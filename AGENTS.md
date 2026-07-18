@@ -19,6 +19,10 @@ end-to-end RL version.
 - The TGVF model structure is preserved.
 - The representation phase has two obligations: `D` contains target-specific
   information, and the frozen/base language model can read that information.
+- The legacy representation dataset and selected TGVF/DeepStack model/training
+  code may be reused only under the provenance and parity rules. The native
+  pipeline is new, and the historical TGVF Adapter checkpoint is reference
+  only rather than a direct initialization.
 - There is no Stage2 SFT in this version.
 - The RL policy initializes from the original Qwen reasoning model, not a
   Golden/Stage2 adapter.
@@ -27,14 +31,21 @@ end-to-end RL version.
 - The protocol uses Qwen's native tool schema and existing `<tool_call>`,
   `</tool_call>`, `<tool_response>`, `</tool_response>`, `<think>`, `</think>`,
   and native vision tokens.
+- The native function name is `tgvf_focus_tool`. The runtime supports repeated
+  calls, with a configurable safety cap greater than one.
 - The legacy custom Stage3 trainer is not ported. Distributed RL infrastructure
-  comes from a separately selected mature library.
+  comes from upstream veRL. FSDP2 support is required; the exact veRL commit,
+  rollout backend, sharding, device mesh, worker placement, and parallel
+  topology are selected from compatibility and throughput evidence.
 
 ## Terminology
 
 Use these names in new code and documents:
 
 - **representation phase**: target-specific/readable `D` learning;
+- **TGVF Adapter**: the preserved TGVF model module that consumes target
+  conditioning and original-image visual features and produces main `D` plus
+  the D-DeepStack branches;
 - **policy RL phase**: end-to-end routing, target generation, tool use,
   post-`D` reasoning, and answering;
 - **native tool trajectory**: Qwen chat-template serialization using the native
@@ -43,13 +54,19 @@ Use these names in new code and documents:
 Do not introduce new components named Stage2 or Stage3. Historical names may
 appear only in provenance or comparison text.
 
+Use the full phase names in prose until compact replacements are accepted.
+Short package, configuration, and CLI identifiers may be defined separately,
+but must not use `stage1`, `stage2`, or `stage3` as current component identities.
+
 ## Change discipline
 
 - Start every non-trivial task with a macro plan: objective, files to change,
   files not to touch, unresolved decisions, and verification.
 - Do not create implementation code until the corresponding task and interface
   are accepted in `docs/PROJECT_TASK.md`.
-- Do not install or pin an RL framework until a compatibility spike is approved.
+- Do not install or pin the production veRL dependency matrix until an approved
+  veRL compatibility spike has passed. Candidate versions may be used only in
+  the isolated spike environment authorized for that task.
 - Do not launch GPU work without a `PLANNED` entry in
   `docs/EXPERIMENT_LEDGER.md` and a complete experiment identity.
 - Keep algorithm mathematics explicit: behavior-policy log probabilities,

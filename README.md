@@ -1,4 +1,4 @@
-# TGVF End-to-End RL
+TGVF End-to-End RL
 
 This is the new, independently versioned TGVF project.
 
@@ -15,11 +15,16 @@ The project starts from four decisions:
 3. Do not resize the tokenizer or introduce project-specific protocol tokens.
    Use Qwen's existing native tool-call, tool-response, thinking, and vision
    tokens through the native chat template.
-4. Use a mature RL framework for distributed rollout and optimization. This
+4. Use upstream veRL for distributed rollout and optimization, with required
+   FSDP2 support and an evidence-selected concrete parallel topology. This
    repository owns only the narrow TGVF model/runtime adapter, trajectory
-   contract, rewards, and verification needed by that framework.
+   contract, rewards, and verification needed by veRL.
 
 The authoritative task definition is [docs/PROJECT_TASK.md](docs/PROJECT_TASK.md).
+Open implementation contracts are tracked in
+[docs/OPEN_IMPLEMENTATION_CONTRACTS.md](docs/OPEN_IMPLEMENTATION_CONTRACTS.md).
+The framework-skeleton reference is
+[docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md](docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md).
 Rules for using the previous repository as a controlled reference are in
 [docs/LEGACY_REFERENCE.md](docs/LEGACY_REFERENCE.md). Codex and contributor
 working rules are in [AGENTS.md](AGENTS.md).

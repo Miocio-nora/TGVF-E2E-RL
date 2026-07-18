@@ -1,7 +1,13 @@
 # TGVF End-to-End RL: Project Task
 
-Status: **design baseline; implementation not started**
+Status: **design baseline updated; framework skeleton direction accepted;
+implementation not started**
 Recorded: **2026-07-18 JST**
+Updated: **2026-07-19 JST**
+
+Unresolved implementation contracts and their promotion gates are tracked in
+[`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
+field there must not be filled silently from a framework default.
 
 ## 1. Objective
 
@@ -38,12 +44,22 @@ responsible for two independent properties:
    evidence from the correct `D`, and correct `D` must causally outperform
    matched wrong/shuffled controls.
 
-The current Golden Stage1 bridge may be tested as an initialization, but it is
-not presumed behavior-equivalent. It was trained with Protocol-C target hidden
-states, including learned project-specific boundary rows. Native JSON tool-call
-serialization changes the context and therefore the `Hq` distribution. A
-native-action compatibility gate, and likely native-format representation
-retraining, are required before policy RL.
+The model module trained in this phase and invoked by the tool runtime is named
+the **TGVF Adapter**, preserving the established project terminology. The phase,
+module, checkpoint, and tool runtime are distinct identities.
+
+The legacy representation dataset and selected representation model/training
+logic are eligible for controlled reuse after provenance is frozen. The legacy
+training pipeline and serialization are not reusable as the new pipeline: they
+must be adapted to the native tool format and the contracts in this repository.
+
+The existing Golden TGVF Adapter checkpoint is a parity and historical
+reference only. It must not be used directly as initialization for the new
+native-format representation phase. It was trained with Protocol-C target
+hidden states, including learned project-specific boundary rows. Native JSON
+tool-call serialization changes the context and therefore the `Hq`
+distribution. The project must train a new native-format representation
+checkpoint and pass the representation gates before policy RL.
 
 ### 2.2 Remove Stage2 SFT
 
@@ -76,10 +92,11 @@ deviation, advantage scaling, clipping, KL, per-token versus per-sequence
 normalization, and masking. A framework default is never the mathematical
 specification.
 
-### 2.4 Use a mature RL framework
+### 2.4 Use upstream veRL as the RL framework
 
-This project must not build another distributed RL trainer from scratch. A
-mature framework will own the standard infrastructure:
+This project must not build another distributed RL trainer from scratch.
+Upstream veRL is the selected base framework and will own the standard
+infrastructure:
 
 - distributed policy/reference execution;
 - rollout scheduling and batching;
@@ -87,15 +104,21 @@ mature framework will own the standard infrastructure:
 - optional asynchronous generation backend;
 - metric aggregation.
 
-The approved objective mathematics constrains the framework. If the framework
-default differs, the project may use a narrow public pure-tensor extension hook;
-it must not fork or rewrite the distributed trainer around private internals.
+FSDP2 support is a required implementation capability. The exact parallel
+topology, sharding plan, rollout/training placement, and whether additional
+parallel dimensions are needed remain evidence-based implementation decisions.
+
+The approved objective mathematics constrains veRL. If its default differs,
+the project may use a narrow public pure-tensor extension hook; it must not fork
+or rewrite the distributed trainer around private internals.
 
 This repository supplies a narrow custom boundary for latent TGVF execution.
-The framework decision is deferred until an explicit compatibility spike among
-TRL, veRL, OpenRLHF, or another maintained candidate. None is presumed to be a
-drop-in solution because TGVF injects hidden visual embeddings, M-RoPE state,
-multimodal token types, and D-DeepStack features rather than a PIL tool image.
+The remaining compatibility spike validates a pinned veRL commit, rollout
+backend, Qwen3-VL support, multi-turn latent observations, exact behavior-logprob
+retention/replay, FSDP2, and checkpoint/resume. It is not a framework-selection
+comparison. veRL is not presumed to be a drop-in solution because TGVF injects
+hidden visual embeddings, M-RoPE state, multimodal token types, and D-DeepStack
+features rather than a PIL tool image.
 
 ## 3. Native Qwen tool protocol
 
@@ -122,7 +145,7 @@ single function contract equivalent to:
 {
   "type": "function",
   "function": {
-    "name": "tgvf_focus",
+    "name": "tgvf_focus_tool",
     "description": "Inspect one specific visual region before answering.",
     "parameters": {
       "type": "object",
@@ -148,7 +171,7 @@ The following is an illustrative rendering of the intended trajectory:
 </think>
 
 <tool_call>
-{"name": "tgvf_focus", "arguments": {"target": "{JSON-escaped target}"}}
+{"name": "tgvf_focus_tool", "arguments": {"target": "{JSON-escaped target}"}}
 </tool_call><|im_end|>
 <|im_start|>user
 <tool_response>
@@ -186,9 +209,14 @@ serializes that observation under a user-framed `<tool_response>` turn. The new
 runtime must follow the template exactly; it must not resurrect the historical
 `<|im_start|>tool` framing.
 
+Repeated tool calls are a first-class runtime requirement. A trajectory may
+alternate between policy reasoning, `tgvf_focus_tool`, and a new `D`
+observation more than once before the final answer. A configurable safety cap
+greater than one is required; its exact value and stopping policy remain open.
+
 The parser is fail-closed:
 
-- exactly one complete tool-call object per supported rollout step;
+- exactly one complete tool-call object per assistant action turn;
 - strict `json.loads`;
 - exact function name and argument keys;
 - non-empty, non-generic target;
@@ -196,7 +224,7 @@ The parser is fail-closed:
   including JSON escapes; ambiguous boundary-crossing tokens are rejected or
   handled by one predeclared deterministic rule;
 - no answer leakage or trailing assistant answer after the tool call;
-- explicit maximum tool-call count;
+- explicit configurable maximum tool-call count greater than one;
 - malformed calls receive no tool execution.
 
 ## 4. End-to-end runtime contract
@@ -207,12 +235,12 @@ For each prompt and each sampled group member:
 2. Append the template-owned assistant thinking prefix and sample from the
    current policy without a Stage2 adapter or duplicate `<think>` opener.
 3. If the assistant answers directly, terminate and score the answer.
-4. If it emits a valid `tgvf_focus` call:
+4. If it emits a valid `tgvf_focus_tool` call:
    - locate the exact JSON target value span in the raw sampled token stream;
    - retain all sampled token IDs and actual behavior log probabilities;
    - obtain target hidden states `Hq` using a separately frozen contract for
      value-span inclusion, JSON escapes, hidden layer, and token-time alignment;
-   - execute the fixed TGVF producer on original-image pre-merge and
+   - execute the fixed TGVF Adapter on original-image pre-merge and
      DeepStack features;
    - construct main `D`, all D-DeepStack branches, native visual positions,
      multimodal token types, and mask state;
@@ -220,32 +248,36 @@ For each prompt and each sampled group member:
      visual layout, positions, multimodal types, mask, and cache contract;
    - append the native tool-response turn and its template-owned next-assistant
      thinking prefix.
-5. Continue the same trajectory to post-`D` reasoning and final answer.
+5. Continue the same trajectory to post-`D` reasoning. The policy may answer or
+   emit another valid `tgvf_focus_tool` call; repeat step 4 until a final answer,
+   a malformed action, or the configured safety limit terminates the loop.
 6. Record the complete action mask, tool/environment spans, rewards, stop
    causes, and all identity fields needed for mathematically identical replay.
 7. Replay policy/reference log probabilities only on policy-generated tokens
    from every assistant turn; template prefill and tool-observation tokens are
    environment output and receive no policy loss.
-8. Policy, old-policy, and frozen-reference replay all consume the same
-   rollout-recorded `D` observation. They never regenerate it from their own or
-   updated target hidden states.
+8. For every tool call, policy, old-policy, and frozen-reference replay all
+   consume that call's same rollout-recorded `D` observation. They may recompute
+   logits on the recorded trajectory, but they never regenerate `Hq`, main `D`,
+   or D-DeepStack from their own or updated parameters.
 
 The minimal framework-facing trajectory record must retain:
 
 - exact prompt, action, observation, continuation, and final token IDs;
-- policy-token/loss masks and target span;
+- policy-token/loss masks and every tool call's target span;
 - actual behavior log probabilities for every sampled pre-reasoning, tool-call,
   post-reasoning, and answer token;
 - rollout policy/checkpoint version, asynchronous staleness, sampling
   backend/version, seed/RNG, temperature, top-p, top-k, min-p, penalties, logit
   processors, and raw-versus-transformed logprob convention;
-- immutable rollout-time main `D` and every D-DeepStack tensor or an immutable
-  artifact handle to those exact tensors;
-- visual grid, fake-image span, M-RoPE positions, multimodal token types;
-- main and D-DeepStack state plus original-image mask scope;
+- for every tool call, immutable rollout-time main `D` and every D-DeepStack
+  tensor or an immutable artifact handle to those exact tensors;
+- for every tool call, visual grid, fake-image span, M-RoPE positions, and
+  multimodal token types;
+- per-call main and D-DeepStack state plus original-image mask scope;
 - exact template-owned/policy-owned/environment-owned token masks;
 - reward components and parse/termination metadata;
-- model, processor, representation-checkpoint, code, and prompt identities.
+- model, processor, TGVF-Adapter-checkpoint, code, and prompt identities.
 
 The custom adapter surface should remain narrow, conceptually:
 
@@ -267,13 +299,14 @@ newly defined policy adapter scope. The following are fixed or unresolved:
 
 - Frozen reference: exact original Qwen model and prompt/tool schema.
 - Policy initialization: exact original Qwen model; no Stage2 LoRA.
-- Representation producer: initially frozen during the first RL proof, unless
-  a separately approved experiment enables constrained joint updates.
+- TGVF Adapter: a newly trained native-format TGVF Adapter checkpoint, initially
+  frozen during the first RL proof. The legacy checkpoint is not a direct
+  initialization.
 - Policy trainable scope: unresolved; LoRA is expected, but module/rank/dropout
   must be selected and recorded rather than inherited from Golden.
 - Original vision tower and frozen Qwen visual mergers: frozen by default.
 
-Keeping the representation-producer parameters frozen for the first RL proof
+Keeping the TGVF Adapter parameters frozen for the first RL proof
 reduces one source of drift, but it does **not** make the tool environment
 policy-independent: the sampled target and `Hq` still come from a changing
 policy. Every observation is therefore versioned and materialized at rollout
@@ -291,8 +324,8 @@ Candidate components are:
 - valid native tool syntax and successful execution;
 - target validity, locality, non-genericity, and answer-leak penalty;
 - target/evidence utility or sampled correct-`D` causal advantage;
-- malformed protocol, repeated call, runtime error, loop, cap-hit, and
-  non-termination penalties;
+- malformed protocol, redundant duplicate call, runtime error, loop, cap-hit,
+  and non-termination penalties;
 - tool/token/latency cost so the policy does not call TGVF indiscriminately;
 - KL/reference regularization against the original Qwen policy.
 
@@ -303,7 +336,7 @@ examples and must never replace executable answer/tool checks.
 ## 7. Representation gates
 
 Before policy RL can claim a usable tool channel, the native-format
-representation producer must pass all three levels:
+TGVF Adapter must pass all three levels:
 
 1. **Readout**: verified evidence has lower NLL under correct `D` than target
    only, matched wrong-same-image, matched wrong-image, shuffled, and random
@@ -338,11 +371,14 @@ metrics include:
 The original base, policy-direct, policy-tool, and counterfactual-`D` rows must
 share exact sample IDs and scoring identity.
 
-## 9. Mature RL framework selection gate
+## 9. veRL compatibility gate
 
-The selection spike must use official maintained versions and answer:
+veRL is selected. A **compatibility spike** is a bounded integration proof that
+selects a usable veRL commit and concrete adapter/backend configuration; it is
+not a framework bake-off and it is not a training run. The spike must use an
+official maintained version and answer:
 
-- Does the framework support Qwen VLM policy/reference models?
+- Does the selected veRL commit support Qwen VLM policy/reference models?
 - Can it run multi-turn dynamic tools without converting `D` to a PIL image?
 - Can a custom model forward receive native visual embedding spans, M-RoPE,
   multimodal token types, and D-DeepStack?
@@ -351,23 +387,27 @@ The selection spike must use official maintained versions and answer:
   mask/position/DeepStack state fails closed.
 - Can sampled behavior log probabilities be retained and replayed exactly?
 - Can rollout and update be batched without serial per-trajectory replay?
+- Can FSDP2 load, update, checkpoint, and resume the intended policy scope, and
+  what parallel topology is justified by measured memory and throughput?
 - Are GRPO standard-deviation convention, clipping, KL, and token/sequence
   normalization configurable and identical to the approved equations?
 - Is the intended SDPO implementation supported, or can its pure tensor loss
   be added without replacing private trainer internals?
 - Are checkpoint/resume and dependency versions reproducible locally?
 
-No framework is selected by this document. Current environment packages and
-the compatibility spike must be recorded before installation.
+The veRL family decision is fixed. The exact commit, dependency environment,
+rollout backend, FSDP2 topology, and adapter surface remain open until the spike
+is approved and recorded. No package installation or pin is authorized merely
+by selecting veRL.
 
 ## 10. Migration boundary
 
 ### Allowed exact extraction
 
-Only the selected TGVF producer structure and minimal mathematical helpers may
+Only the selected TGVF Adapter structure and minimal mathematical helpers may
 be copied after the old repository is frozen and numerical parity fixtures are
 written. The current candidate is the 8B-specific
-`TGVFv2BidirectionalDDeepStack` producer.
+`TGVFv2BidirectionalDDeepStack` Adapter.
 
 ### Allowed thin reimplementation
 
@@ -382,6 +422,20 @@ written. The current candidate is the 8B-specific
 These are rewritten behind new neutral interfaces; whole legacy engines are
 not copied.
 
+### Allowed controlled reuse for native representation training
+
+- the legacy representation dataset, after its manifest, provenance, license,
+  transforms, and sample identities are audited;
+- selected representation losses, diagnostics, and model-training logic after
+  their source identities and semantic changes are recorded;
+- preprocessing behavior that passes parity and does not reintroduce a legacy
+  protocol or tokenizer change.
+
+The new representation training pipeline, native transcript construction, data
+schema, configuration, checkpoint manifest, and launcher are implemented in
+this repository. The historical pipeline is not ported as the new pipeline.
+The historical TGVF Adapter checkpoint is not a new-training initialization.
+
 ### Forbidden migration
 
 - all legacy protocol identities and implementations, including Protocol C,
@@ -391,6 +445,8 @@ not copied.
   and loss normalization code;
 - all legacy Stage3 trainer, rollout engine, replay, policy-reference, reward,
   and executor modules;
+- the historical representation training pipeline, launchers, serialization,
+  and checkpoint-resume state as a new runtime pipeline;
 - legacy force/softforce modes as training identities;
 - runtime imports, symlinks, or submodules pointing to the old repository.
 
@@ -406,19 +462,21 @@ intended shape is:
 tgvf-e2e-rl/
   AGENTS.md
   README.md
-  pyproject.toml                 # after framework/dependency decision
+  pyproject.toml                 # after veRL compatibility/dependency approval
   docs/
     PROJECT_TASK.md
     LEGACY_REFERENCE.md
     EXPERIMENT_LEDGER.md
+    OPEN_IMPLEMENTATION_CONTRACTS.md
+    TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md
   src/tgvf_rl/
-    representation/             # extracted TGVF producer
+    representation/             # extracted TGVF Adapter and training path
     qwen/                       # native VLM/tool/D adapter
     protocol/                   # schema, strict parser, transcript identity
     environment/                # TGVF tool execution
     trajectories/               # framework-neutral rollout records
     rewards/                    # decomposed executable rewards
-    framework/                  # one selected mature-RL adapter
+    framework/                  # narrow veRL adapter
     evaluation/                 # identity-safe evaluation/scoring
   tests/
     parity/
@@ -434,7 +492,8 @@ tgvf-e2e-rl/
 
 - Archive the current old-repository dirty worktree under a user-approved
   commit/tag or immutable patch bundle.
-- Pin the base model/processor snapshot and representation checkpoint.
+- Pin the base model/processor snapshot and the historical representation
+  checkpoint only as a parity/reference identity.
 - Finalize the exact extraction whitelist and file hashes.
 
 Gate: every imported idea or symbol has immutable provenance.
@@ -442,20 +501,22 @@ Gate: every imported idea or symbol has immutable provenance.
 ### Phase 1: representation-core extraction
 
 - Extract only the selected TGVF classes/helpers.
-- Export a minimal representation artifact without optimizer, scheduler, or
+- Export a minimal TGVF Adapter artifact without optimizer, scheduler, or
   protocol-token rows.
 - Establish deterministic synthetic and real-row parity with the pinned old
-  producer.
+  TGVF Adapter.
 
 Gate: for fixed tensor inputs (`Hq`, pre-merge vision features, every DeepStack
 branch, mask/config), main `D`, every D-DeepStack output, and required gradients
-match the pinned producer. This gate tests producer mathematics, not legacy
+match the pinned Adapter. This gate tests Adapter mathematics, not legacy
 Protocol-C serialization.
 
 ### Phase 2: native protocol and runtime
 
 - Implement native tool schema, strict parser, target-span mapping, and native
   tool-response `D` injection.
+- Support repeated `tgvf_focus_tool` calls with a configurable safety cap
+  greater than one and per-call immutable observation records.
 - Prove no tokenizer resize, exact template-generated transcript/token round
   trip, correct ownership masks, and no duplicate opening `<think>` in either
   assistant turn.
@@ -464,19 +525,25 @@ Protocol-C serialization.
 Gate: native direct/tool trajectories execute deterministically and expose all
 required replay state.
 
-### Phase 3: native representation compatibility
+### Phase 3: native representation training and compatibility
 
 - Compare old Protocol-C and native-tool `Hq`/`D` behavior.
+- Build the new native-format representation data/training/checkpoint pipeline.
+- Train a new native-format TGVF Adapter checkpoint; do not initialize it
+  directly from the historical TGVF Adapter checkpoint.
 - Run target-sensitivity, readout, counterfactual flip, and free-continuation
   gates.
-- Retrain the representation phase under native serialization if required.
 
 Gate: target-specific, readable native `D`; no claim based only on formatting
 or output-length change.
 
-### Phase 4: RL framework compatibility spike
+### Phase 4: veRL compatibility spike
 
-- Pin one candidate framework in an isolated optional environment.
+- After the spike task is approved, test and pin one upstream veRL commit in an
+  isolated optional environment.
+- Validate candidate rollout backends and an FSDP2 execution/checkpoint path;
+  choose the concrete parallel topology from observed correctness, memory, and
+  throughput.
 - Adapt the narrow trajectory/tool interfaces.
 - Bind the exact GRPO equations before invoking a framework loss.
 - Verify same-policy-version behavior/replay logits and logprobs on the exact
@@ -490,7 +557,7 @@ approved RL mathematics.
 ### Phase 5: minimal GRPO proof
 
 - Use a fixed, audited prompt/sample manifest.
-- Train only the approved policy scope with frozen representation producer.
+- Train only the approved policy scope with the TGVF Adapter frozen.
 - Evaluate direct/tool exploration, reward decomposition, D use, and reasoning
   retention at a checkpoint ladder rather than only at the endpoint.
 
@@ -508,16 +575,19 @@ recorded and reproducible.
 
 ## 13. Open decisions requiring confirmation
 
-1. Exact repository/package version name beyond `tgvf-e2e-rl`.
-2. Whether the current Golden Stage1 weights are only a parity initialization
-   or also one native-compatibility ablation before fresh representation
-   training.
-3. Whether TGVF is frozen for all policy RL or only for the first proof.
+1. Compact code/config labels for the representation phase and policy RL phase;
+   the formal prose names remain in force until replacements are accepted.
+2. Exact legacy representation dataset/code reuse whitelist and the new
+   native-format training interface.
+3. Whether the TGVF Adapter is frozen for all policy RL or only for
+   the first proof; the first proof is fixed to frozen.
 4. Policy LoRA/full-parameter scope and reference/KL contract.
-5. Mature RL framework and pinned dependency environment.
+5. Pinned veRL commit, rollout backend, dependency environment, and concrete
+   FSDP2/parallel topology.
 6. Exact meaning and source implementation of SDPO.
-7. Maximum tool calls, prompt wording, and initial exploration curriculum.
-8. Original-image visibility and DeepStack mask scope after `D`.
+7. Tool-call safety cap greater than one, prompt wording, and initial
+   exploration curriculum.
+8. Original-image visibility and DeepStack mask scope after each `D`.
 9. Training population, reward benchmarks, and held-out evaluation manifests.
 10. Judge models, if any, and their calibrated role in target/evidence rewards.
 
@@ -528,7 +598,8 @@ No implementation should silently decide any item above.
 The project succeeds only when one policy, initialized from the original Qwen
 reasoning model and trained without Stage2 SFT or new protocol tokens:
 
-- naturally chooses between direct answering and native TGVF tool use;
+- naturally chooses between direct answering and one or more native TGVF tool
+  calls when useful;
 - produces valid, useful, non-leaking targets;
 - receives and causally uses target-specific `D`;
 - improves task accuracy net of tool cost;

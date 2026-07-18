@@ -2,6 +2,7 @@
 
 Status: **reference identified but not frozen**
 Recorded: **2026-07-18 JST**
+Updated: **2026-07-19 JST**
 
 ## Reference repository
 
@@ -76,11 +77,21 @@ not whole-file copy candidates.
 |---|---|---|
 | `revisit_vlm_clean/src/revisit_vlm_clean/deepstack.py` | DeepStack payload and mask semantics | `7499a3dbe1df2c654c8b6ff6a8d06d91ba2900bd9a76d7ce2e9b3058f2df0c5c` |
 | `src/revisit_vlm/qwen3_vl_tgvf.py` | vision tap, source geometry, native visual append, M-RoPE reference only | `09401be77bc0a13fd48eb04681b8cfd00cbd2e5f33b59efbfe825e10ab163801` |
-| `src/revisit_vlm/tgvf_v3_stage1.py` | historical representation losses and diagnostics only | `78b465ec67d40c6d60863715c43171f373483b20c11447b13b56b6fe8e28384a` |
+| `src/revisit_vlm/tgvf_v3_stage1.py` | historical representation losses, diagnostics, and candidate training logic for adapted reimplementation; not the pipeline as a whole | `78b465ec67d40c6d60863715c43171f373483b20c11447b13b56b6fe8e28384a` |
 
 `qwen3_vl_tgvf.py` is in the dirty worktree and mixes legacy protocols,
 Stage2 behavior, added-token logic, and useful low-level Qwen mechanics. It
 must never be copied as a module.
+
+## Representation data reuse boundary
+
+The legacy representation dataset is eligible for reuse only after its exact
+manifest, sample identities, transforms, provenance, license, and split policy
+are recorded here or in a linked immutable data artifact. It must be adapted to
+the new native-format representation pipeline. The historical rendered format,
+serialization, launcher, and resume state are not reused as the new pipeline.
+
+No representation data path or manifest has been frozen by this document yet.
 
 ## Golden representation checkpoint
 
@@ -122,10 +133,11 @@ state must be pinned in the new representation manifest and parity tests.
 
 The weights are 8B-specific and were trained under a focus-force prompt, fixed
 pre-focus reasoning, learned Protocol-C boundaries, and Protocol-C target
-hidden states. They are an initialization/parity reference, not proof of
-native-tool behavioral compatibility. The new native `Hq` contract must pin
-the JSON-escaped value-span mapping, quote/syntax exclusion, hidden layer, and
-token-time alignment before compatibility can be assessed.
+hidden states. They are a parity, provenance, and diagnostic-comparison
+reference only; they are not a direct initialization or runtime checkpoint for
+the new native-format representation phase. The new native `Hq` contract must
+pin the JSON-escaped value-span mapping, quote/syntax exclusion, hidden layer,
+and token-time alignment before compatibility can be assessed.
 
 ## Explicitly forbidden legacy areas
 
@@ -133,8 +145,10 @@ token-time alignment before compatibility can be assessed.
   apparently-native Protocol D, and Protocol E tokens, renderers, parsers,
   token-row PEFT, and tokenizer-resize paths;
 - broad TGVF variant builders and all unused TGVF variants;
-- the historical Stage1 trainer, serialization, launcher, and executor as
-  implementation; they are specification/provenance references only;
+- the historical representation trainer as a whole pipeline, plus its
+  serialization, launcher, executor, and resume state. Individually approved
+  losses, diagnostics, and training helpers may be adapted only through the
+  thin-reference and port-record rules above;
 - all Stage2 trainers, fast trainers, runtime engines, adapters, checkpoints,
   data mixtures, reasoning replay, and Golden correction code;
 - the entire `revisit_vlm_clean.stage3_grpo` implementation and its CLIs,
