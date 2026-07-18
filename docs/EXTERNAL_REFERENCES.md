@@ -1,6 +1,6 @@
 # Controlled External References
 
-Status: **spike execution approved; production dependency pin not yet accepted**
+Status: **bounded compatibility pin accepted; production training lock not selected**
 Recorded: **2026-07-19 JST**
 
 This registry fixes the external sources that may inform the design. A recorded
@@ -15,8 +15,9 @@ repository: https://github.com/verl-project/verl
 exact spike snapshot: e003163181731412595257a72ec173071efb125f
 main snapshot observed: 2026-07-19 JST
 runtime: upstream veRL exact snapshot + vLLM + FSDP2 only
-role: approved isolated spike candidate; exact production pin pending report
-dependency status: isolated spike materialization authorized by its manifest
+role: accepted bounded framework/runtime compatibility pin
+dependency status: resolved compatibility lock accepted; production placement,
+  topology, objectives, and training scale remain open
 ```
 
 `v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` is retained only
@@ -75,9 +76,9 @@ Therefore an image recipe alone does not prove candidate identity. Any approved
 environment must verify the exact loaded veRL commit and record all resolved
 package/image identities.
 
-The approved bounded task is in `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. C-MAIN
-does not become a production pin until the evidence report is explicitly
-accepted.
+The bounded task is closed in `docs/VERL_COMPATIBILITY_REPORT.md`. C-MAIN is the
+accepted framework compatibility revision; that result does not turn the
+environment into a production-training topology, objective, or scale lock.
 
 ## SDPO
 

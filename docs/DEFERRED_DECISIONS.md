@@ -66,5 +66,11 @@ experiment identities, not reasons to leave the implementation as a stub.
 - policy/rollout placement and topology beyond the two-GPU smoke;
 - long-run hyperparameters, checkpoint cadence, and production resource budget.
 
+## Repository distribution
+
+- the public repository's software license. No license has been selected or
+  inferred, so `pyproject.toml` intentionally has no license metadata and the
+  repository currently grants no explicit reuse license.
+
 Only physical GPU indices 2 and 3 are authorized for the current smoke. This
 file does not authorize real training.

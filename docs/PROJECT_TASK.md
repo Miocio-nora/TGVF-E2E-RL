@@ -1,6 +1,6 @@
 # TGVF End-to-End RL: Project Task
 
-Status: **I8H-20260719 framework implementation task accepted and in scope**
+Status: **I8H-20260719 bounded framework implementation complete; production gates open**
 Recorded: **2026-07-18 JST**
 Updated: **2026-07-19 JST**
 
@@ -32,7 +32,8 @@ stack is:
 - FSDP2 as a required executable path;
 - Qwen3-VL-8B-Thinking as the primary executable model and
   `Qwen/Qwen2.5-VL-7B-Instruct` as the required family-adapter compatibility
-  fixture;
+  target. The bounded build supplies only its fail-closed main-`D`/family
+  boundary; full DeepStack end-to-end compatibility remains a separate gate;
 - both target-conditioning providers;
 - exact multi-call `tgvf_focus_tool` trajectories, actual behavior log
   probabilities, immutable recorded observations, and deterministic replay;
@@ -88,9 +89,10 @@ registered files/symbols and parity requirements.
 ### 0.3 Execution authority and hard limits
 
 - Isolated dependency installation and the download of necessary public model
-  weights/artifacts are authorized. The selected production veRL pin is written
-  only after its compatibility evidence passes; SDPO's bundled veRL tree is
-  reference-only and is not installed as the framework.
+  weights/artifacts are authorized. Compatibility evidence accepted upstream
+  veRL commit `e003163181731412595257a72ec173071efb125f` and the resolved lock;
+  this does not freeze production placement or parallel topology. SDPO's
+  bundled veRL tree is reference-only and is not installed as the framework.
 - GPU execution is restricted to physical GPU indices **2 and 3**. A process
   may see them as logical devices 0 and 1 only after the physical-to-logical
   mapping is recorded. No other physical GPU is authorized.
@@ -228,14 +230,16 @@ the project may use a narrow public pure-tensor extension hook; it must not fork
 or rewrite the distributed trainer around private internals.
 
 This repository supplies a narrow custom boundary for latent TGVF execution.
-The remaining compatibility spike validates a pinned veRL commit, rollout
-backend, primary Qwen3-VL and secondary Qwen2.5-VL adapter surfaces, multi-turn
-latent observations, both target-conditioning providers, exact
-behavior-logprob retention/replay, executable SDPO integration, FSDP2, and
-checkpoint/resume. It is not a framework-selection comparison. veRL is not
-presumed to be a drop-in solution because TGVF injects hidden visual embeddings,
-M-RoPE state, multimodal token types, and D-DeepStack features rather than a PIL
-tool image.
+The completed bounded compatibility task selected the exact upstream veRL
+commit and vLLM-only backend, exercised the public integration surface,
+transported a real Qwen3 two-call precomputed-latent fixture, and proved a tiny
+two-rank FSDP2 checkpoint/resume path. Framework tests cover both
+target-conditioning providers, exact behavior-logprob retention/replay, and
+executable reference-style SDPO contracts. It was not a framework-selection
+comparison. Full Qwen policy/reference replay, production topology, and the
+Qwen2.5 family-specific representation/branch path remain later gates because
+TGVF injects hidden visual embeddings, M-RoPE state, multimodal token types, and
+D-DeepStack features rather than a PIL tool image.
 
 The SDPO reference repository contains a modified veRL tree rather than a thin
 plugin and does not identify a reproducible upstream veRL base commit. It is
@@ -544,8 +548,9 @@ share exact sample IDs and scoring identity.
 
 veRL is selected. A **compatibility spike** is a bounded integration proof that
 selects a usable veRL commit and concrete adapter/backend configuration; it is
-not a framework bake-off and it is not a training run. The spike must use an
-official maintained version and answer:
+not a framework bake-off and it is not a training run. The completed bounded
+task used upstream veRL and answered the following questions to the extent
+recorded by its framework tests and smoke cells:
 
 - Does the selected veRL commit support Qwen VLM policy/reference models?
 - Does the family adapter run the primary Qwen3-VL-8B-Thinking fixture and a
@@ -579,10 +584,14 @@ official maintained version and answer:
   repository does not prove this path.
 - Are checkpoint/resume and dependency versions reproducible locally?
 
-The veRL family decision is fixed. The exact commit, dependency environment,
-rollout backend, FSDP2 topology, and adapter surface remain open until the spike
-is approved and recorded. No package installation or pin is authorized merely
-by selecting veRL.
+The accepted compatibility stack fixes upstream veRL commit
+`e003163181731412595257a72ec173071efb125f`, its resolved Python 3.12 dependency
+environment, vLLM `0.12.0` as the only backend, and the repository-owned public
+adapter/plugin surface. Its live path requires
+`VLLM_PLUGINS=tgvf_qwen3_precomputed`,
+`VLLM_ATTENTION_BACKEND=TRITON_ATTN`, and multimodal-encoder
+`TORCH_SDPA`. This does not select a production actor/reference/teacher
+placement, sharding plan, or parallel topology.
 
 ### 9.1 Accepted I8H compatibility and implementation task
 
@@ -593,12 +602,19 @@ I8H-20260719 supersedes that document's proposal status, SGLang cells, stable-
 comparison execution, seam-only SDPO outcome, and repeated human-approval
 sequence.
 
-The initial upstream veRL candidate is the exact `main` snapshot
+The accepted upstream veRL compatibility revision is the exact `main` snapshot
 `e003163181731412595257a72ec173071efb125f`, observed on 2026-07-19 JST. Official
 `v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` remains historical comparison
 material only and is not a required runtime cell. Only vLLM is implemented or
-tested. The exact upstream veRL revision and resolved dependency lock are
-selected from the vLLM compatibility evidence and recorded in the report.
+tested. The resolved lock selects vLLM `0.12.0`, Torch `2.9.0+cu128`, and
+Transformers `4.57.6` under CPython `3.12.3`.
+
+The bounded result is `111` passing CPU tests, `SC-20-R6` passing real Qwen3
+TP=2 native two-call precomputed-latent transport, and `SC-30` passing a tiny
+two-rank composable-FSDP2 strict checkpoint/resume with a bitwise-identical next
+step. These results do not claim a trained Adapter, Qwen FSDP2 capacity,
+production policy/reference replay parity, Qwen2.5 end-to-end support, or
+production objective evidence.
 
 Isolated dependency materialization and necessary public weights are
 authorized. GPU work is authorized only on physical devices 2 and 3 after the
@@ -685,7 +701,7 @@ is:
 tgvf-e2e-rl/
   AGENTS.md
   README.md
-  pyproject.toml                 # after veRL compatibility/dependency approval
+  pyproject.toml                 # exact compatibility extras and plugin entry point
   docs/
     PROJECT_TASK.md
     LEGACY_REFERENCE.md
@@ -734,6 +750,10 @@ Gate: every imported idea or symbol has immutable provenance, and the isolated
 compatibility spike is authorized without authorizing the main implementation.
 
 ### Phase 1: veRL/vLLM/FSDP2 compatibility and framework implementation
+
+Status: **bounded framework portion complete**. The real Qwen3 transport and
+tiny FSDP2 resume cells passed; full Qwen replay, Qwen2.5 end-to-end support,
+and production objective/topology gates remain open.
 
 - In the accepted isolated environment, test and then pin one upstream veRL
   commit with vLLM; do not adopt the SDPO or DeepEyes veRL trees.
@@ -852,8 +872,9 @@ identity, throughput, memory, and resume behavior are recorded and reproducible.
 3. Whether the TGVF Adapter is frozen for all policy RL or only for
    the first proof; the first proof is fixed to frozen.
 4. Policy LoRA/full-parameter scope and reference/KL contract.
-5. Pinned veRL commit, rollout backend, dependency environment, and concrete
-   FSDP2/parallel topology.
+5. Production actor/reference/rollout/teacher placement and concrete
+   FSDP2/parallel topology. The compatibility veRL commit, dependency
+   environment, and vLLM-only backend are already fixed.
 6. Exact SDPO equations, feedback/reprompt contract, teacher regularization,
    approximation, and whether any separately named hybrid is scientifically
    required. The paper/repository identity is already fixed.

@@ -1,6 +1,6 @@
 # veRL Compatibility Spike Plan
 
-Status: **APPROVED FOR EXECUTION — bounded compatibility spike only**
+Status: **CLOSED — narrower I8H smoke scope executed; original promotion matrix incomplete**
 Drafted: **2026-07-19 JST**
 Approved: **2026-07-19 JST, by the user in this conversation**
 
@@ -9,6 +9,18 @@ the isolated probe/environment work and the ledgered smoke cells defined here;
 it does not pin a production dependency, authorize production training, or
 accept GRPO/SDPO production mathematics. GPU smoke is restricted to physical
 devices `2` and `3` as specified in §§8 and 10.
+
+Closeout is recorded in
+[`VERL_COMPATIBILITY_REPORT.md`](VERL_COMPATIBILITY_REPORT.md). The later
+I8H-20260719 execution acceptance explicitly limited runtime work to small
+smokes and authorized the framework implementation in the same task. It
+therefore superseded this plan's original full cell matrix and overall hard-
+PASS requirement. The completed result accepts only the dependency/public-
+extension stack and the exact bounded questions actually exercised by
+`SC-20-R6`, `SC-30`, and the CPU contracts. It does **not** claim Qwen3
+`L0..L4`, Qwen2.5 `L0..L1`, real policy/reference replay parity, or a GPU SDPO
+teacher fixture. Those original requirements remain promotion backlog in
+`OPEN_IMPLEMENTATION_CONTRACTS.md`, not hidden passes.
 
 ## 0. Authoritative execution decisions
 
@@ -81,7 +93,8 @@ the change remains inside this already accepted spike.
 
 ### Unresolved decisions that remain unresolved after approving the plan
 
-- production acceptance of the pinned veRL candidate and resolved environment;
+- production placement/topology and training-scale lock beyond the accepted
+  compatibility pin;
 - local/runtime path for `Qwen/Qwen2.5-VL-7B-Instruct`;
 - exact FSDP2 topology beyond the minimum probe;
 - policy LoRA versus full-parameter training scope;
@@ -101,8 +114,9 @@ branch snapshot: main observed 2026-07-19 JST
 commit: e003163181731412595257a72ec173071efb125f
 commit date: 2026-07-17
 reported package version: 0.9.0.dev
-role: primary exact spike candidate
-dependency status: review identity only; not installed or pinned for production
+role: accepted exact bounded compatibility revision
+dependency status: materialized and locked for compatibility; not a production
+  topology/objective/scale lock
 ```
 
 C-MAIN is tested because it contains relevant post-v0.8.0 determinism work
@@ -158,7 +172,7 @@ digest, and the resolved package graph is captured.
 
 | ID | veRL source | Rollout backend baseline | Upstream environment baseline | Status |
 |---|---|---|---|---|
-| `M-VLLM-MAIN` | C-MAIN exact checkout | current Docker argument vLLM `0.23.0` | Python `3.12`, CUDA `13.0.2`, PyTorch `2.11.0`, Transformers `5.3.0`, qwen-vl-utils `0.0.14`, FlashAttention `2.8.3` | approved spike matrix; exact resolved lock still evidence-gated |
+| `M-VLLM-MAIN` | C-MAIN exact checkout | historical Docker argument vLLM `0.23.0` | Python `3.12`, CUDA `13.0.2`, PyTorch `2.11.0`, Transformers `5.3.0`, qwen-vl-utils `0.0.14`, FlashAttention `2.8.3` | historical upstream baseline; accepted resolved lock is vLLM `0.12.0` and the report's exact graph |
 
 The official Dockerfile cannot serve as a lock. At C-MAIN, the vLLM file's
 comment still says `0.20.2` while its argument says `0.23.0`, and it still sets
@@ -191,6 +205,13 @@ artifact, before any Qwen2.5 end-to-end TGVF claim. A missing DeepStack-
 equivalent path is reported at `L3`, never hidden by a dummy branch.
 
 ### 4.2 Cell matrix
+
+The table below is the original pre-I8H promotion matrix and is retained for
+provenance. I8H-20260719 re-scoped runtime execution to bounded smoke cells:
+`SC-20-R6` answers only real Qwen3 native precomputed-latent transport, and
+`SC-30` answers only tiny two-rank FSDP2/checkpoint mechanics. Unrun `SC-22`,
+`SC-23`, and `SC-41`, plus the unexercised portions of `SC-20` and `SC-30`,
+remain open gates; they do not form part of the accepted bounded closeout.
 
 The stack identity is the tuple `(C-MAIN commit, vLLM version, resolved
 environment, FSDP2 topology, repository adapter surface)`. There is no backend
@@ -593,6 +614,11 @@ dtype, token count, aggregation, and denominator.
 
 ### 7.3 Hard PASS requirements
 
+This section defines the original full-matrix promotion PASS. It was not the
+I8H bounded-smoke closeout criterion and has not been claimed as satisfied.
+Its unmet items are retained as rollout, model-family, objective, and GPU gates
+in `OPEN_IMPLEMENTATION_CONTRACTS.md`.
+
 An overall PASS requires all applicable items:
 
 1. C-MAIN is reproducible in the isolated vLLM environment with FSDP2; no
@@ -710,18 +736,21 @@ Each cell has exactly one result:
 - `INVALID`: the environment or fixture identity was wrong, so the result says
   nothing about compatibility.
 
-The overall recommendation is one of:
+Under the original full matrix, the overall recommendation would have been one
+of:
 
 - `ACCEPT_STACK(C-MAIN, vLLM, FSDP2, environment, adapter_surface)`;
 - `REJECT_CURRENT_VERL_STACK`;
 - `INCOMPLETE` when a mandatory cell is `BLOCKED_NOT_RUN` or `INVALID`.
 
-There is no overall “pass with an unresolved hard blocker.”
+There is no overall full-matrix “pass with an unresolved hard blocker.” The
+I8H closeout deliberately makes only narrower per-question compatibility
+claims and leaves every missing promotion item open.
 
 ## 10. Approval checkpoints
 
 These approvals implement
-[`OPEN_IMPLEMENTATION_CONTRACTS.md` Gate V0](OPEN_IMPLEMENTATION_CONTRACTS.md#6-gate-v0--before-the-verl-compatibility-spike).
+[`OPEN_IMPLEMENTATION_CONTRACTS.md` Gate V0](OPEN_IMPLEMENTATION_CONTRACTS.md#6-gate-v0--verl-vllm-compatibility-evidence).
 The `VA*` prefix means “veRL approval” and is deliberately distinct from the
 project-wide representation-training `Gate A0`.
 Every accepted row records the repository commit containing this plan, date,
@@ -733,7 +762,7 @@ accepted scope, approver, and evidence/ledger IDs.
 | VA1 probe/environment + S1 | `ACCEPTED_WITH_MANIFEST` | 2026-07-19 JST | isolated spike files/environment only | manifest recorded before mutation |
 | VA2 GPU smoke | `STANDING_CONDITIONAL_APPROVAL` | 2026-07-19 JST | listed cells; physical GPUs `2,3` only | complete `PLANNED` ledger entry before every launch |
 | VA3 objective | `NOT_ACCEPTED` | — | neither GRPO nor SDPO | — |
-| VA4 report/pin | `NOT_ACCEPTED` | — | — | — |
+| VA4 report/pin | `SUPERSEDED_BY_I8H_CLOSEOUT` | 2026-07-19 JST | no separate approval checkpoint; bounded stack only | `VERL_COMPATIBILITY_REPORT.md` |
 
 1. **VA0 — plan acceptance:** the user has accepted this exact task, matrix,
    fixtures, tolerances, failure rules, and resource ceilings at a recorded git
@@ -752,10 +781,11 @@ accepted scope, approver, and evidence/ledger IDs.
 4. **VA3 — objective approval:** exact GRPO equations are accepted before any
    GRPO optimizer fixture; exact SDPO equations receive a separate later
    approval before any SDPO optimizer fixture.
-5. **VA4 — report/pin acceptance:** the user accepts S5 evidence and the exact
-   stack tuple. This permits proposing a separate framework-binding skeleton
-   task; it neither creates that code nor automatically closes `SK-01..SK-12`.
+5. **VA4 — report/pin acceptance (superseded):** I8H-20260719 authorized the
+   framework build and bounded closeout without another interactive checkpoint.
+   The report accepts the exact compatibility tuple only for the exercised
+   framework/smoke scope; broader promotion gates remain open.
 
-VA0, VA1, and the restricted standing VA2 are now recorded. Execution must
-still stop before any production GRPO or SDPO optimizer use because VA3 is
-open, and it must stop before a production pin because VA4 is open.
+VA0, VA1, and the restricted standing VA2 are recorded, and the bounded I8H
+closeout supersedes VA4. Execution must still stop before any production GRPO
+or SDPO optimizer use because VA3 and the applicable promotion gates are open.

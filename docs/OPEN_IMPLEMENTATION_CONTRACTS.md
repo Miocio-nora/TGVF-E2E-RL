@@ -1,6 +1,6 @@
 # Open Implementation Contracts
 
-Status: **active gate checklist; I8H-20260719 implementation accepted**
+Status: **bounded framework implementation complete; production gate checklist active**
 Recorded: **2026-07-19 JST**
 
 ## 1. Purpose
@@ -65,8 +65,18 @@ This acceptance fixes:
 It closes `SK-01` and accepts the interface shapes in Project Task §0.2 for
 implementation. `SK-02`, `SK-04`, `SK-05`, `SK-06`, `SK-09`, `SK-10`, `SK-11`,
 and `SK-12` now track implementation/evidence quality rather than permission to
-create the accepted source files. `SK-03` continues to block only code derived
-from legacy sources until the exact provenance entry exists.
+create the accepted source files. `SK-03` is closed for the exact files used by
+this bounded build; the same provenance rule continues to block every new
+legacy-derived file until its own entry exists.
+
+The bounded implementation is now complete. The accepted compatibility stack
+is upstream veRL
+`e003163181731412595257a72ec173071efb125f`, vLLM `0.12.0`, Torch
+`2.9.0+cu128`, Transformers `4.57.6`, and CPython `3.12.3`. `111` CPU tests,
+the real-Qwen3 `SC-20-R6` TP=2 latent-transport smoke, and the two-rank `SC-30`
+bitwise FSDP2 resume smoke passed. These results close framework-construction
+and bounded compatibility evidence only; later rollout, representation,
+production-objective, model-family, and scale gates below remain authoritative.
 
 Real datasets, reward values, final prompt text, production GRPO/SDPO
 mathematics and configuration, any hybrid objective, long training, and the 72B
@@ -75,14 +85,19 @@ after its exact test-contract equations and pure-tensor oracle are recorded.
 
 Where older text in this file or `VERL_COMPATIBILITY_SPIKE_PLAN.md` conflicts,
 this section and Project Task §0 take precedence. The earlier proposal status,
-SGLang/stable cells, `SDPO_STATIC_SEAM_READY` stopping point, per-cell request
-for another user reply, and separate post-report skeleton approval are
-superseded. Technical PASS/FAIL criteria, exact-identity records, and ledger
-requirements remain in force.
+full mandatory cell matrix/overall hard-PASS requirement, SGLang/stable cells,
+`SDPO_STATIC_SEAM_READY` stopping point, per-cell request for another user
+reply, and separate post-report skeleton approval are superseded. Technical
+criteria still apply to any cell that claims the corresponding evidence;
+exact-identity records and ledger requirements remain in force. Unrun original
+matrix items remain promotion gates rather than implicit passes.
 
 ## 2. Fixed directions
 
 - [x] `FIXED` — Upstream veRL is the policy-RL infrastructure.
+- [x] `FIXED` — The exact accepted compatibility pin is upstream veRL
+  `e003163181731412595257a72ec173071efb125f` with vLLM `0.12.0`; this is not a
+  production parallel-topology decision.
 - [x] `FIXED` — FSDP2 support is required. Exact topology is evidence-based.
 - [x] `FIXED` — Qwen3-VL-8B-Thinking at the accepted stable local path is the
   primary policy/reference target; `Qwen/Qwen2.5-VL-7B-Instruct` is the required
@@ -132,7 +147,9 @@ requirements remain in force.
   Replacement: train a new native-format TGVF Adapter checkpoint; the old one
   is reference/parity only.
 - [x] `SUPERSEDED C-03` — “No RL framework has been selected.” Replacement:
-  veRL is selected; its commit/backend/topology still require a spike.
+  veRL is selected, and the bounded compatibility task fixed its exact commit,
+  dependency environment, vLLM-only backend, and public adapter surface.
+  Production placement and topology remain open.
 - [x] `SUPERSEDED C-04` — Function name `tgvf_focus`. Replacement:
   `tgvf_focus_tool`.
 - [x] `SUPERSEDED C-05` — A one-call trajectory model. Replacement: at most one
@@ -170,30 +187,39 @@ interfaces must be versioned and fail closed while unset.
     both target-condition providers, multi-call tool runtime,
     framework-neutral trajectory records, reward/judge interfaces,
     GRPO/SDPO objective and teacher-state boundaries, veRL adapter, evaluation.
-- [ ] `OPEN_BLOCKING SK-02` — Freeze ownership between veRL and this repository.
+- [x] `FIXED SK-02` — Ownership between veRL and this repository is explicit.
   - veRL owns: distributed workers, scheduling, optimizer execution,
     checkpoint/resume, metric aggregation.
   - This repository owns: native transcript identity, strict parser, latent
     tool execution, per-call observation records, rewards/verifiers, exact
     objective extension/parity tests.
-  - Public extension points to use: `[TBD after spike]`
-- [ ] `OPEN_BLOCKING SK-03` — Freeze the first legacy reuse inventory.
-  - Exact files/symbols/data manifests and hashes: `[TBD]`
-  - Required artifact: updated `docs/LEGACY_REFERENCE.md` plus reviewed migration
-    inventory.
-- [ ] `OPEN_BLOCKING SK-04` — Freeze the TGVF Adapter boundary.
-  - Inputs: exact `Hq` contract, original-image pre-merge features, all
-    DeepStack branches, geometry/mask/config: `[TBD schema]`
-  - Outputs: main `D`, all D-DeepStack tensors, metadata: `[TBD schema]`
-  - Frozen Qwen merger ownership and artifact identity: `[TBD]`
-- [ ] `OPEN_BLOCKING SK-05` — Freeze a versioned framework-neutral trajectory
+  - Accepted public extension points: `AgentLoopOutput`, a custom public
+    `AgentLoopManager`, `DataProto`, `register_policy_loss`,
+    `FSDPEngineConfig`, and `CheckpointHandler`, plus vLLM's general plugin,
+    model, and multimodal processor registries. Private worker/trainer patches
+    remain forbidden.
+- [x] `FIXED SK-03` — The bounded framework reuse inventory and port records are
+  frozen in `docs/LEGACY_REFERENCE.md`: the adapted TGVF core and clean-subtree
+  DeepStack semantics are tied to exact source paths and SHA256 identities.
+  This closes only the files already used by the framework. Any additional
+  representation code or data still requires a new provenance entry, and the
+  complete training inventory remains blocked under Gate A0.
+- [x] `FIXED SK-04` — The framework TGVF Adapter boundary is typed and
+  versioned in `src/tgvf_rl/representation/`: target conditioning,
+  original-image pre-merge features, model-supported branches and explicit
+  geometry enter; main `D`, ordered D-DeepStack branches, and metadata leave.
+  Real `Hq`, merger/artifact identity, and representation-training values
+  remain Gate A0 items rather than hidden framework defaults.
+- [x] `FIXED SK-05` — A versioned framework-neutral trajectory
   record interface with reserved fields for tokens, ownership masks, behavior
   log probabilities, per-call observations, identities, rewards, and stops.
   It must also preserve typed environment/judge feedback, group identity,
   demonstration provenance, teacher-context identity, per-turn alignment, and
   exact-observation teacher replay handles without making GRPO depend on SDPO.
-  - Exact dataclass/schema: `[TBD]`
-- [ ] `OPEN_BLOCKING SK-06` — Freeze configuration/identity plumbing.
+  - Implemented in `src/tgvf_rl/trajectories/`, `contracts/`, and
+    `observations/`; content-addressed records are validated before veRL
+    conversion.
+- [x] `FIXED SK-06` — Configuration/identity plumbing is fail closed.
   - Every prompt, schema, template, model, Adapter checkpoint, data manifest,
     reward, objective, backend, and code state has a version/hash.
   - Exception: the accepted stable Qwen3 model uses model name + absolute path
@@ -206,31 +232,34 @@ interfaces must be versioned and fail closed while unset.
 - [x] `FIXED SK-08` — The first policy RL path exposes only a frozen TGVF
   Adapter. A joint-update extension may be reserved but not implemented as an
   active mode without Gate J0.
-- [ ] `OPEN_BLOCKING SK-09` — Freeze the SDPO-ready architecture boundary before
-  the framework skeleton is accepted. It must include:
+- [x] `FIXED SK-09` — The SDPO-ready framework boundary is implemented with:
   - typed feedback, success decision, group/demonstration provenance;
   - versioned teacher-context request/result and truncation report;
   - sampled-token alignment for every policy assistant turn;
   - teacher replay handles for the exact recorded original image, main `D`, all
     D-DeepStack branches, layout, positions, masks, and cache contract;
-  - full-logit/top-k-plus-tail distillation-target schema and valid/sample masks;
+  - full-distribution and sampled-token distillation paths with valid/sample
+    masks;
   - objective plugin/composition identity and metrics;
   - current-policy self-teacher plus EMA/trust-region regularization lifecycle
     and FSDP2/LoRA state ownership;
   - teacher/update counters, configuration, RNG, checkpoint, and resume state.
-  The teacher/replay path and `sdpo`/hybrid objective modes exist from the start
-  but fail closed until Gate D0. The general objective registry and accepted
-  GRPO path must remain independently usable.
-- [ ] `OPEN_BLOCKING SK-10` — Freeze a versioned Qwen VLM family-adapter
+  Pure `sdpo` and `grpo` are distinct registry entries; no hybrid is implied.
+  Exact production feedback, equations, target approximation, placement, and
+  parameters remain fail closed under Gate D0.
+- [x] `FIXED SK-10` — A versioned Qwen VLM family-adapter
   interface covering processor/template, vision taps, DeepStack, M-RoPE,
   multimodal state, and deterministic forward.
-  - Primary implementation fixture: Qwen3-VL-8B-Thinking.
-  - Secondary compatibility fixture: `Qwen/Qwen2.5-VL-7B-Instruct`.
-- [ ] `OPEN_BLOCKING SK-11` — Freeze the shared target-conditioning interface
-  and require both contextual-hidden-state and target-token-embedding provider
+  - Primary implementation fixture: Qwen3-VL-8B-Thinking, including the real
+    `SC-20-R6` vLLM latent-transport smoke.
+  - Secondary boundary: `Qwen/Qwen2.5-VL-7B-Instruct` main-`D` synthetic family
+    contract only. This closes the interface shape, not the full end-to-end
+    compatibility gate in `PR-02C`/`SD-11`.
+- [x] `FIXED SK-11` — The shared target-conditioning interface has both
+  contextual-hidden-state and target-token-embedding provider
   implementations/fixtures. No provider-specific trajectory schema is allowed.
-- [ ] `OPEN_BLOCKING SK-12` — Freeze a separate optional judge-provider
-  interface. Judge output carries model/service/prompt/sampling/calibration
+- [x] `FIXED SK-12` — A separate optional judge-provider interface is
+  implemented. Judge output carries model/service/prompt/sampling/calibration
   identity and may never masquerade as reference-policy or SDPO-teacher state.
 
 ## 5. Gate R0 — Before native rollout is accepted
@@ -386,63 +415,78 @@ superseded by §1.1.
 - [x] `FIXED VS-01` — Accept a bounded spike task in
   `docs/PROJECT_TASK.md`; veRL selection itself is not reopened.
   - Accepted task: `I8H-20260719`, Project Task §0.
-- [ ] `OPEN_BLOCKING VS-02` — Candidate upstream veRL commits and isolated
-  dependency matrices.
-  - Primary exact main snapshot:
-    `e003163181731412595257a72ec173071efb125f`, observed 2026-07-19 JST.
-  - Stable comparison:
-    `v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c`.
-  - Proposed upstream vLLM/SGLang matrices and the unresolved local lock are in
-    the spike plan; no environment is installed or accepted yet.
+- [x] `FIXED VS-02` — The isolated compatibility matrix is accepted:
+  CPython `3.12.3`, upstream veRL
+  `e003163181731412595257a72ec173071efb125f`, vLLM `0.12.0`, Torch
+  `2.9.0+cu128`, and Transformers `4.57.6`, with the complete resolved graph in
+  `requirements/compatibility.lock`. Official
+  `v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` remains historical comparison
+  material and was not installed or run.
 - [x] `FIXED VS-03` — vLLM is the only rollout backend. SGLang is not installed,
   tested, or maintained by this task. Exact vLLM package/image identity is
-  selected and recorded from compatibility evidence.
-- [ ] `OPEN_BLOCKING VS-04` — Minimal FSDP2 configuration(s), model fixture,
-  device mesh, and state-dict strategy.
-  - Proposed minimum: two-rank FSDP2, LoRA dropout zero, separate frozen
-    reference, one non-RL infrastructure update, sharded save/teardown/resume.
-  - Exact GPU type, mesh, wrap policy, offload, precision, and state-dict/export
-    strategy remain `[TBD]` until a complete `PLANNED` entry.
-- [ ] `OPEN_BLOCKING VS-05` — Public extension surface to test:
-  documented AgentLoop/registry, tool registration, rollout token/logprob
-  output, DataProto/TensorDict fields, custom model-forward registration,
-  public objective/loss hook, FSDP2 engine/checkpoint, and teacher/distillation
-  lifecycle. Subclassing or replacing private worker/postprocess/trainer control
-  flow fails this item.
+  selected and recorded from compatibility evidence. Live Qwen3 execution
+  requires `VLLM_PLUGINS=tgvf_qwen3_precomputed`,
+  `VLLM_ATTENTION_BACKEND=TRITON_ATTN`, and multimodal-encoder
+  `TORCH_SDPA`.
+- [x] `FIXED VS-04` — The minimum bounded FSDP2 evidence is `SC-30`: two B200
+  ranks, one-dimensional composable-FSDP2 mesh, FP32 tiny deterministic model,
+  strict distributed model/optimizer/extra-state checkpoint, teardown, rebuild,
+  and bitwise-identical resumed next step. This closes the compatibility
+  infrastructure question only; production Qwen wrap, precision, offload,
+  placement, sharding, and topology remain Gate G0/P0 decisions.
+- [x] `FIXED VS-05` — The accepted public surface is veRL
+  `AgentLoopOutput`/custom `AgentLoopManager`, `DataProto`,
+  `register_policy_loss`, `FSDPEngineConfig`, and `CheckpointHandler`, plus
+  vLLM's public general-plugin, model, and multimodal processor registries.
+  The project owns lossless records, exact replay, objectives, teacher state,
+  and plugin code; no private worker/postprocess/trainer or site-package patch
+  is used.
 - [ ] `OPEN_BLOCKING VS-06` — Numerical tolerances and PASS/FAIL criteria for:
   primary Qwen3 policy/reference forward,
   `Qwen/Qwen2.5-VL-7B-Instruct` family-adapter fixture, both
   target-conditioning providers, two-call latent-observation
   transport, actual behavior logprobs, exact observation replay, FSDP2 one
   step, save/resume.
-  - Proposed structural and numerical values are in spike-plan §7 and require
-    VA0 acceptance; they are not framework defaults.
-- [ ] `OPEN_BLOCKING VS-07` — Failure conditions include private-trainer forks,
+  - Completed subset: `111` CPU tests, Qwen3 `SC-20-R6` real TP=2 native
+    two-call latent transport, and `SC-30` exact FSDP2 resume.
+  - Remaining: real Qwen policy/reference logit/logprob replay parity, the full
+    Qwen2.5 family-specific fixture, and production loss/gradient/topology
+    criteria. The passed transport smoke does not close those questions.
+- [x] `FIXED VS-07` — Failure conditions include private-trainer forks,
   PIL re-encoding of `D`, missing actual sampling logprobs, or inability to
   preserve exact observation state.
-  - The expanded proposed hard-failure set is in spike-plan §7.4 and still
-    requires VA0 acceptance as a whole.
-- [ ] `OPEN_BLOCKING VS-08` — Complete `PLANNED` ledger entry before any GPU use.
-- [ ] `OPEN_BLOCKING VS-09` — Produce an SDPO patch-surface map from pinned
-  reference commit `7c457fc1...` to the candidate upstream veRL commit. The
-  report must identify maintained/public hooks versus fork-private changes.
-- [ ] `OPEN_BLOCKING VS-10` — Prove through the proposed neutral schema and
-  isolated spike prototype that the eventual skeleton can carry a complete
+  Failed intermediate Qwen cells remain recorded rather than hidden; the
+  passing path uses only repository-owned public extensions.
+- [x] `FIXED VS-08` — Every completed GPU cell had a complete `PLANNED` ledger
+  entry before launch. This remains a mandatory per-cell rule for future GPU
+  work rather than a blanket authorization.
+- [x] `FIXED VS-09` — The SDPO patch-surface map from pinned
+  reference commit `7c457fc1...` to the accepted upstream veRL commit. The
+  external-reference record identifies fork-private behavior; the implementation
+  ports the objective and teacher contracts onto the public upstream surface
+  without adopting the reference repository's veRL tree.
+- [x] `FIXED VS-10` — The neutral schema and framework tests carry a complete
   native multi-call teacher context, per-assistant-turn alignment, typed
   feedback, exact multimodal observation handles, and versioned distillation
-  targets. The pinned reference's text-only final-response reprompt path is
-  insufficient.
+  targets. Exact-observation teacher replay rejects handle or model-state
+  changes; it does not use the pinned reference's text-only final-response
+  reconstruction.
 - [ ] `OPEN_BLOCKING VS-11` — Establish a feasible FSDP2/LoRA or full-policy
   lifecycle for separate frozen-reference and SDPO teacher state, including
   initialization, update timing, sharding/offload, checkpoint, RNG, and strict
-  resume. Reference-code actor-only checkpointing fails this item.
-- [ ] `OPEN_BLOCKING VS-12` — Explicitly test the known reference limitations:
-  multimodal distillation rejection, dependency on legacy workers, interaction
-  with KL reference policy, full-logit memory, and top-k/tail alignment.
+  resume. Repository-owned teacher state and CPU checkpoint/resume tests exist;
+  `SC-30` proves generic strict FSDP2 state restoration, not the final
+  actor/reference/teacher placement or Qwen LoRA/full-policy lifecycle.
+- [x] `FIXED VS-12` — Known reference limitations—text-only reconstruction,
+  legacy-worker coupling, KL-reference role ambiguity, full-distribution memory,
+  and approximation/alignment choices—are explicit exclusions or configurable
+  project-owned contracts. No SDPO-fork runtime behavior is inherited as a
+  production default.
 
-Required output: `docs/VERL_COMPATIBILITY_REPORT.md` containing PASS/FAIL
-evidence, selected commit/backend, dependency matrix, required public extension
-surface, FSDP2 topology evidence, and unresolved blockers.
+Required output: [`VERL_COMPATIBILITY_REPORT.md`](VERL_COMPATIBILITY_REPORT.md)
+records PASS/FAIL evidence, the selected commit/backend/dependency matrix,
+required public extension surface, bounded FSDP2 evidence, and unresolved
+blockers.
 
 Planning artifact: `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. Its compatible
 technical checks remain useful, while its authorization model is superseded by
@@ -730,13 +774,16 @@ the synthetic implementation smoke.
 - [x] Accept I8H-20260719, its vLLM-only compatibility questions, neutral
   interfaces, synthetic fixtures, hard failures, isolated dependencies, and
   bounded execution authority.
-- [ ] Run the approved isolated spike, record the selected public hooks and
-  state ownership, then close or revise Gate S0 before framework-binding source
-  packages are created.
-- [ ] Freeze the first legacy representation file/data inventory.
-- [ ] Freeze the S0 Qwen-family adapter, both condition-provider interfaces,
-  SDPO teacher/objective/checkpoint boundary, and optional judge-provider
-  interface before creating source packages.
+- [x] Run the approved isolated compatibility task, record the selected public
+  hooks and state ownership, and implement the framework-binding packages.
+  `111` CPU tests, `SC-20-R6`, and `SC-30` are the bounded evidence.
+- [x] Freeze the bounded framework legacy file inventory and port records.
+- [ ] Freeze any additional representation-training code and data inventory
+  before Gate A0.
+- [x] Implement the S0 Qwen-family boundary, both condition-provider
+  interfaces, SDPO teacher/objective/checkpoint boundary, and optional
+  judge-provider interface. This does not close Qwen2.5 end-to-end or D0
+  production-mathematics gates.
 - [ ] Configure the local/runtime path for the fixed
   `Qwen/Qwen2.5-VL-7B-Instruct` model before its executable fixture.
 - [x] Keep the reserved `Qwen/Qwen2.5-72B-Instruct` judge disabled for the first

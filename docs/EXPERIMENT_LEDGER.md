@@ -3,7 +3,7 @@
 I8H-20260719 authorizes the bounded compatibility cells below. It does not
 authorize production training. Only physical GPUs 2 and 3 may be exposed.
 
-## Planned bounded cells
+## Bounded cells and outcomes
 
 ### SC-20-QWEN3-VLLM-LATENT
 

@@ -1,6 +1,6 @@
 # Controlled Legacy Reference
 
-Status: **reference identified but not frozen**
+Status: **bounded framework port inventory frozen; broader reference and training inventory open**
 Recorded: **2026-07-18 JST**
 Updated: **2026-07-19 JST**
 

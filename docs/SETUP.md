@@ -10,6 +10,8 @@ or SDPO production mathematics, policy tuning scope, or scale topology.
 ## Requirements
 
 - CPython 3.12 on Linux x86-64;
+- Python 3.12 development headers (`Python.h`) and a system GCC/G++ toolchain
+  available when Triton compiles runtime extensions;
 - an NVIDIA driver compatible with the PyTorch CUDA 12.8 wheel graph for GPU
   smoke work;
 - network access for the exact upstream veRL Git revision and package wheels.
@@ -17,6 +19,20 @@ or SDPO production mathematics, policy tuning scope, or scale topology.
 Python 3.10 is intentionally unsupported: the accepted veRL revision imports
 `enum.StrEnum`. The old local `.venv` cannot execute the public agent-loop API;
 use the isolated `.venv312` environment instead.
+
+Do not inherit `CC` or `CXX` from a legacy project environment. Select the
+system compiler explicitly before a live vLLM/Triton launch:
+
+```bash
+unset CC CXX CPATH
+export CC=/usr/bin/gcc
+export CXX=/usr/bin/g++
+```
+
+If Python development headers are not installed system-wide, supply an
+explicit, version-matched header bundle through `CPATH`; the exact bundle used
+by `SC-20-R6` is recorded in the experiment ledger. Do not point `CPATH` at an
+unidentified legacy environment.
 
 ## Materialize the exact compatibility environment
 
@@ -39,11 +55,17 @@ set exactly:
 
 ```bash
 export VLLM_PLUGINS=tgvf_qwen3_precomputed
+export VLLM_ATTENTION_BACKEND=TRITON_ATTN
 ```
 
-The live veRL adapter rejects a missing or different value. The plugin is
-loaded by the vLLM core and workers; registering it only in the caller process
-is insufficient.
+The live veRL adapter rejects a missing or different value for either variable.
+The plugin is loaded by the vLLM core and workers; registering it only in the
+caller process is insufficient. The accepted vLLM engine configuration also
+sets
+`actor_rollout_ref.rollout.engine_kwargs.vllm.mm_encoder_attn_backend=TORCH_SDPA`.
+This split uses `TRITON_ATTN` for language-model attention and `TORCH_SDPA` for
+the multimodal encoder; substituting FlashInfer is not part of the accepted
+compatibility path.
 
 ## CPU verification
 

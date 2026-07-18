@@ -5,14 +5,34 @@ Target-Guided Visual Foveation for a Qwen reasoning policy trained with
 end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 `Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
-> **Status:** framework implementation is active on a feature branch. No real
-> data/reward/prompt configuration, production training run, or evaluation
+> **Status:** the bounded framework implementation and its compatibility
+> smokes are complete on the feature branch. No real data/reward/prompt
+> configuration, production training run, trained TGVF Adapter, or evaluation
 > result exists yet.
 
-The bounded [veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md) is
-authorized for implementation and smoke testing. veRL is the RL framework,
-vLLM is the only rollout backend, and any GPU smoke is restricted to physical
-GPU indices 2 and 3. Real training remains out of scope.
+The bounded [veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
+selected upstream veRL commit
+`e003163181731412595257a72ec173071efb125f`, vLLM `0.12.0`, and the resolved
+Python 3.12 compatibility environment. vLLM is the only rollout backend. This
+is the accepted compatibility stack, not a production parallel-topology or
+training lock.
+
+Current evidence is deliberately small:
+
+- `111` CPU tests pass for the framework contracts and synthetic oracles;
+- `SC-20-R6` passes real Qwen3-VL-8B-Thinking TP=2 precomputed-latent transport
+  with a native two-call transcript, no tokenizer growth, and no site-package
+  patch;
+- `SC-30` passes two-rank composable FSDP2 save/teardown/resume with a bitwise-
+  identical next step on its tiny deterministic infrastructure fixture.
+
+The live vLLM path requires the repository plugin and accepted attention split:
+`VLLM_PLUGINS=tgvf_qwen3_precomputed`,
+`VLLM_ATTENTION_BACKEND=TRITON_ATTN`, and multimodal-encoder attention
+`TORCH_SDPA`. See [environment setup](docs/SETUP.md) and the
+[experiment ledger](docs/EXPERIMENT_LEDGER.md) for exact identities. These
+smokes are not policy training, Qwen FSDP2 capacity evidence, or production
+objective evidence.
 
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
@@ -83,8 +103,9 @@ intermediate Stage2-style policy SFT and no Golden policy adapter.
   representation checkpoints remain family/model-specific.
 - Implement both contextual-hidden-state and target-token-embedding providers.
 - Use upstream veRL as the RL infrastructure, vLLM as the only rollout backend,
-  and require an FSDP2 execution path; select the exact commit and parallel
-  topology from bounded smoke evidence.
+  and require an FSDP2 execution path. The exact compatibility commit and
+  environment are selected; production sharding, placement, and parallel
+  topology remain evidence-based.
 - Freeze the TGVF Adapter for the first policy RL proof.
 - Preserve the actual behavior log probability of every policy-sampled token.
 - Replay policy, old-policy, and reference likelihoods against the same exact
@@ -146,8 +167,9 @@ choices remain unset:
 - Qwen2.5 local/runtime path, family-specific representation artifact, and
   native prompt;
 - target-span and `Hq` construction details;
-- exact veRL commit/environment and FSDP2 topology; the backend is fixed to
-  vLLM;
+- production actor/reference/rollout placement, FSDP2 sharding, and parallel
+  topology; the compatibility veRL commit/environment and vLLM backend are
+  fixed;
 - policy LoRA or full-parameter scope;
 - exact GRPO equations, clipping, KL, and normalization;
 - RL data sources and audited manifests;
@@ -163,27 +185,33 @@ be inherited silently from a library default.
 
 ## Roadmap
 
-1. Record provenance and execute the accepted bounded compatibility task.
-2. Complete the isolated veRL/vLLM/FSDP2 smoke and implement versioned
-   Qwen-family, dual-provider, trajectory, objective, teacher-state, and judge
-   boundaries without claiming that the future SDPO contract is frozen.
-3. Extract the TGVF Adapter core and establish numerical parity.
-4. Implement the native Qwen protocol, strict parser, multi-call runtime, and
-   framework-neutral trajectory records.
+1. **Completed:** record provenance and execute the bounded compatibility task.
+2. **Completed for the framework fixture:** implement the versioned
+   Qwen-family, dual-provider, trajectory, objective, teacher-state, judge, and
+   upstream-veRL boundaries; pass the Qwen3 vLLM transport and tiny FSDP2
+   resume smokes. Qwen2.5 remains only a fail-closed main-`D`/family boundary,
+   not full DeepStack end-to-end support.
+3. **Completed for the framework fixture:** implement the native Qwen protocol,
+   strict parser, repeated-call runtime, immutable observations, exact behavior
+   records, and framework-neutral trajectory conversion.
+4. Establish numerical output/gradient parity between the new TGVF Adapter core
+   and its pinned legacy reference, then freeze the native target-span/`Hq` and
+   merger/artifact contracts.
 5. Build the native-format representation pipeline and train a new
    Qwen3-VL-8B-Thinking TGVF Adapter checkpoint. Require a separate
    family-specific artifact and full fixture suite before claiming Qwen2.5-VL
    end-to-end support.
 6. Bind the GRPO equations and run a minimal frozen-Adapter policy proof.
-7. Validate the implemented reference-style SDPO path through text then
-   multimodal parity, including teacher state and exact resume; select real
-   feedback and training hyperparameters only after the framework smoke passes.
+7. Freeze the production SDPO equations, feedback/teacher policy, approximation,
+   and placement, then validate the implemented path on real two-call
+   multimodal replay and FSDP2 teacher-state resume.
 
 ## Documentation
 
 - [Project task and architectural baseline](docs/PROJECT_TASK.md)
 - [Open implementation contracts and promotion gates](docs/OPEN_IMPLEMENTATION_CONTRACTS.md)
 - [Accepted bounded veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
+- [veRL compatibility closeout report](docs/VERL_COMPATIBILITY_REPORT.md)
 - [Historical framework-skeleton reference draft](docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md)
   (subordinate to the project task and supersession register)
 - [Controlled legacy provenance](docs/LEGACY_REFERENCE.md)
