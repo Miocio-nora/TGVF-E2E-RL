@@ -449,8 +449,8 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   two-rank FSDP2 infrastructure/checkpoint smoke, not a Qwen L4 claim.
 - Spike-plan git revision and VA0/VA1/VA2 approval references:
   `2ffa28e`; I8H-20260719 and approved spike-plan §0.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: does the accepted Python/Torch/veRL environment execute composable
   FSDP2 on two ranks and reproduce the next forward, scalar loss, optimizer
   update and local parameter shards exactly after strict distributed
@@ -501,15 +501,30 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
 - World size, microbatch, accumulation, and global batch: world `2`; each rank
   sees shape `[2,3,16]`; one backward/update per step; accumulation `1`.
 - GPUs: same physical B200 identities and logical mapping as SC-20.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 600 seconds.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T07:32:31+09:00` / `2026-07-19T07:32:57+09:00`, 26 seconds;
+  torchrun launcher PID 1422747, two ranks identified in the result as 0 and 1.
+- Actual GPU-hours and peak scratch use: less than `0.015` two-device GPU-hours
+  by wall-time upper bound; the bounded run completed before a live peak-memory
+  sample, returned both devices to 0 MiB, and wrote a 227,280-byte checkpoint,
+  1,562-byte result and 4,027-byte log.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 NCCL_DEBUG=WARN timeout 600s .venv312/bin/torchrun --standalone --nproc-per-node=2 spikes/verl_compat/fsdp2_smoke.py --config configs/smoke/fsdp2.toml --checkpoint-dir artifacts/compatibility/SC-30-fsdp2-infra-db3315a-checkpoint --output artifacts/compatibility/SC-30-fsdp2-infra-db3315a.json > artifacts/compatibility/SC-30-fsdp2-infra-db3315a.log 2>&1`.
 - Outputs: strict distributed checkpoint, result JSON and log above.
 - Scorer/parser identity: smoke script/config SHA256 above.
-- Metrics: `PENDING`—per-rank loss/shard digest, exact resume flag, versions and
-  public veRL symbols.
-- Conclusion: `PENDING`; any nondeterminism, missing state or rank failure stops
-  the cell.
+- Metrics: `PASS`; both ranks reported control loss `1.5465291738510132` and
+  `resume_exact=true`. Rank-local updated model-shard SHA256 values were
+  `228dac25766a600def89284d138d47bfc9b3879862717aee00962cb3fcab3e4f`
+  and `20ea8b816778e10b2e0e6a9b1bfd05e8c43a4962d98c2e7d45ba21569b2c30ed`.
+  The installed veRL distribution was clean at the pinned commit and exposed
+  `FSDPEngineConfig`/`CheckpointHandler`. Result SHA256:
+  `b131beb78ce03ba68fb91ba37369959182527c1aa43b237d407520e068fc89b1`;
+  log SHA256:
+  `9f4dd8e801ee7fadde5e599f6a12c0caed673c6a2f59b2f5912727555aa7b38d`.
+- Conclusion: `PASS` for the two-rank infrastructure/checkpoint question. The
+  uninterrupted and teardown/reconstructed paths produced bitwise-identical
+  step-2 output, scalar loss and post-update local shards with strict model,
+  optimizer and extra-state restoration. This is not a Qwen FSDP2 memory or
+  production-throughput claim.
 
 ## Compatibility-spike status
 
