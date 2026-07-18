@@ -17,7 +17,10 @@ import sys
 from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlparse
 
-from tgvf_rl.framework.vllm import TGVF_QWEN3_VLLM_ARCHITECTURE
+from tgvf_rl.framework.vllm import (
+    TGVF_QWEN3_VLLM_ARCHITECTURE,
+    TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
+)
 
 
 SPIKE_CANDIDATE_VERL_COMMIT = "e003163181731412595257a72ec173071efb125f"
@@ -398,6 +401,17 @@ def validate_verl_config_mapping(
     ):
         raise VerlConfigurationError(
             "the exact-observation proof requires the vLLM multimodal processor cache off"
+        )
+    if (
+        _path_value(
+            config,
+            "actor_rollout_ref.rollout.engine_kwargs.vllm.mm_encoder_attn_backend",
+        )
+        != TGVF_VLLM_MM_ENCODER_ATTN_BACKEND
+    ):
+        raise VerlConfigurationError(
+            "vLLM multimodal encoder attention must use TORCH_SDPA for the accepted "
+            "driver-portable path"
         )
     hf_overrides = _path_value(
         config, "actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides"

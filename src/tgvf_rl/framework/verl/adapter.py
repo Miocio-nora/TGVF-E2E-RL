@@ -8,7 +8,10 @@ from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 from tgvf_rl.checkpoint import CheckpointCoordinator
-from tgvf_rl.framework.vllm import TGVF_QWEN3_VLLM_ARCHITECTURE
+from tgvf_rl.framework.vllm import (
+    TGVF_QWEN3_VLLM_ARCHITECTURE,
+    TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
+)
 
 from .checkpoint_bridge import (
     SDPOTeacherCheckpointContributor,
@@ -67,6 +70,9 @@ class VerlAdapterConfig:
             "actor_rollout_ref.rollout.enable_prefix_caching": False,
             "actor_rollout_ref.rollout.engine_kwargs.vllm.enable_mm_embeds": True,
             "actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb": 0,
+            "actor_rollout_ref.rollout.engine_kwargs.vllm.mm_encoder_attn_backend": (
+                TGVF_VLLM_MM_ENCODER_ATTN_BACKEND
+            ),
             "actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides": {
                 "architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]
             },

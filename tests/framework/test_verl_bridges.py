@@ -295,6 +295,7 @@ def test_concrete_verl_config_mapping_checks_public_paths() -> None:
                     "vllm": {
                         "enable_mm_embeds": True,
                         "mm_processor_cache_gb": 0,
+                        "mm_encoder_attn_backend": "TORCH_SDPA",
                         "hf_overrides": {
                             "architectures": ["TGVFQwen3VLForConditionalGeneration"]
                         },
@@ -323,6 +324,12 @@ def test_concrete_verl_config_mapping_checks_public_paths() -> None:
     validate_verl_config_mapping(config)
     config["actor_rollout_ref"]["rollout"]["calculate_log_probs"] = False
     with pytest.raises(VerlConfigurationError, match="calculate_log_probs"):
+        validate_verl_config_mapping(config)
+    config["actor_rollout_ref"]["rollout"]["calculate_log_probs"] = True
+    config["actor_rollout_ref"]["rollout"]["engine_kwargs"]["vllm"][
+        "mm_encoder_attn_backend"
+    ] = "FLASH_ATTN"
+    with pytest.raises(VerlConfigurationError, match="TORCH_SDPA"):
         validate_verl_config_mapping(config)
 
 
@@ -552,6 +559,12 @@ def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
     assert overrides["actor_rollout_ref.model.lora.dropout"] == 0.0
     assert overrides["actor_rollout_ref.actor.checkpoint.async_save"] is False
     assert overrides["actor_rollout_ref.rollout.limit_images"] == 3
+    assert (
+        overrides[
+            "actor_rollout_ref.rollout.engine_kwargs.vllm.mm_encoder_attn_backend"
+        ]
+        == "TORCH_SDPA"
+    )
     assert overrides["actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides"] == {
         "architectures": ["TGVFQwen3VLForConditionalGeneration"]
     }

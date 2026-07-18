@@ -184,6 +184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         hf_overrides={"architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]},
         enable_mm_embeds=True,
         mm_processor_cache_gb=0,
+        mm_encoder_attn_backend="TORCH_SDPA",
         enable_prefix_caching=False,
         limit_mm_per_prompt={"image": 3},
         max_model_len=512,
