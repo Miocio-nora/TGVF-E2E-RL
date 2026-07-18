@@ -11,8 +11,8 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   latent execution smoke, narrower than the full L1..L3 promotion claim.
 - Spike-plan git revision and VA0/VA1/VA2 approval references:
   `2ffa28e`; I8H-20260719 in `PROJECT_TASK.md` §0 and approved spike-plan §0.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: can real Qwen3-VL-8B-Thinking on vLLM 0.12 load the repo-owned
   public model/processor plugin and execute one native transcript containing a
   source item plus two precomputed main-D/three-branch DeepStack items while
@@ -90,15 +90,80 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`; physical `3` =
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; both NVIDIA B200 183359 MiB,
   compute capability 10.0, driver 570.195.03; logical mapping `2->0`, `3->1`.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T07:02:41+09:00` / `2026-07-19T07:03:32+09:00`, 51 seconds;
+  engine PID 1360895, worker PIDs 1361456 and 1361457.
+- Actual GPU-hours and peak scratch use: less than `0.029` two-device GPU-hours
+  by wall-time upper bound; model weights were not loaded and observed memory
+  remained 0 MiB at the pre-load sample; log 16,495 bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-qwen3-vllm-latent-db3315a.json > artifacts/compatibility/SC-20-qwen3-vllm-latent-db3315a.log 2>&1`.
 - Outputs: result JSON and log paths above; no checkpoint.
 - Scorer/parser identity: smoke script SHA256 above; native renderer and plugin
   are code-commit identified; no task scorer.
-- Metrics: `PENDING`—PASS requires plugin model load, three latent items,
-  two sampled tokens, unchanged tokenizer length, and actual processed logprobs.
-- Conclusion: `PENDING`; any model/plugin/latent/logprob error stops the cell.
+- Metrics: public plugin resolved the requested architecture and initialized
+  TP=2/NCCL, then both workers stopped before weight loading. Log SHA256:
+  `c9f168332ba2f89a6bbde3e7709254b1e80fbd180e3aa882a19da54797282e9f`.
+- Conclusion: `FAIL` as required by the hard gate. The subclass variadic
+  constructor hid vLLM's new-style keyword-only `(vllm_config, prefix)`
+  signature, so vLLM classified it as old-style and raised missing
+  `vllm_config`. No latent forward or sampled-token result was produced.
+
+### SC-20-R1-QWEN3-VLLM-LATENT
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-20-R1`; mandatory bounded
+  rerun after the isolated public-constructor fix from failed `SC-20`.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
+  `SC-20`; I8H-20260719 covers this in-scope corrective rerun.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: same as SC-20, with the added gate that vLLM must recognize the
+  plugin as a new-style model and pass `vllm_config` and `prefix` by keyword.
+- Baseline and exact output path: failed SC-20; result
+  `artifacts/compatibility/SC-20-R1-qwen3-vllm-latent-22afd52.json`, log
+  `artifacts/compatibility/SC-20-R1-qwen3-vllm-latent-22afd52.log`.
+- Model and processor identity: identical to SC-20.
+- Representation checkpoint identity: identical deterministic synthetic latent
+  fixture to SC-20; trained representation checkpoint N/A.
+- N/A fields and justification: identical to SC-20.
+- Policy/reference initialization: identical to SC-20.
+- Rollout policy version and allowed asynchronous staleness: identical to
+  SC-20; staleness `0`.
+- Code commit and worktree state: runtime code commit
+  `22afd522bf444941e3d69741bc648f85d9be0afe`; launch worktree must be clean
+  except for this subsequently committed ledger result/plan.
+- Repository adapter/patch surface and hash: SC-20 surfaces unchanged except
+  `qwen3_plugin.py@4480e9d6e28542ad3b5f3f99597349c3e6d6626c50652e2658cd4a71021f7bce`;
+  smoke script remains
+  `a97ed36b90d9da9eab92853ab38628a4d789dd045c5b7b8d38afe42ccfca693c`;
+  no site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: identical to SC-20, `n=1`.
+- Native prompt/tool schema hash: identical to SC-20.
+- Chat-template/token-fixture hash and token-ownership masks: identical to
+  SC-20.
+- D/DeepStack/position/mask identity: identical to SC-20.
+- Observation materialization/artifact identity used by all replays: identical
+  limitation and CPU evidence to SC-20.
+- RL framework/version/environment lock: identical to SC-20.
+- Objective equations and normalization: N/A; no update.
+- Rollout/replay forward mode and adapter dropout/RNG contract: identical to
+  SC-20.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: identical to SC-20.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: identical to SC-20.
+- Logit/logprob/loss/gradient parity tolerances: identical to SC-20, plus the
+  plugin constructor-signature CPU regression test must pass.
+- World size, microbatch, accumulation, and global batch: identical to SC-20.
+- GPUs: identical physical B200 UUIDs and mapping to SC-20.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R1-qwen3-vllm-latent-22afd52.json > artifacts/compatibility/SC-20-R1-qwen3-vllm-latent-22afd52.log 2>&1`.
+- Outputs: result JSON and log paths above; no checkpoint.
+- Scorer/parser identity: same script/native renderer as SC-20, code commit and
+  corrected plugin hash above.
+- Metrics: `PENDING`; same PASS conditions as SC-20 plus no old-style model
+  warning/error.
+- Conclusion: `PENDING`; first hard failure stops the rerun.
 
 ### SC-30-FSDP2-INFRA
 
