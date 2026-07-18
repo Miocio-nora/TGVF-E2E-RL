@@ -235,8 +235,8 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   rerun after correcting R2's incomplete extracted-header search path.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
   `SC-20`; I8H-20260719 covers this in-scope environment correction.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question, baseline, model, processor, representation fixture,
   initialization, staleness, N/A fields, dataset, transcript, token fixture,
   D/DeepStack identity, replay limitation, RL lock, forward mode, sampling,
@@ -252,14 +252,70 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   A CPU preprocessor preflight for `#include <Python.h>` passed; extracted
   architecture `pyconfig.h` SHA256 is
   `23931f53bc7ee512c6bd3162828747494eaa5e21f23dd63b31170ec1adfbe65e`.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T07:14:37+09:00` / `2026-07-19T07:15:55+09:00`, 78 seconds;
+  engine PID 1385188, worker PIDs 1385479 and 1385480.
+- Actual GPU-hours and peak scratch use: less than `0.044` two-device GPU-hours
+  by wall-time upper bound; observed memory reached 4822 MiB/device before the
+  load sample, and the worker reported 8.447 GiB for loaded model state; log
+  58,401 bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R3-qwen3-vllm-latent-22afd52.json > artifacts/compatibility/SC-20-R3-qwen3-vllm-latent-22afd52.log 2>&1`.
 - Outputs: result JSON and log paths above; no checkpoint.
 - Scorer/parser identity: same script/native renderer and corrected plugin as
   SC-20-R2.
-- Metrics: `PENDING`; same PASS conditions as SC-20-R2 plus successful Triton
-  runtime helper compilation with the preflighted complete include path.
+- Metrics: the complete extracted-header path passed Triton runtime compilation;
+  TP=2 initialized and Qwen weights loaded in 15.25 seconds. Profiling then
+  entered the wheel-bundled visual FlashAttention kernel and raised
+  `cudaErrorUnsupportedPtxVersion`. Log SHA256:
+  `fbe98a6ac50731684dc256d810eb52beff7e35fd3225aa642a21ca1398099c03`.
+- Conclusion: `FAIL` as required by the hard gate. vLLM 0.12's bundled visual
+  FlashAttention PTX is not accepted by the host's NVIDIA 570.195.03 driver
+  (reported CUDA capability 12.8). The Qwen3 vLLM implementation publicly
+  supports a `TORCH_SDPA` multimodal-encoder override, so the next cell tests
+  that explicit driver-portable path; no site package is patched.
+
+### SC-20-R4-QWEN3-VLLM-LATENT
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-20-R4`; mandatory bounded
+  rerun using vLLM's public supported `TORCH_SDPA` visual-encoder path after
+  the wheel/driver PTX mismatch in R3.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
+  `SC-20`; I8H-20260719 covers this in-scope public configuration correction.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question, model, processor, representation fixture, initialization,
+  staleness, N/A fields, dataset, transcript, token fixture, D/DeepStack
+  identity, replay limitation, RL lock, sampling, dtypes, parallelism,
+  tolerances, batch and GPU identities: identical to SC-20-R3, with failed R3
+  as the baseline.
+- Exact output path: result
+  `artifacts/compatibility/SC-20-R4-qwen3-vllm-latent-d39c8bb.json`, log
+  `artifacts/compatibility/SC-20-R4-qwen3-vllm-latent-d39c8bb.log`.
+- Code commit and worktree state: runtime code commit
+  `d39c8bba780d259babb8b6c7c88ea9ba82fc58cc`; launch worktree may differ only
+  by the subsequently committed experiment-ledger record.
+- Repository adapter/patch surfaces and hashes:
+  `qwen3_plugin.py@4480e9d6e28542ad3b5f3f99597349c3e6d6626c50652e2658cd4a71021f7bce`,
+  `adapter.py@62c9c4e1561092f0d07cbd462aabf8dcabcda63a1835e5a50034540a09221e69`,
+  `compatibility.py@335b6c36f2aae95c426c4626ba3fbdac5c419aee6c4beec8111a7dbbfadc3f5f`,
+  `registration.py@f14315fa972324e3d4d7dc6554bbeba1adeebe5930ada5f3ff112dcb3a37a911`,
+  smoke script
+  `23b14c658ffc8ac9376d86d69ac6e7a62f8d53f848036b036156629027f30b22`;
+  no site-package patch.
+- Forward/attention/environment correction: vLLM eager main forward, cache
+  settings identical to R3; `mm_encoder_attn_backend=TORCH_SDPA` is enforced
+  by both the smoke and project veRL configuration validator. System compiler
+  and complete extracted-header paths remain identical to R3.
+- CPU gate before launch: complete suite `111 passed`; adapter tests prove the
+  public override is emitted and fail closed on `FLASH_ATTN`.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R4-qwen3-vllm-latent-d39c8bb.json > artifacts/compatibility/SC-20-R4-qwen3-vllm-latent-d39c8bb.log 2>&1`.
+- Outputs: result JSON and log paths above; no checkpoint.
+- Scorer/parser identity: script/native renderer and project validators at the
+  hashes above.
+- Metrics: `PENDING`; same PASS conditions as SC-20-R3 plus absence of the
+  bundled visual FlashAttention PTX path.
 - Conclusion: `PENDING`; first hard failure stops the rerun.
 
 ### SC-30-FSDP2-INFRA
