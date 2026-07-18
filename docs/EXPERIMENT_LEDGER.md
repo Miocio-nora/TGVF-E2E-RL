@@ -114,8 +114,8 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   rerun after the isolated public-constructor fix from failed `SC-20`.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
   `SC-20`; I8H-20260719 covers this in-scope corrective rerun.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: same as SC-20, with the added gate that vLLM must recognize the
   plugin as a new-style model and pass `vllm_config` and `prefix` by keyword.
 - Baseline and exact output path: failed SC-20; result
@@ -155,14 +155,68 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   plugin constructor-signature CPU regression test must pass.
 - World size, microbatch, accumulation, and global batch: identical to SC-20.
 - GPUs: identical physical B200 UUIDs and mapping to SC-20.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T07:08:23+09:00` / `2026-07-19T07:09:49+09:00`, 86 seconds;
+  engine PID 1373046, worker PIDs 1373596 and 1373597.
+- Actual GPU-hours and peak scratch use: less than `0.048` two-device GPU-hours
+  by wall-time upper bound; observed memory reached 4822 MiB/device before the
+  load sample, and the worker reported 8.447 GiB for loaded model state; log
+  45,627 bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R1-qwen3-vllm-latent-22afd52.json > artifacts/compatibility/SC-20-R1-qwen3-vllm-latent-22afd52.log 2>&1`.
 - Outputs: result JSON and log paths above; no checkpoint.
 - Scorer/parser identity: same script/native renderer as SC-20, code commit and
   corrected plugin hash above.
-- Metrics: `PENDING`; same PASS conditions as SC-20 plus no old-style model
-  warning/error.
+- Metrics: the corrected public plugin resolved as a new-style model, TP=2/NCCL
+  initialized, and Qwen weights loaded in 14.79 seconds. The run then stopped
+  during vLLM's Triton rotary profiling. Log SHA256:
+  `3825882000a40bc155d1619fac90fbdecbb2e952098a09a87a1b4e936a641d34`.
+- Conclusion: `FAIL` as required by the hard gate. The launcher inherited
+  `CC`/`CXX` from the legacy `revisit-vlm` Conda environment, and the host
+  Python 3.12 installation lacks `/usr/include/python3.12/Python.h`; Triton's
+  runtime CUDA helper compilation therefore failed before latent execution.
+  This cell proves the constructor correction but produces no sampled-token
+  result. No site package or source file was patched.
+
+### SC-20-R2-QWEN3-VLLM-LATENT
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-20-R2`; mandatory bounded
+  rerun after isolating the host compiler/header failure in `SC-20-R1`.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
+  `SC-20`; I8H-20260719 covers this in-scope environment correction.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: same as SC-20-R1, with the additional gate that vLLM/Triton uses
+  the system compiler and an exact locally extracted Ubuntu Python 3.12 header
+  package rather than any legacy environment compiler.
+- Baseline and exact output path: failed SC-20-R1; result
+  `artifacts/compatibility/SC-20-R2-qwen3-vllm-latent-22afd52.json`, log
+  `artifacts/compatibility/SC-20-R2-qwen3-vllm-latent-22afd52.log`.
+- Model, processor, representation fixture, initialization, staleness,
+  dataset, transcript, token fixture, D/DeepStack identity, replay limitation,
+  RL lock, forward mode, sampling, dtypes, parallelism, tolerances, batch and
+  GPU identities: identical to SC-20-R1.
+- N/A fields and justification: identical to SC-20-R1.
+- Code commit and worktree state: runtime code commit
+  `22afd522bf444941e3d69741bc648f85d9be0afe`; launch worktree may differ only
+  by the subsequently committed experiment-ledger record.
+- Repository adapter/patch surface and hashes: identical to SC-20-R1; no source
+  or site-package patch. Runtime-only Ubuntu packages are
+  `libpython3.12-dev_3.12.3-1ubuntu0.15_amd64.deb` SHA256
+  `ab00830dd4344f910acf410c671377841906f2cee8ebb4bf91044d64c77a50d0`
+  and `python3.12-dev_3.12.3-1ubuntu0.15_amd64.deb` SHA256
+  `0301b3a8dc5bc6706c0bf97a90496486f77279e5a3f6d5023b866bf63fef4e83`,
+  extracted under ignored `.deps/python312-dev/root` without system install.
+- Environment correction: `CC=/usr/bin/gcc`, `CXX=/usr/bin/g++`, and `CPATH`
+  points exactly to the extracted Python 3.12 include directory. No legacy
+  repository code or Python package is imported.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R2-qwen3-vllm-latent-22afd52.json > artifacts/compatibility/SC-20-R2-qwen3-vllm-latent-22afd52.log 2>&1`.
+- Outputs: result JSON and log paths above; no checkpoint.
+- Scorer/parser identity: same script/native renderer and corrected plugin as
+  SC-20-R1.
+- Metrics: `PENDING`; same PASS conditions as SC-20-R1 plus successful Triton
+  runtime helper compilation with the declared compiler/header identities.
 - Conclusion: `PENDING`; first hard failure stops the rerun.
 
 ### SC-30-FSDP2-INFRA
