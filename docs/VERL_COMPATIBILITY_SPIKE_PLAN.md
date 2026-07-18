@@ -34,16 +34,17 @@ reject the framework-binding skeleton.
 
 ### Files that an accepted spike may add or change
 
-- disposable probe code under a separately accepted `spikes/verl_compat/`
-  task boundary;
-- exact golden fixtures under a separately accepted fixture path;
+- disposable probe code under a `VA1`-accepted `spikes/verl_compat/` task and
+  interface manifest;
+- exact golden fixtures under the fixture path accepted in the same manifest;
 - `docs/VERL_COMPATIBILITY_REPORT.md`;
 - one environment lock or immutable container identity per tested backend;
 - complete `PLANNED`/result entries in `docs/EXPERIMENT_LEDGER.md` for GPU cells;
 - the task, open-contract, and external-reference documents needed to record
   the result.
 
-No probe package or fixture path is created merely by approving this document.
+No probe package or fixture path is created merely by approving this document;
+`VA1` must accept its exact files and interfaces first.
 
 ### Files and state not to touch
 
@@ -192,29 +193,39 @@ The selectable stack identity is the tuple `(veRL commit, rollout backend,
 resolved environment, repository adapter surface)`. A backend comparison can
 fail without invalidating an independent mandatory cell.
 
-| Cell | Revision/backend | Model/level | Stage | Class | Blocks A4? | Prerequisite | Maximum GPU cost |
+| Cell | Revision/backend | Model/level | Stage | Class | Blocks VA4? | Prerequisite | Maximum GPU cost |
 |---|---|---|---|---|---|---|---|
-| `SC-00` | C-MAIN / vLLM | source/API ownership | S0 | mandatory | yes | A0 | 0 |
-| `SC-01` | C-STABLE / vLLM | exact delta from C-MAIN | S0 | diagnostic | no | A0 | 0 |
-| `SC-10` | backend-neutral | Qwen3 `L0` | S1 | mandatory | yes | A1 | 0 |
-| `SC-11` | backend-neutral | Qwen2.5 `L0` | S1 | mandatory | yes | A1 + accepted processor/template snapshot | 0 |
-| `SC-20` | C-MAIN / vLLM | Qwen3 `L1..L3` | S2 | mandatory | yes | A2 ledger | 0.75 GPU-hour |
-| `SC-21` | C-MAIN / SGLang | Qwen3 `L1..L3` | S2 | diagnostic | no | S0 public seam + A2 | 0.75 GPU-hour |
-| `SC-22` | C-MAIN / vLLM | Qwen2.5 `L1` | S2 | mandatory | yes | accepted model runtime + A2 | 0.75 GPU-hour |
-| `SC-23` | C-MAIN / vLLM | Qwen2.5 `L2..L3` | S2 | diagnostic/deferred | no | SC-22 + A2 | 0.75 GPU-hour |
-| `SC-30` | C-MAIN / vLLM | Qwen3 `L4`, single-device control plus two-rank FSDP2 | S3 | mandatory | yes | SC-20 + A2 | 3 GPU-hours |
-| `SC-40` | C-MAIN / backend-neutral | SDPO/OPD static seam and state schema | S0/S1 | mandatory | yes | A0/A1 | 0 |
-| `SC-41` | selected stack | teacher forward/state round trip | S4 | diagnostic/deferred | no | separate A2 | 1 GPU-hour |
-| `SC-50` | C-STABLE / vLLM | Qwen3 `L1..L4` | S2/S3 | conditional | only if selecting C-STABLE | S0 admission + separate A2 | separately approved |
+| `SC-00` | C-MAIN / vLLM | source/API ownership | S0 | mandatory | yes | VA0 | 0 |
+| `SC-01` | C-STABLE / vLLM | exact delta from C-MAIN | S0 | diagnostic | no | VA0 | 0 |
+| `SC-10` | C-MAIN / backend-neutral | Qwen3 `L0` | S1 | mandatory | yes | VA1 | 0 |
+| `SC-11` | C-MAIN / backend-neutral | Qwen2.5 `L0` | S1 | mandatory | yes | VA1 + accepted processor/template snapshot | 0 |
+| `SC-12` | C-MAIN / backend-neutral | F1/F2/F3 transport, behavior-logprob oracle, and GRPO sentinel dataflow | S1 | mandatory | yes | VA1 | 0 |
+| `SC-20` | C-MAIN / vLLM | Qwen3 `L1..L3` | S2 | mandatory | yes | VA2 ledger | 0.75 GPU-hour |
+| `SC-21` | C-MAIN / SGLang | Qwen3 `L1..L3` | S2 | diagnostic | no | S0 public seam + VA2 | 0.75 GPU-hour |
+| `SC-22` | C-MAIN / vLLM | Qwen2.5 `L1` | S2 | mandatory | yes | accepted model runtime + VA2 | 0.75 GPU-hour |
+| `SC-23` | C-MAIN / vLLM | Qwen2.5 `L2..L3` | S2 | diagnostic/deferred | no | SC-22 + VA2 | 0.75 GPU-hour |
+| `SC-30` | C-MAIN / vLLM | Qwen3 `L4`, single-device control plus two-rank FSDP2 | S3 | mandatory | yes | SC-20 + VA2 | 3 GPU-hours |
+| `SC-40` | C-MAIN / backend-neutral | SDPO/OPD static seam and state schema | S0/S1 | mandatory | yes | VA0/VA1 | 0 |
+| `SC-41` | selected stack | teacher forward/state round trip | S4 | diagnostic/deferred | no | separate VA2 | 1 GPU-hour |
+| `SC-50` | C-STABLE / backend-neutral | Qwen3/Qwen2.5 `L0` plus F1/F2/F3 and sentinels | S1 | conditional | only if selecting C-STABLE | SC-01 + amended VA1 | 0 |
+| `SC-51` | C-STABLE / vLLM | Qwen3 `L1..L3` | S2 | conditional | only if selecting C-STABLE | SC-50 + separate VA2 | separately approved |
+| `SC-52` | C-STABLE / vLLM | Qwen2.5 `L1` | S2 | conditional | only if selecting C-STABLE | SC-50 + accepted model runtime + separate VA2 | separately approved |
+| `SC-53` | C-STABLE / vLLM | Qwen3 `L4`, paired single-device/FSDP2 lifecycle | S3 | conditional | only if selecting C-STABLE | SC-51 + separate VA2 | separately approved |
+| `SC-54` | C-STABLE / backend-neutral | SDPO/OPD static seam and state schema | S0/S1 | conditional | only if selecting C-STABLE | SC-01 + amended VA1 | 0 |
 
 `SC-11`/`SC-22` are mandatory because the accepted project task requires a
 real Qwen2.5 family-adapter fixture in the initial skeleton. If its runtime
 identity is not approved, the overall result is `INCOMPLETE`, not a failure of
 veRL. Its later `L2..L4` end-to-end claim does not block a Qwen3 framework pin.
+`SC-12` gives every mandatory S1 schema/oracle/sentinel result an explicit cell
+identity.
+
 SGLang and C-STABLE cells do not block acceptance of C-MAIN/vLLM unless the
-report proposes selecting them. Selecting C-STABLE requires rerunning all
-applicable mandatory cells on C-STABLE; a single failed-cell rerun is
-insufficient.
+report proposes selecting them. Selecting C-STABLE requires `SC-01` and every
+conditional cell `SC-50..SC-54`; these are the explicit counterparts of all
+C-MAIN mandatory cells. A single failed-cell rerun is insufficient, and the
+stable qualification requires amended `VA1`/per-cell `VA2` approvals and a
+separate GPU budget.
 
 ## 5. Fixed spike fixtures
 
@@ -352,7 +363,7 @@ earlier failure.
 
 ### S0 — static source and ownership map
 
-Authorization required: acceptance of this plan only.
+Authorization required: `VA0` acceptance of this plan only.
 
 Work:
 
@@ -387,7 +398,9 @@ Output: static API/ownership table and dependency-install proposal.
 
 ### S1 — isolated CPU/schema probe
 
-Authorization required: separate dependency/environment approval after S0.
+Authorization required: `VA1` acceptance of the exact disposable probe/fixture
+file and interface manifest plus the isolated dependency/environment proposal
+after S0.
 
 Work:
 
@@ -407,7 +420,8 @@ No optimizer step and no GRPO/SDPO numerical fixture occurs in S1.
 
 ### S2 — single-device rollout and replay probe
 
-Authorization required: a complete per-cell `PLANNED` GPU ledger entry.
+Authorization required: a complete per-cell `PLANNED` GPU ledger entry and its
+`VA2` approval.
 
 Work for C-MAIN with vLLM first, a bounded SGLang functional cell, and C-STABLE
 only when S0 admits the stable comparison:
@@ -440,8 +454,8 @@ No policy update occurs in S2.
 
 ### S3 — minimum FSDP2 lifecycle probe
 
-Authorization required: a separate complete `PLANNED` entry and at least two
-approved GPUs.
+Authorization required: a separate complete `PLANNED` entry, its `VA2`
+approval, and at least two approved GPUs.
 
 Work:
 
@@ -473,8 +487,8 @@ from this LoRA probe.
 
 ### S4 — SDPO readiness seam
 
-Authorization required: S1 for schema work; a complete GPU ledger entry for any
-teacher forward.
+Authorization required: `VA1` for schema work; a complete GPU ledger entry and
+per-cell `VA2` for any teacher forward.
 
 Work:
 
@@ -599,7 +613,7 @@ An overall PASS requires all applicable items:
    through a maintained engine/checkpoint surface.
 10. Public seams exist for every GRPO-owned dataflow named in S0, and sentinel
     tests show no silent overwrite or normalization. No private trainer fork is
-    required; exact equations and optimizer parity remain an A3/Gate-G0 task.
+    required; exact equations and optimizer parity remain a VA3/Gate-G0 task.
 11. Complete multi-call multimodal SDPO teacher context, alignment, masks,
     targets, teacher/reference separation, FSDP2 ownership and strict-resume
     fields fit the initial skeleton boundary without using the reference fork as
@@ -695,34 +709,40 @@ There is no overall “pass with an unresolved hard blocker.”
 
 These approvals implement
 [`OPEN_IMPLEMENTATION_CONTRACTS.md` Gate V0](OPEN_IMPLEMENTATION_CONTRACTS.md#6-gate-v0--before-the-verl-compatibility-spike).
+The `VA*` prefix means “veRL approval” and is deliberately distinct from the
+project-wide representation-training `Gate A0`.
 Every accepted row records the repository commit containing this plan, date,
 accepted scope, approver, and evidence/ledger IDs.
 
 | Approval | Current status | Date | Accepted scope | Evidence |
 |---|---|---|---|---|
-| A0 plan | `PROPOSED_NOT_ACCEPTED` | — | — | this draft only |
-| A1 environment + S1 | `NOT_ACCEPTED` | — | — | — |
-| A2 GPU cell | `NOT_ACCEPTED` | — | no cell | — |
-| A3 objective | `NOT_ACCEPTED` | — | neither GRPO nor SDPO | — |
-| A4 report/pin | `NOT_ACCEPTED` | — | — | — |
+| VA0 plan | `PROPOSED_NOT_ACCEPTED` | — | — | this draft only |
+| VA1 probe/environment + S1 | `NOT_ACCEPTED` | — | — | — |
+| VA2 GPU cell | `NOT_ACCEPTED` | — | no cell | — |
+| VA3 objective | `NOT_ACCEPTED` | — | neither GRPO nor SDPO | — |
+| VA4 report/pin | `NOT_ACCEPTED` | — | — | — |
 
-1. **A0 — plan acceptance:** the user accepts this exact task, matrix,
+1. **VA0 — plan acceptance:** the user accepts this exact task, matrix,
    fixtures, tolerances, failure rules, and resource ceilings at a recorded git
    revision. This closes only `VS-01` through the plan-level portions of
    `VS-07`; it authorizes S0, not installation or GPU work.
-2. **A1 — dependency approval:** after S0, the user accepts exact isolated
-   environment path/image digests, resolved package locks, download/storage
-   requirements, and install commands. It authorizes materializing only those
-   environments and running S1.
-3. **A2 — GPU-cell approval:** before each S2/S3/S4 GPU cell, the user accepts a
+2. **VA1 — probe and dependency approval:** after S0, the user accepts the exact
+   disposable probe/fixture files and interfaces needed by the listed S1-S4
+   cells, isolated environment paths or image digests, resolved package locks,
+   download/storage requirements, and install commands. It authorizes creating
+   only the files enumerated by that accepted manifest, materializing only those
+   environments, and running S1. Any later probe/interface expansion requires
+   an amended VA1 before the edit.
+3. **VA2 — GPU-cell approval:** before each S2/S3/S4 GPU cell, the user accepts a
    complete `PLANNED` ledger entry containing its `SC-*` ID, exact hardware,
-   commands, outputs, and limits. One A2 does not authorize another cell.
-4. **A3 — objective approval:** exact GRPO equations are accepted before any
+   commands, outputs, and limits. One VA2 does not authorize another cell.
+4. **VA3 — objective approval:** exact GRPO equations are accepted before any
    GRPO optimizer fixture; exact SDPO equations receive a separate later
    approval before any SDPO optimizer fixture.
-5. **A4 — report/pin acceptance:** the user accepts S5 evidence and the exact
+5. **VA4 — report/pin acceptance:** the user accepts S5 evidence and the exact
    stack tuple. This permits proposing a separate framework-binding skeleton
    task; it neither creates that code nor automatically closes `SK-01..SK-12`.
 
-Until A0 is explicitly recorded, this file is a proposal and no spike code is
-authorized.
+Until VA0 is explicitly recorded, this file is a proposal and S0 is not
+authorized. VA0 still does not authorize probe code, fixtures, installation, or
+GPU work; those require VA1/VA2 as described above.

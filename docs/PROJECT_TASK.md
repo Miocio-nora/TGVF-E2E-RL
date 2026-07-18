@@ -461,8 +461,10 @@ official maintained version and answer:
 - Can rollout and update be batched without serial per-trajectory replay?
 - Can FSDP2 load, update, checkpoint, and resume the intended policy scope, and
   what parallel topology is justified by measured memory and throughput?
-- Are GRPO standard-deviation convention, clipping, KL, and token/sequence
-  normalization configurable and identical to the approved equations?
+- Do maintained public dataflows expose group standard deviation, advantage,
+  behavior/proximal ratio, clipping, reference/KL, masks, normalization, global
+  denominators, and accumulation without silently overwriting project-owned
+  values, so later accepted GRPO equations can be implemented and parity-tested?
 - Is the intended SDPO implementation supported, or can its pure tensor loss
   and teacher lifecycle be added without replacing private trainer internals?
 - Can the same framework-neutral trajectory support both target-conditioning

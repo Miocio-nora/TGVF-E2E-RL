@@ -328,7 +328,7 @@ ratio and reference KL would no longer compare the same recorded trajectory.
 - [ ] `OPEN_BLOCKING VS-01` — Accept a bounded spike task in
   `docs/PROJECT_TASK.md`; veRL selection itself is not reopened.
   - Proposed task: `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`
-  - Current status: proposal drafted; explicit A0 acceptance still required.
+  - Current status: proposal drafted; explicit VA0 acceptance still required.
 - [ ] `OPEN_BLOCKING VS-02` — Candidate upstream veRL commits and isolated
   dependency matrices.
   - Primary exact main snapshot:
@@ -361,12 +361,12 @@ ratio and reference KL would no longer compare the same recorded trajectory.
   transport, actual behavior logprobs, exact observation replay, FSDP2 one
   step, save/resume.
   - Proposed structural and numerical values are in spike-plan §7 and require
-    A0 acceptance; they are not framework defaults.
+    VA0 acceptance; they are not framework defaults.
 - [ ] `OPEN_BLOCKING VS-07` — Failure conditions include private-trainer forks,
   PIL re-encoding of `D`, missing actual sampling logprobs, or inability to
   preserve exact observation state.
   - The expanded proposed hard-failure set is in spike-plan §7.4 and still
-    requires A0 acceptance as a whole.
+    requires VA0 acceptance as a whole.
 - [ ] `OPEN_BLOCKING VS-08` — Complete `PLANNED` ledger entry before any GPU use.
 - [ ] `OPEN_BLOCKING VS-09` — Produce an SDPO patch-surface map from pinned
   reference commit `7c457fc1...` to the candidate upstream veRL commit. The

@@ -24,7 +24,7 @@ approval recorded by the spike plan.
 ### <ID>
 
 - Cell/matrix ID and mandatory/diagnostic class:
-- Spike-plan git revision and A0/A1/A2 approval references:
+- Spike-plan git revision and VA0/VA1/VA2 approval references:
 - Lifecycle status: PLANNED | RUNNING | COMPLETE | CANCELLED
 - Result: PENDING | PASS | FAIL | BLOCKED_NOT_RUN | INVALID | SIDE_RESULT
 - Question:
