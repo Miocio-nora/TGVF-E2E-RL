@@ -1,6 +1,6 @@
 # Open Implementation Contracts
 
-Status: **active gate checklist**
+Status: **active gate checklist; I8H-20260719 implementation accepted**
 Recorded: **2026-07-19 JST**
 
 ## 1. Purpose
@@ -15,8 +15,9 @@ Rules:
   Transformers, vLLM, SGLang, PyTorch, or prior-project default.
 - Closing an item requires a value, an acceptance artifact/test, and a dated
   update to the authoritative task or interface in `docs/PROJECT_TASK.md`.
-- This checklist does not itself authorize implementation, dependency
-  installation, legacy inspection, or GPU execution.
+- Except for the explicit I8H-20260719 acceptance below, this checklist does not
+  itself authorize implementation, dependency installation, legacy inspection,
+  or GPU execution.
 - Exact data, reward coefficients, and prompt wording may be late-bound. Token
   ownership, actual behavior log probabilities, observation identity,
   deterministic replay, and objective equations may not.
@@ -39,6 +40,45 @@ required artifact or test:
 accepted by/date:
 supersedes:
 ```
+
+### 1.1 Authoritative I8H-20260719 acceptance
+
+Accepted by the user on **2026-07-19 JST**, this is one bounded eight-hour
+framework implementation authorization. The full task, accepted source roots,
+and public interface list are authoritative in
+[`PROJECT_TASK.md` §0](PROJECT_TASK.md#0-authoritative-8-hour-implementation-acceptance).
+
+This acceptance fixes:
+
+- upstream veRL plus **vLLM only**, with FSDP2 required; no SGLang execution or
+  stable-version comparison cell;
+- physical GPU indices **2 and 3 only**, after a complete `PLANNED` ledger row;
+- isolated dependency installation and necessary public model-weight/artifact
+  downloads;
+- deterministic synthetic fixtures and small integration smokes only, with no
+  real-data or production training run;
+- executable reference-style pure SDPO, including teacher construction,
+  alignment, exact-observation replay, distillation loss/targets, teacher
+  lifecycle, FSDP2 state, checkpoint, and resume. A frozen seam or interface-
+  only placeholder is not completion.
+
+It closes `SK-01` and accepts the interface shapes in Project Task §0.2 for
+implementation. `SK-02`, `SK-04`, `SK-05`, `SK-06`, `SK-09`, `SK-10`, `SK-11`,
+and `SK-12` now track implementation/evidence quality rather than permission to
+create the accepted source files. `SK-03` continues to block only code derived
+from legacy sources until the exact provenance entry exists.
+
+Real datasets, reward values, final prompt text, production GRPO/SDPO
+mathematics and configuration, any hybrid objective, long training, and the 72B
+judge remain open and fail closed. A synthetic optimizer smoke may run only
+after its exact test-contract equations and pure-tensor oracle are recorded.
+
+Where older text in this file or `VERL_COMPATIBILITY_SPIKE_PLAN.md` conflicts,
+this section and Project Task §0 take precedence. The earlier proposal status,
+SGLang/stable cells, `SDPO_STATIC_SEAM_READY` stopping point, per-cell request
+for another user reply, and separate post-report skeleton approval are
+superseded. Technical PASS/FAIL criteria, exact-identity records, and ledger
+requirements remain in force.
 
 ## 2. Fixed directions
 
@@ -104,15 +144,28 @@ supersedes:
   rollout observations.
 - [x] `SUPERSEDED C-07` — Stage1/Stage3 as current component names. Replacement:
   representation phase, policy RL phase, and TGVF Adapter.
+- [x] `SUPERSEDED C-08` — “The veRL spike remains an unaccepted proposal.”
+  Replacement: I8H-20260719 authorizes the bounded vLLM-only compatibility and
+  implementation task.
+- [x] `SUPERSEDED C-09` — “Run a bounded SGLang comparison and stable veRL
+  qualification.” Replacement: vLLM is the only backend and the exact upstream
+  veRL pin is selected from vLLM evidence.
+- [x] `SUPERSEDED C-10` — “SDPO work ends at a frozen/static seam.” Replacement:
+  implement and test real reference-style pure SDPO during I8H-20260719;
+  production configuration remains a later gate.
+- [x] `SUPERSEDED C-11` — “Every bounded cell needs another interactive user
+  reply.” Replacement: the I8H authorization covers in-scope rows after the
+  agent completes their ledger and gates; exceeding scope still requires new
+  authority.
 
 ## 4. Gate S0 — Before framework-skeleton implementation
 
 The exact reward, RL dataset, and prompt text do not block this gate. Their
 interfaces must be versioned and fail closed while unset.
 
-- [ ] `OPEN_BLOCKING SK-01` — Accept the exact skeleton task and file/interface
-  list in `docs/PROJECT_TASK.md`.
-  - Value: `[TBD]`
+- [x] `FIXED SK-01` — The exact I8H-20260719 task and file/interface surface in
+  `docs/PROJECT_TASK.md` §0 are accepted.
+  - Value: `I8H-20260719`
   - Minimum modules: TGVF Adapter/representation, Qwen adapter, protocol,
     both target-condition providers, multi-call tool runtime,
     framework-neutral trajectory records, reward/judge interfaces,
@@ -323,12 +376,16 @@ ratio and reference KL would no longer compare the same recorded trajectory.
   DeepStack, mask, and cache differences behind the common adapter rather than
   branching in objective code.
 
-## 6. Gate V0 — Before the veRL compatibility spike
+## 6. Gate V0 — veRL/vLLM compatibility evidence
 
-- [ ] `OPEN_BLOCKING VS-01` — Accept a bounded spike task in
+I8H-20260719 authorizes this gate's vLLM-only work. Checkboxes below that are
+not explicitly closed continue to track evidence, not a need for another user
+reply. All SGLang and stable-comparison wording below is historical and
+superseded by §1.1.
+
+- [x] `FIXED VS-01` — Accept a bounded spike task in
   `docs/PROJECT_TASK.md`; veRL selection itself is not reopened.
-  - Proposed task: `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`
-  - Current status: proposal drafted; explicit VA0 acceptance still required.
+  - Accepted task: `I8H-20260719`, Project Task §0.
 - [ ] `OPEN_BLOCKING VS-02` — Candidate upstream veRL commits and isolated
   dependency matrices.
   - Primary exact main snapshot:
@@ -337,11 +394,9 @@ ratio and reference KL would no longer compare the same recorded trajectory.
     `v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c`.
   - Proposed upstream vLLM/SGLang matrices and the unresolved local lock are in
     the spike plan; no environment is installed or accepted yet.
-- [ ] `OPEN_BLOCKING VS-03` — Candidate rollout backends are vLLM first and a
-  bounded SGLang functional comparison. SGLang cannot be selected until its
-  deterministic replay and sampling-identity gates close. One production
-  backend is selected by the report. Exact package/image identities remain
-  unaccepted.
+- [x] `FIXED VS-03` — vLLM is the only rollout backend. SGLang is not installed,
+  tested, or maintained by this task. Exact vLLM package/image identity is
+  selected and recorded from compatibility evidence.
 - [ ] `OPEN_BLOCKING VS-04` — Minimal FSDP2 configuration(s), model fixture,
   device mesh, and state-dict strategy.
   - Proposed minimum: two-rank FSDP2, LoRA dropout zero, separate frozen
@@ -389,8 +444,9 @@ Required output: `docs/VERL_COMPATIBILITY_REPORT.md` containing PASS/FAIL
 evidence, selected commit/backend, dependency matrix, required public extension
 surface, FSDP2 topology evidence, and unresolved blockers.
 
-Planning artifact: `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. It is not the
-required report and does not authorize installation or GPU execution.
+Planning artifact: `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. Its compatible
+technical checks remain useful, while its authorization model is superseded by
+I8H-20260719.
 
 ## 7. Gate A0 — Before native-format representation training
 
@@ -544,6 +600,12 @@ Only the subsection applicable to a cell is required in addition to
 optimizer step; an optimizer/FSDP cell cannot use that distinction to skip its
 own stricter gate.
 
+I8H-20260719 is the user authorization for bounded in-scope GPU rows; no
+additional interactive reply is required after the row is complete. Execution
+is restricted to physical GPU indices **2 and 3**. The ledger records their
+physical-to-logical mapping, and no other physical GPU may be exposed to the
+process.
+
 ### 10.1 GPU-ANY — Before every GPU command
 
 - [ ] `OPEN_BLOCKING GPU-A01` — Complete a cell-specific `PLANNED` entry in
@@ -620,10 +682,11 @@ Status: `DEFERRED` for the first policy RL proof.
 
 ## 12. Gate D0 — Before any SDPO optimizer step
 
-Status: **architecture required at S0; execution fail-closed until every
-applicable D0 item passes**. D0 work may proceed in parallel with GRPO
-correctness work; it is not postponed until after the whole GRPO pipeline is
-built.
+Status: **real reference-style pure-SDPO implementation is required by
+I8H-20260719; an optimizer smoke remains fail-closed until every applicable D0
+item and its test-contract oracle pass**. D0 work may proceed in parallel with
+GRPO correctness work. Production mathematics/configuration remain open after
+the synthetic implementation smoke.
 
 - [x] `FIXED SD-01` — Reference identity:
   - paper: arXiv `2601.20802v2`;
@@ -664,8 +727,9 @@ built.
 
 ## 13. Next document actions
 
-- [ ] Approve the bounded veRL compatibility-spike questions, neutral interface
-  requirements, fixtures, and PASS/FAIL rules before dependency changes.
+- [x] Accept I8H-20260719, its vLLM-only compatibility questions, neutral
+  interfaces, synthetic fixtures, hard failures, isolated dependencies, and
+  bounded execution authority.
 - [ ] Run the approved isolated spike, record the selected public hooks and
   state ownership, then close or revise Gate S0 before framework-binding source
   packages are created.

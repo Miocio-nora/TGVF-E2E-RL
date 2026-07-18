@@ -1,11 +1,30 @@
 # veRL Compatibility Spike Plan
 
-Status: **PROPOSED — documentation-only; execution not authorized**
+Status: **APPROVED FOR EXECUTION — bounded compatibility spike only**
 Drafted: **2026-07-19 JST**
+Approved: **2026-07-19 JST, by the user in this conversation**
 
-The user authorized preparation of this plan. That authorization does not yet
-accept the exact task, permit dependency installation, create a GPU ledger
-entry, or permit a GPU process. Each later approval boundary is explicit below.
+The user has accepted this bounded spike for autonomous execution. This permits
+the isolated probe/environment work and the ledgered smoke cells defined here;
+it does not pin a production dependency, authorize production training, or
+accept GRPO/SDPO production mathematics. GPU smoke is restricted to physical
+devices `2` and `3` as specified in §§8 and 10.
+
+## 0. Authoritative execution decisions
+
+This section supersedes any older comparison or “SDPO seam” wording retained
+for provenance elsewhere:
+
+- runtime is exactly upstream veRL C-MAIN + vLLM + FSDP2;
+- SGLang and stable-release runtime comparison are cancelled;
+- GPU work is ledgered smoke only and may expose physical devices `2`, `3`, or
+  `2,3`; no other device is authorized;
+- SDPO is actually reimplemented and validated from the pinned reference on
+  upstream veRL; neither a frozen interface nor the reference veRL fork passes;
+- DeepEyes contributes only small configuration/family-adapter ideas, never an
+  observation or log-probability contract;
+- GRPO and production SDPO mathematics remain open and fail closed, so no
+  production-objective optimizer step is authorized.
 
 ## 1. Objective and decision boundary
 
@@ -15,15 +34,16 @@ an attempt to settle reward, data, prompt, GRPO, or SDPO research choices.
 
 It must answer one decision:
 
-> Can one exact upstream veRL revision support the TGVF native multi-call
+> Can the pinned upstream veRL candidate, with vLLM rollout and FSDP2 training,
+> support the TGVF native multi-call
 > trajectory, actual behavior-policy log probabilities, immutable latent
 > observation replay, both Qwen VLM family adapters, both target-condition
-> provider seams, FSDP2 lifecycle, and future SDPO teacher boundaries through a
-> narrow maintained/public adapter surface?
+> provider seams, FSDP2 lifecycle, and a real repository-owned SDPO
+> reimplementation through a narrow maintained/public adapter surface?
 
-The output is either an accepted exact veRL revision/backend/extension map or a
-fail-closed report. The spike may select a rollout backend and FSDP2 topology;
-it may not weaken the project contracts to make a framework pass.
+The output is either an accepted exact veRL/vLLM/FSDP2/extension map or a
+fail-closed report. The spike may determine the minimum FSDP2 topology; it may
+not change backend or weaken project contracts to make the framework pass.
 
 ## 2. Macro plan and protected scope
 
@@ -34,17 +54,18 @@ reject the framework-binding skeleton.
 
 ### Files that an accepted spike may add or change
 
-- disposable probe code under a `VA1`-accepted `spikes/verl_compat/` task and
+- disposable probe code under the accepted `spikes/verl_compat/` task and
   interface manifest;
 - exact golden fixtures under the fixture path accepted in the same manifest;
 - `docs/VERL_COMPATIBILITY_REPORT.md`;
-- one environment lock or immutable container identity per tested backend;
+- one environment lock or immutable container identity for vLLM;
 - complete `PLANNED`/result entries in `docs/EXPERIMENT_LEDGER.md` for GPU cells;
 - the task, open-contract, and external-reference documents needed to record
   the result.
 
-No probe package or fixture path is created merely by approving this document;
-`VA1` must accept its exact files and interfaces first.
+The exact probe manifest is recorded before its first edit. Expanding beyond
+that manifest requires an amendment; it does not require another approval when
+the change remains inside this already accepted spike.
 
 ### Files and state not to touch
 
@@ -52,23 +73,25 @@ No probe package or fixture path is created merely by approving this document;
 - no legacy repository, legacy checkpoint, or parent-directory search;
 - no current Python environment mutation;
 - no model-weight mutation, conversion, or full-directory hashing;
-- no reward, dataset, prompt, GRPO, or SDPO default promoted into a contract;
+- no reward, dataset, prompt, GRPO, or SDPO production default promoted into a
+  contract;
 - no 72B judge deployment;
 - no SDPO or DeepEyes veRL fork installation, vendoring, submodule, or runtime
   import.
 
 ### Unresolved decisions that remain unresolved after approving the plan
 
-- production veRL revision and rollout backend;
+- production acceptance of the pinned veRL candidate and resolved environment;
 - local/runtime path for `Qwen/Qwen2.5-VL-7B-Instruct`;
 - exact FSDP2 topology beyond the minimum probe;
 - policy LoRA versus full-parameter training scope;
 - exact GRPO and SDPO equations;
 - production data, reward, prompt, and tool-call cap.
 
-## 3. Candidate upstream revisions
+## 3. Pinned upstream candidate
 
-Only official `verl-project/verl` revisions are candidates.
+Only the official `verl-project/verl` revision below is executed. This is not a
+framework or backend comparison.
 
 ### C-MAIN — primary feature candidate
 
@@ -82,7 +105,7 @@ role: primary exact spike candidate
 dependency status: review identity only; not installed or pinned for production
 ```
 
-C-MAIN is tested first because it contains relevant post-v0.8.0 determinism work
+C-MAIN is tested because it contains relevant post-v0.8.0 determinism work
 and the current Qwen3 tool-call/token-preservation fixes, as well as FSDP2,
 Qwen3-VL and Qwen2.5-VL examples, multi-turn AgentLoop support, rollout
 `response_logprobs`, extensible AgentLoop `extra_fields`, and multimodal
@@ -104,34 +127,20 @@ Static review has already identified three material risks:
 The spike must therefore prove a narrow public override/adapter path. Reusing
 those default paths and calling the result latent replay is a hard failure.
 
-Official C-MAIN full-determinism support also has a strict boundary: vLLM
-single-turn rollout is supported, while SGLang and multi-turn
-`tool_agent_loop` are not bitwise reproducible. Whole asynchronous multi-turn
+Official C-MAIN full-determinism support also has a strict boundary: documented
+vLLM single-turn rollout is supported, while multi-turn `tool_agent_loop` is
+not bitwise reproducible. Whole asynchronous multi-turn
 rollout bitwise equality is diagnostic, not a substitute for this project's
 actual contract. The hard requirements are actual sampled behavior log
 probabilities plus deterministic actor/reference/teacher forward replay on the
 fixed materialized trajectory. Deterministic-operation warnings are promoted to
 test failures.
 
-### C-STABLE — stable comparison
-
-```text
-repository: https://github.com/verl-project/verl
-release: v0.8.0
-commit: 7aed6b230776f963fa09509c10d9c3a767d1102c
-released: 2026-06-01
-role: latest stable comparison and fallback only if it meets every hard gate
-dependency status: review identity only; not installed or pinned for production
-```
-
-C-STABLE establishes how much of the required surface exists in the latest
-stable release. It does not replace C-MAIN automatically: rollout-level full-determinism
-support landed after v0.8.0, and static comparison must enumerate all other
-relevant differences across the roughly 200 intervening commits. C-STABLE is run on
-GPU only if S0 shows that it can meet every hard gate through maintained/public
-interfaces. Selecting C-MAIN requires an explicit stability/maintenance
-rationale; selecting C-STABLE requires proof that no needed C-MAIN correctness
-fix is lost.
+`v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` remains source-history
+provenance only. It is not a runtime candidate, fallback, comparison
+environment, or GPU cell. If C-MAIN fails a hard gate, the result is a recorded
+failure and a new user-approved plan is required; this spike does not
+automatically retreat to the release.
 
 The following are not candidates:
 
@@ -140,34 +149,28 @@ The following are not candidates:
 - an unrecorded moving branch or unversioned package install;
 - a local fork of private trainer internals.
 
-## 4. Candidate dependency matrices
+## 4. Runtime dependency matrix
 
-These are upstream comparison baselines, not approved local locks. Before any
-installation, the host driver/runtime and container support must be inventoried
-read-only, an isolated path or immutable image digest must be approved, and the
-resolved package graph must be recorded.
+This is an upstream environment baseline, not an approved production lock.
+Before isolated installation, the host driver/runtime and container support are
+inventoried read-only, the manifest records an isolated path or immutable image
+digest, and the resolved package graph is captured.
 
 | ID | veRL source | Rollout backend baseline | Upstream environment baseline | Status |
 |---|---|---|---|---|
-| `M-VLLM-MAIN` | C-MAIN exact checkout | current Docker argument vLLM `0.23.0` | Python `3.12`, CUDA `13.0.2`, PyTorch `2.11.0`, Transformers `5.3.0`, qwen-vl-utils `0.0.14`, FlashAttention `2.8.3` | proposed primary |
-| `M-SGLANG-MAIN` | C-MAIN exact checkout | `lmsysorg/sglang:v0.5.12` | CUDA `13.0.2`, Transformers `5.3.0`, qwen-vl-utils `0.0.14`; image-owned Python/PyTorch and image digest must be captured | proposed functional comparison |
-| `M-VLLM-080` | C-STABLE exact checkout | release baseline vLLM `0.20.2` | exact C-STABLE recipe, source checkout, and resolved graph | stable comparison |
-| `M-SGLANG-080` | C-STABLE exact checkout | release baseline SGLang `0.5.12` | exact C-STABLE recipe, source checkout, and resolved graph | stable comparison |
+| `M-VLLM-MAIN` | C-MAIN exact checkout | current Docker argument vLLM `0.23.0` | Python `3.12`, CUDA `13.0.2`, PyTorch `2.11.0`, Transformers `5.3.0`, qwen-vl-utils `0.0.14`, FlashAttention `2.8.3` | approved spike matrix; exact resolved lock still evidence-gated |
 
-The official Dockerfiles cannot serve as locks. At C-MAIN, the vLLM file's comment
-still says `0.20.2` while its argument says `0.23.0`, and both vLLM/SGLang files
-still set `VERL_VERSION=v0.7.1`. C-STABLE recipes have a similar source-version
-mismatch. Any approved environment must load the exact candidate checkout,
-verify the runtime veRL commit/version, capture the image digest and resolved
-package graph, and record these upstream recipe discrepancies.
+The official Dockerfile cannot serve as a lock. At C-MAIN, the vLLM file's
+comment still says `0.20.2` while its argument says `0.23.0`, and it still sets
+`VERL_VERSION=v0.7.1`. The isolated environment must load the exact candidate
+checkout, verify the runtime veRL commit/version, capture the image digest and
+resolved package graph, and record this upstream recipe discrepancy.
 
-vLLM is the first full correctness candidate because C-MAIN documents rollout
-determinism only there. SGLang receives a bounded functional/logprob/latent-
-transport smoke only when S0 finds a plausible public adapter surface. It cannot
-be selected for the first pilot until it independently closes deterministic
-forward/replay and sampling-identity gates. The spike selects one production
-backend; it does not create a two-backend maintenance obligation. Correctness
-and extension-surface stability outrank throughput.
+The only rollout backend in this spike and the first production implementation
+is vLLM. SGLang is explicitly cancelled: it is not installed, configured,
+tested, budgeted, or treated as a fallback. FSDP2 is the only distributed
+training strategy exercised. Correctness and extension-surface stability
+outrank throughput.
 
 ### 4.1 Model support levels
 
@@ -189,43 +192,32 @@ equivalent path is reported at `L3`, never hidden by a dummy branch.
 
 ### 4.2 Cell matrix
 
-The selectable stack identity is the tuple `(veRL commit, rollout backend,
-resolved environment, repository adapter surface)`. A backend comparison can
-fail without invalidating an independent mandatory cell.
+The stack identity is the tuple `(C-MAIN commit, vLLM version, resolved
+environment, FSDP2 topology, repository adapter surface)`. There is no backend
+or stable-release comparison cell.
 
 | Cell | Revision/backend | Model/level | Stage | Class | Blocks VA4? | Prerequisite | Maximum GPU cost |
 |---|---|---|---|---|---|---|---|
 | `SC-00` | C-MAIN / vLLM | source/API ownership | S0 | mandatory | yes | VA0 | 0 |
-| `SC-01` | C-STABLE / vLLM | exact delta from C-MAIN | S0 | diagnostic | no | VA0 | 0 |
 | `SC-10` | C-MAIN / backend-neutral | Qwen3 `L0` | S1 | mandatory | yes | VA1 | 0 |
 | `SC-11` | C-MAIN / backend-neutral | Qwen2.5 `L0` | S1 | mandatory | yes | VA1 + accepted processor/template snapshot | 0 |
-| `SC-12` | C-MAIN / backend-neutral | F1/F2/F3 transport, behavior-logprob oracle, and GRPO sentinel dataflow | S1 | mandatory | yes | VA1 | 0 |
+| `SC-12` | C-MAIN / backend-neutral | F1/F2/F3 transport, behavior-logprob oracle, and objective sentinel dataflow | S1 | mandatory | yes | VA1 | 0 |
 | `SC-20` | C-MAIN / vLLM | Qwen3 `L1..L3` | S2 | mandatory | yes | VA2 ledger | 0.75 GPU-hour |
-| `SC-21` | C-MAIN / SGLang | Qwen3 `L1..L3` | S2 | diagnostic | no | S0 public seam + VA2 | 0.75 GPU-hour |
 | `SC-22` | C-MAIN / vLLM | Qwen2.5 `L1` | S2 | mandatory | yes | accepted model runtime + VA2 | 0.75 GPU-hour |
 | `SC-23` | C-MAIN / vLLM | Qwen2.5 `L2..L3` | S2 | diagnostic/deferred | no | SC-22 + VA2 | 0.75 GPU-hour |
 | `SC-30` | C-MAIN / vLLM | Qwen3 `L4`, single-device control plus two-rank FSDP2 | S3 | mandatory | yes | SC-20 + VA2 | 3 GPU-hours |
-| `SC-40` | C-MAIN / backend-neutral | SDPO/OPD static seam and state schema | S0/S1 | mandatory | yes | VA0/VA1 | 0 |
-| `SC-41` | selected stack | teacher forward/state round trip | S4 | diagnostic/deferred | no | separate VA2 | 1 GPU-hour |
-| `SC-50` | C-STABLE / backend-neutral | Qwen3/Qwen2.5 `L0` plus F1/F2/F3 and sentinels | S1 | conditional | only if selecting C-STABLE | SC-01 + amended VA1 | 0 |
-| `SC-51` | C-STABLE / vLLM | Qwen3 `L1..L3` | S2 | conditional | only if selecting C-STABLE | SC-50 + separate VA2 | separately approved |
-| `SC-52` | C-STABLE / vLLM | Qwen2.5 `L1` | S2 | conditional | only if selecting C-STABLE | SC-50 + accepted model runtime + separate VA2 | separately approved |
-| `SC-53` | C-STABLE / vLLM | Qwen3 `L4`, paired single-device/FSDP2 lifecycle | S3 | conditional | only if selecting C-STABLE | SC-51 + separate VA2 | separately approved |
-| `SC-54` | C-STABLE / backend-neutral | SDPO/OPD static seam and state schema | S0/S1 | conditional | only if selecting C-STABLE | SC-01 + amended VA1 | 0 |
+| `SC-40` | C-MAIN / backend-neutral | repository-owned SDPO reference-semantic implementation and CPU loss/gradient parity | S0/S1/S4 | mandatory | yes | VA0/VA1; production math remains open | 0 |
+| `SC-41` | C-MAIN / vLLM/FSDP2 | exact-observation teacher forward, state, and checkpoint round trip | S4 | mandatory | yes | SC-20 + ledgered VA2 smoke | 1 GPU-hour |
 
 `SC-11`/`SC-22` are mandatory because the accepted project task requires a
 real Qwen2.5 family-adapter fixture in the initial skeleton. If its runtime
 identity is not approved, the overall result is `INCOMPLETE`, not a failure of
 veRL. Its later `L2..L4` end-to-end claim does not block a Qwen3 framework pin.
 `SC-12` gives every mandatory S1 schema/oracle/sentinel result an explicit cell
-identity.
-
-SGLang and C-STABLE cells do not block acceptance of C-MAIN/vLLM unless the
-report proposes selecting them. Selecting C-STABLE requires `SC-01` and every
-conditional cell `SC-50..SC-54`; these are the explicit counterparts of all
-C-MAIN mandatory cells. A single failed-cell rerun is insufficient, and the
-stable qualification requires amended `VA1`/per-cell `VA2` approvals and a
-separate GPU budget.
+identity. `SC-40` and `SC-41` require executable SDPO behavior and parity
+evidence; a config slot, protocol stub, or static seam declaration does not
+pass. They still cannot choose or execute a production SDPO objective while
+VA3 remains open.
 
 ## 5. Fixed spike fixtures
 
@@ -344,7 +336,7 @@ raw/pre-transform value is preserved separately.
 The behavior value used by a future ratio is defined as the log probability of
 the sampled token under the final normalized distribution after temperature,
 all penalties/processors, top-k, top-p, min-p, and every other enabled sampling
-transform in exact execution order. S0 traces that dataflow for each backend.
+transform in exact execution order. S0 traces that dataflow for vLLM.
 S1 uses a tiny fixed-logits oracle with temperature not equal to one, finite
 top-k, top-p below one, and at least one stateful penalty/processor to calculate
 the truncated and renormalized distribution independently. Stop strings, EOS,
@@ -363,7 +355,7 @@ earlier failure.
 
 ### S0 — static source and ownership map
 
-Authorization required: `VA0` acceptance of this plan only.
+Authorization: approved by accepted `VA0` in §10.
 
 Work:
 
@@ -378,8 +370,8 @@ Work:
   would otherwise need to replace;
 - trace the stock Qwen3/Qwen2.5 visual-forward paths and prove where a recorded
   main-`D`/D-DeepStack bundle can bypass visual recomputation;
-- compare C-MAIN and C-STABLE determinism support, including the documented vLLM
-  single-turn, SGLang, and multi-turn limitations;
+- record the documented vLLM single-turn and multi-turn determinism boundary;
+  do not investigate or execute a second rollout backend;
 - trace both rollout-logprob use and default old-logprob recomputation so the
   later objective can select an approved behavior/proximal contract without
   inheriting a trainer mode;
@@ -387,8 +379,9 @@ Work:
   scaling, behavior/proximal ratio, clipping, reference/KL, token masks,
   token/sequence normalization, microbatch/global denominators, and gradient
   accumulation; a replaceable scalar loss alone is insufficient;
-- map the pinned SDPO reference patch surface to C-MAIN public hooks and record
-  any C-STABLE surface difference;
+- map every pinned SDPO reference behavior to C-MAIN public hooks, including
+  teacher-context construction, sampled-token alignment, teacher replay,
+  full/top-k loss, teacher update, and checkpoint/resume ownership;
 - select the intended non-deprecated sync trainer entry for the probe; success
   through a legacy `main_ppo` example alone does not pass;
 - resolve the proposed dependency matrices against the host without installing
@@ -398,9 +391,8 @@ Output: static API/ownership table and dependency-install proposal.
 
 ### S1 — isolated CPU/schema probe
 
-Authorization required: `VA1` acceptance of the exact disposable probe/fixture
-file and interface manifest plus the isolated dependency/environment proposal
-after S0.
+Authorization: approved within the accepted spike after the exact disposable
+probe/fixture manifest and isolated environment identity are recorded.
 
 Work:
 
@@ -412,19 +404,23 @@ Work:
 - verify absent fields, shape mismatches, family mismatch, stale handles, and
   checksum mismatch all fail closed.
 - run the F3 fixed-logits post-transform probability oracle;
-- pass distinct sentinel values for every future GRPO-owned field through the
+- pass distinct sentinel values for every future objective-owned field through the
   public dataflow and prove that framework preprocessing neither overwrites nor
   silently normalizes them.
+- implement and run the `SC-40` CPU reference-semantic SDPO loss/gradient
+  oracle against the pinned source behavior, while marking every undecided
+  production choice explicitly unavailable.
 
-No optimizer step and no GRPO/SDPO numerical fixture occurs in S1.
+No model optimizer step occurs in S1. Synthetic CPU SDPO loss/gradient parity is
+required, but it does not approve a production SDPO objective.
 
 ### S2 — single-device rollout and replay probe
 
-Authorization required: a complete per-cell `PLANNED` GPU ledger entry and its
-`VA2` approval.
+Authorization: standing `VA2` approval applies only after a complete per-cell
+`PLANNED` ledger entry and only with `CUDA_VISIBLE_DEVICES=2` or
+`CUDA_VISIBLE_DEVICES=3`.
 
-Work for C-MAIN with vLLM first, a bounded SGLang functional cell, and C-STABLE
-only when S0 admits the stable comparison:
+Work only for C-MAIN with vLLM:
 
 - primary model: the accepted local Qwen3-VL-8B-Thinking path, not the upstream
   Qwen3-VL-8B-Instruct example;
@@ -454,8 +450,9 @@ No policy update occurs in S2.
 
 ### S3 — minimum FSDP2 lifecycle probe
 
-Authorization required: a separate complete `PLANNED` entry, its `VA2`
-approval, and at least two approved GPUs.
+Authorization: a separate complete `PLANNED` entry and standing `VA2`, with
+exactly `CUDA_VISIBLE_DEVICES=2,3`. The worker sees those devices as local
+ranks `0,1`; no other physical GPU may be visible.
 
 Work:
 
@@ -485,52 +482,64 @@ Full-parameter FSDP2 remains a required capability and gets its own execution
 gate before the first full-parameter experiment; it is not silently inferred
 from this LoRA probe.
 
-### S4 — SDPO readiness seam
+### S4 — SDPO reference-semantic reimplementation and validation
 
-Authorization required: `VA1` for schema work; a complete GPU ledger entry and
-per-cell `VA2` for any teacher forward.
+Authorization: CPU implementation work is covered by accepted `VA1`; any
+teacher GPU forward requires a complete `SC-41` ledger entry and standing
+`VA2`, restricted to physical GPU `2`, GPU `3`, or both.
 
 Work:
 
-- map the pinned
+- reimplement, in repository-owned code on C-MAIN rather than importing or
+  forking its bundled veRL tree, the pinned
   `lasgroup/SDPO@7c457fc1b1f636ae794eb0362ba37d4743b06fbc`
-  dataflow/loss/teacher state to C-MAIN and the admitted C-STABLE comparison;
+  teacher-context, alignment, replay, loss, teacher-update, and state behavior;
 - serialize a complete native two-call teacher context rather than a simplified
   final response;
 - align teacher targets to every policy-sampled assistant token across turns;
 - pass the same F1 observation handles to student, frozen reference, and
   self-teacher paths while keeping behavior, proximal-old, current, frozen
   reference, and self-teacher identities distinct;
-- reserve full-logit and versioned top-k/tail target schemas and measure their
-  memory/I/O bounds;
+- implement full-logit and versioned top-k/tail reference-semantic paths and
+  measure their memory/I/O bounds;
 - require the teacher target mask to equal the policy-sampled assistant-token
   mask; template, tool-response, image, and padding tokens may be context but
   never distillation targets;
-- map the official veRL OPD teacher/top-k/multimodal/FSDP hooks before adding an
-  SDPO-specific boundary;
-- define current-policy/EMA teacher lifecycle, FSDP2 ownership, checkpoint,
-  RNG, and strict resume fields;
+- use maintained upstream veRL OPD/teacher/top-k/multimodal/FSDP hooks where
+  they satisfy the contract, while keeping SDPO algorithm code
+  repository-owned and reviewable;
+- implement current-policy/EMA and trust-region reference behaviors, FSDP2
+  ownership, checkpoint, RNG, and strict resume fields; the reference fork's
+  missing EMA resume state is not inherited;
+- preserve rollout-recorded behavior log probabilities; the reference fork's
+  `old_log_prob = log_prob.detach()` shortcut is forbidden;
+- pass CPU value/gradient parity, exact-D multimodal teacher-forward parity,
+  and uninterrupted-versus-resumed teacher-state parity;
 - verify that the optional 72B answer judge remains a separate disabled
   provider.
 
-This stage produces `SDPO_STATIC_SEAM_READY`, not runtime SDPO compatibility.
-`SC-41` may additionally test a teacher forward/state round trip, but no SDPO
-loss or optimizer step is allowed until its equations and parity oracle are
-accepted.
+This stage produces `SDPO_REFERENCE_IMPLEMENTATION_VALIDATED`, not a production
+objective approval. A placeholder, frozen seam, or wholesale SDPO veRL fork
+cannot produce that result. The production choices—pure SDPO versus an
+independently named hybrid, divergence and `alpha`, full versus top-k targets,
+importance correction, teacher regularization, aggregation, and feedback
+policy—remain fail-closed under VA3. No model optimizer may consume an SDPO
+loss until those exact equations and a production parity oracle are accepted.
 
 ### S5 — decision report
 
 Produce `docs/VERL_COMPATIBILITY_REPORT.md` with:
 
 - result for every cell and links to immutable logs/fixtures;
-- selected veRL commit, backend, dependency lock/image digest, and public
+- selected veRL commit, vLLM dependency lock/image digest, FSDP2 topology, and public
   extension surface;
-- rejected alternatives and exact failure evidence;
+- exact failure evidence; no unexecuted backend/release is ranked as an
+  alternative;
 - FSDP2 topology/state-dict evidence and measured resources;
 - actual behavior-logprob semantics;
 - exact observation/replay schema and parity results;
 - Qwen3 and Qwen2.5 support level stated separately;
-- SDPO patch-surface and teacher-lifecycle map;
+- SDPO reimplementation files, parity evidence, and teacher-lifecycle map;
 - all unresolved blockers and a recommendation to accept or reject the
   framework-binding skeleton.
 
@@ -578,17 +587,16 @@ defaults.
 The direct/no-tool control is measured before latent injection. If it exceeds
 an absolute hard cap, the cell fails; the cap is not relaxed to accommodate a
 noisy backend. Relative latent/direct multipliers are metrics only because the
-direct error can be near zero. Cross-backend equality is diagnostic, not
-required: each backend must independently satisfy replay against its own
-actual behavior distribution. Every reduction reports mask, dtype, token count,
-aggregation, and denominator.
+direct error can be near zero. Every vLLM replay path must independently satisfy
+parity against its actual behavior distribution. Every reduction reports mask,
+dtype, token count, aggregation, and denominator.
 
 ### 7.3 Hard PASS requirements
 
 An overall PASS requires all applicable items:
 
-1. C-MAIN, or an explicitly justified exact C-STABLE revision, is reproducible
-   in an isolated environment.
+1. C-MAIN is reproducible in the isolated vLLM environment with FSDP2; no
+   runtime result from another veRL revision or rollout backend is substituted.
 2. Native direct/one-call/two-call transcripts round-trip exactly with no
    tokenizer growth or sampled/template ownership ambiguity. Qwen3 has no
    duplicate `<think>` opener; Qwen2.5 follows its own pinned native template.
@@ -614,10 +622,13 @@ An overall PASS requires all applicable items:
 10. Public seams exist for every GRPO-owned dataflow named in S0, and sentinel
     tests show no silent overwrite or normalization. No private trainer fork is
     required; exact equations and optimizer parity remain a VA3/Gate-G0 task.
-11. Complete multi-call multimodal SDPO teacher context, alignment, masks,
-    targets, teacher/reference separation, FSDP2 ownership and strict-resume
-    fields fit the initial skeleton boundary without using the reference fork as
-    runtime code. The result is `SDPO_STATIC_SEAM_READY`, not runtime SDPO.
+11. The repository-owned SDPO reimplementation executes complete multi-call
+    multimodal teacher context, alignment, masks, full/top-k reference-semantic
+    targets, teacher/reference separation, FSDP2 ownership, and strict resume
+    without using the reference fork as runtime code. CPU loss/gradient and GPU
+    teacher replay/state fixtures pass. The result is
+    `SDPO_REFERENCE_IMPLEMENTATION_VALIDATED`; production objective execution
+    remains disabled until VA3.
 
 ### 7.4 Hard FAIL conditions
 
@@ -644,6 +655,9 @@ Any applicable condition fails the candidate:
   version state;
 - SDPO teacher replay is text-only, final-turn-only, or conflates self-teacher,
   frozen RL reference, and answer judge;
+- SDPO is represented only by config/schema seams, imports the reference fork
+  at runtime, loses EMA teacher state on resume, or replaces recorded behavior
+  log probabilities with a current-policy detach;
 - family-specific Qwen tensors leak into shared objective/trajectory code or an
   unsupported branch is silently zero-filled;
 - cached and no-cache full-prefix replay exceed tolerance, or a KV cache is
@@ -663,28 +677,28 @@ These are maximums, not reservations.
 |---|---|---|---|---|
 | S0 | ordinary source review | 0 | 4 hours | no install |
 | S1 | up to 16 CPU cores / 64 GiB RAM | 0 | 4 hours per matrix | no model-weight load |
-| S2 | up to 16 CPU cores / 64 GiB RAM | 1 approved GPU per cell | 45 minutes per model/backend cell | at most 8 trajectories and 256 sampled tokens per turn; scripted structural tokens are separate |
-| S3 | up to 32 CPU cores / 128 GiB RAM | at least 2 approved GPUs for the distributed half | 90 minutes aggregate across paired cells; each launch `<= 60` minutes | at most 2 logical optimizer steps per paired path |
-| S4 | S1 resources for schema; S2 resources for a teacher forward | 0 or 1 approved GPU | 60 minutes | no SDPO optimizer step |
+| S2 | up to 16 CPU cores / 64 GiB RAM | one of physical GPU `2` or `3` | 45 minutes per model cell | ledgered smoke only; at most 8 trajectories and 256 sampled tokens per turn |
+| S3 | up to 32 CPU cores / 128 GiB RAM | exactly physical GPUs `2,3` | 90 minutes aggregate; each launch `<= 60` minutes | ledgered FSDP2 smoke; at most 2 non-RL probe steps per paired path |
+| S4 | S1 resources for CPU parity; physical GPU `2`, `3`, or both for teacher/FSDP2 replay | 0, 1, or 2 restricted GPUs | 60 minutes | ledgered smoke; no production SDPO optimizer step |
 
-Global proposed GPU cap: **10 GPU-hours**, including reruns and a 25% failure
-contingency for C-MAIN mandatory cells and the listed optional cells, as
-itemized in §4.2. A full C-STABLE qualification is outside that cap and requires
-a revised resource approval. No individual process may run longer than 60
-minutes without a new ledger entry and approval. Stop a cell immediately after
-a hard failure is captured.
+Global GPU cap: **10 GPU-hours**, including reruns and a 25% failure
+contingency for the C-MAIN/vLLM/FSDP2 cells itemized in §4.2. No individual
+process may run longer than 60 minutes without a new ledger entry and approval.
+Stop a cell immediately after a hard failure is captured.
 
-Proposed scratch capacity is at most **150 GiB excluding existing model
-weights** for two isolated backend environments, locks, and logs. Any new model
+Scratch capacity is at most **150 GiB excluding existing model weights** for
+the isolated vLLM environment, locks, and logs. Any new model
 download, container pull, or additional cache allocation is separately listed
 before approval. The Qwen2.5 cell remains `BLOCKED_NOT_RUN`, not silently
 skipped or treated as a framework failure, until its runtime identity is
 accepted.
 
-Exact GPU model/count, host driver, CUDA compatibility, environment path/image
-digest, output path, commands, and start/stop conditions remain `[TBD]` until
-the corresponding `PLANNED` ledger entry. Four-GPU or long-running training is
-outside this spike.
+Exact GPU model, host driver, CUDA compatibility, environment path/image
+digest, output path, commands, and start/stop conditions are recorded in the
+corresponding `PLANNED` ledger entry. Every GPU command explicitly sets
+`CUDA_VISIBLE_DEVICES=2`, `CUDA_VISIBLE_DEVICES=3`, or
+`CUDA_VISIBLE_DEVICES=2,3`; commands with any other GPU visibility are
+unauthorized. Four-GPU or long-running training is outside this spike.
 
 ## 9. Result vocabulary
 
@@ -698,8 +712,7 @@ Each cell has exactly one result:
 
 The overall recommendation is one of:
 
-- `ACCEPT_STACK(commit, backend, environment, adapter_surface)`, with either
-  C-MAIN's maintenance rationale or C-STABLE's full mandatory-cell rerun;
+- `ACCEPT_STACK(C-MAIN, vLLM, FSDP2, environment, adapter_surface)`;
 - `REJECT_CURRENT_VERL_STACK`;
 - `INCOMPLETE` when a mandatory cell is `BLOCKED_NOT_RUN` or `INVALID`.
 
@@ -716,26 +729,26 @@ accepted scope, approver, and evidence/ledger IDs.
 
 | Approval | Current status | Date | Accepted scope | Evidence |
 |---|---|---|---|---|
-| VA0 plan | `PROPOSED_NOT_ACCEPTED` | — | — | this draft only |
-| VA1 probe/environment + S1 | `NOT_ACCEPTED` | — | — | — |
-| VA2 GPU cell | `NOT_ACCEPTED` | — | no cell | — |
+| VA0 plan | `ACCEPTED` | 2026-07-19 JST | bounded C-MAIN/vLLM/FSDP2 spike | user approval in this conversation |
+| VA1 probe/environment + S1 | `ACCEPTED_WITH_MANIFEST` | 2026-07-19 JST | isolated spike files/environment only | manifest recorded before mutation |
+| VA2 GPU smoke | `STANDING_CONDITIONAL_APPROVAL` | 2026-07-19 JST | listed cells; physical GPUs `2,3` only | complete `PLANNED` ledger entry before every launch |
 | VA3 objective | `NOT_ACCEPTED` | — | neither GRPO nor SDPO | — |
 | VA4 report/pin | `NOT_ACCEPTED` | — | — | — |
 
-1. **VA0 — plan acceptance:** the user accepts this exact task, matrix,
+1. **VA0 — plan acceptance:** the user has accepted this exact task, matrix,
    fixtures, tolerances, failure rules, and resource ceilings at a recorded git
    revision. This closes only `VS-01` through the plan-level portions of
-   `VS-07`; it authorizes S0, not installation or GPU work.
-2. **VA1 — probe and dependency approval:** after S0, the user accepts the exact
-   disposable probe/fixture files and interfaces needed by the listed S1-S4
-   cells, isolated environment paths or image digests, resolved package locks,
-   download/storage requirements, and install commands. It authorizes creating
-   only the files enumerated by that accepted manifest, materializing only those
-   environments, and running S1. Any later probe/interface expansion requires
-   an amended VA1 before the edit.
-3. **VA2 — GPU-cell approval:** before each S2/S3/S4 GPU cell, the user accepts a
-   complete `PLANNED` ledger entry containing its `SC-*` ID, exact hardware,
-   commands, outputs, and limits. One VA2 does not authorize another cell.
+   `VS-07`; it authorizes S0.
+2. **VA1 — probe and dependency approval:** this execution authorizes the exact
+   disposable probe/fixture manifest, isolated C-MAIN/vLLM environment,
+   resolved package lock, and S1/S4 CPU work. The manifest, environment path or
+   image digest, download/storage requirements, and commands are recorded
+   before mutation. Expansion outside this spike remains unauthorized.
+3. **VA2 — GPU-smoke approval:** standing approval applies to listed S2/S3/S4
+   smoke cells only after their complete `PLANNED` ledger entry exists. Each
+   entry contains its `SC-*` ID, `CUDA_VISIBLE_DEVICES` setting, exact hardware,
+   commands, outputs, limits, and stop conditions. Only physical devices `2`
+   and `3` are permitted; this is not authorization for production training.
 4. **VA3 — objective approval:** exact GRPO equations are accepted before any
    GRPO optimizer fixture; exact SDPO equations receive a separate later
    approval before any SDPO optimizer fixture.
@@ -743,6 +756,6 @@ accepted scope, approver, and evidence/ledger IDs.
    stack tuple. This permits proposing a separate framework-binding skeleton
    task; it neither creates that code nor automatically closes `SK-01..SK-12`.
 
-Until VA0 is explicitly recorded, this file is a proposal and S0 is not
-authorized. VA0 still does not authorize probe code, fixtures, installation, or
-GPU work; those require VA1/VA2 as described above.
+VA0, VA1, and the restricted standing VA2 are now recorded. Execution must
+still stop before any production GRPO or SDPO optimizer use because VA3 is
+open, and it must stop before a production pin because VA4 is open.

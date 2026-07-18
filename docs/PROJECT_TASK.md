@@ -1,13 +1,110 @@
 # TGVF End-to-End RL: Project Task
 
-Status: **design baseline updated; framework skeleton direction accepted;
-implementation not started**
+Status: **I8H-20260719 framework implementation task accepted and in scope**
 Recorded: **2026-07-18 JST**
 Updated: **2026-07-19 JST**
 
 Unresolved implementation contracts and their promotion gates are tracked in
 [`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
 field there must not be filled silently from a framework default.
+
+## 0. Authoritative 8-hour implementation acceptance
+
+Decision ID: **I8H-20260719**
+
+Accepted by: **user**, on **2026-07-19 JST**
+
+This decision authorizes one bounded eight-hour implementation goal. It is the
+authoritative execution contract wherever older sections or linked planning
+documents still describe the compatibility work as proposed, require a
+SGLang/stable comparison, stop at an SDPO seam, or require another user reply
+for each already bounded step.
+
+### 0.1 Required result
+
+The goal is a complete framework implementation with deterministic synthetic
+fixtures and small integration smokes. It is **not** a production training run
+and does not claim a trained policy or representation artifact. The required
+stack is:
+
+- upstream veRL as the distributed RL framework;
+- vLLM as the only rollout backend; SGLang is out of scope;
+- FSDP2 as a required executable path;
+- Qwen3-VL-8B-Thinking as the primary executable model and
+  `Qwen/Qwen2.5-VL-7B-Instruct` as the required family-adapter compatibility
+  fixture;
+- both target-conditioning providers;
+- exact multi-call `tgvf_focus_tool` trajectories, actual behavior log
+  probabilities, immutable recorded observations, and deterministic replay;
+- real reference-style pure SDPO code and tests based on
+  `lasgroup/SDPO@7c457fc1b1f636ae794eb0362ba37d4743b06fbc`, including teacher
+  context, token alignment, exact-observation teacher replay, distillation
+  loss/targets, teacher lifecycle, FSDP2 state, checkpoint, and resume. An
+  interface-only or `SDPO_STATIC_SEAM_READY` result is incomplete.
+
+Any GRPO or SDPO optimizer smoke must first record its exact **test-contract**
+equations and pass a pure-tensor oracle. That test identity is not a silent
+production default. Production GRPO/SDPO mathematics, coefficients, hybrid
+composition, and scale configuration remain open.
+
+### 0.2 Accepted implementation and interface surface
+
+The following repository surface is accepted for creation or modification by
+the implementation goal:
+
+- `pyproject.toml`, one reproducible dependency lock, and isolated-environment
+  setup needed for the accepted stack;
+- `src/tgvf_rl/representation/`, `qwen/`, `conditioning/`, `protocol/`,
+  `environment/`, `trajectories/`, `objectives/`, `framework/verl/`,
+  `evaluation/`, and a minimal CLI surface;
+- corresponding `tests/` suites, `configs/smoke/`, and bounded compatibility
+  probes under `spikes/verl_compat/`;
+- provenance, compatibility, experiment-ledger, and implementation reports
+  needed to record exact identities and evidence.
+
+The accepted public interfaces are:
+
+1. a family-neutral TGVF Adapter call from typed target conditioning plus
+   original-image pre-merge/main and model-supported DeepStack inputs to main
+   `D`, D-DeepStack branches, and versioned metadata;
+2. Qwen-family operations for native serialization, target-span identity,
+   visual-state capture, recorded-observation forward, and replay;
+3. one target-conditioning protocol implemented by contextual-hidden-state and
+   target-token-embedding providers;
+4. a strict native-tool parser and repeated-call environment whose observation
+   result is an immutable, content-identified bundle of `D`, branches, layout,
+   positions, masks, cache contract, and provenance;
+5. a framework-neutral trajectory record carrying exact tokens, ownership
+   masks, sampling identity, actual behavior log probabilities, rewards/stops,
+   typed feedback, per-call observations, and SDPO alignment/state;
+6. separately named GRPO and reference-style pure-SDPO objective entries;
+7. a narrow upstream-veRL adapter using maintained/public extension points for
+   rollout, forward/replay, objective execution, FSDP2, checkpoint, and resume.
+
+Implementation helpers may be added within the accepted roots when they do not
+broaden these interfaces. Legacy extraction remains limited to provenance-
+registered files/symbols and parity requirements.
+
+### 0.3 Execution authority and hard limits
+
+- Isolated dependency installation and the download of necessary public model
+  weights/artifacts are authorized. The selected production veRL pin is written
+  only after its compatibility evidence passes; SDPO's bundled veRL tree is
+  reference-only and is not installed as the framework.
+- GPU execution is restricted to physical GPU indices **2 and 3**. A process
+  may see them as logical devices 0 and 1 only after the physical-to-logical
+  mapping is recorded. No other physical GPU is authorized.
+- Every GPU command still requires a complete `PLANNED` experiment-ledger row,
+  exact command/environment identity, bounded timeout/resources, and applicable
+  PASS/FAIL gates. I8H-20260719 supplies the user authorization for an in-scope
+  row; it does not waive the ledger or correctness gates.
+- Real training data, real reward coefficients, a final production prompt,
+  production objective mathematics/configuration, long training, the 72B
+  judge, and production checkpoint promotion are outside this goal. Their
+  interfaces remain explicit and fail closed while unset.
+- The implementation stops and reports evidence if upstream veRL/vLLM cannot
+  meet actual-logprob, exact-observation, public-extension, deterministic
+  replay, or FSDP2 requirements without a private trainer fork.
 
 ## 1. Objective
 
@@ -95,17 +192,20 @@ equations, feedback/reprompt construction, teacher regularization, logit
 approximation, importance weighting, and hybrid composition must be accepted
 and parity-tested before use.
 
-The framework skeleton must nevertheless reserve SDPO's teacher-context,
-token-alignment, exact-observation teacher replay, distillation-target,
-teacher-state, objective-plugin, checkpoint, and resume boundaries now. Deferring
-those boundaries until after a GRPO trainer exists would risk a structural
-rewrite and is not allowed.
+The accepted implementation must provide executable reference-style pure-SDPO
+teacher context, token alignment, exact-observation teacher replay,
+distillation targets/loss, teacher state, FSDP2 ownership, checkpoint, and
+resume behavior. It may be implemented after the common trajectory/replay
+substrate during I8H-20260719, but an interface-only placeholder is not a
+completed result.
 
-GRPO is also not identified by its name alone. Before implementation, the
-project must freeze the exact equations and conventions for group standard
+GRPO is also not identified by its name alone. Before any GRPO optimizer step,
+the project must version the exact equations and conventions for group standard
 deviation, advantage scaling, clipping, KL, per-token versus per-sequence
-normalization, and masking. A framework default is never the mathematical
-specification.
+normalization, and masking, and verify them with a pure-tensor oracle. A
+framework default is never the mathematical specification. Production choices
+may remain open while framework code and non-production synthetic fixtures are
+built.
 
 ### 2.4 Use upstream veRL as the RL framework
 
@@ -131,7 +231,7 @@ This repository supplies a narrow custom boundary for latent TGVF execution.
 The remaining compatibility spike validates a pinned veRL commit, rollout
 backend, primary Qwen3-VL and secondary Qwen2.5-VL adapter surfaces, multi-turn
 latent observations, both target-conditioning providers, exact
-behavior-logprob retention/replay, SDPO extension seams, FSDP2, and
+behavior-logprob retention/replay, executable SDPO integration, FSDP2, and
 checkpoint/resume. It is not a framework-selection comparison. veRL is not
 presumed to be a drop-in solution because TGVF injects hidden visual embeddings,
 M-RoPE state, multimodal token types, and D-DeepStack features rather than a PIL
@@ -484,29 +584,27 @@ rollout backend, FSDP2 topology, and adapter surface remain open until the spike
 is approved and recorded. No package installation or pin is authorized merely
 by selecting veRL.
 
-### 9.1 Proposed bounded spike task
+### 9.1 Accepted I8H compatibility and implementation task
 
-The exact proposed task, fixtures, numerical tolerances, hard failures, staged
-resource ceilings, and approval checkpoints are in
+The earlier proposed fixtures, numerical tolerances, and hard-failure rules are
+retained as useful evidence requirements in
 [`VERL_COMPATIBILITY_SPIKE_PLAN.md`](VERL_COMPATIBILITY_SPIKE_PLAN.md).
+I8H-20260719 supersedes that document's proposal status, SGLang cells, stable-
+comparison execution, seam-only SDPO outcome, and repeated human-approval
+sequence.
 
-Its primary feature candidate is the exact upstream veRL `main` snapshot
+The initial upstream veRL candidate is the exact `main` snapshot
 `e003163181731412595257a72ec173071efb125f`, observed on 2026-07-19 JST. Official
-`v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` is the stable comparison. The
-main snapshot is tested first because relevant rollout-determinism and Qwen3
-tool-token fixes landed after v0.8.0; selecting a development snapshot still
-requires an explicit stability/maintenance rationale. vLLM is the first full
-correctness backend. SGLang receives a bounded functional comparison and cannot
-be selected until it independently closes deterministic replay and sampling-
-identity gates. The report selects one production backend rather than silently
-creating a two-backend maintenance obligation.
+`v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` remains historical comparison
+material only and is not a required runtime cell. Only vLLM is implemented or
+tested. The exact upstream veRL revision and resolved dependency lock are
+selected from the vLLM compatibility evidence and recorded in the report.
 
-The plan is currently **PROPOSED**. Preparation of the document is approved;
-its contents have not yet been accepted as an executable task. Plan acceptance
-authorizes only static source/environment mapping. Isolated dependency
-materialization and every GPU cell require later, separate approvals. No
-GRPO/SDPO optimizer fixture is part of this spike before its exact equations are
-accepted.
+Isolated dependency materialization and necessary public weights are
+authorized. GPU work is authorized only on physical devices 2 and 3 after the
+required ledger row is complete. Synthetic reference-style SDPO implementation
+and its bounded parity smoke are part of the accepted goal; production
+training, production objective selection, and real-data experiments are not.
 
 ## 10. Migration boundary
 
@@ -580,8 +678,8 @@ The exact external commits and permitted topics are recorded in
 
 ## 11. Planned repository shape
 
-No source directories are created until their interfaces are approved. The
-intended shape is:
+The interface roots in §0.2 are accepted for I8H-20260719. The intended shape
+is:
 
 ```text
 tgvf-e2e-rl/
@@ -635,10 +733,10 @@ tgvf-e2e-rl/
 Gate: every imported idea or symbol has immutable provenance, and the isolated
 compatibility spike is authorized without authorizing the main implementation.
 
-### Phase 1: veRL/FSDP2/SDPO compatibility spike and seam freeze
+### Phase 1: veRL/vLLM/FSDP2 compatibility and framework implementation
 
-- In an approved isolated environment, test and then pin one upstream veRL
-  commit and rollout backend; do not adopt the SDPO or DeepEyes veRL trees.
+- In the accepted isolated environment, test and then pin one upstream veRL
+  commit with vLLM; do not adopt the SDPO or DeepEyes veRL trees.
 - Validate Qwen3-VL-8B-Thinking policy/reference forward and the
   `Qwen/Qwen2.5-VL-7B-Instruct` family-adapter fixture.
 - Validate a deterministic native `tgvf_focus_tool` synthetic-latent fixture
@@ -653,17 +751,18 @@ compatibility spike is authorized without authorizing the main implementation.
   overwrite or normalize project-owned values. Exact GRPO equations and
   loss/gradient/accumulation parity remain Gate G0 work and must close before
   any GRPO optimizer fixture, not before the infrastructure-only FSDP2 probe.
-- Map the pinned SDPO patch surface onto maintained/public upstream veRL hooks.
-  Prove that complete teacher context, per-turn alignment, exact recorded
-  observations, distillation targets, teacher lifecycle, and checkpoint state
-  fit the boundary even though SDPO execution stays disabled.
-- Freeze the Qwen-family, dual-provider, trajectory, objective/teacher, judge,
-  and veRL ownership interfaces before creating mainline source packages.
+- Map the pinned SDPO patch surface onto maintained/public upstream veRL hooks,
+  then implement reference-style pure SDPO with complete teacher context,
+  per-turn alignment, exact recorded observations, distillation targets/loss,
+  teacher lifecycle, FSDP2 ownership, and checkpoint/resume. A seam-only result
+  does not pass this phase.
+- Implement the accepted Qwen-family, dual-provider, trajectory,
+  objective/teacher, judge, and veRL ownership interfaces in §0.2.
 
-Gate: the selected framework stack can support the architecture without a
-private-trainer fork, PIL re-encoding of `D`, text-only teacher replay, or loss
-of actual sampling logprobs. Only after this gate may the framework-binding
-skeleton be implemented.
+Gate: the framework-neutral code may be developed under §0 while evidence is
+collected, but the veRL binding passes only if the selected stack works without
+a private-trainer fork, PIL re-encoding of `D`, text-only teacher replay, or
+loss of actual sampling logprobs, and real SDPO synthetic parity passes.
 
 ### Phase 2: representation-core extraction
 
@@ -730,12 +829,13 @@ length.
 Gate: final reward improves without losing high-budget original reasoning or
 learning to ignore/misuse `D`.
 
-### Phase 6: scale and validated SDPO
+### Phase 6: production-scale objective validation
 
 - Scale rollout/replay only after Phase 5 correctness.
-- Bind and test the exact SDPO objective separately against the pinned reference
-  paper/implementation. Validate a reference-style pure-SDPO identity before
-  defining any GRPO+SDPO hybrid.
+- Promote the already implemented reference-style pure-SDPO path only after its
+  production mathematics/configuration is separately accepted against the
+  pinned paper/implementation. Any GRPO+SDPO hybrid remains a distinct later
+  research decision.
 - Verify complete multi-call multimodal teacher context, exact-`D` replay,
   FSDP2 teacher lifecycle, LoRA/full parameter mapping, and strict resume.
 - Consider constrained joint TGVF updates only as a named later experiment.
@@ -767,7 +867,11 @@ identity, throughput, memory, and resume behavior are recorded and reproducible.
 11. Local/runtime path and family-specific representation artifact plan for the
     fixed `Qwen/Qwen2.5-VL-7B-Instruct` compatibility model.
 
-No implementation should silently decide any item above.
+No item above may be silently promoted into a production experiment. Under
+I8H-20260719, implementation may expose it as an explicit unset configuration
+or use a clearly named synthetic test identity with an oracle; real data,
+reward, final prompt, production mathematics, and production configuration
+remain open after the eight-hour goal.
 
 ## 14. Definition of project success
 

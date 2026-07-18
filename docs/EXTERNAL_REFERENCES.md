@@ -1,6 +1,6 @@
 # Controlled External References
 
-Status: **reference identities recorded; no dependency installation authorized**
+Status: **spike execution approved; production dependency pin not yet accepted**
 Recorded: **2026-07-19 JST**
 
 This registry fixes the external sources that may inform the design. A recorded
@@ -8,18 +8,23 @@ commit is a review identity, not a production dependency pin and not permission
 to copy an external repository wholesale. Any code adapted later requires an
 accepted task, a narrow source/symbol record, license review, and parity tests.
 
-## veRL compatibility candidates
+## veRL pinned compatibility candidate
 
 ```text
 repository: https://github.com/verl-project/verl
-primary exact main snapshot: e003163181731412595257a72ec173071efb125f
-stable comparison: v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c
+exact spike snapshot: e003163181731412595257a72ec173071efb125f
 main snapshot observed: 2026-07-19 JST
-role: selected framework family; exact production pin pending compatibility spike
-dependency status: review candidates only; do not install yet
+runtime: upstream veRL exact snapshot + vLLM + FSDP2 only
+role: approved isolated spike candidate; exact production pin pending report
+dependency status: isolated spike materialization authorized by its manifest
 ```
 
-Official point-in-time sources reviewed for the proposed spike include:
+`v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` is retained only
+as source-history provenance. It is not a runtime comparison, fallback, install,
+or GPU cell. SGLang is likewise explicitly outside this spike and first
+production implementation.
+
+Official point-in-time sources reviewed for the approved spike include:
 
 - [v0.8.0 release notes](https://github.com/verl-project/verl/releases/tag/v0.8.0);
 - [v0.8.0 AgentLoop API](https://github.com/verl-project/verl/blob/7aed6b230776f963fa09509c10d9c3a767d1102c/verl/experimental/agent_loop/agent_loop.py);
@@ -32,21 +37,18 @@ Official point-in-time sources reviewed for the proposed spike include:
 Additional exact-main risk sources are:
 
 - [exact main candidate commit](https://github.com/verl-project/verl/commit/e003163181731412595257a72ec173071efb125f);
-- [stable-to-main comparison](https://github.com/verl-project/verl/compare/7aed6b230776f963fa09509c10d9c3a767d1102c...e003163181731412595257a72ec173071efb125f);
 - [main full-determinism support matrix](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docs/advance/determinism.md#L102-L127);
 - [main Qwen3-VL visual/DeepStack reconstruction](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/models/transformers/qwen3_vl.py#L205-L324);
 - [main vLLM async-server generation boundary](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/workers/rollout/vllm_rollout/vllm_async_server.py#L531-L641);
-- [main SGLang async-server generation boundary](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/workers/rollout/sglang_rollout/async_sglang_server.py#L519-L605);
 - [main generic tensor collection helper](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/utils/model.py#L752-L802);
 - [main FSDP model-input update seam](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/workers/engine/fsdp/transformer_impl.py#L1023-L1167);
 - [main extension guide](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docs/extend_guide.rst#L47-L263);
 - [main Qwen-VL monkey-patch boundary](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/models/transformers/monkey_patch.py#L361-L453);
 - [main Qwen2.5-VL-7B FSDP2 example](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/examples/grpo_trainer/run_qwen2_5_vl_7b_fsdp.sh#L1-L151);
 - [main FSDP checkpoint manager](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/utils/checkpoint/fsdp_checkpoint_manager.py#L57-L327);
-- [main vLLM Docker recipe](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docker/Dockerfile.stable.vllm#L1-L18);
-- [main SGLang Docker recipe](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docker/Dockerfile.stable.sglang#L1-L4).
+- [main vLLM Docker recipe](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docker/Dockerfile.stable.vllm#L1-L18).
 
-The stable candidate exposes useful starting surfaces: FSDP2, official Qwen3-VL
+The historical v0.8 source exposes useful starting surfaces: FSDP2, official Qwen3-VL
 and Qwen2.5-VL examples, token-in/token-out AgentLoop execution, rollout
 log-probability fields, dynamic extra fields, and multimodal teacher support.
 These are candidate capabilities, not compatibility evidence.
@@ -63,20 +65,19 @@ The main snapshot's stock Qwen3-VL forward also regenerates image and DeepStack
 embeddings from `pixel_values`. Its generic tensor collector and FSDP
 `model_inputs` update provide potentially useful seams, but stock replay is
 still recomputation, not exact latent replay. Likewise, rollout-level full
-determinism was added only after stable v0.8.0 and the main documentation limits it to
-vLLM single-turn: SGLang and multi-turn `tool_agent_loop` are explicitly not
-supported. These are hard spike questions, not configuration assumptions.
+determinism was added only after v0.8.0 and the main documentation limits it to
+vLLM single-turn; multi-turn `tool_agent_loop` is explicitly not supported.
+These are hard spike questions, not configuration assumptions.
 
 The main vLLM Dockerfile's comment says `0.20.2` while its version argument says
-`0.23.0`; both main backend Dockerfiles still set `VERL_VERSION=v0.7.1`. The
-C-STABLE recipes also do not by themselves prove the desired source checkout.
+`0.23.0`, and it still sets `VERL_VERSION=v0.7.1`.
 Therefore an image recipe alone does not prove candidate identity. Any approved
 environment must verify the exact loaded veRL commit and record all resolved
 package/image identities.
 
-The complete proposed task and main-versus-stable decision rule are in
-`docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. Neither candidate is a production pin
-until the evidence report is explicitly accepted.
+The approved bounded task is in `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. C-MAIN
+does not become a production pin until the evidence report is explicitly
+accepted.
 
 ## SDPO
 
@@ -94,10 +95,21 @@ tree. It conditions the current model on feedback to construct a self-teacher;
 this is distinct from an external answer judge. Its exposed design space
 includes full-logit or top-k distillation, feedback/reprompt construction,
 importance weighting, EMA or trust-region teacher regularization, and teacher
-checkpoint state.
+lifecycle state.
 
-The new project must be SDPO-compatible from its first framework skeleton. In
-particular, framework-neutral trajectory/objective records must reserve:
+Pinned implementation evidence:
+
+- [fixed review commit](https://github.com/lasgroup/SDPO/commit/7c457fc1b1f636ae794eb0362ba37d4743b06fbc);
+- [root import of 1,022 files](https://github.com/lasgroup/SDPO/commit/519a257);
+- [bundled veRL version](https://github.com/lasgroup/SDPO/blob/7c457fc1b1f636ae794eb0362ba37d4743b06fbc/verl/version/version);
+- [Apache-2.0 license](https://github.com/lasgroup/SDPO/blob/7c457fc1b1f636ae794eb0362ba37d4743b06fbc/LICENSE);
+- [teacher-context construction](https://github.com/lasgroup/SDPO/blob/7c457fc1b1f636ae794eb0362ba37d4743b06fbc/verl/trainer/ppo/ray_trainer.py#L672-L796);
+- [actor teacher/loss path](https://github.com/lasgroup/SDPO/blob/7c457fc1b1f636ae794eb0362ba37d4743b06fbc/verl/workers/actor/dp_actor.py#L675-L920);
+- [distillation losses](https://github.com/lasgroup/SDPO/blob/7c457fc1b1f636ae794eb0362ba37d4743b06fbc/verl/trainer/ppo/core_algos.py#L1085-L1188);
+- [actor-only checkpoint manager ownership](https://github.com/lasgroup/SDPO/blob/7c457fc1b1f636ae794eb0362ba37d4743b06fbc/verl/workers/fsdp_workers.py#L893-L915).
+
+The framework goal must include a real repository-owned SDPO reimplementation,
+not merely reserve or freeze interfaces. It implements and verifies:
 
 - feedback and successful-demonstration identity;
 - a separately rendered teacher context and its token alignment;
@@ -105,7 +117,8 @@ particular, framework-neutral trajectory/objective records must reserve:
 - teacher logits/log probabilities or a versioned approximation artifact;
 - current-policy self-teacher identity plus EMA or trust-region regularization
   state;
-- objective composition, metrics, checkpoint, and resume state.
+- full-logit and top-k/tail reference-semantic loss paths;
+- objective composition, metrics, teacher update, checkpoint, and resume state.
 
 The commit above fixes the reference implementation. It does **not** yet freeze
 our exact SDPO equations, teacher regularization, reprompt template, feedback
@@ -113,24 +126,32 @@ policy, full-logit/top-k choice, importance weighting, or GRPO/SDPO composition.
 Those values must pass the SDPO mathematics and parity gate before an optimizer
 step uses SDPO.
 
-Upstream veRL remains the base infrastructure. The SDPO repository's bundled or
-modified veRL tree is not adopted wholesale. The compatibility spike must prove
-that the required SDPO seams can be implemented through maintained/public
-extension points without changing the exact TGVF trajectory and observation
-contracts.
+Upstream veRL remains the production base. The pinned SDPO repository is a
+complete modified veRL `0.7.0.dev` tree whose initial commit imported 1,022
+files without recording an exact upstream base SHA; its bundled
+tree is therefore reference-only and is never installed, vendored, imported,
+or used as a runtime fallback. The compatibility spike reimplements the
+algorithm behavior on the pinned C-MAIN public surfaces without changing the
+exact TGVF trajectory and observation contracts.
 
 Known reference-implementation gaps that the spike must test explicitly:
 
 - its distillation actor asserts that multimodal inputs are unsupported;
 - its teacher reprompt path assumes a simplified text prompt/response rather
   than a complete repeated-tool trajectory;
+- its on-policy worker can replace rollout behavior log probabilities with
+  `log_prob.detach()`, which is forbidden here;
 - it depends on veRL's legacy worker path and does not establish the new-engine
   integration required by a current upstream pin;
 - its shipped path does not prove FSDP2 SDPO, LoRA-to-teacher parameter mapping,
   coexistence with a separate KL reference, or strict EMA-teacher save/resume.
 
-These gaps justify an early neutral interface; they are not permission to
-silently reduce TGVF teacher replay to text-only distillation.
+Passing requires executable CPU loss/gradient parity plus exact-D multimodal
+teacher replay and teacher-state checkpoint/resume parity. A config slot,
+neutral interface, or static seam alone fails. Production pure-SDPO and any
+SDPO+GRPO hybrid remain distinct, fail-closed objective identities: exact
+mathematics and parity must be accepted before either performs a model optimizer
+step.
 
 ## DeepEyes
 
@@ -138,18 +159,14 @@ silently reduce TGVF teacher replay to text-only distillation.
 repository: https://github.com/Visual-Agent/DeepEyes
 review commit: 11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1
 observed: 2026-07-19 JST
-role: agentic multimodal RL design reference
+role: small configuration and family-adapter design reference only
 dependency status: reference only; do not install or vendor
 ```
 
-Permitted reference topics are:
-
-- veRL-based multi-turn agent-loop and tool-environment boundaries;
-- dynamic multimodal observations between assistant turns;
-- per-sample tool routing and mixed agent/non-agent data;
-- interleaved Qwen-VL M-RoPE, policy-loss masks, and multimodal batching;
-- reward/verifier routing, data normalization, tracing, and evaluation patterns;
-- serving an independent large Qwen model as an optional answer judge.
+Permitted reference topics are limited to small configuration-composition,
+family-adapter dispatch, launcher layout, and test-organization ideas that can
+be re-expressed behind this project's contracts. DeepEyes code, veRL tree, and
+runtime are not dependencies.
 
 DeepEyes uses Qwen2.5-VL policy models and documents
 `Qwen/Qwen2.5-72B-Instruct` as an LLM-as-judge example. The user has now fixed
@@ -157,11 +174,13 @@ our secondary policy model to `Qwen/Qwen2.5-VL-7B-Instruct` and approved
 reserving—without first-pilot deployment—the 72B judge provider. Judge prompt,
 reward role, and deployment topology remain unset.
 
-Forbidden inheritance includes its crop/zoom tool identity, rendered prompts,
-dataset assumptions, reward coefficients, asynchronous-staleness behavior, and
-any logprob/replay convention that has not passed this project's stricter
-behavior-logprob and exact-`D` gates. `tgvf_focus_tool` and native TGVF
-observations remain authoritative.
+Forbidden inheritance includes its observation schema or materialization,
+rollout/behavior log probabilities, replay semantics, sampled-token masks,
+agent loop, crop/zoom tool identity, rendered prompts, dataset assumptions,
+reward coefficients, checkpoint state, and asynchronous-staleness behavior.
+DeepEyes cannot supply compatibility evidence for any of those fields.
+`tgvf_focus_tool`, native Qwen trajectories, rollout-recorded probabilities,
+and exact TGVF observations remain authoritative.
 
 ## Model roles and current identities
 

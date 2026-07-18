@@ -13,9 +13,18 @@ HEAD:   a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
 state:  dirty; 52 porcelain entries at scaffold time
 ```
 
-Because the worktree is dirty, `HEAD` alone does not identify the current
-reference behavior. No code may be ported until the user approves an archive
-commit/tag or an immutable patch/content-hash bundle.
+Because the worktree is dirty, `HEAD` alone does not identify arbitrary current
+reference behavior. No unregistered code may be ported until the user approves
+an archive commit/tag or an immutable patch/content-hash bundle. For
+I8H-20260719, the exact committed paths and the separately recorded clean
+working-file hashes below form the authorized bounded content-hash bundle; this
+does not authorize any other file from the dirty worktree.
+
+The pinned tree contains no `LICENSE`, `COPYING`, or `NOTICE` file. The user
+explicitly authorized use of this legacy project, but no separate license or
+ownership assertion is recorded here. This repository will therefore use
+adapted, symbol-level reimplementations with recorded lineage; it will not copy
+whole legacy files or comments into the public repository.
 
 ## Access rule
 
@@ -133,6 +142,29 @@ it is registered here. It does not authorize copying its trainer, replay,
 objective, reward, executor, or scheduler implementation, and it does not make
 its mathematics or behavior correct by assumption.
 
+### Registered clean-subtree files for the framework goal
+
+The user explicitly directed the implementation to prefer the embedded clean
+subtree. The independently named sibling path `.../r-vlm/revisit_vlm_clean`
+does not exist; the authoritative clean subtree is committed inside the pinned
+legacy repository at `revisit_vlm/revisit_vlm_clean/`. The following exact
+files are registered before content inspection or adaptation:
+
+| Committed path at `a200437123afe6fbb481a6c9cf9b7ddf61ff36b8` | SHA256 | Permitted purpose |
+|---|---|---|
+| `revisit_vlm_clean/src/revisit_vlm_clean/deepstack.py` | `7499a3dbe1df2c654c8b6ff6a8d06d91ba2900bd9a76d7ce2e9b3058f2df0c5c` | adapted DeepStack payload/mask semantics |
+| `revisit_vlm_clean/src/revisit_vlm_clean/training/stage1_executor.py` | `4f9106c772c20faa64a7dcf700c6a5294ed85efa30b797eb4925debef381ae5a` | specification-only TGVF construction, loss, and state boundaries; executor is not ported |
+| `revisit_vlm_clean/src/revisit_vlm_clean/cli/train_stage1.py` | `e19c388b9b2d033b4d3b176ba16484f3b3c8e6b6ef6dd88ac6f1d9ed3874f8d5` | specification-only representation configuration and artifact inputs; CLI is not ported |
+| `revisit_vlm_clean/src/revisit_vlm_clean/stage3_grpo/model_prepare.py` | `6424a283a7281f6561ab638666d31216221fd61e42b03210821cc48e7c4aaefa` | specification-only Qwen/TGVF model-loading checks; legacy RL path is not ported |
+| `revisit_vlm_clean/tests/test_deepstack.py` | `cfb9e6692ede29f0460cb251b48869f11499adb9ff62b2fa7ff182855c738685` | adapted semantic test cases |
+| `revisit_vlm_clean/src/revisit_vlm_clean/tgvf_protocol.py` | `9af43f4c884f4a20b3a05c61d235ba4ed555f12154c3d4bbe460b791eefb955d` | negative/specification comparison only; legacy protocol implementation is forbidden |
+| `revisit_vlm_clean/tests/test_tgvf_protocol.py` | `2284d34f5f980abfc7aaa3ec4e93cda063fbf0b78a580c5bc088445dcf26f64a` | negative test ideas only; no legacy serialization fixture becomes canonical |
+
+The clean executor delegates the underlying TGVF mathematics to the already
+registered `src/revisit_vlm/tgvf_foveal.py` symbols. Therefore the clean subtree
+is the preferred orchestration/specification reference, while any mathematical
+extraction still uses the narrow symbol whitelist and parity obligations above.
+
 ## Representation data reuse boundary
 
 The legacy representation dataset is eligible for reuse only after its exact
@@ -232,3 +264,36 @@ date:
 An exact extraction requires deterministic output and gradient parity. An
 adapted extraction requires explicit semantic tests. A specification-only
 reference contributes no copied implementation.
+
+### I8H-20260719 port records
+
+```text
+new path: src/tgvf_rl/representation/adapter.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8 plus working-file SHA256 below
+legacy source path: src/revisit_vlm/tgvf_foveal.py
+legacy source SHA256: f2244980599510c976a20dbbe227523fde5af72f26e8253188e04c072456853f
+symbols/lineage used: FovealCrossAttentionOutput, TGVFv2Bidirectional,
+  TGVFv2BidirectionalDDeepStack, _cross_attention, _validate_inputs
+semantic differences: project-native typed inputs/outputs; no historical stage,
+  protocol, model lookup, builder, or output path; frozen merger supplied through
+  an explicit projection port
+parity fixture: tests/representation/test_adapter.py (synthetic output/gradient);
+  exact legacy checkpoint parity remains a later representation gate
+reviewed by: Codex I8H-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/deepstack.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+legacy source path: revisit_vlm_clean/src/revisit_vlm_clean/deepstack.py
+legacy source SHA256: 7499a3dbe1df2c654c8b6ff6a8d06d91ba2900bd9a76d7ce2e9b3058f2df0c5c
+symbols/lineage used: payload ordering and original-image key-block mask semantics
+semantic differences: batch-aware typed implementation; D branches required;
+  no legacy schema/runtime hooks or historical stage names
+parity fixture: tests/representation/test_deepstack.py
+reviewed by: Codex I8H-20260719
+date: 2026-07-19 JST
+```

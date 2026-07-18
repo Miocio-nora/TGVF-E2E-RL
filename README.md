@@ -5,14 +5,14 @@ Target-Guided Visual Foveation for a Qwen reasoning policy trained with
 end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 `Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
-> **Status:** design and implementation-contract phase. The repository does not
-> yet contain an implementation, pinned dependency stack, training run, or
-> evaluation result.
+> **Status:** framework implementation is active on a feature branch. No real
+> data/reward/prompt configuration, production training run, or evaluation
+> result exists yet.
 
-The bounded veRL compatibility task is currently a
-[proposal](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md). It records candidate commits,
-fixtures, hard PASS/FAIL rules, and resource ceilings, but does not authorize an
-installation or GPU process.
+The bounded [veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md) is
+authorized for implementation and smoke testing. veRL is the RL framework,
+vLLM is the only rollout backend, and any GPU smoke is restricted to physical
+GPU indices 2 and 3. Real training remains out of scope.
 
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
@@ -82,18 +82,20 @@ intermediate Stage2-style policy SFT and no Golden policy adapter.
   `Qwen/Qwen2.5-VL-7B-Instruct` support behind a tested family adapter;
   representation checkpoints remain family/model-specific.
 - Implement both contextual-hidden-state and target-token-embedding providers.
-- Use upstream veRL as the RL infrastructure and require an FSDP2 execution
-  path; select the exact commit, rollout backend, and parallel topology from a
-  bounded compatibility spike.
+- Use upstream veRL as the RL infrastructure, vLLM as the only rollout backend,
+  and require an FSDP2 execution path; select the exact commit and parallel
+  topology from bounded smoke evidence.
 - Freeze the TGVF Adapter for the first policy RL proof.
 - Preserve the actual behavior log probability of every policy-sampled token.
 - Replay policy, old-policy, and reference likelihoods against the same exact
   rollout-materialized `D` observation for every tool call.
 - Treat exact GRPO mathematics as a project artifact, not a framework default.
-- Design the first skeleton for SDPO using pinned
-  `lasgroup/SDPO@7c457fc1b1f636ae794eb0362ba37d4743b06fbc` as the reference,
-  while keeping execution disabled until exact equations, multimodal replay,
-  teacher lifecycle, FSDP2, and resume parity pass.
+- Implement SDPO as a real implementation track in the current framework goal,
+  using pinned
+  `lasgroup/SDPO@7c457fc1b1f636ae794eb0362ba37d4743b06fbc` as the reference. Port
+  its required behavior onto the selected upstream veRL instead of adopting its
+  bundled veRL tree. The initial interfaces remain versioned and evolvable; they
+  are not declared frozen substitutes for the implementation.
 - Reserve, but do not deploy in the first pilot, a
   `Qwen/Qwen2.5-72B-Instruct` judge provider separate from both the RL reference
   policy and the SDPO self-teacher.
@@ -144,7 +146,8 @@ choices remain unset:
 - Qwen2.5 local/runtime path, family-specific representation artifact, and
   native prompt;
 - target-span and `Hq` construction details;
-- veRL commit, SGLang/vLLM backend, and FSDP2 topology;
+- exact veRL commit/environment and FSDP2 topology; the backend is fixed to
+  vLLM;
 - policy LoRA or full-parameter scope;
 - exact GRPO equations, clipping, KL, and normalization;
 - RL data sources and audited manifests;
@@ -160,10 +163,10 @@ be inherited silently from a library default.
 
 ## Roadmap
 
-1. Freeze provenance and approve a bounded compatibility-spike task.
-2. Complete the isolated veRL/FSDP2 spike; freeze the Qwen-family,
-   dual-provider, trajectory, GRPO/SDPO, teacher-state, and judge-provider seams
-   before implementing the framework-binding skeleton.
+1. Record provenance and execute the accepted bounded compatibility task.
+2. Complete the isolated veRL/vLLM/FSDP2 smoke and implement versioned
+   Qwen-family, dual-provider, trajectory, objective, teacher-state, and judge
+   boundaries without claiming that the future SDPO contract is frozen.
 3. Extract the TGVF Adapter core and establish numerical parity.
 4. Implement the native Qwen protocol, strict parser, multi-call runtime, and
    framework-neutral trajectory records.
@@ -172,15 +175,15 @@ be inherited silently from a library default.
    family-specific artifact and full fixture suite before claiming Qwen2.5-VL
    end-to-end support.
 6. Bind the GRPO equations and run a minimal frozen-Adapter policy proof.
-7. Validate reference-style SDPO in parallel through text then multimodal
-   parity; scale any objective only after reasoning retention, reproducibility,
-   and exact resume gates pass.
+7. Validate the implemented reference-style SDPO path through text then
+   multimodal parity, including teacher state and exact resume; select real
+   feedback and training hyperparameters only after the framework smoke passes.
 
 ## Documentation
 
 - [Project task and architectural baseline](docs/PROJECT_TASK.md)
 - [Open implementation contracts and promotion gates](docs/OPEN_IMPLEMENTATION_CONTRACTS.md)
-- [Proposed veRL compatibility spike](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
+- [Accepted bounded veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
 - [Historical framework-skeleton reference draft](docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md)
   (subordinate to the project task and supersession register)
 - [Controlled legacy provenance](docs/LEGACY_REFERENCE.md)
