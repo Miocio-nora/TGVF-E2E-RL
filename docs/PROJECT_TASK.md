@@ -81,10 +81,25 @@ The policy RL phase trains the behavior that SFT previously attempted to
 impose: route choice, target text, native tool syntax, post-`D` evidence use,
 reasoning, and final answer.
 
-GRPO is the first named online objective. SDPO is a candidate consolidation or
-self-distillation objective, but its exact paper/repository/equations must be
-bound before implementation because `SDPO` is not a unique unambiguous name.
-GRPO and SDPO must not be silently mixed into one unidentifiable loss.
+GRPO is the first online objective to validate. SDPO is also a required
+architecture target from the initial skeleton, using
+[`lasgroup/SDPO`](https://github.com/lasgroup/SDPO) commit
+`7c457fc1b1f636ae794eb0362ba37d4743b06fbc` as the fixed reference
+implementation and arXiv `2601.20802v2` as the fixed paper revision.
+
+This fixes the meaning and reference source, not our final objective contract.
+The reference implementation's `loss_mode=sdpo` replaces the policy loss; it
+does not define `GRPO + lambda * SDPO`. Pure GRPO, reference-style pure SDPO,
+and any hybrid are therefore separate objective identities. Exact SDPO
+equations, feedback/reprompt construction, teacher regularization, logit
+approximation, importance weighting, and hybrid composition must be accepted
+and parity-tested before use.
+
+The framework skeleton must nevertheless reserve SDPO's teacher-context,
+token-alignment, exact-observation teacher replay, distillation-target,
+teacher-state, objective-plugin, checkpoint, and resume boundaries now. Deferring
+those boundaries until after a GRPO trainer exists would risk a structural
+rewrite and is not allowed.
 
 GRPO is also not identified by its name alone. Before implementation, the
 project must freeze the exact equations and conventions for group standard
@@ -114,11 +129,43 @@ or rewrite the distributed trainer around private internals.
 
 This repository supplies a narrow custom boundary for latent TGVF execution.
 The remaining compatibility spike validates a pinned veRL commit, rollout
-backend, Qwen3-VL support, multi-turn latent observations, exact behavior-logprob
-retention/replay, FSDP2, and checkpoint/resume. It is not a framework-selection
-comparison. veRL is not presumed to be a drop-in solution because TGVF injects
-hidden visual embeddings, M-RoPE state, multimodal token types, and D-DeepStack
-features rather than a PIL tool image.
+backend, primary Qwen3-VL and secondary Qwen2.5-VL adapter surfaces, multi-turn
+latent observations, both target-conditioning providers, exact
+behavior-logprob retention/replay, SDPO extension seams, FSDP2, and
+checkpoint/resume. It is not a framework-selection comparison. veRL is not
+presumed to be a drop-in solution because TGVF injects hidden visual embeddings,
+M-RoPE state, multimodal token types, and D-DeepStack features rather than a PIL
+tool image.
+
+The SDPO reference repository contains a modified veRL tree rather than a thin
+plugin and does not identify a reproducible upstream veRL base commit. It is
+therefore an algorithm/patch-surface reference, not the production framework
+pin. Its current distillation path also rejects multimodal inputs, reconstructs
+teacher prompts from a simplified final-user view, and does not provide the
+teacher checkpoint/resume contract required here. The compatibility spike must
+measure these gaps explicitly rather than inherit the fork.
+
+### 2.5 Required Qwen families and target-conditioning providers
+
+The primary policy/reference target is **Qwen3-VL-8B-Thinking**. The
+legacy-reported local candidate path is
+`/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`; its immutable model,
+processor, tokenizer, and chat-template identity remains to be frozen.
+
+**Qwen2.5-VL is a required secondary compatibility family.** Its exact
+size/variant/path is `[TBD]`; the project does not silently choose the DeepEyes
+7B or 32B example. Model-family-specific processor, vision-tap, DeepStack,
+M-RoPE, native transcript, and forward behavior live behind a versioned Qwen
+VLM adapter. The initial Qwen3 representation checkpoint is not presumed
+portable to Qwen2.5-VL.
+
+Both target-conditioning providers must be implemented and tested:
+
+1. contextual hidden state from the exact sampled target span and trajectory;
+2. target token embedding from the selected base model without new tokens.
+
+An experiment selects one provider, but provider support itself is not an open
+either/or architecture decision.
 
 ## 3. Native Qwen tool protocol
 
@@ -287,10 +334,19 @@ execute_tgvf_tool
 replay_policy
 replay_reference
 score_trajectory
+build_teacher_context
+replay_teacher_on_recorded_observations
+compute_named_objective
 ```
 
-If SDPO is adopted, an additional feedback/teacher replay surface may be added
-only after its token-alignment and context contracts are specified.
+All entries are present in the framework-neutral architecture from the
+beginning. `build_teacher_context` and
+`replay_teacher_on_recorded_observations` fail closed while SDPO is disabled.
+`compute_named_objective` is a general registry: the approved GRPO path remains
+independently usable, while `sdpo` and any hybrid mode fail closed until their
+own contracts pass. Teacher replay consumes the recorded multimodal trajectory
+and exact per-call observations; it must not reconstruct a text-only final
+response or regenerate `D`.
 
 ## 5. Initial parameter policy
 
@@ -299,9 +355,13 @@ newly defined policy adapter scope. The following are fixed or unresolved:
 
 - Frozen reference: exact original Qwen model and prompt/tool schema.
 - Policy initialization: exact original Qwen model; no Stage2 LoRA.
+- Primary family: Qwen3-VL-8B-Thinking. Secondary compatibility family:
+  Qwen2.5-VL, with exact snapshot `[TBD]`.
 - TGVF Adapter: a newly trained native-format TGVF Adapter checkpoint, initially
   frozen during the first RL proof. The legacy checkpoint is not a direct
   initialization.
+- Target conditioning: both contextual-hidden-state and target-token-embedding
+  providers are required; the active provider is an experiment identity.
 - Policy trainable scope: unresolved; LoRA is expected, but module/rank/dropout
   must be selected and recorded rather than inherited from Golden.
 - Original vision tower and frozen Qwen visual mergers: frozen by default.
@@ -332,6 +392,11 @@ Candidate components are:
 Do not reward longer reasoning. Health metrics and correctness are separate.
 Judge-model rewards, if used, require calibration against human-audited
 examples and must never replace executable answer/tool checks.
+
+The initial external judge candidate is `Qwen/Qwen2.5-72B-Instruct`, following
+the pinned DeepEyes reference. Its exact local/service snapshot, prompt,
+sampling, calibration set, and scope remain `[TBD]`. The answer judge, frozen RL
+reference, and SDPO self-teacher are three separate roles and states.
 
 ## 7. Representation gates
 
@@ -379,6 +444,9 @@ not a framework bake-off and it is not a training run. The spike must use an
 official maintained version and answer:
 
 - Does the selected veRL commit support Qwen VLM policy/reference models?
+- Does the family adapter run the primary Qwen3-VL-8B-Thinking fixture and a
+  declared Qwen2.5-VL compatibility fixture without leaking family-specific
+  tensor assumptions across the boundary?
 - Can it run multi-turn dynamic tools without converting `D` to a PIL image?
 - Can a custom model forward receive native visual embedding spans, M-RoPE,
   multimodal token types, and D-DeepStack?
@@ -392,7 +460,17 @@ official maintained version and answer:
 - Are GRPO standard-deviation convention, clipping, KL, and token/sequence
   normalization configurable and identical to the approved equations?
 - Is the intended SDPO implementation supported, or can its pure tensor loss
-  be added without replacing private trainer internals?
+  and teacher lifecycle be added without replacing private trainer internals?
+- Can the same framework-neutral trajectory support both target-conditioning
+  providers and both GRPO and SDPO replay without changing token ownership or
+  observation identity?
+- Can SDPO teacher context preserve the complete native multi-call transcript,
+  align every policy-sampled assistant turn, and consume the exact recorded
+  original image, main `D`, D-DeepStack, layout, positions, masks, and cache
+  contract?
+- Can teacher/EMA or trust-region state be sharded with FSDP2 and strictly
+  checkpointed/resumed alongside LoRA or full actor state? The reference SDPO
+  repository does not prove this path.
 - Are checkpoint/resume and dependency versions reproducible locally?
 
 The veRL family decision is fixed. The exact commit, dependency environment,
@@ -453,6 +531,23 @@ The historical TGVF Adapter checkpoint is not a new-training initialization.
 Historical reward ideas and tests may inform a new specification, but no old
 Stage3 implementation is assumed correct.
 
+### External reference boundary
+
+The exact external commits and permitted topics are recorded in
+`docs/EXTERNAL_REFERENCES.md`.
+
+- `lasgroup/SDPO` is an algorithm and patch-surface reference. Its bundled veRL
+  tree is not vendored or selected as the production framework.
+- `Visual-Agent/DeepEyes` may inform multi-turn agent-loop, dynamic multimodal
+  observation, tool registry, Qwen-VL M-RoPE/mask, data, reward, judge-service,
+  tracing, and evaluation interfaces.
+- DeepEyes crop tools, rendered prompts, reward coefficients, asynchronous
+  behavior, and logprob/replay conventions are not inherited.
+- The legacy `revisit_vlm_clean` code is an eligible exact-file, read-only design
+  reference under `docs/LEGACY_REFERENCE.md`; “clean” is not blanket reuse
+  permission. Registered files may inform new interfaces, while wholesale
+  trainer/replay/objective/runtime migration remains forbidden.
+
 ## 11. Planned repository shape
 
 No source directories are created until their interfaces are approved. The
@@ -466,16 +561,20 @@ tgvf-e2e-rl/
   docs/
     PROJECT_TASK.md
     LEGACY_REFERENCE.md
+    EXTERNAL_REFERENCES.md
     EXPERIMENT_LEDGER.md
     OPEN_IMPLEMENTATION_CONTRACTS.md
     TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md
   src/tgvf_rl/
     representation/             # extracted TGVF Adapter and training path
-    qwen/                       # native VLM/tool/D adapter
+    qwen/                       # Qwen3/Qwen2.5 family adapters and native VLM state
+    conditioning/               # both required target-condition providers
     protocol/                   # schema, strict parser, transcript identity
     environment/                # TGVF tool execution
     trajectories/               # framework-neutral rollout records
     rewards/                    # decomposed executable rewards
+    objectives/                 # framework-neutral GRPO/SDPO objective boundary
+    judges/                     # optional versioned external answer judges
     framework/                  # narrow veRL adapter
     evaluation/                 # identity-safe evaluation/scoring
   tests/
@@ -488,17 +587,48 @@ tgvf-e2e-rl/
 
 ## 12. Work phases and promotion gates
 
-### Phase 0: freeze provenance
+### Phase 0: freeze provenance and approve the bounded spike
 
 - Archive the current old-repository dirty worktree under a user-approved
   commit/tag or immutable patch bundle.
 - Pin the base model/processor snapshot and the historical representation
   checkpoint only as a parity/reference identity.
 - Finalize the exact extraction whitelist and file hashes.
+- Retain the point-in-time SDPO and DeepEyes review commits in
+  `docs/EXTERNAL_REFERENCES.md`; do not turn either repository into an implicit
+  dependency.
+- Accept the spike questions, candidate commits/backends, synthetic latent
+  fixtures, PASS/FAIL rules, and any applicable `PLANNED` GPU ledger entry.
 
-Gate: every imported idea or symbol has immutable provenance.
+Gate: every imported idea or symbol has immutable provenance, and the isolated
+compatibility spike is authorized without authorizing the main implementation.
 
-### Phase 1: representation-core extraction
+### Phase 1: veRL/FSDP2/SDPO compatibility spike and seam freeze
+
+- In an approved isolated environment, test and then pin one upstream veRL
+  commit and rollout backend; do not adopt the SDPO or DeepEyes veRL trees.
+- Validate Qwen3-VL-8B-Thinking policy/reference forward and the declared
+  Qwen2.5-VL family-adapter fixture.
+- Validate a deterministic native `tgvf_focus_tool` synthetic-latent fixture
+  with at least two calls, exact behavior logprobs, immutable observation
+  replay, masks, positions, cache state, and checkpoint/resume.
+- Validate FSDP2 execution/state handling and both target-conditioning provider
+  seams.
+- Bind the exact GRPO equations before any optimizer fixture, then verify
+  pure-tensor loss/gradient, accumulation, FSDP2, save, and resume parity.
+- Map the pinned SDPO patch surface onto maintained/public upstream veRL hooks.
+  Prove that complete teacher context, per-turn alignment, exact recorded
+  observations, distillation targets, teacher lifecycle, and checkpoint state
+  fit the boundary even though SDPO execution stays disabled.
+- Freeze the Qwen-family, dual-provider, trajectory, objective/teacher, judge,
+  and veRL ownership interfaces before creating mainline source packages.
+
+Gate: the selected framework stack can support the architecture without a
+private-trainer fork, PIL re-encoding of `D`, text-only teacher replay, or loss
+of actual sampling logprobs. Only after this gate may the framework-binding
+skeleton be implemented.
+
+### Phase 2: representation-core extraction
 
 - Extract only the selected TGVF classes/helpers.
 - Export a minimal TGVF Adapter artifact without optimizer, scheduler, or
@@ -511,10 +641,12 @@ branch, mask/config), main `D`, every D-DeepStack output, and required gradients
 match the pinned Adapter. This gate tests Adapter mathematics, not legacy
 Protocol-C serialization.
 
-### Phase 2: native protocol and runtime
+### Phase 3: native protocol and runtime
 
 - Implement native tool schema, strict parser, target-span mapping, and native
   tool-response `D` injection.
+- Establish a Qwen VLM family-adapter contract: Qwen3-VL-8B-Thinking is the
+  primary executable path and Qwen2.5-VL is a required compatibility fixture.
 - Support repeated `tgvf_focus_tool` calls with a configurable safety cap
   greater than one and per-call immutable observation records.
 - Prove no tokenizer resize, exact template-generated transcript/token round
@@ -523,36 +655,31 @@ Protocol-C serialization.
 - Measure untrained base prompt-trigger behavior without using it as SFT data.
 
 Gate: native direct/tool trajectories execute deterministically and expose all
-required replay state.
+required policy/reference/teacher replay state through the already accepted
+framework-neutral interfaces.
 
-### Phase 3: native representation training and compatibility
+### Phase 4: native representation training and family compatibility
 
 - Compare old Protocol-C and native-tool `Hq`/`D` behavior.
 - Build the new native-format representation data/training/checkpoint pipeline.
-- Train a new native-format TGVF Adapter checkpoint; do not initialize it
-  directly from the historical TGVF Adapter checkpoint.
+- Implement and test both contextual-hidden-state and target-token-embedding
+  condition providers behind the same TGVF Adapter boundary.
+- Train a new Qwen3-VL-8B-Thinking native-format TGVF Adapter checkpoint; do not
+  initialize it directly from the historical TGVF Adapter checkpoint.
 - Run target-sensitivity, readout, counterfactual flip, and free-continuation
   gates.
+- Before claiming Qwen2.5-VL end-to-end support, pin its exact snapshot; freeze
+  its native transcript, processor, vision features, M-RoPE, mask/cache, and
+  main-`D`/DeepStack-equivalent injection contract; train a separate
+  family-specific representation artifact; and pass both-provider,
+  multi-call, exact-replay, and objective fixtures. Missing equivalent
+  DeepStack support is a recorded compatibility blocker, not permission to use
+  silent zero/dummy branches or a Qwen3 artifact.
 
-Gate: target-specific, readable native `D`; no claim based only on formatting
-or output-length change.
-
-### Phase 4: veRL compatibility spike
-
-- After the spike task is approved, test and pin one upstream veRL commit in an
-  isolated optional environment.
-- Validate candidate rollout backends and an FSDP2 execution/checkpoint path;
-  choose the concrete parallel topology from observed correctness, memory, and
-  throughput.
-- Adapt the narrow trajectory/tool interfaces.
-- Bind the exact GRPO equations before invoking a framework loss.
-- Verify same-policy-version behavior/replay logits and logprobs on the exact
-  recorded observation, deterministic forward/dropout state, token masks,
-  staleness policy, GRPO loss, gradients, checkpoint, and resume parity on a
-  tiny CPU/GPU fixture.
-
-Gate: framework infrastructure does not change transcript, D construction, or
-approved RL mathematics.
+Gate: the primary family has target-specific, readable native `D`; a secondary
+family is called supported only after its own artifact and full fixture suite
+pass. No claim is based only on interface presence, formatting, or output
+length.
 
 ### Phase 5: minimal GRPO proof
 
@@ -564,14 +691,18 @@ approved RL mathematics.
 Gate: final reward improves without losing high-budget original reasoning or
 learning to ignore/misuse `D`.
 
-### Phase 6: scale and optional SDPO
+### Phase 6: scale and validated SDPO
 
 - Scale rollout/replay only after Phase 5 correctness.
-- Bind and test the exact SDPO objective separately.
+- Bind and test the exact SDPO objective separately against the pinned reference
+  paper/implementation. Validate a reference-style pure-SDPO identity before
+  defining any GRPO+SDPO hybrid.
+- Verify complete multi-call multimodal teacher context, exact-`D` replay,
+  FSDP2 teacher lifecycle, LoRA/full parameter mapping, and strict resume.
 - Consider constrained joint TGVF updates only as a named later experiment.
 
-Gate: mathematical identity, throughput, memory, and resume behavior are all
-recorded and reproducible.
+Gate: SDPO support is real rather than a placeholder, and its mathematical
+identity, throughput, memory, and resume behavior are recorded and reproducible.
 
 ## 13. Open decisions requiring confirmation
 
@@ -584,12 +715,17 @@ recorded and reproducible.
 4. Policy LoRA/full-parameter scope and reference/KL contract.
 5. Pinned veRL commit, rollout backend, dependency environment, and concrete
    FSDP2/parallel topology.
-6. Exact meaning and source implementation of SDPO.
+6. Exact SDPO equations, feedback/reprompt contract, teacher regularization,
+   approximation, and whether any separately named hybrid is scientifically
+   required. The paper/repository identity is already fixed.
 7. Tool-call safety cap greater than one, prompt wording, and initial
    exploration curriculum.
 8. Original-image visibility and DeepStack mask scope after each `D`.
 9. Training population, reward benchmarks, and held-out evaluation manifests.
-10. Judge models, if any, and their calibrated role in target/evidence rewards.
+10. Whether the candidate `Qwen/Qwen2.5-72B-Instruct` judge is used, plus its
+    exact snapshot/service, prompt, sampling, calibration, and reward scope.
+11. Exact Qwen2.5-VL size/variant/path and the family-specific representation
+    artifact plan. Supporting the family is fixed; the concrete snapshot is not.
 
 No implementation should silently decide any item above.
 

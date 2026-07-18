@@ -1,8 +1,9 @@
 # TGVF End-to-End RL
 
 TGVF End-to-End RL is a clean, independently versioned implementation of
-Target-Guided Visual Foveation for a Qwen3-VL reasoning policy trained with
-end-to-end reinforcement learning.
+Target-Guided Visual Foveation for a Qwen reasoning policy trained with
+end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
+Qwen2.5-VL is a required secondary model-family compatibility target.
 
 > **Status:** design and implementation-contract phase. The repository does not
 > yet contain an implementation, pinned dependency stack, training run, or
@@ -18,7 +19,7 @@ adding project-specific tokenizer tokens.
 ```text
 original image + question + native Qwen tool schema
         ↓
-Qwen3-VL reasoning
+selected Qwen-VL policy reasoning
         ↓
 direct answer OR tgvf_focus_tool(target)
         ↓
@@ -26,7 +27,7 @@ TGVF Adapter produces target-conditioned main D + D-DeepStack
         ↓
 D is appended as a native multimodal tool response
         ↓
-Qwen3-VL continues reasoning
+the same Qwen-VL policy continues reasoning
         ↓
 zero or more additional tool calls
         ↓
@@ -51,7 +52,10 @@ action/response turns.
 | **representation phase** | Train target-specific visual evidence `D` that the base/frozen Qwen language model can causally read. |
 | **TGVF Adapter** | Consume target conditioning and original-image visual features; produce main `D` and every D-DeepStack branch. |
 | **policy RL phase** | Learn routing, target generation, native tool use, post-`D` reasoning, repeated calls, and final answering. |
+| **Qwen VLM family adapter** | Isolate Qwen3-VL and Qwen2.5-VL processor, visual, M-RoPE, DeepStack, transcript, and forward differences. |
+| **target-condition providers** | Supply both contextual-hidden-state and target-token-embedding conditioning behind one interface. |
 | **veRL integration** | Provide distributed rollout and optimization infrastructure, with required FSDP2 support. |
+| **objective layer** | Keep GRPO and reference-style SDPO mathematics/state separately identifiable. |
 
 The representation phase will reuse only provenance-pinned legacy data and
 selected TGVF/DeepStack code. It uses a new native-format pipeline and trains a
@@ -69,6 +73,9 @@ intermediate Stage2-style policy SFT and no Golden policy adapter.
 - Never resize the tokenizer or add protocol-specific embedding/lm-head rows.
 - Support multiple `tgvf_focus_tool` calls in one trajectory.
 - Start policy RL from the original Qwen reasoning policy.
+- Use Qwen3-VL-8B-Thinking first and keep Qwen2.5-VL support behind a tested
+  family adapter; representation checkpoints remain family/snapshot-specific.
+- Implement both contextual-hidden-state and target-token-embedding providers.
 - Use upstream veRL as the RL infrastructure and require an FSDP2 execution
   path; select the exact commit, rollout backend, and parallel topology from a
   bounded compatibility spike.
@@ -77,6 +84,12 @@ intermediate Stage2-style policy SFT and no Golden policy adapter.
 - Replay policy, old-policy, and reference likelihoods against the same exact
   rollout-materialized `D` observation for every tool call.
 - Treat exact GRPO mathematics as a project artifact, not a framework default.
+- Design the first skeleton for SDPO using pinned
+  `lasgroup/SDPO@7c457fc1b1f636ae794eb0362ba37d4743b06fbc` as the reference,
+  while keeping execution disabled until exact equations, multimodal replay,
+  teacher lifecycle, FSDP2, and resume parity pass.
+- Keep an optional Qwen 72B answer judge separate from both the RL reference
+  policy and the SDPO self-teacher.
 
 ## Why exact rollout observations matter
 
@@ -107,15 +120,19 @@ The project prioritizes:
    branch;
 5. exact template-owned, policy-sampled, environment-owned, and padding masks;
 6. rollout/replay logit and logprob parity on identical recorded observations;
-7. GRPO loss and gradient parity with the approved equations;
-8. retention of the original Qwen policy's high-budget reasoning behavior.
+7. both condition providers and both required Qwen-family adapters pass their
+   declared fixtures;
+8. GRPO and SDPO loss, gradient, teacher-state, and resume parity with their
+   separately approved equations;
+9. retention of the original Qwen policy's high-budget reasoning behavior.
 
 ## Current open contracts
 
 The framework skeleton may expose versioned interfaces while these research
 choices remain unset:
 
-- exact Qwen/processor snapshot and native prompt;
+- immutable Qwen3 model/processor identity, Qwen2.5 size/snapshot, and native
+  prompt;
 - target-span and `Hq` construction details;
 - veRL commit, SGLang/vLLM backend, and FSDP2 topology;
 - policy LoRA or full-parameter scope;
@@ -123,23 +140,31 @@ choices remain unset:
 - RL data sources and audited manifests;
 - reward components, verifiers, and coefficients;
 - tool-call safety cap and exploration curriculum;
-- the exact SDPO source/equations and any later joint TGVF Adapter update.
+- exact SDPO equations, feedback/teacher policy, target approximation, and any
+  separately defined hybrid or later joint TGVF Adapter update;
+- whether the candidate `Qwen/Qwen2.5-72B-Instruct` judge is needed, and its
+  exact service/prompt/calibration identity.
 
 These values must remain explicit `[TBD]` fields until accepted. They must not
 be inherited silently from a library default.
 
 ## Roadmap
 
-1. Freeze provenance, model identities, and skeleton interfaces.
-2. Extract the TGVF Adapter core and establish numerical parity.
-3. Implement the native Qwen protocol, strict parser, multi-call runtime, and
+1. Freeze provenance and approve a bounded compatibility-spike task.
+2. Complete the isolated veRL/FSDP2 spike; freeze the Qwen-family,
+   dual-provider, trajectory, GRPO/SDPO, teacher-state, and judge-provider seams
+   before implementing the framework-binding skeleton.
+3. Extract the TGVF Adapter core and establish numerical parity.
+4. Implement the native Qwen protocol, strict parser, multi-call runtime, and
    framework-neutral trajectory records.
-4. Build the native-format representation pipeline and train a new TGVF
-   Adapter checkpoint.
-5. Complete the veRL/FSDP2 compatibility spike and exact rollout/replay parity.
+5. Build the native-format representation pipeline and train a new
+   Qwen3-VL-8B-Thinking TGVF Adapter checkpoint. Require a separate
+   family-specific artifact and full fixture suite before claiming Qwen2.5-VL
+   end-to-end support.
 6. Bind the GRPO equations and run a minimal frozen-Adapter policy proof.
-7. Scale only after reasoning retention, reproducibility, and objective parity
-   pass their gates; evaluate SDPO and joint Adapter updates separately later.
+7. Validate reference-style SDPO in parallel through text then multimodal
+   parity; scale any objective only after reasoning retention, reproducibility,
+   and exact resume gates pass.
 
 ## Documentation
 
@@ -147,6 +172,7 @@ be inherited silently from a library default.
 - [Open implementation contracts and promotion gates](docs/OPEN_IMPLEMENTATION_CONTRACTS.md)
 - [Framework-skeleton implementation specification](docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md)
 - [Controlled legacy provenance](docs/LEGACY_REFERENCE.md)
+- [Controlled external references](docs/EXTERNAL_REFERENCES.md)
 - [Experiment ledger](docs/EXPERIMENT_LEDGER.md)
 - [Contributor and agent rules](AGENTS.md)
 

@@ -44,6 +44,12 @@ supersedes:
 
 - [x] `FIXED` — Upstream veRL is the policy-RL infrastructure.
 - [x] `FIXED` — FSDP2 support is required. Exact topology is evidence-based.
+- [x] `FIXED` — Qwen3-VL-8B-Thinking is the primary policy/reference target;
+  Qwen2.5-VL is a required secondary model-family compatibility target. The
+  latter's exact size and snapshot remain configurable.
+- [x] `FIXED` — Contextual-hidden-state and target-token-embedding conditioning
+  providers are both required capabilities. A run selects one as part of its
+  experiment identity.
 - [x] `FIXED` — The native function name is `tgvf_focus_tool`.
 - [x] `FIXED` — A trajectory supports zero or more tool calls; the safety cap is
   configurable and greater than one.
@@ -61,6 +67,16 @@ supersedes:
 - [x] `FIXED` — The TGVF Adapter is frozen for the first policy RL proof.
 - [x] `FIXED` — For each tool call, policy, old-policy, and reference replay
   consume the same rollout-materialized `D` observation.
+- [x] `FIXED` — SDPO compatibility is part of the initial skeleton. Its reference
+  repository is `lasgroup/SDPO` at
+  `7c457fc1b1f636ae794eb0362ba37d4743b06fbc`; its bundled veRL tree is not the
+  selected production framework.
+- [x] `FIXED` — Pure GRPO, reference-style pure SDPO, and any future hybrid are
+  distinct objective identities. The reference SDPO implementation replaces
+  the policy loss and does not define a GRPO-plus-SDPO sum.
+- [x] `FIXED` — An external answer judge, frozen RL reference, and SDPO
+  self-teacher are separate roles. `Qwen/Qwen2.5-72B-Instruct` is the initial
+  judge candidate, not an approved deployment identity.
 - [x] `FIXED` — Prose uses `representation phase`, `policy RL phase`, and `TGVF
   Adapter`. Current component names do not use Stage1/Stage2/Stage3.
 
@@ -95,8 +111,9 @@ interfaces must be versioned and fail closed while unset.
   list in `docs/PROJECT_TASK.md`.
   - Value: `[TBD]`
   - Minimum modules: TGVF Adapter/representation, Qwen adapter, protocol,
-    multi-call tool runtime, framework-neutral trajectory records, reward
-    interface, veRL adapter, evaluation.
+    both target-condition providers, multi-call tool runtime,
+    framework-neutral trajectory records, reward/judge interfaces,
+    GRPO/SDPO objective and teacher-state boundaries, veRL adapter, evaluation.
 - [ ] `OPEN_BLOCKING SK-02` — Freeze ownership between veRL and this repository.
   - veRL owns: distributed workers, scheduling, optimizer execution,
     checkpoint/resume, metric aggregation.
@@ -116,6 +133,9 @@ interfaces must be versioned and fail closed while unset.
 - [ ] `OPEN_BLOCKING SK-05` — Freeze a versioned framework-neutral trajectory
   record interface with reserved fields for tokens, ownership masks, behavior
   log probabilities, per-call observations, identities, rewards, and stops.
+  It must also preserve typed environment/judge feedback, group identity,
+  demonstration provenance, teacher-context identity, per-turn alignment, and
+  exact-observation teacher replay handles without making GRPO depend on SDPO.
   - Exact dataclass/schema: `[TBD]`
 - [ ] `OPEN_BLOCKING SK-06` — Freeze configuration/identity plumbing.
   - Every prompt, schema, template, model, Adapter checkpoint, data manifest,
@@ -128,15 +148,40 @@ interfaces must be versioned and fail closed while unset.
 - [x] `FIXED SK-08` — The first policy RL path exposes only a frozen TGVF
   Adapter. A joint-update extension may be reserved but not implemented as an
   active mode without Gate J0.
-- [x] `FIXED SK-09` — SDPO may have an isolated extension boundary, but it does
-  not block the GRPO skeleton and stays disabled until Gate D0.
+- [ ] `OPEN_BLOCKING SK-09` — Freeze the SDPO-ready architecture boundary before
+  the framework skeleton is accepted. It must include:
+  - typed feedback, success decision, group/demonstration provenance;
+  - versioned teacher-context request/result and truncation report;
+  - sampled-token alignment for every policy assistant turn;
+  - teacher replay handles for the exact recorded original image, main `D`, all
+    D-DeepStack branches, layout, positions, masks, and cache contract;
+  - full-logit/top-k-plus-tail distillation-target schema and valid/sample masks;
+  - objective plugin/composition identity and metrics;
+  - current-policy self-teacher plus EMA/trust-region regularization lifecycle
+    and FSDP2/LoRA state ownership;
+  - teacher/update counters, configuration, RNG, checkpoint, and resume state.
+  The teacher/replay path and `sdpo`/hybrid objective modes exist from the start
+  but fail closed until Gate D0. The general objective registry and accepted
+  GRPO path must remain independently usable.
+- [ ] `OPEN_BLOCKING SK-10` — Freeze a versioned Qwen VLM family-adapter
+  interface covering processor/template, vision taps, DeepStack, M-RoPE,
+  multimodal state, and deterministic forward.
+  - Primary implementation fixture: Qwen3-VL-8B-Thinking.
+  - Secondary compatibility fixture: Qwen2.5-VL `[exact snapshot TBD]`.
+- [ ] `OPEN_BLOCKING SK-11` — Freeze the shared target-conditioning interface
+  and require both contextual-hidden-state and target-token-embedding provider
+  implementations/fixtures. No provider-specific trajectory schema is allowed.
+- [ ] `OPEN_BLOCKING SK-12` — Freeze a separate optional judge-provider
+  interface. Judge output carries model/service/prompt/sampling/calibration
+  identity and may never masquerade as reference-policy or SDPO-teacher state.
 
 ## 5. Gate R0 — Before native rollout is accepted
 
 ### 5.1 Model, template, and protocol identity
 
 - [ ] `OPEN_BLOCKING RO-P01` — Pin exact Qwen model, processor, tokenizer, chat
-  template, and their hashes. Value: `[TBD]`
+  template, family adapter, and their hashes for the primary Qwen3 rollout.
+  Value: `[TBD; legacy-reported model path is recorded separately]`
 - [ ] `OPEN_BLOCKING RO-P02` — Pin exact native tool schema and schema hash for
   `tgvf_focus_tool`. Description/argument wording: `[TBD]`
 - [ ] `OPEN_BLOCKING RO-P03` — Pin one initial prompt version and exact hash.
@@ -242,6 +287,10 @@ cache append/reset/reuse contract
   the TGVF Adapter to regenerate `Hq`, main `D`, or D-DeepStack.
 - [ ] `OPEN_BLOCKING RO-D06` — Freeze replay cache strategy: deterministic
   full-forward or a precisely identified cache artifact. Value: `[TBD]`
+- [ ] `OPEN_BLOCKING RO-D07` — SDPO teacher replay, when enabled, consumes the
+  same recorded observation handles and checksums. Feedback-conditioned text
+  may differ by the accepted teacher-context contract; visual observations may
+  not be regenerated or simplified away.
 
 The identity reason is:
 
@@ -263,6 +312,9 @@ ratio and reference KL would no longer compare the same recorded trajectory.
   observation yields rollout/replay logits and logprobs within `[TBD tolerance]`.
 - [ ] `OPEN_BLOCKING RO-F04` — Verify parity for single/batched, direct,
   one-call, and two-call trajectories.
+- [ ] `OPEN_BLOCKING RO-F05` — Family-specific deterministic-forward fixtures
+  declare Qwen3-VL and Qwen2.5-VL processor, M-RoPE, DeepStack, mask, and cache
+  differences behind the common adapter rather than branching in objective code.
 
 ## 6. Gate V0 — Before the veRL compatibility spike
 
@@ -275,12 +327,30 @@ ratio and reference KL would no longer compare the same recorded trajectory.
   device mesh, and state-dict strategy: `[TBD]`
 - [ ] `OPEN_BLOCKING VS-05` — Public extension surface to test: `[TBD]`
 - [ ] `OPEN_BLOCKING VS-06` — Numerical tolerances and PASS/FAIL criteria for:
-  Qwen policy/reference forward, two-call latent-observation transport, actual
-  behavior logprobs, exact observation replay, FSDP2 one step, save/resume.
+  primary Qwen3 policy/reference forward, declared Qwen2.5 family-adapter
+  fixture, both target-conditioning providers, two-call latent-observation
+  transport, actual behavior logprobs, exact observation replay, FSDP2 one
+  step, save/resume.
 - [ ] `OPEN_BLOCKING VS-07` — Failure conditions include private-trainer forks,
   PIL re-encoding of `D`, missing actual sampling logprobs, or inability to
   preserve exact observation state.
 - [ ] `OPEN_BLOCKING VS-08` — Complete `PLANNED` ledger entry before any GPU use.
+- [ ] `OPEN_BLOCKING VS-09` — Produce an SDPO patch-surface map from pinned
+  reference commit `7c457fc1...` to the candidate upstream veRL commit. The
+  report must identify maintained/public hooks versus fork-private changes.
+- [ ] `OPEN_BLOCKING VS-10` — Prove through the proposed neutral schema and
+  isolated spike prototype that the eventual skeleton can carry a complete
+  native multi-call teacher context, per-assistant-turn alignment, typed
+  feedback, exact multimodal observation handles, and versioned distillation
+  targets. The pinned reference's text-only final-response reprompt path is
+  insufficient.
+- [ ] `OPEN_BLOCKING VS-11` — Establish a feasible FSDP2/LoRA or full-policy
+  lifecycle for separate frozen-reference and SDPO teacher state, including
+  initialization, update timing, sharding/offload, checkpoint, RNG, and strict
+  resume. Reference-code actor-only checkpointing fails this item.
+- [ ] `OPEN_BLOCKING VS-12` — Explicitly test the known reference limitations:
+  multimodal distillation rejection, dependency on legacy workers, interaction
+  with KL reference policy, full-logit memory, and top-k/tail alignment.
 
 Required output: `docs/VERL_COMPATIBILITY_REPORT.md` containing PASS/FAIL
 evidence, selected commit/backend, dependency matrix, required public extension
@@ -309,6 +379,13 @@ surface, FSDP2 topology evidence, and unresolved blockers.
   continuation thresholds: `[TBD]`
 - [ ] `OPEN_BLOCKING AD-10` — Main `D` and every D-DeepStack branch pass the same
   controlled semantic gates.
+- [ ] `OPEN_BLOCKING AD-11` — Both required target-conditioning providers pass
+  target-span/input identity, shape, deterministic-forward, target-specificity,
+  readability, and checkpoint-manifest tests behind one shared interface.
+- [ ] `OPEN_BLOCKING AD-12` — Representation artifacts are explicitly bound to
+  a Qwen model family/snapshot and provider contract. Qwen3 and Qwen2.5
+  compatibility must not be claimed by loading one family's Adapter blindly
+  into the other.
 
 ## 8. Gate G0 — Before any GRPO optimizer step
 
@@ -347,6 +424,12 @@ This gate applies even to a one-step smoke test.
 - [x] `FIXED PR-01` — Policy initializes from the exact original Qwen reasoning
   checkpoint; no policy SFT adapter.
 - [ ] `OPEN_BLOCKING PR-02` — Exact base model/processor snapshot: `[TBD]`
+- [x] `FIXED PR-02A` — The first policy snapshot is
+  Qwen3-VL-8B-Thinking; the recorded local path is a discovery hint, not the
+  immutable identity required by PR-02.
+- [ ] `OPEN_BLOCKING PR-02B` — Before claiming dual-family compatibility, pin
+  the Qwen2.5-VL size/variant/model/processor snapshot and pass its declared
+  adapter fixture: `[TBD]`
 - [ ] `OPEN_BLOCKING PR-03` — Reference model identity and prompt/schema:
   `[TBD]`
 - [ ] `OPEN_BLOCKING PR-04` — LoRA/full scope, modules, rank, alpha, dropout,
@@ -389,6 +472,9 @@ pilot is identified or launched.
   explicitly disabled]`
 - [ ] `OPEN_CONFIGURABLE RW-05` — Judge scope, model, prompt, sampling identity,
   and calibration: `[TBD or none]`
+  - Initial candidate: `Qwen/Qwen2.5-72B-Instruct` via a separately versioned
+    provider/service.
+  - It is not the RL reference or the SDPO teacher.
 - [ ] `OPEN_BLOCKING RW-06` — Component ranges, clipping, total reward equation,
   verifier-failure behavior, and separate logging: `[TBD]`
 
@@ -434,6 +520,9 @@ pilot is identified or launched.
   footprint and I/O cost.
 - [ ] `OPEN_BLOCKING GPU-09` — Before a long pilot, record tokens/s, tool latency,
   update latency, peak memory, utilization, and total-duration estimate.
+- [ ] `OPEN_BLOCKING GPU-10` — Any SDPO GPU smoke additionally records teacher
+  placement/sharding/offload, distillation-target memory, teacher update timing,
+  reference-policy coexistence, and strict teacher/EMA resume evidence.
 
 LoRA + FSDP2 must be executable before the first policy pilot. Full-parameter +
 FSDP2 remains required, but its corresponding items close before the first
@@ -453,24 +542,61 @@ Status: `DEFERRED` for the first policy RL proof.
 - [ ] `DEFERRED JT-05` — Gradient reachability, RNG, staleness, replay parity,
   checkpoint, and resume tests.
 
-## 12. Gate D0 — Deferred SDPO
+## 12. Gate D0 — Before any SDPO optimizer step
 
-Status: `DEFERRED` until the GRPO path is correct.
+Status: **architecture required at S0; execution fail-closed until every
+applicable D0 item passes**. D0 work may proceed in parallel with GRPO
+correctness work; it is not postponed until after the whole GRPO pipeline is
+built.
 
-- [ ] `DEFERRED SD-01` — Exact paper, repository commit, equations, and intended
-  meaning of SDPO: `[TBD]`
-- [ ] `DEFERRED SD-02` — Teacher context, live/EMA teacher identity, token
-  alignment, and multimodal masks: `[TBD]`
-- [ ] `DEFERRED SD-03` — Full-logit/top-k/sampled-token approximation and loss
-  composition with GRPO: `[TBD]`
-- [ ] `DEFERRED SD-04` — Teacher/EMA checkpoint and resume contract: `[TBD]`
-- [ ] `DEFERRED SD-05` — Official text parity, one-step update parity, padding/
-  mask tests, then tiny multimodal parity.
+- [x] `FIXED SD-01` — Reference identity:
+  - paper: arXiv `2601.20802v2`;
+  - repository: `https://github.com/lasgroup/SDPO`;
+  - commit: `7c457fc1b1f636ae794eb0362ba37d4743b06fbc`.
+- [ ] `OPEN_BLOCKING SD-02` — Freeze the exact reference-style SDPO equations:
+  forward/reverse/generalized-JSD choice, token importance weighting and clip,
+  masks, per-token/sequence normalization, and reduction: `[TBD equations]`
+- [ ] `OPEN_BLOCKING SD-03` — Freeze typed success, scalar reward, environment
+  feedback, optional judge feedback, group `uid`, demonstration-selection and
+  provenance contracts: `[TBD]`
+- [ ] `OPEN_BLOCKING SD-04` — Freeze teacher-context template/version,
+  complete native multi-call transcript serialization, response alignment for
+  every sampled assistant turn, truncation/fail-fast policy, and hashes: `[TBD]`
+- [ ] `OPEN_BLOCKING SD-05` — Freeze teacher identity/lifecycle:
+  current-policy self-teacher, EMA or trust-region regularization;
+  initialization; update timing/rate; interaction with the separate KL
+  reference; LoRA/full and FSDP2 state ownership: `[TBD]`
+- [ ] `OPEN_BLOCKING SD-06` — Freeze full-logit or top-k-plus-tail
+  distillation-target schema, storage/recompute rule, dtype, memory budget,
+  token/sample masks, and numerical tolerance: `[TBD]`
+- [ ] `OPEN_BLOCKING SD-07` — Freeze objective modes. Reference-style pure SDPO
+  is distinct from pure GRPO. Any `grpo_sdpo` hybrid requires a new explicit
+  equation, coefficient, normalization, and ablation; it is not inherited from
+  the reference repository: `[TBD]`
+- [ ] `OPEN_BLOCKING SD-08` — Teacher replay consumes exact rollout-recorded
+  original images and each call's main `D`, D-DeepStack, layout, positions,
+  masks, and cache contract. Text-only reprompt reconstruction is forbidden.
+- [ ] `OPEN_BLOCKING SD-09` — Teacher/EMA/trust-region weights, update counters,
+  configuration, optimizer step, RNG, sampler/group state, and feedback/template
+  identity checkpoint and resume exactly: `[TBD schema]`
+- [ ] `OPEN_BLOCKING SD-10` — Reference text loss and one-step parity, teacher
+  update parity, padding/alignment/top-k-tail tests, checkpoint/resume parity,
+  then two-call multimodal Qwen3 parity.
+- [ ] `OPEN_BLOCKING SD-11` — Validate Qwen2.5-VL SDPO compatibility through the
+  same family adapter before advertising cross-family SDPO support.
 
 ## 13. Next document actions
 
-- [ ] Accept or revise Gate S0 skeleton interfaces in `docs/PROJECT_TASK.md`.
-- [ ] Approve a bounded veRL compatibility-spike task before dependency changes.
+- [ ] Approve the bounded veRL compatibility-spike questions, neutral interface
+  requirements, fixtures, and PASS/FAIL rules before dependency changes.
+- [ ] Run the approved isolated spike, record the selected public hooks and
+  state ownership, then close or revise Gate S0 before framework-binding source
+  packages are created.
 - [ ] Freeze the first legacy representation file/data inventory.
+- [ ] Freeze the S0 Qwen-family adapter, both condition-provider interfaces,
+  SDPO teacher/objective/checkpoint boundary, and optional judge-provider
+  interface before creating source packages.
+- [ ] Select and pin the exact Qwen2.5-VL compatibility snapshot and decide
+  whether the Qwen2.5-72B judge candidate is needed for the first pilot.
 - [ ] Convert each accepted `[TBD]` into a versioned project artifact rather
   than embedding it only in code or an experiment command.

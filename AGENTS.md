@@ -11,6 +11,9 @@ end-to-end RL version.
   `revisit_vlm` or `revisit_vlm_clean`.
 - Legacy inspection must be explicit, read-only, pinned to a file plus commit or
   working-tree hash, and recorded in `docs/LEGACY_REFERENCE.md` before porting.
+- External implementation references must be pinned in
+  `docs/EXTERNAL_REFERENCES.md`; recording a commit does not authorize vendoring,
+  dependency installation, or treating a fork as the production framework.
 - Never treat a legacy script name, stage name, checkpoint name, or output path
   as an experiment identity.
 
@@ -26,6 +29,18 @@ end-to-end RL version.
 - There is no Stage2 SFT in this version.
 - The RL policy initializes from the original Qwen reasoning model, not a
   Golden/Stage2 adapter.
+- The primary policy/reference family is Qwen3-VL-8B-Thinking. Qwen2.5-VL is a
+  required secondary compatibility family, with its exact size and snapshot
+  still explicit configuration. Model-facing code must use a family adapter
+  rather than hardcode Qwen3-only tensor or processor behavior.
+- Do not claim Qwen2.5-VL end-to-end support from an empty adapter slot. It
+  requires a separately identified representation artifact plus native
+  transcript, both-provider, main-`D`/model-supported branch, exact-replay, and
+  objective fixtures. Missing an equivalent DeepStack path is a compatibility
+  blocker; dummy branches and Qwen3 checkpoint reuse are forbidden.
+- Both target-conditioning providers are required capabilities:
+  contextual hidden state and target token embedding. An experiment selects a
+  provider, but the implementation and tests must support both.
 - The tokenizer is never resized. Project-specific Protocol-C tokens and their
   embedding/head rows are forbidden.
 - The protocol uses Qwen's native tool schema and existing `<tool_call>`,
@@ -37,6 +52,16 @@ end-to-end RL version.
   comes from upstream veRL. FSDP2 support is required; the exact veRL commit,
   rollout backend, sharding, device mesh, worker placement, and parallel
   topology are selected from compatibility and throughput evidence.
+- SDPO compatibility is an initial architecture requirement, not a later
+  retrofit. The pinned reference is `lasgroup/SDPO` commit
+  `7c457fc1b1f636ae794eb0362ba37d4743b06fbc`. Upstream veRL remains the base;
+  the SDPO repository's veRL tree is reference-only. The skeleton must reserve
+  feedback-conditioned teacher context, token alignment, exact-observation
+  teacher replay, distillation targets, objective composition, teacher state,
+  and checkpoint/resume interfaces. No SDPO optimizer step is allowed until its
+  exact mathematics and parity gate are accepted.
+- An optional 72B Qwen answer judge is a separate versioned service role. It is
+  never the frozen RL reference policy or the SDPO self-teacher.
 
 ## Terminology
 
@@ -102,5 +127,8 @@ but must not use `stage1`, `stage2`, or `stage3` as current component identities
    `<think>` opener in either assistant turn.
 6. Tool-environment rollout and policy/reference-replay logit/logprob parity on
    the exact same recorded observation.
-7. RL loss and gradient parity with the selected framework/objective.
-8. High-budget reasoning retention against the original Qwen policy.
+7. Both target-conditioning providers and both required Qwen-VL family adapters
+   satisfy their declared fixtures without sharing incompatible checkpoints.
+8. GRPO and SDPO loss/gradient/checkpoint parity with their separately approved
+   mathematics; pure SDPO and any hybrid are distinct objective identities.
+9. High-budget reasoning retention against the original Qwen policy.

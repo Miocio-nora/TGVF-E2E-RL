@@ -83,6 +83,54 @@ not whole-file copy candidates.
 Stage2 behavior, added-token logic, and useful low-level Qwen mechanics. It
 must never be copied as a module.
 
+## Reference-only model-path lookup
+
+The user authorized a read-only lookup of the primary model path in the old
+project. The following committed file was inspected directly; no broad legacy
+search was run:
+
+```text
+legacy source: README.md
+commit: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+content SHA256: ef18e93e8d4d8edbf969346801ebd8a4e4630a94a65595062a70be472ca9c377
+inspection date: 2026-07-19 JST
+role: specification only; model-path lookup
+```
+
+It records the default Qwen3 model used by that project as:
+
+```text
+/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking
+```
+
+That exact directory was present when checked on 2026-07-19 JST. The path is a
+discovery hint, not a frozen model identity. No files inside it were inspected
+by this lookup. The new project must separately pin the weights, configuration,
+processor, tokenizer, chat template, and hashes before rollout or GPU work.
+
+The committed README does not identify the Qwen2.5-VL compatibility snapshot or
+the optional 72B judge deployment. Those remain explicit `[TBD]` values rather
+than guessed legacy paths.
+
+## `revisit_vlm_clean` reference boundary
+
+The user confirmed that the clean subtree may be used as a design reference.
+This is exact-file, read-only authorization under the same provenance rule, not
+permission to copy, import, or broadly inspect the subtree. The already recorded
+`revisit_vlm_clean/src/revisit_vlm_clean/deepstack.py` entry is the first such
+reference.
+
+Potential additional specification-only topics include Qwen-family model
+loading/configuration, target-conditioning helpers, multimodal layout/state,
+and judge-service configuration. Before inspecting any of them, add the exact
+path plus committed or working-tree content identity to this document. No path
+for those topics has been approved or inspected yet.
+
+Exact-file inspection of a clean RL/agent file may inform a new interface after
+it is registered here. It does not authorize copying its trainer, replay,
+objective, reward, executor, or scheduler implementation, and it does not make
+its mathematics or behavior correct by assumption.
+
 ## Representation data reuse boundary
 
 The legacy representation dataset is eligible for reuse only after its exact
@@ -151,8 +199,11 @@ and token-time alignment before compatibility can be assessed.
   thin-reference and port-record rules above;
 - all Stage2 trainers, fast trainers, runtime engines, adapters, checkpoints,
   data mixtures, reasoning replay, and Golden correction code;
-- the entire `revisit_vlm_clean.stage3_grpo` implementation and its CLIs,
-  executors, policy/reference replay, rewards, judges, and schedulers;
+- wholesale extraction, runtime reuse, or correctness-by-assumption for the
+  `revisit_vlm_clean.stage3_grpo` implementation and its CLIs, executors,
+  policy/reference replay, rewards, judges, and schedulers. A separately
+  registered exact file may still be inspected read-only for specification
+  purposes under the boundary above;
 - legacy force/softforce training identities;
 - current benchmark parser code until its final-answer extraction defects are
   fixed and independently tested;
