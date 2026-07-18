@@ -335,8 +335,8 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   rerun with both public driver-portable attention selections after R4.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
   `SC-20`; I8H-20260719 covers this in-scope public configuration correction.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question, model, processor, representation fixture, initialization,
   staleness, N/A fields, dataset, transcript, token fixture, D/DeepStack
   identity, replay limitation, RL lock, sampling, dtypes, parallelism,
@@ -361,14 +361,69 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   paths are identical to R4.
 - CPU gate before launch: complete suite `111 passed`; runtime-environment tests
   prove `TRITON_ATTN` is required and reject `FLASHINFER`.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T07:23:54+09:00` / `2026-07-19T07:25:15+09:00`, 81 seconds;
+  engine PID 1405122, worker PIDs 1405752 and 1405753.
+- Actual GPU-hours and peak scratch use: less than `0.045` two-device GPU-hours
+  by wall-time upper bound; observed memory reached 10,986 MiB/device, worker
+  model-state report 8.447 GiB/device; log 12,321 bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_ATTENTION_BACKEND=TRITON_ATTN VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R5-qwen3-vllm-latent-515256c.json > artifacts/compatibility/SC-20-R5-qwen3-vllm-latent-515256c.log 2>&1`.
 - Outputs: result JSON and log paths above; no checkpoint.
 - Scorer/parser identity: script/native renderer and project validators at the
   hashes above.
-- Metrics: `PENDING`; same PASS conditions as SC-20-R4 plus explicit
-  `TRITON_ATTN` selection and no FlashInfer warmup/JIT.
+- Metrics: both workers selected `TRITON_ATTN`; Qwen weights loaded in 3.01
+  seconds; visual profiling, 114.11 GiB KV sizing and full engine warmup all
+  completed (15.29 seconds). The first real request then failed in vLLM's
+  cache-disabled UUID builder/hash path. Log SHA256:
+  `38c3a91e6417e9968eba2fbe00d39b31f31e8f1b884ec029ad287233e9ac725b`.
+- Conclusion: `FAIL` as required by the hard gate. The project passed three
+  latent items in one field dictionary; vLLM's cache-disabled UUID builder
+  counts that public value as one item, while the custom parser correctly
+  expanded it to three, causing an out-of-range UUID lookup. R6 transports a
+  public list of three per-item dictionaries and coalesces only inside the
+  repo-owned parser. No site package is patched.
+
+### SC-20-R6-QWEN3-VLLM-LATENT
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-20-R6`; mandatory bounded
+  rerun after aligning public latent item and UUID cardinalities in R5.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
+  `SC-20`; I8H-20260719 covers this in-scope repo-owned interface correction.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question, model, processor, representation fixture, initialization,
+  staleness, N/A fields, dataset, transcript, token fixture, D/DeepStack
+  identity, replay limitation, RL lock, sampling, dtypes, attention,
+  parallelism, tolerances, batch, GPU and environment identities: identical
+  to SC-20-R5, with failed R5 as the baseline.
+- Exact output path: result
+  `artifacts/compatibility/SC-20-R6-qwen3-vllm-latent-f796c29.json`, log
+  `artifacts/compatibility/SC-20-R6-qwen3-vllm-latent-f796c29.log`.
+- Code commit and worktree state: runtime code commit
+  `f796c29544410ac3514f218d81899554e78c4141`; launch worktree may differ only
+  by the subsequently committed experiment-ledger record.
+- Repository adapter/patch surfaces and hashes: R5 configuration surfaces
+  unchanged; `packer.py@f1da42f47ee54680edb76243feacc4f7896f85a7ce563b5d77576f9c755cd908`,
+  `qwen3_plugin.py@aecf42c0e21b4a9442f7b939fb3d7337895cad27d2111d26ec3c6b2fef1112dc`,
+  smoke script
+  `d841b5edd15db66742ccb96958e3e966d883cb6d6226120e5fc363ce401b6ba2`;
+  no site-package patch.
+- Public input correction: `multi_modal_data.image` is a list of exactly three
+  dictionaries (source, call 0 D, call 1 D), each carrying its own merged
+  main+DeepStack tensor and one-row grid. The custom public processor validates
+  every item and coalesces fields only after UUID creation. Content, order and
+  aggregate latent SHA are unchanged from SC-20.
+- CPU gate before launch: complete suite `111 passed`; live vLLM parser test
+  proves public list cardinality 3, parser cardinality 3, per-item shapes, and
+  post-pack mutation rejection.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_ATTENTION_BACKEND=TRITON_ATTN VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R6-qwen3-vllm-latent-f796c29.json > artifacts/compatibility/SC-20-R6-qwen3-vllm-latent-f796c29.log 2>&1`.
+- Outputs: result JSON and log paths above; no checkpoint.
+- Scorer/parser identity: script/native renderer, packer and project processor
+  at the hashes above.
+- Metrics: `PENDING`; same PASS conditions as SC-20-R5 plus exact 3-to-3 public
+  item/UUID/parser cardinality and completed sampled-token output.
 - Conclusion: `PENDING`; first hard failure stops the rerun.
 
 ### SC-30-FSDP2-INFRA
