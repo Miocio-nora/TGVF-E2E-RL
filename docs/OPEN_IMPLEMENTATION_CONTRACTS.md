@@ -44,9 +44,9 @@ supersedes:
 
 - [x] `FIXED` — Upstream veRL is the policy-RL infrastructure.
 - [x] `FIXED` — FSDP2 support is required. Exact topology is evidence-based.
-- [x] `FIXED` — Qwen3-VL-8B-Thinking is the primary policy/reference target;
-  Qwen2.5-VL is a required secondary model-family compatibility target. The
-  latter's exact size and snapshot remain configurable.
+- [x] `FIXED` — Qwen3-VL-8B-Thinking at the accepted stable local path is the
+  primary policy/reference target; `Qwen/Qwen2.5-VL-7B-Instruct` is the required
+  secondary compatibility model.
 - [x] `FIXED` — Contextual-hidden-state and target-token-embedding conditioning
   providers are both required capabilities. A run selects one as part of its
   experiment identity.
@@ -75,8 +75,11 @@ supersedes:
   distinct objective identities. The reference SDPO implementation replaces
   the policy loss and does not define a GRPO-plus-SDPO sum.
 - [x] `FIXED` — An external answer judge, frozen RL reference, and SDPO
-  self-teacher are separate roles. `Qwen/Qwen2.5-72B-Instruct` is the initial
-  judge candidate, not an approved deployment identity.
+  self-teacher are separate roles. The `Qwen/Qwen2.5-72B-Instruct` provider is
+  reserved but disabled for the first pilot.
+- [x] `FIXED` — Full weight-directory hashing is not required for the stable
+  local Qwen3 path. Exact tokenizer/chat-template transcript fixtures and hashes
+  remain mandatory protocol artifacts.
 - [x] `FIXED` — Prose uses `representation phase`, `policy RL phase`, and `TGVF
   Adapter`. Current component names do not use Stage1/Stage2/Stage3.
 
@@ -140,6 +143,8 @@ interfaces must be versioned and fail closed while unset.
 - [ ] `OPEN_BLOCKING SK-06` — Freeze configuration/identity plumbing.
   - Every prompt, schema, template, model, Adapter checkpoint, data manifest,
     reward, objective, backend, and code state has a version/hash.
+  - Exception: the accepted stable Qwen3 model uses model name + absolute path
+    rather than full weight-shard hashes; protocol fixtures are still hashed.
   - Unset research values fail closed rather than receiving defaults.
 - [ ] `OPEN_CONFIGURABLE SK-07` — Compact package/config labels.
   - Formal prose names remain fixed.
@@ -167,7 +172,7 @@ interfaces must be versioned and fail closed while unset.
   interface covering processor/template, vision taps, DeepStack, M-RoPE,
   multimodal state, and deterministic forward.
   - Primary implementation fixture: Qwen3-VL-8B-Thinking.
-  - Secondary compatibility fixture: Qwen2.5-VL `[exact snapshot TBD]`.
+  - Secondary compatibility fixture: `Qwen/Qwen2.5-VL-7B-Instruct`.
 - [ ] `OPEN_BLOCKING SK-11` — Freeze the shared target-conditioning interface
   and require both contextual-hidden-state and target-token-embedding provider
   implementations/fixtures. No provider-specific trajectory schema is allowed.
@@ -179,9 +184,10 @@ interfaces must be versioned and fail closed while unset.
 
 ### 5.1 Model, template, and protocol identity
 
-- [ ] `OPEN_BLOCKING RO-P01` — Pin exact Qwen model, processor, tokenizer, chat
-  template, family adapter, and their hashes for the primary Qwen3 rollout.
-  Value: `[TBD; legacy-reported model path is recorded separately]`
+- [ ] `OPEN_BLOCKING RO-P01` — Record the accepted Qwen3 model name/path and pin
+  processor, tokenizer, chat template, family adapter, golden token fixtures,
+  and fixture hashes for the primary rollout. Full weight-shard hashes are not
+  required.
 - [ ] `OPEN_BLOCKING RO-P02` — Pin exact native tool schema and schema hash for
   `tgvf_focus_tool`. Description/argument wording: `[TBD]`
 - [ ] `OPEN_BLOCKING RO-P03` — Pin one initial prompt version and exact hash.
@@ -313,8 +319,9 @@ ratio and reference KL would no longer compare the same recorded trajectory.
 - [ ] `OPEN_BLOCKING RO-F04` — Verify parity for single/batched, direct,
   one-call, and two-call trajectories.
 - [ ] `OPEN_BLOCKING RO-F05` — Family-specific deterministic-forward fixtures
-  declare Qwen3-VL and Qwen2.5-VL processor, M-RoPE, DeepStack, mask, and cache
-  differences behind the common adapter rather than branching in objective code.
+  declare Qwen3-VL and `Qwen/Qwen2.5-VL-7B-Instruct` processor, M-RoPE,
+  DeepStack, mask, and cache differences behind the common adapter rather than
+  branching in objective code.
 
 ## 6. Gate V0 — Before the veRL compatibility spike
 
@@ -327,8 +334,9 @@ ratio and reference KL would no longer compare the same recorded trajectory.
   device mesh, and state-dict strategy: `[TBD]`
 - [ ] `OPEN_BLOCKING VS-05` — Public extension surface to test: `[TBD]`
 - [ ] `OPEN_BLOCKING VS-06` — Numerical tolerances and PASS/FAIL criteria for:
-  primary Qwen3 policy/reference forward, declared Qwen2.5 family-adapter
-  fixture, both target-conditioning providers, two-call latent-observation
+  primary Qwen3 policy/reference forward,
+  `Qwen/Qwen2.5-VL-7B-Instruct` family-adapter fixture, both
+  target-conditioning providers, two-call latent-observation
   transport, actual behavior logprobs, exact observation replay, FSDP2 one
   step, save/resume.
 - [ ] `OPEN_BLOCKING VS-07` — Failure conditions include private-trainer forks,
@@ -383,9 +391,9 @@ surface, FSDP2 topology evidence, and unresolved blockers.
   target-span/input identity, shape, deterministic-forward, target-specificity,
   readability, and checkpoint-manifest tests behind one shared interface.
 - [ ] `OPEN_BLOCKING AD-12` — Representation artifacts are explicitly bound to
-  a Qwen model family/snapshot and provider contract. Qwen3 and Qwen2.5
-  compatibility must not be claimed by loading one family's Adapter blindly
-  into the other.
+  a Qwen model identity and provider contract. Qwen3 and
+  `Qwen/Qwen2.5-VL-7B-Instruct` compatibility must not be claimed by loading one
+  model's Adapter blindly into the other.
 
 ## 8. Gate G0 — Before any GRPO optimizer step
 
@@ -423,13 +431,16 @@ This gate applies even to a one-step smoke test.
 
 - [x] `FIXED PR-01` — Policy initializes from the exact original Qwen reasoning
   checkpoint; no policy SFT adapter.
-- [ ] `OPEN_BLOCKING PR-02` — Exact base model/processor snapshot: `[TBD]`
-- [x] `FIXED PR-02A` — The first policy snapshot is
-  Qwen3-VL-8B-Thinking; the recorded local path is a discovery hint, not the
-  immutable identity required by PR-02.
-- [ ] `OPEN_BLOCKING PR-02B` — Before claiming dual-family compatibility, pin
-  the Qwen2.5-VL size/variant/model/processor snapshot and pass its declared
-  adapter fixture: `[TBD]`
+- [x] `FIXED PR-02` — The first policy model is Qwen3-VL-8B-Thinking at
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`; no full weight hash is
+  required.
+- [ ] `OPEN_BLOCKING PR-02A` — Pin the primary processor/tokenizer/chat-template
+  behavior through exact transcript fixtures and hashes: `[TBD artifact]`
+- [x] `FIXED PR-02B` — The secondary model ID is
+  `Qwen/Qwen2.5-VL-7B-Instruct`.
+- [ ] `OPEN_BLOCKING PR-02C` — Before claiming end-to-end secondary-model
+  support, configure its local/runtime identity and pass its full family-specific
+  Adapter/representation fixture: `[TBD path/artifact]`
 - [ ] `OPEN_BLOCKING PR-03` — Reference model identity and prompt/schema:
   `[TBD]`
 - [ ] `OPEN_BLOCKING PR-04` — LoRA/full scope, modules, rank, alpha, dropout,
@@ -472,8 +483,8 @@ pilot is identified or launched.
   explicitly disabled]`
 - [ ] `OPEN_CONFIGURABLE RW-05` — Judge scope, model, prompt, sampling identity,
   and calibration: `[TBD or none]`
-  - Initial candidate: `Qwen/Qwen2.5-72B-Instruct` via a separately versioned
-    provider/service.
+  - Reserved model: `Qwen/Qwen2.5-72B-Instruct` via a separately versioned
+    provider/service; disabled for the first pilot.
   - It is not the RL reference or the SDPO teacher.
 - [ ] `OPEN_BLOCKING RW-06` — Component ranges, clipping, total reward equation,
   verifier-failure behavior, and separate logging: `[TBD]`
@@ -583,7 +594,8 @@ built.
   update parity, padding/alignment/top-k-tail tests, checkpoint/resume parity,
   then two-call multimodal Qwen3 parity.
 - [ ] `OPEN_BLOCKING SD-11` — Validate Qwen2.5-VL SDPO compatibility through the
-  same family adapter before advertising cross-family SDPO support.
+  `Qwen/Qwen2.5-VL-7B-Instruct` family adapter before advertising cross-family
+  SDPO support.
 
 ## 13. Next document actions
 
@@ -596,7 +608,9 @@ built.
 - [ ] Freeze the S0 Qwen-family adapter, both condition-provider interfaces,
   SDPO teacher/objective/checkpoint boundary, and optional judge-provider
   interface before creating source packages.
-- [ ] Select and pin the exact Qwen2.5-VL compatibility snapshot and decide
-  whether the Qwen2.5-72B judge candidate is needed for the first pilot.
+- [ ] Configure the local/runtime path for the fixed
+  `Qwen/Qwen2.5-VL-7B-Instruct` model before its executable fixture.
+- [x] Keep the reserved `Qwen/Qwen2.5-72B-Instruct` judge disabled for the first
+  pilot; specify service/prompt/calibration only before a later activation.
 - [ ] Convert each accepted `[TBD]` into a versioned project artifact rather
   than embedding it only in code or an experiment command.

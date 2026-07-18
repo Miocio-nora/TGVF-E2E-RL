@@ -82,9 +82,10 @@ Permitted reference topics are:
 - serving an independent large Qwen model as an optional answer judge.
 
 DeepEyes uses Qwen2.5-VL policy models and documents
-`Qwen/Qwen2.5-72B-Instruct` as an LLM-as-judge example. These facts make it a
-useful compatibility reference, but they do not select our secondary policy
-snapshot, judge prompt, judge reward role, or deployment topology.
+`Qwen/Qwen2.5-72B-Instruct` as an LLM-as-judge example. The user has now fixed
+our secondary policy model to `Qwen/Qwen2.5-VL-7B-Instruct` and approved
+reserving—without first-pilot deployment—the 72B judge provider. Judge prompt,
+reward role, and deployment topology remain unset.
 
 Forbidden inheritance includes its crop/zoom tool identity, rendered prompts,
 dataset assumptions, reward coefficients, asynchronous-staleness behavior, and
@@ -99,24 +100,32 @@ observations remain authoritative.
 ```text
 family: Qwen3-VL
 initial size/variant: 8B Thinking
-legacy-reported local path:
+accepted stable local path:
   /nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking
 path presence checked: 2026-07-19 JST
-immutable snapshot identity: [TBD]
+full weight-directory hash: intentionally not required
 ```
 
 The local path came from the pinned legacy README inspection recorded in
-`docs/LEGACY_REFERENCE.md`. A filesystem path is not an experiment identity.
-Weights, config, processor, tokenizer, chat template, and hashes must be frozen
-before rollout or GPU work.
+`docs/LEGACY_REFERENCE.md`. The user confirmed that this directory is stable and
+that full model-directory or weight-shard hashing is unnecessary. Experiments
+record the exact model name and absolute path. Processor, tokenizer, chat
+template, and native token serialization still require exact golden fixtures
+and fixture hashes because they define the protocol.
 
 ### Secondary policy compatibility family
 
 ```text
-family: Qwen2.5-VL
-exact size/variant/path/snapshot: [TBD]
+model ID: Qwen/Qwen2.5-VL-7B-Instruct
+official model card: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct
+local/runtime path: [TBD]
 role: required model-adapter compatibility target, not the first policy run
 ```
+
+The 7B variant is fixed because it is the closest Qwen2.5-VL scale to the
+primary 8B policy and is the main policy configuration documented by the pinned
+DeepEyes reference. This is a model choice, not a claim that its TGVF/DeepStack
+path already works.
 
 New model-facing interfaces must not hardcode Qwen3-only class names, tensor
 field names, processor behavior, DeepStack branch layout, or M-RoPE assembly.
@@ -127,21 +136,21 @@ checkpoint can be shared between model families.
 
 There are two explicit support levels:
 
-1. the initial skeleton must be family-neutral and prove a pinned Qwen2.5-VL
-   processor/transcript/forward adapter fixture;
-2. an end-to-end Qwen2.5-VL support claim additionally requires a separately
+1. the initial skeleton must be family-neutral and prove a
+   `Qwen/Qwen2.5-VL-7B-Instruct` processor/transcript/forward adapter fixture;
+2. an end-to-end support claim for that model additionally requires a separately
    trained family-specific representation artifact, both condition providers,
-   native multi-call main-`D` and model-supported branch injection, exact
-   replay, and objective fixtures. If the selected model lacks an equivalent
-   DeepStack path, that is a compatibility blocker until an accepted mapping
-   exists; dummy branches and Qwen3 artifact reuse are forbidden.
+   native multi-call main-`D` and model-supported branch injection, exact replay,
+   and objective fixtures. If the selected model lacks an equivalent DeepStack
+   path, that is a compatibility blocker until an accepted mapping exists; dummy
+   branches and Qwen3 artifact reuse are forbidden.
 
 ### Optional answer judge
 
 ```text
-candidate: Qwen/Qwen2.5-72B-Instruct
+reserved model: Qwen/Qwen2.5-72B-Instruct
 exact local path/service/snapshot: [TBD]
-role: optional semantic answer verifier only
+role: optional semantic answer verifier only; disabled for first pilot
 ```
 
 The judge is independently versioned and calibrated. It is not the frozen RL

@@ -147,17 +147,19 @@ measure these gaps explicitly rather than inherit the fork.
 
 ### 2.5 Required Qwen families and target-conditioning providers
 
-The primary policy/reference target is **Qwen3-VL-8B-Thinking**. The
-legacy-reported local candidate path is
-`/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`; its immutable model,
-processor, tokenizer, and chat-template identity remains to be frozen.
+The primary policy/reference target is **Qwen3-VL-8B-Thinking**, using the
+stable local path
+`/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`. Per the user decision, the
+project does not scan or hash every weight shard in that directory. The model
+name and path are the accepted operational identity. Processor/tokenizer/chat
+template behavior is still frozen through exact native transcript fixtures and
+fixture hashes because it directly affects policy tokens.
 
-**Qwen2.5-VL is a required secondary compatibility family.** Its exact
-size/variant/path is `[TBD]`; the project does not silently choose the DeepEyes
-7B or 32B example. Model-family-specific processor, vision-tap, DeepStack,
-M-RoPE, native transcript, and forward behavior live behind a versioned Qwen
-VLM adapter. The initial Qwen3 representation checkpoint is not presumed
-portable to Qwen2.5-VL.
+The required secondary compatibility model is
+**`Qwen/Qwen2.5-VL-7B-Instruct`**. Its local/runtime path remains `[TBD]`.
+Model-family-specific processor, vision-tap, DeepStack, M-RoPE, native
+transcript, and forward behavior live behind a versioned Qwen VLM adapter. The
+Qwen3 representation checkpoint is not presumed portable to Qwen2.5-VL.
 
 Both target-conditioning providers must be implemented and tested:
 
@@ -356,7 +358,7 @@ newly defined policy adapter scope. The following are fixed or unresolved:
 - Frozen reference: exact original Qwen model and prompt/tool schema.
 - Policy initialization: exact original Qwen model; no Stage2 LoRA.
 - Primary family: Qwen3-VL-8B-Thinking. Secondary compatibility family:
-  Qwen2.5-VL, with exact snapshot `[TBD]`.
+  `Qwen/Qwen2.5-VL-7B-Instruct`.
 - TGVF Adapter: a newly trained native-format TGVF Adapter checkpoint, initially
   frozen during the first RL proof. The legacy checkpoint is not a direct
   initialization.
@@ -393,10 +395,12 @@ Do not reward longer reasoning. Health metrics and correctness are separate.
 Judge-model rewards, if used, require calibration against human-audited
 examples and must never replace executable answer/tool checks.
 
-The initial external judge candidate is `Qwen/Qwen2.5-72B-Instruct`, following
-the pinned DeepEyes reference. Its exact local/service snapshot, prompt,
-sampling, calibration set, and scope remain `[TBD]`. The answer judge, frozen RL
-reference, and SDPO self-teacher are three separate roles and states.
+The optional external judge is `Qwen/Qwen2.5-72B-Instruct`, following the
+pinned DeepEyes reference. Its provider interface is reserved, but it is
+disabled for the first pilot. Before any later activation, its exact
+local/service identity, prompt, sampling, calibration set, and scope must be
+accepted. The answer judge, frozen RL reference, and SDPO self-teacher are three
+separate roles and states.
 
 ## 7. Representation gates
 
@@ -445,8 +449,8 @@ official maintained version and answer:
 
 - Does the selected veRL commit support Qwen VLM policy/reference models?
 - Does the family adapter run the primary Qwen3-VL-8B-Thinking fixture and a
-  declared Qwen2.5-VL compatibility fixture without leaking family-specific
-  tensor assumptions across the boundary?
+  `Qwen/Qwen2.5-VL-7B-Instruct` compatibility fixture without leaking
+  family-specific tensor assumptions across the boundary?
 - Can it run multi-turn dynamic tools without converting `D` to a PIL image?
 - Can a custom model forward receive native visual embedding spans, M-RoPE,
   multimodal token types, and D-DeepStack?
@@ -591,7 +595,8 @@ tgvf-e2e-rl/
 
 - Archive the current old-repository dirty worktree under a user-approved
   commit/tag or immutable patch bundle.
-- Pin the base model/processor snapshot and the historical representation
+- Record the accepted stable Qwen3 local path and native transcript identity;
+  do not perform full weight-shard hashing. Pin the historical representation
   checkpoint only as a parity/reference identity.
 - Finalize the exact extraction whitelist and file hashes.
 - Retain the point-in-time SDPO and DeepEyes review commits in
@@ -607,8 +612,8 @@ compatibility spike is authorized without authorizing the main implementation.
 
 - In an approved isolated environment, test and then pin one upstream veRL
   commit and rollout backend; do not adopt the SDPO or DeepEyes veRL trees.
-- Validate Qwen3-VL-8B-Thinking policy/reference forward and the declared
-  Qwen2.5-VL family-adapter fixture.
+- Validate Qwen3-VL-8B-Thinking policy/reference forward and the
+  `Qwen/Qwen2.5-VL-7B-Instruct` family-adapter fixture.
 - Validate a deterministic native `tgvf_focus_tool` synthetic-latent fixture
   with at least two calls, exact behavior logprobs, immutable observation
   replay, masks, positions, cache state, and checkpoint/resume.
@@ -646,7 +651,8 @@ Protocol-C serialization.
 - Implement native tool schema, strict parser, target-span mapping, and native
   tool-response `D` injection.
 - Establish a Qwen VLM family-adapter contract: Qwen3-VL-8B-Thinking is the
-  primary executable path and Qwen2.5-VL is a required compatibility fixture.
+  primary executable path and `Qwen/Qwen2.5-VL-7B-Instruct` is the required
+  compatibility fixture.
 - Support repeated `tgvf_focus_tool` calls with a configurable safety cap
   greater than one and per-call immutable observation records.
 - Prove no tokenizer resize, exact template-generated transcript/token round
@@ -668,7 +674,8 @@ framework-neutral interfaces.
   initialize it directly from the historical TGVF Adapter checkpoint.
 - Run target-sensitivity, readout, counterfactual flip, and free-continuation
   gates.
-- Before claiming Qwen2.5-VL end-to-end support, pin its exact snapshot; freeze
+- Before claiming Qwen2.5-VL end-to-end support, configure the exact local or
+  runtime identity for `Qwen/Qwen2.5-VL-7B-Instruct`; freeze
   its native transcript, processor, vision features, M-RoPE, mask/cache, and
   main-`D`/DeepStack-equivalent injection contract; train a separate
   family-specific representation artifact; and pass both-provider,
@@ -722,10 +729,11 @@ identity, throughput, memory, and resume behavior are recorded and reproducible.
    exploration curriculum.
 8. Original-image visibility and DeepStack mask scope after each `D`.
 9. Training population, reward benchmarks, and held-out evaluation manifests.
-10. Whether the candidate `Qwen/Qwen2.5-72B-Instruct` judge is used, plus its
-    exact snapshot/service, prompt, sampling, calibration, and reward scope.
-11. Exact Qwen2.5-VL size/variant/path and the family-specific representation
-    artifact plan. Supporting the family is fixed; the concrete snapshot is not.
+10. Later activation conditions and exact service, prompt, sampling,
+    calibration, and reward scope for the reserved
+    `Qwen/Qwen2.5-72B-Instruct` judge. It is disabled for the first pilot.
+11. Local/runtime path and family-specific representation artifact plan for the
+    fixed `Qwen/Qwen2.5-VL-7B-Instruct` compatibility model.
 
 No implementation should silently decide any item above.
 

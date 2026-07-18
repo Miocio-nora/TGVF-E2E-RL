@@ -3,7 +3,7 @@
 TGVF End-to-End RL is a clean, independently versioned implementation of
 Target-Guided Visual Foveation for a Qwen reasoning policy trained with
 end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
-Qwen2.5-VL is a required secondary model-family compatibility target.
+`Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
 > **Status:** design and implementation-contract phase. The repository does not
 > yet contain an implementation, pinned dependency stack, training run, or
@@ -73,8 +73,9 @@ intermediate Stage2-style policy SFT and no Golden policy adapter.
 - Never resize the tokenizer or add protocol-specific embedding/lm-head rows.
 - Support multiple `tgvf_focus_tool` calls in one trajectory.
 - Start policy RL from the original Qwen reasoning policy.
-- Use Qwen3-VL-8B-Thinking first and keep Qwen2.5-VL support behind a tested
-  family adapter; representation checkpoints remain family/snapshot-specific.
+- Use Qwen3-VL-8B-Thinking first and keep
+  `Qwen/Qwen2.5-VL-7B-Instruct` support behind a tested family adapter;
+  representation checkpoints remain family/model-specific.
 - Implement both contextual-hidden-state and target-token-embedding providers.
 - Use upstream veRL as the RL infrastructure and require an FSDP2 execution
   path; select the exact commit, rollout backend, and parallel topology from a
@@ -88,8 +89,12 @@ intermediate Stage2-style policy SFT and no Golden policy adapter.
   `lasgroup/SDPO@7c457fc1b1f636ae794eb0362ba37d4743b06fbc` as the reference,
   while keeping execution disabled until exact equations, multimodal replay,
   teacher lifecycle, FSDP2, and resume parity pass.
-- Keep an optional Qwen 72B answer judge separate from both the RL reference
+- Reserve, but do not deploy in the first pilot, a
+  `Qwen/Qwen2.5-72B-Instruct` judge provider separate from both the RL reference
   policy and the SDPO self-teacher.
+- Treat the existing local Qwen3 path as stable; do not spend time hashing all
+  weight shards. Continue hashing tokenizer/chat-template fixtures because they
+  define the native protocol.
 
 ## Why exact rollout observations matter
 
@@ -131,8 +136,8 @@ The project prioritizes:
 The framework skeleton may expose versioned interfaces while these research
 choices remain unset:
 
-- immutable Qwen3 model/processor identity, Qwen2.5 size/snapshot, and native
-  prompt;
+- Qwen2.5 local/runtime path, family-specific representation artifact, and
+  native prompt;
 - target-span and `Hq` construction details;
 - veRL commit, SGLang/vLLM backend, and FSDP2 topology;
 - policy LoRA or full-parameter scope;
@@ -142,8 +147,8 @@ choices remain unset:
 - tool-call safety cap and exploration curriculum;
 - exact SDPO equations, feedback/teacher policy, target approximation, and any
   separately defined hybrid or later joint TGVF Adapter update;
-- whether the candidate `Qwen/Qwen2.5-72B-Instruct` judge is needed, and its
-  exact service/prompt/calibration identity.
+- the future activation conditions and exact service/prompt/calibration identity
+  for the reserved `Qwen/Qwen2.5-72B-Instruct` judge.
 
 These values must remain explicit `[TBD]` fields until accepted. They must not
 be inherited silently from a library default.

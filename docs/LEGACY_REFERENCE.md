@@ -104,13 +104,15 @@ It records the default Qwen3 model used by that project as:
 ```
 
 That exact directory was present when checked on 2026-07-19 JST. The path is a
-discovery hint, not a frozen model identity. No files inside it were inspected
-by this lookup. The new project must separately pin the weights, configuration,
-processor, tokenizer, chat template, and hashes before rollout or GPU work.
+stable operational model identity by user decision. No files inside it were
+inspected by this lookup, and no full directory or weight-shard hash is required.
+The new project still freezes processor/tokenizer/chat-template behavior through
+exact native transcript fixtures and fixture hashes before rollout.
 
-The committed README does not identify the Qwen2.5-VL compatibility snapshot or
-the optional 72B judge deployment. Those remain explicit `[TBD]` values rather
-than guessed legacy paths.
+The committed README does not identify local paths for the fixed
+`Qwen/Qwen2.5-VL-7B-Instruct` compatibility model or the reserved
+`Qwen/Qwen2.5-72B-Instruct` judge. Those paths remain explicit `[TBD]` values
+rather than guessed legacy paths.
 
 ## `revisit_vlm_clean` reference boundary
 

@@ -29,10 +29,10 @@ end-to-end RL version.
 - There is no Stage2 SFT in this version.
 - The RL policy initializes from the original Qwen reasoning model, not a
   Golden/Stage2 adapter.
-- The primary policy/reference family is Qwen3-VL-8B-Thinking. Qwen2.5-VL is a
-  required secondary compatibility family, with its exact size and snapshot
-  still explicit configuration. Model-facing code must use a family adapter
-  rather than hardcode Qwen3-only tensor or processor behavior.
+- The primary policy/reference model is Qwen3-VL-8B-Thinking. The required
+  secondary compatibility model is `Qwen/Qwen2.5-VL-7B-Instruct`.
+  Model-facing code must use a family adapter rather than hardcode Qwen3-only
+  tensor or processor behavior.
 - Do not claim Qwen2.5-VL end-to-end support from an empty adapter slot. It
   requires a separately identified representation artifact plus native
   transcript, both-provider, main-`D`/model-supported branch, exact-replay, and
@@ -60,8 +60,14 @@ end-to-end RL version.
   teacher replay, distillation targets, objective composition, teacher state,
   and checkpoint/resume interfaces. No SDPO optimizer step is allowed until its
   exact mathematics and parity gate are accepted.
-- An optional 72B Qwen answer judge is a separate versioned service role. It is
-  never the frozen RL reference policy or the SDPO self-teacher.
+- The optional `Qwen/Qwen2.5-72B-Instruct` answer judge has a reserved provider
+  interface but is not deployed for the first pilot. It is never the frozen RL
+  reference policy or the SDPO self-teacher.
+- The stable local Qwen3 path
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking` is the accepted
+  operational model identity; full weight-directory hashing is not required.
+  Exact tokenizer/chat-template golden fixtures and their hashes remain
+  required because they determine protocol serialization.
 
 ## Terminology
 
