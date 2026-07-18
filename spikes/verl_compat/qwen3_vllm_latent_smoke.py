@@ -104,7 +104,7 @@ def _messages() -> list[dict[str, Any]]:
     ]
 
 
-def _synthetic_latents(config: Any) -> dict[str, dict[str, torch.Tensor]]:
+def _synthetic_latents(config: Any) -> dict[str, list[dict[str, torch.Tensor]]]:
     hidden_size = int(config.vision_config.out_hidden_size)
     deepstack = tuple(config.vision_config.deepstack_visual_indexes)
     merge_size = int(config.vision_config.spatial_merge_size)
@@ -125,12 +125,13 @@ def _synthetic_latents(config: Any) -> dict[str, dict[str, torch.Tensor]]:
         generator=generator,
     )
     return {
-        "image": {
-            "image_embeds": embeddings,
-            "image_grid_thw": torch.tensor(
-                [[1, 2, 2], [1, 2, 2], [1, 2, 2]], dtype=torch.long
-            ),
-        }
+        "image": [
+            {
+                "image_embeds": embeddings[index : index + 1].clone(),
+                "image_grid_thw": torch.tensor([[1, 2, 2]], dtype=torch.long),
+            }
+            for index in range(3)
+        ]
     }
 
 
@@ -231,6 +232,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise AssertionError("vLLM sampled logprob is not finite and non-positive")
         actual_logprobs.append(value)
 
+    latent_tensor = torch.cat(
+        [item["image_embeds"] for item in multimodal_data["image"]], dim=0
+    )
     payload = {
         "schema_version": "tgvf-qwen3-vllm-latent-smoke-v1",
         "result": "PASS",
@@ -263,13 +267,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "latent": {
             "items": 3,
             "rows_per_item": 1,
-            "width": int(multimodal_data["image"]["image_embeds"].shape[-1]),
+            "width": int(latent_tensor.shape[-1]),
             "sha256": hashlib.sha256(
-                multimodal_data["image"]["image_embeds"]
-                .contiguous()
-                .view(torch.uint8)
-                .numpy()
-                .tobytes()
+                latent_tensor.contiguous().view(torch.uint8).numpy().tobytes()
             ).hexdigest(),
         },
         "sampling": {

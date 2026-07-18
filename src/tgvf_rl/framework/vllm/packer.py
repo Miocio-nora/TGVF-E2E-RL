@@ -132,19 +132,29 @@ class PackedQwen3Replay:
         for item in self.items:
             item.verify_integrity()
 
-    def as_vllm_multi_modal_data(self) -> dict[str, dict[str, torch.Tensor]]:
+    def as_vllm_multi_modal_data(
+        self,
+    ) -> dict[str, list[dict[str, torch.Tensor]]]:
         """Build the public vLLM ``multi_modal_data`` value.
 
-        The custom processor consumes the dictionary form so that grids are
-        transported with the already-merged embeddings.  Callers should pass
-        :attr:`image_uuids` as the corresponding image UUIDs.
+        Each image is a separate list item so vLLM's cache-disabled UUID
+        builder observes the same item count as the custom parser. The parser
+        coalesces the fields only after vLLM has established those identities.
+        Callers may pass :attr:`image_uuids` as the corresponding image UUIDs
+        when input caching is enabled.
         """
 
+        self.verify_integrity()
         return {
-            "image": {
-                "image_embeds": self.image_embeds,
-                "image_grid_thw": self.image_grid_thw,
-            }
+            "image": [
+                {
+                    "image_embeds": item.image_embeds.clone(),
+                    "image_grid_thw": torch.tensor(
+                        (item.image_grid_thw,), dtype=torch.long
+                    ),
+                }
+                for item in self.items
+            ]
         }
 
 

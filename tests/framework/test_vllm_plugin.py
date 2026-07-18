@@ -166,9 +166,14 @@ def test_packer_emits_source_then_each_call_with_main_plus_three_branches() -> N
     assert all(item.image_embeds.shape == (4, 8) for item in packed.items)
     assert all(item.image_grid_thw == (1, 4, 4) for item in packed.items)
     mm_data = packed.as_vllm_multi_modal_data()
-    assert mm_data["image"]["image_embeds"].shape == (12, 8)
+    assert len(mm_data["image"]) == 3
+    assert tuple(item["image_embeds"].shape for item in mm_data["image"]) == (
+        (4, 8),
+        (4, 8),
+        (4, 8),
+    )
     assert torch.equal(
-        mm_data["image"]["image_grid_thw"],
+        torch.cat([item["image_grid_thw"] for item in mm_data["image"]]),
         torch.tensor([[1, 4, 4], [1, 4, 4], [1, 4, 4]]),
     )
     assert len(packed.image_uuids) == 3

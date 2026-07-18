@@ -112,6 +112,25 @@ if VLLM_IMPORT_ERROR is None:
             self,
             data: Mapping[str, torch.Tensor] | ModalityData[ImageItem],
         ) -> ModalityDataItems[Any, Any] | None:
+            if (
+                isinstance(data, list)
+                and data
+                and all(isinstance(item, Mapping) for item in data)
+            ):
+                item_dicts = list(data)
+                for item in item_dicts:
+                    validate_precomputed_qwen3_image_dict(
+                        item,
+                        spatial_merge_size=self.spatial_merge_size,
+                    )
+                data = {
+                    "image_embeds": torch.cat(
+                        [item["image_embeds"] for item in item_dicts], dim=0
+                    ),
+                    "image_grid_thw": torch.cat(
+                        [item["image_grid_thw"] for item in item_dicts], dim=0
+                    ),
+                }
             if isinstance(data, Mapping):
                 validate_precomputed_qwen3_image_dict(
                     data,
