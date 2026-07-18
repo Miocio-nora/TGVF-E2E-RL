@@ -281,8 +281,8 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   the wheel/driver PTX mismatch in R3.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
   `SC-20`; I8H-20260719 covers this in-scope public configuration correction.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question, model, processor, representation fixture, initialization,
   staleness, N/A fields, dataset, transcript, token fixture, D/DeepStack
   identity, replay limitation, RL lock, sampling, dtypes, parallelism,
@@ -308,14 +308,67 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   and complete extracted-header paths remain identical to R3.
 - CPU gate before launch: complete suite `111 passed`; adapter tests prove the
   public override is emitted and fail closed on `FLASH_ATTN`.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T07:20:19+09:00` / `2026-07-19T07:21:35+09:00`, 76 seconds;
+  engine PID 1397079, worker PIDs 1397504 and 1397505.
+- Actual GPU-hours and peak scratch use: less than `0.043` two-device GPU-hours
+  by wall-time upper bound; observed memory reached 4822 MiB/device before the
+  load sample, and the worker reported 8.447 GiB for loaded model state; log
+  139,245 bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R4-qwen3-vllm-latent-d39c8bb.json > artifacts/compatibility/SC-20-R4-qwen3-vllm-latent-d39c8bb.log 2>&1`.
 - Outputs: result JSON and log paths above; no checkpoint.
 - Scorer/parser identity: script/native renderer and project validators at the
   hashes above.
-- Metrics: `PENDING`; same PASS conditions as SC-20-R3 plus absence of the
-  bundled visual FlashAttention PTX path.
+- Metrics: visual `TORCH_SDPA` completed profiling, Qwen weights loaded in 9.45
+  seconds, and the engine reported 114.11 GiB available KV memory. The language
+  backend auto-selected FlashInfer, whose warmup JIT inherited the legacy
+  Conda `nvcc` and failed on absent `cublasLt.h`/`nvrtc.h`. Log SHA256:
+  `e55ad2b872f1bd7a12fef65c1a6222a6d245926262350f4d4ca5ec72d5b93eac`.
+- Conclusion: `FAIL` as required by the hard gate. R4 proves the visual SDPA
+  correction and reaches language-model KV initialization, but the implicit
+  FlashInfer backend introduces an undeclared CUDA-toolkit JIT dependency. The
+  next cell pins vLLM's public `TRITON_ATTN` backend; no site package is patched.
+
+### SC-20-R5-QWEN3-VLLM-LATENT
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-20-R5`; mandatory bounded
+  rerun with both public driver-portable attention selections after R4.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
+  `SC-20`; I8H-20260719 covers this in-scope public configuration correction.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question, model, processor, representation fixture, initialization,
+  staleness, N/A fields, dataset, transcript, token fixture, D/DeepStack
+  identity, replay limitation, RL lock, sampling, dtypes, parallelism,
+  tolerances, batch and GPU identities: identical to SC-20-R4, with failed R4
+  as the baseline.
+- Exact output path: result
+  `artifacts/compatibility/SC-20-R5-qwen3-vllm-latent-515256c.json`, log
+  `artifacts/compatibility/SC-20-R5-qwen3-vllm-latent-515256c.log`.
+- Code commit and worktree state: runtime code commit
+  `515256ca5cf7d931bbdcf3709af02eb24e59c867`; launch worktree may differ only
+  by the subsequently committed experiment-ledger record.
+- Repository adapter/patch surfaces and hashes: R4 surfaces unchanged except
+  `adapter.py@7f039fa5f0e22daa325889a07c0b4e4c81e30faea8b0da9f7f7dec0f1475a206`,
+  `registration.py@bc3c29f10962f45c7f99575622c54b1db127ec39de9e7921fe8da9053e1f5e77`,
+  and smoke script
+  `a2042c086b0e73894f9755504d78c46a3cc5d611e50217a18348041e64d85fe7`;
+  no site-package patch.
+- Forward/attention/environment correction: R4's `TORCH_SDPA` multimodal
+  encoder remains; `VLLM_ATTENTION_BACKEND=TRITON_ATTN` selects the public
+  Triton language attention backend. The project adapter emits and validates
+  both required vLLM environment values before worker spawn. Compiler/header
+  paths are identical to R4.
+- CPU gate before launch: complete suite `111 passed`; runtime-environment tests
+  prove `TRITON_ATTN` is required and reject `FLASHINFER`.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_ATTENTION_BACKEND=TRITON_ATTN VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R5-qwen3-vllm-latent-515256c.json > artifacts/compatibility/SC-20-R5-qwen3-vllm-latent-515256c.log 2>&1`.
+- Outputs: result JSON and log paths above; no checkpoint.
+- Scorer/parser identity: script/native renderer and project validators at the
+  hashes above.
+- Metrics: `PENDING`; same PASS conditions as SC-20-R4 plus explicit
+  `TRITON_ATTN` selection and no FlashInfer warmup/JIT.
 - Conclusion: `PENDING`; first hard failure stops the rerun.
 
 ### SC-30-FSDP2-INFRA
