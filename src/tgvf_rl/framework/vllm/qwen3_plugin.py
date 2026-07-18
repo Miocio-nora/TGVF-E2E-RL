@@ -159,8 +159,11 @@ if VLLM_IMPORT_ERROR is None:
     class TGVFQwen3VLForConditionalGeneration(Qwen3VLForConditionalGeneration):
         """Qwen3-vLLM model accepting main+DeepStack precomputed embeddings."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
+        def __init__(self, *, vllm_config: Any, prefix: str = "model") -> None:
+            # Preserve vLLM's public new-style model signature. A variadic
+            # wrapper is classified as an old-style model and receives legacy
+            # constructor arguments before this class can validate anything.
+            super().__init__(vllm_config=vllm_config, prefix=prefix)
             if not self.use_deepstack or self.deepstack_num_level != 3:
                 raise ValueError(
                     "TGVF Qwen3 vLLM plugin requires exactly three DeepStack levels"

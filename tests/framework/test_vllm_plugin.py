@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
 import torch
 
@@ -286,3 +288,15 @@ def test_precomputed_parser_rejects_premerge_row_semantics(monkeypatch) -> None:
                 }
             }
         )
+
+
+def test_live_plugin_preserves_vllm_new_style_model_signature() -> None:
+    pytest.importorskip("vllm")
+    from tgvf_rl.framework.vllm.qwen3_plugin import (
+        TGVFQwen3VLForConditionalGeneration,
+    )
+
+    signature = inspect.signature(TGVFQwen3VLForConditionalGeneration)
+    assert tuple(signature.parameters) == ("vllm_config", "prefix")
+    assert signature.parameters["vllm_config"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["prefix"].default == "model"
