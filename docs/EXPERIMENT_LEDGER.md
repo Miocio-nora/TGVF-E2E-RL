@@ -1,22 +1,178 @@
 # Experiment Ledger
 
-No experiments have been launched in this repository.
+I8H-20260719 authorizes the bounded compatibility cells below. It does not
+authorize production training. Only physical GPUs 2 and 3 may be exposed.
 
-The repository is currently a documentation-only scaffold. GPU training,
-evaluation, dependency installation, and checkpoint conversion are not
-authorized by the scaffold itself.
+## Planned bounded cells
+
+### SC-20-QWEN3-VLLM-LATENT
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-20`; mandatory Qwen3 vLLM
+  latent execution smoke, narrower than the full L1..L3 promotion claim.
+- Spike-plan git revision and VA0/VA1/VA2 approval references:
+  `2ffa28e`; I8H-20260719 in `PROJECT_TASK.md` §0 and approved spike-plan §0.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: can real Qwen3-VL-8B-Thinking on vLLM 0.12 load the repo-owned
+  public model/processor plugin and execute one native transcript containing a
+  source item plus two precomputed main-D/three-branch DeepStack items while
+  returning actual processed sampled-token log probabilities?
+- Baseline and exact output path: no competing backend; result
+  `artifacts/compatibility/SC-20-qwen3-vllm-latent-db3315a.json`, log
+  `artifacts/compatibility/SC-20-qwen3-vllm-latent-db3315a.log`.
+- Model and processor identity: stable local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`; model type `qwen3_vl`,
+  original architecture `Qwen3VLForConditionalGeneration`, plugin architecture
+  `TGVFQwen3VLForConditionalGeneration`; tokenizer length `151669`; no weight-
+  directory hash by user decision.
+- Representation checkpoint identity: N/A—deterministic synthetic latent seed
+  `20260719`; this cell does not claim a trained/native TGVF Adapter artifact.
+- N/A fields and justification: reference policy, optimizer, gradient,
+  checkpoint/resume, reward, scorer and dataset are N/A because this is one
+  inference-only transport smoke.
+- Policy/reference initialization: original local Qwen3 reasoning weights;
+  reference not instantiated.
+- Rollout policy version and allowed asynchronous staleness: immutable base
+  model path for this no-update process; staleness `0`.
+- Code commit and worktree state: runtime code commit `db3315a`; the launch
+  worktree must be clean, with only this subsequently committed ledger entry
+  differing from the runtime-code tree.
+- Repository adapter/patch surface and hash:
+  `packer.py@15aab9a71f02086f164b144cb28804ff31d658d4efb599766269fdffc5b05487`,
+  `qwen3_plugin.py@1e4756d7c2dfd57edbb46bb8bc69cf52b9b4c924bf66218723d61a90e98202df`,
+  `registration.py@fa2c3a48dc316833552a132047bd1993d680bc4d430b6477079cc34ab50d35dc`,
+  smoke script
+  `a97ed36b90d9da9eab92853ab38628a4d789dd045c5b7b8d38afe42ccfca693c`;
+  no site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: synthetic one-request fixture,
+  `n=1`, no dataset.
+- Native prompt/tool schema hash: transcript text
+  `c3f7e889eca24efa97ac605cb875ca88858b4c6b827bec4c59c411cbde7e091b`;
+  tool schema
+  `1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361`.
+- Chat-template/token-fixture hash and token-ownership masks: chat template
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`;
+  295 prompt-token IDs
+  `d0dc12f15978045403a5a664e4e3eb5ce9f711a1638efad3a8886922f4525294`;
+  assistant generation prefill asserted; this cell does not apply an RL loss
+  mask.
+- D/DeepStack/position/mask identity: three items (source, call 0, call 1), each
+  grid `(1,2,2)`, one merged row, width `4096*(1+3)=16384`, branch layers
+  `(8,16,24)`, BF16 latent SHA256
+  `3f7711522f4bd3c10530b765a186b109003727934459ed388f35e60863d26cda`;
+  vLLM processor owns native M-RoPE placeholder positions.
+- Observation materialization/artifact identity used by all replays: this GPU
+  cell has no policy/reference replay. CPU tests at `db3315a` separately prove
+  `ObservationStore -> pack_qwen3_vllm_replay` content checks; the limitation is
+  retained in the compatibility conclusion.
+- RL framework/version/environment lock: veRL
+  `e003163181731412595257a72ec173071efb125f` / `0.9.0.dev0`, vLLM `0.12.0`,
+  Torch `2.9.0+cu128`, Transformers `4.57.6`, Python `3.12.3`; lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: N/A; no objective or update.
+- Rollout/replay forward mode and adapter dropout/RNG contract: vLLM eager
+  forward, prefix cache off, multimodal processor cache `0`, main+DeepStack
+  precomputed embeddings, no TGVF recomputation; policy-adapter dropout N/A.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM `0.12.0`, seed `20260719`,
+  temperature `.7`, top-p `.9`, top-k `20`, min-p `.01`, repetition `1.05`,
+  presence `.1`, frequency `.05`, no custom processor, two tokens,
+  `processed_logprobs` after all represented transforms.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 weights/KV, no quantization,
+  vLLM-selected attention, TP=2, no training mesh, max model length 512, eager.
+- Logit/logprob/loss/gradient parity tolerances: structural engine PASS plus
+  finite non-positive sampled processed logprobs; CPU vLLM 0.12 transform oracle
+  requires exact elementwise equality. No loss/gradient in this cell.
+- World size, microbatch, accumulation, and global batch: TP world `2`, one
+  request, one completion, no accumulation.
+- GPUs: physical `2` =
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`; physical `3` =
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; both NVIDIA B200 183359 MiB,
+  compute capability 10.0, driver 570.195.03; logical mapping `2->0`, `3->1`.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-qwen3-vllm-latent-db3315a.json > artifacts/compatibility/SC-20-qwen3-vllm-latent-db3315a.log 2>&1`.
+- Outputs: result JSON and log paths above; no checkpoint.
+- Scorer/parser identity: smoke script SHA256 above; native renderer and plugin
+  are code-commit identified; no task scorer.
+- Metrics: `PENDING`—PASS requires plugin model load, three latent items,
+  two sampled tokens, unchanged tokenizer length, and actual processed logprobs.
+- Conclusion: `PENDING`; any model/plugin/latent/logprob error stops the cell.
+
+### SC-30-FSDP2-INFRA
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-30`; mandatory executable
+  two-rank FSDP2 infrastructure/checkpoint smoke, not a Qwen L4 claim.
+- Spike-plan git revision and VA0/VA1/VA2 approval references:
+  `2ffa28e`; I8H-20260719 and approved spike-plan §0.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: does the accepted Python/Torch/veRL environment execute composable
+  FSDP2 on two ranks and reproduce the next forward, scalar loss, optimizer
+  update and local parameter shards exactly after strict distributed
+  checkpoint teardown/reconstruction/resume?
+- Baseline and exact output path: in-process uninterrupted step-2 control;
+  result `artifacts/compatibility/SC-30-fsdp2-infra-db3315a.json`, checkpoint
+  `artifacts/compatibility/SC-30-fsdp2-infra-db3315a-checkpoint`, log
+  `artifacts/compatibility/SC-30-fsdp2-infra-db3315a.log`.
+- Model and processor identity: `synthetic-tiny-fsdp2-model-v1`, width 16, two
+  residual MLP blocks, FP32, seed `20260719`; processor N/A.
+- Representation checkpoint identity: N/A—no TGVF or Qwen model in this
+  infrastructure-only cell.
+- N/A fields and justification: data, prompt, reward, behavior policy,
+  reference policy, D/DeepStack and sampling are N/A because no RL rollout or
+  objective is executed.
+- Policy/reference initialization: N/A; tiny deterministic model is initialized
+  identically for control/resume.
+- Rollout policy version and allowed asynchronous staleness: N/A; no rollout or
+  intervening update.
+- Code commit and worktree state: runtime code commit `db3315a`; clean launch
+  worktree, with only the committed ledger entry outside that runtime-code tree.
+- Repository adapter/patch surface and hash: script
+  `22380ea2f0ff0d44e847d5cc1065db30767cd9ca7ff73363c52aeac84d02ff8d`,
+  config `f2a1f3f1abf3ed96a50ebdf6d4c6ccf0920d561457d7ec41d9b7c866f251660a`;
+  public veRL `FSDPEngineConfig` and `CheckpointHandler` imports, public PyTorch
+  `fully_shard` and distributed-checkpoint APIs; no patch.
+- Dataset/manifest, hashes, sample rule, and n: deterministic random tensors for
+  two steps, fixture seeds `20260720` and `20260721`; no dataset.
+- Native prompt/tool schema hash: N/A.
+- Chat-template/token-fixture hash and token-ownership masks: N/A.
+- D/DeepStack/position/mask identity: N/A.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: same exact stack and lock SHA256 as
+  SC-20.
+- Objective equations and normalization: test-only identity
+  `synthetic-fsdp2-mse-v1`; `mean((model(x)-target)**2)` over every output
+  element; AdamW lr `.001`, weight decay `0`, no production RL meaning.
+- Rollout/replay forward mode and adapter dropout/RNG contract: train forward;
+  `torch.use_deterministic_algorithms(True)`, TF32 off, no dropout, fixed CPU
+  batch generation, CUBLAS workspace `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: N/A.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: FP32, no KV/quantization/attention/TP;
+  one-dimensional CUDA FSDP mesh of logical ranks `(0,1)`, world size 2.
+- Logit/logprob/loss/gradient parity tolerances: resumed step-2 output, loss and
+  local updated parameter shards must be bitwise equal (`atol=rtol=0`).
+- World size, microbatch, accumulation, and global batch: world `2`; each rank
+  sees shape `[2,3,16]`; one backward/update per step; accumulation `1`.
+- GPUs: same physical B200 identities and logical mapping as SC-20.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 600 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 NCCL_DEBUG=WARN timeout 600s .venv312/bin/torchrun --standalone --nproc-per-node=2 spikes/verl_compat/fsdp2_smoke.py --config configs/smoke/fsdp2.toml --checkpoint-dir artifacts/compatibility/SC-30-fsdp2-infra-db3315a-checkpoint --output artifacts/compatibility/SC-30-fsdp2-infra-db3315a.json > artifacts/compatibility/SC-30-fsdp2-infra-db3315a.log 2>&1`.
+- Outputs: strict distributed checkpoint, result JSON and log above.
+- Scorer/parser identity: smoke script/config SHA256 above.
+- Metrics: `PENDING`—per-rank loss/shard digest, exact resume flag, versions and
+  public veRL symbols.
+- Conclusion: `PENDING`; any nondeterminism, missing state or rank failure stops
+  the cell.
 
 ## Compatibility-spike status
 
-`docs/VERL_COMPATIBILITY_SPIKE_PLAN.md` is a proposed task, not an experiment
-entry. There is currently no `PLANNED` compatibility-spike cell and therefore
-no GPU cell is authorized. Exact hardware, environment/image digest, model
-runtime identity, command, output path, tolerances, and stop conditions must be
-filled here before each proposed S2/S3/S4 GPU process.
-
-CPU-only static review under S0 does not create an experiment identity. Any
-dependency installation or model download still requires the separate
-approval recorded by the spike plan.
+CPU public-API, transport, objective and oracle tests passed before these rows
+were entered. The two planned cells are bounded evidence; they do not silently
+close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ## Required entry template
 
