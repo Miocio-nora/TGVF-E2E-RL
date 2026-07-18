@@ -42,6 +42,7 @@ def validate_smoke_config(path: Path) -> Mapping[str, Any]:
     _require(stack, "verl_commit", SPIKE_CANDIDATE_VERL_COMMIT)
     _require(stack, "rollout_backend", "vllm")
     _require(stack, "behavior_logprobs", "processed_logprobs")
+    _require(stack, "vllm_enable_mm_embeds", True)
     _require(stack, "sharding_strategy", "fsdp2")
     _require(stack, "world_size", 2)
     _require(stack, "physical_gpu_ids", [2, 3])
@@ -54,14 +55,29 @@ def validate_smoke_config(path: Path) -> Mapping[str, Any]:
     checkpoint = config.get("checkpoint")
     if not isinstance(checkpoint, Mapping):
         raise ValueError("[checkpoint] is required")
+    _require(checkpoint, "format", "torch.distributed.checkpoint")
     _require(checkpoint, "strict", True)
     _require(checkpoint, "async_save", False)
+    _require(checkpoint, "contents", ["model", "optimizer", "extra"])
+    _require(checkpoint, "resume_parity_atol", 0.0)
+    _require(checkpoint, "resume_parity_rtol", 0.0)
 
     objective = config.get("objective")
     if not isinstance(objective, Mapping):
         raise ValueError("[objective] is required")
     _require(objective, "identity", "synthetic-fsdp2-mse-v1")
+    _require(objective, "equation", "mean((model(x) - target) ** 2)")
+    _require(objective, "normalization", "global element mean")
     _require(objective, "production_rl", False)
+
+    model = config.get("model")
+    if not isinstance(model, Mapping):
+        raise ValueError("[model] is required")
+    _require(model, "identity", "synthetic-tiny-fsdp2-model-v1")
+    _require(model, "hidden_size", 16)
+    _require(model, "layers", 2)
+    _require(model, "dtype", "float32")
+    _require(model, "seed", 20260719)
     return config
 
 
