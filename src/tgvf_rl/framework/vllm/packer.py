@@ -1,0 +1,429 @@
+"""Lossless Qwen3-VL multimodal packing for recorded TGVF observations.
+
+The vLLM Qwen3-VL model represents one visual token as the concatenation of
+the main visual embedding followed by its three DeepStack embeddings.  This
+module is the sole bridge from project-owned, content-addressed replay state to
+that transport representation.  It never reruns the vision tower or the TGVF
+Adapter.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import json
+from typing import Literal
+
+import torch
+
+from tgvf_rl.contracts.errors import ReplayMismatchError
+from tgvf_rl.contracts.tensors import TensorArtifactRef
+from tgvf_rl.observations.schema import FocusedObservationRecord
+from tgvf_rl.observations.store import (
+    ObservationStore,
+    TrajectoryReplayHandle,
+    tensor_checksum,
+)
+
+
+QWEN3_DEEPSTACK_BRANCH_LAYERS = (8, 16, 24)
+QWEN3_DEEPSTACK_BRANCH_COUNT = len(QWEN3_DEEPSTACK_BRANCH_LAYERS)
+
+
+@dataclass(frozen=True, slots=True)
+class PackedQwen3ImageItem:
+    """One source-image or one call-specific D item accepted by vLLM."""
+
+    kind: Literal["source_image", "focused_d"]
+    call_index: int | None
+    positions: tuple[int, ...]
+    image_embeds: torch.Tensor
+    image_grid_thw: tuple[int, int, int]
+    component_digests: tuple[str, ...]
+    packed_tensor_sha256: str
+    item_sha256: str
+
+    def verify_integrity(self) -> None:
+        if self.kind == "source_image" and self.call_index is not None:
+            raise ReplayMismatchError("source image cannot have a tool call index")
+        if self.kind == "focused_d" and (
+            self.call_index is None or self.call_index < 0
+        ):
+            raise ReplayMismatchError("focused D requires a non-negative call index")
+        if self.image_embeds.ndim != 2:
+            raise ReplayMismatchError("packed image item must have shape [N,4H]")
+        if self.image_embeds.shape[0] != len(self.positions):
+            raise ReplayMismatchError(
+                "packed image rows and recorded visual positions differ"
+            )
+        if len(self.component_digests) != 1 + QWEN3_DEEPSTACK_BRANCH_COUNT:
+            raise ReplayMismatchError(
+                "packed Qwen3 item must identify main plus three DeepStack tensors"
+            )
+        actual = tensor_checksum(self.image_embeds)
+        if actual != self.packed_tensor_sha256:
+            raise ReplayMismatchError("packed image tensor checksum changed")
+        if (
+            _item_checksum(
+                kind=self.kind,
+                call_index=self.call_index,
+                positions=self.positions,
+                grid=self.image_grid_thw,
+                component_digests=self.component_digests,
+                packed_tensor_sha256=self.packed_tensor_sha256,
+            )
+            != self.item_sha256
+        ):
+            raise ReplayMismatchError("packed image item identity changed")
+
+
+@dataclass(frozen=True, slots=True)
+class PackedQwen3Replay:
+    """Ordered vLLM input plus immutable replay identities.
+
+    ``items`` is always source first, followed by one main-D item per tool call
+    in contiguous call-index order.  Each item's feature columns are main,
+    DeepStack layer 8, layer 16, then layer 24.
+    """
+
+    replay_handle: TrajectoryReplayHandle
+    items: tuple[PackedQwen3ImageItem, ...]
+    branch_layers: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if self.branch_layers != QWEN3_DEEPSTACK_BRANCH_LAYERS:
+            raise ReplayMismatchError(
+                "vLLM Qwen3 packing requires DeepStack layers (8, 16, 24)"
+            )
+        if not self.items or self.items[0].kind != "source_image":
+            raise ReplayMismatchError("packed replay must begin with the source image")
+        calls = tuple(
+            item.call_index for item in self.items[1:] if item.kind == "focused_d"
+        )
+        if len(calls) != len(self.items) - 1 or calls != tuple(range(len(calls))):
+            raise ReplayMismatchError(
+                "packed D items must use contiguous call order after the source image"
+            )
+        for item in self.items:
+            item.verify_integrity()
+
+    @property
+    def image_embeds(self) -> torch.Tensor:
+        """Return a fresh concatenation in vLLM's flat multimodal field shape."""
+
+        self.verify_integrity()
+        return torch.cat(tuple(item.image_embeds for item in self.items), dim=0).clone()
+
+    @property
+    def image_grid_thw(self) -> torch.Tensor:
+        self.verify_integrity()
+        return torch.tensor(
+            tuple(item.image_grid_thw for item in self.items), dtype=torch.long
+        )
+
+    @property
+    def image_uuids(self) -> tuple[str, ...]:
+        """Stable vLLM cache identities including layout and tensor content."""
+
+        self.verify_integrity()
+        return tuple(item.item_sha256 for item in self.items)
+
+    def verify_integrity(self) -> None:
+        for item in self.items:
+            item.verify_integrity()
+
+    def as_vllm_multi_modal_data(self) -> dict[str, dict[str, torch.Tensor]]:
+        """Build the public vLLM ``multi_modal_data`` value.
+
+        The custom processor consumes the dictionary form so that grids are
+        transported with the already-merged embeddings.  Callers should pass
+        :attr:`image_uuids` as the corresponding image UUIDs.
+        """
+
+        return {
+            "image": {
+                "image_embeds": self.image_embeds,
+                "image_grid_thw": self.image_grid_thw,
+            }
+        }
+
+
+def pack_qwen3_vllm_replay(
+    store: ObservationStore,
+    replay_handle: TrajectoryReplayHandle,
+    *,
+    expected_branch_layers: tuple[int, ...] = QWEN3_DEEPSTACK_BRANCH_LAYERS,
+) -> PackedQwen3Replay:
+    """Pack the exact recorded source and call-specific D tensors for vLLM.
+
+    Reusing the source grid for D is exact because the TGVF Adapter preserves
+    the source pre-merge spatial layout before applying the same frozen spatial
+    merger.  A synthetic or malformed record whose D token count differs from
+    that grid is rejected instead of inventing a grid.
+    """
+
+    if not isinstance(store, ObservationStore):
+        raise TypeError("vLLM packing requires an ObservationStore")
+    if not isinstance(replay_handle, TrajectoryReplayHandle):
+        raise TypeError("vLLM packing requires a TrajectoryReplayHandle")
+    expected_branch_layers = tuple(int(layer) for layer in expected_branch_layers)
+    if expected_branch_layers != QWEN3_DEEPSTACK_BRANCH_LAYERS:
+        raise ReplayMismatchError(
+            "this Qwen3-vLLM bridge accepts exactly DeepStack layers (8, 16, 24)"
+        )
+
+    replay = store.resolve_replay(replay_handle)
+    if replay.model.family != "qwen3_vl":
+        raise ReplayMismatchError("Qwen3 vLLM packer received a different model family")
+    if not replay.observation_handles:
+        raise ReplayMismatchError("precomputed-D vLLM replay requires an observation")
+    records = tuple(
+        store.resolve_record(handle) for handle in replay.observation_handles
+    )
+    _validate_record_sequence(records, expected_branch_layers)
+
+    first = records[0]
+    grid = first.source_visual.image_grid_thw
+    merge_size = first.source_visual.spatial_merge_size
+    source_main = _resolve_features(
+        store, first.source_visual.merged_main, "source main"
+    )
+    source_branches = tuple(
+        _resolve_features(store, ref, f"source DeepStack branch {index}")
+        for index, ref in enumerate(first.source_visual.merged_deepstack)
+    )
+    _validate_grid(grid, merge_size, source_main.shape[0])
+    items = [
+        _pack_item(
+            kind="source_image",
+            call_index=None,
+            positions=first.layout.original_image_positions,
+            grid=grid,
+            main=source_main,
+            branches=source_branches,
+            component_digests=(
+                first.source_visual.merged_main.address.digest,
+                *(ref.address.digest for ref in first.source_visual.merged_deepstack),
+            ),
+        )
+    ]
+
+    for record in records:
+        main_d = _resolve_features(
+            store, record.payload.main_d, f"call {record.call_index} main D"
+        )
+        branches = tuple(
+            _resolve_features(
+                store,
+                branch.d_tensor,
+                f"call {record.call_index} DeepStack layer {branch.layer}",
+            )
+            for branch in record.branches
+        )
+        _validate_grid(grid, merge_size, main_d.shape[0])
+        items.append(
+            _pack_item(
+                kind="focused_d",
+                call_index=record.call_index,
+                positions=record.layout.d_positions,
+                grid=grid,
+                main=main_d,
+                branches=branches,
+                component_digests=(
+                    record.payload.main_d.address.digest,
+                    *(branch.d_tensor.address.digest for branch in record.branches),
+                ),
+            )
+        )
+
+    return PackedQwen3Replay(
+        replay_handle=replay_handle,
+        items=tuple(items),
+        branch_layers=expected_branch_layers,
+    )
+
+
+def _validate_record_sequence(
+    records: tuple[FocusedObservationRecord, ...],
+    expected_branch_layers: tuple[int, ...],
+) -> None:
+    first = records[0]
+    source_identity = (
+        first.source_visual.image_sha256,
+        first.source_visual.merged_main.address.digest,
+        tuple(ref.address.digest for ref in first.source_visual.merged_deepstack),
+        first.source_visual.image_grid_thw,
+        first.source_visual.spatial_merge_size,
+        first.layout.original_image_positions,
+    )
+    representation = first.representation
+    previous_end = -1
+    for block_name, positions in (
+        ("source image", first.layout.original_image_positions),
+    ):
+        _validate_contiguous_positions(positions, block_name)
+        previous_end = positions[-1]
+
+    for expected_call, record in enumerate(records):
+        if record.call_index != expected_call:
+            raise ReplayMismatchError(
+                "observation calls are not contiguous and ordered"
+            )
+        if record.representation != representation:
+            raise ReplayMismatchError("representation identity changed within replay")
+        current_source = (
+            record.source_visual.image_sha256,
+            record.source_visual.merged_main.address.digest,
+            tuple(ref.address.digest for ref in record.source_visual.merged_deepstack),
+            record.source_visual.image_grid_thw,
+            record.source_visual.spatial_merge_size,
+            record.layout.original_image_positions,
+        )
+        if current_source != source_identity:
+            raise ReplayMismatchError(
+                "recorded source visual state changed across calls"
+            )
+        if record.layout.deepstack_branch_layers != expected_branch_layers:
+            raise ReplayMismatchError(
+                "recorded D-DeepStack branch order/layers differ from Qwen3"
+            )
+        if tuple(branch.layer for branch in record.branches) != expected_branch_layers:
+            raise ReplayMismatchError("D-DeepStack branch records are out of order")
+        if len(record.source_visual.merged_deepstack) != len(expected_branch_layers):
+            raise ReplayMismatchError(
+                "source image does not contain three DeepStack branches"
+            )
+        if any(
+            branch.injection_positions != record.layout.d_positions
+            for branch in record.branches
+        ):
+            raise ReplayMismatchError(
+                "vLLM DeepStack positions must exactly equal the main visual positions"
+            )
+        _validate_contiguous_positions(
+            record.layout.d_positions, f"call {record.call_index} D"
+        )
+        if record.layout.d_positions[0] <= previous_end:
+            raise ReplayMismatchError(
+                "vLLM visual items must occur in source-then-call prompt order"
+            )
+        previous_end = record.layout.d_positions[-1]
+
+
+def _resolve_features(
+    store: ObservationStore, ref: TensorArtifactRef, name: str
+) -> torch.Tensor:
+    # ``resolve_verified`` performs the address, descriptor, shape, and dtype
+    # digest checks before this transport-specific validation.
+    tensor = store.resolve_verified(ref)
+    if tensor.ndim == 3:
+        if tensor.shape[0] != 1:
+            raise ReplayMismatchError(f"{name} must describe one vLLM request")
+        tensor = tensor.squeeze(0)
+    if tensor.ndim != 2 or not tensor.is_floating_point():
+        raise ReplayMismatchError(f"{name} must be a floating tensor [N,H]")
+    return tensor.contiguous()
+
+
+def _pack_item(
+    *,
+    kind: Literal["source_image", "focused_d"],
+    call_index: int | None,
+    positions: tuple[int, ...],
+    grid: tuple[int, int, int],
+    main: torch.Tensor,
+    branches: tuple[torch.Tensor, ...],
+    component_digests: tuple[str, ...],
+) -> PackedQwen3ImageItem:
+    if len(branches) != QWEN3_DEEPSTACK_BRANCH_COUNT:
+        raise ReplayMismatchError("Qwen3 packing requires exactly three branches")
+    if any(
+        branch.shape != main.shape
+        or branch.dtype != main.dtype
+        or branch.device != main.device
+        for branch in branches
+    ):
+        raise ReplayMismatchError(
+            "main and all DeepStack embeddings must share exact shape/dtype/device"
+        )
+    packed = torch.cat((main, *branches), dim=-1).contiguous().clone()
+    packed_digest = tensor_checksum(packed)
+    item_digest = _item_checksum(
+        kind=kind,
+        call_index=call_index,
+        positions=positions,
+        grid=grid,
+        component_digests=component_digests,
+        packed_tensor_sha256=packed_digest,
+    )
+    return PackedQwen3ImageItem(
+        kind=kind,
+        call_index=call_index,
+        positions=positions,
+        image_embeds=packed,
+        image_grid_thw=grid,
+        component_digests=component_digests,
+        packed_tensor_sha256=packed_digest,
+        item_sha256=item_digest,
+    )
+
+
+def _validate_grid(
+    grid: tuple[int, int, int], spatial_merge_size: int, feature_count: int
+) -> None:
+    if len(grid) != 3 or any(type(value) is not int or value <= 0 for value in grid):
+        raise ReplayMismatchError("image_grid_thw must contain three positive integers")
+    temporal, height, width = grid
+    if temporal != 1:
+        raise ReplayMismatchError("precomputed source/D items must use an image grid")
+    if spatial_merge_size <= 0 or (
+        height % spatial_merge_size or width % spatial_merge_size
+    ):
+        raise ReplayMismatchError("image grid is not divisible by spatial merge size")
+    expected = temporal * height * width // (spatial_merge_size**2)
+    if expected != feature_count:
+        raise ReplayMismatchError(
+            "recorded feature count does not match the exact merged source grid"
+        )
+
+
+def _validate_contiguous_positions(positions: tuple[int, ...], name: str) -> None:
+    if not positions:
+        raise ReplayMismatchError(f"{name} positions must not be empty")
+    if positions != tuple(range(positions[0], positions[0] + len(positions))):
+        raise ReplayMismatchError(
+            f"{name} positions must form one contiguous vLLM placeholder"
+        )
+
+
+def _item_checksum(
+    *,
+    kind: str,
+    call_index: int | None,
+    positions: tuple[int, ...],
+    grid: tuple[int, int, int],
+    component_digests: tuple[str, ...],
+    packed_tensor_sha256: str,
+) -> str:
+    payload = json.dumps(
+        {
+            "call_index": call_index,
+            "component_digests": component_digests,
+            "grid": grid,
+            "kind": kind,
+            "packed_tensor_sha256": packed_tensor_sha256,
+            "positions": positions,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+__all__ = [
+    "QWEN3_DEEPSTACK_BRANCH_COUNT",
+    "QWEN3_DEEPSTACK_BRANCH_LAYERS",
+    "PackedQwen3ImageItem",
+    "PackedQwen3Replay",
+    "pack_qwen3_vllm_replay",
+]

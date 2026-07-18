@@ -189,6 +189,9 @@ be inherited silently from a library default.
 - [Controlled legacy provenance](docs/LEGACY_REFERENCE.md)
 - [Controlled external references](docs/EXTERNAL_REFERENCES.md)
 - [Experiment ledger](docs/EXPERIMENT_LEDGER.md)
+- [Compatibility environment setup](docs/SETUP.md)
+- [Framework implementation report](docs/IMPLEMENTATION_REPORT.md)
+- [Decisions intentionally deferred after the framework build](docs/DEFERRED_DECISIONS.md)
 - [Contributor and agent rules](AGENTS.md)
 
 ## Relationship to the earlier project

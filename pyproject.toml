@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tgvf-e2e-rl"
+version = "0.1.0"
+description = "Exact-replay framework for TGVF end-to-end reinforcement learning"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "torch>=2.4",
+]
+
+[project.scripts]
+tgvf-rl = "tgvf_rl.cli:main"
+
+[project.entry-points."vllm.general_plugins"]
+tgvf_qwen3_precomputed = "tgvf_rl.framework.vllm:register_tgvf_qwen3_vllm_plugin"
+
+[project.optional-dependencies]
+qwen = ["transformers>=4.57", "safetensors>=0.4"]
+test = ["pytest>=8.3", "ruff>=0.12"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+pythonpath = ["src"]

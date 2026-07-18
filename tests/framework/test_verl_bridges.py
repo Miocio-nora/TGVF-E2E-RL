@@ -1,0 +1,562 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+import hashlib
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from tgvf_rl.checkpoint import CheckpointCoordinator
+from tgvf_rl.framework.verl import (
+    ACTUAL_RESPONSE_LOGPROBS_FIELD,
+    EXACT_OBSERVATION_HANDLES_FIELD,
+    LOSSLESS_AGENT_LOOP_MANAGER_FQN,
+    OBJECTIVE_SENTINELS_FIELD,
+    TRAJECTORY_PAYLOAD_FIELD,
+    TRAJECTORY_REPLAY_HANDLE_FIELD,
+    FSDP2BridgeConfig,
+    LosslessAgentLoopManager,
+    RolloutBridgeRecord,
+    SDPOTeacherCheckpointContributor,
+    TGVF_VLLM_PLUGIN_NAME,
+    VerlAdapterConfig,
+    VerlConfigurationError,
+    VerlRuntimeRequirements,
+    VerlUnavailableError,
+    adapt_policy_loss,
+    build_agent_loop_output,
+    build_data_proto_payload,
+    load_verl_public_api,
+    make_objective_sentinels,
+    parse_agent_loop_output,
+    register_project_policy_loss,
+    register_sdpo_teacher_checkpoint,
+    require_vllm_backend,
+    trajectory_to_rollout_bridge,
+    to_verl_data_proto,
+    validate_data_proto_integrity,
+    validate_verl_config_mapping,
+    verl_is_available,
+)
+from tgvf_rl.contracts.tokens import (
+    LogProbMeasurement,
+    OwnedTokenSequence,
+    SamplingIdentity,
+    TokenOwnership,
+    TokenSpan,
+)
+from tgvf_rl.observations.store import (
+    TrajectoryReplayHandle,
+    TrajectoryReplayRecord,
+    TrajectoryReplayTensorRefs,
+)
+from tgvf_rl.trajectories import BehaviorTraceStore, VLLMBehaviorRecorder
+from tgvf_rl.trajectories.schema import (
+    AssistantTurnRecord,
+    ToolCallRecord,
+    ToolObservationRecord,
+    TrajectoryIdentity,
+    TrajectoryRecord,
+    TrajectoryStop,
+)
+from tgvf_rl.trajectories.validation import TrajectoryValidator
+from tests.support import SHA0, populated_observation_store, policy_version
+
+
+SHA_A = "a" * 64
+SHA_B = "b" * 64
+
+
+def _record(*, suffix: int = 0, tool_call_count: int = 1) -> RolloutBridgeRecord:
+    if tool_call_count not in {1, 2}:
+        raise ValueError("fixture supports one or two tool calls")
+    observation_store, observation_handle = populated_observation_store()
+    version = policy_version()
+    trajectory_id = TrajectoryIdentity("smoke", "sample", 0, "group")
+    sampling = SamplingIdentity(
+        policy_version=version,
+        backend="vllm",
+        backend_version="fixture-processed-logprobs",
+        seed=7 + suffix,
+        rng_state_sha256=SHA0,
+        temperature=0.7,
+        top_p=0.9,
+        top_k=20,
+        min_p=0.0,
+        repetition_penalty=1.05,
+        presence_penalty=0.1,
+        frequency_penalty=0.0,
+        logit_processors=("fixture_processor",),
+        measurement=LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        asynchronous_staleness_steps=0,
+    )
+    behavior_store = BehaviorTraceStore()
+    behavior_recorder = VLLMBehaviorRecorder(behavior_store)
+    base_observation = observation_store.resolve_record(observation_handle)
+    observation_handles = [observation_handle]
+    targets = ["red label"]
+    if tool_call_count == 2:
+        targets.append("lower label")
+        second_positions = (8, 9)
+        second_observation = replace(
+            base_observation,
+            observation_id=f"observation-1-{suffix}",
+            call_index=1,
+            condition=replace(
+                base_observation.condition,
+                sampled_target_text_sha256=hashlib.sha256(b"lower label").hexdigest(),
+                call_indices=(1,),
+            ),
+            branches=tuple(
+                replace(branch, injection_positions=second_positions)
+                for branch in base_observation.branches
+            ),
+            layout=replace(
+                base_observation.layout,
+                d_positions=second_positions,
+                deepstack_injection_positions=tuple(
+                    second_positions for _ in base_observation.branches
+                ),
+            ),
+        )
+        observation_handles.append(observation_store.put(second_observation))
+
+    if tool_call_count == 1:
+        native_token_rows = (tuple(100 + index for index in range(7)),)
+    else:
+        native_token_rows = ((100, 101), (102, 103))
+    assistant_turns = []
+    tool_calls = []
+    observations = []
+    response_ids: tuple[int, ...] = ()
+    for call_index, (target, handle, native_tokens) in enumerate(
+        zip(targets, observation_handles, native_token_rows, strict=True)
+    ):
+        token_base = 10 + suffix + 10 * call_index
+        tokens = OwnedTokenSequence(
+            (token_base, token_base + 1, token_base + 2),
+            (TokenOwnership.POLICY_SAMPLED,) * 3,
+        )
+        behavior_handle = behavior_recorder.record(
+            trajectory_id=trajectory_id.canonical_id,
+            assistant_turn_index=call_index,
+            tokens=tokens,
+            actual_sampled_logprobs=(
+                -0.125 - suffix - call_index,
+                -0.5 - call_index,
+                -1.75 - suffix - call_index,
+            ),
+            sampling=replace(sampling, seed=sampling.seed + call_index),
+            behavior_policy=version,
+            backend_request_sha256=SHA_A,
+            backend_response_sha256=SHA_B,
+        )
+        assistant_turns.append(
+            AssistantTurnRecord(
+                turn_index=call_index,
+                raw_text="reason</think><tool_call>fixture</tool_call>",
+                tokens=tokens,
+                behavior_trace=behavior_handle,
+                think_span=TokenSpan(0, 3),
+                is_tool_call=True,
+            )
+        )
+        tool_calls.append(
+            ToolCallRecord(
+                call_index,
+                call_index,
+                "tgvf_focus_tool",
+                target,
+                TokenSpan(1, 3),
+                (10, 10 + len(target)),
+                f"fixture call {call_index}",
+            )
+        )
+        observations.append(ToolObservationRecord(call_index, handle, native_tokens))
+        response_ids += tokens.token_ids + native_tokens
+
+    model = base_observation.model
+    trajectory = TrajectoryRecord(
+        schema_version="trajectory-v1",
+        identity=trajectory_id,
+        model=model,
+        behavior_policy=version,
+        assistant_turns=tuple(assistant_turns),
+        tool_calls=tuple(tool_calls),
+        observations=tuple(observations),
+        final_answer=None,
+        stop=TrajectoryStop.MAX_TOKENS,
+    )
+    final_ids = (1, 2) + response_ids
+    input_ids = observation_store.put_tensor(
+        f"replay.{suffix}.input_ids", torch.tensor([final_ids], dtype=torch.int64)
+    )
+    replay = TrajectoryReplayRecord(
+        schema_version="trajectory-replay-v1",
+        replay_id=f"replay-{suffix}-{tool_call_count}",
+        trajectory_id=trajectory_id.canonical_id,
+        model=model,
+        behavior_policy=version,
+        observation_handles=tuple(observation_handles),
+        tensors=TrajectoryReplayTensorRefs(
+            input_ids=input_ids,
+            position_ids=base_observation.payload.position_ids,
+            attention_mask=base_observation.payload.attention_mask,
+            policy_attention_mask=base_observation.masks.policy_visible,
+            reference_attention_mask=base_observation.masks.reference_visible,
+            teacher_attention_mask=base_observation.masks.teacher_visible,
+        ),
+    )
+    replay_handle = observation_store.put_replay(replay)
+    return trajectory_to_rollout_bridge(
+        trajectory,
+        validator=TrajectoryValidator(observation_store, behavior_store),
+        initial_prompt_token_ids=(1, 2),
+        native_tool_appended_token_ids=native_token_rows,
+        replay_handle=replay_handle,
+        sentinel_fields=make_objective_sentinels(f"row-{suffix}"),
+        extra_fields={"custom_exact_field": ("raw", suffix)},
+    )
+
+
+class _FakeAgentLoopOutput:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class _FakeDataProto:
+    def __init__(self, batch, non_tensor_batch, meta_info):
+        self.batch = batch
+        self.non_tensor_batch = non_tensor_batch
+        self.meta_info = meta_info
+
+    @classmethod
+    def from_dict(cls, *, tensors, non_tensors, meta_info):
+        return cls(tensors, non_tensors, meta_info)
+
+
+def test_optional_import_and_public_symbol_resolution_without_installed_verl() -> None:
+    assert isinstance(verl_is_available(), bool)
+
+    def unavailable(_: str):
+        raise ModuleNotFoundError("deliberately absent")
+
+    with pytest.raises(VerlUnavailableError, match="compatibility candidate"):
+        load_verl_public_api(importer=unavailable)
+
+    modules = {
+        "verl.experimental.agent_loop": SimpleNamespace(
+            AgentLoopOutput=type("AgentLoopOutput", (), {}),
+            AgentLoopManager=type("AgentLoopManager", (), {}),
+        ),
+        "verl.protocol": SimpleNamespace(DataProto=type("DataProto", (), {})),
+        "verl.trainer.ppo.core_algos": SimpleNamespace(
+            register_policy_loss=lambda name: name
+        ),
+        "verl.workers.config": SimpleNamespace(
+            FSDPEngineConfig=type("FSDPEngineConfig", (), {})
+        ),
+        "verl.utils.checkpoint": SimpleNamespace(
+            CheckpointHandler=type("CheckpointHandler", (), {})
+        ),
+    }
+    api = load_verl_public_api(importer=modules.__getitem__)
+    assert api.agent_loop_output.__name__ == "AgentLoopOutput"
+    assert api.data_proto.__name__ == "DataProto"
+
+
+def test_runtime_requirements_are_vllm_only_and_fsdp2_strict() -> None:
+    requirements = VerlRuntimeRequirements()
+    assert requirements.rollout_backend == "vllm"
+    assert requirements.calculate_log_probs is True
+    assert requirements.fsdp2.actor_strategy == "fsdp2"
+
+    for backend in ("sglang", "hf", "VLLM-extra"):
+        with pytest.raises(VerlConfigurationError, match="vLLM"):
+            require_vllm_backend(backend)
+    with pytest.raises(VerlConfigurationError, match="response_logprobs"):
+        VerlRuntimeRequirements(calculate_log_probs=False)
+    with pytest.raises(VerlConfigurationError, match="synchronous"):
+        FSDP2BridgeConfig(checkpoint_async_save=True)
+    with pytest.raises(VerlConfigurationError, match="two ranks"):
+        FSDP2BridgeConfig(world_size=1, fsdp_size=1)
+
+
+def test_concrete_verl_config_mapping_checks_public_paths() -> None:
+    config = {
+        "actor_rollout_ref": {
+            "rollout": {
+                "name": "vllm",
+                "calculate_log_probs": True,
+                "logprobs_mode": "processed_logprobs",
+                "enable_prefix_caching": False,
+                "engine_kwargs": {
+                    "vllm": {
+                        "enable_mm_embeds": True,
+                        "mm_processor_cache_gb": 0,
+                        "hf_overrides": {
+                            "architectures": ["TGVFQwen3VLForConditionalGeneration"]
+                        },
+                    }
+                },
+                "limit_images": 3,
+            },
+            "model": {"lora": {"dropout": 0.0}},
+            "actor": {
+                "strategy": "fsdp2",
+                "fsdp_config": {"fsdp_size": 2, "full_determinism": True},
+                "checkpoint": {
+                    "async_save": False,
+                    "strict": True,
+                    "save_contents": ["model", "optimizer", "extra"],
+                    "load_contents": ["model", "optimizer", "extra"],
+                },
+            },
+            "ref": {
+                "strategy": "fsdp2",
+                "fsdp_config": {"fsdp_size": 2, "full_determinism": True},
+            },
+        },
+        "trainer": {"v1": {"trainer_mode": "sync"}},
+    }
+    validate_verl_config_mapping(config)
+    config["actor_rollout_ref"]["rollout"]["calculate_log_probs"] = False
+    with pytest.raises(VerlConfigurationError, match="calculate_log_probs"):
+        validate_verl_config_mapping(config)
+
+
+def test_agent_loop_output_preserves_actual_values_handles_and_extra_fields() -> None:
+    record = _record()
+    metrics = object()
+    output = build_agent_loop_output(
+        record,
+        metrics=metrics,
+        agent_loop_output_cls=_FakeAgentLoopOutput,
+    )
+
+    assert tuple(output.response_logprobs) == record.response_logprobs
+    assert (
+        output.extra_fields[ACTUAL_RESPONSE_LOGPROBS_FIELD] == record.response_logprobs
+    )
+    assert (
+        output.extra_fields[EXACT_OBSERVATION_HANDLES_FIELD]
+        == record.exact_observation_handles
+    )
+    assert output.extra_fields[OBJECTIVE_SENTINELS_FIELD] == dict(
+        record.sentinel_fields
+    )
+    assert output.extra_fields["custom_exact_field"] == ("raw", 0)
+    parsed = parse_agent_loop_output(output)
+    assert parsed == record
+    assert record.response_mask == (1, 1, 1, 0, 0, 0, 0, 0, 0, 0)
+    assert record.response_logprobs[3:] == (0.0,) * 7
+    assert (
+        record.behavior_trace_records[
+            0
+        ].behavior.sampling.has_identity_sampling_transforms
+        is False
+    )
+
+    output.response_logprobs[0] = -999.0
+    with pytest.raises(ValueError, match="changed"):
+        parse_agent_loop_output(output)
+
+
+def test_agent_loop_transport_rejects_unbound_replay_or_absent_trajectory() -> None:
+    record = _record()
+    output = build_agent_loop_output(
+        record,
+        metrics=object(),
+        agent_loop_output_cls=_FakeAgentLoopOutput,
+    )
+    output.extra_fields[TRAJECTORY_REPLAY_HANDLE_FIELD] = TrajectoryReplayHandle(
+        "forged-replay", SHA_A
+    )
+    with pytest.raises(ValueError, match="provenance"):
+        parse_agent_loop_output(output)
+
+    output = build_agent_loop_output(
+        record,
+        metrics=object(),
+        agent_loop_output_cls=_FakeAgentLoopOutput,
+    )
+    output.extra_fields[TRAJECTORY_PAYLOAD_FIELD] = None
+    with pytest.raises(TypeError, match="complete TrajectoryRecord"):
+        parse_agent_loop_output(output)
+
+
+def test_unique_converter_interleaves_two_calls_in_global_token_order() -> None:
+    record = _record(tool_call_count=2)
+    first_turn, second_turn = record.trajectory_payload.assistant_turns
+    first_observation, second_observation = record.trajectory_payload.observations
+    assert record.response_ids == (
+        first_turn.tokens.token_ids
+        + first_observation.template_token_ids
+        + second_turn.tokens.token_ids
+        + second_observation.template_token_ids
+    )
+    assert record.response_mask == (1, 1, 1, 0, 0, 1, 1, 1, 0, 0)
+    assert record.response_logprobs[3:5] == (0.0, 0.0)
+    assert record.response_logprobs[8:] == (0.0, 0.0)
+
+
+def test_dataproto_roundtrip_keeps_exact_sidecars_and_detects_tensor_overwrite() -> (
+    None
+):
+    records = (_record(), _record(suffix=1))
+    payload = build_data_proto_payload(records)
+    data = to_verl_data_proto(payload, data_proto_cls=_FakeDataProto)
+    view = validate_data_proto_integrity(data)
+
+    assert view.observation_handles == tuple(
+        row.exact_observation_handles for row in records
+    )
+    assert view.actual_response_logprobs == tuple(
+        row.response_logprobs for row in records
+    )
+    assert view.trajectory_payloads == tuple(row.trajectory_payload for row in records)
+    assert [dict(item) for item in view.objective_sentinels] == [
+        dict(row.sentinel_fields) for row in records
+    ]
+    assert tuple(data.non_tensor_batch["custom_exact_field"]) == (
+        ("raw", 0),
+        ("raw", 1),
+    )
+
+    data.batch["rollout_log_probs"][0, 0] += 0.5
+    with pytest.raises(ValueError, match="differs"):
+        validate_data_proto_integrity(data)
+
+
+def test_public_policy_loss_hook_receives_actual_rollout_logprobs_unchanged() -> None:
+    captured = {}
+
+    def project_loss(call):
+        captured["call"] = call
+        selected = call.response_mask.bool()
+        return call.log_prob[selected].sum(), {"selected": int(selected.sum())}
+
+    registered = {}
+
+    def registrar(name):
+        def decorate(function):
+            registered[name] = function
+            return function
+
+        return decorate
+
+    wrapped = register_project_policy_loss(
+        "tgvf_test_exact_transport",
+        project_loss,
+        registrar=registrar,
+    )
+    assert registered["tgvf_test_exact_transport"] is wrapped
+
+    current = torch.tensor([[-0.2, -0.3]], requires_grad=True)
+    actual = torch.tensor([[-1.2, -1.3]])
+    loss, metrics = wrapped(
+        torch.tensor([[-0.4, -0.5]]),
+        current,
+        torch.tensor([[1.0, 2.0]]),
+        torch.tensor([[1, 1]]),
+        "token-mean",
+        {"identity": "unchanged"},
+        actual,
+    )
+    assert loss.requires_grad
+    assert metrics == {"selected": 2}
+    assert captured["call"].rollout_log_probs is actual
+
+    aliasing = current.detach()
+    with pytest.raises(ValueError, match="log_prob.detach"):
+        adapt_policy_loss(project_loss)(
+            torch.tensor([[-0.4, -0.5]]),
+            current,
+            torch.tensor([[1.0, 2.0]]),
+            torch.tensor([[1, 1]]),
+            "token-mean",
+            {},
+            aliasing,
+        )
+    with pytest.raises(ValueError, match="actual rollout_log_probs"):
+        wrapped(
+            torch.tensor([[-0.4, -0.5]]),
+            current,
+            torch.tensor([[1.0, 2.0]]),
+            torch.tensor([[1, 1]]),
+            "token-mean",
+            {},
+            None,
+        )
+
+
+@dataclass
+class _TeacherState:
+    value: torch.Tensor
+    update_count: int
+
+    def state_dict(self):
+        return {"value": self.value.clone(), "update_count": self.update_count}
+
+    def load_state_dict(self, state):
+        self.value = state["value"].clone()
+        self.update_count = state["update_count"]
+
+
+def test_sdpo_teacher_is_a_separate_checkpoint_contributor() -> None:
+    teacher = _TeacherState(torch.tensor([1.0, 2.0]), 7)
+    contributor = SDPOTeacherCheckpointContributor(teacher)
+    saved = contributor.checkpoint_state()
+    teacher.value.add_(10)
+    teacher.update_count = 8
+    contributor.restore_checkpoint_state(saved)
+    assert torch.equal(teacher.value, torch.tensor([1.0, 2.0]))
+    assert teacher.update_count == 7
+
+    coordinator = CheckpointCoordinator()
+    registered = register_sdpo_teacher_checkpoint(coordinator, teacher)
+    assert registered.checkpoint_name == "sdpo_teacher_state"
+    with pytest.raises(ValueError, match="duplicate"):
+        coordinator.register(registered)
+
+
+def test_custom_manager_uses_composition_and_validates_delegate_dataproto() -> None:
+    data = to_verl_data_proto(
+        build_data_proto_payload((_record(),)), data_proto_cls=_FakeDataProto
+    )
+
+    class Delegate:
+        def generate_sequences(self, prompts):
+            assert prompts == "prompts"
+            return data
+
+    class PublicManager:
+        @classmethod
+        def create(cls, *args, **kwargs):
+            return Delegate()
+
+    api = SimpleNamespace(agent_loop_manager=PublicManager)
+    manager = LosslessAgentLoopManager.create(_public_api=api)
+    assert type(manager) is LosslessAgentLoopManager
+    assert manager.generate_sequences("prompts") is data
+
+
+def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
+    config = VerlAdapterConfig(max_tool_calls=2)
+    overrides = config.public_config_overrides()
+    assert overrides["actor_rollout_ref.rollout.name"] == "vllm"
+    assert overrides["actor_rollout_ref.rollout.calculate_log_probs"] is True
+    assert overrides["actor_rollout_ref.rollout.full_determinism"] is True
+    assert overrides["actor_rollout_ref.actor.strategy"] == "fsdp2"
+    assert overrides["actor_rollout_ref.model.lora.dropout"] == 0.0
+    assert overrides["actor_rollout_ref.actor.checkpoint.async_save"] is False
+    assert overrides["actor_rollout_ref.rollout.limit_images"] == 3
+    assert overrides["actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides"] == {
+        "architectures": ["TGVFQwen3VLForConditionalGeneration"]
+    }
+    assert config.required_environment() == {"VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME}
+    assert (
+        overrides["actor_rollout_ref.rollout.agent.agent_loop_manager_class"]
+        == LOSSLESS_AGENT_LOOP_MANAGER_FQN
+    )

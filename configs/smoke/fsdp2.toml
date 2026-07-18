@@ -1,0 +1,38 @@
+schema_version = "tgvf-fsdp2-smoke-v1"
+run_id = "I8H-SC-30-FSDP2-INFRA-20260719"
+scope = "synthetic_infrastructure_only"
+
+[stack]
+verl_commit = "e003163181731412595257a72ec173071efb125f"
+rollout_backend = "vllm"
+behavior_logprobs = "processed_logprobs"
+vllm_enable_mm_embeds = true
+sharding_strategy = "fsdp2"
+world_size = 2
+physical_gpu_ids = [2, 3]
+logical_gpu_ids = [0, 1]
+full_determinism = true
+adapter_dropout = 0.0
+trainer_mode = "sync"
+asynchronous_staleness_steps = 0
+
+[model]
+identity = "synthetic-tiny-fsdp2-model-v1"
+hidden_size = 16
+layers = 2
+dtype = "float32"
+seed = 20260719
+
+[objective]
+identity = "synthetic-fsdp2-mse-v1"
+equation = "mean((model(x) - target) ** 2)"
+normalization = "global element mean"
+production_rl = false
+
+[checkpoint]
+format = "torch.distributed.checkpoint"
+strict = true
+async_save = false
+contents = ["model", "optimizer", "extra"]
+resume_parity_atol = 0.0
+resume_parity_rtol = 0.0

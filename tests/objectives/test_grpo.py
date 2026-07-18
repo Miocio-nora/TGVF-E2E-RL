@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+import torch
+
+from tgvf_rl.contracts.errors import ReplayMismatchError
+from tgvf_rl.contracts.identity import ComponentRole, PolicyVersion
+from tgvf_rl.objectives import (
+    GRPOSpec,
+    GroupStdMode,
+    LogProbSource,
+    LossReduction,
+    PolicyLogProbSet,
+    RatioDenominator,
+    ReductionSpec,
+    ReferenceKLEstimator,
+    ReferenceKLSpec,
+    RoleLogProbs,
+    ZeroVarianceBehavior,
+    compute_grpo_loss,
+    compute_group_advantages,
+)
+
+
+def _version(step: int, digit: str) -> PolicyVersion:
+    return PolicyVersion("objective-test", step, digit * 64)
+
+
+def _policy(
+    current_values: torch.Tensor,
+    *,
+    behavior_values: torch.Tensor | None = None,
+    proximal_values: torch.Tensor | None = None,
+    reference_values: torch.Tensor | None = None,
+    mask: torch.Tensor | None = None,
+) -> PolicyLogProbSet:
+    shape = current_values.shape
+    behavior_values = (
+        torch.zeros(shape, dtype=current_values.dtype)
+        if behavior_values is None
+        else behavior_values
+    )
+    proximal_values = (
+        torch.full(shape, 0.15, dtype=current_values.dtype)
+        if proximal_values is None
+        else proximal_values
+    )
+    reference_values = (
+        torch.full(shape, -0.10, dtype=current_values.dtype)
+        if reference_values is None
+        else reference_values
+    )
+    mask = torch.ones(shape, dtype=torch.bool) if mask is None else mask
+    return PolicyLogProbSet(
+        behavior=RoleLogProbs(
+            ComponentRole.BEHAVIOR,
+            behavior_values.detach().clone(),
+            _version(0, "0"),
+            LogProbSource.ROLLOUT_RECORDED,
+            "9" * 64,
+        ),
+        proximal_old=RoleLogProbs(
+            ComponentRole.PROXIMAL_OLD,
+            proximal_values.detach().clone(),
+            _version(1, "1"),
+            LogProbSource.DETERMINISTIC_REPLAY,
+            "9" * 64,
+        ),
+        current=RoleLogProbs(
+            ComponentRole.CURRENT,
+            current_values,
+            _version(2, "2"),
+            LogProbSource.DETERMINISTIC_REPLAY,
+            "9" * 64,
+        ),
+        reference=RoleLogProbs(
+            ComponentRole.REFERENCE,
+            reference_values.detach().clone(),
+            _version(0, "3"),
+            LogProbSource.DETERMINISTIC_REPLAY,
+            "9" * 64,
+        ),
+        policy_sampled_mask=mask,
+    )
+
+
+def _spec(*, denominator: RatioDenominator = RatioDenominator.BEHAVIOR) -> GRPOSpec:
+    return GRPOSpec(
+        center_rewards=True,
+        scale_by_group_std=True,
+        group_std_mode=GroupStdMode.POPULATION,
+        group_std_epsilon=1.0e-8,
+        zero_variance_behavior=ZeroVarianceBehavior.ZERO_ADVANTAGE,
+        ratio_denominator=denominator,
+        clip_ratio_min=0.8,
+        clip_ratio_max=1.2,
+        dual_clip=None,
+        reference_kl=ReferenceKLSpec(
+            estimator=ReferenceKLEstimator.K3_LOW_VARIANCE,
+            coefficient=0.17,
+        ),
+        reduction=ReductionSpec(
+            mode=LossReduction.TOKEN_MEAN,
+            fixed_token_normalizer=None,
+        ),
+    )
+
+
+def test_population_group_advantages_and_zero_variance_are_explicit() -> None:
+    rewards = torch.tensor([1.0, 3.0, 2.0, 6.0, 5.0, 5.0], dtype=torch.float64)
+    groups = torch.tensor([0, 0, 1, 1, 2, 2])
+    actual = compute_group_advantages(rewards, groups, _spec())
+    torch.testing.assert_close(
+        actual,
+        torch.tensor([-1.0, 1.0, -1.0, 1.0, 0.0, 0.0], dtype=torch.float64),
+    )
+
+    epsilon_spec = replace(
+        _spec(),
+        zero_variance_behavior=ZeroVarianceBehavior.EPSILON_DIVISION,
+    )
+    epsilon_actual = compute_group_advantages(rewards, groups, epsilon_spec)
+    torch.testing.assert_close(epsilon_actual[-2:], torch.zeros(2, dtype=torch.float64))
+
+
+def test_grpo_value_and_gradient_match_cpu_oracle_and_ignore_template_tokens() -> None:
+    current = torch.tensor(
+        [
+            [0.00, 0.30, -0.40],
+            [0.20, -0.10, 0.45],
+            [-0.35, 0.10, 0.00],
+            [0.25, -0.25, 0.05],
+        ],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    mask = torch.tensor(
+        [
+            [True, True, False],
+            [True, False, True],
+            [False, True, True],
+            [True, True, False],
+        ]
+    )
+    policy = _policy(current, mask=mask)
+    rewards = torch.tensor([1.0, 3.0, 2.0, 6.0], dtype=torch.float64)
+    groups = torch.tensor([0, 0, 1, 1])
+    spec = _spec()
+
+    result = compute_grpo_loss(spec, policy, rewards, groups)
+
+    advantage = torch.tensor([-1.0, 1.0, -1.0, 1.0], dtype=torch.float64)[:, None]
+    ratio = current.exp()
+    clipped = ratio.clamp(0.8, 1.2)
+    surrogate = torch.minimum(ratio * advantage, clipped * advantage)
+    log_ratio_to_reference = current - policy.reference.values
+    k3 = torch.exp(-log_ratio_to_reference) + log_ratio_to_reference - 1.0
+    manual_tokens = -surrogate + 0.17 * k3
+    expected = manual_tokens[mask].mean()
+
+    torch.testing.assert_close(result.loss, expected)
+    assert torch.count_nonzero(result.per_token_loss[~mask]).item() == 0
+    expected_gradient = torch.autograd.grad(expected, current, retain_graph=True)[0]
+    actual_gradient = torch.autograd.grad(result.loss, current)[0]
+    torch.testing.assert_close(actual_gradient, expected_gradient)
+    assert torch.count_nonzero(actual_gradient[~mask]).item() == 0
+
+
+def test_ratio_denominator_is_a_hashed_mathematical_choice() -> None:
+    current = torch.tensor(
+        [[0.1, 0.2], [-0.2, 0.3]], dtype=torch.float64, requires_grad=True
+    )
+    rewards = torch.tensor([0.0, 2.0], dtype=torch.float64)
+    groups = torch.tensor([7, 7])
+    policy = _policy(current)
+    behavior_spec = _spec(denominator=RatioDenominator.BEHAVIOR)
+    proximal_spec = _spec(denominator=RatioDenominator.PROXIMAL_OLD)
+
+    behavior_loss = compute_grpo_loss(behavior_spec, policy, rewards, groups).loss
+    proximal_loss = compute_grpo_loss(proximal_spec, policy, rewards, groups).loss
+    assert behavior_spec.identity_sha256 != proximal_spec.identity_sha256
+    assert not torch.isclose(behavior_loss, proximal_loss)
+    assert behavior_spec.identity_sha256 == _spec().identity_sha256
+
+
+def test_detached_current_cannot_masquerade_as_recorded_behavior() -> None:
+    current = torch.tensor([[0.1, -0.2]], dtype=torch.float64, requires_grad=True)
+    with pytest.raises(ReplayMismatchError, match="share storage"):
+        PolicyLogProbSet(
+            behavior=RoleLogProbs(
+                ComponentRole.BEHAVIOR,
+                current.detach(),
+                _version(0, "0"),
+                LogProbSource.ROLLOUT_RECORDED,
+                "9" * 64,
+            ),
+            proximal_old=RoleLogProbs(
+                ComponentRole.PROXIMAL_OLD,
+                current.detach().clone(),
+                _version(0, "1"),
+                LogProbSource.DETERMINISTIC_REPLAY,
+                "9" * 64,
+            ),
+            current=RoleLogProbs(
+                ComponentRole.CURRENT,
+                current,
+                _version(1, "2"),
+                LogProbSource.DETERMINISTIC_REPLAY,
+                "9" * 64,
+            ),
+            reference=RoleLogProbs(
+                ComponentRole.REFERENCE,
+                current.detach().clone(),
+                _version(0, "3"),
+                LogProbSource.DETERMINISTIC_REPLAY,
+                "9" * 64,
+            ),
+            policy_sampled_mask=torch.ones_like(current, dtype=torch.bool),
+        )
+
+
+def test_sample_standard_deviation_rejects_singleton_group() -> None:
+    spec = replace(_spec(), group_std_mode=GroupStdMode.SAMPLE)
+    with pytest.raises(ValueError, match="at least two"):
+        compute_group_advantages(
+            torch.tensor([1.0, 2.0], dtype=torch.float64),
+            torch.tensor([0, 1]),
+            spec,
+        )

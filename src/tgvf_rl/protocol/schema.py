@@ -1,0 +1,228 @@
+"""Framework-neutral records for Qwen's native TGVF tool protocol.
+
+This module deliberately has no tokenizer dependency.  A caller supplies the
+already-sampled text, token IDs, and exact byte coverage for every token.  The
+parser may inspect those records, but it never decodes, rerenders, or retokenizes
+the assistant turn.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from hashlib import sha256
+from copy import deepcopy
+import json
+from types import MappingProxyType
+from typing import Any, Mapping
+
+
+TGVF_FOCUS_TOOL_NAME = "tgvf_focus_tool"
+TOOL_CALL_OPEN = "<tool_call>"
+TOOL_CALL_CLOSE = "</tool_call>"
+
+_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": TGVF_FOCUS_TOOL_NAME,
+        "description": "Inspect one specific visual region before answering.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "A neutral, visually locatable region description.",
+                }
+            },
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType(
+            {key: _freeze_json(item) for key, item in value.items()}
+        )
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+TGVF_FOCUS_TOOL_SCHEMA: Mapping[str, Any] = _freeze_json(
+    _TGVF_FOCUS_TOOL_SCHEMA_MUTABLE
+)
+TGVF_FOCUS_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
+    _TGVF_FOCUS_TOOL_SCHEMA_MUTABLE,
+    ensure_ascii=False,
+    separators=(",", ":"),
+    sort_keys=True,
+)
+TGVF_FOCUS_TOOL_SCHEMA_SHA256 = sha256(
+    TGVF_FOCUS_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
+).hexdigest()
+
+
+def build_tgvf_focus_tool_schema() -> dict[str, Any]:
+    """Return a fresh JSON-compatible copy of the fixed native tool schema."""
+
+    # Preserve the declared schema field order because it is part of the Qwen
+    # system-prompt token identity, while the separate canonical JSON remains
+    # the order-independent schema digest.
+    return deepcopy(_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE)
+
+
+class ParseErrorCode(str, Enum):
+    MISSING_TOOL_CALL = "missing_tool_call"
+    INCOMPLETE_TOOL_CALL = "incomplete_tool_call"
+    MULTIPLE_TOOL_CALLS = "multiple_tool_calls"
+    TRAILING_ASSISTANT_TEXT = "trailing_assistant_text"
+    INVALID_JSON = "invalid_json"
+    INVALID_CALL_SHAPE = "invalid_call_shape"
+    INVALID_TOOL_NAME = "invalid_tool_name"
+    INVALID_ARGUMENTS = "invalid_arguments"
+    EMPTY_TARGET = "empty_target"
+    AMBIGUOUS_TARGET_TOKEN_SPAN = "ambiguous_target_token_span"
+
+
+class ToolCallParseError(ValueError):
+    """Fail-closed parse error with a stable machine-readable code."""
+
+    def __init__(self, code: ParseErrorCode, detail: str) -> None:
+        self.code = code
+        self.detail = detail
+        super().__init__(f"{code.value}: {detail}")
+
+
+@dataclass(frozen=True, slots=True)
+class TextOffsets:
+    """Half-open character and UTF-8 byte offsets into sampled assistant text."""
+
+    char_start: int
+    char_end: int
+    byte_start: int
+    byte_end: int
+
+    def __post_init__(self) -> None:
+        if self.char_start < 0 or self.byte_start < 0:
+            raise ValueError("text offsets must be non-negative")
+        if self.char_end < self.char_start or self.byte_end < self.byte_start:
+            raise ValueError("text offset ends must not precede their starts")
+
+
+@dataclass(frozen=True, slots=True)
+class TokenByteSpan:
+    """Exact half-open UTF-8 byte coverage of one already-sampled token."""
+
+    token_index: int
+    token_id: int
+    byte_start: int
+    byte_end: int
+
+    def __post_init__(self) -> None:
+        if self.token_index < 0:
+            raise ValueError("token_index must be non-negative")
+        if self.token_id < 0:
+            raise ValueError("token_id must be non-negative")
+        if self.byte_start < 0 or self.byte_end < self.byte_start:
+            raise ValueError("invalid token byte span")
+
+
+@dataclass(frozen=True, slots=True)
+class SampledAssistantTurn:
+    """Immutable sampled assistant text and its caller-provided token identity."""
+
+    sampled_text: str
+    token_ids: tuple[int, ...]
+    token_byte_spans: tuple[TokenByteSpan, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "token_ids", tuple(self.token_ids))
+        object.__setattr__(self, "token_byte_spans", tuple(self.token_byte_spans))
+
+        if len(self.token_ids) != len(self.token_byte_spans):
+            raise ValueError("each sampled token must have exactly one byte span")
+
+        total_bytes = len(self.sampled_text.encode("utf-8"))
+        cursor = 0
+        for expected_index, (token_id, span) in enumerate(
+            zip(self.token_ids, self.token_byte_spans, strict=True)
+        ):
+            if span.token_index != expected_index:
+                raise ValueError(
+                    "token byte spans must be ordered and index-contiguous"
+                )
+            if span.token_id != token_id:
+                raise ValueError("token byte span token_id does not match token_ids")
+            if span.byte_start != cursor:
+                raise ValueError(
+                    "token byte spans must provide contiguous exact coverage"
+                )
+            cursor = span.byte_end
+
+        if cursor != total_bytes:
+            raise ValueError("token byte spans must cover sampled_text exactly")
+
+
+@dataclass(frozen=True, slots=True)
+class TargetSpan:
+    """Decoded target plus its exact raw JSON and sampled-token identity."""
+
+    target_text: str
+    raw_json_value: str
+    offsets: TextOffsets
+    token_start: int
+    token_end: int
+    token_ids: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "token_ids", tuple(self.token_ids))
+        if not self.target_text.strip():
+            raise ValueError("target_text must be non-empty")
+        if self.token_start < 0 or self.token_end <= self.token_start:
+            raise ValueError("target token span must be non-empty and half-open")
+        if len(self.token_ids) != self.token_end - self.token_start:
+            raise ValueError("target token IDs do not match target token span")
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedToolCall:
+    """A validated call while retaining the original sampled representation."""
+
+    name: str
+    target: str
+    sampled_text: str
+    sampled_token_ids: tuple[int, ...]
+    sampled_token_byte_spans: tuple[TokenByteSpan, ...]
+    raw_tool_call: str
+    raw_json: str
+    call_offsets: TextOffsets
+    json_offsets: TextOffsets
+    target_span: TargetSpan
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sampled_token_ids", tuple(self.sampled_token_ids))
+        object.__setattr__(
+            self,
+            "sampled_token_byte_spans",
+            tuple(self.sampled_token_byte_spans),
+        )
+        SampledAssistantTurn(
+            self.sampled_text,
+            self.sampled_token_ids,
+            self.sampled_token_byte_spans,
+        )
+        if self.name != TGVF_FOCUS_TOOL_NAME:
+            raise ValueError(f"unsupported tool name: {self.name!r}")
+        if self.target != self.target_span.target_text:
+            raise ValueError("parsed target and target span disagree")
+
+
+class TerminationReason(str, Enum):
+    FINAL_ANSWER = "final_answer"
+    MALFORMED_ACTION = "malformed_action"
+    TOOL_ERROR = "tool_error"
+    TOOL_CALL_CAP = "tool_call_cap"
+    TIMEOUT = "timeout"
