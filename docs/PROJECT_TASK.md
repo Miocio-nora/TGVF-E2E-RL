@@ -482,6 +482,30 @@ rollout backend, FSDP2 topology, and adapter surface remain open until the spike
 is approved and recorded. No package installation or pin is authorized merely
 by selecting veRL.
 
+### 9.1 Proposed bounded spike task
+
+The exact proposed task, fixtures, numerical tolerances, hard failures, staged
+resource ceilings, and approval checkpoints are in
+[`VERL_COMPATIBILITY_SPIKE_PLAN.md`](VERL_COMPATIBILITY_SPIKE_PLAN.md).
+
+Its primary feature candidate is the exact upstream veRL `main` snapshot
+`e003163181731412595257a72ec173071efb125f`, observed on 2026-07-19 JST. Official
+`v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c` is the stable comparison. The
+main snapshot is tested first because relevant rollout-determinism and Qwen3
+tool-token fixes landed after v0.8.0; selecting a development snapshot still
+requires an explicit stability/maintenance rationale. vLLM is the first full
+correctness backend. SGLang receives a bounded functional comparison and cannot
+be selected until it independently closes deterministic replay and sampling-
+identity gates. The report selects one production backend rather than silently
+creating a two-backend maintenance obligation.
+
+The plan is currently **PROPOSED**. Preparation of the document is approved;
+its contents have not yet been accepted as an executable task. Plan acceptance
+authorizes only static source/environment mapping. Isolated dependency
+materialization and every GPU cell require later, separate approvals. No
+GRPO/SDPO optimizer fixture is part of this spike before its exact equations are
+accepted.
+
 ## 10. Migration boundary
 
 ### Allowed exact extraction
@@ -568,6 +592,7 @@ tgvf-e2e-rl/
     EXTERNAL_REFERENCES.md
     EXPERIMENT_LEDGER.md
     OPEN_IMPLEMENTATION_CONTRACTS.md
+    VERL_COMPATIBILITY_SPIKE_PLAN.md
     TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md
   src/tgvf_rl/
     representation/             # extracted TGVF Adapter and training path
@@ -619,8 +644,13 @@ compatibility spike is authorized without authorizing the main implementation.
   replay, masks, positions, cache state, and checkpoint/resume.
 - Validate FSDP2 execution/state handling and both target-conditioning provider
   seams.
-- Bind the exact GRPO equations before any optimizer fixture, then verify
-  pure-tensor loss/gradient, accumulation, FSDP2, save, and resume parity.
+- Map public ownership for every future GRPO dataflow—group formation/std,
+  advantage, behavior/proximal ratio, clipping, reference/KL, masks,
+  normalization, global denominators, and accumulation—and use sentinel fields
+  plus a deterministic non-RL objective to prove that veRL does not silently
+  overwrite or normalize project-owned values. Exact GRPO equations and
+  loss/gradient/accumulation parity remain Gate G0 work and must close before
+  any GRPO optimizer fixture, not before the infrastructure-only FSDP2 probe.
 - Map the pinned SDPO patch surface onto maintained/public upstream veRL hooks.
   Prove that complete teacher context, per-turn alignment, exact recorded
   observations, distillation targets, teacher lifecycle, and checkpoint state

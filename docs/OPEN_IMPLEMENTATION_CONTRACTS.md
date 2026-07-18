@@ -327,21 +327,46 @@ ratio and reference KL would no longer compare the same recorded trajectory.
 
 - [ ] `OPEN_BLOCKING VS-01` — Accept a bounded spike task in
   `docs/PROJECT_TASK.md`; veRL selection itself is not reopened.
+  - Proposed task: `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`
+  - Current status: proposal drafted; explicit A0 acceptance still required.
 - [ ] `OPEN_BLOCKING VS-02` — Candidate upstream veRL commits and isolated
-  dependency matrices: `[TBD]`
-- [ ] `OPEN_BLOCKING VS-03` — Candidate rollout backends: `[TBD: SGLang/vLLM]`
+  dependency matrices.
+  - Primary exact main snapshot:
+    `e003163181731412595257a72ec173071efb125f`, observed 2026-07-19 JST.
+  - Stable comparison:
+    `v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c`.
+  - Proposed upstream vLLM/SGLang matrices and the unresolved local lock are in
+    the spike plan; no environment is installed or accepted yet.
+- [ ] `OPEN_BLOCKING VS-03` — Candidate rollout backends are vLLM first and a
+  bounded SGLang functional comparison. SGLang cannot be selected until its
+  deterministic replay and sampling-identity gates close. One production
+  backend is selected by the report. Exact package/image identities remain
+  unaccepted.
 - [ ] `OPEN_BLOCKING VS-04` — Minimal FSDP2 configuration(s), model fixture,
-  device mesh, and state-dict strategy: `[TBD]`
-- [ ] `OPEN_BLOCKING VS-05` — Public extension surface to test: `[TBD]`
+  device mesh, and state-dict strategy.
+  - Proposed minimum: two-rank FSDP2, LoRA dropout zero, separate frozen
+    reference, one non-RL infrastructure update, sharded save/teardown/resume.
+  - Exact GPU type, mesh, wrap policy, offload, precision, and state-dict/export
+    strategy remain `[TBD]` until a complete `PLANNED` entry.
+- [ ] `OPEN_BLOCKING VS-05` — Public extension surface to test:
+  documented AgentLoop/registry, tool registration, rollout token/logprob
+  output, DataProto/TensorDict fields, custom model-forward registration,
+  public objective/loss hook, FSDP2 engine/checkpoint, and teacher/distillation
+  lifecycle. Subclassing or replacing private worker/postprocess/trainer control
+  flow fails this item.
 - [ ] `OPEN_BLOCKING VS-06` — Numerical tolerances and PASS/FAIL criteria for:
   primary Qwen3 policy/reference forward,
   `Qwen/Qwen2.5-VL-7B-Instruct` family-adapter fixture, both
   target-conditioning providers, two-call latent-observation
   transport, actual behavior logprobs, exact observation replay, FSDP2 one
   step, save/resume.
+  - Proposed structural and numerical values are in spike-plan §7 and require
+    A0 acceptance; they are not framework defaults.
 - [ ] `OPEN_BLOCKING VS-07` — Failure conditions include private-trainer forks,
   PIL re-encoding of `D`, missing actual sampling logprobs, or inability to
   preserve exact observation state.
+  - The expanded proposed hard-failure set is in spike-plan §7.4 and still
+    requires A0 acceptance as a whole.
 - [ ] `OPEN_BLOCKING VS-08` — Complete `PLANNED` ledger entry before any GPU use.
 - [ ] `OPEN_BLOCKING VS-09` — Produce an SDPO patch-surface map from pinned
   reference commit `7c457fc1...` to the candidate upstream veRL commit. The
@@ -363,6 +388,9 @@ ratio and reference KL would no longer compare the same recorded trajectory.
 Required output: `docs/VERL_COMPATIBILITY_REPORT.md` containing PASS/FAIL
 evidence, selected commit/backend, dependency matrix, required public extension
 surface, FSDP2 topology evidence, and unresolved blockers.
+
+Planning artifact: `docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. It is not the
+required report and does not authorize installation or GPU execution.
 
 ## 7. Gate A0 — Before native-format representation training
 
@@ -509,31 +537,68 @@ pilot is identified or launched.
 - [ ] `OPEN_BLOCKING EV-03` — Checkpoint ladder, early-stop conditions, and
   promotion rule: `[TBD]`
 
-## 10. Gate GPU0 — Before any GPU command
+## 10. GPU execution gates
 
-- [ ] `OPEN_BLOCKING GPU-01` — Complete `PLANNED` entry in
-  `docs/EXPERIMENT_LEDGER.md`.
-- [ ] `OPEN_BLOCKING GPU-02` — Record code commit/dirty state, base model,
-  processor, TGVF Adapter checkpoint, prompt/schema/template, data, reward,
-  objective, and output identities.
-- [ ] `OPEN_BLOCKING GPU-03` — Approved question, fixture, command, hardware,
-  PASS/FAIL thresholds, timeout, early stop, and recovery plan.
-- [ ] `OPEN_BLOCKING GPU-04` — Pin PyTorch, CUDA, NCCL, Transformers, attention
-  kernel, veRL, rollout backend, driver/container, and environment lock.
-- [ ] `OPEN_BLOCKING GPU-05` — Record FSDP2 device mesh, sharding/wrap policy,
-  mixed precision, activation checkpointing, offload, state-dict strategy, and
-  LoRA handling.
-- [ ] `OPEN_BLOCKING GPU-06` — Record actor/reference/rollout/TGVF placement.
-  Rollout tensor parallelism and training FSDP2 are separate identities.
-- [ ] `OPEN_BLOCKING GPU-07` — Tiny smoke covers two tool calls, exact `D`
-  transport, logprob parity, one-step loss/gradient, save, and resume.
-- [ ] `OPEN_BLOCKING GPU-08` — Estimate per-call `D` artifact GPU/CPU/disk/network
-  footprint and I/O cost.
-- [ ] `OPEN_BLOCKING GPU-09` — Before a long pilot, record tokens/s, tool latency,
-  update latency, peak memory, utilization, and total-duration estimate.
-- [ ] `OPEN_BLOCKING GPU-10` — Any SDPO GPU smoke additionally records teacher
-  placement/sharding/offload, distillation-target memory, teacher update timing,
-  reference-policy coexistence, and strict teacher/EMA resume evidence.
+Only the subsection applicable to a cell is required in addition to
+`GPU-ANY`. A rollout-only or teacher-forward cell is not forced to perform an
+optimizer step; an optimizer/FSDP cell cannot use that distinction to skip its
+own stricter gate.
+
+### 10.1 GPU-ANY — Before every GPU command
+
+- [ ] `OPEN_BLOCKING GPU-A01` — Complete a cell-specific `PLANNED` entry in
+  `docs/EXPERIMENT_LEDGER.md`, including plan/approval revision and `SC-*` ID.
+- [ ] `OPEN_BLOCKING GPU-A02` — Record code commit/dirty state, model/processor,
+  prompt/schema/template, observation fixture/checkpoint or justified `N/A`,
+  objective or justified non-RL probe identity, and exact output identities.
+- [ ] `OPEN_BLOCKING GPU-A03` — Approve question, fixture, command, hardware,
+  PASS/FAIL thresholds, timeout, early stop, cleanup, and recovery plan.
+- [ ] `OPEN_BLOCKING GPU-A04` — Pin driver, container/image digest, Python,
+  PyTorch, CUDA, NCCL, Transformers, attention implementation/kernel, veRL,
+  rollout backend, weight/KV dtype, quantization, tensor parallelism, and the
+  complete environment lock.
+- [ ] `OPEN_BLOCKING GPU-A05` — Record actor/reference/rollout/TGVF/teacher
+  placement applicable to the cell and its maximum GPU-hours/scratch use.
+
+### 10.2 GPU-ROLLOUT — Additional S2/rollout requirements
+
+- [ ] `OPEN_BLOCKING GPU-R01` — Direct/one-call/two-call fixtures preserve
+  sampled tokens, ownership masks, exact latent observation, positions, masks,
+  branches, cache identity, and source-image separation.
+- [ ] `OPEN_BLOCKING GPU-R02` — Record actual behavior-logprob semantics,
+  sampling transforms/order, policy/backend/RNG/request identity, and staleness.
+- [ ] `OPEN_BLOCKING GPU-R03` — Same recorded observation satisfies single/
+  batched, cached/no-cache, actor/proximal/reference replay tolerances without a
+  policy update or latent recomputation.
+- [ ] `OPEN_BLOCKING GPU-R04` — Estimate per-call observation artifact GPU/CPU/
+  disk/network footprint and I/O cost.
+
+### 10.3 GPU-FSDP-OPT — Additional optimizer/FSDP2 requirements
+
+- [ ] `OPEN_BLOCKING GPU-F01` — Record actor/reference device meshes,
+  sharding/wrap policy, mixed precision, activation checkpointing, offload,
+  state-dict strategy, LoRA handling, and rollout/training placement.
+- [ ] `OPEN_BLOCKING GPU-F02` — Pair the distributed path with an exact
+  single-device control and freeze initialization, ordered batch, objective,
+  optimizer, dtype, seed, and reductions.
+- [ ] `OPEN_BLOCKING GPU-F03` — Compare loss, gradient direction/magnitude,
+  parameter delta, and post-update result using accepted tolerances.
+- [ ] `OPEN_BLOCKING GPU-F04` — Synchronous save/teardown/resume restores model,
+  reference, optimizer, scheduler, RNG, dataloader/sampler, policy/version,
+  observation/objective custom state, and the matching next step.
+
+### 10.4 GPU-SDPO — Additional teacher-forward requirements
+
+- [ ] `OPEN_BLOCKING GPU-SD01` — Record teacher placement/sharding/offload,
+  target type/memory, update timing, policy/reference coexistence, exact
+  observation use, target mask, and any teacher/EMA state round trip. A seam-
+  only cell cannot claim runtime SDPO compatibility.
+
+### 10.5 GPU-PILOT — Additional long-pilot requirements
+
+- [ ] `OPEN_BLOCKING GPU-P01` — Record tokens/s, tool latency, update latency,
+  peak memory, utilization, total-duration estimate, checkpoint cadence, and
+  stop/recovery policy before a long pilot.
 
 LoRA + FSDP2 must be executable before the first policy pilot. Full-parameter +
 FSDP2 remains required, but its corresponding items close before the first

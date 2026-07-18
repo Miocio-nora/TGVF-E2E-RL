@@ -8,6 +8,76 @@ commit is a review identity, not a production dependency pin and not permission
 to copy an external repository wholesale. Any code adapted later requires an
 accepted task, a narrow source/symbol record, license review, and parity tests.
 
+## veRL compatibility candidates
+
+```text
+repository: https://github.com/verl-project/verl
+primary exact main snapshot: e003163181731412595257a72ec173071efb125f
+stable comparison: v0.8.0@7aed6b230776f963fa09509c10d9c3a767d1102c
+main snapshot observed: 2026-07-19 JST
+role: selected framework family; exact production pin pending compatibility spike
+dependency status: review candidates only; do not install yet
+```
+
+Official point-in-time sources reviewed for the proposed spike include:
+
+- [v0.8.0 release notes](https://github.com/verl-project/verl/releases/tag/v0.8.0);
+- [v0.8.0 AgentLoop API](https://github.com/verl-project/verl/blob/7aed6b230776f963fa09509c10d9c3a767d1102c/verl/experimental/agent_loop/agent_loop.py);
+- [v0.8.0 tool loop](https://github.com/verl-project/verl/blob/7aed6b230776f963fa09509c10d9c3a767d1102c/verl/experimental/agent_loop/tool_agent_loop.py);
+- [v0.8.0 tool response schema](https://github.com/verl-project/verl/blob/7aed6b230776f963fa09509c10d9c3a767d1102c/verl/tools/schemas.py);
+- [v0.8.0 rollout-correction contract](https://github.com/verl-project/verl/blob/7aed6b230776f963fa09509c10d9c3a767d1102c/docs/algo/rollout_corr.md);
+- [v0.8.0 Qwen3-VL-8B FSDP2 example](https://github.com/verl-project/verl/blob/7aed6b230776f963fa09509c10d9c3a767d1102c/examples/grpo_trainer/run_qwen3_vl_8b_fsdp.sh);
+- [v0.8.0 multimodal distillation example](https://github.com/verl-project/verl/blob/7aed6b230776f963fa09509c10d9c3a767d1102c/examples/on_policy_distillation_trainer/run_qwen3_vl_8b_fsdp.sh).
+
+Additional exact-main risk sources are:
+
+- [exact main candidate commit](https://github.com/verl-project/verl/commit/e003163181731412595257a72ec173071efb125f);
+- [stable-to-main comparison](https://github.com/verl-project/verl/compare/7aed6b230776f963fa09509c10d9c3a767d1102c...e003163181731412595257a72ec173071efb125f);
+- [main full-determinism support matrix](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docs/advance/determinism.md#L102-L127);
+- [main Qwen3-VL visual/DeepStack reconstruction](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/models/transformers/qwen3_vl.py#L205-L324);
+- [main vLLM async-server generation boundary](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/workers/rollout/vllm_rollout/vllm_async_server.py#L531-L641);
+- [main SGLang async-server generation boundary](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/workers/rollout/sglang_rollout/async_sglang_server.py#L519-L605);
+- [main generic tensor collection helper](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/utils/model.py#L752-L802);
+- [main FSDP model-input update seam](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/workers/engine/fsdp/transformer_impl.py#L1023-L1167);
+- [main extension guide](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docs/extend_guide.rst#L47-L263);
+- [main Qwen-VL monkey-patch boundary](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/models/transformers/monkey_patch.py#L361-L453);
+- [main Qwen2.5-VL-7B FSDP2 example](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/examples/grpo_trainer/run_qwen2_5_vl_7b_fsdp.sh#L1-L151);
+- [main FSDP checkpoint manager](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/verl/utils/checkpoint/fsdp_checkpoint_manager.py#L57-L327);
+- [main vLLM Docker recipe](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docker/Dockerfile.stable.vllm#L1-L18);
+- [main SGLang Docker recipe](https://github.com/verl-project/verl/blob/e003163181731412595257a72ec173071efb125f/docker/Dockerfile.stable.sglang#L1-L4).
+
+The stable candidate exposes useful starting surfaces: FSDP2, official Qwen3-VL
+and Qwen2.5-VL examples, token-in/token-out AgentLoop execution, rollout
+log-probability fields, dynamic extra fields, and multimodal teacher support.
+These are candidate capabilities, not compatibility evidence.
+
+Static review also shows why the spike is required. The default tool response
+is limited to text/image/video; the stock multimodal postprocess reconstructs
+processor inputs from decoded tokens and ordinary media; and the exposed
+rollout server call is oriented around image/video/audio rather than immutable
+main-`D`/D-DeepStack bundles. The project must prove a maintained/public latent
+adapter path that preserves exact rollout observations and log-probability
+identity. Default PIL/processor replay is explicitly unacceptable.
+
+The main snapshot's stock Qwen3-VL forward also regenerates image and DeepStack
+embeddings from `pixel_values`. Its generic tensor collector and FSDP
+`model_inputs` update provide potentially useful seams, but stock replay is
+still recomputation, not exact latent replay. Likewise, rollout-level full
+determinism was added only after stable v0.8.0 and the main documentation limits it to
+vLLM single-turn: SGLang and multi-turn `tool_agent_loop` are explicitly not
+supported. These are hard spike questions, not configuration assumptions.
+
+The main vLLM Dockerfile's comment says `0.20.2` while its version argument says
+`0.23.0`; both main backend Dockerfiles still set `VERL_VERSION=v0.7.1`. The
+C-STABLE recipes also do not by themselves prove the desired source checkout.
+Therefore an image recipe alone does not prove candidate identity. Any approved
+environment must verify the exact loaded veRL commit and record all resolved
+package/image identities.
+
+The complete proposed task and main-versus-stable decision rule are in
+`docs/VERL_COMPATIBILITY_SPIKE_PLAN.md`. Neither candidate is a production pin
+until the evidence report is explicitly accepted.
+
 ## SDPO
 
 ```text

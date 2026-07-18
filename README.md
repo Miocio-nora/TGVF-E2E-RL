@@ -9,6 +9,11 @@ end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 > yet contain an implementation, pinned dependency stack, training run, or
 > evaluation result.
 
+The bounded veRL compatibility task is currently a
+[proposal](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md). It records candidate commits,
+fixtures, hard PASS/FAIL rules, and resource ceilings, but does not authorize an
+installation or GPU process.
+
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
 reasoning, and answer—without an intermediate policy SFT stage and without
@@ -175,7 +180,9 @@ be inherited silently from a library default.
 
 - [Project task and architectural baseline](docs/PROJECT_TASK.md)
 - [Open implementation contracts and promotion gates](docs/OPEN_IMPLEMENTATION_CONTRACTS.md)
-- [Framework-skeleton implementation specification](docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md)
+- [Proposed veRL compatibility spike](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
+- [Historical framework-skeleton reference draft](docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md)
+  (subordinate to the project task and supersession register)
 - [Controlled legacy provenance](docs/LEGACY_REFERENCE.md)
 - [Controlled external references](docs/EXTERNAL_REFERENCES.md)
 - [Experiment ledger](docs/EXPERIMENT_LEDGER.md)
