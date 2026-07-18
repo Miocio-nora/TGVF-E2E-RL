@@ -10,6 +10,7 @@ from .packer import (
 from .registration import (
     SUPPORTED_VLLM_VERSION,
     TGVF_QWEN3_VLLM_ARCHITECTURE,
+    TGVF_VLLM_ATTENTION_BACKEND,
     TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
     VLLMCompatibilityError,
     VLLMPluginError,
@@ -26,6 +27,7 @@ __all__ = [
     "QWEN3_DEEPSTACK_BRANCH_LAYERS",
     "SUPPORTED_VLLM_VERSION",
     "TGVF_QWEN3_VLLM_ARCHITECTURE",
+    "TGVF_VLLM_ATTENTION_BACKEND",
     "TGVF_VLLM_MM_ENCODER_ATTN_BACKEND",
     "PackedQwen3ImageItem",
     "PackedQwen3Replay",

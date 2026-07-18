@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping
 from tgvf_rl.checkpoint import CheckpointCoordinator
 from tgvf_rl.framework.vllm import (
     TGVF_QWEN3_VLLM_ARCHITECTURE,
+    TGVF_VLLM_ATTENTION_BACKEND,
     TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
 )
 
@@ -95,7 +96,12 @@ class VerlAdapterConfig:
 
     @staticmethod
     def required_environment() -> Mapping[str, str]:
-        return MappingProxyType({"VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME})
+        return MappingProxyType(
+            {
+                "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
+                "VLLM_ATTENTION_BACKEND": TGVF_VLLM_ATTENTION_BACKEND,
+            }
+        )
 
     @staticmethod
     def validate_runtime_environment(
@@ -105,6 +111,11 @@ class VerlAdapterConfig:
         if values.get("VLLM_PLUGINS") != TGVF_VLLM_PLUGIN_NAME:
             raise ValueError(
                 "VLLM_PLUGINS must select only the repo-owned precomputed-Qwen3 plugin"
+            )
+        if values.get("VLLM_ATTENTION_BACKEND") != TGVF_VLLM_ATTENTION_BACKEND:
+            raise ValueError(
+                "VLLM_ATTENTION_BACKEND must be TRITON_ATTN for the accepted "
+                "driver-portable path"
             )
 
 

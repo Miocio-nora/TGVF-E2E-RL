@@ -568,7 +568,23 @@ def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
     assert overrides["actor_rollout_ref.rollout.engine_kwargs.vllm.hf_overrides"] == {
         "architectures": ["TGVFQwen3VLForConditionalGeneration"]
     }
-    assert config.required_environment() == {"VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME}
+    assert config.required_environment() == {
+        "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
+        "VLLM_ATTENTION_BACKEND": "TRITON_ATTN",
+    }
+    config.validate_runtime_environment(
+        {
+            "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
+            "VLLM_ATTENTION_BACKEND": "TRITON_ATTN",
+        }
+    )
+    with pytest.raises(ValueError, match="TRITON_ATTN"):
+        config.validate_runtime_environment(
+            {
+                "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
+                "VLLM_ATTENTION_BACKEND": "FLASHINFER",
+            }
+        )
     assert (
         overrides["actor_rollout_ref.rollout.agent.agent_loop_manager_class"]
         == LOSSLESS_AGENT_LOOP_MANAGER_FQN

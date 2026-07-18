@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 SUPPORTED_VLLM_VERSION = "0.12.0"
 TGVF_QWEN3_VLLM_ARCHITECTURE = "TGVFQwen3VLForConditionalGeneration"
+TGVF_VLLM_ATTENTION_BACKEND = "TRITON_ATTN"
 TGVF_VLLM_MM_ENCODER_ATTN_BACKEND = "TORCH_SDPA"
 
 
@@ -152,6 +153,7 @@ def register_tgvf_qwen3_vllm_plugin(
 __all__ = [
     "SUPPORTED_VLLM_VERSION",
     "TGVF_QWEN3_VLLM_ARCHITECTURE",
+    "TGVF_VLLM_ATTENTION_BACKEND",
     "TGVF_VLLM_MM_ENCODER_ATTN_BACKEND",
     "VLLMCompatibilityError",
     "VLLMPluginError",

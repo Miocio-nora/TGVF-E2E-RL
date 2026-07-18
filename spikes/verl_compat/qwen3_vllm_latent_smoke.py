@@ -31,6 +31,7 @@ if str(SOURCE_ROOT) not in sys.path:
 
 from tgvf_rl.framework.vllm import (  # noqa: E402
     TGVF_QWEN3_VLLM_ARCHITECTURE,
+    TGVF_VLLM_ATTENTION_BACKEND,
 )
 from tgvf_rl.protocol import NativeProtocolRenderer  # noqa: E402
 
@@ -152,6 +153,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("CUDA_VISIBLE_DEVICES must be exactly '2,3'")
     if os.environ.get("VLLM_PLUGINS") != PLUGIN_NAME:
         raise RuntimeError(f"VLLM_PLUGINS must be exactly {PLUGIN_NAME!r}")
+    if os.environ.get("VLLM_ATTENTION_BACKEND") != TGVF_VLLM_ATTENTION_BACKEND:
+        raise RuntimeError(
+            f"VLLM_ATTENTION_BACKEND must be {TGVF_VLLM_ATTENTION_BACKEND!r}"
+        )
 
     config = AutoConfig.from_pretrained(model_path, local_files_only=True)
     processor = AutoProcessor.from_pretrained(model_path, local_files_only=True)
