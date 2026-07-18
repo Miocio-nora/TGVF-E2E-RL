@@ -389,8 +389,8 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   rerun after aligning public latent item and UUID cardinalities in R5.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical to
   `SC-20`; I8H-20260719 covers this in-scope repo-owned interface correction.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question, model, processor, representation fixture, initialization,
   staleness, N/A fields, dataset, transcript, token fixture, D/DeepStack
   identity, replay limitation, RL lock, sampling, dtypes, attention,
@@ -416,15 +416,32 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
 - CPU gate before launch: complete suite `111 passed`; live vLLM parser test
   proves public list cardinality 3, parser cardinality 3, per-item shapes, and
   post-pack mutation rejection.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard timeout 1800 seconds.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T07:29:40+09:00` / `2026-07-19T07:31:09+09:00`, 89 seconds;
+  engine PID 1417608, worker PIDs 1418069 and 1418070.
+- Actual GPU-hours and peak scratch use: less than `0.050` two-device GPU-hours
+  by wall-time upper bound; observed peak memory 128,662 MiB/device including
+  the deliberately large 114.11 GiB KV allocation; result 1,619 bytes, log
+  11,215 bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_ATTENTION_BACKEND=TRITON_ATTN VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv312/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-R6-qwen3-vllm-latent-f796c29.json > artifacts/compatibility/SC-20-R6-qwen3-vllm-latent-f796c29.log 2>&1`.
 - Outputs: result JSON and log paths above; no checkpoint.
 - Scorer/parser identity: script/native renderer, packer and project processor
   at the hashes above.
-- Metrics: `PENDING`; same PASS conditions as SC-20-R5 plus exact 3-to-3 public
-  item/UUID/parser cardinality and completed sampled-token output.
-- Conclusion: `PENDING`; first hard failure stops the rerun.
+- Metrics: `PASS`. Both workers selected `TRITON_ATTN`; weights loaded in 2.81
+  seconds and engine initialization took 17.58 seconds. The exact 295-token
+  native prompt contained two tool calls/responses; tokenizer length remained
+  `151669`; three one-row, width-16384 latent items retained aggregate SHA256
+  `3f7711522f4bd3c10530b765a186b109003727934459ed388f35e60863d26cda`.
+  Sampled token IDs were `(58533,279)` and vLLM returned finite non-positive
+  processed logprobs `(0.0,0.0)`. Result SHA256:
+  `473a9dcb438a51336bdfa0ee82d3a46b49262869b36868a1c02064b2e55bc4c7`;
+  log SHA256:
+  `159b69c186271b002ee63d450e5792c3c4b71223a6847d1b5418047c1308bc87`.
+- Conclusion: `PASS` for this bounded real-model transport smoke. It proves the
+  public repo-owned vLLM plugin can execute the recorded-latent shape and native
+  two-call transcript on Qwen3-VL-8B-Thinking TP=2 without tokenizer growth or
+  site-package patches. It is not policy/reference replay parity, a trained
+  TGVF Adapter result, or production reward/objective evidence.
 
 ### SC-30-FSDP2-INFRA
 
