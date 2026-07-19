@@ -2692,8 +2692,10 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; Norm finite/replay fusion
   commit `281dc1b5ee12be925ea2edf8c04d4f771a82417a`; native conditioning/runtime
   boundary commit `66da1cffc71c2aa86e3403ad9caa110aab403185`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `ABORTED_BEFORE_LAUNCH`.
+- Result: `NOT_RUN`; the mandatory idle-device preflight found physical GPU0
+  occupied by PID `1858503` at about 121 GB and high utilization. No RP-21
+  process was started and no output path was created.
 - Question: with RP-19's exact B8/GA4 and global batch 32 retained, how much do
   fused Norm validation, bound CPU token authority, and per-group runtime
   invariant checks reduce the `11.095230004`-second steady step and the
@@ -2761,19 +2763,90 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   one group/four rows per rank per accumulation window, global batch 32.
 - GPUs: only user-authorized physical 0 and 3 mapped to logical 0/1; both must
   be idle at immediate preflight.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard limit one aggregate
-  GPU-hour, plus one diagnostic 100 ms `nvidia-smi` trace.
+- Start/end timestamps, elapsed time, and session/process identity: preflight
+  rejected launch at approximately `2026-07-20 06:09 +09:00`; no session/PID.
+- Actual GPU-hours and peak scratch use: zero; no output or utilization trace.
 - Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
   run-representation configs/smoke/representation_qwen3_embedding_rp21_syncfused_real512_ga4_throughput.toml`;
   a read-only 100 ms utilization sampler observes physical 0/3.
-- Outputs: `PENDING`; overwrite forbidden under the exact RP-21 root.
+- Outputs: none; the exact RP-21 root was not created.
 - Scorer/parser identity: no answer scorer; strict native representation runner.
-- Metrics: `PENDING`; compare exact steps 2/3, peak allocation, and utilization
-  distributions/longest below-50% runs directly with RP-19.
+- Metrics: none; preflight-only result.
+- Conclusion: do not contend with the unrelated GPU0/1 training process. Rerun
+  the unchanged question as RP-22 on currently idle, previously user-authorized
+  physical GPUs 2 and 3 through the explicit configuration pair.
+
+### RP-22-QWEN3-REPRESENTATION-SYNCFUSED-REAL512-K4-GA4-THROUGHPUT-GPU23
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-22`; exact RP-21 question
+  rerun with only the explicit physical-device pair and output identity changed.
+- Spike-plan git revision and approval references: accepted
+  `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION` and
+  `RPI-20260720-CONFIG-BOUND-GPU-PAIR`; implementation commits
+  `281dc1b5ee12be925ea2edf8c04d4f771a82417a` and
+  `66da1cffc71c2aa86e3403ad9caa110aab403185`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question/baseline: identical RP-21 hot-path sync/utilization question against
+  RP-19's exact B8/GA4 steps 2/3 (`11.032586041`/`11.157873967` seconds).
+- Exact output path:
+  `artifacts/representation/RP-22-qwen3-syncfused-real512-k4-ga4-throughput-gpu23/`;
+  overwrite forbidden.
+- Model/processor/representation initialization: stable local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer `151669`, native template, no
+  resize, `image_max_pixels=262144`; frozen original Qwen and fresh TGVF
+  Adapter seed `20260719`; three updates under the 2,000-step horizon.
+- N/A fields and justification: policy/reference, rollout/logprobs, reward,
+  GRPO, SDPO, judge, vLLM sampling, KV cache and replay are absent; synchronous
+  representation training has no asynchronous staleness.
+- Code/worktree/config identity: runtime commit
+  `66da1cffc71c2aa86e3403ad9caa110aab403185`; source/canonical config SHA256
+  `6f325b9c8965c4dacef408214114af58672ea5b52708c4d537ff54c4bbc53ba4`/
+  `2aee4f30e150e4aa7acfee534645062f702255a311ac9703acd0c458608ceaf9`;
+  clean committed launch required.
+- Repository patch surface: exactly RP-21's fused streaming Norm validation,
+  bound processor-derived CPU token authority, per-group runtime invariant
+  entry/exit, plus all accepted RP-19 processor/layout and trainer host-read
+  changes. No package, Qwen parameter, Adapter parameter, or objective change.
+- Dataset/sample identity: RP-19 eight-row/two-group real-resolution fixture,
+  source SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`,
+  same-image K4 cycling, disjoint validation, sampler seeds 71/73.
+- Prompt/tool/template/token ownership: prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`,
+  native `tgvf_focus_tool`, chat-template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  evidence-only labels, no tokenizer growth.
+- D/DeepStack/position/mask/observation identity: unchanged main D, ordered
+  `(8,16,24)` branches, M-RoPE, source-key blocking, and atomic complete
+  candidate observation; replay is N/A.
+- Framework/objective/determinism identity: accepted Python 3.12/Torch 2.9
+  lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`;
+  legacy summed-NLL Matrix CE + L_gen + Norm weights `1/1/.1`, manifold zero;
+  frozen Qwen eval, Adapter dropout zero, no cache, TF32 off, CUBLAS `:4096:8`.
+- Sampling/logprob identity: sampling and logprobs N/A; same-image seeds 71/73.
+- Dtype/topology/batch identity: BF16 parameters/output, FP32 reduction, SDPA,
+  no quantization/KV/TP/offload, FSDP2 mesh `[2]`, reshard false; world 2, K4,
+  GA4, one group/four rows per rank per window, global batch 32.
+- Parity gates: exactly 32 global rows/samples, eight B8 Qwen calls and 64 cells
+  per rank/update, exact sample order/objectives/gradient norms versus RP-19,
+  finite state, tokenizer `151669`; 80 focused CPU tests and Ruff passed.
+- GPUs: physical `[2,3]` mapped in order to logical `[0,1]`; both reported zero
+  memory use and zero utilization at the planning preflight and must be checked
+  again immediately before launch.
+- Start/end/session, GPU-hours, scratch, outputs and metrics: `PENDING`; hard
+  limit one aggregate GPU-hour and one read-only 100 ms utilization trace.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/smoke/representation_qwen3_embedding_rp22_syncfused_real512_ga4_throughput_gpu23.toml`;
+  a read-only 100 ms sampler observes physical 2/3.
+- Scorer/parser identity: no answer scorer; strict native representation runner.
 - Conclusion: `PENDING`.
 
 ## Compatibility-spike status
