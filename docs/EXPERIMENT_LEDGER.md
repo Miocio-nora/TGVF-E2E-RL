@@ -1189,8 +1189,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `2af89671f9628c7432a5431d1e6bd1e2b9843b74`, under decision
   `RPI-20260719-B200-BATCHED-READOUT`; its focused parity gate passed before
   launch.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: at the same mathematical global batch of 32 as RP-12, what
   train-core optimizer-step time, rows/s, matrices/s, physical Qwen call count,
   and peak CUDA memory are measured when every local Matrix-CE cell is executed
@@ -1213,7 +1213,9 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   Adapter state must match RP-12 SHA256
   `715f385ffa0c506572020fbc2eaff8b33c0cdf1cdaad2324efaae11335b85df9`.
   The bounded run targets three optimizer updates under the unchanged
-  historical 2,000-update scheduler horizon.
+  historical 2,000-update scheduler horizon. The checkpoint-bound
+  initialization identity confirmed the expected initial Adapter SHA256
+  `715f385ffa0c506572020fbc2eaff8b33c0cdf1cdaad2324efaae11335b85df9`.
 - N/A fields and justification: policy/reference rollout, behavior logprob,
   reward, GRPO, SDPO teacher, answer judge, vLLM sampling, KV replay, and policy
   replay are absent from this representation-only timing smoke.
@@ -1227,7 +1229,7 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `490e60b979bea1be2b6c3ef0fd190fd74b858ad582eb9b90e20f64534992aea2`.
   The launcher must verify that runtime commit through the strict code-identity
   check and start from a clean worktree. The exact clean launch HEAD is
-  recorded at closeout because a commit cannot contain its own hash.
+  `62f722e91caa15a68512b3ba9af189cc5330fc70`.
 - Repository adapter/patch surface and hash: representation-training tree
   `c1d2ad19e225458bd7a2dda70ea702eeea984623`; unchanged Qwen tree
   `6ae2676f7f08949f2425d736fe4d54751d53f69f`. Single-pass streaming,
@@ -1244,8 +1246,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `c95ec424a64d6303a90f245aa52fa1c24eba28963af0455ddcb0e7830efe53ba`/
   `e18eb856f4c8b03c03a2f2a683a8267bb0581498de05fed403c4246e5cca3a13`;
   32 unique rows/eight complete K=4 groups, four distinct groups per rank, and
-  sampler seeds 71/73. Validation-data identity is
-  `16c33970676fb41c197cb007a2a7ea0c5d51b0fbcd8f3268bef6284f2f579821`;
+  sampler seeds 71/73. The cadence-bound validation-data identity is
+  `54a36c5b3f2b27d10d71a64d5be090f533b37780bb31b22027c3ca05a8f49900`;
   train/validation image-byte manifests are
   `692847ec741898bd077d7831c5a73cfac4ce4ff3eac399603ce6170330d2ba26`/
   `f83d49e1290557428e807aca8624827a8b9a4a4892e523b88c281d010fa213d9`;
@@ -1316,11 +1318,13 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `0` MiB used and `182642` MiB free on each device; `/nvmesv` had about
   `24` TiB free. The launch repeats the clean-device check and exposes no other
   physical GPU.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`;
-  fill from the executed launcher and workers after the run.
-- Actual GPU-hours and peak scratch use: `PENDING`; record measured wall-time
-  upper bound, peak allocated/reserved CUDA memory, and exact output size after
-  the run.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T23:35:55+09:00` to `23:37:10+09:00`, about 76 seconds wall;
+  torchrun launcher PID `1193865`. Worker PIDs were not persisted in the
+  current runner log and remain a telemetry gap rather than an inferred value.
+- Actual GPU-hours and peak scratch use: less than `0.043` aggregate GPU-hour;
+  output root uses about `537` MiB. Maximum per-rank train-step allocated/
+  reserved CUDA memory was `117,085,050,368`/`126,636,523,520` bytes.
 - Command: planned command is
   `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp13_singlepass_cellb32_throughput.toml`.
   The materialized configuration source/canonical hashes are recorded above;
@@ -1329,9 +1333,15 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   both `4`. Current checkpoint schema requires `save_final=true`, so one
   final DCP/export after the timed steps is allowed; no validation or periodic
   checkpoint may run during steps 1-3.
-- Outputs: `PENDING`; expected outputs under the exclusive root are Adapter,
-  metrics JSONL, run log, and the required final step-3 DCP. Record all content
-  and manifest SHA256 values after execution. Metrics must carry nested schema
+- Outputs: Adapter/metrics/run-log SHA256
+  `339d3ad2f0378edea8c1b9db4685de64a83a449bc9bfcf391fb6b89e7d50a7f6`/
+  `321acd2f9c453cab00f3f33c51998f1d733c46552cc2f76ea4c9bcd6e9bba776`/
+  `0ddc1c1740985a1d80e892aa18dec178b05fccbb7115593ee2d3e8f1a0d32647`;
+  final artifact-manifest SHA256
+  `1ebbdb2b70050f9cef7ab5fcd2b2bbcb9c92aee2a4cebfedfd8d0161a83e4a70`;
+  required final step-3 DCP metadata SHA256
+  `90a5c228d115296c915b79b9bffa74e74801c58589901765e25d66c601ffdb3c`.
+  Metrics carry nested schema
   `representation-qwen-physical-execution-v1` with
   `forward_batch_sizes_by_rank`, per-rank/global call and cell counts, and
   maximum physical batch.
@@ -1340,14 +1350,24 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   identity above; single-pass execution and telemetry have their separate
   SHA256 values above. Qwen3 family adapter SHA256 is
   `9993156852dd5d204e399dde00120aa102a3ca39dec541534313e27be9054c9f`.
-- Metrics: `PENDING`. Record every step separately and use steps 2/3 for the
-  steady mean. Every step must report 32 rows/eight matrices; each rank must
-  report 16 sample IDs from four group keys and physical schedule `(32,32)`;
-  global telemetry must report four calls and 128 cells. Validation events
-  during the three timed steps are forbidden.
-- Conclusion: `PENDING`; this cell can establish only bounded semantic parity,
-  execution geometry, throughput, and capacity evidence. It cannot promote an
-  Adapter or close production prompt/data/quality gates.
+- Metrics: `PASS`. Steps 1/2/3 took `15.969847741`/`15.678297025`/
+  `16.195537078` seconds and produced `2.003776149`/`2.041037999`/
+  `1.975852968` global rows/s. The step-2/3 steady means are
+  `15.936917052` seconds and `2.008445484` rows/s. Every step reported 32
+  rows/eight matrices, 16 sample IDs per rank, per-rank schedule `(32,32)`,
+  64 cells/two calls per rank, and 128 cells/four calls globally. No validation
+  event occurred. All losses/gradients were finite and tokenizer length stayed
+  `151669`; run identity is
+  `efd2a7dbe30fb0239f07ddf82302374213a1555d018052d75f17ef858d9576dd`.
+- Conclusion: `PASS` for the bounded CELLB32 geometry and parity question, but
+  not as a material throughput win. Against RP-12, steady step time improved
+  only `1.70%` and row throughput `1.76%` (`1.017x`) while peak allocation rose
+  from about 31.0 GB to 117.1 GB. Linear extrapolation at mathematical global
+  batch 32 remains about `8.85` hours for 2,000 updates on two GPUs. The pinned
+  historical global-batch-32 run used eight GPUs with one local K4 group per
+  rank; RP-13 uses four local K4 groups per rank on two GPUs. Thus physical
+  batching cannot erase the fourfold per-rank cell workload. This result does
+  not promote an Adapter or close production prompt/data/quality gates.
 
 ## Compatibility-spike status
 

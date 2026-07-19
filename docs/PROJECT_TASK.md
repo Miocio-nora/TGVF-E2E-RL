@@ -292,6 +292,15 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   of user-facing memory-mode options. Acceptance requires objective and
   gradient parity, explicit physical-Qwen batch/call metrics, and a bounded
   throughput smoke on physical GPUs 2 and 3 before its timing is extrapolated.
+- Execution record `RP-13` passed the CELLB32 geometry and parity gates on
+  physical GPUs 2 and 3: both ranks executed exactly two B32 Qwen calls and 64
+  cells per update, with one forward/VJP per cell and no readout recompute.
+  Peak allocation was about 117.1 GB per rank. Steady step time was `15.937`
+  seconds, only `1.70%` faster than RP-12, so B32 is not a material throughput
+  solution by itself. At global batch 32, two ranks each own four local K4
+  groups; the pinned historical global-batch-32 run used eight ranks with one
+  local K4 group each. Final production batch geometry remains open rather
+  than being inferred from this smoke.
 
 ### 2.2 Remove Stage2 SFT
 
