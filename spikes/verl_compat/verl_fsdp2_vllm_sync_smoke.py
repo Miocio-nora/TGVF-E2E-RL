@@ -66,8 +66,12 @@ EXPECTED_DISTRIBUTIONS: Mapping[str, str] = {
     "nvidia-nccl-cu12": "2.28.9",
 }
 PHYSICAL_GPUS = "2,3"
+PYTHON_HEADER_ROOT = REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
 REQUIRED_ENVIRONMENT: Mapping[str, str] = {
     "CUDA_VISIBLE_DEVICES": PHYSICAL_GPUS,
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CPATH": f"{PYTHON_HEADER_ROOT}:{PYTHON_HEADER_ROOT / 'python3.12'}",
     "VLLM_ATTENTION_BACKEND": "TRITON_ATTN",
     "VLLM_PLUGINS": "__tgvf_native_sync_gate_no_plugins__",
     "VLLM_USE_V1": "1",
@@ -309,6 +313,8 @@ def build_command(
 
 
 def child_environment(paths: GatePaths) -> dict[str, str]:
+    if not (PYTHON_HEADER_ROOT / "python3.12/Python.h").is_file():
+        raise FileNotFoundError("pinned local Python 3.12 headers are missing")
     result = dict(os.environ)
     # Ray must remap each actor to a logical CUDA ordinal.  Keeping physical
     # host IDs visible makes veRL interpret accelerator IDs 2/3 as local
@@ -392,6 +398,7 @@ def plan_payload(
         "manager_import_hook": SOURCE_ROOT
         / "tgvf_rl/framework/verl/sync_gate_manager.py",
         "candidate_lock": LOCK_PATH,
+        "python_header": PYTHON_HEADER_ROOT / "python3.12/Python.h",
     }
     source_hashes = {
         name: _sha256_path(path) if path.is_file() else None

@@ -89,6 +89,9 @@ def test_plan_is_one_upstream_v1_no_sleep_integration_path() -> None:
     )
     assert "trainer.total_training_steps=2" in overrides
     assert plan["environment"]["CUDA_VISIBLE_DEVICES"] == "2,3"
+    assert plan["environment"]["CC"] == "/usr/bin/gcc"
+    assert plan["environment"]["CXX"] == "/usr/bin/g++"
+    assert "python3.12" in plan["environment"]["CPATH"]
     assert "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES" not in plan["environment"]
     assert plan["environment"]["VLLM_PLUGINS"] == (
         "__tgvf_native_sync_gate_no_plugins__"
