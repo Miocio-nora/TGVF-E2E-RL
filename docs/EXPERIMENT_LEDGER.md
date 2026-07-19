@@ -3,6 +3,11 @@
 I8H-20260719 authorizes the bounded compatibility cells below. It does not
 authorize production training. Only physical GPUs 2 and 3 may be exposed.
 
+Experiment namespaces are disjoint: `SC-*` is reserved for cells fixed by the
+veRL compatibility matrix, while `RP-*` identifies bounded representation-
+phase executions. A materialized run ID is never renamed after execution; an
+identity collision is retained as `INVALID` and rerun under a new planned ID.
+
 ## Bounded cells and outcomes
 
 ### SC-20-QWEN3-VLLM-LATENT
@@ -526,18 +531,19 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   optimizer and extra-state restoration. This is not a Qwen FSDP2 memory or
   production-throughput claim.
 
-### SC-40-QWEN3-REPRESENTATION-FSDP2-EMBEDDING
+### INVALID-RUN-ID-COLLISION-20260719-180827
 
-- Cell/matrix ID and mandatory/diagnostic class: `SC-40`; mandatory bounded
-  real-Qwen3 representation-phase backward/FSDP2 smoke for the
-  target-token-embedding provider. It is not a production training run or an
-  artifact-promotion cell.
+- Cell/matrix ID and mandatory/diagnostic class: materialized run ID
+  `SC-40-QWEN3-REPRESENTATION-FSDP2-EMBEDDING`; invalid diagnostic side result.
+  The `SC-40` short namespace was already reserved for the compatibility
+  matrix's SDPO CPU parity cell, so this run cannot receive representation-gate
+  credit despite its technically successful execution.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: implementation
   baseline `ce6a15f5e7df6fabf57f0997cee279efb66a96e4`; user-accepted
   `I8H-20260719` in `PROJECT_TASK.md` §0 and `AD-05G`/`AD-06`/`AD-07` in
   `OPEN_IMPLEMENTATION_CONTRACTS.md`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `INVALID`.
 - Question: can the stable local Qwen3-VL-8B-Thinking model execute one
   deterministic native-format same-image Matrix-CE plus `L_gen` optimizer step
   with target-token-embedding conditioning, main `D` plus all three DeepStack
@@ -555,11 +561,12 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   tokenizer, tokenizer length `151669`, BF16 weights, SDPA, local-files-only,
   no remote code, no tokenizer resize, and no full weight-directory hash by the
   accepted operational-identity decision.
-- Representation checkpoint identity: initialization is fresh random TGVF
+- Representation checkpoint identity: initialization was fresh random TGVF
   Adapter seed `20260719`; historical checkpoints are forbidden. The planned
-  outputs are a newly materialized Adapter-only export and
-  `distributed-representation-checkpoint-v1` step-1 checkpoint; neither is a
-  promoted artifact.
+  outputs materialized as a 104-tensor/72,055,808-parameter Adapter-only export
+  and `distributed-representation-checkpoint-v1` step-1 checkpoint; neither is
+  a promoted artifact. Run identity SHA256 is
+  `50fae1c344ec9286f9cfe9455490d09138eeeee4b732c9484ee86f87b8f5e71a`.
 - N/A fields and justification: policy/reference models, rollout, behavior
   log probabilities, reward, GRPO, SDPO teacher, answer judge, vLLM sampling,
   policy staleness, KV cache, and exact-observation policy replay are N/A because
@@ -570,9 +577,10 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
 - Rollout policy version and allowed asynchronous staleness: N/A; no rollout or
   policy update. The representation step is fully synchronous.
 - Code commit and worktree state: runtime implementation commit
-  `ce6a15f5e7df6fabf57f0997cee279efb66a96e4`; launch requires a clean worktree.
-  The subsequent commit containing this config/ledger record changes no
-  runtime-code identity path.
+  `ce6a15f5e7df6fabf57f0997cee279efb66a96e4`; launch HEAD
+  `bb407a53d67e6664f23162deb8b39a4be64e31b2` had a clean worktree. The latter
+  commit contains only this config/ledger plan and changes no runtime-code
+  identity path.
 - Repository adapter/patch surface and hash: git tree
   `src/tgvf_rl/representation/training@b2ea66242bbd6e50660006327ae4ef612f5bf6f0`
   plus `src/tgvf_rl/qwen@6ae2676f7f08949f2425d736fe4d54751d53f69f`;
@@ -676,29 +684,171 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; both NVIDIA B200 183359 MiB,
   compute capability 10.0, mapped `2->logical 0`, `3->logical 1`. No other GPU
   may be visible.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: planned hard timeout `1800s`, maximum
-  `1.0` aggregate GPU-hour across two devices. Existing local model weights are
-  read-only; new log/checkpoint/artifact scratch is capped at `20 GiB` and is
-  retained on failure for audit.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T18:08:27.648+09:00` / `2026-07-19T18:09:43.649+09:00`, about
+  76 seconds; execution session `43069`, torchrun launcher PID `311941`, two
+  ranks identified as logical 0 and 1 in the result.
+- Actual GPU-hours and peak scratch use: less than `0.043` aggregate GPU-hour
+  across both devices by wall-time upper bound. Output used about `537 MiB` of
+  allocated disk (`577,925,311` apparent bytes), far below the `20 GiB` cap.
+  A live peak-GPU-memory sample was not instrumented, so this cell makes no
+  peak-memory/capacity claim; both Qwen copies and the complete step fit and the
+  process exited normally.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding.toml > /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/SC-40-qwen3-representation-fsdp2-embedding/run.log 2>&1`.
-- Outputs: planned `adapter.pt`, `metrics.jsonl`, one strict distributed
-  checkpoint directory, and `run.log` at the exact paths above.
+- Outputs: `adapter.pt` SHA256
+  `aaada9eb5c55577fe4cddc7d901ee13a999af8c9d423c6a596056c340571cd3a`;
+  `metrics.jsonl` SHA256
+  `686663b5bebd4dd8ce7cb44022715ff09a8492ee30528e41c00fb73c25071217`;
+  `run.log` SHA256
+  `6025ea15eed8dcd9524a591fa0ccc594419200ad9971b59b5262285f6b1c359b`.
+  The strict DCP directory contains both rank shards and its integrity-checked
+  sidecar. Rank shard file SHA256 values are
+  `6923d8a3e74690ef7b0c333602bbfa3b2e34c1335aff4c0ffa3d28ccecf33b32`
+  and
+  `811d38cf9f458995252b53b1d878cd67915083e70565b895694a5915298c6109`;
+  sidecar payload SHA256 is
+  `000a56537a9ae82704e6133aa85ecc0a8eaa0bbb732d094c291265a5b1fba85c`.
 - Scorer/parser identity: no answer scorer. Strict config/parser, native
   processor/group builder, Matrix-CE/readability evaluator, runner, DCP loader,
   and export loader are identified by runtime commit and source-tree hashes
   above.
+- Metrics: `SIDE_RESULT` technical execution pass. Train global rows/samples
+  `4/4`; Matrix CE
+  `0.6901558041572571`, `L_gen` `4.843873739242554`, weighted total
+  `1.9011242389678955`, pre-clip gradient norm `13.23893928527832`, and used lr
+  `0.0003`. Validation covers two groups/four rows/24 evidence tokens with
+  Matrix CE `0.73828125`, `L_gen` `3.5234375`, and weighted total
+  `1.619140625`. Both rank-owned sample lists are exact. Tokenizer length is
+  `151669` before and after. Independent post-run loaders verified all 104
+  exported tensor checksums, the sidecar digest, and the presence/structure of
+  both ranks' recorded model/optimizer shard-content digests, plus run identity,
+  global step 1, and world size 2. Recomputing those logical shard digests from
+  restored DCP tensors remains the explicitly open restore gate. The export
+  manifest SHA256 is
+  `d1f63a7a6f1cb0b69890795d95430aaf9335dffb42f78b4bca7134fd430c7158`.
+- Conclusion: `INVALID` because the run ID collides with the pre-existing
+  `SC-40` SDPO matrix identity. Technically, real Qwen3,
+  target-token-embedding conditioning, native main `D` plus all three
+  DeepStack branches, same-image Matrix CE plus `L_gen`, nonzero Adapter
+  backward, two-rank FSDP2 update, validation, DCP save, and rank-zero export
+  completed without tokenizer growth. Those outputs are retained only for
+  audit and are not promoted or used to close a gate. `RP-10` below reruns the
+  same bounded question under a valid disjoint identity.
+
+### RP-10-QWEN3-REPRESENTATION-FSDP2-EMBEDDING
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-10`; mandatory bounded
+  real-Qwen3 representation-phase backward/FSDP2 smoke for the
+  target-token-embedding provider. `RP-*` is the representation execution
+  namespace and does not overlap the veRL compatibility matrix.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime baseline
+  `ce6a15f5e7df6fabf57f0997cee279efb66a96e4`, corrected config commit
+  `b65e812783ba8cda22c46dcf01329fa1d196e265`, user-accepted `I8H-20260719`,
+  and `AD-05G`/`AD-06`/`AD-07`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: identical to the invalid side result above: can stable local
+  Qwen3-VL-8B-Thinking complete one deterministic native same-image Matrix-CE
+  plus `L_gen` optimizer step with target-token-embedding conditioning, main
+  `D` and all three branches, frozen Qwen, two-rank FSDP2, validation, DCP
+  save, Adapter export, and no tokenizer growth?
+- Baseline and exact output path: the `295 passed` CPU suite, `SC-30`, and the
+  identity-invalid technical side result above. Corrected outputs must be new
+  under `artifacts/representation/RP-10-qwen3-representation-fsdp2-embedding/`:
+  `adapter.pt`, `metrics.jsonl`, `checkpoints/`, and `run.log`; no overwrite.
+- Model and processor identity: identical to the fully resolved invalid side
+  result above: stable local Qwen3-VL-8B-Thinking, tokenizer length `151669`,
+  BF16, SDPA, local-only, no remote code or tokenizer resize.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`, no
+  legacy checkpoint, no promoted input artifact. Planned outputs are a new
+  Adapter-only export and step-1 distributed representation checkpoint.
+- N/A fields and justification: identical to the invalid side result. There is
+  no policy/reference rollout, behavior logprob, reward, GRPO, SDPO teacher,
+  judge, vLLM sampling, KV cache, or policy replay in this representation run.
+- Policy/reference initialization: N/A; original Qwen3 is frozen and only the
+  freshly initialized TGVF Adapter is trainable.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  representation step with no rollout or intervening update.
+- Code commit and worktree state: runtime code
+  `ce6a15f5e7df6fabf57f0997cee279efb66a96e4`; corrected config commit
+  `b65e812783ba8cda22c46dcf01329fa1d196e265`; launch requires a clean worktree
+  after committing this `PLANNED` row, with no later runtime-code change.
+- Repository adapter/patch surface and hash: training tree
+  `b2ea66242bbd6e50660006327ae4ef612f5bf6f0`, Qwen tree
+  `6ae2676f7f08949f2425d736fe4d54751d53f69f`; corrected config source SHA256
+  `817cca317bb68adb9d68a9a3cb9a51a5d12fdb5d87194d6a7c4aee6ef3f07e76`
+  and canonical SHA256
+  `ce73fd382b853e535e841b03563ad729bc8ad48eaa243a05e2801e187e7276f6`.
+  No package/site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: identical exact train/
+  validation JSONL, transformed manifests, four PPM byte hashes, K=2 group
+  ownership, `n=4` per split, and sampler seeds `71`/`73` recorded in the
+  invalid side result; the corrected config changes only run/output identity.
+- Native prompt/tool schema hash: identical smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`
+  and native tool-schema SHA256
+  `1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361`.
+- Chat-template/token-fixture hash and token-ownership masks: identical accepted
+  template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  golden-file SHA256
+  `1df319f994e31db398d008880b0678afb56e1b4390123957e56f25ba9c165a68`,
+  exact evidence-only labels, visual `-100` labels, and tokenizer-length gate.
+- D/DeepStack/position/mask identity: identical live main `D`, branch layers
+  `(8,16,24)`, native positions/M-RoPE, 4-D original-image key block, and
+  runtime-bound Adapter/projection identity contract.
+- Observation materialization/artifact identity used by all replays: no policy
+  replay; identical in-step candidate materialization and exact detached-score/
+  differentiable-recompute equality, with no intervening update.
+- RL framework/version/environment lock: identical lock and host identity:
+  Python `3.12.3`, Torch `2.9.0+cu128`, CUDA `12.8`, NCCL `2.27.5`,
+  Transformers `4.57.6`, vLLM `0.12.0`, Pillow `12.3.0`, upstream veRL
+  `e003163181731412595257a72ec173071efb125f`, lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`,
+  Ubuntu `24.04.3`, kernel `6.8.0-86-generic`, driver `570.195.03`, no container.
+- Objective equations and normalization: identical explicit smoke equation:
+  `s_ij` summed evidence log likelihood; global-row-mean Matrix CE plus global-
+  sample-mean per-sample-token-mean `L_gen`; weights `1.0`/`.25`; manifold
+  zero; norm unset; explicit AdamW lr `3e-4`; constant one-step scheduler;
+  global L2 clip `1.0`.
+- Rollout/replay forward mode and adapter dropout/RNG contract: identical Qwen
+  eval/frozen, Adapter dropout zero, `use_cache=false`, deterministic algorithms,
+  TF32 off, cuDNN benchmark off, seed `20260719`, CUBLAS `:4096:8`, exact
+  score-recompute equality.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: token sampling/logprobs N/A;
+  deterministic same-image sampler seeds `71`/`73`.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 Qwen/TGVF, FP32 reduction, no
+  quantization/KV/rollout TP, SDPA, `fsdp=[2]`, reshard after forward, no
+  offload/activation checkpointing/LoRA; frozen Qwen replicated and exactly 52
+  Adapter-owned leaves sharded.
+- Logit/logprob/loss/gradient parity tolerances: identical structural PASS gate
+  to the invalid side result: complete/zero-exit, finite component losses and
+  nonzero gradient norm, exact recompute, four train rows/two validation groups,
+  tokenizer unchanged, loadable 104-tensor export and integrity-checked DCP
+  sidecar. No single-device numerical or restore/next-step parity claim.
+- World size, microbatch, accumulation, and global batch: world 2; local K=2,
+  global rows/samples 4; accumulation 1; one optimizer step and validation.
+- GPUs: physical 2 and 3 only, with the exact B200 UUIDs and logical mapping
+  recorded above; no other physical GPU visible.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: hard timeout `1800s`, maximum `1.0`
+  aggregate GPU-hour, new output cap `20 GiB`; retain failures for audit.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp10.toml > /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-10-qwen3-representation-fsdp2-embedding/run.log 2>&1`.
+- Outputs: planned corrected `adapter.pt`, `metrics.jsonl`, one DCP directory,
+  and `run.log` under the exact RP-10 path.
+- Scorer/parser identity: no answer scorer; strict config/native pipeline/
+  objective/evaluation/runner/DCP/export code at the tree identities above.
 - Metrics: `PENDING`.
-- Conclusion: `PENDING`. Any environment/identity mismatch, nonfinite value,
-  missing Adapter gradient, OOM, timeout, collective failure, missing output,
-  or failed post-run load check is `FAIL`; the command stops immediately. No
-  partial output is promoted or overwritten. A correction requires a new
-  recorded rerun identity.
+- Conclusion: `PENDING`; the same fail-fast rules as the invalid side result
+  apply. RP-10 receives no gate credit until its own outputs pass independent
+  integrity checks.
 
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
-were entered. The two planned cells are bounded evidence; they do not silently
+were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ## Required entry template

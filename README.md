@@ -6,9 +6,11 @@ end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 `Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
 > **Status:** the bounded framework and representation-phase execution scaffold
-> are implemented on `main`. No production data/prompt/hyperparameter
-> contract, real representation training run, trained TGVF Adapter, policy RL
-> run, or evaluation result exists yet.
+> are implemented on `main`. An initial synthetic-data real-Qwen3/two-rank
+> execution completed technically but is identity-invalid because its `SC-40`
+> prefix was already reserved; the corrected `RP-10` smoke is planned. No production
+> data/prompt/hyperparameter contract, production representation run, promoted
+> TGVF Adapter, policy RL run, or task evaluation result exists yet.
 
 The bounded [veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
 selected upstream veRL commit
@@ -37,15 +39,20 @@ Current evidence is deliberately small:
   patch;
 - `SC-30` passes two-rank composable FSDP2 save/teardown/resume with a bitwise-
   identical next step on its tiny deterministic infrastructure fixture.
+- the identity-invalid side result executes one real Qwen3-VL-8B-Thinking BF16 representation step on
+  physical GPUs 2 and 3 using target-token-embedding conditioning, native main
+  `D` plus all three DeepStack branches, same-image Matrix CE plus `L_gen`,
+  two-rank FSDP2, validation, content-bound DCP save, and Adapter-only export.
 
 The live vLLM path requires the repository plugin and accepted attention split:
 `VLLM_PLUGINS=tgvf_qwen3_precomputed`,
 `VLLM_ATTENTION_BACKEND=TRITON_ATTN`, and multimodal-encoder attention
 `TORCH_SDPA`. See [environment setup](docs/SETUP.md) and the
 [experiment ledger](docs/EXPERIMENT_LEDGER.md) for exact identities. These
-smokes and CPU fixtures are not policy training, a real-Qwen representation
-optimizer step, representation FSDP2 capacity/resume evidence, a trained
-artifact, or production-objective evidence.
+smokes and CPU fixtures are not policy training, production representation
+training, representation restore/next-step-resume evidence, a promoted trained
+artifact, or production-objective evidence. The side result receives no gate
+credit; `RP-10` must independently pass the same one-step question.
 
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
@@ -219,14 +226,16 @@ be inherited silently from a library default.
 4. **Completed for bounded fixtures:** establish an independent functional
    output/gradient oracle for the selected TGVF Adapter equations and freeze a
    real local-Qwen3 native transcript/processor golden. Exact 4096/1152 legacy-
-   checkpoint parity and a real-Qwen gradient run remain promotion gates.
-5. **Implemented, not yet run on production data:** the native-format Qwen3
-   representation data/pipeline, both provider paths, streaming objective,
+   checkpoint parity remains a promotion gate; `RP-10` is planned to supply the
+   identity-valid real-Qwen gradient/FSDP2-save evidence.
+5. **Implemented; corrected smoke pending, not run on production data:** the native-
+   format Qwen3 representation data/pipeline, both provider paths, streaming objective,
    trainer, FSDP2 ownership, configuration, and checkpoint/resume scaffolds.
-   Resolve the open data/scientific contracts and pass the planned GPU smoke
-   before training a new Qwen3-VL-8B-Thinking TGVF Adapter. Require a separate
-   family-specific artifact and full fixture suite before claiming Qwen2.5-VL
-   end-to-end support.
+   Resolve the open data/scientific contracts, real distributed restore gate,
+   and paired-provider experiment before training a new production
+   Qwen3-VL-8B-Thinking TGVF Adapter. Require a separate family-specific
+   artifact and full fixture suite before claiming Qwen2.5-VL end-to-end
+   support.
 6. Bind the GRPO equations and run a minimal frozen-Adapter policy proof.
 7. Freeze the production SDPO equations, feedback/teacher policy, approximation,
    and placement, then validate the implemented path on real two-call

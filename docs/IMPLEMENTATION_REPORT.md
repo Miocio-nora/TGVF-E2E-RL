@@ -1,9 +1,11 @@
 # I8H-20260719 Framework Implementation Report
 
 Status: **bounded framework implementation complete; production gates open**
-Branch: `codex/framework-implementation`
+Branch: `main`
 Base commit: `168b3ab`
 Authorization commit: `2ffa28e`
+Representation implementation commit: `ce6a15f`
+Updated: **2026-07-19 JST**
 
 ## Result
 
@@ -46,7 +48,7 @@ or site-package patch is used.
 
 ## Verification evidence
 
-- `111` CPU tests pass. They cover the public veRL bridge, native transcript and
+- `295` CPU tests pass. They cover the public veRL bridge, native transcript and
   parser, tokenizer invariants, two-call environment, exact behavior-logprob
   transport, immutable observations, deterministic replay contracts, both
   target-conditioning providers, sampling-transform oracle, GRPO tensor
@@ -60,50 +62,58 @@ or site-package patch is used.
   distributed checkpoint save, teardown, reconstruction, and resume reproduced
   the next output, scalar loss, and updated local parameter shards bitwise on a
   tiny deterministic model.
+- an identity-invalid side result executes one real Qwen3-VL-8B-Thinking representation optimizer step on
+  physical GPUs 2 and 3. The target-token-embedding provider, native main `D`
+  and all three D-DeepStack branches, same-image Matrix CE plus `L_gen`, frozen
+  Qwen, two-rank FSDP2, validation, content-bound DCP save, and 104-tensor
+  Adapter-only export all completed without tokenizer growth.
 
 The Qwen3 cell proves public precomputed-latent transport and native transcript
 execution, not policy/reference replay parity, a trained TGVF Adapter, or
-production reward/objective behavior. The FSDP2 cell proves infrastructure and
-exact resume for its tiny fixture, not Qwen memory capacity, throughput, or a
-production actor/reference/teacher placement.
+production reward/objective behavior. `SC-30` proves exact resume for its tiny
+fixture. The technical side result proves debugging readiness but receives no
+experiment-gate credit because its `SC-40` prefix collides with the reserved
+SDPO cell. Corrected `RP-10` is planned; neither result can imply production
+data quality, capacity/throughput, a paired provider result, or real
+distributed restore/next-step parity.
 
 ## Representation-parity work after the bounded framework build
 
-The repository now also contains the accepted representation objective
-primitives, without claiming a completed production trainer:
+The repository now also contains an executable native Qwen3 representation
+trainer, without claiming a completed production run:
 
 - canonical one-call Qwen3 evidence supervision labels only
-  `evidence_description` in the final post-tool assistant thinking turn and verifies the
-  exact generation-prefill/completion relationship;
+  `evidence_description` in the final post-tool assistant thinking turn and
+  verifies the exact generation-prefill/completion relationship;
 - the label boundary uses fast-tokenizer offsets. A local Qwen3 smoke observed
   that sentence-final punctuation may share the following template newline;
-  the committed boundary fixture is synthetic and the pinned real golden
-  remains open;
-- a family-owned canonical-to-model map validates a caller-provided expanded
-  token sequence for original-image and tool-observation placeholder runs,
-  leaving every declared visual position ignored by `L_gen`. Real processor/
-  image-grid integration remains open, and Qwen2.5-VL explicitly fails closed
-  pending its own transcript/artifact fixture;
+  the committed real-processor golden fixes the exact ownership and expanded
+  visual positions;
+- a family-owned canonical-to-model map validates processor-expanded original-
+  image and tool-observation placeholder runs, leaving every visual position
+  ignored by `L_gen`. Qwen2.5-VL explicitly fails closed pending its own
+  transcript/artifact/DeepStack fixture;
 - a differentiable live-tensor Qwen injection path avoids the detaching
   content-addressed replay store during representation training;
-- a synthetic cell-by-cell K×K layout/sensitivity oracle fixes each row's
-  query/evidence/source layout while atomically swapping one candidate's main
-  `D` and all ordered D-DeepStack branches; it does not yet consume the required
-  post-`D` original-image key-block mask;
-- the baseline objective separately returns raw and explicitly weighted Matrix
-  CE and `L_gen` values for later trainer logging; setting `L_gen=0` is allowed
-  only under the distinct Matrix-only ablation identity.
+- the streaming K×K executor atomically swaps main `D` plus all branches,
+  blocks original-image keys for evidence queries, checks deterministic
+  score/recompute equality, and releases each cell graph before traversing each
+  Adapter candidate once;
+- the trainer performs explicit global numerator/count normalization,
+  Adapter-only AdamW, global gradient clipping, collective-safe unequal-K
+  padding, validation, strict FSDP2 checkpointing, and Adapter export. Matrix CE
+  and `L_gen` remain separately logged; `L_gen=0` is only a named ablation.
 
-The synthetic K×K oracle intentionally retains all cell graphs and is suitable
-for layout/sensitivity fixtures, not scientific readout or an 8B training
-schedule. Original-image key blocking, real-Qwen gradient parity, an accepted
-streaming/FSDP2 schedule, globally scaled accumulation, trainer logging,
-real-data manifest, optimizer/checkpoint identity, and the numerical objective
-weights remain open under Gate A0.
+Production data/manifests, prompt, initialization, objective coefficients,
+hyperparameters, semantic thresholds, paired providers, exact legacy-state
+parity, and real distributed restore/next-step evidence remain open under Gate
+A0. The invalid side result is not accepted evidence; corrected `RP-10` must
+pass independently and still will not be a trained-quality artifact.
 
 ## Model-family boundary
 
-Qwen3-VL-8B-Thinking is the only real-model latent smoke. The current
+Qwen3-VL-8B-Thinking is the only real-model latent and representation-smoke
+family. The current
 `Qwen/Qwen2.5-VL-7B-Instruct` implementation is a family-adapter/main-`D`
 synthetic boundary only. Full Qwen2.5-VL end-to-end support remains blocked on
 an accepted runtime identity, a family-specific representation artifact,
