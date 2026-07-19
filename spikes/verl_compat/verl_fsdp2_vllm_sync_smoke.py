@@ -66,7 +66,6 @@ EXPECTED_DISTRIBUTIONS: Mapping[str, str] = {
 PHYSICAL_GPUS = "2,3"
 REQUIRED_ENVIRONMENT: Mapping[str, str] = {
     "CUDA_VISIBLE_DEVICES": PHYSICAL_GPUS,
-    "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES": "1",
     "VLLM_ATTENTION_BACKEND": "TRITON_ATTN",
     "VLLM_PLUGINS": "__tgvf_native_sync_gate_no_plugins__",
     "VLLM_USE_V1": "1",
@@ -302,6 +301,10 @@ def build_command(
 
 def child_environment(paths: GatePaths) -> dict[str, str]:
     result = dict(os.environ)
+    # Ray must remap each actor to a logical CUDA ordinal.  Keeping physical
+    # host IDs visible makes veRL interpret accelerator IDs 2/3 as local
+    # ordinals inside a two-device process and fail before worker creation.
+    result.pop("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES", None)
     result.update(REQUIRED_ENVIRONMENT)
     result["VERL_FILE_LOGGER_PATH"] = str(paths.metrics)
     return result

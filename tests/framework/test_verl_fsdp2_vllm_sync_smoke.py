@@ -83,6 +83,7 @@ def test_plan_is_one_upstream_v1_no_sleep_integration_path() -> None:
     )
     assert "trainer.total_training_steps=2" in overrides
     assert plan["environment"]["CUDA_VISIBLE_DEVICES"] == "2,3"
+    assert "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES" not in plan["environment"]
     assert plan["environment"]["VLLM_PLUGINS"] == (
         "__tgvf_native_sync_gate_no_plugins__"
     )
@@ -95,6 +96,24 @@ def test_candidate_python_symlink_is_not_resolved_out_of_virtualenv() -> None:
 
     assert smoke.absolute_executable(candidate_python) == candidate_python
     assert smoke.absolute_executable(candidate_python) != candidate_python.resolve()
+
+
+def test_child_environment_allows_ray_to_assign_logical_cuda_ordinals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load(SMOKE_PATH, "tgvf_verl_sync_smoke_ray_mapping_test")
+    paths = smoke.derive_paths(
+        smoke.bounded_result_path(
+            Path("artifacts/compatibility/proposed-ray-mapping-gate.json"),
+            require_new=False,
+        )
+    )
+    monkeypatch.setenv("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES", "1")
+
+    environment = smoke.child_environment(paths)
+
+    assert environment["CUDA_VISIBLE_DEVICES"] == "2,3"
+    assert "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES" not in environment
 
 
 def test_fixture_forces_greedy_rows_and_non_rl_zero_reward() -> None:
