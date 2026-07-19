@@ -4,9 +4,16 @@ from .base import (
     CONTEXTUAL_HIDDEN_STATE,
     TARGET_CONDITIONING_SCHEMA_VERSION,
     TARGET_TOKEN_EMBEDDING,
+    TargetConditioningConfig,
     TargetConditionProvider,
     TargetConditioningOutput,
+    TargetConditioningProviderKind,
     TargetConditioningProvenance,
+    TargetConditioningRequest,
+)
+from .factory import (
+    TargetConditioningDependencies,
+    create_target_condition_provider,
 )
 from .providers import (
     ContextHiddenStateProvider,
@@ -21,9 +28,14 @@ __all__ = [
     "TARGET_TOKEN_EMBEDDING",
     "ContextHiddenStateProvider",
     "ContextualHiddenStateConditionProvider",
+    "TargetConditioningConfig",
+    "TargetConditioningDependencies",
     "TargetConditionProvider",
     "TargetConditioningOutput",
+    "TargetConditioningProviderKind",
     "TargetConditioningProvenance",
+    "TargetConditioningRequest",
     "TargetTokenEmbeddingConditionProvider",
     "TargetTokenEmbeddingProvider",
+    "create_target_condition_provider",
 ]

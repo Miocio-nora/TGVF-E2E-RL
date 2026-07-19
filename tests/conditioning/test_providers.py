@@ -6,6 +6,7 @@ from torch import nn
 
 from tgvf_rl.conditioning import (
     ContextualHiddenStateConditionProvider,
+    TargetConditioningRequest,
     TargetTokenEmbeddingConditionProvider,
 )
 from tgvf_rl.contracts.identity import ModelIdentity
@@ -33,12 +34,15 @@ def test_contextual_provider_selects_exact_span_and_records_provenance() -> None
     hidden = torch.arange(30, dtype=torch.float32).reshape(5, 6).requires_grad_()
 
     output = provider.build(
-        hidden_states=hidden,
-        input_ids=input_ids,
-        target_span=TokenSpan(1, 4),
-        expected_target_token_ids=(7, 8, 9),
-        trajectory_id="trajectory-a",
-        call_index=1,
+        TargetConditioningRequest(
+            input_ids=input_ids,
+            target_span=TokenSpan(1, 4),
+            expected_target_token_ids=(7, 8, 9),
+            trajectory_id="trajectory-a",
+            call_index=1,
+            model_identity=provider.model_identity,
+            contextual_hidden_states=hidden,
+        )
     )
 
     assert torch.equal(output.values, hidden[1:4])
@@ -56,12 +60,15 @@ def test_contextual_provider_handles_per_trajectory_batched_targets() -> None:
     input_ids = torch.tensor([[1, 5, 6, 2], [1, 8, 9, 2]])
     hidden = torch.randn(2, 4, 7)
     output = provider(
-        hidden_states=hidden,
-        input_ids=input_ids,
-        target_span=TokenSpan(1, 3),
-        expected_target_token_ids=((5, 6), (8, 9)),
-        trajectory_id=("trajectory-a", "trajectory-b"),
-        call_index=(0, 2),
+        TargetConditioningRequest(
+            input_ids=input_ids,
+            target_span=TokenSpan(1, 3),
+            expected_target_token_ids=((5, 6), (8, 9)),
+            trajectory_id=("trajectory-a", "trajectory-b"),
+            call_index=(0, 2),
+            model_identity=provider.model_identity,
+            contextual_hidden_states=hidden,
+        )
     )
 
     assert output.values.shape == (2, 2, 7)
@@ -73,29 +80,41 @@ def test_contextual_provider_rejects_span_token_and_model_identity_drift() -> No
     provider = ContextualHiddenStateConditionProvider(
         model_identity=_model(), hidden_layer=3
     )
-    kwargs = dict(
-        hidden_states=torch.randn(4, 6),
-        input_ids=torch.tensor([1, 5, 6, 2]),
-        target_span=TokenSpan(1, 3),
-        trajectory_id="trajectory-a",
-        call_index=0,
-    )
     with pytest.raises(ValueError, match="do not exactly match"):
-        provider.build(expected_target_token_ids=(5, 7), **kwargs)
+        provider.build(
+            TargetConditioningRequest(
+                input_ids=torch.tensor([1, 5, 6, 2]),
+                target_span=TokenSpan(1, 3),
+                expected_target_token_ids=(5, 7),
+                trajectory_id="trajectory-a",
+                call_index=0,
+                model_identity=provider.model_identity,
+                contextual_hidden_states=torch.randn(4, 6),
+            )
+        )
     with pytest.raises(ValueError, match="model identity"):
         provider.build(
-            expected_target_token_ids=(5, 6),
-            model_identity=_model(name="different"),
-            **kwargs,
+            TargetConditioningRequest(
+                input_ids=torch.tensor([1, 5, 6, 2]),
+                target_span=TokenSpan(1, 3),
+                expected_target_token_ids=(5, 6),
+                trajectory_id="trajectory-a",
+                call_index=0,
+                model_identity=_model(name="different"),
+                contextual_hidden_states=torch.randn(4, 6),
+            )
         )
     with pytest.raises(ValueError, match="outside"):
         provider.build(
-            hidden_states=torch.randn(4, 6),
-            input_ids=torch.tensor([1, 5, 6, 2]),
-            target_span=TokenSpan(3, 5),
-            expected_target_token_ids=(2, 3),
-            trajectory_id="trajectory-a",
-            call_index=0,
+            TargetConditioningRequest(
+                input_ids=torch.tensor([1, 5, 6, 2]),
+                target_span=TokenSpan(3, 5),
+                expected_target_token_ids=(2, 3),
+                trajectory_id="trajectory-a",
+                call_index=0,
+                model_identity=provider.model_identity,
+                contextual_hidden_states=torch.randn(4, 6),
+            )
         )
 
 
@@ -112,11 +131,14 @@ def test_token_embedding_provider_borrows_exact_existing_rows_without_ownership(
     ids = torch.tensor([0, 3, 7, 4])
 
     output = provider.build(
-        input_ids=ids,
-        target_span=TokenSpan(1, 3),
-        expected_target_token_ids=(3, 7),
-        trajectory_id="trajectory-a",
-        call_index=0,
+        TargetConditioningRequest(
+            input_ids=ids,
+            target_span=TokenSpan(1, 3),
+            expected_target_token_ids=(3, 7),
+            trajectory_id="trajectory-a",
+            call_index=0,
+            model_identity=model,
+        )
     )
 
     assert torch.equal(output.values, embedding(ids[1:3]))
@@ -138,11 +160,14 @@ def test_token_embedding_provider_detects_vocab_growth() -> None:
 
     with pytest.raises(ValueError, match="tokenizer growth"):
         provider.build(
-            input_ids=torch.tensor([1, 2]),
-            target_span=TokenSpan(0, 1),
-            expected_target_token_ids=(1,),
-            trajectory_id="trajectory-a",
-            call_index=0,
+            TargetConditioningRequest(
+                input_ids=torch.tensor([1, 2]),
+                target_span=TokenSpan(0, 1),
+                expected_target_token_ids=(1,),
+                trajectory_id="trajectory-a",
+                call_index=0,
+                model_identity=provider.model_identity,
+            )
         )
 
 
@@ -155,9 +180,12 @@ def test_token_embedding_provider_rejects_ids_outside_original_tokenizer() -> No
     )
     with pytest.raises(ValueError, match="vocabulary"):
         provider.build(
-            input_ids=torch.tensor([1, 8]),
-            target_span=TokenSpan(0, 1),
-            expected_target_token_ids=(1,),
-            trajectory_id="trajectory-a",
-            call_index=0,
+            TargetConditioningRequest(
+                input_ids=torch.tensor([1, 8]),
+                target_span=TokenSpan(0, 1),
+                expected_target_token_ids=(1,),
+                trajectory_id="trajectory-a",
+                call_index=0,
+                model_identity=provider.model_identity,
+            )
         )

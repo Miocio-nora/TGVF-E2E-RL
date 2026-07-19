@@ -3,7 +3,10 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from tgvf_rl.conditioning.providers import ContextualHiddenStateConditionProvider
+from tgvf_rl.conditioning import (
+    ContextualHiddenStateConditionProvider,
+    TargetConditioningRequest,
+)
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.environment.focus_tool import (
@@ -49,12 +52,15 @@ def test_focus_tool_materializes_main_and_deepstack_once() -> None:
     condition = ContextualHiddenStateConditionProvider(
         model_identity=model_id, hidden_layer=2
     ).build(
-        hidden_states=torch.randn(len(input_ids), 8),
-        input_ids=input_ids,
-        target_span=span,
-        expected_target_token_ids=parsed.target_span.token_ids,
-        trajectory_id="trajectory",
-        call_index=0,
+        TargetConditioningRequest(
+            input_ids=input_ids,
+            target_span=span,
+            expected_target_token_ids=parsed.target_span.token_ids,
+            trajectory_id="trajectory",
+            call_index=0,
+            model_identity=model_id,
+            contextual_hidden_states=torch.randn(len(input_ids), 8),
+        )
     )
     main_projection = FrozenProjectionPort(
         Merger(4, 8), identity="main", input_dim=4, output_dim=8, spatial_merge_size=2

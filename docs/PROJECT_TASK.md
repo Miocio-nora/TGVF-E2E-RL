@@ -273,6 +273,24 @@ Both target-conditioning providers must be implemented and tested:
 An experiment selects one provider, but provider support itself is not an open
 either/or architecture decision.
 
+Decision `TCPI-20260719` makes that selection an explicit public interface:
+
+- every run configuration contains one required target-conditioning provider
+  configuration; there is no implicit default;
+- provider identity is a closed enum with exactly `contextual_hidden_state` and
+  `target_token_embedding` in schema v1;
+- both implementations accept the same typed target-conditioning request and
+  return the same `TargetConditioningOutput`/provenance schema;
+- a repository-owned factory constructs the selected provider from the run
+  configuration and injected model dependencies; callers do not branch on
+  provider class names;
+- contextual hidden-layer identity and base embedding identity are mutually
+  exclusive, explicitly configured fields; invalid or incomplete combinations
+  fail closed; and
+- both selections must pass the same request, batching, TGVF Adapter handoff,
+  provenance, and configuration-identity tests. Provider-specific Qwen-family
+  numerical fixtures remain required before a real experiment is promoted.
+
 ## 3. Native Qwen tool protocol
 
 No project-specific tokens may be added. For the pinned local

@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict
 from enum import Enum
 
+from tgvf_rl.conditioning.base import TargetConditioningConfig
 from tgvf_rl.contracts.errors import ContractUnsetError
 
 from .schema import RunConfig, RunGate
@@ -32,6 +33,10 @@ def config_sha256(config: RunConfig) -> str:
 def validate_run_config(config: RunConfig) -> None:
     if not config.run_id:
         raise ValueError("run_id must be non-empty")
+    if not isinstance(config.target_conditioning, TargetConditioningConfig):
+        raise TypeError(
+            "target_conditioning must be an explicit TargetConditioningConfig"
+        )
     if config.gate is RunGate.SKELETON:
         return
     if config.prompt_identity is None or config.max_tool_calls is None:

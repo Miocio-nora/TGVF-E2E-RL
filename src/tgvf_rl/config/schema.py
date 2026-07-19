@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from tgvf_rl.conditioning.base import TargetConditioningConfig
 from tgvf_rl.contracts.data import DataManifestIdentity
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity
 
@@ -45,6 +46,7 @@ class RunConfig:
     stack: StackConfig
     primary_model: ModelIdentity
     secondary_model: ModelIdentity | None
+    target_conditioning: TargetConditioningConfig
     representation_artifact: ArtifactIdentity | None
     data_manifest: DataManifestIdentity | None
     prompt_identity: ArtifactIdentity | None

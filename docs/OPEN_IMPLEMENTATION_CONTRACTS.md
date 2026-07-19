@@ -257,7 +257,11 @@ interfaces must be versioned and fail closed while unset.
     compatibility gate in `PR-02C`/`SD-11`.
 - [x] `FIXED SK-11` — The shared target-conditioning interface has both
   contextual-hidden-state and target-token-embedding provider
-  implementations/fixtures. No provider-specific trajectory schema is allowed.
+  implementations/fixtures. `TCPI-20260719` requires one explicit provider enum
+  in every run configuration, a shared typed request/output contract, and a
+  configuration-driven factory with no default provider. Contextual hidden-layer
+  and token-embedding identities are mutually exclusive and fail closed. No
+  provider-specific trajectory schema is allowed.
 - [x] `FIXED SK-12` — A separate optional judge-provider interface is
   implemented. Judge output carries model/service/prompt/sampling/calibration
   identity and may never masquerade as reference-policy or SDPO-teacher state.

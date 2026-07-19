@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import weakref
-from collections.abc import Sequence
-
 import torch
 from torch import nn
 
@@ -17,6 +15,7 @@ from .base import (
     BoundTargetConditionProvider,
     TargetConditioningOutput,
     TargetConditioningProvenance,
+    TargetConditioningRequest,
     _ValidatedTargetSelection,
     _validate_target_selection,
 )
@@ -35,24 +34,25 @@ class ContextualHiddenStateConditionProvider(BoundTargetConditionProvider):
 
     def build(
         self,
-        *,
-        hidden_states: torch.Tensor,
-        input_ids: torch.Tensor,
-        target_span: TokenSpan,
-        expected_target_token_ids: Sequence[int] | Sequence[Sequence[int]],
-        trajectory_id: str | Sequence[str],
-        call_index: int | Sequence[int],
-        model_identity: ModelIdentity | None = None,
+        request: TargetConditioningRequest,
+        /,
     ) -> TargetConditioningOutput:
-        self._check_runtime_model(model_identity)
+        if not isinstance(request, TargetConditioningRequest):
+            raise TypeError("request must be a TargetConditioningRequest")
+        self._check_runtime_model(request.model_identity)
         selection = _validate_target_selection(
-            input_ids=input_ids,
-            target_span=target_span,
-            expected_target_token_ids=expected_target_token_ids,
-            trajectory_id=trajectory_id,
-            call_index=call_index,
+            input_ids=request.input_ids,
+            target_span=request.target_span,
+            expected_target_token_ids=request.expected_target_token_ids,
+            trajectory_id=request.trajectory_id,
+            call_index=request.call_index,
             tokenizer_length=self.model_identity.tokenizer_length,
         )
+        hidden_states = request.contextual_hidden_states
+        if hidden_states is None:
+            raise ValueError(
+                "contextual_hidden_state requires contextual_hidden_states"
+            )
         if not isinstance(hidden_states, torch.Tensor):
             raise TypeError("hidden_states must be a torch.Tensor")
         expected_rank = 3 if selection.batched else 2
@@ -72,20 +72,24 @@ class ContextualHiddenStateConditionProvider(BoundTargetConditionProvider):
         elif hidden_states.shape[0] != selection.sequence_length:
             raise ValueError("hidden_states sequence length must match input_ids")
 
-        values = hidden_states[..., target_span.start : target_span.end, :]
+        values = hidden_states[
+            ..., request.target_span.start : request.target_span.end, :
+        ]
         return TargetConditioningOutput(
             values=values,
             provenance=_provenance(
                 provider=self.provider_name,
                 model=self.model_identity,
-                target_span=target_span,
+                target_span=request.target_span,
                 selection=selection,
                 hidden_layer=self.hidden_layer,
             ),
         )
 
-    def forward(self, **kwargs: object) -> TargetConditioningOutput:
-        return self.build(**kwargs)
+    def forward(
+        self, request: TargetConditioningRequest, /
+    ) -> TargetConditioningOutput:
+        return self.build(request)
 
 
 class TargetTokenEmbeddingConditionProvider(BoundTargetConditionProvider):
@@ -133,32 +137,35 @@ class TargetTokenEmbeddingConditionProvider(BoundTargetConditionProvider):
 
     def build(
         self,
-        *,
-        input_ids: torch.Tensor,
-        target_span: TokenSpan,
-        expected_target_token_ids: Sequence[int] | Sequence[Sequence[int]],
-        trajectory_id: str | Sequence[str],
-        call_index: int | Sequence[int],
-        model_identity: ModelIdentity | None = None,
+        request: TargetConditioningRequest,
+        /,
     ) -> TargetConditioningOutput:
-        self._check_runtime_model(model_identity)
+        if not isinstance(request, TargetConditioningRequest):
+            raise TypeError("request must be a TargetConditioningRequest")
+        self._check_runtime_model(request.model_identity)
+        if request.contextual_hidden_states is not None:
+            raise ValueError(
+                "target_token_embedding request cannot carry contextual_hidden_states"
+            )
         selection = _validate_target_selection(
-            input_ids=input_ids,
-            target_span=target_span,
-            expected_target_token_ids=expected_target_token_ids,
-            trajectory_id=trajectory_id,
-            call_index=call_index,
+            input_ids=request.input_ids,
+            target_span=request.target_span,
+            expected_target_token_ids=request.expected_target_token_ids,
+            trajectory_id=request.trajectory_id,
+            call_index=request.call_index,
             tokenizer_length=self.model_identity.tokenizer_length,
         )
         embedding = self.borrowed_embedding
         self._validate_embedding(embedding)
         weight = embedding.weight
-        if input_ids.device != weight.device:
+        if request.input_ids.device != weight.device:
             raise ValueError(
                 "input_ids and the borrowed model embedding must share a device"
             )
 
-        selected_ids = selection.input_ids[:, target_span.start : target_span.end]
+        selected_ids = selection.input_ids[
+            :, request.target_span.start : request.target_span.end
+        ]
         values = embedding(selected_ids)
         if not selection.batched:
             values = values.squeeze(0)
@@ -167,14 +174,16 @@ class TargetTokenEmbeddingConditionProvider(BoundTargetConditionProvider):
             provenance=_provenance(
                 provider=self.provider_name,
                 model=self.model_identity,
-                target_span=target_span,
+                target_span=request.target_span,
                 selection=selection,
                 embedding_identity=self.embedding_identity,
             ),
         )
 
-    def forward(self, **kwargs: object) -> TargetConditioningOutput:
-        return self.build(**kwargs)
+    def forward(
+        self, request: TargetConditioningRequest, /
+    ) -> TargetConditioningOutput:
+        return self.build(request)
 
 
 def _provenance(

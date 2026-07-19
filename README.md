@@ -78,7 +78,7 @@ action/response turns.
 | **TGVF Adapter** | Consume target conditioning and original-image visual features; produce main `D` and every D-DeepStack branch. |
 | **policy RL phase** | Learn routing, target generation, native tool use, post-`D` reasoning, repeated calls, and final answering. |
 | **Qwen VLM family adapter** | Isolate Qwen3-VL and Qwen2.5-VL processor, visual, M-RoPE, DeepStack, transcript, and forward differences. |
-| **target-condition providers** | Supply both contextual-hidden-state and target-token-embedding conditioning behind one interface. |
+| **target-condition providers** | Supply contextual-hidden-state or target-token-embedding conditioning through one typed interface; every run selects one explicitly with no default. |
 | **veRL integration** | Provide distributed rollout and optimization infrastructure, with required FSDP2 support. |
 | **objective layer** | Keep GRPO and reference-style SDPO mathematics/state separately identifiable. |
 

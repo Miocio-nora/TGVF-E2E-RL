@@ -6,6 +6,7 @@ import hashlib
 import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol, runtime_checkable
 
 import torch
@@ -26,6 +27,74 @@ _INTEGER_DTYPES = {
     torch.int32,
     torch.int64,
 }
+
+
+class TargetConditioningProviderKind(str, Enum):
+    """Closed set of provider choices recorded in every run identity."""
+
+    CONTEXTUAL_HIDDEN_STATE = "contextual_hidden_state"
+    TARGET_TOKEN_EMBEDDING = "target_token_embedding"
+
+
+@dataclass(frozen=True, slots=True)
+class TargetConditioningConfig:
+    """Fail-closed configuration for one explicitly selected provider."""
+
+    provider: TargetConditioningProviderKind
+    hidden_layer: int | None = None
+    embedding_identity: str | None = None
+    schema_version: str = TARGET_CONDITIONING_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != TARGET_CONDITIONING_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported target-conditioning schema {self.schema_version!r}"
+            )
+        if not isinstance(self.provider, TargetConditioningProviderKind):
+            raise TypeError("provider must be a TargetConditioningProviderKind")
+        if self.provider is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE:
+            if not isinstance(self.hidden_layer, int) or isinstance(
+                self.hidden_layer, bool
+            ):
+                raise ValueError(
+                    "contextual_hidden_state requires an explicit integer hidden_layer"
+                )
+            if self.embedding_identity is not None:
+                raise ValueError(
+                    "contextual_hidden_state cannot configure embedding_identity"
+                )
+            return
+        if self.hidden_layer is not None:
+            raise ValueError("target_token_embedding cannot configure hidden_layer")
+        if not self.embedding_identity or not self.embedding_identity.strip():
+            raise ValueError(
+                "target_token_embedding requires an explicit embedding_identity"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class TargetConditioningRequest:
+    """One common request consumed by either provider implementation."""
+
+    input_ids: torch.Tensor
+    target_span: TokenSpan
+    expected_target_token_ids: Sequence[int] | Sequence[Sequence[int]]
+    trajectory_id: str | Sequence[str]
+    call_index: int | Sequence[int]
+    model_identity: ModelIdentity
+    contextual_hidden_states: torch.Tensor | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.input_ids, torch.Tensor):
+            raise TypeError("input_ids must be a torch.Tensor")
+        if not isinstance(self.target_span, TokenSpan):
+            raise TypeError("target_span must be a TokenSpan")
+        if not isinstance(self.model_identity, ModelIdentity):
+            raise TypeError("model_identity must be a ModelIdentity")
+        if self.contextual_hidden_states is not None and not isinstance(
+            self.contextual_hidden_states, torch.Tensor
+        ):
+            raise TypeError("contextual_hidden_states must be a torch.Tensor")
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,12 +206,14 @@ class TargetConditioningOutput:
 
 @runtime_checkable
 class TargetConditionProvider(Protocol):
-    """Common provider boundary; implementations expose ``build`` and ``forward``."""
+    """Strong common boundary for a configuration-selected provider."""
 
     provider_name: str
     model_identity: ModelIdentity
 
-    def build(self, *args: object, **kwargs: object) -> TargetConditioningOutput: ...
+    def build(
+        self, request: TargetConditioningRequest, /
+    ) -> TargetConditioningOutput: ...
 
 
 class BoundTargetConditionProvider(nn.Module):
@@ -328,7 +399,10 @@ __all__ = [
     "TARGET_CONDITIONING_SCHEMA_VERSION",
     "TARGET_TOKEN_EMBEDDING",
     "BoundTargetConditionProvider",
+    "TargetConditioningConfig",
     "TargetConditionProvider",
     "TargetConditioningOutput",
+    "TargetConditioningProviderKind",
     "TargetConditioningProvenance",
+    "TargetConditioningRequest",
 ]
