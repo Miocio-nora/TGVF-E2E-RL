@@ -6,14 +6,56 @@ import torch
 from tgvf_rl.representation.training.losses import (
     EvidenceReadabilityLossTerms,
     HistoricalNormLossTerms,
+    MatrixCEScoreMode,
     SameImageMatrixCELossTerms,
 )
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveConfigV2,
+    RepresentationObjectiveConfigV3,
     RepresentationObjectiveKind,
     compose_reference_representation_objective,
+    resolve_matrix_ce_score_config,
 )
+
+
+def test_v3_binds_balanced_matrix_ce_mode_and_temperature() -> None:
+    balanced = RepresentationObjectiveConfigV3(
+        identity="balanced-matrix-ce",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=1.0,
+        l_gen_weight=1.0,
+        norm_weight=0.1,
+        matrix_ce_mode=MatrixCEScoreMode.BALANCED,
+        matrix_ce_temperature=0.75,
+    )
+    legacy_v2 = RepresentationObjectiveConfigV2(
+        identity="historical-matrix-ce",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=1.0,
+        l_gen_weight=1.0,
+        norm_weight=0.1,
+    )
+
+    assert resolve_matrix_ce_score_config(balanced) == (
+        MatrixCEScoreMode.BALANCED,
+        0.75,
+    )
+    assert resolve_matrix_ce_score_config(legacy_v2) == (
+        MatrixCEScoreMode.LEGACY_SUMMED_NLL,
+        1.0,
+    )
+
+    with pytest.raises(ValueError, match="legacy_summed_nll requires"):
+        RepresentationObjectiveConfigV3(
+            identity="invalid-tempered-legacy",
+            kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+            matrix_ce_weight=1.0,
+            l_gen_weight=1.0,
+            norm_weight=0.1,
+            matrix_ce_mode=MatrixCEScoreMode.LEGACY_SUMMED_NLL,
+            matrix_ce_temperature=0.75,
+        )
 
 
 def test_v2_baseline_composes_and_logs_raw_and_weighted_norm() -> None:

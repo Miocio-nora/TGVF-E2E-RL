@@ -17,8 +17,10 @@ from tgvf_rl.qwen.base import (
 
 from .losses import (
     EvidenceReadabilityLossTerms,
+    MatrixCEScoreMode,
     SameImageMatrixCELossTerms,
     causal_evidence_losses,
+    matrix_ce_cell_scores,
     same_image_matrix_ce_loss_terms,
 )
 from .transcript import ModelEvidenceSupervision
@@ -314,6 +316,9 @@ def synthetic_same_image_layout_readout_terms(
     family_adapter: QwenVLMFamilyAdapter,
     model: object,
     group: SameImageReadoutGroup,
+    *,
+    matrix_ce_mode: MatrixCEScoreMode = MatrixCEScoreMode.LEGACY_SUMMED_NLL,
+    matrix_ce_temperature: float = 1.0,
 ) -> SameImageReadoutTerms:
     """Exercise K×K row/layout and atomic whole-D swaps on a synthetic mask.
 
@@ -351,7 +356,13 @@ def synthetic_same_image_layout_readout_terms(
                 device=result.logits.device,
             ).unsqueeze(0)
             losses = causal_evidence_losses(result.logits, labels)
-            cell_scores.append(losses.per_sample_summed_log_likelihood[0])
+            cell_scores.append(
+                matrix_ce_cell_scores(
+                    losses,
+                    mode=matrix_ce_mode,
+                    temperature=matrix_ce_temperature,
+                )[0]
+            )
             if row_index == column_index:
                 diagonal_l_gen.append(losses.per_sample_token_mean_nll[0])
                 evidence_counts.append(losses.valid_token_counts[0])

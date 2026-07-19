@@ -8,6 +8,7 @@ import pytest
 import torch
 from torch import nn
 
+import tgvf_rl.representation.training.evaluation as evaluation_module
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
@@ -15,10 +16,14 @@ from tgvf_rl.representation.training.evaluation import (
     _isolated_validation_rng,
     evaluate_representation_validation_event,
 )
-from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
+from tgvf_rl.representation.training.losses import (
+    EVIDENCE_IGNORE_INDEX,
+    MatrixCEScoreMode,
+)
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveConfigV2,
+    RepresentationObjectiveConfigV3,
     RepresentationObjectiveKind,
 )
 from tgvf_rl.representation.training.readout import (
@@ -281,6 +286,17 @@ def _objective_v2() -> RepresentationObjectiveConfigV2:
     )
 
 
+def _objective_v3() -> RepresentationObjectiveConfigV3:
+    return RepresentationObjectiveConfigV3(
+        identity="validation-balanced-matrix-ce",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=1.0,
+        l_gen_weight=1.0,
+        norm_weight=0.1,
+        matrix_ce_mode=MatrixCEScoreMode.BALANCED,
+    )
+
+
 def _evaluate(
     *,
     adapter: TGVFAdapter,
@@ -291,6 +307,7 @@ def _evaluate(
     world_size: int = 1,
     objective: RepresentationObjectiveConfig
     | RepresentationObjectiveConfigV2
+    | RepresentationObjectiveConfigV3
     | None = None,
 ):
     return evaluate_representation_validation_event(
@@ -381,6 +398,47 @@ def test_validation_v2_reports_raw_and_weighted_historical_norm() -> None:
         metrics.global_matrix_ce_loss
         + metrics.global_l_gen_loss
         + metrics.global_weighted_norm_loss
+    )
+
+
+def test_validation_forwards_balanced_objective_without_changing_l_gen_or_norm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = _evaluate(
+        adapter=_adapter(),
+        qwen=_qwen(initially_trainable=False).eval(),
+        samples=_samples(),
+        builder=_RecordingGroupBuilder(),
+        event=0,
+        objective=_objective_v2(),
+    )
+    balanced_objective = _objective_v3()
+    recorded_objectives: list[object] = []
+    original_score = evaluation_module.score_streaming_same_image_group
+
+    def recording_score(*args: object, **kwargs: object):
+        recorded_objectives.append(kwargs.get("objective"))
+        return original_score(*args, **kwargs)
+
+    monkeypatch.setattr(
+        evaluation_module,
+        "score_streaming_same_image_group",
+        recording_score,
+    )
+    balanced = _evaluate(
+        adapter=_adapter(),
+        qwen=_qwen(initially_trainable=False).eval(),
+        samples=_samples(),
+        builder=_RecordingGroupBuilder(),
+        event=0,
+        objective=balanced_objective,
+    )
+
+    assert recorded_objectives == [balanced_objective]
+    assert balanced.global_l_gen_loss == pytest.approx(legacy.global_l_gen_loss)
+    assert balanced.global_norm_loss == pytest.approx(legacy.global_norm_loss)
+    assert balanced.global_weighted_norm_loss == pytest.approx(
+        legacy.global_weighted_norm_loss
     )
 
 

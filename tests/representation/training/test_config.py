@@ -8,15 +8,18 @@ import pytest
 
 from tgvf_rl.cli import main
 from tgvf_rl.conditioning import TargetConditioningProviderKind
+from tgvf_rl.objectives.base import spec_identity_sha256
 from tgvf_rl.representation.training.config import (
     ACCEPTED_QWEN3_ATTENTION_BACKEND,
     ACCEPTED_QWEN3_MODEL_DTYPE,
     ACCEPTED_QWEN3_MODEL_NAME,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
+    REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
     REPRESENTATION_TRAINING_SCOPE,
     RepresentationDataConfigV2,
     RepresentationObjectiveExecutionConfigV2,
+    RepresentationObjectiveExecutionConfigV3,
     load_representation_training_config,
 )
 from tgvf_rl.representation.training.checkpoint import (
@@ -29,6 +32,7 @@ from tgvf_rl.representation.training.data import SplitOverlapReport
 from tgvf_rl.representation.training.distributed_checkpoint import (
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
 )
+from tgvf_rl.representation.training.losses import MatrixCEScoreMode
 from tgvf_rl.representation.training.runtime import (
     ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256,
     ACCEPTED_QWEN3_MODEL_PATH,
@@ -239,6 +243,20 @@ def _upgrade_config_to_v2(path: Path) -> Path:
     return path
 
 
+def _upgrade_config_to_v3(path: Path) -> Path:
+    path = _upgrade_config_to_v2(path)
+    text = path.read_text(encoding="utf-8").replace(
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2}"',
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3}"',
+    )
+    text = text.replace(
+        "norm_weight = 0.1",
+        'norm_weight = 0.1\nmatrix_ce_mode = "balanced"',
+    )
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def test_complete_config_maps_to_runtime_contracts_and_binds_both_hashes(
     tmp_path: Path,
 ) -> None:
@@ -396,6 +414,81 @@ def test_v2_has_no_norm_mode_and_v1_remains_loadable_unchanged(tmp_path: Path) -
     )
     with pytest.raises(ValueError, match="unknown.*norm_mode"):
         load_representation_training_config(v2_path, verify_external_files=False)
+
+
+def test_v3_selects_balanced_matrix_ce_and_defaults_temperature(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v3(_write_config(tmp_path))
+
+    defaulted = load_representation_training_config(
+        path,
+        verify_external_files=False,
+    )
+
+    assert defaulted.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3
+    assert isinstance(defaulted.objective, RepresentationObjectiveExecutionConfigV3)
+    assert defaulted.objective.objective.matrix_ce_mode is MatrixCEScoreMode.BALANCED
+    assert defaulted.objective.objective.matrix_ce_temperature == 1.0
+    assert defaulted.validation_payload()["matrix_ce_mode"] == "balanced"
+    assert defaulted.validation_payload()["matrix_ce_temperature"] == 1.0
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'matrix_ce_mode = "balanced"',
+            'matrix_ce_mode = "balanced"\nmatrix_ce_temperature = 0.5',
+        ),
+        encoding="utf-8",
+    )
+    explicit = load_representation_training_config(
+        path,
+        verify_external_files=False,
+    )
+    assert explicit.objective.objective.matrix_ce_temperature == 0.5
+    assert spec_identity_sha256(explicit.objective.objective) != (
+        spec_identity_sha256(defaulted.objective.objective)
+    )
+
+
+def test_v3_legacy_mode_is_selectable_but_cannot_be_tempered(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v3(_write_config(tmp_path))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'matrix_ce_mode = "balanced"',
+            'matrix_ce_mode = "legacy_summed_nll"',
+        ),
+        encoding="utf-8",
+    )
+    legacy = load_representation_training_config(
+        path,
+        verify_external_files=False,
+    )
+    assert legacy.objective.objective.matrix_ce_mode is (
+        MatrixCEScoreMode.LEGACY_SUMMED_NLL
+    )
+    assert legacy.objective.objective.matrix_ce_temperature == 1.0
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'matrix_ce_mode = "legacy_summed_nll"',
+            'matrix_ce_mode = "legacy_summed_nll"\nmatrix_ce_temperature = 0.5',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="legacy_summed_nll requires"):
+        load_representation_training_config(path, verify_external_files=False)
+
+
+def test_existing_v2_objective_identity_remains_unchanged() -> None:
+    repository = Path(__file__).resolve().parents[3]
+    config = load_representation_training_config(
+        repository
+        / "configs/smoke/representation_qwen3_embedding_rp13_singlepass_cellb32_throughput.toml",
+        verify_external_files=False,
+    )
+
+    assert isinstance(config.objective, RepresentationObjectiveExecutionConfigV2)
+    assert spec_identity_sha256(config.objective.objective) == (
+        "3203b12dc9474f60e8fc0b1a224471fedfb648ee3dd1fa73dcd79a08a487d7c9"
+    )
 
 
 def test_target_token_embedding_is_a_real_exclusive_provider_choice(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
+import math
 
 import torch
 from torch.nn import functional as F
@@ -13,19 +15,62 @@ EVIDENCE_IGNORE_INDEX = -100
 HISTORICAL_NORM_EPS = 1e-6
 
 
+class MatrixCEScoreMode(str, Enum):
+    """Selectable cell-score mathematics for same-image Matrix CE."""
+
+    LEGACY_SUMMED_NLL = "legacy_summed_nll"
+    BALANCED = "balanced"
+
+
 @dataclass(frozen=True, slots=True)
 class CausalEvidenceLosses:
     """Per-sample evidence likelihood reductions after a causal shift.
 
     ``per_sample_token_mean_nll`` is the representation readability loss before
-    its independently configured sample reduction.  Matrix-CE cells instead
-    use ``per_sample_summed_log_likelihood``, which is the negative summed NLL.
-    ``valid_token_counts`` makes the different normalizers observable.
+    its independently configured sample reduction and the balanced Matrix-CE
+    cell statistic.  ``per_sample_summed_log_likelihood`` is the historical
+    negative summed-NLL Matrix-CE statistic.  ``valid_token_counts`` makes the
+    different normalizers observable.
     """
 
     per_sample_token_mean_nll: torch.Tensor
     per_sample_summed_log_likelihood: torch.Tensor
     valid_token_counts: torch.Tensor
+
+
+def matrix_ce_cell_scores(
+    losses: CausalEvidenceLosses,
+    *,
+    mode: MatrixCEScoreMode,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Convert per-cell evidence losses into selectable Matrix-CE scores.
+
+    ``legacy_summed_nll`` returns the historical negative summed NLL exactly.
+    ``balanced`` removes evidence-length scaling before applying a fixed
+    positive temperature: ``-mean_nll / temperature``.
+    """
+
+    if not isinstance(losses, CausalEvidenceLosses):
+        raise TypeError("losses must be CausalEvidenceLosses")
+    if not isinstance(mode, MatrixCEScoreMode):
+        raise TypeError("Matrix-CE score mode must be explicit")
+    if isinstance(temperature, bool) or not isinstance(temperature, float):
+        raise TypeError("Matrix-CE temperature must be an explicit float")
+    if not math.isfinite(temperature) or temperature <= 0:
+        raise ValueError("Matrix-CE temperature must be finite and positive")
+    if mode is MatrixCEScoreMode.LEGACY_SUMMED_NLL:
+        if temperature != 1.0:
+            raise ValueError("legacy_summed_nll requires temperature 1.0")
+        # Preserve the historical hot path and tensor identity exactly.
+        return losses.per_sample_summed_log_likelihood
+
+    values = -losses.per_sample_token_mean_nll / temperature
+    if values.ndim != 1 or values.shape != losses.valid_token_counts.shape:
+        raise ValueError("Matrix-CE cell scores and evidence counts must align")
+    if not values.dtype.is_floating_point:
+        raise TypeError("Matrix-CE cell scores must use a floating dtype")
+    return values
 
 
 @dataclass(frozen=True, slots=True)

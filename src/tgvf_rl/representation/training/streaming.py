@@ -18,13 +18,17 @@ from tgvf_rl.representation.deepstack import build_original_image_key_block_mask
 from .losses import (
     CausalEvidenceLosses,
     EVIDENCE_IGNORE_INDEX,
+    MatrixCEScoreMode,
     causal_evidence_losses,
     historical_sample_norm_loss,
+    matrix_ce_cell_scores,
 )
 from .objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveConfigLike,
     RepresentationObjectiveConfigV2,
+    RepresentationObjectiveConfigV3,
+    resolve_matrix_ce_score_config,
 )
 from .readout import (
     RepresentationReadoutRow,
@@ -58,6 +62,8 @@ class _StreamingGradientContract:
     objective_identity: str
     objective_schema_version: str
     matrix_ce_weight: float
+    matrix_ce_mode: MatrixCEScoreMode
+    matrix_ce_temperature: float
     l_gen_weight: float
     norm_weight: float | None
     matrix_valid_rows: int
@@ -281,6 +287,11 @@ def _score_streaming_groups(
     normalization: StreamingGlobalNormalization | None,
 ) -> tuple[tuple[StreamingGroupScores, ...], tuple[int, ...]]:
     training = _validate_score_training_inputs(groups, objective, normalization)
+    score_mode, score_temperature = (
+        (MatrixCEScoreMode.LEGACY_SUMMED_NLL, 1.0)
+        if objective is None
+        else resolve_matrix_ce_score_config(objective)
+    )
     score_cells: list[list[list[torch.Tensor | None]]] = [
         [[None for _ in group.candidates] for _ in group.rows] for group in groups
     ]
@@ -327,6 +338,11 @@ def _score_streaming_groups(
             else:
                 with torch.no_grad():
                     losses = _forward_cell_batch_losses(family_adapter, model, cells)
+            cell_scores = matrix_ce_cell_scores(
+                losses,
+                mode=score_mode,
+                temperature=score_temperature,
+            )
             forward_batch_sizes.append(len(cells))
 
             row_matrix_terms: list[torch.Tensor] = []
@@ -335,7 +351,7 @@ def _score_streaming_groups(
             for logical_row in compatible_rows:
                 row_size = len(logical_row.cells)
                 row_slice = slice(cursor, cursor + row_size)
-                row_scores = losses.per_sample_summed_log_likelihood[row_slice]
+                row_scores = cell_scores[row_slice]
                 for cell, value in zip(
                     logical_row.cells,
                     row_scores,
@@ -513,7 +529,12 @@ def _backward_streaming_groups(
     expected_qwen_schedule: tuple[int, ...] | None,
 ) -> StreamingBackwardMetrics:
     if not isinstance(
-        objective, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
+        objective,
+        (
+            RepresentationObjectiveConfig,
+            RepresentationObjectiveConfigV2,
+            RepresentationObjectiveConfigV3,
+        ),
     ):
         raise TypeError("objective must be a representation objective config")
     if not isinstance(normalization, StreamingGlobalNormalization):
@@ -715,16 +736,21 @@ def _validate_score_training_inputs(
     objective: RepresentationObjectiveConfigLike | None,
     normalization: StreamingGlobalNormalization | None,
 ) -> bool:
-    if (objective is None) != (normalization is None):
-        raise ValueError(
-            "objective and normalization must either both be provided or both omitted"
-        )
     if objective is None:
+        if normalization is not None:
+            raise ValueError("normalization requires an explicit objective")
         return False
     if not isinstance(
-        objective, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
+        objective,
+        (
+            RepresentationObjectiveConfig,
+            RepresentationObjectiveConfigV2,
+            RepresentationObjectiveConfigV3,
+        ),
     ):
         raise TypeError("objective must be a representation objective config")
+    if normalization is None:
+        return False
     if not isinstance(normalization, StreamingGlobalNormalization):
         raise TypeError("normalization must be StreamingGlobalNormalization")
     local_rows = sum(len(group.rows) for group in groups)
@@ -755,10 +781,13 @@ def _gradient_contract(
     normalization: StreamingGlobalNormalization,
     qwen_forward_batch_sizes: tuple[int, ...],
 ) -> _StreamingGradientContract:
+    matrix_ce_mode, matrix_ce_temperature = resolve_matrix_ce_score_config(objective)
     return _StreamingGradientContract(
         objective_identity=objective.identity,
         objective_schema_version=objective.schema_version,
         matrix_ce_weight=objective.matrix_ce_weight,
+        matrix_ce_mode=matrix_ce_mode,
+        matrix_ce_temperature=matrix_ce_temperature,
         l_gen_weight=objective.l_gen_weight,
         norm_weight=(
             objective.norm_weight

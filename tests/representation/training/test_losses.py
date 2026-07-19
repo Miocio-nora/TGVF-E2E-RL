@@ -5,16 +5,53 @@ import torch
 from torch.nn import functional as F
 
 from tgvf_rl.representation.training.losses import (
+    CausalEvidenceLosses,
     EVIDENCE_IGNORE_INDEX,
+    MatrixCEScoreMode,
     causal_evidence_losses,
     evidence_readability_loss_terms,
     historical_norm_loss_terms,
     historical_sample_norm_loss,
     historical_visual_token_norm_loss,
+    matrix_ce_cell_scores,
     same_image_matrix_ce_loss,
     same_image_matrix_ce_loss_terms,
     same_image_matrix_ce_score_gradients,
 )
+
+
+def test_balanced_matrix_ce_equalizes_equal_mean_nll_across_lengths() -> None:
+    summed_log_likelihood = torch.tensor([-2.0, -6.0])
+    losses = CausalEvidenceLosses(
+        per_sample_token_mean_nll=torch.tensor([2.0, 2.0]),
+        per_sample_summed_log_likelihood=summed_log_likelihood,
+        valid_token_counts=torch.tensor([1, 3]),
+    )
+
+    balanced = matrix_ce_cell_scores(
+        losses,
+        mode=MatrixCEScoreMode.BALANCED,
+        temperature=1.0,
+    )
+    colder = matrix_ce_cell_scores(
+        losses,
+        mode=MatrixCEScoreMode.BALANCED,
+        temperature=0.5,
+    )
+    legacy = matrix_ce_cell_scores(
+        losses,
+        mode=MatrixCEScoreMode.LEGACY_SUMMED_NLL,
+    )
+
+    assert torch.equal(balanced, torch.tensor([-2.0, -2.0]))
+    assert torch.equal(colder, torch.tensor([-4.0, -4.0]))
+    assert legacy is summed_log_likelihood
+    with pytest.raises(ValueError, match="requires temperature 1.0"):
+        matrix_ce_cell_scores(
+            losses,
+            mode=MatrixCEScoreMode.LEGACY_SUMMED_NLL,
+            temperature=0.5,
+        )
 
 
 def test_historical_norm_formula_is_fp32_and_detaches_source() -> None:

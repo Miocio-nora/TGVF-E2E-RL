@@ -208,7 +208,10 @@ def evaluate_representation_validation_event(
                 )
                 _assert_visuals_do_not_require_grad(group)
                 scores = score_streaming_same_image_group(
-                    family_adapter, qwen_model, group
+                    family_adapter,
+                    qwen_model,
+                    group,
+                    objective=objective,
                 )
     finally:
         # Restore Adapter-owned training modes exactly. Shared borrowed Qwen

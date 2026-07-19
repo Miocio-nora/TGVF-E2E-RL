@@ -1,9 +1,11 @@
 """Strict TOML identity for executable Qwen3 representation training.
 
-The representation phase deliberately has no runnable scientific defaults.
+The representation phase deliberately has no implicit runnable experiment.
 Every field that can change the model, native prompt, data population,
-optimization, distributed topology, or checkpoint continuation is present in
-the TOML schema and participates in the canonical configuration digest.
+optimization, distributed topology, or checkpoint continuation participates
+in the canonical configuration digest.  The one accepted optional scientific
+field is balanced Matrix-CE temperature, whose registered default is ``1.0``;
+its resolved value is still bound by the objective/run identity.
 
 Loading a configuration is read-only.  In particular, it never initializes
 CUDA, creates an output directory, loads model weights, or starts training.
@@ -38,11 +40,14 @@ from .distributed_checkpoint import (
 )
 from .data import SplitOverlapPolicy
 from .fsdp2 import RepresentationFSDP2Config
+from .losses import MatrixCEScoreMode
 from .native_pipeline import RepresentationPromptConfig
 from .objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveConfigV2,
+    RepresentationObjectiveConfigV3,
     RepresentationObjectiveKind,
+    resolve_matrix_ce_score_config,
 )
 from .runtime import (
     ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256,
@@ -61,6 +66,7 @@ from .trainer import (
 
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION = "representation-training-config-v1"
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2 = "representation-training-config-v2"
+REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3 = "representation-training-config-v3"
 REPRESENTATION_TRAINING_SCOPE = "qwen3_native_representation_phase_training"
 ACCEPTED_QWEN3_MODEL_NAME = "Qwen3-VL-8B-Thinking"
 ACCEPTED_QWEN3_MODEL_DTYPE = "bfloat16"
@@ -277,6 +283,23 @@ class RepresentationObjectiveExecutionConfigV2:
     def __post_init__(self) -> None:
         if not isinstance(self.objective, RepresentationObjectiveConfigV2):
             raise TypeError("objective must be a RepresentationObjectiveConfigV2")
+        if self.manifold_enabled is not False or self.manifold_weight != 0.0:
+            raise ValueError(
+                "manifold optimization must be explicitly disabled at zero"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationObjectiveExecutionConfigV3:
+    """Executable objective with explicit Matrix-CE scoring mathematics."""
+
+    objective: RepresentationObjectiveConfigV3
+    manifold_enabled: bool
+    manifold_weight: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.objective, RepresentationObjectiveConfigV3):
+            raise TypeError("objective must be a RepresentationObjectiveConfigV3")
         if self.manifold_enabled is not False or self.manifold_weight != 0.0:
             raise ValueError(
                 "manifold optimization must be explicitly disabled at zero"
@@ -576,6 +599,7 @@ class RepresentationTrainingConfig:
     objective: (
         RepresentationObjectiveExecutionConfig
         | RepresentationObjectiveExecutionConfigV2
+        | RepresentationObjectiveExecutionConfigV3
     )
     optimizer: RepresentationAdamWConfig
     scheduler: RepresentationSchedulerConfig
@@ -594,6 +618,7 @@ class RepresentationTrainingConfig:
         if self.schema_version not in {
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
         }:
             raise ValueError("representation training config schema mismatch")
         if self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
@@ -609,7 +634,7 @@ class RepresentationTrainingConfig:
                 DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
             ):
                 raise ValueError("training config v1 requires DCP schema v1")
-        else:
+        elif self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
             if not isinstance(self.data, RepresentationDataConfigV2):
                 raise TypeError(
                     "training config v2 requires an overlap-bound data contract"
@@ -622,6 +647,21 @@ class RepresentationTrainingConfig:
                 DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
             ):
                 raise ValueError("training config v2 requires DCP schema v2")
+        else:
+            if not isinstance(self.data, RepresentationDataConfigV2):
+                raise TypeError(
+                    "training config v3 requires an overlap-bound data contract"
+                )
+            if not isinstance(self.objective, RepresentationObjectiveExecutionConfigV3):
+                raise TypeError(
+                    "training config v3 requires its explicit Matrix-CE objective"
+                )
+            if self.scheduler.kind is not RepresentationSchedulerKind.HISTORICAL_COSINE:
+                raise ValueError("training config v3 requires historical cosine")
+            if self.checkpoint.format != (
+                DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
+            ):
+                raise ValueError("training config v3 requires DCP schema v2")
         if self.scope != REPRESENTATION_TRAINING_SCOPE:
             raise ValueError("representation training scope mismatch")
         _non_empty_text(self.run_id, field_name="run_id")
@@ -678,6 +718,9 @@ class RepresentationTrainingConfig:
     def validation_payload(self) -> dict[str, object]:
         """Concise, JSON-safe identity emitted by the validation-only CLI."""
 
+        matrix_ce_mode, matrix_ce_temperature = resolve_matrix_ce_score_config(
+            self.objective.objective
+        )
         return {
             "schema_version": self.schema_version,
             "scope": self.scope,
@@ -705,6 +748,9 @@ class RepresentationTrainingConfig:
             "prompt_identity": self.prompt.identity,
             "prompt_sha256": self.prompt.sha256,
             "objective_identity": self.objective.objective.identity,
+            "objective_schema_version": self.objective.objective.schema_version,
+            "matrix_ce_mode": matrix_ce_mode.value,
+            "matrix_ce_temperature": matrix_ce_temperature,
             "train_source_sha256": self.data.train.source_sha256,
             "validation_source_sha256": self.data.validation.source_sha256,
             "split_overlap_policy": (
@@ -903,7 +949,10 @@ def _parse_data(
     *,
     schema_version: str,
 ) -> RepresentationDataConfig | RepresentationDataConfigV2:
-    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
+    if schema_version in {
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+    }:
         _exact_fields(
             value,
             {
@@ -991,7 +1040,55 @@ def _parse_objective(
     value: Mapping[str, Any],
     *,
     schema_version: str,
-) -> RepresentationObjectiveExecutionConfig | RepresentationObjectiveExecutionConfigV2:
+) -> (
+    RepresentationObjectiveExecutionConfig
+    | RepresentationObjectiveExecutionConfigV2
+    | RepresentationObjectiveExecutionConfigV3
+):
+    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3:
+        required = {
+            "identity",
+            "kind",
+            "matrix_ce_weight",
+            "l_gen_weight",
+            "norm_weight",
+            "matrix_ce_mode",
+            "manifold_enabled",
+            "manifold_weight",
+        }
+        optional = (
+            {"matrix_ce_temperature"} if "matrix_ce_temperature" in value else set()
+        )
+        _exact_fields(value, required | optional, table="objective")
+        kind_raw = _string(value, "kind", table="objective")
+        try:
+            kind = RepresentationObjectiveKind(kind_raw)
+        except ValueError as error:
+            raise ValueError(f"objective.kind is unsupported: {kind_raw!r}") from error
+        mode_raw = _string(value, "matrix_ce_mode", table="objective")
+        try:
+            mode = MatrixCEScoreMode(mode_raw)
+        except ValueError as error:
+            raise ValueError(
+                f"objective.matrix_ce_mode is unsupported: {mode_raw!r}"
+            ) from error
+        return RepresentationObjectiveExecutionConfigV3(
+            objective=RepresentationObjectiveConfigV3(
+                identity=_string(value, "identity", table="objective"),
+                kind=kind,
+                matrix_ce_weight=_float(value, "matrix_ce_weight", table="objective"),
+                l_gen_weight=_float(value, "l_gen_weight", table="objective"),
+                norm_weight=_float(value, "norm_weight", table="objective"),
+                matrix_ce_mode=mode,
+                matrix_ce_temperature=(
+                    _float(value, "matrix_ce_temperature", table="objective")
+                    if "matrix_ce_temperature" in value
+                    else 1.0
+                ),
+            ),
+            manifold_enabled=_boolean(value, "manifold_enabled", table="objective"),
+            manifold_weight=_float(value, "manifold_weight", table="objective"),
+        )
     if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
         _exact_fields(
             value,
@@ -1099,7 +1196,10 @@ def _parse_scheduler(
     schema_version: str,
 ) -> RepresentationSchedulerConfig:
     fields = {"kind", "total_steps", "warmup_steps"}
-    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
+    if schema_version in {
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+    }:
         fields.add("min_lr_ratio")
     elif schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
         raise ValueError("representation training config schema mismatch")
@@ -1115,7 +1215,11 @@ def _parse_scheduler(
         warmup_steps=_int(value, "warmup_steps", table="scheduler"),
         min_lr_ratio=(
             _float(value, "min_lr_ratio", table="scheduler")
-            if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2
+            if schema_version
+            in {
+                REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
+                REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+            }
             else None
         ),
     )
@@ -1550,6 +1654,7 @@ __all__ = [
     "NO_RESUME_CHECKPOINT",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2",
+    "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3",
     "REPRESENTATION_TRAINING_SCOPE",
     "RepresentationAdamWConfig",
     "RepresentationCheckpointConfig",
@@ -1563,6 +1668,7 @@ __all__ = [
     "RepresentationModelConfig",
     "RepresentationObjectiveExecutionConfig",
     "RepresentationObjectiveExecutionConfigV2",
+    "RepresentationObjectiveExecutionConfigV3",
     "RepresentationOutputConfig",
     "RepresentationResumeConfig",
     "RepresentationTrainingConfig",

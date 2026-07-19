@@ -14,6 +14,7 @@ from tgvf_rl.representation.training.losses import (
     EVIDENCE_IGNORE_INDEX,
     EvidenceReadabilityLossTerms,
     HistoricalNormLossTerms,
+    MatrixCEScoreMode,
     SameImageMatrixCELossTerms,
     historical_norm_loss_terms,
     historical_sample_norm_loss,
@@ -21,6 +22,7 @@ from tgvf_rl.representation.training.losses import (
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveConfigV2,
+    RepresentationObjectiveConfigV3,
     RepresentationObjectiveKind,
     compose_reference_representation_objective,
 )
@@ -95,8 +97,11 @@ def _frozen_model() -> _TinyFrozenQwen:
     return model
 
 
-def _supervision(token_ids: tuple[int, ...]) -> ModelEvidenceSupervision:
-    evidence_positions = (6, 7)
+def _supervision(
+    token_ids: tuple[int, ...],
+    *,
+    evidence_positions: tuple[int, ...] = (6, 7),
+) -> ModelEvidenceSupervision:
     return ModelEvidenceSupervision(
         family="qwen3_vl",
         model_token_ids=token_ids,
@@ -210,6 +215,30 @@ def _mixed_length_group(*, group_id: str) -> SameImageReadoutGroup:
     return replace(group, rows=(group.rows[0], long_row))
 
 
+def _different_evidence_length_group(*, group_id: str) -> SameImageReadoutGroup:
+    group = _group(group_id=group_id)
+    short_row, long_row = group.rows
+    short_row = replace(
+        short_row,
+        supervision=_supervision(
+            short_row.supervision.model_token_ids,
+            evidence_positions=(7,),
+        ),
+    )
+    long_token_ids = (*long_row.supervision.model_token_ids, 4)
+    long_row = replace(
+        long_row,
+        supervision=_supervision(
+            long_token_ids,
+            evidence_positions=(6, 7, 8),
+        ),
+        input_ids=torch.tensor([long_token_ids], dtype=torch.long),
+        attention_mask=torch.ones(1, len(long_token_ids), dtype=torch.bool),
+        position_ids=torch.arange(len(long_token_ids)).view(1, len(long_token_ids)),
+    )
+    return replace(group, rows=(short_row, long_row))
+
+
 def _objective() -> RepresentationObjectiveConfig:
     return RepresentationObjectiveConfig(
         identity="test-matrix-and-readable",
@@ -226,6 +255,22 @@ def _objective_v2() -> RepresentationObjectiveConfigV2:
         matrix_ce_weight=0.7,
         l_gen_weight=1.3,
         norm_weight=0.1,
+    )
+
+
+def _objective_v3(
+    *,
+    mode: MatrixCEScoreMode = MatrixCEScoreMode.BALANCED,
+    temperature: float = 0.5,
+) -> RepresentationObjectiveConfigV3:
+    return RepresentationObjectiveConfigV3(
+        identity=f"test-{mode.value}-matrix-ce",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=0.7,
+        l_gen_weight=1.3,
+        norm_weight=0.1,
+        matrix_ce_mode=mode,
+        matrix_ce_temperature=temperature,
     )
 
 
@@ -427,6 +472,154 @@ def test_direct_two_group_backward_matches_combined_blockwise_reference() -> Non
     ):
         assert actual is not None
         assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_balanced_streaming_gradients_match_full_autograd_for_unequal_lengths() -> None:
+    torch.manual_seed(51)
+    legacy_model = _frozen_model()
+    full_model = _frozen_model()
+    streaming_model = _frozen_model()
+    full_model.load_state_dict(legacy_model.state_dict())
+    streaming_model.load_state_dict(legacy_model.state_dict())
+    legacy_group = _different_evidence_length_group(group_id="balanced-reference")
+    full_group = _different_evidence_length_group(group_id="balanced-reference")
+    streaming_group = _different_evidence_length_group(group_id="balanced-reference")
+    objective = _objective_v3(temperature=0.5)
+
+    legacy_terms = synthetic_same_image_layout_readout_terms(
+        Qwen3VLAdapter(),
+        legacy_model,
+        legacy_group,
+    )
+    full_terms = synthetic_same_image_layout_readout_terms(
+        Qwen3VLAdapter(),
+        full_model,
+        full_group,
+        matrix_ce_mode=objective.matrix_ce_mode,
+        matrix_ce_temperature=objective.matrix_ce_temperature,
+    )
+    expected_balanced_scores = (
+        legacy_terms.score_matrix
+        / legacy_terms.evidence_token_counts.unsqueeze(1)
+        / objective.matrix_ce_temperature
+    )
+    assert torch.equal(full_terms.evidence_token_counts, torch.tensor([1, 3]))
+    assert torch.allclose(
+        full_terms.score_matrix,
+        expected_balanced_scores,
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    assert torch.allclose(
+        full_terms.l_gen.numerator,
+        legacy_terms.l_gen.numerator,
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+    norm_terms = historical_norm_loss_terms(
+        tuple(
+            historical_sample_norm_loss(
+                candidate.visual.main,
+                full_group.source_visual.main,
+                candidate.visual.deepstack,
+                full_group.source_visual.deepstack,
+            )
+            for candidate in full_group.candidates
+        )
+    )
+    reference_value = compose_reference_representation_objective(
+        full_terms.matrix_ce,
+        full_terms.l_gen,
+        objective,
+        norm_terms,
+    )
+    expected_gradients = torch.autograd.grad(
+        reference_value.total_loss,
+        _candidate_tensors(full_group),
+    )
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=2,
+        l_gen_samples=2,
+    )
+    scores = score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        objective=objective,
+        normalization=normalization,
+    )
+    with pytest.raises(ValueError, match="differs from the materialized Qwen VJP"):
+        backward_streaming_same_image_group(
+            Qwen3VLAdapter(),
+            streaming_model,
+            streaming_group,
+            scores,
+            objective=_objective_v3(temperature=1.0),
+            normalization=normalization,
+        )
+    metrics = backward_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        scores,
+        objective=objective,
+        normalization=normalization,
+    )
+
+    assert torch.allclose(
+        scores.score_matrix,
+        full_terms.score_matrix.detach(),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    assert torch.allclose(
+        metrics.matrix_ce_numerator,
+        full_terms.matrix_ce.numerator.detach(),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    assert torch.allclose(
+        metrics.weighted_local_mean,
+        reference_value.total_loss.detach(),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    for actual, expected in zip(
+        _candidate_tensors(streaming_group),
+        expected_gradients,
+        strict=True,
+    ):
+        assert actual.grad is not None
+        assert torch.allclose(actual.grad, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_explicit_legacy_streaming_mode_is_bitwise_historical() -> None:
+    torch.manual_seed(52)
+    historical_model = _frozen_model()
+    explicit_model = _frozen_model()
+    explicit_model.load_state_dict(historical_model.state_dict())
+    historical = score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        historical_model,
+        _different_evidence_length_group(group_id="legacy-reference"),
+    )
+    explicit = score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        explicit_model,
+        _different_evidence_length_group(group_id="legacy-reference"),
+        objective=_objective_v3(
+            mode=MatrixCEScoreMode.LEGACY_SUMMED_NLL,
+            temperature=1.0,
+        ),
+    )
+
+    assert torch.equal(explicit.score_matrix, historical.score_matrix)
+    assert torch.equal(explicit.diagonal_l_gen, historical.diagonal_l_gen)
+    assert torch.equal(
+        explicit.evidence_token_counts,
+        historical.evidence_token_counts,
+    )
 
 
 def test_right_padded_mixed_length_rows_match_unpadded_reference() -> None:

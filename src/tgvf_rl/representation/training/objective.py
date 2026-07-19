@@ -11,12 +11,14 @@ import torch
 from .losses import (
     EvidenceReadabilityLossTerms,
     HistoricalNormLossTerms,
+    MatrixCEScoreMode,
     SameImageMatrixCELossTerms,
 )
 
 
 REPRESENTATION_OBJECTIVE_SCHEMA_VERSION = "representation_objective_v1"
 REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V2 = "representation_objective_v2"
+REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V3 = "representation_objective_v3"
 
 
 class RepresentationObjectiveKind(str, Enum):
@@ -94,9 +96,62 @@ class RepresentationObjectiveConfigV2(RepresentationObjectiveConfig):
             raise ValueError("the v2 baseline requires historical norm weight 0.1")
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RepresentationObjectiveConfigV3(RepresentationObjectiveConfigV2):
+    """Norm-aware objective with an explicit Matrix-CE cell-score identity."""
+
+    matrix_ce_mode: MatrixCEScoreMode
+    matrix_ce_temperature: float = 1.0
+    schema_version: str = REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V3
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, str) or not self.identity.strip():
+            raise ValueError("representation objective identity must be non-empty")
+        if self.schema_version != REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V3:
+            raise ValueError("representation objective v3 schema mismatch")
+        _validate_weight(self.matrix_ce_weight, field_name="matrix_ce_weight")
+        _validate_weight(self.l_gen_weight, field_name="l_gen_weight")
+        _validate_weight(self.norm_weight, field_name="norm_weight")
+        if self.matrix_ce_weight <= 0:
+            raise ValueError("Matrix-CE weight must be greater than zero")
+        if self.kind is not RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM:
+            raise ValueError(
+                "objective v3 requires the matrix_ce_l_gen_and_norm baseline"
+            )
+        if self.l_gen_weight <= 0:
+            raise ValueError("the v3 baseline requires a nonzero L_gen weight")
+        if self.norm_weight != 0.1:
+            raise ValueError("the v3 baseline requires historical norm weight 0.1")
+        _validate_matrix_ce_score_config(
+            self.matrix_ce_mode,
+            self.matrix_ce_temperature,
+        )
+
+
 RepresentationObjectiveConfigLike = (
-    RepresentationObjectiveConfig | RepresentationObjectiveConfigV2
+    RepresentationObjectiveConfig
+    | RepresentationObjectiveConfigV2
+    | RepresentationObjectiveConfigV3
 )
+
+
+def resolve_matrix_ce_score_config(
+    config: RepresentationObjectiveConfigLike,
+) -> tuple[MatrixCEScoreMode, float]:
+    """Resolve old objective schemas to their exact historical score contract."""
+
+    if not isinstance(
+        config,
+        (
+            RepresentationObjectiveConfig,
+            RepresentationObjectiveConfigV2,
+            RepresentationObjectiveConfigV3,
+        ),
+    ):
+        raise TypeError("config must be a representation objective config")
+    if isinstance(config, RepresentationObjectiveConfigV3):
+        return config.matrix_ce_mode, config.matrix_ce_temperature
+    return MatrixCEScoreMode.LEGACY_SUMMED_NLL, 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +286,20 @@ def _validate_weight(value: object, *, field_name: str) -> None:
         raise TypeError(f"{field_name} must be an explicit float")
     if not math.isfinite(value) or value < 0:
         raise ValueError(f"{field_name} must be finite and non-negative")
+
+
+def _validate_matrix_ce_score_config(
+    mode: object,
+    temperature: object,
+) -> None:
+    if not isinstance(mode, MatrixCEScoreMode):
+        raise TypeError("matrix_ce_mode must be a MatrixCEScoreMode")
+    if isinstance(temperature, bool) or not isinstance(temperature, float):
+        raise TypeError("matrix_ce_temperature must be an explicit float")
+    if not math.isfinite(temperature) or temperature <= 0:
+        raise ValueError("matrix_ce_temperature must be finite and positive")
+    if mode is MatrixCEScoreMode.LEGACY_SUMMED_NLL and temperature != 1.0:
+        raise ValueError("legacy_summed_nll requires matrix_ce_temperature 1.0")
 
 
 def _validate_scalar_numerator(value: object, *, name: str) -> None:
