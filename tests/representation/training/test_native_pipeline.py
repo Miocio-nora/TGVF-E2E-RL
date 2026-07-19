@@ -25,7 +25,9 @@ from tgvf_rl.representation.training.internal_evaluation import (
 from tgvf_rl.representation.training.native_pipeline import (
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
+    _expand_native_visual_placeholders,
     _processor_batch,
+    _single_visual_expansion_count,
     build_native_representation_messages,
     render_native_action_target,
 )
@@ -41,6 +43,7 @@ from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 from tgvf_rl.representation.training.streaming import (
     score_streaming_same_image_group,
 )
+from tgvf_rl.representation.training.transcript import render_native_evidence_labels
 
 
 _IMAGE_TOKEN = "<|image_pad|>"
@@ -127,6 +130,8 @@ class _Processor:
         self.tokenizer = tokenizer
         self.chat_template = tokenizer.chat_template
         self.image_processor = SimpleNamespace(merge_size=2, patch_size=16)
+        self.visual_tokens_per_image = 1
+        self.calls: list[tuple[str, int]] = []
 
     @staticmethod
     def _user(messages) -> str:
@@ -178,12 +183,17 @@ class _Processor:
 
     def __call__(self, *, text, images, padding, return_tensors):
         assert len(text) == 1 and not padding and return_tensors == "pt"
+        self.calls.append((text[0], len(images)))
         canonical_ids = self.tokenizer.encode(text[0], add_special_tokens=False)
         visual_id = self.tokenizer.convert_tokens_to_ids(_IMAGE_TOKEN)
         assert canonical_ids.count(visual_id) == len(images)
         expanded = []
         for token_id in canonical_ids:
-            expanded.append(token_id)
+            expanded.extend(
+                [token_id] * self.visual_tokens_per_image
+                if token_id == visual_id
+                else [token_id]
+            )
         return {
             "input_ids": torch.tensor([expanded], dtype=torch.long),
             "attention_mask": torch.ones(1, len(expanded), dtype=torch.long),
@@ -488,6 +498,61 @@ def test_native_action_target_uses_strict_raw_tool_span(tmp_path: Path) -> None:
     )
 
 
+def test_shared_visual_expansion_matches_processor_for_action_and_readout(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    runtime.processor.visual_tokens_per_image = 3
+    image = b"one-processed-image"
+    sample = _sample(tmp_path / "unused.png", 0)
+    messages = build_native_representation_messages(sample, _prompt())
+    action = render_native_action_target(runtime, messages)
+    action_batch = _processor_batch(
+        runtime.processor,
+        text=action.transcript.text,
+        images=(image,),
+    )
+    derived_action_ids, action_expansion = _expand_native_visual_placeholders(
+        runtime,
+        action.transcript.token_ids,
+        visual_token_counts=(3,),
+    )
+
+    assert derived_action_ids == tuple(
+        int(value) for value in action_batch["input_ids"][0]
+    )
+    assert _single_visual_expansion_count(action_expansion) == 3
+
+    canonical_readout = render_native_evidence_labels(
+        runtime.renderer,
+        messages,
+        evidence_description=sample.evidence_description,
+    )
+    readout_batch = _processor_batch(
+        runtime.processor,
+        text=canonical_readout.transcript.text,
+        images=(image, image),
+    )
+    derived_readout_ids, readout_expansion = _expand_native_visual_placeholders(
+        runtime,
+        canonical_readout.transcript.token_ids,
+        visual_token_counts=(3, 3),
+    )
+
+    assert derived_readout_ids == tuple(
+        int(value) for value in readout_batch["input_ids"][0]
+    )
+    assert tuple(
+        len(mapped)
+        for canonical_id, mapped in zip(
+            readout_expansion.canonical_token_ids,
+            readout_expansion.canonical_to_model_positions,
+            strict=True,
+        )
+        if canonical_id == runtime.tokenizer.convert_tokens_to_ids(_IMAGE_TOKEN)
+    ) == (3, 3)
+
+
 @pytest.mark.parametrize(
     "provider",
     [
@@ -517,6 +582,8 @@ def test_real_group_builder_contract_supports_both_providers(
         collective_candidate_count=len(samples) + 1,
     )
 
+    assert len(runtime.processor.calls) == 1
+    assert runtime.processor.calls[0][1] == 1
     assert tuple(row.sample_id for row in group.rows) == (
         "sample-0",
         "sample-1",

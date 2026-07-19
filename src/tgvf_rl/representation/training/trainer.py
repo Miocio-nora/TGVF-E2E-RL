@@ -25,6 +25,7 @@ from .readout import SameImageReadoutGroup
 from .sampling import SameImageBatchSampler
 from .schema import RepresentationTrainingSample
 from .streaming import (
+    StreamingBackwardMetrics,
     StreamingGlobalNormalization,
     backward_streaming_same_image_group,
     backward_streaming_same_image_groups,
@@ -261,10 +262,10 @@ class RepresentationTrainer:
         )
 
         self.optimizer.zero_grad(set_to_none=True)
-        local_matrix_numerator = 0.0
-        local_l_gen_numerator = 0.0
-        local_norm_numerator = (
-            0.0 if isinstance(self.objective, RepresentationObjectiveConfigV2) else None
+        local_metric_numerators = torch.zeros(
+            3 if isinstance(self.objective, RepresentationObjectiveConfigV2) else 2,
+            dtype=torch.float64,
+            device=_parameter_device(self.adapter),
         )
         local_sample_ids: list[str] = []
         local_qwen_forward_batch_sizes: list[int] = []
@@ -313,18 +314,10 @@ class RepresentationTrainer:
                 raise RuntimeError(
                     "direct multi-group execution returned incorrect local counts"
                 )
-            local_matrix_numerator = float(
-                backward_metrics.matrix_ce_numerator.float().item()
+            _accumulate_local_metric_numerators_(
+                local_metric_numerators,
+                backward_metrics,
             )
-            local_l_gen_numerator = float(
-                backward_metrics.l_gen_numerator.float().item()
-            )
-            if local_norm_numerator is not None:
-                if backward_metrics.norm_numerator is None:
-                    raise RuntimeError("objective v2 did not return a norm numerator")
-                local_norm_numerator = float(
-                    backward_metrics.norm_numerator.float().item()
-                )
             local_sample_ids.extend(
                 sample_id
                 for expected_ids in expected_ids_by_group
@@ -367,20 +360,10 @@ class RepresentationTrainer:
                         objective=self.objective,
                         normalization=normalization,
                     )
-                local_matrix_numerator += float(
-                    backward_metrics.matrix_ce_numerator.float().item()
+                _accumulate_local_metric_numerators_(
+                    local_metric_numerators,
+                    backward_metrics,
                 )
-                local_l_gen_numerator += float(
-                    backward_metrics.l_gen_numerator.float().item()
-                )
-                if local_norm_numerator is not None:
-                    if backward_metrics.norm_numerator is None:
-                        raise RuntimeError(
-                            "objective v2 did not return a norm numerator"
-                        )
-                    local_norm_numerator += float(
-                        backward_metrics.norm_numerator.float().item()
-                    )
                 local_sample_ids.extend(expected_ids)
                 local_qwen_forward_batch_sizes.extend(
                     getattr(backward_metrics, "qwen_forward_batch_sizes", ())
@@ -407,11 +390,9 @@ class RepresentationTrainer:
             global_matrix_numerator,
             global_l_gen_numerator,
             global_norm_numerator,
-        ) = _global_float_sums(
-            local_matrix_numerator,
-            local_l_gen_numerator,
-            local_norm_numerator,
-            device=_parameter_device(self.adapter),
+        ) = _global_metric_sums(
+            local_metric_numerators,
+            has_norm=isinstance(self.objective, RepresentationObjectiveConfigV2),
         )
         matrix_loss = global_matrix_numerator / global_rows
         l_gen_loss = global_l_gen_numerator / global_samples
@@ -438,7 +419,7 @@ class RepresentationTrainer:
             global_total_loss=total_loss,
             global_row_count=global_rows,
             global_sample_count=global_samples,
-            gradient_norm_before_clip=float(gradient_norm.detach().float().item()),
+            gradient_norm_before_clip=gradient_norm,
             learning_rate=used_learning_rate,
             local_sample_ids=tuple(local_sample_ids),
             local_qwen_forward_batch_sizes=tuple(local_qwen_forward_batch_sizes),
@@ -587,14 +568,8 @@ def _assert_gradients(
     require_all: bool,
 ) -> None:
     missing = tuple(name for name, parameter in parameters if parameter.grad is None)
-    if require_all:
-        missing_by_rank = _gather_missing_gradient_names(missing)
-        if any(missing_by_rank):
-            raise RuntimeError(
-                "Adapter-owned parameters received no gradient by rank: "
-                f"{missing_by_rank}"
-            )
-    local_finite = True
+    device = _parameter_device_from_pairs(parameters)
+    finite_checks: list[torch.Tensor] = []
     has_dtensor = False
     for _name, parameter in parameters:
         gradient = parameter.grad
@@ -602,15 +577,32 @@ def _assert_gradients(
             continue
         local_gradient, is_dtensor = _local_gradient_shard(gradient)
         has_dtensor = has_dtensor or is_dtensor
-        local_finite = local_finite and bool(
-            torch.isfinite(local_gradient).all().item()
+        finite_checks.append(torch.isfinite(local_gradient).all())
+    local_finite = (
+        torch.stack(finite_checks).all()
+        if finite_checks
+        else torch.ones((), dtype=torch.bool, device=device)
+    )
+    status = torch.stack(
+        (
+            torch.tensor(not missing or not require_all, device=device),
+            local_finite.to(device=device),
         )
-    if has_dtensor:
-        local_finite = _distributed_boolean_and(
-            local_finite,
-            device=_parameter_device_from_pairs(parameters),
+    ).to(dtype=torch.int32)
+    distributed = (
+        torch.distributed.is_available() and torch.distributed.is_initialized()
+    )
+    if has_dtensor and not distributed:
+        raise RuntimeError("DTensor gradients require initialized distributed state")
+    if distributed and (require_all or has_dtensor):
+        torch.distributed.all_reduce(status, op=torch.distributed.ReduceOp.MIN)
+    gradients_complete, gradients_finite = (bool(value) for value in status.tolist())
+    if require_all and not gradients_complete:
+        missing_by_rank = _gather_missing_gradient_names(missing)
+        raise RuntimeError(
+            f"Adapter-owned parameters received no gradient by rank: {missing_by_rank}"
         )
-    if not local_finite:
+    if not gradients_finite:
         raise FloatingPointError("non-finite Adapter gradient on at least one rank")
 
 
@@ -618,7 +610,7 @@ def _clip_adapter_grad_norm_(
     parameters: Sequence[tuple[str, nn.Parameter]],
     *,
     max_norm: float,
-) -> torch.Tensor:
+) -> float:
     """Clip one global L2 norm for plain or one-dimensional FSDP2 shards.
 
     Composable FSDP2 exposes sharded gradients as DTensors.  Computing a norm
@@ -662,7 +654,8 @@ def _clip_adapter_grad_norm_(
             op=torch.distributed.ReduceOp.SUM,
         )
     total_norm = torch.sqrt(squared_norm)
-    if not bool(torch.isfinite(total_norm).item()):
+    total_norm_value = float(total_norm.item())
+    if not math.isfinite(total_norm_value):
         raise FloatingPointError("non-finite global Adapter gradient norm")
     coefficient = torch.clamp(
         torch.tensor(max_norm, device=total_norm.device, dtype=total_norm.dtype)
@@ -671,7 +664,7 @@ def _clip_adapter_grad_norm_(
     )
     for local_gradient, _is_dtensor in gradients:
         local_gradient.mul_(coefficient.to(dtype=local_gradient.dtype))
-    return total_norm
+    return total_norm_value
 
 
 def _local_gradient_shard(gradient: torch.Tensor) -> tuple[torch.Tensor, bool]:
@@ -691,12 +684,6 @@ def _local_gradient_shard(gradient: torch.Tensor) -> tuple[torch.Tensor, bool]:
     if not isinstance(local, torch.Tensor):
         raise TypeError("DTensor local gradient shard must be a Tensor")
     return local, True
-
-
-def _distributed_boolean_and(value: bool, *, device: torch.device) -> bool:
-    flag = torch.tensor(int(value), dtype=torch.int32, device=device)
-    torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MIN)
-    return bool(flag.item())
 
 
 def _gather_missing_gradient_names(
@@ -777,7 +764,8 @@ def _global_integer_counts(
     )
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM)
-    return int(counts[0].item()), int(counts[1].item())
+    host_counts = counts.tolist()
+    return int(host_counts[0]), int(host_counts[1])
 
 
 def synchronize_collective_candidate_counts(
@@ -804,7 +792,7 @@ def synchronize_collective_candidate_counts(
     values = torch.tensor(counts, dtype=torch.int64, device=device)
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.all_reduce(values, op=torch.distributed.ReduceOp.MAX)
-    result = tuple(int(value.item()) for value in values)
+    result = tuple(int(value) for value in values.tolist())
     if any(
         global_count < local_count for global_count, local_count in zip(result, counts)
     ):
@@ -812,23 +800,39 @@ def synchronize_collective_candidate_counts(
     return result
 
 
-def _global_float_sums(
-    matrix_numerator: float,
-    l_gen_numerator: float,
-    norm_numerator: float | None,
+def _accumulate_local_metric_numerators_(
+    totals: torch.Tensor,
+    metrics: StreamingBackwardMetrics,
+) -> None:
+    if totals.ndim != 1 or totals.shape[0] not in (2, 3):
+        raise ValueError("local metric totals must contain two or three values")
+    components = [metrics.matrix_ce_numerator, metrics.l_gen_numerator]
+    if totals.shape[0] == 3:
+        if metrics.norm_numerator is None:
+            raise RuntimeError("objective v2 did not return a norm numerator")
+        components.append(metrics.norm_numerator)
+    values = torch.stack(
+        tuple(component.detach().float().reshape(()) for component in components)
+    ).to(device=totals.device, dtype=totals.dtype)
+    totals.add_(values)
+
+
+def _global_metric_sums(
+    local_values: torch.Tensor,
     *,
-    device: torch.device,
+    has_norm: bool,
 ) -> tuple[float, float, float | None]:
-    local_values = [matrix_numerator, l_gen_numerator]
-    if norm_numerator is not None:
-        local_values.append(norm_numerator)
-    values = torch.tensor(local_values, dtype=torch.float64, device=device)
+    expected_values = 3 if has_norm else 2
+    if local_values.shape != (expected_values,):
+        raise ValueError("local metric numerator shape does not match objective")
+    values = local_values.detach().clone()
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.all_reduce(values, op=torch.distributed.ReduceOp.SUM)
+    host_values = values.tolist()
     return (
-        float(values[0].item()),
-        float(values[1].item()),
-        None if norm_numerator is None else float(values[2].item()),
+        float(host_values[0]),
+        float(host_values[1]),
+        float(host_values[2]) if has_norm else None,
     )
 
 

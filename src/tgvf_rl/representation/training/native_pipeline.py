@@ -364,26 +364,31 @@ class Qwen3NativeRepresentationGroupBuilder:
             render_native_action_target(self.runtime, messages)
             for messages in messages_by_sample
         )
-        model_actions = tuple(
-            self._materialize_action(action, image) for action in action_by_sample
+        first_action, first_expansion = self._materialize_action_with_expansion(
+            action_by_sample[0], image
         )
-
-        first_action = model_actions[0]
+        source_visual_token_count = _single_visual_expansion_count(first_expansion)
+        model_actions = (
+            first_action,
+            *tuple(
+                self._materialize_action_from_shared_visual(
+                    action,
+                    reference=first_action,
+                    visual_token_count=source_visual_token_count,
+                )
+                for action in action_by_sample[1:]
+            ),
+        )
         vision = self.runtime.extract_vision_features(
             Qwen3VisionPreMergeRequest(
                 pixel_values=first_action.pixel_values,
                 image_grid_thw=first_action.image_grid_thw,
             )
         )
-        for action in model_actions[1:]:
-            if not torch.equal(action.image_grid_thw, first_action.image_grid_thw):
-                raise ValueError("same source image produced inconsistent Qwen grids")
-            if action.pixel_values.shape != first_action.pixel_values.shape or not (
-                torch.equal(action.pixel_values, first_action.pixel_values)
-            ):
-                raise ValueError(
-                    "same source image produced inconsistent pixel tensors"
-                )
+        if int(vision.merged_main.shape[-2]) != source_visual_token_count:
+            raise ValueError(
+                "processor visual expansion differs from merged vision token count"
+            )
 
         source_identity = _source_visual_identity(
             image_path=image_path,
@@ -421,7 +426,6 @@ class Qwen3NativeRepresentationGroupBuilder:
                 self._readout_row(
                     sample=sample,
                     messages=messages,
-                    image=image,
                     vision=vision,
                     source_identity=source_identity,
                 )
@@ -447,41 +451,63 @@ class Qwen3NativeRepresentationGroupBuilder:
     def _materialize_action(
         self, canonical: NativeActionTarget, image: Any
     ) -> ModelActionTarget:
+        action, _expansion = self._materialize_action_with_expansion(canonical, image)
+        return action
+
+    def _materialize_action_with_expansion(
+        self, canonical: NativeActionTarget, image: Any
+    ) -> tuple[ModelActionTarget, CanonicalToModelTokenExpansion]:
         batch = _processor_batch(
             self.runtime.processor,
             text=canonical.transcript.text,
             images=(image,),
             image_max_pixels=self.image_max_pixels,
         )
-        input_ids, attention_mask, pixel_values, grid = _move_processor_batch(
-            self.runtime, batch
-        )
         expansion = _qwen3_expansion(
             self.runtime,
             canonical.transcript.token_ids,
-            input_ids,
+            batch["input_ids"],
         )
-        target_positions: list[int] = []
-        for canonical_position in range(
-            canonical.canonical_target_span.start,
-            canonical.canonical_target_span.end,
-        ):
-            mapped = expansion.canonical_to_model_positions[canonical_position]
-            if len(mapped) != 1:
-                raise ValueError("a native target token cannot be visually expanded")
-            target_positions.append(mapped[0])
-        if tuple(target_positions) != tuple(
-            range(target_positions[0], target_positions[-1] + 1)
-        ):
-            raise ValueError("expanded target positions are not contiguous")
-        return ModelActionTarget(
+        input_ids, attention_mask, pixel_values, grid = _move_processor_batch(
+            self.runtime, batch
+        )
+        return (
+            _model_action_from_expansion(
+                canonical=canonical,
+                expansion=expansion,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pixel_values=pixel_values,
+                image_grid_thw=grid,
+            ),
+            expansion,
+        )
+
+    def _materialize_action_from_shared_visual(
+        self,
+        canonical: NativeActionTarget,
+        *,
+        reference: ModelActionTarget,
+        visual_token_count: int,
+    ) -> ModelActionTarget:
+        model_token_ids, expansion = _expand_native_visual_placeholders(
+            self.runtime,
+            canonical.transcript.token_ids,
+            visual_token_counts=(visual_token_count,),
+        )
+        input_ids = torch.tensor(
+            (model_token_ids,),
+            dtype=torch.long,
+            device=reference.input_ids.device,
+        )
+        attention_mask = torch.ones_like(input_ids)
+        return _model_action_from_expansion(
+            canonical=canonical,
+            expansion=expansion,
             input_ids=input_ids,
             attention_mask=attention_mask,
-            pixel_values=pixel_values,
-            image_grid_thw=grid,
-            target_span=TokenSpan(target_positions[0], target_positions[-1] + 1),
-            target_token_ids=canonical.canonical_target_token_ids,
-            canonical=canonical,
+            pixel_values=reference.pixel_values,
+            image_grid_thw=reference.image_grid_thw,
         )
 
     def _condition(
@@ -533,7 +559,6 @@ class Qwen3NativeRepresentationGroupBuilder:
         *,
         sample: RepresentationTrainingSample,
         messages: Sequence[Mapping[str, Any]],
-        image: Any,
         vision: Qwen3VisionFeatures,
         source_identity: str,
     ) -> RepresentationReadoutRow:
@@ -542,32 +567,28 @@ class Qwen3NativeRepresentationGroupBuilder:
             messages,
             evidence_description=sample.evidence_description,
         )
-        batch = _processor_batch(
-            self.runtime.processor,
-            text=canonical.transcript.text,
-            images=(image, image),
-            image_max_pixels=self.image_max_pixels,
+        expected_tokens = int(vision.merged_main.shape[-2])
+        model_token_ids, _expansion = _expand_native_visual_placeholders(
+            self.runtime,
+            canonical.transcript.token_ids,
+            visual_token_counts=(expected_tokens, expected_tokens),
         )
-        input_ids, attention_mask, _pixel_values, grid = _move_processor_batch(
-            self.runtime, batch
-        )
-        if grid.shape != (2, 3) or not torch.equal(grid[0], grid[1]):
-            raise ValueError("readout source and D placeholders must share one grid")
-        expected_grid = torch.tensor(
-            vision.image_grid_thw,
-            dtype=grid.dtype,
-            device=grid.device,
-        )
-        if not torch.equal(grid[0], expected_grid):
-            raise ValueError("readout visual grid differs from source vision features")
+        cpu_input_ids = torch.tensor((model_token_ids,), dtype=torch.long)
         supervision = self.family_adapter.materialize_representation_supervision(
             self.runtime.model,
             self.runtime.tokenizer,
             canonical,
-            input_ids,
+            cpu_input_ids,
+        )
+        device = vision.merged_main.device
+        input_ids = cpu_input_ids.to(device=device)
+        attention_mask = torch.ones_like(input_ids)
+        grid = torch.tensor(
+            (vision.image_grid_thw, vision.image_grid_thw),
+            dtype=torch.long,
+            device=device,
         )
         blocks = supervision.visual_expansion_blocks
-        expected_tokens = int(vision.merged_main.shape[-2])
         if tuple(map(len, blocks)) != (expected_tokens, expected_tokens):
             raise ValueError("readout visual blocks differ from source/D token counts")
         position_ids = _qwen3_position_ids(
@@ -587,6 +608,108 @@ class Qwen3NativeRepresentationGroupBuilder:
             source_positions=blocks[0],
             d_positions=blocks[1],
         )
+
+
+def _model_action_from_expansion(
+    *,
+    canonical: NativeActionTarget,
+    expansion: CanonicalToModelTokenExpansion,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    pixel_values: torch.Tensor,
+    image_grid_thw: torch.Tensor,
+) -> ModelActionTarget:
+    if expansion.canonical_token_ids != canonical.transcript.token_ids:
+        raise ValueError("action expansion belongs to a different transcript")
+    if input_ids.shape != (1, len(expansion.model_token_ids)):
+        raise ValueError("action input shape differs from the proven token expansion")
+    target_positions: list[int] = []
+    for canonical_position in range(
+        canonical.canonical_target_span.start,
+        canonical.canonical_target_span.end,
+    ):
+        mapped = expansion.canonical_to_model_positions[canonical_position]
+        if len(mapped) != 1:
+            raise ValueError("a native target token cannot be visually expanded")
+        target_positions.append(mapped[0])
+    if tuple(target_positions) != tuple(
+        range(target_positions[0], target_positions[-1] + 1)
+    ):
+        raise ValueError("expanded target positions are not contiguous")
+    return ModelActionTarget(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        target_span=TokenSpan(target_positions[0], target_positions[-1] + 1),
+        target_token_ids=canonical.canonical_target_token_ids,
+        canonical=canonical,
+    )
+
+
+def _expand_native_visual_placeholders(
+    runtime: Qwen3RepresentationRuntime,
+    canonical_token_ids: Sequence[int],
+    *,
+    visual_token_counts: Sequence[int],
+) -> tuple[tuple[int, ...], CanonicalToModelTokenExpansion]:
+    visual_id = runtime.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    if isinstance(visual_id, bool) or not isinstance(visual_id, int):
+        raise TypeError("Qwen image placeholder did not resolve to an integer ID")
+    if runtime.tokenizer.convert_ids_to_tokens(visual_id) != "<|image_pad|>":
+        raise ValueError("Qwen image placeholder token does not round trip")
+    counts = tuple(
+        _plain_int(value, name="visual_token_count") for value in visual_token_counts
+    )
+    if not counts or any(value <= 0 for value in counts):
+        raise ValueError("visual token counts must contain positive integers")
+    canonical = tuple(
+        _plain_int(value, name="canonical token ID") for value in canonical_token_ids
+    )
+    if canonical.count(visual_id) != len(counts):
+        raise ValueError(
+            "canonical visual placeholders and processor-owned counts differ"
+        )
+    count_iterator = iter(counts)
+    model_token_ids = tuple(
+        expanded
+        for token_id in canonical
+        for expanded in (
+            (token_id,) * next(count_iterator) if token_id == visual_id else (token_id,)
+        )
+    )
+    expansion = _build_visual_token_expansion(
+        family="qwen3_vl",
+        canonical_token_ids=canonical,
+        model_token_ids=model_token_ids,
+        visual_placeholder_token_id=visual_id,
+    )
+    visual_blocks = tuple(
+        mapped
+        for canonical_id, mapped in zip(
+            expansion.canonical_token_ids,
+            expansion.canonical_to_model_positions,
+            strict=True,
+        )
+        if canonical_id == visual_id
+    )
+    if tuple(map(len, visual_blocks)) != counts:
+        raise RuntimeError("derived native visual expansion lost processor geometry")
+    return model_token_ids, expansion
+
+
+def _single_visual_expansion_count(
+    expansion: CanonicalToModelTokenExpansion,
+) -> int:
+    visual_positions = set(expansion.visual_model_positions)
+    blocks = tuple(
+        mapped
+        for mapped in expansion.canonical_to_model_positions
+        if mapped and set(mapped).issubset(visual_positions)
+    )
+    if len(blocks) != 1:
+        raise ValueError("native action must contain exactly one visual expansion")
+    return len(blocks[0])
 
 
 def _processor_batch(

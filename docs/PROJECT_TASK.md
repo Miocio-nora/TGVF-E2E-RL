@@ -327,6 +327,22 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   measured control-stack speedup; the checkpoint parameter/state identity and
   public family-adapter interface must remain unchanged. Subsequent
   optimizations require measured phase attribution and their own parity gate.
+- Decision `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION` accepts a
+  mathematics-preserving refactor of the Qwen3 native representation group
+  builder to remove CPU/GPU bubbles measured in RP-17 and RP-18. For one
+  same-image group, the source image may be decoded and processed once; later
+  action transcripts and readout transcripts must derive their expanded native
+  input IDs, masks, visual grids, and positions from that exact processor-owned
+  source expansion. This reuse must preserve the canonical transcript, target
+  span, source/D visual-token blocks, main D, every D-DeepStack branch, and all
+  objective values and gradients. Redundant normal-path device-to-host
+  validation synchronizations may be fused or deferred while retaining
+  fail-closed diagnostics. Acceptance requires processor-call/image-instance
+  count tests, exact derived-versus-processor transcript fixtures, existing
+  representation contract tests, and a bounded two-GPU throughput/utilization
+  comparison. A later `B16 x GA2` measurement may retain global batch 32 only
+  after the same objective and gradient contracts pass; it is not accepted as
+  a semantic batch change.
 - Decision `RPI-20260720-CONFIG-BOUND-GPU-PAIR` accepts replacing the
   representation runner's historical physical-GPU `[2,3]` hardcode with an
   explicit two-device configuration identity. The pair must contain two

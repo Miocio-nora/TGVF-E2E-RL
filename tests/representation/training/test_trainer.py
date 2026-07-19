@@ -39,7 +39,11 @@ from tgvf_rl.representation.training.trainer import (
     build_representation_optimizer,
     build_representation_scheduler,
     synchronize_collective_candidate_counts,
+    _accumulate_local_metric_numerators_,
+    _assert_gradients,
+    _global_metric_sums,
 )
+from tgvf_rl.representation.training.streaming import StreamingBackwardMetrics
 from tgvf_rl.representation.training.transcript import ModelEvidenceSupervision
 
 
@@ -534,6 +538,109 @@ def test_collective_candidate_counts_use_each_microsteps_global_maximum(
     assert synchronize_collective_candidate_counts(
         (4, 5), device=torch.device("cpu")
     ) == (5, 5)
+
+
+def test_gradient_validation_uses_one_numeric_collective_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = nn.Parameter(torch.ones(3))
+    second = nn.Parameter(torch.ones(2))
+    first.grad = torch.tensor((1.0, 2.0, 3.0))
+    second.grad = torch.tensor((4.0, 5.0))
+    reductions: list[tuple[tuple[int, ...], object]] = []
+
+    monkeypatch.setattr(torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    def all_reduce(values: torch.Tensor, *, op: object) -> None:
+        reductions.append((tuple(values.tolist()), op))
+
+    def reject_object_gather(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("success path must not gather Python objects")
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", all_reduce)
+    monkeypatch.setattr(
+        torch.distributed,
+        "all_gather_object",
+        reject_object_gather,
+    )
+
+    _assert_gradients(
+        (("first", first), ("second", second)),
+        require_all=True,
+    )
+
+    assert reductions == [((1, 1), torch.distributed.ReduceOp.MIN)]
+
+
+def test_gradient_validation_keeps_ranked_names_on_missing_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = nn.Parameter(torch.ones(3))
+    second = nn.Parameter(torch.ones(2))
+    first.grad = torch.ones_like(first)
+    second.grad = None
+    gathered_calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def all_reduce(values: torch.Tensor, *, op: object) -> None:
+        assert tuple(values.tolist()) == (0, 1)
+        assert op == torch.distributed.ReduceOp.MIN
+
+    def all_gather_object(
+        gathered: list[object],
+        missing: tuple[str, ...],
+    ) -> None:
+        gathered_calls.append(missing)
+        gathered[:] = [("second",), ("remote_second",)]
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", all_reduce)
+    monkeypatch.setattr(torch.distributed, "all_gather_object", all_gather_object)
+
+    with pytest.raises(RuntimeError, match="remote_second"):
+        _assert_gradients(
+            (("first", first), ("second", second)),
+            require_all=True,
+        )
+
+    assert gathered_calls == [("second",)]
+
+
+def test_gradient_validation_keeps_nonfinite_failure_contract() -> None:
+    first = nn.Parameter(torch.ones(3))
+    second = nn.Parameter(torch.ones(2))
+    first.grad = torch.tensor((1.0, float("nan"), 3.0))
+    second.grad = torch.ones_like(second)
+
+    with pytest.raises(
+        FloatingPointError,
+        match="non-finite Adapter gradient on at least one rank",
+    ):
+        _assert_gradients(
+            (("first", first), ("second", second)),
+            require_all=True,
+        )
+
+
+def test_metric_numerators_stay_tensor_resident_until_one_global_pack() -> None:
+    totals = torch.zeros(3, dtype=torch.float64)
+    for matrix, l_gen, norm in ((1.25, 2.5, 3.75), (4.0, 5.0, 6.0)):
+        metrics = StreamingBackwardMetrics(
+            matrix_ce_numerator=torch.tensor(matrix),
+            l_gen_numerator=torch.tensor(l_gen),
+            norm_numerator=torch.tensor(norm),
+            local_row_count=1,
+            local_sample_count=1,
+            weighted_local_mean=torch.tensor(0.0),
+            weighted_norm_local_mean=torch.tensor(0.0),
+        )
+        _accumulate_local_metric_numerators_(totals, metrics)
+
+    assert torch.equal(totals, torch.tensor((5.25, 7.5, 9.75)))
+    assert _global_metric_sums(totals, has_norm=True) == (5.25, 7.5, 9.75)
 
 
 def test_trainer_rejects_optimizer_that_owns_frozen_qwen_or_omits_adapter() -> None:
