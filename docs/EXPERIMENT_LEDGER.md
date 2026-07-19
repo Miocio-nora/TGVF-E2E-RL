@@ -2941,6 +2941,65 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   preparation with device execution or another structural execution gap,
   rather than additional isolated validation checks.
 
+### RP-24-QWEN3-REPRESENTATION-FSDPACCUM-REAL512-K4-GA4-THROUGHPUT-GPU23
+
+- Cell/matrix ID and class: `RP-24`; bounded FSDP2 gradient-accumulation
+  communication A/B against RP-23.
+- Approval/code: accepted `RPI-20260720-CONTROL-STACK-OPTIMIZATION` and
+  `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; runtime commit
+  `ac13f568061ca893400d343b9ebc9419127e2195` contains the Torch2.9
+  `set_requires_gradient_sync`/`set_reshard_after_backward` implementation and
+  intentionally excludes the later selective-lm-head patch.
+- Lifecycle status: `PLANNED`; result `PENDING`.
+- Question/baseline/output: does matching the historical GA4 `no_sync`
+  schedule—three local accumulation backwards followed by one FP32
+  reduce-scatter—remove the repeated FSDP communication/reshard bubbles and
+  beat RP-23's `9.9452722195`-second steady mean? Output is only
+  `artifacts/representation/RP-24-qwen3-fsdpaccum-real512-k4-ga4-throughput-gpu23/`.
+- Model/processor/initialization: exact RP-23 stable local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer `151669`, no resize,
+  `image_max_pixels=262144`; frozen Qwen plus fresh TGVF Adapter seed
+  `20260719`; three updates under the 2,000-step horizon.
+- N/A: policy/reference, rollout/logprobs, reward, GRPO, SDPO, judge, vLLM
+  sampling, KV cache, replay, asynchronous staleness, and answer scoring are
+  absent from this representation-only diagnostic.
+- Code/worktree/config: only committed code may launch; source/canonical TOML
+  SHA256 `47df73b040f3caa9422c89b20de50064e5689b28663c1f04a312282a7432a56e`/
+  `0629e27d877ca89f6b18873479829d5e2be389163f979b00b6fbe5b629c9239f`.
+- Data/sample/prompt/template: exact RP-23 real-resolution K4 throughput
+  fixture SHA256 `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`,
+  disjoint validation, seeds 71/73, native `tgvf_focus_tool`, prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`,
+  template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`.
+- D/objective/determinism: exact main D plus D-DeepStack `(8,16,24)`, native
+  positions/masks, legacy summed-NLL Matrix CE + L_gen + Norm weights
+  `1/1/.1`, manifold zero; frozen eval Qwen, Adapter dropout zero, no cache,
+  TF32 off and CUBLAS `:4096:8`.
+- Framework/topology/batch: accepted Python3.12/Torch2.9 lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`;
+  FSDP2 `[2]`, forward-to-backward reshard false, non-final backward reshard and
+  gradient sync false, final backward both true; physical GPU2/3 UUIDs
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`/
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; world2, K4, GA4, global batch32,
+  eight B8 Qwen calls/rank/update.
+- Parity gates: exact RP-23 initial Adapter, sample order, step-1 objective
+  values, counts, Qwen call schedule and tokenizer length. Gradient/update
+  values are not declared bitwise against RP-23 because RP-23 reduced and cast
+  every microstep while RP-24 accumulates unsharded FP32 gradients before one
+  reduce-scatter; all values must be finite and the numerical delta is
+  reported. Any window exception is process-fatal and the Trainer is fail-stop.
+- Start/end/session, GPU-hours, scratch, outputs/metrics: `PENDING`; GPUs2/3
+  observed idle immediately before planning; hard limit one aggregate GPU-hour
+  and one 100 ms utilization trace; overwrite forbidden.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/smoke/representation_qwen3_embedding_rp24_fsdpaccum_real512_ga4_throughput_gpu23.toml`;
+  a read-only 100 ms sampler observes physical GPUs2/3.
+- Conclusion: `PENDING`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
