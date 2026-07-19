@@ -64,8 +64,8 @@ independent FP32/BF16 functional output/gradient oracle in
 `tests/representation/test_adapter_reference_parity.py`. An initial real-Qwen3
 execution reached backward/save/export technically, but its `SC-40` prefix
 collides with the reserved SDPO cell and is invalid evidence. Corrected
-representation run `RP-10` is planned. These results do not constitute a
-production-trained/promoted Adapter, accepted data split, both-provider
+representation run `RP-10` independently passed. These results do not
+constitute a production-trained/promoted Adapter, accepted data split, both-provider
 comparison, distributed restore/next-step proof, or quality result.
 
 ## Exact mathematical parity items
@@ -266,19 +266,19 @@ explicit acceptance before Gate AD-13 can close.
 | `test_same_image_negative_matrix_ce_prefers_diagonal_scores` | `DONE` | pure Matrix-CE value fixture |
 | `test_same_image_negative_matrix_ce_score_gradients_match_autograd` | `DONE` | FP32 autograd plus FP16/BF16 legacy-cast fixtures |
 | `test_readout_inputs_mask_prompt_and_replace_only_fvt_positions` | `DONE` | exact evidence ownership, two-block processor mapping, and synthetic native readout integration in `test_transcript.py`, `test_native_pipeline.py`, and the real processor golden |
-| `test_readout_inputs_can_use_source_image_grid_positions` | `PARTIAL` | native Qwen3 group builder and real golden cover layout; an identity-invalid side run reached real 8B execution, but corrected `RP-10`, intended-layer, and numerical parity remain open |
+| `test_readout_inputs_can_use_source_image_grid_positions` | `PARTIAL` | native Qwen3 group builder/real golden cover layout and corrected `RP-10` executes real 8B; intended-layer and numerical parity remain open |
 | `test_readout_inputs_reject_source_grid_token_count_mismatch` | `DONE` | typed runtime/readout/token-expansion contracts fail closed on grid, source-token, or visual-block disagreement |
 | `test_readout_prompt_can_omit_target` | `DONE` | hashed prompt schema permits `{question}` without `{target}` and the native group fixture exercises that form; production matched-control evaluation is open |
 | `test_readout_inputs_without_target_still_replace_fvt_positions` | `DONE` | native group-builder fixture omits target from the user prompt while preserving strict call-target extraction and both visual blocks |
-| `test_readout_loss_backprops_to_fvt_not_frozen_lm` | `DONE` | synthetic fixtures pass; the identity-invalid side run reached nonzero real-8B backward, and corrected `RP-10` must repeat it for gate evidence |
-| `test_tgvf_module_params_remain_trainable_when_qwen_is_frozen` | `DONE` | runtime fixtures enforce frozen Qwen plus every-and-only Adapter ownership; corrected `RP-10` must repeat the invalid side run's real FSDP2 audit |
-| `test_tgvf_checkpoint_saves_module_without_qwen_weights` | `DONE` | strict Adapter-only CPU artifact/tamper fixtures pass; corrected `RP-10` must repeat the invalid side run's real export, while restore remains separate |
+| `test_readout_loss_backprops_to_fvt_not_frozen_lm` | `DONE` | synthetic fixtures and corrected `RP-10` prove nonzero real-8B backward through main `D`/all branches/Adapter while Qwen stays frozen |
+| `test_tgvf_module_params_remain_trainable_when_qwen_is_frozen` | `DONE` | runtime fixtures and corrected `RP-10` enforce frozen Qwen plus every-and-only Adapter ownership under real FSDP2 |
+| `test_tgvf_checkpoint_saves_module_without_qwen_weights` | `DONE` | strict CPU fixtures and corrected `RP-10` 104-tensor export pass; distributed restore remains separate |
 | `test_build_tgvf_module_supports_target_slot_variant` | `PROPOSED_EXCLUSION` | unused legacy variant builder |
 | `test_build_tgvf_module_supports_v2_dynamic_token_variants` | `PROPOSED_EXCLUSION` | unused legacy variants; only the selected bidirectional D-DeepStack structure is in scope |
 | `test_v3_stage1_dataset_keeps_focus_and_skips_direct_rows` | `DONE` | strict retained-focus transform and every-row disposition fixture in `test_data.py` |
 | `test_weak_strict_mask_blocks_only_post_tgvf_queries` | `DONE` | streaming native readout constructs and consumes the post-evidence source-key block; synthetic query-row fixture passes |
-| `test_v3_stage1_readout_loss_backprops_to_d_not_frozen_qwen` | `DONE` | synthetic native fixtures pass; corrected `RP-10` must repeat the invalid side run's real-8B nonzero backward |
-| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | native pipeline carries main `D` plus all branches; corrected `RP-10`, intended-layer mapping, and semantic thresholds remain open |
+| `test_v3_stage1_readout_loss_backprops_to_d_not_frozen_qwen` | `DONE` | synthetic fixtures plus corrected `RP-10` real-8B target-token-embedding backward and nonzero Adapter gradient norm |
+| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | corrected `RP-10` carries main `D` plus all branches through real Qwen/backward; intended-layer mapping and semantic thresholds remain open |
 | `test_qwen3_position_ids_unwraps_peft_like_model_but_uses_wrapper_embeddings` | `OPEN` | native Qwen-family/PEFT ownership replacement fixture |
 
 The table records semantic migration only. Historical names remain provenance
@@ -356,8 +356,8 @@ These are required because the new system changes the protocol or capability:
   no tokenizer growth, separately identified from the policy transcript fixture;
 - [x] strict target span plus both contextual-hidden-state and target-token-
   embedding `Hq` paths in the synthetic native group fixture; corrected
-  `RP-10` is planned for the real-8B embedding optimizer path, while the paired contextual
-  run and provider comparison remain open;
+  `RP-10` passes the real-8B embedding optimizer path, while the paired
+  contextual run and provider comparison remain open;
 - [x] provider-specific configuration/checkpoint identity;
 - [ ] paired provider runs with identical data/order/initialization/seed;
 - [x] synthetic main `D` and every D-DeepStack branch causal/readability and
@@ -367,10 +367,10 @@ These are required because the new system changes the protocol or capability:
   observation identity in bounded fixtures;
 - [x] CPU checkpoint/resume including sampler state, provider/data/optimizer/
   scheduler/accumulation identities, RNG, and global step;
-- [ ] corrected `RP-10` real two-rank DCP save plus Adapter-only export and
+- [x] corrected `RP-10` real two-rank DCP save plus Adapter-only export and
   independent export/sidecar integrity load;
 - [ ] real two-rank distributed teardown/restore and matching next-step
-  evidence; corrected `RP-10` must first cover optimizer/save/export.
+  evidence; corrected `RP-10` covers optimizer/save/export only.
 
 ## Golden-equivalence audit
 
@@ -397,8 +397,8 @@ remaining blockers are:
   gradients under documented tolerances;
 - prove on the real model that each captured/injected branch maps to the intended
   Qwen layer and that the complete native readout remains deterministic;
-- complete `RP-10`, then execute the contextual-hidden-state provider alongside
-  its target-token-embedding path and record paired target-span/`Hq`, specificity,
+- execute the contextual-hidden-state provider alongside completed `RP-10`
+  target-token-embedding and record paired target-span/`Hq`, specificity,
   readability, and gradient evidence;
 - restore the `RP-10`-class distributed checkpoint after teardown and prove the
   matching next optimizer step; save/export alone does not establish resume;

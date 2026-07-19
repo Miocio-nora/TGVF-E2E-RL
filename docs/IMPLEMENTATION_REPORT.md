@@ -62,8 +62,8 @@ or site-package patch is used.
   distributed checkpoint save, teardown, reconstruction, and resume reproduced
   the next output, scalar loss, and updated local parameter shards bitwise on a
   tiny deterministic model.
-- an identity-invalid side result executes one real Qwen3-VL-8B-Thinking representation optimizer step on
-  physical GPUs 2 and 3. The target-token-embedding provider, native main `D`
+- corrected `RP-10` passes one real Qwen3-VL-8B-Thinking representation
+  optimizer step on physical GPUs 2 and 3. The target-token-embedding provider, native main `D`
   and all three D-DeepStack branches, same-image Matrix CE plus `L_gen`, frozen
   Qwen, two-rank FSDP2, validation, content-bound DCP save, and 104-tensor
   Adapter-only export all completed without tokenizer growth.
@@ -71,11 +71,10 @@ or site-package patch is used.
 The Qwen3 cell proves public precomputed-latent transport and native transcript
 execution, not policy/reference replay parity, a trained TGVF Adapter, or
 production reward/objective behavior. `SC-30` proves exact resume for its tiny
-fixture. The technical side result proves debugging readiness but receives no
-experiment-gate credit because its `SC-40` prefix collides with the reserved
-SDPO cell. Corrected `RP-10` is planned; neither result can imply production
-data quality, capacity/throughput, a paired provider result, or real
-distributed restore/next-step parity.
+fixture. The earlier technical side result remains invalid because its `SC-40`
+prefix collides with the reserved SDPO cell; `RP-10` is the accepted bounded
+identity. Neither result implies production data quality, capacity/throughput,
+a paired provider result, or real distributed restore/next-step parity.
 
 ## Representation-parity work after the bounded framework build
 
@@ -107,8 +106,8 @@ trainer, without claiming a completed production run:
 Production data/manifests, prompt, initialization, objective coefficients,
 hyperparameters, semantic thresholds, paired providers, exact legacy-state
 parity, and real distributed restore/next-step evidence remain open under Gate
-A0. The invalid side result is not accepted evidence; corrected `RP-10` must
-pass independently and still will not be a trained-quality artifact.
+A0. Corrected `RP-10` is a one-step synthetic-data execution proof, not a
+trained-quality artifact; the invalid side result receives no gate credit.
 
 ## Model-family boundary
 
