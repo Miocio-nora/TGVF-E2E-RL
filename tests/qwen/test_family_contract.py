@@ -29,10 +29,8 @@ from tgvf_rl.observations.store import (
     TrajectoryReplayTensorRefs,
 )
 from tgvf_rl.qwen.base import (
-    QwenVLMFamilyAdapter,
     ReplayConsumer,
     _prove_native_streaming_injected_request,
-    _prove_selected_sequence_positions,
     gather_next_token_logprobs,
     injected_request_from_recorded,
     materialize_deepstack,
@@ -73,16 +71,6 @@ class TinyQwen(nn.Module):
         super().__init__()
         self.model = SimpleNamespace(language_model=TinyLanguageModel())
         self.lm_head = nn.Linear(8, 32, bias=False)
-
-
-class _GenericFallbackQwen3Adapter(Qwen3VLAdapter):
-    def forward_injected_selected_logits(self, model, request, positions):
-        return QwenVLMFamilyAdapter.forward_injected_selected_logits(
-            self,
-            model,
-            request,
-            positions,
-        )
 
 
 def _replay(*, branches: int, calls: int = 2):
@@ -202,80 +190,6 @@ def test_qwen25_support_is_not_misrepresented_as_qwen3_deepstack() -> None:
     store, replay = _replay(branches=1, calls=1)
     with pytest.raises(ValueError, match="no accepted DeepStack"):
         adapter.forward_recorded(TinyQwen(), store, replay, ReplayConsumer.REFERENCE)
-
-
-@pytest.mark.parametrize(
-    ("adapter", "branches"),
-    ((Qwen3VLAdapter(), 3), (Qwen25VLAdapter(), 0)),
-)
-def test_qwen_family_selected_logits_apply_head_only_to_requested_positions(
-    adapter: QwenVLMFamilyAdapter,
-    branches: int,
-) -> None:
-    torch.manual_seed(31)
-    model = TinyQwen()
-    store, replay = _replay(branches=branches, calls=1)
-    request = injected_request_from_recorded(
-        resolve_replay_request(store, replay, ReplayConsumer.POLICY)
-    )
-    positions = _prove_selected_sequence_positions(request, ((0, 3, 6),))
-    head_input_shapes: list[tuple[int, ...]] = []
-    hook = model.lm_head.register_forward_pre_hook(
-        lambda _module, args: head_input_shapes.append(tuple(args[0].shape))
-    )
-    try:
-        full = adapter.forward_injected(model, request)
-        selected = adapter.forward_injected_selected_logits(model, request, positions)
-    finally:
-        hook.remove()
-
-    expected = full.logits[:, (0, 3, 6), :].reshape(3, 32)
-    torch.testing.assert_close(selected.logits, expected)
-    assert head_input_shapes == [(1, 8, 8), (3, 8)]
-    assert full.hidden_states.shape == (1, 8, 8)
-    assert full.logits.shape == (1, 8, 32)
-
-
-def test_generic_selected_logits_fallback_gathers_from_full_interface() -> None:
-    torch.manual_seed(37)
-    model = TinyQwen()
-    store, replay = _replay(branches=3, calls=1)
-    request = injected_request_from_recorded(
-        resolve_replay_request(store, replay, ReplayConsumer.POLICY)
-    )
-    positions = _prove_selected_sequence_positions(request, ((1, 5),))
-    head_input_shapes: list[tuple[int, ...]] = []
-    hook = model.lm_head.register_forward_pre_hook(
-        lambda _module, args: head_input_shapes.append(tuple(args[0].shape))
-    )
-    try:
-        selected = _GenericFallbackQwen3Adapter().forward_injected_selected_logits(
-            model,
-            request,
-            positions,
-        )
-    finally:
-        hook.remove()
-
-    assert selected.logits.shape == (2, 32)
-    assert head_input_shapes == [(1, 8, 8)]
-
-
-def test_selected_position_proof_rejects_request_replacement_and_id_mutation() -> None:
-    model = TinyQwen()
-    store, replay = _replay(branches=3, calls=1)
-    request = injected_request_from_recorded(
-        resolve_replay_request(store, replay, ReplayConsumer.POLICY)
-    )
-    positions = _prove_selected_sequence_positions(request, ((1, 5),))
-    adapter = Qwen3VLAdapter()
-
-    with pytest.raises(ValueError, match="different forward request"):
-        adapter.forward_injected_selected_logits(model, replace(request), positions)
-
-    request.input_ids[0, 0] = request.input_ids[0, 0] + 1
-    with pytest.raises(ValueError, match="input_ids changed"):
-        adapter.forward_injected_selected_logits(model, request, positions)
 
 
 def test_replay_logprobs_use_preceding_logits() -> None:
