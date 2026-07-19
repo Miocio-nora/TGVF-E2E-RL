@@ -3182,9 +3182,9 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 ### RP-27-QWEN3-REPRESENTATION-OPERATOR-PROFILE-REAL512-K4-GA4-GPU23
 
 - Cell/matrix ID and class: `RP-27`; bounded operator-timeline diagnostic on
-  the accepted RP-24 full-logits path. Lifecycle status: `PLANNED`; no timing
-  from the profiled step may be used as a throughput estimate and its Adapter
-  output is not promotion-eligible.
+  the accepted RP-24 full-logits path. Lifecycle status: `COMPLETE`; result
+  `ROOT_CAUSE_FOUND`. No timing from the profiled step is used as a throughput
+  estimate and its Adapter output is not promotion-eligible.
 - Approval/code/question: accepted
   `RPI-20260720-CONTROL-STACK-OPTIMIZATION` measured-attribution clause;
   diagnostic launcher/runtime commit
@@ -3231,6 +3231,34 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   configs/smoke/representation_qwen3_embedding_rp27_operator_profile_real512_ga4_gpu23.toml
   --profile-global-step 2 --trace-dir
   artifacts/representation/RP-27-qwen3-operator-profile-real512-k4-ga4-gpu23/profile`.
+- Execution/resources: both devices were idle at preflight; torchrun started
+  `2026-07-20 07:30:37 +09:00` and completed about `07:31:59 +09:00`.
+  Train-core use was approximately `0.012219` aggregate GPU-hours. The output
+  tree is `1,026,602,351` bytes, including complete per-rank summaries,
+  operator tables and 223.9/224.7 MB Chrome traces. Final diagnostic Adapter
+  manifest SHA256 is
+  `abbd1f418c5833fa5d6f1bfd76eacf0678cefcbcd37bd52801bf91fd4d62aade`.
+- Parity/profile validity: unprofiled step 1 took `11.153583912` seconds and
+  matches RP-24 exactly in sample order, every objective, gradient norm,
+  counts, tokenizer length and eight B8 calls. Profiled step 2 completed in
+  `10.840172723` seconds with exact RP-24 mathematical values; its timing is
+  instrumentation-contaminated as planned.
+- Root cause: across 16 readout rows/rank, `_readout_row` consumed
+  `3,180.4` ms on rank0 and `3,900.8` ms on rank1, while profiler-attributed
+  CUDA work inside that scope was only about `25.9`/`27.2` ms. Each call spent
+  roughly 190--252 ms invoking Qwen3 `get_rope_index` on CUDA IDs. The upstream
+  helper performs Python/list/scalar operations plus `argwhere`, `tolist` and
+  repeated grid `item` reads; CUDA inputs therefore create many tiny kernels
+  and device-to-host synchronizations although M-RoPE depends only on discrete
+  IDs, mask and image grid.
+- Secondary effect/conclusion: rank1's 720 ms larger cumulative readout delay,
+  plus longer readout sequences, arrives late at the final synchronized
+  backward; rank0 attributes about `1.328` seconds to the final NCCL
+  reduce-scatter wait. Group builder spans were `5,979.1`/`7,031.1` ms,
+  Qwen cell batches `1,218.3`/`1,296.3` ms, and score groups
+  `3,222.5`/`3,496.3` ms. The next correction computes the unchanged native
+  M-RoPE positions on CPU and transfers the single completed position tensor,
+  then requires exact real-model position/objective/gradient parity.
 
 ## Compatibility-spike status
 
