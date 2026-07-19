@@ -19,6 +19,7 @@ def test_bounded_fsdp2_config_is_explicit_and_valid() -> None:
     config = validate_smoke_config(REPOSITORY_ROOT / "configs/smoke/fsdp2.toml")
     assert config["stack"]["physical_gpu_ids"] == [2, 3]
     assert config["stack"]["vllm_enable_mm_embeds"] is True
+    assert config["run_id"] == "I8H-SC-30-FSDP2-INFRA-20260719"
     assert config["objective"]["production_rl"] is False
     assert config["checkpoint"]["contents"] == ["model", "optimizer", "extra"]
 

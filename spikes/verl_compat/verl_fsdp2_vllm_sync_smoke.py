@@ -41,6 +41,8 @@ SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
+from tgvf_rl.experiment_identity import validate_run_id  # noqa: E402
+
 ACCEPTED_MODEL_PATH = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking")
 REWARD_PATH = Path(__file__).with_name("verl_sync_fixed_reward.py").resolve()
 LOCK_PATH = REPOSITORY_ROOT / "requirements/compatibility-torch211-cu129.lock"
@@ -147,21 +149,24 @@ def derive_paths(result: Path) -> GatePaths:
     )
 
 
-def fixture_rows() -> tuple[dict[str, Any], ...]:
+def fixture_rows(*, run_id: str) -> tuple[dict[str, Any], ...]:
     """Return the two deterministic prompts repeated at both trainer steps."""
 
+    run_id = validate_run_id(run_id)
     prompts = (
         "Reply with one short statement about a red square.",
         "Reply with one short statement about a blue circle.",
     )
     return tuple(
         {
+            "run_id": run_id,
             "data_source": "tgvf_verl_vllm_sync_gate",
             "prompt": [{"role": "user", "content": prompt}],
             "ability": "compatibility",
             "reward_model": {"style": "rule", "ground_truth": 0.0},
             "extra_info": {
                 "fixture_schema_version": FIXTURE_SCHEMA_VERSION,
+                "run_id": run_id,
                 "index": index,
             },
             # Candidate V1 otherwise ignores rollout.do_sample for train rows.
@@ -171,20 +176,23 @@ def fixture_rows() -> tuple[dict[str, Any], ...]:
     )
 
 
-def fixture_logical_sha256() -> str:
+def fixture_logical_sha256(*, run_id: str) -> str:
     payload = json.dumps(
-        fixture_rows(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        fixture_rows(run_id=run_id),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     ).encode("utf-8")
     return sha256(payload).hexdigest()
 
 
-def write_fixture(path: Path) -> None:
+def write_fixture(path: Path, *, run_id: str) -> None:
     if path.exists():
         raise FileExistsError(f"fixture already exists: {path}")
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    table = pa.Table.from_pylist(list(fixture_rows()))
+    table = pa.Table.from_pylist(list(fixture_rows(run_id=run_id)))
     pq.write_table(table, path, compression="zstd")
 
 
@@ -366,8 +374,14 @@ def validate_model_path(path: Path) -> dict[str, Any]:
 
 
 def plan_payload(
-    *, python: Path, model_path: Path, paths: GatePaths, timeout_seconds: int
+    *,
+    run_id: str,
+    python: Path,
+    model_path: Path,
+    paths: GatePaths,
+    timeout_seconds: int,
 ) -> dict[str, Any]:
+    run_id = validate_run_id(run_id)
     command = build_command(python=python, model_path=model_path, paths=paths)
     env = {**REQUIRED_ENVIRONMENT, "VERL_FILE_LOGGER_PATH": str(paths.metrics)}
     source_paths = {
@@ -384,6 +398,7 @@ def plan_payload(
     }
     return {
         "schema_version": PLAN_SCHEMA_VERSION,
+        "run_id": run_id,
         "scope": {
             "trainer": "upstream veRL V1 sync",
             "manager": "verl.trainer.ppo.v1.AgentLoopManagerTQ",
@@ -409,7 +424,7 @@ def plan_payload(
         },
         "physical_gpus": [2, 3],
         "timeout_seconds": timeout_seconds,
-        "fixture_logical_sha256": fixture_logical_sha256(),
+        "fixture_logical_sha256": fixture_logical_sha256(run_id=run_id),
         "source_sha256": source_hashes,
         "artifacts": {name: str(path) for name, path in asdict(paths).items()},
         "environment": env,
@@ -608,11 +623,13 @@ def _pip_check(python: Path) -> dict[str, Any]:
 
 def launch(
     *,
+    run_id: str,
     python: Path,
     model_path: Path,
     paths: GatePaths,
     timeout_seconds: int,
 ) -> int:
+    run_id = validate_run_id(run_id)
     for path in asdict(paths).values():
         if path.exists():
             raise FileExistsError(f"gate artifact already exists: {path}")
@@ -625,6 +642,7 @@ def launch(
         raise RuntimeError(f"pip check failed: {pip_check}")
 
     plan = plan_payload(
+        run_id=run_id,
         python=python,
         model_path=model_path,
         paths=paths,
@@ -633,7 +651,7 @@ def launch(
     paths.plan.write_text(
         json.dumps(plan, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
-    write_fixture(paths.fixture)
+    write_fixture(paths.fixture, run_id=run_id)
 
     command = build_command(python=python, model_path=model_path, paths=paths)
     environment = child_environment(paths)
@@ -665,6 +683,7 @@ def launch(
     log_text = paths.log.read_text(encoding="utf-8", errors="replace")
     result = {
         "schema_version": RESULT_SCHEMA_VERSION,
+        "run_id": run_id,
         "status": "PASS"
         if returncode == 0 and metric_result.get("passed") is True
         else "FAIL",
@@ -674,7 +693,7 @@ def launch(
         "plan_sha256": _sha256_path(paths.plan),
         "resolved_config_sha256": _sha256_path(paths.resolved_config),
         "fixture_parquet_sha256": _sha256_path(paths.fixture),
-        "fixture_logical_sha256": fixture_logical_sha256(),
+        "fixture_logical_sha256": fixture_logical_sha256(run_id=run_id),
         "process_returncode": returncode,
         "metrics": metric_result,
         "log_diagnostics": {
@@ -691,6 +710,12 @@ def launch(
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--run-id",
+        type=_run_id_argument,
+        required=True,
+        help="explicit experiment identity; never inferred from --output",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-path", type=Path, default=ACCEPTED_MODEL_PATH)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
@@ -701,6 +726,13 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="launch the recorded GPU gate; without this flag only print its plan",
     )
     return parser.parse_args(argv)
+
+
+def _run_id_argument(value: str) -> str:
+    try:
+        return validate_run_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -717,6 +749,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             json.dumps(
                 plan_payload(
+                    run_id=args.run_id,
                     python=python,
                     model_path=model_path,
                     paths=paths,
@@ -728,6 +761,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     return launch(
+        run_id=args.run_id,
         python=python,
         model_path=model_path,
         paths=paths,

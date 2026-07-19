@@ -151,3 +151,21 @@ def test_output_path_is_bounded_json_and_non_overwriting(tmp_path: Path) -> None
             probe.bounded_output_path(existing)
     finally:
         existing.unlink()
+
+
+def test_cli_requires_safe_explicit_run_id() -> None:
+    probe = _load_probe()
+    common = [
+        "--runtime",
+        "candidate",
+        "--physical-gpu",
+        "3",
+        "--output",
+        "artifacts/compatibility/proposed-patch-probe.json",
+    ]
+    with pytest.raises(SystemExit):
+        probe._parse_args(common)
+    with pytest.raises(SystemExit):
+        probe._parse_args(["--run-id", "../unsafe", *common])
+    args = probe._parse_args(["--run-id", "RP-15P-T211-PATCH", *common])
+    assert args.run_id == "RP-15P-T211-PATCH"

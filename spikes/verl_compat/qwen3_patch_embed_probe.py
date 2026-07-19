@@ -17,7 +17,7 @@ physical GPU 3, the exact invocation is::
     CUDA_VISIBLE_DEVICES=3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 \
       .venv-torch211-cu129/bin/python \
       spikes/verl_compat/qwen3_patch_embed_probe.py \
-      --runtime candidate --physical-gpu 3 \
+      --run-id <ledger-run-id> --runtime candidate --physical-gpu 3 \
       --output artifacts/compatibility/<ledger-cell>.json
 
 The command may be launched only after that exact output identity has a
@@ -43,6 +43,8 @@ from typing import Any
 
 import torch
 from torch.nn import functional as F
+
+from tgvf_rl.experiment_identity import validate_run_id
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -546,6 +548,12 @@ def _run_dtype(
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--run-id",
+        type=_run_id_argument,
+        required=True,
+        help="explicit experiment identity; never inferred from --output",
+    )
     parser.add_argument("--runtime", choices=tuple(RUNTIME_IDENTITIES), required=True)
     parser.add_argument(
         "--physical-gpu",
@@ -555,6 +563,13 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
+
+
+def _run_id_argument(value: str) -> str:
+    try:
+        return validate_run_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -606,6 +621,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     properties = torch.cuda.get_device_properties(logical_device)
     payload = {
         "schema_version": RESULT_SCHEMA_VERSION,
+        "run_id": args.run_id,
         "result": "PASS" if passed else "FAIL",
         "scope": "isolated_qwen3_patch_embed_projection_only",
         "invocation": {

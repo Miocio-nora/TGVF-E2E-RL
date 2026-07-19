@@ -14,6 +14,7 @@ import torch
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SMOKE_PATH = REPOSITORY_ROOT / "spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py"
 REWARD_PATH = REPOSITORY_ROOT / "spikes/verl_compat/verl_sync_fixed_reward.py"
+RUN_ID = "SC-21-T211-VERL-VLLM-SYNC-TEST"
 
 
 def _load(path: Path, name: str) -> Any:
@@ -56,6 +57,7 @@ def test_plan_is_one_upstream_v1_no_sleep_integration_path() -> None:
     )
     paths = smoke.derive_paths(result)
     plan = smoke.plan_payload(
+        run_id=RUN_ID,
         python=REPOSITORY_ROOT / ".venv-torch211-cu129/bin/python",
         model_path=smoke.ACCEPTED_MODEL_PATH,
         paths=paths,
@@ -63,6 +65,7 @@ def test_plan_is_one_upstream_v1_no_sleep_integration_path() -> None:
     )
     overrides = plan["command"][3:]
 
+    assert plan["run_id"] == RUN_ID
     assert plan["scope"]["manager"] == ("verl.trainer.ppo.v1.AgentLoopManagerTQ")
     assert "generate_sequences(TensorDict)->None" in plan["scope"]["manager_contract"]
     assert "trainer.use_v1=true" in overrides
@@ -119,13 +122,15 @@ def test_child_environment_allows_ray_to_assign_logical_cuda_ordinals(
 def test_fixture_forces_greedy_rows_and_non_rl_zero_reward() -> None:
     smoke = _load(SMOKE_PATH, "tgvf_verl_sync_smoke_fixture_test")
     reward = _load(REWARD_PATH, "tgvf_verl_sync_reward_test")
-    rows = smoke.fixture_rows()
+    rows = smoke.fixture_rows(run_id=RUN_ID)
 
     assert len(rows) == 2
+    assert all(row["run_id"] == RUN_ID for row in rows)
     assert [row["extra_info"]["index"] for row in rows] == [0, 1]
+    assert all(row["extra_info"]["run_id"] == RUN_ID for row in rows)
     assert all(row["__do_sample__"] is False for row in rows)
     assert all(row["reward_model"]["ground_truth"] == 0.0 for row in rows)
-    assert len(smoke.fixture_logical_sha256()) == 64
+    assert len(smoke.fixture_logical_sha256(run_id=RUN_ID)) == 64
     assert reward.compute_score("tgvf_verl_vllm_sync_gate", "ignored", 0.0) == 0.0
     with pytest.raises(ValueError, match="data source"):
         reward.compute_score("wrong", "ignored", 0.0)
@@ -165,11 +170,21 @@ def test_default_cli_only_prints_plan_and_writes_nothing(capsys) -> None:
     proposed = Path("artifacts/compatibility/proposed-no-launch-sync-gate.json")
     resolved = REPOSITORY_ROOT / proposed
 
-    assert smoke.main(["--output", str(proposed)]) == 0
+    assert smoke.main(["--run-id", RUN_ID, "--output", str(proposed)]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_version"] == smoke.PLAN_SCHEMA_VERSION
+    assert payload["run_id"] == RUN_ID
     assert payload["physical_gpus"] == [2, 3]
     assert not resolved.exists()
+
+
+def test_cli_requires_a_safe_explicit_run_id() -> None:
+    smoke = _load(SMOKE_PATH, "tgvf_verl_sync_smoke_run_id_test")
+    output = "artifacts/compatibility/proposed-run-id-gate.json"
+    with pytest.raises(SystemExit):
+        smoke._parse_args(["--output", output])
+    with pytest.raises(SystemExit):
+        smoke._parse_args(["--run-id", "../unsafe", "--output", output])
 
 
 def test_infrastructure_objective_has_zero_advantage_and_real_nll_gradient() -> None:

@@ -8,12 +8,14 @@ optimizer, or materialize a production TGVF Adapter checkpoint.
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import hashlib
 from importlib import metadata
 import json
 import math
 import os
 from pathlib import Path
+import platform
 import sys
 from typing import Any, Sequence
 
@@ -33,6 +35,12 @@ from tgvf_rl.framework.vllm import (  # noqa: E402
     TGVF_QWEN3_VLLM_ARCHITECTURE,
     TGVF_VLLM_ATTENTION_BACKEND,
 )
+from tgvf_rl.compatibility_stack import (  # noqa: E402
+    TORCH211_CU129_COMPATIBILITY_STACK,
+    audited_compatibility_stack,
+)
+from tgvf_rl.experiment_identity import validate_run_id  # noqa: E402
+from tgvf_rl.framework.verl import verify_verl_distribution_identity  # noqa: E402
 from tgvf_rl.protocol import NativeProtocolRenderer  # noqa: E402
 
 
@@ -137,13 +145,65 @@ def _synthetic_latents(config: Any) -> dict[str, list[dict[str, torch.Tensor]]]:
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--run-id",
+        type=_run_id_argument,
+        required=True,
+        help="explicit experiment identity; never inferred from --output",
+    )
+    parser.add_argument(
+        "--stack",
+        choices=(TORCH211_CU129_COMPATIBILITY_STACK,),
+        required=True,
+        help="explicit audited candidate stack selector",
+    )
     parser.add_argument("--model", type=Path, default=EXPECTED_MODEL_PATH)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
 
 
+def _run_id_argument(value: str) -> str:
+    try:
+        return validate_run_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _validate_candidate_runtime(stack_selector: str) -> dict[str, Any]:
+    stack = audited_compatibility_stack(stack_selector)
+    versions = {
+        name: metadata.version(name)
+        for name in ("torch", "transformers", "vllm", "verl")
+    }
+    checks = {
+        "python_3_12": platform.python_version_tuple()[:2] == ("3", "12"),
+        "torch_distribution": versions["torch"] == stack.torch_distribution_version,
+        "torch_runtime": str(torch.__version__) == stack.torch_runtime_version,
+        "transformers": versions["transformers"]
+        == stack.transformers_distribution_version,
+        "vllm": versions["vllm"] == stack.vllm_distribution_version,
+    }
+    if not all(checks.values()):
+        raise RuntimeError(f"candidate runtime identity failed: {checks}")
+    verl = verify_verl_distribution_identity(expected_commit=stack.verl_commit)
+    return {
+        "compatibility_stack": asdict(stack),
+        "python": platform.python_version(),
+        "torch_runtime": str(torch.__version__),
+        "distributions": versions,
+        "verl": {
+            "commit": verl.commit,
+            "source_url": verl.source_url,
+            "source_kind": verl.source_kind,
+            "source_clean": verl.source_clean,
+        },
+        "checks": {**checks, "verl_commit": verl.commit == stack.verl_commit},
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
+    runtime_identity = _validate_candidate_runtime(args.stack)
     model_path = args.model.resolve()
     output_path = _bounded_output(args.output)
     if model_path != EXPECTED_MODEL_PATH:
@@ -237,7 +297,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     payload = {
         "schema_version": "tgvf-qwen3-vllm-latent-smoke-v1",
+        "run_id": args.run_id,
         "result": "PASS",
+        "stack": args.stack,
+        "runtime_identity": runtime_identity,
         "scope": "synthetic source plus two precomputed-D items; no optimizer",
         "model": {
             "path": str(model_path),

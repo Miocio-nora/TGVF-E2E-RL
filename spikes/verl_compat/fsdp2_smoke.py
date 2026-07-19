@@ -45,6 +45,7 @@ from tgvf_rl.framework.verl import (  # noqa: E402
     load_verl_public_api,
     verify_verl_distribution_identity,
 )
+from tgvf_rl.experiment_identity import validate_run_id  # noqa: E402
 
 
 class TinyBlock(nn.Module):
@@ -176,6 +177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.config if args.config.is_absolute() else REPOSITORY_ROOT / args.config,
         stack_selector=args.stack,
     )
+    run_id = validate_run_id(config.get("run_id"))
     checkpoint_dir = _bounded_path(args.checkpoint_dir, expected_parent="compatibility")
     output_path = _bounded_path(args.output, expected_parent="compatibility")
     if checkpoint_dir.exists():
@@ -285,6 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "schema_version": "tgvf-fsdp2-smoke-result-v1",
+                "run_id": run_id,
                 "result": "PASS",
                 "scope": config["scope"],
                 "objective": dict(config["objective"]),

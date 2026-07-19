@@ -18,6 +18,7 @@ from tgvf_rl.compatibility_stack import (
     AuditedCompatibilityStack,
     audited_compatibility_stack,
 )
+from tgvf_rl.experiment_identity import validate_run_id
 from tgvf_rl.framework.verl import (
     VerlAdapterConfig,
     VerlRuntimeRequirements,
@@ -48,6 +49,7 @@ def validate_smoke_config(
         config = tomllib.load(stream)
     _require(config, "schema_version", SMOKE_CONFIG_SCHEMA)
     _require(config, "scope", "synthetic_infrastructure_only")
+    validate_run_id(config.get("run_id"))
 
     stack = config.get("stack")
     if not isinstance(stack, Mapping):
