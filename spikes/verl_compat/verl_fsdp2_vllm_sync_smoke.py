@@ -215,6 +215,7 @@ def hydra_overrides(*, model_path: Path, paths: GatePaths) -> tuple[str, ...]:
         "data.dataloader_num_workers=0",
         f"actor_rollout_ref.model.path={model_path}",
         f"actor_rollout_ref.model.external_lib={OBJECTIVE_MODULE}",
+        "+actor_rollout_ref.model.override_config.attn_implementation=sdpa",
         "actor_rollout_ref.model.use_remove_padding=false",
         "actor_rollout_ref.model.enable_gradient_checkpointing=false",
         "actor_rollout_ref.model.lora.dropout=0.0",

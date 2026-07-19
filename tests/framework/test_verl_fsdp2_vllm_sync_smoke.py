@@ -71,6 +71,9 @@ def test_plan_is_one_upstream_v1_no_sleep_integration_path() -> None:
     assert "trainer.use_v1=true" in overrides
     assert "trainer.v1.trainer_mode=sync" in overrides
     assert "actor_rollout_ref.actor.strategy=fsdp2" in overrides
+    assert (
+        "+actor_rollout_ref.model.override_config.attn_implementation=sdpa" in overrides
+    )
     assert "actor_rollout_ref.actor.fsdp_config.strategy=fsdp2" in overrides
     assert "actor_rollout_ref.rollout.name=vllm" in overrides
     assert "actor_rollout_ref.rollout.tensor_model_parallel_size=2" in overrides
