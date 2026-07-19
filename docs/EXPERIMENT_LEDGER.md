@@ -1412,6 +1412,387 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   that difference remains attributable to score/recompute versus single-pass
   B32 execution. Whether `262144` becomes the production cap remains open.
 
+### SC-30-T211-FSDP2-INFRA
+
+- Cell/matrix ID and mandatory/diagnostic class: `SC-30-T211-FSDP2-INFRA`;
+  mandatory Torch-2.11 two-rank composable-FSDP2 checkpoint/resume gate.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime commit
+  `2918c8913756e4bbac0e6aa171c102ceab4d409c`; accepted re-spike in
+  `PROJECT_TASK.md` §9.2 and I8H-20260719.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: does the candidate stack execute a two-rank FSDP2 update and then
+  reproduce the next output, loss, update, and local shards bitwise after a
+  strict DCP teardown/reconstruct/resume?
+- Baseline and exact output path: control `SC-30-FSDP2-INFRA`; result/log/DCP
+  are `artifacts/compatibility/SC-30-T211-fsdp2-infra.json`,
+  `artifacts/compatibility/SC-30-T211-fsdp2-infra.log`, and
+  `artifacts/compatibility/SC-30-T211-fsdp2-infra-checkpoint/`.
+- Model and processor identity: `synthetic-tiny-fsdp2-model-v1`, width 16, two
+  residual MLP blocks, FP32, seed `20260719`; processor N/A.
+- Representation checkpoint identity: N/A; this is synthetic infrastructure.
+- N/A fields and justification: prompt, tokenizer, D/DeepStack, policy,
+  reference, reward, sampling, behavior logprobs, GRPO, and SDPO are absent.
+- Policy/reference initialization: N/A; deterministic tiny-model control and
+  resumed lanes start from identical state.
+- Rollout policy version and allowed asynchronous staleness: N/A; no rollout.
+- Code commit and worktree state: runtime `2918c8913756e4bbac0e6aa171c102ceab4d409c`;
+  launch must use a clean descendant containing only this config/ledger plan.
+- Repository adapter/patch surface and hash: `fsdp2_smoke.py` SHA256
+  `a386e70f84417784ed2d3aa731578a488f873e2469d1dfec813d7a8f88065694`;
+  config SHA256
+  `526baee91aa2b19f47ea7c3f1342ff3c366b45e3fb90a24e55c6e744fa0e43f7`;
+  public PyTorch composable FSDP2/DCP and veRL checkpoint imports, no patch.
+- Dataset/manifest, hashes, sample rule, and n: generated two-step tensors with
+  fixture seeds `20260720` and `20260721`; no external dataset.
+- Native prompt/tool schema hash: N/A.
+- Chat-template/token-fixture hash and token-ownership masks: N/A.
+- D/DeepStack/position/mask identity: N/A.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: CPython `3.12.3`, Torch
+  `2.11.0+cu129`, CUDA `12.9`, NCCL `2.28.9`, Transformers `4.57.6`, vLLM
+  `0.23.0+cu129`, veRL `638b8ff84f279e054982f1f4633a546f3c6ced68`,
+  TransferQueue `0.1.8`; candidate lock SHA256
+  `b62e6f81e0f33ebc71468f81d94e427f5c7d954aab6223b151f48f339a5d60e6`.
+- Objective equations and normalization: test-only global-element-mean
+  `mean((model(x)-target)**2)`, AdamW; no production RL interpretation.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic
+  algorithms, TF32 off, no dropout, fixed seeds, CUBLAS `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: N/A.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: FP32, no KV/quantization/attention/TP;
+  FSDP mesh `[2]`, reshard after forward, no offload.
+- Logit/logprob/loss/gradient parity tolerances: output, scalar loss, and local
+  updated shards after resume must be exact (`atol=rtol=0`).
+- World size, microbatch, accumulation, and global batch: world 2; local tensor
+  `[2,3,16]`; one update per step; accumulation 1.
+- GPUs: physical 2 `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, B200 183359 MiB, driver
+  `570.195.03`, mapped to logical 0/1. Preflight at
+  `2026-07-20T03:05:40+09:00` found 0 MiB used on each.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  captured from the launched process and result.
+- Actual GPU-hours and peak scratch use: pending; bounded by 600 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 600s .venv-torch211-cu129/bin/torchrun --standalone --nproc-per-node=2 spikes/verl_compat/fsdp2_smoke.py --stack torch211-cu129 --config configs/smoke/fsdp2_torch211.toml --checkpoint-dir artifacts/compatibility/SC-30-T211-fsdp2-infra-checkpoint --output artifacts/compatibility/SC-30-T211-fsdp2-infra.json > artifacts/compatibility/SC-30-T211-fsdp2-infra.log 2>&1`.
+- Outputs: new result/log/DCP paths above; overwrite forbidden.
+- Scorer/parser identity: exact script/config hashes above.
+- Metrics: pending exact-resume and runtime identity assertions.
+- Conclusion: pending; cannot promote the candidate by itself.
+
+### SC-21-T211-VERL-VLLM-WEIGHT-SYNC
+
+- Cell/matrix ID and mandatory/diagnostic class:
+  `SC-21-T211-VERL-VLLM-WEIGHT-SYNC`; mandatory upstream veRL FSDP2 actor to
+  vLLM TP=2 generation/weight-sync gate.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime
+  `2918c8913756e4bbac0e6aa171c102ceab4d409c`; `PROJECT_TASK.md` §9.2 and
+  I8H-20260719.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: can upstream veRL V1 synchronously run TransferQueue generation,
+  two nonzero FSDP2 actor updates, naive ZMQ/CUDA-IPC weight transfer to vLLM,
+  and replay processed logprobs at staleness zero?
+- Baseline and exact output path: no earlier combined gate; result, log,
+  metrics, fixture, resolved config, and plan use the prefix
+  `artifacts/compatibility/SC-21-T211-verl-vllm-weight-sync`.
+- Model and processor identity: stable local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, Qwen3-VL 8B Thinking,
+  model config SHA256
+  `5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661`,
+  tokenizer length `151669`, BF16, local-only, no tokenizer resize.
+- Representation checkpoint identity: N/A; repo TGVF plugin is deliberately
+  disabled in this infrastructure gate.
+- N/A fields and justification: production reward, reference-policy replay,
+  main-D/D-DeepStack transport, GRPO, and SDPO are excluded; their mathematics
+  are not authorized by this spike.
+- Policy/reference initialization: actor from the original local Qwen3; no
+  reference policy; vLLM uses dummy load followed by actor weight sync.
+- Rollout policy version and allowed asynchronous staleness: version 0 then 1;
+  synchronous trainer, required staleness 0 and no intervening update.
+- Code commit and worktree state: runtime commit above; clean planned-launch
+  descendant required.
+- Repository adapter/patch surface and hash: driver
+  `c472232d0cba7b1a4e8a2f5808da1191797838fbcdfc188b14759a380aa0ab07`,
+  manager hook `63cfacbc57b3cb352e49dafa187153703bec3858ac279ecf7dfb903eec335a81`,
+  objective `f5f8bea96bb6226e8ae371b09ae30d0145d9c68f02bd8517875240e2de8d4fc3`,
+  reward `f2da3ff00bf7d089bd8bb71ba642a4873f0a0638141c6c2f99e579c6386423e0`;
+  no veRL/vLLM site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: generated two-row Parquet;
+  logical fixture SHA256
+  `6be68e092dc4576079fb5b3ae7182a4b22ebe9d7e9eb48f6b735a2a7acdfa22e`,
+  deterministic order, train/validation n=2.
+- Native prompt/tool schema hash: no tool invocation; fixed textual sync
+  fixture from the driver hash above.
+- Chat-template/token-fixture hash and token-ownership masks: Qwen native
+  template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`;
+  generated response tokens alone form the update mask.
+- D/DeepStack/position/mask identity: N/A by deliberate exclusion.
+- Observation materialization/artifact identity used by all replays: each
+  generated response and processed rollout logprob returns through
+  TransferQueue to the same synchronous update; no observation recomputation.
+- RL framework/version/environment lock: exact candidate stack and lock SHA256
+  identical to `SC-30-T211-FSDP2-INFRA`.
+- Objective equations and normalization: infrastructure-only registered
+  zero-advantage estimator plus mean generated-token NLL; fixed reward 1.0;
+  production GRPO/PPO/SDPO math is explicitly excluded.
+- Rollout/replay forward mode and adapter dropout/RNG contract: full
+  determinism, LoRA/dropout 0, sync V1 trainer, no cache sleep, seed `20260720`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM `0.23.0+cu129`, greedy
+  (`do_sample=false`, temperature 1.0, top-p 1.0, top-k -1), 16-token cap, no
+  custom processors, `processed_logprobs` after represented transforms.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16, no quantization, Triton
+  attention, vLLM TP=2, actor FSDP2 size 2, naive checkpoint backend,
+  `free_cache_engine=false`, `enable_sleep_mode=false`.
+- Logit/logprob/loss/gradient parity tolerances: both update gradients finite
+  and nonzero; step two actor version 1/staleness 0; rollout/replay probability
+  differences use maximum floor `.05`, mean floor `.01`, relative multiplier
+  `5`, gross max `.2`, gross mean `.02`, Pearson minimum `.9`.
+- World size, microbatch, accumulation, and global batch: two GPUs; train batch
+  2, PPO mini-batch 2, micro-batch 1/GPU, one epoch/update, two updates.
+- GPUs: same physical UUIDs/mapping/preflight as
+  `SC-30-T211-FSDP2-INFRA`; no other GPU visible.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  driver and Ray/veRL process identities captured in outputs/log.
+- Actual GPU-hours and peak scratch use: pending; 1800-second hard timeout.
+- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
+- Outputs: prefix listed above; overwrite forbidden.
+- Scorer/parser identity: driver and registered objective hashes above; public
+  manager must be identical to upstream `AgentLoopManagerTQ`.
+- Metrics: pending two-step sync, update, staleness, and logprob assertions.
+- Conclusion: pending; passing proves the no-sleep/no-TGVF-plugin combined
+  transport only, not production RL mathematics.
+
+### SC-20-T211-QWEN3-VLLM-LATENT
+
+- Cell/matrix ID and mandatory/diagnostic class:
+  `SC-20-T211-QWEN3-VLLM-LATENT`; mandatory candidate-stack real-Qwen3 native
+  repeated-tool/precomputed-latent vLLM smoke.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime
+  `2918c8913756e4bbac0e6aa171c102ceab4d409c`; `PROJECT_TASK.md` §9.2 and
+  I8H-20260719.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: does vLLM `0.23.0+cu129` load the public repo plugin and generate
+  from the exact native two-call transcript with source plus two main-D/three-
+  branch DeepStack items, without tokenizer growth?
+- Baseline and exact output path: control `SC-20-R6`; result/log are
+  `artifacts/compatibility/SC-20-T211-qwen3-vllm-latent.json` and `.log`.
+- Model and processor identity: same stable local Qwen3 path, config/hash,
+  tokenizer length and native template identity as `SC-21`; architecture
+  override `TGVFQwen3VLForConditionalGeneration`.
+- Representation checkpoint identity: deterministic synthetic latent seed
+  `20260719`; no trained TGVF Adapter artifact claim.
+- N/A fields and justification: optimizer, reference, reward, GRPO, SDPO,
+  checkpoint/resume and task scorer are absent in this inference-only cell.
+- Policy/reference initialization: original Qwen3 weights; no reference.
+- Rollout policy version and allowed asynchronous staleness: immutable base
+  model, version 0, staleness 0.
+- Code commit and worktree state: runtime commit above; clean planned-launch
+  descendant required.
+- Repository adapter/patch surface and hash: plugin
+  `964f551733d1ebdf96b53ed1cb1277c7d017bc755f1509438b99c2bde3ac3444`,
+  registration
+  `ed42f20520ffbd029139d393b7a96122399ce2144414d3b467018864a8d9ec23`,
+  driver `d841b5edd15db66742ccb96958e3e966d883cb6d6226120e5fc363ce401b6ba2`;
+  no site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: one synthetic request, no
+  dataset; three deterministic BF16 latent rows from seed `20260719`.
+- Native prompt/tool schema hash: native `tgvf_focus_tool` schema
+  `1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361`;
+  exactly two native calls and responses.
+- Chat-template/token-fixture hash and token-ownership masks: template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`;
+  generation prefill asserted; no RL loss mask.
+- D/DeepStack/position/mask identity: source/call0/call1, each grid `(1,2,2)`,
+  one merged row, width `4096*(1+3)=16384`, branches `(8,16,24)`, native
+  processor M-RoPE positions; aggregate latent hash is asserted by output.
+- Observation materialization/artifact identity used by all replays: one
+  pre-materialized immutable public-input list; no policy/reference replay.
+- RL framework/version/environment lock: exact candidate stack/lock identical
+  to `SC-30-T211-FSDP2-INFRA`.
+- Objective equations and normalization: N/A; inference only.
+- Rollout/replay forward mode and adapter dropout/RNG contract: eager vLLM,
+  prefix cache off, multimodal processor cache zero, no TGVF recomputation.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM `0.23.0+cu129`, seed
+  `20260719`, temperature `.7`, top-p `.9`, top-k `20`, min-p `.01`,
+  repetition `1.05`, presence `.1`, frequency `.05`, no custom processor, two
+  tokens, sampled `processed_logprobs` after transforms.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 weights/KV, no quantization,
+  `TRITON_ATTN`, TP=2, max length 512, eager; no training mesh.
+- Logit/logprob/loss/gradient parity tolerances: structure exact; two sampled
+  logprobs finite and non-positive; tokenizer stays `151669`.
+- World size, microbatch, accumulation, and global batch: TP world 2, one
+  request/completion, no accumulation.
+- GPUs: same physical UUIDs/mapping/preflight as
+  `SC-30-T211-FSDP2-INFRA`; no other GPU visible.
+- Start/end timestamps, elapsed time, and session/process identity: pending.
+- Actual GPU-hours and peak scratch use: pending; 1800-second timeout.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_ATTENTION_BACKEND=TRITON_ATTN VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv-torch211-cu129/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --output artifacts/compatibility/SC-20-T211-qwen3-vllm-latent.json > artifacts/compatibility/SC-20-T211-qwen3-vllm-latent.log 2>&1`.
+- Outputs: new result/log paths above; overwrite forbidden.
+- Scorer/parser identity: driver, public plugin and native renderer at runtime
+  commit and hashes above.
+- Metrics: pending native transcript, latent, token and processed-logprob checks.
+- Conclusion: pending; not a trained Adapter or replay-parity claim.
+
+### RP-15P-T211-QWEN3-PATCH-EMBED
+
+- Cell/matrix ID and mandatory/diagnostic class:
+  `RP-15P-T211-QWEN3-PATCH-EMBED`; mandatory candidate patch-projection parity
+  and bounded timing diagnostic on one authorized GPU.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime
+  `2918c8913756e4bbac0e6aa171c102ceab4d409c`; `PROJECT_TASK.md` §9.2 and
+  I8H-20260719.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: is the mathematically equivalent Linear projection numerically
+  compatible with native Conv3D in FP32/BF16, and what is its bounded speedup
+  on a fixed 512-by-512-equivalent patch tensor?
+- Baseline and exact output path: native Conv3D in the same process; result
+  `artifacts/compatibility/RP-15P-T211-qwen3-patch-embed.json`.
+- Model and processor identity: accepted local Qwen3; config SHA256
+  `5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661`,
+  model index SHA256
+  `520b2e05079402e9468a8701d03d1154d14b2599593afb6effa7fb60c1bff070`;
+  only patch weight/bias from their declared safetensors shard are loaded.
+- Representation checkpoint identity: N/A; frozen base patch projection only.
+- N/A fields and justification: data, prompt, tokenizer serialization,
+  D/DeepStack, policy/reference, reward, sampling, optimizer, replay, GRPO and
+  SDPO are absent.
+- Policy/reference initialization: N/A.
+- Rollout policy version and allowed asynchronous staleness: N/A.
+- Code commit and worktree state: runtime commit above; clean planned-launch
+  descendant required.
+- Repository adapter/patch surface and hash: probe SHA256
+  `3e424250cc5bff0d76e8eee29cec3d53412349fbe79e59ce20953fc2a5a924f6`;
+  no model/package patch.
+- Dataset/manifest, hashes, sample rule, and n: generated seed `20260720`,
+  flattened shape `(1024,1536)` corresponding to grid `(1,32,32)`.
+- Native prompt/tool schema hash: N/A.
+- Chat-template/token-fixture hash and token-ownership masks: N/A.
+- D/DeepStack/position/mask identity: N/A.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: candidate Torch/CUDA identity and
+  lock SHA256 identical to `SC-30-T211-FSDP2-INFRA`.
+- Objective equations and normalization: N/A; forward parity/timing only.
+- Rollout/replay forward mode and adapter dropout/RNG contract: eval/no-grad,
+  deterministic input; 3 warmups and 10 synchronized timed iterations/method.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: N/A.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: native FP32/BF16 weights/input, no
+  quantization/KV/attention/TP/mesh.
+- Logit/logprob/loss/gradient parity tolerances: FP32 `atol=rtol=1e-4`; BF16
+  `atol=rtol=0.015625`; timing has no PASS floor.
+- World size, microbatch, accumulation, and global batch: one process/GPU;
+  1024 patches per call; no batch accumulation.
+- GPUs: only physical 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, B200 183359 MiB, driver
+  `570.195.03`; preflight found 0 MiB used.
+- Start/end timestamps, elapsed time, and session/process identity: pending.
+- Actual GPU-hours and peak scratch use: pending; bounded 26 calls plus load.
+- Command: `CUDA_VISIBLE_DEVICES=3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 .venv-torch211-cu129/bin/python spikes/verl_compat/qwen3_patch_embed_probe.py --runtime candidate --physical-gpu 3 --output artifacts/compatibility/RP-15P-T211-qwen3-patch-embed.json`.
+- Outputs: new JSON above; overwrite forbidden.
+- Scorer/parser identity: exact probe hash above.
+- Metrics: pending max error and synchronized latency/speed ratio per dtype.
+- Conclusion: pending; a pass authorizes considering the Linear fast path but
+  does not itself change production code.
+
+### RP-15-QWEN3-REPRESENTATION-TORCH211-FSDP2-EMBEDDING-K4-GPR4-GA1-SINGLEPASS-CELLB32-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-15`; mandatory three-step
+  real-Qwen representation FSDP2 forward/backward and throughput comparison.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime
+  `2918c8913756e4bbac0e6aa171c102ceab4d409c`; `PROJECT_TASK.md` §9.2,
+  I8H-20260719 and the accepted RP-13 geometry.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: with mathematical global batch 32 and identical RP-13 math/data,
+  how fast does the candidate stack execute three real Qwen3 TGVF-Adapter
+  updates, and do all representation contracts remain valid?
+- Baseline and exact output path: control `RP-13`; outputs under
+  `artifacts/representation/RP-15-qwen3-representation-torch211-fsdp2-embedding-k4-gpr4-ga1-singlepass-cellb32-throughput/`.
+- Model and processor identity: stable local Qwen3, config/template/tokenizer
+  identities above, BF16/SDPA/local-only/no resize; `image_max_pixels=null` to
+  keep exact RP-13 fixture identity.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`, no
+  source artifact or legacy checkpoint; only Adapter trainable, Qwen frozen.
+- N/A fields and justification: policy/reference rollout, behavior logprob,
+  reward, GRPO, SDPO teacher, judge, vLLM and policy replay are absent.
+- Policy/reference initialization: N/A; original local Qwen is frozen readout.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  representation updates only.
+- Code commit and worktree state: runtime commit above; clean planned-launch
+  descendant required; config binds the runtime commit with `dirty=false`.
+- Repository adapter/patch surface and hash: representation-training tree
+  `6eeacdb69e7b224caf57796d96eec02aca33453c`, Qwen tree
+  `6ae2676f7f08949f2425d736fe4d54751d53f69f`; config source/canonical SHA256
+  `aed59d79ebca37cc684259a79871e4ade3899362658721c002bd7a001b6e8ed0`/
+  `ea4ab704b131ac405f491f24cf9f684d5c277e01ff58b6cc99b112f0ad4692bf`;
+  no site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: train/validation JSONL SHA256
+  `34053c694023461be9f0fe30fd1e525e27697894f705e5428fafad45cfeabc1c`/
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`;
+  train has 32 rows/eight complete K4 same-image groups, four groups/rank,
+  sampler seeds 71/73, required disjoint overlap hash
+  `c23fe08408640a95d0fe9c482228908bc35e7816021e51b029cc6c9d6979c218`.
+- Native prompt/tool schema hash: smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`;
+  native tool schema
+  `1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361`.
+- Chat-template/token-fixture hash and token-ownership masks: template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`;
+  evidence-description-only labels; visual/template positions `-100`.
+- D/DeepStack/position/mask identity: live TGVF Adapter main D plus ordered
+  branches `(8,16,24)`, native M-RoPE, post-D original-image key blocking,
+  target-token-embedding conditioning.
+- Observation materialization/artifact identity used by all replays: each
+  candidate observation is materialized once and used by the differentiable
+  single pass; four independent K4 CE matrices/rank, no cross-group denominator
+  and no detached recompute.
+- RL framework/version/environment lock: exact candidate stack/lock identical
+  to `SC-30-T211-FSDP2-INFRA`.
+- Objective equations and normalization: unchanged RP-13 global-row-mean K4
+  Matrix CE, global per-sample evidence-token-mean `L_gen`, historical Norm;
+  weights `1/1/.1`, manifold `0`; AdamW lr `1e-4`, clip 1, historical cosine
+  horizon 2000/warmup 100/min ratio .1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: frozen Qwen
+  eval, Adapter dropout 0, no cache, deterministic algorithms, TF32 off, seed
+  `20260719`, CUBLAS `:4096:8`; exactly two physical B32 forward calls/rank/update.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: token sampling N/A; deterministic
+  same-image group sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 forward, FP32 reduction, no
+  quantization/KV/TP, SDPA, FSDP2 `[2]`, reshard, no offload.
+- Logit/logprob/loss/gradient parity tolerances: exact structural counts;
+  finite losses/gradients; all Adapter gradients required; tokenizer `151669`;
+  focused Matrix-CE single-pass parity tolerance `atol=rtol=1e-6`; performance
+  has no minimum threshold.
+- World size, microbatch, accumulation, and global batch: world 2; K4 data
+  groups, four groups/rank/update, GA1; 16 local/32 global rows and eight global
+  K4 matrices/update; three updates.
+- GPUs: same physical UUIDs/mapping/preflight as
+  `SC-30-T211-FSDP2-INFRA`; no other GPU visible.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  torchrun/rank identities captured in the log/result.
+- Actual GPU-hours and peak scratch use: pending; 1800-second timeout and one
+  final checkpoint/export.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv-torch211-cu129/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp15_torch211_singlepass_cellb32_throughput.toml > /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-15-qwen3-representation-torch211-fsdp2-embedding-k4-gpr4-ga1-singlepass-cellb32-throughput/run.log 2>&1`.
+- Outputs: Adapter, metrics, final strict DCP and log under the root above;
+  overwrite forbidden; no validation/periodic save within steps 1-3.
+- Scorer/parser identity: strict representation parser/runner/objective at
+  runtime commit and tree/hash identities above.
+- Metrics: pending three step times/rows-per-second, peak CUDA, loss/gradient,
+  token length, cell/call/matrix counts and final DCP/export checks.
+- Conclusion: pending; bounded throughput evidence only, not a promoted
+  representation artifact or production training result.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
