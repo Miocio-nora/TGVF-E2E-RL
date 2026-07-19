@@ -271,6 +271,12 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   `16x16` local matrix. This direct-batch geometry is a bounded throughput
   comparison, not permission to change the accepted K=4 objective or to make
   a production batch-size choice from smoke data alone.
+- Execution record `RP-12` passed that comparison on physical GPUs 2 and 3.
+  Direct GPR4/GA1 reduced steady optimizer-step time from `20.366` to `16.213`
+  seconds and raised row throughput from `1.571` to `1.974` rows/s at the same
+  32-row/eight-matrix global update; peak allocated memory was about 31.0 GB.
+  This supports GA=1 for this B200 geometry while leaving the final production
+  batch and data/prompt identities open.
 
 ### 2.2 Remove Stage2 SFT
 

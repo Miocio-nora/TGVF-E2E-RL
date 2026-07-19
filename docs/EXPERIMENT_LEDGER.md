@@ -1052,8 +1052,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   and `AD-07`. Runtime commit is
   `9b47105e761ceac015094b46d3844f89df63bc10`; config/data commit is
   `6ebed9d02008f8ed0acf26b547b4e2d101875b0f`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: at the same mathematical global batch of 32 used by RP-11, what
   train-core optimizer-step time, rows/s, matrices/s, and peak CUDA memory are
   measured when four independent K=4 blocks per rank are executed directly at
@@ -1081,8 +1081,7 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `9b47105e761ceac015094b46d3844f89df63bc10`; config source/canonical SHA256
   `95079be0c077314894962fe3ec273f5e3bfe5b6985ef7d5e77ab78e2a56c7721`/
   `440ef254e6c3aa2b6660fa54bb9733f596d71ca97c3859c65e8325ceecd8647c`.
-  The launch HEAD and clean-worktree check will be recorded immediately before
-  execution.
+  Launch HEAD was `c4f86d5ea2748109edd46a6c4b99156d0236d9bb`; the worktree was clean.
 - Repository adapter/patch surface and hash: representation-training tree
   `e23a8cd63bdca430a6bf24f689b3707ff8fed777` and unchanged Qwen tree
   `6ae2676f7f08949f2425d736fe4d54751d53f69f`.
@@ -1144,21 +1143,38 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical 3
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, both NVIDIA B200 and mapped to
   logical 0/1. Preflight: `0` MiB used and `182642` MiB free on each.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`,
-  recorded on execution; the invocation has a 1,800-second hard limit.
-- Actual GPU-hours and peak scratch use: `PENDING`, recorded on execution.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-19T22:40:57+09:00` to `22:42:17+09:00`, about 81 seconds;
+  launcher PID `834140`, worker PIDs `834755`/`834756`; exit zero inside the
+  1,800-second hard limit.
+- Actual GPU-hours and peak scratch use: less than `0.045` aggregate GPU-hour;
+  output root uses `577,934,377` bytes. Maximum train-step allocated/reserved
+  CUDA memory was `31,016,656,896`/`33,632,026,624` bytes.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp12_ga1_throughput.toml`.
-- Outputs: planned Adapter export, metrics JSONL, final step-3 DCP checkpoint,
-  and `run.log` under the exact RP-12 output root.
+- Outputs: Adapter SHA256
+  `b13a1c8e56221c5174af50ba489775e11824b6de932f53a92b9410f6b560fb72`;
+  metrics/run-log SHA256
+  `29dc8ca5f3be3acd09dd947f85dc51fac4135025cb8636cf11aff063e2a2e221`/
+  `49b01386b99e0c4572324163bccb11b0df3aaf25b94f4f11ca5bdf7f6b69ad27`;
+  final step-3 DCP checkpoint. Export-manifest SHA256 is
+  `ad6e0670085ffa5046f99d486e425d0aaf9d073abc93fb3f62775d510fea60fb`.
 - Scorer/parser identity: no answer scorer; unchanged strict native pipeline,
   objective, performance measurement, runner, DCP, and export implementation at
   the runtime commit.
-- Metrics: `PENDING`. Every step must report 32 rows, eight matrices, 16 sample
-  IDs per rank from four distinct group keys. Record all three train-step
-  times, rows/s, matrices/s, allocated/reserved CUDA peaks, tokenizer length,
-  and relative throughput against the RP-11 step-2 baseline; step 1 is warmup
-  and the step 2-3 mean is the primary summary.
-- Conclusion: `PENDING`.
+- Metrics: `PASS`. Every step reported 32 rows/eight matrices and every rank
+  reported 16 sample IDs from four distinct group keys. Step 1/2/3 took
+  `17.662964305`/`16.225037827`/`16.200917722` seconds at
+  `1.811700429`/`1.972260425`/`1.975196748` rows/s. The steady step-2/3 means
+  are `16.212977775` seconds and `1.973728587` rows/s. Against RP-11 step 2,
+  optimizer-step time fell `20.39%` and row throughput rose `25.62%`
+  (`1.256x`). Peak allocated memory rose from `21,207,001,600` to
+  `31,016,656,896` bytes but remains far below B200 capacity. Losses and
+  gradients were finite; tokenizer length stayed `151669`; run identity is
+  `7af1be27960842f086eb42a9851ed62c3e1f78c5dc32cec8ce6e8b8fb3489629`.
+- Conclusion: `PASS` for the bounded same-global-batch throughput question.
+  Direct GPR4/GA1 is materially faster and fits comfortably, so configured
+  gradient accumulation is not justified by memory for this B200 geometry.
+  This is throughput evidence, not a production prompt/data-quality result.
 
 ## Compatibility-spike status
 
