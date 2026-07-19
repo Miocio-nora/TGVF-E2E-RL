@@ -10,6 +10,7 @@ from torch.nn import functional as F
 
 import tgvf_rl.representation.training.streaming as streaming_module
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
+from tgvf_rl.qwen.base import QwenVLMFamilyAdapter
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import (
     EVIDENCE_IGNORE_INDEX,
@@ -89,6 +90,16 @@ class _TinyFrozenQwen(nn.Module):
         super().__init__()
         self.model = _TinyQwenContainer()
         self.lm_head = nn.Linear(4, 16, bias=False)
+
+
+class _FullLogitsFallbackQwen3Adapter(Qwen3VLAdapter):
+    def forward_injected_selected_logits(self, model, request, positions):
+        return QwenVLMFamilyAdapter.forward_injected_selected_logits(
+            self,
+            model,
+            request,
+            positions,
+        )
 
 
 def _frozen_model() -> _TinyFrozenQwen:
@@ -888,8 +899,10 @@ def test_native_qwen_cell_batch_has_no_validation_host_reads(
         for column_index, candidate in enumerate(group.candidates)
     )
     original_item = torch.Tensor.item
+    original_tolist = torch.Tensor.tolist
     original_equal = torch.equal
     item_calls = 0
+    tolist_calls = 0
     equal_calls = 0
 
     def counted_item(tensor: torch.Tensor, *args: object) -> object:
@@ -902,7 +915,13 @@ def test_native_qwen_cell_batch_has_no_validation_host_reads(
         equal_calls += 1
         return original_equal(first, second)
 
+    def counted_tolist(tensor: torch.Tensor, *args: object) -> object:
+        nonlocal tolist_calls
+        tolist_calls += 1
+        return original_tolist(tensor, *args)
+
     monkeypatch.setattr(torch.Tensor, "item", counted_item)
+    monkeypatch.setattr(torch.Tensor, "tolist", counted_tolist)
     monkeypatch.setattr(torch, "equal", counted_equal)
     losses = streaming_module._forward_cell_batch_losses(
         Qwen3VLAdapter(),
@@ -912,7 +931,68 @@ def test_native_qwen_cell_batch_has_no_validation_host_reads(
 
     assert losses.per_sample_token_mean_nll.shape == (4,)
     assert item_calls == 0
+    assert tolist_calls == 0
     assert equal_calls == 0
+
+
+def test_selected_head_matches_full_fallback_values_and_visual_gradients() -> None:
+    torch.manual_seed(43)
+    selected_model = _frozen_model()
+    fallback_model = _frozen_model()
+    fallback_model.load_state_dict(selected_model.state_dict())
+    selected_group = _different_evidence_length_group(group_id="selected")
+    fallback_group = _different_evidence_length_group(group_id="fallback")
+
+    def cells(group: SameImageReadoutGroup):
+        return tuple(
+            streaming_module._StreamingCell(
+                group_index=0,
+                row_index=row_index,
+                column_index=column_index,
+                source=group.source_visual,
+                row=row,
+                candidate=candidate.visual,
+                blocked_attention_mask=streaming_module._blocked_evidence_attention_mask(
+                    row,
+                    group.source_visual,
+                ),
+            )
+            for row_index, row in enumerate(group.rows)
+            for column_index, candidate in enumerate(group.candidates)
+        )
+
+    selected = streaming_module._forward_cell_batch_losses(
+        Qwen3VLAdapter(), selected_model, cells(selected_group)
+    )
+    fallback = streaming_module._forward_cell_batch_losses(
+        _FullLogitsFallbackQwen3Adapter(), fallback_model, cells(fallback_group)
+    )
+    torch.testing.assert_close(
+        selected.per_sample_token_mean_nll,
+        fallback.per_sample_token_mean_nll,
+    )
+    torch.testing.assert_close(
+        selected.per_sample_summed_log_likelihood,
+        fallback.per_sample_summed_log_likelihood,
+    )
+    assert torch.equal(selected.valid_token_counts, torch.tensor([1, 1, 3, 3]))
+
+    (
+        selected.per_sample_token_mean_nll.sum()
+        - selected.per_sample_summed_log_likelihood.sum()
+    ).backward()
+    (
+        fallback.per_sample_token_mean_nll.sum()
+        - fallback.per_sample_summed_log_likelihood.sum()
+    ).backward()
+    for selected_tensor, fallback_tensor in zip(
+        _candidate_tensors(selected_group),
+        _candidate_tensors(fallback_group),
+        strict=True,
+    ):
+        assert selected_tensor.grad is not None
+        assert fallback_tensor.grad is not None
+        torch.testing.assert_close(selected_tensor.grad, fallback_tensor.grad)
 
 
 def test_streaming_norm_determinism_comparison_is_fused_before_vjps(

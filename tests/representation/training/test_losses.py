@@ -4,12 +4,21 @@ import pytest
 import torch
 from torch.nn import functional as F
 
+from tgvf_rl.qwen.base import (
+    InjectedForwardRequest,
+    _bind_selected_logits_result,
+    _gather_selected_sequence_tensor,
+    _prove_selected_sequence_positions,
+)
 from tgvf_rl.representation.training.losses import (
     CausalEvidenceLosses,
     EVIDENCE_IGNORE_INDEX,
     MatrixCEScoreMode,
+    _causal_evidence_losses_from_selected_logits,
     _causal_evidence_losses_from_native_labels,
     _materialize_native_causal_evidence_labels,
+    _prove_native_causal_evidence_selection,
+    _resolve_native_causal_evidence_selection,
     causal_evidence_losses,
     evidence_readability_loss_terms,
     historical_norm_loss_terms,
@@ -251,6 +260,84 @@ def test_native_causal_label_proof_rejects_invalid_rows_and_mutation() -> None:
     proven.values[0, 1] = 2
     with pytest.raises(ValueError, match="changed after construction"):
         _causal_evidence_losses_from_native_labels(torch.zeros(1, 2, 4), proven)
+
+
+def test_selected_causal_evidence_matches_full_loss_and_gradient_for_unequal_lengths() -> (
+    None
+):
+    torch.manual_seed(41)
+    labels = torch.tensor(
+        [
+            [EVIDENCE_IGNORE_INDEX, 1, EVIDENCE_IGNORE_INDEX, EVIDENCE_IGNORE_INDEX, EVIDENCE_IGNORE_INDEX],
+            [EVIDENCE_IGNORE_INDEX, 2, 1, EVIDENCE_IGNORE_INDEX, 0],
+        ]
+    )
+    label_rows = tuple(tuple(int(value) for value in row) for row in labels.tolist())
+    request = InjectedForwardRequest(
+        input_ids=torch.zeros(2, 5, dtype=torch.long),
+        attention_mask=torch.ones(2, 5, dtype=torch.bool),
+        position_ids=torch.arange(5).repeat(2, 1),
+        visual_blocks=(),
+    )
+    selection = _prove_native_causal_evidence_selection(
+        label_rows,
+        5,
+        vocabulary_size=4,
+    )
+    position_rows, selection_identity = _resolve_native_causal_evidence_selection(
+        selection
+    )
+    positions = _prove_selected_sequence_positions(
+        request,
+        position_rows,
+        selection_identity=selection_identity,
+    )
+    full_logits = torch.randn(2, 5, 4, dtype=torch.float64, requires_grad=True)
+    selected_source = full_logits.detach().clone().requires_grad_(True)
+
+    full = causal_evidence_losses(full_logits, labels)
+    selected = _causal_evidence_losses_from_selected_logits(
+        _bind_selected_logits_result(
+            _gather_selected_sequence_tensor(selected_source, positions),
+            positions,
+        ),
+        selection,
+    )
+
+    torch.testing.assert_close(
+        selected.per_sample_token_mean_nll,
+        full.per_sample_token_mean_nll,
+    )
+    torch.testing.assert_close(
+        selected.per_sample_summed_log_likelihood,
+        full.per_sample_summed_log_likelihood,
+    )
+    assert torch.equal(selected.valid_token_counts, torch.tensor([1, 3]))
+    full_objective = (
+        full.per_sample_token_mean_nll.sum()
+        - full.per_sample_summed_log_likelihood.sum()
+    )
+    selected_objective = (
+        selected.per_sample_token_mean_nll.sum()
+        - selected.per_sample_summed_log_likelihood.sum()
+    )
+    full_objective.backward()
+    selected_objective.backward()
+    torch.testing.assert_close(selected_source.grad, full_logits.grad)
+
+    other_selection = _prove_native_causal_evidence_selection(
+        label_rows,
+        5,
+        vocabulary_size=4,
+    )
+    with pytest.raises(ValueError, match="target proof identities differ"):
+        _causal_evidence_losses_from_selected_logits(
+            _bind_selected_logits_result(
+                _gather_selected_sequence_tensor(selected_source, positions),
+                positions,
+            ),
+            other_selection,
+        )
 
 
 def test_evidence_readability_reduces_token_mean_per_sample_then_sample_mean() -> None:

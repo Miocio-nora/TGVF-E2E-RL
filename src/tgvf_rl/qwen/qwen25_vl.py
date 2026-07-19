@@ -14,6 +14,10 @@ from .base import (
     QwenVLMFamilyAdapter,
     RecordedReplayResult,
     ReplayConsumer,
+    SelectedLogitsResult,
+    SelectedSequencePositions,
+    _forward_selected_linear_lm_head,
+    _resolve_selected_sequence_positions,
     injected_request_from_recorded,
     materialize_inputs_embeds,
     resolve_replay_request,
@@ -47,6 +51,30 @@ class Qwen25VLAdapter(QwenVLMFamilyAdapter):
         model: Any,
         request: InjectedForwardRequest,
     ) -> RecordedReplayResult:
+        hidden, outputs, visual_mask = self._forward_injected_hidden(model, request)
+        logits = resolve_lm_head(model)(hidden)
+        return RecordedReplayResult(
+            logits=logits,
+            hidden_states=hidden,
+            past_key_values=getattr(outputs, "past_key_values", None),
+            visual_position_mask=visual_mask,
+        )
+
+    def forward_injected_selected_logits(
+        self,
+        model: Any,
+        request: InjectedForwardRequest,
+        positions: SelectedSequencePositions,
+    ) -> SelectedLogitsResult:
+        _resolve_selected_sequence_positions(request, positions)
+        hidden, _, _ = self._forward_injected_hidden(model, request)
+        return _forward_selected_linear_lm_head(model, hidden, positions)
+
+    def _forward_injected_hidden(
+        self,
+        model: Any,
+        request: InjectedForwardRequest,
+    ) -> tuple[torch.Tensor, Any, torch.Tensor]:
         if not isinstance(request, InjectedForwardRequest):
             raise TypeError("request must be InjectedForwardRequest")
         if any(block.deepstack for block in request.visual_blocks):
@@ -67,13 +95,7 @@ class Qwen25VLAdapter(QwenVLMFamilyAdapter):
             if hasattr(outputs, "last_hidden_state")
             else outputs[0]
         )
-        logits = resolve_lm_head(model)(hidden)
-        return RecordedReplayResult(
-            logits=logits,
-            hidden_states=hidden,
-            past_key_values=getattr(outputs, "past_key_values", None),
-            visual_position_mask=visual_mask,
-        )
+        return hidden, outputs, visual_mask
 
     def materialize_representation_supervision(
         self,
