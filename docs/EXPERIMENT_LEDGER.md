@@ -1604,8 +1604,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: corrected
   runtime commit `a01c4b8caadef4c5d4afe72ec2a6477983a338eb`;
   `PROJECT_TASK.md` §9.2 and I8H-20260719.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: unchanged from failed SC-21, now allowing Ray to assign logical
   per-actor CUDA ordinals while preserving exclusive physical-GPU 2/3 scope.
 - Baseline and exact output path: failed SC-21; result/log/metrics/fixture/
@@ -1619,8 +1619,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   dummy vLLM load followed by actor weight sync.
 - Rollout policy version and allowed asynchronous staleness: versions `[0,1]`,
   synchronous staleness exactly zero.
-- Code commit and worktree state: corrected runtime commit above; launch must be
-  a clean descendant containing only the committed ledger/config identities.
+- Code commit and worktree state: corrected runtime commit above; clean launch
+  HEAD `a5e75e3e7dcd335b756f67caf730cd892dd0c739`.
 - Repository adapter/patch surface and hash: driver
   `03fd629449fd1b41c11a68956c3c7455e0b5f9ccd6bf3c1cfabdb4bb5e4b764d`,
   manager/objective/reward SHA256
@@ -1659,16 +1659,93 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   mini-batch 2, micro-batch 1/GPU, one epoch and two updates.
 - GPUs: physical 2/3 and UUIDs/mapping exactly as SC-21; immediate preflight
   must show both free and no other GPU may be visible.
-- Start/end timestamps, elapsed time, and session/process identity: pending and
-  captured by driver/log at launch.
-- Actual GPU-hours and peak scratch use: pending; 1800-second hard timeout.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T03:27:24.963+09:00` to `03:28:17.875+09:00`, about 53 seconds;
+  TaskRunner PID `1612327`, worker PIDs `1613628/1613629`.
+- Actual GPU-hours and peak scratch use: less than `0.030` aggregate GPU-hour;
+  failure preceded weight loading and devices returned to 0 MiB.
 - Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R1-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R1-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
-- Outputs: six exact new artifact paths under the prefix above; overwrite is
-  forbidden and every plan/result/fixture row binds the explicit run ID.
+- Outputs: result/log/plan/resolved-config/fixture SHA256 respectively
+  `44044dc47408ca3c709dc10bf0deb8afc4fbbff44f898726e359c7dcda54e734`,
+  `5fe480c63b09537a729709873259f5493bdd1b38900f083d5d5fee1cb1878587`,
+  `b06d2b06586e3f2cb0097927dc292a924bccc905839735363eeae7efdafa4166`,
+  `d0d6f79f00d35651c5700cb975e0c08a02238053a28cc1fdb3a224294897a155`,
+  `83e865a32ad30cd1b886cbadf3931084f28741e3556e4b62c2b23828efce6b45`;
+  all bind the explicit R1 run ID; no metrics file was produced.
 - Scorer/parser identity: driver/manager/objective/reward hashes above.
-- Metrics: pending two-step generation/sync/replay/update assertions.
-- Conclusion: pending; a pass remains limited to the combined no-sleep,
-  no-TGVF-plugin infrastructure path.
+- Metrics: runtime/model/pip/Hydra/veRL checks and corrected Ray logical GPU
+  mapping passed; no update or sync occurred.
+- Conclusion: `FAIL` during FSDP2 model construction because veRL defaulted the
+  Hugging Face actor to `flash_attention_2`, which is intentionally absent from
+  this candidate. R2 explicitly selects the already accepted SDPA actor path;
+  it does not add or install FlashAttention.
+
+### SC-21-T211-R2-VERL-VLLM-WEIGHT-SYNC
+
+- Cell/matrix ID and mandatory/diagnostic class:
+  `SC-21-T211-R2-VERL-VLLM-WEIGHT-SYNC`; mandatory corrective rerun after R1
+  reached actor construction and exposed veRL's unselected attention default.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime commit
+  `dba7801fd0dae8b8d274ba24be65e7ac76b24cb2`; `PROJECT_TASK.md` §9.2 and
+  I8H-20260719.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: unchanged combined FSDP2→vLLM sync question, now with the actor's
+  Hugging Face attention implementation explicitly fixed to `sdpa`.
+- Baseline and exact output path: failed R1; six outputs use exact prefix
+  `artifacts/compatibility/SC-21-T211-R2-verl-vllm-weight-sync`.
+- Model and processor identity: identical stable local Qwen3 identity to R1;
+  actor uses SDPA and rollout remains vLLM Triton attention.
+- Representation checkpoint identity: N/A; TGVF plugin remains disabled.
+- N/A fields and justification: identical production GRPO/SDPO, reference and
+  D/DeepStack exclusions to R1.
+- Policy/reference initialization: original Qwen3 actor, no reference; dummy
+  vLLM initial load then exact actor-weight synchronization.
+- Rollout policy version and allowed asynchronous staleness: `[0,1]`, sync,
+  staleness exactly zero.
+- Code commit and worktree state: runtime commit above; launch must be a clean
+  descendant containing only this committed ledger plan.
+- Repository adapter/patch surface and hash: driver
+  `2b927b67f99a4c8011bba224ff2c6e84ded56deb3343bb8f2264b47beb27d6ee`;
+  manager/objective/reward/lock hashes remain exactly those recorded for R1;
+  no external or site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: explicit-run-ID-bound two-row
+  fixture logical SHA256
+  `977b3de0d9c30d2a27b6abf33490443de98d006e00323fd666bb8fd163621f51`,
+  deterministic n=2 train/validation.
+- Native prompt/tool schema hash: no tool call; fixed sync fixture.
+- Chat-template/token-fixture hash and token-ownership masks: exact template,
+  two prompt hashes and generated-token-only mask from R1.
+- D/DeepStack/position/mask identity: N/A by deliberate exclusion.
+- Observation materialization/artifact identity used by all replays: exact
+  response/behavior-logprob TransferQueue record with explicit R2 run ID; no
+  recomputation.
+- RL framework/version/environment lock: exact candidate stack and lock from
+  R1; public probe, `pip check`, focused tests and Hydra resolution pass.
+- Objective equations and normalization: zero advantage plus generated-token-
+  mean NLL and fixed zero reward; infrastructure only.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic,
+  actor SDPA, dropout zero, synchronous V1, seed `20260720`, no sleep/wake.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: exact R1 greedy processed-logprob
+  contract.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16, unquantized; actor SDPA, rollout
+  Triton attention; TP2 vLLM, FSDP2 size 2, naive no-sleep sync.
+- Logit/logprob/loss/gradient parity tolerances: identical explicit R1 gates,
+  including nonzero gradients, version 1, staleness 0 and probability floors.
+- World size, microbatch, accumulation, and global batch: identical R1 two-GPU
+  batch 2 / mini-batch 2 / micro-batch 1 per GPU / two-update geometry.
+- GPUs: only physical 2/3 with UUIDs and logical mapping already recorded;
+  immediate preflight must be free.
+- Start/end timestamps, elapsed time, and session/process identity: pending.
+- Actual GPU-hours and peak scratch use: pending; 1800-second timeout.
+- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R2-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R2-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
+- Outputs: six explicit-run-ID artifacts under the prefix above; overwrite
+  forbidden.
+- Scorer/parser identity: driver/manager/objective/reward hashes above.
+- Metrics: pending combined two-update generation/sync/replay assertions.
+- Conclusion: pending; limited to no-sleep/no-TGVF-plugin infrastructure.
 
 ### SC-20-T211-QWEN3-VLLM-LATENT
 
