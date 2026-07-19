@@ -275,6 +275,7 @@ def hydra_overrides(*, model_path: Path, paths: GatePaths) -> tuple[str, ...]:
         "actor_rollout_ref.rollout.enable_chunked_prefill=false",
         "actor_rollout_ref.rollout.enable_prefix_caching=false",
         "+actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0",
+        "+actor_rollout_ref.rollout.engine_kwargs.vllm.mm_encoder_attn_backend=TORCH_SDPA",
         "actor_rollout_ref.rollout.agent.num_workers=1",
         f"+actor_rollout_ref.rollout.agent.agent_loop_manager_class={MANAGER_CLASS}",
         "critic.enable=false",

@@ -83,6 +83,10 @@ def test_plan_is_one_upstream_v1_no_sleep_integration_path() -> None:
     assert "actor_rollout_ref.rollout.calculate_log_probs=true" in overrides
     assert "actor_rollout_ref.rollout.logprobs_mode=processed_logprobs" in overrides
     assert (
+        "+actor_rollout_ref.rollout.engine_kwargs.vllm.mm_encoder_attn_backend="
+        "TORCH_SDPA" in overrides
+    )
+    assert (
         "+actor_rollout_ref.rollout.agent.agent_loop_manager_class="
         "tgvf_rl.framework.verl.sync_gate_manager.SyncGateAgentLoopManagerTQ"
         in overrides
