@@ -1,10 +1,10 @@
 schema_version = "representation-training-config-v2"
 scope = "qwen3_native_representation_phase_training"
-run_id = "RP-12-QWEN3-REPRESENTATION-FSDP2-EMBEDDING-K4-GA1-THROUGHPUT"
+run_id = "RP-12-QWEN3-REPRESENTATION-FSDP2-EMBEDDING-K4-GPR4-GA1-THROUGHPUT"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "41fb07d1c8bfdaf0388115de6062b1cc8732bcc0"
+commit = "9b47105e761ceac015094b46d3844f89df63bc10"
 dirty = false
 dirty_state_sha256 = "none"
 
@@ -30,8 +30,8 @@ split_overlap_policy = "require_disjoint"
 expected_overlap_report_sha256 = "c23fe08408640a95d0fe9c482228908bc35e7816021e51b029cc6c9d6979c218"
 
 [data.train]
-jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/tests/fixtures/representation_smoke/train_k4.jsonl"
-source_sha256 = "beb1b8a7c3f97811e8a8f9b0734d7484cc5de4d31861fe09b61342b3c88b61f2"
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/tests/fixtures/representation_smoke/train_k4_gpr4.jsonl"
+source_sha256 = "34053c694023461be9f0fe30fd1e525e27697894f705e5428fafad45cfeabc1c"
 batch_size = 4
 sampler_seed = 71
 
@@ -105,13 +105,14 @@ offload_policy = "none"
 
 [training]
 gradient_accumulation_steps = 1
+groups_per_rank_per_optimizer_step = 4
 target_optimizer_steps = 3
 validation_every_optimizer_steps = 3
 log_every_optimizer_steps = 1
 
 [output]
-final_artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-12-qwen3-representation-fsdp2-embedding-k4-ga1-throughput/adapter.pt"
-metrics_jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-12-qwen3-representation-fsdp2-embedding-k4-ga1-throughput/metrics.jsonl"
+final_artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-12-qwen3-representation-fsdp2-embedding-k4-gpr4-ga1-throughput/adapter.pt"
+metrics_jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-12-qwen3-representation-fsdp2-embedding-k4-gpr4-ga1-throughput/metrics.jsonl"
 allow_overwrite = false
 
 [resume]
@@ -120,8 +121,8 @@ checkpoint_path = "none"
 strict_identity = true
 
 [checkpoint]
-directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-12-qwen3-representation-fsdp2-embedding-k4-ga1-throughput/checkpoints"
-filename_prefix = "representation-qwen3-embedding-k4-ga1-throughput"
+directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-12-qwen3-representation-fsdp2-embedding-k4-gpr4-ga1-throughput/checkpoints"
+filename_prefix = "representation-qwen3-embedding-k4-gpr4-ga1-throughput"
 save_every_optimizer_steps = 3
 save_final = true
 keep_last = 1
