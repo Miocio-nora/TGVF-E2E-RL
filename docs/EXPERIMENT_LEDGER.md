@@ -3101,6 +3101,65 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   not the primary utilization-gap cause. The next cell targets one-group-ahead
   CPU preparation while retaining the accepted full-logits mathematics.
 
+### RP-26-QWEN3-REPRESENTATION-PREFETCH-REAL512-K4-GA4-THROUGHPUT-GPU23
+
+- Cell/matrix ID and class: `RP-26`; bounded one-group-ahead host-preparation
+  A/B against the accepted full-logits RP-24 baseline. Lifecycle status:
+  `PLANNED`; output is diagnostic and is not eligible for representation-
+  artifact promotion.
+- Approval/code/question: accepted
+  `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; runtime commit
+  `857b3a96afeaab03342f83165ee0d5c864c204ba`. Does overlapping group
+  `i+1` image decode/hash, native transcript/tokenization and Qwen processor
+  work with group `i` device materialization/readout reduce RP-24's
+  `10.045555151`-second steady step and long below-50% utilization spans?
+- Execution boundary: the sampler fixes all four local K4 groups before the
+  step. One step-scoped worker holds at most one CPU-only prepared group;
+  ordering is `result_i -> submit(i+1) -> materialize_i`. H2D, frozen vision,
+  target conditioning, TGVF Adapter, M-RoPE, Qwen readout and all autograd stay
+  on the trainer thread. Every future is consumed or cancel/drained before the
+  optimizer-step boundary; no prefetch state crosses checkpoint/resume.
+- Model/data/prompt/initialization: exact RP-24 stable local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer `151669`, no resize, native
+  template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  `image_max_pixels=262144`, target-token-embedding provider, fresh Adapter
+  seed `20260719`; train/validation SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`/
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`,
+  seeds 71/73, disjoint split, native `tgvf_focus_tool`, prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`.
+- D/objective/determinism: unchanged full-vocabulary logits, complete main D
+  plus D-DeepStack `(8,16,24)`, native positions/masks, legacy summed-NLL
+  Matrix CE + L_gen + Norm weights `1/1/.1`, manifold zero; frozen eval Qwen,
+  Adapter dropout zero, no cache, TF32 off, CUBLAS `:4096:8`.
+- Framework/topology/batch: accepted Python3.12/Torch2.9 lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`;
+  FSDP2 mesh `[2]`, `reshard_after_forward=false`, corrected GA4 sync schedule,
+  physical GPUs2/3 mapped logical0/1, world2, K4, global batch32, eight B8 Qwen
+  calls/rank/update, three optimizer steps.
+- N/A: no rollout, sampling, policy/reference replay, behavior logprobs,
+  reward, GRPO, SDPO, judge, vLLM sampling, KV cache, staleness, or answer
+  scoring occurs in this representation-only cell.
+- Parity/verification gate: 38 focused CPU tests plus Ruff passed before
+  planning, including prepared-versus-synchronous exact tensor/score parity,
+  true one-ahead overlap, thread ownership, ordering, fallback and fail-stop
+  drain. RP-24 sample order, counts, Qwen schedule, tokenizer length, every
+  step-1 objective and gradient norm must match exactly; any mismatch rejects
+  the prefetch path.
+- Config/output: source/canonical TOML SHA256
+  `c470424402e02aacabd3f3cabee198f1a796d958870ab939e31a18fabc8136d3`/
+  `d88678815f54eefb74b4e9dfa36b45af2004aaf4d62c5077077661972f33a85b`;
+  overwrite is forbidden under
+  `artifacts/representation/RP-26-qwen3-prefetch-real512-k4-ga4-throughput-gpu23/`.
+- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/smoke/representation_qwen3_embedding_rp26_prefetch_real512_ga4_throughput_gpu23.toml`;
+  a read-only utilization sampler records physical GPUs2/3.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
