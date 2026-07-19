@@ -72,16 +72,22 @@ legacy-derived file until its own entry exists.
 The bounded implementation is now complete. The accepted compatibility stack
 is upstream veRL
 `e003163181731412595257a72ec173071efb125f`, vLLM `0.12.0`, Torch
-`2.9.0+cu128`, Transformers `4.57.6`, and CPython `3.12.3`. `111` CPU tests,
+`2.9.0+cu128`, Transformers `4.57.6`, and CPython `3.12.3`. `295` CPU tests,
 the real-Qwen3 `SC-20-R6` TP=2 latent-transport smoke, and the two-rank `SC-30`
-bitwise FSDP2 resume smoke passed. These results close framework-construction
-and bounded compatibility evidence only; later rollout, representation,
-production-objective, model-family, and scale gates below remain authoritative.
+bitwise FSDP2 resume smoke passed. The CPU baseline now includes the bounded
+representation data/native pipeline, both conditioning providers, streaming
+Matrix CE plus `L_gen`, trainer, FSDP2 ownership, artifact/checkpoint/config,
+real local-processor golden, and functional Adapter reference-parity fixtures.
+These results close framework construction and bounded implementation evidence
+only; later rollout, production representation, objective, model-family, and
+scale gates below remain authoritative.
 
-Real datasets, reward values, final prompt text, production GRPO/SDPO
-mathematics and configuration, any hybrid objective, long training, and the 72B
-judge remain open and fail closed. A synthetic optimizer smoke may run only
-after its exact test-contract equations and pure-tensor oracle are recorded.
+No data or Adapter artifact is accepted for production use. Dataset/image
+licenses, the seven resolved-path split overlaps, final representation prompt
+and hyperparameters, reward values, production GRPO/SDPO mathematics and
+configuration, any hybrid objective, long training, and the 72B judge remain
+open and fail closed. A synthetic optimizer smoke may run only after its exact
+test-contract equations and pure-tensor oracle are recorded.
 
 Where older text in this file or `VERL_COMPATIBILITY_SPIKE_PLAN.md` conflicts,
 this section and Project Task §0 take precedence. The earlier proposal status,
@@ -468,7 +474,7 @@ superseded by §1.1.
   target-conditioning providers, two-call latent-observation
   transport, actual behavior logprobs, exact observation replay, FSDP2 one
   step, save/resume.
-  - Completed subset: `111` CPU tests, Qwen3 `SC-20-R6` real TP=2 native
+  - Completed subset: `238` CPU tests, Qwen3 `SC-20-R6` real TP=2 native
     two-call latent transport, and `SC-30` exact FSDP2 resume.
   - Remaining: real Qwen policy/reference logit/logprob replay parity, the full
     Qwen2.5 family-specific fixture, and production loss/gradient/topology
@@ -515,11 +521,24 @@ I8H-20260719.
 
 ## 7. Gate A0 — Before native-format representation training
 
-- [ ] `OPEN_BLOCKING AD-01` — Candidate retained train/validation JSONL paths,
-  SHA256 identities, row/group counts, and manifest-level split non-overlap are
-  recorded in `docs/LEGACY_REFERENCE.md`. Dataset-source/image licenses, a new
-  immutable accepted-row manifest, exclusion/duplicate policy, and perceptual
-  near-duplicate audit remain `[TBD]`.
+The code needed for a bounded Qwen3 representation execution is present. This
+section distinguishes that implementation evidence from permission to consume
+the external data or start a production/GPU run.
+
+- [ ] `OPEN_BLOCKING AD-01` — Candidate retained train/validation JSONL paths
+  and SHA256 identities are recorded in `docs/LEGACY_REFERENCE.md`. The strict
+  transform audit produced:
+  - train: 35,542 accepted rows, 9,186 groups, 6,398 groups with at least four
+    targets, 14,480 excluded rows, 3,004 leakage records, manifest
+    `4160198e65268e33f1c36d050f74498f4f8fa35f3ac263202ee8bfdf5f5cd820`;
+  - validation: 1,382 accepted rows, 376 groups, 226 groups with at least four
+    targets, 641 excluded rows, 108 leakage records, manifest
+    `e44cbd6f86ff82879b3be312d9a23198b7267bccd710cbe7d1ecc1dc9954ea15`.
+  Group key, stable UID, and content hash do not overlap, but seven distinct
+  resolved image paths do. No implementation silently filters these rows.
+  Dataset/image licenses, an accepted overlap/exclusion policy, replacement
+  manifests if the split changes, and a perceptual near-duplicate audit remain
+  blocking. The audited manifests are evidence, not production-ready artifacts.
 - [x] `FIXED AD-02A` — The protocol-neutral representation row contains the
   retained row `uid` as `sample_id`, exact image reference, already-rendered
   question text, target text, `evidence_description`, optional `image_id`, and
@@ -528,11 +547,26 @@ I8H-20260719.
   The exact retained data has no separate `choices` field; a future source with
   choices requires a new schema/transform version rather than implicit prompt
   rendering inside this record.
-- [ ] `OPEN_BLOCKING AD-02B` — Retained JSONL transform, focus-row filter,
-  image-path resolution, leakage records, exact accepted/excluded-row manifest,
-  and source-hash validation: `[TBD implementation]`
+- [x] `FIXED AD-02B` — `retained_focus_rows_v1` implements source-hash
+  validation, strict focus metadata, fail-closed fields/image resolution,
+  duplicate handling, leakage records/warnings, every-row accepted/excluded
+  disposition, immutable manifest identity, and four-key split-overlap reports.
+  Evidence: `tests/representation/training/test_data.py` plus the exact audit in
+  `docs/LEGACY_REFERENCE.md`. Leakage records are metadata, not implicit row
+  removal.
+- [ ] `OPEN_BLOCKING AD-02C` — Before any production representation run or
+  resume, bind the validation manifest identity and validation sampler seed
+  into the run/checkpoint identity, and verify them when appending validation
+  history after restore. The bounded synthetic smoke records both values in
+  its TOML and metrics, but the current `RepresentationRunIdentity` does not
+  make them restore invariants.
+- [ ] `OPEN_BLOCKING AD-02D` — Before any production representation run, bind
+  the actual bytes (or an accepted immutable content identity) of every image
+  consumed by a retained manifest. The current source/transform identities bind
+  each image path but do not detect an in-place image-file replacement. This is
+  explicitly not closed by the repository-owned synthetic smoke images.
 - [ ] `OPEN_BLOCKING AD-03` — New pipeline transcript/prompt construction and
-  `Hq` contract are only partially fixed:
+  production `Hq` contract are not fully closed:
   - [x] `FIXED AD-03A` — `evidence_description` is the reasoning content of the
     assistant turn after the latent `tgvf_focus_tool` result. Only the exact
     tokenizer positions owned by this rendered evidence span receive
@@ -552,14 +586,27 @@ I8H-20260719.
     evidence mappings are singleton/contiguous/ID-identical and every visual
     position remains ignored. The executable mapping is Qwen3-specific;
     Qwen2.5-VL fails closed pending its separate family fixture/artifact.
-  - `AD-03B` — Exact prompt wording, original-image user-content construction,
-    target-call JSON construction, target-span/`Hq` extraction, and the final
-    tokenizer/chat-template golden fixture: `[TBD implementation/artifact]`.
+  - [x] `FIXED AD-03B` — The Qwen3 implementation constructs one original-image
+    user turn, one native `tgvf_focus_tool` action, one latent-image tool result,
+    and the evidence reasoning turn. The strict parser identifies the raw JSON
+    target span and exact IDs before/after processor expansion. The separate
+    `qwen3_native_representation_smoke_v1.json` golden uses an explicitly
+    non-production prompt, a deterministic 56×56 RGB image, a Unicode/slash
+    target, and evidence text; it freezes prompt, tokenizer/template/schema,
+    action/evidence transcript, target span, expanded-input, two-visual-block,
+    and evidence-label identities against the accepted local processor.
+  - [ ] `OPEN_CONFIGURABLE AD-03C` — Accept the production prompt wording/hash,
+    contextual hidden layer, and any target-visible versus target-omitted
+    matched-control policy. The smoke-only prompt is forbidden as a production
+    default.
 - [ ] `OPEN_BLOCKING AD-04` — TGVF Adapter initialization that does not use the
-  historical trained checkpoint directly: `[TBD]`
+  historical trained checkpoint directly. The config/runtime implement only
+  fresh initialization with an explicit seed and reject legacy checkpoint
+  initialization, but the production initialization distribution and seed are
+  `[TBD]`.
 - [ ] `OPEN_BLOCKING AD-05` — Exact representation objective and execution
   contract is not yet fully closed. Its independently gated parts are:
-  - `AD-05A` — Implement and parity-test the pinned Matrix-CE equation: each
+  - [x] `FIXED AD-05A` — The pinned Matrix-CE equation is implemented: each
     same-image group produces a square score matrix with evidence/query on rows,
     candidate `D` plus all D-DeepStack branches on columns, the diagonal is the
     label, there is no temperature in the historical equation, and cross
@@ -568,18 +615,15 @@ I8H-20260719.
     the trainer must aggregate the global CE numerator and global valid-row
     denominator; averaging already-normalized local losses is forbidden when
     group sizes differ.
-    The pure kernel now exposes an unnormalized CE numerator plus valid-row
-    count and has local value/gradient and rank-4-versus-rank-5 reduction
-    fixtures. A live-tensor family forward and synthetic cell-by-cell
-    layout/swap oracle hold each row transcript/layout/source image fixed while
-    atomically swapping candidate main `D` plus all branches; main `D` and each
-    branch have a separate sensitivity fixture. This is not yet the accepted
-    K×K readout: the post-`D` original-image key-block/Qwen mask contract is
-    still open, so its evidence queries can see the source image. The synthetic
-    oracle also retains all cell graphs and is not an accepted 8B execution
-    schedule. Key blocking, trainer-owned streaming, distributed/accumulation
-    scaling, and real-Qwen gradient parity remain blocking.
-  - `AD-05B` — Reproduce and test same-image multi-target grouping: image key,
+    The pure terms, manual score-gradient, unequal-rank normalization, atomic
+    main/branch swap oracle, memory-bounded score/recompute path, post-`D`
+    original-image key blocking, and trainer-owned global normalization all have
+    CPU fixtures. Loss-excluded zero-gradient padding now aligns composable-
+    FSDP forward/backward counts when ranks receive four and five real
+    candidates. The streaming executor requires deterministic recomputation and
+    releases each cell graph before traversing each Adapter candidate once.
+    A real 8B/two-rank execution remains blocking under `AD-05G`.
+  - [x] `FIXED AD-05B` — Same-image multi-target grouping implements image key,
     minimum/maximum group batch size, duplicate handling, incomplete-group
     dropping, whole-group distributed ownership, group/member shuffle,
     seed/epoch/cursor state, and deterministic resume. Ordinary independent
@@ -601,36 +645,62 @@ I8H-20260719.
     A diagnostic-only computation, if retained, must not contribute gradients.
   - `AD-05E` — Norm-loss inclusion, mathematics, target, and weight remain
     undecided. No speculative mode or default may enter configuration or code.
-  - `AD-05F` — Exact nonzero Matrix-CE and `L_gen` baseline weights, optimizer,
-    scheduler, precision,
-    accumulation, clipping, and trainer/checkpoint-resume behavior: `[TBD]`.
+  - [ ] `OPEN_CONFIGURABLE AD-05F` — The trainer/config/checkpoint code exposes
+    explicit nonzero Matrix-CE and `L_gen` weights, AdamW options, scheduler,
+    precision, accumulation, clipping, validation/log cadence, and strict
+    optimizer-boundary resume. CPU fixtures prove an accumulated optimizer step
+    and bitwise-identical next step after resume. Exact production values and
+    the accepted TOML identity remain `[TBD]` and receive no library defaults.
     Historical `L_gen` first divides each sample's summed evidence NLL by that
     sample's evidence-token count, then sums those per-sample means and divides
     by the global sample count. Accumulation and DDP must aggregate that global
     numerator and denominator; a global token-mean or an equal mean of unequal
     local microbatch means is a different objective and is forbidden silently.
-- [ ] `OPEN_BLOCKING AD-06` — Trainable/frozen parameter whitelist, including
-  original vision tower and Qwen mergers: `[TBD]`
-- [ ] `OPEN_BLOCKING AD-07` — Checkpoint artifact schema and identity, excluding
-  optimizer state and legacy protocol-token rows from the deployable Adapter
-  artifact: `[TBD]`
+  - [ ] `OPEN_BLOCKING AD-05G` — Run a real local-Qwen3 backward and two-rank
+    representation FSDP2 optimizer/checkpoint/resume smoke on physical GPUs 2
+    and 3 under a complete experiment-ledger identity. The generic `SC-30`
+    infrastructure smoke is not this evidence.
+- [ ] `OPEN_BLOCKING AD-06` — Runtime, trainer, and FSDP2 planning enforce every
+  and only Adapter-owned trainable parameters while the vision tower, language
+  model, and four borrowed Qwen mergers remain frozen. CPU/meta and simulated
+  composable-FSDP2 fixtures cover 52 owned leaves and excluded borrowed state;
+  audit this whitelist after loading the real 8B model and after real sharding.
+- [ ] `OPEN_BLOCKING AD-07` — Adapter-only artifact, single-process training
+  checkpoint, distributed checkpoint, rank-zero full-owned-state export, and
+  strict resume schemas are implemented. They bind model/provider/prompt/data/
+  objective/architecture/projection/optimizer/scheduler/sampler/precision/
+  accumulation/initialization/RNG identities and exclude optimizer state,
+  Qwen mergers, and legacy protocol rows from deployment. CPU artifact/tamper/
+  next-step parity passes. The distributed sidecar additionally binds each
+  rank's Adapter and optimizer local-shard content digests before restore is
+  applied; real two-rank distributed save/restore/export and a newly trained
+  artifact remain blocking.
 - [ ] `OPEN_BLOCKING AD-08` — Numerical output/gradient parity of the extracted
-  TGVF Adapter core against its pinned reference: `[TBD tolerance]`
+  TGVF Adapter core against its pinned reference. The independent small-shape
+  functional oracle now checks outputs and target/visual/104-owned-parameter
+  gradients in FP32 (`2e-6`) and BF16 (`3e-2`). Exact `4096/1152` historical-
+  checkpoint state plus accepted Qwen merger parity remains `[TBD tolerance]`.
 - [ ] `OPEN_BLOCKING AD-09` — Target specificity, readout, causal flip, and free
   continuation thresholds: `[TBD]`
-- [ ] `OPEN_BLOCKING AD-10` — Main `D` and every D-DeepStack branch pass the same
-  controlled semantic gates.
+- [ ] `OPEN_BLOCKING AD-10` — Synthetic sensitivity/gradient tests cover main
+  `D` and every D-DeepStack branch. All branches must still pass real-Qwen
+  controlled semantic gates and accepted thresholds.
 - [ ] `OPEN_BLOCKING AD-11` — Both required target-conditioning providers pass
-  target-span/input identity, shape, deterministic-forward, target-specificity,
-  readability, and checkpoint-manifest tests behind one shared interface.
+  through one explicit shared configuration/runtime/native group-builder path,
+  and provider identity is checkpoint-bound. Both have synthetic target-span,
+  shape, determinism, and training-path fixtures. Real-Qwen target specificity,
+  readability, branch, and optimization evidence remains blocking.
 - [ ] `OPEN_BLOCKING AD-12` — Representation artifacts are explicitly bound to
-  a Qwen model identity and provider contract. Qwen3 and
+  a Qwen model identity and provider contract in the implemented schema. Qwen3 and
   `Qwen/Qwen2.5-VL-7B-Instruct` compatibility must not be claimed by loading one
-  model's Adapter blindly into the other.
+  model's Adapter blindly into the other; Qwen2.5 still lacks its separate
+  representation artifact/native transcript/DeepStack/objective fixtures.
 - [ ] `OPEN_BLOCKING AD-13` — The provenance inventory of historical internal
-  representation tests and metrics is complete, and every item maps to an
-  exact-parity or native-adaptation fixture with a tolerance/threshold or an
-  explicitly accepted exclusion. See `docs/REPRESENTATION_PARITY_INVENTORY.md`.
+  representation tests and metrics now maps implemented data, transcript,
+  sampler, loss, masking, trainer, checkpoint, config, and functional-parity
+  evidence. Explicit acceptance of proposed exclusions plus real-Qwen metric
+  thresholds/evaluations is still required. See
+  `docs/REPRESENTATION_PARITY_INVENTORY.md`.
 - [ ] `OPEN_BLOCKING AD-14` — Contextual-hidden-state and
   target-token-embedding providers run as separate paired experiments with
   identical data/group order, Adapter initialization, batch plan, and seed;
@@ -890,10 +960,18 @@ the synthetic implementation smoke.
   bounded execution authority.
 - [x] Run the approved isolated compatibility task, record the selected public
   hooks and state ownership, and implement the framework-binding packages.
-  `111` CPU tests, `SC-20-R6`, and `SC-30` are the bounded evidence.
+  `238` CPU tests, `SC-20-R6`, and `SC-30` are the bounded evidence.
 - [x] Freeze the bounded framework legacy file inventory and port records.
-- [ ] Freeze any additional representation-training code and data inventory
-  before Gate A0.
+- [x] Record the bounded representation-training code lineage, strict external-
+  data transform audit, manifest hashes, and the seven unresolved exact path
+  overlaps. This records evidence but does not accept the data for training.
+- [x] Implement the Qwen3 native representation data/group path, both provider
+  choices, streaming Matrix CE plus `L_gen`, trainer, FSDP2 ownership,
+  checkpoint/config contracts, real processor golden, and functional Adapter
+  oracle.
+- [ ] Accept the production representation data split, prompt, scientific
+  configuration, parity tolerances, and promotion thresholds; then run the real
+  Qwen3/two-rank FSDP2 smoke before any training claim.
 - [x] Implement the S0 Qwen-family boundary, both condition-provider
   interfaces, SDPO teacher/objective/checkpoint boundary, and optional
   judge-provider interface. This does not close Qwen2.5 end-to-end or D0

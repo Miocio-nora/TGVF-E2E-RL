@@ -1,6 +1,7 @@
 # Controlled Legacy Reference
 
-Status: **bounded framework port inventory frozen; broader reference and training inventory open**
+Status: **bounded framework and representation-training port inventory recorded;
+production data/artifact acceptance remains open**
 Recorded: **2026-07-18 JST**
 Updated: **2026-07-19 JST**
 
@@ -66,6 +67,15 @@ Working-tree SHA256 at scaffold time:
 ```text
 f2244980599510c976a20dbbe227523fde5af72f26e8253188e04c072456853f
 ```
+
+This exact working-file identity is the registered mathematical lineage for the
+selected TGVF Adapter. The new
+`tests/representation/test_adapter_reference_parity.py` fixture evaluates an
+independently written functional form of the selected attention, gate/residual,
+main-projection, and three branch-projection paths. It compares outputs plus
+target, visual-input, and all 104 Adapter-owned parameter gradients in FP32 and
+BF16. This is bounded equation-level evidence; it does not load the historical
+checkpoint or close real-dimension/real-Qwen merger parity.
 
 The Golden 8B construction to verify is:
 
@@ -194,36 +204,53 @@ training documentation and content-hashed before row inspection:
 | Role | Exact legacy worktree path | SHA256 |
 |---|---|---|
 | candidate retained train rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_50k/final/tgvf_teacher_items.accepted.jsonl` | `8406f8f843f927642aa2d728f1896579f20c44ca7329b86cb35b42544f73f666` |
-| candidate image-disjoint validation rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
+| candidate validation rows (not path-disjoint after audit) | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
 
 These files are not committed at the frozen legacy commit and remain external
 data artifacts. Their hashes authorize bounded read-only schema/count/split
 inspection and a new manifest that references them; they do not authorize
 copying the JSONL or image assets into this public repository. Dataset-source
-license, image-asset identities, exact accepted/excluded row manifest, duplicate
-policy, and proof of image-disjoint train/validation membership remain Gate A0
-items.
+license, image-asset identities, duplicate/near-duplicate policy, and an
+accepted split decision remain Gate A0 items.
 
-Bounded aggregate inspection under those hashes found:
+The new `retained_focus_rows_v1` loader was run read-only against both exact
+source hashes. It records every source-line disposition, resolved image path,
+duplicate and historical target/short-answer leakage signal in an immutable
+`representation_data_manifest_v1`; leakage is a warning/record, not an
+automatic exclusion. The bounded audit produced:
 
-| Aggregate | Train | Validation |
+| Audit value | Train | Validation |
 |---|---:|---:|
-| total accepted rows | 50,022 | 2,023 |
-| focus rows retained by the historical representation filter | 35,542 | 1,382 |
-| unique focus image-group keys | 9,186 | 376 |
-| groups with at least four focus targets | 6,398 | 226 |
-| focus rows materialized per epoch by exact local batch-size-4 grouping | 25,592 | 904 |
-| focus rows dropped per epoch by that grouping | 9,950 | 478 |
-| duplicate target strings within one image group | 0 | 0 |
-| missing referenced image rows | 0 | 0 |
+| source rows | 50,022 | 2,023 |
+| accepted representation rows | 35,542 | 1,382 |
+| excluded rows | 14,480 | 641 |
+| unique accepted image-group keys | 9,186 | 376 |
+| groups with at least four accepted targets | 6,398 | 226 |
+| accepted rows with the historical leakage signal | 3,004 | 108 |
+| rows materialized per epoch by exact local batch-size-4 grouping | 25,592 | 904 |
+| accepted rows unused per epoch by that grouping | 9,950 | 478 |
 
-No overlap was observed between train and validation for the recorded group
-key, image path, `stable_image_uid`, or `item_content_hash`. This is strong
-manifest-level split evidence, but it is not perceptual near-duplicate image
-proof. The batch-size-4 Golden sampler excludes about 28% of otherwise valid
-train focus rows in each epoch because groups of one to three never form a
-batch and remainders are dropped. Exact baseline parity preserves this behavior;
-using smaller or variable group sizes is a separately named data-efficiency
+The canonical in-memory manifest identities for that exact audit are:
+
+```text
+train:      4160198e65268e33f1c36d050f74498f4f8fa35f3ac263202ee8bfdf5f5cd820
+validation: e44cbd6f86ff82879b3be312d9a23198b7267bccd710cbe7d1ecc1dc9954ea15
+```
+
+The split audit found no overlap in `image_group_key`, `stable_image_uid`, or
+`item_content_hash`, but it found **seven distinct exact resolved image-path
+overlaps**. This corrects the earlier aggregate statement that all four keys
+were disjoint. The loader and audit do not silently filter, reassign, or bless
+those rows: both manifests describe the unmodified transformed populations.
+Any training launch under the required-disjoint contract must fail until an
+explicit split/exclusion policy is accepted and produces newly identified
+manifests. The seven exact overlaps also do not substitute for a perceptual
+near-duplicate audit.
+
+The batch-size-4 parity sampler excludes about 28% of otherwise accepted train
+rows in each epoch because groups of one to three never form a batch and group
+remainders are dropped. Exact baseline parity preserves this behavior; using
+smaller or variable group sizes is a separately named data-efficiency
 experiment rather than a silent sampler change.
 
 ## Golden representation checkpoint
@@ -330,10 +357,13 @@ symbols/lineage used: FovealCrossAttentionOutput, TGVFv2Bidirectional,
 semantic differences: project-native typed inputs/outputs; no historical stage,
   protocol, model lookup, builder, or output path; frozen merger supplied through
   an explicit projection port; the opt-in Adapter-owned tensor subset excludes
-  all borrowed merger parameters while retaining the selected 104 TGVF tensors,
-  but the complete artifact/manifest writer remains a promotion gate
-parity fixture: tests/representation/test_adapter.py (synthetic output/gradient);
-  exact legacy checkpoint parity remains a later representation gate
+  all borrowed merger parameters while retaining the selected 104 TGVF tensors;
+  the new artifact writer consumes that subset, while a newly trained production
+  artifact remains a promotion gate
+parity fixture: tests/representation/test_adapter.py and
+  tests/representation/test_adapter_reference_parity.py (independent functional
+  output plus input/104-owned-parameter gradient oracle in FP32/BF16); exact
+  legacy-checkpoint and real-dimension Qwen-merger parity remain later gates
 reviewed by: Codex I8H-20260719
 date: 2026-07-19 JST
 
@@ -427,6 +457,94 @@ symbols/lineage used: mean, median, pct_positive, grouped_means,
 semantic differences: typed pure-data reductions; branch-aware/native controls
   are supplied by callers; no file I/O, legacy model loading, or thresholds
 parity fixture: tests/representation/training/test_metrics.py
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/data.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8 plus registered data hashes
+legacy source path: src/revisit_vlm/tgvf_v3_stage1.py;
+  scripts/train_tgvf_v3_stage1.py; docs/TGVF_V3_STAGE1_TRAINING.md
+legacy source SHA256: 78b465ec67d40c6d60863715c43171f373483b20c11447b13b56b6fe8e28384a;
+  07428d9214e5662ee0477a037a3bee41e93fbf3caf5c90af395bd603d925dc26;
+  3a2087a647a46825871ce6346703a35a4608aa31a841be865840ab82ad61d572
+symbols/lineage used: focus-row predicate, relative image resolution,
+  target/short-answer leakage warning semantics, and retained metadata
+semantic differences: strict typed focus metadata, source SHA validation,
+  complete accepted/excluded/duplicate/leakage manifests, exact resolved-path
+  split audit, and fail-closed duplicate handling; no row is silently filtered
+  to repair a split overlap
+parity fixture: tests/representation/training/test_data.py; exact legacy-data
+  aggregate audit and manifest identities recorded above
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/native_pipeline.py;
+  src/tgvf_rl/representation/training/runtime.py
+role: adapted extraction plus new native-protocol implementation
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8 plus registered working-file identities
+legacy source path: src/revisit_vlm/tgvf_foveal.py;
+  src/revisit_vlm/qwen3_vl_tgvf.py; tests/test_tgvf_v3_stage1.py
+legacy source SHA256: f2244980599510c976a20dbbe227523fde5af72f26e8253188e04c072456853f;
+  09401be77bc0a13fd48eb04681b8cfd00cbd2e5f33b59efbfe825e10ab163801;
+  f9010aa7d37143a4d8d98d3d0559868eab8018b62ad74287b0e9d08763bc0dcf
+symbols/lineage used: selected TGVF construction, frozen-Qwen vision/merger
+  capture geometry, and representation readout intent only
+semantic differences: Qwen native tool schema/transcript, strict raw target
+  span, no tokenizer growth, explicit hashed prompt, source plus latent visual
+  blocks, provider-selected native Hq, and no legacy protocol/token rows
+parity fixture: tests/representation/training/test_native_pipeline.py;
+  tests/representation/training/test_runtime.py;
+  tests/representation/training/test_qwen3_representation_golden.py
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/streaming.py;
+  src/tgvf_rl/representation/training/trainer.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+legacy source path: src/revisit_vlm/tgvf_training.py;
+  revisit_vlm_clean/src/revisit_vlm_clean/training/executor.py;
+  scripts/train_tgvf_v3_stage1.py
+legacy source SHA256: ebae9266cafc4f83685f6a7d46a5b0fc501111f3ba9ee257c9e530e636857dd4;
+  c54a2cbaee34d2f0d1a1e7a134eca666242c7bef263e0f083c43634d254dff30;
+  07428d9214e5662ee0477a037a3bee41e93fbf3caf5c90af395bd603d925dc26
+symbols/lineage used: Matrix-CE score gradient, evidence-token L_gen,
+  same-image optimizer loop, clipping, and metric reductions
+semantic differences: memory-bounded cell recomputation, post-D source-key
+  blocking, explicit global numerator/count normalization across accumulation
+  and data-parallel ranks, and strict frozen-Qwen/Adapter-only ownership
+parity fixture: tests/representation/training/test_streaming.py;
+  tests/representation/training/test_trainer.py
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/checkpoint.py;
+  src/tgvf_rl/representation/training/distributed_checkpoint.py;
+  src/tgvf_rl/representation/training/fsdp2.py;
+  src/tgvf_rl/representation/training/config.py
+role: specification-informed new implementation
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+legacy source path: revisit_vlm_clean/src/revisit_vlm_clean/training/executor.py;
+  revisit_vlm_clean/src/revisit_vlm_clean/training_plan.py;
+  revisit_vlm_clean/src/revisit_vlm_clean/defaults.py
+legacy source SHA256: c54a2cbaee34d2f0d1a1e7a134eca666242c7bef263e0f083c43634d254dff30;
+  cac206c3620f417d81cf6a3af9c62c85b63db53bb27b2b13ab2629dc0cd4c430;
+  a1f7c070cff26a03a9374065fc544aa9a86a89195295c7c6d3f1517585ea0901
+symbols/lineage used: optimizer/scheduler/sampler checkpoint intent,
+  resolved run identity, and representation execution-state inventory
+semantic differences: Adapter-only deployable artifacts, optimizer-boundary
+  strict resume with RNG and complete identities, composable-FSDP2 ownership
+  that excludes borrowed Qwen mergers, distributed checkpoint schema, and a
+  strict TOML contract with no production scientific defaults
+parity fixture: tests/representation/training/test_checkpoint.py;
+  tests/representation/training/test_fsdp2.py;
+  tests/representation/training/test_config.py; real two-rank representation
+  optimizer/checkpoint execution remains a production gate
 reviewed by: Codex RPI-20260719
 date: 2026-07-19 JST
 ```

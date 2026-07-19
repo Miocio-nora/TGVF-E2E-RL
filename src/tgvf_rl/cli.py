@@ -1,4 +1,4 @@
-"""Small, fail-closed command line surface for framework validation."""
+"""Small, fail-closed command line surface for validation and bounded runs."""
 
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ from tgvf_rl.framework.verl import (
     VerlAdapterConfig,
     load_verl_public_api,
     verify_verl_distribution_identity,
+)
+from tgvf_rl.representation.training.config import (
+    load_representation_training_config,
 )
 
 
@@ -133,6 +136,16 @@ def _parser() -> argparse.ArgumentParser:
         "validate-smoke-config", help="validate a bounded TOML smoke identity"
     )
     validate.add_argument("path", type=Path)
+    validate_representation = subparsers.add_parser(
+        "validate-representation-config",
+        help="validate a complete Qwen3 representation-training TOML identity",
+    )
+    validate_representation.add_argument("path", type=Path)
+    run_representation = subparsers.add_parser(
+        "run-representation",
+        help="run a strict Qwen3 representation configuration under torchrun",
+    )
+    run_representation.add_argument("path", type=Path)
     return parser
 
 
@@ -143,12 +156,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _environment_payload(live=args.live)
         elif args.command == "validate-smoke-config":
             result = dict(validate_smoke_config(args.path))
+        elif args.command == "validate-representation-config":
+            result = load_representation_training_config(
+                args.path
+            ).validation_payload()
+        elif args.command == "run-representation":
+            from tgvf_rl.representation.training.runner import (
+                run_representation_training,
+            )
+
+            result = run_representation_training(args.path)
         else:  # pragma: no cover - argparse owns the command choices
             raise AssertionError(f"unhandled command {args.command}")
-    except (OSError, ValueError, RuntimeError) as error:
+    except (OSError, TypeError, ValueError, RuntimeError) as error:
         print(f"contract error: {error}", file=sys.stderr)
         return 2
-    print(json.dumps(result, indent=2, sort_keys=True, default=list))
+    if result is not None:
+        print(json.dumps(result, indent=2, sort_keys=True, default=list))
     return 0
 
 

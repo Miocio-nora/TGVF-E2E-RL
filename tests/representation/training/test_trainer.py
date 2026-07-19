@@ -1,0 +1,416 @@
+from __future__ import annotations
+
+from hashlib import sha256
+from types import SimpleNamespace
+
+import pytest
+import torch
+from torch import nn
+
+from tgvf_rl.conditioning.base import TargetConditioningProviderKind
+from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
+from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
+from tgvf_rl.representation.training.checkpoint import (
+    RepresentationAccumulationIdentity,
+)
+from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
+from tgvf_rl.representation.training.objective import (
+    RepresentationObjectiveConfig,
+    RepresentationObjectiveKind,
+)
+from tgvf_rl.representation.training.readout import (
+    RepresentationCandidateObservation,
+    RepresentationReadoutRow,
+    RepresentationVisualTensorBundle,
+    SameImageReadoutGroup,
+)
+from tgvf_rl.representation.training.sampling import SameImageBatchSampler
+from tgvf_rl.representation.training.schema import RepresentationTrainingSample
+from tgvf_rl.representation.training.trainer import (
+    RepresentationOptimizerConfig,
+    RepresentationPrecision,
+    RepresentationSchedulerConfig,
+    RepresentationSchedulerKind,
+    RepresentationTrainer,
+    RepresentationTrainerConfig,
+    build_representation_optimizer,
+    build_representation_scheduler,
+    synchronize_collective_candidate_counts,
+)
+from tgvf_rl.representation.training.transcript import ModelEvidenceSupervision
+
+
+class _ToyMerger(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.linear = nn.Linear(16, 6)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        return self.linear(tokens.reshape(-1, 16))
+
+
+def _projection(identity: str) -> FrozenProjectionPort:
+    return FrozenProjectionPort(
+        _ToyMerger(),
+        identity=identity,
+        input_dim=4,
+        output_dim=6,
+        spatial_merge_size=2,
+    )
+
+
+def _adapter() -> TGVFAdapter:
+    torch.manual_seed(101)
+    return TGVFAdapter(
+        d_lm=6,
+        d_v=4,
+        attn_dim=5,
+        main_projection=_projection("main"),
+        deepstack_projections=tuple(
+            _projection(f"branch-{layer}") for layer in (8, 16, 24)
+        ),
+        branch_layers=(8, 16, 24),
+    )
+
+
+class _TinyLanguageModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed_tokens = nn.Embedding(20, 6)
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def forward(
+        self,
+        *,
+        inputs_embeds,
+        visual_pos_masks,
+        deepstack_visual_embeds,
+        **kwargs,
+    ):
+        hidden = inputs_embeds.clone()
+        for branch in deepstack_visual_embeds:
+            hidden = hidden.clone()
+            hidden[visual_pos_masks] += branch
+        hidden = hidden + hidden.sum(dim=1, keepdim=True) * 0.05
+        return SimpleNamespace(last_hidden_state=hidden, past_key_values=None)
+
+
+class _TinyContainer(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.language_model = _TinyLanguageModel()
+
+
+class _TinyQwen(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = _TinyContainer()
+        self.lm_head = nn.Linear(6, 20, bias=False)
+
+
+def _qwen() -> _TinyQwen:
+    torch.manual_seed(202)
+    model = _TinyQwen().eval()
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
+    return model
+
+
+def _sample(image: str, member: int) -> RepresentationTrainingSample:
+    return RepresentationTrainingSample(
+        sample_id=f"{image}-{member}",
+        image=f"/{image}.png",
+        image_id=image,
+        question="What is shown?",
+        target=f"target-{member}",
+        evidence_description=f"evidence-{member}",
+    )
+
+
+def _samples() -> tuple[RepresentationTrainingSample, ...]:
+    return tuple(_sample(image, member) for image in ("a", "b") for member in range(2))
+
+
+def _supervision(token_ids: tuple[int, ...]) -> ModelEvidenceSupervision:
+    evidence_positions = (6, 7)
+    return ModelEvidenceSupervision(
+        family="qwen3_vl",
+        model_token_ids=token_ids,
+        labels=tuple(
+            token if index in evidence_positions else EVIDENCE_IGNORE_INDEX
+            for index, token in enumerate(token_ids)
+        ),
+        evidence_token_positions=evidence_positions,
+        visual_model_positions=(1, 2, 3, 4),
+        canonical_to_model_positions=((0,), (1, 2), (3, 4), (5,), (6,), (7,)),
+    )
+
+
+class _GroupBuilder:
+    def __call__(
+        self,
+        samples: tuple[RepresentationTrainingSample, ...],
+        adapter: TGVFAdapter,
+        *,
+        collective_candidate_count: int,
+    ) -> SameImageReadoutGroup:
+        if collective_candidate_count < len(samples):
+            raise ValueError("collective candidate count cannot be smaller than real K")
+        rows = []
+        candidates = []
+        source = RepresentationVisualTensorBundle(
+            main=torch.full((1, 2, 6), 0.2),
+            deepstack=tuple(torch.full((1, 2, 6), 0.05) for _ in range(3)),
+            branch_layers=(8, 16, 24),
+        )
+        for index, sample in enumerate(samples):
+            token_ids = (1, 2, 2, 2, 2, 3, 5 + index * 2, 6 + index * 2)
+            rows.append(
+                RepresentationReadoutRow(
+                    sample_id=sample.sample_id,
+                    image_group_key=sample.image_group_key,
+                    source_visual_identity=f"source-{sample.image_group_key}",
+                    supervision=_supervision(token_ids),
+                    input_ids=torch.tensor([token_ids], dtype=torch.long),
+                    attention_mask=torch.ones(1, 8, dtype=torch.bool),
+                    position_ids=torch.arange(8).view(1, 8),
+                    source_positions=(1, 2),
+                    d_positions=(3, 4),
+                )
+            )
+            target = torch.full((3, 6), 0.1 + index * 0.1)
+            visual = torch.arange(32, dtype=torch.float32).reshape(8, 4) / 32
+            output = adapter(
+                target_hidden_states=target,
+                pre_merge_visual_tokens=visual,
+                deepstack_pre_merge_visual_tokens=tuple(
+                    visual + branch_index * 0.1 for branch_index in range(3)
+                ),
+            )
+            candidates.append(
+                RepresentationCandidateObservation(
+                    sample_id=sample.sample_id,
+                    image_group_key=sample.image_group_key,
+                    source_visual_identity=f"source-{sample.image_group_key}",
+                    target_conditioning_provider=(
+                        TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
+                    ),
+                    projection_identities=(
+                        output.metadata.main_projection_identity,
+                        *output.metadata.deepstack_projection_identities,
+                    ),
+                    visual=RepresentationVisualTensorBundle(
+                        main=output.main_d.unsqueeze(0),
+                        deepstack=tuple(
+                            branch.unsqueeze(0)
+                            for branch in output.deepstack_visual_embeds
+                        ),
+                        branch_layers=output.metadata.branch_layers,
+                    ),
+                )
+            )
+        padding = []
+        for _ in range(collective_candidate_count - len(samples)):
+            target = torch.full((3, 6), 0.1)
+            visual = torch.arange(32, dtype=torch.float32).reshape(8, 4) / 32
+            output = adapter(
+                target_hidden_states=target,
+                pre_merge_visual_tokens=visual,
+                deepstack_pre_merge_visual_tokens=tuple(
+                    visual + branch_index * 0.1 for branch_index in range(3)
+                ),
+            )
+            padding.append(
+                RepresentationVisualTensorBundle(
+                    main=output.main_d.unsqueeze(0),
+                    deepstack=tuple(
+                        branch.unsqueeze(0)
+                        for branch in output.deepstack_visual_embeds
+                    ),
+                    branch_layers=output.metadata.branch_layers,
+                )
+            )
+        return SameImageReadoutGroup(
+            image_group_key=samples[0].image_group_key,
+            source_visual_identity=f"source-{samples[0].image_group_key}",
+            source_visual=source,
+            rows=tuple(rows),
+            candidates=tuple(candidates),
+            collective_padding=tuple(padding),
+        )
+
+
+def _objective() -> RepresentationObjectiveConfig:
+    return RepresentationObjectiveConfig(
+        identity="trainer-test-objective",
+        kind=RepresentationObjectiveKind.MATRIX_CE_AND_L_GEN,
+        matrix_ce_weight=0.6,
+        l_gen_weight=1.1,
+    )
+
+
+def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen() -> None:
+    samples = _samples()
+    adapter = _adapter()
+    qwen = _qwen()
+    optimizer = build_representation_optimizer(
+        adapter,
+        RepresentationOptimizerConfig(
+            learning_rate=1e-3,
+            betas=(0.9, 0.95),
+            eps=1e-8,
+            weight_decay=0.0,
+        ),
+    )
+    scheduler = build_representation_scheduler(
+        optimizer,
+        RepresentationSchedulerConfig(
+            kind=RepresentationSchedulerKind.LINEAR_WARMUP_DECAY,
+            total_steps=2,
+            warmup_steps=0,
+        ),
+    )
+    before = {
+        name: parameter.detach().clone()
+        for name, parameter in adapter.named_parameters()
+        if parameter.requires_grad
+    }
+    sampler = SameImageBatchSampler(
+        samples,
+        batch_size=2,
+        seed=17,
+        data_manifest_sha256=sha256(b"trainer-test-data").hexdigest(),
+    )
+    trainer = RepresentationTrainer(
+        adapter=adapter,
+        qwen_model=qwen,
+        family_adapter=Qwen3VLAdapter(),
+        samples=samples,
+        sampler=sampler,
+        group_builder=_GroupBuilder(),
+        objective=_objective(),
+        accumulation=RepresentationAccumulationIdentity(
+            gradient_accumulation_steps=2,
+            data_parallel_world_size=1,
+        ),
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=RepresentationTrainerConfig(
+            precision=RepresentationPrecision.FP32,
+            max_grad_norm=1.0,
+            require_all_adapter_gradients=True,
+        ),
+    )
+
+    metrics = trainer.train_step()
+
+    assert metrics.global_step == 1
+    assert metrics.global_row_count == 4
+    assert metrics.global_sample_count == 4
+    assert metrics.global_matrix_ce_loss > 0
+    assert metrics.global_l_gen_loss > 0
+    assert metrics.global_total_loss == pytest.approx(
+        metrics.global_matrix_ce_loss * 0.6 + metrics.global_l_gen_loss * 1.1
+    )
+    assert metrics.gradient_norm_before_clip > 0
+    assert metrics.learning_rate == pytest.approx(1e-3)
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(5e-4)
+    assert len(metrics.local_sample_ids) == 4
+    assert any(
+        not torch.equal(before[name], parameter.detach())
+        for name, parameter in adapter.named_parameters()
+        if name in before
+    )
+    assert all(not parameter.requires_grad for parameter in qwen.parameters())
+    assert all(parameter.grad is None for parameter in qwen.parameters())
+
+
+@pytest.mark.parametrize(
+    ("total_steps", "warmup_steps", "expected_used", "expected_final"),
+    (
+        (4, 0, (1.0, 0.75, 0.5, 0.25), 0.0),
+        (5, 2, (0.5, 1.0, 1.0, 2.0 / 3.0, 1.0 / 3.0), 0.0),
+    ),
+)
+def test_linear_scheduler_controls_the_learning_rate_used_by_each_update(
+    total_steps: int,
+    warmup_steps: int,
+    expected_used: tuple[float, ...],
+    expected_final: float,
+) -> None:
+    parameter = nn.Parameter(torch.tensor(1.0))
+    base_learning_rate = 2.0
+    optimizer = torch.optim.SGD([parameter], lr=base_learning_rate)
+    scheduler = build_representation_scheduler(
+        optimizer,
+        RepresentationSchedulerConfig(
+            kind=RepresentationSchedulerKind.LINEAR_WARMUP_DECAY,
+            total_steps=total_steps,
+            warmup_steps=warmup_steps,
+        ),
+    )
+    used = []
+    for _ in range(total_steps):
+        used.append(float(optimizer.param_groups[0]["lr"]) / base_learning_rate)
+        optimizer.zero_grad(set_to_none=True)
+        parameter.grad = torch.ones_like(parameter)
+        optimizer.step()
+        scheduler.step()
+
+    assert used == pytest.approx(expected_used)
+    assert optimizer.param_groups[0]["lr"] / base_learning_rate == pytest.approx(
+        expected_final
+    )
+
+
+def test_collective_candidate_counts_use_each_microsteps_global_maximum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    def all_reduce(values: torch.Tensor, *, op: object) -> None:
+        assert op == torch.distributed.ReduceOp.MAX
+        assert tuple(int(value) for value in values.tolist()) == (4, 5)
+        remote_counts = torch.tensor((5, 4), dtype=values.dtype)
+        values.copy_(torch.maximum(values, remote_counts))
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", all_reduce)
+
+    assert synchronize_collective_candidate_counts(
+        (4, 5), device=torch.device("cpu")
+    ) == (5, 5)
+
+
+def test_trainer_rejects_optimizer_that_owns_frozen_qwen_or_omits_adapter() -> None:
+    samples = _samples()
+    adapter = _adapter()
+    qwen = _qwen()
+    wrong = torch.optim.AdamW([adapter.target_proj.weight], lr=1e-3)
+    sampler = SameImageBatchSampler(
+        samples,
+        batch_size=2,
+        seed=1,
+        data_manifest_sha256=sha256(b"wrong-optimizer").hexdigest(),
+    )
+
+    with pytest.raises(ValueError, match="every and only"):
+        RepresentationTrainer(
+            adapter=adapter,
+            qwen_model=qwen,
+            family_adapter=Qwen3VLAdapter(),
+            samples=samples,
+            sampler=sampler,
+            group_builder=_GroupBuilder(),
+            objective=_objective(),
+            accumulation=RepresentationAccumulationIdentity(1, 1),
+            optimizer=wrong,
+            scheduler=None,
+            config=RepresentationTrainerConfig(
+                precision=RepresentationPrecision.FP32,
+                max_grad_norm=1.0,
+                require_all_adapter_gradients=True,
+            ),
+        )

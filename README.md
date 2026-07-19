@@ -5,10 +5,10 @@ Target-Guided Visual Foveation for a Qwen reasoning policy trained with
 end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 `Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
-> **Status:** the bounded framework implementation and its compatibility
-> smokes are complete on the feature branch. No real data/reward/prompt
-> configuration, production training run, trained TGVF Adapter, or evaluation
-> result exists yet.
+> **Status:** the bounded framework and representation-phase execution scaffold
+> are implemented on `main`. No production data/prompt/hyperparameter
+> contract, real representation training run, trained TGVF Adapter, policy RL
+> run, or evaluation result exists yet.
 
 The bounded [veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
 selected upstream veRL commit
@@ -19,7 +19,19 @@ training lock.
 
 Current evidence is deliberately small:
 
-- `111` CPU tests pass for the framework contracts and synthetic oracles;
+- `295` CPU tests pass for the framework, representation-phase contracts, and
+  synthetic oracles;
+- the representation suite covers the audited retained-JSONL transform,
+  same-image sampler, native Qwen3 pipeline with both target-conditioning
+  providers, streaming Matrix CE plus `L_gen`, a frozen-Qwen optimizer step,
+  Adapter-only artifacts, exact CPU next-step resume, strict TOML identity,
+  composable-FSDP2 parameter ownership, collective-safe four-versus-five-
+  candidate padding, and content-bound distributed checkpoints;
+- a separate local-Qwen3 representation golden freezes the real processor/chat
+  template, strict Unicode target span, action/evidence transcripts, two visual
+  expansions, and evidence labels without loading the 8B weights; an independent
+  functional oracle checks TGVF Adapter output and input/parameter gradients in
+  FP32 and BF16;
 - `SC-20-R6` passes real Qwen3-VL-8B-Thinking TP=2 precomputed-latent transport
   with a native two-call transcript, no tokenizer growth, and no site-package
   patch;
@@ -31,8 +43,9 @@ The live vLLM path requires the repository plugin and accepted attention split:
 `VLLM_ATTENTION_BACKEND=TRITON_ATTN`, and multimodal-encoder attention
 `TORCH_SDPA`. See [environment setup](docs/SETUP.md) and the
 [experiment ledger](docs/EXPERIMENT_LEDGER.md) for exact identities. These
-smokes are not policy training, Qwen FSDP2 capacity evidence, or production
-objective evidence.
+smokes and CPU fixtures are not policy training, a real-Qwen representation
+optimizer step, representation FSDP2 capacity/resume evidence, a trained
+artifact, or production-objective evidence.
 
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
@@ -82,13 +95,15 @@ action/response turns.
 | **veRL integration** | Provide distributed rollout and optimization infrastructure, with required FSDP2 support. |
 | **objective layer** | Keep GRPO and reference-style SDPO mathematics/state separately identifiable. |
 
-The representation phase will reuse only provenance-pinned legacy data and
-selected TGVF/DeepStack code. It uses a new native-format pipeline and trains a
-new TGVF Adapter checkpoint; the historical checkpoint is a parity/reference
-artifact, not a direct initialization.
+The representation phase can read only provenance-pinned legacy data through
+the new audited transform and native-format pipeline. A production run must
+train a new TGVF Adapter checkpoint; the historical checkpoint is a
+parity/reference artifact, not a direct initialization. The current data audit
+is evidence, not an accepted training manifest: seven resolved image paths
+overlap across the candidate splits and no row is silently removed.
 
 The policy initializes from the original Qwen reasoning model. There is no
-intermediate Stage2-style policy SFT and no Golden policy adapter.
+intermediate policy SFT and no Golden policy adapter.
 
 ## Fixed design decisions
 
@@ -166,7 +181,14 @@ choices remain unset:
 
 - Qwen2.5 local/runtime path, family-specific representation artifact, and
   native prompt;
-- target-span and `Hq` construction details;
+- production representation prompt wording, contextual hidden-layer choice,
+  and real-Qwen `Hq`/readout validation; the Qwen3 native span/processor smoke
+  contract and both provider code paths are implemented;
+- accepted train/validation manifests, resolution of the seven exact resolved-
+  path overlaps, dataset/image licenses, and perceptual duplicate policy;
+- representation initialization seed, Matrix-CE/`L_gen` weights, optimizer,
+  scheduler, precision, accumulation, clipping, validation cadence, and
+  promotion thresholds;
 - production actor/reference/rollout placement, FSDP2 sharding, and parallel
   topology; the compatibility veRL commit/environment and vLLM backend are
   fixed;
@@ -194,11 +216,15 @@ be inherited silently from a library default.
 3. **Completed for the framework fixture:** implement the native Qwen protocol,
    strict parser, repeated-call runtime, immutable observations, exact behavior
    records, and framework-neutral trajectory conversion.
-4. Establish numerical output/gradient parity between the new TGVF Adapter core
-   and its pinned legacy reference, then freeze the native target-span/`Hq` and
-   merger/artifact contracts.
-5. Build the native-format representation pipeline and train a new
-   Qwen3-VL-8B-Thinking TGVF Adapter checkpoint. Require a separate
+4. **Completed for bounded fixtures:** establish an independent functional
+   output/gradient oracle for the selected TGVF Adapter equations and freeze a
+   real local-Qwen3 native transcript/processor golden. Exact 4096/1152 legacy-
+   checkpoint parity and a real-Qwen gradient run remain promotion gates.
+5. **Implemented, not yet run on production data:** the native-format Qwen3
+   representation data/pipeline, both provider paths, streaming objective,
+   trainer, FSDP2 ownership, configuration, and checkpoint/resume scaffolds.
+   Resolve the open data/scientific contracts and pass the planned GPU smoke
+   before training a new Qwen3-VL-8B-Thinking TGVF Adapter. Require a separate
    family-specific artifact and full fixture suite before claiming Qwen2.5-VL
    end-to-end support.
 6. Bind the GRPO equations and run a minimal frozen-Adapter policy proof.
@@ -215,6 +241,7 @@ be inherited silently from a library default.
 - [Historical framework-skeleton reference draft](docs/TGVF_E2E_RL_CODEX_IMPLEMENTATION_SPEC.md)
   (subordinate to the project task and supersession register)
 - [Controlled legacy provenance](docs/LEGACY_REFERENCE.md)
+- [Representation parity and open scientific gates](docs/REPRESENTATION_PARITY_INVENTORY.md)
 - [Controlled external references](docs/EXTERNAL_REFERENCES.md)
 - [Experiment ledger](docs/EXPERIMENT_LEDGER.md)
 - [Compatibility environment setup](docs/SETUP.md)

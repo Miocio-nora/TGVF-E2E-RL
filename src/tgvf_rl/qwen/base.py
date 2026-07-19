@@ -367,8 +367,22 @@ def _validate_forward_request(
     if request.input_ids.ndim != 2:
         raise ValueError("input_ids must have shape [B, S]")
     batch, sequence = request.input_ids.shape
-    if request.attention_mask.shape != (batch, sequence):
-        raise ValueError("attention_mask must match input_ids")
+    standard_attention_shape = (batch, sequence)
+    blocked_attention_shape = (batch, 1, sequence, sequence)
+    if request.attention_mask.shape != standard_attention_shape:
+        if not isinstance(request, InjectedForwardRequest) or (
+            request.attention_mask.shape != blocked_attention_shape
+        ):
+            raise ValueError(
+                "attention_mask must have shape [B,S], or [B,1,S,S] for a "
+                "live injected forward"
+            )
+        if not request.attention_mask.dtype.is_floating_point:
+            raise TypeError("a four-dimensional attention mask must be additive")
+        if not bool(torch.isfinite(request.attention_mask).all().item()):
+            raise ValueError("a four-dimensional attention mask must be finite")
+        if bool((request.attention_mask > 0).any().item()):
+            raise ValueError("an additive attention mask cannot contain positive bias")
     if request.position_ids.ndim not in {2, 3}:
         raise ValueError("position_ids must have shape [B,S] or [R,B,S]")
     if request.position_ids.shape[-2:] != (batch, sequence):

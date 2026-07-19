@@ -1,0 +1,204 @@
+{
+  "canonical_transcripts": {
+    "action": {
+      "text_characters": 1152,
+      "text_sha256": "38d46cea5bb22a9997c96ffcfdcc62f7ce7f181686cbbbea8a7ff6a78c704577",
+      "text_utf8_bytes": 1168,
+      "token_ids_sha256": "64fb6089d3a736ebe4e26daf41713790e0d6b1d29ff0b61ac8c3321de329ec70",
+      "token_length": 255
+    },
+    "action_generation_prefill": {
+      "text_characters": 1035,
+      "text_sha256": "72a82a3cb0768ffd7f67ca718a52b39649b3ce63e68386a751d0cebde5fd6f42",
+      "text_utf8_bytes": 1043,
+      "token_ids_sha256": "2f5a9d3561bf47de96c2a3ccba2d06713ddf11ae798be70488ac3116cd0bb412",
+      "token_length": 224
+    },
+    "evidence": {
+      "text_characters": 1336,
+      "text_sha256": "ddd0cdaca0f6eb5da150326b12fb50b1238821dc031c4671a2167ed56427864b",
+      "text_utf8_bytes": 1356,
+      "token_ids_sha256": "c5623b52fc778dc5809b3020ed296c63fce252e13400411d47416088b4d6ac01",
+      "token_length": 288
+    },
+    "evidence_generation_prefill": {
+      "text_characters": 1267,
+      "text_sha256": "35306776841157796b4f729caaabc1c96807babf270cace54e228946ab3dbfd3",
+      "text_utf8_bytes": 1283,
+      "token_ids_sha256": "17a7205d43523c8099abba78af12cc8f918e66de866116530794ae9e603e7465",
+      "token_length": 268
+    }
+  },
+  "evidence_supervision": {
+    "canonical_positions": [
+      268,
+      269,
+      270,
+      271,
+      272,
+      273,
+      274,
+      275,
+      276,
+      277,
+      278,
+      279,
+      280,
+      281,
+      282,
+      283
+    ],
+    "canonical_positions_sha256": "0caa015933f908a06a18fb9f926dde5fd8cfe5f54fefa91e04824fa14d0862b6",
+    "canonical_token_ids_sha256": "34941f1f3c83987c802e442b2c5313e0b4d0195f14415eea36c9c5a6220595fe",
+    "ignore_index": -100,
+    "processor_expanded_labels_sha256": "09f6a6a4f54e1e8d7fcbd2b39ac3662a1e6e775413b3fd964817f4a89ab1cce7",
+    "processor_expanded_positions": [
+      394,
+      395,
+      396,
+      397,
+      398,
+      399,
+      400,
+      401,
+      402,
+      403,
+      404,
+      405,
+      406,
+      407,
+      408,
+      409
+    ],
+    "processor_expanded_positions_sha256": "5b17c074b7da21c584d6f05cc6297c362cf5d74bc1784dfce6746509fd4be426",
+    "processor_expanded_token_ids_sha256": "34941f1f3c83987c802e442b2c5313e0b4d0195f14415eea36c9c5a6220595fe"
+  },
+  "fixture_schema": "qwen3_native_representation_processor_golden_v1",
+  "image": {
+    "construction": "rgb_xy_mod_256_v1",
+    "height": 56,
+    "mode": "RGB",
+    "raw_rgb_bytes": 9408,
+    "raw_rgb_sha256": "23cabb9f3df4cffa9edfeee63059953e4282ac770760d6f600011eff58669aad",
+    "width": 56
+  },
+  "model": {
+    "chat_template_sha256": "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956",
+    "family": "qwen3_vl",
+    "image_placeholder_token_id": 151655,
+    "path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking",
+    "processor_class": "transformers.models.qwen3_vl.processing_qwen3_vl.Qwen3VLProcessor",
+    "tokenizer_class": "transformers.models.qwen2.tokenization_qwen2_fast.Qwen2TokenizerFast",
+    "tokenizer_length": 151669
+  },
+  "parsed_target": {
+    "canonical_token_ids": [
+      111687,
+      102673,
+      99327,
+      14,
+      2809,
+      6691
+    ],
+    "canonical_token_ids_sha256": "98ec54d4b9ee7f161b442c2eb81d83e033ccd966b0512a2ff443b62c0c07242c",
+    "canonical_transcript_token_span": {
+      "end": 251,
+      "start": 245
+    },
+    "processor_expanded_token_ids": [
+      111687,
+      102673,
+      99327,
+      14,
+      2809,
+      6691
+    ],
+    "processor_expanded_token_span": {
+      "end": 314,
+      "start": 308
+    },
+    "sampled_character_span": {
+      "end": 90,
+      "start": 76
+    },
+    "sampled_token_span": {
+      "end": 28,
+      "start": 22
+    },
+    "sampled_utf8_byte_span": {
+      "end": 98,
+      "start": 76
+    },
+    "text": "左侧铭牌/section-A"
+  },
+  "processor_inputs": {
+    "action": {
+      "image_grid_thw": [
+        [
+          1,
+          16,
+          16
+        ]
+      ],
+      "length": 318,
+      "token_ids_sha256": "7b045eb05773cf2f354383ff76459d4e5572d6a73392cd6d9a5b5d780796351a",
+      "visual_blocks": [
+        {
+          "end": 229,
+          "length": 64,
+          "start": 165
+        }
+      ]
+    },
+    "evidence": {
+      "image_grid_thw": [
+        [
+          1,
+          16,
+          16
+        ],
+        [
+          1,
+          16,
+          16
+        ]
+      ],
+      "length": 414,
+      "token_ids_sha256": "e397f9ef1ac76a44dcfcf578f0f55413cb4c0291c92a32d0daf7a78549279aef",
+      "visual_blocks": [
+        {
+          "end": 229,
+          "length": 64,
+          "start": 165
+        },
+        {
+          "end": 384,
+          "length": 64,
+          "start": 320
+        }
+      ]
+    }
+  },
+  "production_prompt": false,
+  "prompt": {
+    "identity": "qwen3-representation-smoke-only-v1",
+    "rendered_sha256": "f177506b51f45371ec4bc7eb5ece80f74a0b8c1a7ad055e0e3f37dba5253e70f",
+    "sha256": "ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3",
+    "template": "[SMOKE-ONLY REPRESENTATION FIXTURE; NOT A PRODUCTION PROMPT]\nQuestion: {question}\nRequested target: {target}\nUse the native focus tool once for that target."
+  },
+  "protocol": {
+    "canonical_evidence_schema": "canonical_evidence_supervision_v1",
+    "model_evidence_schema": "model_evidence_supervision_v1",
+    "native_action_target_schema": "native_action_target_v1",
+    "representation_prompt_schema": "native_representation_prompt_v1",
+    "token_expansion_schema": "canonical_to_model_token_expansion_v1",
+    "tool_name": "tgvf_focus_tool",
+    "tool_schema_sha256": "1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361"
+  },
+  "sample": {
+    "evidence_description": "The focused crop shows 蓝色/C-7 on the metal tag.",
+    "question": "Which detail appears in the requested region?",
+    "target": "左侧铭牌/section-A"
+  },
+  "smoke_only": true
+}

@@ -1,6 +1,7 @@
 # Representation Phase Parity Inventory
 
-Status: **implementation inventory accepted; fixtures and native semantics in progress**
+Status: **bounded executable scaffold and parity fixtures implemented;
+production/scientific promotion gates open**
 
 Recorded: **2026-07-19 JST**
 
@@ -29,6 +30,40 @@ Historical component names appear only as provenance.
   plan, and seed.
 - A geometric or distance-based contrastive objective is a later named
   experiment, not part of baseline parity.
+
+## Implemented bounded evidence
+
+The current implementation has an executable Qwen3 representation path, not
+only interface placeholders:
+
+- `data.py` applies the strict retained-focus transform, validates the source
+  hash and image paths, and emits immutable accepted/excluded/duplicate/leakage
+  manifests plus four-key train/validation overlap reports;
+- `native_pipeline.py` and `runtime.py` build the native Qwen tool trajectory,
+  extract the strict raw target span, bind either contextual-hidden-state or
+  target-token-embedding conditioning, capture main/three-branch Qwen3 visual
+  features, and construct source-plus-`D` readout rows;
+- `streaming.py` evaluates a same-image `K×K` matrix without retaining the full
+  set of cell graphs, blocks original-image keys for post-`D` evidence queries,
+  and backpropagates the exact Matrix-CE and `L_gen` gradients through main `D`
+  and all D-DeepStack branches;
+- `trainer.py` owns accumulation, global numerator/count normalization, frozen-
+  Qwen checks, Adapter-only AdamW ownership, clipping, scheduling, metrics, and
+  loss-excluded zero-gradient collective padding when different ranks receive
+  four- versus five-candidate groups;
+- `fsdp2.py`, `checkpoint.py`, `distributed_checkpoint.py`, and `config.py`
+  implement composable-FSDP2 ownership, Adapter-only artifacts, strict training
+  state/resume identities, content-bound per-rank distributed checkpoint
+  schemas, and a no-default TOML contract for both providers.
+
+The bounded evidence includes the separate real-local-processor golden in
+`tests/representation/training/test_qwen3_representation_golden.py`, synthetic
+native group-builder fixtures for both providers, streaming/trainer fixtures,
+CPU bitwise next-step checkpoint parity, FSDP2 ownership/API tests, and the
+independent FP32/BF16 functional output/gradient oracle in
+`tests/representation/test_adapter_reference_parity.py`. These do not constitute
+a trained Adapter, an accepted data split, a real 8B backward pass, or a
+two-rank representation FSDP2 run.
 
 ## Exact mathematical parity items
 
@@ -69,6 +104,8 @@ Required new fixtures:
 - [x] FP16/BF16 parity for the historical FP32-softmax-then-cast score-gradient;
 - [x] unnormalized numerator/row-count terms and a four-row-versus-five-row global
   reduction oracle;
+- [x] four-row-versus-five-row composable-FSDP forward/backward count alignment
+  through loss-excluded, exact-zero-gradient Adapter padding;
 - [x] synthetic live-forward sensitivity for main `D` and each ordered
   D-DeepStack branch under atomic whole-observation column swaps;
 - [x] zero valid groups returns a scalar zero without creating a false training
@@ -100,11 +137,16 @@ Required new fixtures:
 
 - [x] canonical exact label ownership and canonical-to-expanded-model visual
   mapping fixtures;
-- [ ] pinned real representation transcript/model-input golden fixture;
+- [x] pinned real local-Qwen3 representation transcript/model-input golden
+  fixture, using a clearly smoke-only prompt and deterministic 56×56 in-memory
+  RGB image; it freezes action/evidence transcript identities, strict target
+  span/IDs, processor-expanded IDs, two visual blocks, and evidence positions;
 - [x] per-sample token-mean then sample-mean reduction, including unequal token
   counts;
 - [x] negative summed-NLL Matrix score;
-- [ ] gradients reach main `D` and every D-DeepStack branch but not frozen Qwen;
+- [x] synthetic native streaming/trainer gradients reach main `D`, every
+  D-DeepStack branch, and Adapter-owned parameters while frozen Qwen has no
+  gradients; real-Qwen gradient parity remains a production gate;
 - [x] baseline `L_gen=on` and ablation `L_gen=off` identities and separate
   Matrix/readability metrics.
 
@@ -158,6 +200,17 @@ Required new fixtures:
   becoming false negative columns; semantic near-duplicate handling remains a
   manifest-level decision.
 
+The read-only legacy-data audit records 35,542 accepted train rows in 9,186
+groups (6,398 groups with at least four targets), 14,480 excluded rows, and
+3,004 accepted-row leakage warnings under manifest
+`4160198e65268e33f1c36d050f74498f4f8fa35f3ac263202ee8bfdf5f5cd820`.
+Validation has 1,382 accepted rows in 376 groups (226 groups with at least four
+targets), 641 excluded rows, and 108 leakage warnings under manifest
+`e44cbd6f86ff82879b3be312d9a23198b7267bccd710cbe7d1ecc1dc9954ea15`.
+Group key, stable UID, and content hash are disjoint, but seven exact resolved
+image paths overlap. No loader or sampler code silently removes them; an
+accepted split decision and replacement manifest identities remain required.
+
 ## Historical unit-test inventory
 
 Pinned tests:
@@ -196,33 +249,33 @@ explicit acceptance before Gate AD-13 can close.
 
 | Pinned legacy test function | Status | New fixture or required disposition |
 |---|---|---|
-| `test_teacher_guide_dataset_loads_jsonl_and_warns_on_leakage` | `OPEN` | retained-JSONL loader, immutable manifest, and leakage record |
+| `test_teacher_guide_dataset_loads_jsonl_and_warns_on_leakage` | `DONE` | strict retained-JSONL loader, immutable full-disposition manifest, leakage record/warning, source hash, and overlap fixtures in `test_data.py` |
 | `test_default_loss_weights_are_conservative` | `PROPOSED_EXCLUSION` | historical defaults do not define the native objective; accepted weights need new identities |
-| `test_training_config_defaults_readout_prompt_target_dropout` | `OPEN` | native target visibility/dropout decision and fixture |
+| `test_training_config_defaults_readout_prompt_target_dropout` | `PARTIAL` | prompt text/hash and target visibility are explicit and no hidden dropout default exists; production prompt/control policy remains open |
 | `test_token_direct_can_use_per_target_token_output_length` | `PROPOSED_EXCLUSION` | unused legacy Adapter variant; selected structure has image-layout-owned `D` length |
 | `test_non_token_direct_rejects_none_num_foveated_tokens` | `PROPOSED_EXCLUSION` | unused legacy variant-builder validation |
 | `test_visual_token_manifold_loss_returns_finite_scalar` | `PROPOSED_EXCLUSION` | manifold optimizer contribution is fixed to zero; no replacement loss is implemented |
 | `test_attention_diagnostics_report_slot_entropy_mass_and_coverage` | `DONE` | `tests/representation/training/test_metrics.py` |
 | `test_attention_diagnostics_average_sub_slots_to_fvt_slots` | `DONE` | `tests/representation/training/test_metrics.py` |
 | `test_fvt_norm_diagnostics_and_summary_values` | `DONE` | diagnostic-only fixtures in `tests/representation/training/test_metrics.py` |
-| `test_disabled_optional_losses_skip_cleanly` | `OPEN` | negative configuration fixture after the native objective schema is accepted |
+| `test_disabled_optional_losses_skip_cleanly` | `DONE` | native objective/config fixtures enforce manifold disabled at zero, norm unset, and separately identified Matrix-only ablation |
 | `test_same_image_negative_groups_fallback_to_image_path` | `PARTIAL` | key fallback is covered; the older size-2 pair/cyclic path is not the selected Golden sampler and needs an accepted exclusion |
 | `test_same_image_negative_matrix_ce_prefers_diagonal_scores` | `DONE` | pure Matrix-CE value fixture |
 | `test_same_image_negative_matrix_ce_score_gradients_match_autograd` | `DONE` | FP32 autograd plus FP16/BF16 legacy-cast fixtures |
-| `test_readout_inputs_mask_prompt_and_replace_only_fvt_positions` | `OPEN` | native transcript/readout integration |
-| `test_readout_inputs_can_use_source_image_grid_positions` | `OPEN` | native layout/M-RoPE readout integration |
-| `test_readout_inputs_reject_source_grid_token_count_mismatch` | `OPEN` | native layout fail-closed fixture |
-| `test_readout_prompt_can_omit_target` | `OPEN` | native matched-control semantics; not silently inherited |
-| `test_readout_inputs_without_target_still_replace_fvt_positions` | `OPEN` | native matched-control readout integration |
-| `test_readout_loss_backprops_to_fvt_not_frozen_lm` | `OPEN` | real readout gradient/frozen-Qwen integration |
-| `test_tgvf_module_params_remain_trainable_when_qwen_is_frozen` | `PARTIAL` | synthetic Adapter/frozen-merger gradient exists; a real frozen-Qwen whitelist fixture is open |
-| `test_tgvf_checkpoint_saves_module_without_qwen_weights` | `PARTIAL` | strict 104-tensor Adapter-owned subset excludes mergers; fresh file checkpoint and identity manifest are open |
+| `test_readout_inputs_mask_prompt_and_replace_only_fvt_positions` | `DONE` | exact evidence ownership, two-block processor mapping, and synthetic native readout integration in `test_transcript.py`, `test_native_pipeline.py`, and the real processor golden |
+| `test_readout_inputs_can_use_source_image_grid_positions` | `PARTIAL` | native Qwen3 group builder constructs processor grid/M-RoPE positions and the real golden locks both visual expansions; real 8B forward parity remains open |
+| `test_readout_inputs_reject_source_grid_token_count_mismatch` | `DONE` | typed runtime/readout/token-expansion contracts fail closed on grid, source-token, or visual-block disagreement |
+| `test_readout_prompt_can_omit_target` | `DONE` | hashed prompt schema permits `{question}` without `{target}` and the native group fixture exercises that form; production matched-control evaluation is open |
+| `test_readout_inputs_without_target_still_replace_fvt_positions` | `DONE` | native group-builder fixture omits target from the user prompt while preserving strict call-target extraction and both visual blocks |
+| `test_readout_loss_backprops_to_fvt_not_frozen_lm` | `DONE` | synthetic streaming/trainer fixtures backpropagate through candidate `D` tensors and Adapter parameters while frozen Qwen receives no gradients; real 8B proof remains open |
+| `test_tgvf_module_params_remain_trainable_when_qwen_is_frozen` | `DONE` | runtime, native group-builder, streaming, and trainer fixtures enforce frozen Qwen plus trainable Adapter ownership; real 8B FSDP execution remains open |
+| `test_tgvf_checkpoint_saves_module_without_qwen_weights` | `DONE` | strict Adapter-only artifact and identity manifest exclude borrowed Qwen mergers; CPU save/load and tamper fixtures pass, distributed production export remains open |
 | `test_build_tgvf_module_supports_target_slot_variant` | `PROPOSED_EXCLUSION` | unused legacy variant builder |
 | `test_build_tgvf_module_supports_v2_dynamic_token_variants` | `PROPOSED_EXCLUSION` | unused legacy variants; only the selected bidirectional D-DeepStack structure is in scope |
-| `test_v3_stage1_dataset_keeps_focus_and_skips_direct_rows` | `OPEN` | retained-data transform/filter fixture |
-| `test_weak_strict_mask_blocks_only_post_tgvf_queries` | `PARTIAL` | pure key-block mask exists; native readout execution does not yet consume it |
-| `test_v3_stage1_readout_loss_backprops_to_d_not_frozen_qwen` | `OPEN` | native readout integration |
-| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | synthetic live injection/sensitivity covers main `D` and each branch; original-image key blocking, real Qwen, Adapter-output provenance, and gradient parity remain open |
+| `test_v3_stage1_dataset_keeps_focus_and_skips_direct_rows` | `DONE` | strict retained-focus transform and every-row disposition fixture in `test_data.py` |
+| `test_weak_strict_mask_blocks_only_post_tgvf_queries` | `DONE` | streaming native readout constructs and consumes the post-evidence source-key block; synthetic query-row fixture passes |
+| `test_v3_stage1_readout_loss_backprops_to_d_not_frozen_qwen` | `DONE` | synthetic native streaming/trainer gradient and frozen-Qwen fixtures; real 8B gradient evidence remains open |
+| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | native pipeline plus streaming path carries Adapter-produced main `D` and all branches and consumes source-key blocking; real Qwen output/gradient and intended-layer mapping remain open |
 | `test_qwen3_position_ids_unwraps_peft_like_model_but_uses_wrapper_embeddings` | `OPEN` | native Qwen-family/PEFT ownership replacement fixture |
 
 The table records semantic migration only. Historical names remain provenance
@@ -296,47 +349,74 @@ weight is zero in the new baseline.
 
 These are required because the new system changes the protocol or capability:
 
-- exact Qwen native tool transcript/token round trip with no tokenizer growth;
-- target-span and `Hq` identity under both conditioning providers;
-- provider-specific artifact identity and paired-run comparison;
-- main `D` and every D-DeepStack branch causal/readability controls;
-- free continuation and counterfactual value-flip evaluation;
-- deterministic forward and exact observation identity;
-- representation checkpoint/resume including sampler state, provider identity,
-  data manifest, optimizer, scheduler, accumulation, RNG, and global step.
+- [x] exact local-Qwen3 native tool transcript/token/processor round trip with
+  no tokenizer growth, separately identified from the policy transcript fixture;
+- [x] strict target span plus both contextual-hidden-state and target-token-
+  embedding `Hq` paths in the synthetic native group fixture; a real 8B provider
+  comparison remains open;
+- [x] provider-specific configuration/checkpoint identity;
+- [ ] paired provider runs with identical data/order/initialization/seed;
+- [x] synthetic main `D` and every D-DeepStack branch causal/readability and
+  post-`D` source-key-block controls;
+- [ ] real-Qwen free continuation and counterfactual value-flip evaluation;
+- [x] deterministic streaming score/recompute equality and exact source/candidate
+  observation identity in bounded fixtures;
+- [x] CPU checkpoint/resume including sampler state, provider/data/optimizer/
+  scheduler/accumulation identities, RNG, and global step;
+- [ ] two-rank representation FSDP2 optimizer/checkpoint/resume evidence.
 
 ## Golden-equivalence audit
 
 The selected bidirectional attention, gate/residual, independent branch Adapter,
-and restored visual-salience equations structurally match the pinned reference.
-The opt-in Adapter-owned tensor-subset primitive now exports the 104 selected
-TGVF tensors and strictly rejects borrowed Qwen-merger state. It is not yet
-wired to a representation checkpoint writer and is not a complete artifact or
-Golden-equivalence claim. The remaining blockers are:
+and visual-salience equations are now checked by an independent functional
+oracle in `tests/representation/test_adapter_reference_parity.py`. For seeded
+small dimensions, it compares main/three-branch outputs and gradients with
+respect to target input, all four visual inputs, and all 104 Adapter-owned
+parameters in FP32 (`atol=rtol=2e-6`) and BF16 (`atol=rtol=3e-2`). Borrowed
+Qwen-merger parameters remain frozen and outside the owned artifact.
 
-- a production factory that binds the accepted Qwen3 main merger and three
-  DeepStack mergers with dimensions `4096/1152`, merge size `2`, and branch
-  layers `(8, 16, 24)` under exact model identities;
-- fixed-reference output and input/parameter-gradient parity, including BF16;
-- native representation readout using D-only DeepStack and post-D blocking of
-  original-image keys;
-- model-level proof that branch payload order maps to the intended Qwen layers;
-- either masked variable-length batched target conditioning or a fail-closed
-  execution contract that runs such Adapter inputs per sample.
-- a checkpoint manifest/loader that binds model family, conditioning provider,
-  architecture, projection identities, dtype, data, and training state and uses
-  the Adapter-owned subset rather than ordinary `state_dict()` for deployment.
+The native Qwen3 runtime binds exact model/component identities and the accepted
+`4096/1152`, merge-size-2, branch-layer `(8,16,24)` architecture; the new
+checkpoint path exports only Adapter-owned tensors and binds provider, model,
+prompt, objective, data, sampler, optimizer, scheduler, precision,
+accumulation, and initialization identities. The streaming readout consumes all
+branches and blocks original-image keys for evidence prediction.
 
-Synthetic shape/gradient tests and an Adapter-only state test are supporting
-fixtures, not substitutes for those gates.
+This is still not a Golden-checkpoint equivalence or trained-artifact claim. The
+remaining blockers are:
 
-## Open items before implementation promotion
+- load the pinned historical 104-tensor state under the exact accepted Qwen3
+  merger snapshot and compare real-dimension outputs plus input/parameter
+  gradients under documented tolerances;
+- prove on the real model that each captured/injected branch maps to the intended
+  Qwen layer and that the complete native readout remains deterministic;
+- execute both target-conditioning providers with real local Qwen3 state and
+  record target-span/`Hq`, specificity, readability, and gradient evidence;
+- pass a real two-rank representation FSDP2 optimizer/checkpoint/resume smoke;
+- train and validate a newly initialized native-format Adapter rather than
+  loading the historical checkpoint.
 
-- exact retained train/validation manifests and image-disjoint split;
-- the native post-tool evidence transcript and label span;
-- Adapter initialization distribution and seed contract;
-- final `L_gen` and Matrix-CE weights and required ablation size;
-- norm-loss inclusion, if any;
-- thresholds for readout, retrieval, branch, causal-flip, and free-continuation
-  promotion;
-- exact optimizer/scheduler/precision/accumulation contract.
+The functional oracle, real-processor golden, synthetic group/trainer fixtures,
+and CPU checkpoint parity are supporting evidence, not substitutes for those
+gates.
+
+## Open scientific and production items
+
+- accept a train/validation split policy that resolves the seven exact resolved-
+  image-path overlaps without silent filtering; record dataset/image licenses
+  and perform a perceptual near-duplicate audit;
+- replace the smoke-only golden prompt with an accepted production prompt
+  identity and bind the contextual provider's hidden layer;
+- freeze Adapter initialization distribution/seed and final nonzero `L_gen` and
+  Matrix-CE weights; define the required Matrix-only ablation size;
+- decide whether any norm objective exists. No formula or default is currently
+  implemented, and manifold optimization remains zero;
+- freeze AdamW, scheduler, BF16, accumulation, clipping, validation cadence,
+  checkpoint cadence, and metric logging in a production TOML artifact;
+- run the real Qwen3 native group/readout backward for both providers and the
+  two-rank representation FSDP2 optimizer/checkpoint/resume smoke;
+- complete exact historical-checkpoint/real-merger output and gradient parity;
+- set quantitative readout, retrieval, branch, causal-flip, free-continuation,
+  and reasoning-retention promotion thresholds;
+- build a separately identified representation artifact and complete native
+  transcript/DeepStack/objective fixtures before claiming Qwen2.5-VL support.

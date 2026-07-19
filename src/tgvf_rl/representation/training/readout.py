@@ -147,13 +147,20 @@ class RepresentationCandidateObservation:
 
 @dataclass(frozen=True, slots=True)
 class SameImageReadoutGroup:
-    """One image, K row-fixed queries, and K atomically swappable observations."""
+    """One image, K real rows/candidates, plus loss-excluded collective padding.
+
+    ``collective_padding`` contains extra Adapter forwards needed only to keep
+    composable-FSDP collective counts identical when data-parallel ranks own
+    different permitted local K values.  Padding has no row identity and must
+    never enter Matrix CE, L_gen, or metric denominators.
+    """
 
     image_group_key: str
     source_visual_identity: str
     source_visual: RepresentationVisualTensorBundle
     rows: tuple[RepresentationReadoutRow, ...]
     candidates: tuple[RepresentationCandidateObservation, ...]
+    collective_padding: tuple[RepresentationVisualTensorBundle, ...] = ()
 
     def __post_init__(self) -> None:
         _require_non_empty_text(self.image_group_key, field_name="image_group_key")
@@ -162,6 +169,8 @@ class SameImageReadoutGroup:
         )
         if len(self.rows) < 2 or len(self.candidates) != len(self.rows):
             raise ValueError("same-image readout requires aligned K>=2 rows/candidates")
+        if not isinstance(self.collective_padding, tuple):
+            raise TypeError("collective_padding must be an immutable tuple")
         row_ids = tuple(row.sample_id for row in self.rows)
         candidate_ids = tuple(candidate.sample_id for candidate in self.candidates)
         if row_ids != candidate_ids or len(set(row_ids)) != len(row_ids):
@@ -205,6 +214,25 @@ class SameImageReadoutGroup:
             for row in self.rows:
                 if len(row.d_positions) != candidate.visual.main.shape[1]:
                     raise ValueError("row D positions differ from candidate D tokens")
+        for padding in self.collective_padding:
+            if not isinstance(padding, RepresentationVisualTensorBundle):
+                raise TypeError("collective padding must contain visual bundles")
+            if padding.branch_layers != self.source_visual.branch_layers:
+                raise ValueError("collective padding DeepStack layer order differs")
+            if (
+                padding.main.device != self.source_visual.main.device
+                or padding.main.dtype != self.source_visual.main.dtype
+                or padding.main.shape[-1] != self.source_visual.main.shape[-1]
+            ):
+                raise ValueError("collective padding visual tensor contract differs")
+            if any(len(row.d_positions) != padding.main.shape[1] for row in self.rows):
+                raise ValueError("row D positions differ from collective padding tokens")
+
+    @property
+    def collective_candidate_count(self) -> int:
+        """Number of Adapter forwards/backwards every rank must execute."""
+
+        return len(self.candidates) + len(self.collective_padding)
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +317,12 @@ def synthetic_same_image_layout_readout_terms(
         matrix_ce=matrix_terms,
         l_gen=l_gen_terms,
     )
+
+
+def assert_frozen_deterministic_readout_model(model: object) -> None:
+    """Require the base Qwen readout path to be frozen and deterministic."""
+
+    _assert_frozen_deterministic_model(model)
 
 
 def _cell_request(
