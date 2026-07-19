@@ -619,6 +619,76 @@ def test_real_group_builder_contract_supports_both_providers(
     assert scores.score_matrix.shape == (2, 2)
 
 
+def test_group_builder_checks_runtime_invariants_only_at_group_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"immutable-image-fixture")
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    builder = Qwen3NativeRepresentationGroupBuilder(
+        runtime=runtime,
+        family_adapter=Qwen3VLAdapter(),
+        prompt=_prompt(),
+        image_loader=lambda path: Path(path).read_bytes(),
+    )
+    original_assert = runtime.assert_bound_invariants
+    boundary_checks = 0
+
+    def counted_assert() -> None:
+        nonlocal boundary_checks
+        boundary_checks += 1
+        original_assert()
+
+    monkeypatch.setattr(runtime, "assert_bound_invariants", counted_assert)
+
+    group = builder(
+        (_sample(image, 0), _sample(image, 1)),
+        runtime.adapter,
+        collective_candidate_count=2,
+    )
+
+    assert len(group.candidates) == 2
+    assert boundary_checks == 2
+
+
+def test_group_builder_exit_check_rejects_mid_group_runtime_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"immutable-image-fixture")
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    original_assert = runtime.assert_bound_invariants
+    boundary_checks = 0
+
+    def counted_assert() -> None:
+        nonlocal boundary_checks
+        boundary_checks += 1
+        original_assert()
+
+    def mutating_image_loader(path: str) -> bytes:
+        runtime.model.config._name_or_path = "/mutated-mid-group"
+        return Path(path).read_bytes()
+
+    monkeypatch.setattr(runtime, "assert_bound_invariants", counted_assert)
+    builder = Qwen3NativeRepresentationGroupBuilder(
+        runtime=runtime,
+        family_adapter=Qwen3VLAdapter(),
+        prompt=_prompt(),
+        image_loader=mutating_image_loader,
+    )
+
+    with pytest.raises(ValueError, match="model path differs"):
+        builder(
+            (_sample(image, 0), _sample(image, 1)),
+            runtime.adapter,
+            collective_candidate_count=2,
+        )
+
+    assert boundary_checks == 2
+
+
 def test_group_builder_rejects_same_key_with_different_image_paths(
     tmp_path: Path,
 ) -> None:

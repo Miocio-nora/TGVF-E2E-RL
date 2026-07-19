@@ -9,6 +9,7 @@ from tgvf_rl.conditioning import (
     TargetConditioningRequest,
     TargetTokenEmbeddingConditionProvider,
 )
+from tgvf_rl.conditioning.base import _bind_canonical_input_ids
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.contracts.tokens import TokenSpan
 
@@ -189,3 +190,86 @@ def test_token_embedding_provider_rejects_ids_outside_original_tokenizer() -> No
                 model_identity=provider.model_identity,
             )
         )
+
+
+def test_bound_canonical_ids_avoid_tensor_content_reads_and_preserve_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _model(tokenizer_length=16)
+    embedding = nn.Embedding(16, 5)
+    provider = TargetTokenEmbeddingConditionProvider(
+        model_identity=model,
+        embedding=embedding,
+        embedding_identity="base-embedding",
+    )
+    input_ids = torch.tensor([1, 5, 6, 2])
+    proof = _bind_canonical_input_ids(input_ids, (1, 5, 6, 2))
+
+    def forbidden_equal(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("proof path must not compare device tensor contents")
+
+    def forbidden_tolist(*_args: object, **_kwargs: object) -> list[object]:
+        raise AssertionError("proof path must not copy device tensor contents")
+
+    monkeypatch.setattr(torch, "equal", forbidden_equal)
+    monkeypatch.setattr(torch.Tensor, "tolist", forbidden_tolist)
+    output = provider.build(
+        TargetConditioningRequest(
+            input_ids=input_ids,
+            target_span=TokenSpan(1, 3),
+            expected_target_token_ids=(5, 6),
+            trajectory_id="trajectory-a",
+            call_index=0,
+            model_identity=model,
+            canonical_input_ids_proof=proof,
+        )
+    )
+
+    assert output.provenance.target_token_ids == ((5, 6),)
+    assert output.provenance.source_input_ids_sha256 == proof.digest
+
+
+def test_bound_canonical_ids_reject_tensor_mutation_replacement_and_false_cpu_rows() -> (
+    None
+):
+    model = _model(tokenizer_length=16)
+    embedding = nn.Embedding(16, 5)
+    provider = TargetTokenEmbeddingConditionProvider(
+        model_identity=model,
+        embedding=embedding,
+        embedding_identity="base-embedding",
+    )
+    input_ids = torch.tensor([1, 5, 6, 2])
+    proof = _bind_canonical_input_ids(input_ids, (1, 5, 6, 2))
+
+    input_ids[1] = 7
+    with pytest.raises(ValueError, match="does not bind this tensor state"):
+        provider.build(
+            TargetConditioningRequest(
+                input_ids=input_ids,
+                target_span=TokenSpan(1, 3),
+                expected_target_token_ids=(5, 6),
+                trajectory_id="trajectory-a",
+                call_index=0,
+                model_identity=model,
+                canonical_input_ids_proof=proof,
+            )
+        )
+
+    original = torch.tensor([1, 5, 6, 2])
+    original_proof = _bind_canonical_input_ids(original, (1, 5, 6, 2))
+    with pytest.raises(ValueError, match="does not bind this tensor state"):
+        provider.build(
+            TargetConditioningRequest(
+                input_ids=original.clone(),
+                target_span=TokenSpan(1, 3),
+                expected_target_token_ids=(5, 6),
+                trajectory_id="trajectory-a",
+                call_index=0,
+                model_identity=model,
+                canonical_input_ids_proof=original_proof,
+            )
+        )
+
+    with pytest.raises(ValueError, match="differ from the bound CPU tensor"):
+        _bind_canonical_input_ids(original, (1, 5, 7, 2))

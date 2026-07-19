@@ -29,6 +29,7 @@ from tgvf_rl.conditioning import (
     TargetConditioningProviderKind,
     TargetConditioningRequest,
 )
+from tgvf_rl.conditioning.base import _bind_canonical_input_ids
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.protocol.native import RenderedTranscript
 from tgvf_rl.protocol.parser import StrictToolCallParser
@@ -155,6 +156,7 @@ class ModelActionTarget:
     """Target span after Qwen processor visual-token expansion."""
 
     input_ids: torch.Tensor
+    model_token_ids: tuple[int, ...]
     attention_mask: torch.Tensor
     pixel_values: torch.Tensor
     image_grid_thw: torch.Tensor
@@ -174,12 +176,14 @@ class ModelActionTarget:
             raise ValueError("native action requires exactly one image grid")
         if self.target_span.end > self.input_ids.shape[1]:
             raise ValueError("model target span lies outside input_ids")
-        realized = tuple(
-            int(value)
-            for value in self.input_ids[
-                0, self.target_span.start : self.target_span.end
-            ].tolist()
-        )
+        if len(self.model_token_ids) != self.input_ids.shape[1] or any(
+            not isinstance(token_id, int) or isinstance(token_id, bool)
+            for token_id in self.model_token_ids
+        ):
+            raise ValueError("CPU model token IDs must align with action input_ids")
+        realized = self.model_token_ids[
+            self.target_span.start : self.target_span.end
+        ]
         if realized != self.target_token_ids:
             raise ValueError("model target IDs differ from expanded input_ids")
         if realized != self.canonical.canonical_target_token_ids:
@@ -350,7 +354,22 @@ class Qwen3NativeRepresentationGroupBuilder:
         if len({sample.target for sample in samples}) != len(samples):
             raise ValueError("same-image Matrix CE requires distinct targets")
 
-        self.runtime.assert_bound_invariants()
+        with self.runtime.validated_group_execution():
+            return self._build_group_with_validated_runtime(
+                samples,
+                adapter,
+                collective_candidate_count=collective_candidate_count,
+            )
+
+    def _build_group_with_validated_runtime(
+        self,
+        samples: tuple[RepresentationTrainingSample, ...],
+        adapter: TGVFAdapter,
+        *,
+        collective_candidate_count: int,
+    ) -> SameImageReadoutGroup:
+        """Build only while the runtime's per-group invariant scope is active."""
+
         image_path = samples[0].image
         image = self.image_loader(image_path)
         if image is None:
@@ -445,7 +464,6 @@ class Qwen3NativeRepresentationGroupBuilder:
             candidates=tuple(candidates),
             collective_padding=collective_padding,
         )
-        self.runtime.assert_bound_invariants()
         return group
 
     def _materialize_action(
@@ -515,13 +533,18 @@ class Qwen3NativeRepresentationGroupBuilder:
         sample: RepresentationTrainingSample,
         action: ModelActionTarget,
     ):
+        conditioning_input_ids = action.input_ids[0]
         request = TargetConditioningRequest(
-            input_ids=action.input_ids[0],
+            input_ids=conditioning_input_ids,
             target_span=action.target_span,
             expected_target_token_ids=action.target_token_ids,
             trajectory_id=f"representation:{sample.sample_id}",
             call_index=0,
             model_identity=self.runtime.model_identity,
+            canonical_input_ids_proof=_bind_canonical_input_ids(
+                conditioning_input_ids,
+                action.model_token_ids,
+            ),
         )
         contextual = None
         if (
@@ -638,6 +661,7 @@ def _model_action_from_expansion(
         raise ValueError("expanded target positions are not contiguous")
     return ModelActionTarget(
         input_ids=input_ids,
+        model_token_ids=expansion.model_token_ids,
         attention_mask=attention_mask,
         pixel_values=pixel_values,
         image_grid_thw=image_grid_thw,

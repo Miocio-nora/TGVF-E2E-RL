@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import struct
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
@@ -27,6 +27,7 @@ _INTEGER_DTYPES = {
     torch.int32,
     torch.int64,
 }
+_CANONICAL_INPUT_IDS_PROOF_SEAL = object()
 
 
 class TargetConditioningProviderKind(str, Enum):
@@ -73,6 +74,27 @@ class TargetConditioningConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class _CanonicalInputIdsProof:
+    """CPU token authority bound to one exact, still-unmodified tensor."""
+
+    rows: tuple[tuple[int, ...], ...]
+    digest: str
+    tensor_identity: int
+    tensor_data_ptr: int
+    tensor_version: int
+    tensor_shape: tuple[int, ...]
+    tensor_stride: tuple[int, ...]
+    tensor_storage_offset: int
+    tensor_device: torch.device
+    tensor_dtype: torch.dtype
+    seal: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.seal is not _CANONICAL_INPUT_IDS_PROOF_SEAL:
+            raise ValueError("canonical input-ID proofs require the trusted binder")
+
+
+@dataclass(frozen=True, slots=True)
 class TargetConditioningRequest:
     """One common request consumed by either provider implementation."""
 
@@ -83,6 +105,7 @@ class TargetConditioningRequest:
     call_index: int | Sequence[int]
     model_identity: ModelIdentity
     contextual_hidden_states: torch.Tensor | None = None
+    canonical_input_ids_proof: _CanonicalInputIdsProof | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.input_ids, torch.Tensor):
@@ -95,6 +118,13 @@ class TargetConditioningRequest:
             self.contextual_hidden_states, torch.Tensor
         ):
             raise TypeError("contextual_hidden_states must be a torch.Tensor")
+        if self.canonical_input_ids_proof is not None and not isinstance(
+            self.canonical_input_ids_proof,
+            _CanonicalInputIdsProof,
+        ):
+            raise TypeError(
+                "canonical_input_ids_proof must be a bound canonical proof"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +288,7 @@ def _validate_target_selection(
     trajectory_id: str | Sequence[str],
     call_index: int | Sequence[int],
     tokenizer_length: int,
+    canonical_input_ids_proof: _CanonicalInputIdsProof | None = None,
 ) -> _ValidatedTargetSelection:
     if not isinstance(input_ids, torch.Tensor):
         raise TypeError("input_ids must be a torch.Tensor")
@@ -275,24 +306,51 @@ def _validate_target_selection(
         raise ValueError("input_ids batch and sequence dimensions must be non-empty")
     if target_span.end > sequence_length:
         raise ValueError("target span lies outside input_ids")
-    if int(normalized_ids.min()) < 0 or int(normalized_ids.max()) >= tokenizer_length:
-        raise ValueError(
-            "input_ids contain an ID outside the bound tokenizer vocabulary"
-        )
-
     rows = _normalize_expected_rows(
         expected_target_token_ids,
         batch_size=int(batch_size),
         span_length=target_span.end - target_span.start,
     )
-    expected = torch.tensor(
-        rows, device=normalized_ids.device, dtype=normalized_ids.dtype
-    )
-    selected = normalized_ids[:, target_span.start : target_span.end]
-    if not torch.equal(selected, expected):
-        raise ValueError(
-            "target token IDs do not exactly match input_ids at target_span"
+    if canonical_input_ids_proof is None:
+        if (
+            int(normalized_ids.min()) < 0
+            or int(normalized_ids.max()) >= tokenizer_length
+        ):
+            raise ValueError(
+                "input_ids contain an ID outside the bound tokenizer vocabulary"
+            )
+        expected = torch.tensor(
+            rows, device=normalized_ids.device, dtype=normalized_ids.dtype
         )
+        selected = normalized_ids[:, target_span.start : target_span.end]
+        if not torch.equal(selected, expected):
+            raise ValueError(
+                "target token IDs do not exactly match input_ids at target_span"
+            )
+        digest = _hash_input_ids(normalized_ids)
+    else:
+        canonical_rows, digest = _validate_canonical_input_ids_proof(
+            canonical_input_ids_proof,
+            input_ids=input_ids,
+            batched=batched,
+            batch_size=int(batch_size),
+            sequence_length=int(sequence_length),
+        )
+        if any(
+            token_id < 0 or token_id >= tokenizer_length
+            for row in canonical_rows
+            for token_id in row
+        ):
+            raise ValueError(
+                "input_ids contain an ID outside the bound tokenizer vocabulary"
+            )
+        realized_rows = tuple(
+            row[target_span.start : target_span.end] for row in canonical_rows
+        )
+        if realized_rows != rows:
+            raise ValueError(
+                "target token IDs do not exactly match input_ids at target_span"
+            )
 
     trajectories = _normalize_string_rows(
         trajectory_id, batch_size=int(batch_size), name="trajectory_id"
@@ -308,8 +366,137 @@ def _validate_target_selection(
         trajectories=trajectories,
         call_indices=call_indices,
         batched=batched,
-        digest=_hash_input_ids(normalized_ids),
+        digest=digest,
     )
+
+
+def _bind_canonical_input_ids(
+    input_ids: torch.Tensor,
+    canonical_input_ids: Sequence[int] | Sequence[Sequence[int]],
+) -> _CanonicalInputIdsProof:
+    """Bind trusted CPU IDs to one tensor without reading a CUDA tensor.
+
+    Native materialization calls this only after the processor-owned expansion
+    has produced the CPU token tuple (or after that tuple created the tensor).
+    CPU callers are checked directly.  The version/identity contract then
+    rejects replacement or in-place mutation before provider consumption.
+    """
+
+    if not isinstance(input_ids, torch.Tensor):
+        raise TypeError("input_ids must be a torch.Tensor")
+    if input_ids.ndim not in (1, 2):
+        raise ValueError("input_ids must have shape [S] or [B, S]")
+    if input_ids.dtype not in _INTEGER_DTYPES:
+        raise TypeError("input_ids must use an integer dtype")
+    batched = input_ids.ndim == 2
+    normalized = input_ids if batched else input_ids.unsqueeze(0)
+    batch_size, sequence_length = normalized.shape
+    if batch_size == 0 or sequence_length == 0:
+        raise ValueError("input_ids batch and sequence dimensions must be non-empty")
+    rows = _normalize_canonical_input_rows(
+        canonical_input_ids,
+        batched=batched,
+        batch_size=int(batch_size),
+        sequence_length=int(sequence_length),
+    )
+    if input_ids.device.type == "cpu":
+        actual_rows = tuple(
+            tuple(int(token_id) for token_id in row)
+            for row in normalized.detach().to(dtype=torch.int64).tolist()
+        )
+        if actual_rows != rows:
+            raise ValueError("canonical input IDs differ from the bound CPU tensor")
+    return _CanonicalInputIdsProof(
+        rows=rows,
+        digest=_hash_input_id_rows(rows),
+        tensor_identity=id(input_ids),
+        tensor_data_ptr=input_ids.data_ptr(),
+        tensor_version=input_ids._version,
+        tensor_shape=tuple(input_ids.shape),
+        tensor_stride=tuple(input_ids.stride()),
+        tensor_storage_offset=input_ids.storage_offset(),
+        tensor_device=input_ids.device,
+        tensor_dtype=input_ids.dtype,
+        seal=_CANONICAL_INPUT_IDS_PROOF_SEAL,
+    )
+
+
+def _validate_canonical_input_ids_proof(
+    proof: _CanonicalInputIdsProof,
+    *,
+    input_ids: torch.Tensor,
+    batched: bool,
+    batch_size: int,
+    sequence_length: int,
+) -> tuple[tuple[tuple[int, ...], ...], str]:
+    if not isinstance(proof, _CanonicalInputIdsProof):
+        raise TypeError("canonical_input_ids_proof must be a bound canonical proof")
+    if proof.seal is not _CANONICAL_INPUT_IDS_PROOF_SEAL:
+        raise ValueError("canonical input-ID proof seal changed")
+    tensor_contract = (
+        id(input_ids),
+        input_ids.data_ptr(),
+        input_ids._version,
+        tuple(input_ids.shape),
+        tuple(input_ids.stride()),
+        input_ids.storage_offset(),
+        input_ids.device,
+        input_ids.dtype,
+    )
+    expected_contract = (
+        proof.tensor_identity,
+        proof.tensor_data_ptr,
+        proof.tensor_version,
+        proof.tensor_shape,
+        proof.tensor_stride,
+        proof.tensor_storage_offset,
+        proof.tensor_device,
+        proof.tensor_dtype,
+    )
+    if tensor_contract != expected_contract:
+        raise ValueError("canonical input-ID proof does not bind this tensor state")
+    rows = proof.rows
+    if len(rows) != batch_size or any(len(row) != sequence_length for row in rows):
+        raise ValueError("canonical input-ID proof shape differs from input_ids")
+    if (not batched) != (len(proof.tensor_shape) == 1):
+        raise ValueError("canonical input-ID proof batching differs from input_ids")
+    if proof.digest != _hash_input_id_rows(rows):
+        raise ValueError("canonical input-ID proof digest changed")
+    return rows, proof.digest
+
+
+def _normalize_canonical_input_rows(
+    values: Sequence[int] | Sequence[Sequence[int]],
+    *,
+    batched: bool,
+    batch_size: int,
+    sequence_length: int,
+) -> tuple[tuple[int, ...], ...]:
+    if isinstance(values, torch.Tensor) or isinstance(values, (str, bytes)):
+        raise TypeError("canonical_input_ids must be CPU integer sequences")
+    items = tuple(values)
+    if not items:
+        raise ValueError("canonical_input_ids must be non-empty")
+    if not batched:
+        if any(not isinstance(item, int) or isinstance(item, bool) for item in items):
+            raise TypeError("canonical_input_ids must contain integers")
+        rows = (tuple(int(item) for item in items),)
+    else:
+        materialized: list[tuple[int, ...]] = []
+        for row in items:
+            if isinstance(row, (str, bytes)) or not isinstance(row, Sequence):
+                raise TypeError("batched canonical_input_ids require integer rows")
+            normalized_row = tuple(row)
+            if any(
+                not isinstance(item, int) or isinstance(item, bool)
+                for item in normalized_row
+            ):
+                raise TypeError("canonical_input_ids must contain integers")
+            materialized.append(tuple(int(item) for item in normalized_row))
+        rows = tuple(materialized)
+    if len(rows) != batch_size or any(len(row) != sequence_length for row in rows):
+        raise ValueError("canonical_input_ids shape must match input_ids")
+    return rows
 
 
 def _normalize_expected_rows(
@@ -387,10 +574,16 @@ def _normalize_integer_rows(
 
 def _hash_input_ids(input_ids: torch.Tensor) -> str:
     canonical = input_ids.detach().to(device="cpu", dtype=torch.int64).contiguous()
+    rows = tuple(tuple(int(token_id) for token_id in row) for row in canonical.tolist())
+    return _hash_input_id_rows(rows)
+
+
+def _hash_input_id_rows(rows: tuple[tuple[int, ...], ...]) -> str:
     digest = hashlib.sha256()
-    digest.update(struct.pack("<II", int(canonical.shape[0]), int(canonical.shape[1])))
-    for token_id in canonical.view(-1).tolist():
-        digest.update(struct.pack("<q", int(token_id)))
+    digest.update(struct.pack("<II", len(rows), len(rows[0])))
+    for row in rows:
+        for token_id in row:
+            digest.update(struct.pack("<q", token_id))
     return digest.hexdigest()
 
 

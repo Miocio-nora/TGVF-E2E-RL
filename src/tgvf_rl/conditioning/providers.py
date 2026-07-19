@@ -47,6 +47,7 @@ class ContextualHiddenStateConditionProvider(BoundTargetConditionProvider):
             trajectory_id=request.trajectory_id,
             call_index=request.call_index,
             tokenizer_length=self.model_identity.tokenizer_length,
+            canonical_input_ids_proof=request.canonical_input_ids_proof,
         )
         hidden_states = request.contextual_hidden_states
         if hidden_states is None:
@@ -154,6 +155,7 @@ class TargetTokenEmbeddingConditionProvider(BoundTargetConditionProvider):
             trajectory_id=request.trajectory_id,
             call_index=request.call_index,
             tokenizer_length=self.model_identity.tokenizer_length,
+            canonical_input_ids_proof=request.canonical_input_ids_proof,
         )
         embedding = self.borrowed_embedding
         self._validate_embedding(embedding)

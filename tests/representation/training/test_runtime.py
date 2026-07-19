@@ -409,6 +409,23 @@ def test_runtime_rejects_identity_provider_and_hidden_state_drift() -> None:
         runtime.assert_bound_invariants()
 
 
+def test_public_runtime_entry_still_rejects_invariant_drift() -> None:
+    identity = _identity()
+    model = _TinyQwen3(name_or_path=identity.revision_or_path)
+    runtime = create_qwen3_representation_runtime(
+        model=model,
+        processor=_processor(),
+        model_identity=identity,
+        conditioning_config=_embedding_config(identity),
+        adapter_dtype=torch.float32,
+        fixture_mode=True,
+    )
+    model.config._name_or_path = "/mutated-before-public-call"
+
+    with pytest.raises(ValueError, match="model path differs"):
+        runtime.build_target_condition(_target_request(identity))
+
+
 def test_vision_capture_fails_closed_when_a_deepstack_merger_is_not_executed() -> None:
     identity = _identity()
     model = _TinyQwen3(name_or_path=identity.revision_or_path, skip_branch=1)

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import hashlib
 import weakref
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MethodType
@@ -263,6 +265,13 @@ class Qwen3RepresentationRuntime:
         # The provider deliberately holds only a weak reference to a borrowed
         # embedding. Keep the tokenizer-bounded view alive with the runtime.
         self._conditioning_embedding = conditioning_embedding
+        # A scope is local to one execution context and one runtime instance.
+        # It is deliberately entered anew for every native same-image group;
+        # no validation result survives a group or optimizer boundary.
+        self._validated_group_scope: ContextVar[object | None] = ContextVar(
+            f"qwen3_representation_group_scope_{id(self)}",
+            default=None,
+        )
 
     @property
     def tokenizer(self) -> Any:
@@ -318,6 +327,34 @@ class Qwen3RepresentationRuntime:
             raise RuntimeError("bound Qwen input-embedding ownership changed")
         _ = self._conditioning_embedding.weight
 
+    @contextmanager
+    def validated_group_execution(self) -> Iterator[None]:
+        """Validate one native group at entry and unconditionally at exit.
+
+        Public runtime operations remain independently fail-closed when called
+        outside this scope.  Within one group, their repeated invariant scans
+        are redundant: this scope proves the entry state and its ``finally``
+        check rejects any tokenizer, template, model, freezing, or component
+        mutation before the built group can escape to the trainer.
+        """
+
+        if self._validated_group_scope.get() is not None:
+            raise RuntimeError("validated representation group scopes cannot nest")
+        self.assert_bound_invariants()
+        marker = object()
+        reset_token = self._validated_group_scope.set(marker)
+        try:
+            yield
+        finally:
+            self._validated_group_scope.reset(reset_token)
+            self.assert_bound_invariants()
+
+    def _assert_public_runtime_boundary(self) -> None:
+        """Run a full check unless this call is inside one validated group."""
+
+        if self._validated_group_scope.get() is None:
+            self.assert_bound_invariants()
+
     def build_target_condition(
         self,
         request: TargetConditioningRequest,
@@ -332,7 +369,7 @@ class Qwen3RepresentationRuntime:
             raise ValueError(
                 "runtime requests must not bypass the typed contextual-state stack"
             )
-        self.assert_bound_invariants()
+        self._assert_public_runtime_boundary()
         if (
             self.conditioning_config.provider
             is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
@@ -360,7 +397,7 @@ class Qwen3RepresentationRuntime:
             raise RuntimeError("Hq provider provenance differs from runtime selection")
         if condition.values.shape[-1] != self.architecture.language_hidden_size:
             raise ValueError("Hq width differs from the bound Qwen language width")
-        self.assert_bound_invariants()
+        self._assert_public_runtime_boundary()
         return condition
 
     def extract_vision_features(
@@ -370,7 +407,7 @@ class Qwen3RepresentationRuntime:
 
         if not isinstance(request, Qwen3VisionPreMergeRequest):
             raise TypeError("request must be Qwen3VisionPreMergeRequest")
-        self.assert_bound_invariants()
+        self._assert_public_runtime_boundary()
         merge_size = self.architecture.spatial_merge_size
         grid = tuple(int(value) for value in request.image_grid_thw[0].tolist())
         if grid[1] % merge_size or grid[2] % merge_size:
@@ -420,7 +457,7 @@ class Qwen3RepresentationRuntime:
             raise ValueError("pre-merge features differ from the bound vision width")
         if features.merged_main.shape[-1] != self.architecture.language_hidden_size:
             raise ValueError("merged features differ from the bound language width")
-        self.assert_bound_invariants()
+        self._assert_public_runtime_boundary()
         return features
 
     def make_adapter_input(
@@ -434,7 +471,7 @@ class Qwen3RepresentationRuntime:
             raise TypeError("condition must be a TargetConditioningOutput")
         if not isinstance(vision, Qwen3VisionFeatures):
             raise TypeError("vision must be Qwen3VisionFeatures")
-        self.assert_bound_invariants()
+        self._assert_public_runtime_boundary()
         if condition.provenance.model != self.model_identity:
             raise ValueError("conditioning model differs from the runtime binding")
         if condition.provenance.provider != self.conditioning_config.provider.value:
