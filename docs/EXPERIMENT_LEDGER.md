@@ -3392,6 +3392,62 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   is not a throughput estimate. Next action is exact batched transcript
   rendering/tokenization, followed by an unprofiled timing cell.
 
+### RP-30-QWEN3-REPRESENTATION-FAST-TOKENIZER-INVARIANT-REAL512-K4-GA4-GPU23
+
+- Cell/matrix ID and class: `RP-30`; `PLANNED` bounded unprofiled throughput and
+  utilization A/B against retained RP-28. The output is diagnostic rather than
+  a promoted representation artifact.
+- Approval/code/question: accepted
+  `RPI-20260720-CONTROL-STACK-OPTIMIZATION`; runtime commit
+  `1d3d37c88404446545b8a43014c8bbbfb2bd7716`. Does replacing repeated Qwen
+  fast-tokenizer merged-vocabulary materialization with an exact contiguous-
+  suffix cardinality proof remove the multi-second CPU gaps and make physical
+  GPU utilization materially more continuous?
+- Change boundary: the native tokenizer-length invariant still checks the base
+  vocabulary and complete added-token suffix on every call. Only a proven
+  contiguous added-token ID range uses the fast cardinality path; unfamiliar
+  layouts fall back to native `len(tokenizer)`. Same-image K=4 action/evidence
+  conversations are rendered/tokenized in ordered batches while preserving
+  the scalar APIs and every transcript byte, token ID, offset, ownership span,
+  label and identity hash. No model, Adapter, objective, optimizer, FSDP2 or
+  CUDA operation changes.
+- CPU attribution/parity gate: the accepted Qwen tokenizer reports base size
+  `151643` plus contiguous added IDs `151643..151668`, exactly reproducing
+  length `151669`. On the local processor, native `len(tokenizer)` measured
+  `17.58` ms/call versus `0.0108` ms for the dynamic exact helper; real-fixture
+  supervision fell from about `51.78` to `0.714` ms/call. Thirty-nine focused
+  tests, including real-Qwen scalar/batch golden equality, passed with Ruff,
+  format and diff checks. The GPU run must exactly match RP-28 step-by-step
+  sample order, Matrix CE, L_gen, Norm, total objective, gradient norm, counts,
+  tokenizer length, and eight B8 Qwen calls per rank/update.
+- Model/data/prompt: exact RP-28 stable local Qwen3-VL-8B-Thinking BF16/SDPA,
+  tokenizer/template identity, `image_max_pixels=262144`, target-token-
+  embedding provider, train/validation fixture identities and sampler seeds
+  71/73, native `tgvf_focus_tool`, and smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`.
+- Mathematics/determinism: unchanged complete main D plus D-DeepStack
+  `(8,16,24)`, legacy summed-NLL Matrix CE + L_gen + Norm weights `1/1/.1`,
+  manifold zero, frozen eval Qwen, fresh Adapter seed `20260719`, Adapter
+  dropout zero, no cache, TF32 off, and CUBLAS `:4096:8`.
+- Framework/topology/batch: accepted Python3.12/Torch2.9 control lock, FSDP2
+  mesh `[2]`, `reshard_after_forward=false`, corrected GA4 synchronization,
+  physical GPUs2/3 mapped to logical0/1, world2, K4, global batch32, three
+  optimizer steps. A read-only utilization sampler records both physical GPUs.
+- Representation-only N/A: rollout, sampling/logprobs, policy/reference replay,
+  reward, GRPO, SDPO, judge, vLLM sampling, KV cache, asynchronous staleness,
+  and answer scoring.
+- Config/output: source/canonical TOML SHA256
+  `0e2958e731b3b307cb8bab80f6cea10e9147e408fcd955967a46846ecb2c8ec4`/
+  `634cc72dcf0a0ef2684fbe5a6b9ac3d8b5fc69fb3cadfc54daed476f145990e2`;
+  overwrite is forbidden under
+  `artifacts/representation/RP-30-qwen3-fast-tokenizer-invariant-real512-k4-ga4-gpu23/`.
+- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/smoke/representation_qwen3_embedding_rp30_fast_tokenizer_invariant_real512_ga4_gpu23.toml`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
