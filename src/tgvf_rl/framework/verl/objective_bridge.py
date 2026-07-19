@@ -66,18 +66,15 @@ def validate_objective_sentinels(values: Mapping[str, object]) -> Mapping[str, o
     return MappingProxyType(normalized)
 
 
-def _shares_storage(left: torch.Tensor, right: torch.Tensor) -> bool:
-    if left.device != right.device:
-        return False
-    try:
-        return left.untyped_storage().data_ptr() == right.untyped_storage().data_ptr()
-    except RuntimeError:
-        return left is right
-
-
 @dataclass(frozen=True, slots=True)
 class VerlPolicyLossCall:
-    """The exact seven-argument public ``register_policy_loss`` invocation."""
+    """The exact public ``register_policy_loss`` invocation.
+
+    ``rollout_is_weights`` is veRL's optional rollout-correction importance
+    weight. It is not a behavior log probability. Actual rollout log
+    probabilities remain an independently validated DataProto/TransferQueue
+    field and are not smuggled through this hook.
+    """
 
     old_log_prob: torch.Tensor
     log_prob: torch.Tensor
@@ -85,7 +82,7 @@ class VerlPolicyLossCall:
     response_mask: torch.Tensor
     loss_agg_mode: str
     config: object
-    rollout_log_probs: torch.Tensor
+    rollout_is_weights: torch.Tensor | None
 
     def __post_init__(self) -> None:
         tensors = (
@@ -93,7 +90,6 @@ class VerlPolicyLossCall:
             self.log_prob,
             self.advantages,
             self.response_mask,
-            self.rollout_log_probs,
         )
         if any(not isinstance(value, torch.Tensor) for value in tensors):
             raise TypeError("veRL policy-loss inputs must be tensors")
@@ -110,7 +106,6 @@ class VerlPolicyLossCall:
             ("old_log_prob", self.old_log_prob),
             ("log_prob", self.log_prob),
             ("advantages", self.advantages),
-            ("rollout_log_probs", self.rollout_log_probs),
         ):
             if not value.dtype.is_floating_point:
                 raise TypeError(f"{name} must use a floating dtype")
@@ -136,10 +131,21 @@ class VerlPolicyLossCall:
             raise ValueError("response_mask must remain binary")
         if not self.loss_agg_mode:
             raise ValueError("loss_agg_mode must remain explicit")
-        if _shares_storage(self.log_prob, self.rollout_log_probs):
-            raise ValueError(
-                "rollout_log_probs must be actual recorded behavior values, not log_prob.detach()"
-            )
+        if self.rollout_is_weights is not None:
+            if not isinstance(self.rollout_is_weights, torch.Tensor):
+                raise TypeError("rollout_is_weights must be a tensor when present")
+            if self.rollout_is_weights.shape != shape:
+                raise ValueError(
+                    "rollout_is_weights must share [batch, response] shape"
+                )
+            if self.rollout_is_weights.device != self.log_prob.device:
+                raise ValueError("rollout_is_weights must share the policy device")
+            if not self.rollout_is_weights.dtype.is_floating_point:
+                raise TypeError("rollout_is_weights must use a floating dtype")
+            if not bool(torch.isfinite(self.rollout_is_weights.detach()).all().item()):
+                raise ValueError("rollout_is_weights must be finite")
+            if not bool((self.rollout_is_weights.detach() >= 0).all().item()):
+                raise ValueError("rollout_is_weights must be non-negative")
 
 
 ProjectPolicyLoss = Callable[
@@ -162,12 +168,8 @@ def adapt_policy_loss(
         response_mask: torch.Tensor,
         loss_agg_mode: str,
         config: object,
-        rollout_log_probs: torch.Tensor | None,
+        rollout_is_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
-        if rollout_log_probs is None:
-            raise ValueError(
-                "actual rollout_log_probs are required; replayed current log probabilities are forbidden"
-            )
         call = VerlPolicyLossCall(
             old_log_prob=old_log_prob,
             log_prob=log_prob,
@@ -175,7 +177,7 @@ def adapt_policy_loss(
             response_mask=response_mask,
             loss_agg_mode=loss_agg_mode,
             config=config,
-            rollout_log_probs=rollout_log_probs,
+            rollout_is_weights=rollout_is_weights,
         )
         result = project_loss(call)
         if not isinstance(result, tuple) or len(result) != 2:

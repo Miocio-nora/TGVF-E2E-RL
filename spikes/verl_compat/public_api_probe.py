@@ -3,13 +3,18 @@
 
 from __future__ import annotations
 
+import argparse
+from collections.abc import Sequence
+from contextlib import redirect_stdout
 import importlib
 from importlib import metadata
+import io
 import json
 import os
 from pathlib import Path
 import platform
 import subprocess
+import sys
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -18,30 +23,46 @@ from urllib.parse import unquote, urlparse
 # Python APIs only and is not an experiment or a GPU workload.
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
+from tgvf_rl.compatibility_stack import (  # noqa: E402
+    CONTROL_COMPATIBILITY_STACK,
+    TORCH211_CU129_COMPATIBILITY_STACK,
+    audited_compatibility_stack,
+    audited_stack_for_framework_pair,
+)
 
-EXPECTED = {
-    "vllm": "0.12.0",
-    "verl_commit": "e003163181731412595257a72ec173071efb125f",
+
+_CONTROL_STACK = audited_compatibility_stack(CONTROL_COMPATIBILITY_STACK)
+_TORCH211_STACK = audited_compatibility_stack(TORCH211_CU129_COMPATIBILITY_STACK)
+DEFAULT_EXPECTED = {
+    "vllm": _CONTROL_STACK.vllm_distribution_version,
+    "verl_commit": _CONTROL_STACK.verl_commit,
 }
 
 
 PUBLIC_SYMBOLS = (
-    ("vllm", "ModelRegistry.register_model"),
-    ("vllm.multimodal", "MULTIMODAL_REGISTRY.register_processor"),
-    ("vllm.plugins", "DEFAULT_PLUGINS_GROUP"),
-    ("vllm.plugins", "load_general_plugins"),
+    ("vllm", "ModelRegistry.register_model", True),
+    ("vllm.multimodal", "MULTIMODAL_REGISTRY.register_processor", True),
+    ("vllm.plugins", "DEFAULT_PLUGINS_GROUP", False),
+    ("vllm.plugins", "load_general_plugins", True),
     (
         "vllm.model_executor.models.qwen3_vl",
         "Qwen3VLForConditionalGeneration",
+        True,
     ),
-    ("vllm.model_executor.models.qwen3_vl", "Qwen3VLMultiModalProcessor"),
-    ("vllm.multimodal.parse", "DictEmbeddingItems"),
-    ("verl.experimental.agent_loop", "AgentLoopOutput"),
-    ("verl.experimental.agent_loop", "AgentLoopManager"),
-    ("verl.protocol", "DataProto"),
-    ("verl.trainer.ppo.core_algos", "register_policy_loss"),
-    ("verl.workers.config", "FSDPEngineConfig"),
-    ("verl.utils.checkpoint", "CheckpointHandler"),
+    ("vllm.model_executor.models.qwen3_vl", "Qwen3VLMultiModalProcessor", True),
+    ("vllm.multimodal.parse", "DictEmbeddingItems", True),
+    ("verl.experimental.agent_loop", "AgentLoopOutput", True),
+    ("verl.experimental.agent_loop", "AgentLoopManager", True),
+    ("verl.protocol", "DataProto", True),
+    ("verl.trainer.ppo.core_algos", "register_policy_loss", True),
+    ("verl.workers.config", "FSDPEngineConfig", True),
+    ("verl.utils.checkpoint", "CheckpointHandler", True),
+)
+
+CANDIDATE_V1_TRANSFER_QUEUE_SYMBOLS = (
+    ("transfer_queue", "KVBatchMeta", True),
+    ("transfer_queue", "init", True),
+    ("verl.trainer.ppo.v1.agent_loop_tq", "AgentLoopManagerTQ", True),
 )
 
 
@@ -138,27 +159,120 @@ def _symbol(module_name: str, dotted_name: str) -> dict[str, Any]:
     }
 
 
-def main() -> int:
-    distributions = {
-        name: _distribution(name) for name in ("torch", "transformers", "vllm", "verl")
+def _nonempty(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise argparse.ArgumentTypeError("value must be non-empty")
+    return value
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--expected-vllm-version",
+        type=_nonempty,
+        default=DEFAULT_EXPECTED["vllm"],
+        help="exact installed vLLM distribution version",
+    )
+    parser.add_argument(
+        "--expected-verl-commit",
+        type=_nonempty,
+        default=DEFAULT_EXPECTED["verl_commit"],
+        help="exact installed veRL VCS or local-checkout commit",
+    )
+    return parser.parse_args(argv)
+
+
+def _archive_identity_matches(
+    distribution: dict[str, Any],
+    *,
+    expected_url: str | None,
+    expected_sha256: str | None,
+) -> bool:
+    if expected_url is None or expected_sha256 is None:
+        return (
+            expected_url is None
+            and expected_sha256 is None
+            and distribution.get("direct_url") is None
+        )
+    direct_url = distribution.get("direct_url")
+    if not isinstance(direct_url, dict) or direct_url.get("url") != expected_url:
+        return False
+    archive_info = direct_url.get("archive_info")
+    if not isinstance(archive_info, dict):
+        return False
+    hashes = archive_info.get("hashes")
+    return (
+        isinstance(hashes, dict)
+        and hashes.get("sha256") == expected_sha256
+        and archive_info.get("hash") == f"sha256={expected_sha256}"
+    )
+
+
+def _symbols_match_contract(
+    symbols: tuple[dict[str, Any], ...],
+    expected_symbols: tuple[tuple[str, str, bool], ...],
+) -> bool:
+    if len(symbols) != len(expected_symbols):
+        return False
+    return all(
+        item.get("identity") == f"{module}.{name}"
+        and item.get("available") is True
+        and item.get("callable") is expected_callable
+        for item, (module, name, expected_callable) in zip(
+            symbols, expected_symbols, strict=True
+        )
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
+    expected = {
+        "vllm": args.expected_vllm_version,
+        "verl_commit": args.expected_verl_commit,
     }
     try:
-        import torch
-
-        torch_state: dict[str, Any] = {
-            "version": torch.__version__,
-            "cuda_available": torch.cuda.is_available(),
-            "visible_device_count": torch.cuda.device_count(),
+        expected_stack = audited_stack_for_framework_pair(
+            vllm_distribution_version=args.expected_vllm_version,
+            verl_commit=args.expected_verl_commit,
+        )
+    except ValueError:
+        expected_stack = None
+    public_symbol_contract = PUBLIC_SYMBOLS
+    if (
+        expected_stack is not None
+        and expected_stack.selector == _TORCH211_STACK.selector
+    ):
+        public_symbol_contract += CANDIDATE_V1_TRANSFER_QUEUE_SYMBOLS
+    import_stdout = io.StringIO()
+    with redirect_stdout(import_stdout):
+        distributions = {
+            name: _distribution(name)
+            for name in ("torch", "transformers", "vllm", "verl", "TransferQueue")
         }
-    except Exception as error:
-        torch_state = {"error": f"{type(error).__name__}: {error}"}
+        try:
+            import torch
 
-    symbols = tuple(_symbol(module, name) for module, name in PUBLIC_SYMBOLS)
+            torch_state: dict[str, Any] = {
+                "version": torch.__version__,
+                "cuda_available": torch.cuda.is_available(),
+                "visible_device_count": torch.cuda.device_count(),
+            }
+        except Exception as error:
+            torch_state = {"error": f"{type(error).__name__}: {error}"}
+
+        symbols = tuple(
+            _symbol(module, name) for module, name, _ in public_symbol_contract
+        )
     general_plugins = tuple(
         {"name": entry.name, "value": entry.value}
         for entry in metadata.entry_points(group="vllm.general_plugins")
     )
     verl_commit = distributions.get("verl", {}).get("commit_identity", {}).get("commit")
+    verl_source_clean = (
+        distributions.get("verl", {}).get("commit_identity", {}).get("clean")
+    )
+    transfer_queue = distributions.get("TransferQueue", {})
     result = {
         "schema_version": "tgvf-public-api-probe-v1",
         "cuda_visible_devices": os.environ["CUDA_VISIBLE_DEVICES"],
@@ -166,20 +280,69 @@ def main() -> int:
             "version": platform.python_version(),
             "implementation": platform.python_implementation(),
         },
-        "expected": EXPECTED,
+        "expected": {
+            **expected,
+            "stack": expected_stack.selector if expected_stack is not None else None,
+        },
         "distributions": distributions,
         "torch_runtime": torch_state,
         "public_symbols": symbols,
+        "captured_import_stdout": import_stdout.getvalue(),
         "vllm_general_plugins": general_plugins,
         "checks": {
+            "audited_framework_pair": expected_stack is not None,
             "cuda_hidden": (
                 not torch_state.get("cuda_available", True)
                 and torch_state.get("visible_device_count", -1) == 0
             ),
+            "python_identity": (
+                expected_stack is not None
+                and platform.python_implementation() == "CPython"
+                and sys.version_info[:2] == expected_stack.python_major_minor
+            ),
+            "torch_identity": (
+                expected_stack is not None
+                and distributions.get("torch", {}).get("version")
+                == expected_stack.torch_distribution_version
+                and torch_state.get("version") == expected_stack.torch_runtime_version
+            ),
+            "transformers_version": (
+                expected_stack is not None
+                and distributions.get("transformers", {}).get("version")
+                == expected_stack.transformers_distribution_version
+            ),
             "vllm_version": distributions.get("vllm", {}).get("version")
-            == EXPECTED["vllm"],
-            "verl_commit": verl_commit == EXPECTED["verl_commit"],
-            "all_public_symbols": all(item["available"] for item in symbols),
+            == expected["vllm"],
+            "vllm_archive_identity": (
+                expected_stack is not None
+                and _archive_identity_matches(
+                    distributions.get("vllm", {}),
+                    expected_url=expected_stack.vllm_archive_url,
+                    expected_sha256=expected_stack.vllm_archive_sha256,
+                )
+            ),
+            "verl_commit": verl_commit == expected["verl_commit"],
+            "verl_source_clean": verl_source_clean is not False,
+            "transfer_queue_identity": (
+                expected_stack is not None
+                and (
+                    expected_stack.transfer_queue_distribution_version is None
+                    or (
+                        transfer_queue.get("version")
+                        == expected_stack.transfer_queue_distribution_version
+                        and _archive_identity_matches(
+                            transfer_queue,
+                            expected_url=expected_stack.transfer_queue_archive_url,
+                            expected_sha256=(
+                                expected_stack.transfer_queue_archive_sha256
+                            ),
+                        )
+                    )
+                )
+            ),
+            "public_symbol_identity_and_callable": _symbols_match_contract(
+                symbols, public_symbol_contract
+            ),
             "tgvf_general_plugin": any(
                 entry["name"] == "tgvf_qwen3_precomputed"
                 and entry["value"]
@@ -189,7 +352,7 @@ def main() -> int:
         },
     }
     print(json.dumps(result, sort_keys=True, indent=2))
-    return 0
+    return 0 if all(result["checks"].values()) else 1
 
 
 if __name__ == "__main__":

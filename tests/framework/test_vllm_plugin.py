@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+from importlib import metadata
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -9,9 +11,11 @@ from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tensors import TensorPayloadSet
 from tgvf_rl.framework.vllm import (
-    SUPPORTED_VLLM_VERSION,
+    SUPPORTED_VLLM_VERSIONS,
     TGVF_QWEN3_VLLM_ARCHITECTURE,
+    VLLMCompatibilityError,
     VLLMPublicPluginAPI,
+    load_vllm_public_plugin_api,
     pack_qwen3_vllm_replay,
     register_tgvf_qwen3_vllm_plugin,
 )
@@ -210,7 +214,10 @@ def test_packer_fails_closed_on_wrong_layers_and_post_pack_mutation() -> None:
         packed.as_vllm_multi_modal_data()
 
 
-def test_public_registration_calls_both_general_vllm_registries() -> None:
+@pytest.mark.parametrize("version", sorted(SUPPORTED_VLLM_VERSIONS))
+def test_public_registration_calls_both_general_vllm_registries(
+    version: str,
+) -> None:
     calls: list[tuple[object, ...]] = []
 
     class Model:
@@ -244,22 +251,83 @@ def test_public_registration_calls_both_general_vllm_registries() -> None:
             processor_cls=Processor,
             processing_info_cls=Info,
             dummy_inputs_cls=Dummy,
-            version=SUPPORTED_VLLM_VERSION,
+            version=version,
         )
     )
     assert registration.architecture == TGVF_QWEN3_VLLM_ARCHITECTURE
+    assert registration.version == version
     assert calls == [
         ("processor", Processor, Info, Dummy),
         ("model", TGVF_QWEN3_VLLM_ARCHITECTURE, Model),
     ]
 
 
-def test_vllm_012_parser_cpu_probe_and_live_registry(monkeypatch) -> None:
+def test_public_registration_rejects_an_unaudited_neighbor_build() -> None:
+    with pytest.raises(VLLMCompatibilityError, match="unsupported version"):
+        register_tgvf_qwen3_vllm_plugin(
+            api=VLLMPublicPluginAPI(
+                model_registry=object(),
+                multimodal_registry=object(),
+                model_cls=object,
+                processor_cls=object,
+                processing_info_cls=object,
+                dummy_inputs_cls=object,
+                version="0.23.0",
+            )
+        )
+
+
+def test_processing_info_selects_tgvf_parser_for_three_latent_items(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    pytest.importorskip("vllm")
+    from tgvf_rl.framework.vllm.qwen3_plugin import (
+        TGVFQwen3VLDataParser,
+        TGVFQwen3VLProcessingInfo,
+    )
+
+    class ModelConfig:
+        @staticmethod
+        def get_multimodal_config():
+            return SimpleNamespace(enable_mm_embeds=True)
+
+        @staticmethod
+        def get_inputs_embeds_size():
+            return 8
+
+    class Context:
+        model_config = ModelConfig()
+
+        @staticmethod
+        def get_hf_config(_expected_type):
+            return SimpleNamespace(vision_config=SimpleNamespace(spatial_merge_size=2))
+
+    info = TGVFQwen3VLProcessingInfo(Context())
+    parser = info.get_data_parser()
+    assert isinstance(parser, TGVFQwen3VLDataParser)
+
+    store, replay = _recorded_replay()
+    packed = pack_qwen3_vllm_replay(store, replay)
+    parsed = parser.parse_mm_data(packed.as_vllm_multi_modal_data())
+    image_items = parsed["image"]
+    assert len(image_items) == 3
+    assert tuple(image_items[index]["image_embeds"].shape for index in range(3)) == (
+        (4, 8),
+        (4, 8),
+        (4, 8),
+    )
+
+
+def test_supported_vllm_parser_cpu_probe_and_live_registry(monkeypatch) -> None:
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     pytest.importorskip("vllm")
     from vllm import ModelRegistry
 
-    from tgvf_rl.framework.vllm.qwen3_plugin import TGVFQwen3VLDataParser
+    from tgvf_rl.framework.vllm.qwen3_plugin import (
+        TGVFQwen3VLDataParser,
+        TGVFQwen3VLProcessingInfo,
+    )
 
     store, replay = _recorded_replay()
     packed = pack_qwen3_vllm_replay(store, replay)
@@ -273,8 +341,11 @@ def test_vllm_012_parser_cpu_probe_and_live_registry(monkeypatch) -> None:
         (4, 8),
     )
 
-    registration = register_tgvf_qwen3_vllm_plugin()
-    assert registration.version == "0.12.0"
+    public_api = load_vllm_public_plugin_api()
+    assert public_api.processing_info_cls is TGVFQwen3VLProcessingInfo
+    registration = register_tgvf_qwen3_vllm_plugin(api=public_api)
+    assert registration.version == metadata.version("vllm")
+    assert registration.version in SUPPORTED_VLLM_VERSIONS
     assert TGVF_QWEN3_VLLM_ARCHITECTURE in ModelRegistry.get_supported_archs()
 
 

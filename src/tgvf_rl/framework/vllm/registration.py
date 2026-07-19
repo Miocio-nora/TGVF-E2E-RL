@@ -1,4 +1,4 @@
-"""Fail-closed public vLLM 0.12 plugin registration."""
+"""Fail-closed public vLLM plugin registration for audited runtime builds."""
 
 from __future__ import annotations
 
@@ -7,7 +7,16 @@ from importlib import import_module, metadata
 from typing import Any, Callable
 
 
+# Keep the original singular name as the accepted-control identity for callers
+# that already import it. Live registration uses the exact set below and does
+# not accept an un-audited patch, local-build suffix, or neighboring release.
 SUPPORTED_VLLM_VERSION = "0.12.0"
+SUPPORTED_VLLM_VERSIONS = frozenset(
+    {
+        SUPPORTED_VLLM_VERSION,
+        "0.23.0+cu129",
+    }
+)
 TGVF_QWEN3_VLLM_ARCHITECTURE = "TGVFQwen3VLForConditionalGeneration"
 TGVF_VLLM_ATTENTION_BACKEND = "TRITON_ATTN"
 TGVF_VLLM_MM_ENCODER_ATTN_BACKEND = "TORCH_SDPA"
@@ -63,7 +72,7 @@ def load_vllm_public_plugin_api(
         plugin = importer("tgvf_rl.framework.vllm.qwen3_plugin")
     except (ImportError, ModuleNotFoundError) as error:
         raise VLLMUnavailableError(
-            "vLLM is optional; install the accepted 0.12 compatibility environment"
+            "vLLM is optional; install an exact audited compatibility environment"
         ) from error
 
     if importer is import_module:
@@ -75,9 +84,11 @@ def load_vllm_public_plugin_api(
             ) from error
     else:
         version = getattr(root, "__version__", "")
-    if version != SUPPORTED_VLLM_VERSION:
+    if version not in SUPPORTED_VLLM_VERSIONS:
+        accepted = ", ".join(sorted(SUPPORTED_VLLM_VERSIONS))
         raise VLLMCompatibilityError(
-            f"vLLM {SUPPORTED_VLLM_VERSION} is required, found {version or 'unknown'}"
+            f"vLLM must be one of the exact audited builds ({accepted}); "
+            f"found {version or 'unknown'}"
         )
 
     import_error = getattr(plugin, "VLLM_IMPORT_ERROR", None)
@@ -90,11 +101,11 @@ def load_vllm_public_plugin_api(
         multimodal_registry = multimodal.MULTIMODAL_REGISTRY
         model_cls = plugin.TGVFQwen3VLForConditionalGeneration
         processor_cls = plugin.TGVFQwen3VLMultiModalProcessor
-        processing_info_cls = plugin.Qwen3VLProcessingInfo
+        processing_info_cls = plugin.TGVFQwen3VLProcessingInfo
         dummy_inputs_cls = plugin.Qwen3VLDummyInputsBuilder
     except AttributeError as error:
         raise VLLMCompatibilityError(
-            "vLLM 0.12 public model/processor registry surface is incomplete"
+            "the audited vLLM public model/processor registry surface is incomplete"
         ) from error
     if not callable(getattr(model_registry, "register_model", None)):
         raise VLLMCompatibilityError("ModelRegistry.register_model is unavailable")
@@ -124,7 +135,7 @@ def register_tgvf_qwen3_vllm_plugin(
     """
 
     public = load_vllm_public_plugin_api() if api is None else api
-    if public.version != SUPPORTED_VLLM_VERSION:
+    if public.version not in SUPPORTED_VLLM_VERSIONS:
         raise VLLMCompatibilityError("injected vLLM API has an unsupported version")
     register_processor = getattr(public.multimodal_registry, "register_processor", None)
     register_model = getattr(public.model_registry, "register_model", None)
@@ -152,6 +163,7 @@ def register_tgvf_qwen3_vllm_plugin(
 
 __all__ = [
     "SUPPORTED_VLLM_VERSION",
+    "SUPPORTED_VLLM_VERSIONS",
     "TGVF_QWEN3_VLLM_ARCHITECTURE",
     "TGVF_VLLM_ATTENTION_BACKEND",
     "TGVF_VLLM_MM_ENCODER_ATTN_BACKEND",

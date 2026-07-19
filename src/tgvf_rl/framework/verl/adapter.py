@@ -20,7 +20,13 @@ from .checkpoint_bridge import (
     register_sdpo_teacher_checkpoint,
     validate_fsdp2_checkpoint_config,
 )
-from .compatibility import VerlPublicAPI, VerlRuntimeRequirements, load_verl_public_api
+from .compatibility import (
+    SPIKE_CANDIDATE_VERL_COMMIT,
+    TORCH211_CANDIDATE_VERL_COMMIT,
+    VerlPublicAPI,
+    VerlRuntimeRequirements,
+    load_verl_public_api,
+)
 from .data_bridge import (
     DataProtoIntegrityView,
     build_verl_data_proto,
@@ -37,6 +43,9 @@ from .rollout_bridge import (
 LOSSLESS_AGENT_LOOP_MANAGER_FQN = (
     "tgvf_rl.framework.verl.rollout_bridge.LosslessAgentLoopManager"
 )
+LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN = (
+    "tgvf_rl.framework.verl.rollout_bridge.LosslessTransferQueueAgentLoopManager"
+)
 TGVF_VLLM_PLUGIN_NAME = "tgvf_qwen3_precomputed"
 
 
@@ -45,12 +54,23 @@ class VerlAdapterConfig:
     """Accepted configuration choices exposed as plain veRL override paths."""
 
     runtime: VerlRuntimeRequirements = field(default_factory=VerlRuntimeRequirements)
-    agent_loop_manager_fqn: str = LOSSLESS_AGENT_LOOP_MANAGER_FQN
+    agent_loop_manager_fqn: str | None = None
     max_tool_calls: int | None = None
 
     def __post_init__(self) -> None:
-        if self.agent_loop_manager_fqn != LOSSLESS_AGENT_LOOP_MANAGER_FQN:
-            raise ValueError("the lossless public custom AgentLoopManager is required")
+        expected_manager = {
+            SPIKE_CANDIDATE_VERL_COMMIT: LOSSLESS_AGENT_LOOP_MANAGER_FQN,
+            TORCH211_CANDIDATE_VERL_COMMIT: (
+                LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN
+            ),
+        }[self.runtime.verl_commit]
+        if self.agent_loop_manager_fqn is None:
+            object.__setattr__(self, "agent_loop_manager_fqn", expected_manager)
+        elif self.agent_loop_manager_fqn != expected_manager:
+            raise ValueError(
+                "the selected veRL identity requires its exact lossless agent-loop "
+                "transport manager"
+            )
         if self.max_tool_calls is not None and (
             type(self.max_tool_calls) is not int or self.max_tool_calls <= 1
         ):
@@ -90,8 +110,19 @@ class VerlAdapterConfig:
             "actor_rollout_ref.actor.checkpoint.strict": fsdp.checkpoint_strict,
             "actor_rollout_ref.actor.checkpoint.save_contents": fsdp.checkpoint_save_contents,
             "actor_rollout_ref.actor.checkpoint.load_contents": fsdp.checkpoint_load_contents,
+            "trainer.use_v1": (
+                self.runtime.verl_commit == TORCH211_CANDIDATE_VERL_COMMIT
+            ),
             "trainer.v1.trainer_mode": self.runtime.trainer_mode,
         }
+        if self.runtime.verl_commit == TORCH211_CANDIDATE_VERL_COMMIT:
+            values.update(
+                {
+                    "actor_rollout_ref.rollout.free_cache_engine": False,
+                    "actor_rollout_ref.rollout.enable_sleep_mode": False,
+                    "actor_rollout_ref.rollout.checkpoint_engine.backend": "naive",
+                }
+            )
         return MappingProxyType(values)
 
     @staticmethod
@@ -138,7 +169,9 @@ class VerlAdapter:
             # only in this process cannot cover the vLLM core and workers.
             self.config.public_config_overrides()
             self.config.validate_runtime_environment()
-            self._public_api = load_verl_public_api()
+            self._public_api = load_verl_public_api(
+                expected_commit=self.config.runtime.verl_commit
+            )
         return self._public_api
 
     def build_agent_loop_output(
@@ -178,6 +211,7 @@ class VerlAdapter:
 
 __all__ = [
     "LOSSLESS_AGENT_LOOP_MANAGER_FQN",
+    "LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN",
     "LosslessAgentLoopManager",
     "TGVF_VLLM_PLUGIN_NAME",
     "VerlAdapter",

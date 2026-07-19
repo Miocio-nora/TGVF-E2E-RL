@@ -17,13 +17,28 @@ import sys
 from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlparse
 
+from tgvf_rl.compatibility_stack import (
+    CONTROL_COMPATIBILITY_STACK,
+    TORCH211_CU129_COMPATIBILITY_STACK,
+    audited_compatibility_stack,
+)
 from tgvf_rl.framework.vllm import (
     TGVF_QWEN3_VLLM_ARCHITECTURE,
     TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
 )
 
 
-SPIKE_CANDIDATE_VERL_COMMIT = "e003163181731412595257a72ec173071efb125f"
+SPIKE_CANDIDATE_VERL_COMMIT = audited_compatibility_stack(
+    CONTROL_COMPATIBILITY_STACK
+).verl_commit
+TORCH211_CANDIDATE_VERL_COMMIT = audited_compatibility_stack(
+    TORCH211_CU129_COMPATIBILITY_STACK
+).verl_commit
+ACCEPTED_VERL_COMMITS = frozenset(
+    {SPIKE_CANDIDATE_VERL_COMMIT, TORCH211_CANDIDATE_VERL_COMMIT}
+)
+VERL_AGENT_LOOP_RETURN_TRANSPORT = "return_dataproto"
+VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT = "transfer_queue"
 SUPPORTED_ROLLOUT_BACKEND = "vllm"
 SUPPORTED_LOGPROBS_MODE = "processed_logprobs"
 
@@ -54,6 +69,7 @@ class VerlPublicAPI:
     register_policy_loss: Callable[..., Any]
     fsdp_engine_config: type[Any]
     checkpoint_handler: type[Any]
+    agent_loop_transport: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +98,8 @@ def _symbol(module: Any, name: str, module_name: str) -> Any:
 
 def load_verl_public_api(
     importer: Callable[[str], Any] = import_module,
+    *,
+    expected_commit: str = SPIKE_CANDIDATE_VERL_COMMIT,
 ) -> VerlPublicAPI:
     """Resolve only the pinned public APIs when a live integration needs them.
 
@@ -90,8 +108,22 @@ def load_verl_public_api(
     intentionally not installed.
     """
 
+    agent_loop_output_module_name = "verl.experimental.agent_loop"
+    if expected_commit == SPIKE_CANDIDATE_VERL_COMMIT:
+        agent_loop_manager_module_name = agent_loop_output_module_name
+        agent_loop_manager_symbol = "AgentLoopManager"
+        agent_loop_transport = VERL_AGENT_LOOP_RETURN_TRANSPORT
+    elif expected_commit == TORCH211_CANDIDATE_VERL_COMMIT:
+        agent_loop_manager_module_name = "verl.trainer.ppo.v1"
+        agent_loop_manager_symbol = "AgentLoopManagerTQ"
+        agent_loop_transport = VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT
+    else:
+        raise VerlCompatibilityError(
+            "requested veRL revision is not an accepted compatibility identity"
+        )
     module_names = (
-        "verl.experimental.agent_loop",
+        agent_loop_output_module_name,
+        agent_loop_manager_module_name,
         "verl.protocol",
         "verl.trainer.ppo.core_algos",
         "verl.workers.config",
@@ -107,9 +139,14 @@ def load_verl_public_api(
                 "veRL is optional; install the exact compatibility candidate before constructing the live adapter"
             )
     try:
-        agent_loop, protocol, core_algos, workers_config, checkpoint = (
-            importer(name) for name in module_names
-        )
+        (
+            agent_loop_output_module,
+            agent_loop_manager_module,
+            protocol,
+            core_algos,
+            workers_config,
+            checkpoint,
+        ) = (importer(name) for name in module_names)
     except (ImportError, ModuleNotFoundError) as error:
         error_type = (
             VerlCompatibilityError
@@ -118,21 +155,28 @@ def load_verl_public_api(
         )
         raise error_type(
             "veRL public modules failed to import for compatibility candidate "
-            f"{SPIKE_CANDIDATE_VERL_COMMIT}: {error}"
+            f"{expected_commit}: {error}"
         ) from error
 
     if importer is import_module:
-        verify_verl_distribution_identity()
+        verify_verl_distribution_identity(expected_commit=expected_commit)
 
     return VerlPublicAPI(
-        agent_loop_output=_symbol(agent_loop, "AgentLoopOutput", module_names[0]),
-        agent_loop_manager=_symbol(agent_loop, "AgentLoopManager", module_names[0]),
-        data_proto=_symbol(protocol, "DataProto", module_names[1]),
-        register_policy_loss=_symbol(
-            core_algos, "register_policy_loss", module_names[2]
+        agent_loop_output=_symbol(
+            agent_loop_output_module, "AgentLoopOutput", module_names[0]
         ),
-        fsdp_engine_config=_symbol(workers_config, "FSDPEngineConfig", module_names[3]),
-        checkpoint_handler=_symbol(checkpoint, "CheckpointHandler", module_names[4]),
+        agent_loop_manager=_symbol(
+            agent_loop_manager_module,
+            agent_loop_manager_symbol,
+            module_names[1],
+        ),
+        data_proto=_symbol(protocol, "DataProto", module_names[2]),
+        register_policy_loss=_symbol(
+            core_algos, "register_policy_loss", module_names[3]
+        ),
+        fsdp_engine_config=_symbol(workers_config, "FSDPEngineConfig", module_names[4]),
+        checkpoint_handler=_symbol(checkpoint, "CheckpointHandler", module_names[5]),
+        agent_loop_transport=agent_loop_transport,
     )
 
 
@@ -191,11 +235,17 @@ def installed_verl_distribution_identity() -> VerlDistributionIdentity:
     )
 
 
-def verify_verl_distribution_identity() -> VerlDistributionIdentity:
-    identity = installed_verl_distribution_identity()
-    if identity.commit != SPIKE_CANDIDATE_VERL_COMMIT:
+def verify_verl_distribution_identity(
+    *, expected_commit: str = SPIKE_CANDIDATE_VERL_COMMIT
+) -> VerlDistributionIdentity:
+    if expected_commit not in ACCEPTED_VERL_COMMITS:
         raise VerlCompatibilityError(
-            "installed veRL revision differs from the accepted compatibility candidate"
+            "requested veRL revision is not an accepted compatibility identity"
+        )
+    identity = installed_verl_distribution_identity()
+    if identity.commit != expected_commit:
+        raise VerlCompatibilityError(
+            "installed veRL revision differs from the requested compatibility identity"
         )
     if identity.source_clean is False:
         raise VerlCompatibilityError("installed local veRL candidate source is dirty")
@@ -275,9 +325,9 @@ class VerlRuntimeRequirements:
     fsdp2: FSDP2BridgeConfig = field(default_factory=FSDP2BridgeConfig)
 
     def __post_init__(self) -> None:
-        if self.verl_commit != SPIKE_CANDIDATE_VERL_COMMIT:
+        if self.verl_commit not in ACCEPTED_VERL_COMMITS:
             raise VerlConfigurationError(
-                f"veRL revision must be the spike candidate {SPIKE_CANDIDATE_VERL_COMMIT}"
+                "veRL revision must be an exact accepted compatibility identity"
             )
         require_vllm_backend(self.rollout_backend)
         if self.calculate_log_probs is not True:
@@ -324,9 +374,17 @@ def _path_value(config: object, dotted_path: str) -> object:
 
 
 def validate_verl_config_mapping(
-    config: object, *, expected_world_size: int = 2
+    config: object,
+    *,
+    expected_world_size: int = 2,
+    expected_verl_commit: str = SPIKE_CANDIDATE_VERL_COMMIT,
 ) -> None:
     """Validate the concrete public veRL config paths used by the pinned commit."""
+
+    if expected_verl_commit not in ACCEPTED_VERL_COMMITS:
+        raise VerlConfigurationError(
+            "veRL revision must be an exact accepted compatibility identity"
+        )
 
     require_vllm_backend(_path_value(config, "actor_rollout_ref.rollout.name"))
     if _path_value(config, "actor_rollout_ref.rollout.calculate_log_probs") is not True:
@@ -375,8 +433,35 @@ def validate_verl_config_mapping(
         checkpoint_save_contents=tuple(_path_value(checkpoint, "save_contents")),
         checkpoint_load_contents=tuple(_path_value(checkpoint, "load_contents")),
     )
+    expected_use_v1 = expected_verl_commit == TORCH211_CANDIDATE_VERL_COMMIT
+    if _path_value(config, "trainer.use_v1") is not expected_use_v1:
+        raise VerlConfigurationError(
+            "trainer.use_v1 differs from the selected veRL transport"
+        )
     if _path_value(config, "trainer.v1.trainer_mode") != "sync":
         raise VerlConfigurationError("trainer.v1.trainer_mode must be sync")
+    if expected_use_v1:
+        if (
+            _path_value(config, "actor_rollout_ref.rollout.free_cache_engine")
+            is not False
+        ):
+            raise VerlConfigurationError(
+                "the Torch 2.11 candidate requires no-sleep free_cache_engine=false"
+            )
+        if (
+            _path_value(config, "actor_rollout_ref.rollout.enable_sleep_mode")
+            is not False
+        ):
+            raise VerlConfigurationError(
+                "the Torch 2.11 candidate requires enable_sleep_mode=false"
+            )
+        if (
+            _path_value(config, "actor_rollout_ref.rollout.checkpoint_engine.backend")
+            != "naive"
+        ):
+            raise VerlConfigurationError(
+                "the Torch 2.11 candidate requires naive colocated weight sync"
+            )
     if (
         _path_value(config, "actor_rollout_ref.rollout.enable_prefix_caching")
         is not False

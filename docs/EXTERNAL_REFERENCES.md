@@ -80,6 +80,57 @@ The bounded task is closed in `docs/VERL_COMPATIBILITY_REPORT.md`. C-MAIN is the
 accepted framework compatibility revision; that result does not turn the
 environment into a production-training topology, objective, or scale lock.
 
+### Torch 2.11 compatibility re-spike candidates
+
+The 2026-07-20 re-spike is authorized against these exact upstream identities;
+they are candidates until the repository's compatibility gates pass:
+
+```text
+upstream veRL candidate: 638b8ff84f279e054982f1f4633a546f3c6ced68
+vLLM tag:                 v0.23.0
+vLLM tag commit:          0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665
+vLLM cu129 wheel SHA256:  8bc2203995d061e6b988916b71b9dee8a5970f5fdc5f37d4445a877a2fab2cc1
+TransferQueue:             0.1.8 wheel, SHA256 078c4a63ba0c222fe684e96844c937dcd97f45ac94340a9c92eb03cfbc48cffd
+candidate role:           isolated compatibility re-spike only
+```
+
+Official veRL main CI/Docker material at that commit selects PyTorch 2.11 and
+vLLM 0.23. Official vLLM metadata pins PyTorch 2.11, TorchVision 0.26, and
+TorchAudio 2.11, and its release publishes a CUDA 12.9 x86-64 wheel but no CUDA
+12.8 wheel. The first spike therefore uses the matching CUDA 12.9 PyTorch and
+vLLM binaries. The existing CUDA 12.8 I8H lock remains the control; a future
+CUDA 12.8 source build would be a distinct candidate and result.
+
+The pinned veRL stable-vLLM Dockerfile is not the same resolved runtime as this
+wheel candidate. At this revision it uses CUDA 13.0, Transformers 5.3, a vLLM
+source checkout with unmerged vLLM PRs 44483 and 45589 applied, and an NCCL
+floor needed by its suspend/resume path. This repository's candidate instead
+uses the unmodified official CUDA 12.9 vLLM wheel, Transformers 4.57.6, and its
+resolved NCCL 2.28.9 package. The Dockerfile is therefore upstream selection
+evidence, not compatibility evidence for this exact environment. Only the
+explicit `free_cache_engine=false`, `enable_sleep_mode=false`, colocated
+`checkpoint_engine.backend=naive` path may be accepted by this re-spike.
+Sleep/wake is unsupported unless a separately pinned runtime passes its own
+gate.
+
+Primary upstream sources:
+
+- [veRL candidate commit](https://github.com/verl-project/verl/commit/638b8ff84f279e054982f1f4633a546f3c6ced68);
+- [veRL stable-vLLM Docker candidate](https://github.com/verl-project/verl/blob/638b8ff84f279e054982f1f4633a546f3c6ced68/docker/Dockerfile.stable.vllm);
+- [vLLM partial wake-up PR 44483](https://github.com/vllm-project/vllm/pull/44483);
+- [vLLM reload-memory PR 45589](https://github.com/vllm-project/vllm/pull/45589);
+- [veRL vLLM CI](https://github.com/verl-project/verl/blob/638b8ff84f279e054982f1f4633a546f3c6ced68/.github/workflows/vllm.yml);
+- [veRL CPU CI explicit TransferQueue install](https://github.com/verl-project/verl/blob/638b8ff84f279e054982f1f4633a546f3c6ced68/.github/workflows/cpu_unit_tests.yml#L91-L94);
+- [TransferQueue 0.1.8 distribution metadata](https://pypi.org/project/TransferQueue/0.1.8/);
+- [vLLM v0.23.0 tag](https://github.com/vllm-project/vllm/tree/v0.23.0);
+- [vLLM CUDA requirements](https://github.com/vllm-project/vllm/blob/v0.23.0/requirements/cuda.txt);
+- [vLLM CUDA installation/build contract](https://github.com/vllm-project/vllm/blob/v0.23.0/docs/getting_started/installation/gpu.cuda.inc.md);
+- [PyTorch official prior-version wheels](https://pytorch.org/get-started/previous-versions/).
+
+No vLLM or veRL source is vendored by recording these references. The
+repository-owned plugin may be adapted only through public APIs and must retain
+the accepted vLLM 0.12 control path until promotion is explicitly decided.
+
 ## SDPO
 
 ```text

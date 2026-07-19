@@ -806,6 +806,50 @@ required ledger row is complete. Synthetic reference-style SDPO implementation
 and its bounded parity smoke are part of the accepted goal; production
 training, production objective selection, and real-data experiments are not.
 
+### 9.2 Accepted Torch 2.11 compatibility re-spike
+
+On 2026-07-20 JST the user accepted an isolated re-spike of the runtime stack
+to evaluate the representation-throughput benefit of PyTorch 2.11. The
+accepted control remains the complete I8H environment above; it must not be
+modified in place. The first binary-compatible candidate is CPython 3.12,
+PyTorch/TorchVision/TorchAudio `2.11.0/0.26.0/2.11.0` from the official CUDA
+12.9 index, the official vLLM `0.23.0+cu129` release wheel, Transformers
+`4.57.6`, and upstream veRL commit
+`638b8ff84f279e054982f1f4633a546f3c6ced68`. CUDA 12.9 is selected for this
+first re-spike because vLLM publishes a matching official binary while it does
+not publish a CUDA 12.8 wheel; source-building vLLM is a separate fallback, not
+an interchangeable result.
+
+This re-spike may materialize a separate environment and adapt repository-owned
+public integration code, but it may not overwrite
+`requirements/compatibility.lock`, `.venv312`, or the accepted I8H artifacts.
+The candidate is rejected unless all of the following pass in the same resolved
+environment:
+
+- dependency resolution, `pip check`, exact package/source identity, and the
+  veRL public AgentLoop/DataProto/loss/FSDP/checkpoint surface;
+- the repository's CPU contracts, with a newly audited vLLM 0.23 sampling and
+  processed-logprob contract rather than a changed version constant;
+- two-rank composable FSDP2 update plus strict checkpoint/reconstruct/resume;
+- a bounded upstream-veRL FSDP2 actor-to-vLLM weight-synchronization and
+  generation path; separate FSDP2 and vLLM processes are not sufficient
+  evidence for this gate. This exact wheel candidate is restricted to
+  `free_cache_engine=false`, `enable_sleep_mode=false`, and the colocated naive
+  checkpoint engine; passing it does not claim the upstream patched sleep/wake
+  path;
+- the real local Qwen3-VL-8B-Thinking vLLM TP=2 native repeated-tool-call and
+  precomputed main-`D`/D-DeepStack smoke;
+- real Qwen3 representation FSDP2 forward/backward and the Qwen3 patch-embed
+  performance probe; and
+- no regression of tokenizer size, exact observation identity, deterministic
+  replay state, both target-conditioning provider interfaces, or SDPO state
+  transport.
+
+GPU cells remain limited to physical devices 2 and 3 and require complete
+`PLANNED` ledger identities before launch. Passing this task promotes a new
+compatibility candidate only; changing the production/default lock is a
+separate recorded decision. Failure leaves the I8H environment authoritative.
+
 ## 10. Migration boundary
 
 ### Allowed exact extraction

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+import inspect
 import random
 import shutil
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from tgvf_rl.representation.training.checkpoint import (
     RepresentationTrainerExecutionIdentity,
 )
 from tgvf_rl.representation.training import distributed_checkpoint as dcp_module
+from tgvf_rl.representation.training import fsdp2 as fsdp2_module
 from tgvf_rl.representation.training.distributed_checkpoint import (
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2,
@@ -42,6 +44,7 @@ from tgvf_rl.representation.training.distributed_checkpoint import (
 )
 from tgvf_rl.representation.training.data import SplitOverlapPolicy
 from tgvf_rl.representation.training.fsdp2 import (
+    SUPPORTED_REPRESENTATION_TORCH_IDENTITIES,
     RepresentationFSDP2Binding,
     RepresentationFSDP2Config,
     build_representation_fsdp2_plan,
@@ -391,6 +394,84 @@ class _FakeDCP:
             state_dict_options_type=_FakeOptions,
             fsdp_module_type=_FakeFSDPModule,
         )
+
+
+def test_distributed_checkpoint_supported_torch_api_identity_is_exact() -> None:
+    assert SUPPORTED_REPRESENTATION_TORCH_IDENTITIES == (
+        ("2.9.0", "2.9.0+cu128"),
+        ("2.11.0+cu129", "2.11.0+cu129"),
+    )
+    api = dcp_module._load_distributed_checkpoint_api()
+    assert tuple(inspect.signature(api.get_model_state_dict).parameters) == (
+        "model",
+        "submodules",
+        "options",
+    )
+    assert tuple(inspect.signature(api.get_optimizer_state_dict).parameters) == (
+        "model",
+        "optimizers",
+        "submodules",
+        "options",
+    )
+    assert tuple(inspect.signature(api.dcp_save).parameters) == (
+        "state_dict",
+        "checkpoint_id",
+        "storage_writer",
+        "planner",
+        "process_group",
+        "no_dist",
+        "use_collectives",
+    )
+    assert api.state_dict_options_type.__module__ == (
+        "torch.distributed.checkpoint.state_dict"
+    )
+    assert api.state_dict_options_type.__name__ == "StateDictOptions"
+    assert api.fsdp_module_type.__module__ == "torch.distributed.fsdp"
+    assert api.fsdp_module_type.__name__ == "FSDPModule"
+
+
+@pytest.mark.parametrize(
+    ("distribution_version", "runtime_version"),
+    (
+        ("2.9.0", "2.9.0"),
+        ("2.9.1", "2.9.1+cu128"),
+        ("2.9.0", "2.9.0+cu129"),
+        ("2.10.0+cu129", "2.10.0+cu129"),
+        ("2.11.0+cu129", "2.11.0"),
+        ("2.11.1+cu129", "2.11.1+cu129"),
+        ("2.11.0+cu129", "2.11.0+cu128"),
+        ("2.9.0", "2.11.0+cu129"),
+        ("unparseable", "unparseable"),
+    ),
+)
+def test_distributed_checkpoint_rejects_unaccepted_torch_identities(
+    monkeypatch: pytest.MonkeyPatch,
+    distribution_version: str,
+    runtime_version: str,
+) -> None:
+    monkeypatch.setattr(
+        fsdp2_module.metadata, "version", lambda _name: distribution_version
+    )
+    monkeypatch.setattr(torch, "__version__", runtime_version)
+    with pytest.raises(RuntimeError, match="exact audited torch identity"):
+        dcp_module._load_distributed_checkpoint_api()
+
+
+def test_distributed_checkpoint_rejects_public_signature_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torch.distributed.checkpoint.state_dict as torch_state_dict
+
+    monkeypatch.setattr(
+        torch_state_dict,
+        "get_model_state_dict",
+        lambda model: model.state_dict(),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="get_model_state_dict public signature drifted",
+    ):
+        dcp_module._load_distributed_checkpoint_api()
 
 
 def _mock_distributed(

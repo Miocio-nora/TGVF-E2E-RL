@@ -1,4 +1,4 @@
-"""vLLM 0.12 Qwen3-VL processor/model extension for recorded TGVF latents.
+"""Audited vLLM Qwen3-VL processor/model extension for recorded TGVF latents.
 
 This module is imported only by the live registration function.  The project
 package therefore remains importable when vLLM is not installed.  All vLLM
@@ -21,7 +21,7 @@ try:
         Qwen3VLDummyInputsBuilder,
         Qwen3VLForConditionalGeneration,
         Qwen3VLMultiModalProcessor,
-        Qwen3VLProcessingInfo,
+        Qwen3VLProcessingInfo as _Qwen3VLProcessingInfo,
     )
     from vllm.multimodal.inputs import MultiModalFieldConfig
     from vllm.multimodal.parse import (
@@ -87,6 +87,9 @@ def validate_precomputed_qwen3_image_dict(
 
 
 if VLLM_IMPORT_ERROR is None:
+    # Preserve the previously exported upstream identity for import
+    # compatibility; live TGVF registration uses the subclass below.
+    Qwen3VLProcessingInfo = _Qwen3VLProcessingInfo
 
     def _merged_field_config(
         data: Mapping[str, torch.Tensor], spatial_merge_size: int
@@ -145,6 +148,23 @@ if VLLM_IMPORT_ERROR is None:
                     ),
                 )
             return super()._parse_image_data(data)
+
+    class TGVFQwen3VLProcessingInfo(_Qwen3VLProcessingInfo):
+        """Select the TGVF latent parser on every audited vLLM generation.
+
+        vLLM 0.12 asks the multimodal processor for its parser, while vLLM
+        0.23 asks the registered processing-info object. Defining this hook and
+        retaining the processor hook below keeps the transport explicit across
+        both public lifecycles.
+        """
+
+        def get_data_parser(self) -> TGVFQwen3VLDataParser:
+            parser_kwargs: dict[str, Any] = {"video_needs_metadata": True}
+            expected_hidden_size = getattr(self, "_get_expected_hidden_size", None)
+            if callable(expected_hidden_size):
+                parser_kwargs["expected_hidden_size"] = expected_hidden_size()
+            merge_size = int(self.get_hf_config().vision_config.spatial_merge_size)
+            return TGVFQwen3VLDataParser(merge_size, **parser_kwargs)
 
     class TGVFQwen3VLMultiModalProcessor(Qwen3VLMultiModalProcessor):
         """Stock Qwen3 prompt semantics with corrected merged-embed sizing."""
@@ -222,10 +242,11 @@ else:
     class _VLLMRequired:
         def __init__(self, *_: Any, **__: Any) -> None:
             raise ModuleNotFoundError(
-                "vLLM 0.12 is required to construct the TGVF Qwen3 plugin"
+                "an audited vLLM build is required to construct the TGVF Qwen3 plugin"
             ) from VLLM_IMPORT_ERROR
 
     TGVFQwen3VLDataParser = _VLLMRequired
+    TGVFQwen3VLProcessingInfo = _VLLMRequired
     TGVFQwen3VLMultiModalProcessor = _VLLMRequired
     TGVFQwen3VLForConditionalGeneration = _VLLMRequired
     Qwen3VLProcessingInfo = _VLLMRequired
@@ -238,6 +259,7 @@ __all__ = [
     "TGVFQwen3VLDataParser",
     "TGVFQwen3VLForConditionalGeneration",
     "TGVFQwen3VLMultiModalProcessor",
+    "TGVFQwen3VLProcessingInfo",
     "VLLM_IMPORT_ERROR",
     "validate_precomputed_qwen3_image_dict",
 ]

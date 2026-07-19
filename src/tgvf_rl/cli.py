@@ -12,9 +12,15 @@ import tomllib
 from typing import Any, Mapping, Sequence
 
 from tgvf_rl import SCHEMA_VERSION, __version__
+from tgvf_rl.compatibility_stack import (
+    AUDITED_COMPATIBILITY_STACKS,
+    CONTROL_COMPATIBILITY_STACK,
+    AuditedCompatibilityStack,
+    audited_compatibility_stack,
+)
 from tgvf_rl.framework.verl import (
-    SPIKE_CANDIDATE_VERL_COMMIT,
     VerlAdapterConfig,
+    VerlRuntimeRequirements,
     load_verl_public_api,
     verify_verl_distribution_identity,
 )
@@ -32,9 +38,12 @@ def _require(mapping: Mapping[str, Any], key: str, expected: object) -> None:
         raise ValueError(f"{key} must be {expected!r}, got {value!r}")
 
 
-def validate_smoke_config(path: Path) -> Mapping[str, Any]:
+def validate_smoke_config(
+    path: Path, *, stack_selector: str = CONTROL_COMPATIBILITY_STACK
+) -> Mapping[str, Any]:
     """Validate the bounded infrastructure smoke without adding hidden defaults."""
 
+    selected_stack = audited_compatibility_stack(stack_selector)
     with path.open("rb") as stream:
         config = tomllib.load(stream)
     _require(config, "schema_version", SMOKE_CONFIG_SCHEMA)
@@ -43,7 +52,7 @@ def validate_smoke_config(path: Path) -> Mapping[str, Any]:
     stack = config.get("stack")
     if not isinstance(stack, Mapping):
         raise ValueError("[stack] is required")
-    _require(stack, "verl_commit", SPIKE_CANDIDATE_VERL_COMMIT)
+    _require(stack, "verl_commit", selected_stack.verl_commit)
     _require(stack, "rollout_backend", "vllm")
     _require(stack, "behavior_logprobs", "processed_logprobs")
     _require(stack, "vllm_enable_mm_embeds", True)
@@ -85,20 +94,71 @@ def validate_smoke_config(path: Path) -> Mapping[str, Any]:
     return config
 
 
-def _environment_payload(*, live: bool) -> dict[str, Any]:
+def _assert_installed_stack_identity(stack: AuditedCompatibilityStack) -> str:
+    if sys.version_info[:2] != stack.python_major_minor:
+        raise RuntimeError(
+            f"selected {stack.selector!r} stack requires Python "
+            f"{stack.python_major_minor[0]}.{stack.python_major_minor[1]}; "
+            f"observed {sys.version_info.major}.{sys.version_info.minor}"
+        )
+    try:
+        torch_distribution_version = metadata.version("torch")
+        transformers_distribution_version = metadata.version("transformers")
+        vllm_distribution_version = metadata.version("vllm")
+    except metadata.PackageNotFoundError as error:
+        raise RuntimeError(
+            f"selected {stack.selector!r} stack distribution is not installed: "
+            f"{error.name}"
+        ) from error
+    import torch
+
+    torch_runtime_version = str(torch.__version__)
+    observed = (
+        torch_distribution_version,
+        torch_runtime_version,
+        transformers_distribution_version,
+        vllm_distribution_version,
+    )
+    expected = (
+        stack.torch_distribution_version,
+        stack.torch_runtime_version,
+        stack.transformers_distribution_version,
+        stack.vllm_distribution_version,
+    )
+    if observed != expected:
+        raise RuntimeError(
+            f"installed stack differs from selected {stack.selector!r} identity: "
+            f"expected torch_distribution={expected[0]!r}, "
+            f"torch_runtime={expected[1]!r}, transformers={expected[2]!r}, "
+            f"vllm={expected[3]!r}; "
+            f"observed torch_distribution={observed[0]!r}, "
+            f"torch_runtime={observed[1]!r}, transformers={observed[2]!r}, "
+            f"vllm={observed[3]!r}"
+        )
+    return torch_runtime_version
+
+
+def _environment_payload(
+    *, live: bool, stack_selector: str = CONTROL_COMPATIBILITY_STACK
+) -> dict[str, Any]:
+    stack = audited_compatibility_stack(stack_selector)
+    adapter_config = VerlAdapterConfig(
+        runtime=VerlRuntimeRequirements(verl_commit=stack.verl_commit),
+        max_tool_calls=2,
+    )
     payload: dict[str, Any] = {
         "project_version": __version__,
         "schema_version": SCHEMA_VERSION,
-        "verl_candidate_commit": SPIKE_CANDIDATE_VERL_COMMIT,
-        "required_overrides": dict(
-            VerlAdapterConfig(max_tool_calls=2).public_config_overrides()
-        ),
-        "required_environment": dict(VerlAdapterConfig.required_environment()),
+        "compatibility_stack": asdict(stack),
+        "verl_candidate_commit": stack.verl_commit,
+        "required_overrides": dict(adapter_config.public_config_overrides()),
+        "required_environment": dict(adapter_config.required_environment()),
         "override_scope": "synthetic two-call fixture; production cap remains unset",
     }
     if live:
-        identity = verify_verl_distribution_identity()
-        api = load_verl_public_api()
+        torch_runtime_version = _assert_installed_stack_identity(stack)
+        identity = verify_verl_distribution_identity(expected_commit=stack.verl_commit)
+        api = load_verl_public_api(expected_commit=stack.verl_commit)
         payload.update(
             {
                 "verl_distribution": {
@@ -112,6 +172,7 @@ def _environment_payload(*, live: bool) -> dict[str, Any]:
                     name: metadata.version(name)
                     for name in ("torch", "transformers", "vllm", "verl")
                 },
+                "torch_runtime_version": torch_runtime_version,
                 "public_api": {
                     "agent_loop_output": api.agent_loop_output.__name__,
                     "agent_loop_manager": api.agent_loop_manager.__name__,
@@ -133,10 +194,22 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="import the installed veRL candidate and verify exact provenance",
     )
+    info.add_argument(
+        "--stack",
+        choices=tuple(AUDITED_COMPATIBILITY_STACKS),
+        default=CONTROL_COMPATIBILITY_STACK,
+        help="named audited compatibility stack (default: control)",
+    )
     validate = subparsers.add_parser(
         "validate-smoke-config", help="validate a bounded TOML smoke identity"
     )
     validate.add_argument("path", type=Path)
+    validate.add_argument(
+        "--stack",
+        choices=tuple(AUDITED_COMPATIBILITY_STACKS),
+        default=CONTROL_COMPATIBILITY_STACK,
+        help="named audited compatibility stack (default: control)",
+    )
     validate_representation = subparsers.add_parser(
         "validate-representation-config",
         help="validate a complete Qwen3 representation-training TOML identity",
@@ -173,9 +246,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "compat-info":
-            result = _environment_payload(live=args.live)
+            result = _environment_payload(live=args.live, stack_selector=args.stack)
         elif args.command == "validate-smoke-config":
-            result = dict(validate_smoke_config(args.path))
+            result = dict(validate_smoke_config(args.path, stack_selector=args.stack))
         elif args.command == "validate-representation-config":
             result = load_representation_training_config(args.path).validation_payload()
         elif args.command == "run-representation":

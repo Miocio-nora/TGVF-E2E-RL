@@ -1,30 +1,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from copy import deepcopy
 import hashlib
 from types import SimpleNamespace
 
 import pytest
 import torch
 
+import tgvf_rl.framework.verl.compatibility as verl_compatibility
 from tgvf_rl.checkpoint import CheckpointCoordinator
 from tgvf_rl.framework.verl import (
     ACTUAL_RESPONSE_LOGPROBS_FIELD,
     EXACT_OBSERVATION_HANDLES_FIELD,
     LOSSLESS_AGENT_LOOP_MANAGER_FQN,
+    LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN,
     OBJECTIVE_SENTINELS_FIELD,
     TRAJECTORY_PAYLOAD_FIELD,
     TRAJECTORY_REPLAY_HANDLE_FIELD,
     FSDP2BridgeConfig,
     LosslessAgentLoopManager,
+    LosslessTransferQueueAgentLoopManager,
     RolloutBridgeRecord,
     SDPOTeacherCheckpointContributor,
     TGVF_VLLM_PLUGIN_NAME,
+    TORCH211_CANDIDATE_VERL_COMMIT,
+    VERL_AGENT_LOOP_RETURN_TRANSPORT,
+    VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT,
     VerlAdapterConfig,
     VerlConfigurationError,
+    VerlCompatibilityError,
+    VerlDistributionIdentity,
     VerlRuntimeRequirements,
     VerlUnavailableError,
-    adapt_policy_loss,
     build_agent_loop_output,
     build_data_proto_payload,
     load_verl_public_api,
@@ -38,6 +46,7 @@ from tgvf_rl.framework.verl import (
     validate_data_proto_integrity,
     validate_verl_config_mapping,
     verl_is_available,
+    verify_verl_distribution_identity,
 )
 from tgvf_rl.contracts.tokens import (
     LogProbMeasurement,
@@ -264,6 +273,59 @@ def test_optional_import_and_public_symbol_resolution_without_installed_verl() -
     api = load_verl_public_api(importer=modules.__getitem__)
     assert api.agent_loop_output.__name__ == "AgentLoopOutput"
     assert api.data_proto.__name__ == "DataProto"
+    assert api.agent_loop_transport == VERL_AGENT_LOOP_RETURN_TRANSPORT
+
+
+def test_candidate_public_api_selects_transfer_queue_manager() -> None:
+    modules = {
+        "verl.experimental.agent_loop": SimpleNamespace(
+            AgentLoopOutput=type("AgentLoopOutput", (), {}),
+        ),
+        "verl.trainer.ppo.v1": SimpleNamespace(
+            AgentLoopManagerTQ=type("AgentLoopManagerTQ", (), {}),
+        ),
+        "verl.protocol": SimpleNamespace(DataProto=type("DataProto", (), {})),
+        "verl.trainer.ppo.core_algos": SimpleNamespace(
+            register_policy_loss=lambda name: name
+        ),
+        "verl.workers.config": SimpleNamespace(
+            FSDPEngineConfig=type("FSDPEngineConfig", (), {})
+        ),
+        "verl.utils.checkpoint": SimpleNamespace(
+            CheckpointHandler=type("CheckpointHandler", (), {})
+        ),
+    }
+
+    api = load_verl_public_api(
+        importer=modules.__getitem__,
+        expected_commit=TORCH211_CANDIDATE_VERL_COMMIT,
+    )
+
+    assert api.agent_loop_manager.__name__ == "AgentLoopManagerTQ"
+    assert api.agent_loop_transport == VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT
+
+
+def test_verl_distribution_identity_requires_an_explicit_audited_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = "638b8ff84f279e054982f1f4633a546f3c6ced68"
+    identity = VerlDistributionIdentity(
+        package_version="0.9.0.dev0",
+        source_url="https://github.com/verl-project/verl.git",
+        commit=candidate,
+        source_kind="vcs",
+        source_clean=None,
+    )
+    monkeypatch.setattr(
+        verl_compatibility,
+        "installed_verl_distribution_identity",
+        lambda: identity,
+    )
+    assert verify_verl_distribution_identity(expected_commit=candidate) is identity
+    with pytest.raises(VerlCompatibilityError, match="differs"):
+        verify_verl_distribution_identity()
+    with pytest.raises(VerlCompatibilityError, match="not an accepted"):
+        verify_verl_distribution_identity(expected_commit="f" * 40)
 
 
 def test_runtime_requirements_are_vllm_only_and_fsdp2_strict() -> None:
@@ -271,6 +333,10 @@ def test_runtime_requirements_are_vllm_only_and_fsdp2_strict() -> None:
     assert requirements.rollout_backend == "vllm"
     assert requirements.calculate_log_probs is True
     assert requirements.fsdp2.actor_strategy == "fsdp2"
+    assert (
+        VerlRuntimeRequirements(verl_commit=TORCH211_CANDIDATE_VERL_COMMIT).verl_commit
+        == TORCH211_CANDIDATE_VERL_COMMIT
+    )
 
     for backend in ("sglang", "hf", "VLLM-extra"):
         with pytest.raises(VerlConfigurationError, match="vLLM"):
@@ -319,7 +385,7 @@ def test_concrete_verl_config_mapping_checks_public_paths() -> None:
                 "fsdp_config": {"fsdp_size": 2, "full_determinism": True},
             },
         },
-        "trainer": {"v1": {"trainer_mode": "sync"}},
+        "trainer": {"use_v1": False, "v1": {"trainer_mode": "sync"}},
     }
     validate_verl_config_mapping(config)
     config["actor_rollout_ref"]["rollout"]["calculate_log_probs"] = False
@@ -436,7 +502,7 @@ def test_dataproto_roundtrip_keeps_exact_sidecars_and_detects_tensor_overwrite()
         validate_data_proto_integrity(data)
 
 
-def test_public_policy_loss_hook_receives_actual_rollout_logprobs_unchanged() -> None:
+def test_public_policy_loss_hook_matches_live_rollout_is_weights_keyword() -> None:
     captured = {}
 
     def project_loss(call):
@@ -461,40 +527,40 @@ def test_public_policy_loss_hook_receives_actual_rollout_logprobs_unchanged() ->
     assert registered["tgvf_test_exact_transport"] is wrapped
 
     current = torch.tensor([[-0.2, -0.3]], requires_grad=True)
-    actual = torch.tensor([[-1.2, -1.3]])
+    is_weights = torch.tensor([[0.8, 1.2]])
     loss, metrics = wrapped(
-        torch.tensor([[-0.4, -0.5]]),
-        current,
-        torch.tensor([[1.0, 2.0]]),
-        torch.tensor([[1, 1]]),
-        "token-mean",
-        {"identity": "unchanged"},
-        actual,
+        old_log_prob=torch.tensor([[-0.4, -0.5]]),
+        log_prob=current,
+        advantages=torch.tensor([[1.0, 2.0]]),
+        response_mask=torch.tensor([[1, 1]]),
+        loss_agg_mode="token-mean",
+        config={"identity": "unchanged"},
+        rollout_is_weights=is_weights,
     )
     assert loss.requires_grad
     assert metrics == {"selected": 2}
-    assert captured["call"].rollout_log_probs is actual
+    assert captured["call"].rollout_is_weights is is_weights
 
-    aliasing = current.detach()
-    with pytest.raises(ValueError, match="log_prob.detach"):
-        adapt_policy_loss(project_loss)(
-            torch.tensor([[-0.4, -0.5]]),
-            current,
-            torch.tensor([[1.0, 2.0]]),
-            torch.tensor([[1, 1]]),
-            "token-mean",
-            {},
-            aliasing,
-        )
-    with pytest.raises(ValueError, match="actual rollout_log_probs"):
+    loss_without_correction, _ = wrapped(
+        old_log_prob=torch.tensor([[-0.4, -0.5]]),
+        log_prob=current,
+        advantages=torch.tensor([[1.0, 2.0]]),
+        response_mask=torch.tensor([[1, 1]]),
+        loss_agg_mode="token-mean",
+        config={},
+        rollout_is_weights=None,
+    )
+    assert loss_without_correction.requires_grad
+
+    with pytest.raises(TypeError, match="rollout_log_probs"):
         wrapped(
-            torch.tensor([[-0.4, -0.5]]),
-            current,
-            torch.tensor([[1.0, 2.0]]),
-            torch.tensor([[1, 1]]),
-            "token-mean",
-            {},
-            None,
+            old_log_prob=torch.tensor([[-0.4, -0.5]]),
+            log_prob=current,
+            advantages=torch.tensor([[1.0, 2.0]]),
+            response_mask=torch.tensor([[1, 1]]),
+            loss_agg_mode="token-mean",
+            config={},
+            rollout_log_probs=torch.tensor([[-1.2, -1.3]]),
         )
 
 
@@ -543,10 +609,37 @@ def test_custom_manager_uses_composition_and_validates_delegate_dataproto() -> N
         def create(cls, *args, **kwargs):
             return Delegate()
 
-    api = SimpleNamespace(agent_loop_manager=PublicManager)
+    api = SimpleNamespace(
+        agent_loop_manager=PublicManager,
+        agent_loop_transport=VERL_AGENT_LOOP_RETURN_TRANSPORT,
+    )
     manager = LosslessAgentLoopManager.create(_public_api=api)
     assert type(manager) is LosslessAgentLoopManager
     assert manager.generate_sequences("prompts") is data
+
+
+def test_candidate_manager_preserves_transfer_queue_dispatch_semantics() -> None:
+    class Delegate:
+        def generate_sequences(self, prompts):
+            assert prompts == "tensordict-prompts"
+            return None
+
+    class PublicManager:
+        @classmethod
+        def create(cls, *args, **kwargs):
+            return Delegate()
+
+    api = SimpleNamespace(
+        agent_loop_manager=PublicManager,
+        agent_loop_transport=VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT,
+    )
+    manager = LosslessTransferQueueAgentLoopManager.create(_public_api=api)
+
+    assert type(manager) is LosslessTransferQueueAgentLoopManager
+    assert manager.generate_sequences("tensordict-prompts") is None
+
+    with pytest.raises(VerlCompatibilityError, match="transport differs"):
+        LosslessAgentLoopManager.create(_public_api=api)
 
 
 def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
@@ -589,3 +682,69 @@ def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
         overrides["actor_rollout_ref.rollout.agent.agent_loop_manager_class"]
         == LOSSLESS_AGENT_LOOP_MANAGER_FQN
     )
+
+
+def test_candidate_adapter_selects_v1_transfer_queue_and_no_sleep() -> None:
+    runtime = VerlRuntimeRequirements(verl_commit=TORCH211_CANDIDATE_VERL_COMMIT)
+    config = VerlAdapterConfig(runtime=runtime, max_tool_calls=2)
+    overrides = config.public_config_overrides()
+
+    assert config.agent_loop_manager_fqn == (
+        LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN
+    )
+    assert overrides["trainer.use_v1"] is True
+    assert overrides["actor_rollout_ref.rollout.free_cache_engine"] is False
+    assert overrides["actor_rollout_ref.rollout.enable_sleep_mode"] is False
+    assert overrides["actor_rollout_ref.rollout.checkpoint_engine.backend"] == "naive"
+
+    concrete = {
+        "actor_rollout_ref": {
+            "rollout": {
+                "name": "vllm",
+                "calculate_log_probs": True,
+                "logprobs_mode": "processed_logprobs",
+                "enable_prefix_caching": False,
+                "free_cache_engine": False,
+                "enable_sleep_mode": False,
+                "checkpoint_engine": {"backend": "naive"},
+                "engine_kwargs": {
+                    "vllm": {
+                        "enable_mm_embeds": True,
+                        "mm_processor_cache_gb": 0,
+                        "mm_encoder_attn_backend": "TORCH_SDPA",
+                        "hf_overrides": {
+                            "architectures": ["TGVFQwen3VLForConditionalGeneration"]
+                        },
+                    }
+                },
+                "limit_images": 3,
+            },
+            "model": {"lora": {"dropout": 0.0}},
+            "actor": {
+                "strategy": "fsdp2",
+                "fsdp_config": {"fsdp_size": 2, "full_determinism": True},
+                "checkpoint": {
+                    "async_save": False,
+                    "strict": True,
+                    "save_contents": ["model", "optimizer", "extra"],
+                    "load_contents": ["model", "optimizer", "extra"],
+                },
+            },
+            "ref": {
+                "strategy": "fsdp2",
+                "fsdp_config": {"fsdp_size": 2, "full_determinism": True},
+            },
+        },
+        "trainer": {"use_v1": True, "v1": {"trainer_mode": "sync"}},
+    }
+    validate_verl_config_mapping(
+        concrete,
+        expected_verl_commit=TORCH211_CANDIDATE_VERL_COMMIT,
+    )
+    broken = deepcopy(concrete)
+    broken["actor_rollout_ref"]["rollout"]["enable_sleep_mode"] = True
+    with pytest.raises(VerlConfigurationError, match="enable_sleep_mode=false"):
+        validate_verl_config_mapping(
+            broken,
+            expected_verl_commit=TORCH211_CANDIDATE_VERL_COMMIT,
+        )

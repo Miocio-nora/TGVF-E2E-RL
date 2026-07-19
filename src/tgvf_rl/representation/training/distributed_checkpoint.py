@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
+import inspect
 from io import BytesIO
 import os
 from pathlib import Path
@@ -39,7 +40,10 @@ from .checkpoint import (
     capture_representation_rng_state,
     restore_representation_rng_state,
 )
-from .fsdp2 import RepresentationFSDP2Binding
+from .fsdp2 import (
+    RepresentationFSDP2Binding,
+    _require_supported_torch_identity,
+)
 from .history import RepresentationMetricsHistoryIdentity
 from .sampling import SameImageBatchSampler
 
@@ -62,7 +66,49 @@ _BORROWED_QWEN_PREFIXES = (
     "main_projection.",
     "d_deepstack_projections.",
 )
-_EXPECTED_TORCH_MAJOR_MINOR = (2, 9)
+_EXPECTED_STATE_DICT_OPTIONS_PARAMETERS = (
+    "full_state_dict",
+    "cpu_offload",
+    "ignore_frozen_params",
+    "keep_submodule_prefixes",
+    "strict",
+    "broadcast_from_rank0",
+    "flatten_optimizer_state_dict",
+    "dsd_fqn_modifiers",
+)
+_EXPECTED_DCP_PUBLIC_PARAMETERS = {
+    "get_model_state_dict": ("model", "submodules", "options"),
+    "get_optimizer_state_dict": (
+        "model",
+        "optimizers",
+        "submodules",
+        "options",
+    ),
+    "set_model_state_dict": ("model", "model_state_dict", "options"),
+    "set_optimizer_state_dict": (
+        "model",
+        "optimizers",
+        "optim_state_dict",
+        "options",
+    ),
+    "save": (
+        "state_dict",
+        "checkpoint_id",
+        "storage_writer",
+        "planner",
+        "process_group",
+        "no_dist",
+        "use_collectives",
+    ),
+    "load": (
+        "state_dict",
+        "checkpoint_id",
+        "storage_reader",
+        "planner",
+        "process_group",
+        "no_dist",
+    ),
+}
 _HEX = frozenset("0123456789abcdef")
 _COLLECTIVE_OUTCOME_KIND = "distributed-representation-collective-outcome-v1"
 
@@ -1570,26 +1616,53 @@ def _validate_expected_metrics_history(
 
 
 def _load_distributed_checkpoint_api() -> _DistributedCheckpointAPI:
-    version = torch.__version__.split("+", 1)[0].split(".")
+    _require_supported_torch_identity(api_name="distributed checkpoint")
     try:
-        major_minor = (int(version[0]), int(version[1]))
-    except (IndexError, ValueError) as error:
-        raise RuntimeError(
-            f"cannot parse torch version {torch.__version__!r}"
-        ) from error
-    if major_minor != _EXPECTED_TORCH_MAJOR_MINOR:
-        raise RuntimeError(
-            "representation distributed checkpoint requires pinned torch 2.9"
+        from torch.distributed.checkpoint import load, save
+        from torch.distributed.checkpoint.state_dict import (
+            StateDictOptions,
+            get_model_state_dict,
+            get_optimizer_state_dict,
+            set_model_state_dict,
+            set_optimizer_state_dict,
         )
-    from torch.distributed.checkpoint import load, save
-    from torch.distributed.checkpoint.state_dict import (
+        from torch.distributed.fsdp import FSDPModule
+    except (ImportError, AttributeError) as error:
+        raise RuntimeError(
+            "torch distributed checkpoint public APIs are unavailable"
+        ) from error
+
+    public_functions = {
+        "get_model_state_dict": get_model_state_dict,
+        "get_optimizer_state_dict": get_optimizer_state_dict,
+        "set_model_state_dict": set_model_state_dict,
+        "set_optimizer_state_dict": set_optimizer_state_dict,
+        "save": save,
+        "load": load,
+    }
+    for api_name, value in public_functions.items():
+        _assert_public_signature(
+            value,
+            api_name=api_name,
+            expected_parameters=_EXPECTED_DCP_PUBLIC_PARAMETERS[api_name],
+        )
+    _assert_public_signature(
         StateDictOptions,
-        get_model_state_dict,
-        get_optimizer_state_dict,
-        set_model_state_dict,
-        set_optimizer_state_dict,
+        api_name="StateDictOptions",
+        expected_parameters=_EXPECTED_STATE_DICT_OPTIONS_PARAMETERS,
     )
-    from torch.distributed.fsdp import FSDPModule
+    if (
+        not inspect.isclass(StateDictOptions)
+        or StateDictOptions.__name__ != "StateDictOptions"
+        or StateDictOptions.__module__ != "torch.distributed.checkpoint.state_dict"
+    ):
+        raise RuntimeError("torch StateDictOptions public class identity drifted")
+    if (
+        not inspect.isclass(FSDPModule)
+        or FSDPModule.__name__ != "FSDPModule"
+        or FSDPModule.__module__ != "torch.distributed.fsdp"
+    ):
+        raise RuntimeError("torch FSDPModule public class identity drifted")
 
     return _DistributedCheckpointAPI(
         get_model_state_dict=get_model_state_dict,
@@ -1601,6 +1674,23 @@ def _load_distributed_checkpoint_api() -> _DistributedCheckpointAPI:
         state_dict_options_type=StateDictOptions,
         fsdp_module_type=FSDPModule,
     )
+
+
+def _assert_public_signature(
+    value: object,
+    *,
+    api_name: str,
+    expected_parameters: tuple[str, ...],
+) -> None:
+    try:
+        actual_parameters = tuple(inspect.signature(value).parameters)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"cannot inspect torch {api_name} signature") from error
+    if actual_parameters != expected_parameters:
+        raise RuntimeError(
+            f"torch {api_name} public signature drifted: "
+            f"expected={expected_parameters} actual={actual_parameters}"
+        )
 
 
 def _qualified_type(value: object) -> str:

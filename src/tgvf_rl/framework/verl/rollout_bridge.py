@@ -20,7 +20,15 @@ from tgvf_rl.trajectories.behavior import (
 from tgvf_rl.trajectories.schema import TrajectoryRecord, trajectory_checksum
 from tgvf_rl.trajectories.validation import TrajectoryValidator
 
-from .compatibility import VerlPublicAPI, load_verl_public_api
+from .compatibility import (
+    SPIKE_CANDIDATE_VERL_COMMIT,
+    TORCH211_CANDIDATE_VERL_COMMIT,
+    VERL_AGENT_LOOP_RETURN_TRANSPORT,
+    VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT,
+    VerlCompatibilityError,
+    VerlPublicAPI,
+    load_verl_public_api,
+)
 from .objective_bridge import validate_objective_sentinels
 
 
@@ -617,8 +625,11 @@ def _map_maybe_awaitable(value: object, transform: Any) -> object:
     return transform(value)
 
 
-class LosslessAgentLoopManager:
-    """Composition wrapper selected through veRL's public custom-manager FQN."""
+class _LosslessAgentLoopManagerBase:
+    """Version-bound composition wrapper for one audited veRL transport."""
+
+    expected_verl_commit: str
+    expected_transport: str
 
     def __init__(
         self,
@@ -627,7 +638,13 @@ class LosslessAgentLoopManager:
         _public_api: VerlPublicAPI | None = None,
         **kwargs: object,
     ) -> None:
-        self._public_api = _public_api or load_verl_public_api()
+        self._public_api = _public_api or load_verl_public_api(
+            expected_commit=self.expected_verl_commit
+        )
+        if self._public_api.agent_loop_transport != self.expected_transport:
+            raise VerlCompatibilityError(
+                "veRL agent-loop manager transport differs from the selected runtime"
+            )
         self._delegate = (
             _delegate
             if _delegate is not None
@@ -636,7 +653,13 @@ class LosslessAgentLoopManager:
 
     @classmethod
     def create(cls, *args: object, **kwargs: object) -> object:
-        api = kwargs.pop("_public_api", None) or load_verl_public_api()
+        api = kwargs.pop("_public_api", None) or load_verl_public_api(
+            expected_commit=cls.expected_verl_commit
+        )
+        if api.agent_loop_transport != cls.expected_transport:
+            raise VerlCompatibilityError(
+                "veRL agent-loop manager transport differs from the selected runtime"
+            )
         created = api.agent_loop_manager.create(*args, **kwargs)
         return _map_maybe_awaitable(
             created,
@@ -644,9 +667,12 @@ class LosslessAgentLoopManager:
         )
 
     def generate_sequences(self, prompts: object) -> object:
+        generated = self._delegate.generate_sequences(prompts)
+        if self.expected_transport == VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT:
+            return _map_maybe_awaitable(generated, _require_transfer_queue_dispatch)
+
         from .data_bridge import validate_data_proto_integrity
 
-        generated = self._delegate.generate_sequences(prompts)
         return _map_maybe_awaitable(
             generated,
             lambda output: _validate_and_return(output, validate_data_proto_integrity),
@@ -654,6 +680,29 @@ class LosslessAgentLoopManager:
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._delegate, name)
+
+
+class LosslessAgentLoopManager(_LosslessAgentLoopManagerBase):
+    """Lossless DataProto-return manager for the accepted control veRL."""
+
+    expected_verl_commit = SPIKE_CANDIDATE_VERL_COMMIT
+    expected_transport = VERL_AGENT_LOOP_RETURN_TRANSPORT
+
+
+class LosslessTransferQueueAgentLoopManager(_LosslessAgentLoopManagerBase):
+    """TransferQueue-dispatch manager for the Torch 2.11 veRL candidate."""
+
+    expected_verl_commit = TORCH211_CANDIDATE_VERL_COMMIT
+    expected_transport = VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT
+
+
+def _require_transfer_queue_dispatch(value: object) -> None:
+    if value is not None:
+        raise ValueError(
+            "the selected veRL TransferQueue manager must dispatch in-place and "
+            "return None"
+        )
+    return None
 
 
 def _validate_and_return(value: object, validator: Any) -> object:

@@ -36,6 +36,11 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from tgvf_rl.cli import validate_smoke_config  # noqa: E402
+from tgvf_rl.compatibility_stack import (  # noqa: E402
+    AUDITED_COMPATIBILITY_STACKS,
+    CONTROL_COMPATIBILITY_STACK,
+    audited_compatibility_stack,
+)
 from tgvf_rl.framework.verl import (  # noqa: E402
     load_verl_public_api,
     verify_verl_distribution_identity,
@@ -155,13 +160,21 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--checkpoint-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--stack",
+        choices=tuple(AUDITED_COMPATIBILITY_STACKS),
+        default=CONTROL_COMPATIBILITY_STACK,
+        help="named audited compatibility stack (default: control)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
+    selected_stack = audited_compatibility_stack(args.stack)
     config = validate_smoke_config(
-        args.config if args.config.is_absolute() else REPOSITORY_ROOT / args.config
+        args.config if args.config.is_absolute() else REPOSITORY_ROOT / args.config,
+        stack_selector=args.stack,
     )
     checkpoint_dir = _bounded_path(args.checkpoint_dir, expected_parent="compatibility")
     output_path = _bounded_path(args.output, expected_parent="compatibility")
@@ -188,8 +201,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         torch.backends.cudnn.deterministic = True
         torch.set_float32_matmul_precision("highest")
 
-        identity = verify_verl_distribution_identity()
-        api = load_verl_public_api()
+        identity = verify_verl_distribution_identity(
+            expected_commit=selected_stack.verl_commit
+        )
+        api = load_verl_public_api(expected_commit=selected_stack.verl_commit)
         model_config = config["model"]
         width = int(model_config["hidden_size"])
         layers = int(model_config["layers"])

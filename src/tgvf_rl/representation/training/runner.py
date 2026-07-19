@@ -86,6 +86,8 @@ _REQUIRED_CUBLAS_WORKSPACE = ":4096:8"
 _CODE_IDENTITY_PATHS = (
     "src/tgvf_rl",
     "pyproject.toml",
+    "requirements/compatibility.lock",
+    "requirements/compatibility-torch211-cu129.lock",
     "uv.lock",
 )
 

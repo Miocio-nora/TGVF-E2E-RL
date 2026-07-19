@@ -1,0 +1,19 @@
+# Isolated Torch 2.11 compatibility re-spike candidate, accepted 2026-07-20.
+# This is not the production/default lock and must not replace
+# requirements/compatibility.lock until every recorded gate passes.
+--extra-index-url https://download.pytorch.org/whl/cu129
+
+torch==2.11.0+cu129
+torchvision==0.26.0+cu129
+torchaudio==2.11.0+cu129
+transformers==4.57.6
+
+# Required by veRL's default trainer.use_v1 path at the pinned candidate;
+# upstream CI installs this exact wheel separately from veRL metadata.
+TransferQueue @ https://files.pythonhosted.org/packages/84/7f/de3403bb53616cec07e0ec1dbdb6a88d5bcae121215bcdd4076f488cc4a7/transferqueue-0.1.8-py3-none-any.whl#sha256=078c4a63ba0c222fe684e96844c937dcd97f45ac94340a9c92eb03cfbc48cffd
+
+# Official v0.23.0 CUDA 12.9 x86-64 release asset.
+vllm @ https://github.com/vllm-project/vllm/releases/download/v0.23.0/vllm-0.23.0%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl#sha256=8bc2203995d061e6b988916b71b9dee8a5970f5fdc5f37d4445a877a2fab2cc1
+
+# Exact upstream veRL main candidate. No SDPO/DeepEyes veRL fork is installed.
+verl @ git+https://github.com/verl-project/verl.git@638b8ff84f279e054982f1f4633a546f3c6ced68

@@ -10,6 +10,7 @@ from torch import nn
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
 from tgvf_rl.representation.training import fsdp2 as fsdp2_module
 from tgvf_rl.representation.training.fsdp2 import (
+    SUPPORTED_REPRESENTATION_TORCH_IDENTITIES,
     RepresentationFSDP2Config,
     apply_representation_fsdp2,
     build_representation_fsdp2_plan,
@@ -247,7 +248,7 @@ def test_apply_ignores_exact_borrowed_state_and_optimizer_owns_only_shards(
         binding.assert_optimizer_ownership(polluted)
 
 
-def test_fsdp2_config_and_torch_api_are_fail_closed() -> None:
+def test_fsdp2_config_and_supported_torch_api_identity_are_exact() -> None:
     with pytest.raises(ValueError, match="at least two ranks"):
         RepresentationFSDP2Config(world_size=1, reshard_after_forward=True)
     with pytest.raises(TypeError, match="explicit bool"):
@@ -256,5 +257,60 @@ def test_fsdp2_config_and_torch_api_are_fail_closed() -> None:
             reshard_after_forward=1,  # type: ignore[arg-type]
         )
 
+    assert SUPPORTED_REPRESENTATION_TORCH_IDENTITIES == (
+        ("2.9.0", "2.9.0+cu128"),
+        ("2.11.0+cu129", "2.11.0+cu129"),
+    )
     api = fsdp2_module._load_fsdp2_api()
-    assert "ignored_params" in inspect.signature(api.fully_shard).parameters
+    assert tuple(inspect.signature(api.fully_shard).parameters) == (
+        "module",
+        "mesh",
+        "reshard_after_forward",
+        "shard_placement_fn",
+        "mp_policy",
+        "offload_policy",
+        "ignored_params",
+    )
+    assert api.fsdp_module_type.__module__ == "torch.distributed.fsdp"
+    assert api.fsdp_module_type.__name__ == "FSDPModule"
+    assert api.device_mesh_type.__module__ == "torch.distributed.device_mesh"
+    assert api.device_mesh_type.__name__ == "DeviceMesh"
+    assert api.dtensor_type.__module__ == "torch.distributed.tensor"
+    assert api.dtensor_type.__name__ == "DTensor"
+
+
+@pytest.mark.parametrize(
+    ("distribution_version", "runtime_version"),
+    (
+        ("2.9.0", "2.9.0"),
+        ("2.9.1", "2.9.1+cu128"),
+        ("2.9.0", "2.9.0+cu129"),
+        ("2.10.0+cu129", "2.10.0+cu129"),
+        ("2.11.0+cu129", "2.11.0"),
+        ("2.11.1+cu129", "2.11.1+cu129"),
+        ("2.11.0+cu129", "2.11.0+cu128"),
+        ("2.9.0", "2.11.0+cu129"),
+        ("unparseable", "unparseable"),
+    ),
+)
+def test_fsdp2_api_rejects_unaccepted_torch_identities(
+    monkeypatch: pytest.MonkeyPatch,
+    distribution_version: str,
+    runtime_version: str,
+) -> None:
+    monkeypatch.setattr(
+        fsdp2_module.metadata, "version", lambda _name: distribution_version
+    )
+    monkeypatch.setattr(torch, "__version__", runtime_version)
+    with pytest.raises(RuntimeError, match="exact audited torch identity"):
+        fsdp2_module._load_fsdp2_api()
+
+
+def test_fsdp2_api_rejects_public_signature_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torch.distributed.fsdp as torch_fsdp
+
+    monkeypatch.setattr(torch_fsdp, "fully_shard", lambda module: module)
+    with pytest.raises(RuntimeError, match="fully_shard public signature drifted"):
+        fsdp2_module._load_fsdp2_api()

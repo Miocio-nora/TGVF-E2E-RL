@@ -17,14 +17,15 @@ the TGVF Adapter calls each merger directly, outside a Qwen-root forward hook.
 from __future__ import annotations
 
 import inspect
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib import metadata
 from typing import Any
 
 import torch
 from torch import nn
 
+from tgvf_rl.compatibility_stack import AUDITED_COMPATIBILITY_STACKS
 from tgvf_rl.representation.adapter import TGVFAdapter
 
 
@@ -32,8 +33,28 @@ _BORROWED_PROJECTION_PREFIXES = (
     "main_projection.",
     "d_deepstack_projections.",
 )
-_EXPECTED_TORCH_MAJOR_MINOR = (2, 9)
+SUPPORTED_REPRESENTATION_TORCH_IDENTITIES = (
+    *(
+        (stack.torch_distribution_version, stack.torch_runtime_version)
+        for stack in AUDITED_COMPATIBILITY_STACKS.values()
+    ),
+)
 _FSDP_MESH_DIM_NAME = "fsdp"
+_EXPECTED_FULLY_SHARD_PARAMETERS = (
+    "module",
+    "mesh",
+    "reshard_after_forward",
+    "shard_placement_fn",
+    "mp_policy",
+    "offload_policy",
+    "ignored_params",
+)
+_EXPECTED_MIXED_PRECISION_POLICY_PARAMETERS = (
+    "param_dtype",
+    "reduce_dtype",
+    "output_dtype",
+    "cast_forward_inputs",
+)
 _OWNED_ATTENTION_LEAF_NAMES = (
     "target_norm",
     "target_proj",
@@ -49,6 +70,61 @@ _OWNED_ATTENTION_LEAF_NAMES = (
     "context_to_delta",
     "gate_proj",
 )
+
+
+def _require_supported_torch_identity(*, api_name: str) -> tuple[str, str]:
+    """Require an exact installed-distribution/runtime pair before API access."""
+
+    try:
+        distribution_version = metadata.version("torch")
+    except metadata.PackageNotFoundError as error:
+        raise RuntimeError(
+            f"representation {api_name} cannot prove the torch distribution identity"
+        ) from error
+    runtime_version = str(torch.__version__)
+    identity = (distribution_version, runtime_version)
+    if identity not in SUPPORTED_REPRESENTATION_TORCH_IDENTITIES:
+        supported = ", ".join(
+            f"distribution={distribution!r}/runtime={runtime!r}"
+            for distribution, runtime in SUPPORTED_REPRESENTATION_TORCH_IDENTITIES
+        )
+        raise RuntimeError(
+            f"representation {api_name} requires an exact audited torch identity; "
+            f"accepted: {supported}; observed distribution={distribution_version!r}/"
+            f"runtime={runtime_version!r}"
+        )
+    return identity
+
+
+def _assert_public_signature(
+    value: object,
+    *,
+    api_name: str,
+    expected_parameters: tuple[str, ...],
+) -> None:
+    try:
+        actual_parameters = tuple(inspect.signature(value).parameters)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"cannot inspect torch {api_name} signature") from error
+    if actual_parameters != expected_parameters:
+        raise RuntimeError(
+            f"torch {api_name} public signature drifted: "
+            f"expected={expected_parameters} actual={actual_parameters}"
+        )
+
+
+def _assert_public_class(
+    value: object,
+    *,
+    api_name: str,
+    expected_module: str,
+) -> None:
+    if (
+        not inspect.isclass(value)
+        or value.__name__ != api_name
+        or value.__module__ != expected_module
+    ):
+        raise RuntimeError(f"torch {api_name} public class identity drifted")
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,7 +301,7 @@ def apply_representation_fsdp2(
     mixed_precision_policy: Any,
     offload_policy: Any,
 ) -> RepresentationFSDP2Binding:
-    """Apply torch 2.9 composable FSDP2 to Adapter-owned parameters only.
+    """Apply a supported torch composable FSDP2 to Adapter-owned parameters only.
 
     The optimizer must be created *after* this function and audited with
     :meth:`RepresentationFSDP2Binding.assert_optimizer_ownership`.
@@ -504,13 +580,7 @@ def _assert_distributed_prerequisites(
 
 
 def _load_fsdp2_api() -> _FSDP2API:
-    version_match = re.match(r"^(\d+)\.(\d+)", torch.__version__)
-    if version_match is None or tuple(map(int, version_match.groups())) != (
-        _EXPECTED_TORCH_MAJOR_MINOR
-    ):
-        raise RuntimeError(
-            "representation FSDP2 binding is pinned to the accepted torch 2.9 API"
-        )
+    _require_supported_torch_identity(api_name="FSDP2 binding")
     try:
         from torch.distributed.device_mesh import DeviceMesh
         from torch.distributed.fsdp import (
@@ -523,16 +593,33 @@ def _load_fsdp2_api() -> _FSDP2API:
     except (ImportError, AttributeError) as error:
         raise RuntimeError("torch composable FSDP2 APIs are unavailable") from error
 
-    required = {
-        "mesh",
-        "reshard_after_forward",
-        "mp_policy",
-        "offload_policy",
-        "ignored_params",
-    }
-    parameters = set(inspect.signature(fully_shard).parameters)
-    if not required.issubset(parameters):
-        raise RuntimeError("torch fully_shard lacks the required public arguments")
+    _assert_public_signature(
+        fully_shard,
+        api_name="fully_shard",
+        expected_parameters=_EXPECTED_FULLY_SHARD_PARAMETERS,
+    )
+    _assert_public_signature(
+        MixedPrecisionPolicy,
+        api_name="MixedPrecisionPolicy",
+        expected_parameters=_EXPECTED_MIXED_PRECISION_POLICY_PARAMETERS,
+    )
+    _assert_public_signature(
+        OffloadPolicy,
+        api_name="OffloadPolicy",
+        expected_parameters=(),
+    )
+    for value, api_name, expected_module in (
+        (FSDPModule, "FSDPModule", "torch.distributed.fsdp"),
+        (MixedPrecisionPolicy, "MixedPrecisionPolicy", "torch.distributed.fsdp"),
+        (OffloadPolicy, "OffloadPolicy", "torch.distributed.fsdp"),
+        (DeviceMesh, "DeviceMesh", "torch.distributed.device_mesh"),
+        (DTensor, "DTensor", "torch.distributed.tensor"),
+    ):
+        _assert_public_class(
+            value,
+            api_name=api_name,
+            expected_module=expected_module,
+        )
     return _FSDP2API(
         fully_shard=fully_shard,
         fsdp_module_type=FSDPModule,
@@ -544,6 +631,7 @@ def _load_fsdp2_api() -> _FSDP2API:
 
 
 __all__ = [
+    "SUPPORTED_REPRESENTATION_TORCH_IDENTITIES",
     "RepresentationFSDP2Binding",
     "RepresentationFSDP2Config",
     "RepresentationFSDP2Plan",

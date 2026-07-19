@@ -98,6 +98,13 @@ def test_public_runner_checks_launch_contract_before_distributed_startup(
     assert verified == []
 
 
+def test_candidate_runtime_lock_is_part_of_representation_code_identity() -> None:
+    assert {
+        "requirements/compatibility.lock",
+        "requirements/compatibility-torch211-cu129.lock",
+    }.issubset(runner_module._CODE_IDENTITY_PATHS)
+
+
 def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

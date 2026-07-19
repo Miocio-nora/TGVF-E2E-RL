@@ -15,6 +15,10 @@ from .tokens import LogProbMeasurement, SamplingIdentity
 
 
 VLLM_V1_ORACLE_VERSION = "0.12.0"
+VLLM_V1_ORACLE_SUPPORTED_VERSIONS = (
+    VLLM_V1_ORACLE_VERSION,
+    "0.23.0+cu129",
+)
 _SAMPLING_EPS = 1e-5
 _MIN_RANDOM_TEMPERATURE = 1e-2
 
@@ -30,7 +34,7 @@ def vllm_v1_processed_logprobs(
     prompt_token_ids: Sequence[int],
     output_token_ids: Sequence[int],
 ) -> torch.Tensor:
-    """Return vLLM 0.12 v1 processed log probabilities for one request.
+    """Return audited vLLM v1 processed log probabilities for one request.
 
     ``prompt_token_ids`` is the complete request prompt and
     ``output_token_ids`` is the generated history *before* the token whose
@@ -40,8 +44,9 @@ def vllm_v1_processed_logprobs(
 
     The implemented vLLM v1 order is repetition/frequency/presence penalties,
     temperature, min-p, joint top-k/top-p filtering, then float32 log-softmax.
-    Custom processors, backend versions other than the audited vLLM 0.12.0,
-    raw-logprob measurement identities, and greedy sampling fail closed.
+    Custom processors, backend versions outside the exact audited distribution
+    identities, raw-logprob measurement identities, and greedy sampling fail
+    closed.
     vLLM's reported greedy ``processed_logprobs`` is not the actual argmax
     sampling measure, so accepting it as behavior would be incorrect.  Built-in
     min-p is represented by ``SamplingIdentity.min_p`` and must not be repeated
@@ -88,9 +93,11 @@ def _validate_request(
         raise ValueError("raw model logits must be finite before sampling transforms")
     if not isinstance(sampling, SamplingIdentity):
         raise TypeError("sampling must be a SamplingIdentity")
-    if sampling.backend_version != VLLM_V1_ORACLE_VERSION:
+    if sampling.backend_version not in VLLM_V1_ORACLE_SUPPORTED_VERSIONS:
+        supported = ", ".join(VLLM_V1_ORACLE_SUPPORTED_VERSIONS)
         raise UnsupportedVLLMSamplingTransformError(
-            "processed-logprob oracle is pinned to vLLM 0.12.0; "
+            "processed-logprob oracle is pinned to exact vLLM distributions "
+            f"({supported}); "
             f"recorded backend is {sampling.backend_version!r}"
         )
     if sampling.measurement is not LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS:
@@ -103,8 +110,8 @@ def _validate_request(
         )
     if sampling.temperature < _MIN_RANDOM_TEMPERATURE:
         raise UnsupportedVLLMSamplingTransformError(
-            "vLLM 0.12 clamps random temperatures below 0.01; record the effective "
-            "backend temperature"
+            "the audited vLLM distributions clamp random temperatures below 0.01; "
+            "record the effective backend temperature"
         )
     if not -2.0 <= sampling.presence_penalty <= 2.0:
         raise UnsupportedVLLMSamplingTransformError(
@@ -186,6 +193,7 @@ def _apply_top_k_top_p(logits: torch.Tensor, top_k: int, top_p: float) -> torch.
 
 __all__ = [
     "UnsupportedVLLMSamplingTransformError",
+    "VLLM_V1_ORACLE_SUPPORTED_VERSIONS",
     "VLLM_V1_ORACLE_VERSION",
     "vllm_v1_processed_logprobs",
 ]

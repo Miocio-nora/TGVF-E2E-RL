@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from importlib import metadata
 import importlib.util
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import torch
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.contracts.sampling import (
     UnsupportedVLLMSamplingTransformError,
+    VLLM_V1_ORACLE_SUPPORTED_VERSIONS,
     VLLM_V1_ORACLE_VERSION,
     vllm_v1_processed_logprobs,
 )
@@ -41,10 +43,13 @@ def _sampling(**updates: object) -> SamplingIdentity:
     return replace(base, **updates)
 
 
-def test_nontrivial_processed_distribution_matches_independent_golden() -> None:
+@pytest.mark.parametrize("backend_version", VLLM_V1_ORACLE_SUPPORTED_VERSIONS)
+def test_nontrivial_processed_distribution_matches_independent_golden(
+    backend_version: str,
+) -> None:
     result = vllm_v1_processed_logprobs(
         torch.tensor([2.0, 1.0, -0.5, 0.3, 1.5, -1.0], dtype=torch.float64),
-        _sampling(),
+        _sampling(backend_version=backend_version),
         prompt_token_ids=(0, 2, 4),
         output_token_ids=(1, 1, 3),
     )
@@ -151,14 +156,30 @@ def test_invalid_explicit_history_fails_closed() -> None:
         )
 
 
-def test_matches_installed_vllm_012_cpu_source_path() -> None:
+@pytest.mark.parametrize(
+    "backend_version",
+    ("0.12.1", "0.23.0", "0.23.0+cu128", "0.23.1+cu129"),
+)
+def test_unaudited_distribution_identities_fail_closed(backend_version: str) -> None:
+    with pytest.raises(UnsupportedVLLMSamplingTransformError, match="pinned"):
+        vllm_v1_processed_logprobs(
+            torch.tensor([1.0, 0.0]),
+            _sampling(backend_version=backend_version),
+            prompt_token_ids=(),
+            output_token_ids=(),
+        )
+
+
+def test_matches_installed_supported_vllm_cpu_source_path() -> None:
     if importlib.util.find_spec("vllm") is None:
         pytest.skip("vLLM is not installed; independent golden remains active")
 
     import vllm
 
-    if vllm.__version__ != VLLM_V1_ORACLE_VERSION:
-        pytest.skip(f"vLLM {VLLM_V1_ORACLE_VERSION} is not installed")
+    distribution_version = metadata.version("vllm")
+    if distribution_version not in VLLM_V1_ORACLE_SUPPORTED_VERSIONS:
+        pytest.skip(f"installed vLLM {distribution_version} has no audited oracle")
+    assert vllm.__version__ == distribution_version.split("+", maxsplit=1)[0]
 
     from vllm import SamplingParams
     from vllm.model_executor.layers.utils import apply_penalties
@@ -170,7 +191,7 @@ def test_matches_installed_vllm_012_cpu_source_path() -> None:
     raw_logits = torch.tensor([2.0, 1.0, -0.5, 0.3, 1.5, -1.0], dtype=torch.float64)
     prompt_token_ids = [0, 2, 4]
     output_token_ids = [1, 1, 3]
-    sampling = _sampling()
+    sampling = _sampling(backend_version=distribution_version)
 
     expected = raw_logits.float().unsqueeze(0)
     apply_penalties(

@@ -2,6 +2,7 @@
 
 from .adapter import (
     LOSSLESS_AGENT_LOOP_MANAGER_FQN,
+    LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN,
     TGVF_VLLM_PLUGIN_NAME,
     VerlAdapter,
     VerlAdapterConfig,
@@ -13,9 +14,13 @@ from .checkpoint_bridge import (
     validate_fsdp2_checkpoint_config,
 )
 from .compatibility import (
+    ACCEPTED_VERL_COMMITS,
     SPIKE_CANDIDATE_VERL_COMMIT,
+    TORCH211_CANDIDATE_VERL_COMMIT,
     SUPPORTED_LOGPROBS_MODE,
     SUPPORTED_ROLLOUT_BACKEND,
+    VERL_AGENT_LOOP_RETURN_TRANSPORT,
+    VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT,
     FSDP2BridgeConfig,
     VerlBridgeError,
     VerlCompatibilityError,
@@ -65,6 +70,7 @@ from .rollout_bridge import (
     TRAJECTORY_REPLAY_HANDLE_FIELD,
     TRAJECTORY_SHA256_FIELD,
     LosslessAgentLoopManager,
+    LosslessTransferQueueAgentLoopManager,
     RolloutBridgeRecord,
     build_agent_loop_output,
     parse_agent_loop_output,
@@ -74,6 +80,7 @@ from .rollout_bridge import (
 )
 
 __all__ = [
+    "ACCEPTED_VERL_COMMITS",
     "ACTUAL_RESPONSE_LOGPROBS_FIELD",
     "BEHAVIOR_TRACE_HANDLES_FIELD",
     "BEHAVIOR_TRACE_RECORDS_FIELD",
@@ -86,10 +93,13 @@ __all__ = [
     "EXACT_OBSERVATION_HANDLES_FIELD",
     "FSDP2BridgeConfig",
     "LOSSLESS_AGENT_LOOP_MANAGER_FQN",
+    "LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN",
     "LosslessAgentLoopManager",
+    "LosslessTransferQueueAgentLoopManager",
     "OBJECTIVE_SENTINELS_FIELD",
     "OBJECTIVE_SENTINEL_FIELDS",
     "SPIKE_CANDIDATE_VERL_COMMIT",
+    "TORCH211_CANDIDATE_VERL_COMMIT",
     "ProjectPolicyLoss",
     "ROLLOUT_PROVENANCE_SHA256_FIELD",
     "RolloutBridgeRecord",
@@ -113,6 +123,8 @@ __all__ = [
     "VerlDistributionIdentity",
     "VerlRuntimeRequirements",
     "VerlUnavailableError",
+    "VERL_AGENT_LOOP_RETURN_TRANSPORT",
+    "VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT",
     "adapt_policy_loss",
     "build_agent_loop_output",
     "build_data_proto_payload",
