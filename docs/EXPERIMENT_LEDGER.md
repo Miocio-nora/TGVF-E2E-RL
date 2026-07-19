@@ -1767,8 +1767,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: runtime commit
   `619c706d886fb711c714e2c697d36dfebe537387`; `PROJECT_TASK.md` §9.2 and
   I8H-20260719.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: unchanged combined FSDP2→vLLM gate, now with Triton's compiler
   pointed at the pinned local Python 3.12 headers.
 - Baseline and exact output path: failed R2; six outputs use exact prefix
@@ -1782,8 +1782,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   vLLM initialization then exact actor-weight sync.
 - Rollout policy version and allowed asynchronous staleness: `[0,1]`, sync,
   staleness zero.
-- Code commit and worktree state: runtime commit above; clean planned-launch
-  descendant required.
+- Code commit and worktree state: runtime commit above; clean launch HEAD
+  `cfe5bcd78f6d339f2d4c036b34ab739fdd4f6403`.
 - Repository adapter/patch surface and hash: driver
   `ca2be71a4461b2eedada88a918f4efa5f2ba2dda85d32ecc9bc998c451abb2ea`;
   remaining code/lock hashes unchanged from R2. Compiler `/usr/bin/gcc`, C++
@@ -1818,13 +1818,91 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - World size, microbatch, accumulation, and global batch: unchanged two-GPU,
   batch-2, two-update R2 geometry.
 - GPUs: only physical 2/3 and their recorded UUIDs; immediate free preflight.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T03:40:19.182+09:00` to `03:46:26.825+09:00`, about 368 seconds;
+  TaskRunner `1659194`, actor workers `1660503/1660504`, vLLM server/core/TP
+  workers `1670612/1671589/1671734/1671735`.
+- Actual GPU-hours and peak scratch use: less than `0.205` aggregate GPU-hour;
+  all devices returned to zero after failure.
+- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R3-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R3-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
+- Outputs: result/log/plan/resolved-config/fixture SHA256 respectively
+  `3f066b8824bc07ab637f3de411914e4c62783c6e2509f3136874200fa672e3f5`,
+  `2c31e44b1ab85e658bb41d447f20a5a0ec72cffa3c4cca7f93c79224f8091894`,
+  `0cb71492f69b65364066c94b4ebea7afccf7d829bfdc4840a76275a9af9d38aa`,
+  `d820543729f3aa39a491fc060df22befb099b6c6d9389d701120c71e6baf0f85`,
+  `b079d5f62b11571744a759dcb85efb3c9bdf7cf8971ee12127abf95fafd54a1a`;
+  no update metrics were produced.
+- Scorer/parser identity: exact driver/manager/objective/reward hashes above.
+- Metrics: FSDP2 actor, reward manager and vLLM server all initialized; failure
+  occurred during vLLM multimodal profile before generation or weight sync.
+- Conclusion: `FAIL`: vLLM chose its bundled FA2 for visual-encoder profiling,
+  whose CUDA-12.9 PTX is unsupported by host driver 570.195.03 (reported CUDA
+  12.8). R4 explicitly selects vLLM's public `TORCH_SDPA` multimodal encoder
+  backend, matching the already accepted latent-smoke configuration; no driver
+  or FlashAttention change is authorized.
+
+### SC-21-T211-R4-VERL-VLLM-WEIGHT-SYNC
+
+- Cell/matrix ID and mandatory/diagnostic class:
+  `SC-21-T211-R4-VERL-VLLM-WEIGHT-SYNC`; final mandatory corrective rerun after
+  R3 exposed the unselected vLLM multimodal-attention default.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime commit
+  `3fc90e9de54d91903f86d7a2b1eea95dfce5cf63`; `PROJECT_TASK.md` §9.2 and
+  I8H-20260719.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: unchanged combined FSDP2→vLLM gate with both actor attention and
+  vLLM visual-encoder profiling fixed to public Torch SDPA paths.
+- Baseline and exact output path: failed R3; six outputs use prefix
+  `artifacts/compatibility/SC-21-T211-R4-verl-vllm-weight-sync`.
+- Model and processor identity: unchanged Qwen3; actor SDPA, vLLM decoder
+  Triton attention and vLLM multimodal encoder `TORCH_SDPA`.
+- Representation checkpoint identity: N/A; TGVF plugin remains disabled.
+- N/A fields and justification: unchanged R3 exclusions.
+- Policy/reference initialization: original Qwen3 actor, no reference; dummy
+  rollout load then exact actor-weight sync.
+- Rollout policy version and allowed asynchronous staleness: `[0,1]`, sync,
+  staleness zero.
+- Code commit and worktree state: runtime commit above; clean planned-launch
+  descendant required.
+- Repository adapter/patch surface and hash: driver
+  `c56978dee7ab41a79adddece25bc2358d243efee912c4488e95591075c21ce5e`;
+  other code/lock/header hashes unchanged from R3; no external patch.
+- Dataset/manifest, hashes, sample rule, and n: explicit-R4-ID logical fixture
+  SHA256
+  `addeafd9e5d2f87cf39beb36c174c3c4563e84293599f149bbc23fbddbe4352e`,
+  deterministic two rows.
+- Native prompt/tool schema hash: no tool call; fixed sync fixture.
+- Chat-template/token-fixture hash and token-ownership masks: unchanged R3
+  exact template/prompt hashes and generated-token-only mask.
+- D/DeepStack/position/mask identity: N/A by exclusion.
+- Observation materialization/artifact identity used by all replays: exact R4
+  TransferQueue response/behavior-logprob record, no recomputation.
+- RL framework/version/environment lock: exact candidate stack/lock/header
+  identity; focused tests, public probe, pip and Hydra checks pass.
+- Objective equations and normalization: zero advantage plus generated-token-
+  mean NLL, fixed zero reward; infrastructure only.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic,
+  dropout zero, sync V1, seed `20260720`, no sleep/wake.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: unchanged greedy processed-logprob
+  contract.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16, no quantization; actor and
+  multimodal encoder Torch SDPA, vLLM decoder Triton; TP2/FSDP2 size 2, naive
+  no-sleep sync.
+- Logit/logprob/loss/gradient parity tolerances: unchanged explicit R3 gates.
+- World size, microbatch, accumulation, and global batch: unchanged R3 two-GPU
+  batch-2/two-update geometry.
+- GPUs: physical 2/3 only, exact UUIDs above; immediate free preflight.
 - Start/end timestamps, elapsed time, and session/process identity: pending.
 - Actual GPU-hours and peak scratch use: pending; 1800-second timeout.
-- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R3-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R3-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
+- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R4-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R4-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
 - Outputs: six explicit-run-ID artifacts; overwrite forbidden.
 - Scorer/parser identity: exact driver/manager/objective/reward hashes above.
 - Metrics: pending combined two-update generation/sync/replay assertions.
-- Conclusion: pending; limited to no-sleep/no-TGVF-plugin infrastructure.
+- Conclusion: pending. Any new framework-level blocker rejects this candidate;
+  no further compatibility patch ladder is authorized in this spike.
 
 ### SC-20-T211-QWEN3-VLLM-LATENT
 
