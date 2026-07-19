@@ -327,6 +327,19 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   measured control-stack speedup; the checkpoint parameter/state identity and
   public family-adapter interface must remain unchanged. Subsequent
   optimizations require measured phase attribution and their own parity gate.
+- Decision `RPI-20260720-BALANCED-MATRIX-CE` accepts a second selectable
+  Matrix-CE cell score for the representation phase. Its public configuration
+  name is `balanced`: for row `i` and complete candidate observation `j`
+  (main D plus every D-DeepStack branch),
+  `score_ij = -(evidence NLL sum / valid evidence-token count) / temperature`.
+  Temperature is a fixed positive run-identity value and defaults to `1.0`.
+  Row-wise diagonal-label cross entropy and the existing global valid-row
+  reduction are unchanged, as is `L_gen`. The existing summed-log-likelihood
+  score remains selectable as `legacy_summed_nll` and must retain exact value
+  and gradient behavior. This task changes only the normal autograd and
+  streaming/manual-gradient score paths and their CPU tests; it adds no margin,
+  symmetric, embedding-contrastive, Norm, or other objective and requires no
+  GPU smoke.
 
 ### 2.2 Remove Stage2 SFT
 
