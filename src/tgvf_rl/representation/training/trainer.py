@@ -27,7 +27,9 @@ from .schema import RepresentationTrainingSample
 from .streaming import (
     StreamingGlobalNormalization,
     backward_streaming_same_image_group,
+    backward_streaming_same_image_groups,
     score_streaming_same_image_group,
+    score_streaming_same_image_groups,
 )
 
 
@@ -215,10 +217,21 @@ class RepresentationTrainer:
         self.qwen_model.eval()
         _assert_parameter_ownership(self.adapter, self.qwen_model, self.optimizer)
 
-        batch_indices = tuple(
-            self.sampler.next_batch()
-            for _ in range(self.accumulation.gradient_accumulation_steps)
+        direct_groups = getattr(
+            self.accumulation,
+            "groups_per_rank_per_optimizer_step",
+            1,
         )
+        if direct_groups > 1 and self.accumulation.gradient_accumulation_steps != 1:
+            raise RuntimeError(
+                "direct multi-group execution requires gradient accumulation one"
+            )
+        group_count = (
+            direct_groups
+            if direct_groups > 1
+            else self.accumulation.gradient_accumulation_steps
+        )
+        batch_indices = tuple(self.sampler.next_batch() for _ in range(group_count))
         if any(not indices for indices in batch_indices):
             raise RuntimeError("representation sampler emitted an empty batch")
         local_rows = sum(len(indices) for indices in batch_indices)
@@ -244,53 +257,111 @@ class RepresentationTrainer:
             0.0 if isinstance(self.objective, RepresentationObjectiveConfigV2) else None
         )
         local_sample_ids: list[str] = []
-        for indices, collective_candidate_count in zip(
-            batch_indices,
-            collective_candidate_counts,
-            strict=True,
-        ):
-            logical_samples = tuple(self.samples[index] for index in indices)
+        if direct_groups > 1:
+            groups: list[SameImageReadoutGroup] = []
+            expected_ids_by_group: list[tuple[str, ...]] = []
             with self._autocast_context():
-                group = self.group_builder(
-                    logical_samples,
-                    self.adapter,
-                    collective_candidate_count=collective_candidate_count,
-                )
-                expected_ids = tuple(sample.sample_id for sample in logical_samples)
-                actual_ids = tuple(row.sample_id for row in group.rows)
-                if actual_ids != expected_ids:
-                    raise ValueError(
-                        "group builder changed sampler-owned sample order/identity"
+                for indices, collective_candidate_count in zip(
+                    batch_indices,
+                    collective_candidate_counts,
+                    strict=True,
+                ):
+                    logical_samples = tuple(self.samples[index] for index in indices)
+                    group = self.group_builder(
+                        logical_samples,
+                        self.adapter,
+                        collective_candidate_count=collective_candidate_count,
                     )
-                if group.collective_candidate_count != collective_candidate_count:
-                    raise ValueError(
-                        "group builder did not materialize the synchronized collective "
-                        "candidate count"
+                    expected_ids = tuple(sample.sample_id for sample in logical_samples)
+                    _assert_built_group_identity(
+                        group,
+                        expected_ids=expected_ids,
+                        collective_candidate_count=collective_candidate_count,
                     )
-                scores = score_streaming_same_image_group(
-                    self.family_adapter, self.qwen_model, group
-                )
-                backward_metrics = backward_streaming_same_image_group(
+                    groups.append(group)
+                    expected_ids_by_group.append(expected_ids)
+                scores = score_streaming_same_image_groups(
                     self.family_adapter,
                     self.qwen_model,
-                    group,
+                    groups,
+                )
+                backward_metrics = backward_streaming_same_image_groups(
+                    self.family_adapter,
+                    self.qwen_model,
+                    groups,
                     scores,
                     objective=self.objective,
                     normalization=normalization,
                 )
-            local_matrix_numerator += float(
+            if (
+                backward_metrics.local_row_count != local_rows
+                or backward_metrics.local_sample_count != local_rows
+            ):
+                raise RuntimeError(
+                    "direct multi-group execution returned incorrect local counts"
+                )
+            local_matrix_numerator = float(
                 backward_metrics.matrix_ce_numerator.float().item()
             )
-            local_l_gen_numerator += float(
+            local_l_gen_numerator = float(
                 backward_metrics.l_gen_numerator.float().item()
             )
             if local_norm_numerator is not None:
                 if backward_metrics.norm_numerator is None:
                     raise RuntimeError("objective v2 did not return a norm numerator")
-                local_norm_numerator += float(
+                local_norm_numerator = float(
                     backward_metrics.norm_numerator.float().item()
                 )
-            local_sample_ids.extend(expected_ids)
+            local_sample_ids.extend(
+                sample_id
+                for expected_ids in expected_ids_by_group
+                for sample_id in expected_ids
+            )
+        else:
+            for indices, collective_candidate_count in zip(
+                batch_indices,
+                collective_candidate_counts,
+                strict=True,
+            ):
+                logical_samples = tuple(self.samples[index] for index in indices)
+                with self._autocast_context():
+                    group = self.group_builder(
+                        logical_samples,
+                        self.adapter,
+                        collective_candidate_count=collective_candidate_count,
+                    )
+                    expected_ids = tuple(sample.sample_id for sample in logical_samples)
+                    _assert_built_group_identity(
+                        group,
+                        expected_ids=expected_ids,
+                        collective_candidate_count=collective_candidate_count,
+                    )
+                    scores = score_streaming_same_image_group(
+                        self.family_adapter, self.qwen_model, group
+                    )
+                    backward_metrics = backward_streaming_same_image_group(
+                        self.family_adapter,
+                        self.qwen_model,
+                        group,
+                        scores,
+                        objective=self.objective,
+                        normalization=normalization,
+                    )
+                local_matrix_numerator += float(
+                    backward_metrics.matrix_ce_numerator.float().item()
+                )
+                local_l_gen_numerator += float(
+                    backward_metrics.l_gen_numerator.float().item()
+                )
+                if local_norm_numerator is not None:
+                    if backward_metrics.norm_numerator is None:
+                        raise RuntimeError(
+                            "objective v2 did not return a norm numerator"
+                        )
+                    local_norm_numerator += float(
+                        backward_metrics.norm_numerator.float().item()
+                    )
+                local_sample_ids.extend(expected_ids)
 
         trainable = _adapter_owned_trainable_parameters(self.adapter)
         _assert_gradients(
@@ -652,6 +723,22 @@ def _assert_distributed_identity(expected_world_size: int) -> None:
         raise ValueError(
             "data-parallel world size differs from the accumulation identity: "
             f"expected={expected_world_size} actual={actual_world_size}"
+        )
+
+
+def _assert_built_group_identity(
+    group: SameImageReadoutGroup,
+    *,
+    expected_ids: tuple[str, ...],
+    collective_candidate_count: int,
+) -> None:
+    actual_ids = tuple(row.sample_id for row in group.rows)
+    if actual_ids != expected_ids:
+        raise ValueError("group builder changed sampler-owned sample order/identity")
+    if group.collective_candidate_count != collective_candidate_count:
+        raise ValueError(
+            "group builder did not materialize the synchronized collective "
+            "candidate count"
         )
 
 

@@ -30,6 +30,7 @@ from .checkpoint import (
     MATRIX_CE_GLOBAL_REDUCTION,
     L_GEN_GLOBAL_REDUCTION,
     RepresentationAccumulationIdentity,
+    RepresentationAccumulationIdentityV2,
 )
 from .distributed_checkpoint import (
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
@@ -444,6 +445,7 @@ class RepresentationTrainingLoopConfig:
     target_optimizer_steps: int
     validation_every_optimizer_steps: int
     log_every_optimizer_steps: int
+    groups_per_rank_per_optimizer_step: int = 1
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -451,14 +453,34 @@ class RepresentationTrainingLoopConfig:
             "target_optimizer_steps",
             "validation_every_optimizer_steps",
             "log_every_optimizer_steps",
+            "groups_per_rank_per_optimizer_step",
         ):
             _positive_int(
                 getattr(self, field_name), field_name=f"training.{field_name}"
+            )
+        if (
+            self.groups_per_rank_per_optimizer_step > 1
+            and self.gradient_accumulation_steps != 1
+        ):
+            raise ValueError(
+                "training.groups_per_rank_per_optimizer_step > 1 requires "
+                "training.gradient_accumulation_steps = 1"
             )
 
     def accumulation_identity(
         self, *, world_size: int
     ) -> RepresentationAccumulationIdentity:
+        if self.groups_per_rank_per_optimizer_step > 1:
+            return RepresentationAccumulationIdentityV2(
+                gradient_accumulation_steps=self.gradient_accumulation_steps,
+                data_parallel_world_size=world_size,
+                matrix_ce_reduction=MATRIX_CE_GLOBAL_REDUCTION,
+                l_gen_reduction=L_GEN_GLOBAL_REDUCTION,
+                checkpoint_at_optimizer_boundary=True,
+                groups_per_rank_per_optimizer_step=(
+                    self.groups_per_rank_per_optimizer_step
+                ),
+            )
         return RepresentationAccumulationIdentity(
             gradient_accumulation_steps=self.gradient_accumulation_steps,
             data_parallel_world_size=world_size,
@@ -1187,14 +1209,20 @@ def _parse_fsdp2(value: Mapping[str, Any]) -> RepresentationFSDP2TopologyConfig:
 
 
 def _parse_training(value: Mapping[str, Any]) -> RepresentationTrainingLoopConfig:
+    required_fields = {
+        "gradient_accumulation_steps",
+        "target_optimizer_steps",
+        "validation_every_optimizer_steps",
+        "log_every_optimizer_steps",
+    }
     _exact_fields(
         value,
-        {
-            "gradient_accumulation_steps",
-            "target_optimizer_steps",
-            "validation_every_optimizer_steps",
-            "log_every_optimizer_steps",
-        },
+        required_fields
+        | (
+            {"groups_per_rank_per_optimizer_step"}
+            if "groups_per_rank_per_optimizer_step" in value
+            else set()
+        ),
         table="training",
     )
     return RepresentationTrainingLoopConfig(
@@ -1207,6 +1235,11 @@ def _parse_training(value: Mapping[str, Any]) -> RepresentationTrainingLoopConfi
         ),
         log_every_optimizer_steps=_int(
             value, "log_every_optimizer_steps", table="training"
+        ),
+        groups_per_rank_per_optimizer_step=(
+            _int(value, "groups_per_rank_per_optimizer_step", table="training")
+            if "groups_per_rank_per_optimizer_step" in value
+            else 1
         ),
     )
 

@@ -5,11 +5,15 @@ from types import SimpleNamespace
 import pytest
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import (
     EVIDENCE_IGNORE_INDEX,
+    EvidenceReadabilityLossTerms,
+    HistoricalNormLossTerms,
+    SameImageMatrixCELossTerms,
     historical_norm_loss_terms,
     historical_sample_norm_loss,
 )
@@ -28,7 +32,9 @@ from tgvf_rl.representation.training.readout import (
 )
 from tgvf_rl.representation.training.streaming import (
     StreamingGlobalNormalization,
+    backward_streaming_same_image_groups,
     backward_streaming_same_image_group,
+    score_streaming_same_image_groups,
     score_streaming_same_image_group,
 )
 from tgvf_rl.representation.training.transcript import ModelEvidenceSupervision
@@ -111,17 +117,26 @@ def _bundle(value: float, *, requires_grad: bool) -> RepresentationVisualTensorB
     )
 
 
-def _group(*, padding_count: int = 0) -> SameImageReadoutGroup:
+def _group(
+    *,
+    padding_count: int = 0,
+    group_id: str = "image-1",
+    size: int = 2,
+    candidate_offset: float = 0.0,
+) -> SameImageReadoutGroup:
+    if size < 2 or size > 4:
+        raise ValueError("tiny streaming fixture supports 2 <= K <= 4")
     rows = []
     candidates = []
-    for index, evidence in enumerate(((5, 6), (7, 8))):
-        sample_id = f"sample-{index}"
+    for index in range(size):
+        evidence = (5 + index * 2, 6 + index * 2)
+        sample_id = f"{group_id}-sample-{index}"
         token_ids = (1, 2, 2, 2, 2, 3, *evidence)
         rows.append(
             RepresentationReadoutRow(
                 sample_id=sample_id,
-                image_group_key="image-1",
-                source_visual_identity="source-sha",
+                image_group_key=group_id,
+                source_visual_identity=f"source-{group_id}",
                 supervision=_supervision(token_ids),
                 input_ids=torch.tensor([token_ids], dtype=torch.long),
                 attention_mask=torch.ones(1, 8, dtype=torch.bool),
@@ -133,19 +148,25 @@ def _group(*, padding_count: int = 0) -> SameImageReadoutGroup:
         candidates.append(
             RepresentationCandidateObservation(
                 sample_id=sample_id,
-                image_group_key="image-1",
-                source_visual_identity="source-sha",
+                image_group_key=group_id,
+                source_visual_identity=f"source-{group_id}",
                 target_conditioning_provider=(
                     TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
                 ),
                 projection_identities=("main", "branch-8", "branch-16", "branch-24"),
-                visual=_bundle(float(index + 1), requires_grad=True),
+                visual=_bundle(
+                    candidate_offset + float(index + 1),
+                    requires_grad=True,
+                ),
             )
         )
     return SameImageReadoutGroup(
-        image_group_key="image-1",
-        source_visual_identity="source-sha",
-        source_visual=_bundle(0.25, requires_grad=False),
+        image_group_key=group_id,
+        source_visual_identity=f"source-{group_id}",
+        source_visual=_bundle(
+            0.25 + candidate_offset / 10,
+            requires_grad=False,
+        ),
         rows=tuple(rows),
         candidates=tuple(candidates),
         collective_padding=tuple(
@@ -169,6 +190,201 @@ def _objective() -> RepresentationObjectiveConfig:
         matrix_ce_weight=0.7,
         l_gen_weight=1.3,
     )
+
+
+def _objective_v2() -> RepresentationObjectiveConfigV2:
+    return RepresentationObjectiveConfigV2(
+        identity="test-direct-multi-group-historical-norm",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=0.7,
+        l_gen_weight=1.3,
+        norm_weight=0.1,
+    )
+
+
+def test_direct_four_k4_groups_keep_blockwise_ce_and_batch_qwen_cells() -> None:
+    torch.manual_seed(41)
+    model = _frozen_model()
+    groups = tuple(
+        _group(
+            group_id=f"direct-image-{index}",
+            size=4,
+            candidate_offset=float(index) * 0.4,
+        )
+        for index in range(4)
+    )
+
+    scores = score_streaming_same_image_groups(Qwen3VLAdapter(), model, groups)
+
+    assert len(scores.group_scores) == 4
+    assert all(score.score_matrix.shape == (4, 4) for score in scores.group_scores)
+    assert scores.qwen_forward_batch_sizes == (4,) * 16
+    assert len(model.model.language_model.attention_masks) == 16
+    assert all(
+        mask.shape == (4, 1, 8, 8)
+        for mask in model.model.language_model.attention_masks
+    )
+
+    objective = _objective_v2()
+    expected_matrix_numerator = torch.stack(
+        tuple(
+            F.cross_entropy(
+                score.score_matrix,
+                torch.arange(4),
+                reduction="sum",
+            )
+            for score in scores.group_scores
+        )
+    ).sum()
+    expected_l_gen_numerator = torch.stack(
+        tuple(score.diagonal_l_gen.sum() for score in scores.group_scores)
+    ).sum()
+    expected_norm_numerator = torch.stack(
+        tuple(score.historical_norm.sum() for score in scores.group_scores)
+    ).sum()
+    expected_total = (
+        expected_matrix_numerator / 16 * objective.matrix_ce_weight
+        + expected_l_gen_numerator / 16 * objective.l_gen_weight
+        + expected_norm_numerator / 16 * objective.norm_weight
+    )
+    incorrect_cross_group_matrix = torch.block_diag(
+        *(score.score_matrix for score in scores.group_scores)
+    )
+    incorrect_cross_group_ce = F.cross_entropy(
+        incorrect_cross_group_matrix,
+        torch.arange(16),
+    )
+    assert incorrect_cross_group_matrix.shape == (16, 16)
+    assert not torch.allclose(
+        expected_matrix_numerator / 16,
+        incorrect_cross_group_ce,
+    )
+
+    metrics = backward_streaming_same_image_groups(
+        Qwen3VLAdapter(),
+        model,
+        groups,
+        scores,
+        objective=objective,
+        normalization=StreamingGlobalNormalization(
+            matrix_valid_rows=16,
+            l_gen_samples=16,
+        ),
+    )
+
+    assert metrics.local_row_count == metrics.local_sample_count == 16
+    assert torch.equal(metrics.matrix_ce_numerator, expected_matrix_numerator)
+    assert torch.equal(metrics.l_gen_numerator, expected_l_gen_numerator)
+    assert metrics.norm_numerator is not None
+    assert torch.equal(metrics.norm_numerator, expected_norm_numerator)
+    assert torch.allclose(metrics.weighted_local_mean, expected_total)
+    assert len(model.model.language_model.attention_masks) == 32
+    assert all(
+        tensor.grad is not None and bool(torch.isfinite(tensor.grad).all().item())
+        for group in groups
+        for tensor in _candidate_tensors(group)
+    )
+    assert all(parameter.grad is None for parameter in model.parameters())
+
+
+def test_direct_two_group_backward_matches_combined_blockwise_reference() -> None:
+    torch.manual_seed(47)
+    full_model = _frozen_model()
+    streaming_model = _frozen_model()
+    streaming_model.load_state_dict(full_model.state_dict())
+    full_groups = (
+        _group(group_id="reference-a", candidate_offset=0.0),
+        _group(group_id="reference-b", candidate_offset=0.7),
+    )
+    streaming_groups = (
+        _group(group_id="reference-a", candidate_offset=0.0),
+        _group(group_id="reference-b", candidate_offset=0.7),
+    )
+    objective = _objective_v2()
+    full_terms = tuple(
+        synthetic_same_image_layout_readout_terms(
+            Qwen3VLAdapter(),
+            full_model,
+            group,
+        )
+        for group in full_groups
+    )
+    full_norm_terms = tuple(
+        historical_norm_loss_terms(
+            tuple(
+                historical_sample_norm_loss(
+                    candidate.visual.main,
+                    group.source_visual.main,
+                    candidate.visual.deepstack,
+                    group.source_visual.deepstack,
+                )
+                for candidate in group.candidates
+            )
+        )
+        for group in full_groups
+    )
+    reference_value = compose_reference_representation_objective(
+        SameImageMatrixCELossTerms(
+            numerator=torch.stack(
+                tuple(terms.matrix_ce.numerator for terms in full_terms)
+            ).sum(),
+            valid_row_count=4,
+        ),
+        EvidenceReadabilityLossTerms(
+            numerator=torch.stack(
+                tuple(terms.l_gen.numerator for terms in full_terms)
+            ).sum(),
+            sample_count=4,
+        ),
+        objective,
+        HistoricalNormLossTerms(
+            numerator=torch.stack(
+                tuple(terms.numerator for terms in full_norm_terms)
+            ).sum(),
+            sample_count=4,
+        ),
+    )
+    expected_gradients = torch.autograd.grad(
+        reference_value.total_loss,
+        tuple(tensor for group in full_groups for tensor in _candidate_tensors(group)),
+    )
+
+    scores = score_streaming_same_image_groups(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_groups,
+    )
+    metrics = backward_streaming_same_image_groups(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_groups,
+        scores,
+        objective=objective,
+        normalization=StreamingGlobalNormalization(
+            matrix_valid_rows=4,
+            l_gen_samples=4,
+        ),
+    )
+
+    assert scores.qwen_forward_batch_sizes == (2,) * 4
+    assert all(score.score_matrix.shape == (2, 2) for score in scores.group_scores)
+    assert torch.allclose(
+        metrics.weighted_local_mean,
+        reference_value.total_loss.detach(),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    for actual, expected in zip(
+        (
+            tensor.grad
+            for group in streaming_groups
+            for tensor in _candidate_tensors(group)
+        ),
+        expected_gradients,
+        strict=True,
+    ):
+        assert actual is not None
+        assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
 
 def test_streaming_backward_matches_full_graph_reference() -> None:

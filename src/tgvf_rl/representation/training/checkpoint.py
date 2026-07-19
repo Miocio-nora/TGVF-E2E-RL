@@ -45,6 +45,7 @@ REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2 = (
 )
 REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3 = "representation-run-identity-v3"
 REPRESENTATION_ACCUMULATION_SCHEMA_VERSION = "representation-accumulation-v1"
+REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2 = "representation-accumulation-v2"
 REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION = "representation-adapter-contract-v1"
 REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION = (
     "representation-optimizer-identity-v1"
@@ -92,6 +93,11 @@ class RepresentationAccumulationIdentity:
     schema_version: str = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        self._validate_common_fields()
+        if self.schema_version != REPRESENTATION_ACCUMULATION_SCHEMA_VERSION:
+            raise ValueError("representation accumulation schema mismatch")
+
+    def _validate_common_fields(self) -> None:
         _positive_int(
             self.gradient_accumulation_steps,
             field_name="gradient_accumulation_steps",
@@ -107,12 +113,49 @@ class RepresentationAccumulationIdentity:
             raise ValueError(
                 "representation checkpoints must be taken at optimizer boundaries"
             )
-        if self.schema_version != REPRESENTATION_ACCUMULATION_SCHEMA_VERSION:
-            raise ValueError("representation accumulation schema mismatch")
 
     @property
     def identity_sha256(self) -> str:
         return spec_identity_sha256(self)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RepresentationAccumulationIdentityV2(RepresentationAccumulationIdentity):
+    """Exact optimizer batch identity for multiple direct groups per rank."""
+
+    groups_per_rank_per_optimizer_step: int
+    schema_version: str = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
+
+    def __post_init__(self) -> None:
+        RepresentationAccumulationIdentity._validate_common_fields(self)
+        _positive_int(
+            self.groups_per_rank_per_optimizer_step,
+            field_name="groups_per_rank_per_optimizer_step",
+        )
+        if self.groups_per_rank_per_optimizer_step <= 1:
+            raise ValueError(
+                "representation accumulation v2 requires more than one direct "
+                "group per rank per optimizer step"
+            )
+        if self.gradient_accumulation_steps != 1:
+            raise ValueError(
+                "multiple direct groups per rank per optimizer step require "
+                "gradient_accumulation_steps=1"
+            )
+        if self.schema_version != REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2:
+            raise ValueError("representation accumulation v2 schema mismatch")
+
+
+def _validate_accumulation_identity(identity: object) -> None:
+    if type(identity) is RepresentationAccumulationIdentity:
+        expected_schema_version = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION
+    elif type(identity) is RepresentationAccumulationIdentityV2:
+        expected_schema_version = REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
+    else:
+        raise TypeError("unsupported representation accumulation identity type")
+    if identity.schema_version != expected_schema_version:
+        raise ValueError("representation accumulation identity schema mismatch")
+    identity.__post_init__()
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,8 +619,7 @@ class RepresentationRunIdentity:
             raise TypeError(
                 "adapter_contract must be a RepresentationAdapterContractIdentity"
             )
-        if not isinstance(self.accumulation, RepresentationAccumulationIdentity):
-            raise TypeError("accumulation must be a RepresentationAccumulationIdentity")
+        _validate_accumulation_identity(self.accumulation)
         if not isinstance(self.optimizer, RepresentationOptimizerIdentity):
             raise TypeError("optimizer must be a RepresentationOptimizerIdentity")
         if self.scheduler is not None and not isinstance(
@@ -1205,8 +1247,7 @@ def _validate_runtime_identity(
     elif scheduler is not None:
         raise ValueError("scheduler validation requires its optimizer")
     if accumulation is not None:
-        if not isinstance(accumulation, RepresentationAccumulationIdentity):
-            raise TypeError("accumulation must be a RepresentationAccumulationIdentity")
+        _validate_accumulation_identity(accumulation)
         if accumulation != identity.accumulation:
             raise IdentityMismatchError(
                 "runtime accumulation differs from representation run identity"
@@ -1239,7 +1280,7 @@ def _validate_run_identity(identity: object) -> None:
     identity.provider.__post_init__()
     identity.objective.__post_init__()
     identity.adapter_contract.__post_init__()
-    identity.accumulation.__post_init__()
+    _validate_accumulation_identity(identity.accumulation)
     identity.optimizer.__post_init__()
     if identity.scheduler is not None:
         identity.scheduler.__post_init__()

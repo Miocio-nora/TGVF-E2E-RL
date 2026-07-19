@@ -85,6 +85,7 @@ from .transcript import (
 )
 from .checkpoint import (
     RepresentationAccumulationIdentity,
+    RepresentationAccumulationIdentityV2,
     RepresentationAdapterContractIdentity,
     RepresentationInitializationIdentity,
     RepresentationOptimizerIdentity,
@@ -177,8 +178,11 @@ from .runtime import (
 )
 from .streaming import (
     StreamingGlobalNormalization,
+    StreamingMultiGroupScores,
     backward_streaming_same_image_group,
+    backward_streaming_same_image_groups,
     score_streaming_same_image_group,
+    score_streaming_same_image_groups,
 )
 from .trainer import (
     RepresentationOptimizerConfig,
@@ -313,6 +317,7 @@ __all__ = [
     "RepresentationBranchHealthRecord",
     "RepresentationBranchHealthSummary",
     "RepresentationAccumulationIdentity",
+    "RepresentationAccumulationIdentityV2",
     "RepresentationAdapterContractIdentity",
     "RepresentationDataError",
     "RepresentationDataManifest",
@@ -370,9 +375,11 @@ __all__ = [
     "TensorDiagnosticsSummary",
     "TensorDistributionDiagnostics",
     "StreamingGlobalNormalization",
+    "StreamingMultiGroupScores",
     "apply_representation_fsdp2",
     "attention_diagnostics",
     "backward_streaming_same_image_group",
+    "backward_streaming_same_image_groups",
     "build_native_representation_messages",
     "build_qwen3_d_only_messages",
     "build_representation_fsdp2_plan",
@@ -414,6 +421,7 @@ __all__ = [
     "save_representation_internal_evaluation_report_atomic",
     "materialize_qwen3_d_only_processor_prefix",
     "score_streaming_same_image_group",
+    "score_streaming_same_image_groups",
     "summarize_attention_diagnostics",
     "summarize_query_score_matrices",
     "summarize_readout",

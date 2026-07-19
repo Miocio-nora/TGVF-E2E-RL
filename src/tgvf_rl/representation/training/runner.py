@@ -347,6 +347,9 @@ def _run_initialized(
                 "planned_target_optimizer_steps": (
                     config.training.target_optimizer_steps
                 ),
+                "groups_per_rank_per_optimizer_step": (
+                    config.training.groups_per_rank_per_optimizer_step
+                ),
                 "train_manifest_sha256": train_data.manifest.manifest_sha256,
                 "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
                 "conditioning_provider": config.provider.provider.value,
@@ -382,7 +385,9 @@ def _run_initialized(
             trainer.train_step,
             device=device,
             global_matrix_count=(
-                config.training.gradient_accumulation_steps * world_size
+                config.training.gradient_accumulation_steps
+                * config.training.groups_per_rank_per_optimizer_step
+                * world_size
             ),
         )
         all_sample_ids = _gather_string_tuples(metrics.local_sample_ids)

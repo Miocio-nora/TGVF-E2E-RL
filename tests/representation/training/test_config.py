@@ -19,6 +19,12 @@ from tgvf_rl.representation.training.config import (
     RepresentationObjectiveExecutionConfigV2,
     load_representation_training_config,
 )
+from tgvf_rl.representation.training.checkpoint import (
+    REPRESENTATION_ACCUMULATION_SCHEMA_VERSION,
+    REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2,
+    RepresentationAccumulationIdentity,
+    RepresentationAccumulationIdentityV2,
+)
 from tgvf_rl.representation.training.data import SplitOverlapReport
 from tgvf_rl.representation.training.distributed_checkpoint import (
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
@@ -253,12 +259,64 @@ def test_complete_config_maps_to_runtime_contracts_and_binds_both_hashes(
     assert config.initialization.source_artifact_sha256 is None
     assert config.optimizer.torch_options["foreach"] is False
     assert config.fsdp2.runtime_config.world_size == 2
+    assert config.training.groups_per_rank_per_optimizer_step == 1
+    assert type(config.accumulation_identity) is RepresentationAccumulationIdentity
+    assert (
+        config.accumulation_identity.schema_version
+        == REPRESENTATION_ACCUMULATION_SCHEMA_VERSION
+    )
     assert config.accumulation_identity.gradient_accumulation_steps == 2
     assert (
         config.checkpoint.format == DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
     )
     assert config.source_toml_sha256 == _sha(path.read_bytes())
     assert len(config.canonical_config_sha256) == 64
+
+
+def test_direct_groups_select_versioned_accumulation_identity_and_reject_accumulation(
+    tmp_path: Path,
+) -> None:
+    path = _upgrade_config_to_v2(_write_config(tmp_path))
+    text = path.read_text(encoding="utf-8").replace(
+        "gradient_accumulation_steps = 2",
+        "gradient_accumulation_steps = 1\ngroups_per_rank_per_optimizer_step = 3",
+    )
+    path.write_text(text, encoding="utf-8")
+
+    config = load_representation_training_config(path)
+    accumulation = config.accumulation_identity
+
+    assert config.training.groups_per_rank_per_optimizer_step == 3
+    assert type(accumulation) is RepresentationAccumulationIdentityV2
+    assert accumulation.groups_per_rank_per_optimizer_step == 3
+    assert accumulation.gradient_accumulation_steps == 1
+    assert accumulation.schema_version == REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "gradient_accumulation_steps = 1",
+            "gradient_accumulation_steps = 2",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="requires.*gradient_accumulation_steps = 1"):
+        load_representation_training_config(path, verify_external_files=False)
+
+
+@pytest.mark.parametrize("groups", [0, -1])
+def test_direct_groups_must_be_positive(tmp_path: Path, groups: int) -> None:
+    path = _write_config(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "gradient_accumulation_steps = 2",
+            "gradient_accumulation_steps = 1\n"
+            f"groups_per_rank_per_optimizer_step = {groups}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="groups_per_rank_per_optimizer_step"):
+        load_representation_training_config(path, verify_external_files=False)
 
 
 def test_v2_binds_norm_and_2000_step_cosine_while_allowing_bounded_target(

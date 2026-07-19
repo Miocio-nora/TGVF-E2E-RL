@@ -13,6 +13,7 @@ from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
 from tgvf_rl.representation.training.checkpoint import (
     RepresentationAccumulationIdentity,
+    RepresentationAccumulationIdentityV2,
 )
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.objective import (
@@ -353,6 +354,59 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
     )
     assert all(not parameter.requires_grad for parameter in qwen.parameters())
     assert all(parameter.grad is None for parameter in qwen.parameters())
+
+
+def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
+    samples = tuple(
+        _sample(image, member) for image in ("a", "b", "c", "d") for member in range(2)
+    )
+    adapter = _adapter()
+    qwen = _qwen()
+    optimizer = build_representation_optimizer(
+        adapter,
+        RepresentationOptimizerConfig(
+            learning_rate=1e-3,
+            betas=(0.9, 0.95),
+            eps=1e-8,
+            weight_decay=0.0,
+        ),
+    )
+    trainer = RepresentationTrainer(
+        adapter=adapter,
+        qwen_model=qwen,
+        family_adapter=Qwen3VLAdapter(),
+        samples=samples,
+        sampler=SameImageBatchSampler(
+            samples,
+            batch_size=2,
+            seed=19,
+            data_manifest_sha256=sha256(b"trainer-direct-groups").hexdigest(),
+        ),
+        group_builder=_GroupBuilder(),
+        objective=_objective_v2(),
+        accumulation=RepresentationAccumulationIdentityV2(
+            gradient_accumulation_steps=1,
+            data_parallel_world_size=1,
+            groups_per_rank_per_optimizer_step=4,
+        ),
+        optimizer=optimizer,
+        scheduler=None,
+        config=RepresentationTrainerConfig(
+            precision=RepresentationPrecision.FP32,
+            max_grad_norm=1.0,
+            require_all_adapter_gradients=True,
+        ),
+    )
+
+    metrics = trainer.train_step()
+
+    assert metrics.global_step == 1
+    assert metrics.global_row_count == 8
+    assert metrics.global_sample_count == 8
+    assert len(metrics.local_sample_ids) == 8
+    assert len(set(metrics.local_sample_ids)) == 8
+    assert metrics.global_norm_loss is not None
+    assert metrics.gradient_norm_before_clip > 0
 
 
 @pytest.mark.parametrize(

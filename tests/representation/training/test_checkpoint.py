@@ -15,7 +15,10 @@ from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import CodeIdentity, ModelIdentity
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
 from tgvf_rl.representation.training.checkpoint import (
+    REPRESENTATION_ACCUMULATION_SCHEMA_VERSION,
+    REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2,
     RepresentationAccumulationIdentity,
+    RepresentationAccumulationIdentityV2,
     RepresentationAdapterContractIdentity,
     RepresentationInitializationIdentity,
     RepresentationOptimizerIdentity,
@@ -268,6 +271,78 @@ def test_scheduler_v2_identity_binds_minimum_ratio_without_changing_v1_type() ->
     assert first.min_lr_ratio == 0.1
     assert second.min_lr_ratio == 0.2
     assert first.identity_sha256 != second.identity_sha256
+
+
+def test_accumulation_v2_binds_direct_groups_without_changing_v1_type(
+    tmp_path,
+) -> None:
+    legacy = RepresentationAccumulationIdentity(
+        gradient_accumulation_steps=1,
+        data_parallel_world_size=1,
+    )
+    direct = RepresentationAccumulationIdentityV2(
+        gradient_accumulation_steps=1,
+        data_parallel_world_size=1,
+        groups_per_rank_per_optimizer_step=3,
+    )
+
+    assert type(legacy) is RepresentationAccumulationIdentity
+    assert legacy.schema_version == REPRESENTATION_ACCUMULATION_SCHEMA_VERSION
+    assert type(direct) is RepresentationAccumulationIdentityV2
+    assert direct.schema_version == REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
+    assert direct.identity_sha256 != legacy.identity_sha256
+    assert (
+        direct.identity_sha256
+        != replace(
+            direct,
+            groups_per_rank_per_optimizer_step=4,
+        ).identity_sha256
+    )
+
+    with pytest.raises(ValueError, match="more than one direct group"):
+        RepresentationAccumulationIdentityV2(
+            gradient_accumulation_steps=1,
+            data_parallel_world_size=1,
+            groups_per_rank_per_optimizer_step=1,
+        )
+    with pytest.raises(ValueError, match="gradient_accumulation_steps=1"):
+        RepresentationAccumulationIdentityV2(
+            gradient_accumulation_steps=2,
+            data_parallel_world_size=1,
+            groups_per_rank_per_optimizer_step=3,
+        )
+
+    adapter = _adapter(23)
+    sampler = _sampler()
+    optimizer = _optimizer(adapter)
+    identity = replace(
+        _run_identity(
+            adapter,
+            sampler=sampler,
+            optimizer=optimizer,
+            initialization_seed=23,
+            with_scheduler=False,
+        ),
+        accumulation=direct,
+    )
+    path = tmp_path / "direct-groups-training.pt"
+    save_representation_training_checkpoint_atomic(
+        path,
+        adapter=adapter,
+        optimizer=optimizer,
+        scheduler=None,
+        sampler=sampler,
+        run_identity=identity,
+        accumulation=direct,
+        trainer_execution=identity.trainer_execution,
+        global_step=0,
+    )
+
+    loaded = load_representation_training_checkpoint(path)
+    assert type(loaded.manifest.run_identity.accumulation) is (
+        RepresentationAccumulationIdentityV2
+    )
+    assert loaded.manifest.run_identity.accumulation == direct
 
 
 def test_run_identity_v3_binds_validation_and_planned_horizon_without_breaking_v2(
