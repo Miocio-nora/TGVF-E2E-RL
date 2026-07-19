@@ -10,6 +10,7 @@ from torch.nn import functional as F
 
 import tgvf_rl.representation.training.streaming as streaming_module
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
+from tgvf_rl.qwen.base import QwenVLMFamilyAdapter
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import (
     EVIDENCE_IGNORE_INDEX,
@@ -92,7 +93,13 @@ class _TinyFrozenQwen(nn.Module):
 
 
 class _FullLogitsFallbackQwen3Adapter(Qwen3VLAdapter):
-    _forward_injected_selected_logits = None
+    def forward_injected_selected_logits(self, model, request, positions):
+        return QwenVLMFamilyAdapter.forward_injected_selected_logits(
+            self,
+            model,
+            request,
+            positions,
+        )
 
 
 def _frozen_model() -> _TinyFrozenQwen:

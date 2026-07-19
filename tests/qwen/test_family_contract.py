@@ -31,7 +31,6 @@ from tgvf_rl.observations.store import (
 from tgvf_rl.qwen.base import (
     QwenVLMFamilyAdapter,
     ReplayConsumer,
-    _forward_injected_selected_logits,
     _prove_native_streaming_injected_request,
     _prove_selected_sequence_positions,
     gather_next_token_logprobs,
@@ -77,7 +76,13 @@ class TinyQwen(nn.Module):
 
 
 class _GenericFallbackQwen3Adapter(Qwen3VLAdapter):
-    _forward_injected_selected_logits = None
+    def forward_injected_selected_logits(self, model, request, positions):
+        return QwenVLMFamilyAdapter.forward_injected_selected_logits(
+            self,
+            model,
+            request,
+            positions,
+        )
 
 
 def _replay(*, branches: int, calls: int = 2):
@@ -203,7 +208,7 @@ def test_qwen25_support_is_not_misrepresented_as_qwen3_deepstack() -> None:
     ("adapter", "branches"),
     ((Qwen3VLAdapter(), 3), (Qwen25VLAdapter(), 0)),
 )
-def test_qwen_family_private_selected_logits_apply_head_only_to_requested_positions(
+def test_qwen_family_selected_logits_apply_head_only_to_requested_positions(
     adapter: QwenVLMFamilyAdapter,
     branches: int,
 ) -> None:
@@ -220,12 +225,7 @@ def test_qwen_family_private_selected_logits_apply_head_only_to_requested_positi
     )
     try:
         full = adapter.forward_injected(model, request)
-        selected = _forward_injected_selected_logits(
-            adapter,
-            model,
-            request,
-            positions,
-        )
+        selected = adapter.forward_injected_selected_logits(model, request, positions)
     finally:
         hook.remove()
 
@@ -249,8 +249,7 @@ def test_generic_selected_logits_fallback_gathers_from_full_interface() -> None:
         lambda _module, args: head_input_shapes.append(tuple(args[0].shape))
     )
     try:
-        selected = _forward_injected_selected_logits(
-            _GenericFallbackQwen3Adapter(),
+        selected = _GenericFallbackQwen3Adapter().forward_injected_selected_logits(
             model,
             request,
             positions,
@@ -272,16 +271,11 @@ def test_selected_position_proof_rejects_request_replacement_and_id_mutation() -
     adapter = Qwen3VLAdapter()
 
     with pytest.raises(ValueError, match="different forward request"):
-        _forward_injected_selected_logits(
-            adapter,
-            model,
-            replace(request),
-            positions,
-        )
+        adapter.forward_injected_selected_logits(model, replace(request), positions)
 
     request.input_ids[0, 0] = request.input_ids[0, 0] + 1
     with pytest.raises(ValueError, match="input_ids changed"):
-        _forward_injected_selected_logits(adapter, model, request, positions)
+        adapter.forward_injected_selected_logits(model, request, positions)
 
 
 def test_replay_logprobs_use_preceding_logits() -> None:
