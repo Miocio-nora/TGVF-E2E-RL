@@ -2261,6 +2261,128 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   evidence for a separately parity-tested repo-owned representation fast path;
   it does not by itself estimate end-to-end training throughput.
 
+### RP-17-QWEN3-REPRESENTATION-FASTPATCH-REAL512-K4-GA4-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-17`; diagnostic bounded
+  real-Qwen3 representation-phase train-core throughput measurement. It is not
+  a promoted TGVF Adapter or a production prompt/data run.
+- Spike-plan git revision and approval references: accepted decision
+  `RPI-20260720-CONTROL-STACK-OPTIMIZATION` in `PROJECT_TASK.md` section 2.1;
+  production fast-path implementation commit
+  `319c0375efd22e52a6b67b254519208b95dfa980` and config-bound GPU placement
+  commit `1062e2db35a17376b33b9578be81ffb88c9c06e0`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: after replacing Qwen3's pathological BF16 full-patch Conv3D call
+  with its parity-gated Linear expression, what steady two-B200 optimizer-step
+  time is measured at the historical mathematical global batch 32 using
+  local K=4, four accumulation microsteps, and the accepted `262144`-pixel
+  cap; what 2,000-step train-core duration follows from that measurement?
+- Baseline and exact output path: RP-11 GA4 steady tiny-image step was
+  `20.366196423` seconds; RP-14A pre-fast-path capped real-image K4/GA1 step
+  was `9.057971587` seconds. RP-16P measured the isolated BF16 patch projection
+  at `4711.1425299` versus `0.08024` ms. RP-17 may write only under
+  `artifacts/representation/RP-17-qwen3-fastpatch-real512-k4-ga4-throughput/`.
+- Model and processor identity: stable local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, family `qwen3_vl`,
+  tokenizer length `151669`, chat-template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  BF16, SDPA, local-only, no remote code, no tokenizer resize, and
+  aspect-ratio-preserving `image_max_pixels=262144`.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`, no
+  source artifact and no legacy-checkpoint initialization; three measured
+  optimizer updates under the historical 2,000-update scheduler horizon.
+- N/A fields and justification: rollout, behavior logprobs, policy/reference,
+  reward, GRPO, SDPO teacher, answer judge, vLLM sampling, KV cache, and exact
+  policy replay are absent from this representation-only timing diagnostic.
+- Policy/reference initialization: N/A; Qwen3 is frozen and only the freshly
+  initialized TGVF Adapter is trainable.
+- Rollout policy version and allowed asynchronous staleness: N/A; execution is
+  synchronous and no policy update exists.
+- Code commit and worktree state: runtime commit
+  `1062e2db35a17376b33b9578be81ffb88c9c06e0`; source/canonical config SHA256
+  `adf4ffdced248a838aa1523a4fac9efa9e5f0e47e9cec22119b691b24d025f15`/
+  `12f0a9982201cbf051357061df477e14b27670ecf44785c020354ce7405d3ad8`.
+  Launch requires a clean committed tree and the runner's live-code check.
+- Repository adapter/patch surface and hash: production patch is confined to
+  `src/tgvf_rl/representation/training/runtime.py`, SHA256
+  `0c22dc2f89753133fbbb54124beecd50837487f2a86c3cf03dfc03f8ad1dd901`;
+  the existing Conv3D module, Parameters, state-dict keys, shapes, and values
+  remain unchanged. No installed package or Qwen checkpoint is patched.
+- Dataset/manifest, hashes, sample rule, and n: fixed RP-14A real-resolution
+  train JSONL, source SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`,
+  eight rows/two complete K=4 groups over fixed DocVQA/TextVQA images; fixed
+  validation source SHA256
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`.
+  Each rank owns one group, so its four accumulation microsteps deliberately
+  cross sampler epochs and repeat that fixed group; this is a throughput
+  fixture, not a diversity or quality estimate.
+- Native prompt/tool schema hash: smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`;
+  native `tgvf_focus_tool` schema remains unchanged.
+- Chat-template/token-fixture hash and token-ownership masks: accepted native
+  Qwen3 chat-template identity above; only evidence-description tokens are
+  labels, all visual/template positions are ignored, and tokenizer growth is
+  forbidden.
+- D/DeepStack/position/mask identity: unchanged native main `D`, ordered
+  D-DeepStack layers `(8,16,24)`, native M-RoPE positions, and post-D
+  original-image key blocking.
+- Observation materialization/artifact identity used by all replays: no policy
+  replay. Every Matrix-CE cell uses one complete main-D plus all-branch
+  observation and the current single-pass differentiable readout path.
+- RL framework/version/environment lock: accepted control Python `3.12.3`,
+  Torch `2.9.0+cu128`, CUDA `12.8`, NCCL `2.27.5`, Transformers `4.57.6`,
+  vLLM `0.12.0`, upstream veRL `0.9.0.dev0`, Pillow `12.3.0`; lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: legacy summed-evidence-NLL Matrix CE
+  (`legacy_summed_nll`, inherited exactly from config schema v2), global
+  valid-row mean, unchanged per-sample evidence-token-mean `L_gen`, historical
+  Norm; weights `1.0/1.0/0.1`, manifold zero. AdamW `1e-4`, clip `1.0`, cosine
+  warmup 100, floor ratio `.1`, horizon 2,000. Balanced Matrix CE is not used
+  so this remains comparable to prior timing cells.
+- Rollout/replay forward mode and adapter dropout/RNG contract: frozen Qwen in
+  eval mode, TGVF Adapter dropout zero, no cache, deterministic algorithms,
+  TF32 off, seed `20260719`, and CUBLAS workspace `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: token sampling/logprobs N/A;
+  deterministic same-image sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout
+  tensor parallelism, and training device mesh: BF16 forward, FP32 reduction,
+  no quantization/KV/rollout TP, SDPA, FSDP2 `fsdp=[2]`, reshard after forward,
+  and no offload.
+- Logit/logprob/loss/gradient parity tolerances: RP-16P fast-path projection
+  gate passed FP32 exact output and BF16 maximum absolute difference
+  `0.015625`; production integration tests preserve exact state/Parameter
+  identity, enforce geometry fail-closed, and cover FP32/BF16 parity. Timing
+  has no numerical PASS floor; losses/gradients must be finite and tokenizer
+  length must stay `151669`.
+- World size, microbatch, accumulation, and global batch: world 2, one local
+  K=4 same-image matrix per microstep, four gradient-accumulation microsteps,
+  16 local/32 global rows and four local/eight global KxK matrices per update.
+  The expected execution is two B8 Qwen calls per microstep/rank, eight calls
+  and 64 cells per optimizer update/rank. Three updates are timed; steps 2/3
+  form the predeclared steady mean.
+- GPUs: only physical 0
+  `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` and physical 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, both NVIDIA B200, mapped to
+  logical 0/1. The user explicitly authorized this pair; immediate preflight
+  found both at 0 MiB used and 0% utilization.
+- Start/end timestamps, elapsed time, and session/process identity: PENDING.
+- Actual GPU-hours and peak scratch use: PENDING; command hard limit is 1.0
+  aggregate GPU-hour. The three train steps exclude validation and periodic
+  checkpoints; the required final checkpoint/export is outside step timing.
+- Command: after the clean/free-device preflight,
+  `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp17_fastpatch_real512_ga4_throughput.toml > /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-17-qwen3-fastpatch-real512-k4-ga4-throughput/run.log 2>&1`.
+- Outputs: PENDING; metrics, final Adapter export, final step-3 DCP, and run log
+  are confined to the RP-17 output root and overwrite is forbidden.
+- Scorer/parser identity: no answer scorer; strict native representation
+  runner and config identity above.
+- Metrics: PENDING. The reported 2,000-step estimate will be
+  `mean(step 2, step 3) * 2000`, with initialization, validation, and periodic
+  checkpoint overhead stated separately rather than hidden in train-core time.
+- Conclusion: PENDING.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
