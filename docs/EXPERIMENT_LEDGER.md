@@ -3338,7 +3338,7 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 
 ### RP-29-QWEN3-REPRESENTATION-POST-MROPE-PROFILE-REAL512-K4-GA4-GPU23
 
-- Cell/matrix ID/class/status: `RP-29`; `PLANNED` bounded operator profile of
+- Cell/matrix ID/class/status: `RP-29`; `COMPLETE` bounded operator profile of
   the retained RP-28 CPU-M-RoPE path. It is diagnostic only; profiled timing
   and Adapter output are not promotion-eligible.
 - Approval/code/question: accepted control-stack measured attribution;
@@ -3372,6 +3372,25 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   configs/smoke/representation_qwen3_embedding_rp29_post_mrope_profile_real512_ga4_gpu23.toml
   --profile-global-step 2 --trace-dir
   artifacts/representation/RP-29-qwen3-post-mrope-profile-real512-k4-ga4-gpu23/profile`.
+- Result: `PASS` for attribution. The run completed two optimizer steps on
+  physical GPUs 2/3; steps 1/2 took `10.992597855`/`10.404267961` seconds.
+  Both steps preserved the RP-24/RP-28 sample order, losses, counts, gradient
+  norms, tokenizer length and eight B8 Qwen calls per rank. The final Adapter
+  manifest is
+  `8ded17e9aeac3c8363abba369e65d9a28d8854dd60cdc7e7ef98f578c423d63c`.
+- Attribution: across the four groups in profiled step 2, rank 0/rank 1 spent
+  `6737.5`/`6609.8` ms in group construction. Within that scope, the sixteen
+  per-sample action renders consumed `2421.8`/`2445.2` ms, evidence renders
+  `2709.1`/`2695.4` ms, and supervision materialization `907.5`/`888.0` ms.
+  In contrast, CPU M-RoPE was only `11.0`/`10.4` ms, vision encoding
+  `129.4`/`125.0` ms, and TGVF Adapter forward `150.9`/`145.6` ms. The longest
+  remaining utilization gaps therefore come from serial CPU native transcript
+  rendering/tokenization rather than vision, Adapter, or M-RoPE compute.
+- Resource accounting: train-core usage was approximately `0.01189` GPU-hours;
+  the complete diagnostic tree is `1023592362` bytes, including the two raw
+  traces (`222306700` and `223261118` bytes). Profiled timing is diagnostic and
+  is not a throughput estimate. Next action is exact batched transcript
+  rendering/tokenization, followed by an unprofiled timing cell.
 
 ## Compatibility-spike status
 
