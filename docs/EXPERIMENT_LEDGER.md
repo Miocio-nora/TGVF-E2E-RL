@@ -1369,6 +1369,49 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   batching cannot erase the fourfold per-rank cell workload. This result does
   not promote an Adapter or close production prompt/data/quality gates.
 
+### RP-14-QWEN3-REPRESENTATION-REAL-RESOLUTION-MAX-PIXELS-AB
+
+- Cell and status: `RP-14`, `COMPLETE`; bounded diagnostic comparison accepted
+  by `RPI-20260720-GOLDEN-IMAGE-CAP-AB`. It does not promote either output as a
+  representation artifact.
+- Question: does the Golden area cap `max_pixels=262144` materially change the
+  real-resolution representation execution relative to the pinned processor's
+  native `16777216` maximum?
+- Runtime/config identity: implementation commit
+  `81e4fd7a2b20f29a1620c2ef3f9df1121c45a69b`; launch commit
+  `95b3b61600b1296e298bb7dd271e6913f85f1e9f`; cap/default TOML SHA256
+  `536c8f7ad28d28ff7edb35ff4cbf305b9e574eee7fddfd8b2b8faf5a9584fd31`/
+  `008a0e193ec4364dbf515ce39dc85e7a7ba73a72ec7ab8b358c414d27415d992`.
+  Both lanes used target-token embedding, fresh seed `20260719`, K4/GPR1/GA1,
+  two B200 ranks on physical GPUs 2 and 3, BF16/SDPA, and one requested update.
+- Fixed diagnostic data: JSONL SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`.
+  Rank inputs were a `1770x1138` image with SHA256
+  `472bee888ff92c9f27a60759c2b422d46dc38d30781473f78b5c88bb77202edc`
+  and a `1024x685` image with SHA256
+  `49fbc0500a5f172a67c79ab09c998f849dabde9a90eb59ccf13b8617c2535bc1`.
+- Processor geometry: native/capped grids were respectively
+  `(1,72,110)/(1,24,38)` and `(1,42,64)/(1,26,38)`. Main-D token counts fell
+  from `1980` to `228` and from `672` to `247`. Resize preserved aspect ratio;
+  no square crop/resize was used.
+- Capped result: `PASS`. The update completed in `9.057971587` seconds for
+  eight rows, with physical schedules `(8,8)` on both ranks. Peak allocated
+  CUDA memory was `61,723,877,888`/`63,822,406,656` bytes and peak reserved was
+  `66,355,986,432`/`69,229,084,672` bytes. Metrics SHA256 is
+  `e677be8c93fef323fee9accb502ff22d0018c38c376674f168c6e87913a9eca4`.
+- Native-limit result: no optimizer-step metric was produced after about 106
+  seconds beyond the durable start event, so the lane was terminated rather
+  than spending more diagnostic GPU time. One-second telemetry observed up to
+  `182274`/`122158` MiB framebuffer use. During the long imbalanced interval,
+  one rank commonly reported `0%` SM while the other reported `100%`, showing
+  rank straggling rather than balanced full-device use. This is a terminated
+  lower-bound observation, not a completed timing number and not an OOM claim.
+- Conclusion: the missing Golden cap is a material root cause for real-data
+  memory and speed behavior. It does not explain the RP-12 versus RP-13
+  31-GB/117-GB difference because their `8x4` fixture remains below both caps;
+  that difference remains attributable to score/recompute versus single-pass
+  B32 execution. Whether `262144` becomes the production cap remains open.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
