@@ -2950,7 +2950,7 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `ac13f568061ca893400d343b9ebc9419127e2195` contains the Torch2.9
   `set_requires_gradient_sync`/`set_reshard_after_backward` implementation and
   intentionally excludes the later selective-lm-head patch.
-- Lifecycle status: `PLANNED`; result `PENDING`.
+- Lifecycle status: `COMPLETE`; result `SIDE_RESULT`.
 - Question/baseline/output: does matching the historical GA4 `no_sync`
   schedule—three local accumulation backwards followed by one FP32
   reduce-scatter—remove the repeated FSDP communication/reshard bubbles and
@@ -2989,16 +2989,36 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   every microstep while RP-24 accumulates unsharded FP32 gradients before one
   reduce-scatter; all values must be finite and the numerical delta is
   reported. Any window exception is process-fatal and the Trainer is fail-stop.
-- Start/end/session, GPU-hours, scratch, outputs/metrics: `PENDING`; GPUs2/3
-  observed idle immediately before planning; hard limit one aggregate GPU-hour
-  and one 100 ms utilization trace; overwrite forbidden.
+- Start/end/session, GPU-hours, scratch, outputs/metrics: torchrun parent PID
+  `1920437` launched at `2026-07-20 06:58:24 +09:00` and completed at
+  `06:59:29 +09:00` (about 65 seconds wall). The three measured steps used
+  `0.0174` aggregate train-core GPU-hours and the full launch stayed below
+  `0.0362` aggregate GPU-hours. The output tree occupies `577,981,782` bytes;
+  metrics, final Adapter, step-3 checkpoint, run log and utilization trace are
+  complete. Final artifact manifest SHA256 is
+  `e1062dc24f9b74d91766228659dc43577835f56f9d22a95070f0833fa8a90415`.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
   run-representation configs/smoke/representation_qwen3_embedding_rp24_fsdpaccum_real512_ga4_throughput_gpu23.toml`;
   a read-only 100 ms sampler observes physical GPUs2/3.
-- Conclusion: `PENDING`.
+- Metrics/parity: steps 1/2/3 took `11.152782980`, `10.038504998`, and
+  `10.052605304` seconds. The steps-2/3 steady mean is `10.045555151` seconds
+  (`5.5809` train-core hours for 2,000 steps), `1.01%` slower than RP-23.
+  Step-1 sample order, all objective values, counts and eight B8 calls match
+  RP-23 exactly. Step-1 gradient norm is `8.115238190` versus RP-23
+  `8.115159988` (about `9.6e-6` relative); later losses follow the expected
+  distinct FP32-accumulation update path. Maximum rank peak allocated/reserved
+  memory is `64,426,703,360`/`73,052,192,768` bytes. In the memory-resident
+  trace GPU2/GPU3 mean utilization is `31.8%`/`35.4%`, below-50% samples are
+  `67.3%`/`63.6%`, zero samples are `48.7%`/`40.9%`, and longest below-50%
+  intervals are about `3.34`/`1.95` seconds.
+- Conclusion: retain the FSDP2 accumulation correction because it implements
+  the intended GA4 no-sync mathematics, but reject communication/resharding as
+  the explanation for the utilization gaps. It neither improves throughput
+  nor makes the device timeline more continuous; the next cell isolates
+  readout staging/full-vocabulary projection before CPU group prefetch.
 
 ## Compatibility-spike status
 
