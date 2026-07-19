@@ -13,8 +13,6 @@ from tgvf_rl.qwen.base import (
     InjectedVisualBlock,
     QwenVLMFamilyAdapter,
     _prove_native_streaming_injected_request,
-    _prove_selected_sequence_positions,
-    resolve_lm_head,
 )
 from tgvf_rl.representation.deepstack import (
     _build_original_image_key_block_mask_from_positions,
@@ -24,10 +22,9 @@ from .losses import (
     CausalEvidenceLosses,
     EVIDENCE_IGNORE_INDEX,
     MatrixCEScoreMode,
-    _causal_evidence_losses_from_selected_logits,
+    _causal_evidence_losses_from_native_labels,
     _historical_sample_norm_loss_unchecked,
-    _prove_native_causal_evidence_selection,
-    _resolve_native_causal_evidence_selection,
+    _materialize_native_causal_evidence_labels,
     causal_evidence_losses,
     matrix_ce_cell_scores,
 )
@@ -1128,28 +1125,14 @@ def _forward_cell_batch_losses(
             use_cache=False,
         )
     )
-    lm_head_weight = getattr(resolve_lm_head(model), "weight", None)
-    if not isinstance(lm_head_weight, torch.Tensor) or lm_head_weight.ndim != 2:
-        raise TypeError("native selected logits require a matrix lm_head weight")
-    selection = _prove_native_causal_evidence_selection(
+    result = family_adapter.forward_injected(model, batched_request)
+    labels = _materialize_native_causal_evidence_labels(
         tuple(cell.row.supervision.labels for cell in cells),
         maximum_sequence,
-        vocabulary_size=int(lm_head_weight.shape[0]),
+        device=result.logits.device,
+        vocabulary_size=int(result.logits.shape[-1]),
     )
-    position_rows, selection_identity = _resolve_native_causal_evidence_selection(
-        selection
-    )
-    positions = _prove_selected_sequence_positions(
-        batched_request,
-        position_rows,
-        selection_identity=selection_identity,
-    )
-    result = family_adapter.forward_injected_selected_logits(
-        model,
-        batched_request,
-        positions,
-    )
-    return _causal_evidence_losses_from_selected_logits(result, selection)
+    return _causal_evidence_losses_from_native_labels(result.logits, labels)
 
 
 def _right_pad_input_ids(

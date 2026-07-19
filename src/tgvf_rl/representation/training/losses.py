@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import math
 
@@ -14,7 +14,6 @@ from torch.nn import functional as F
 EVIDENCE_IGNORE_INDEX = -100
 HISTORICAL_NORM_EPS = 1e-6
 _NATIVE_CAUSAL_LABEL_PROOF_AUTHORITY = object()
-_NATIVE_CAUSAL_SELECTION_PROOF_AUTHORITY = object()
 
 
 class MatrixCEScoreMode(str, Enum):
@@ -48,28 +47,6 @@ class _NativeCausalEvidenceLabels:
     vocabulary_size: int
     tensor_version: int
     authority: object
-
-
-@dataclass(frozen=True, slots=True)
-class _NativeCausalEvidenceSelection:
-    """CPU-proven causal positions, targets, and per-sample token counts."""
-
-    prediction_position_rows: tuple[tuple[int, ...], ...]
-    target_token_ids: tuple[int, ...]
-    valid_token_counts: tuple[int, ...]
-    vocabulary_size: int
-    _selection_identity: object | None = field(
-        default=None,
-        init=False,
-        repr=False,
-        compare=False,
-    )
-    _authority: object | None = field(
-        default=None,
-        init=False,
-        repr=False,
-        compare=False,
-    )
 
 
 def matrix_ce_cell_scores(
@@ -233,143 +210,6 @@ def _materialize_native_causal_evidence_labels(
         vocabulary_size=vocabulary_size,
         tensor_version=values._version,
         authority=_NATIVE_CAUSAL_LABEL_PROOF_AUTHORITY,
-    )
-
-
-def _prove_native_causal_evidence_selection(
-    rows: tuple[tuple[int, ...], ...],
-    sequence: int,
-    *,
-    vocabulary_size: int,
-) -> _NativeCausalEvidenceSelection:
-    """Derive exact causal prediction positions and targets on the CPU.
-
-    For a non-ignored label at sequence position ``p``, the selected language-
-    model logit is position ``p - 1``.  The immutable selection identity binds
-    those positions to the corresponding flattened target IDs and row counts.
-    """
-
-    if not isinstance(rows, tuple) or not rows:
-        raise ValueError("native causal evidence selection requires non-empty rows")
-    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 2:
-        raise ValueError("native causal evidence selection requires sequence >= 2")
-    if (
-        isinstance(vocabulary_size, bool)
-        or not isinstance(vocabulary_size, int)
-        or vocabulary_size <= 0
-    ):
-        raise ValueError("native causal evidence selection requires a positive vocabulary")
-
-    prediction_rows: list[tuple[int, ...]] = []
-    target_token_ids: list[int] = []
-    valid_token_counts: list[int] = []
-    for row in rows:
-        if not isinstance(row, tuple):
-            raise TypeError("native causal evidence label rows must be tuples")
-        if len(row) > sequence:
-            raise ValueError("right-padding target is shorter than evidence labels")
-        if any(isinstance(value, bool) or not isinstance(value, int) for value in row):
-            raise TypeError("native causal evidence labels must contain integer ids")
-        valid = tuple(
-            (label_position - 1, value)
-            for label_position, value in enumerate(row[1:], start=1)
-            if value != EVIDENCE_IGNORE_INDEX
-        )
-        if not valid:
-            raise ValueError(
-                "every sample must have at least one non-ignored evidence token "
-                "after the causal shift"
-            )
-        if any(value < 0 or value >= vocabulary_size for _, value in valid):
-            raise ValueError("non-ignored evidence labels must be valid vocabulary ids")
-        prediction_rows.append(tuple(position for position, _ in valid))
-        target_token_ids.extend(value for _, value in valid)
-        valid_token_counts.append(len(valid))
-
-    selection = _NativeCausalEvidenceSelection(
-        prediction_position_rows=tuple(prediction_rows),
-        target_token_ids=tuple(target_token_ids),
-        valid_token_counts=tuple(valid_token_counts),
-        vocabulary_size=vocabulary_size,
-    )
-    object.__setattr__(selection, "_selection_identity", object())
-    object.__setattr__(
-        selection,
-        "_authority",
-        _NATIVE_CAUSAL_SELECTION_PROOF_AUTHORITY,
-    )
-    return selection
-
-
-def _resolve_native_causal_evidence_selection(
-    selection: _NativeCausalEvidenceSelection,
-) -> tuple[tuple[tuple[int, ...], ...], object]:
-    if (
-        not isinstance(selection, _NativeCausalEvidenceSelection)
-        or selection._authority is not _NATIVE_CAUSAL_SELECTION_PROOF_AUTHORITY
-        or selection._selection_identity is None
-    ):
-        raise TypeError("causal evidence selection must carry a construction proof")
-    if len(selection.prediction_position_rows) != len(selection.valid_token_counts):
-        raise ValueError("causal evidence selection rows and counts differ")
-    if any(
-        len(row) != count or count <= 0
-        for row, count in zip(
-            selection.prediction_position_rows,
-            selection.valid_token_counts,
-            strict=True,
-        )
-    ):
-        raise ValueError("causal evidence selection contains an invalid row count")
-    if sum(selection.valid_token_counts) != len(selection.target_token_ids):
-        raise ValueError("causal evidence selection positions and targets differ")
-    return selection.prediction_position_rows, selection._selection_identity
-
-
-def _causal_evidence_losses_from_selected_logits(
-    result: object,
-    selection: _NativeCausalEvidenceSelection,
-) -> CausalEvidenceLosses:
-    """Reduce sealed selected logits with their exact CPU-proven targets."""
-
-    position_rows, selection_identity = _resolve_native_causal_evidence_selection(
-        selection
-    )
-    # Local import avoids coupling the public pure-tensor loss module to Qwen
-    # package initialization while still enforcing the family result proof.
-    from tgvf_rl.qwen.base import _resolve_selected_logits_result
-
-    logits, positions = _resolve_selected_logits_result(
-        result,
-        expected_selection_identity=selection_identity,
-    )
-    if positions.rows != position_rows:
-        raise ValueError("selected logits and causal prediction positions differ")
-    if logits.shape[-1] != selection.vocabulary_size:
-        raise ValueError("selected-logits vocabulary differs from target proof")
-
-    targets = torch.tensor(
-        selection.target_token_ids,
-        dtype=torch.long,
-        device=logits.device,
-    )
-    valid_token_counts = torch.tensor(
-        selection.valid_token_counts,
-        dtype=torch.long,
-        device=logits.device,
-    )
-    per_token_nll = F.cross_entropy(logits, targets, reduction="none")
-    summed_nll = torch.stack(
-        tuple(
-            sample_nll.sum()
-            for sample_nll in per_token_nll.split(selection.valid_token_counts)
-        )
-    )
-    token_mean_nll = summed_nll / valid_token_counts.to(dtype=summed_nll.dtype)
-    return CausalEvidenceLosses(
-        per_sample_token_mean_nll=token_mean_nll,
-        per_sample_summed_log_likelihood=-summed_nll,
-        valid_token_counts=valid_token_counts,
     )
 
 
