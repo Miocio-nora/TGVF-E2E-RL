@@ -2390,8 +2390,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and approval references: accepted
   `RPI-20260720-CONTROL-STACK-OPTIMIZATION`; runtime commit
   `1062e2db35a17376b33b9578be81ffb88c9c06e0`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: does keeping the 72M-parameter TGVF Adapter unsharded between its
   forward and backward (`reshard_after_forward=false`) reduce RP-17's
   `12.0231005715`-second steady optimizer step without changing mathematics?
@@ -2443,15 +2443,119 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   world 2, K4, GA4/GPR1, global batch 32, eight B8 Qwen calls/rank/update.
 - GPUs: only user-authorized physical GPUs 0 and 3, UUIDs recorded in RP-17,
   both observed at 0 MiB and 0% utilization immediately before planning.
-- Start/end timestamps, elapsed time, and session/process identity: PENDING.
-- Actual GPU-hours and peak scratch use: PENDING; hard limit one aggregate
-  GPU-hour, with final DCP/export outside train-step timing.
+- Start/end timestamps, elapsed time, and session/process identity: launched
+  `2026-07-20 05:15:45 +09:00`; completed `05:16:50 +09:00`; torchrun parent
+  PID `1799780`. The bounded invocation stayed below one aggregate GPU-hour.
+- Actual GPU-hours and peak scratch use: about `0.036` aggregate GPU-hours by
+  invocation wall time. Peak allocated/reserved bytes were
+  `64,215,435,264`/`73,146,564,608` on the maximum rank.
 - Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp18_noreshard_real512_ga4_throughput.toml > /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-18-qwen3-noreshard-real512-k4-ga4-throughput/run.log 2>&1`.
-- Outputs: PENDING; overwrite forbidden under the exact RP-18 root.
+- Outputs: complete metrics, final Adapter artifact, and final step-3 DCP under
+  the exact RP-18 root; overwrite remained forbidden.
 - Scorer/parser identity: no answer scorer; strict representation runner.
-- Metrics: PENDING; compare steady mean of steps 2/3 and peak allocation to
-  RP-17, and report the implied 2,000-step train-core duration.
-- Conclusion: PENDING.
+- Metrics: steps 1/2/3 were `13.207190879`, `11.702221723`, and
+  `11.939163785` seconds. The predeclared steady mean was
+  `11.820692754` seconds, implying `6.5671` train-core hours for 2,000 steps.
+  Same-seed losses and gradient norms matched RP-17 exactly at every step.
+- Conclusion: `reshard_after_forward=false` preserved the measured mathematics
+  and improved the steady step by about `1.68%`; it is retained for the next
+  timing cell but does not explain the discontinuous GPU utilization.
+
+### RP-19-QWEN3-REPRESENTATION-CONTINUOUS-REAL512-K4-GA4-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-19`; bounded execution-
+  continuity A/B against RP-18.
+- Spike-plan git revision and approval references: accepted
+  `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; runtime commit
+  `fcd470c15e621fc2ac4849bb3be4d09cc008bc57`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: after reducing one K4 group's Qwen processor/image work from
+  8 calls/12 image instances to 1 call/1 image instance and fusing normal-step
+  host synchronizations, does the RP-18 GPU timeline become more continuous and
+  does its `11.820692754`-second steady optimizer step improve?
+- Baseline and exact output path: RP-18 steps 2/3 were `11.702221723` and
+  `11.939163785` seconds. RP-19 writes only under
+  `artifacts/representation/RP-19-qwen3-continuous-real512-k4-ga4-throughput/`.
+- Model and processor identity: stable local Qwen3-VL-8B-Thinking, BF16/SDPA,
+  tokenizer `151669`, exact native template, no resize, local-only, and
+  aspect-ratio-preserving `image_max_pixels=262144`.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`; no
+  source or legacy artifact; three updates under the unchanged 2,000-step
+  scheduler horizon.
+- N/A fields and justification: policy/reference, rollout/logprobs, reward,
+  GRPO, SDPO, judge, vLLM sampling, KV cache and replay are absent from this
+  representation-only timing diagnostic.
+- Policy/reference initialization: N/A; frozen original Qwen and fresh TGVF
+  Adapter only.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  representation training with no policy update.
+- Code commit and worktree state: runtime commit above; source/canonical TOML
+  SHA256 `0328ca66804ad185083d7e95ad5ad5b2f6fcaabc2957670c5686a4f1ee056fa6`/
+  `e13d0fae6b4393ea1b104ecef51f2ece51bf4bd7a03493cafa7d1aa3f23b7445`;
+  launch requires the committed config/ledger-only planning delta and no live
+  implementation drift.
+- Repository adapter/patch surface and hash: repo-owned changes are confined to
+  the Qwen3 native representation group builder and trainer bookkeeping. The
+  first processor result is the group-owned visual geometry; later transcripts
+  derive exact native visual expansions, while Qwen, Adapter parameters,
+  objectives, and installed packages remain unchanged.
+- Dataset/manifest, hashes, sample rule, and n: identical RP-18 fixed two-image
+  real-resolution K4 fixture, source SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`,
+  with the same validation fixture and seeds. Each rank repeats one group over
+  GA4; this is a throughput fixture, not a quality estimate.
+- Native prompt/tool schema hash: unchanged smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`
+  and native `tgvf_focus_tool` schema.
+- Chat-template/token-fixture hash and token-ownership masks: unchanged exact
+  template SHA256 `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`;
+  evidence-only labels and no tokenizer growth.
+- D/DeepStack/position/mask identity: unchanged main D, ordered branches
+  `(8,16,24)`, native M-RoPE positions, and post-D source-key blocking.
+- Observation materialization/artifact identity used by all replays: no policy
+  replay; each Matrix-CE column still uses one complete differentiable main-D
+  plus all D-DeepStack branches from that target.
+- RL framework/version/environment lock: unchanged accepted Python 3.12 / Torch
+  2.9 control lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: unchanged legacy summed-NLL Matrix CE,
+  L_gen and Norm, weights `1/1/.1`, manifold zero, global reductions unchanged.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic,
+  frozen Qwen eval state, Adapter dropout zero, no cache, TF32 off, and CUBLAS
+  workspace `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: sampling/logprobs N/A; same-image
+  sampler seeds remain 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 forward/FP32 reduction, SDPA, no
+  quantization/KV/TP/offload, FSDP2 mesh `[2]`, and
+  `reshard_after_forward=false`.
+- Logit/logprob/loss/gradient parity tolerances: same-seed step losses, gradient
+  norm, sample order, physical Qwen call sizes, and tokenizer length must equal
+  RP-18; timing/allocator/utilization samples are measurement outputs. CPU gates
+  passed 63 focused tests plus Ruff before planning.
+- World size, microbatch, accumulation, and global batch: world 2, K4,
+  GA4/GPR1, 16 local/32 global rows, eight B8 Qwen calls/rank/update, global
+  batch 32 unchanged.
+- GPUs: only user-authorized physical GPUs 0 and 3, mapped to logical 0/1; both
+  must be idle at immediate preflight.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; command hard limit one
+  aggregate GPU-hour. A 100 ms `nvidia-smi` utilization trace is written under
+  the RP-19 root and is diagnostic only.
+- Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/smoke/representation_qwen3_embedding_rp19_continuous_real512_ga4_throughput.toml`;
+  a separate read-only 100 ms `nvidia-smi` sampler observes physical 0 and 3.
+- Outputs: `PENDING`; overwrite forbidden under the exact RP-19 root.
+- Scorer/parser identity: no answer scorer; strict native representation runner.
+- Metrics: `PENDING`; compare step 2/3 mean, peak allocation, and the fraction
+  and longest run of 100 ms samples below 50% GPU utilization against the
+  observed discontinuity.
+- Conclusion: `PENDING`.
 
 ## Compatibility-spike status
 
