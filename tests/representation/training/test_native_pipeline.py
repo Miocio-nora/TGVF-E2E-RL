@@ -674,6 +674,98 @@ def test_real_group_builder_contract_supports_both_providers(
     assert scores.score_matrix.shape == (2, 2)
 
 
+def test_prepared_group_is_cpu_only_and_exactly_matches_synchronous_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"immutable-image-fixture")
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    family = Qwen3VLAdapter()
+    samples = (_sample(image, 0), _sample(image, 1))
+    builder = Qwen3NativeRepresentationGroupBuilder(
+        runtime=runtime,
+        family_adapter=family,
+        prompt=_prompt(),
+        image_loader=lambda path: Path(path).read_bytes(),
+    )
+    synchronous = builder(
+        samples,
+        runtime.adapter,
+        collective_candidate_count=3,
+    )
+
+    vision_calls = runtime.vision_tower.forward_calls
+    with monkeypatch.context() as prepare_guard:
+        prepare_guard.setattr(
+            runtime.model,
+            "forward",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("CPU preparation must not run the Qwen model")
+            ),
+        )
+        prepare_guard.setattr(
+            runtime.adapter,
+            "forward",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("CPU preparation must not run the TGVF Adapter")
+            ),
+        )
+        prepared = builder._prepare_cpu_group(
+            samples,
+            collective_candidate_count=3,
+        )
+    assert runtime.vision_tower.forward_calls == vision_calls
+    assert all(
+        tensor.device.type == "cpu"
+        for tensor in (
+            prepared.processor_input_ids,
+            prepared.processor_attention_mask,
+            prepared.processor_pixel_values,
+            prepared.processor_image_grid_thw,
+        )
+    )
+
+    materialized = builder._materialize_prepared_group(prepared, runtime.adapter)
+    assert materialized.image_group_key == synchronous.image_group_key
+    assert materialized.source_visual_identity == synchronous.source_visual_identity
+    assert tuple(row.sample_id for row in materialized.rows) == tuple(
+        row.sample_id for row in synchronous.rows
+    )
+    for actual, expected in zip(materialized.rows, synchronous.rows, strict=True):
+        assert actual.supervision == expected.supervision
+        assert actual.source_positions == expected.source_positions
+        assert actual.d_positions == expected.d_positions
+        assert torch.equal(actual.input_ids, expected.input_ids)
+        assert torch.equal(actual.attention_mask, expected.attention_mask)
+        assert torch.equal(actual.position_ids, expected.position_ids)
+    for actual, expected in zip(
+        materialized.candidates,
+        synchronous.candidates,
+        strict=True,
+    ):
+        assert torch.equal(actual.visual.main, expected.visual.main)
+        assert all(
+            torch.equal(actual_branch, expected_branch)
+            for actual_branch, expected_branch in zip(
+                actual.visual.deepstack,
+                expected.visual.deepstack,
+                strict=True,
+            )
+        )
+    synchronous_scores = score_streaming_same_image_group(
+        family,
+        runtime.model,
+        synchronous,
+    )
+    prepared_scores = score_streaming_same_image_group(
+        family,
+        runtime.model,
+        materialized,
+    )
+    assert torch.equal(prepared_scores.score_matrix, synchronous_scores.score_matrix)
+
+
 def test_group_builder_checks_runtime_invariants_only_at_group_boundaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

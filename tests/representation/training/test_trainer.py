@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from hashlib import sha256
+from threading import Event, Lock, get_ident
 from types import SimpleNamespace
 
 import pytest
@@ -271,6 +272,106 @@ class _FailOnSecondGroupBuilder(_GroupBuilder):
         return super().__call__(*args, **kwargs)
 
 
+class _PrefetchGroupBuilder(_GroupBuilder):
+    def __init__(self, *, fail_prepare_call: int | None = None) -> None:
+        self.fail_prepare_call = fail_prepare_call
+        self.main_thread_id = get_ident()
+        self.prepare_sample_ids: list[tuple[str, ...]] = []
+        self.materialize_sample_ids: list[tuple[str, ...]] = []
+        self.prepare_thread_ids: list[int] = []
+        self.materialize_thread_ids: list[int] = []
+        self.sync_calls = 0
+        self.active_prepares = 0
+        self.max_active_prepares = 0
+        self.second_prepare_started = Event()
+        self.release_second_prepare = Event()
+        self.second_prepare_finished = Event()
+        self.overlapped_second_prepare_with_first_materialize = False
+        self._lock = Lock()
+
+    def __call__(self, *args, **kwargs) -> SameImageReadoutGroup:
+        self.sync_calls += 1
+        raise AssertionError("prefetch-capable builder used synchronous __call__")
+
+    def _prepare_cpu_group(
+        self,
+        samples: tuple[RepresentationTrainingSample, ...],
+        *,
+        collective_candidate_count: int,
+    ) -> object:
+        sample_ids = tuple(sample.sample_id for sample in samples)
+        with self._lock:
+            self.prepare_sample_ids.append(sample_ids)
+            self.prepare_thread_ids.append(get_ident())
+            call_index = len(self.prepare_sample_ids)
+            self.active_prepares += 1
+            self.max_active_prepares = max(
+                self.max_active_prepares,
+                self.active_prepares,
+            )
+        try:
+            if call_index == 2:
+                self.second_prepare_started.set()
+                if self.fail_prepare_call != call_index:
+                    if not self.release_second_prepare.wait(timeout=5):
+                        raise RuntimeError("second CPU preparation was not released")
+            if self.fail_prepare_call == call_index:
+                raise RuntimeError(f"injected CPU preparation failure {call_index}")
+            return samples, collective_candidate_count
+        finally:
+            with self._lock:
+                self.active_prepares -= 1
+            if call_index == 2:
+                self.second_prepare_finished.set()
+
+    def _materialize_prepared_group(
+        self,
+        prepared: object,
+        adapter: TGVFAdapter,
+    ) -> SameImageReadoutGroup:
+        if (
+            not isinstance(prepared, tuple)
+            or len(prepared) != 2
+            or not isinstance(prepared[0], tuple)
+            or not isinstance(prepared[1], int)
+        ):
+            raise TypeError("malformed prepared group fixture")
+        samples = prepared[0]
+        collective_candidate_count = prepared[1]
+        sample_ids = tuple(sample.sample_id for sample in samples)
+        with self._lock:
+            self.materialize_sample_ids.append(sample_ids)
+            self.materialize_thread_ids.append(get_ident())
+            materialize_index = len(self.materialize_sample_ids)
+        if materialize_index == 1 and self.fail_prepare_call is None:
+            if not self.second_prepare_started.wait(timeout=5):
+                raise RuntimeError("next CPU preparation did not start one group ahead")
+            with self._lock:
+                self.overlapped_second_prepare_with_first_materialize = (
+                    self.active_prepares == 1
+                )
+            self.release_second_prepare.set()
+        return super().__call__(
+            samples,
+            adapter,
+            collective_candidate_count=collective_candidate_count,
+        )
+
+
+class _PrepareOnlyGroupBuilder(_GroupBuilder):
+    def __init__(self) -> None:
+        self.prepare_calls = 0
+        self.sync_thread_ids: list[int] = []
+
+    def _prepare_cpu_group(self, *args, **kwargs) -> object:
+        self.prepare_calls += 1
+        raise AssertionError("a partial private hook must not enable prefetch")
+
+    def __call__(self, *args, **kwargs) -> SameImageReadoutGroup:
+        self.sync_thread_ids.append(get_ident())
+        return super().__call__(*args, **kwargs)
+
+
 def _objective() -> RepresentationObjectiveConfig:
     return RepresentationObjectiveConfig(
         identity="trainer-test-objective",
@@ -287,6 +388,51 @@ def _objective_v2() -> RepresentationObjectiveConfigV2:
         matrix_ce_weight=0.6,
         l_gen_weight=1.1,
         norm_weight=0.1,
+    )
+
+
+def _trainer_for_group_builder(
+    group_builder: _GroupBuilder,
+    *,
+    accumulation_controller: _RecordingAccumulationController | None = None,
+) -> RepresentationTrainer:
+    samples = _samples()
+    adapter = _adapter()
+    qwen = _qwen()
+    optimizer = build_representation_optimizer(
+        adapter,
+        RepresentationOptimizerConfig(
+            learning_rate=1e-3,
+            betas=(0.9, 0.95),
+            eps=1e-8,
+            weight_decay=0.0,
+        ),
+    )
+    return RepresentationTrainer(
+        adapter=adapter,
+        qwen_model=qwen,
+        family_adapter=Qwen3VLAdapter(),
+        samples=samples,
+        sampler=SameImageBatchSampler(
+            samples,
+            batch_size=2,
+            seed=17,
+            data_manifest_sha256=sha256(b"trainer-prefetch-data").hexdigest(),
+        ),
+        group_builder=group_builder,
+        objective=_objective(),
+        accumulation=RepresentationAccumulationIdentity(
+            gradient_accumulation_steps=2,
+            data_parallel_world_size=1,
+        ),
+        optimizer=optimizer,
+        scheduler=None,
+        config=RepresentationTrainerConfig(
+            precision=RepresentationPrecision.FP32,
+            max_grad_norm=1.0,
+            require_all_adapter_gradients=True,
+        ),
+        accumulation_controller=accumulation_controller,
     )
 
 
@@ -388,6 +534,71 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
         ("begin", 1, 2),
         ("finish",),
     ]
+
+
+def test_trainer_prefetches_only_one_cpu_group_ahead_of_materialization() -> None:
+    builder = _PrefetchGroupBuilder()
+    trainer = _trainer_for_group_builder(builder)
+
+    metrics = trainer.train_step()
+
+    assert metrics.global_step == 1
+    assert builder.sync_calls == 0
+    assert builder.prepare_sample_ids == builder.materialize_sample_ids
+    assert (
+        tuple(
+            sample_id
+            for group_sample_ids in builder.materialize_sample_ids
+            for sample_id in group_sample_ids
+        )
+        == metrics.local_sample_ids
+    )
+    assert len(builder.prepare_sample_ids) == 2
+    assert len(set(builder.prepare_thread_ids)) == 1
+    assert builder.prepare_thread_ids[0] != builder.main_thread_id
+    assert builder.materialize_thread_ids == [builder.main_thread_id] * 2
+    assert builder.max_active_prepares == 1
+    assert builder.overlapped_second_prepare_with_first_materialize
+    assert builder.second_prepare_finished.is_set()
+    assert builder.active_prepares == 0
+
+
+def test_cpu_prefetch_failure_is_drained_and_trainer_is_fail_stop() -> None:
+    builder = _PrefetchGroupBuilder(fail_prepare_call=2)
+    controller = _RecordingAccumulationController()
+    trainer = _trainer_for_group_builder(
+        builder,
+        accumulation_controller=controller,
+    )
+
+    with pytest.raises(RuntimeError, match="injected CPU preparation failure 2"):
+        trainer.train_step()
+
+    assert trainer.global_step == 0
+    assert builder.sync_calls == 0
+    assert len(builder.prepare_sample_ids) == 2
+    assert len(builder.materialize_sample_ids) == 1
+    assert builder.second_prepare_finished.is_set()
+    assert builder.active_prepares == 0
+    assert controller.events == [
+        ("begin", 0, 2),
+        ("begin", 1, 2),
+        ("finish",),
+    ]
+    with pytest.raises(RuntimeError, match="cannot be reused"):
+        trainer.train_step()
+
+
+def test_partial_prefetch_hooks_keep_the_synchronous_builder_path() -> None:
+    builder = _PrepareOnlyGroupBuilder()
+    trainer = _trainer_for_group_builder(builder)
+    main_thread_id = get_ident()
+
+    metrics = trainer.train_step()
+
+    assert metrics.global_step == 1
+    assert builder.prepare_calls == 0
+    assert builder.sync_thread_ids == [main_thread_id, main_thread_id]
 
 
 def test_partial_accumulation_failure_is_fail_stop() -> None:

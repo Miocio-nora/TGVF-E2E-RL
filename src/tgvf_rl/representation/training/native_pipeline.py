@@ -64,7 +64,9 @@ from .runtime import (
 )
 from .schema import RepresentationTrainingSample
 from .transcript import (
+    CanonicalEvidenceSupervision,
     CanonicalToModelTokenExpansion,
+    ModelEvidenceSupervision,
     _build_visual_token_expansion,
     render_native_evidence_labels,
 )
@@ -236,6 +238,71 @@ class ModelActionTarget:
             raise ValueError("action input_ids differ from CPU model token IDs")
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedNativeRepresentationGroup:
+    """CPU-only immutable inputs for one native same-image group.
+
+    The training prefetch worker may construct this value, but it must never
+    touch CUDA, run a model forward, or call the TGVF Adapter.  Runtime-owned
+    rendering, tokenization, and image processing are the CPU work intentionally
+    moved here; model-owned operations remain in
+    ``_materialize_prepared_group`` on the training thread.
+    """
+
+    samples: tuple[RepresentationTrainingSample, ...]
+    collective_candidate_count: int
+    image_path: str
+    image_sha256: str
+    actions: tuple[NativeActionTarget, ...]
+    action_expansions: tuple[CanonicalToModelTokenExpansion, ...]
+    readout_canonical: tuple[CanonicalEvidenceSupervision, ...]
+    readout_model_token_ids: tuple[tuple[int, ...], ...]
+    source_visual_token_count: int
+    processor_input_ids: torch.Tensor = field(repr=False)
+    processor_attention_mask: torch.Tensor = field(repr=False)
+    processor_pixel_values: torch.Tensor = field(repr=False)
+    processor_image_grid_thw: torch.Tensor = field(repr=False)
+
+    def __post_init__(self) -> None:
+        size = len(self.samples)
+        if size < 2:
+            raise ValueError("prepared native group requires K>=2")
+        if self.collective_candidate_count < size:
+            raise ValueError("prepared collective candidate count is smaller than K")
+        if not self.image_path:
+            raise ValueError("prepared native group requires an image path")
+        _require_sha256(self.image_sha256, field_name="prepared image_sha256")
+        if (
+            len(self.actions) != size
+            or len(self.action_expansions) != size
+            or len(self.readout_canonical) != size
+            or len(self.readout_model_token_ids) != size
+        ):
+            raise ValueError("prepared native group rows differ from K")
+        if self.source_visual_token_count <= 0:
+            raise ValueError("prepared source visual token count must be positive")
+        processor_tensors = (
+            self.processor_input_ids,
+            self.processor_attention_mask,
+            self.processor_pixel_values,
+            self.processor_image_grid_thw,
+        )
+        if any(
+            not isinstance(tensor, torch.Tensor) or tensor.device.type != "cpu"
+            for tensor in processor_tensors
+        ):
+            raise ValueError("prepared processor tensors must remain CPU-owned")
+        if any(
+            expansion.canonical_token_ids != action.transcript.token_ids
+            for action, expansion in zip(
+                self.actions,
+                self.action_expansions,
+                strict=True,
+            )
+        ):
+            raise ValueError("prepared action expansion differs from its transcript")
+
+
 def build_native_representation_messages(
     sample: RepresentationTrainingSample,
     prompt: RepresentationPromptConfig,
@@ -381,12 +448,33 @@ class Qwen3NativeRepresentationGroupBuilder:
         *,
         collective_candidate_count: int,
     ) -> SameImageReadoutGroup:
+        if adapter is not self.runtime.adapter:
+            raise ValueError("group builder must use the runtime-owned TGVF Adapter")
+        # Keep the established synchronous API and its entry/exit invariant
+        # scope.  Training may call the two private phases separately so only
+        # the CPU phase runs one group ahead.
+        with self.runtime.validated_group_execution():
+            prepared = self._prepare_cpu_group(
+                samples,
+                collective_candidate_count=collective_candidate_count,
+            )
+            return self._materialize_prepared_group_in_validated_runtime(
+                prepared,
+                adapter,
+            )
+
+    def _prepare_cpu_group(
+        self,
+        samples: tuple[RepresentationTrainingSample, ...],
+        *,
+        collective_candidate_count: int,
+    ) -> _PreparedNativeRepresentationGroup:
+        """Prepare one group without CUDA, model forwards, or Adapter calls."""
+
         if len(samples) < 2 or not all(
             isinstance(sample, RepresentationTrainingSample) for sample in samples
         ):
             raise ValueError("native representation group requires K>=2 typed samples")
-        if adapter is not self.runtime.adapter:
-            raise ValueError("group builder must use the runtime-owned TGVF Adapter")
         collective_candidate_count = _plain_int(
             collective_candidate_count,
             name="collective_candidate_count",
@@ -400,48 +488,160 @@ class Qwen3NativeRepresentationGroupBuilder:
         if len({sample.target for sample in samples}) != len(samples):
             raise ValueError("same-image Matrix CE requires distinct targets")
 
-        with self.runtime.validated_group_execution():
-            return self._build_group_with_validated_runtime(
-                samples,
-                adapter,
-                collective_candidate_count=collective_candidate_count,
-            )
-
-    def _build_group_with_validated_runtime(
-        self,
-        samples: tuple[RepresentationTrainingSample, ...],
-        adapter: TGVFAdapter,
-        *,
-        collective_candidate_count: int,
-    ) -> SameImageReadoutGroup:
-        """Build only while the runtime's per-group invariant scope is active."""
-
         image_path = samples[0].image
         image = self.image_loader(image_path)
         if image is None:
             raise ValueError("image_loader returned None")
+        image_sha256 = sha256(
+            Path(image_path).resolve(strict=True).read_bytes()
+        ).hexdigest()
 
         messages_by_sample = tuple(
             build_native_representation_messages(sample, self.prompt)
             for sample in samples
         )
-        action_by_sample = tuple(
+        actions = tuple(
             render_native_action_target(self.runtime, messages)
             for messages in messages_by_sample
         )
-        first_action, first_expansion = self._materialize_action_with_expansion(
-            action_by_sample[0], image
+        processor_batch = _processor_batch(
+            self.runtime.processor,
+            text=actions[0].transcript.text,
+            images=(image,),
+            image_max_pixels=self.image_max_pixels,
+        )
+        if any(
+            processor_batch[name].device.type != "cpu"
+            for name in (
+                "input_ids",
+                "attention_mask",
+                "pixel_values",
+                "image_grid_thw",
+            )
+        ):
+            raise ValueError(
+                "native CPU preparation received a non-CPU processor tensor"
+            )
+        first_expansion = _qwen3_expansion(
+            self.runtime,
+            actions[0].transcript.token_ids,
+            processor_batch["input_ids"],
         )
         source_visual_token_count = _single_visual_expansion_count(first_expansion)
+        action_expansions = (
+            first_expansion,
+            *tuple(
+                _expand_native_visual_placeholders(
+                    self.runtime,
+                    action.transcript.token_ids,
+                    visual_token_counts=(source_visual_token_count,),
+                )[1]
+                for action in actions[1:]
+            ),
+        )
+        readout_canonical = tuple(
+            render_native_evidence_labels(
+                self.runtime.renderer,
+                messages,
+                evidence_description=sample.evidence_description,
+            )
+            for sample, messages in zip(samples, messages_by_sample, strict=True)
+        )
+        readout_model_token_ids = tuple(
+            _expand_native_visual_placeholders(
+                self.runtime,
+                canonical.transcript.token_ids,
+                visual_token_counts=(
+                    source_visual_token_count,
+                    source_visual_token_count,
+                ),
+            )[0]
+            for canonical in readout_canonical
+        )
+        return _PreparedNativeRepresentationGroup(
+            samples=samples,
+            collective_candidate_count=collective_candidate_count,
+            image_path=image_path,
+            image_sha256=image_sha256,
+            actions=actions,
+            action_expansions=action_expansions,
+            readout_canonical=readout_canonical,
+            readout_model_token_ids=readout_model_token_ids,
+            source_visual_token_count=source_visual_token_count,
+            processor_input_ids=processor_batch["input_ids"],
+            processor_attention_mask=processor_batch["attention_mask"],
+            processor_pixel_values=processor_batch["pixel_values"],
+            processor_image_grid_thw=processor_batch["image_grid_thw"],
+        )
+
+    def _materialize_prepared_group(
+        self,
+        prepared: object,
+        adapter: TGVFAdapter,
+    ) -> SameImageReadoutGroup:
+        """Materialize one CPU plan on the training thread."""
+
+        if not isinstance(prepared, _PreparedNativeRepresentationGroup):
+            raise TypeError("native materialization requires a prepared CPU group")
+        if adapter is not self.runtime.adapter:
+            raise ValueError("group builder must use the runtime-owned TGVF Adapter")
+        with self.runtime.validated_group_execution():
+            return self._materialize_prepared_group_in_validated_runtime(
+                prepared,
+                adapter,
+            )
+
+    def _materialize_prepared_group_in_validated_runtime(
+        self,
+        prepared: _PreparedNativeRepresentationGroup,
+        adapter: TGVFAdapter,
+    ) -> SameImageReadoutGroup:
+        """Materialize only while the runtime invariant scope is active."""
+
+        supervisions = tuple(
+            self.family_adapter.materialize_representation_supervision(
+                self.runtime.model,
+                self.runtime.tokenizer,
+                canonical,
+                torch.tensor((model_token_ids,), dtype=torch.long),
+            )
+            for canonical, model_token_ids in zip(
+                prepared.readout_canonical,
+                prepared.readout_model_token_ids,
+                strict=True,
+            )
+        )
+        processor_batch = {
+            "input_ids": prepared.processor_input_ids,
+            "attention_mask": prepared.processor_attention_mask,
+            "pixel_values": prepared.processor_pixel_values,
+            "image_grid_thw": prepared.processor_image_grid_thw,
+        }
+        input_ids, attention_mask, pixel_values, grid = _move_processor_batch(
+            self.runtime,
+            processor_batch,
+        )
+        first_action = _model_action_from_expansion(
+            canonical=prepared.actions[0],
+            expansion=prepared.action_expansions[0],
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            image_grid_thw=grid,
+        )
         model_actions = (
             first_action,
             *tuple(
-                self._materialize_action_from_shared_visual(
+                self._materialize_action_from_prepared_expansion(
                     action,
+                    expansion=expansion,
                     reference=first_action,
-                    visual_token_count=source_visual_token_count,
                 )
-                for action in action_by_sample[1:]
+                for action, expansion in zip(
+                    prepared.actions[1:],
+                    prepared.action_expansions[1:],
+                    strict=True,
+                )
             ),
         )
         vision = self.runtime.extract_vision_features(
@@ -450,21 +650,24 @@ class Qwen3NativeRepresentationGroupBuilder:
                 image_grid_thw=first_action.image_grid_thw,
             )
         )
-        if int(vision.merged_main.shape[-2]) != source_visual_token_count:
+        if int(vision.merged_main.shape[-2]) != prepared.source_visual_token_count:
             raise ValueError(
                 "processor visual expansion differs from merged vision token count"
             )
 
-        source_identity = _source_visual_identity(
-            image_path=image_path,
+        source_identity = _source_visual_identity_from_sha256(
+            image_sha256=prepared.image_sha256,
             vision=vision,
         )
         source_visual = _source_bundle(vision)
         rows: list[RepresentationReadoutRow] = []
         candidates: list[RepresentationCandidateObservation] = []
         padding_input: TGVFAdapterInput | None = None
-        for sample, messages, model_action in zip(
-            samples, messages_by_sample, model_actions, strict=True
+        for sample, model_action, supervision in zip(
+            prepared.samples,
+            model_actions,
+            supervisions,
+            strict=True,
         ):
             condition = self._condition(sample, model_action)
             adapter_input = self.runtime.make_adapter_input(condition, vision)
@@ -488,9 +691,9 @@ class Qwen3NativeRepresentationGroupBuilder:
                 )
             )
             rows.append(
-                self._readout_row(
+                self._materialize_prepared_readout_row(
                     sample=sample,
-                    messages=messages,
+                    supervision=supervision,
                     vision=vision,
                     source_identity=source_identity,
                 )
@@ -500,10 +703,10 @@ class Qwen3NativeRepresentationGroupBuilder:
             raise RuntimeError("native group did not retain a collective padding input")
         collective_padding = tuple(
             _adapter_output_bundle(adapter(padding_input))
-            for _ in range(collective_candidate_count - len(samples))
+            for _ in range(prepared.collective_candidate_count - len(prepared.samples))
         )
         group = SameImageReadoutGroup(
-            image_group_key=samples[0].image_group_key,
+            image_group_key=prepared.samples[0].image_group_key,
             source_visual_identity=source_identity,
             source_visual=source_visual,
             rows=tuple(rows),
@@ -559,8 +762,25 @@ class Qwen3NativeRepresentationGroupBuilder:
             canonical.transcript.token_ids,
             visual_token_counts=(visual_token_count,),
         )
+        if model_token_ids != expansion.model_token_ids:
+            raise RuntimeError("prepared action expansion changed its model token IDs")
+        return self._materialize_action_from_prepared_expansion(
+            canonical,
+            expansion=expansion,
+            reference=reference,
+        )
+
+    def _materialize_action_from_prepared_expansion(
+        self,
+        canonical: NativeActionTarget,
+        *,
+        expansion: CanonicalToModelTokenExpansion,
+        reference: ModelActionTarget,
+    ) -> ModelActionTarget:
+        if expansion.canonical_token_ids != canonical.transcript.token_ids:
+            raise ValueError("prepared action expansion belongs to another transcript")
         input_ids = torch.tensor(
-            (model_token_ids,),
+            (expansion.model_token_ids,),
             dtype=torch.long,
             device=reference.input_ids.device,
         )
@@ -650,6 +870,26 @@ class Qwen3NativeRepresentationGroupBuilder:
             canonical,
             cpu_input_ids,
         )
+        return self._materialize_prepared_readout_row(
+            sample=sample,
+            supervision=supervision,
+            vision=vision,
+            source_identity=source_identity,
+        )
+
+    def _materialize_prepared_readout_row(
+        self,
+        *,
+        sample: RepresentationTrainingSample,
+        supervision: ModelEvidenceSupervision,
+        vision: Qwen3VisionFeatures,
+        source_identity: str,
+    ) -> RepresentationReadoutRow:
+        cpu_input_ids = torch.tensor(
+            (supervision.model_token_ids,),
+            dtype=torch.long,
+        )
+        expected_tokens = int(vision.merged_main.shape[-2])
         device = vision.merged_main.device
         input_ids = cpu_input_ids.to(device=device)
         attention_mask = torch.ones_like(input_ids)
@@ -979,6 +1219,18 @@ def _source_visual_identity(
     if not path.is_file():
         raise ValueError("representation image path must resolve to a file")
     image_sha256 = sha256(path.read_bytes()).hexdigest()
+    return _source_visual_identity_from_sha256(
+        image_sha256=image_sha256,
+        vision=vision,
+    )
+
+
+def _source_visual_identity_from_sha256(
+    *,
+    image_sha256: str,
+    vision: Qwen3VisionFeatures,
+) -> str:
+    _require_sha256(image_sha256, field_name="source image_sha256")
     model = vision.model_identity
     payload = {
         "schema": "representation_source_visual_identity_v1",
