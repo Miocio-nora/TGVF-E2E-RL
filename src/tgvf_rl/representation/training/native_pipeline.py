@@ -650,23 +650,30 @@ class Qwen3NativeRepresentationGroupBuilder:
             canonical,
             cpu_input_ids,
         )
-        device = vision.merged_main.device
-        input_ids = cpu_input_ids.to(device=device)
-        attention_mask = torch.ones_like(input_ids)
-        grid = torch.tensor(
+        # Qwen's native M-RoPE helper is device-agnostic and dominated by
+        # Python scalar/list indexing.  Feeding it CUDA IDs forces many tiny
+        # GPU kernels and host synchronizations (`tolist`, `item`, argwhere)
+        # even though positions depend only on discrete IDs, mask, and grid.
+        # Construct the exact native positions on CPU, then transfer the one
+        # finished tensor with the rest of the readout inputs.
+        cpu_attention_mask = torch.ones_like(cpu_input_ids)
+        cpu_grid = torch.tensor(
             (vision.image_grid_thw, vision.image_grid_thw),
             dtype=torch.long,
-            device=device,
         )
+        cpu_position_ids = _qwen3_position_ids(
+            self.runtime.model,
+            input_ids=cpu_input_ids,
+            attention_mask=cpu_attention_mask,
+            image_grid_thw=cpu_grid,
+        )
+        device = vision.merged_main.device
+        input_ids = cpu_input_ids.to(device=device)
+        attention_mask = cpu_attention_mask.to(device=device)
+        position_ids = cpu_position_ids.to(device=device)
         blocks = supervision.visual_expansion_blocks
         if tuple(map(len, blocks)) != (expected_tokens, expected_tokens):
             raise ValueError("readout visual blocks differ from source/D token counts")
-        position_ids = _qwen3_position_ids(
-            self.runtime.model,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            image_grid_thw=grid,
-        )
         return RepresentationReadoutRow(
             sample_id=sample.sample_id,
             image_group_key=sample.image_group_key,
