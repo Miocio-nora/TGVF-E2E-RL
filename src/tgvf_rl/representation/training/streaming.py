@@ -12,6 +12,7 @@ from tgvf_rl.qwen.base import (
     InjectedForwardRequest,
     InjectedVisualBlock,
     QwenVLMFamilyAdapter,
+    _forward_injected_selected_logits,
     _prove_native_streaming_injected_request,
     _prove_selected_sequence_positions,
     resolve_lm_head,
@@ -1144,7 +1145,8 @@ def _forward_cell_batch_losses(
         position_rows,
         selection_identity=selection_identity,
     )
-    result = family_adapter.forward_injected_selected_logits(
+    result = _forward_injected_selected_logits(
+        family_adapter,
         model,
         batched_request,
         positions,

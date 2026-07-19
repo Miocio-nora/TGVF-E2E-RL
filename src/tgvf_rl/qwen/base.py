@@ -137,7 +137,7 @@ class InjectedForwardRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class SelectedSequencePositions:
+class _SelectedSequencePositions:
     """Sealed row-major sequence positions for one exact injected request.
 
     Instances are created by :func:`_prove_selected_sequence_positions` from
@@ -164,11 +164,11 @@ class SelectedSequencePositions:
 
 
 @dataclass(frozen=True, slots=True)
-class SelectedLogitsResult:
+class _SelectedLogitsResult:
     """Logits evaluated only at one sealed row-major position selection."""
 
     logits: torch.Tensor
-    positions: SelectedSequencePositions
+    positions: _SelectedSequencePositions
     _logits_version: int = field(default=-1, init=False, repr=False, compare=False)
     _authority: object | None = field(
         default=None,
@@ -210,25 +210,6 @@ class QwenVLMFamilyAdapter(ABC):
             f"{self.capabilities.family} has no accepted live injected forward"
         )
 
-    def forward_injected_selected_logits(
-        self,
-        model: Any,
-        request: InjectedForwardRequest,
-        positions: SelectedSequencePositions,
-    ) -> SelectedLogitsResult:
-        """Return exact row-major logits at selected sequence positions.
-
-        The family-neutral fallback preserves compatibility by running the
-        existing full-logits interface and gathering afterwards.  Families
-        with a proven position-wise language-model head may override this to
-        avoid materializing unselected vocabulary logits.
-        """
-
-        _resolve_selected_sequence_positions(request, positions)
-        result = self.forward_injected(model, request)
-        selected = _gather_selected_sequence_tensor(result.logits, positions)
-        return _bind_selected_logits_result(selected, positions)
-
     def materialize_representation_supervision(
         self,
         model: Any,
@@ -248,6 +229,35 @@ class QwenVLMFamilyAdapter(ABC):
             raise ValueError(
                 f"tokenizer length changed: expected={expected_length} actual={actual}"
             )
+
+
+def _forward_injected_selected_logits(
+    family_adapter: QwenVLMFamilyAdapter,
+    model: Any,
+    request: InjectedForwardRequest,
+    positions: _SelectedSequencePositions,
+) -> _SelectedLogitsResult:
+    """Private selected-logits dispatch with a full-logits fallback."""
+
+    if not isinstance(family_adapter, QwenVLMFamilyAdapter):
+        raise TypeError("family_adapter must be QwenVLMFamilyAdapter")
+    _resolve_selected_sequence_positions(request, positions)
+    family_hook = getattr(
+        family_adapter,
+        "_forward_injected_selected_logits",
+        None,
+    )
+    if family_hook is None:
+        full_result = family_adapter.forward_injected(model, request)
+        selected = _gather_selected_sequence_tensor(full_result.logits, positions)
+        return _bind_selected_logits_result(selected, positions)
+    if not callable(family_hook):
+        raise TypeError("private selected-logits family hook must be callable")
+    result = family_hook(model, request, positions)
+    _, result_positions = _resolve_selected_logits_result(result)
+    if result_positions is not positions:
+        raise ValueError("private selected-logits family hook changed the selection")
+    return result
 
 
 def assert_model_vocabulary_compatible(
@@ -425,7 +435,7 @@ def _prove_selected_sequence_positions(
     rows: tuple[tuple[int, ...], ...],
     *,
     selection_identity: object | None = None,
-) -> SelectedSequencePositions:
+) -> _SelectedSequencePositions:
     """Seal CPU-validated row-major positions to one injected request."""
 
     if not isinstance(request, InjectedForwardRequest):
@@ -451,7 +461,7 @@ def _prove_selected_sequence_positions(
             )
     if selection_identity is None:
         selection_identity = object()
-    proven = SelectedSequencePositions(
+    proven = _SelectedSequencePositions(
         rows=rows,
         _request=request,
         _input_ids=request.input_ids,
@@ -468,12 +478,12 @@ def _prove_selected_sequence_positions(
 
 def _resolve_selected_sequence_positions(
     request: InjectedForwardRequest,
-    positions: SelectedSequencePositions,
+    positions: _SelectedSequencePositions,
 ) -> tuple[tuple[int, ...], ...]:
     """Validate one sealed selection without reading device tensor contents."""
 
     if (
-        not isinstance(positions, SelectedSequencePositions)
+        not isinstance(positions, _SelectedSequencePositions)
         or positions._authority is not _SELECTED_SEQUENCE_POSITIONS_AUTHORITY
     ):
         raise TypeError("selected positions must carry a construction proof")
@@ -495,7 +505,7 @@ def _resolve_selected_sequence_positions(
 
 def _gather_selected_sequence_tensor(
     values: torch.Tensor,
-    positions: SelectedSequencePositions,
+    positions: _SelectedSequencePositions,
 ) -> torch.Tensor:
     """Gather ``[B,S,H]`` values in sealed row-major order."""
 
@@ -517,28 +527,28 @@ def _gather_selected_sequence_tensor(
 
 def _bind_selected_logits_result(
     logits: torch.Tensor,
-    positions: SelectedSequencePositions,
-) -> SelectedLogitsResult:
+    positions: _SelectedSequencePositions,
+) -> _SelectedLogitsResult:
     _resolve_selected_sequence_positions(positions._request, positions)
     if logits.ndim != 2 or logits.shape[0] != positions.selected_count:
         raise ValueError("selected logits must have shape [selected_positions,V]")
     if not logits.dtype.is_floating_point:
         raise TypeError("selected logits must use a floating dtype")
-    result = SelectedLogitsResult(logits=logits, positions=positions)
+    result = _SelectedLogitsResult(logits=logits, positions=positions)
     object.__setattr__(result, "_logits_version", logits._version)
     object.__setattr__(result, "_authority", _SELECTED_LOGITS_RESULT_AUTHORITY)
     return result
 
 
 def _resolve_selected_logits_result(
-    result: SelectedLogitsResult,
+    result: _SelectedLogitsResult,
     *,
     expected_selection_identity: object | None = None,
-) -> tuple[torch.Tensor, SelectedSequencePositions]:
+) -> tuple[torch.Tensor, _SelectedSequencePositions]:
     """Consume sealed selected logits without inspecting device contents."""
 
     if (
-        not isinstance(result, SelectedLogitsResult)
+        not isinstance(result, _SelectedLogitsResult)
         or result._authority is not _SELECTED_LOGITS_RESULT_AUTHORITY
     ):
         raise TypeError("selected logits must carry a family-adapter proof")
@@ -836,8 +846,8 @@ def resolve_lm_head(model: Any) -> Any:
 def _forward_selected_linear_lm_head(
     model: Any,
     hidden_states: torch.Tensor,
-    positions: SelectedSequencePositions,
-) -> SelectedLogitsResult:
+    positions: _SelectedSequencePositions,
+) -> _SelectedLogitsResult:
     """Apply a proven position-wise Qwen head only to selected hidden rows."""
 
     lm_head = resolve_lm_head(model)

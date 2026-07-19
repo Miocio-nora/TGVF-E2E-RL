@@ -20,8 +20,8 @@ from .base import (
     QwenVLMFamilyAdapter,
     RecordedReplayResult,
     ReplayConsumer,
-    SelectedLogitsResult,
-    SelectedSequencePositions,
+    _SelectedLogitsResult,
+    _SelectedSequencePositions,
     _forward_selected_linear_lm_head,
     _resolve_selected_sequence_positions,
     assert_model_vocabulary_compatible,
@@ -68,12 +68,12 @@ class Qwen3VLAdapter(QwenVLMFamilyAdapter):
             visual_position_mask=visual_mask,
         )
 
-    def forward_injected_selected_logits(
+    def _forward_injected_selected_logits(
         self,
         model: Any,
         request: InjectedForwardRequest,
-        positions: SelectedSequencePositions,
-    ) -> SelectedLogitsResult:
+        positions: _SelectedSequencePositions,
+    ) -> _SelectedLogitsResult:
         _resolve_selected_sequence_positions(request, positions)
         hidden, _, _ = self._forward_injected_hidden(model, request)
         return _forward_selected_linear_lm_head(model, hidden, positions)
