@@ -3336,6 +3336,43 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   eliminate the bursty timeline. Profile the retained path before selecting
   another optimization.
 
+### RP-29-QWEN3-REPRESENTATION-POST-MROPE-PROFILE-REAL512-K4-GA4-GPU23
+
+- Cell/matrix ID/class/status: `RP-29`; `PLANNED` bounded operator profile of
+  the retained RP-28 CPU-M-RoPE path. It is diagnostic only; profiled timing
+  and Adapter output are not promotion-eligible.
+- Approval/code/question: accepted control-stack measured attribution;
+  diagnostic/runtime commit `026f44ea2a657037510b78381729f7b43324194e`.
+  After the exact 6.07% RP-28 gain, which remaining group-builder sub-scope
+  causes the longest utilization gap?
+- Profile contract: exact RP-28 model/data/prompt/objective/seed/topology and
+  global batch32. Step 1 is unprofiled and must match RP-28 exactly; step 2
+  captures CPU/CUDA traces. Added scopes isolate runtime invariant scans,
+  message/action/evidence rendering, processor/shared-visual action, source
+  identity, supervision, CPU M-RoPE, vision, conditioning, Adapter, Qwen cell
+  batches, score and backward. Instrumentation affects timing only.
+- Fixed identities: Qwen3-VL-8B-Thinking BF16/SDPA, tokenizer `151669`, native
+  template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  `image_max_pixels=262144`, target-token-embedding, main D + DeepStack
+  `(8,16,24)`, legacy Matrix CE/L_gen/Norm `1/1/.1`, manifold zero, K4/GA4,
+  FSDP2 world2 GPUs2/3, CUBLAS `:4096:8`, no cache/dropout/TF32.
+- Representation-only N/A: rollout, sampling/logprobs, replay, reward, GRPO,
+  SDPO, judge, vLLM, KV cache and staleness.
+- Config/output: source/canonical SHA256
+  `2ce677846ccd9536c36fc476e7c13ee81abb6b02c46b38496dd5cbe737c99358`/
+  `cab0926fc6de54ac34ab66002e541285e72a928270889e34015a895376c27b93`;
+  overwrite forbidden under
+  `artifacts/representation/RP-29-qwen3-post-mrope-profile-real512-k4-ga4-gpu23/`.
+- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2
+  tools/profile_representation_step.py
+  configs/smoke/representation_qwen3_embedding_rp29_post_mrope_profile_real512_ga4_gpu23.toml
+  --profile-global-step 2 --trace-dir
+  artifacts/representation/RP-29-qwen3-post-mrope-profile-real512-k4-ga4-gpu23/profile`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
