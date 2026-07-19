@@ -3020,6 +3020,64 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   nor makes the device timeline more continuous; the next cell isolates
   readout staging/full-vocabulary projection before CPU group prefetch.
 
+### RP-25-QWEN3-REPRESENTATION-SELECTEDHEAD-REAL512-K4-GA4-THROUGHPUT-GPU23
+
+- Cell/matrix ID and class: `RP-25`; bounded selective language-model-head
+  projection A/B against RP-24. Lifecycle status: `PLANNED`; output is a
+  diagnostic side result and is not eligible for representation-artifact
+  promotion.
+- Approval/code/question: accepted
+  `RPI-20260720-CONTROL-STACK-OPTIMIZATION` and
+  `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; runtime commit
+  `4d2cdd4d0b209d41026200af50b600ec6d45f404`. Does gathering the exact
+  evidence prediction hidden states before Qwen's position-wise linear
+  `lm_head`, rather than materializing vocabulary logits at every sequence
+  position, reduce RP-24's `10.045555151`-second steady step and its measured
+  utilization gaps?
+- Model/processor/initialization: stable local Qwen3-VL-8B-Thinking,
+  BF16/SDPA, tokenizer `151669`, no resize, native template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  `image_max_pixels=262144`; frozen Qwen and fresh TGVF Adapter seed
+  `20260719`; target-token-embedding provider.
+- Data/prompt: exact RP-24 K4 fixture SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`,
+  validation SHA256
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`,
+  disjoint split identity, sampler seeds 71/73, native `tgvf_focus_tool`, and
+  smoke prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`.
+- D/objective/determinism: unchanged complete main D plus D-DeepStack
+  `(8,16,24)`, native positions/masks, legacy summed-NLL Matrix CE + L_gen +
+  Norm weights `1/1/.1`, manifold zero; frozen eval Qwen, Adapter dropout zero,
+  no cache, TF32 off, and CUBLAS `:4096:8`. The selective path changes neither
+  evidence labels nor causal position `p-1` and remains differentiable to every
+  selected main-D/DeepStack input.
+- Framework/topology/batch: accepted Python3.12/Torch2.9 control lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`;
+  FSDP2 mesh `[2]`, `reshard_after_forward=false`, corrected GA4 sync schedule,
+  physical GPUs 2/3 mapped to logical 0/1, K4, world2, global batch32, eight B8
+  Qwen calls/rank/update, three optimizer steps.
+- Representation-only N/A contract: no rollout, sampling, policy/reference
+  replay, behavior logprobs, reward, GRPO, SDPO, judge, vLLM sampling, KV cache,
+  asynchronous staleness, or answer scoring is present in this cell.
+- Parity gate: exact RP-24 sample order, global counts, Qwen call schedule,
+  tokenizer length and step-1 objective identity are required. Because the
+  BF16 GEMM and CE reduction geometry changes, each step-1 objective must have
+  absolute delta at most `1e-4` and gradient-norm relative delta at most
+  `1e-3`; exact deltas are reported. Failure rejects the fast path.
+- Config/output: source/canonical TOML SHA256
+  `4f7fa348e7e4382676dfb0bbf7b67d66d0d8ff9ba99c5f5172d7dc8db4dd03d6`/
+  `0260057a997920c3ac84875b3e5cfdb1a12ea56c2e79a8335a7c02f17ded7d5d`;
+  overwrite is forbidden under
+  `artifacts/representation/RP-25-qwen3-selectedhead-real512-k4-ga4-throughput-gpu23/`.
+  A read-only utilization sampler records both devices during the run.
+- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/smoke/representation_qwen3_embedding_rp25_selectedhead_real512_ga4_throughput_gpu23.toml`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
