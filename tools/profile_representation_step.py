@@ -20,6 +20,7 @@ from typing import Any
 
 import torch
 
+import tgvf_rl.representation.training.native_pipeline as native_pipeline_module
 import tgvf_rl.representation.training.streaming as streaming_module
 import tgvf_rl.representation.training.trainer as trainer_module
 from tgvf_rl.representation.training import runner
@@ -96,6 +97,20 @@ class _StepProfiler:
             "_forward_cell_batch_losses",
             "tgvf.qwen_cell_batch",
         )
+        for attribute, scope_name in (
+            ("build_native_representation_messages", "tgvf.build_messages"),
+            ("render_native_action_target", "tgvf.render_action"),
+            ("render_native_evidence_labels", "tgvf.render_evidence"),
+            ("_expand_native_visual_placeholders", "tgvf.expand_visual_tokens"),
+            ("_qwen3_position_ids", "tgvf.mrope_positions"),
+            ("_source_visual_identity", "tgvf.source_identity"),
+        ):
+            self._patch(
+                stack,
+                native_pipeline_module,
+                attribute,
+                scope_name,
+            )
 
     def profile_runner_step(
         self,
@@ -126,6 +141,10 @@ class _StepProfiler:
             runtime = getattr(group_builder, "runtime", None)
             for attribute, scope_name in (
                 ("_materialize_action_with_expansion", "tgvf.processor_action"),
+                (
+                    "_materialize_action_from_shared_visual",
+                    "tgvf.shared_visual_action",
+                ),
                 ("_condition", "tgvf.target_condition"),
                 ("_readout_row", "tgvf.readout_row"),
             ):
@@ -136,12 +155,27 @@ class _StepProfiler:
                         attribute,
                         scope_name,
                     )
-            if runtime is not None and hasattr(runtime, "extract_vision_features"):
+            if runtime is not None:
+                for attribute, scope_name in (
+                    ("assert_bound_invariants", "tgvf.runtime_invariants"),
+                    ("extract_vision_features", "tgvf.vision_features"),
+                    ("make_adapter_input", "tgvf.make_adapter_input"),
+                    ("build_target_condition", "tgvf.build_target_condition"),
+                ):
+                    if hasattr(runtime, attribute):
+                        self._patch(
+                            instance_stack,
+                            runtime,
+                            attribute,
+                            scope_name,
+                        )
+            family_adapter = trainer.family_adapter
+            if hasattr(family_adapter, "materialize_representation_supervision"):
                 self._patch(
                     instance_stack,
-                    runtime,
-                    "extract_vision_features",
-                    "tgvf.vision_features",
+                    family_adapter,
+                    "materialize_representation_supervision",
+                    "tgvf.materialize_supervision",
                 )
             self.active = True
             try:
