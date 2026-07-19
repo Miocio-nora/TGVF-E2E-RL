@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import Enum
@@ -136,120 +135,6 @@ class RepresentationAccumulationController(Protocol):
     def begin_microstep(self, *, index: int, count: int) -> None: ...
 
     def finish_window(self) -> None: ...
-
-
-class _OptimizerStepGroupBuilder:
-    """Build sampler-fixed groups with at most one CPU preparation in flight.
-
-    The optional private hooks deliberately receive no sampler, CUDA device, or
-    distributed handle.  A step-scoped single-worker executor prepares only the
-    next already-selected group; materialization remains on the trainer thread
-    under the caller's autocast context.  Builders without both hooks retain the
-    original synchronous ``__call__`` path exactly.
-    """
-
-    def __init__(
-        self,
-        *,
-        group_builder: RepresentationGroupBuilder,
-        adapter: TGVFAdapter,
-        samples: Sequence[RepresentationTrainingSample],
-        batch_indices: tuple[tuple[int, ...], ...],
-        collective_candidate_counts: tuple[int, ...],
-    ) -> None:
-        if len(batch_indices) != len(collective_candidate_counts):
-            raise ValueError("group batches and collective candidate counts must align")
-        if not batch_indices:
-            raise ValueError("an optimizer step must contain at least one group")
-        self._group_builder = group_builder
-        self._adapter = adapter
-        self._logical_samples = tuple(
-            tuple(samples[index] for index in indices) for indices in batch_indices
-        )
-        self._collective_candidate_counts = collective_candidate_counts
-        prepare = getattr(group_builder, "_prepare_cpu_group", None)
-        materialize = getattr(group_builder, "_materialize_prepared_group", None)
-        self._prepare = prepare if callable(prepare) else None
-        self._materialize = materialize if callable(materialize) else None
-        self._enabled = (
-            len(self._logical_samples) > 1
-            and self._prepare is not None
-            and self._materialize is not None
-        )
-        self._executor: ThreadPoolExecutor | None = None
-        self._pending: Future[object] | None = None
-        self._next_group_index = 0
-        self._closed = False
-
-    def __enter__(self) -> _OptimizerStepGroupBuilder:
-        if self._closed:
-            raise RuntimeError("optimizer-step group builder is already closed")
-        if self._enabled:
-            self._executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="representation-cpu-prefetch",
-            )
-            self._submit_prepare(0)
-        return self
-
-    def __exit__(self, *_exc_info: object) -> None:
-        self.close()
-
-    def build(self, group_index: int) -> SameImageReadoutGroup:
-        if self._closed:
-            raise RuntimeError("optimizer-step group builder is closed")
-        if group_index != self._next_group_index:
-            raise RuntimeError("optimizer-step groups must be materialized in order")
-        logical_samples = self._logical_samples[group_index]
-        collective_candidate_count = self._collective_candidate_counts[group_index]
-        if not self._enabled:
-            group = self._group_builder(
-                logical_samples,
-                self._adapter,
-                collective_candidate_count=collective_candidate_count,
-            )
-        else:
-            if self._pending is None or self._materialize is None:
-                raise RuntimeError(
-                    "CPU group preparation disappeared before consumption"
-                )
-            pending = self._pending
-            self._pending = None
-            prepared = pending.result()
-            next_group_index = group_index + 1
-            if next_group_index < len(self._logical_samples):
-                self._submit_prepare(next_group_index)
-            group = self._materialize(prepared, self._adapter)
-
-        self._next_group_index += 1
-        return group
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        pending = self._pending
-        self._pending = None
-        if pending is not None:
-            pending.cancel()
-        executor = self._executor
-        self._executor = None
-        if executor is not None:
-            # A running CPU preparation cannot be cancelled. Waiting here is
-            # intentional: no worker or prepared-but-unconsumed state may cross
-            # the optimizer boundary, checkpoint, or process teardown.
-            executor.shutdown(wait=True, cancel_futures=True)
-
-    def _submit_prepare(self, group_index: int) -> None:
-        if self._pending is not None:
-            raise RuntimeError("more than one CPU group preparation is in flight")
-        if self._executor is None or self._prepare is None:
-            raise RuntimeError("CPU group preparation is not initialized")
-        self._pending = self._executor.submit(
-            self._prepare,
-            self._logical_samples[group_index],
-            collective_candidate_count=(self._collective_candidate_counts[group_index]),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,34 +312,25 @@ class RepresentationTrainer:
         local_qwen_forward_batch_sizes: list[int] = []
         accumulation_failure: BaseException | None = None
         try:
-            with _OptimizerStepGroupBuilder(
-                group_builder=self.group_builder,
-                adapter=self.adapter,
-                samples=self.samples,
-                batch_indices=batch_indices,
-                collective_candidate_counts=collective_candidate_counts,
-            ) as step_group_builder:
-                if direct_groups > 1:
-                    self._train_direct_group_windows(
-                        batch_indices=batch_indices,
-                        collective_candidate_counts=collective_candidate_counts,
-                        groups_per_microstep=groups_per_microstep,
-                        normalization=normalization,
-                        local_metric_numerators=local_metric_numerators,
-                        local_sample_ids=local_sample_ids,
-                        local_qwen_forward_batch_sizes=local_qwen_forward_batch_sizes,
-                        build_group=step_group_builder.build,
-                    )
-                else:
-                    self._train_accumulation_groups(
-                        batch_indices=batch_indices,
-                        collective_candidate_counts=collective_candidate_counts,
-                        normalization=normalization,
-                        local_metric_numerators=local_metric_numerators,
-                        local_sample_ids=local_sample_ids,
-                        local_qwen_forward_batch_sizes=local_qwen_forward_batch_sizes,
-                        build_group=step_group_builder.build,
-                    )
+            if direct_groups > 1:
+                self._train_direct_group_windows(
+                    batch_indices=batch_indices,
+                    collective_candidate_counts=collective_candidate_counts,
+                    groups_per_microstep=groups_per_microstep,
+                    normalization=normalization,
+                    local_metric_numerators=local_metric_numerators,
+                    local_sample_ids=local_sample_ids,
+                    local_qwen_forward_batch_sizes=local_qwen_forward_batch_sizes,
+                )
+            else:
+                self._train_accumulation_groups(
+                    batch_indices=batch_indices,
+                    collective_candidate_counts=collective_candidate_counts,
+                    normalization=normalization,
+                    local_metric_numerators=local_metric_numerators,
+                    local_sample_ids=local_sample_ids,
+                    local_qwen_forward_batch_sizes=local_qwen_forward_batch_sizes,
+                )
         except BaseException as error:
             accumulation_failure = error
             raise
@@ -536,7 +412,6 @@ class RepresentationTrainer:
         local_metric_numerators: torch.Tensor,
         local_sample_ids: list[str],
         local_qwen_forward_batch_sizes: list[int],
-        build_group: Callable[[int], SameImageReadoutGroup],
     ) -> None:
         microstep_count = len(batch_indices) // groups_per_microstep
         for microstep_index, window_start in enumerate(
@@ -551,16 +426,17 @@ class RepresentationTrainer:
             groups: list[SameImageReadoutGroup] = []
             expected_ids_by_group: list[tuple[str, ...]] = []
             with self._autocast_context():
-                for group_index, (indices, collective_candidate_count) in enumerate(
-                    zip(
-                        window_indices,
-                        window_candidate_counts,
-                        strict=True,
-                    ),
-                    start=window_start,
+                for indices, collective_candidate_count in zip(
+                    window_indices,
+                    window_candidate_counts,
+                    strict=True,
                 ):
                     logical_samples = tuple(self.samples[index] for index in indices)
-                    group = build_group(group_index)
+                    group = self.group_builder(
+                        logical_samples,
+                        self.adapter,
+                        collective_candidate_count=collective_candidate_count,
+                    )
                     expected_ids = tuple(sample.sample_id for sample in logical_samples)
                     _assert_built_group_identity(
                         group,
@@ -614,7 +490,6 @@ class RepresentationTrainer:
         local_metric_numerators: torch.Tensor,
         local_sample_ids: list[str],
         local_qwen_forward_batch_sizes: list[int],
-        build_group: Callable[[int], SameImageReadoutGroup],
     ) -> None:
         microstep_count = len(batch_indices)
         for microstep_index, (indices, collective_candidate_count) in enumerate(
@@ -623,7 +498,11 @@ class RepresentationTrainer:
             self._begin_microstep(microstep_index, microstep_count)
             logical_samples = tuple(self.samples[index] for index in indices)
             with self._autocast_context():
-                group = build_group(microstep_index)
+                group = self.group_builder(
+                    logical_samples,
+                    self.adapter,
+                    collective_candidate_count=collective_candidate_count,
+                )
                 expected_ids = tuple(sample.sample_id for sample in logical_samples)
                 _assert_built_group_identity(
                     group,
