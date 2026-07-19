@@ -2866,6 +2866,62 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   discontinuous, so the next cell targets the remaining readout/mask content
   synchronizations and between-step telemetry rather than changing batch math.
 
+### RP-23-QWEN3-REPRESENTATION-READOUTSYNC-REAL512-K4-GA4-THROUGHPUT-GPU23
+
+- Cell/matrix ID and class: `RP-23`; bounded native readout/mask synchronization
+  A/B against RP-22.
+- Approval/code: accepted `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`;
+  implementation commit `75f219ae285f90cb325f72eb039e970f44af6259`.
+- Lifecycle status: `PLANNED`; result `PENDING`.
+- Question/baseline/output: do construction-bound native proofs for readout IDs,
+  action masks, source positions, Qwen additive-mask/DeepStack layout, and causal
+  labels beat RP-22's `10.3865383875`-second steady mean without changing any
+  value or gradient? Output is only
+  `artifacts/representation/RP-23-qwen3-readoutsync-real512-k4-ga4-throughput-gpu23/`.
+- Model/processor/initialization: exact RP-22 stable local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer `151669`, no resize,
+  `image_max_pixels=262144`; frozen Qwen plus fresh TGVF Adapter seed
+  `20260719`, three updates under the 2,000-step horizon.
+- N/A: policy/reference, rollout/logprobs, reward, GRPO, SDPO, judge, vLLM
+  sampling, KV cache, replay, and asynchronous staleness are absent.
+- Code/worktree/config: code commit above; clean committed launch required;
+  source/canonical config SHA256
+  `3ceb09041b5d8aec6e1106e97420a9184667052acd04738ed03307a267c990fa`/
+  `52bec3f3cb20c93c89aa0acdc1c12a67dd9b8a48948c3d4e847980d5fc9debf3`.
+- Patch surface: public/generic checked APIs remain fail-closed. Only the native
+  streaming path consumes sealed tensor identity/version proofs for tensors
+  constructed from already-validated CPU tuples/layouts; mutation/replacement
+  fails. Non-log steps also skip exact performance/object-gather telemetry, but
+  this RP uses `log_every=1`, so its measurement path is unchanged.
+- Data/sample/prompt/template: exact RP-22 K4 real-resolution fixture source
+  SHA256 `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`,
+  disjoint validation, seeds 71/73; prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`,
+  native `tgvf_focus_tool`, template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`.
+- D/objective/determinism: exact main D plus `(8,16,24)` D-DeepStack atomic
+  columns, M-RoPE/source-key blocking; legacy summed-NLL Matrix CE + L_gen +
+  Norm weights `1/1/.1`, manifold zero; frozen eval Qwen, Adapter dropout zero,
+  no cache, TF32 off, CUBLAS `:4096:8`.
+- Framework/topology/batch: accepted Python3.12/Torch2.9 lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`;
+  BF16/FP32 reduction, no quantization/KV/TP/offload, FSDP2 `[2]`, reshard
+  false; physical `[2,3]` to logical `[0,1]`; world2, K4, GA4, global batch32.
+- Parity gates: exact RP-22 sample order, objectives, gradient norms, 32 rows,
+  eight B8 calls/64 cells per rank/update, tokenizer `151669`; 339 integrated
+  conditioning/Qwen/representation tests plus Ruff passed.
+- Start/end/session, GPU-hours, scratch, outputs/metrics: `PENDING`; both GPUs
+  must be idle at immediate preflight; hard limit one aggregate GPU-hour and
+  one 100 ms utilization trace; overwrite forbidden.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/smoke/representation_qwen3_embedding_rp23_readoutsync_real512_ga4_throughput_gpu23.toml`;
+  read-only utilization sampling observes physical 2/3.
+- Scorer/parser: no answer scorer; strict native representation runner.
+- Conclusion: `PENDING`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
