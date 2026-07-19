@@ -2872,7 +2872,7 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   A/B against RP-22.
 - Approval/code: accepted `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`;
   implementation commit `75f219ae285f90cb325f72eb039e970f44af6259`.
-- Lifecycle status: `PLANNED`; result `PENDING`.
+- Lifecycle status: `COMPLETE`; result `PASS`.
 - Question/baseline/output: do construction-bound native proofs for readout IDs,
   action masks, source positions, Qwen additive-mask/DeepStack layout, and causal
   labels beat RP-22's `10.3865383875`-second steady mean without changing any
@@ -2910,9 +2910,14 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Parity gates: exact RP-22 sample order, objectives, gradient norms, 32 rows,
   eight B8 calls/64 cells per rank/update, tokenizer `151669`; 339 integrated
   conditioning/Qwen/representation tests plus Ruff passed.
-- Start/end/session, GPU-hours, scratch, outputs/metrics: `PENDING`; both GPUs
-  must be idle at immediate preflight; hard limit one aggregate GPU-hour and
-  one 100 ms utilization trace; overwrite forbidden.
+- Start/end/session, GPU-hours, scratch, outputs/metrics: torchrun parent PID
+  `1889757` launched at `2026-07-20 06:29:07 +09:00` and completed at
+  `06:30:10 +09:00` (about 63 seconds wall). The three measured steps used
+  `0.0173` aggregate train-core GPU-hours and the full launch stayed below
+  `0.0350` aggregate GPU-hours. The output tree occupies `577,992,792` bytes.
+  Metrics, final Adapter, step-3 checkpoint, run log, and 100 ms utilization
+  trace are complete; final artifact manifest SHA256
+  `9fb31b1405ba1f806c5ae55221851f5629256c858094902808710c83b7dbe9fd`.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
@@ -2920,7 +2925,21 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   run-representation configs/smoke/representation_qwen3_embedding_rp23_readoutsync_real512_ga4_throughput_gpu23.toml`;
   read-only utilization sampling observes physical 2/3.
 - Scorer/parser: no answer scorer; strict native representation runner.
-- Conclusion: `PENDING`.
+- Metrics: steps 1/2/3 took `11.285435083`, `9.962707680`, and
+  `9.927836759` seconds. The steps-2/3 steady mean is `9.9452722195` seconds
+  (`5.5252` train-core hours for 2,000 steps), `4.25%` faster than RP-22 and
+  `10.36%` faster than RP-19. Sample order, all objective values, gradient
+  norms, counts, and eight B8 Qwen calls per rank/update match RP-22 exactly.
+  Maximum rank peak allocated/reserved memory was `64,216,334,848`/
+  `73,125,593,088` bytes. In the memory-resident trace, physical GPU2/GPU3
+  mean utilization was `31.9%`/`35.1%`; below-50% samples were `67.3%`/
+  `65.4%`, zero samples were `46.2%`/`45.5%`, and longest below-50% runs were
+  about `3.20`/`1.58` seconds.
+- Conclusion: the native sealed-proof optimization is accepted because it
+  preserves exact training semantics and saves another `4.25%`. The trace is
+  still strongly discontinuous: the next cell must target overlap of host
+  preparation with device execution or another structural execution gap,
+  rather than additional isolated validation checks.
 
 ## Compatibility-spike status
 
