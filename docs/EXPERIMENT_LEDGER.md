@@ -2271,8 +2271,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   production fast-path implementation commit
   `319c0375efd22e52a6b67b254519208b95dfa980` and config-bound GPU placement
   commit `1062e2db35a17376b33b9578be81ffb88c9c06e0`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: after replacing Qwen3's pathological BF16 full-patch Conv3D call
   with its parity-gated Linear expression, what steady two-B200 optimizer-step
   time is measured at the historical mathematical global batch 32 using
@@ -2468,8 +2468,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and approval references: accepted
   `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; runtime commit
   `fcd470c15e621fc2ac4849bb3be4d09cc008bc57`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: after reducing one K4 group's Qwen processor/image work from
   8 calls/12 image instances to 1 call/1 image instance and fusing normal-step
   host synchronizations, does the RP-18 GPU timeline become more continuous and
@@ -2540,21 +2540,127 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   batch 32 unchanged.
 - GPUs: only user-authorized physical GPUs 0 and 3, mapped to logical 0/1; both
   must be idle at immediate preflight.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; command hard limit one
-  aggregate GPU-hour. A 100 ms `nvidia-smi` utilization trace is written under
-  the RP-19 root and is diagnostic only.
+- Start/end timestamps, elapsed time, and session/process identity: torchrun
+  parent PID `1820984` launched `2026-07-20 05:32:08 +09:00`; the complete
+  utilization trace ended `05:33:11 +09:00`.
+- Actual GPU-hours and peak scratch use: about `0.035` aggregate GPU-hours by
+  invocation wall time. Maximum-rank peak allocated/reserved bytes were
+  `64,216,335,872`/`73,125,593,088`. The 100 ms utilization trace contains
+  340 in-training samples per GPU under the exact RP-19 root.
 - Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
   run-representation configs/smoke/representation_qwen3_embedding_rp19_continuous_real512_ga4_throughput.toml`;
   a separate read-only 100 ms `nvidia-smi` sampler observes physical 0 and 3.
-- Outputs: `PENDING`; overwrite forbidden under the exact RP-19 root.
+- Outputs: complete metrics, final Adapter artifact, final step-3 DCP, run log,
+  and 100 ms utilization trace under the RP-19 root; overwrite was forbidden.
 - Scorer/parser identity: no answer scorer; strict native representation runner.
-- Metrics: `PENDING`; compare step 2/3 mean, peak allocation, and the fraction
-  and longest run of 100 ms samples below 50% GPU utilization against the
-  observed discontinuity.
+- Metrics: steps 1/2/3 were `11.886870550`, `11.032586041`, and
+  `11.157873967` seconds. The predeclared steady mean was `11.095230004`
+  seconds (`6.1640` train-core hours for 2,000 steps), a `6.14%` improvement
+  over RP-18. Same-seed losses, gradient norms, sample order, and B8 physical
+  calls matched RP-18 exactly. During the memory-resident training window,
+  GPU0/GPU3 mean utilization was `27.3%`/`45.2%`; samples below 50% were
+  `72.9%`/`54.4%`, zero-utilization samples were `46.8%`/`28.2%`, and the
+  longest below-50% runs were about `2.9`/`1.8` seconds.
+- Conclusion: processor/layout reuse and fused host reads are accepted: they
+  preserve the exact measured objective and save `6.14%`. They do not solve
+  the discontinuous GPU timeline. The next bounded cell therefore combines the
+  same four local K4 matrices as two B16 direct-group accumulation windows
+  (`GA2`) while preserving global batch 32.
+
+### RP-20-QWEN3-REPRESENTATION-CONTINUOUS-REAL512-K4-GPR4-GA2-B16-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-20`; bounded B16/GA2
+  utilization and throughput A/B against RP-19 B8/GA4.
+- Spike-plan git revision and approval references: accepted
+  `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; direct-group accumulation
+  implementation commit `bd3d9ca2010767e3e14f0610efaa70bed7a2d5b6`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: with the mathematical global batch fixed at 32, does partitioning
+  four local K4 groups into two accumulation windows, each executed as B16,
+  reduce RP-19's utilization gaps and `11.095230004`-second steady step?
+- Baseline and exact output path: RP-19 steps 2/3 were `11.032586041` and
+  `11.157873967` seconds. RP-20 writes only under
+  `artifacts/representation/RP-20-qwen3-continuous-real512-k4-gpr4-ga2-b16-throughput/`.
+- Model and processor identity: identical RP-19 stable local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer `151669`, exact native template,
+  no resize, local-only, and `image_max_pixels=262144`.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`; no
+  source/legacy artifact; three updates under the unchanged 2,000-step horizon.
+- N/A fields and justification: policy/reference, rollout/logprobs, reward,
+  GRPO, SDPO, judge, vLLM sampling, KV cache and replay are absent.
+- Policy/reference initialization: N/A; frozen original Qwen and fresh TGVF
+  Adapter only.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  representation update.
+- Code commit and worktree state: runtime commit above; configuration
+  source/canonical SHA256
+  `17cc62baf2a43adfd68b2405f536cc25ef1385188e4b1ae348d2c5048a950810`/
+  `f5fa2d519696ff5fa50e5ae5abf7c06774b98ae43ec460e938cffb3e88285c9e`;
+  clean committed launch required.
+- Repository adapter/patch surface and hash: RP-19 processor/layout and fused
+  host-read changes remain; the new repo-owned change only partitions the
+  versioned total direct-group identity across GA windows and fixes the
+  performance matrix denominator. No Qwen/Adapter parameter or package patch.
+- Dataset/manifest, hashes, sample rule, and n: 16-row/four-group matched
+  real-resolution fixture, source SHA256
+  `42bdeedf0d5375792ac7108142538434330e21c7b930768356ec693d780ef381`.
+  Two group identities per rank reuse the exact RP-19 source image/content;
+  deterministic cycling supplies four local matrices per update. Validation,
+  overlap policy, and sampler seeds remain RP-19 identities.
+- Native prompt/tool schema hash: unchanged smoke prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`
+  and native `tgvf_focus_tool`.
+- Chat-template/token-fixture hash and token-ownership masks: unchanged exact
+  template SHA256 `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  evidence-only labels, and no tokenizer growth.
+- D/DeepStack/position/mask identity: unchanged main D, ordered `(8,16,24)`
+  branches, M-RoPE, and post-D source-key blocking.
+- Observation materialization/artifact identity used by all replays: no replay;
+  every K4 column remains one indivisible main-D/all-DeepStack observation, and
+  the four CE matrices remain independent across the two B16 windows.
+- RL framework/version/environment lock: unchanged accepted Python 3.12 /
+  Torch 2.9 control lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: unchanged legacy summed-NLL Matrix CE,
+  L_gen and Norm, weights `1/1/.1`, manifold zero. Both windows use the exact
+  same full-step global row/sample denominators.
+- Rollout/replay forward mode and adapter dropout/RNG contract: identical
+  deterministic RP-19 state, frozen Qwen eval, Adapter dropout zero, no cache,
+  TF32 off, CUBLAS `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: sampling/logprobs N/A; same-image
+  sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/FP32 reduction, SDPA, no
+  quantization/KV/TP/offload, FSDP2 `[2]`, reshard false.
+- Logit/logprob/loss/gradient parity tolerances: global row/sample counts must
+  remain 32; Qwen calls must be four B16 calls/rank/update; tokenizer length and
+  finite objectives/gradients are exact gates. Because B16 changes BF16 kernel
+  grouping, compare objective/gradient values to RP-19 with the existing BF16
+  execution tolerance rather than demanding bit identity. CPU gates passed
+  93 focused tests plus Ruff.
+- World size, microbatch, accumulation, and global batch: world 2, total GPR4,
+  K4, GA2, two groups/eight rows per rank per accumulation window, global batch
+  32. Expected physical readout is four B16 calls/rank/update for 64 cells.
+- GPUs: only user-authorized physical 0 and 3 mapped to logical 0/1; both must
+  be idle at immediate preflight.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard limit one aggregate
+  GPU-hour, plus one diagnostic 100 ms `nvidia-smi` trace.
+- Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/smoke/representation_qwen3_embedding_rp20_continuous_real512_b16_ga2_throughput.toml`;
+  a read-only 100 ms utilization sampler observes physical 0/3.
+- Outputs: `PENDING`; overwrite forbidden under the exact RP-20 root.
+- Scorer/parser identity: no answer scorer; strict native representation runner.
+- Metrics: `PENDING`; compare steady mean, peak allocation, and utilization
+  distributions/longest below-50% runs directly with RP-19.
 - Conclusion: `PENDING`.
 
 ## Compatibility-spike status
