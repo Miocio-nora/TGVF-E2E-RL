@@ -2178,11 +2178,12 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Cell/matrix ID and mandatory/diagnostic class:
   `RP-16P-QWEN3-PATCH-EMBED-CONTROL`; diagnostic bounded control-stack
   patch-projection parity and timing cell.
-- Spike-plan git revision and VA0/VA1/VA2 approval references: implementation
-  probe commit `2918c891e124b5249f65cc64d9af95d8092202e0`; user decision
+- Spike-plan git revision and VA0/VA1/VA2 approval references: run-ID-aware
+  probe commit `a01c4b8caadef4c5d4afe72ec2a6477983a338eb`; planned ledger
+  commit `b14e2acd3a289fd78499dc3ced68aa88159d99fe`; user decision
   `RPI-20260720-CONTROL-STACK-OPTIMIZATION` in `PROJECT_TASK.md` §2.1.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: on the accepted Torch 2.9 control runtime, is the flattened Linear
   expression numerically compatible with the native full-patch Conv3D in FP32
   and BF16, and what bounded synchronized speed ratio is observed?
@@ -2237,14 +2238,28 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - GPUs: only physical 3
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, NVIDIA B200, driver
   `570.195.03`; the pre-plan check observed 0 MiB used.
-- Start/end timestamps, elapsed time, and session/process identity: pending.
-- Actual GPU-hours and peak scratch use: pending; bounded by 600 seconds.
+- Start/end timestamps, elapsed time, and session/process identity: the launcher
+  did not persist exact start/PID/elapsed telemetry; result/log completion mtimes
+  are `2026-07-20 04:14:20.394/04:14:20.686 JST`, and the command was bounded by
+  600 seconds.
+- Actual GPU-hours and peak scratch use: at most `0.167` GPU-hours by the hard
+  timeout; peak device/scratch memory was not captured. Result plus log occupy
+  12,964 bytes.
 - Command: `CUDA_VISIBLE_DEVICES=3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 timeout 600s .venv312/bin/python spikes/verl_compat/qwen3_patch_embed_probe.py --run-id RP-16P-QWEN3-PATCH-EMBED-CONTROL --runtime control --physical-gpu 3 --output artifacts/compatibility/RP-16P-control-qwen3-patch-embed.json > artifacts/compatibility/RP-16P-control-qwen3-patch-embed.log 2>&1`.
-- Outputs: new explicit-run-ID result JSON and log; overwrite forbidden.
+- Outputs: result JSON SHA256
+  `6cffb3f47e090ec767dbae9e61b2558bc4d44e1340c4d28f80a4dac704eaf150`
+  (7,385 bytes) and log SHA256
+  `beed078cc1cb8c3d4a07697fe2d5155c3791b1c231ac54d2dac7a62f24beca23`
+  (5,579 bytes); overwrite was forbidden.
 - Scorer/parser identity: exact probe hash above.
-- Metrics: pending per-dtype error values, synchronized latencies and speed
-  ratios.
-- Conclusion: pending; this cell changes no production path.
+- Metrics: FP32 native Conv3D `0.3985923 ms`, Linear `0.150552 ms`,
+  `2.647539x`, maximum absolute error `0.0`; BF16 native Conv3D
+  `4711.1425299 ms`, Linear `0.08024 ms`, `58713.142197x`, maximum absolute
+  error `0.015625`. Both passed their predeclared tolerances.
+- Conclusion: projection-only parity and timing passed. Accepted-control BF16
+  Conv3D is pathological on this B200. This result supplies the prerequisite
+  evidence for a separately parity-tested repo-owned representation fast path;
+  it does not by itself estimate end-to-end training throughput.
 
 ## Compatibility-spike status
 

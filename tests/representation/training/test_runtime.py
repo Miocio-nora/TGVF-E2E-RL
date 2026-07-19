@@ -15,10 +15,12 @@ from tgvf_rl.conditioning import (
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.representation.training.runtime import (
+    QWEN3_PATCH_EMBED_LINEAR_FAST_PATH,
     QWEN3_REPRESENTATION_BRANCH_LAYERS,
     Qwen3ContextualHiddenStateStack,
     Qwen3VisionPreMergeRequest,
     create_qwen3_representation_runtime,
+    install_qwen3_patch_embed_linear_fast_path,
     qwen3_input_embedding_identity,
 )
 
@@ -82,6 +84,41 @@ class _VisionTower(nn.Module):
             if index != self.skip_branch:
                 deepstack.append(merger(hidden + index + 1))
         return self.merger(hidden), deepstack
+
+
+class _ProductionGeometryPatchEmbed(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_channels = 3
+        self.temporal_patch_size = 2
+        self.patch_size = 16
+        self.embed_dim = 1152
+        kernel = (self.temporal_patch_size, self.patch_size, self.patch_size)
+        self.proj = nn.Conv3d(
+            self.in_channels,
+            self.embed_dim,
+            kernel_size=kernel,
+            stride=kernel,
+            bias=True,
+        )
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        values = hidden_states.view(
+            -1,
+            self.in_channels,
+            self.temporal_patch_size,
+            self.patch_size,
+            self.patch_size,
+        )
+        return self.proj(values.to(dtype=self.proj.weight.dtype)).view(
+            -1, self.embed_dim
+        )
+
+
+class _ProductionGeometryVisionShell(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.patch_embed = _ProductionGeometryPatchEmbed()
 
 
 class _LanguageModel(nn.Module):
@@ -210,6 +247,50 @@ def test_factory_freezes_qwen_and_borrows_exact_four_mergers() -> None:
     owned = runtime.adapter.artifact_state_dict(keep_vars=True)
     assert owned
     assert all(tensor.requires_grad for tensor in owned.values())
+    assert runtime.patch_embed_fast_path is None
+
+
+def test_patch_embed_linear_fast_path_preserves_state_and_parameter_identity() -> None:
+    torch.manual_seed(803)
+    vision = _ProductionGeometryVisionShell().eval()
+    patches = torch.randn(7, 3 * 2 * 16 * 16)
+    native = vision.patch_embed(patches)
+    parameters_before = tuple(
+        (name, id(parameter)) for name, parameter in vision.named_parameters()
+    )
+    state_before = {
+        name: value.detach().clone() for name, value in vision.state_dict().items()
+    }
+
+    installed = install_qwen3_patch_embed_linear_fast_path(vision)
+    linear = vision.patch_embed(patches)
+
+    assert installed is vision.patch_embed
+    assert installed._tgvf_fast_path_identity == (  # type: ignore[attr-defined]
+        QWEN3_PATCH_EMBED_LINEAR_FAST_PATH
+    )
+    assert (
+        tuple((name, id(parameter)) for name, parameter in vision.named_parameters())
+        == parameters_before
+    )
+    assert tuple(vision.state_dict()) == tuple(state_before)
+    for name, expected in state_before.items():
+        assert torch.equal(vision.state_dict()[name], expected)
+    torch.testing.assert_close(linear, native, atol=1.0e-5, rtol=1.0e-5)
+    assert linear.shape == (7, 1152)
+    assert install_qwen3_patch_embed_linear_fast_path(vision) is installed
+
+
+def test_patch_embed_linear_fast_path_fails_closed_on_geometry_or_input_drift() -> None:
+    vision = _ProductionGeometryVisionShell().eval()
+    vision.patch_embed.patch_size = 8
+    with pytest.raises(ValueError, match="attributes changed"):
+        install_qwen3_patch_embed_linear_fast_path(vision)
+
+    vision.patch_embed.patch_size = 16
+    install_qwen3_patch_embed_linear_fast_path(vision)
+    with pytest.raises(ValueError, match=r"shape \[N,1536\]"):
+        vision.patch_embed(torch.randn(2, 64))
 
 
 def test_contextual_hq_and_vision_features_form_one_typed_adapter_input() -> None:

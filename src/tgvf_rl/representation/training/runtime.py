@@ -16,10 +16,12 @@ import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MethodType
 from typing import Any
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from tgvf_rl.conditioning import (
     TargetConditioningConfig,
@@ -49,6 +51,9 @@ QWEN3_REPRESENTATION_BRANCH_LAYERS = (8, 16, 24)
 QWEN3_REPRESENTATION_SPATIAL_MERGE_SIZE = 2
 QWEN3_REPRESENTATION_LANGUAGE_DIM = 4096
 QWEN3_REPRESENTATION_VISION_DIM = 1152
+QWEN3_PATCH_EMBED_LINEAR_FAST_PATH = "qwen3_patch_embed_reshape_linear_v1"
+_QWEN3_PATCH_EMBED_KERNEL = (2, 16, 16)
+_QWEN3_PATCH_EMBED_INPUT_WIDTH = 3 * 2 * 16 * 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +245,7 @@ class Qwen3RepresentationRuntime:
         conditioning_config: TargetConditioningConfig,
         conditioning_provider: BoundTargetConditionProvider,
         conditioning_embedding: nn.Module,
+        patch_embed_fast_path: nn.Module | None,
     ) -> None:
         self.model = model
         self.processor = processor
@@ -253,6 +259,7 @@ class Qwen3RepresentationRuntime:
         self.adapter = adapter
         self.conditioning_config = conditioning_config
         self.conditioning_provider = conditioning_provider
+        self.patch_embed_fast_path = patch_embed_fast_path
         # The provider deliberately holds only a weak reference to a borrowed
         # embedding. Keep the tokenizer-bounded view alive with the runtime.
         self._conditioning_embedding = conditioning_embedding
@@ -298,6 +305,12 @@ class Qwen3RepresentationRuntime:
             is not self.vision_tower
         ):
             raise RuntimeError("bound Qwen vision-tower ownership changed")
+        if self.patch_embed_fast_path is not None:
+            if getattr(self.vision_tower, "patch_embed", None) is not (
+                self.patch_embed_fast_path
+            ):
+                raise RuntimeError("bound Qwen patch-embedding ownership changed")
+            _assert_qwen3_patch_embed_linear_fast_path(self.patch_embed_fast_path)
         embedding = resolve_language_model(self.model).get_input_embeddings()
         if not isinstance(self._conditioning_embedding, _TokenizerBoundEmbedding):
             raise RuntimeError("runtime lost its tokenizer-bounded embedding view")
@@ -447,6 +460,141 @@ def qwen3_input_embedding_identity(model_identity: ModelIdentity) -> str:
     return f"{model_identity.revision_or_path}::language_model.input_embeddings"
 
 
+def install_qwen3_patch_embed_linear_fast_path(
+    vision_tower: nn.Module,
+) -> nn.Module:
+    """Replace only Qwen3 patch-embedding arithmetic, preserving model state.
+
+    The Hugging Face implementation applies a full-patch Conv3D to already
+    flattened processor patches.  With kernel and stride equal to the complete
+    patch, that operation is algebraically a Linear projection.  This installer
+    keeps the original Conv3D module, Parameters, state-dict keys, and shapes;
+    it binds only a repo-owned ``forward`` implementation to the existing patch
+    module.  Patch count remains dynamic, so this does not impose a resolution
+    cap.
+    """
+
+    if not isinstance(vision_tower, nn.Module):
+        raise TypeError("vision_tower must be an nn.Module")
+    patch_embed = getattr(vision_tower, "patch_embed", None)
+    if not isinstance(patch_embed, nn.Module):
+        raise TypeError("Qwen3 vision tower must expose an nn.Module patch_embed")
+    _validate_qwen3_patch_embed_module(patch_embed)
+    marker = getattr(patch_embed, "_tgvf_fast_path_identity", None)
+    if marker is not None:
+        if marker != QWEN3_PATCH_EMBED_LINEAR_FAST_PATH:
+            raise RuntimeError("Qwen3 patch embed carries an unknown fast path")
+        _assert_qwen3_patch_embed_linear_fast_path(patch_embed)
+        return patch_embed
+
+    parameter_inventory = tuple(
+        (name, id(parameter)) for name, parameter in patch_embed.named_parameters()
+    )
+    state_inventory = tuple(
+        (name, tuple(value.shape), value.dtype, value.device)
+        for name, value in patch_embed.state_dict().items()
+    )
+    original_forward = patch_embed.forward
+    try:
+        patch_embed.forward = MethodType(  # type: ignore[method-assign]
+            _qwen3_patch_embed_linear_forward,
+            patch_embed,
+        )
+        patch_embed._tgvf_fast_path_identity = (  # type: ignore[attr-defined]
+            QWEN3_PATCH_EMBED_LINEAR_FAST_PATH
+        )
+        _assert_qwen3_patch_embed_linear_fast_path(patch_embed)
+        if parameter_inventory != tuple(
+            (name, id(parameter)) for name, parameter in patch_embed.named_parameters()
+        ):
+            raise RuntimeError("patch-embed fast path changed Parameter identity")
+        if state_inventory != tuple(
+            (name, tuple(value.shape), value.dtype, value.device)
+            for name, value in patch_embed.state_dict().items()
+        ):
+            raise RuntimeError("patch-embed fast path changed state-dict inventory")
+    except Exception:
+        patch_embed.forward = original_forward  # type: ignore[method-assign]
+        if hasattr(patch_embed, "_tgvf_fast_path_identity"):
+            delattr(patch_embed, "_tgvf_fast_path_identity")
+        raise
+    return patch_embed
+
+
+def _qwen3_patch_embed_linear_forward(
+    patch_embed: nn.Module,
+    hidden_states: torch.Tensor,
+) -> torch.Tensor:
+    _validate_qwen3_patch_embed_module(patch_embed)
+    if not isinstance(hidden_states, torch.Tensor):
+        raise TypeError("Qwen3 patch input must be a torch.Tensor")
+    if (
+        hidden_states.ndim != 2
+        or hidden_states.shape[0] == 0
+        or hidden_states.shape[1] != _QWEN3_PATCH_EMBED_INPUT_WIDTH
+    ):
+        raise ValueError("Qwen3 patch input must have shape [N,1536] with positive N")
+    if not hidden_states.is_floating_point():
+        raise TypeError("Qwen3 patch input must use a floating dtype")
+    projection = patch_embed.proj
+    if hidden_states.device != projection.weight.device:
+        raise ValueError("Qwen3 patch input and projection must share a device")
+    return F.linear(
+        hidden_states.to(dtype=projection.weight.dtype),
+        projection.weight.reshape(projection.out_channels, -1),
+        projection.bias,
+    )
+
+
+def _assert_qwen3_patch_embed_linear_fast_path(patch_embed: nn.Module) -> None:
+    _validate_qwen3_patch_embed_module(patch_embed)
+    if (
+        getattr(patch_embed, "_tgvf_fast_path_identity", None)
+        != QWEN3_PATCH_EMBED_LINEAR_FAST_PATH
+    ):
+        raise RuntimeError("Qwen3 patch-embedding fast path identity changed")
+    forward = getattr(patch_embed, "forward", None)
+    if getattr(forward, "__func__", None) is not _qwen3_patch_embed_linear_forward:
+        raise RuntimeError("Qwen3 patch-embedding forward implementation changed")
+
+
+def _validate_qwen3_patch_embed_module(patch_embed: nn.Module) -> None:
+    projection = getattr(patch_embed, "proj", None)
+    if not isinstance(projection, nn.Conv3d):
+        raise TypeError("Qwen3 patch_embed.proj must remain an nn.Conv3d")
+    if (
+        tuple(projection.kernel_size) != _QWEN3_PATCH_EMBED_KERNEL
+        or tuple(projection.stride) != _QWEN3_PATCH_EMBED_KERNEL
+        or tuple(projection.padding) != (0, 0, 0)
+        or tuple(projection.dilation) != (1, 1, 1)
+        or projection.groups != 1
+        or projection.padding_mode != "zeros"
+    ):
+        raise ValueError("Qwen3 patch projection geometry is unsupported")
+    if projection.in_channels != 3 or projection.out_channels != 1152:
+        raise ValueError("Qwen3 patch projection channels are unsupported")
+    if projection.bias is None:
+        raise ValueError("Qwen3 patch projection requires its checkpoint bias")
+    if not projection.weight.is_contiguous():
+        raise ValueError("Qwen3 patch projection weight must remain contiguous")
+    if (
+        projection.weight.device != projection.bias.device
+        or projection.weight.dtype != projection.bias.dtype
+    ):
+        raise ValueError("Qwen3 patch projection weight/bias must share device/dtype")
+    expected_attributes = {
+        "in_channels": 3,
+        "temporal_patch_size": 2,
+        "patch_size": 16,
+        "embed_dim": 1152,
+    }
+    if any(
+        getattr(patch_embed, name, None) != expected
+        for name, expected in expected_attributes.items()
+    ):
+        raise ValueError("Qwen3 patch-embedding module attributes changed")
+
+
 def create_qwen3_representation_runtime(
     *,
     model: nn.Module,
@@ -525,6 +673,11 @@ def create_qwen3_representation_runtime(
 
     model.requires_grad_(False)
     model.eval()
+    patch_embed_fast_path = (
+        None
+        if fixture_mode
+        else install_qwen3_patch_embed_linear_fast_path(vision_tower)
+    )
     language_model = resolve_language_model(model)
     embedding = language_model.get_input_embeddings()
     if not isinstance(embedding, nn.Module):
@@ -610,6 +763,7 @@ def create_qwen3_representation_runtime(
         conditioning_config=conditioning_config,
         conditioning_provider=provider,
         conditioning_embedding=tokenizer_embedding,
+        patch_embed_fast_path=patch_embed_fast_path,
     )
     runtime.assert_bound_invariants()
     return runtime
@@ -846,6 +1000,7 @@ __all__ = [
     "QWEN3_REPRESENTATION_LANGUAGE_DIM",
     "QWEN3_REPRESENTATION_SPATIAL_MERGE_SIZE",
     "QWEN3_REPRESENTATION_VISION_DIM",
+    "QWEN3_PATCH_EMBED_LINEAR_FAST_PATH",
     "Qwen3ContextualHiddenStateStack",
     "Qwen3RepresentationArchitecture",
     "Qwen3RepresentationComponentPaths",
@@ -853,5 +1008,6 @@ __all__ = [
     "Qwen3VisionFeatures",
     "Qwen3VisionPreMergeRequest",
     "create_qwen3_representation_runtime",
+    "install_qwen3_patch_embed_linear_fast_path",
     "qwen3_input_embedding_identity",
 ]
