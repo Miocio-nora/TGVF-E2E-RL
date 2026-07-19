@@ -19,8 +19,8 @@ from .losses import (
     CausalEvidenceLosses,
     EVIDENCE_IGNORE_INDEX,
     MatrixCEScoreMode,
+    _historical_sample_norm_loss_unchecked,
     causal_evidence_losses,
-    historical_sample_norm_loss,
     matrix_ce_cell_scores,
 )
 from .objective import (
@@ -301,10 +301,11 @@ def _score_streaming_groups(
     evidence_counts: list[list[torch.Tensor | None]] = [
         [None for _ in group.rows] for group in groups
     ]
+    _validate_streaming_norm_tensors_finite(groups)
     with torch.no_grad():
         norm_losses = [
             [
-                historical_sample_norm_loss(
+                _historical_sample_norm_loss_unchecked(
                     candidate.visual.main,
                     group.source_visual.main,
                     candidate.visual.deepstack,
@@ -624,25 +625,30 @@ def _backward_streaming_groups(
             * normalization.data_parallel_world_size
             / normalization.l_gen_samples
         )
-        for group_index, (group, group_tensors, scores) in enumerate(
-            zip(groups, candidate_tensors, group_scores, strict=True)
-        ):
-            for column_index, (candidate, tensors) in enumerate(
-                zip(group.candidates, group_tensors, strict=True)
-            ):
-                live_norm = historical_sample_norm_loss(
+        _validate_streaming_norm_tensors_finite(groups)
+        live_norms = tuple(
+            tuple(
+                _historical_sample_norm_loss_unchecked(
                     candidate.visual.main,
                     group.source_visual.main,
                     candidate.visual.deepstack,
                     group.source_visual.deepstack,
                 )
-                if not torch.equal(
-                    live_norm.detach(),
-                    scores.historical_norm[column_index],
-                ):
-                    raise RuntimeError(
-                        "deterministic streaming execution changed a norm value"
-                    )
+                for candidate in group.candidates
+            )
+            for group in groups
+        )
+        flat_live_norms = torch.stack(
+            tuple(value for values in live_norms for value in values)
+        )
+        flat_stored_norms = torch.cat(
+            tuple(scores.historical_norm for scores in group_scores)
+        )
+        if not torch.equal(flat_live_norms.detach(), flat_stored_norms):
+            raise RuntimeError("deterministic streaming execution changed a norm value")
+        for group_index, group_tensors in enumerate(candidate_tensors):
+            for column_index, tensors in enumerate(group_tensors):
+                live_norm = live_norms[group_index][column_index]
                 norm_gradients = torch.autograd.grad(
                     live_norm * norm_scale,
                     tensors,
@@ -821,6 +827,54 @@ def _candidate_output_tensors(
     visual: RepresentationVisualTensorBundle,
 ) -> tuple[torch.Tensor, ...]:
     return (visual.main, *visual.deepstack)
+
+
+def _validate_streaming_norm_tensors_finite(
+    groups: tuple[SameImageReadoutGroup, ...],
+) -> None:
+    """Validate every norm input with one normal-path device-to-host sync."""
+
+    named_tensors: list[tuple[torch.Tensor, str]] = []
+    for group in groups:
+        first_candidate, *remaining_candidates = group.candidates
+        named_tensors.extend(
+            (
+                (first_candidate.visual.main, "D tokens"),
+                (group.source_visual.main, "source visual tokens"),
+            )
+        )
+        for d_branch, source_branch in zip(
+            first_candidate.visual.deepstack,
+            group.source_visual.deepstack,
+            strict=True,
+        ):
+            named_tensors.extend(
+                (
+                    (d_branch, "D tokens"),
+                    (source_branch, "source visual tokens"),
+                )
+            )
+        for candidate in remaining_candidates:
+            named_tensors.append((candidate.visual.main, "D tokens"))
+            named_tensors.extend(
+                (branch, "D tokens") for branch in candidate.visual.deepstack
+            )
+
+    reference_device = named_tensors[0][0].device
+    if any(tensor.device != reference_device for tensor, _ in named_tensors[1:]):
+        raise ValueError("streaming norm tensors must share a device")
+    finite_flags = torch.stack(
+        tuple(torch.isfinite(tensor.detach()).all() for tensor, _ in named_tensors)
+    )
+    if bool(finite_flags.all().item()):
+        return
+
+    # The failure path may synchronize again to retain the checked public API's
+    # precise D-versus-source diagnostic; the hot, valid path synchronizes once.
+    for tensor, name in named_tensors:
+        if not bool(torch.isfinite(tensor.detach()).all().item()):
+            raise ValueError(f"{name} must be finite")
+    raise RuntimeError("streaming norm finite validation was internally inconsistent")
 
 
 def _unique_candidate_slots(

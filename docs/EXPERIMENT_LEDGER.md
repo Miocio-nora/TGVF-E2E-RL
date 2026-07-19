@@ -2577,8 +2577,9 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and approval references: accepted
   `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; direct-group accumulation
   implementation commit `bd3d9ca2010767e3e14f0610efaa70bed7a2d5b6`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS` as a bounded execution/contract cell; `B16 x GA2` is rejected
+  as the throughput default because it did not improve RP-19.
 - Question: with the mathematical global batch fixed at 32, does partitioning
   four local K4 groups into two accumulation windows, each executed as B16,
   reduce RP-19's utilization gaps and `11.095230004`-second steady step?
@@ -2648,20 +2649,40 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   32. Expected physical readout is four B16 calls/rank/update for 64 cells.
 - GPUs: only user-authorized physical 0 and 3 mapped to logical 0/1; both must
   be idle at immediate preflight.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
-- Actual GPU-hours and peak scratch use: `PENDING`; hard limit one aggregate
-  GPU-hour, plus one diagnostic 100 ms `nvidia-smi` trace.
+- Start/end timestamps, elapsed time, and session/process identity: launched
+  `2026-07-20 05:45:52 +09:00` as torchrun parent PID `1833912`; final runner
+  output completed at `05:46:55 +09:00` (about 63 seconds wall time).
+- Actual GPU-hours and peak scratch use: the three measured train steps used
+  `0.0190` aggregate train-core GPU-hours; the full launch was below `0.035`
+  aggregate GPU-hours. The completed output tree occupies `578,004,317` bytes
+  (`538 MiB` by `du`), below the one aggregate GPU-hour limit. A 100 ms
+  `nvidia-smi` trace was captured.
 - Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
   run-representation configs/smoke/representation_qwen3_embedding_rp20_continuous_real512_b16_ga2_throughput.toml`;
   a read-only 100 ms utilization sampler observes physical 0/3.
-- Outputs: `PENDING`; overwrite forbidden under the exact RP-20 root.
+- Outputs: completed metrics, final Adapter, step-3 checkpoint, run log, and
+  utilization trace under the exact RP-20 root; final artifact manifest SHA256
+  `c21f9697e332d0ba41272088bf0cbf2e0b8c9e15f8e8b5c57b88d08a19be4d9b`.
+  Overwrite remains forbidden.
 - Scorer/parser identity: no answer scorer; strict native representation runner.
-- Metrics: `PENDING`; compare steady mean, peak allocation, and utilization
-  distributions/longest below-50% runs directly with RP-19.
-- Conclusion: `PENDING`.
+- Metrics: steps 1/2/3 took `11.956811975`, `11.129316294`, and
+  `11.143948025` seconds. The predeclared steady mean is `11.1366321595`
+  seconds, equivalent to `6.1870` train-core hours for 2,000 steps and `0.37%`
+  slower than RP-19. Every rank executed four B16 Qwen calls and 64 cells per
+  step; global row/sample counts were exactly 32. The maximum rank peak
+  allocated/reserved memory was `110,357,683,200`/`119,632,035,840` bytes.
+  In the memory-resident trace, GPU0/GPU3 mean utilization was approximately
+  `41.9%`/`32.7%`; below-50% samples were `55.9%`/`67.7%`, zero-utilization
+  samples were `36.8%`/`45.2%`, and the longest below-50% runs were about
+  `3.3`/`4.0` seconds.
+- Conclusion: the direct-group accumulation implementation and B16 execution
+  contract pass, but packing two groups per accumulation window neither
+  improves throughput nor removes the utilization gaps. Keep RP-19's B8/GA4
+  execution as the comparison/default path and next remove hot-path
+  CUDA-to-host validation synchronizations without changing the objective.
 
 ## Compatibility-spike status
 

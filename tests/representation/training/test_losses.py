@@ -76,6 +76,16 @@ def test_historical_norm_formula_is_fp32_and_detaches_source() -> None:
     assert source_tokens.grad is None
 
 
+def test_checked_historical_norm_api_rejects_nonfinite_inputs() -> None:
+    finite = torch.ones(1, 2)
+    nonfinite = torch.tensor([[float("nan"), 1.0]])
+
+    with pytest.raises(ValueError, match="D tokens must be finite"):
+        historical_visual_token_norm_loss(nonfinite, finite)
+    with pytest.raises(ValueError, match="source visual tokens must be finite"):
+        historical_visual_token_norm_loss(finite, nonfinite)
+
+
 def test_historical_sample_norm_reduces_branch_mean_then_main_equally() -> None:
     main_d = torch.tensor([[3.0, 4.0]], requires_grad=True)
     main_source = torch.tensor([[0.0, 2.0]])

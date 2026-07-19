@@ -8,6 +8,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+import tgvf_rl.representation.training.streaming as streaming_module
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import (
@@ -846,6 +847,69 @@ def test_streaming_v2_norm_matches_full_graph_and_reports_raw_weighted_values() 
     ):
         assert actual is not None
         assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_streaming_norm_finite_check_has_one_normal_path_host_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group = _group()
+    original_item = torch.Tensor.item
+    item_calls = 0
+
+    def counted_item(tensor: torch.Tensor, *args: object) -> object:
+        nonlocal item_calls
+        item_calls += 1
+        return original_item(tensor, *args)
+
+    monkeypatch.setattr(torch.Tensor, "item", counted_item)
+    streaming_module._validate_streaming_norm_tensors_finite((group,))
+
+    assert item_calls == 1
+
+
+def test_streaming_norm_determinism_comparison_is_fused_before_vjps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group = _group()
+    model = _frozen_model()
+    objective = _objective_v2()
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=2,
+        l_gen_samples=2,
+    )
+    scores = score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        model,
+        group,
+        objective=objective,
+        normalization=normalization,
+    )
+    changed_norm = scores.historical_norm.clone()
+    changed_norm[1] = torch.nextafter(
+        changed_norm[1],
+        torch.full_like(changed_norm[1], float("inf")),
+    )
+    changed_scores = replace(scores, historical_norm=changed_norm)
+    original_equal = torch.equal
+    equal_calls: list[tuple[torch.Size, torch.Size]] = []
+
+    def counted_equal(first: torch.Tensor, second: torch.Tensor) -> bool:
+        equal_calls.append((first.shape, second.shape))
+        return original_equal(first, second)
+
+    monkeypatch.setattr(torch, "equal", counted_equal)
+    with pytest.raises(RuntimeError, match="changed a norm value"):
+        backward_streaming_same_image_group(
+            Qwen3VLAdapter(),
+            model,
+            group,
+            changed_scores,
+            objective=objective,
+            normalization=normalization,
+        )
+
+    assert equal_calls == [(torch.Size([2]), torch.Size([2]))]
+    assert all(tensor.grad is None for tensor in _candidate_tensors(group))
 
 
 def test_collective_padding_has_zero_gradient_and_does_not_change_real_objective() -> (

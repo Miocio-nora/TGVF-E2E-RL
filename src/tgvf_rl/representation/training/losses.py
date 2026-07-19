@@ -239,6 +239,41 @@ def historical_sample_norm_loss(
     return (main_loss + branch_losses.mean()) / 2
 
 
+def _historical_sample_norm_loss_unchecked(
+    main_d: torch.Tensor,
+    main_source: torch.Tensor,
+    deepstack_d: Sequence[torch.Tensor],
+    deepstack_source: Sequence[torch.Tensor],
+) -> torch.Tensor:
+    """Compute the fixed sample norm after a streaming-wide validation."""
+
+    def visual_loss(
+        d_tokens: torch.Tensor,
+        source_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        d_norm = torch.linalg.vector_norm(d_tokens.float(), dim=-1)
+        source_reference = (
+            torch.linalg.vector_norm(source_tokens.detach().float(), dim=-1)
+            .mean()
+            .clamp_min(HISTORICAL_NORM_EPS)
+        )
+        log_ratio = torch.log((d_norm + HISTORICAL_NORM_EPS) / source_reference)
+        return log_ratio.square().mean()
+
+    main_loss = visual_loss(main_d, main_source)
+    branch_losses = torch.stack(
+        tuple(
+            visual_loss(d_branch, source_branch)
+            for d_branch, source_branch in zip(
+                deepstack_d,
+                deepstack_source,
+                strict=True,
+            )
+        )
+    )
+    return (main_loss + branch_losses.mean()) / 2
+
+
 def historical_norm_loss_terms(
     per_sample_losses: Sequence[torch.Tensor],
 ) -> HistoricalNormLossTerms:
