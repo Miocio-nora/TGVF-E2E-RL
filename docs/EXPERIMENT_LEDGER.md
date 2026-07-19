@@ -3023,9 +3023,9 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 ### RP-25-QWEN3-REPRESENTATION-SELECTEDHEAD-REAL512-K4-GA4-THROUGHPUT-GPU23
 
 - Cell/matrix ID and class: `RP-25`; bounded selective language-model-head
-  projection A/B against RP-24. Lifecycle status: `PLANNED`; output is a
-  diagnostic side result and is not eligible for representation-artifact
-  promotion.
+  projection A/B against RP-24. Lifecycle status: `COMPLETE`; result `FAIL`
+  under the predeclared gradient-parity gate. Output is a diagnostic side
+  result and is not eligible for representation-artifact promotion.
 - Approval/code/question: accepted
   `RPI-20260720-CONTROL-STACK-OPTIMIZATION` and
   `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; runtime commit
@@ -3077,6 +3077,29 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
   run-representation
   configs/smoke/representation_qwen3_embedding_rp25_selectedhead_real512_ga4_throughput_gpu23.toml`.
+- Execution/resources: both physical GPUs were idle at immediate preflight.
+  Torchrun started at `2026-07-20 07:08:23 +09:00` and completed at about
+  `07:09:30 +09:00`; the three measured steps used approximately `0.016881`
+  aggregate train-core GPU-hours. The output tree occupies `577,982,664`
+  bytes and contains metrics, a final diagnostic Adapter, step-3 checkpoint,
+  run log, and utilization trace. Final artifact manifest SHA256 is
+  `7ebd6556e585530a09bf029b074ebff21d26c2ddcdeb20f7a7ee6261b45c2381`.
+- Metrics/identity: steps 1/2/3 took `10.805963864`, `9.800602207`, and
+  `9.778940455` seconds. The steps-2/3 steady mean is `9.789771331` seconds,
+  a `2.5462%` step-time reduction versus RP-24 (`5.4388` train-core hours for
+  2,000 steps). Sample order, row/sample counts, tokenizer length, and eight
+  B8 calls/rank/update match RP-24. Step-1 Matrix CE/L_gen/Norm deltas are
+  approximately `-1.058e-6`/`-1.788e-7`/`0`, all inside the objective gate.
+- Parity failure/conclusion: step-1 gradient norm is `8.156969070` versus
+  RP-24's `8.115238190`, a `0.514229%` relative delta that exceeds the frozen
+  `0.1%` gate. Maximum-rank peak allocated/reserved memory fell to
+  `55,437,285,376`/`57,554,239,488` bytes, but the timeline remained bursty:
+  GPU2/GPU3 mean utilization was `30.5%`/`37.7%`, below-50% samples were
+  `69.3%`/`62.5%`, zero samples were `41.8%`/`37.5%`, and longest below-50%
+  spans were about `3.23`/`1.54` seconds. Reject this selective-head execution
+  path despite its modest speed/memory gain; full-vocabulary projection was
+  not the primary utilization-gap cause. The next cell targets one-group-ahead
+  CPU preparation while retaining the accepted full-logits mathematics.
 
 ## Compatibility-spike status
 
