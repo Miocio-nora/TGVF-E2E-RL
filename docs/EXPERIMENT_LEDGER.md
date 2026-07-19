@@ -3264,7 +3264,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 
 - Cell/matrix ID and class: `RP-28`; bounded native M-RoPE placement A/B
   against RP-24 following the RP-27 root-cause profile. Lifecycle status:
-  `PLANNED`; output is diagnostic until exact parity and throughput gates pass.
+  `COMPLETE`; result `PASS_RETAINED`. The code path is retained; this three-step
+  output remains diagnostic rather than a promoted representation artifact.
 - Approval/code/question: accepted
   `RPI-20260720-CONTROL-STACK-OPTIMIZATION`; runtime commit
   `e461c66bd9916c97ff170679e51739922bb2fbab`. Does invoking the unchanged
@@ -3312,6 +3313,28 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
   run-representation
   configs/smoke/representation_qwen3_embedding_rp28_cpu_mrope_real512_ga4_throughput_gpu23.toml`.
+- Execution/resources: both GPUs were idle at immediate preflight; torchrun
+  started `2026-07-20 07:36:48 +09:00` and completed about
+  `07:37:49 +09:00`. Train-core use was approximately `0.016381` aggregate
+  GPU-hours. The complete output tree occupies `577,975,929` bytes; final
+  diagnostic Adapter manifest SHA256 is
+  `d23b4a3cebc8c49fd33cdb9cb511333739958a93670fa0d161960857bec3d754`.
+- Parity: all three steps match RP-24 exactly in sample order, Matrix CE,
+  L_gen, Norm, total objective, gradient norm, counts, tokenizer length and
+  eight B8 Qwen calls/rank/update. This is end-to-end real-model evidence that
+  CPU and CUDA invocation of the same native helper produced identical
+  positions on every exercised transcript.
+- Timing/memory: steps 1/2/3 took `10.614827115`, `9.439143186`, and
+  `9.431757647` seconds. The steady mean is `9.435450417` seconds (`5.2419`
+  train-core hours for 2,000 steps), a `6.0734%` step-time reduction and
+  `6.4661%` throughput gain versus RP-24. Peak allocated/reserved memory and
+  resident allocations remain unchanged.
+- Utilization/conclusion: GPU2/GPU3 mean utilization rose to `33.8%`/`36.0%`;
+  below-50% samples were `66.0%`/`63.3%`, zero samples fell to `38.1%`/`36.1%`,
+  and longest below-50% spans were about `3.16`/`1.53` seconds. Retain CPU
+  M-RoPE because it is exact and materially faster, but it does not fully
+  eliminate the bursty timeline. Profile the retained path before selecting
+  another optimization.
 
 ## Compatibility-spike status
 
