@@ -3179,6 +3179,59 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   scheduling/contention makes the update slower. The next diagnostic must use
   an operator timeline instead of another inferred bottleneck.
 
+### RP-27-QWEN3-REPRESENTATION-OPERATOR-PROFILE-REAL512-K4-GA4-GPU23
+
+- Cell/matrix ID and class: `RP-27`; bounded operator-timeline diagnostic on
+  the accepted RP-24 full-logits path. Lifecycle status: `PLANNED`; no timing
+  from the profiled step may be used as a throughput estimate and its Adapter
+  output is not promotion-eligible.
+- Approval/code/question: accepted
+  `RPI-20260720-CONTROL-STACK-OPTIMIZATION` measured-attribution clause;
+  diagnostic launcher/runtime commit
+  `e642145eeab45dafb2a3ff51301e89a633fc0bfd`. Which high-level scope and CUDA
+  operators contain the observed 1--3 second below-50% spans after RP-25 and
+  RP-26 excluded full-vocabulary projection and host prefetch as primary causes?
+- Profile contract: step 1 is an unprofiled warm update; step 2 alone records
+  PyTorch CPU/CUDA activities and per-rank Chrome traces. Scoped CUDA events
+  cover group builder, processor action, frozen vision, target conditioning,
+  Adapter forward, readout-row/M-RoPE, each Qwen cell batch, group score and
+  Adapter backward. The profiler changes timing only, not inputs, operations,
+  objectives, RNG, optimizer ordering, or checkpoint state.
+- Model/data/mathematics: exact RP-24 stable local Qwen3-VL-8B-Thinking,
+  BF16/SDPA, target-token-embedding, tokenizer `151669`, native template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  `image_max_pixels=262144`, K4 fixture/validation SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`/
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`,
+  prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`,
+  fresh Adapter seed `20260719`, full main D + DeepStack `(8,16,24)`, legacy
+  summed-NLL Matrix CE/L_gen/Norm weights `1/1/.1`, manifold zero.
+- Determinism/topology: frozen eval Qwen, Adapter dropout zero, no cache, TF32
+  off, CUBLAS `:4096:8`; accepted Python3.12/Torch2.9 lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`,
+  FSDP2 mesh `[2]`, reshard false, corrected GA4 sync, physical GPUs2/3,
+  world2, global batch32, eight B8 calls/rank/update, two optimizer steps.
+- N/A: rollout, policy/reference replay, behavior logprobs, reward, GRPO, SDPO,
+  judge, vLLM sampling, KV cache, asynchronous staleness, and answer scoring.
+- Parity gate: unprofiled step-1 sample order, objectives, gradient, counts,
+  Qwen schedule and tokenizer length must match RP-24 exactly. Step 2 must be
+  finite and complete; profiler overhead is expected and not compared to the
+  baseline. Ruff, format and syntax checks passed for the diagnostic launcher.
+- Config/output: source/canonical TOML SHA256
+  `0904bc81a27ae6d13016ae0bcdb4bf6747f2b98b03b1fae064ddcdacc65fe784`/
+  `1f9975f302ecb33e9dac6d183c239fccc760b9538df4e4602a241b5e76b4b4c4`;
+  overwrite forbidden under
+  `artifacts/representation/RP-27-qwen3-operator-profile-real512-k4-ga4-gpu23/`.
+- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2
+  tools/profile_representation_step.py
+  configs/smoke/representation_qwen3_embedding_rp27_operator_profile_real512_ga4_gpu23.toml
+  --profile-global-step 2 --trace-dir
+  artifacts/representation/RP-27-qwen3-operator-profile-real512-k4-ga4-gpu23/profile`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
