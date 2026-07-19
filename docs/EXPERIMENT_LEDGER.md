@@ -2788,8 +2788,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `RPI-20260720-CONFIG-BOUND-GPU-PAIR`; implementation commits
   `281dc1b5ee12be925ea2edf8c04d4f771a82417a` and
   `66da1cffc71c2aa86e3403ad9caa110aab403185`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question/baseline: identical RP-21 hot-path sync/utilization question against
   RP-19's exact B8/GA4 steps 2/3 (`11.032586041`/`11.157873967` seconds).
 - Exact output path:
@@ -2836,10 +2836,15 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   per rank/update, exact sample order/objectives/gradient norms versus RP-19,
   finite state, tokenizer `151669`; 80 focused CPU tests and Ruff passed.
 - GPUs: physical `[2,3]` mapped in order to logical `[0,1]`; both reported zero
-  memory use and zero utilization at the planning preflight and must be checked
-  again immediately before launch.
-- Start/end/session, GPU-hours, scratch, outputs and metrics: `PENDING`; hard
-  limit one aggregate GPU-hour and one read-only 100 ms utilization trace.
+  memory use and zero utilization at the immediate launch preflight.
+- Start/end/session, GPU-hours, scratch, outputs and metrics: torchrun parent
+  PID `1866041` launched at `2026-07-20 06:12:16 +09:00` and completed at
+  `06:13:23 +09:00` (about 67 seconds wall). The three measured steps used
+  `0.0180` aggregate train-core GPU-hours and the full launch stayed below
+  `0.0373` aggregate GPU-hours. The output tree occupies `578,014,408` bytes.
+  Metrics, final Adapter, step-3 checkpoint, run log, and utilization trace are
+  complete; final artifact manifest SHA256
+  `e9ebccae60d701b4a3d25c967b609c3bfb49bb0949068baed145504d614e8c9b`.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
@@ -2847,7 +2852,19 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   run-representation configs/smoke/representation_qwen3_embedding_rp22_syncfused_real512_ga4_throughput_gpu23.toml`;
   a read-only 100 ms sampler observes physical 2/3.
 - Scorer/parser identity: no answer scorer; strict native representation runner.
-- Conclusion: `PENDING`.
+- Metrics: steps 1/2/3 took `11.557830680`, `10.449125817`, and
+  `10.323950958` seconds. The steps-2/3 steady mean is `10.3865383875`
+  seconds (`5.7703` train-core hours for 2,000 steps), `6.39%` faster than
+  RP-19. All sample IDs, objective values, gradient norms, counts, and B8 call
+  schedules match RP-19 exactly. Maximum rank peak allocated/reserved memory
+  was `64,216,335,872`/`73,125,593,088` bytes. In the memory-resident trace,
+  physical GPU2/GPU3 mean utilization was `29.5%`/`52.1%`; below-50% samples
+  were `70.7%`/`46.7%`, zero samples were `46.3%`/`23.6%`, and longest
+  below-50% runs were about `3.14`/`1.53` seconds.
+- Conclusion: the fused checks and per-group invariant boundary are accepted;
+  they preserve exact training semantics and save `6.39%`. Utilization remains
+  discontinuous, so the next cell targets the remaining readout/mask content
+  synchronizations and between-step telemetry rather than changing batch math.
 
 ## Compatibility-spike status
 
