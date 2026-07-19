@@ -5,10 +5,10 @@ Target-Guided Visual Foveation for a Qwen reasoning policy trained with
 end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 `Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
-> **Status:** the bounded framework and representation-phase execution scaffold
-> are implemented on `main`, and the corrected `RP-10` synthetic-data
-> real-Qwen3/two-rank representation optimizer smoke has passed. The earlier
-> colliding run ID is retained as invalid. No production
+> **Status:** the bounded framework and representation-phase trainer are
+> implemented on `main`. `RP-11` passes a real-Qwen3/two-rank K=4/GA=4
+> continuous-versus-process-teardown resume smoke with Matrix CE, `L_gen`, and
+> the fixed historical Norm loss. No production
 > data/prompt/hyperparameter contract, production representation run, promoted
 > TGVF Adapter, policy RL run, or task evaluation result exists yet.
 
@@ -21,12 +21,13 @@ training lock.
 
 Current evidence is deliberately small:
 
-- `295` CPU tests pass for the framework, representation-phase contracts, and
+- `346` CPU tests pass for the framework, representation-phase contracts, and
   synthetic oracles;
 - the representation suite covers the audited retained-JSONL transform,
   same-image sampler, native Qwen3 pipeline with both target-conditioning
-  providers, streaming Matrix CE plus `L_gen`, a frozen-Qwen optimizer step,
-  Adapter-only artifacts, exact CPU next-step resume, strict TOML identity,
+  providers, streaming Matrix CE plus `L_gen` plus fixed Norm, a frozen-Qwen
+  optimizer step, complete internal-evaluation controls and Qwen3 D-only
+  materialization, Adapter-only artifacts, exact CPU next-step resume, strict TOML identity,
   composable-FSDP2 parameter ownership, collective-safe four-versus-five-
   candidate padding, and content-bound distributed checkpoints;
 - a separate local-Qwen3 representation golden freezes the real processor/chat
@@ -46,6 +47,12 @@ Current evidence is deliberately small:
   Its identity-valid executable config is
   `configs/smoke/representation_qwen3_embedding_rp10.toml`; the earlier
   colliding config is retained only in git history.
+- `RP-11` passes two uninterrupted updates and a separate step-1
+  save/teardown/reconstruct/restore/step-2 lane at K=4 with four accumulation
+  microsteps. The comparator reports exact equality for all 104 Adapter
+  tensors, recorded model/optimizer/scheduler/sampler/RNG/shard state, and two
+  train plus two validation scientific records. The measured continuous steps
+  sustain about 1.5 global rows/s on physical GPUs 2 and 3.
 
 The live vLLM path requires the repository plugin and accepted attention split:
 `VLLM_PLUGINS=tgvf_qwen3_precomputed`,
@@ -53,9 +60,9 @@ The live vLLM path requires the repository plugin and accepted attention split:
 `TORCH_SDPA`. See [environment setup](docs/SETUP.md) and the
 [experiment ledger](docs/EXPERIMENT_LEDGER.md) for exact identities. These
 smokes and CPU fixtures are not policy training, production representation
-training, representation restore/next-step-resume evidence, a promoted trained
-artifact, or production-objective evidence. `RP-10` is deliberately only one
-synthetic-data optimizer step and makes no quality or capacity claim.
+training, a promoted trained artifact, or semantic-quality evidence. `RP-11`
+closes the bounded executor/resume question, but its prompt and data are
+explicitly smoke-only.
 
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
@@ -230,12 +237,13 @@ be inherited silently from a library default.
    output/gradient oracle for the selected TGVF Adapter equations and freeze a
    real local-Qwen3 native transcript/processor golden. Exact 4096/1152 legacy-
    checkpoint parity remains a promotion gate; `RP-10` supplies the
-   identity-valid real-Qwen gradient/FSDP2-save evidence.
+   identity-valid real-Qwen gradient/FSDP2-save evidence and `RP-11` supplies
+   the bounded real distributed next-update resume evidence.
 5. **Implemented and smoke-tested, not run on production data:** the native-
    format Qwen3 representation data/pipeline, both provider paths, streaming objective,
    trainer, FSDP2 ownership, configuration, and checkpoint/resume scaffolds.
-   Resolve the open data/scientific contracts, real distributed restore gate,
-   and paired-provider experiment before training a new production
+   Resolve the open production prompt/data/scientific contracts and semantic
+   evaluation thresholds before training a new production
    Qwen3-VL-8B-Thinking TGVF Adapter. Require a separate family-specific
    artifact and full fixture suite before claiming Qwen2.5-VL end-to-end
    support.

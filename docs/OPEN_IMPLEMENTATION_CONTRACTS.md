@@ -72,12 +72,14 @@ legacy-derived file until its own entry exists.
 The bounded implementation is now complete. The accepted compatibility stack
 is upstream veRL
 `e003163181731412595257a72ec173071efb125f`, vLLM `0.12.0`, Torch
-`2.9.0+cu128`, Transformers `4.57.6`, and CPython `3.12.3`. `295` CPU tests,
+`2.9.0+cu128`, Transformers `4.57.6`, and CPython `3.12.3`. `346` CPU tests,
 the real-Qwen3 `SC-20-R6` TP=2 latent-transport smoke, and the two-rank `SC-30`
 bitwise FSDP2 resume smoke passed. One real-Qwen3 representation execution
 completed technically under a colliding `SC-40` prefix and is retained as
 invalid because that ID was already reserved for SDPO CPU parity. Corrected
 representation run `RP-10` independently passed the same bounded question.
+`RP-11` additionally passed real-Qwen3 K=4/GA=4 continuous versus clean
+process-teardown/restore next-update parity with the fixed Norm-aware objective.
 The CPU baseline includes the bounded representation data/native pipeline,
 both conditioning providers, streaming
 Matrix CE plus `L_gen`, trainer, FSDP2 ownership, artifact/checkpoint/config,
@@ -479,9 +481,10 @@ superseded by §1.1.
   target-conditioning providers, two-call latent-observation
   transport, actual behavior logprobs, exact observation replay, FSDP2 one
   step, save/resume.
-  - Completed subset: `295` CPU tests, Qwen3 `SC-20-R6` real TP=2 native
+  - Completed subset: `346` CPU tests, Qwen3 `SC-20-R6` real TP=2 native
     two-call latent transport, `SC-30` exact tiny-model FSDP2 resume, and valid
-    `RP-10` real-Qwen3 target-token-embedding backward/FSDP2 update/save/export.
+    `RP-10` real-Qwen3 target-token-embedding backward/FSDP2 update/save/export,
+    and `RP-11` exact real-Qwen3 teardown/restore next-update parity.
     The identity-invalid side result remains debugging evidence only.
   - Remaining: real Qwen policy/reference logit/logprob replay parity, the full
     Qwen2.5 family-specific fixture, and production loss/gradient/topology
@@ -631,9 +634,11 @@ the external data or start a production/GPU run.
     FSDP forward/backward counts when ranks receive four and five real
     candidates. The streaming executor requires deterministic recomputation and
     releases each cell graph before traversing each Adapter candidate once.
-    Corrected `RP-10` supplies one real 8B/two-rank K=2 execution for the
-    target-token-embedding provider. Production values, paired providers,
-    distributed restore, and numerical controls remain gated below.
+    Corrected `RP-10` supplies one real 8B/two-rank K=2 execution and `RP-11`
+    supplies the K=4/GA=4 Norm-aware exact teardown/restore next-update proof
+    for the target-token-embedding provider. Production identity, semantic
+    thresholds, paired-provider comparison, and numerical controls remain
+    gated below.
   - [x] `FIXED AD-05B` — Same-image multi-target grouping implements image key,
     minimum/maximum group batch size, duplicate handling, incomplete-group
     dropping, whole-group distributed ownership, group/member shuffle,
@@ -672,15 +677,15 @@ the external data or start a production/GPU run.
     by the global sample count. Accumulation and DDP must aggregate that global
     numerator and denominator; a global token-mean or an equal mean of unequal
     local microbatch means is a different objective and is forbidden silently.
-  - [ ] `OPEN_BLOCKING AD-05G` — Run a real local-Qwen3 backward and two-rank
+  - [x] `FIXED AD-05G` — Run a real local-Qwen3 backward and two-rank
     representation FSDP2 optimizer/checkpoint/resume smoke on physical GPUs 2
     and 3 under a complete experiment-ledger identity. The generic `SC-30`
     infrastructure smoke is not this evidence. Corrected `RP-10` passed the
     real-Qwen3 target-token-embedding backward, optimizer, validation,
-    checkpoint-save, and export subset. Clean teardown/reconstruction plus
-    strict distributed restore and matching next optimizer step is still required before this
-    combined gate closes; the completed one-step history is not mutated or
-    reused to manufacture that proof.
+    checkpoint-save, and export subset. `RP-11` then passed K=4/GA=4 continuous
+    versus clean process teardown/reconstruction, strict distributed restore,
+    and exact matching next optimizer step. This is bounded executor evidence,
+    not a production-data or semantic-quality result.
 - [x] `FIXED AD-06` — Runtime, trainer, and FSDP2 planning enforce every
   and only Adapter-owned trainable parameters while the vision tower, language
   model, and four borrowed Qwen mergers remain frozen. CPU/meta and simulated
@@ -699,9 +704,13 @@ the external data or start a production/GPU run.
   rank's Adapter and optimizer local-shard content digests before restore is
   applied. Corrected `RP-10` passed real two-rank save/export; independent
   post-run loading verified all 104 export tensor digests plus sidecar integrity
-  and recorded per-rank shard-content digest fields. Recomputing logical shard
-  digests after real distributed restore, matching the resumed next step, and then promoting any trained
-  artifact remain blocking.
+  and recorded per-rank shard-content digest fields. `RP-11` restored the
+  step-1 payload in a fresh process, revalidated loaded shard contents, and
+  matched the uninterrupted step-2 Adapter, optimizer/scheduler/sampler/RNG,
+  shard, and scientific metric state exactly. Artifact promotion remains
+  blocked on production identity and semantic gates; final step-2 DCP payloads
+  were compared through validated sidecar state rather than independently
+  restored a second time.
 - [ ] `OPEN_BLOCKING AD-08` — Numerical output/gradient parity of the extracted
   TGVF Adapter core against its pinned reference. The independent small-shape
   functional oracle now checks outputs and target/visual/104-owned-parameter
@@ -992,7 +1001,7 @@ the synthetic implementation smoke.
   bounded execution authority.
 - [x] Run the approved isolated compatibility task, record the selected public
   hooks and state ownership, and implement the framework-binding packages.
-  `295` CPU tests, `SC-20-R6`, `SC-30`, and corrected `RP-10` are the accepted
+  `346` CPU tests, `SC-20-R6`, `SC-30`, corrected `RP-10`, and `RP-11` are the accepted
   bounded evidence; the colliding representation side result remains invalid.
 - [x] Freeze the bounded framework legacy file inventory and port records.
 - [x] Record the bounded representation-training code lineage, strict external-
@@ -1005,10 +1014,12 @@ the synthetic implementation smoke.
 - [x] Run corrected `RP-10`, one bounded real-Qwen3/two-rank FSDP2
   representation backward, validation, checkpoint-save, and export smoke,
   without making a production-training or promoted-artifact claim.
+- [x] Run `RP-11`, the bounded real-Qwen3 K=4/GA=4 continuous versus clean
+  teardown/restore matching-next-update proof with Matrix CE, `L_gen`, and Norm.
 - [ ] Accept the production representation data split, prompt, scientific
-  configuration, parity tolerances, and promotion thresholds; complete the
-  distributed restore/next-step and paired-provider gates before any
-  production training claim.
+  configuration, parity tolerances, semantic evaluation, and promotion
+  thresholds before any production training claim. A paired-provider run is
+  optional comparison evidence, not a prerequisite.
 - [x] Implement the S0 Qwen-family boundary, both condition-provider
   interfaces, SDPO teacher/objective/checkpoint boundary, and optional
   judge-provider interface. This does not close Qwen2.5 end-to-end or D0

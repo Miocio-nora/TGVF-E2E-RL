@@ -48,7 +48,7 @@ or site-package patch is used.
 
 ## Verification evidence
 
-- `295` CPU tests pass. They cover the public veRL bridge, native transcript and
+- `346` CPU tests pass. They cover the public veRL bridge, native transcript and
   parser, tokenizer invariants, two-call environment, exact behavior-logprob
   transport, immutable observations, deterministic replay contracts, both
   target-conditioning providers, sampling-transform oracle, GRPO tensor
@@ -67,14 +67,19 @@ or site-package patch is used.
   and all three D-DeepStack branches, same-image Matrix CE plus `L_gen`, frozen
   Qwen, two-rank FSDP2, validation, content-bound DCP save, and 104-tensor
   Adapter-only export all completed without tokenizer growth.
+- `RP-11` passes the real-Qwen3 K=4/GA=4 two-update execution and a separate
+  step-1 save, full process teardown, reconstruction, strict DCP restore, and
+  matching step-2 update. All 104 Adapter tensors and recorded model/optimizer/
+  scheduler/sampler/RNG/shard and scientific metric state compare exactly.
 
 The Qwen3 cell proves public precomputed-latent transport and native transcript
 execution, not policy/reference replay parity, a trained TGVF Adapter, or
 production reward/objective behavior. `SC-30` proves exact resume for its tiny
 fixture. The earlier technical side result remains invalid because its `SC-40`
 prefix collides with the reserved SDPO cell; `RP-10` is the accepted bounded
-identity. Neither result implies production data quality, capacity/throughput,
-a paired provider result, or real distributed restore/next-step parity.
+identity. `RP-11` supplies the bounded real distributed restore/next-step
+parity result. None of these results implies production data quality, a paired
+provider result, or accepted semantic thresholds.
 
 ## Representation-parity work after the bounded framework build
 
@@ -100,14 +105,19 @@ trainer, without claiming a completed production run:
   Adapter candidate once;
 - the trainer performs explicit global numerator/count normalization,
   Adapter-only AdamW, global gradient clipping, collective-safe unequal-K
-  padding, validation, strict FSDP2 checkpointing, and Adapter export. Matrix CE
-  and `L_gen` remain separately logged; `L_gen=0` is only a named ablation.
+  padding, validation, strict FSDP2 checkpointing, and Adapter export. Matrix CE,
+  `L_gen`, and the one fixed historical Norm objective are separately logged;
+  manifold remains zero;
+- the executable internal evaluation reproduces correct/target-only/random/
+  wrong-same/wrong-different readout controls, full query matrices, main/branch
+  distribution and attention health, plus a concrete Qwen3 native D-only
+  teacher-forced/free-continuation path. Its production prompt, audited pair
+  manifest, extraction rule, and thresholds remain deliberately unset.
 
-Production data/manifests, prompt, initialization, objective coefficients,
-hyperparameters, semantic thresholds, paired providers, exact legacy-state
-parity, and real distributed restore/next-step evidence remain open under Gate
-A0. Corrected `RP-10` is a one-step synthetic-data execution proof, not a
-trained-quality artifact; the invalid side result receives no gate credit.
+Production data/manifests, prompt, semantic thresholds, paired-provider
+comparison, exact legacy-state parity, and formal counterfactual evaluation
+remain open under Gate A0. `RP-11` is an executor/resume proof with smoke-only
+data and prompt, not a trained-quality artifact.
 
 ## Model-family boundary
 

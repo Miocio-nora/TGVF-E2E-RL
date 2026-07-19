@@ -889,8 +889,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `I8H-20260719`, `RPI-20260719-NORM-EVAL`, `AD-05G`, `AD-06`, and `AD-07`;
   runtime commit `41fb07d1c8bfdaf0388115de6062b1cc8732bcc0`; exact configs commit
   `69534f2440c58bb623c26d4811b76bb903d1c754`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: do an uninterrupted two-update run and an otherwise identical run
   stopped after update 1, fully torn down, reconstructed, restored, and advanced
   through update 2 produce exact Adapter tensors, recorded optimizer/scheduler/
@@ -917,8 +917,10 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   representation updates with no intervening policy update.
 - Code commit and worktree state: runtime code
   `41fb07d1c8bfdaf0388115de6062b1cc8732bcc0`, code-identity paths clean;
-  config commit `69534f2440c58bb623c26d4811b76bb903d1c754`. Launch HEAD and final
-  documentation-only state are recorded after execution.
+  config commit `69534f2440c58bb623c26d4811b76bb903d1c754`; launch HEAD
+  `7ba4348378f699f9de9e821b3dabf23263e23680`. Runtime code paths were clean;
+  the only launch-time difference from runtime commit was committed config and
+  experiment-ledger state.
 - Repository adapter/patch surface and hash: representation-training tree
   `5e2b227c9b2db7ec7c80ff57be68e10f6d243e03`; Qwen tree
   `6ae2676f7f08949f2425d736fe4d54751d53f69f`. Continuous/split-fresh/
@@ -988,10 +990,16 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, NVIDIA B200, logical 0/1.
   Preflight showed 0 MiB used and 182,642 MiB free on each; no other GPU may
   be visible.
-- Start/end timestamps, elapsed time, and session/process identity: `PENDING`,
-  recorded per invocation; each invocation has a 3,600-second wall limit.
-- Actual GPU-hours and peak scratch use: `PENDING`; train-step elapsed time and
-  allocated/reserved/peak CUDA memory are emitted per rank.
+- Start/end timestamps, elapsed time, and session/process identity: continuous
+  launcher PID `535857`, `2026-07-19T20:12:18+09:00` to
+  `20:13:37+09:00` (about 79 s); split-step-1 launcher PID `536992`,
+  `20:14:01` to `20:14:54` (about 53 s); fresh resume launcher PID `538213`,
+  `20:15:17` to `20:16:10` (about 53 s). Every invocation exited zero inside
+  its 3,600-second bound.
+- Actual GPU-hours and peak scratch use: less than `0.103` aggregate GPU-hour
+  by the three-invocation wall-time upper bound; RP-11 artifacts use
+  `2,023,388,296` bytes (`1.9 GiB`). Maximum measured train-step allocated/
+  reserved CUDA memory was `21,217,806,848`/`22,299,017,216` bytes on one rank.
 - Command: continuous:
   `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 3600s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp11_continuous.toml`;
   split step 1: same environment/torchrun with
@@ -1000,16 +1008,37 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `representation_qwen3_embedding_rp11_split_resume.toml`; then
   `.venv312/bin/python -m tgvf_rl.cli compare-representation-resume` with both
   exact artifacts, step-2 checkpoints, and metrics paths recorded above.
-- Outputs: `continuous/{adapter.pt,metrics.jsonl,checkpoints/,run.log}`;
-  `split/{adapter.pt,metrics.jsonl,checkpoints/,step1.log,resume.log}`; root
-  `resume_comparison.json`. File hashes are `PENDING`.
+- Outputs: both Adapter files are byte-identical, SHA256
+  `665d0189a43a242386110893ab111e27f57953d672588184b69ff9680d3d8d84`.
+  Continuous/split metrics SHA256 are
+  `19046cbcc53bdc6bb9d8d1a99bc110d694378a1bb14d3e45d2729a99f6d1da`/
+  `bf31353f82c6199c90e99f98f84a4efdd2d7bd07db66ac7f0c4de80f30616fa6`;
+  continuous/step1/resume log SHA256 are
+  `2219f480b4f464871a23565f31018c0758e41ed3229bdb2526e8cd0309566524`/
+  `ec94fe792e11add7525f07efba415c6fe6a5934db7cb38e5d68c8e846df30a74`/
+  `c76bd86b6a84e64e063d360794b12e2b648eb76bf3782ff52f9c7c3a0188b7f8`.
+  Comparator JSON SHA256 is
+  `e077dedda1c374075bf282b1ccd3a838d356f2e5f06ef45797a6a859f1175577`.
 - Scorer/parser identity: no answer scorer; strict config/native pipeline,
   objective/evaluation, DCP/history, and resume comparator at runtime commit.
-- Metrics: `PENDING`. PASS requires two finite train/validation events per lane,
-  expected LR `1e-6` then `2e-6`, nonzero Adapter gradients, unchanged tokenizer,
-  successful fresh-process restore, and exact comparator result.
-- Conclusion: `PENDING`; this is a bounded execution/resume proof, not a
-  production prompt/data-quality result or promoted representation artifact.
+- Metrics: `PASS`. Both lanes have identical scientific records. Step 1/2
+  learning rates are `1.0000000000000002e-6`/`2.0000000000000003e-6`;
+  total losses are `6.032827917486429`/`6.06851127743721`; Matrix CE
+  `1.4035631567239761`/`1.4297739267349243`; `L_gen`
+  `4.596969246864319`/`4.606441974639893`; Norm
+  `.3229551389813423`/`.3229537606239319`; gradient norms
+  `5.383439540863037`/`9.009767532348633`. Continuous step times are
+  `21.574`/`20.366` s (`1.483`/`1.571` global rows/s). Validation totals at
+  steps 1/2 are `5.7763159327209`/`5.756785213202238`. Tokenizer length stayed
+  `151669`. The resume comparator reports `exact=true`, 104 Adapter tensors,
+  two train and two validation records, world size 2, run identity SHA256
+  `f56b5c64380e1a6c796c498a971a3accd1fc7b37f68d68d9b91c39d392a04299`,
+  and exact recorded model/optimizer/rank-state digests.
+- Conclusion: `PASS` for the bounded K=4/GA=4 real-Qwen3 teardown/resume
+  question. This closes the representation executor's real distributed
+  restore/next-update proof. It is not a production prompt/data-quality result,
+  a semantic-quality threshold result, a formal native counterfactual run, or
+  a promoted representation artifact.
 
 ## Compatibility-spike status
 

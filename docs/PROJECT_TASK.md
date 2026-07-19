@@ -258,6 +258,11 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   optimizer, scheduler, sampler, RNG, validation history, and distributed shard
   state, and records steady-state time and peak memory. It is a bounded smoke,
   not a promoted representation artifact.
+- Execution record `RP-11` passed that bounded proof on physical GPUs 2 and 3:
+  continuous and clean-teardown/resumed step 2 produced byte-identical
+  104-tensor Adapter exports and exact recorded optimizer/scheduler/sampler/RNG,
+  shard, train, and validation state. This closes executor/resume readiness,
+  not the still-open production prompt, data identity, or semantic thresholds.
 
 ### 2.2 Remove Stage2 SFT
 

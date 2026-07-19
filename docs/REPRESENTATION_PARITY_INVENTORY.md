@@ -64,9 +64,11 @@ independent FP32/BF16 functional output/gradient oracle in
 `tests/representation/test_adapter_reference_parity.py`. An initial real-Qwen3
 execution reached backward/save/export technically, but its `SC-40` prefix
 collides with the reserved SDPO cell and is invalid evidence. Corrected
-representation run `RP-10` independently passed. These results do not
+representation run `RP-10` independently passed. `RP-11` additionally passed
+the real-Qwen3 K=4/GA=4 clean teardown/restore matching-next-update proof.
+These results do not
 constitute a production-trained/promoted Adapter, accepted data split, both-provider
-comparison, distributed restore/next-step proof, or quality result.
+comparison, production semantic evaluation, or quality result.
 
 ## Exact mathematical parity items
 
@@ -272,7 +274,7 @@ explicit acceptance before Gate AD-13 can close.
 | `test_readout_inputs_without_target_still_replace_fvt_positions` | `DONE` | native group-builder fixture omits target from the user prompt while preserving strict call-target extraction and both visual blocks |
 | `test_readout_loss_backprops_to_fvt_not_frozen_lm` | `DONE` | synthetic fixtures and corrected `RP-10` prove nonzero real-8B backward through main `D`/all branches/Adapter while Qwen stays frozen |
 | `test_tgvf_module_params_remain_trainable_when_qwen_is_frozen` | `DONE` | runtime fixtures and corrected `RP-10` enforce frozen Qwen plus every-and-only Adapter ownership under real FSDP2 |
-| `test_tgvf_checkpoint_saves_module_without_qwen_weights` | `DONE` | strict CPU fixtures and corrected `RP-10` 104-tensor export pass; distributed restore remains separate |
+| `test_tgvf_checkpoint_saves_module_without_qwen_weights` | `DONE` | strict CPU fixtures, corrected `RP-10` 104-tensor export, and `RP-11` fresh-process distributed restore/next-update parity pass |
 | `test_build_tgvf_module_supports_target_slot_variant` | `PROPOSED_EXCLUSION` | unused legacy variant builder |
 | `test_build_tgvf_module_supports_v2_dynamic_token_variants` | `PROPOSED_EXCLUSION` | unused legacy variants; only the selected bidirectional D-DeepStack structure is in scope |
 | `test_v3_stage1_dataset_keeps_focus_and_skips_direct_rows` | `DONE` | strict retained-focus transform and every-row disposition fixture in `test_data.py` |
@@ -363,15 +365,17 @@ These are required because the new system changes the protocol or capability:
   data/order/initialization/seed;
 - [x] synthetic main `D` and every D-DeepStack branch causal/readability and
   post-`D` source-key-block controls;
-- [ ] real-Qwen free continuation and counterfactual value-flip evaluation;
+- [x] executable Qwen3 D-only native materializer, teacher-forced value-flip,
+  no-cache free-continuation, real-processor golden, and tiny actual-forward
+  fixtures; a formal trained-artifact/data run remains open;
 - [x] deterministic streaming score/recompute equality and exact source/candidate
   observation identity in bounded fixtures;
 - [x] CPU checkpoint/resume including sampler state, provider/data/optimizer/
   scheduler/accumulation identities, RNG, and global step;
 - [x] corrected `RP-10` real two-rank DCP save plus Adapter-only export and
   independent export/sidecar integrity load;
-- [ ] real two-rank distributed teardown/restore and matching next-step
-  evidence; corrected `RP-10` covers optimizer/save/export only.
+- [x] `RP-11` real two-rank K=4/GA=4 distributed teardown/restore and exact
+  matching next-step evidence.
 
 ## Golden-equivalence audit
 
@@ -401,8 +405,6 @@ remaining blockers are:
 - execute the contextual-hidden-state provider alongside completed `RP-10`
   target-token-embedding and record paired target-span/`Hq`, specificity,
   readability, and gradient evidence;
-- restore the `RP-10`-class distributed checkpoint after teardown and prove the
-  matching next optimizer step; save/export alone does not establish resume;
 - train and validate a newly initialized native-format Adapter rather than
   loading the historical checkpoint.
 
@@ -420,8 +422,9 @@ gates.
 - bind the accepted initialization seed, prompt, provider, data identity,
   optimizer/scheduler, BF16, accumulation, cadence, and output paths in a
   production TOML artifact;
-- complete the two-rank K=4 checkpoint teardown/restore and matching next-step
-  proof; a contextual-provider paired run remains optional comparison evidence;
+- run the formal internal evaluation on an accepted prompt, audited
+  counterfactual pair manifest, extraction rule, and semantic thresholds; a
+  contextual-provider paired run remains optional comparison evidence;
 - complete exact historical-checkpoint/real-merger output and gradient parity;
 - set quantitative readout, retrieval, branch, causal-flip, free-continuation,
   and reasoning-retention promotion thresholds;
