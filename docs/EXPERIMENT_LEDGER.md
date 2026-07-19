@@ -2173,6 +2173,79 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   gate rejected this exact candidate first. The accepted Torch 2.9 control
   remains authoritative for representation training.
 
+### RP-16P-QWEN3-PATCH-EMBED-CONTROL
+
+- Cell/matrix ID and mandatory/diagnostic class:
+  `RP-16P-QWEN3-PATCH-EMBED-CONTROL`; diagnostic bounded control-stack
+  patch-projection parity and timing cell.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: implementation
+  probe commit `2918c891e124b5249f65cc64d9af95d8092202e0`; user decision
+  `RPI-20260720-CONTROL-STACK-OPTIMIZATION` in `PROJECT_TASK.md` §2.1.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: on the accepted Torch 2.9 control runtime, is the flattened Linear
+  expression numerically compatible with the native full-patch Conv3D in FP32
+  and BF16, and what bounded synchronized speed ratio is observed?
+- Baseline and exact output path: native checkpoint Conv3D in the same process;
+  result/log are
+  `artifacts/compatibility/RP-16P-control-qwen3-patch-embed.json` and `.log`.
+- Model and processor identity: stable local Qwen3; config SHA256
+  `5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661`,
+  model index SHA256
+  `520b2e05079402e9468a8701d03d1154d14b2599593afb6effa7fb60c1bff070`;
+  only `model.visual.patch_embed.proj.weight` and `.bias` are read from
+  `model-00004-of-00004.safetensors`.
+- Representation checkpoint identity: N/A; frozen base patch projection only.
+- N/A fields and justification: dataset, prompt, tokenizer serialization,
+  target conditioning, Adapter, D/DeepStack, policy/reference, reward,
+  sampling, optimizer, replay, GRPO, SDPO and checkpoint/resume are absent.
+- Policy/reference initialization: N/A.
+- Rollout policy version and allowed asynchronous staleness: N/A.
+- Code commit and worktree state: probe SHA256
+  `204997e85b2cc3fc681b129e88ffa2be13e180324ad49ecf4df9312ce53572d9`;
+  launch requires the clean commit containing this planned entry.
+- Repository adapter/patch surface and hash: probe only; no project model code
+  or installed package is patched.
+- Dataset/manifest, hashes, sample rule, and n: deterministic seed `20260720`,
+  one synthetic flattened `(1024,1536)` patch tensor representing grid
+  `(1,32,32)` and input SHA256
+  `d5f60ced7e11c0d9a31ca9ea7e53eb9fb0fc462243cfa4b75fb5d9a93b0b34b0`.
+- Native prompt/tool schema hash: N/A.
+- Chat-template/token-fixture hash and token-ownership masks: N/A.
+- D/DeepStack/position/mask identity: N/A.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: accepted control Python `3.12.3`,
+  Torch `2.9.0+cu128`/CUDA `12.8`; compatibility lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: native
+  `conv3d(x.reshape(N,3,2,16,16), W, b).reshape(N,1152)` versus
+  `linear(x, W.reshape(1152,1536), b)`; no training objective.
+- Rollout/replay forward mode and adapter dropout/RNG contract: inference mode,
+  deterministic algorithms, cuDNN benchmark off/deterministic on, seed
+  `20260720`, and `CUBLAS_WORKSPACE_CONFIG=:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: N/A.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: checkpoint weight/bias BF16; separate
+  FP32 and BF16 projection comparisons; no KV, attention, TP or mesh.
+- Logit/logprob/loss/gradient parity tolerances: output allclose FP32
+  `atol=rtol=1e-4`, BF16 `atol=rtol=0.015625`; all finite. Timing has no PASS
+  floor and cannot by itself authorize a code change.
+- World size, microbatch, accumulation, and global batch: one process/GPU,
+  1024 patches/call; three warmups plus ten synchronized iterations per method
+  and dtype, 56 total projection calls including parity calls.
+- GPUs: only physical 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, NVIDIA B200, driver
+  `570.195.03`; the pre-plan check observed 0 MiB used.
+- Start/end timestamps, elapsed time, and session/process identity: pending.
+- Actual GPU-hours and peak scratch use: pending; bounded by 600 seconds.
+- Command: `CUDA_VISIBLE_DEVICES=3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 timeout 600s .venv312/bin/python spikes/verl_compat/qwen3_patch_embed_probe.py --run-id RP-16P-QWEN3-PATCH-EMBED-CONTROL --runtime control --physical-gpu 3 --output artifacts/compatibility/RP-16P-control-qwen3-patch-embed.json > artifacts/compatibility/RP-16P-control-qwen3-patch-embed.log 2>&1`.
+- Outputs: new explicit-run-ID result JSON and log; overwrite forbidden.
+- Scorer/parser identity: exact probe hash above.
+- Metrics: pending per-dtype error values, synchronized latencies and speed
+  ratios.
+- Conclusion: pending; this cell changes no production path.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

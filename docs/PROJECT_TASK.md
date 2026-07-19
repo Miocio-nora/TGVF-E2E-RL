@@ -313,6 +313,20 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   GPU utilization, peak CUDA memory, and optimizer-step throughput on fixed
   inputs. This is a diagnostic parity experiment, not a production-default
   resolution decision or a promoted representation artifact.
+- Decision `RPI-20260720-CONTROL-STACK-OPTIMIZATION` accepts continued
+  performance work on the already accepted Python 3.12 / Torch `2.9.0+cu128`
+  / upstream veRL / FSDP2 / vLLM `0.12.0` control stack. Production dependency
+  locks, representation objectives, K=4 same-image grouping, provider
+  semantics, native transcripts, deterministic forward state, and exact RL
+  observation/replay contracts remain unchanged. FlashAttention 2,
+  FlashAttention 4, SGLang, and another framework/runtime upgrade are outside
+  this task. The first bounded measurement compares Qwen3's native full-patch
+  Conv3D with the algebraically equivalent flattened Linear expression using
+  the exact checkpoint weight and bias under FP32 and BF16. It may become a
+  repo-owned Qwen3 representation fast path only after numerical parity and a
+  measured control-stack speedup; the checkpoint parameter/state identity and
+  public family-adapter interface must remain unchanged. Subsequent
+  optimizations require measured phase attribution and their own parity gate.
 
 ### 2.2 Remove Stage2 SFT
 
