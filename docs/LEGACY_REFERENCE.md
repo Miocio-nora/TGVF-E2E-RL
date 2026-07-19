@@ -155,6 +155,20 @@ files are registered before content inspection or adaptation:
 | `revisit_vlm_clean/src/revisit_vlm_clean/deepstack.py` | `7499a3dbe1df2c654c8b6ff6a8d06d91ba2900bd9a76d7ce2e9b3058f2df0c5c` | adapted DeepStack payload/mask semantics |
 | `revisit_vlm_clean/src/revisit_vlm_clean/training/stage1_executor.py` | `4f9106c772c20faa64a7dcf700c6a5294ed85efa30b797eb4925debef381ae5a` | specification-only TGVF construction, loss, and state boundaries; executor is not ported |
 | `revisit_vlm_clean/src/revisit_vlm_clean/cli/train_stage1.py` | `e19c388b9b2d033b4d3b176ba16484f3b3c8e6b6ef6dd88ac6f1d9ed3874f8d5` | specification-only representation configuration and artifact inputs; CLI is not ported |
+| `src/revisit_vlm/tgvf_training.py` | `ebae9266cafc4f83685f6a7d46a5b0fc501111f3ba9ee257c9e530e636857dd4` | specification-only exact Matrix-CE, same-image grouping/sampling, representation auxiliary losses, and diagnostic semantics; only individually recorded helpers may be adapted |
+| `revisit_vlm_clean/src/revisit_vlm_clean/training/executor.py` | `c54a2cbaee34d2f0d1a1e7a134eca666242c7bef263e0f083c43634d254dff30` | specification-only representation execution, batching, optimizer, metric, checkpoint, and resume behavior; generic executor is not ported wholesale |
+| `revisit_vlm_clean/src/revisit_vlm_clean/training_plan.py` | `cac206c3620f417d81cf6a3af9c62c85b63db53bb27b2b13ab2629dc0cd4c430` | specification-only resolved representation configuration and batch identity |
+| `revisit_vlm_clean/src/revisit_vlm_clean/defaults.py` | `a1f7c070cff26a03a9374065fc544aa9a86a89195295c7c6d3f1517585ea0901` | specification-only historical representation defaults; no value is accepted solely because it was a default |
+| `tests/test_tgvf_training.py` | `e74aea92b65822f651c69c08796d21cb7ebc4d31223526a9dbf8c3d3832f3132` | test-specification reference for Matrix-CE, grouping, readout, loss, and diagnostic parity |
+| `tests/test_tgvf_v3_stage1.py` | `f9010aa7d37143a4d8d98d3d0559868eab8018b62ad74287b0e9d08763bc0dcf` | test-specification reference for Qwen3 representation transcript/readout, D-DeepStack, masking, objective, and diagnostics |
+| `scripts/train_tgvf_v3_stage1.py` | `07428d9214e5662ee0477a037a3bee41e93fbf3caf5c90af395bd603d925dc26` | specification-only historical representation sampler, execution loop, validation/internal generation, metrics, checkpoint, and resume semantics; the script and legacy protocol are not ported wholesale |
+| `docs/TGVF_V3_STAGE1_TRAINING.md` | `3a2087a647a46825871ce6346703a35a4608aa31a841be865840ab82ad61d572` | specification-only inventory of historical representation training, diagnostics, evaluation commands, and known limitations |
+| `eval/run_tgvf_v3_eval_suite.sh` | `7839d2e03c0e54b7de547b90ac904a44ab27f0055edf3a8ddff2ac2215c6dd6f` | specification-only inventory and invocation contract for historical readout, query-sensitivity, and distribution evaluation tasks |
+| `eval/eval_v3_readout.py` | `3df6f807d6b0b8d718d88e570451ac62be7eda5db311d48c311cde3622490e20` | specification-only exact historical readout controls, per-sample records, aggregations, and metrics |
+| `eval/eval_v3_query_sensitivity.py` | `3c241e3081dbcf760475d6837163cd0ff32c3019ea01d9bc32e07c60889bf791` | specification-only exact historical same-image score-matrix retrieval metrics and reports |
+| `eval/eval_v3_fvt_distribution.py` | `a84e525fc4ebe046c776f8da4f110280b7cd6c18718738cb9e580a31e3d9b4c5` | specification-only exact historical D distribution, finiteness, collapse, and norm diagnostics |
+| `eval/v3_common.py` | `6400e7ac9fb76b3b4c5951b33ca26bf4e5619d0e30e30769a10d8f3bf43dcb38` | specification-only shared historical representation evaluation sample preparation, controls, scoring, cache, and identity semantics |
+| `eval/metrics.py` | `aa52ad8fca252ddbf7a36d4f47990e96dd7320898c76253fbc8e6c1c7404c794` | adapted metric-reduction semantics for readout, retrieval, and distribution parity fixtures |
 | `revisit_vlm_clean/src/revisit_vlm_clean/stage3_grpo/model_prepare.py` | `6424a283a7281f6561ab638666d31216221fd61e42b03210821cc48e7c4aaefa` | specification-only Qwen/TGVF model-loading checks; legacy RL path is not ported |
 | `revisit_vlm_clean/tests/test_deepstack.py` | `cfb9e6692ede29f0460cb251b48869f11499adb9ff62b2fa7ff182855c738685` | adapted semantic test cases |
 | `revisit_vlm_clean/src/revisit_vlm_clean/tgvf_protocol.py` | `9af43f4c884f4a20b3a05c61d235ba4ed555f12154c3d4bbe460b791eefb955d` | negative/specification comparison only; legacy protocol implementation is forbidden |
@@ -173,7 +187,44 @@ are recorded here or in a linked immutable data artifact. It must be adapted to
 the new native-format representation pipeline. The historical rendered format,
 serialization, launcher, and resume state are not reused as the new pipeline.
 
-No representation data path or manifest has been frozen by this document yet.
+The user selected the same historical representation data population for the
+new pipeline. The following exact worktree files were identified by the pinned
+training documentation and content-hashed before row inspection:
+
+| Role | Exact legacy worktree path | SHA256 |
+|---|---|---|
+| candidate retained train rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_50k/final/tgvf_teacher_items.accepted.jsonl` | `8406f8f843f927642aa2d728f1896579f20c44ca7329b86cb35b42544f73f666` |
+| candidate image-disjoint validation rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
+
+These files are not committed at the frozen legacy commit and remain external
+data artifacts. Their hashes authorize bounded read-only schema/count/split
+inspection and a new manifest that references them; they do not authorize
+copying the JSONL or image assets into this public repository. Dataset-source
+license, image-asset identities, exact accepted/excluded row manifest, duplicate
+policy, and proof of image-disjoint train/validation membership remain Gate A0
+items.
+
+Bounded aggregate inspection under those hashes found:
+
+| Aggregate | Train | Validation |
+|---|---:|---:|
+| total accepted rows | 50,022 | 2,023 |
+| focus rows retained by the historical representation filter | 35,542 | 1,382 |
+| unique focus image-group keys | 9,186 | 376 |
+| groups with at least four focus targets | 6,398 | 226 |
+| focus rows materialized per epoch by exact local batch-size-4 grouping | 25,592 | 904 |
+| focus rows dropped per epoch by that grouping | 9,950 | 478 |
+| duplicate target strings within one image group | 0 | 0 |
+| missing referenced image rows | 0 | 0 |
+
+No overlap was observed between train and validation for the recorded group
+key, image path, `stable_image_uid`, or `item_content_hash`. This is strong
+manifest-level split evidence, but it is not perceptual near-duplicate image
+proof. The batch-size-4 Golden sampler excludes about 28% of otherwise valid
+train focus rows in each epoch because groups of one to three never form a
+batch and remainders are dropped. Exact baseline parity preserves this behavior;
+using smaller or variable group sizes is a separately named data-efficiency
+experiment rather than a silent sampler change.
 
 ## Golden representation checkpoint
 
@@ -278,7 +329,9 @@ symbols/lineage used: FovealCrossAttentionOutput, TGVFv2Bidirectional,
   TGVFv2BidirectionalDDeepStack, _cross_attention, _validate_inputs
 semantic differences: project-native typed inputs/outputs; no historical stage,
   protocol, model lookup, builder, or output path; frozen merger supplied through
-  an explicit projection port
+  an explicit projection port; the opt-in Adapter-owned tensor subset excludes
+  all borrowed merger parameters while retaining the selected 104 TGVF tensors,
+  but the complete artifact/manifest writer remains a promotion gate
 parity fixture: tests/representation/test_adapter.py (synthetic output/gradient);
   exact legacy checkpoint parity remains a later representation gate
 reviewed by: Codex I8H-20260719
@@ -295,5 +348,85 @@ semantic differences: batch-aware typed implementation; D branches required;
   no legacy schema/runtime hooks or historical stage names
 parity fixture: tests/representation/test_deepstack.py
 reviewed by: Codex I8H-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/schema.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8 plus registered working-file identity
+legacy source path: src/revisit_vlm/tgvf_v3_stage1.py
+legacy source SHA256: 78b465ec67d40c6d60863715c43171f373483b20c11447b13b56b6fe8e28384a
+symbols/lineage used: TGVFv3Stage1Sample data fields, focus-row identity, image-group key
+semantic differences: native phase-neutral schema; no legacy protocol fields or rendering;
+  immutable sample identity and validation are explicit
+parity fixture: tests/representation/training/test_schema.py
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/__init__.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8 plus registered working-file identity
+legacy source path: the individually recorded representation schema, sampler,
+  loss, and metric sources listed in the adjacent port records
+legacy source SHA256: see adjacent per-module records
+symbols/lineage used: public representation-training semantic surface only
+semantic differences: package export boundary only; no legacy runtime import,
+  protocol renderer, trainer, or default objective values
+parity fixture: import coverage in tests/representation/training/
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/sampling.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+legacy source path: revisit_vlm_clean/src/revisit_vlm_clean/training/executor.py;
+  scripts/train_tgvf_v3_stage1.py
+legacy source SHA256: c54a2cbaee34d2f0d1a1e7a134eca666242c7bef263e0f083c43634d254dff30;
+  07428d9214e5662ee0477a037a3bee41e93fbf3caf5c90af395bd603d925dc26
+symbols/lineage used: _SingleProcessSampleCursor same-image path; SameImageBatchSampler
+semantic differences: explicit immutable sampler identity and exact next-batch
+  checkpoint/resume state repair; no general random-sampling fallback
+parity fixture: tests/representation/training/test_sampling.py
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/losses.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+legacy source path: src/revisit_vlm/tgvf_training.py;
+  src/revisit_vlm/tgvf_v3_stage1.py
+legacy source SHA256: ebae9266cafc4f83685f6a7d46a5b0fc501111f3ba9ee257c9e530e636857dd4;
+  78b465ec67d40c6d60863715c43171f373483b20c11447b13b56b6fe8e28384a
+symbols/lineage used: same_image_negative_matrix_ce_loss,
+  same_image_negative_matrix_ce_score_gradients,
+  compute_v3_stage1_lm_losses_batched
+semantic differences: pure tensor, phase-neutral API; no legacy model/protocol
+  execution; manifold and norm optimization losses are absent
+parity fixture: tests/representation/training/test_losses.py
+reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/metrics.py
+role: adapted extraction
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+legacy source path: eval/metrics.py; eval/eval_v3_readout.py;
+  eval/eval_v3_query_sensitivity.py; eval/eval_v3_fvt_distribution.py;
+  src/revisit_vlm/tgvf_training.py
+legacy source SHA256: aa52ad8fca252ddbf7a36d4f47990e96dd7320898c76253fbc8e6c1c7404c794;
+  3df6f807d6b0b8d718d88e570451ac62be7eda5db311d48c311cde3622490e20;
+  3c241e3081dbcf760475d6837163cd0ff32c3019ea01d9bc32e07c60889bf791;
+  a84e525fc4ebe046c776f8da4f110280b7cd6c18718738cb9e580a31e3d9b4c5;
+  ebae9266cafc4f83685f6a7d46a5b0fc501111f3ba9ee257c9e530e636857dd4
+symbols/lineage used: mean, median, pct_positive, grouped_means,
+  tensor_distribution_stats, attention_diagnostics, summarize_diagnostics,
+  readout/query/distribution report reductions
+semantic differences: typed pure-data reductions; branch-aware/native controls
+  are supplied by callers; no file I/O, legacy model loading, or thresholds
+parity fixture: tests/representation/training/test_metrics.py
+reviewed by: Codex RPI-20260719
 date: 2026-07-19 JST
 ```

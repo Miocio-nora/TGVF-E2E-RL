@@ -105,6 +105,21 @@ matrix items remain promotion gates rather than implicit passes.
 - [x] `FIXED` — Contextual-hidden-state and target-token-embedding conditioning
   providers are both required capabilities. A run selects one as part of its
   experiment identity.
+- [x] `FIXED` — Provider types are not mixed in one representation run. Their
+  comparison uses separate paired runs with identical sample/group order,
+  initialization, batch plan, and seed.
+- [x] `FIXED` — Same-image Matrix CE is a required target-specificity objective;
+  ordinary independent shuffle is not a valid substitute for same-image
+  multi-target grouping.
+- [x] `FIXED` — `L_gen` remains a separately controlled readability term pending
+  an explicit on/off ablation. Its final necessity and weight are not fixed.
+- [x] `FIXED` — The manifold-loss optimizer contribution is exactly zero.
+- [x] `FIXED` — No new norm-loss mode, formula, target, or default weight is
+  accepted. Norm-loss design remains open.
+- [x] `FIXED` — Pinned historical internal representation tests and metrics must
+  be reproduced as exact parity fixtures or documented native-protocol
+  adaptations; omissions require an explicit decision. This requirement does
+  not mark the still-open AD-13 inventory as complete.
 - [x] `FIXED` — The native function name is `tgvf_focus_tool`.
 - [x] `FIXED` — A trajectory supports zero or more tool calls; the safety cap is
   configurable and greater than one.
@@ -498,16 +513,65 @@ I8H-20260719.
 
 ## 7. Gate A0 — Before native-format representation training
 
-- [ ] `OPEN_BLOCKING AD-01` — Exact retained representation dataset manifest,
-  provenance, license, splits, hashes, and exclusions: `[TBD]`
-- [ ] `OPEN_BLOCKING AD-02` — New canonical native-format sample schema and
-  transform from retained data: `[TBD]`
+- [ ] `OPEN_BLOCKING AD-01` — Candidate retained train/validation JSONL paths,
+  SHA256 identities, row/group counts, and manifest-level split non-overlap are
+  recorded in `docs/LEGACY_REFERENCE.md`. Dataset-source/image licenses, a new
+  immutable accepted-row manifest, exclusion/duplicate policy, and perceptual
+  near-duplicate audit remain `[TBD]`.
+- [x] `FIXED AD-02A` — The protocol-neutral representation row contains the
+  retained row `uid` as `sample_id`, exact image reference, already-rendered
+  question text, target text, `evidence_description`, optional `image_id`, and
+  the recorded evaluation metadata. Its immutable content digest binds every
+  field, and the group key is `image_id` with exact image-reference fallback.
+  The exact retained data has no separate `choices` field; a future source with
+  choices requires a new schema/transform version rather than implicit prompt
+  rendering inside this record.
+- [ ] `OPEN_BLOCKING AD-02B` — Retained JSONL transform, focus-row filter,
+  image-path resolution, leakage records, exact accepted/excluded-row manifest,
+  and source-hash validation: `[TBD implementation]`
 - [ ] `OPEN_BLOCKING AD-03` — New pipeline transcript/prompt construction and
   `Hq` contract: `[TBD]`
 - [ ] `OPEN_BLOCKING AD-04` — TGVF Adapter initialization that does not use the
   historical trained checkpoint directly: `[TBD]`
-- [ ] `OPEN_BLOCKING AD-05` — Exact representation losses, weights,
-  normalization, sampling, and optimization: `[TBD]`
+- [ ] `OPEN_BLOCKING AD-05` — Exact representation objective and execution
+  contract is not yet fully closed. Its independently gated parts are:
+  - `AD-05A` — Implement and parity-test the pinned Matrix-CE equation: each
+    same-image group produces a square score matrix with evidence/query on rows,
+    candidate `D` plus all D-DeepStack branches on columns, the diagonal is the
+    label, there is no temperature in the historical equation, and cross
+    entropy is summed then divided by the total number of valid rows across
+    groups. Across data-parallel ranks and gradient-accumulation microbatches,
+    the trainer must aggregate the global CE numerator and global valid-row
+    denominator; averaging already-normalized local losses is forbidden when
+    group sizes differ.
+    The pure kernel now exposes an unnormalized CE numerator plus valid-row
+    count and has local value/gradient and rank-4-versus-rank-5 reduction
+    fixtures. Full main-`D`/all-branch matrix construction and trainer-owned
+    distributed/accumulation reduction remain blocking.
+  - `AD-05B` — Reproduce and test same-image multi-target grouping: image key,
+    minimum/maximum group batch size, duplicate handling, incomplete-group
+    dropping, whole-group distributed ownership, group/member shuffle,
+    seed/epoch/cursor state, and deterministic resume. Ordinary independent
+    shuffle is forbidden.
+    Exact duplicate target strings within one image group now fail closed;
+    semantic near-duplicate normalization remains a manifest decision.
+  - `AD-05C` — Freeze the native `L_gen` label span, token and sample reduction,
+    weight, and logging, and require an on/off ablation. Historical behavior is
+    evidence-token mean NLL per sample followed by sample mean. The unresolved
+    `AD-03` question is exactly where `evidence_description` appears after the
+    native tool result and therefore which of its token positions receive
+    teacher-forcing labels; "assistant supervision" is not a separate module.
+  - [x] `FIXED AD-05D` — Manifold-loss optimizer contribution is exactly zero.
+    A diagnostic-only computation, if retained, must not contribute gradients.
+  - `AD-05E` — Norm-loss inclusion, mathematics, target, and weight remain
+    undecided. No speculative mode or default may enter configuration or code.
+  - `AD-05F` — Remaining objective weights, optimizer, scheduler, precision,
+    accumulation, clipping, and trainer/checkpoint-resume behavior: `[TBD]`.
+    Historical `L_gen` first divides each sample's summed evidence NLL by that
+    sample's evidence-token count, then sums those per-sample means and divides
+    by the global sample count. Accumulation and DDP must aggregate that global
+    numerator and denominator; a global token-mean or an equal mean of unequal
+    local microbatch means is a different objective and is forbidden silently.
 - [ ] `OPEN_BLOCKING AD-06` — Trainable/frozen parameter whitelist, including
   original vision tower and Qwen mergers: `[TBD]`
 - [ ] `OPEN_BLOCKING AD-07` — Checkpoint artifact schema and identity, excluding
@@ -526,6 +590,15 @@ I8H-20260719.
   a Qwen model identity and provider contract. Qwen3 and
   `Qwen/Qwen2.5-VL-7B-Instruct` compatibility must not be claimed by loading one
   model's Adapter blindly into the other.
+- [ ] `OPEN_BLOCKING AD-13` — The provenance inventory of historical internal
+  representation tests and metrics is complete, and every item maps to an
+  exact-parity or native-adaptation fixture with a tolerance/threshold or an
+  explicitly accepted exclusion. See `docs/REPRESENTATION_PARITY_INVENTORY.md`.
+- [ ] `OPEN_BLOCKING AD-14` — Contextual-hidden-state and
+  target-token-embedding providers run as separate paired experiments with
+  identical data/group order, Adapter initialization, batch plan, and seed;
+  both report target specificity, readability, branch, and optimization
+  metrics under their own artifact identities.
 
 ## 8. Gate G0 — Before any GRPO optimizer step
 

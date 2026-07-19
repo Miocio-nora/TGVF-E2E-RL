@@ -160,6 +160,34 @@ tool-call serialization changes the context and therefore the `Hq`
 distribution. The project must train a new native-format representation
 checkpoint and pass the representation gates before policy RL.
 
+Decision `RPI-20260719` fixes the initial representation-training parity
+boundary:
+
+- Same-image Matrix CE is the required target-specificity objective. Its
+  training unit is a semantic group containing multiple distinct targets for
+  one image. Ordinary independent sample shuffling is invalid because it can
+  remove every off-diagonal same-image comparison.
+- The exact historical group construction, group shuffle, incomplete-group
+  policy, distributed ownership, Matrix-CE score orientation, reduction, and
+  gradients are provenance-pinned and parity-tested before use.
+- `L_gen` and Matrix CE have separate intended roles. `L_gen` measures and
+  trains whether frozen Qwen can read the evidence from `D`; Matrix CE applies
+  relative target-specificity pressure within an image. `L_gen` remains an
+  independently weighted and logged term so that its necessity can be tested
+  by a controlled on/off ablation. Its final weight and whether it remains in a
+  promoted objective are still open.
+- The manifold-loss contribution to optimization is exactly zero. Norm-loss
+  inclusion, mathematics, target, and weight remain open. No new norm mode or
+  speculative default is part of the initial implementation contract.
+- Alternative geometric or distance-based contrastive losses are a separate
+  research comparison, not a silent replacement for Matrix CE. They require
+  explicit mathematics, negative construction, branch handling, and an
+  ablation against both target specificity and causal readability.
+- The historical representation internal tests and evaluation metrics are
+  inventoried and must be reproduced as exact mathematical parity fixtures or
+  explicit native-protocol semantic adaptations. The authoritative inventory is
+  [`REPRESENTATION_PARITY_INVENTORY.md`](REPRESENTATION_PARITY_INVENTORY.md).
+
 ### 2.2 Remove Stage2 SFT
 
 There is no supervised Stage2 policy adapter in this version. In particular:
@@ -290,6 +318,12 @@ Decision `TCPI-20260719` makes that selection an explicit public interface:
 - both selections must pass the same request, batching, TGVF Adapter handoff,
   provenance, and configuration-identity tests. Provider-specific Qwen-family
   numerical fixtures remain required before a real experiment is promoted.
+
+Provider types are never mixed within one representation-training run or
+batch. Contextual-hidden-state and target-token-embedding comparisons use
+separate paired runs with the same retained sample IDs, same-image group order,
+TGVF Adapter initialization, batch/accumulation plan, and random seed. Provider
+identity is part of the experiment and checkpoint-artifact identity.
 
 ## 3. Native Qwen tool protocol
 
@@ -543,6 +577,12 @@ Main `D` and every D-DeepStack branch are always swapped together. Zero `D` is
 an out-of-distribution health control, not the primary semantic negative.
 Correct and wrong/shuffled controls must match length, visual grid, M-RoPE,
 dtype, main/branch shapes, and calibrated norm/statistical ranges.
+
+The control-matching requirement above prevents scale or layout from becoming a
+confounder; it does not accept a norm-training loss. Historical internal
+representation tests and metrics must be reproduced according to the parity
+inventory, with every exclusion or native-protocol adaptation stated rather
+than silently dropped.
 
 ## 8. Reasoning-preservation gates
 
@@ -837,8 +877,20 @@ framework-neutral interfaces.
 
 - Compare old Protocol-C and native-tool `Hq`/`D` behavior.
 - Build the new native-format representation data/training/checkpoint pipeline.
+- Reproduce the pinned same-image multi-target sampler and exact Matrix-CE
+  tensor/gradient behavior before any general-purpose data-loader shuffle or
+  distributed sampler is accepted.
+- Implement `L_gen` as a separately configurable and logged readability term,
+  including a controlled on/off ablation; do not infer its scientific
+  necessity from historical use alone.
+- Keep manifold optimization weight at zero and leave norm-loss design unset;
+  do not add speculative norm modes to the initial implementation.
 - Implement and test both contextual-hidden-state and target-token-embedding
-  condition providers behind the same TGVF Adapter boundary.
+  condition providers behind the same TGVF Adapter boundary in separate paired
+  runs.
+- Reproduce the pinned historical internal representation tests and metrics,
+  distinguishing exact tensor/reduction parity from native-protocol semantic
+  adaptations.
 - Train a new Qwen3-VL-8B-Thinking native-format TGVF Adapter checkpoint; do not
   initialize it directly from the historical TGVF Adapter checkpoint.
 - Run target-sensitivity, readout, counterfactual flip, and free-continuation

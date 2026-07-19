@@ -56,6 +56,14 @@ def test_adapter_produces_main_and_required_independent_deepstack_branches() -> 
     assert output.d_deepstack.branch_layers == (8, 16, 24)
     assert len(output.deepstack_visual_embeds) == 3
     assert all(branch.shape == (2, 6) for branch in output.deepstack_visual_embeds)
+    gated_delta = output.main_attention.conditioned_visual_tokens - main_visual
+    expected_salience = torch.softmax(
+        torch.linalg.vector_norm(gated_delta.float(), dim=-1), dim=-1
+    ).to(dtype=gated_delta.dtype)
+    assert output.main_attention.visual_salience.shape == (1, 8)
+    assert torch.allclose(
+        output.main_attention.visual_salience, expected_salience.unsqueeze(0)
+    )
     assert (
         len({id(module) for module in adapter.d_deepstack_branch_adapters.values()})
         == 3
@@ -92,6 +100,10 @@ def test_adapter_supports_explicit_batch_dimension() -> None:
     assert output.metadata.batched
     assert output.metadata.batch_size == 2
     assert all(branch.shape == (2, 2, 6) for branch in output.deepstack_visual_embeds)
+    assert output.main_attention.visual_salience.shape == (2, 8)
+    assert torch.allclose(
+        output.main_attention.visual_salience.sum(dim=-1), torch.ones(2)
+    )
 
 
 def test_adapter_rejects_implicit_broadcasting_and_missing_branches() -> None:
@@ -140,3 +152,74 @@ def test_adapter_branch_conditioning_does_not_leak_between_branches() -> None:
     assert torch.equal(
         first.deepstack_visual_embeds[2], second.deepstack_visual_embeds[2]
     )
+
+
+def test_adapter_artifact_state_excludes_every_borrowed_qwen_merger() -> None:
+    source = _adapter()
+    full_state = source.state_dict()
+    artifact_state = {
+        name: value.clone() for name, value in source.artifact_state_dict().items()
+    }
+    component_names = (
+        "target_norm",
+        "target_proj",
+        "visual_norm",
+        "visual_proj",
+        "target_q_proj",
+        "visual_k_proj",
+        "visual_v_proj",
+        "enriched_target_norm",
+        "visual_q_proj",
+        "target_k_proj",
+        "target_v_proj",
+        "context_to_delta",
+        "gate_proj",
+    )
+    expected_keys = {
+        f"{component}.{suffix}"
+        for component in component_names
+        for suffix in ("weight", "bias")
+    }
+    expected_keys.update(
+        f"d_deepstack_branch_adapters.{layer}.{component}.{suffix}"
+        for layer in (8, 16, 24)
+        for component in component_names
+        for suffix in ("weight", "bias")
+    )
+
+    assert len(artifact_state) == 104
+    assert set(artifact_state) == expected_keys
+    assert "target_norm.weight" in artifact_state
+    assert any(name.startswith("main_projection.") for name in full_state)
+    assert any(name.startswith("d_deepstack_projections.") for name in full_state)
+    assert not any(name.startswith("main_projection.") for name in artifact_state)
+    assert not any(
+        name.startswith("d_deepstack_projections.") for name in artifact_state
+    )
+
+    target = _adapter()
+    with torch.no_grad():
+        target.target_norm.weight.zero_()
+        next(target.main_projection.projection.parameters()).add_(7)
+    projection_before = {
+        name: value.clone()
+        for name, value in target.state_dict().items()
+        if name not in artifact_state
+    }
+    assert not torch.equal(
+        target.target_norm.weight, artifact_state["target_norm.weight"]
+    )
+
+    target.load_artifact_state_dict(artifact_state)
+
+    projection_after = target.state_dict()
+    assert torch.equal(target.target_norm.weight, artifact_state["target_norm.weight"])
+    assert all(
+        torch.equal(value, projection_after[name])
+        for name, value in projection_before.items()
+    )
+
+    polluted = dict(artifact_state)
+    polluted["main_projection.projection.weight"] = torch.zeros(1)
+    with pytest.raises(ValueError, match="artifact keys mismatch"):
+        target.load_artifact_state_dict(polluted)

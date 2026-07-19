@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import sqrt
 
@@ -23,7 +23,11 @@ from .deepstack import (
 )
 
 
-TGVF_ADAPTER_OUTPUT_SCHEMA_VERSION = "tgvf-adapter-output-v1"
+TGVF_ADAPTER_OUTPUT_SCHEMA_VERSION = "tgvf-adapter-output-v2"
+_BORROWED_PROJECTION_STATE_PREFIXES = (
+    "main_projection.",
+    "d_deepstack_projections.",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +105,7 @@ class BidirectionalAttentionOutput:
     target_to_visual_attention: torch.Tensor
     visual_to_target_attention: torch.Tensor
     gate: torch.Tensor
+    visual_salience: torch.Tensor
 
 
 class TGVFBidirectionalAttention(nn.Module):
@@ -176,12 +181,19 @@ class TGVFBidirectionalAttention(nn.Module):
         gate = torch.sigmoid(
             self.gate_proj(torch.cat((visual_tokens, visual_context), dim=-1))
         )
-        conditioned = visual_raw + gate * delta
+        gated_delta = gate * delta
+        conditioned = visual_raw + gated_delta
+        visual_salience = torch.softmax(
+            torch.linalg.vector_norm(gated_delta.float(), dim=-1), dim=-1
+        ).to(dtype=gated_delta.dtype)
+        if gated_delta.ndim == 2:
+            visual_salience = visual_salience.unsqueeze(0)
         return BidirectionalAttentionOutput(
             conditioned_visual_tokens=conditioned,
             target_to_visual_attention=target_to_visual,
             visual_to_target_attention=visual_to_target,
             gate=gate,
+            visual_salience=visual_salience,
         )
 
 
@@ -314,6 +326,70 @@ class TGVFAdapter(TGVFBidirectionalAttention):
                 for layer in self.d_deepstack_branch_layers
             }
         )
+
+    def artifact_state_dict(
+        self, *, keep_vars: bool = False
+    ) -> dict[str, torch.Tensor]:
+        """Return the Adapter-owned tensor subset, excluding Qwen mergers.
+
+        The projection ports are registered modules so device placement and
+        forward execution remain explicit, but their parameters belong to the
+        frozen base model and are forbidden in the deployable Adapter artifact.
+        This tensor subset is not a complete artifact by itself: the eventual
+        checkpoint manifest must bind model, provider, projection, architecture,
+        data, and training identities before loading it across runs.
+        """
+
+        full_state = super().state_dict(keep_vars=keep_vars)
+        artifact = {
+            name: value
+            for name, value in full_state.items()
+            if not name.startswith(_BORROWED_PROJECTION_STATE_PREFIXES)
+        }
+        if not artifact:
+            raise RuntimeError("TGVF Adapter artifact state is unexpectedly empty")
+        return artifact
+
+    def load_artifact_state_dict(self, state: Mapping[str, torch.Tensor]) -> None:
+        """Strictly load an Adapter-only artifact without touching Qwen state."""
+
+        if not isinstance(state, Mapping):
+            raise TypeError("TGVF Adapter artifact state must be a mapping")
+        expected = self.artifact_state_dict(keep_vars=True)
+        if set(state) != set(expected):
+            missing = sorted(set(expected) - set(state))
+            unexpected = sorted(set(state) - set(expected))
+            raise ValueError(
+                "TGVF Adapter artifact keys mismatch: "
+                f"missing={missing} unexpected={unexpected}"
+            )
+        for name, expected_value in expected.items():
+            value = state[name]
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"TGVF Adapter artifact value {name!r} is not a tensor")
+            if (
+                value.shape != expected_value.shape
+                or value.dtype != expected_value.dtype
+            ):
+                raise ValueError(
+                    f"TGVF Adapter artifact tensor {name!r} has shape/dtype "
+                    f"{tuple(value.shape)}/{value.dtype}, expected "
+                    f"{tuple(expected_value.shape)}/{expected_value.dtype}"
+                )
+
+        full_state_keys = set(super().state_dict())
+        borrowed_keys = full_state_keys - set(expected)
+        if not borrowed_keys or any(
+            not name.startswith(_BORROWED_PROJECTION_STATE_PREFIXES)
+            for name in borrowed_keys
+        ):
+            raise RuntimeError("borrowed Qwen merger state boundary is inconsistent")
+        incompatible = super().load_state_dict(dict(state), strict=False)
+        if (
+            incompatible.unexpected_keys
+            or set(incompatible.missing_keys) != borrowed_keys
+        ):
+            raise RuntimeError("strict TGVF Adapter tensor-subset load diverged")
 
     def forward(
         self,
