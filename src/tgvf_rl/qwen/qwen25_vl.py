@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
+
 from tgvf_rl.contracts.identity import SupportLevel
 
 from .base import (
     FamilyCapabilities,
+    InjectedForwardRequest,
     QwenVLMFamilyAdapter,
     RecordedReplayResult,
     ReplayConsumer,
+    injected_request_from_recorded,
     materialize_inputs_embeds,
     resolve_replay_request,
     resolve_language_model,
@@ -35,7 +39,16 @@ class Qwen25VLAdapter(QwenVLMFamilyAdapter):
         replay_handle: Any,
         consumer: ReplayConsumer,
     ) -> RecordedReplayResult:
-        request = resolve_replay_request(store, replay_handle, consumer)
+        recorded = resolve_replay_request(store, replay_handle, consumer)
+        return self.forward_injected(model, injected_request_from_recorded(recorded))
+
+    def forward_injected(
+        self,
+        model: Any,
+        request: InjectedForwardRequest,
+    ) -> RecordedReplayResult:
+        if not isinstance(request, InjectedForwardRequest):
+            raise TypeError("request must be InjectedForwardRequest")
         if any(block.deepstack for block in request.visual_blocks):
             raise ValueError(
                 "Qwen2.5-VL has no accepted DeepStack-equivalent replay contract"
@@ -60,4 +73,18 @@ class Qwen25VLAdapter(QwenVLMFamilyAdapter):
             hidden_states=hidden,
             past_key_values=getattr(outputs, "past_key_values", None),
             visual_position_mask=visual_mask,
+        )
+
+    def materialize_representation_supervision(
+        self,
+        model: Any,
+        tokenizer: Any,
+        canonical: Any,
+        model_input_ids: torch.Tensor,
+    ) -> Any:
+        """Fail until Qwen2.5-VL has its own accepted transcript/artifact fixture."""
+
+        raise NotImplementedError(
+            "Qwen2.5-VL representation supervision is blocked until its "
+            "family-specific native transcript and representation artifact pass"
         )

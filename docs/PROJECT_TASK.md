@@ -172,10 +172,33 @@ boundary:
   gradients are provenance-pinned and parity-tested before use.
 - `L_gen` and Matrix CE have separate intended roles. `L_gen` measures and
   trains whether frozen Qwen can read the evidence from `D`; Matrix CE applies
-  relative target-specificity pressure within an image. `L_gen` remains an
-  independently weighted and logged term so that its necessity can be tested
-  by a controlled on/off ablation. Its final weight and whether it remains in a
-  promoted objective are still open.
+  relative target-specificity pressure within an image. The accepted baseline
+  uses both terms with independently configured, nonzero weights and separate
+  metrics. The exact numerical weights remain open and must be bound explicitly
+  by an experiment identity; a controlled `L_gen=off` comparison is an ablation,
+  not the baseline and not permission to remove the implementation.
+- In the native representation transcript, `evidence_description` is emitted
+  as the reasoning content of the assistant turn after the latent tool result.
+  That representation-only assistant turn has empty answer content.
+  The preceding teacher-constructed tool-call turn has empty reasoning and
+  answer content and contains only the native call; it does not fabricate an
+  intermediate reasoning target.
+  Only tokenizer positions owned exactly by that `evidence_description` span
+  receive teacher-forcing labels. Prompt text, the first assistant tool call,
+  tool-call JSON, the latent tool response, chat-template wrappers, and any
+  answer content are ignored by `L_gen`. Token ownership is derived from the
+  rendered native transcript and tokenizer offsets. A token is evidence-owned
+  when its start offset lies inside the evidence span; this deliberately owns
+  Qwen's common sentence-final token that also carries the following template
+  newline, while excluding tokens that begin in the closing wrapper. A token
+  that begins before and crosses into evidence is rejected as ambiguous.
+  Decoded-text or fuzzy substring heuristics are not an accepted training mask.
+  These positions first belong to the canonical chat transcript. The selected
+  Qwen-family adapter must then map every canonical token to the processor's
+  expanded model positions. Evidence tokens must remain singleton, contiguous,
+  and ID-identical; all original-image and tool-observation visual positions
+  remain label `-100`. Qwen2.5-VL requires its own accepted transcript and
+  expansion fixture and cannot reuse the Qwen3 thinking contract.
 - The manifold-loss contribution to optimization is exactly zero. Norm-loss
   inclusion, mathematics, target, and weight remain open. No new norm mode or
   speculative default is part of the initial implementation contract.

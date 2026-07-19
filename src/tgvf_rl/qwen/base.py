@@ -57,6 +57,23 @@ class RecordedVisualBlock:
 
 
 @dataclass(frozen=True, slots=True)
+class InjectedVisualBlock:
+    """One live, differentiable source-image or focused-D tensor block."""
+
+    kind: str
+    positions: tuple[int, ...]
+    embeddings: torch.Tensor
+    deepstack: tuple[torch.Tensor, ...]
+    deepstack_positions: tuple[tuple[int, ...], ...]
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"source_image", "focused_d"}:
+            raise ValueError("unknown injected visual block kind")
+        if len(self.deepstack) != len(self.deepstack_positions):
+            raise ValueError("DeepStack tensors and injection positions must align")
+
+
+@dataclass(frozen=True, slots=True)
 class RecordedReplayRequest:
     replay_handle: TrajectoryReplayHandle
     consumer: ReplayConsumer
@@ -68,6 +85,28 @@ class RecordedReplayRequest:
     cache_position: torch.Tensor | None = None
     rope_delta: torch.Tensor | None = None
     use_cache: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class InjectedForwardRequest:
+    """Direct live-tensor request used by differentiable representation readout."""
+
+    input_ids: torch.Tensor
+    attention_mask: torch.Tensor
+    position_ids: torch.Tensor
+    visual_blocks: tuple[InjectedVisualBlock, ...]
+    token_type_ids: torch.Tensor | None = None
+    cache_position: torch.Tensor | None = None
+    rope_delta: torch.Tensor | None = None
+    use_cache: bool = False
+
+    def __post_init__(self) -> None:
+        if self.token_type_ids is not None:
+            raise ValueError("live injected token_type_ids are not yet accepted")
+        if self.cache_position is not None or self.rope_delta is not None:
+            raise ValueError("live injected representation forward is no_cache only")
+        if self.use_cache:
+            raise ValueError("live injected representation forward is no_cache only")
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,12 +130,81 @@ class QwenVLMFamilyAdapter(ABC):
     ) -> RecordedReplayResult:
         """Forward exact recorded visual tensors without rerunning a vision tower."""
 
+    def forward_injected(
+        self,
+        model: Any,
+        request: InjectedForwardRequest,
+    ) -> RecordedReplayResult:
+        """Forward live visual tensors while preserving gradients to those tensors."""
+
+        raise NotImplementedError(
+            f"{self.capabilities.family} has no accepted live injected forward"
+        )
+
+    def materialize_representation_supervision(
+        self,
+        model: Any,
+        tokenizer: Any,
+        canonical: Any,
+        model_input_ids: torch.Tensor,
+    ) -> Any:
+        """Map canonical evidence labels to exact family model positions."""
+
+        raise NotImplementedError(
+            f"{self.capabilities.family} has no accepted representation supervision"
+        )
+
     def assert_tokenizer_invariant(self, tokenizer: Any, expected_length: int) -> None:
         actual = len(tokenizer)
         if actual != expected_length:
             raise ValueError(
                 f"tokenizer length changed: expected={expected_length} actual={actual}"
             )
+
+
+def assert_model_vocabulary_compatible(
+    model: Any,
+    tokenizer: Any,
+    *,
+    expected_tokenizer_length: int,
+    token_ids: torch.Tensor,
+) -> None:
+    """Verify no tokenizer growth and that every native id has a model row.
+
+    Qwen checkpoints may pad embedding/head matrices beyond ``len(tokenizer)``;
+    exact equality is therefore not required. The two model matrices must agree,
+    and the pinned tokenizer plus every realized model token must fit within
+    those unchanged rows.
+    """
+
+    actual_length = len(tokenizer)
+    if actual_length != expected_tokenizer_length:
+        raise ValueError(
+            "tokenizer length changed: "
+            f"expected={expected_tokenizer_length} actual={actual_length}"
+        )
+    embedding = resolve_language_model(model).get_input_embeddings()
+    head = resolve_lm_head(model)
+    embedding_weight = getattr(embedding, "weight", None)
+    head_weight = getattr(head, "weight", None)
+    if not isinstance(embedding_weight, torch.Tensor) or not isinstance(
+        head_weight, torch.Tensor
+    ):
+        raise TypeError("model embeddings and lm_head must expose tensor weights")
+    embedding_rows = int(embedding_weight.shape[0])
+    head_rows = int(head_weight.shape[0])
+    if embedding_rows != head_rows:
+        raise ValueError("input embedding and lm_head vocabulary rows differ")
+    if actual_length > embedding_rows:
+        raise ValueError("tokenizer vocabulary exceeds model embedding/head rows")
+    if not isinstance(token_ids, torch.Tensor) or token_ids.numel() == 0:
+        raise ValueError("model token ids must be a non-empty tensor")
+    if token_ids.dtype != torch.long:
+        raise TypeError("model token ids must have dtype torch.long")
+    minimum = int(token_ids.min().item())
+    maximum = int(token_ids.max().item())
+    if minimum < 0 or maximum >= embedding_rows:
+        raise ValueError("model token id is outside embedding/head vocabulary rows")
 
 
 def resolve_replay_request(
@@ -215,6 +323,47 @@ def resolve_replay_request(
 
 
 def validate_replay_request(request: RecordedReplayRequest) -> tuple[int, int]:
+    return _validate_forward_request(request)
+
+
+def validate_injected_request(request: InjectedForwardRequest) -> tuple[int, int]:
+    if not isinstance(request, InjectedForwardRequest):
+        raise TypeError("request must be InjectedForwardRequest")
+    return _validate_forward_request(request)
+
+
+def injected_request_from_recorded(
+    request: RecordedReplayRequest,
+) -> InjectedForwardRequest:
+    """Drop store handles after verification while retaining exact live tensors."""
+
+    if not isinstance(request, RecordedReplayRequest):
+        raise TypeError("request must be RecordedReplayRequest")
+    validate_replay_request(request)
+    return InjectedForwardRequest(
+        input_ids=request.input_ids,
+        attention_mask=request.attention_mask,
+        position_ids=request.position_ids,
+        visual_blocks=tuple(
+            InjectedVisualBlock(
+                kind=block.kind,
+                positions=block.positions,
+                embeddings=block.embeddings,
+                deepstack=block.deepstack,
+                deepstack_positions=block.deepstack_positions,
+            )
+            for block in request.visual_blocks
+        ),
+        token_type_ids=request.token_type_ids,
+        cache_position=request.cache_position,
+        rope_delta=request.rope_delta,
+        use_cache=request.use_cache,
+    )
+
+
+def _validate_forward_request(
+    request: RecordedReplayRequest | InjectedForwardRequest,
+) -> tuple[int, int]:
     if request.input_ids.ndim != 2:
         raise ValueError("input_ids must have shape [B, S]")
     batch, sequence = request.input_ids.shape
@@ -260,9 +409,9 @@ def validate_replay_request(request: RecordedReplayRequest) -> tuple[int, int]:
 
 
 def materialize_inputs_embeds(
-    model: Any, request: RecordedReplayRequest
+    model: Any, request: RecordedReplayRequest | InjectedForwardRequest
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    batch, sequence = validate_replay_request(request)
+    batch, sequence = _validate_forward_request(request)
     language_model = resolve_language_model(model)
     embedding_layer = language_model.get_input_embeddings()
     embedding_device = embedding_layer.weight.device
@@ -285,8 +434,13 @@ def materialize_inputs_embeds(
 
 
 def materialize_deepstack(
-    request: RecordedReplayRequest, visual_mask: torch.Tensor
+    request: RecordedReplayRequest | InjectedForwardRequest,
+    visual_mask: torch.Tensor,
+    *,
+    target_dtype: torch.dtype,
 ) -> list[torch.Tensor]:
+    if not target_dtype.is_floating_point:
+        raise TypeError("DeepStack target dtype must be floating point")
     batch, sequence = visual_mask.shape
     branches: list[torch.Tensor] = []
     branch_count = (
@@ -296,7 +450,11 @@ def materialize_deepstack(
         raise ValueError("all recorded visual blocks must carry the same branch count")
     for branch_index in range(branch_count):
         prototype = request.visual_blocks[0].deepstack[branch_index]
-        full = prototype.new_zeros((batch, sequence, prototype.shape[-1]))
+        full = torch.zeros(
+            (batch, sequence, prototype.shape[-1]),
+            device=visual_mask.device,
+            dtype=target_dtype,
+        )
         branch_mask = torch.zeros_like(visual_mask)
         for block in request.visual_blocks:
             positions = block.deepstack_positions[branch_index]

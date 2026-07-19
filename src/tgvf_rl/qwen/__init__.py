@@ -2,6 +2,8 @@
 
 from .base import (
     FamilyCapabilities,
+    InjectedForwardRequest,
+    InjectedVisualBlock,
     RecordedReplayRequest,
     RecordedReplayResult,
     RecordedVisualBlock,
@@ -13,6 +15,8 @@ from .qwen3_vl import Qwen3VLAdapter
 
 __all__ = [
     "FamilyCapabilities",
+    "InjectedForwardRequest",
+    "InjectedVisualBlock",
     "Qwen25VLAdapter",
     "Qwen3VLAdapter",
     "RecordedReplayRequest",

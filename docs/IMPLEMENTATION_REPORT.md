@@ -67,6 +67,40 @@ production reward/objective behavior. The FSDP2 cell proves infrastructure and
 exact resume for its tiny fixture, not Qwen memory capacity, throughput, or a
 production actor/reference/teacher placement.
 
+## Representation-parity work after the bounded framework build
+
+The repository now also contains the accepted representation objective
+primitives, without claiming a completed production trainer:
+
+- canonical one-call Qwen3 evidence supervision labels only
+  `evidence_description` in the final post-tool assistant thinking turn and verifies the
+  exact generation-prefill/completion relationship;
+- the label boundary uses fast-tokenizer offsets. A local Qwen3 smoke observed
+  that sentence-final punctuation may share the following template newline;
+  the committed boundary fixture is synthetic and the pinned real golden
+  remains open;
+- a family-owned canonical-to-model map validates a caller-provided expanded
+  token sequence for original-image and tool-observation placeholder runs,
+  leaving every declared visual position ignored by `L_gen`. Real processor/
+  image-grid integration remains open, and Qwen2.5-VL explicitly fails closed
+  pending its own transcript/artifact fixture;
+- a differentiable live-tensor Qwen injection path avoids the detaching
+  content-addressed replay store during representation training;
+- a synthetic cell-by-cell K×K layout/sensitivity oracle fixes each row's
+  query/evidence/source layout while atomically swapping one candidate's main
+  `D` and all ordered D-DeepStack branches; it does not yet consume the required
+  post-`D` original-image key-block mask;
+- the baseline objective separately returns raw and explicitly weighted Matrix
+  CE and `L_gen` values for later trainer logging; setting `L_gen=0` is allowed
+  only under the distinct Matrix-only ablation identity.
+
+The synthetic K×K oracle intentionally retains all cell graphs and is suitable
+for layout/sensitivity fixtures, not scientific readout or an 8B training
+schedule. Original-image key blocking, real-Qwen gradient parity, an accepted
+streaming/FSDP2 schedule, globally scaled accumulation, trainer logging,
+real-data manifest, optimizer/checkpoint identity, and the numerical objective
+weights remain open under Gate A0.
+
 ## Model-family boundary
 
 Qwen3-VL-8B-Thinking is the only real-model latent smoke. The current

@@ -18,8 +18,9 @@ Historical component names appear only as provenance.
 
 - Matrix CE and same-image multi-target grouping are required.
 - Ordinary independent shuffle is invalid for Matrix-CE training.
-- `L_gen` remains separately configurable and logged pending an on/off
-  readability ablation.
+- The accepted baseline retains both Matrix CE and `L_gen`, separately logged
+  with explicit nonzero weights. `L_gen=off` remains a separately identified
+  ablation; the exact baseline coefficient is still open.
 - Manifold-loss optimizer weight is exactly zero.
 - Norm-loss design is unresolved. No new mode, formula, target, or default is
   authorized by this inventory.
@@ -68,7 +69,8 @@ Required new fixtures:
 - [x] FP16/BF16 parity for the historical FP32-softmax-then-cast score-gradient;
 - [x] unnormalized numerator/row-count terms and a four-row-versus-five-row global
   reduction oracle;
-- [ ] main-`D` plus every-branch swap identity;
+- [x] synthetic live-forward sensitivity for main `D` and each ordered
+  D-DeepStack branch under atomic whole-observation column swaps;
 - [x] zero valid groups returns a scalar zero without creating a false training
   signal.
 
@@ -82,22 +84,29 @@ Across ranks and accumulation windows, the trainer therefore reduces the sum
 of per-sample token means by the global sample count. It does not replace this
 with a global token mean and does not equally average unequal local batch means.
 
-The native label span is still open under `AD-03`. The phrase "assistant
-supervision" is not a new module: it only describes which next-token positions
-receive teacher-forcing labels. If `evidence_description` becomes the text that
-Qwen writes after receiving `D`, only the `evidence_description` token positions
-receive labels; tool-response serialization, tool-call JSON, prompt text, and
-chat-template wrapper tokens remain ignored. This is not fixed until the native
-transcript contract is accepted.
+`AD-03A` fixes the native label span. The phrase "assistant supervision" is not
+a new module: it only describes which next-token positions receive
+teacher-forcing labels. `evidence_description` is the reasoning content written
+by Qwen after receiving the latent `D`; only the exact rendered
+`evidence_description` token positions receive labels. Tool-response
+serialization, tool-call JSON, prompt text, answer content, and chat-template
+wrapper tokens remain ignored. Ownership comes from exact tokenizer offsets
+against the rendered transcript: a token is evidence-owned when its start
+offset lies inside the evidence span. This includes Qwen's sentence-final token
+that also carries the following template newline; a token that starts before
+and crosses into evidence remains an error.
 
 Required new fixtures:
 
-- [ ] exact label ownership/mask;
+- [x] canonical exact label ownership and canonical-to-expanded-model visual
+  mapping fixtures;
+- [ ] pinned real representation transcript/model-input golden fixture;
 - [x] per-sample token-mean then sample-mean reduction, including unequal token
   counts;
 - [x] negative summed-NLL Matrix score;
 - [ ] gradients reach main `D` and every D-DeepStack branch but not frozen Qwen;
-- [ ] separate `L_gen=on` and `L_gen=off` identities and metrics.
+- [x] baseline `L_gen=on` and ablation `L_gen=off` identities and separate
+  Matrix/readability metrics.
 
 ## Same-image multi-target sampler parity
 
@@ -119,8 +128,9 @@ grouping is the parity baseline:
 - a batch contains targets from exactly one image group;
 - incomplete material that cannot form a permitted local group batch is
   dropped;
-- the batch-size-5 legacy path permits a final group of four; other local batch
-  sizes use their full size as the minimum.
+- the batch-size-5 legacy path permits both four- and five-row partitions under
+  the pinned exact partition rule; other local batch sizes use their full size
+  as the minimum.
 
 The historical checkpoint did not persist enough sampler cursor/epoch state to
 guarantee the exact next batch after arbitrary mid-epoch resume. The new
@@ -212,7 +222,7 @@ explicit acceptance before Gate AD-13 can close.
 | `test_v3_stage1_dataset_keeps_focus_and_skips_direct_rows` | `OPEN` | retained-data transform/filter fixture |
 | `test_weak_strict_mask_blocks_only_post_tgvf_queries` | `PARTIAL` | pure key-block mask exists; native readout execution does not yet consume it |
 | `test_v3_stage1_readout_loss_backprops_to_d_not_frozen_qwen` | `OPEN` | native readout integration |
-| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | Adapter branch gradient exists; readout branch injection/swap is open |
+| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | synthetic live injection/sensitivity covers main `D` and each branch; original-image key blocking, real Qwen, Adapter-output provenance, and gradient parity remain open |
 | `test_qwen3_position_ids_unwraps_peft_like_model_but_uses_wrapper_embeddings` | `OPEN` | native Qwen-family/PEFT ownership replacement fixture |
 
 The table records semantic migration only. Historical names remain provenance

@@ -27,7 +27,14 @@ from tgvf_rl.observations.store import (
     TrajectoryReplayRecord,
     TrajectoryReplayTensorRefs,
 )
-from tgvf_rl.qwen.base import ReplayConsumer, gather_next_token_logprobs
+from tgvf_rl.qwen.base import (
+    ReplayConsumer,
+    gather_next_token_logprobs,
+    injected_request_from_recorded,
+    materialize_deepstack,
+    materialize_inputs_embeds,
+    resolve_replay_request,
+)
 from tgvf_rl.qwen.qwen25_vl import Qwen25VLAdapter
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 
@@ -190,3 +197,21 @@ def test_replay_logprobs_use_preceding_logits() -> None:
     gathered = gather_next_token_logprobs(logits, tokens, torch.tensor([[2]]))
     expected = torch.log_softmax(logits[0, 1], dim=-1)[3]
     torch.testing.assert_close(gathered[0, 0], expected)
+
+
+def test_recorded_deepstack_materializes_on_embedding_device_and_target_dtype() -> None:
+    model = TinyQwen()
+    store, replay = _replay(branches=3, calls=1)
+    recorded = resolve_replay_request(store, replay, ReplayConsumer.POLICY)
+    request = injected_request_from_recorded(recorded)
+    inputs_embeds, visual_mask = materialize_inputs_embeds(model, request)
+
+    branches = materialize_deepstack(
+        request,
+        visual_mask,
+        target_dtype=torch.float64,
+    )
+
+    assert len(branches) == 3
+    assert all(branch.device == inputs_embeds.device for branch in branches)
+    assert all(branch.dtype == torch.float64 for branch in branches)

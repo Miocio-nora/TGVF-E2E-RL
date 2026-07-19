@@ -50,17 +50,21 @@ class NativeProtocolRenderer:
         *,
         add_generation_prompt: bool,
     ) -> RenderedTranscript:
-        if len(self.tokenizer) != self.expected_tokenizer_length:
-            raise ValueError("tokenizer grew after renderer construction")
+        self.assert_tokenizer_length()
+        self.assert_chat_template_identity()
         text = self.processor.apply_chat_template(
             list(messages),
             tools=[build_tgvf_focus_tool_schema()],
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
         )
+        self.assert_tokenizer_length()
+        self.assert_chat_template_identity()
         if not isinstance(text, str):
             raise TypeError("chat template did not return text")
         token_ids = tuple(self.tokenizer.encode(text, add_special_tokens=False))
+        self.assert_tokenizer_length()
+        self.assert_chat_template_identity()
         raw_ids = b"".join(struct.pack("<I", token_id) for token_id in token_ids)
         return RenderedTranscript(
             text=text,
@@ -72,15 +76,47 @@ class NativeProtocolRenderer:
             tokenizer_length=len(self.tokenizer),
         )
 
+    def assert_tokenizer_length(self) -> None:
+        """Fail if any processor/tokenizer operation changed vocabulary size."""
+
+        actual = len(self.tokenizer)
+        if actual != self.expected_tokenizer_length:
+            raise ValueError(
+                "tokenizer length changed after renderer construction: "
+                f"expected={self.expected_tokenizer_length} actual={actual}"
+            )
+
+    def assert_chat_template_identity(self) -> None:
+        """Fail if the processor's effective template changed after pinning."""
+
+        template = getattr(self.processor, "chat_template", None) or getattr(
+            self.tokenizer, "chat_template", None
+        )
+        if not isinstance(template, str) or not template:
+            raise ValueError("processor chat template is no longer explicit")
+        actual = hashlib.sha256(template.encode("utf-8")).hexdigest()
+        if actual != self.chat_template_sha256:
+            raise ValueError(
+                "processor chat template changed after renderer construction"
+            )
+
     @staticmethod
     def assert_generation_prefill(
         transcript: RenderedTranscript, tokenizer: Any
     ) -> None:
-        expected = tuple(
-            tokenizer.encode(
-                "<|im_start|>assistant\n<think>\n", add_special_tokens=False
+        expected_text = "<|im_start|>assistant\n<think>\n"
+        if not transcript.text.endswith(expected_text):
+            raise ValueError(
+                "native Qwen Thinking generation prefill text differs from the accepted contract"
             )
-        )
+        final_assistant = transcript.text.rsplit("<|im_start|>assistant\n", maxsplit=1)[
+            -1
+        ]
+        if final_assistant != "<think>\n":
+            raise ValueError(
+                "native Qwen Thinking prefill has a duplicate or extra assistant opener"
+            )
+        expected = tuple(tokenizer.encode(expected_text, add_special_tokens=False))
         if not expected or transcript.token_ids[-len(expected) :] != expected:
             raise ValueError(
                 "native Qwen Thinking generation prefill differs from the accepted contract"

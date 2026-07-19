@@ -41,6 +41,21 @@ from .metrics import (
     summarize_tensor_diagnostics,
     tensor_distribution_diagnostics,
 )
+from .objective import (
+    REPRESENTATION_OBJECTIVE_SCHEMA_VERSION,
+    RepresentationObjectiveConfig,
+    RepresentationObjectiveKind,
+    RepresentationObjectiveValue,
+    compose_reference_representation_objective,
+)
+from .readout import (
+    RepresentationCandidateObservation,
+    RepresentationReadoutRow,
+    RepresentationVisualTensorBundle,
+    SameImageReadoutGroup,
+    SameImageReadoutTerms,
+    synthetic_same_image_layout_readout_terms,
+)
 from .sampling import (
     SAMPLER_IDENTITY_SCHEMA_VERSION,
     SAMPLER_STATE_SCHEMA_VERSION,
@@ -53,10 +68,20 @@ from .schema import (
     RepresentationSampleIdentity,
     RepresentationTrainingSample,
 )
+from .transcript import (
+    CANONICAL_EVIDENCE_SCHEMA_VERSION,
+    MODEL_EVIDENCE_SCHEMA_VERSION,
+    CanonicalEvidenceSupervision,
+    ModelEvidenceSupervision,
+    render_native_evidence_labels,
+)
 
 __all__ = [
     "EVIDENCE_IGNORE_INDEX",
+    "CANONICAL_EVIDENCE_SCHEMA_VERSION",
+    "MODEL_EVIDENCE_SCHEMA_VERSION",
     "REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION",
+    "REPRESENTATION_OBJECTIVE_SCHEMA_VERSION",
     "SAMPLER_IDENTITY_SCHEMA_VERSION",
     "SAMPLER_STATE_SCHEMA_VERSION",
     "AttentionDiagnostics",
@@ -64,6 +89,8 @@ __all__ = [
     "CausalEvidenceLosses",
     "DistributionMetrics",
     "EvidenceReadabilityLossTerms",
+    "CanonicalEvidenceSupervision",
+    "ModelEvidenceSupervision",
     "NormComparisonDiagnostics",
     "QueryMetrics",
     "QueryRowMetrics",
@@ -73,14 +100,23 @@ __all__ = [
     "ReadoutNLLs",
     "ReadoutSampleMetrics",
     "RepresentationHealthSummary",
+    "RepresentationCandidateObservation",
+    "RepresentationObjectiveConfig",
+    "RepresentationObjectiveKind",
+    "RepresentationObjectiveValue",
+    "RepresentationReadoutRow",
     "RepresentationSampleIdentity",
     "RepresentationTrainingSample",
+    "RepresentationVisualTensorBundle",
     "SameImageBatchSampler",
     "SameImageMatrixCELossTerms",
+    "SameImageReadoutGroup",
+    "SameImageReadoutTerms",
     "TensorDiagnosticsSummary",
     "TensorDistributionDiagnostics",
     "attention_diagnostics",
     "causal_evidence_losses",
+    "compose_reference_representation_objective",
     "evidence_readability_loss_terms",
     "grouped_query_row_metrics",
     "grouped_query_score_metrics",
@@ -89,6 +125,7 @@ __all__ = [
     "norm_comparison_diagnostics",
     "partition_same_image_group",
     "query_score_matrix_metrics",
+    "render_native_evidence_labels",
     "readout_sample_metrics",
     "same_image_group_owner",
     "same_image_matrix_ce_loss",
@@ -99,5 +136,6 @@ __all__ = [
     "summarize_readout",
     "summarize_representation_health",
     "summarize_tensor_diagnostics",
+    "synthetic_same_image_layout_readout_terms",
     "tensor_distribution_diagnostics",
 ]

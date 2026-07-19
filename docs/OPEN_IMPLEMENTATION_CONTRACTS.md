@@ -111,8 +111,10 @@ matrix items remain promotion gates rather than implicit passes.
 - [x] `FIXED` — Same-image Matrix CE is a required target-specificity objective;
   ordinary independent shuffle is not a valid substitute for same-image
   multi-target grouping.
-- [x] `FIXED` — `L_gen` remains a separately controlled readability term pending
-  an explicit on/off ablation. Its final necessity and weight are not fixed.
+- [x] `FIXED` — The representation baseline includes both Matrix CE and
+  `L_gen`, with separately logged, explicitly configured nonzero weights.
+  `L_gen=off` is a separately identified ablation rather than the baseline.
+  Exact numerical weights remain open and fail closed until bound.
 - [x] `FIXED` — The manifold-loss optimizer contribution is exactly zero.
 - [x] `FIXED` — No new norm-loss mode, formula, target, or default weight is
   accepted. Norm-loss design remains open.
@@ -530,7 +532,29 @@ I8H-20260719.
   image-path resolution, leakage records, exact accepted/excluded-row manifest,
   and source-hash validation: `[TBD implementation]`
 - [ ] `OPEN_BLOCKING AD-03` — New pipeline transcript/prompt construction and
-  `Hq` contract: `[TBD]`
+  `Hq` contract are only partially fixed:
+  - [x] `FIXED AD-03A` — `evidence_description` is the reasoning content of the
+    assistant turn after the latent `tgvf_focus_tool` result. Only the exact
+    tokenizer positions owned by this rendered evidence span receive
+    teacher-forcing labels. The prompt, first assistant tool-call turn,
+    tool-call JSON, tool result, template wrappers, and answer content are
+    ignored; the representation evidence turn itself has empty answer content.
+    Its preceding teacher-constructed call turn has empty reasoning/answer
+    content and only the native target call, so no intermediate reasoning label
+    or hidden prompt text is invented.
+    Offset ownership must match the rendered token ids exactly. A
+    token is evidence-owned iff its start offset lies inside the evidence span;
+    this includes Qwen's observed sentence-final token that also carries the
+    following template newline. A token that starts before and crosses into the
+    evidence is ambiguous and fails closed. Fuzzy decoded-text matching is
+    forbidden. Canonical labels are not model labels until the Qwen-family
+    adapter verifies the processor's canonical-to-expanded-position map:
+    evidence mappings are singleton/contiguous/ID-identical and every visual
+    position remains ignored. The executable mapping is Qwen3-specific;
+    Qwen2.5-VL fails closed pending its separate family fixture/artifact.
+  - `AD-03B` — Exact prompt wording, original-image user-content construction,
+    target-call JSON construction, target-span/`Hq` extraction, and the final
+    tokenizer/chat-template golden fixture: `[TBD implementation/artifact]`.
 - [ ] `OPEN_BLOCKING AD-04` — TGVF Adapter initialization that does not use the
   historical trained checkpoint directly: `[TBD]`
 - [ ] `OPEN_BLOCKING AD-05` — Exact representation objective and execution
@@ -546,8 +570,15 @@ I8H-20260719.
     group sizes differ.
     The pure kernel now exposes an unnormalized CE numerator plus valid-row
     count and has local value/gradient and rank-4-versus-rank-5 reduction
-    fixtures. Full main-`D`/all-branch matrix construction and trainer-owned
-    distributed/accumulation reduction remain blocking.
+    fixtures. A live-tensor family forward and synthetic cell-by-cell
+    layout/swap oracle hold each row transcript/layout/source image fixed while
+    atomically swapping candidate main `D` plus all branches; main `D` and each
+    branch have a separate sensitivity fixture. This is not yet the accepted
+    K×K readout: the post-`D` original-image key-block/Qwen mask contract is
+    still open, so its evidence queries can see the source image. The synthetic
+    oracle also retains all cell graphs and is not an accepted 8B execution
+    schedule. Key blocking, trainer-owned streaming, distributed/accumulation
+    scaling, and real-Qwen gradient parity remain blocking.
   - `AD-05B` — Reproduce and test same-image multi-target grouping: image key,
     minimum/maximum group batch size, duplicate handling, incomplete-group
     dropping, whole-group distributed ownership, group/member shuffle,
@@ -555,17 +586,23 @@ I8H-20260719.
     shuffle is forbidden.
     Exact duplicate target strings within one image group now fail closed;
     semantic near-duplicate normalization remains a manifest decision.
-  - `AD-05C` — Freeze the native `L_gen` label span, token and sample reduction,
-    weight, and logging, and require an on/off ablation. Historical behavior is
-    evidence-token mean NLL per sample followed by sample mean. The unresolved
-    `AD-03` question is exactly where `evidence_description` appears after the
-    native tool result and therefore which of its token positions receive
-    teacher-forcing labels; "assistant supervision" is not a separate module.
+  - [x] `FIXED AD-05C` — The baseline contains `L_gen`; setting its weight to
+    zero is allowed only for a separately identified ablation. Only the
+    `AD-03A` evidence-token labels contribute. The reduction is the historical
+    evidence-token mean NLL per sample followed by a global sample mean, and it
+    is logged separately from Matrix CE. "Assistant supervision" is not a
+    separate module. The exact nonzero baseline coefficient remains
+    `OPEN_CONFIGURABLE` under `AD-05F` and must not receive a hidden default.
+    The executable objective identity enforces nonzero Matrix-CE and `L_gen`
+    weights for the baseline and permits zero only for a named Matrix-only
+    ablation; both raw and weighted components are separately returned and
+    loggable. Actual trainer logging remains part of `AD-05F`.
   - [x] `FIXED AD-05D` — Manifold-loss optimizer contribution is exactly zero.
     A diagnostic-only computation, if retained, must not contribute gradients.
   - `AD-05E` — Norm-loss inclusion, mathematics, target, and weight remain
     undecided. No speculative mode or default may enter configuration or code.
-  - `AD-05F` — Remaining objective weights, optimizer, scheduler, precision,
+  - `AD-05F` — Exact nonzero Matrix-CE and `L_gen` baseline weights, optimizer,
+    scheduler, precision,
     accumulation, clipping, and trainer/checkpoint-resume behavior: `[TBD]`.
     Historical `L_gen` first divides each sample's summed evidence NLL by that
     sample's evidence-token count, then sums those per-sample means and divides
