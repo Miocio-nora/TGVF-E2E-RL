@@ -1040,6 +1040,126 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   a semantic-quality threshold result, a formal native counterfactual run, or
   a promoted representation artifact.
 
+### RP-12-QWEN3-REPRESENTATION-FSDP2-EMBEDDING-K4-GPR4-GA1-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-12`; diagnostic bounded
+  real-Qwen3 representation-phase K=4/GPR=4/GA=1 direct-batch train-core
+  throughput smoke for the target-token-embedding provider. This is not a
+  promoted training run.
+- Spike-plan git revision and approval references: user direction on
+  `2026-07-19` to directly measure GA=1 after the RP-11 memory result;
+  accepted task commit `30d0622`, `RPI-20260719-NORM-EVAL`, `AD-05G`, `AD-06`,
+  and `AD-07`. Runtime commit is
+  `9b47105e761ceac015094b46d3844f89df63bc10`; config/data commit is
+  `6ebed9d02008f8ed0acf26b547b4e2d101875b0f`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: at the same mathematical global batch of 32 used by RP-11, what
+  train-core optimizer-step time, rows/s, matrices/s, and peak CUDA memory are
+  measured when four independent K=4 blocks per rank are executed directly at
+  GA=1 instead of through four accumulation microsteps?
+- Baseline and exact output path: RP-11 continuous step 2 measured `20.366` s,
+  `32` rows, eight matrices, `1.571` rows/s, and at most
+  `21,207,001,600` allocated bytes. RP-12 writes only under
+  `artifacts/representation/RP-12-qwen3-representation-fsdp2-embedding-k4-gpr4-ga1-throughput/`.
+- Model and processor identity: stable local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, tokenizer length
+  `151669`, chat-template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  BF16, SDPA, local-only, no remote code, and no tokenizer resize.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`, no
+  source artifact and no legacy-checkpoint initialization; three optimizer
+  updates under the historical 2,000-update scheduler horizon.
+- N/A fields and justification: policy/reference rollout, behavior logprob,
+  reward, GRPO, SDPO teacher, answer judge, vLLM sampling, KV replay, and policy
+  replay are absent from this representation-only timing smoke.
+- Policy/reference initialization: N/A; original Qwen3 is frozen and only the
+  freshly initialized TGVF Adapter is trainable.
+- Rollout policy version and allowed asynchronous staleness: N/A; this is a
+  synchronous representation update with no intervening policy update.
+- Code commit and worktree state: runtime code at
+  `9b47105e761ceac015094b46d3844f89df63bc10`; config source/canonical SHA256
+  `95079be0c077314894962fe3ec273f5e3bfe5b6985ef7d5e77ab78e2a56c7721`/
+  `440ef254e6c3aa2b6660fa54bb9733f596d71ca97c3859c65e8325ceecd8647c`.
+  The launch HEAD and clean-worktree check will be recorded immediately before
+  execution.
+- Repository adapter/patch surface and hash: representation-training tree
+  `e23a8cd63bdca430a6bf24f689b3707ff8fed777` and unchanged Qwen tree
+  `6ae2676f7f08949f2425d736fe4d54751d53f69f`.
+- Dataset/manifest, hashes, sample rule, and n: direct-batch smoke
+  train/validation source SHA256
+  `34053c694023461be9f0fe30fd1e525e27697894f705e5428fafad45cfeabc1c`/
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`;
+  retained manifests `c95ec424a64d6303a90f245aa52fa1c24eba28963af0455ddcb0e7830efe53ba`/
+  `e18eb856f4c8b03c03a2f2a683a8267bb0581498de05fed403c4246e5cca3a13`;
+  32 unique rows/eight complete K=4 groups, with four distinct groups owned by
+  each rank and sampler seeds 71/73. One update consumes one complete train
+  epoch. Validation-data identity is
+  `16c33970676fb41c197cb007a2a7ea0c5d51b0fbcd8f3268bef6284f2f579821`;
+  train/validation image-byte manifests are
+  `692847ec741898bd077d7831c5a73cfac4ce4ff3eac399603ce6170330d2ba26`/
+  `f83d49e1290557428e807aca8624827a8b9a4a4892e523b88c281d010fa213d9`.
+  The empty overlap-report SHA256 is
+  `c23fe08408640a95d0fe9c482228908bc35e7816021e51b029cc6c9d6979c218`.
+- Native prompt/tool schema hash: smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`;
+  native `tgvf_focus_tool` schema SHA256
+  `1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361`.
+- Chat-template/token-fixture hash and token-ownership masks: Qwen3 golden
+  SHA256 `1df319f994e31db398d008880b0678afb56e1b4390123957e56f25ba9c165a68`;
+  evidence-description-only labels and all visual/template positions `-100`.
+- D/DeepStack/position/mask identity: native main `D`, ordered branch layers
+  `(8,16,24)`, native M-RoPE, post-D original-image key blocking, and atomic
+  main-plus-all-branches candidates, unchanged from RP-11.
+- Observation materialization/artifact identity used by all replays: no policy
+  replay; Matrix scoring and differentiable recompute use the same in-update
+  candidate observations.
+- RL framework/version/environment lock: Python `3.12.3`, Torch `2.9.0+cu128`,
+  CUDA `12.8`, NCCL `2.27.5`, Transformers `4.57.6`, vLLM `0.12.0`, veRL
+  `0.9.0.dev0`, Pillow `12.3.0`; compatibility lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: unchanged RP-11 global-row-mean
+  Matrix CE, global sample mean `L_gen`, and fixed historical Norm; weights
+  `1.0/1.0/0.1`, manifold zero, AdamW `1e-4`, gradient clip `1.0`, historical
+  cosine warmup 100/floor ratio `.1`/horizon 2,000.
+- Rollout/replay forward mode and adapter dropout/RNG contract: frozen Qwen in
+  eval mode, Adapter dropout zero, no cache, deterministic algorithms, TF32
+  off, seed `20260719`, and CUBLAS `:4096:8`.
+- Sampling backend/version, parameters, and logprob convention: token sampling
+  and logprobs N/A; deterministic same-image sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 forward, FP32 reduction, no
+  quantization/KV/rollout TP, SDPA, FSDP2 `fsdp=[2]`, reshard after forward,
+  and no offload.
+- Logit/logprob/loss/gradient parity tolerances: the direct path is gated by a
+  blockwise objective/gradient fixture and must keep four separate local
+  `4x4` blocks rather than one `16x16` block. It must complete all updates,
+  retain tokenizer length, report finite losses/gradients, and report the exact
+  expected row/matrix counts; performance values are measurements.
+- World size, direct batch, accumulation, and global batch: world 2, four
+  distinct local K=4 groups per rank, GA=1; 16 local/32 global rows and eight
+  independent `4x4` matrices per optimizer update, 96 row presentations/24
+  matrix presentations over three updates.
+- GPUs: only physical 2
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, both NVIDIA B200 and mapped to
+  logical 0/1. Preflight: `0` MiB used and `182642` MiB free on each.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`,
+  recorded on execution; the invocation has a 1,800-second hard limit.
+- Actual GPU-hours and peak scratch use: `PENDING`, recorded on execution.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp12_ga1_throughput.toml`.
+- Outputs: planned Adapter export, metrics JSONL, final step-3 DCP checkpoint,
+  and `run.log` under the exact RP-12 output root.
+- Scorer/parser identity: no answer scorer; unchanged strict native pipeline,
+  objective, performance measurement, runner, DCP, and export implementation at
+  the runtime commit.
+- Metrics: `PENDING`. Every step must report 32 rows, eight matrices, 16 sample
+  IDs per rank from four distinct group keys. Record all three train-step
+  times, rows/s, matrices/s, allocated/reserved CUDA peaks, tokenizer length,
+  and relative throughput against the RP-11 step-2 baseline; step 1 is warmup
+  and the step 2-3 mean is the primary summary.
+- Conclusion: `PENDING`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
