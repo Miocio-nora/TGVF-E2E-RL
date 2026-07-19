@@ -3105,8 +3105,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 
 - Cell/matrix ID and class: `RP-26`; bounded one-group-ahead host-preparation
   A/B against the accepted full-logits RP-24 baseline. Lifecycle status:
-  `PLANNED`; output is diagnostic and is not eligible for representation-
-  artifact promotion.
+  `COMPLETE`; result `SIDE_RESULT_REJECTED`. Output is diagnostic and is not
+  eligible for representation-artifact promotion.
 - Approval/code/question: accepted
   `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; runtime commit
   `857b3a96afeaab03342f83165ee0d5c864c204ba`. Does overlapping group
@@ -3159,6 +3159,25 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   run-representation
   configs/smoke/representation_qwen3_embedding_rp26_prefetch_real512_ga4_throughput_gpu23.toml`;
   a read-only utilization sampler records physical GPUs2/3.
+- Execution/resources: both GPUs were idle at immediate preflight. Torchrun
+  started at `2026-07-20 07:23:25 +09:00` and completed at about
+  `07:24:29 +09:00`; measured train-core use was approximately `0.017669`
+  aggregate GPU-hours. The output tree occupies `577,979,806` bytes and is
+  complete; final diagnostic artifact manifest SHA256 is
+  `bfaa43444052e9470b9f5f88d0c9da6814121567216f174f31c727b9abf3992c`.
+- Metrics/parity: steps 1/2/3 took `11.231770953`, `10.239523763`, and
+  `10.333306422` seconds. Sample order, all objective values, gradient norms,
+  counts, tokenizer length, peak allocation/reservation, and eight B8 Qwen
+  calls/rank/update match RP-24 exactly. The predeclared exact mathematics gate
+  therefore passes.
+- Throughput/utilization/conclusion: the steps-2/3 steady mean is
+  `10.286415093` seconds (`5.7147` train-core hours for 2,000 steps), `2.3977%`
+  slower than RP-24. GPU2/GPU3 mean utilization was `32.0%`/`35.9%`, below-50%
+  samples were `67.1%`/`63.9%`, zero samples were `54.8%`/`46.5%`, and longest
+  below-50% spans were about `3.34`/`2.72` seconds. Reject the prefetch path:
+  real processor/template work is not the dominant utilization gap and worker
+  scheduling/contention makes the update slower. The next diagnostic must use
+  an operator timeline instead of another inferred bottleneck.
 
 ## Compatibility-spike status
 
