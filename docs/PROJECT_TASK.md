@@ -327,6 +327,14 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   measured control-stack speedup; the checkpoint parameter/state identity and
   public family-adapter interface must remain unchanged. Subsequent
   optimizations require measured phase attribution and their own parity gate.
+- Decision `RPI-20260720-CONFIG-BOUND-GPU-PAIR` accepts replacing the
+  representation runner's historical physical-GPU `[2,3]` hardcode with an
+  explicit two-device configuration identity. The pair must contain two
+  distinct non-negative physical IDs, keep logical IDs `[0,1]`, and match
+  `CUDA_VISIBLE_DEVICES` exactly and in order before distributed startup. This
+  changes only launch placement; world size, FSDP2 mesh, model, objective,
+  batch mathematics, determinism, and checkpoint identity remain unchanged.
+  The initial authorized alternate pair is physical GPUs `[0,3]` for RP-17.
 - Decision `RPI-20260720-BALANCED-MATRIX-CE` accepts a second selectable
   Matrix-CE cell score for the representation phase. Its public configuration
   name is `balanced`: for row `i` and complete candidate observation `j`

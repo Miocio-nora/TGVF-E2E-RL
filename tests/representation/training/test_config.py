@@ -559,8 +559,8 @@ def test_every_checkpoint_step_must_have_a_durable_train_metric(
     [
         (
             "physical_gpu_ids = [2, 3]",
-            "physical_gpu_ids = [0, 1]",
-            "physical GPUs",
+            "physical_gpu_ids = [2, 2]",
+            "distinct non-negative",
         ),
         (
             "manifold_enabled = false",

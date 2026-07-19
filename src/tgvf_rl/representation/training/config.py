@@ -435,8 +435,18 @@ class RepresentationFSDP2TopologyConfig:
             raise ValueError("fsdp2.strategy must be 'fsdp2'")
         if self.world_size != 2:
             raise ValueError("representation FSDP2 world_size must be 2")
-        if self.physical_gpu_ids != (2, 3):
-            raise ValueError("representation training is assigned physical GPUs [2, 3]")
+        if (
+            len(self.physical_gpu_ids) != self.world_size
+            or any(
+                isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or gpu_id < 0
+                for gpu_id in self.physical_gpu_ids
+            )
+            or len(set(self.physical_gpu_ids)) != self.world_size
+        ):
+            raise ValueError(
+                "fsdp2.physical_gpu_ids must contain two distinct non-negative "
+                "physical GPU IDs"
+            )
         if self.logical_gpu_ids != (0, 1):
             raise ValueError("CUDA-visible logical GPU IDs must be [0, 1]")
         if self.device_type != "cuda":

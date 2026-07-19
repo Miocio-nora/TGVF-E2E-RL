@@ -34,8 +34,15 @@ def _forbid_real_accelerator_or_process_group(
     monkeypatch.setattr(torch.distributed, "init_process_group", forbidden)
 
 
-def _launch_config() -> SimpleNamespace:
-    return SimpleNamespace(fsdp2=SimpleNamespace(world_size=2))
+def _launch_config(
+    physical_gpu_ids: tuple[int, int] = (2, 3),
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        fsdp2=SimpleNamespace(
+            world_size=2,
+            physical_gpu_ids=physical_gpu_ids,
+        )
+    )
 
 
 def _set_valid_launch_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,6 +78,20 @@ def test_launch_environment_is_exact_and_rank_values_are_ascii(
         runner_module._require_launch_environment(config)
     monkeypatch.setenv("RANK", "-1")
     with pytest.raises(ValueError, match="non-negative torchrun integer"):
+        runner_module._require_launch_environment(config)
+
+
+def test_launch_environment_is_bound_to_configured_physical_gpu_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _launch_config((0, 3))
+    _set_valid_launch_environment(monkeypatch)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,3")
+
+    runner_module._require_launch_environment(config)
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,0")
+    with pytest.raises(ValueError, match="launch environment mismatch"):
         runner_module._require_launch_environment(config)
 
 

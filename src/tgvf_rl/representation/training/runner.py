@@ -81,7 +81,6 @@ REPRESENTATION_RUNNER_SCHEMA_VERSION = "representation-runner-v1"
 REPRESENTATION_QWEN_PHYSICAL_EXECUTION_SCHEMA_VERSION = (
     "representation-qwen-physical-execution-v1"
 )
-_REQUIRED_VISIBLE_DEVICES = "2,3"
 _REQUIRED_CUBLAS_WORKSPACE = ":4096:8"
 _CODE_IDENTITY_PATHS = (
     "src/tgvf_rl",
@@ -1195,8 +1194,11 @@ def _enable_determinism() -> None:
 
 
 def _require_launch_environment(config: RepresentationTrainingConfig) -> None:
+    required_visible_devices = ",".join(
+        str(gpu_id) for gpu_id in config.fsdp2.physical_gpu_ids
+    )
     required = {
-        "CUDA_VISIBLE_DEVICES": _REQUIRED_VISIBLE_DEVICES,
+        "CUDA_VISIBLE_DEVICES": required_visible_devices,
         "CUBLAS_WORKSPACE_CONFIG": _REQUIRED_CUBLAS_WORKSPACE,
         "PYTHONHASHSEED": "0",
         "TOKENIZERS_PARALLELISM": "false",
