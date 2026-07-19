@@ -160,10 +160,51 @@ class _FakeFSDPModule:
     pass
 
 
+class _RecordingAccumulationModule(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[object, ...]] = []
+
+    def set_requires_gradient_sync(self, value: bool, *, recurse: bool) -> None:
+        self.calls.append(("sync", value, recurse))
+
+    def set_reshard_after_backward(self, value: bool, *, recurse: bool) -> None:
+        self.calls.append(("reshard", value, recurse))
+
+    def set_is_last_backward(self, value: bool) -> None:
+        self.calls.append(("last", value))
+
+
 @dataclass
 class _FullyShardCall:
     modules: list[object]
     kwargs: list[dict[str, object]]
+
+
+def test_fsdp2_accumulation_state_suppresses_nonfinal_communication() -> None:
+    module = _RecordingAccumulationModule()
+
+    fsdp2_module._set_fsdp2_accumulation_state(
+        module,
+        requires_gradient_sync=False,
+        reshard_after_backward=False,
+        is_last_backward=False,
+    )
+    fsdp2_module._set_fsdp2_accumulation_state(
+        module,
+        requires_gradient_sync=True,
+        reshard_after_backward=True,
+        is_last_backward=True,
+    )
+
+    assert module.calls == [
+        ("sync", False, True),
+        ("reshard", False, True),
+        ("last", False),
+        ("sync", True, True),
+        ("reshard", True, True),
+        ("last", True),
+    ]
 
 
 def test_apply_ignores_exact_borrowed_state_and_optimizer_owns_only_shards(

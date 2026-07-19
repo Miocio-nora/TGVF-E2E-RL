@@ -129,6 +129,14 @@ class RepresentationGroupBuilder(Protocol):
     ) -> SameImageReadoutGroup: ...
 
 
+class RepresentationAccumulationController(Protocol):
+    """Distributed execution controls for one gradient-accumulation window."""
+
+    def begin_microstep(self, *, index: int, count: int) -> None: ...
+
+    def finish_window(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RepresentationStepMetrics:
     global_step: int
@@ -171,6 +179,7 @@ class RepresentationTrainer:
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None,
         config: RepresentationTrainerConfig,
+        accumulation_controller: RepresentationAccumulationController | None = None,
         initial_global_step: int = 0,
     ) -> None:
         if not isinstance(adapter, TGVFAdapter):
@@ -204,6 +213,13 @@ class RepresentationTrainer:
             raise TypeError("scheduler must be a torch LRScheduler")
         if not isinstance(config, RepresentationTrainerConfig):
             raise TypeError("config must be RepresentationTrainerConfig")
+        if accumulation_controller is not None and (
+            not callable(getattr(accumulation_controller, "begin_microstep", None))
+            or not callable(getattr(accumulation_controller, "finish_window", None))
+        ):
+            raise TypeError(
+                "accumulation_controller must expose begin_microstep/finish_window"
+            )
         _non_negative_int(initial_global_step, field_name="initial_global_step")
 
         self.adapter = adapter
@@ -217,11 +233,29 @@ class RepresentationTrainer:
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.config = config
+        self.accumulation_controller = accumulation_controller
         self.global_step = initial_global_step
+        self._failed = False
         _assert_parameter_ownership(adapter, qwen_model, optimizer)
         _assert_distributed_identity(accumulation.data_parallel_world_size)
 
     def train_step(self) -> RepresentationStepMetrics:
+        """Execute one optimizer step and fail-stop after any partial failure."""
+
+        if self._failed:
+            raise RuntimeError("a failed RepresentationTrainer cannot be reused")
+        try:
+            return self._train_step_impl()
+        except BaseException:
+            # FSDP2 may retain an unreduced unsharded accumulation buffer after
+            # a partial window. Public setters restore future policy flags but
+            # cannot abort that private state. The runner is process-fatal on
+            # any training exception; the reusable trainer enforces the same
+            # fail-stop rule instead of risking stale-gradient reuse.
+            self._failed = True
+            raise
+
+    def _train_step_impl(self) -> RepresentationStepMetrics:
         """Execute one optimizer step over a complete accumulation window."""
 
         self.adapter.train(True)
@@ -276,116 +310,41 @@ class RepresentationTrainer:
         )
         local_sample_ids: list[str] = []
         local_qwen_forward_batch_sizes: list[int] = []
-        if direct_groups > 1:
-            for window_start in range(0, group_count, groups_per_microstep):
-                window_end = window_start + groups_per_microstep
-                window_indices = batch_indices[window_start:window_end]
-                window_candidate_counts = collective_candidate_counts[
-                    window_start:window_end
-                ]
-                groups: list[SameImageReadoutGroup] = []
-                expected_ids_by_group: list[tuple[str, ...]] = []
-                with self._autocast_context():
-                    for indices, collective_candidate_count in zip(
-                        window_indices,
-                        window_candidate_counts,
-                        strict=True,
-                    ):
-                        logical_samples = tuple(
-                            self.samples[index] for index in indices
-                        )
-                        group = self.group_builder(
-                            logical_samples,
-                            self.adapter,
-                            collective_candidate_count=collective_candidate_count,
-                        )
-                        expected_ids = tuple(
-                            sample.sample_id for sample in logical_samples
-                        )
-                        _assert_built_group_identity(
-                            group,
-                            expected_ids=expected_ids,
-                            collective_candidate_count=collective_candidate_count,
-                        )
-                        groups.append(group)
-                        expected_ids_by_group.append(expected_ids)
-                    scores = score_streaming_same_image_groups(
-                        self.family_adapter,
-                        self.qwen_model,
-                        groups,
-                        objective=self.objective,
-                        normalization=normalization,
-                    )
-                    backward_metrics = backward_streaming_same_image_groups(
-                        self.family_adapter,
-                        self.qwen_model,
-                        groups,
-                        scores,
-                        objective=self.objective,
-                        normalization=normalization,
-                    )
-                window_rows = sum(len(indices) for indices in window_indices)
-                if (
-                    backward_metrics.local_row_count != window_rows
-                    or backward_metrics.local_sample_count != window_rows
-                ):
-                    raise RuntimeError(
-                        "direct multi-group execution returned incorrect local counts"
-                    )
-                _accumulate_local_metric_numerators_(
-                    local_metric_numerators,
-                    backward_metrics,
+        accumulation_failure: BaseException | None = None
+        try:
+            if direct_groups > 1:
+                self._train_direct_group_windows(
+                    batch_indices=batch_indices,
+                    collective_candidate_counts=collective_candidate_counts,
+                    groups_per_microstep=groups_per_microstep,
+                    normalization=normalization,
+                    local_metric_numerators=local_metric_numerators,
+                    local_sample_ids=local_sample_ids,
+                    local_qwen_forward_batch_sizes=local_qwen_forward_batch_sizes,
                 )
-                local_sample_ids.extend(
-                    sample_id
-                    for expected_ids in expected_ids_by_group
-                    for sample_id in expected_ids
+            else:
+                self._train_accumulation_groups(
+                    batch_indices=batch_indices,
+                    collective_candidate_counts=collective_candidate_counts,
+                    normalization=normalization,
+                    local_metric_numerators=local_metric_numerators,
+                    local_sample_ids=local_sample_ids,
+                    local_qwen_forward_batch_sizes=local_qwen_forward_batch_sizes,
                 )
-                local_qwen_forward_batch_sizes.extend(
-                    getattr(backward_metrics, "qwen_forward_batch_sizes", ())
-                )
-        else:
-            for indices, collective_candidate_count in zip(
-                batch_indices,
-                collective_candidate_counts,
-                strict=True,
-            ):
-                logical_samples = tuple(self.samples[index] for index in indices)
-                with self._autocast_context():
-                    group = self.group_builder(
-                        logical_samples,
-                        self.adapter,
-                        collective_candidate_count=collective_candidate_count,
+        except BaseException as error:
+            accumulation_failure = error
+            raise
+        finally:
+            if self.accumulation_controller is not None:
+                try:
+                    self.accumulation_controller.finish_window()
+                except BaseException as finish_error:
+                    if accumulation_failure is None:
+                        raise
+                    accumulation_failure.add_note(
+                        "accumulation-controller flag restoration also failed: "
+                        f"{finish_error!r}"
                     )
-                    expected_ids = tuple(sample.sample_id for sample in logical_samples)
-                    _assert_built_group_identity(
-                        group,
-                        expected_ids=expected_ids,
-                        collective_candidate_count=collective_candidate_count,
-                    )
-                    scores = score_streaming_same_image_group(
-                        self.family_adapter,
-                        self.qwen_model,
-                        group,
-                        objective=self.objective,
-                        normalization=normalization,
-                    )
-                    backward_metrics = backward_streaming_same_image_group(
-                        self.family_adapter,
-                        self.qwen_model,
-                        group,
-                        scores,
-                        objective=self.objective,
-                        normalization=normalization,
-                    )
-                _accumulate_local_metric_numerators_(
-                    local_metric_numerators,
-                    backward_metrics,
-                )
-                local_sample_ids.extend(expected_ids)
-                local_qwen_forward_batch_sizes.extend(
-                    getattr(backward_metrics, "qwen_forward_batch_sizes", ())
-                )
 
         trainable = _adapter_owned_trainable_parameters(self.adapter)
         _assert_gradients(
@@ -442,6 +401,141 @@ class RepresentationTrainer:
             local_sample_ids=tuple(local_sample_ids),
             local_qwen_forward_batch_sizes=tuple(local_qwen_forward_batch_sizes),
         )
+
+    def _train_direct_group_windows(
+        self,
+        *,
+        batch_indices: tuple[tuple[int, ...], ...],
+        collective_candidate_counts: tuple[int, ...],
+        groups_per_microstep: int,
+        normalization: StreamingGlobalNormalization,
+        local_metric_numerators: torch.Tensor,
+        local_sample_ids: list[str],
+        local_qwen_forward_batch_sizes: list[int],
+    ) -> None:
+        microstep_count = len(batch_indices) // groups_per_microstep
+        for microstep_index, window_start in enumerate(
+            range(0, len(batch_indices), groups_per_microstep)
+        ):
+            self._begin_microstep(microstep_index, microstep_count)
+            window_end = window_start + groups_per_microstep
+            window_indices = batch_indices[window_start:window_end]
+            window_candidate_counts = collective_candidate_counts[
+                window_start:window_end
+            ]
+            groups: list[SameImageReadoutGroup] = []
+            expected_ids_by_group: list[tuple[str, ...]] = []
+            with self._autocast_context():
+                for indices, collective_candidate_count in zip(
+                    window_indices,
+                    window_candidate_counts,
+                    strict=True,
+                ):
+                    logical_samples = tuple(self.samples[index] for index in indices)
+                    group = self.group_builder(
+                        logical_samples,
+                        self.adapter,
+                        collective_candidate_count=collective_candidate_count,
+                    )
+                    expected_ids = tuple(sample.sample_id for sample in logical_samples)
+                    _assert_built_group_identity(
+                        group,
+                        expected_ids=expected_ids,
+                        collective_candidate_count=collective_candidate_count,
+                    )
+                    groups.append(group)
+                    expected_ids_by_group.append(expected_ids)
+                scores = score_streaming_same_image_groups(
+                    self.family_adapter,
+                    self.qwen_model,
+                    groups,
+                    objective=self.objective,
+                    normalization=normalization,
+                )
+                backward_metrics = backward_streaming_same_image_groups(
+                    self.family_adapter,
+                    self.qwen_model,
+                    groups,
+                    scores,
+                    objective=self.objective,
+                    normalization=normalization,
+                )
+            window_rows = sum(len(indices) for indices in window_indices)
+            if (
+                backward_metrics.local_row_count != window_rows
+                or backward_metrics.local_sample_count != window_rows
+            ):
+                raise RuntimeError(
+                    "direct multi-group execution returned incorrect local counts"
+                )
+            _accumulate_local_metric_numerators_(
+                local_metric_numerators,
+                backward_metrics,
+            )
+            local_sample_ids.extend(
+                sample_id
+                for expected_ids in expected_ids_by_group
+                for sample_id in expected_ids
+            )
+            local_qwen_forward_batch_sizes.extend(
+                getattr(backward_metrics, "qwen_forward_batch_sizes", ())
+            )
+
+    def _train_accumulation_groups(
+        self,
+        *,
+        batch_indices: tuple[tuple[int, ...], ...],
+        collective_candidate_counts: tuple[int, ...],
+        normalization: StreamingGlobalNormalization,
+        local_metric_numerators: torch.Tensor,
+        local_sample_ids: list[str],
+        local_qwen_forward_batch_sizes: list[int],
+    ) -> None:
+        microstep_count = len(batch_indices)
+        for microstep_index, (indices, collective_candidate_count) in enumerate(
+            zip(batch_indices, collective_candidate_counts, strict=True)
+        ):
+            self._begin_microstep(microstep_index, microstep_count)
+            logical_samples = tuple(self.samples[index] for index in indices)
+            with self._autocast_context():
+                group = self.group_builder(
+                    logical_samples,
+                    self.adapter,
+                    collective_candidate_count=collective_candidate_count,
+                )
+                expected_ids = tuple(sample.sample_id for sample in logical_samples)
+                _assert_built_group_identity(
+                    group,
+                    expected_ids=expected_ids,
+                    collective_candidate_count=collective_candidate_count,
+                )
+                scores = score_streaming_same_image_group(
+                    self.family_adapter,
+                    self.qwen_model,
+                    group,
+                    objective=self.objective,
+                    normalization=normalization,
+                )
+                backward_metrics = backward_streaming_same_image_group(
+                    self.family_adapter,
+                    self.qwen_model,
+                    group,
+                    scores,
+                    objective=self.objective,
+                    normalization=normalization,
+                )
+            _accumulate_local_metric_numerators_(
+                local_metric_numerators,
+                backward_metrics,
+            )
+            local_sample_ids.extend(expected_ids)
+            local_qwen_forward_batch_sizes.extend(
+                getattr(backward_metrics, "qwen_forward_batch_sizes", ())
+            )
+
+    def _begin_microstep(self, index: int, count: int) -> None:
+        if self.accumulation_controller is not None:
+            self.accumulation_controller.begin_microstep(index=index, count=count)
 
     def fit(
         self,

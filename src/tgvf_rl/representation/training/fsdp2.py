@@ -55,6 +55,17 @@ _EXPECTED_MIXED_PRECISION_POLICY_PARAMETERS = (
     "output_dtype",
     "cast_forward_inputs",
 )
+_EXPECTED_SET_REQUIRES_GRADIENT_SYNC_PARAMETERS = (
+    "self",
+    "requires_gradient_sync",
+    "recurse",
+)
+_EXPECTED_SET_RESHARD_AFTER_BACKWARD_PARAMETERS = (
+    "self",
+    "reshard_after_backward",
+    "recurse",
+)
+_EXPECTED_SET_IS_LAST_BACKWARD_PARAMETERS = ("self", "is_last_backward")
 _OWNED_ATTENTION_LEAF_NAMES = (
     "target_norm",
     "target_proj",
@@ -243,6 +254,76 @@ class RepresentationFSDP2Binding:
         }
         if borrowed_ids & set(actual_ids):
             raise ValueError("optimizer contains a borrowed Qwen merger parameter")
+
+    def begin_microstep(self, *, index: int, count: int) -> None:
+        """Configure FSDP2 for one exact gradient-accumulation microstep.
+
+        Non-final microsteps retain unsharded Adapter parameters and accumulate
+        unreduced gradients locally.  The final microstep performs the one
+        required reduce-scatter, matching DDP ``no_sync`` accumulation without
+        changing the global loss normalization.
+        """
+
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise TypeError("FSDP2 accumulation microstep index must be an integer")
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise TypeError("FSDP2 accumulation microstep count must be an integer")
+        if count <= 0 or index < 0 or index >= count:
+            raise ValueError("FSDP2 accumulation microstep lies outside its window")
+        final = index == count - 1
+        _set_fsdp2_accumulation_state(
+            self.adapter,
+            requires_gradient_sync=final,
+            reshard_after_backward=final,
+            is_last_backward=final,
+        )
+
+    def finish_window(self) -> None:
+        """Restore synchronized policy flags after an accumulation window.
+
+        This is not an abort primitive: a partially failed window may retain
+        private FSDP accumulation state, so the trainer is deliberately
+        fail-stop after any exception.
+        """
+
+        _set_fsdp2_accumulation_state(
+            self.adapter,
+            requires_gradient_sync=True,
+            reshard_after_backward=True,
+            is_last_backward=True,
+        )
+
+
+def _set_fsdp2_accumulation_state(
+    module: nn.Module,
+    *,
+    requires_gradient_sync: bool,
+    reshard_after_backward: bool,
+    is_last_backward: bool,
+) -> None:
+    """Apply the three composable-FSDP accumulation controls consistently."""
+
+    values = (
+        requires_gradient_sync,
+        reshard_after_backward,
+        is_last_backward,
+    )
+    if any(not isinstance(value, bool) for value in values):
+        raise TypeError("FSDP2 accumulation controls must be bool")
+    methods = tuple(
+        getattr(module, name, None)
+        for name in (
+            "set_requires_gradient_sync",
+            "set_reshard_after_backward",
+            "set_is_last_backward",
+        )
+    )
+    if any(not callable(method) for method in methods):
+        raise TypeError("bound Adapter does not expose composable-FSDP controls")
+    set_sync, set_reshard, set_last = methods
+    set_sync(requires_gradient_sync, recurse=True)
+    set_reshard(reshard_after_backward, recurse=True)
+    set_last(is_last_backward)
 
 
 @dataclass(frozen=True, slots=True)
@@ -607,6 +688,21 @@ def _load_fsdp2_api() -> _FSDP2API:
         OffloadPolicy,
         api_name="OffloadPolicy",
         expected_parameters=(),
+    )
+    _assert_public_signature(
+        FSDPModule.set_requires_gradient_sync,
+        api_name="FSDPModule.set_requires_gradient_sync",
+        expected_parameters=_EXPECTED_SET_REQUIRES_GRADIENT_SYNC_PARAMETERS,
+    )
+    _assert_public_signature(
+        FSDPModule.set_reshard_after_backward,
+        api_name="FSDPModule.set_reshard_after_backward",
+        expected_parameters=_EXPECTED_SET_RESHARD_AFTER_BACKWARD_PARAMETERS,
+    )
+    _assert_public_signature(
+        FSDPModule.set_is_last_backward,
+        api_name="FSDPModule.set_is_last_backward",
+        expected_parameters=_EXPECTED_SET_IS_LAST_BACKWARD_PARAMETERS,
     )
     for value, api_name, expected_module in (
         (FSDPModule, "FSDPModule", "torch.distributed.fsdp"),

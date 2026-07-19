@@ -249,6 +249,28 @@ class _GroupBuilder:
         )
 
 
+class _RecordingAccumulationController:
+    def __init__(self) -> None:
+        self.events: list[tuple[object, ...]] = []
+
+    def begin_microstep(self, *, index: int, count: int) -> None:
+        self.events.append(("begin", index, count))
+
+    def finish_window(self) -> None:
+        self.events.append(("finish",))
+
+
+class _FailOnSecondGroupBuilder(_GroupBuilder):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, *args, **kwargs) -> SameImageReadoutGroup:
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("injected second-microstep failure")
+        return super().__call__(*args, **kwargs)
+
+
 def _objective() -> RepresentationObjectiveConfig:
     return RepresentationObjectiveConfig(
         identity="trainer-test-objective",
@@ -307,6 +329,7 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
         seed=17,
         data_manifest_sha256=sha256(b"trainer-test-data").hexdigest(),
     )
+    accumulation_controller = _RecordingAccumulationController()
     trainer = RepresentationTrainer(
         adapter=adapter,
         qwen_model=qwen,
@@ -326,6 +349,7 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
             max_grad_norm=1.0,
             require_all_adapter_gradients=True,
         ),
+        accumulation_controller=accumulation_controller,
     )
 
     metrics = trainer.train_step()
@@ -359,6 +383,64 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
     )
     assert all(not parameter.requires_grad for parameter in qwen.parameters())
     assert all(parameter.grad is None for parameter in qwen.parameters())
+    assert accumulation_controller.events == [
+        ("begin", 0, 2),
+        ("begin", 1, 2),
+        ("finish",),
+    ]
+
+
+def test_partial_accumulation_failure_is_fail_stop() -> None:
+    samples = _samples()
+    adapter = _adapter()
+    qwen = _qwen()
+    optimizer = build_representation_optimizer(
+        adapter,
+        RepresentationOptimizerConfig(
+            learning_rate=1e-3,
+            betas=(0.9, 0.95),
+            eps=1e-8,
+            weight_decay=0.0,
+        ),
+    )
+    controller = _RecordingAccumulationController()
+    trainer = RepresentationTrainer(
+        adapter=adapter,
+        qwen_model=qwen,
+        family_adapter=Qwen3VLAdapter(),
+        samples=samples,
+        sampler=SameImageBatchSampler(
+            samples,
+            batch_size=2,
+            seed=17,
+            data_manifest_sha256=sha256(b"trainer-fail-stop-data").hexdigest(),
+        ),
+        group_builder=_FailOnSecondGroupBuilder(),
+        objective=_objective(),
+        accumulation=RepresentationAccumulationIdentity(
+            gradient_accumulation_steps=2,
+            data_parallel_world_size=1,
+        ),
+        optimizer=optimizer,
+        scheduler=None,
+        config=RepresentationTrainerConfig(
+            precision=RepresentationPrecision.FP32,
+            max_grad_norm=1.0,
+            require_all_adapter_gradients=True,
+        ),
+        accumulation_controller=controller,
+    )
+
+    with pytest.raises(RuntimeError, match="injected second-microstep failure"):
+        trainer.train_step()
+    assert trainer.global_step == 0
+    assert controller.events == [
+        ("begin", 0, 2),
+        ("begin", 1, 2),
+        ("finish",),
+    ]
+    with pytest.raises(RuntimeError, match="cannot be reused"):
+        trainer.train_step()
 
 
 @pytest.mark.parametrize(

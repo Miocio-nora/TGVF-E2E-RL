@@ -334,6 +334,7 @@ def _run_initialized(
         optimizer=optimizer,
         scheduler=scheduler,
         config=config.execution.trainer_config,
+        accumulation_controller=binding,
         initial_global_step=initial_global_step,
     )
 
