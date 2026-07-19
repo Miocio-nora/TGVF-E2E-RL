@@ -2684,6 +2684,98 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   execution as the comparison/default path and next remove hot-path
   CUDA-to-host validation synchronizations without changing the objective.
 
+### RP-21-QWEN3-REPRESENTATION-SYNCFUSED-REAL512-K4-GA4-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-21`; bounded hot-path
+  synchronization/runtime-invariant throughput A/B against RP-19.
+- Spike-plan git revision and approval references: accepted
+  `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION`; Norm finite/replay fusion
+  commit `281dc1b5ee12be925ea2edf8c04d4f771a82417a`; native conditioning/runtime
+  boundary commit `66da1cffc71c2aa86e3403ad9caa110aab403185`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: with RP-19's exact B8/GA4 and global batch 32 retained, how much do
+  fused Norm validation, bound CPU token authority, and per-group runtime
+  invariant checks reduce the `11.095230004`-second steady step and the
+  below-50%/zero-utilization intervals?
+- Baseline and exact output path: RP-19 steps 2/3 were `11.032586041` and
+  `11.157873967` seconds. RP-21 writes only under
+  `artifacts/representation/RP-21-qwen3-syncfused-real512-k4-ga4-throughput/`.
+- Model and processor identity: identical RP-19 stable local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer `151669`, exact native template,
+  no resize, local-only, and `image_max_pixels=262144`.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`; no
+  source/legacy artifact; three updates under the unchanged 2,000-step horizon.
+- N/A fields and justification: policy/reference, rollout/logprobs, reward,
+  GRPO, SDPO, judge, vLLM sampling, KV cache and replay are absent.
+- Policy/reference initialization: N/A; frozen original Qwen and fresh TGVF
+  Adapter only.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  representation update.
+- Code commit and worktree state: runtime commit
+  `66da1cffc71c2aa86e3403ad9caa110aab403185`; configuration source/canonical
+  SHA256 `c3bcc1639ac5ac6dc14630596411a6a0d39772632d6c398a939fcc414693ccd6`/
+  `7125f18d096fdccdc7b21ec0a47e8bf3ebc0e2bdf0722737602efabea47b8278`;
+  clean committed launch required.
+- Repository adapter/patch surface and hash: processor/layout reuse and fused
+  trainer host reads remain from RP-19. RP-21 additionally fuses all
+  streaming Norm finite checks and live/stored comparisons, binds the
+  processor-derived CPU token tuple to the exact input tensor identity/version,
+  and validates frozen runtime invariants at each group entry/exit rather than
+  every internal runtime call. Public checked fallbacks remain fail-closed.
+- Dataset/manifest, hashes, sample rule, and n: identical RP-19 eight-row/two-
+  group matched real-resolution fixture, source SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`;
+  deterministic same-image K4 cycling, validation identity, overlap policy,
+  and sampler seeds 71/73 are unchanged.
+- Native prompt/tool schema hash: unchanged smoke prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`
+  and native `tgvf_focus_tool`.
+- Chat-template/token-fixture hash and token-ownership masks: unchanged exact
+  template SHA256 `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  evidence-only labels, and no tokenizer growth.
+- D/DeepStack/position/mask identity: unchanged main D, ordered `(8,16,24)`
+  branches, M-RoPE, and post-D source-key blocking.
+- Observation materialization/artifact identity used by all replays: no replay;
+  every K4 column remains one indivisible main-D/all-DeepStack observation.
+- RL framework/version/environment lock: unchanged accepted Python 3.12 /
+  Torch 2.9 control lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: unchanged legacy summed-NLL Matrix CE,
+  L_gen and Norm, weights `1/1/.1`, manifold zero; full-step global row/sample
+  denominators are unchanged.
+- Rollout/replay forward mode and adapter dropout/RNG contract: identical
+  deterministic RP-19 state, frozen Qwen eval, Adapter dropout zero, no cache,
+  TF32 off, CUBLAS `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: sampling/logprobs N/A; same-image
+  sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/FP32 reduction, SDPA, no
+  quantization/KV/TP/offload, FSDP2 `[2]`, reshard false.
+- Logit/logprob/loss/gradient parity tolerances: global row/sample counts must
+  remain 32; each rank must execute eight B8 Qwen calls and 64 cells per update;
+  tokenizer length, sample order, objective values, and gradient norms must
+  match RP-19 exactly. CPU gates passed 80 focused tests plus Ruff.
+- World size, microbatch, accumulation, and global batch: world 2, K4, GA4,
+  one group/four rows per rank per accumulation window, global batch 32.
+- GPUs: only user-authorized physical 0 and 3 mapped to logical 0/1; both must
+  be idle at immediate preflight.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`.
+- Actual GPU-hours and peak scratch use: `PENDING`; hard limit one aggregate
+  GPU-hour, plus one diagnostic 100 ms `nvidia-smi` trace.
+- Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/smoke/representation_qwen3_embedding_rp21_syncfused_real512_ga4_throughput.toml`;
+  a read-only 100 ms utilization sampler observes physical 0/3.
+- Outputs: `PENDING`; overwrite forbidden under the exact RP-21 root.
+- Scorer/parser identity: no answer scorer; strict native representation runner.
+- Metrics: `PENDING`; compare exact steps 2/3, peak allocation, and utilization
+  distributions/longest below-50% runs directly with RP-19.
+- Conclusion: `PENDING`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
