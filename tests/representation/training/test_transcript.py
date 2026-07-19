@@ -11,6 +11,7 @@ from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.transcript import (
     _build_visual_token_expansion,
+    _render_native_evidence_labels_batch,
     render_native_evidence_labels,
 )
 from tgvf_rl.protocol.native import NativeProtocolRenderer
@@ -228,6 +229,45 @@ def test_only_final_post_tool_evidence_tokens_receive_canonical_labels() -> None
     final_start, final_end = offsets[supervision.evidence_token_positions[-1]]
     assert supervision.transcript.text[final_start:final_end] == ".\n"
     assert final_start < supervision.evidence_char_end < final_end
+
+
+def test_batched_evidence_render_preserves_scalar_order_labels_and_hashes() -> None:
+    tokenizer = _OffsetTokenizer()
+    renderer = NativeProtocolRenderer(
+        _Processor(tokenizer), expected_tokenizer_length=4096
+    )
+    evidence_descriptions = (
+        "The sign reads OPEN.",
+        "The second sign reads CLOSED.",
+    )
+    messages_batch = tuple(
+        _messages(evidence=evidence) for evidence in evidence_descriptions
+    )
+    scalar = tuple(
+        render_native_evidence_labels(
+            renderer,
+            messages,
+            evidence_description=evidence,
+        )
+        for messages, evidence in zip(
+            messages_batch, evidence_descriptions, strict=True
+        )
+    )
+
+    batched = _render_native_evidence_labels_batch(
+        renderer,
+        messages_batch,
+        evidence_descriptions=evidence_descriptions,
+    )
+
+    assert batched == scalar
+    assert tuple(item.evidence_text for item in batched) == evidence_descriptions
+    assert tuple(item.transcript.text_sha256 for item in batched) == tuple(
+        item.transcript.text_sha256 for item in scalar
+    )
+    assert tuple(item.transcript.token_ids_sha256 for item in batched) == tuple(
+        item.transcript.token_ids_sha256 for item in scalar
+    )
 
 
 def test_visual_expansion_maps_canonical_labels_to_model_positions() -> None:

@@ -17,6 +17,7 @@ from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayHandle,
 )
+from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +181,7 @@ class QwenVLMFamilyAdapter(ABC):
         )
 
     def assert_tokenizer_invariant(self, tokenizer: Any, expected_length: int) -> None:
-        actual = len(tokenizer)
+        actual = effective_tokenizer_length(tokenizer)
         if actual != expected_length:
             raise ValueError(
                 f"tokenizer length changed: expected={expected_length} actual={actual}"
@@ -202,7 +203,7 @@ def assert_model_vocabulary_compatible(
     those unchanged rows.
     """
 
-    actual_length = len(tokenizer)
+    actual_length = effective_tokenizer_length(tokenizer)
     if actual_length != expected_tokenizer_length:
         raise ValueError(
             "tokenizer length changed: "

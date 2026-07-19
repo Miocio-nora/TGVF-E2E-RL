@@ -294,6 +294,81 @@ def render_native_evidence_labels(
 
     if not isinstance(renderer, NativeProtocolRenderer):
         raise TypeError("renderer must be a NativeProtocolRenderer")
+    _validate_native_evidence_request(messages, evidence_description)
+
+    history = messages[:-1]
+    generation_prefill = renderer.render(history, add_generation_prompt=True)
+    renderer.assert_generation_prefill(generation_prefill, renderer.tokenizer)
+    transcript = renderer.render(messages, add_generation_prompt=False)
+    return _native_evidence_supervision_from_rendered(
+        renderer,
+        evidence_description=evidence_description,
+        generation_prefill=generation_prefill,
+        transcript=transcript,
+    )
+
+
+def _render_native_evidence_labels_batch(
+    renderer: NativeProtocolRenderer,
+    messages_batch: Sequence[Sequence[Mapping[str, Any]]],
+    *,
+    evidence_descriptions: Sequence[str],
+) -> tuple[CanonicalEvidenceSupervision, ...]:
+    """Render one same-image group's evidence transcripts in two batch calls."""
+
+    if not isinstance(renderer, NativeProtocolRenderer):
+        raise TypeError("renderer must be a NativeProtocolRenderer")
+    if not isinstance(messages_batch, Sequence) or isinstance(
+        messages_batch, (str, bytes)
+    ):
+        raise TypeError("messages_batch must be a sequence of message sequences")
+    if not isinstance(evidence_descriptions, Sequence) or isinstance(
+        evidence_descriptions, (str, bytes)
+    ):
+        raise TypeError("evidence_descriptions must be a sequence of strings")
+    if not messages_batch:
+        raise ValueError("native evidence batch cannot be empty")
+    if len(messages_batch) != len(evidence_descriptions):
+        raise ValueError("native evidence messages and descriptions must align")
+    for messages, evidence_description in zip(
+        messages_batch, evidence_descriptions, strict=True
+    ):
+        _validate_native_evidence_request(messages, evidence_description)
+
+    generation_prefills = renderer.render_many(
+        tuple(messages[:-1] for messages in messages_batch),
+        add_generation_prompt=True,
+    )
+    if len(generation_prefills) != len(messages_batch):
+        raise RuntimeError("native evidence prefill batch changed cardinality")
+    for generation_prefill in generation_prefills:
+        renderer.assert_generation_prefill(generation_prefill, renderer.tokenizer)
+    transcripts = renderer.render_many(
+        messages_batch,
+        add_generation_prompt=False,
+    )
+    if len(transcripts) != len(messages_batch):
+        raise RuntimeError("native evidence transcript batch changed cardinality")
+    return tuple(
+        _native_evidence_supervision_from_rendered(
+            renderer,
+            evidence_description=evidence_description,
+            generation_prefill=generation_prefill,
+            transcript=transcript,
+        )
+        for evidence_description, generation_prefill, transcript in zip(
+            evidence_descriptions,
+            generation_prefills,
+            transcripts,
+            strict=True,
+        )
+    )
+
+
+def _validate_native_evidence_request(
+    messages: Sequence[Mapping[str, Any]],
+    evidence_description: str,
+) -> None:
     if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
         raise TypeError("messages must be a sequence of mappings")
     if not isinstance(evidence_description, str) or not evidence_description.strip():
@@ -304,10 +379,14 @@ def render_native_evidence_labels(
         raise ValueError("evidence_description cannot contain native control tags")
     _validate_post_tool_evidence_messages(messages, evidence_description)
 
-    history = messages[:-1]
-    generation_prefill = renderer.render(history, add_generation_prompt=True)
-    renderer.assert_generation_prefill(generation_prefill, renderer.tokenizer)
-    transcript = renderer.render(messages, add_generation_prompt=False)
+
+def _native_evidence_supervision_from_rendered(
+    renderer: NativeProtocolRenderer,
+    *,
+    evidence_description: str,
+    generation_prefill: RenderedTranscript,
+    transcript: RenderedTranscript,
+) -> CanonicalEvidenceSupervision:
     expected_text = (
         generation_prefill.text
         + evidence_description

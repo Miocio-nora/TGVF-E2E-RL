@@ -72,8 +72,11 @@ def test_qwen3_local_native_transcript_golden_digests() -> None:
         processor, expected_tokenizer_length=fixture["tokenizer_length"]
     )
     assert renderer.chat_template_sha256 == fixture["chat_template_sha256"]
-    for name, (messages, add_generation_prompt) in _messages().items():
+    cases = _messages()
+    scalar_results = {}
+    for name, (messages, add_generation_prompt) in cases.items():
         result = renderer.render(messages, add_generation_prompt=add_generation_prompt)
+        scalar_results[name] = result
         expected = fixture["cases"][name]
         assert len(result.token_ids) == expected["length"]
         assert result.token_ids_sha256 == expected["token_ids_sha256"]
@@ -81,3 +84,15 @@ def test_qwen3_local_native_transcript_golden_digests() -> None:
         assert result.tokenizer_length == fixture["tokenizer_length"]
         if name == "prompt":
             renderer.assert_generation_prefill(result, processor.tokenizer)
+
+    for add_generation_prompt in (False, True):
+        names = [
+            name
+            for name, (_, case_generation_prompt) in cases.items()
+            if case_generation_prompt is add_generation_prompt
+        ]
+        batch_results = renderer.render_many(
+            [cases[name][0] for name in names],
+            add_generation_prompt=add_generation_prompt,
+        )
+        assert batch_results == tuple(scalar_results[name] for name in names)

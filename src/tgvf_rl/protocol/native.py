@@ -7,6 +7,8 @@ import struct
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
+
 from .schema import TGVF_FOCUS_TOOL_SCHEMA_SHA256, build_tgvf_focus_tool_schema
 
 
@@ -30,9 +32,11 @@ class NativeProtocolRenderer:
             raise TypeError("processor must expose apply_chat_template")
         if not hasattr(tokenizer, "encode"):
             raise TypeError("processor tokenizer must expose encode")
-        if len(tokenizer) != expected_tokenizer_length:
+        actual_tokenizer_length = effective_tokenizer_length(tokenizer)
+        if actual_tokenizer_length != expected_tokenizer_length:
             raise ValueError(
-                f"tokenizer length mismatch: expected={expected_tokenizer_length} actual={len(tokenizer)}"
+                "tokenizer length mismatch: "
+                f"expected={expected_tokenizer_length} actual={actual_tokenizer_length}"
             )
         template = getattr(processor, "chat_template", None) or getattr(
             tokenizer, "chat_template", None
@@ -65,6 +69,145 @@ class NativeProtocolRenderer:
         token_ids = tuple(self.tokenizer.encode(text, add_special_tokens=False))
         self.assert_tokenizer_length()
         self.assert_chat_template_identity()
+        return self._build_rendered_transcript(text, token_ids)
+
+    def render_many(
+        self,
+        messages_batch: Sequence[Sequence[Mapping[str, Any]]],
+        *,
+        add_generation_prompt: bool,
+    ) -> tuple[RenderedTranscript, ...]:
+        """Render independent conversations with exact scalar-render semantics.
+
+        Processors and tokenizers with native batch support are invoked once per
+        batch.  Implementations that reject or return a non-batch-shaped result
+        fall back to their scalar APIs without changing transcript bytes.
+        """
+
+        conversations = tuple(tuple(messages) for messages in messages_batch)
+        if not conversations:
+            self.assert_tokenizer_length()
+            self.assert_chat_template_identity()
+            return ()
+
+        self.assert_tokenizer_length()
+        self.assert_chat_template_identity()
+        texts = self._render_texts_many(
+            conversations,
+            add_generation_prompt=add_generation_prompt,
+        )
+        self.assert_tokenizer_length()
+        self.assert_chat_template_identity()
+        token_ids_batch = self._encode_texts_many(texts)
+        self.assert_tokenizer_length()
+        self.assert_chat_template_identity()
+        return tuple(
+            self._build_rendered_transcript(text, token_ids)
+            for text, token_ids in zip(texts, token_ids_batch, strict=True)
+        )
+
+    def _render_texts_many(
+        self,
+        conversations: tuple[tuple[Mapping[str, Any], ...], ...],
+        *,
+        add_generation_prompt: bool,
+    ) -> tuple[str, ...]:
+        try:
+            batch_result = self.processor.apply_chat_template(
+                [list(messages) for messages in conversations],
+                tools=[build_tgvf_focus_tool_schema()],
+                tokenize=False,
+                add_generation_prompt=add_generation_prompt,
+            )
+        except Exception:
+            self.assert_tokenizer_length()
+            self.assert_chat_template_identity()
+        else:
+            self.assert_tokenizer_length()
+            self.assert_chat_template_identity()
+            texts = self._coerce_text_batch(batch_result, len(conversations))
+            if texts is not None:
+                return texts
+
+        texts = []
+        for messages in conversations:
+            text = self.processor.apply_chat_template(
+                list(messages),
+                tools=[build_tgvf_focus_tool_schema()],
+                tokenize=False,
+                add_generation_prompt=add_generation_prompt,
+            )
+            self.assert_tokenizer_length()
+            self.assert_chat_template_identity()
+            if not isinstance(text, str):
+                raise TypeError("chat template did not return text")
+            texts.append(text)
+        return tuple(texts)
+
+    def _encode_texts_many(self, texts: tuple[str, ...]) -> tuple[tuple[int, ...], ...]:
+        try:
+            batch_result = self.tokenizer(
+                list(texts),
+                add_special_tokens=False,
+            )
+        except Exception:
+            self.assert_tokenizer_length()
+            self.assert_chat_template_identity()
+        else:
+            self.assert_tokenizer_length()
+            self.assert_chat_template_identity()
+            token_ids_batch = self._coerce_token_id_batch(batch_result, len(texts))
+            if token_ids_batch is not None:
+                return token_ids_batch
+
+        token_ids_batch = []
+        for text in texts:
+            token_ids = tuple(self.tokenizer.encode(text, add_special_tokens=False))
+            self.assert_tokenizer_length()
+            self.assert_chat_template_identity()
+            token_ids_batch.append(token_ids)
+        return tuple(token_ids_batch)
+
+    @staticmethod
+    def _coerce_text_batch(value: Any, expected_size: int) -> tuple[str, ...] | None:
+        if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+            return None
+        texts = tuple(value)
+        if len(texts) != expected_size or not all(
+            isinstance(text, str) for text in texts
+        ):
+            return None
+        return texts
+
+    @staticmethod
+    def _coerce_token_id_batch(
+        value: Any, expected_size: int
+    ) -> tuple[tuple[int, ...], ...] | None:
+        if isinstance(value, Mapping):
+            value = value.get("input_ids")
+        else:
+            value = getattr(value, "input_ids", None)
+        if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+            return None
+        rows = tuple(value)
+        if len(rows) != expected_size:
+            return None
+        token_ids_batch: list[tuple[int, ...]] = []
+        for row in rows:
+            if isinstance(row, (str, bytes)) or not isinstance(row, Sequence):
+                return None
+            token_ids = tuple(row)
+            try:
+                for token_id in token_ids:
+                    struct.pack("<I", token_id)
+            except (struct.error, TypeError):
+                return None
+            token_ids_batch.append(token_ids)
+        return tuple(token_ids_batch)
+
+    def _build_rendered_transcript(
+        self, text: str, token_ids: tuple[int, ...]
+    ) -> RenderedTranscript:
         raw_ids = b"".join(struct.pack("<I", token_id) for token_id in token_ids)
         return RenderedTranscript(
             text=text,
@@ -73,13 +216,13 @@ class NativeProtocolRenderer:
             text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             chat_template_sha256=self.chat_template_sha256,
             tool_schema_sha256=TGVF_FOCUS_TOOL_SCHEMA_SHA256,
-            tokenizer_length=len(self.tokenizer),
+            tokenizer_length=effective_tokenizer_length(self.tokenizer),
         )
 
     def assert_tokenizer_length(self) -> None:
         """Fail if any processor/tokenizer operation changed vocabulary size."""
 
-        actual = len(self.tokenizer)
+        actual = effective_tokenizer_length(self.tokenizer)
         if actual != self.expected_tokenizer_length:
             raise ValueError(
                 "tokenizer length changed after renderer construction: "

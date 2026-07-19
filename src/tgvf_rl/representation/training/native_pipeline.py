@@ -64,9 +64,10 @@ from .runtime import (
 )
 from .schema import RepresentationTrainingSample
 from .transcript import (
+    CanonicalEvidenceSupervision,
     CanonicalToModelTokenExpansion,
     _build_visual_token_expansion,
-    render_native_evidence_labels,
+    _render_native_evidence_labels_batch,
 )
 
 
@@ -290,6 +291,64 @@ def render_native_action_target(
     prefill = runtime.renderer.render(messages[:1], add_generation_prompt=True)
     runtime.renderer.assert_generation_prefill(prefill, runtime.tokenizer)
     transcript = runtime.renderer.render(messages[:2], add_generation_prompt=False)
+    return _native_action_target_from_rendered(
+        runtime,
+        messages=messages,
+        prefill=prefill,
+        transcript=transcript,
+    )
+
+
+def _render_native_action_targets_batch(
+    runtime: Qwen3RepresentationRuntime,
+    messages_batch: Sequence[Sequence[Mapping[str, Any]]],
+) -> tuple[NativeActionTarget, ...]:
+    """Render one same-image group's action transcripts in two batch calls."""
+
+    if not isinstance(runtime, Qwen3RepresentationRuntime):
+        raise TypeError("runtime must be Qwen3RepresentationRuntime")
+    if not isinstance(messages_batch, Sequence) or isinstance(
+        messages_batch, (str, bytes)
+    ):
+        raise TypeError("messages_batch must be a sequence of message sequences")
+    if not messages_batch:
+        raise ValueError("native action batch cannot be empty")
+    if any(len(messages) != 4 for messages in messages_batch):
+        raise ValueError("native representation action requires four-turn messages")
+    prefills = runtime.renderer.render_many(
+        tuple(messages[:1] for messages in messages_batch),
+        add_generation_prompt=True,
+    )
+    if len(prefills) != len(messages_batch):
+        raise RuntimeError("native action prefill batch changed cardinality")
+    for prefill in prefills:
+        runtime.renderer.assert_generation_prefill(prefill, runtime.tokenizer)
+    transcripts = runtime.renderer.render_many(
+        tuple(messages[:2] for messages in messages_batch),
+        add_generation_prompt=False,
+    )
+    if len(transcripts) != len(messages_batch):
+        raise RuntimeError("native action transcript batch changed cardinality")
+    return tuple(
+        _native_action_target_from_rendered(
+            runtime,
+            messages=messages,
+            prefill=prefill,
+            transcript=transcript,
+        )
+        for messages, prefill, transcript in zip(
+            messages_batch, prefills, transcripts, strict=True
+        )
+    )
+
+
+def _native_action_target_from_rendered(
+    runtime: Qwen3RepresentationRuntime,
+    *,
+    messages: Sequence[Mapping[str, Any]],
+    prefill: RenderedTranscript,
+    transcript: RenderedTranscript,
+) -> NativeActionTarget:
     if not transcript.text.startswith(prefill.text) or not transcript.text.endswith(
         _ACTION_TEMPLATE_SUFFIX
     ):
@@ -425,9 +484,16 @@ class Qwen3NativeRepresentationGroupBuilder:
             build_native_representation_messages(sample, self.prompt)
             for sample in samples
         )
-        action_by_sample = tuple(
-            render_native_action_target(self.runtime, messages)
-            for messages in messages_by_sample
+        action_by_sample = _render_native_action_targets_batch(
+            self.runtime,
+            messages_by_sample,
+        )
+        evidence_by_sample = _render_native_evidence_labels_batch(
+            self.runtime.renderer,
+            messages_by_sample,
+            evidence_descriptions=tuple(
+                sample.evidence_description for sample in samples
+            ),
         )
         first_action, first_expansion = self._materialize_action_with_expansion(
             action_by_sample[0], image
@@ -463,8 +529,8 @@ class Qwen3NativeRepresentationGroupBuilder:
         rows: list[RepresentationReadoutRow] = []
         candidates: list[RepresentationCandidateObservation] = []
         padding_input: TGVFAdapterInput | None = None
-        for sample, messages, model_action in zip(
-            samples, messages_by_sample, model_actions, strict=True
+        for sample, canonical_evidence, model_action in zip(
+            samples, evidence_by_sample, model_actions, strict=True
         ):
             condition = self._condition(sample, model_action)
             adapter_input = self.runtime.make_adapter_input(condition, vision)
@@ -490,7 +556,7 @@ class Qwen3NativeRepresentationGroupBuilder:
             rows.append(
                 self._readout_row(
                     sample=sample,
-                    messages=messages,
+                    canonical=canonical_evidence,
                     vision=vision,
                     source_identity=source_identity,
                 )
@@ -628,15 +694,10 @@ class Qwen3NativeRepresentationGroupBuilder:
         self,
         *,
         sample: RepresentationTrainingSample,
-        messages: Sequence[Mapping[str, Any]],
+        canonical: CanonicalEvidenceSupervision,
         vision: Qwen3VisionFeatures,
         source_identity: str,
     ) -> RepresentationReadoutRow:
-        canonical = render_native_evidence_labels(
-            self.runtime.renderer,
-            messages,
-            evidence_description=sample.evidence_description,
-        )
         expected_tokens = int(vision.merged_main.shape[-2])
         model_token_ids, _expansion = _expand_native_visual_placeholders(
             self.runtime,

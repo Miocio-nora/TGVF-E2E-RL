@@ -28,6 +28,7 @@ from tgvf_rl.representation.training.native_pipeline import (
     _bind_all_ones_attention_mask,
     _expand_native_visual_placeholders,
     _processor_batch,
+    _render_native_action_targets_batch,
     _single_visual_expansion_count,
     _validate_single_input,
     build_native_representation_messages,
@@ -550,6 +551,35 @@ def test_native_action_target_uses_strict_raw_tool_span(tmp_path: Path) -> None:
             target.canonical_target_span.start : target.canonical_target_span.end
         ]
         == target.canonical_target_token_ids
+    )
+
+
+def test_batched_action_render_preserves_scalar_order_spans_and_hashes(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    samples = (_sample(tmp_path / "unused.png", 0), _sample(tmp_path / "unused.png", 1))
+    messages_batch = tuple(
+        build_native_representation_messages(sample, _prompt()) for sample in samples
+    )
+    scalar = tuple(
+        render_native_action_target(runtime, messages) for messages in messages_batch
+    )
+
+    batched = _render_native_action_targets_batch(runtime, messages_batch)
+
+    assert batched == scalar
+    assert tuple(item.target_text for item in batched) == tuple(
+        sample.target for sample in samples
+    )
+    assert tuple(item.canonical_target_span for item in batched) == tuple(
+        item.canonical_target_span for item in scalar
+    )
+    assert tuple(item.transcript.text_sha256 for item in batched) == tuple(
+        item.transcript.text_sha256 for item in scalar
+    )
+    assert tuple(item.transcript.token_ids_sha256 for item in batched) == tuple(
+        item.transcript.token_ids_sha256 for item in scalar
     )
 
 
