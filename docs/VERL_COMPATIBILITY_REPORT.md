@@ -47,6 +47,24 @@ dependency lock. The vLLM path is deliberately constrained to
 language attention, disabled prefix caching, zero multimodal processor cache,
 and zero policy-adapter dropout.
 
+## Torch 2.11 candidate re-spike
+
+The later isolated Torch `2.11.0+cu129` / vLLM `0.23.0+cu129` candidate was
+rejected on 2026-07-20 and does not supersede the table above. Its two-rank
+FSDP2 strict checkpoint/resume cell passed, and the combined upstream-veRL
+cell initialized the real Qwen FSDP2 actor and vLLM TP2 server. The first
+decoder request then entered vLLM's bundled FlashAttention 2 operator and
+failed with `cudaErrorUnsupportedPtxVersion` on the host's NVIDIA
+`570.195.03` driver. vLLM accepted `TORCH_SDPA` for the multimodal encoder but
+treated `VLLM_ATTENTION_BACKEND` as an unknown environment key, so it did not
+select the planned decoder Triton backend. Under the accepted hard-gate rule,
+the remaining candidate Qwen latent, patch-projection, and representation
+throughput cells were cancelled rather than extending the patch ladder.
+
+FlashAttention 2 and FlashAttention 4 are not production dependencies. Either
+requires a separate compatibility decision covering the exact driver/CUDA
+binary, vLLM, upstream veRL, FSDP2, Qwen3, and exact rollout/replay path.
+
 ## Evidence summary
 
 ### CPU contracts

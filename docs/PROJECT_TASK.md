@@ -850,6 +850,19 @@ GPU cells remain limited to physical devices 2 and 3 and require complete
 compatibility candidate only; changing the production/default lock is a
 separate recorded decision. Failure leaves the I8H environment authoritative.
 
+The candidate failed the mandatory combined veRL FSDP2-to-vLLM gate on
+2026-07-20. FSDP2 checkpoint/resume passed and the real Qwen actor initialized,
+but vLLM `0.23.0+cu129` selected its bundled decoder FlashAttention 2 kernel;
+that kernel's PTX was rejected by the host's NVIDIA `570.195.03` driver
+(`cudaErrorUnsupportedPtxVersion`). Selecting `TORCH_SDPA` for the multimodal
+encoder did not change the decoder path, and this vLLM release treated the old
+`VLLM_ATTENTION_BACKEND` environment key as unknown. Therefore this exact
+candidate is rejected, the remaining candidate GPU cells are not run, and the
+I8H Torch 2.9 environment remains authoritative. FlashAttention 2 and
+FlashAttention 4 are explicitly deferred: neither may enter the production
+dependency set until a separately approved compatibility spike proves the
+chosen driver, CUDA build, vLLM, veRL, FSDP2, Qwen3, and replay path together.
+
 ## 10. Migration boundary
 
 ### Allowed exact extraction

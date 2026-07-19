@@ -1849,22 +1849,24 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: runtime commit
   `3fc90e9de54d91903f86d7a2b1eea95dfce5cf63`; `PROJECT_TASK.md` §9.2 and
   I8H-20260719.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: unchanged combined FSDP2→vLLM gate with both actor attention and
   vLLM visual-encoder profiling fixed to public Torch SDPA paths.
 - Baseline and exact output path: failed R3; six outputs use prefix
   `artifacts/compatibility/SC-21-T211-R4-verl-vllm-weight-sync`.
-- Model and processor identity: unchanged Qwen3; actor SDPA, vLLM decoder
-  Triton attention and vLLM multimodal encoder `TORCH_SDPA`.
+- Model and processor identity: unchanged Qwen3; actor SDPA and vLLM
+  multimodal encoder `TORCH_SDPA`; decoder Triton was requested but the runtime
+  auto-selected bundled FlashAttention 2.
 - Representation checkpoint identity: N/A; TGVF plugin remains disabled.
 - N/A fields and justification: unchanged R3 exclusions.
 - Policy/reference initialization: original Qwen3 actor, no reference; dummy
   rollout load then exact actor-weight sync.
 - Rollout policy version and allowed asynchronous staleness: `[0,1]`, sync,
   staleness zero.
-- Code commit and worktree state: runtime commit above; clean planned-launch
-  descendant required.
+- Code commit and worktree state: clean launch commit
+  `ab8e43576f2e2e79fd5cdaa76a0a712f5977ca87`; the runtime correction remains
+  commit `3fc90e9de54d91903f86d7a2b1eea95dfce5cf63`.
 - Repository adapter/patch surface and hash: driver
   `c56978dee7ab41a79adddece25bc2358d243efee912c4488e95591075c21ce5e`;
   other code/lock/header hashes unchanged from R3; no external patch.
@@ -1889,20 +1891,46 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   contract.
 - Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
   parallelism, and training device mesh: BF16, no quantization; actor and
-  multimodal encoder Torch SDPA, vLLM decoder Triton; TP2/FSDP2 size 2, naive
-  no-sleep sync.
+  multimodal encoder Torch SDPA, actual vLLM decoder bundled FA2 despite the
+  requested Triton environment key; TP2/FSDP2 size 2, naive no-sleep sync.
 - Logit/logprob/loss/gradient parity tolerances: unchanged explicit R3 gates.
 - World size, microbatch, accumulation, and global batch: unchanged R3 two-GPU
   batch-2/two-update geometry.
 - GPUs: physical 2/3 only, exact UUIDs above; immediate free preflight.
-- Start/end timestamps, elapsed time, and session/process identity: pending.
-- Actual GPU-hours and peak scratch use: pending; 1800-second timeout.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T03:48:52+09:00` / `2026-07-20T03:54:51+09:00`, 359 seconds;
+  TaskRunner PID 1689171, TransferQueue controller/storage PIDs 1689930/1690079,
+  FSDP workers 1690465/1690466, vLLM server/core PIDs 1699390/1699910, TP workers
+  1700141/1700142, and agent-loop PID 1701506.
+- Actual GPU-hours and peak scratch use: less than `0.200` two-device GPU-hours
+  by wall-time upper bound; the six output artifacts total 328,342 bytes, no
+  checkpoint was produced, and no trustworthy peak-memory sample was recorded.
 - Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R4-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R4-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
-- Outputs: six explicit-run-ID artifacts; overwrite forbidden.
+- Outputs: all six explicit-run-ID artifacts materialized. SHA256 values:
+  result `abb82637f084b0491d315332749c0aa35d73c193a1742006e6f443518f214ea1`,
+  log `5e10c57bd4522c8e020f338586d4c0ec93c58d270361140f32d6cca14c0024d4`,
+  plan `4769b3ee74e8b28dc3fd2a6d358dd67a79ce571da1356266b6a236bf4825a14c`,
+  resolved config
+  `5b7c78f9da58e773e49db2867c5cc622eb3ea4d2f7f4c43bd13fbe91fe89230a`,
+  parquet fixture
+  `fcdde66a98ed8119d58ec7e837001483745893a9ab81b445e57cf4d2b1cb573c`,
+  and empty metrics JSONL
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 - Scorer/parser identity: exact driver/manager/objective/reward hashes above.
-- Metrics: pending combined two-update generation/sync/replay assertions.
-- Conclusion: pending. Any new framework-level blocker rejects this candidate;
-  no further compatibility patch ladder is authorized in this spike.
+- Metrics: the actor FSDP2 workers loaded the 8.77B model, the reward manager
+  initialized, the vLLM TP2 server reached the first generation request, and
+  the explicit multimodal `TORCH_SDPA` path avoided the earlier visual-kernel
+  failure. vLLM `0.23.0+cu129` warned that `VLLM_ATTENTION_BACKEND` is unknown,
+  selected `vllm/v1/attention/backends/flash_attn.py` for decoder attention,
+  and its bundled `_vllm_fa2_C.varlen_fwd` raised
+  `cudaErrorUnsupportedPtxVersion` on driver `570.195.03` (reported CUDA 12.8).
+  No rollout item, weight update, behavior logprob, or replay metric was
+  produced; the later zero-item partition assertion is downstream fallout.
+- Conclusion: `FAIL` under the mandatory combined gate. The exact Torch
+  `2.11.0+cu129` / vLLM `0.23.0+cu129` candidate is rejected on this host. No
+  R5 or further attention-backend patch ladder is authorized; FlashAttention 2
+  and FlashAttention 4 remain outside the production dependency set pending a
+  separately approved compatibility spike.
 
 ### SC-20-T211-QWEN3-VLLM-LATENT
 
@@ -1912,8 +1940,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: runtime
   `a01c4b8caadef4c5d4afe72ec2a6477983a338eb`; `PROJECT_TASK.md` §9.2 and
   I8H-20260719.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `CANCELLED`.
+- Result: `BLOCKED_NOT_RUN`.
 - Question: does vLLM `0.23.0+cu129` load the public repo plugin and generate
   from the exact native two-call transcript with source plus two main-D/three-
   branch DeepStack items, without tokenizer growth?
@@ -1974,14 +2002,16 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   request/completion, no accumulation.
 - GPUs: same physical UUIDs/mapping/preflight as
   `SC-30-T211-FSDP2-INFRA-20260720`; no other GPU visible.
-- Start/end timestamps, elapsed time, and session/process identity: pending.
-- Actual GPU-hours and peak scratch use: pending; 1800-second timeout.
+- Start/end timestamps, elapsed time, and session/process identity: not
+  launched; no process identity.
+- Actual GPU-hours and peak scratch use: zero; no outputs materialized.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed VLLM_ATTENTION_BACKEND=TRITON_ATTN VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn CC=/usr/bin/gcc CXX=/usr/bin/g++ CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 1800s .venv-torch211-cu129/bin/python spikes/verl_compat/qwen3_vllm_latent_smoke.py --run-id SC-20-T211-QWEN3-VLLM-LATENT --stack torch211-cu129 --output artifacts/compatibility/SC-20-T211-qwen3-vllm-latent.json > artifacts/compatibility/SC-20-T211-qwen3-vllm-latent.log 2>&1`.
 - Outputs: new result/log paths above; overwrite forbidden.
 - Scorer/parser identity: driver, public plugin and native renderer at runtime
   commit and hashes above.
-- Metrics: pending native transcript, latent, token and processed-logprob checks.
-- Conclusion: pending; not a trained Adapter or replay-parity claim.
+- Metrics: not collected.
+- Conclusion: `BLOCKED_NOT_RUN`; the prerequisite combined veRL/FSDP2/vLLM
+  R4 gate rejected this exact candidate before this cell was launched.
 
 ### RP-15P-T211-QWEN3-PATCH-EMBED
 
@@ -1991,8 +2021,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: runtime
   `a01c4b8caadef4c5d4afe72ec2a6477983a338eb`; `PROJECT_TASK.md` §9.2 and
   I8H-20260719.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `CANCELLED`.
+- Result: `BLOCKED_NOT_RUN`.
 - Question: is the mathematically equivalent Linear projection numerically
   compatible with native Conv3D in FP32/BF16, and what is its bounded speedup
   on a fixed 512-by-512-equivalent patch tensor?
@@ -2042,15 +2072,16 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - GPUs: only physical 3
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, B200 183359 MiB, driver
   `570.195.03`; preflight found 0 MiB used.
-- Start/end timestamps, elapsed time, and session/process identity: pending.
-- Actual GPU-hours and peak scratch use: pending; exactly 56 projection calls
-  across both dtypes plus tensor load, bounded by 600 seconds.
+- Start/end timestamps, elapsed time, and session/process identity: not
+  launched; no process identity.
+- Actual GPU-hours and peak scratch use: zero; no outputs materialized.
 - Command: `CUDA_VISIBLE_DEVICES=3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 timeout 600s .venv-torch211-cu129/bin/python spikes/verl_compat/qwen3_patch_embed_probe.py --run-id RP-15P-T211-QWEN3-PATCH-EMBED --runtime candidate --physical-gpu 3 --output artifacts/compatibility/RP-15P-T211-qwen3-patch-embed.json > artifacts/compatibility/RP-15P-T211-qwen3-patch-embed.log 2>&1`.
 - Outputs: new explicit-run-ID JSON and log above; overwrite forbidden.
 - Scorer/parser identity: exact probe hash above.
-- Metrics: pending max error and synchronized latency/speed ratio per dtype.
-- Conclusion: pending; a pass authorizes considering the Linear fast path but
-  does not itself change production code.
+- Metrics: not collected.
+- Conclusion: `BLOCKED_NOT_RUN`; the prerequisite combined veRL/FSDP2/vLLM
+  R4 gate rejected this exact candidate. The Linear fast path remains an
+  unpromoted option and was not tested under the rejected runtime.
 
 ### RP-15-QWEN3-REPRESENTATION-TORCH211-FSDP2-EMBEDDING-K4-GPR4-GA1-SINGLEPASS-CELLB32-THROUGHPUT
 
@@ -2059,8 +2090,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: runtime
   `a01c4b8caadef4c5d4afe72ec2a6477983a338eb`; `PROJECT_TASK.md` §9.2,
   I8H-20260719 and the accepted RP-13 geometry.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `CANCELLED`.
+- Result: `BLOCKED_NOT_RUN`.
 - Question: with mathematical global batch 32 and identical RP-13 math/data,
   how fast does the candidate stack execute three real Qwen3 TGVF-Adapter
   updates, and do all representation contracts remain valid?
@@ -2128,19 +2159,19 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   K4 matrices/update; three updates.
 - GPUs: same physical UUIDs/mapping/preflight as
   `SC-30-T211-FSDP2-INFRA-20260720`; no other GPU visible.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  torchrun/rank identities captured in the log/result.
-- Actual GPU-hours and peak scratch use: pending; 1800-second timeout and one
-  final checkpoint/export.
+- Start/end timestamps, elapsed time, and session/process identity: not
+  launched; no torchrun/rank identity.
+- Actual GPU-hours and peak scratch use: zero; no output directory or
+  checkpoint was materialized.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv-torch211-cu129/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp15_torch211_singlepass_cellb32_throughput.toml > /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-15-qwen3-representation-torch211-fsdp2-embedding-k4-gpr4-ga1-singlepass-cellb32-throughput/run.log 2>&1`.
 - Outputs: Adapter, metrics, final strict DCP and log under the root above;
   overwrite forbidden; no validation/periodic save within steps 1-3.
 - Scorer/parser identity: strict representation parser/runner/objective at
   runtime commit and tree/hash identities above.
-- Metrics: pending three step times/rows-per-second, peak CUDA, loss/gradient,
-  token length, cell/call/matrix counts and final DCP/export checks.
-- Conclusion: pending; bounded throughput evidence only, not a promoted
-  representation artifact or production training result.
+- Metrics: not collected.
+- Conclusion: `BLOCKED_NOT_RUN`; the mandatory combined veRL/FSDP2/vLLM R4
+  gate rejected this exact candidate first. The accepted Torch 2.9 control
+  remains authoritative for representation training.
 
 ## Compatibility-spike status
 
