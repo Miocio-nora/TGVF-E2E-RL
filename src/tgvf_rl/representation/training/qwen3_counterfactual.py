@@ -290,6 +290,7 @@ def materialize_qwen3_d_only_processor_prefix(
     sample: RepresentationTrainingSample,
     prompt: RepresentationPromptConfig,
     geometry_image: Any,
+    image_max_pixels: int | None = None,
 ) -> Qwen3DOnlyProcessorPrefix:
     """Use the real Qwen processor for one tool-response geometry block."""
 
@@ -309,6 +310,7 @@ def materialize_qwen3_d_only_processor_prefix(
         processor,
         text=transcript.text,
         images=(geometry_image,),
+        image_max_pixels=image_max_pixels,
     )
     input_ids = batch["input_ids"].to(dtype=torch.long)
     attention_mask = batch["attention_mask"]
@@ -619,14 +621,23 @@ class Qwen3CounterfactualCaseBuilder:
         *,
         runtime: Qwen3RepresentationRuntime,
         prompt: RepresentationPromptConfig,
+        image_max_pixels: int | None = None,
     ) -> None:
         if not isinstance(runtime, Qwen3RepresentationRuntime):
             raise TypeError("counterfactual builder requires Qwen3 runtime")
         if not isinstance(prompt, RepresentationPromptConfig):
             raise TypeError("counterfactual builder requires explicit prompt")
+        if image_max_pixels is not None:
+            if isinstance(image_max_pixels, bool) or not isinstance(
+                image_max_pixels, int
+            ):
+                raise TypeError("image_max_pixels must be an integer")
+            if image_max_pixels <= 0:
+                raise ValueError("image_max_pixels must be positive")
         runtime.assert_bound_invariants()
         self.runtime = runtime
         self.prompt = prompt
+        self.image_max_pixels = image_max_pixels
 
     def build(
         self,
@@ -677,6 +688,7 @@ class Qwen3CounterfactualCaseBuilder:
                 sample=sample_a,
                 prompt=self.prompt,
                 geometry_image=geometry_a,
+                image_max_pixels=self.image_max_pixels,
             )
             prefix_b = materialize_qwen3_d_only_processor_prefix(
                 processor=self.runtime.processor,
@@ -684,6 +696,7 @@ class Qwen3CounterfactualCaseBuilder:
                 sample=sample_a,
                 prompt=self.prompt,
                 geometry_image=geometry_b,
+                image_max_pixels=self.image_max_pixels,
             )
             _validate_matched_geometry(prefix_a, prefix_b)
             if len(prefix_a.d_positions) != observation_a.main.shape[1]:

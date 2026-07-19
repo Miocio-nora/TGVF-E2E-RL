@@ -273,6 +273,35 @@ def test_complete_config_maps_to_runtime_contracts_and_binds_both_hashes(
     assert len(config.canonical_config_sha256) == 64
 
 
+def test_model_image_max_pixels_is_optional_and_exposed_by_validation(
+    tmp_path: Path,
+) -> None:
+    uncapped = load_representation_training_config(
+        _write_config(tmp_path),
+        verify_external_files=False,
+    )
+    uncapped_model_payload = uncapped.validation_payload()["model"]
+    assert uncapped.model.image_max_pixels is None
+    assert isinstance(uncapped_model_payload, dict)
+    assert uncapped_model_payload["image_max_pixels"] is None
+
+    path = _write_config(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "tokenizer_resize = false",
+            "tokenizer_resize = false\nimage_max_pixels = 262144",
+        ),
+        encoding="utf-8",
+    )
+
+    capped = load_representation_training_config(path, verify_external_files=False)
+    capped_model_payload = capped.validation_payload()["model"]
+
+    assert capped.model.image_max_pixels == 262144
+    assert isinstance(capped_model_payload, dict)
+    assert capped_model_payload["image_max_pixels"] == 262144
+
+
 def test_direct_groups_select_versioned_accumulation_identity_and_reject_accumulation(
     tmp_path: Path,
 ) -> None:

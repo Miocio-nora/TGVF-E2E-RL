@@ -25,6 +25,7 @@ from tgvf_rl.representation.training.internal_evaluation import (
 from tgvf_rl.representation.training.native_pipeline import (
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
+    _processor_batch,
     build_native_representation_messages,
     render_native_action_target,
 )
@@ -193,6 +194,22 @@ class _Processor:
             "image_grid_thw": torch.tensor(
                 [[1, 2, 2] for _ in images], dtype=torch.long
             ),
+        }
+
+
+class _ImageCapRecordingProcessor:
+    def __init__(self, *, shortest_edge: object = 3136) -> None:
+        self.image_processor = SimpleNamespace(size={"shortest_edge": shortest_edge})
+        self.calls: list[dict[str, object]] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        image_count = len(kwargs["images"])
+        return {
+            "input_ids": torch.ones(1, 2, dtype=torch.long),
+            "attention_mask": torch.ones(1, 2, dtype=torch.long),
+            "pixel_values": torch.ones(image_count, 3),
+            "image_grid_thw": torch.ones(image_count, 3, dtype=torch.long),
         }
 
 
@@ -392,6 +409,66 @@ def test_prompt_hash_and_fields_are_explicit() -> None:
             template=template,
             expected_sha256=hashlib.sha256(template.encode()).hexdigest(),
         )
+
+
+def test_processor_batch_forwards_bounded_smart_resize_without_overriding_minimum() -> (
+    None
+):
+    processor = _ImageCapRecordingProcessor(shortest_edge=3136)
+    images = (object(), object())
+
+    _processor_batch(
+        processor,
+        text="native transcript",
+        images=images,
+        image_max_pixels=262144,
+    )
+
+    assert processor.calls == [
+        {
+            "text": ["native transcript"],
+            "images": list(images),
+            "padding": False,
+            "return_tensors": "pt",
+            "images_kwargs": {
+                "size": {
+                    "shortest_edge": 3136,
+                    "longest_edge": 262144,
+                }
+            },
+        }
+    ]
+
+
+def test_processor_batch_omits_image_kwargs_without_a_cap() -> None:
+    processor = _ImageCapRecordingProcessor()
+
+    _processor_batch(
+        processor,
+        text="native transcript",
+        images=(object(),),
+        image_max_pixels=None,
+    )
+
+    assert "images_kwargs" not in processor.calls[0]
+
+
+@pytest.mark.parametrize("image_max_pixels", [True, 1.5, "262144", 0, -1, 3135])
+def test_processor_batch_rejects_invalid_or_subminimum_image_caps(
+    image_max_pixels: object,
+) -> None:
+    processor = _ImageCapRecordingProcessor(shortest_edge=3136)
+
+    with pytest.raises(
+        (TypeError, ValueError), match="image_max_pixels|pixel|shortest"
+    ):
+        _processor_batch(
+            processor,
+            text="native transcript",
+            images=(object(),),
+            image_max_pixels=image_max_pixels,  # type: ignore[arg-type]
+        )
+    assert processor.calls == []
 
 
 def test_native_action_target_uses_strict_raw_tool_span(tmp_path: Path) -> None:

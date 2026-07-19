@@ -131,6 +131,7 @@ class RepresentationModelConfig:
     local_files_only: bool
     trust_remote_code: bool
     tokenizer_resize: bool
+    image_max_pixels: int | None = None
 
     def __post_init__(self) -> None:
         if self.family != "qwen3_vl":
@@ -157,6 +158,11 @@ class RepresentationModelConfig:
             raise ValueError("model.trust_remote_code must be false")
         if self.tokenizer_resize is not False:
             raise ValueError("model.tokenizer_resize must be false")
+        if self.image_max_pixels is not None:
+            _positive_int(
+                self.image_max_pixels,
+                field_name="model.image_max_pixels",
+            )
 
     @property
     def identity(self) -> ModelIdentity:
@@ -693,6 +699,7 @@ class RepresentationTrainingConfig:
                 "chat_template_sha256": self.model.chat_template_sha256,
                 "dtype": self.model.dtype,
                 "attention_backend": self.model.attention_backend,
+                "image_max_pixels": self.model.image_max_pixels,
             },
             "conditioning_provider": self.provider.provider.value,
             "prompt_identity": self.prompt.identity,
@@ -824,6 +831,7 @@ def _parse_code(value: Mapping[str, Any]) -> RepresentationCodeConfig:
 
 
 def _parse_model(value: Mapping[str, Any]) -> RepresentationModelConfig:
+    optional_fields = {"image_max_pixels"} if "image_max_pixels" in value else set()
     _exact_fields(
         value,
         {
@@ -837,7 +845,8 @@ def _parse_model(value: Mapping[str, Any]) -> RepresentationModelConfig:
             "local_files_only",
             "trust_remote_code",
             "tokenizer_resize",
-        },
+        }
+        | optional_fields,
         table="model",
     )
     return RepresentationModelConfig(
@@ -851,6 +860,11 @@ def _parse_model(value: Mapping[str, Any]) -> RepresentationModelConfig:
         local_files_only=_boolean(value, "local_files_only", table="model"),
         trust_remote_code=_boolean(value, "trust_remote_code", table="model"),
         tokenizer_resize=_boolean(value, "tokenizer_resize", table="model"),
+        image_max_pixels=(
+            _int(value, "image_max_pixels", table="model")
+            if "image_max_pixels" in value
+            else None
+        ),
     )
 
 

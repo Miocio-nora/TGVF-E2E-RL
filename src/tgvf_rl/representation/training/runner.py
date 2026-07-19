@@ -261,6 +261,7 @@ def _run_initialized(
         family_adapter=family_adapter,
         prompt=config.prompt,
         image_loader=_load_rgb_image,
+        image_max_pixels=config.model.image_max_pixels,
     )
     initial_global_step = 0
     next_validation_event_index = 0
@@ -356,6 +357,7 @@ def _run_initialized(
                 "train_manifest_sha256": train_data.manifest.manifest_sha256,
                 "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
                 "conditioning_provider": config.provider.provider.value,
+                "image_max_pixels": config.model.image_max_pixels,
                 "validation_data_identity_sha256": (
                     None
                     if validation_data_audit is None
@@ -490,6 +492,7 @@ def _run_initialized(
             "global_step": trainer.global_step,
             "planned_target_optimizer_steps": (config.training.target_optimizer_steps),
             "conditioning_provider": config.provider.provider.value,
+            "image_max_pixels": config.model.image_max_pixels,
             "train_manifest_sha256": train_data.manifest.manifest_sha256,
             "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
             "validation_data_identity_sha256": (
@@ -534,6 +537,7 @@ def _run_initialized(
         "source_toml_sha256": config.source_toml_sha256,
         "global_step": trainer.global_step,
         "conditioning_provider": config.provider.provider.value,
+        "image_max_pixels": config.model.image_max_pixels,
         "train_manifest_sha256": train_data.manifest.manifest_sha256,
         "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
         "validation_data_identity_sha256": (

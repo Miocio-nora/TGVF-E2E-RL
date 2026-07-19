@@ -296,6 +296,7 @@ class Qwen3NativeRepresentationGroupBuilder:
         family_adapter: QwenVLMFamilyAdapter,
         prompt: RepresentationPromptConfig,
         image_loader: Callable[[str], Any],
+        image_max_pixels: int | None = None,
     ) -> None:
         if not isinstance(runtime, Qwen3RepresentationRuntime):
             raise TypeError("runtime must be Qwen3RepresentationRuntime")
@@ -310,10 +311,18 @@ class Qwen3NativeRepresentationGroupBuilder:
             raise TypeError("prompt must be RepresentationPromptConfig")
         if not callable(image_loader):
             raise TypeError("image_loader must be callable")
+        if image_max_pixels is not None:
+            image_max_pixels = _plain_int(
+                image_max_pixels,
+                name="image_max_pixels",
+            )
+            if image_max_pixels <= 0:
+                raise ValueError("image_max_pixels must be positive")
         self.runtime = runtime
         self.family_adapter = family_adapter
         self.prompt = prompt
         self.image_loader = image_loader
+        self.image_max_pixels = image_max_pixels
 
     def __call__(
         self,
@@ -442,6 +451,7 @@ class Qwen3NativeRepresentationGroupBuilder:
             self.runtime.processor,
             text=canonical.transcript.text,
             images=(image,),
+            image_max_pixels=self.image_max_pixels,
         )
         input_ids, attention_mask, pixel_values, grid = _move_processor_batch(
             self.runtime, batch
@@ -536,6 +546,7 @@ class Qwen3NativeRepresentationGroupBuilder:
             self.runtime.processor,
             text=canonical.transcript.text,
             images=(image, image),
+            image_max_pixels=self.image_max_pixels,
         )
         input_ids, attention_mask, _pixel_values, grid = _move_processor_batch(
             self.runtime, batch
@@ -583,13 +594,20 @@ def _processor_batch(
     *,
     text: str,
     images: tuple[Any, ...],
+    image_max_pixels: int | None = None,
 ) -> Mapping[str, torch.Tensor]:
+    image_kwargs: dict[str, object] = {}
+    if image_max_pixels is not None:
+        image_kwargs["images_kwargs"] = {
+            "size": _bounded_image_processor_size(processor, image_max_pixels)
+        }
     try:
         batch = processor(
             text=[text],
             images=list(images),
             padding=False,
             return_tensors="pt",
+            **image_kwargs,
         )
     except TypeError as error:
         raise TypeError("Qwen processor rejected native text/image inputs") from error
@@ -603,6 +621,29 @@ def _processor_batch(
     if any(not isinstance(batch[name], torch.Tensor) for name in required):
         raise TypeError("Qwen processor outputs must be torch tensors")
     return batch
+
+
+def _bounded_image_processor_size(
+    processor: Any,
+    image_max_pixels: int,
+) -> dict[str, int]:
+    image_max_pixels = _plain_int(image_max_pixels, name="image_max_pixels")
+    if image_max_pixels <= 0:
+        raise ValueError("image_max_pixels must be positive")
+    image_processor = getattr(processor, "image_processor", None)
+    size = getattr(image_processor, "size", None)
+    if not isinstance(size, Mapping):
+        raise TypeError("Qwen image processor must expose a size mapping")
+    minimum = size.get("shortest_edge")
+    if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
+        raise ValueError(
+            "Qwen image processor size must contain a positive shortest_edge"
+        )
+    if image_max_pixels < minimum:
+        raise ValueError(
+            "image_max_pixels cannot be below the Qwen processor minimum pixel area"
+        )
+    return {"shortest_edge": minimum, "longest_edge": image_max_pixels}
 
 
 def _move_processor_batch(

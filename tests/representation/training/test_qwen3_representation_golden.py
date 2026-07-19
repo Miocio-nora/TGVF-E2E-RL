@@ -117,6 +117,29 @@ def _make_image() -> Any:
     return image
 
 
+def test_golden_image_max_pixels_cap_changes_real_processor_grid() -> None:
+    processor = _load_accepted_processor(Path(_MODEL_PATH))
+    pil_image = pytest.importorskip(
+        "PIL.Image", reason="accepted local Qwen3 processor is unavailable"
+    )
+    image = pil_image.new("RGB", (1024, 1024))
+    text = "<|vision_start|><|image_pad|><|vision_end|>"
+
+    uncapped = _processor_batch(processor, text=text, images=(image,))
+    capped = _processor_batch(
+        processor,
+        text=text,
+        images=(image,),
+        image_max_pixels=512 * 512,
+    )
+
+    assert uncapped["image_grid_thw"].tolist() == [[1, 64, 64]]
+    assert capped["image_grid_thw"].tolist() == [[1, 32, 32]]
+    assert uncapped["pixel_values"].shape[0] == 4096
+    assert capped["pixel_values"].shape[0] == 1024
+    assert image.size == (1024, 1024)
+
+
 def _prompt() -> RepresentationPromptConfig:
     prompt_sha256 = hashlib.sha256(_PROMPT_TEMPLATE.encode("utf-8")).hexdigest()
     return RepresentationPromptConfig(
@@ -199,6 +222,7 @@ def _compute_golden() -> dict[str, Any]:
     parsed = StrictToolCallParser().parse(action.sampled_turn)
     builder = object.__new__(Qwen3NativeRepresentationGroupBuilder)
     builder.runtime = runtime
+    builder.image_max_pixels = None
     model_action = builder._materialize_action(action, image)
     action_expansion = _qwen3_expansion(
         runtime,

@@ -301,6 +301,18 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   groups; the pinned historical global-batch-32 run used eight ranks with one
   local K4 group each. Final production batch geometry remains open rather
   than being inferred from this smoke.
+- Decision `RPI-20260720-GOLDEN-IMAGE-CAP-AB` accepts one bounded image-
+  processing comparison against the pinned Golden representation path. The
+  Golden lane sets the Qwen image processor's maximum pixel area to exactly
+  `512 * 512 = 262144` while retaining the pinned processor's minimum-pixel
+  bound and aspect-ratio-preserving smart resize; it must not force a square
+  `512x512` raster. The cap is an explicit configuration/run identity and is
+  applied consistently to every original-image and geometry-only processor
+  materialization in the representation run. The comparison records source
+  dimensions, `image_grid_thw`, pre-/post-merge visual-token counts, sustained
+  GPU utilization, peak CUDA memory, and optimizer-step throughput on fixed
+  inputs. This is a diagnostic parity experiment, not a production-default
+  resolution decision or a promoted representation artifact.
 
 ### 2.2 Remove Stage2 SFT
 
