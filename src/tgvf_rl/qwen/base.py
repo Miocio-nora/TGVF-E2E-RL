@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -33,6 +33,25 @@ class ReplayConsumer(str, Enum):
     POLICY = "policy"
     REFERENCE = "reference"
     TEACHER = "teacher"
+
+
+_NATIVE_STREAMING_PROOF_AUTHORITY = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeStreamingForwardConstructionProof:
+    """Identity-bound proof for tensors built by the native streaming path.
+
+    This is deliberately private: public and generic request validation always
+    performs content checks.  The proof only removes redundant device-to-host
+    reads after the streaming path has constructed an additive mask and exact
+    main/DeepStack layouts itself.
+    """
+
+    authority: object
+    attention_mask: torch.Tensor
+    attention_mask_version: int
+    visual_layout: tuple[tuple[tuple[int, ...], tuple[tuple[int, ...], ...]], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +118,12 @@ class InjectedForwardRequest:
     cache_position: torch.Tensor | None = None
     rope_delta: torch.Tensor | None = None
     use_cache: bool = False
+    _construction_proof: _NativeStreamingForwardConstructionProof | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if self.token_type_ids is not None:
@@ -332,6 +357,50 @@ def validate_injected_request(request: InjectedForwardRequest) -> tuple[int, int
     return _validate_forward_request(request)
 
 
+def _prove_native_streaming_injected_request(
+    request: InjectedForwardRequest,
+) -> InjectedForwardRequest:
+    """Bind native construction guarantees to one immutable request.
+
+    The caller is the native streaming batch constructor.  Structural tensor
+    checks still run here and on consumption.  Additive-mask contents need no
+    device read because that constructor only emits zero or finite non-positive
+    bias.  DeepStack masks need no ``torch.equal`` because branch positions are
+    proven identical to the corresponding main positions as Python tuples.
+    """
+
+    if not isinstance(request, InjectedForwardRequest):
+        raise TypeError("request must be InjectedForwardRequest")
+    if request._construction_proof is not None:
+        raise ValueError("native streaming request is already construction-proven")
+    if request.attention_mask.ndim != 4:
+        raise ValueError(
+            "native streaming construction proof requires a blocked attention mask"
+        )
+    _validate_forward_request(request, _check_additive_mask_contents=False)
+    visual_layout = _request_visual_layout(request)
+    if any(
+        branch_positions != positions
+        for positions, deepstack_positions in visual_layout
+        for branch_positions in deepstack_positions
+    ):
+        raise ValueError(
+            "Qwen DeepStack injection positions must equal the main visual positions"
+        )
+    proven = replace(request)
+    object.__setattr__(
+        proven,
+        "_construction_proof",
+        _NativeStreamingForwardConstructionProof(
+            authority=_NATIVE_STREAMING_PROOF_AUTHORITY,
+            attention_mask=proven.attention_mask,
+            attention_mask_version=proven.attention_mask._version,
+            visual_layout=visual_layout,
+        ),
+    )
+    return proven
+
+
 def injected_request_from_recorded(
     request: RecordedReplayRequest,
 ) -> InjectedForwardRequest:
@@ -363,6 +432,8 @@ def injected_request_from_recorded(
 
 def _validate_forward_request(
     request: RecordedReplayRequest | InjectedForwardRequest,
+    *,
+    _check_additive_mask_contents: bool = True,
 ) -> tuple[int, int]:
     if request.input_ids.ndim != 2:
         raise ValueError("input_ids must have shape [B, S]")
@@ -379,10 +450,13 @@ def _validate_forward_request(
             )
         if not request.attention_mask.dtype.is_floating_point:
             raise TypeError("a four-dimensional attention mask must be additive")
-        if not bool(torch.isfinite(request.attention_mask).all().item()):
-            raise ValueError("a four-dimensional attention mask must be finite")
-        if bool((request.attention_mask > 0).any().item()):
-            raise ValueError("an additive attention mask cannot contain positive bias")
+        if _check_additive_mask_contents:
+            if not bool(torch.isfinite(request.attention_mask).all().item()):
+                raise ValueError("a four-dimensional attention mask must be finite")
+            if bool((request.attention_mask > 0).any().item()):
+                raise ValueError(
+                    "an additive attention mask cannot contain positive bias"
+                )
     if request.position_ids.ndim not in {2, 3}:
         raise ValueError("position_ids must have shape [B,S] or [R,B,S]")
     if request.position_ids.shape[-2:] != (batch, sequence):
@@ -425,7 +499,11 @@ def _validate_forward_request(
 def materialize_inputs_embeds(
     model: Any, request: RecordedReplayRequest | InjectedForwardRequest
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    batch, sequence = _validate_forward_request(request)
+    proof = _resolve_native_streaming_construction_proof(request)
+    batch, sequence = _validate_forward_request(
+        request,
+        _check_additive_mask_contents=proof is None,
+    )
     language_model = resolve_language_model(model)
     embedding_layer = language_model.get_input_embeddings()
     embedding_device = embedding_layer.weight.device
@@ -453,6 +531,7 @@ def materialize_deepstack(
     *,
     target_dtype: torch.dtype,
 ) -> list[torch.Tensor]:
+    proof = _resolve_native_streaming_construction_proof(request)
     if not target_dtype.is_floating_point:
         raise TypeError("DeepStack target dtype must be floating point")
     batch, sequence = visual_mask.shape
@@ -469,18 +548,53 @@ def materialize_deepstack(
             device=visual_mask.device,
             dtype=target_dtype,
         )
-        branch_mask = torch.zeros_like(visual_mask)
+        branch_mask = torch.zeros_like(visual_mask) if proof is None else None
         for block in request.visual_blocks:
             positions = block.deepstack_positions[branch_index]
             _scatter_recorded(full, positions, block.deepstack[branch_index])
-            if positions:
+            if branch_mask is not None and positions:
                 branch_mask[:, list(positions)] = True
-        if not torch.equal(branch_mask, visual_mask):
+        if branch_mask is not None and not torch.equal(branch_mask, visual_mask):
             raise ValueError(
                 "Qwen DeepStack injection positions must equal the main visual positions"
             )
         branches.append(full[visual_mask])
     return branches
+
+
+def _request_visual_layout(
+    request: InjectedForwardRequest,
+) -> tuple[tuple[tuple[int, ...], tuple[tuple[int, ...], ...]], ...]:
+    return tuple(
+        (block.positions, block.deepstack_positions) for block in request.visual_blocks
+    )
+
+
+def _resolve_native_streaming_construction_proof(
+    request: RecordedReplayRequest | InjectedForwardRequest,
+) -> _NativeStreamingForwardConstructionProof | None:
+    if not isinstance(request, InjectedForwardRequest):
+        return None
+    proof = request._construction_proof
+    if proof is None:
+        return None
+    if (
+        not isinstance(proof, _NativeStreamingForwardConstructionProof)
+        or proof.authority is not _NATIVE_STREAMING_PROOF_AUTHORITY
+    ):
+        raise ValueError("invalid native streaming construction proof")
+    if (
+        request.attention_mask is not proof.attention_mask
+        or request.attention_mask._version != proof.attention_mask_version
+    ):
+        raise ValueError(
+            "native streaming attention mask changed after construction proof"
+        )
+    if _request_visual_layout(request) != proof.visual_layout:
+        raise ValueError(
+            "native streaming visual layout changed after construction proof"
+        )
+    return proof
 
 
 def _normalize_recorded_features(

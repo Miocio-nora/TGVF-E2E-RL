@@ -12,14 +12,19 @@ from tgvf_rl.qwen.base import (
     InjectedForwardRequest,
     InjectedVisualBlock,
     QwenVLMFamilyAdapter,
+    _prove_native_streaming_injected_request,
 )
-from tgvf_rl.representation.deepstack import build_original_image_key_block_mask
+from tgvf_rl.representation.deepstack import (
+    _build_original_image_key_block_mask_from_positions,
+)
 
 from .losses import (
     CausalEvidenceLosses,
     EVIDENCE_IGNORE_INDEX,
     MatrixCEScoreMode,
+    _causal_evidence_losses_from_native_labels,
     _historical_sample_norm_loss_unchecked,
+    _materialize_native_causal_evidence_labels,
     causal_evidence_losses,
     matrix_ce_cell_scores,
 )
@@ -1093,43 +1098,41 @@ def _forward_cell_batch_losses(
         )
         for block_index in range(len(requests[0].visual_blocks))
     )
-    batched_request = InjectedForwardRequest(
-        input_ids=torch.cat(
-            tuple(
-                _right_pad_input_ids(request.input_ids, maximum_sequence)
-                for request in requests
+    batched_request = _prove_native_streaming_injected_request(
+        InjectedForwardRequest(
+            input_ids=torch.cat(
+                tuple(
+                    _right_pad_input_ids(request.input_ids, maximum_sequence)
+                    for request in requests
+                ),
+                dim=0,
             ),
-            dim=0,
-        ),
-        attention_mask=torch.cat(
-            tuple(
-                _right_pad_attention_mask(request.attention_mask, maximum_sequence)
-                for request in requests
+            attention_mask=torch.cat(
+                tuple(
+                    _right_pad_attention_mask(request.attention_mask, maximum_sequence)
+                    for request in requests
+                ),
+                dim=0,
             ),
-            dim=0,
-        ),
-        position_ids=torch.cat(
-            tuple(
-                _right_pad_position_ids(request.position_ids, maximum_sequence)
-                for request in requests
+            position_ids=torch.cat(
+                tuple(
+                    _right_pad_position_ids(request.position_ids, maximum_sequence)
+                    for request in requests
+                ),
+                dim=position_batch_dimension,
             ),
-            dim=position_batch_dimension,
-        ),
-        visual_blocks=visual_blocks,
-        use_cache=False,
-    )
-    result = family_adapter.forward_injected(model, batched_request)
-    labels = torch.stack(
-        tuple(
-            _right_pad_labels(
-                cell.row.supervision.labels,
-                maximum_sequence,
-                device=result.logits.device,
-            )
-            for cell in cells
+            visual_blocks=visual_blocks,
+            use_cache=False,
         )
     )
-    return causal_evidence_losses(result.logits, labels)
+    result = family_adapter.forward_injected(model, batched_request)
+    labels = _materialize_native_causal_evidence_labels(
+        tuple(cell.row.supervision.labels for cell in cells),
+        maximum_sequence,
+        device=result.logits.device,
+        vocabulary_size=int(result.logits.shape[-1]),
+    )
+    return _causal_evidence_losses_from_native_labels(result.logits, labels)
 
 
 def _right_pad_input_ids(
@@ -1299,6 +1302,8 @@ def _validate_execution_inputs(
     if not isinstance(group, SameImageReadoutGroup):
         raise TypeError("group must be SameImageReadoutGroup")
     assert_frozen_deterministic_readout_model(model)
+    for row in group.rows:
+        row.assert_input_ids_authority()
     if any(
         row.supervision.family != family_adapter.capabilities.family
         for row in group.rows
@@ -1320,13 +1325,9 @@ def _blocked_evidence_attention_mask(
     final_evidence = row.supervision.evidence_token_positions[-1]
     if first_evidence <= 0:
         raise ValueError("evidence must have a preceding causal prediction query")
-    return build_original_image_key_block_mask(
+    return _build_original_image_key_block_mask_from_positions(
         attention_mask=row.attention_mask,
-        original_image_token_indices=torch.tensor(
-            row.source_positions,
-            dtype=torch.long,
-            device=row.attention_mask.device,
-        ),
+        original_image_token_positions=row.source_positions,
         block_query_start=first_evidence - 1,
         block_query_end=final_evidence,
         dtype=source.main.dtype,

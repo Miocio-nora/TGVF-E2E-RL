@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 import torch
 from torch import nn
 
-from tgvf_rl.conditioning.base import TargetConditioningProviderKind
+from tgvf_rl.conditioning.base import (
+    TargetConditioningProviderKind,
+    _bind_canonical_input_ids,
+)
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.readout import (
@@ -17,6 +21,9 @@ from tgvf_rl.representation.training.readout import (
     synthetic_same_image_layout_readout_terms,
 )
 from tgvf_rl.representation.training.transcript import ModelEvidenceSupervision
+from tgvf_rl.representation.training.streaming import (
+    score_streaming_same_image_group,
+)
 
 
 class _ContextualTinyLanguageModel(nn.Module):
@@ -296,4 +303,38 @@ def test_row_rejects_swapping_source_and_d_placeholder_blocks() -> None:
             position_ids=row.position_ids,
             source_positions=row.d_positions,
             d_positions=row.source_positions,
+        )
+
+
+def test_bound_readout_ids_avoid_host_content_reads_and_reject_late_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group = _group()
+    original = group.rows[0]
+    proof = _bind_canonical_input_ids(
+        original.input_ids,
+        (original.supervision.model_token_ids,),
+    )
+    host_reads = 0
+    original_tolist = torch.Tensor.tolist
+
+    def counted_tolist(tensor: torch.Tensor, *args: object) -> object:
+        nonlocal host_reads
+        host_reads += 1
+        return original_tolist(tensor, *args)
+
+    monkeypatch.setattr(torch.Tensor, "tolist", counted_tolist)
+    bound_row = replace(original, canonical_input_ids_proof=proof)
+    assert host_reads == 0
+
+    with pytest.raises(ValueError, match="does not bind this tensor state"):
+        replace(bound_row, input_ids=bound_row.input_ids.clone())
+
+    bound_group = replace(group, rows=(bound_row, group.rows[1]))
+    bound_row.input_ids[0, 0] = 9
+    with pytest.raises(ValueError, match="does not bind this tensor state"):
+        score_streaming_same_image_group(
+            Qwen3VLAdapter(),
+            _freeze(_TinyFrozenQwen()),
+            bound_group,
         )

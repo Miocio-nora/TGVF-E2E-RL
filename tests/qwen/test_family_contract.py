@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +30,7 @@ from tgvf_rl.observations.store import (
 )
 from tgvf_rl.qwen.base import (
     ReplayConsumer,
+    _prove_native_streaming_injected_request,
     gather_next_token_logprobs,
     injected_request_from_recorded,
     materialize_deepstack,
@@ -215,3 +217,77 @@ def test_recorded_deepstack_materializes_on_embedding_device_and_target_dtype() 
     assert len(branches) == 3
     assert all(branch.device == inputs_embeds.device for branch in branches)
     assert all(branch.dtype == torch.float64 for branch in branches)
+
+
+@pytest.mark.parametrize(
+    ("invalid_value", "message"),
+    ((float("nan"), "must be finite"), (0.25, "positive bias")),
+)
+def test_generic_injected_forward_rejects_invalid_additive_mask_contents(
+    invalid_value: float,
+    message: str,
+) -> None:
+    model = TinyQwen()
+    store, replay = _replay(branches=3, calls=1)
+    request = injected_request_from_recorded(
+        resolve_replay_request(store, replay, ReplayConsumer.POLICY)
+    )
+    batch, sequence = request.input_ids.shape
+    attention_mask = torch.zeros(batch, 1, sequence, sequence)
+    attention_mask[0, 0, 0, 0] = invalid_value
+
+    with pytest.raises(ValueError, match=message):
+        materialize_inputs_embeds(
+            model,
+            replace(request, attention_mask=attention_mask),
+        )
+
+
+def test_generic_deepstack_materialization_rejects_layout_mismatch() -> None:
+    model = TinyQwen()
+    store, replay = _replay(branches=3, calls=1)
+    request = injected_request_from_recorded(
+        resolve_replay_request(store, replay, ReplayConsumer.POLICY)
+    )
+    first = request.visual_blocks[0]
+    mismatched_positions = (0, first.positions[-1])
+    request = replace(
+        request,
+        visual_blocks=(
+            replace(
+                first,
+                deepstack_positions=(
+                    mismatched_positions,
+                    *first.deepstack_positions[1:],
+                ),
+            ),
+            *request.visual_blocks[1:],
+        ),
+    )
+    inputs_embeds, visual_mask = materialize_inputs_embeds(model, request)
+
+    with pytest.raises(ValueError, match="must equal the main visual positions"):
+        materialize_deepstack(
+            request,
+            visual_mask,
+            target_dtype=inputs_embeds.dtype,
+        )
+
+
+def test_native_injected_request_proof_rejects_post_construction_mutation() -> None:
+    model = TinyQwen()
+    store, replay = _replay(branches=3, calls=1)
+    request = injected_request_from_recorded(
+        resolve_replay_request(store, replay, ReplayConsumer.POLICY)
+    )
+    batch, sequence = request.input_ids.shape
+    proven = _prove_native_streaming_injected_request(
+        replace(
+            request,
+            attention_mask=torch.zeros(batch, 1, sequence, sequence),
+        )
+    )
+    proven.attention_mask[0, 0, 0, 0] = 0.5
+
+    with pytest.raises(ValueError, match="changed after construction proof"):
+        materialize_inputs_embeds(model, proven)

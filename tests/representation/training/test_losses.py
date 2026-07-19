@@ -8,6 +8,8 @@ from tgvf_rl.representation.training.losses import (
     CausalEvidenceLosses,
     EVIDENCE_IGNORE_INDEX,
     MatrixCEScoreMode,
+    _causal_evidence_losses_from_native_labels,
+    _materialize_native_causal_evidence_labels,
     causal_evidence_losses,
     evidence_readability_loss_terms,
     historical_norm_loss_terms,
@@ -198,6 +200,57 @@ def test_causal_evidence_losses_reject_invalid_non_ignored_label() -> None:
             torch.zeros(1, 2, 3),
             torch.tensor([[EVIDENCE_IGNORE_INDEX, 3]]),
         )
+
+
+def test_generic_causal_evidence_api_retains_two_content_host_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logits = torch.zeros(2, 3, 5)
+    labels = torch.tensor(
+        [
+            [EVIDENCE_IGNORE_INDEX, 1, EVIDENCE_IGNORE_INDEX],
+            [EVIDENCE_IGNORE_INDEX, 2, 3],
+        ]
+    )
+    original_item = torch.Tensor.item
+    item_calls = 0
+
+    def counted_item(tensor: torch.Tensor, *args: object) -> object:
+        nonlocal item_calls
+        item_calls += 1
+        return original_item(tensor, *args)
+
+    monkeypatch.setattr(torch.Tensor, "item", counted_item)
+    causal_evidence_losses(logits, labels)
+
+    assert item_calls == 2
+
+
+def test_native_causal_label_proof_rejects_invalid_rows_and_mutation() -> None:
+    with pytest.raises(ValueError, match="every sample.*causal shift"):
+        _materialize_native_causal_evidence_labels(
+            ((1, EVIDENCE_IGNORE_INDEX),),
+            2,
+            device=torch.device("cpu"),
+            vocabulary_size=4,
+        )
+    with pytest.raises(ValueError, match="valid vocabulary ids"):
+        _materialize_native_causal_evidence_labels(
+            ((EVIDENCE_IGNORE_INDEX, 4),),
+            2,
+            device=torch.device("cpu"),
+            vocabulary_size=4,
+        )
+
+    proven = _materialize_native_causal_evidence_labels(
+        ((EVIDENCE_IGNORE_INDEX, 1),),
+        2,
+        device=torch.device("cpu"),
+        vocabulary_size=4,
+    )
+    proven.values[0, 1] = 2
+    with pytest.raises(ValueError, match="changed after construction"):
+        _causal_evidence_losses_from_native_labels(torch.zeros(1, 2, 4), proven)
 
 
 def test_evidence_readability_reduces_token_mean_per_sample_then_sample_mean() -> None:

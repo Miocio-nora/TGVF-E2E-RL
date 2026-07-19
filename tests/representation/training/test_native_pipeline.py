@@ -25,9 +25,11 @@ from tgvf_rl.representation.training.internal_evaluation import (
 from tgvf_rl.representation.training.native_pipeline import (
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
+    _bind_all_ones_attention_mask,
     _expand_native_visual_placeholders,
     _processor_batch,
     _single_visual_expansion_count,
+    _validate_single_input,
     build_native_representation_messages,
     render_native_action_target,
 )
@@ -49,6 +51,59 @@ from tgvf_rl.representation.training.transcript import render_native_evidence_la
 _IMAGE_TOKEN = "<|image_pad|>"
 _ASSISTANT_PREFILL = "<|im_start|>assistant\n<think>\n"
 _EVIDENCE_SUFFIX = "\n</think>\n\n<|im_end|>\n"
+
+
+def test_bound_all_ones_mask_rejects_mutation_replacement_and_false_cpu_mask() -> None:
+    input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids)
+    proof = _bind_all_ones_attention_mask(attention_mask)
+
+    _validate_single_input(
+        input_ids,
+        attention_mask,
+        attention_mask_proof=proof,
+    )
+    with pytest.raises(ValueError, match="does not bind this tensor state"):
+        _validate_single_input(
+            input_ids,
+            attention_mask.clone(),
+            attention_mask_proof=proof,
+        )
+    attention_mask[0, 0] = 0
+    with pytest.raises(ValueError, match="does not bind this tensor state"):
+        _validate_single_input(
+            input_ids,
+            attention_mask,
+            attention_mask_proof=proof,
+        )
+    with pytest.raises(ValueError, match="cannot contain masked tokens"):
+        _bind_all_ones_attention_mask(torch.tensor([[1, 0]], dtype=torch.long))
+
+
+def test_materialized_action_revalidates_bound_ids_without_content_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    sample = _sample(tmp_path / "unused.png", 0)
+    messages = build_native_representation_messages(sample, _prompt())
+    canonical = render_native_action_target(runtime, messages)
+    builder = Qwen3NativeRepresentationGroupBuilder(
+        runtime=runtime,
+        family_adapter=Qwen3VLAdapter(),
+        prompt=_prompt(),
+        image_loader=lambda _path: b"image",
+    )
+    action = builder._materialize_action(canonical, b"image")
+
+    def forbidden_tolist(*_args: object, **_kwargs: object) -> list[object]:
+        raise AssertionError("bound action validation must not copy tensor contents")
+
+    monkeypatch.setattr(torch.Tensor, "tolist", forbidden_tolist)
+    action.assert_bound_invariants()
+    action.input_ids[0, 0] += 1
+    with pytest.raises(ValueError, match="does not bind this tensor state"):
+        action.assert_bound_invariants()
 
 
 class _Tokenizer:

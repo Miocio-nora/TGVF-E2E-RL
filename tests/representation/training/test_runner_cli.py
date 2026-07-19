@@ -265,6 +265,102 @@ def test_invocation_target_must_advance_restored_state() -> None:
         )
 
 
+def test_train_step_telemetry_follows_existing_log_cadence_without_reordering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Trainer:
+        def __init__(self) -> None:
+            self.global_step = 0
+            self.sample_order: list[str] = []
+
+        def train_step(self) -> SimpleNamespace:
+            self.global_step += 1
+            sample_id = f"sample-{self.global_step}"
+            self.sample_order.append(sample_id)
+            return SimpleNamespace(global_step=self.global_step, sample_id=sample_id)
+
+    trainer = _Trainer()
+    measured_at_steps: list[int] = []
+    performance = object()
+
+    def measure(
+        step: object,
+        *,
+        device: torch.device,
+        global_matrix_count: int,
+    ) -> tuple[object, object]:
+        assert callable(step)
+        assert device == torch.device("cpu")
+        assert global_matrix_count == 8
+        measured_at_steps.append(trainer.global_step)
+        return step(), performance
+
+    monkeypatch.setattr(runner_module, "measure_distributed_train_step", measure)
+
+    results = tuple(
+        runner_module._run_train_step_with_periodic_telemetry(
+            trainer,  # type: ignore[arg-type]
+            device=torch.device("cpu"),
+            global_matrix_count=8,
+            log_every_optimizer_steps=10,
+        )
+        for _ in range(10)
+    )
+
+    assert measured_at_steps == [9]
+    assert [result.global_step for result, _telemetry in results] == list(range(1, 11))
+    assert trainer.sample_order == [f"sample-{step}" for step in range(1, 11)]
+    assert all(telemetry is None for _result, telemetry in results[:9])
+    assert results[9][1] is performance
+
+
+def test_log_every_one_preserves_exact_per_step_performance_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer = SimpleNamespace(global_step=0)
+    train_calls: list[int] = []
+    measure_calls: list[int] = []
+
+    def train_step() -> SimpleNamespace:
+        trainer.global_step += 1
+        train_calls.append(trainer.global_step)
+        return SimpleNamespace(global_step=trainer.global_step)
+
+    trainer.train_step = train_step
+
+    def measure(
+        step: object,
+        *,
+        device: torch.device,
+        global_matrix_count: int,
+    ) -> tuple[object, object]:
+        assert callable(step)
+        assert device == torch.device("cpu")
+        assert global_matrix_count == 4
+        measure_calls.append(trainer.global_step)
+        return step(), object()
+
+    monkeypatch.setattr(runner_module, "measure_distributed_train_step", measure)
+
+    first = runner_module._run_train_step_with_periodic_telemetry(
+        trainer,  # type: ignore[arg-type]
+        device=torch.device("cpu"),
+        global_matrix_count=4,
+        log_every_optimizer_steps=1,
+    )
+    second = runner_module._run_train_step_with_periodic_telemetry(
+        trainer,  # type: ignore[arg-type]
+        device=torch.device("cpu"),
+        global_matrix_count=4,
+        log_every_optimizer_steps=1,
+    )
+
+    assert train_calls == [1, 2]
+    assert measure_calls == [0, 1]
+    assert first[1] is not None
+    assert second[1] is not None
+
+
 def test_checkpoint_path_and_step_have_one_strict_ascii_round_trip(
     tmp_path: Path,
 ) -> None:

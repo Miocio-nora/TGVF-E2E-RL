@@ -7,6 +7,7 @@ from torch import nn
 from tgvf_rl.representation.deepstack import (
     DDeepStackProjectionPorts,
     FrozenProjectionPort,
+    _build_original_image_key_block_mask_from_positions,
     build_original_image_key_block_mask,
 )
 
@@ -95,3 +96,37 @@ def test_original_image_key_block_mask_is_batched_and_causal() -> None:
     assert blocked[0, 0, 2, 1] == minimum
     assert blocked[0, 0, 0, 1] == minimum  # normal causal masking
     assert blocked[1, 0, :, 3].eq(minimum).all()  # key padding
+
+
+def test_internal_cpu_position_mask_path_has_no_tensor_content_host_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attention_mask = torch.ones(1, 4, dtype=torch.bool)
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("trusted CPU positions must not inspect tensor contents")
+
+    monkeypatch.setattr(torch.Tensor, "min", forbidden)
+    monkeypatch.setattr(torch.Tensor, "max", forbidden)
+    monkeypatch.setattr(torch.Tensor, "item", forbidden)
+    monkeypatch.setattr(torch.Tensor, "tolist", forbidden)
+    monkeypatch.setattr(torch, "unique", forbidden)
+    blocked = _build_original_image_key_block_mask_from_positions(
+        attention_mask=attention_mask,
+        original_image_token_positions=(1,),
+        block_query_start=2,
+    )
+
+    assert blocked.shape == (1, 1, 4, 4)
+    with pytest.raises(ValueError, match="outside"):
+        _build_original_image_key_block_mask_from_positions(
+            attention_mask=attention_mask,
+            original_image_token_positions=(4,),
+            block_query_start=2,
+        )
+    with pytest.raises(ValueError, match="unique"):
+        _build_original_image_key_block_mask_from_positions(
+            attention_mask=attention_mask,
+            original_image_token_positions=(1, 1),
+            block_query_start=2,
+        )

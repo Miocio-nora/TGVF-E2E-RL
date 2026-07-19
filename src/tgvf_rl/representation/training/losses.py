@@ -13,6 +13,7 @@ from torch.nn import functional as F
 
 EVIDENCE_IGNORE_INDEX = -100
 HISTORICAL_NORM_EPS = 1e-6
+_NATIVE_CAUSAL_LABEL_PROOF_AUTHORITY = object()
 
 
 class MatrixCEScoreMode(str, Enum):
@@ -36,6 +37,16 @@ class CausalEvidenceLosses:
     per_sample_token_mean_nll: torch.Tensor
     per_sample_summed_log_likelihood: torch.Tensor
     valid_token_counts: torch.Tensor
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeCausalEvidenceLabels:
+    """Identity-bound labels validated before native device materialization."""
+
+    values: torch.Tensor
+    vocabulary_size: int
+    tensor_version: int
+    authority: object
 
 
 def matrix_ce_cell_scores(
@@ -137,8 +148,7 @@ def causal_evidence_losses(
 
     _validate_causal_evidence_inputs(logits, labels)
 
-    shift_logits = logits[:, :-1, :].contiguous()
-    shift_labels = labels[:, 1:].contiguous()
+    shift_labels = labels[:, 1:]
     valid_mask = shift_labels != EVIDENCE_IGNORE_INDEX
     valid_token_counts = valid_mask.sum(dim=-1)
     if bool((valid_token_counts == 0).any().item()):
@@ -150,6 +160,86 @@ def causal_evidence_losses(
     valid_labels = shift_labels[valid_mask]
     if bool(((valid_labels < 0) | (valid_labels >= logits.shape[-1])).any().item()):
         raise ValueError("non-ignored evidence labels must be valid vocabulary ids")
+
+    return _causal_evidence_losses_unchecked(logits, labels)
+
+
+def _materialize_native_causal_evidence_labels(
+    rows: tuple[tuple[int, ...], ...],
+    sequence: int,
+    *,
+    device: torch.device,
+    vocabulary_size: int,
+) -> _NativeCausalEvidenceLabels:
+    """Validate CPU label tuples once, then materialize one proven device tensor."""
+
+    if not isinstance(rows, tuple) or not rows:
+        raise ValueError("native causal evidence labels require a non-empty row tuple")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 2:
+        raise ValueError("native causal evidence labels require sequence >= 2")
+    if (
+        isinstance(vocabulary_size, bool)
+        or not isinstance(vocabulary_size, int)
+        or vocabulary_size <= 0
+    ):
+        raise ValueError("native causal evidence labels require a positive vocabulary")
+
+    padded_rows: list[tuple[int, ...]] = []
+    for row in rows:
+        if not isinstance(row, tuple):
+            raise TypeError("native causal evidence label rows must be tuples")
+        if len(row) > sequence:
+            raise ValueError("right-padding target is shorter than evidence labels")
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in row):
+            raise TypeError("native causal evidence labels must contain integer ids")
+        valid_labels = tuple(
+            value for value in row[1:] if value != EVIDENCE_IGNORE_INDEX
+        )
+        if not valid_labels:
+            raise ValueError(
+                "every sample must have at least one non-ignored evidence token "
+                "after the causal shift"
+            )
+        if any(value < 0 or value >= vocabulary_size for value in valid_labels):
+            raise ValueError("non-ignored evidence labels must be valid vocabulary ids")
+        padded_rows.append(row + (EVIDENCE_IGNORE_INDEX,) * (sequence - len(row)))
+
+    values = torch.tensor(tuple(padded_rows), dtype=torch.long, device=device)
+    return _NativeCausalEvidenceLabels(
+        values=values,
+        vocabulary_size=vocabulary_size,
+        tensor_version=values._version,
+        authority=_NATIVE_CAUSAL_LABEL_PROOF_AUTHORITY,
+    )
+
+
+def _causal_evidence_losses_from_native_labels(
+    logits: torch.Tensor,
+    labels: _NativeCausalEvidenceLabels,
+) -> CausalEvidenceLosses:
+    """Consume construction-proven labels without redundant CUDA host reads."""
+
+    if (
+        not isinstance(labels, _NativeCausalEvidenceLabels)
+        or labels.authority is not _NATIVE_CAUSAL_LABEL_PROOF_AUTHORITY
+    ):
+        raise TypeError("labels must carry a native causal construction proof")
+    if labels.values._version != labels.tensor_version:
+        raise ValueError("native causal evidence labels changed after construction")
+    _validate_causal_evidence_inputs(logits, labels.values)
+    if labels.vocabulary_size != int(logits.shape[-1]):
+        raise ValueError("native causal evidence label vocabulary changed")
+    return _causal_evidence_losses_unchecked(logits, labels.values)
+
+
+def _causal_evidence_losses_unchecked(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> CausalEvidenceLosses:
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+    valid_mask = shift_labels != EVIDENCE_IGNORE_INDEX
+    valid_token_counts = valid_mask.sum(dim=-1)
 
     per_token_nll = F.cross_entropy(
         shift_logits.reshape(-1, shift_logits.shape[-1]),

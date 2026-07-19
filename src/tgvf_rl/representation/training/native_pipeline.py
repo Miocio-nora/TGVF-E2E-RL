@@ -15,7 +15,7 @@ before the frozen language-model readout.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -29,7 +29,11 @@ from tgvf_rl.conditioning import (
     TargetConditioningProviderKind,
     TargetConditioningRequest,
 )
-from tgvf_rl.conditioning.base import _bind_canonical_input_ids
+from tgvf_rl.conditioning.base import (
+    _CanonicalInputIdsProof,
+    _bind_canonical_input_ids,
+    _validate_canonical_input_ids_proof,
+)
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.protocol.native import RenderedTranscript
 from tgvf_rl.protocol.parser import StrictToolCallParser
@@ -70,6 +74,7 @@ REPRESENTATION_PROMPT_SCHEMA_VERSION = "native_representation_prompt_v1"
 NATIVE_ACTION_TARGET_SCHEMA_VERSION = "native_action_target_v1"
 _ACTION_TEMPLATE_SUFFIX = "<|im_end|>\n"
 _ALLOWED_PROMPT_FIELDS = frozenset({"question", "target"})
+_ALL_ONES_ATTENTION_MASK_PROOF_SEAL = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +157,27 @@ class NativeActionTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class _AllOnesAttentionMaskProof:
+    """One internally constructed all-ones mask bound to its tensor state."""
+
+    tensor_identity: int
+    tensor_data_ptr: int
+    tensor_version: int
+    tensor_shape: tuple[int, ...]
+    tensor_stride: tuple[int, ...]
+    tensor_storage_offset: int
+    tensor_device: torch.device
+    tensor_dtype: torch.dtype
+    seal: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.seal is not _ALL_ONES_ATTENTION_MASK_PROOF_SEAL:
+            raise ValueError(
+                "all-ones attention-mask proofs require the trusted binder"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ModelActionTarget:
     """Target span after Qwen processor visual-token expansion."""
 
@@ -163,9 +189,11 @@ class ModelActionTarget:
     target_span: TokenSpan
     target_token_ids: tuple[int, ...]
     canonical: NativeActionTarget
+    canonical_input_ids_proof: _CanonicalInputIdsProof | None = None
+    attention_mask_proof: _AllOnesAttentionMaskProof | None = None
 
     def __post_init__(self) -> None:
-        _validate_single_input(self.input_ids, self.attention_mask)
+        self.assert_bound_invariants()
         if not isinstance(self.pixel_values, torch.Tensor) or (
             self.pixel_values.ndim != 2 or not self.pixel_values.is_floating_point()
         ):
@@ -176,18 +204,36 @@ class ModelActionTarget:
             raise ValueError("native action requires exactly one image grid")
         if self.target_span.end > self.input_ids.shape[1]:
             raise ValueError("model target span lies outside input_ids")
+        realized = self.model_token_ids[self.target_span.start : self.target_span.end]
+        if realized != self.target_token_ids:
+            raise ValueError("model target IDs differ from expanded input_ids")
+        if realized != self.canonical.canonical_target_token_ids:
+            raise ValueError("Qwen visual expansion changed target token IDs")
+
+    def assert_bound_invariants(self) -> None:
+        _validate_single_input(
+            self.input_ids,
+            self.attention_mask,
+            attention_mask_proof=self.attention_mask_proof,
+        )
         if len(self.model_token_ids) != self.input_ids.shape[1] or any(
             not isinstance(token_id, int) or isinstance(token_id, bool)
             for token_id in self.model_token_ids
         ):
             raise ValueError("CPU model token IDs must align with action input_ids")
-        realized = self.model_token_ids[
-            self.target_span.start : self.target_span.end
-        ]
-        if realized != self.target_token_ids:
-            raise ValueError("model target IDs differ from expanded input_ids")
-        if realized != self.canonical.canonical_target_token_ids:
-            raise ValueError("Qwen visual expansion changed target token IDs")
+        if self.canonical_input_ids_proof is None:
+            realized_ids = tuple(int(value) for value in self.input_ids[0].tolist())
+        else:
+            rows, _digest = _validate_canonical_input_ids_proof(
+                self.canonical_input_ids_proof,
+                input_ids=self.input_ids,
+                batched=True,
+                batch_size=1,
+                sequence_length=int(self.input_ids.shape[1]),
+            )
+            realized_ids = rows[0]
+        if realized_ids != self.model_token_ids:
+            raise ValueError("action input_ids differ from CPU model token IDs")
 
 
 def build_native_representation_messages(
@@ -533,6 +579,7 @@ class Qwen3NativeRepresentationGroupBuilder:
         sample: RepresentationTrainingSample,
         action: ModelActionTarget,
     ):
+        action.assert_bound_invariants()
         conditioning_input_ids = action.input_ids[0]
         request = TargetConditioningRequest(
             input_ids=conditioning_input_ids,
@@ -630,6 +677,10 @@ class Qwen3NativeRepresentationGroupBuilder:
             position_ids=position_ids,
             source_positions=blocks[0],
             d_positions=blocks[1],
+            canonical_input_ids_proof=_bind_canonical_input_ids(
+                input_ids,
+                (supervision.model_token_ids,),
+            ),
         )
 
 
@@ -668,6 +719,11 @@ def _model_action_from_expansion(
         target_span=TokenSpan(target_positions[0], target_positions[-1] + 1),
         target_token_ids=canonical.canonical_target_token_ids,
         canonical=canonical,
+        canonical_input_ids_proof=_bind_canonical_input_ids(
+            input_ids,
+            (expansion.model_token_ids,),
+        ),
+        attention_mask_proof=_bind_all_ones_attention_mask(attention_mask),
     )
 
 
@@ -797,6 +853,7 @@ def _move_processor_batch(
     runtime: Qwen3RepresentationRuntime,
     batch: Mapping[str, torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    _validate_single_input(batch["input_ids"], batch["attention_mask"])
     embedding = resolve_language_model(runtime.model).get_input_embeddings()
     embedding_weight = getattr(embedding, "weight", None)
     if not isinstance(embedding_weight, torch.Tensor):
@@ -818,7 +875,7 @@ def _move_processor_batch(
         dtype=vision_owner.dtype if vision_owner.dtype.is_floating_point else None,
     )
     grid = batch["image_grid_thw"].to(device=device, dtype=torch.long)
-    _validate_single_input(input_ids, attention_mask)
+    _validate_single_input_structure(input_ids, attention_mask)
     return input_ids, attention_mask, pixel_values, grid
 
 
@@ -1033,14 +1090,84 @@ def _owned_token_positions(
 def _validate_single_input(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
+    *,
+    attention_mask_proof: _AllOnesAttentionMaskProof | None = None,
+) -> None:
+    _validate_single_input_structure(input_ids, attention_mask)
+    if attention_mask_proof is not None:
+        _validate_all_ones_attention_mask_proof(
+            attention_mask_proof,
+            attention_mask=attention_mask,
+        )
+        return
+    if bool((attention_mask == 0).any().item()):
+        raise ValueError(
+            "unpadded native representation input cannot contain masked tokens"
+        )
+
+
+def _validate_single_input_structure(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
 ) -> None:
     if input_ids.dtype != torch.long or input_ids.ndim != 2 or input_ids.shape[0] != 1:
         raise ValueError("native representation input_ids must be long [1,S]")
     if attention_mask.shape != input_ids.shape:
         raise ValueError("native representation attention_mask must match input_ids")
-    if bool((attention_mask == 0).any().item()):
+
+
+def _bind_all_ones_attention_mask(
+    attention_mask: torch.Tensor,
+) -> _AllOnesAttentionMaskProof:
+    if not isinstance(attention_mask, torch.Tensor):
+        raise TypeError("attention_mask must be a torch.Tensor")
+    if attention_mask.device.type == "cpu" and bool((attention_mask == 0).any().item()):
         raise ValueError(
             "unpadded native representation input cannot contain masked tokens"
+        )
+    return _AllOnesAttentionMaskProof(
+        tensor_identity=id(attention_mask),
+        tensor_data_ptr=attention_mask.data_ptr(),
+        tensor_version=attention_mask._version,
+        tensor_shape=tuple(attention_mask.shape),
+        tensor_stride=tuple(attention_mask.stride()),
+        tensor_storage_offset=attention_mask.storage_offset(),
+        tensor_device=attention_mask.device,
+        tensor_dtype=attention_mask.dtype,
+        seal=_ALL_ONES_ATTENTION_MASK_PROOF_SEAL,
+    )
+
+
+def _validate_all_ones_attention_mask_proof(
+    proof: _AllOnesAttentionMaskProof,
+    *,
+    attention_mask: torch.Tensor,
+) -> None:
+    if not isinstance(proof, _AllOnesAttentionMaskProof):
+        raise TypeError("attention_mask_proof must be a bound all-ones proof")
+    tensor_contract = (
+        id(attention_mask),
+        attention_mask.data_ptr(),
+        attention_mask._version,
+        tuple(attention_mask.shape),
+        tuple(attention_mask.stride()),
+        attention_mask.storage_offset(),
+        attention_mask.device,
+        attention_mask.dtype,
+    )
+    expected_contract = (
+        proof.tensor_identity,
+        proof.tensor_data_ptr,
+        proof.tensor_version,
+        proof.tensor_shape,
+        proof.tensor_stride,
+        proof.tensor_storage_offset,
+        proof.tensor_device,
+        proof.tensor_dtype,
+    )
+    if tensor_contract != expected_contract:
+        raise ValueError(
+            "all-ones attention-mask proof does not bind this tensor state"
         )
 
 

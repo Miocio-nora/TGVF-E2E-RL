@@ -274,6 +274,77 @@ def build_original_image_key_block_mask(
         if torch.unique(indices).numel() != indices.numel():
             raise ValueError("original-image token indices must be unique")
 
+    return _build_original_image_key_block_mask_unchecked(
+        attention_mask=attention_mask,
+        indices=indices,
+        start=start,
+        end=end,
+        dtype=dtype,
+    )
+
+
+def _build_original_image_key_block_mask_from_positions(
+    *,
+    attention_mask: torch.Tensor,
+    original_image_token_positions: Sequence[int],
+    block_query_start: int,
+    block_query_end: int | None = None,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Build the mask from validated CPU positions without CUDA content reads."""
+
+    if attention_mask.ndim != 2:
+        raise ValueError("attention_mask must have shape [B, sequence_length]")
+    if not dtype.is_floating_point:
+        raise TypeError("attention mask dtype must be floating point")
+    batch_size, sequence_length = attention_mask.shape
+    if batch_size == 0 or sequence_length == 0:
+        raise ValueError(
+            "attention_mask batch and sequence dimensions must be non-empty"
+        )
+    start = int(block_query_start)
+    end = sequence_length if block_query_end is None else int(block_query_end)
+    if start < 0 or end < start or end > sequence_length:
+        raise ValueError("blocked query span lies outside the sequence")
+    if isinstance(original_image_token_positions, (str, bytes)) or not isinstance(
+        original_image_token_positions,
+        Sequence,
+    ):
+        raise TypeError("original-image token positions must be an integer sequence")
+    positions = tuple(original_image_token_positions)
+    if any(
+        not isinstance(position, int) or isinstance(position, bool)
+        for position in positions
+    ):
+        raise TypeError("original-image token positions must contain integers")
+    if any(position < 0 or position >= sequence_length for position in positions):
+        raise ValueError("original-image token index lies outside the sequence")
+    if len(set(positions)) != len(positions):
+        raise ValueError("original-image token indices must be unique")
+    indices = torch.tensor(
+        positions,
+        device=attention_mask.device,
+        dtype=torch.long,
+    )
+    return _build_original_image_key_block_mask_unchecked(
+        attention_mask=attention_mask,
+        indices=indices,
+        start=start,
+        end=end,
+        dtype=dtype,
+    )
+
+
+def _build_original_image_key_block_mask_unchecked(
+    *,
+    attention_mask: torch.Tensor,
+    indices: torch.Tensor,
+    start: int,
+    end: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    batch_size, sequence_length = attention_mask.shape
+
     minimum = torch.finfo(dtype).min
     mask = torch.zeros(
         (batch_size, 1, sequence_length, sequence_length),

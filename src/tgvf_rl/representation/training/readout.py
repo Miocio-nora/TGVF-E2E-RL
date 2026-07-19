@@ -6,7 +6,11 @@ from dataclasses import dataclass
 
 import torch
 
-from tgvf_rl.conditioning.base import TargetConditioningProviderKind
+from tgvf_rl.conditioning.base import (
+    TargetConditioningProviderKind,
+    _CanonicalInputIdsProof,
+    _validate_canonical_input_ids_proof,
+)
 from tgvf_rl.qwen.base import (
     InjectedForwardRequest,
     InjectedVisualBlock,
@@ -102,6 +106,7 @@ class RepresentationReadoutRow:
     position_ids: torch.Tensor
     source_positions: tuple[int, ...]
     d_positions: tuple[int, ...]
+    canonical_input_ids_proof: _CanonicalInputIdsProof | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("sample_id", "image_group_key", "source_visual_identity"):
@@ -113,10 +118,7 @@ class RepresentationReadoutRow:
         if self.input_ids.shape[0] != 1:
             raise ValueError("synthetic same-image readout requires row batch size one")
         batch, sequence = self.input_ids.shape
-        if tuple(int(value) for value in self.input_ids[0].tolist()) != (
-            self.supervision.model_token_ids
-        ):
-            raise ValueError("readout input_ids differ from model evidence supervision")
+        self.assert_input_ids_authority()
         if self.attention_mask.shape != (batch, sequence):
             raise ValueError("readout attention_mask must match input_ids")
         if self.position_ids.ndim not in {2, 3} or self.position_ids.shape[-2:] != (
@@ -147,6 +149,28 @@ class RepresentationReadoutRow:
             )
         if any(position < 0 or position >= sequence for position in combined):
             raise ValueError("readout visual position is outside the model sequence")
+
+    def assert_input_ids_authority(self) -> None:
+        """Revalidate the exact input tensor without reading bound CUDA content."""
+
+        if self.input_ids.dtype != torch.long or self.input_ids.ndim != 2:
+            raise ValueError("readout input_ids must have shape [B,S] and dtype long")
+        if self.input_ids.shape[0] != 1:
+            raise ValueError("synthetic same-image readout requires row batch size one")
+        sequence = int(self.input_ids.shape[1])
+        if self.canonical_input_ids_proof is None:
+            realized_ids = tuple(int(value) for value in self.input_ids[0].tolist())
+        else:
+            rows, _digest = _validate_canonical_input_ids_proof(
+                self.canonical_input_ids_proof,
+                input_ids=self.input_ids,
+                batched=True,
+                batch_size=1,
+                sequence_length=int(sequence),
+            )
+            realized_ids = rows[0]
+        if realized_ids != self.supervision.model_token_ids:
+            raise ValueError("readout input_ids differ from model evidence supervision")
 
 
 @dataclass(frozen=True, slots=True)

@@ -386,20 +386,26 @@ def _run_initialized(
 
     created_checkpoint_paths: list[Path] = []
     validation_event_index = next_validation_event_index
+    global_matrix_count = _optimizer_step_global_matrix_count(
+        config,
+        world_size=world_size,
+    )
     while trainer.global_step < invocation_target_step:
-        metrics, performance = measure_distributed_train_step(
-            trainer.train_step,
+        metrics, performance = _run_train_step_with_periodic_telemetry(
+            trainer,
             device=device,
-            global_matrix_count=_optimizer_step_global_matrix_count(
-                config,
-                world_size=world_size,
-            ),
-        )
-        all_sample_ids = _gather_string_tuples(metrics.local_sample_ids)
-        all_qwen_forward_batch_sizes = _gather_positive_int_tuples(
-            metrics.local_qwen_forward_batch_sizes
+            global_matrix_count=global_matrix_count,
+            log_every_optimizer_steps=(config.training.log_every_optimizer_steps),
         )
         if metrics.global_step % config.training.log_every_optimizer_steps == 0:
+            if performance is None:
+                raise RuntimeError(
+                    "log-cadence train step did not collect exact performance telemetry"
+                )
+            all_sample_ids = _gather_string_tuples(metrics.local_sample_ids)
+            all_qwen_forward_batch_sizes = _gather_positive_int_tuples(
+                metrics.local_qwen_forward_batch_sizes
+            )
             _log_training_metric(
                 config,
                 metrics=metrics,
@@ -408,6 +414,8 @@ def _run_initialized(
                 run_identity=run_identity,
                 performance=performance,
             )
+        elif performance is not None:
+            raise RuntimeError("non-log train step unexpectedly collected telemetry")
         if metrics.global_step % config.training.validation_every_optimizer_steps == 0:
             validation = _evaluate_validation(
                 config=config,
@@ -1007,6 +1015,43 @@ def _validate_resume_metrics_history(
             "metrics history must contain exactly one train event at the checkpoint"
         )
     return tuple(records)
+
+
+def _run_train_step_with_periodic_telemetry(
+    trainer: RepresentationTrainer,
+    *,
+    device: torch.device,
+    global_matrix_count: int,
+    log_every_optimizer_steps: int,
+) -> tuple[RepresentationStepMetrics, RepresentationTrainStepPerformance | None]:
+    """Run exactly one update and measure only an existing train-log step.
+
+    The strict performance probe deliberately synchronizes CUDA and gathers
+    per-rank resource records.  Keeping that probe on the already configured
+    durable-log cadence removes its host-side gap from ordinary updates while
+    preserving the exact RP evidence path when ``log_every_optimizer_steps=1``.
+    """
+
+    current_step = trainer.global_step
+    if isinstance(current_step, bool) or not isinstance(current_step, int):
+        raise TypeError("trainer.global_step must be an integer")
+    if current_step < 0:
+        raise ValueError("trainer.global_step must be non-negative")
+    if (
+        isinstance(log_every_optimizer_steps, bool)
+        or not isinstance(log_every_optimizer_steps, int)
+        or log_every_optimizer_steps <= 0
+    ):
+        raise ValueError("log_every_optimizer_steps must be a positive integer")
+
+    next_step_is_logged = (current_step + 1) % log_every_optimizer_steps == 0
+    if not next_step_is_logged:
+        return trainer.train_step(), None
+    return measure_distributed_train_step(
+        trainer.train_step,
+        device=device,
+        global_matrix_count=global_matrix_count,
+    )
 
 
 def _log_training_metric(

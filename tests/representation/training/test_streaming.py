@@ -867,6 +867,54 @@ def test_streaming_norm_finite_check_has_one_normal_path_host_read(
     assert item_calls == 1
 
 
+def test_native_qwen_cell_batch_has_no_validation_host_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group = _group()
+    cells = tuple(
+        streaming_module._StreamingCell(
+            group_index=0,
+            row_index=row_index,
+            column_index=column_index,
+            source=group.source_visual,
+            row=row,
+            candidate=candidate.visual,
+            blocked_attention_mask=streaming_module._blocked_evidence_attention_mask(
+                row,
+                group.source_visual,
+            ),
+        )
+        for row_index, row in enumerate(group.rows)
+        for column_index, candidate in enumerate(group.candidates)
+    )
+    original_item = torch.Tensor.item
+    original_equal = torch.equal
+    item_calls = 0
+    equal_calls = 0
+
+    def counted_item(tensor: torch.Tensor, *args: object) -> object:
+        nonlocal item_calls
+        item_calls += 1
+        return original_item(tensor, *args)
+
+    def counted_equal(first: torch.Tensor, second: torch.Tensor) -> bool:
+        nonlocal equal_calls
+        equal_calls += 1
+        return original_equal(first, second)
+
+    monkeypatch.setattr(torch.Tensor, "item", counted_item)
+    monkeypatch.setattr(torch, "equal", counted_equal)
+    losses = streaming_module._forward_cell_batch_losses(
+        Qwen3VLAdapter(),
+        _frozen_model(),
+        cells,
+    )
+
+    assert losses.per_sample_token_mean_nll.shape == (4,)
+    assert item_calls == 0
+    assert equal_calls == 0
+
+
 def test_streaming_norm_determinism_comparison_is_fused_before_vjps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
