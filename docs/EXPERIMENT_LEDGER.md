@@ -3260,6 +3260,59 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   M-RoPE positions on CPU and transfers the single completed position tensor,
   then requires exact real-model position/objective/gradient parity.
 
+### RP-28-QWEN3-REPRESENTATION-CPU-MROPE-REAL512-K4-GA4-THROUGHPUT-GPU23
+
+- Cell/matrix ID and class: `RP-28`; bounded native M-RoPE placement A/B
+  against RP-24 following the RP-27 root-cause profile. Lifecycle status:
+  `PLANNED`; output is diagnostic until exact parity and throughput gates pass.
+- Approval/code/question: accepted
+  `RPI-20260720-CONTROL-STACK-OPTIMIZATION`; runtime commit
+  `e461c66bd9916c97ff170679e51739922bb2fbab`. Does invoking the unchanged
+  Qwen3 `get_rope_index` on CPU IDs/mask/grid and transferring its one finished
+  position tensor eliminate the 3.2--3.9 seconds of readout-row synchronization
+  spans identified by RP-27?
+- Change boundary: only the device placement of discrete M-RoPE construction
+  changes. The exact same model-owned helper, token IDs, all-one mask, two-image
+  grid, output dtype/shape and final positions are used. Frozen vision, target
+  conditioning, TGVF Adapter, main D/DeepStack, Qwen readout and all autograd
+  remain on the original GPU path. No alternative position formula is ported.
+- Model/data/prompt/initialization: exact RP-24 stable local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer `151669`, no resize, template
+  SHA256 `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  `image_max_pixels=262144`, target-token-embedding, fresh Adapter seed
+  `20260719`; train/validation SHA256
+  `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d`/
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`,
+  seeds 71/73, disjoint split, native `tgvf_focus_tool`, prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`.
+- Mathematics/determinism: unchanged complete main D plus D-DeepStack
+  `(8,16,24)`, native masks, full logits, legacy summed-NLL Matrix CE + L_gen +
+  Norm `1/1/.1`, manifold zero; frozen eval Qwen, Adapter dropout zero, no
+  cache, TF32 off, CUBLAS `:4096:8`.
+- Framework/topology/batch: accepted Python3.12/Torch2.9 lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`;
+  FSDP2 `[2]`, reshard false, corrected GA4 sync, physical GPUs2/3,
+  logical0/1, world2, K4, global batch32, eight B8 calls/rank/update, three
+  optimizer steps.
+- N/A: no rollout, policy/reference replay, behavior logprobs, sampling,
+  reward, GRPO, SDPO, judge, vLLM sampling, KV cache, staleness, or scoring.
+- Parity/verification gate: 22 native/golden CPU tests plus Ruff passed. RP-24
+  sample order, every objective, gradient norm, counts, Qwen schedule and
+  tokenizer length must match exactly at step 1; later trajectory values must
+  then remain exact. Any mismatch rejects CPU M-RoPE. Timing, memory and a
+  100-ms physical-device utilization trace are recorded independently.
+- Config/output: source/canonical TOML SHA256
+  `8d991d7ccdc0e69c09b631f73f702d4130c773fde458a678f599f1141b54e2ba`/
+  `686b21f79c7bbf61356b13f48efb1ad4cb611f7dbbc86cbadebda4db8db2742b`;
+  overwrite forbidden under
+  `artifacts/representation/RP-28-qwen3-cpu-mrope-real512-k4-ga4-throughput-gpu23/`.
+- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/smoke/representation_qwen3_embedding_rp28_cpu_mrope_real512_ga4_throughput_gpu23.toml`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
