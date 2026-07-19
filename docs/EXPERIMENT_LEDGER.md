@@ -2383,6 +2383,76 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   checkpoint overhead stated separately rather than hidden in train-core time.
 - Conclusion: PENDING.
 
+### RP-18-QWEN3-REPRESENTATION-NORESHARD-REAL512-K4-GA4-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-18`; diagnostic
+  configuration-only A/B against RP-17.
+- Spike-plan git revision and approval references: accepted
+  `RPI-20260720-CONTROL-STACK-OPTIMIZATION`; runtime commit
+  `1062e2db35a17376b33b9578be81ffb88c9c06e0`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: does keeping the 72M-parameter TGVF Adapter unsharded between its
+  forward and backward (`reshard_after_forward=false`) reduce RP-17's
+  `12.0231005715`-second steady optimizer step without changing mathematics?
+- Baseline and exact output path: RP-17 steps 2/3 `12.019430332`/
+  `12.026770811` seconds; output only under
+  `artifacts/representation/RP-18-qwen3-noreshard-real512-k4-ga4-throughput/`.
+- Model and processor identity: exactly RP-17 stable Qwen3-VL-8B-Thinking,
+  BF16/SDPA, tokenizer `151669`, native template, no resize, max pixels
+  `262144`.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`; no
+  source/legacy artifact; three updates under the 2,000-step scheduler.
+- N/A fields and justification: policy/reference, rollout/logprobs, reward,
+  GRPO, SDPO, judge, vLLM, KV cache and replay are absent.
+- Policy/reference initialization: N/A; frozen Qwen and fresh Adapter only.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  representation training.
+- Code commit and worktree state: runtime commit above; source/canonical TOML
+  SHA256 `7bdc1bd0271d4a8377ac0d4adad0f099d51ad6a987f407738094dfd6a58a0b0f`/
+  `1daf168b621d7ab6c4811df43145da25365270f6366786053522358f1ab3c0ed`;
+  clean committed launch required.
+- Repository adapter/patch surface and hash: no code/package/model patch; only
+  the existing public FSDP2 boolean changes from RP-17 `true` to `false`.
+- Dataset/manifest, hashes, sample rule, and n: identical RP-17 fixed two-image
+  real-resolution K4 fixture and seeds; each rank repeats its one group across
+  GA4, so this is only a matched execution A/B.
+- Native prompt/tool schema hash: identical RP-17 smoke-only native prompt and
+  `tgvf_focus_tool` schema.
+- Chat-template/token-fixture hash and token-ownership masks: identical RP-17;
+  evidence-only labels and no tokenizer growth.
+- D/DeepStack/position/mask identity: identical main D plus branches `(8,16,24)`,
+  native M-RoPE and post-D source-key blocking.
+- Observation materialization/artifact identity used by all replays: no replay;
+  identical single-pass complete candidate observations.
+- RL framework/version/environment lock: identical accepted Torch 2.9 control
+  lock SHA256 `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: identical RP-17 legacy summed-NLL
+  Matrix CE, L_gen and Norm, weights `1/1/.1`, manifold zero.
+- Rollout/replay forward mode and adapter dropout/RNG contract: identical
+  deterministic state, frozen Qwen, Adapter dropout zero and CUBLAS `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: sampling N/A; sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/FP32 reduction, SDPA, no
+  quantization/KV/TP/offload, FSDP2 `[2]`; only reshard-after-forward is false.
+- Logit/logprob/loss/gradient parity tolerances: RP-17 finite loss/gradient and
+  structural contracts must remain; same-seed scientific metrics are compared,
+  while timing and allocator values are excluded from exact parity.
+- World size, microbatch, accumulation, and global batch: identical RP-17:
+  world 2, K4, GA4/GPR1, global batch 32, eight B8 Qwen calls/rank/update.
+- GPUs: only user-authorized physical GPUs 0 and 3, UUIDs recorded in RP-17,
+  both observed at 0 MiB and 0% utilization immediately before planning.
+- Start/end timestamps, elapsed time, and session/process identity: PENDING.
+- Actual GPU-hours and peak scratch use: PENDING; hard limit one aggregate
+  GPU-hour, with final DCP/export outside train-step timing.
+- Command: `CUDA_VISIBLE_DEVICES=0,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp18_noreshard_real512_ga4_throughput.toml > /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-18-qwen3-noreshard-real512-k4-ga4-throughput/run.log 2>&1`.
+- Outputs: PENDING; overwrite forbidden under the exact RP-18 root.
+- Scorer/parser identity: no answer scorer; strict representation runner.
+- Metrics: PENDING; compare steady mean of steps 2/3 and peak allocation to
+  RP-17, and report the implied 2,000-step train-core duration.
+- Conclusion: PENDING.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
