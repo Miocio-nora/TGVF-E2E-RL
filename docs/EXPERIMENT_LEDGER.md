@@ -1688,8 +1688,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: runtime commit
   `dba7801fd0dae8b8d274ba24be65e7ac76b24cb2`; `PROJECT_TASK.md` §9.2 and
   I8H-20260719.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: unchanged combined FSDP2→vLLM sync question, now with the actor's
   Hugging Face attention implementation explicitly fixed to `sdpa`.
 - Baseline and exact output path: failed R1; six outputs use exact prefix
@@ -1703,8 +1703,8 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   vLLM initial load then exact actor-weight synchronization.
 - Rollout policy version and allowed asynchronous staleness: `[0,1]`, sync,
   staleness exactly zero.
-- Code commit and worktree state: runtime commit above; launch must be a clean
-  descendant containing only this committed ledger plan.
+- Code commit and worktree state: runtime commit above; clean launch HEAD
+  `6cf55de991d6e06754f5d2e2aa30d3ce1e372550`.
 - Repository adapter/patch surface and hash: driver
   `2b927b67f99a4c8011bba224ff2c6e84ded56deb3343bb8f2264b47beb27d6ee`;
   manager/objective/reward/lock hashes remain exactly those recorded for R1;
@@ -1738,12 +1738,91 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   batch 2 / mini-batch 2 / micro-batch 1 per GPU / two-update geometry.
 - GPUs: only physical 2/3 with UUIDs and logical mapping already recorded;
   immediate preflight must be free.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T03:31:24.970+09:00` to `03:36:40.197+09:00`, about 315 seconds;
+  TaskRunner PID `1630788`, workers `1632288/1632289`.
+- Actual GPU-hours and peak scratch use: less than `0.176` aggregate GPU-hour;
+  live memory reached about 11.3/9.9 GiB before failure and returned to zero.
+- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R2-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R2-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
+- Outputs: result/log/plan/resolved-config/fixture SHA256 respectively
+  `fcd9534c495d58342a2c4e9364c5b73acbaf8edb689762223dfed60f399c28cc`,
+  `2dceb372adecda2779f875ed4d64b02ad62cef1b68401a6a0b5db767f125b6bc`,
+  `32673943cb48364ec75ebbd114b1493177b6aab303a63a2aa35ebc62333054ad`,
+  `add3e4339f7cfce721862a95962109ea83ea24ea8d1248b7bcc1e00c7cae86ee`,
+  `1ab80939d1fc0f586e2c7430aad7f21da78a302eea468531d04cc9e954f1b43d`;
+  no metrics file was produced.
+- Scorer/parser identity: driver/manager/objective/reward hashes above.
+- Metrics: SDPA Qwen FSDP2 construction reached the 8.77B model and vLLM
+  import; no optimizer update or sync occurred.
+- Conclusion: `FAIL` when Triton compiled its CUDA helper: host
+  `/usr/include/python3.12/Python.h` is absent. R3 provides the already pinned,
+  locally extracted Ubuntu Python 3.12 headers used by the accepted control
+  vLLM smoke; no system install or package change is made.
+
+### SC-21-T211-R3-VERL-VLLM-WEIGHT-SYNC
+
+- Cell/matrix ID and mandatory/diagnostic class:
+  `SC-21-T211-R3-VERL-VLLM-WEIGHT-SYNC`; mandatory corrective rerun after R2
+  reached Triton import and confirmed the missing host header.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: runtime commit
+  `619c706d886fb711c714e2c697d36dfebe537387`; `PROJECT_TASK.md` §9.2 and
+  I8H-20260719.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: unchanged combined FSDP2→vLLM gate, now with Triton's compiler
+  pointed at the pinned local Python 3.12 headers.
+- Baseline and exact output path: failed R2; six outputs use exact prefix
+  `artifacts/compatibility/SC-21-T211-R3-verl-vllm-weight-sync`.
+- Model and processor identity: identical Qwen3, actor SDPA and rollout Triton
+  identities to R2.
+- Representation checkpoint identity: N/A; no TGVF plugin.
+- N/A fields and justification: unchanged R2 exclusions for production math,
+  reference replay, D/DeepStack, GRPO and SDPO.
+- Policy/reference initialization: original Qwen3 actor, no reference; dummy
+  vLLM initialization then exact actor-weight sync.
+- Rollout policy version and allowed asynchronous staleness: `[0,1]`, sync,
+  staleness zero.
+- Code commit and worktree state: runtime commit above; clean planned-launch
+  descendant required.
+- Repository adapter/patch surface and hash: driver
+  `ca2be71a4461b2eedada88a918f4efa5f2ba2dda85d32ecc9bc998c451abb2ea`;
+  remaining code/lock hashes unchanged from R2. Compiler `/usr/bin/gcc`, C++
+  compiler `/usr/bin/g++`, and `CPATH` are explicit. Extracted `Python.h`
+  SHA256 is
+  `729ef157f6026e6e1b3104593f87dddc597c3b83b60c7c2965878c62a56c6f7d`;
+  the pinned Ubuntu dev-package provenance is recorded in
+  `EXTERNAL_REFERENCES.md`; no system install or site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: explicit-R3-ID two-row logical
+  fixture SHA256
+  `5d85c96008a38aae9fde4c97d9532582781a35145128e5b06b5bd7ccf257c41d`;
+  deterministic n=2 train/validation.
+- Native prompt/tool schema hash: no tool call; fixed sync text.
+- Chat-template/token-fixture hash and token-ownership masks: unchanged exact
+  native template/two prompt hashes/generated-token-only mask.
+- D/DeepStack/position/mask identity: N/A by exclusion.
+- Observation materialization/artifact identity used by all replays: same
+  explicit-run-ID TransferQueue response/behavior-logprob record as R2.
+- RL framework/version/environment lock: exact candidate stack and lock;
+  focused tests, public probe, `pip check` and Hydra resolve pass.
+- Objective equations and normalization: zero advantage plus token-mean NLL,
+  fixed zero reward; infrastructure only.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic,
+  actor SDPA, dropout zero, sync V1, seed `20260720`, no sleep/wake.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: unchanged greedy processed-logprob
+  contract.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16, no quantization, actor SDPA,
+  rollout Triton, vLLM TP2 and actor FSDP2 size 2, naive no-sleep sync.
+- Logit/logprob/loss/gradient parity tolerances: unchanged explicit R2 gates.
+- World size, microbatch, accumulation, and global batch: unchanged two-GPU,
+  batch-2, two-update R2 geometry.
+- GPUs: only physical 2/3 and their recorded UUIDs; immediate free preflight.
 - Start/end timestamps, elapsed time, and session/process identity: pending.
 - Actual GPU-hours and peak scratch use: pending; 1800-second timeout.
-- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R2-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R2-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
-- Outputs: six explicit-run-ID artifacts under the prefix above; overwrite
-  forbidden.
-- Scorer/parser identity: driver/manager/objective/reward hashes above.
+- Command: `.venv-torch211-cu129/bin/python spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py --run-id SC-21-T211-R3-VERL-VLLM-WEIGHT-SYNC --python .venv-torch211-cu129/bin/python --output artifacts/compatibility/SC-21-T211-R3-verl-vllm-weight-sync.json --timeout-seconds 1800 --launch-gpu`.
+- Outputs: six explicit-run-ID artifacts; overwrite forbidden.
+- Scorer/parser identity: exact driver/manager/objective/reward hashes above.
 - Metrics: pending combined two-update generation/sync/replay assertions.
 - Conclusion: pending; limited to no-sleep/no-TGVF-plugin infrastructure.
 
