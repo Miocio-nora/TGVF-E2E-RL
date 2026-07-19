@@ -1181,14 +1181,14 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - Cell/matrix ID and mandatory/diagnostic class: `RP-13`; diagnostic bounded
   real-Qwen3 representation-phase K=4/GPR=4/GA=1 single-pass physical-cell-B32
   train-core throughput smoke for the target-token-embedding provider. This is
-  not a promoted training run. **NOT LAUNCHABLE:** every item explicitly marked
-  `FILL BEFORE LAUNCH` below must be resolved from the materialized code,
-  configuration, fixtures, and clean launch tree first.
+  not a promoted training run. Launch is allowed only from the clean committed
+  tree carrying the exact runtime and configuration identities below.
 - Spike-plan git revision and approval references: user direction on
   `2026-07-19` fixes the direct CELLB32 comparison and the boundary in this
-  planned entry. `FILL BEFORE LAUNCH`: accepted implementation/task revision
-  and the exact approval reference covering the single-pass execution path and
-  its parity gate.
+  planned entry. Accepted implementation/task revision is
+  `2af89671f9628c7432a5431d1e6bd1e2b9843b74`, under decision
+  `RPI-20260719-B200-BATCHED-READOUT`; its focused parity gate passed before
+  launch.
 - Lifecycle status: `PLANNED`.
 - Result: `PENDING`.
 - Question: at the same mathematical global batch of 32 as RP-12, what
@@ -1221,14 +1221,21 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   freshly initialized TGVF Adapter is trainable.
 - Rollout policy version and allowed asynchronous staleness: N/A; this is a
   synchronous representation update with no intervening policy update.
-- Code commit and worktree state: `FILL BEFORE LAUNCH`: exact runtime commit,
-  launch HEAD, clean-worktree evidence, configuration source SHA256, and
-  canonical configuration SHA256. The launch is forbidden while any value in
-  this field is unresolved.
-- Repository adapter/patch surface and hash: `FILL BEFORE LAUNCH`: exact
-  representation-training tree identity, Qwen family-adapter tree identity,
-  and hashes of the single-pass execution and physical-execution telemetry
-  surfaces. No site-package patch is permitted.
+- Code commit and worktree state: runtime commit
+  `2af89671f9628c7432a5431d1e6bd1e2b9843b74`; configuration source/canonical
+  SHA256 `13c6586c5e68d5ea5db34dd7ae3192f83cfc653a574a61211fd65ff2eea20c0e`/
+  `490e60b979bea1be2b6c3ef0fd190fd74b858ad582eb9b90e20f64534992aea2`.
+  The launcher must verify that runtime commit through the strict code-identity
+  check and start from a clean worktree. The exact clean launch HEAD is
+  recorded at closeout because a commit cannot contain its own hash.
+- Repository adapter/patch surface and hash: representation-training tree
+  `c1d2ad19e225458bd7a2dda70ea702eeea984623`; unchanged Qwen tree
+  `6ae2676f7f08949f2425d736fe4d54751d53f69f`. Single-pass streaming,
+  trainer, and physical-execution telemetry SHA256 are
+  `e12545c6959b6848d0d58ee4a094d51fa29ca5e52bc969435712d4055361b6b0`,
+  `08f8ab7f1f8b46d3c7c7b2d05e5cc2ba029901f7cfa5e5254ce8182e155b0209`,
+  and `a46faebb4eb747e33998b614641b82890a2d9fdcd4d7ad237e1e03d825ad9b32`.
+  No site-package patch is permitted.
 - Dataset/manifest, hashes, sample rule, and n: unchanged RP-12 direct-batch
   smoke train/validation source SHA256
   `34053c694023461be9f0fe30fd1e525e27697894f705e5428fafad45cfeabc1c`/
@@ -1285,15 +1292,17 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   parallelism, and training device mesh: unchanged BF16 forward, FP32
   reduction, no quantization/KV/rollout TP, SDPA, FSDP2 `fsdp=[2]`, reshard
   after forward, and no offload.
-- Logit/logprob/loss/gradient parity tolerances: `FILL BEFORE LAUNCH`: accepted
-  fixture revision/hash and its numerical tolerance proving that single-pass
-  packing preserves four independent `4x4` losses and the corresponding
-  Adapter-input/Adapter-parameter gradients against the accepted blockwise
-  oracle. Structural gates are exact: per rank/update physical batch schedule
+- Logit/logprob/loss/gradient parity tolerances: focused fixture
+  `tests/representation/training/test_streaming.py` at runtime commit
+  `2af89671f9628c7432a5431d1e6bd1e2b9843b74`, SHA256
+  `4667d397f629d9e39bec0f564f31f901b1cb4aad542b992d11321d1dcc54a5f4`,
+  passed score/objective/Adapter-input-gradient parity at `atol=rtol=1e-6`,
+  including mixed-length right padding. The focused trainer/telemetry suite
+  passed `46` tests. Structural gates are exact: per rank/update schedule
   `(32,32)`, two calls, 64 cells, four K=4 matrices, no `16x16` cross-block CE,
   no second cell presentation, all losses/gradients finite, and tokenizer
   length unchanged. Performance values are measurements rather than a minimum
-  PASS threshold. Launch is forbidden until the parity fixture passes.
+  PASS threshold.
 - World size, microbatch, accumulation, and global batch: world 2; data batch
   size K=4 remains unchanged; four distinct same-image groups per rank and
   GA=1 produce 16 local/32 global rows and four local/eight global independent
@@ -1303,8 +1312,10 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 - GPUs: only physical 2
   `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical 3
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, both NVIDIA B200 and mapped to
-  logical 0/1. `FILL BEFORE LAUNCH`: fresh UUID/mapping, free-memory, competing-
-  process, and scratch-space preflight; no other physical GPU may be visible.
+  logical 0/1. Preflight immediately before the configuration commit found
+  `0` MiB used and `182642` MiB free on each device; `/nvmesv` had about
+  `24` TiB free. The launch repeats the clean-device check and exposes no other
+  physical GPU.
 - Start/end timestamps, elapsed time, and session/process identity: `PENDING`;
   fill from the executed launcher and workers after the run.
 - Actual GPU-hours and peak scratch use: `PENDING`; record measured wall-time
@@ -1312,11 +1323,10 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   the run.
 - Command: planned command is
   `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp13_singlepass_cellb32_throughput.toml`.
-  `FILL BEFORE LAUNCH`: materialize and validate that exact config, bind the
-  CELLB32 execution through its run ID, accepted task decision, and exact
-  runtime commit, set target optimizer steps to 3, and set both validation and
-  checkpoint cadence to 4. Current checkpoint schema requires
-  `save_final=true`, so one
+  The materialized configuration source/canonical hashes are recorded above;
+  it binds CELLB32 through its run ID, accepted task decision, and exact runtime
+  commit. Target optimizer steps are `3`, and validation/checkpoint cadence are
+  both `4`. Current checkpoint schema requires `save_final=true`, so one
   final DCP/export after the timed steps is allowed; no validation or periodic
   checkpoint may run during steps 1-3.
 - Outputs: `PENDING`; expected outputs under the exclusive root are Adapter,
@@ -1325,9 +1335,11 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   `representation-qwen-physical-execution-v1` with
   `forward_batch_sizes_by_rank`, per-rank/global call and cell counts, and
   maximum physical batch.
-- Scorer/parser identity: no answer scorer. `FILL BEFORE LAUNCH`: exact hashes
-  of the strict native pipeline, objective, single-pass execution, performance
-  telemetry, runner, DCP, and export implementation.
+- Scorer/parser identity: no answer scorer. The strict native pipeline,
+  objective, DCP, and export are bound by the representation-training tree
+  identity above; single-pass execution and telemetry have their separate
+  SHA256 values above. Qwen3 family adapter SHA256 is
+  `9993156852dd5d204e399dde00120aa102a3ca39dec541534313e27be9054c9f`.
 - Metrics: `PENDING`. Record every step separately and use steps 2/3 for the
   steady mean. Every step must report 32 rows/eight matrices; each rank must
   report 16 sample IDs from four group keys and physical schedule `(32,32)`;
