@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,11 @@ from torch import nn
 
 from tgvf_rl import cli
 from tgvf_rl.representation.training import runner as runner_module
+from tgvf_rl.representation.training.performance import (
+    RepresentationRankTrainStepResources,
+    RepresentationTrainStepPerformance,
+)
+from tgvf_rl.representation.training.trainer import RepresentationStepMetrics
 
 
 @pytest.fixture(autouse=True)
@@ -297,6 +303,90 @@ def test_collective_metric_append_propagates_rank_zero_failure(
             tmp_path / "metrics.jsonl",
             {"event": "train"},
         )
+
+
+def test_training_metric_gathers_and_logs_versioned_qwen_physical_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    def gather(gathered: list[object], local: object) -> None:
+        gathered[:] = [local, (32, 32)]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    all_qwen_forward_batch_sizes = runner_module._gather_positive_int_tuples((32, 32))
+    metrics = RepresentationStepMetrics(
+        global_step=1,
+        global_matrix_ce_loss=1.0,
+        global_l_gen_loss=2.0,
+        global_norm_loss=3.0,
+        global_weighted_norm_loss=0.3,
+        global_total_loss=3.3,
+        global_row_count=32,
+        global_sample_count=32,
+        gradient_norm_before_clip=0.5,
+        learning_rate=1e-4,
+        local_sample_ids=tuple(f"sample-{index}" for index in range(16)),
+        local_qwen_forward_batch_sizes=(32, 32),
+    )
+    rank_resources = tuple(
+        RepresentationRankTrainStepResources(
+            rank=rank,
+            elapsed_ns=1_000_000_000 + rank,
+            starting_allocated_bytes=100,
+            starting_reserved_bytes=200,
+            peak_allocated_bytes=150,
+            peak_reserved_bytes=250,
+            ending_allocated_bytes=110,
+            ending_reserved_bytes=210,
+        )
+        for rank in range(2)
+    )
+    performance = RepresentationTrainStepPerformance(
+        global_step=1,
+        global_row_count=32,
+        global_matrix_count=8,
+        ranks=rank_resources,
+    )
+    captured: dict[str, object] = {}
+
+    def capture(path: Path, payload: Mapping[str, object]) -> None:
+        captured["path"] = path
+        captured["payload"] = dict(payload)
+
+    monkeypatch.setattr(
+        runner_module,
+        "_append_metric_rank_zero_collective",
+        capture,
+    )
+    output_path = tmp_path / "metrics.jsonl"
+
+    runner_module._log_training_metric(
+        SimpleNamespace(output=SimpleNamespace(metrics_jsonl_path=output_path)),
+        metrics=metrics,
+        all_sample_ids=(("rank-0-sample",), ("rank-1-sample",)),
+        all_qwen_forward_batch_sizes=all_qwen_forward_batch_sizes,
+        run_identity=SimpleNamespace(identity_sha256="a" * 64),
+        performance=performance,
+    )
+
+    assert captured["path"] == output_path
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert "local_sample_ids" not in payload
+    assert "local_qwen_forward_batch_sizes" not in payload
+    performance_payload = payload["performance"]
+    assert isinstance(performance_payload, dict)
+    assert performance_payload["qwen_physical_execution"] == {
+        "schema_version": "representation-qwen-physical-execution-v1",
+        "forward_batch_sizes_by_rank": [[32, 32], [32, 32]],
+        "forward_call_count_by_rank": [2, 2],
+        "cell_evaluation_count_by_rank": [64, 64],
+        "max_forward_batch_size_by_rank": [32, 32],
+        "global_forward_call_count": 4,
+        "global_cell_evaluation_count": 128,
+    }
 
 
 def _write_metrics(path: Path, records: list[dict[str, object]]) -> None:

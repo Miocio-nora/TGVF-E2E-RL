@@ -17,6 +17,7 @@ from tgvf_rl.representation.deepstack import build_original_image_key_block_mask
 
 from .losses import (
     CausalEvidenceLosses,
+    EVIDENCE_IGNORE_INDEX,
     causal_evidence_losses,
     historical_sample_norm_loss,
 )
@@ -33,15 +34,49 @@ from .readout import (
 )
 
 
+_MAX_PHYSICAL_QWEN_BATCH = 32
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamingCandidateGradients:
+    """Detached weighted-readout gradient at one Adapter-output boundary."""
+
+    weighted_readout: tuple[torch.Tensor, ...]
+
+    def __post_init__(self) -> None:
+        if not self.weighted_readout:
+            raise ValueError("streaming candidate gradient paths cannot be empty")
+        for gradient in self.weighted_readout:
+            if gradient.requires_grad:
+                raise ValueError("streaming candidate gradients must be detached")
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamingGradientContract:
+    """Identity of the weights already applied by the single Qwen VJP."""
+
+    objective_identity: str
+    objective_schema_version: str
+    matrix_ce_weight: float
+    l_gen_weight: float
+    norm_weight: float | None
+    matrix_valid_rows: int
+    l_gen_samples: int
+    data_parallel_world_size: int
+    qwen_forward_batch_sizes: tuple[int, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class StreamingGroupScores:
-    """Detached first-pass values used to derive exact Matrix-CE gradients."""
+    """Detached values and row-local gradients from the single Qwen pass."""
 
     sample_ids: tuple[str, ...]
     score_matrix: torch.Tensor
     diagonal_l_gen: torch.Tensor
     evidence_token_counts: torch.Tensor
     historical_norm: torch.Tensor
+    candidate_output_gradients: tuple[_StreamingCandidateGradients, ...] | None = None
+    gradient_contract: _StreamingGradientContract | None = None
 
     def __post_init__(self) -> None:
         size = len(self.sample_ids)
@@ -61,6 +96,22 @@ class StreamingGroupScores:
         ):
             if tensor.requires_grad:
                 raise ValueError("streaming first-pass values must be detached")
+        if (self.candidate_output_gradients is None) != (
+            self.gradient_contract is None
+        ):
+            raise ValueError(
+                "streaming candidate gradients and their contract must coexist"
+            )
+        if self.candidate_output_gradients is not None:
+            if len(self.candidate_output_gradients) != size:
+                raise ValueError(
+                    "streaming candidate gradients must cover every candidate"
+                )
+            if any(
+                not isinstance(gradients, _StreamingCandidateGradients)
+                for gradients in self.candidate_output_gradients
+            ):
+                raise TypeError("streaming candidate gradients use an invalid payload")
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,10 +142,10 @@ class StreamingMultiGroupScores:
             isinstance(size, bool)
             or not isinstance(size, int)
             or size <= 0
-            or size > len(self.group_scores)
+            or size > _MAX_PHYSICAL_QWEN_BATCH
             for size in self.qwen_forward_batch_sizes
         ):
-            raise ValueError("multi-group Qwen batch sizes must be in [1, group_count]")
+            raise ValueError("multi-group Qwen batch sizes must be in [1, 32]")
         expected_cells = sum(
             len(scores.sample_ids) ** 2 for scores in self.group_scores
         )
@@ -144,6 +195,7 @@ class StreamingBackwardMetrics:
     local_sample_count: int
     weighted_local_mean: torch.Tensor
     weighted_norm_local_mean: torch.Tensor | None
+    qwen_forward_batch_sizes: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,64 +209,48 @@ class _StreamingCell:
     blocked_attention_mask: torch.Tensor
 
 
+@dataclass(frozen=True, slots=True)
+class _StreamingRow:
+    group_index: int
+    row_index: int
+    cells: tuple[_StreamingCell, ...]
+
+
 def score_streaming_same_image_group(
     family_adapter: QwenVLMFamilyAdapter,
     model: object,
     group: SameImageReadoutGroup,
+    *,
+    objective: RepresentationObjectiveConfigLike | None = None,
+    normalization: StreamingGlobalNormalization | None = None,
 ) -> StreamingGroupScores:
-    """Run the detached score pass without retaining any K-squared graph."""
+    """Score one block, optionally materializing its one-pass training VJP."""
 
     _validate_execution_inputs(family_adapter, model, group)
-    score_rows: list[torch.Tensor] = []
-    diagonal_l_gen: list[torch.Tensor] = []
-    evidence_counts: list[torch.Tensor] = []
-    norm_losses: list[torch.Tensor] = []
-    with torch.no_grad():
-        for candidate in group.candidates:
-            norm_losses.append(
-                historical_sample_norm_loss(
-                    candidate.visual.main,
-                    group.source_visual.main,
-                    candidate.visual.deepstack,
-                    group.source_visual.deepstack,
-                )
-            )
-        for row_index, row in enumerate(group.rows):
-            blocked_mask = _blocked_evidence_attention_mask(row, group.source_visual)
-            row_scores: list[torch.Tensor] = []
-            for column_index, candidate in enumerate(group.candidates):
-                losses = _forward_cell_losses(
-                    family_adapter,
-                    model,
-                    source=group.source_visual,
-                    row=row,
-                    candidate=candidate.visual,
-                    blocked_attention_mask=blocked_mask,
-                )
-                row_scores.append(losses.per_sample_summed_log_likelihood[0])
-                if row_index == column_index:
-                    diagonal_l_gen.append(losses.per_sample_token_mean_nll[0])
-                    evidence_counts.append(losses.valid_token_counts[0])
-            score_rows.append(torch.stack(row_scores))
-    return StreamingGroupScores(
-        sample_ids=tuple(row.sample_id for row in group.rows),
-        score_matrix=torch.stack(score_rows).detach(),
-        diagonal_l_gen=torch.stack(diagonal_l_gen).detach(),
-        evidence_token_counts=torch.stack(evidence_counts).detach(),
-        historical_norm=torch.stack(norm_losses).detach(),
+    group_scores, _ = _score_streaming_groups(
+        family_adapter,
+        model,
+        (group,),
+        objective=objective,
+        normalization=normalization,
     )
+    return group_scores[0]
 
 
 def score_streaming_same_image_groups(
     family_adapter: QwenVLMFamilyAdapter,
     model: object,
     groups: Sequence[SameImageReadoutGroup],
+    *,
+    objective: RepresentationObjectiveConfigLike | None = None,
+    normalization: StreamingGlobalNormalization | None = None,
 ) -> StreamingMultiGroupScores:
-    """Score independent same-image blocks with cross-group Qwen cell batches.
+    """Score separate CE blocks in packed, row-local physical Qwen batches.
 
-    A batch wave contains at most one cell from each group. Compatibility
-    bucketing may split a wave, but cells from one group are never combined
-    into a larger cross-image Matrix-CE block.
+    Two logical row waves are packed up to physical batch 32.  Every logical
+    row still forms CE only against candidates from its own same-image group.
+    Passing ``objective`` and ``normalization`` enables the training path: one
+    weighted VJP is consumed at the candidate-D boundary per physical forward.
     """
 
     materialized = _validate_multi_group_execution_inputs(
@@ -222,72 +258,195 @@ def score_streaming_same_image_groups(
         model,
         groups,
     )
-    score_cells: list[list[list[torch.Tensor | None]]] = [
-        [[None for _ in group.candidates] for _ in group.rows] for group in materialized
-    ]
-    diagonal_l_gen: list[list[torch.Tensor | None]] = [
-        [None for _ in group.rows] for group in materialized
-    ]
-    evidence_counts: list[list[torch.Tensor | None]] = [
-        [None for _ in group.rows] for group in materialized
-    ]
-    norm_losses: list[list[torch.Tensor]] = [[] for _ in materialized]
-    forward_batch_sizes: list[int] = []
-    with torch.no_grad():
-        for group_index, group in enumerate(materialized):
-            for candidate in group.candidates:
-                norm_losses[group_index].append(
-                    historical_sample_norm_loss(
-                        candidate.visual.main,
-                        group.source_visual.main,
-                        candidate.visual.deepstack,
-                        group.source_visual.deepstack,
-                    )
-                )
-        for wave in _multi_group_cell_waves(materialized):
-            for compatible_cells in _partition_compatible_cells(wave):
-                losses = _forward_cell_batch_losses(
-                    family_adapter,
-                    model,
-                    compatible_cells,
-                )
-                forward_batch_sizes.append(len(compatible_cells))
-                for batch_index, cell in enumerate(compatible_cells):
-                    score_cells[cell.group_index][cell.row_index][cell.column_index] = (
-                        losses.per_sample_summed_log_likelihood[batch_index]
-                    )
-                    if cell.row_index == cell.column_index:
-                        diagonal_l_gen[cell.group_index][cell.row_index] = (
-                            losses.per_sample_token_mean_nll[batch_index]
-                        )
-                        evidence_counts[cell.group_index][cell.row_index] = (
-                            losses.valid_token_counts[batch_index]
-                        )
-
-    group_scores = tuple(
-        StreamingGroupScores(
-            sample_ids=tuple(row.sample_id for row in group.rows),
-            score_matrix=_stack_complete_matrix(
-                score_cells[group_index],
-                name="multi-group score matrix",
-            ).detach(),
-            diagonal_l_gen=_stack_complete_vector(
-                diagonal_l_gen[group_index],
-                name="multi-group diagonal L_gen",
-            ).detach(),
-            evidence_token_counts=_stack_complete_vector(
-                evidence_counts[group_index],
-                name="multi-group evidence counts",
-            ).detach(),
-            historical_norm=torch.stack(norm_losses[group_index]).detach(),
-        )
-        for group_index, group in enumerate(materialized)
+    group_scores, forward_batch_sizes = _score_streaming_groups(
+        family_adapter,
+        model,
+        materialized,
+        objective=objective,
+        normalization=normalization,
     )
     return StreamingMultiGroupScores(
         group_sample_ids=tuple(scores.sample_ids for scores in group_scores),
         group_scores=group_scores,
         qwen_forward_batch_sizes=tuple(forward_batch_sizes),
     )
+
+
+def _score_streaming_groups(
+    family_adapter: QwenVLMFamilyAdapter,
+    model: object,
+    groups: tuple[SameImageReadoutGroup, ...],
+    *,
+    objective: RepresentationObjectiveConfigLike | None,
+    normalization: StreamingGlobalNormalization | None,
+) -> tuple[tuple[StreamingGroupScores, ...], tuple[int, ...]]:
+    training = _validate_score_training_inputs(groups, objective, normalization)
+    score_cells: list[list[list[torch.Tensor | None]]] = [
+        [[None for _ in group.candidates] for _ in group.rows] for group in groups
+    ]
+    diagonal_l_gen: list[list[torch.Tensor | None]] = [
+        [None for _ in group.rows] for group in groups
+    ]
+    evidence_counts: list[list[torch.Tensor | None]] = [
+        [None for _ in group.rows] for group in groups
+    ]
+    with torch.no_grad():
+        norm_losses = [
+            [
+                historical_sample_norm_loss(
+                    candidate.visual.main,
+                    group.source_visual.main,
+                    candidate.visual.deepstack,
+                    group.source_visual.deepstack,
+                )
+                for candidate in group.candidates
+            ]
+            for group in groups
+        ]
+
+    accumulated_gradients = (
+        [
+            [
+                [
+                    torch.zeros_like(tensor)
+                    for tensor in _candidate_output_tensors(candidate.visual)
+                ]
+                for candidate in group.candidates
+            ]
+            for group in groups
+        ]
+        if training
+        else None
+    )
+    forward_batch_sizes: list[int] = []
+    for paired_rows in _paired_multi_group_row_waves(groups):
+        for compatible_rows in _partition_compatible_rows(paired_rows):
+            cells = tuple(cell for row in compatible_rows for cell in row.cells)
+            if training:
+                losses = _forward_cell_batch_losses(family_adapter, model, cells)
+            else:
+                with torch.no_grad():
+                    losses = _forward_cell_batch_losses(family_adapter, model, cells)
+            forward_batch_sizes.append(len(cells))
+
+            row_matrix_terms: list[torch.Tensor] = []
+            row_l_gen_terms: list[torch.Tensor] = []
+            cursor = 0
+            for logical_row in compatible_rows:
+                row_size = len(logical_row.cells)
+                row_slice = slice(cursor, cursor + row_size)
+                row_scores = losses.per_sample_summed_log_likelihood[row_slice]
+                for cell, value in zip(
+                    logical_row.cells,
+                    row_scores,
+                    strict=True,
+                ):
+                    score_cells[cell.group_index][cell.row_index][cell.column_index] = (
+                        value.detach()
+                    )
+                diagonal_index = cursor + logical_row.row_index
+                diagonal_l_gen[logical_row.group_index][logical_row.row_index] = (
+                    losses.per_sample_token_mean_nll[diagonal_index].detach()
+                )
+                evidence_counts[logical_row.group_index][logical_row.row_index] = (
+                    losses.valid_token_counts[diagonal_index].detach()
+                )
+                if training:
+                    row_matrix_terms.append(
+                        F.cross_entropy(
+                            row_scores.unsqueeze(0),
+                            torch.tensor(
+                                [logical_row.row_index],
+                                dtype=torch.long,
+                                device=row_scores.device,
+                            ),
+                            reduction="sum",
+                        )
+                    )
+                    row_l_gen_terms.append(
+                        losses.per_sample_token_mean_nll[diagonal_index]
+                    )
+                cursor += row_size
+            if cursor != len(cells):
+                raise RuntimeError("streaming row partition drifted")
+
+            if training:
+                assert objective is not None
+                assert normalization is not None
+                assert accumulated_gradients is not None
+                surrogate = torch.stack(row_matrix_terms).sum() * (
+                    objective.matrix_ce_weight
+                    * normalization.data_parallel_world_size
+                    / normalization.matrix_valid_rows
+                ) + torch.stack(row_l_gen_terms).sum() * (
+                    objective.l_gen_weight
+                    * normalization.data_parallel_world_size
+                    / normalization.l_gen_samples
+                )
+                candidate_slots = _unique_candidate_slots(compatible_rows)
+                flat_outputs = tuple(
+                    tensor
+                    for group_index, column_index in candidate_slots
+                    for tensor in _candidate_output_tensors(
+                        groups[group_index].candidates[column_index].visual
+                    )
+                )
+                gradients = torch.autograd.grad(
+                    surrogate,
+                    flat_outputs,
+                    retain_graph=False,
+                    create_graph=False,
+                    allow_unused=False,
+                )
+                gradient_cursor = 0
+                for group_index, column_index in candidate_slots:
+                    accumulators = accumulated_gradients[group_index][column_index]
+                    for accumulator in accumulators:
+                        accumulator.add_(gradients[gradient_cursor].detach())
+                        gradient_cursor += 1
+                if gradient_cursor != len(gradients):
+                    raise RuntimeError("streaming candidate gradient partition drifted")
+
+    contract = (
+        None
+        if not training
+        else _gradient_contract(
+            objective,
+            normalization,
+            tuple(forward_batch_sizes),
+        )
+    )
+    group_scores = tuple(
+        StreamingGroupScores(
+            sample_ids=tuple(row.sample_id for row in group.rows),
+            score_matrix=_stack_complete_matrix(
+                score_cells[group_index],
+                name="streaming score matrix",
+            ).detach(),
+            diagonal_l_gen=_stack_complete_vector(
+                diagonal_l_gen[group_index],
+                name="streaming diagonal L_gen",
+            ).detach(),
+            evidence_token_counts=_stack_complete_vector(
+                evidence_counts[group_index],
+                name="streaming evidence counts",
+            ).detach(),
+            historical_norm=torch.stack(norm_losses[group_index]).detach(),
+            candidate_output_gradients=(
+                None
+                if accumulated_gradients is None
+                else tuple(
+                    _StreamingCandidateGradients(
+                        weighted_readout=tuple(gradient.detach() for gradient in values)
+                    )
+                    for values in accumulated_gradients[group_index]
+                )
+            ),
+            gradient_contract=contract,
+        )
+        for group_index, group in enumerate(groups)
+    )
+    return group_scores, tuple(forward_batch_sizes)
 
 
 def backward_streaming_same_image_group(
@@ -299,178 +458,17 @@ def backward_streaming_same_image_group(
     objective: RepresentationObjectiveConfigLike,
     normalization: StreamingGlobalNormalization,
 ) -> StreamingBackwardMetrics:
-    """Recompute one cell at a time and backpropagate the exact global objective.
-
-    The first pass determines the Matrix-CE derivative with respect to each
-    scalar score. This second pass recomputes and immediately releases each
-    frozen-Qwen cell graph. Cell gradients stop at the candidate main-D and
-    DeepStack outputs; they are accumulated there, then each candidate's TGVF
-    Adapter graph is traversed exactly once. This is both memory bounded and
-    compatible with FSDP2 pre/post-backward hooks.
-    """
+    """Traverse the Adapter once from a previously materialized Qwen VJP."""
 
     _validate_execution_inputs(family_adapter, model, group)
     if not isinstance(scores, StreamingGroupScores):
         raise TypeError("scores must be StreamingGroupScores")
-    if not isinstance(
-        objective, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
-    ):
-        raise TypeError("objective must be a representation objective config")
-    if not isinstance(normalization, StreamingGlobalNormalization):
-        raise TypeError("normalization must be StreamingGlobalNormalization")
-    sample_ids = tuple(row.sample_id for row in group.rows)
-    if scores.sample_ids != sample_ids:
-        raise ValueError("streaming scores belong to a different group/order")
-    size = len(sample_ids)
-    if normalization.matrix_valid_rows < size or normalization.l_gen_samples < size:
-        raise ValueError("global normalization counts cannot be smaller than one group")
-
-    probabilities = torch.softmax(scores.score_matrix.float(), dim=-1).to(
-        dtype=scores.score_matrix.dtype
-    )
-    score_gradients = probabilities.clone()
-    diagonal = torch.arange(size, device=score_gradients.device)
-    score_gradients[diagonal, diagonal] -= 1
-    score_gradients = score_gradients * (
-        objective.matrix_ce_weight
-        * normalization.data_parallel_world_size
-        / normalization.matrix_valid_rows
-    )
-    l_gen_gradient = (
-        objective.l_gen_weight
-        * normalization.data_parallel_world_size
-        / normalization.l_gen_samples
-    )
-
-    candidate_tensors = tuple(
-        (candidate.visual.main, *candidate.visual.deepstack)
-        for candidate in group.candidates
-    )
-    for tensors in candidate_tensors:
-        if any(not tensor.requires_grad for tensor in tensors):
-            raise ValueError(
-                "every candidate main-D/DeepStack output must retain its Adapter graph"
-            )
-    accumulated_candidate_gradients = [
-        [torch.zeros_like(tensor) for tensor in tensors]
-        for tensors in candidate_tensors
-    ]
-    if isinstance(objective, RepresentationObjectiveConfigV2):
-        for column_index, (candidate, tensors) in enumerate(
-            zip(group.candidates, candidate_tensors, strict=True)
-        ):
-            live_norm = historical_sample_norm_loss(
-                candidate.visual.main,
-                group.source_visual.main,
-                candidate.visual.deepstack,
-                group.source_visual.deepstack,
-            )
-            if not torch.equal(
-                live_norm.detach(), scores.historical_norm[column_index]
-            ):
-                raise RuntimeError(
-                    "deterministic streaming recompute changed a norm value"
-                )
-            if objective.norm_weight:
-                norm_surrogate = live_norm * (
-                    objective.norm_weight
-                    * normalization.data_parallel_world_size
-                    / normalization.l_gen_samples
-                )
-                norm_gradients = torch.autograd.grad(
-                    norm_surrogate,
-                    tensors,
-                    retain_graph=False,
-                    create_graph=False,
-                    allow_unused=False,
-                )
-                for accumulator, gradient in zip(
-                    accumulated_candidate_gradients[column_index],
-                    norm_gradients,
-                    strict=True,
-                ):
-                    accumulator.add_(gradient.detach())
-    for row_index, row in enumerate(group.rows):
-        blocked_mask = _blocked_evidence_attention_mask(row, group.source_visual)
-        for column_index, candidate in enumerate(group.candidates):
-            losses = _forward_cell_losses(
-                family_adapter,
-                model,
-                source=group.source_visual,
-                row=row,
-                candidate=candidate.visual,
-                blocked_attention_mask=blocked_mask,
-            )
-            live_score = losses.per_sample_summed_log_likelihood[0]
-            expected_score = scores.score_matrix[row_index, column_index]
-            if not torch.equal(live_score.detach(), expected_score):
-                raise RuntimeError(
-                    "deterministic streaming recompute changed a Matrix-CE score"
-                )
-            surrogate = live_score * score_gradients[row_index, column_index]
-            if row_index == column_index and objective.l_gen_weight:
-                live_l_gen = losses.per_sample_token_mean_nll[0]
-                if not torch.equal(
-                    live_l_gen.detach(), scores.diagonal_l_gen[row_index]
-                ):
-                    raise RuntimeError(
-                        "deterministic streaming recompute changed an L_gen value"
-                    )
-                surrogate = surrogate + live_l_gen * l_gen_gradient
-            gradients = torch.autograd.grad(
-                surrogate,
-                candidate_tensors[column_index],
-                retain_graph=False,
-                create_graph=False,
-                allow_unused=False,
-            )
-            for accumulator, gradient in zip(
-                accumulated_candidate_gradients[column_index],
-                gradients,
-                strict=True,
-            ):
-                accumulator.add_(gradient.detach())
-
-    for tensors, gradients in zip(
-        candidate_tensors,
-        accumulated_candidate_gradients,
-        strict=True,
-    ):
-        torch.autograd.backward(
-            tensors,
-            grad_tensors=tuple(gradients),
-            retain_graph=False,
-            create_graph=False,
-        )
-    _backward_collective_padding(group.collective_padding)
-
-    labels = torch.arange(size, device=scores.score_matrix.device)
-    matrix_numerator = F.cross_entropy(scores.score_matrix, labels, reduction="sum")
-    l_gen_numerator = scores.diagonal_l_gen.sum()
-    norm_numerator = (
-        scores.historical_norm.sum()
-        if isinstance(objective, RepresentationObjectiveConfigV2)
-        else None
-    )
-    weighted_norm_local_mean = (
-        None
-        if norm_numerator is None
-        else norm_numerator / size * objective.norm_weight
-    )
-    weighted_local_mean = (
-        matrix_numerator / size * objective.matrix_ce_weight
-        + l_gen_numerator / size * objective.l_gen_weight
-    )
-    if weighted_norm_local_mean is not None:
-        weighted_local_mean = weighted_local_mean + weighted_norm_local_mean
-    return StreamingBackwardMetrics(
-        matrix_ce_numerator=matrix_numerator,
-        l_gen_numerator=l_gen_numerator,
-        norm_numerator=norm_numerator,
-        local_row_count=size,
-        local_sample_count=size,
-        weighted_local_mean=weighted_local_mean,
-        weighted_norm_local_mean=weighted_norm_local_mean,
+    return _backward_streaming_groups(
+        (group,),
+        (scores,),
+        objective=objective,
+        normalization=normalization,
+        expected_qwen_schedule=None,
     )
 
 
@@ -483,7 +481,7 @@ def backward_streaming_same_image_groups(
     objective: RepresentationObjectiveConfigLike,
     normalization: StreamingGlobalNormalization,
 ) -> StreamingBackwardMetrics:
-    """Backpropagate one globally normalized objective over separate CE blocks."""
+    """Traverse the Adapter once for several independently scored CE blocks."""
 
     materialized = _validate_multi_group_execution_inputs(
         family_adapter,
@@ -492,18 +490,38 @@ def backward_streaming_same_image_groups(
     )
     if not isinstance(scores, StreamingMultiGroupScores):
         raise TypeError("scores must be StreamingMultiGroupScores")
+    sample_ids = tuple(
+        tuple(row.sample_id for row in group.rows) for group in materialized
+    )
+    if scores.group_sample_ids != sample_ids:
+        raise ValueError("multi-group streaming scores belong to another group/order")
+    return _backward_streaming_groups(
+        materialized,
+        scores.group_scores,
+        objective=objective,
+        normalization=normalization,
+        expected_qwen_schedule=scores.qwen_forward_batch_sizes,
+    )
+
+
+def _backward_streaming_groups(
+    groups: tuple[SameImageReadoutGroup, ...],
+    group_scores: tuple[StreamingGroupScores, ...],
+    *,
+    objective: RepresentationObjectiveConfigLike,
+    normalization: StreamingGlobalNormalization,
+    expected_qwen_schedule: tuple[int, ...] | None,
+) -> StreamingBackwardMetrics:
     if not isinstance(
         objective, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
     ):
         raise TypeError("objective must be a representation objective config")
     if not isinstance(normalization, StreamingGlobalNormalization):
         raise TypeError("normalization must be StreamingGlobalNormalization")
-    sample_ids = tuple(
-        tuple(row.sample_id for row in group.rows) for group in materialized
-    )
-    if scores.group_sample_ids != sample_ids:
-        raise ValueError("multi-group streaming scores belong to another group/order")
-    local_rows = sum(len(group.rows) for group in materialized)
+    if len(groups) != len(group_scores):
+        raise ValueError("streaming groups and score blocks must align")
+
+    local_rows = sum(len(group.rows) for group in groups)
     if (
         normalization.matrix_valid_rows < local_rows
         or normalization.l_gen_samples < local_rows
@@ -511,50 +529,82 @@ def backward_streaming_same_image_groups(
         raise ValueError(
             "global normalization counts cannot be smaller than all local groups"
         )
-
-    score_gradients: list[torch.Tensor] = []
-    for group_scores in scores.group_scores:
-        size = len(group_scores.sample_ids)
-        probabilities = torch.softmax(group_scores.score_matrix.float(), dim=-1).to(
-            dtype=group_scores.score_matrix.dtype
-        )
-        gradients = probabilities.clone()
-        diagonal = torch.arange(size, device=gradients.device)
-        gradients[diagonal, diagonal] -= 1
-        gradients.mul_(
-            objective.matrix_ce_weight
-            * normalization.data_parallel_world_size
-            / normalization.matrix_valid_rows
-        )
-        score_gradients.append(gradients)
-    l_gen_gradient = (
-        objective.l_gen_weight
-        * normalization.data_parallel_world_size
-        / normalization.l_gen_samples
-    )
+    for group, scores in zip(groups, group_scores, strict=True):
+        sample_ids = tuple(row.sample_id for row in group.rows)
+        if scores.sample_ids != sample_ids:
+            raise ValueError("streaming scores belong to a different group/order")
+        if (
+            scores.candidate_output_gradients is None
+            or scores.gradient_contract is None
+        ):
+            raise ValueError(
+                "training backward requires score materialization with objective "
+                "and normalization"
+            )
+        _assert_gradient_contract(scores.gradient_contract, objective, normalization)
+    contracts = tuple(scores.gradient_contract for scores in group_scores)
+    first_contract = contracts[0]
+    if first_contract is None:
+        raise RuntimeError("streaming gradient contract unexpectedly disappeared")
+    if any(contract != first_contract for contract in contracts[1:]):
+        raise ValueError("streaming score blocks use different gradient contracts")
+    if (
+        expected_qwen_schedule is not None
+        and first_contract.qwen_forward_batch_sizes != expected_qwen_schedule
+    ):
+        raise ValueError("streaming Qwen schedule differs from score telemetry")
 
     candidate_tensors = tuple(
         tuple(
-            (candidate.visual.main, *candidate.visual.deepstack)
+            _candidate_output_tensors(candidate.visual)
             for candidate in group.candidates
         )
-        for group in materialized
+        for group in groups
     )
-    for group_tensors in candidate_tensors:
-        for tensors in group_tensors:
+    accumulated_gradients: list[list[list[torch.Tensor]]] = []
+    for group_index, (group_tensors, scores) in enumerate(
+        zip(candidate_tensors, group_scores, strict=True)
+    ):
+        payloads = scores.candidate_output_gradients
+        if payloads is None:
+            raise RuntimeError("streaming candidate gradients unexpectedly disappeared")
+        group_gradients: list[list[torch.Tensor]] = []
+        for column_index, (tensors, payload) in enumerate(
+            zip(group_tensors, payloads, strict=True)
+        ):
             if any(not tensor.requires_grad for tensor in tensors):
                 raise ValueError(
                     "every candidate main-D/DeepStack output must retain its "
                     "Adapter graph"
                 )
-    accumulated_candidate_gradients = [
-        [[torch.zeros_like(tensor) for tensor in tensors] for tensors in group_tensors]
-        for group_tensors in candidate_tensors
-    ]
+            if len(tensors) != len(payload.weighted_readout):
+                raise ValueError("streaming candidate gradient path count changed")
+            values: list[torch.Tensor] = []
+            for tensor, gradient in zip(
+                tensors,
+                payload.weighted_readout,
+                strict=True,
+            ):
+                if (
+                    tensor.shape != gradient.shape
+                    or tensor.device != gradient.device
+                    or tensor.dtype != gradient.dtype
+                ):
+                    raise ValueError(
+                        "streaming candidate gradient tensor contract changed"
+                    )
+                values.append(gradient.clone())
+            group_gradients.append(values)
+        accumulated_gradients.append(group_gradients)
 
     if isinstance(objective, RepresentationObjectiveConfigV2):
-        for group_index, (group, group_tensors, group_scores) in enumerate(
-            zip(materialized, candidate_tensors, scores.group_scores, strict=True)
+        norm_scale = (
+            objective.norm_weight
+            * normalization.data_parallel_world_size
+            / normalization.l_gen_samples
+        )
+        for group_index, (group, group_tensors, scores) in enumerate(
+            zip(groups, candidate_tensors, group_scores, strict=True)
         ):
             for column_index, (candidate, tensors) in enumerate(
                 zip(group.candidates, group_tensors, strict=True)
@@ -566,104 +616,39 @@ def backward_streaming_same_image_groups(
                     group.source_visual.deepstack,
                 )
                 if not torch.equal(
-                    live_norm.detach(), group_scores.historical_norm[column_index]
+                    live_norm.detach(),
+                    scores.historical_norm[column_index],
                 ):
                     raise RuntimeError(
-                        "deterministic multi-group recompute changed a norm value"
+                        "deterministic streaming execution changed a norm value"
                     )
-                norm_surrogate = live_norm * (
-                    objective.norm_weight
-                    * normalization.data_parallel_world_size
-                    / normalization.l_gen_samples
-                )
                 norm_gradients = torch.autograd.grad(
-                    norm_surrogate,
+                    live_norm * norm_scale,
                     tensors,
                     retain_graph=False,
                     create_graph=False,
                     allow_unused=False,
                 )
                 for accumulator, gradient in zip(
-                    accumulated_candidate_gradients[group_index][column_index],
+                    accumulated_gradients[group_index][column_index],
                     norm_gradients,
                     strict=True,
                 ):
                     accumulator.add_(gradient.detach())
 
-    backward_batch_sizes: list[int] = []
-    for wave in _multi_group_cell_waves(materialized):
-        for compatible_cells in _partition_compatible_cells(wave):
-            losses = _forward_cell_batch_losses(
-                family_adapter,
-                model,
-                compatible_cells,
-            )
-            backward_batch_sizes.append(len(compatible_cells))
-            surrogate = losses.per_sample_summed_log_likelihood.new_zeros(())
-            flat_candidate_tensors: list[torch.Tensor] = []
-            for batch_index, cell in enumerate(compatible_cells):
-                group_scores = scores.group_scores[cell.group_index]
-                live_score = losses.per_sample_summed_log_likelihood[batch_index]
-                expected_score = group_scores.score_matrix[
-                    cell.row_index, cell.column_index
-                ]
-                if not torch.equal(live_score.detach(), expected_score):
-                    raise RuntimeError(
-                        "deterministic multi-group recompute changed a Matrix-CE score"
-                    )
-                surrogate = (
-                    surrogate
-                    + live_score
-                    * score_gradients[cell.group_index][
-                        cell.row_index, cell.column_index
-                    ]
-                )
-                if cell.row_index == cell.column_index and objective.l_gen_weight:
-                    live_l_gen = losses.per_sample_token_mean_nll[batch_index]
-                    if not torch.equal(
-                        live_l_gen.detach(),
-                        group_scores.diagonal_l_gen[cell.row_index],
-                    ):
-                        raise RuntimeError(
-                            "deterministic multi-group recompute changed an L_gen value"
-                        )
-                    surrogate = surrogate + live_l_gen * l_gen_gradient
-                flat_candidate_tensors.extend(
-                    candidate_tensors[cell.group_index][cell.column_index]
-                )
-            gradients = torch.autograd.grad(
-                surrogate,
-                tuple(flat_candidate_tensors),
-                retain_graph=False,
-                create_graph=False,
-                allow_unused=False,
-            )
-            cursor = 0
-            for cell in compatible_cells:
-                accumulators = accumulated_candidate_gradients[cell.group_index][
-                    cell.column_index
-                ]
-                for accumulator in accumulators:
-                    accumulator.add_(gradients[cursor].detach())
-                    cursor += 1
-            if cursor != len(gradients):
-                raise RuntimeError("multi-group candidate gradient partition drifted")
-    if tuple(backward_batch_sizes) != scores.qwen_forward_batch_sizes:
-        raise RuntimeError("multi-group Qwen compatibility schedule changed")
-
     adapter_outputs: list[torch.Tensor] = []
     adapter_output_gradients: list[torch.Tensor] = []
     for group_tensors, group_gradients in zip(
         candidate_tensors,
-        accumulated_candidate_gradients,
+        accumulated_gradients,
         strict=True,
     ):
         for tensors, gradients in zip(group_tensors, group_gradients, strict=True):
             adapter_outputs.extend(tensors)
             adapter_output_gradients.extend(gradients)
-    for group in materialized:
+    for group in groups:
         for padding in group.collective_padding:
-            tensors = (padding.main, *padding.deepstack)
+            tensors = _candidate_output_tensors(padding)
             if any(not tensor.requires_grad for tensor in tensors):
                 raise ValueError(
                     "training collective padding must retain every Adapter graph"
@@ -679,27 +664,25 @@ def backward_streaming_same_image_groups(
         create_graph=False,
     )
 
-    matrix_numerators = tuple(
-        F.cross_entropy(
-            group_scores.score_matrix,
-            torch.arange(
-                len(group_scores.sample_ids),
-                device=group_scores.score_matrix.device,
-            ),
-            reduction="sum",
+    matrix_numerator = torch.stack(
+        tuple(
+            F.cross_entropy(
+                scores.score_matrix,
+                torch.arange(
+                    len(scores.sample_ids),
+                    device=scores.score_matrix.device,
+                ),
+                reduction="sum",
+            )
+            for scores in group_scores
         )
-        for group_scores in scores.group_scores
-    )
-    matrix_numerator = torch.stack(matrix_numerators).sum()
+    ).sum()
     l_gen_numerator = torch.stack(
-        tuple(group_scores.diagonal_l_gen.sum() for group_scores in scores.group_scores)
+        tuple(scores.diagonal_l_gen.sum() for scores in group_scores)
     ).sum()
     norm_numerator = (
         torch.stack(
-            tuple(
-                group_scores.historical_norm.sum()
-                for group_scores in scores.group_scores
-            )
+            tuple(scores.historical_norm.sum() for scores in group_scores)
         ).sum()
         if isinstance(objective, RepresentationObjectiveConfigV2)
         else None
@@ -723,7 +706,106 @@ def backward_streaming_same_image_groups(
         local_sample_count=local_rows,
         weighted_local_mean=weighted_local_mean,
         weighted_norm_local_mean=weighted_norm_local_mean,
+        qwen_forward_batch_sizes=first_contract.qwen_forward_batch_sizes,
     )
+
+
+def _validate_score_training_inputs(
+    groups: tuple[SameImageReadoutGroup, ...],
+    objective: RepresentationObjectiveConfigLike | None,
+    normalization: StreamingGlobalNormalization | None,
+) -> bool:
+    if (objective is None) != (normalization is None):
+        raise ValueError(
+            "objective and normalization must either both be provided or both omitted"
+        )
+    if objective is None:
+        return False
+    if not isinstance(
+        objective, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
+    ):
+        raise TypeError("objective must be a representation objective config")
+    if not isinstance(normalization, StreamingGlobalNormalization):
+        raise TypeError("normalization must be StreamingGlobalNormalization")
+    local_rows = sum(len(group.rows) for group in groups)
+    if (
+        normalization.matrix_valid_rows < local_rows
+        or normalization.l_gen_samples < local_rows
+    ):
+        raise ValueError(
+            "global normalization counts cannot be smaller than all local groups"
+        )
+    outputs = tuple(
+        tensor
+        for group in groups
+        for candidate in group.candidates
+        for tensor in _candidate_output_tensors(candidate.visual)
+    )
+    if any(not tensor.requires_grad for tensor in outputs):
+        raise ValueError(
+            "training score materialization requires every candidate Adapter graph"
+        )
+    if len({id(tensor) for tensor in outputs}) != len(outputs):
+        raise ValueError("candidate Adapter outputs cannot be shared across columns")
+    return True
+
+
+def _gradient_contract(
+    objective: RepresentationObjectiveConfigLike,
+    normalization: StreamingGlobalNormalization,
+    qwen_forward_batch_sizes: tuple[int, ...],
+) -> _StreamingGradientContract:
+    return _StreamingGradientContract(
+        objective_identity=objective.identity,
+        objective_schema_version=objective.schema_version,
+        matrix_ce_weight=objective.matrix_ce_weight,
+        l_gen_weight=objective.l_gen_weight,
+        norm_weight=(
+            objective.norm_weight
+            if isinstance(objective, RepresentationObjectiveConfigV2)
+            else None
+        ),
+        matrix_valid_rows=normalization.matrix_valid_rows,
+        l_gen_samples=normalization.l_gen_samples,
+        data_parallel_world_size=normalization.data_parallel_world_size,
+        qwen_forward_batch_sizes=qwen_forward_batch_sizes,
+    )
+
+
+def _assert_gradient_contract(
+    contract: _StreamingGradientContract,
+    objective: RepresentationObjectiveConfigLike,
+    normalization: StreamingGlobalNormalization,
+) -> None:
+    expected = _gradient_contract(
+        objective,
+        normalization,
+        contract.qwen_forward_batch_sizes,
+    )
+    if contract != expected:
+        raise ValueError(
+            "backward objective/normalization differs from the materialized Qwen VJP"
+        )
+
+
+def _candidate_output_tensors(
+    visual: RepresentationVisualTensorBundle,
+) -> tuple[torch.Tensor, ...]:
+    return (visual.main, *visual.deepstack)
+
+
+def _unique_candidate_slots(
+    rows: tuple[_StreamingRow, ...],
+) -> tuple[tuple[int, int], ...]:
+    seen: set[tuple[int, int]] = set()
+    ordered: list[tuple[int, int]] = []
+    for row in rows:
+        for cell in row.cells:
+            slot = (cell.group_index, cell.column_index)
+            if slot not in seen:
+                seen.add(slot)
+                ordered.append(slot)
+    return tuple(ordered)
 
 
 def _validate_multi_group_execution_inputs(
@@ -744,59 +826,99 @@ def _validate_multi_group_execution_inputs(
     return materialized
 
 
-def _multi_group_cell_waves(
+def _multi_group_row_waves(
     groups: tuple[SameImageReadoutGroup, ...],
-) -> tuple[tuple[_StreamingCell, ...], ...]:
+) -> tuple[tuple[_StreamingRow, ...], ...]:
     maximum_size = max(len(group.rows) for group in groups)
-    waves: list[tuple[_StreamingCell, ...]] = []
+    waves: list[tuple[_StreamingRow, ...]] = []
     for row_index in range(maximum_size):
-        for column_index in range(maximum_size):
-            cells = []
-            for group_index, group in enumerate(groups):
-                size = len(group.rows)
-                if row_index >= size or column_index >= size:
-                    continue
-                row = group.rows[row_index]
-                cells.append(
-                    _StreamingCell(
-                        group_index=group_index,
-                        row_index=row_index,
-                        column_index=column_index,
-                        source=group.source_visual,
-                        row=row,
-                        candidate=group.candidates[column_index].visual,
-                        blocked_attention_mask=_blocked_evidence_attention_mask(
-                            row,
-                            group.source_visual,
-                        ),
-                    )
+        rows: list[_StreamingRow] = []
+        for group_index, group in enumerate(groups):
+            if row_index >= len(group.rows):
+                continue
+            row = group.rows[row_index]
+            blocked_mask = _blocked_evidence_attention_mask(
+                row,
+                group.source_visual,
+            )
+            rows.append(
+                _StreamingRow(
+                    group_index=group_index,
+                    row_index=row_index,
+                    cells=tuple(
+                        _StreamingCell(
+                            group_index=group_index,
+                            row_index=row_index,
+                            column_index=column_index,
+                            source=group.source_visual,
+                            row=row,
+                            candidate=candidate.visual,
+                            blocked_attention_mask=blocked_mask,
+                        )
+                        for column_index, candidate in enumerate(group.candidates)
+                    ),
                 )
-            if cells:
-                waves.append(tuple(cells))
+            )
+        if rows:
+            waves.append(tuple(rows))
     return tuple(waves)
 
 
-def _partition_compatible_cells(
-    cells: tuple[_StreamingCell, ...],
-) -> tuple[tuple[_StreamingCell, ...], ...]:
-    buckets: dict[tuple[object, ...], list[_StreamingCell]] = {}
-    for cell in cells:
-        request = _cell_request(
-            cell.source,
-            cell.row,
-            cell.candidate,
-            cell.blocked_attention_mask,
+def _paired_multi_group_row_waves(
+    groups: tuple[SameImageReadoutGroup, ...],
+) -> tuple[tuple[_StreamingRow, ...], ...]:
+    waves = _multi_group_row_waves(groups)
+    return tuple(
+        tuple(row for wave in waves[index : index + 2] for row in wave)
+        for index in range(0, len(waves), 2)
+    )
+
+
+def _partition_compatible_rows(
+    rows: tuple[_StreamingRow, ...],
+) -> tuple[tuple[_StreamingRow, ...], ...]:
+    buckets: dict[tuple[object, ...], list[_StreamingRow]] = {}
+    for row in rows:
+        if len(row.cells) > _MAX_PHYSICAL_QWEN_BATCH:
+            raise ValueError(
+                "one logical Matrix-CE row exceeds the physical Qwen batch cap"
+            )
+        requests = tuple(
+            _cell_request(
+                cell.source,
+                cell.row,
+                cell.candidate,
+                cell.blocked_attention_mask,
+            )
+            for cell in row.cells
         )
-        buckets.setdefault(_request_batch_key(request), []).append(cell)
-    return tuple(tuple(bucket) for bucket in buckets.values())
+        key = _request_batch_key(requests[0])
+        if any(_request_batch_key(request) != key for request in requests[1:]):
+            raise ValueError("one logical Matrix-CE row has incompatible candidates")
+        buckets.setdefault(key, []).append(row)
+
+    partitions: list[tuple[_StreamingRow, ...]] = []
+    for bucket in buckets.values():
+        current: list[_StreamingRow] = []
+        current_size = 0
+        for row in bucket:
+            row_size = len(row.cells)
+            if current and current_size + row_size > _MAX_PHYSICAL_QWEN_BATCH:
+                partitions.append(tuple(current))
+                current = []
+                current_size = 0
+            current.append(row)
+            current_size += row_size
+        if current:
+            partitions.append(tuple(current))
+    return tuple(partitions)
 
 
 def _request_batch_key(request: InjectedForwardRequest) -> tuple[object, ...]:
-    position_batch_dimension = 0 if request.position_ids.ndim == 2 else 1
-    position_shape = tuple(
-        dimension
-        for index, dimension in enumerate(request.position_ids.shape)
-        if index != position_batch_dimension
+    """Return structural compatibility while permitting exact right padding."""
+
+    position_prefix = (
+        () if request.position_ids.ndim == 2 else (int(request.position_ids.shape[0]),)
     )
     block_keys = tuple(
         (
@@ -822,14 +944,14 @@ def _request_batch_key(request: InjectedForwardRequest) -> tuple[object, ...]:
         for block in request.visual_blocks
     )
     return (
-        tuple(request.input_ids.shape[1:]),
+        request.input_ids.ndim,
         request.input_ids.dtype,
         request.input_ids.device,
-        tuple(request.attention_mask.shape[1:]),
+        request.attention_mask.ndim,
         request.attention_mask.dtype,
         request.attention_mask.device,
         request.position_ids.ndim,
-        position_shape,
+        position_prefix,
         request.position_ids.dtype,
         request.position_ids.device,
         block_keys,
@@ -843,6 +965,8 @@ def _forward_cell_batch_losses(
 ) -> CausalEvidenceLosses:
     if not cells:
         raise ValueError("a Qwen cell batch cannot be empty")
+    if len(cells) > _MAX_PHYSICAL_QWEN_BATCH:
+        raise ValueError("a Qwen cell batch exceeds the physical batch cap")
     requests = tuple(
         _cell_request(
             cell.source,
@@ -854,7 +978,8 @@ def _forward_cell_batch_losses(
     )
     reference_key = _request_batch_key(requests[0])
     if any(_request_batch_key(request) != reference_key for request in requests[1:]):
-        raise ValueError("Qwen cell batch contains incompatible requests")
+        raise ValueError("Qwen cell batch contains structurally incompatible requests")
+    maximum_sequence = max(int(request.input_ids.shape[1]) for request in requests)
     position_batch_dimension = 0 if requests[0].position_ids.ndim == 2 else 1
     visual_blocks = tuple(
         InjectedVisualBlock(
@@ -886,25 +1011,126 @@ def _forward_cell_batch_losses(
         for block_index in range(len(requests[0].visual_blocks))
     )
     batched_request = InjectedForwardRequest(
-        input_ids=torch.cat(tuple(request.input_ids for request in requests), dim=0),
+        input_ids=torch.cat(
+            tuple(
+                _right_pad_input_ids(request.input_ids, maximum_sequence)
+                for request in requests
+            ),
+            dim=0,
+        ),
         attention_mask=torch.cat(
-            tuple(request.attention_mask for request in requests),
+            tuple(
+                _right_pad_attention_mask(request.attention_mask, maximum_sequence)
+                for request in requests
+            ),
             dim=0,
         ),
         position_ids=torch.cat(
-            tuple(request.position_ids for request in requests),
+            tuple(
+                _right_pad_position_ids(request.position_ids, maximum_sequence)
+                for request in requests
+            ),
             dim=position_batch_dimension,
         ),
         visual_blocks=visual_blocks,
         use_cache=False,
     )
     result = family_adapter.forward_injected(model, batched_request)
-    labels = torch.tensor(
-        tuple(cell.row.supervision.labels for cell in cells),
-        dtype=torch.long,
-        device=result.logits.device,
+    labels = torch.stack(
+        tuple(
+            _right_pad_labels(
+                cell.row.supervision.labels,
+                maximum_sequence,
+                device=result.logits.device,
+            )
+            for cell in cells
+        )
     )
     return causal_evidence_losses(result.logits, labels)
+
+
+def _right_pad_input_ids(
+    input_ids: torch.Tensor,
+    sequence: int,
+) -> torch.Tensor:
+    padding = sequence - int(input_ids.shape[1])
+    if padding < 0:
+        raise ValueError("right-padding target is shorter than input IDs")
+    if padding == 0:
+        return input_ids
+    safe_token = input_ids[:, -1:].expand(-1, padding)
+    return torch.cat((input_ids, safe_token), dim=1)
+
+
+def _right_pad_attention_mask(
+    attention_mask: torch.Tensor,
+    sequence: int,
+) -> torch.Tensor:
+    original = int(attention_mask.shape[-1])
+    padding = sequence - original
+    if padding < 0:
+        raise ValueError("right-padding target is shorter than attention mask")
+    if attention_mask.ndim != 4 or attention_mask.shape[-2:] != (
+        original,
+        original,
+    ):
+        raise ValueError(
+            "streaming right padding requires a square additive attention mask"
+        )
+    if padding == 0:
+        return attention_mask
+    if not attention_mask.dtype.is_floating_point:
+        raise TypeError("streaming right padding requires floating attention bias")
+    minimum = torch.finfo(attention_mask.dtype).min
+    padded = torch.zeros(
+        (*attention_mask.shape[:-2], sequence, sequence),
+        dtype=attention_mask.dtype,
+        device=attention_mask.device,
+    )
+    padded[..., :original, :original] = attention_mask
+    padded[..., :, original:] = minimum
+    return padded
+
+
+def _right_pad_position_ids(
+    position_ids: torch.Tensor,
+    sequence: int,
+) -> torch.Tensor:
+    original = int(position_ids.shape[-1])
+    padding = sequence - original
+    if padding < 0:
+        raise ValueError("right-padding target is shorter than position IDs")
+    if padding == 0:
+        return position_ids
+    increments = torch.arange(
+        1,
+        padding + 1,
+        dtype=position_ids.dtype,
+        device=position_ids.device,
+    )
+    increments = increments.reshape(
+        *((1,) * (position_ids.ndim - 1)),
+        padding,
+    )
+    return torch.cat((position_ids, position_ids[..., -1:] + increments), dim=-1)
+
+
+def _right_pad_labels(
+    labels: tuple[int, ...],
+    sequence: int,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    if len(labels) > sequence:
+        raise ValueError("right-padding target is shorter than evidence labels")
+    values = torch.full(
+        (sequence,),
+        EVIDENCE_IGNORE_INDEX,
+        dtype=torch.long,
+        device=device,
+    )
+    values[: len(labels)] = torch.tensor(labels, dtype=torch.long, device=device)
+    return values
 
 
 def _cell_request(

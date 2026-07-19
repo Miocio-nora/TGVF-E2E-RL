@@ -1176,6 +1176,167 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   gradient accumulation is not justified by memory for this B200 geometry.
   This is throughput evidence, not a production prompt/data-quality result.
 
+### RP-13-QWEN3-REPRESENTATION-FSDP2-EMBEDDING-K4-GPR4-GA1-SINGLEPASS-CELLB32-THROUGHPUT
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-13`; diagnostic bounded
+  real-Qwen3 representation-phase K=4/GPR=4/GA=1 single-pass physical-cell-B32
+  train-core throughput smoke for the target-token-embedding provider. This is
+  not a promoted training run. **NOT LAUNCHABLE:** every item explicitly marked
+  `FILL BEFORE LAUNCH` below must be resolved from the materialized code,
+  configuration, fixtures, and clean launch tree first.
+- Spike-plan git revision and approval references: user direction on
+  `2026-07-19` fixes the direct CELLB32 comparison and the boundary in this
+  planned entry. `FILL BEFORE LAUNCH`: accepted implementation/task revision
+  and the exact approval reference covering the single-pass execution path and
+  its parity gate.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: at the same mathematical global batch of 32 as RP-12, what
+  train-core optimizer-step time, rows/s, matrices/s, physical Qwen call count,
+  and peak CUDA memory are measured when every local Matrix-CE cell is executed
+  once in exactly two differentiable physical B32 Qwen forwards per rank and
+  the results remain four independent K=4 blocks rather than one cross-image
+  matrix?
+- Baseline and exact output path: RP-12 steady steps 2/3 measured
+  `16.212977775` seconds, `1.973728587` global rows/s, approximately `0.493432`
+  global matrices/s, and at most `31,016,656,896` allocated bytes. RP-13 may
+  write only under
+  `artifacts/representation/RP-13-qwen3-representation-fsdp2-embedding-k4-gpr4-ga1-singlepass-cellb32-throughput/`.
+  No unverified historical wall time is a numerical baseline for this cell.
+- Model and processor identity: unchanged RP-12 stable local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`; model family `qwen3_vl`,
+  tokenizer length `151669`, chat-template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  BF16, SDPA, local-only, no remote code, and no tokenizer resize.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`, no
+  source artifact and no legacy-checkpoint initialization. The initialized
+  Adapter state must match RP-12 SHA256
+  `715f385ffa0c506572020fbc2eaff8b33c0cdf1cdaad2324efaae11335b85df9`.
+  The bounded run targets three optimizer updates under the unchanged
+  historical 2,000-update scheduler horizon.
+- N/A fields and justification: policy/reference rollout, behavior logprob,
+  reward, GRPO, SDPO teacher, answer judge, vLLM sampling, KV replay, and policy
+  replay are absent from this representation-only timing smoke.
+- Policy/reference initialization: N/A; original Qwen3 is frozen and only the
+  freshly initialized TGVF Adapter is trainable.
+- Rollout policy version and allowed asynchronous staleness: N/A; this is a
+  synchronous representation update with no intervening policy update.
+- Code commit and worktree state: `FILL BEFORE LAUNCH`: exact runtime commit,
+  launch HEAD, clean-worktree evidence, configuration source SHA256, and
+  canonical configuration SHA256. The launch is forbidden while any value in
+  this field is unresolved.
+- Repository adapter/patch surface and hash: `FILL BEFORE LAUNCH`: exact
+  representation-training tree identity, Qwen family-adapter tree identity,
+  and hashes of the single-pass execution and physical-execution telemetry
+  surfaces. No site-package patch is permitted.
+- Dataset/manifest, hashes, sample rule, and n: unchanged RP-12 direct-batch
+  smoke train/validation source SHA256
+  `34053c694023461be9f0fe30fd1e525e27697894f705e5428fafad45cfeabc1c`/
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`;
+  retained manifests
+  `c95ec424a64d6303a90f245aa52fa1c24eba28963af0455ddcb0e7830efe53ba`/
+  `e18eb856f4c8b03c03a2f2a683a8267bb0581498de05fed403c4246e5cca3a13`;
+  32 unique rows/eight complete K=4 groups, four distinct groups per rank, and
+  sampler seeds 71/73. Validation-data identity is
+  `16c33970676fb41c197cb007a2a7ea0c5d51b0fbcd8f3268bef6284f2f579821`;
+  train/validation image-byte manifests are
+  `692847ec741898bd077d7831c5a73cfac4ce4ff3eac399603ce6170330d2ba26`/
+  `f83d49e1290557428e807aca8624827a8b9a4a4892e523b88c281d010fa213d9`;
+  empty overlap-report SHA256 is
+  `c23fe08408640a95d0fe9c482228908bc35e7816021e51b029cc6c9d6979c218`.
+- Native prompt/tool schema hash: unchanged smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`;
+  native `tgvf_focus_tool` schema SHA256
+  `1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361`.
+- Chat-template/token-fixture hash and token-ownership masks: unchanged Qwen3
+  golden SHA256
+  `1df319f994e31db398d008880b0678afb56e1b4390123957e56f25ba9c165a68`;
+  evidence-description-only labels and all visual/template positions `-100`.
+- D/DeepStack/position/mask identity: unchanged native main `D`, ordered branch
+  layers `(8,16,24)`, native M-RoPE, post-D original-image key blocking, and
+  atomic main-plus-all-branches candidate observations.
+- Observation materialization/artifact identity used by all replays: no policy
+  replay. Each in-update candidate observation is materialized once and used by
+  the live differentiable single-pass readout. Each physical B32 forward packs
+  two complete row slots across all four local K=4 groups: eight cells from
+  each group, partitioned back into eight group-local four-candidate CE rows.
+  The second B32 forward completes the four independent score matrices.
+  Cross-group logits never enter the same CE denominator, and detached
+  score/recompute execution is forbidden in this cell.
+- RL framework/version/environment lock: unchanged Python `3.12.3`, Torch
+  `2.9.0+cu128`, CUDA `12.8`, NCCL `2.27.5`, Transformers `4.57.6`, vLLM
+  `0.12.0`, veRL `0.9.0.dev0`, and Pillow `12.3.0`; compatibility lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: exactly unchanged RP-12 global-row-
+  mean diagonal-label Matrix CE over eight separate K=4 blocks, global sample
+  mean of per-sample evidence-token-mean `L_gen`, and fixed historical Norm;
+  weights `1.0/1.0/0.1`, manifold zero, AdamW `1e-4`, gradient clip `1.0`, and
+  historical cosine warmup 100/floor ratio `.1`/horizon 2,000. The physical
+  Qwen packing changes execution only, never negatives or denominators.
+- Rollout/replay forward mode and adapter dropout/RNG contract: frozen Qwen in
+  eval mode, Adapter dropout zero, no cache, deterministic algorithms, TF32
+  off, seed `20260719`, and CUBLAS `:4096:8`. Exactly two differentiable Qwen
+  forward calls of physical size 32 occur per rank/update; every one of the 64
+  local cells occurs once and no deterministic recompute pass occurs.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: token sampling and logprobs N/A;
+  deterministic same-image sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: unchanged BF16 forward, FP32
+  reduction, no quantization/KV/rollout TP, SDPA, FSDP2 `fsdp=[2]`, reshard
+  after forward, and no offload.
+- Logit/logprob/loss/gradient parity tolerances: `FILL BEFORE LAUNCH`: accepted
+  fixture revision/hash and its numerical tolerance proving that single-pass
+  packing preserves four independent `4x4` losses and the corresponding
+  Adapter-input/Adapter-parameter gradients against the accepted blockwise
+  oracle. Structural gates are exact: per rank/update physical batch schedule
+  `(32,32)`, two calls, 64 cells, four K=4 matrices, no `16x16` cross-block CE,
+  no second cell presentation, all losses/gradients finite, and tokenizer
+  length unchanged. Performance values are measurements rather than a minimum
+  PASS threshold. Launch is forbidden until the parity fixture passes.
+- World size, microbatch, accumulation, and global batch: world 2; data batch
+  size K=4 remains unchanged; four distinct same-image groups per rank and
+  GA=1 produce 16 local/32 global rows and four local/eight global independent
+  `4x4` matrices per update. Physical readout packing is two B32 Qwen batches
+  per rank/update, or four calls/128 cells globally. Three timed updates contain
+  96 global row presentations and 24 global matrix presentations.
+- GPUs: only physical 2
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, both NVIDIA B200 and mapped to
+  logical 0/1. `FILL BEFORE LAUNCH`: fresh UUID/mapping, free-memory, competing-
+  process, and scratch-space preflight; no other physical GPU may be visible.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`;
+  fill from the executed launcher and workers after the run.
+- Actual GPU-hours and peak scratch use: `PENDING`; record measured wall-time
+  upper bound, peak allocated/reserved CUDA memory, and exact output size after
+  the run.
+- Command: planned command is
+  `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp13_singlepass_cellb32_throughput.toml`.
+  `FILL BEFORE LAUNCH`: materialize and validate that exact config, bind the
+  CELLB32 execution through its run ID, accepted task decision, and exact
+  runtime commit, set target optimizer steps to 3, and set both validation and
+  checkpoint cadence to 4. Current checkpoint schema requires
+  `save_final=true`, so one
+  final DCP/export after the timed steps is allowed; no validation or periodic
+  checkpoint may run during steps 1-3.
+- Outputs: `PENDING`; expected outputs under the exclusive root are Adapter,
+  metrics JSONL, run log, and the required final step-3 DCP. Record all content
+  and manifest SHA256 values after execution. Metrics must carry nested schema
+  `representation-qwen-physical-execution-v1` with
+  `forward_batch_sizes_by_rank`, per-rank/global call and cell counts, and
+  maximum physical batch.
+- Scorer/parser identity: no answer scorer. `FILL BEFORE LAUNCH`: exact hashes
+  of the strict native pipeline, objective, single-pass execution, performance
+  telemetry, runner, DCP, and export implementation.
+- Metrics: `PENDING`. Record every step separately and use steps 2/3 for the
+  steady mean. Every step must report 32 rows/eight matrices; each rank must
+  report 16 sample IDs from four group keys and physical schedule `(32,32)`;
+  global telemetry must report four calls and 128 cells. Validation events
+  during the three timed steps are forbidden.
+- Conclusion: `PENDING`; this cell can establish only bounded semantic parity,
+  execution geometry, throughput, and capacity evidence. It cannot promote an
+  Adapter or close production prompt/data/quality gates.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -63,7 +64,14 @@ class _RecordingLanguageModel(nn.Module):
         for branch in deepstack_visual_embeds:
             hidden = hidden.clone()
             hidden[visual_pos_masks] += branch
-        hidden = hidden + hidden.sum(dim=1, keepdim=True) * 0.1
+        if attention_mask.ndim == 4:
+            minimum = torch.finfo(attention_mask.dtype).min
+            valid_keys = (attention_mask > minimum).any(dim=-2).squeeze(1)
+        else:
+            valid_keys = attention_mask.bool()
+        hidden = (
+            hidden + (hidden * valid_keys.unsqueeze(-1)).sum(dim=1, keepdim=True) * 0.1
+        )
         return SimpleNamespace(last_hidden_state=hidden, past_key_values=None)
 
 
@@ -98,7 +106,12 @@ def _supervision(token_ids: tuple[int, ...]) -> ModelEvidenceSupervision:
         ),
         evidence_token_positions=evidence_positions,
         visual_model_positions=(1, 2, 3, 4),
-        canonical_to_model_positions=((0,), (1, 2), (3, 4), (5,), (6,), (7,)),
+        canonical_to_model_positions=(
+            (0,),
+            (1, 2),
+            (3, 4),
+            *((position,) for position in range(5, len(token_ids))),
+        ),
     )
 
 
@@ -183,6 +196,20 @@ def _candidate_tensors(group: SameImageReadoutGroup) -> tuple[torch.Tensor, ...]
     )
 
 
+def _mixed_length_group(*, group_id: str) -> SameImageReadoutGroup:
+    group = _group(group_id=group_id)
+    long_row = group.rows[1]
+    token_ids = (*long_row.supervision.model_token_ids, 4)
+    long_row = replace(
+        long_row,
+        supervision=_supervision(token_ids),
+        input_ids=torch.tensor([token_ids], dtype=torch.long),
+        attention_mask=torch.ones(1, len(token_ids), dtype=torch.bool),
+        position_ids=torch.arange(len(token_ids)).view(1, len(token_ids)),
+    )
+    return replace(group, rows=(group.rows[0], long_row))
+
+
 def _objective() -> RepresentationObjectiveConfig:
     return RepresentationObjectiveConfig(
         identity="test-matrix-and-readable",
@@ -214,18 +241,28 @@ def test_direct_four_k4_groups_keep_blockwise_ce_and_batch_qwen_cells() -> None:
         for index in range(4)
     )
 
-    scores = score_streaming_same_image_groups(Qwen3VLAdapter(), model, groups)
+    objective = _objective_v2()
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=16,
+        l_gen_samples=16,
+    )
+    scores = score_streaming_same_image_groups(
+        Qwen3VLAdapter(),
+        model,
+        groups,
+        objective=objective,
+        normalization=normalization,
+    )
 
     assert len(scores.group_scores) == 4
     assert all(score.score_matrix.shape == (4, 4) for score in scores.group_scores)
-    assert scores.qwen_forward_batch_sizes == (4,) * 16
-    assert len(model.model.language_model.attention_masks) == 16
+    assert scores.qwen_forward_batch_sizes == (32, 32)
+    assert len(model.model.language_model.attention_masks) == 2
     assert all(
-        mask.shape == (4, 1, 8, 8)
+        mask.shape == (32, 1, 8, 8)
         for mask in model.model.language_model.attention_masks
     )
 
-    objective = _objective_v2()
     expected_matrix_numerator = torch.stack(
         tuple(
             F.cross_entropy(
@@ -266,10 +303,7 @@ def test_direct_four_k4_groups_keep_blockwise_ce_and_batch_qwen_cells() -> None:
         groups,
         scores,
         objective=objective,
-        normalization=StreamingGlobalNormalization(
-            matrix_valid_rows=16,
-            l_gen_samples=16,
-        ),
+        normalization=normalization,
     )
 
     assert metrics.local_row_count == metrics.local_sample_count == 16
@@ -278,7 +312,8 @@ def test_direct_four_k4_groups_keep_blockwise_ce_and_batch_qwen_cells() -> None:
     assert metrics.norm_numerator is not None
     assert torch.equal(metrics.norm_numerator, expected_norm_numerator)
     assert torch.allclose(metrics.weighted_local_mean, expected_total)
-    assert len(model.model.language_model.attention_masks) == 32
+    assert metrics.qwen_forward_batch_sizes == (32, 32)
+    assert len(model.model.language_model.attention_masks) == 2
     assert all(
         tensor.grad is not None and bool(torch.isfinite(tensor.grad).all().item())
         for group in groups
@@ -349,24 +384,31 @@ def test_direct_two_group_backward_matches_combined_blockwise_reference() -> Non
         tuple(tensor for group in full_groups for tensor in _candidate_tensors(group)),
     )
 
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=4,
+        l_gen_samples=4,
+    )
     scores = score_streaming_same_image_groups(
         Qwen3VLAdapter(),
         streaming_model,
         streaming_groups,
+        objective=objective,
+        normalization=normalization,
     )
+    score_forward_count = len(streaming_model.model.language_model.attention_masks)
     metrics = backward_streaming_same_image_groups(
         Qwen3VLAdapter(),
         streaming_model,
         streaming_groups,
         scores,
         objective=objective,
-        normalization=StreamingGlobalNormalization(
-            matrix_valid_rows=4,
-            l_gen_samples=4,
-        ),
+        normalization=normalization,
     )
 
-    assert scores.qwen_forward_batch_sizes == (2,) * 4
+    assert scores.qwen_forward_batch_sizes == (8,)
+    assert metrics.qwen_forward_batch_sizes == (8,)
+    assert score_forward_count == 1
+    assert len(streaming_model.model.language_model.attention_masks) == 1
     assert all(score.score_matrix.shape == (2, 2) for score in scores.group_scores)
     assert torch.allclose(
         metrics.weighted_local_mean,
@@ -380,6 +422,99 @@ def test_direct_two_group_backward_matches_combined_blockwise_reference() -> Non
             for group in streaming_groups
             for tensor in _candidate_tensors(group)
         ),
+        expected_gradients,
+        strict=True,
+    ):
+        assert actual is not None
+        assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_right_padded_mixed_length_rows_match_unpadded_reference() -> None:
+    torch.manual_seed(53)
+    full_model = _frozen_model()
+    streaming_model = _frozen_model()
+    streaming_model.load_state_dict(full_model.state_dict())
+    full_group = _mixed_length_group(group_id="mixed-reference")
+    streaming_group = _mixed_length_group(group_id="mixed-reference")
+    objective = _objective_v2()
+
+    full_terms = synthetic_same_image_layout_readout_terms(
+        Qwen3VLAdapter(),
+        full_model,
+        full_group,
+    )
+    norm_terms = historical_norm_loss_terms(
+        tuple(
+            historical_sample_norm_loss(
+                candidate.visual.main,
+                full_group.source_visual.main,
+                candidate.visual.deepstack,
+                full_group.source_visual.deepstack,
+            )
+            for candidate in full_group.candidates
+        )
+    )
+    reference_value = compose_reference_representation_objective(
+        full_terms.matrix_ce,
+        full_terms.l_gen,
+        objective,
+        norm_terms,
+    )
+    expected_gradients = torch.autograd.grad(
+        reference_value.total_loss,
+        _candidate_tensors(full_group),
+    )
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=2,
+        l_gen_samples=2,
+    )
+
+    scores = score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        objective=objective,
+        normalization=normalization,
+    )
+    metrics = backward_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        scores,
+        objective=objective,
+        normalization=normalization,
+    )
+
+    assert metrics.qwen_forward_batch_sizes == (4,)
+    assert len(streaming_model.model.language_model.attention_masks) == 1
+    padded_mask = streaming_model.model.language_model.attention_masks[0]
+    assert padded_mask.shape == (4, 1, 9, 9)
+    short_mask_model = _frozen_model()
+    score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        short_mask_model,
+        _group(group_id="short-mask-reference"),
+    )
+    assert torch.equal(
+        padded_mask[0, :, :8, :8],
+        short_mask_model.model.language_model.attention_masks[0][0],
+    )
+    minimum = torch.finfo(padded_mask.dtype).min
+    assert bool((padded_mask[:2, :, :, 8] == minimum).all().item())
+    assert torch.allclose(
+        scores.score_matrix,
+        full_terms.score_matrix.detach(),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    assert torch.allclose(
+        metrics.weighted_local_mean,
+        reference_value.total_loss.detach(),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    for actual, expected in zip(
+        (tensor.grad for tensor in _candidate_tensors(streaming_group)),
         expected_gradients,
         strict=True,
     ):
@@ -406,19 +541,25 @@ def test_streaming_backward_matches_full_graph_reference() -> None:
         full_value.total_loss, _candidate_tensors(full_group)
     )
 
-    scores = score_streaming_same_image_group(
-        Qwen3VLAdapter(), streaming_model, streaming_group
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=2,
+        l_gen_samples=2,
     )
+    scores = score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        objective=objective,
+        normalization=normalization,
+    )
+    score_forward_count = len(streaming_model.model.language_model.attention_masks)
     metrics = backward_streaming_same_image_group(
         Qwen3VLAdapter(),
         streaming_model,
         streaming_group,
         scores,
         objective=objective,
-        normalization=StreamingGlobalNormalization(
-            matrix_valid_rows=2,
-            l_gen_samples=2,
-        ),
+        normalization=normalization,
     )
     actual_gradients = tuple(
         tensor.grad for tensor in _candidate_tensors(streaming_group)
@@ -426,6 +567,9 @@ def test_streaming_backward_matches_full_graph_reference() -> None:
 
     assert metrics.local_row_count == 2
     assert metrics.local_sample_count == 2
+    assert metrics.qwen_forward_batch_sizes == (4,)
+    assert score_forward_count == 1
+    assert len(streaming_model.model.language_model.attention_masks) == 1
     assert torch.allclose(metrics.weighted_local_mean, full_value.total_loss.detach())
     for actual, expected in zip(actual_gradients, expected_gradients, strict=True):
         assert actual is not None
@@ -474,8 +618,16 @@ def test_streaming_v2_norm_matches_full_graph_and_reports_raw_weighted_values() 
         full_value.total_loss / 2, _candidate_tensors(full_group)
     )
 
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=4,
+        l_gen_samples=4,
+    )
     scores = score_streaming_same_image_group(
-        Qwen3VLAdapter(), streaming_model, streaming_group
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        objective=objective,
+        normalization=normalization,
     )
     metrics = backward_streaming_same_image_group(
         Qwen3VLAdapter(),
@@ -483,10 +635,7 @@ def test_streaming_v2_norm_matches_full_graph_and_reports_raw_weighted_values() 
         streaming_group,
         scores,
         objective=objective,
-        normalization=StreamingGlobalNormalization(
-            matrix_valid_rows=4,
-            l_gen_samples=4,
-        ),
+        normalization=normalization,
     )
 
     assert metrics.norm_numerator is not None
@@ -522,7 +671,11 @@ def test_collective_padding_has_zero_gradient_and_does_not_change_real_objective
     )
 
     unpadded_scores = score_streaming_same_image_group(
-        Qwen3VLAdapter(), unpadded_model, unpadded_group
+        Qwen3VLAdapter(),
+        unpadded_model,
+        unpadded_group,
+        objective=objective,
+        normalization=normalization,
     )
     unpadded_metrics = backward_streaming_same_image_group(
         Qwen3VLAdapter(),
@@ -533,7 +686,11 @@ def test_collective_padding_has_zero_gradient_and_does_not_change_real_objective
         normalization=normalization,
     )
     padded_scores = score_streaming_same_image_group(
-        Qwen3VLAdapter(), padded_model, padded_group
+        Qwen3VLAdapter(),
+        padded_model,
+        padded_group,
+        objective=objective,
+        normalization=normalization,
     )
     padded_metrics = backward_streaming_same_image_group(
         Qwen3VLAdapter(),
@@ -577,7 +734,7 @@ def test_streaming_readout_blocks_source_keys_for_causal_evidence_queries() -> N
     score_streaming_same_image_group(Qwen3VLAdapter(), model, _group())
 
     mask = model.model.language_model.attention_masks[0]
-    assert mask.shape == (1, 1, 8, 8)
+    assert mask.shape == (4, 1, 8, 8)
     minimum = torch.finfo(mask.dtype).min
     assert mask[0, 0, 5, 1].item() == minimum
     assert mask[0, 0, 6, 2].item() == minimum

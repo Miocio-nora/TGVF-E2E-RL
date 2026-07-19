@@ -358,7 +358,7 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
 
 def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
     samples = tuple(
-        _sample(image, member) for image in ("a", "b", "c", "d") for member in range(2)
+        _sample(image, member) for image in ("a", "b", "c", "d") for member in range(4)
     )
     adapter = _adapter()
     qwen = _qwen()
@@ -378,7 +378,7 @@ def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
         samples=samples,
         sampler=SameImageBatchSampler(
             samples,
-            batch_size=2,
+            batch_size=4,
             seed=19,
             data_manifest_sha256=sha256(b"trainer-direct-groups").hexdigest(),
         ),
@@ -401,10 +401,11 @@ def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
     metrics = trainer.train_step()
 
     assert metrics.global_step == 1
-    assert metrics.global_row_count == 8
-    assert metrics.global_sample_count == 8
-    assert len(metrics.local_sample_ids) == 8
-    assert len(set(metrics.local_sample_ids)) == 8
+    assert metrics.global_row_count == 16
+    assert metrics.global_sample_count == 16
+    assert len(metrics.local_sample_ids) == 16
+    assert len(set(metrics.local_sample_ids)) == 16
+    assert metrics.local_qwen_forward_batch_sizes == (32, 32)
     assert metrics.global_norm_loss is not None
     assert metrics.gradient_norm_before_clip > 0
 

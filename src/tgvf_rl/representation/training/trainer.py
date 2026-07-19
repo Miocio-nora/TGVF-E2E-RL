@@ -141,6 +141,16 @@ class RepresentationStepMetrics:
     gradient_norm_before_clip: float
     learning_rate: float
     local_sample_ids: tuple[str, ...]
+    local_qwen_forward_batch_sizes: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.local_qwen_forward_batch_sizes, tuple) or any(
+            isinstance(size, bool) or not isinstance(size, int) or size <= 0
+            for size in self.local_qwen_forward_batch_sizes
+        ):
+            raise ValueError(
+                "local Qwen forward batch sizes must be positive integer tuples"
+            )
 
 
 class RepresentationTrainer:
@@ -257,6 +267,7 @@ class RepresentationTrainer:
             0.0 if isinstance(self.objective, RepresentationObjectiveConfigV2) else None
         )
         local_sample_ids: list[str] = []
+        local_qwen_forward_batch_sizes: list[int] = []
         if direct_groups > 1:
             groups: list[SameImageReadoutGroup] = []
             expected_ids_by_group: list[tuple[str, ...]] = []
@@ -284,6 +295,8 @@ class RepresentationTrainer:
                     self.family_adapter,
                     self.qwen_model,
                     groups,
+                    objective=self.objective,
+                    normalization=normalization,
                 )
                 backward_metrics = backward_streaming_same_image_groups(
                     self.family_adapter,
@@ -317,6 +330,9 @@ class RepresentationTrainer:
                 for expected_ids in expected_ids_by_group
                 for sample_id in expected_ids
             )
+            local_qwen_forward_batch_sizes.extend(
+                getattr(backward_metrics, "qwen_forward_batch_sizes", ())
+            )
         else:
             for indices, collective_candidate_count in zip(
                 batch_indices,
@@ -337,7 +353,11 @@ class RepresentationTrainer:
                         collective_candidate_count=collective_candidate_count,
                     )
                     scores = score_streaming_same_image_group(
-                        self.family_adapter, self.qwen_model, group
+                        self.family_adapter,
+                        self.qwen_model,
+                        group,
+                        objective=self.objective,
+                        normalization=normalization,
                     )
                     backward_metrics = backward_streaming_same_image_group(
                         self.family_adapter,
@@ -362,6 +382,9 @@ class RepresentationTrainer:
                         backward_metrics.norm_numerator.float().item()
                     )
                 local_sample_ids.extend(expected_ids)
+                local_qwen_forward_batch_sizes.extend(
+                    getattr(backward_metrics, "qwen_forward_batch_sizes", ())
+                )
 
         trainable = _adapter_owned_trainable_parameters(self.adapter)
         _assert_gradients(
@@ -418,6 +441,7 @@ class RepresentationTrainer:
             gradient_norm_before_clip=float(gradient_norm.detach().float().item()),
             learning_rate=used_learning_rate,
             local_sample_ids=tuple(local_sample_ids),
+            local_qwen_forward_batch_sizes=tuple(local_qwen_forward_batch_sizes),
         )
 
     def fit(

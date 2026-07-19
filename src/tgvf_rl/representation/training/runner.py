@@ -78,6 +78,9 @@ from .validation_identity import (
 
 
 REPRESENTATION_RUNNER_SCHEMA_VERSION = "representation-runner-v1"
+REPRESENTATION_QWEN_PHYSICAL_EXECUTION_SCHEMA_VERSION = (
+    "representation-qwen-physical-execution-v1"
+)
 _REQUIRED_VISIBLE_DEVICES = "2,3"
 _REQUIRED_CUBLAS_WORKSPACE = ":4096:8"
 _CODE_IDENTITY_PATHS = (
@@ -391,11 +394,15 @@ def _run_initialized(
             ),
         )
         all_sample_ids = _gather_string_tuples(metrics.local_sample_ids)
+        all_qwen_forward_batch_sizes = _gather_positive_int_tuples(
+            metrics.local_qwen_forward_batch_sizes
+        )
         if metrics.global_step % config.training.log_every_optimizer_steps == 0:
             _log_training_metric(
                 config,
                 metrics=metrics,
                 all_sample_ids=all_sample_ids,
+                all_qwen_forward_batch_sizes=all_qwen_forward_batch_sizes,
                 run_identity=run_identity,
                 performance=performance,
             )
@@ -991,11 +998,19 @@ def _log_training_metric(
     *,
     metrics: RepresentationStepMetrics,
     all_sample_ids: tuple[tuple[str, ...], ...],
+    all_qwen_forward_batch_sizes: tuple[tuple[int, ...], ...],
     run_identity: RepresentationRunIdentity,
     performance: RepresentationTrainStepPerformance,
 ) -> None:
     payload = asdict(metrics)
     payload.pop("local_sample_ids")
+    payload.pop("local_qwen_forward_batch_sizes")
+    qwen_forward_call_counts = tuple(
+        len(batch_sizes) for batch_sizes in all_qwen_forward_batch_sizes
+    )
+    qwen_cell_evaluation_counts = tuple(
+        sum(batch_sizes) for batch_sizes in all_qwen_forward_batch_sizes
+    )
     payload.update(
         {
             "event": "train",
@@ -1006,6 +1021,22 @@ def _log_training_metric(
                 "max_rank_elapsed_seconds": (performance.max_rank_elapsed_seconds),
                 "global_rows_per_second": performance.global_rows_per_second,
                 "global_matrices_per_second": (performance.global_matrices_per_second),
+                "qwen_physical_execution": {
+                    "schema_version": (
+                        REPRESENTATION_QWEN_PHYSICAL_EXECUTION_SCHEMA_VERSION
+                    ),
+                    "forward_batch_sizes_by_rank": [
+                        list(batch_sizes)
+                        for batch_sizes in all_qwen_forward_batch_sizes
+                    ],
+                    "forward_call_count_by_rank": list(qwen_forward_call_counts),
+                    "cell_evaluation_count_by_rank": list(qwen_cell_evaluation_counts),
+                    "max_forward_batch_size_by_rank": [
+                        max(batch_sizes) for batch_sizes in all_qwen_forward_batch_sizes
+                    ],
+                    "global_forward_call_count": sum(qwen_forward_call_counts),
+                    "global_cell_evaluation_count": sum(qwen_cell_evaluation_counts),
+                },
             },
         }
     )
@@ -1103,6 +1134,32 @@ def _gather_string_tuples(values: Sequence[str]) -> tuple[tuple[str, ...], ...]:
         for value in gathered
     ):
         raise TypeError("distributed sample-ID gather returned malformed state")
+    return tuple(gathered)  # type: ignore[arg-type]
+
+
+def _gather_positive_int_tuples(
+    values: Sequence[int],
+) -> tuple[tuple[int, ...], ...]:
+    local = tuple(values)
+    if not local or any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in local
+    ):
+        raise ValueError("Qwen forward batch sizes must be positive integers")
+    gathered: list[object] = [None] * torch.distributed.get_world_size()
+    torch.distributed.all_gather_object(gathered, local)
+    if not all(
+        isinstance(value, tuple)
+        and value
+        and all(
+            not isinstance(item, bool) and isinstance(item, int) and item > 0
+            for item in value
+        )
+        for value in gathered
+    ):
+        raise TypeError(
+            "distributed Qwen forward-batch gather returned malformed state"
+        )
     return tuple(gathered)  # type: ignore[arg-type]
 
 

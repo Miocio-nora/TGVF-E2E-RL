@@ -277,6 +277,21 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   32-row/eight-matrix global update; peak allocated memory was about 31.0 GB.
   This supports GA=1 for this B200 geometry while leaving the final production
   batch and data/prompt identities open.
+- Decision `RPI-20260719-B200-BATCHED-READOUT` fixes the next direct-batch
+  executor correction. The two physical devices are B200 GPUs with about
+  180 GB usable memory each, so the representation executor prioritizes
+  throughput over the RP-12 low-memory score/recompute schedule. For the
+  GPR4/K4 geometry, every Matrix-CE cell is evaluated differentiably once;
+  complete four-candidate rows from independent groups may be combined two
+  row slots at a time into compatible Qwen batches of at most 32. Each group's
+  `4x4` score matrix and CE remain independent, repeated uses of a candidate
+  across rows accumulate into that candidate, the diagonal cell is reused for `L_gen`, and the
+  globally normalized candidate gradients traverse the TGVF Adapter once.
+  Compatibility buckets may split the physical batch without changing the
+  objective. This is the direct multi-group execution contract, not a family
+  of user-facing memory-mode options. Acceptance requires objective and
+  gradient parity, explicit physical-Qwen batch/call metrics, and a bounded
+  throughput smoke on physical GPUs 2 and 3 before its timing is extrapolated.
 
 ### 2.2 Remove Stage2 SFT
 
