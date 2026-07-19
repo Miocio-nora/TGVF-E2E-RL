@@ -263,6 +263,14 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   104-tensor Adapter exports and exact recorded optimizer/scheduler/sampler/RNG,
   shard, train, and validation state. This closes executor/resume readiness,
   not the still-open production prompt, data identity, or semantic thresholds.
+- The post-RP-11 throughput comparison keeps its mathematical global batch at
+  32 while removing configured gradient accumulation. With world size two,
+  each rank directly materializes four independent same-image K=4 groups in
+  one optimizer update. The eight group-local `4x4` Matrix-CE blocks are
+  reduced by their 32 valid rows; they must never be replaced by a cross-image
+  `16x16` local matrix. This direct-batch geometry is a bounded throughput
+  comparison, not permission to change the accepted K=4 objective or to make
+  a production batch-size choice from smoke data alone.
 
 ### 2.2 Remove Stage2 SFT
 
