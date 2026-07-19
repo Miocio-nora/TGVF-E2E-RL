@@ -327,6 +327,17 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   measured control-stack speedup; the checkpoint parameter/state identity and
   public family-adapter interface must remain unchanged. Subsequent
   optimizations require measured phase attribution and their own parity gate.
+- Execution record `RP-30` removes the dominant host-side utilization gap
+  without changing training mathematics. Qwen fast-tokenizer length validation
+  now proves the exact base vocabulary plus contiguous added-token suffix
+  instead of repeatedly materializing the merged 151k vocabulary; unfamiliar
+  tokenizer layouts retain the native fallback. Ordered K=4 action/evidence
+  transcript batching preserves scalar bytes, IDs, offsets, labels and hashes.
+  Against retained RP-28, exact final 104-tensor Adapter parity passed while
+  steady optimizer-step time fell from `9.4355` to `4.0565` seconds and mean
+  GPU2/GPU3 utilization rose from `33.8%`/`36.0%` to about `84.5%`/`83.8%`.
+  This retained path estimates `2.2536` train-core hours for 2,000 steps;
+  periodic validation/checkpoint time remains additional.
 - Decision `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION` accepts a
   mathematics-preserving refactor of the Qwen3 native representation group
   builder to remove CPU/GPU bubbles measured in RP-17 and RP-18. For one

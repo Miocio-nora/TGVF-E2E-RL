@@ -3378,14 +3378,15 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   norms, tokenizer length and eight B8 Qwen calls per rank. The final Adapter
   manifest is
   `8ded17e9aeac3c8363abba369e65d9a28d8854dd60cdc7e7ef98f578c423d63c`.
-- Attribution: across the four groups in profiled step 2, rank 0/rank 1 spent
-  `6737.5`/`6609.8` ms in group construction. Within that scope, the sixteen
-  per-sample action renders consumed `2421.8`/`2445.2` ms, evidence renders
-  `2709.1`/`2695.4` ms, and supervision materialization `907.5`/`888.0` ms.
-  In contrast, CPU M-RoPE was only `11.0`/`10.4` ms, vision encoding
-  `129.4`/`125.0` ms, and TGVF Adapter forward `150.9`/`145.6` ms. The longest
-  remaining utilization gaps therefore come from serial CPU native transcript
-  rendering/tokenization rather than vision, Adapter, or M-RoPE compute.
+- Attribution: the instrumented four-group step attributed `6737.5`/`6609.8`
+  ms on rank 0/rank 1 to group construction. The profiler's nested CUDA events
+  inflate fine-grained wall scopes, so those individual values are not treated
+  as timing estimates. Independent CPU measurement and exact call accounting
+  identify the blocking operation inside them: Qwen's fast-tokenizer
+  `len(tokenizer)` took `17.58` ms and was invoked approximately 328 times per
+  GA4 step, predicting roughly `5.77` seconds of host stalls. CPU M-RoPE,
+  vision and Adapter are no longer plausible causes. RP-30 directly tests the
+  exact cheaper tokenizer-invariant path without profiling instrumentation.
 - Resource accounting: train-core usage was approximately `0.01189` GPU-hours;
   the complete diagnostic tree is `1023592362` bytes, including the two raw
   traces (`222306700` and `223261118` bytes). Profiled timing is diagnostic and
@@ -3394,9 +3395,9 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
 
 ### RP-30-QWEN3-REPRESENTATION-FAST-TOKENIZER-INVARIANT-REAL512-K4-GA4-GPU23
 
-- Cell/matrix ID and class: `RP-30`; `PLANNED` bounded unprofiled throughput and
-  utilization A/B against retained RP-28. The output is diagnostic rather than
-  a promoted representation artifact.
+- Cell/matrix ID and class: `RP-30`; `COMPLETE`, result `PASS_RETAINED`, bounded
+  unprofiled throughput and utilization A/B against retained RP-28. The output
+  is diagnostic rather than a promoted representation artifact.
 - Approval/code/question: accepted
   `RPI-20260720-CONTROL-STACK-OPTIMIZATION`; runtime commit
   `1d3d37c88404446545b8a43014c8bbbfb2bd7716`. Does replacing repeated Qwen
@@ -3447,6 +3448,28 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
   run-representation
   configs/smoke/representation_qwen3_embedding_rp30_fast_tokenizer_invariant_real512_ga4_gpu23.toml`.
+- Execution/resources: both physical GPUs were idle at preflight. Torchrun ran
+  from `2026-07-20 07:55:26 +09:00` through `07:56:15 +09:00`. The three
+  train-core steps used approximately `0.007254` aggregate GPU-hours; the
+  complete output tree is `577958795` bytes. Final diagnostic Adapter manifest
+  SHA256 is
+  `43faca0148e8019bd4990645a51536825ea0179346a6263e853922983541b22c`.
+- Exact parity: all three steps match RP-28 exactly in sample order, Matrix CE,
+  L_gen, Norm, total objective, gradient norm, counts, tokenizer length and the
+  eight B8 Qwen calls/rank/update. The final 104 Adapter tensors and all tensor
+  SHA256 values are also exactly equal to RP-28; only run-bound artifact
+  metadata changes.
+- Timing: steps 1/2/3 took `4.943561714`, `4.062893931`, and `4.050138547`
+  seconds. The steps-2/3 steady mean is `4.056516239` seconds: a `57.0077%`
+  reduction and `2.3260x` throughput versus RP-28. At this measured train-core
+  rate, 2,000 optimizer steps take approximately `2.2536` hours before periodic
+  validation/checkpoint overhead.
+- Utilization/conclusion: over the memory-resident train window, GPU2/GPU3 mean
+  utilization rose to approximately `84.5%`/`83.8%`; below-50% samples fell to
+  `14.8%`/`13.1%`, zero samples to `0%`/`1.6%`, and the longest below-50% spans
+  to about `0.36`/`0.18` seconds. Retain both the exact fast tokenizer
+  invariant and ordered batch transcript path. The repeated merged-vocabulary
+  scans were the principal cause of the previously discontinuous GPU usage.
 
 ## Compatibility-spike status
 
