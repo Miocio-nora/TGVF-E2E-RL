@@ -53,6 +53,41 @@ class RepresentationVisualTensorBundle:
 
 
 @dataclass(frozen=True, slots=True)
+class RepresentationAttentionTensorBundle:
+    """Detached target-to-visual attention for main and ordered branches.
+
+    These tensors are diagnostics emitted by the TGVF Adapter.  They are not
+    readout inputs and never contribute to an optimization objective.  The
+    native group builder retains detached copies so an internal-evaluation
+    runner can reproduce the historical attention-health reductions without
+    rerunning the Adapter or guessing an internal module path.
+    """
+
+    main: torch.Tensor
+    deepstack: tuple[torch.Tensor, ...]
+    branch_layers: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        _validate_attention_tensor(self.main, name="main attention tensor")
+        if len(self.deepstack) != len(self.branch_layers):
+            raise ValueError("attention tensors and branch layers must align")
+        if not self.deepstack:
+            raise ValueError("attention diagnostics require DeepStack branches")
+        if len(set(self.branch_layers)) != len(self.branch_layers):
+            raise ValueError("attention branch layers must be unique")
+        for index, branch in enumerate(self.deepstack):
+            _validate_attention_tensor(
+                branch, name=f"DeepStack attention tensor {index}"
+            )
+            if branch.device != self.main.device or branch.dtype != self.main.dtype:
+                raise ValueError(
+                    "main and every DeepStack attention tensor must share device/dtype"
+                )
+        if any(tensor.requires_grad for tensor in (self.main, *self.deepstack)):
+            raise ValueError("retained evaluation attention tensors must be detached")
+
+
+@dataclass(frozen=True, slots=True)
 class RepresentationReadoutRow:
     """Row-fixed query, evidence labels, layout, masks, and positions."""
 
@@ -122,6 +157,8 @@ class RepresentationCandidateObservation:
     target_conditioning_provider: TargetConditioningProviderKind
     projection_identities: tuple[str, ...]
     visual: RepresentationVisualTensorBundle
+    image_grid_thw: tuple[int, int, int] | None = None
+    attention: RepresentationAttentionTensorBundle | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -143,6 +180,22 @@ class RepresentationCandidateObservation:
             raise ValueError("candidate projection identities must be non-empty")
         if len(self.projection_identities) != 1 + len(self.visual.deepstack):
             raise ValueError("candidate must identify main and every branch projection")
+        if self.image_grid_thw is not None and (
+            not isinstance(self.image_grid_thw, tuple)
+            or len(self.image_grid_thw) != 3
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+                for value in self.image_grid_thw
+            )
+        ):
+            raise ValueError("candidate image_grid_thw must contain positive integers")
+        if self.attention is not None:
+            if not isinstance(self.attention, RepresentationAttentionTensorBundle):
+                raise TypeError("candidate attention must be a typed attention bundle")
+            if self.attention.branch_layers != self.visual.branch_layers:
+                raise ValueError(
+                    "candidate visual and attention branch layer order differs"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +279,9 @@ class SameImageReadoutGroup:
             ):
                 raise ValueError("collective padding visual tensor contract differs")
             if any(len(row.d_positions) != padding.main.shape[1] for row in self.rows):
-                raise ValueError("row D positions differ from collective padding tokens")
+                raise ValueError(
+                    "row D positions differ from collective padding tokens"
+                )
 
     @property
     def collective_candidate_count(self) -> int:
@@ -381,6 +436,15 @@ def _validate_visual_tensor(value: object, *, name: str) -> None:
         raise TypeError(f"{name} must be a torch.Tensor")
     if value.ndim != 3 or value.shape[0] != 1 or min(value.shape[1:]) <= 0:
         raise ValueError(f"{name} must have shape [1,N,H] with N,H>0")
+    if not value.dtype.is_floating_point:
+        raise TypeError(f"{name} must use a floating dtype")
+
+
+def _validate_attention_tensor(value: object, *, name: str) -> None:
+    if not isinstance(value, torch.Tensor):
+        raise TypeError(f"{name} must be a torch.Tensor")
+    if value.ndim not in {2, 3} or min(value.shape) <= 0:
+        raise ValueError(f"{name} must have non-empty rank two or three shape")
     if not value.dtype.is_floating_point:
         raise TypeError(f"{name} must use a floating dtype")
 

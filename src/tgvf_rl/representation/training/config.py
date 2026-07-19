@@ -33,10 +33,16 @@ from .checkpoint import (
 )
 from .distributed_checkpoint import (
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
+    DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2,
 )
+from .data import SplitOverlapPolicy
 from .fsdp2 import RepresentationFSDP2Config
 from .native_pipeline import RepresentationPromptConfig
-from .objective import RepresentationObjectiveConfig, RepresentationObjectiveKind
+from .objective import (
+    RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigV2,
+    RepresentationObjectiveKind,
+)
 from .runtime import (
     ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256,
     ACCEPTED_QWEN3_MODEL_PATH,
@@ -53,13 +59,13 @@ from .trainer import (
 
 
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION = "representation-training-config-v1"
+REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2 = "representation-training-config-v2"
 REPRESENTATION_TRAINING_SCOPE = "qwen3_native_representation_phase_training"
 ACCEPTED_QWEN3_MODEL_NAME = "Qwen3-VL-8B-Thinking"
 ACCEPTED_QWEN3_MODEL_DTYPE = "bfloat16"
 ACCEPTED_QWEN3_ATTENTION_BACKEND = "sdpa"
 NO_INITIALIZATION_SOURCE = "none"
 NO_RESUME_CHECKPOINT = "none"
-
 _SHA256_CHARACTERS = frozenset("0123456789abcdef")
 _TOP_LEVEL_FIELDS = frozenset(
     {
@@ -129,13 +135,9 @@ class RepresentationModelConfig:
         if self.family != "qwen3_vl":
             raise ValueError("model.family must be 'qwen3_vl'")
         if self.model_name != ACCEPTED_QWEN3_MODEL_NAME:
-            raise ValueError(
-                f"model.model_name must be {ACCEPTED_QWEN3_MODEL_NAME!r}"
-            )
+            raise ValueError(f"model.model_name must be {ACCEPTED_QWEN3_MODEL_NAME!r}")
         if str(self.local_path) != ACCEPTED_QWEN3_MODEL_PATH:
-            raise ValueError(
-                "model.local_path must be the accepted stable Qwen3 path"
-            )
+            raise ValueError("model.local_path must be the accepted stable Qwen3 path")
         if self.tokenizer_length != ACCEPTED_QWEN3_TOKENIZER_LENGTH:
             raise ValueError("model.tokenizer_length differs from the accepted fixture")
         if self.chat_template_sha256 != ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256:
@@ -143,9 +145,7 @@ class RepresentationModelConfig:
                 "model.chat_template_sha256 differs from the accepted fixture"
             )
         if self.dtype != ACCEPTED_QWEN3_MODEL_DTYPE:
-            raise ValueError(
-                f"model.dtype must be {ACCEPTED_QWEN3_MODEL_DTYPE!r}"
-            )
+            raise ValueError(f"model.dtype must be {ACCEPTED_QWEN3_MODEL_DTYPE!r}")
         if self.attention_backend != ACCEPTED_QWEN3_ATTENTION_BACKEND:
             raise ValueError(
                 "model.attention_backend must be the accepted SDPA backend"
@@ -209,6 +209,37 @@ class RepresentationDataConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RepresentationDataConfigV2:
+    """Explicit content-bound split-overlap contract for current training."""
+
+    train: RepresentationDataSplitConfig
+    validation: RepresentationDataSplitConfig
+    warn_on_target_leakage: bool
+    split_overlap_policy: SplitOverlapPolicy
+    expected_overlap_report_sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.train, RepresentationDataSplitConfig) or not isinstance(
+            self.validation, RepresentationDataSplitConfig
+        ):
+            raise TypeError("data train/validation must be typed split configs")
+        _bool(
+            self.warn_on_target_leakage,
+            field_name="data.warn_on_target_leakage",
+        )
+        if not isinstance(self.split_overlap_policy, SplitOverlapPolicy):
+            raise TypeError("data.split_overlap_policy must be explicit")
+        _sha256(
+            self.expected_overlap_report_sha256,
+            field_name="data.expected_overlap_report_sha256",
+        )
+        if self.train.jsonl_path == self.validation.jsonl_path:
+            raise ValueError("train and validation JSONL paths must be distinct")
+        if self.train.source_sha256 == self.validation.source_sha256:
+            raise ValueError("train and validation JSONL snapshots must be distinct")
+
+
+@dataclass(frozen=True, slots=True)
 class RepresentationObjectiveExecutionConfig:
     objective: RepresentationObjectiveConfig
     manifold_enabled: bool
@@ -221,9 +252,28 @@ class RepresentationObjectiveExecutionConfig:
         if self.objective.kind is not RepresentationObjectiveKind.MATRIX_CE_AND_L_GEN:
             raise ValueError("the executable baseline requires Matrix CE plus L_gen")
         if self.manifold_enabled is not False or self.manifold_weight != 0.0:
-            raise ValueError("manifold optimization must be explicitly disabled at zero")
+            raise ValueError(
+                "manifold optimization must be explicitly disabled at zero"
+            )
         if self.norm_loss != "unset_not_implemented":
             raise ValueError("norm_loss must remain explicitly unset_not_implemented")
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationObjectiveExecutionConfigV2:
+    """Executable norm-aware objective with manifold fixed at zero."""
+
+    objective: RepresentationObjectiveConfigV2
+    manifold_enabled: bool
+    manifold_weight: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.objective, RepresentationObjectiveConfigV2):
+            raise TypeError("objective must be a RepresentationObjectiveConfigV2")
+        if self.manifold_enabled is not False or self.manifold_weight != 0.0:
+            raise ValueError(
+                "manifold optimization must be explicitly disabled at zero"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,9 +354,7 @@ class RepresentationExecutionConfig:
         if self.gradient_clip_norm_type != 2.0:
             raise ValueError("execution.gradient_clip_norm_type must be 2.0")
         if self.gradient_clip_error_if_nonfinite is not True:
-            raise ValueError(
-                "execution.gradient_clip_error_if_nonfinite must be true"
-            )
+            raise ValueError("execution.gradient_clip_error_if_nonfinite must be true")
 
     @property
     def trainer_config(self) -> RepresentationTrainerConfig:
@@ -364,7 +412,9 @@ class RepresentationFSDP2TopologyConfig:
         if self.device_type != "cuda":
             raise ValueError("representation FSDP2 device_type must be 'cuda'")
         if self.mesh_dim_name != "fsdp" or self.mesh_shape != (2,):
-            raise ValueError("representation FSDP2 requires one mesh dimension fsdp=[2]")
+            raise ValueError(
+                "representation FSDP2 requires one mesh dimension fsdp=[2]"
+            )
         _bool(
             self.reshard_after_forward,
             field_name="fsdp2.reshard_after_forward",
@@ -402,9 +452,13 @@ class RepresentationTrainingLoopConfig:
             "validation_every_optimizer_steps",
             "log_every_optimizer_steps",
         ):
-            _positive_int(getattr(self, field_name), field_name=f"training.{field_name}")
+            _positive_int(
+                getattr(self, field_name), field_name=f"training.{field_name}"
+            )
 
-    def accumulation_identity(self, *, world_size: int) -> RepresentationAccumulationIdentity:
+    def accumulation_identity(
+        self, *, world_size: int
+    ) -> RepresentationAccumulationIdentity:
         return RepresentationAccumulationIdentity(
             gradient_accumulation_steps=self.gradient_accumulation_steps,
             data_parallel_world_size=world_size,
@@ -424,9 +478,7 @@ class RepresentationOutputConfig:
         _absolute_path(
             self.final_artifact_path, field_name="output.final_artifact_path"
         )
-        _absolute_path(
-            self.metrics_jsonl_path, field_name="output.metrics_jsonl_path"
-        )
+        _absolute_path(self.metrics_jsonl_path, field_name="output.metrics_jsonl_path")
         if self.final_artifact_path == self.metrics_jsonl_path:
             raise ValueError("artifact and metrics output paths must differ")
         if self.allow_overwrite is not False:
@@ -444,9 +496,7 @@ class RepresentationResumeConfig:
         if self.enabled:
             if self.checkpoint_path is None:
                 raise ValueError("enabled resume requires an exact checkpoint path")
-            _absolute_path(
-                self.checkpoint_path, field_name="resume.checkpoint_path"
-            )
+            _absolute_path(self.checkpoint_path, field_name="resume.checkpoint_path")
         elif self.checkpoint_path is not None:
             raise ValueError("disabled resume checkpoint_path must be 'none'")
         if self.strict_identity is not True:
@@ -478,7 +528,10 @@ class RepresentationCheckpointConfig:
             raise ValueError("checkpoint.strict_identity must be true")
         if self.optimizer_boundary_only is not True:
             raise ValueError("checkpoint.optimizer_boundary_only must be true")
-        if self.format != DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION:
+        if self.format not in {
+            DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
+            DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2,
+        }:
             raise ValueError("checkpoint.format differs from the implementation schema")
 
 
@@ -490,9 +543,12 @@ class RepresentationTrainingConfig:
     code: RepresentationCodeConfig
     model: RepresentationModelConfig
     provider: TargetConditioningConfig
-    data: RepresentationDataConfig
+    data: RepresentationDataConfig | RepresentationDataConfigV2
     prompt: RepresentationPromptConfig
-    objective: RepresentationObjectiveExecutionConfig
+    objective: (
+        RepresentationObjectiveExecutionConfig
+        | RepresentationObjectiveExecutionConfigV2
+    )
     optimizer: RepresentationAdamWConfig
     scheduler: RepresentationSchedulerConfig
     execution: RepresentationExecutionConfig
@@ -507,17 +563,52 @@ class RepresentationTrainingConfig:
     canonical_config_sha256: str
 
     def __post_init__(self) -> None:
-        if self.schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
+        if self.schema_version not in {
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
+        }:
             raise ValueError("representation training config schema mismatch")
+        if self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
+            if not isinstance(self.data, RepresentationDataConfig):
+                raise TypeError(
+                    "training config v1 requires its historical data contract"
+                )
+            if not isinstance(self.objective, RepresentationObjectiveExecutionConfig):
+                raise TypeError("training config v1 requires its historical objective")
+            if self.scheduler.kind is RepresentationSchedulerKind.HISTORICAL_COSINE:
+                raise ValueError("training config v1 cannot select historical cosine")
+            if self.checkpoint.format != (
+                DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
+            ):
+                raise ValueError("training config v1 requires DCP schema v1")
+        else:
+            if not isinstance(self.data, RepresentationDataConfigV2):
+                raise TypeError(
+                    "training config v2 requires an overlap-bound data contract"
+                )
+            if not isinstance(self.objective, RepresentationObjectiveExecutionConfigV2):
+                raise TypeError("training config v2 requires its norm-aware objective")
+            if self.scheduler.kind is not RepresentationSchedulerKind.HISTORICAL_COSINE:
+                raise ValueError("training config v2 requires historical cosine")
+            if self.checkpoint.format != (
+                DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
+            ):
+                raise ValueError("training config v2 requires DCP schema v2")
         if self.scope != REPRESENTATION_TRAINING_SCOPE:
             raise ValueError("representation training scope mismatch")
         _non_empty_text(self.run_id, field_name="run_id")
         _absolute_path(self.source_path, field_name="configuration source path")
         _sha256(self.source_toml_sha256, field_name="source_toml_sha256")
         _sha256(self.canonical_config_sha256, field_name="canonical_config_sha256")
-        if self.scheduler.total_steps != self.training.target_optimizer_steps:
+        if self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
+            if self.scheduler.total_steps != self.training.target_optimizer_steps:
+                raise ValueError(
+                    "scheduler.total_steps must equal training.target_optimizer_steps"
+                )
+        elif self.training.target_optimizer_steps > self.scheduler.total_steps:
             raise ValueError(
-                "scheduler.total_steps must equal training.target_optimizer_steps"
+                "training.target_optimizer_steps cannot exceed the historical "
+                "scheduler horizon"
             )
         expected_precision_dtype = (
             "bfloat16"
@@ -587,6 +678,16 @@ class RepresentationTrainingConfig:
             "objective_identity": self.objective.objective.identity,
             "train_source_sha256": self.data.train.source_sha256,
             "validation_source_sha256": self.data.validation.source_sha256,
+            "split_overlap_policy": (
+                self.data.split_overlap_policy.value
+                if isinstance(self.data, RepresentationDataConfigV2)
+                else SplitOverlapPolicy.REQUIRE_DISJOINT.value
+            ),
+            "expected_overlap_report_sha256": (
+                self.data.expected_overlap_report_sha256
+                if isinstance(self.data, RepresentationDataConfigV2)
+                else None
+            ),
             "world_size": self.fsdp2.world_size,
             "physical_gpu_ids": list(self.fsdp2.physical_gpu_ids),
             "target_optimizer_steps": self.training.target_optimizer_steps,
@@ -631,11 +732,20 @@ def load_representation_training_config(
     provider = _parse_conditioning(
         _table(value, "conditioning", table="root"), model.identity
     )
-    data = _parse_data(_table(value, "data", table="root"))
+    data = _parse_data(
+        _table(value, "data", table="root"),
+        schema_version=schema_version,
+    )
     prompt = _parse_prompt(_table(value, "prompt", table="root"))
-    objective = _parse_objective(_table(value, "objective", table="root"))
+    objective = _parse_objective(
+        _table(value, "objective", table="root"),
+        schema_version=schema_version,
+    )
     optimizer = _parse_optimizer(_table(value, "optimizer", table="root"))
-    scheduler = _parse_scheduler(_table(value, "scheduler", table="root"))
+    scheduler = _parse_scheduler(
+        _table(value, "scheduler", table="root"),
+        schema_version=schema_version,
+    )
     execution = _parse_execution(_table(value, "execution", table="root"))
     initialization = _parse_initialization(
         _table(value, "initialization", table="root")
@@ -713,9 +823,7 @@ def _parse_model(value: Mapping[str, Any]) -> RepresentationModelConfig:
         model_name=_string(value, "model_name", table="model"),
         local_path=_path(value, "local_path", table="model", allow_empty=False),
         tokenizer_length=_int(value, "tokenizer_length", table="model"),
-        chat_template_sha256=_string(
-            value, "chat_template_sha256", table="model"
-        ),
+        chat_template_sha256=_string(value, "chat_template_sha256", table="model"),
         dtype=_string(value, "dtype", table="model"),
         attention_backend=_string(value, "attention_backend", table="model"),
         local_files_only=_boolean(value, "local_files_only", table="model"),
@@ -731,7 +839,9 @@ def _parse_conditioning(
     try:
         provider = TargetConditioningProviderKind(provider_raw)
     except ValueError as error:
-        raise ValueError(f"conditioning.provider is unsupported: {provider_raw!r}") from error
+        raise ValueError(
+            f"conditioning.provider is unsupported: {provider_raw!r}"
+        ) from error
     if provider is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE:
         _exact_fields(value, {"provider", "hidden_layer"}, table="conditioning")
         return TargetConditioningConfig(
@@ -752,7 +862,47 @@ def _parse_conditioning(
     )
 
 
-def _parse_data(value: Mapping[str, Any]) -> RepresentationDataConfig:
+def _parse_data(
+    value: Mapping[str, Any],
+    *,
+    schema_version: str,
+) -> RepresentationDataConfig | RepresentationDataConfigV2:
+    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
+        _exact_fields(
+            value,
+            {
+                "warn_on_target_leakage",
+                "split_overlap_policy",
+                "expected_overlap_report_sha256",
+                "train",
+                "validation",
+            },
+            table="data",
+        )
+        policy_raw = _string(value, "split_overlap_policy", table="data")
+        try:
+            policy = SplitOverlapPolicy(policy_raw)
+        except ValueError as error:
+            raise ValueError(
+                f"data.split_overlap_policy is unsupported: {policy_raw!r}"
+            ) from error
+        return RepresentationDataConfigV2(
+            train=_parse_data_split(_table(value, "train", table="data"), name="train"),
+            validation=_parse_data_split(
+                _table(value, "validation", table="data"), name="validation"
+            ),
+            warn_on_target_leakage=_boolean(
+                value, "warn_on_target_leakage", table="data"
+            ),
+            split_overlap_policy=policy,
+            expected_overlap_report_sha256=_string(
+                value,
+                "expected_overlap_report_sha256",
+                table="data",
+            ),
+        )
+    if schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
+        raise ValueError("representation training config schema mismatch")
     _exact_fields(
         value,
         {
@@ -768,9 +918,7 @@ def _parse_data(value: Mapping[str, Any]) -> RepresentationDataConfig:
         validation=_parse_data_split(
             _table(value, "validation", table="data"), name="validation"
         ),
-        warn_on_target_leakage=_boolean(
-            value, "warn_on_target_leakage", table="data"
-        ),
+        warn_on_target_leakage=_boolean(value, "warn_on_target_leakage", table="data"),
         require_disjoint_validation=_boolean(
             value, "require_disjoint_validation", table="data"
         ),
@@ -805,7 +953,41 @@ def _parse_prompt(value: Mapping[str, Any]) -> RepresentationPromptConfig:
 
 def _parse_objective(
     value: Mapping[str, Any],
-) -> RepresentationObjectiveExecutionConfig:
+    *,
+    schema_version: str,
+) -> RepresentationObjectiveExecutionConfig | RepresentationObjectiveExecutionConfigV2:
+    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
+        _exact_fields(
+            value,
+            {
+                "identity",
+                "kind",
+                "matrix_ce_weight",
+                "l_gen_weight",
+                "norm_weight",
+                "manifold_enabled",
+                "manifold_weight",
+            },
+            table="objective",
+        )
+        kind_raw = _string(value, "kind", table="objective")
+        try:
+            kind = RepresentationObjectiveKind(kind_raw)
+        except ValueError as error:
+            raise ValueError(f"objective.kind is unsupported: {kind_raw!r}") from error
+        return RepresentationObjectiveExecutionConfigV2(
+            objective=RepresentationObjectiveConfigV2(
+                identity=_string(value, "identity", table="objective"),
+                kind=kind,
+                matrix_ce_weight=_float(value, "matrix_ce_weight", table="objective"),
+                l_gen_weight=_float(value, "l_gen_weight", table="objective"),
+                norm_weight=_float(value, "norm_weight", table="objective"),
+            ),
+            manifold_enabled=_boolean(value, "manifold_enabled", table="objective"),
+            manifold_weight=_float(value, "manifold_weight", table="objective"),
+        )
+    if schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
+        raise ValueError("representation training config schema mismatch")
     _exact_fields(
         value,
         {
@@ -875,8 +1057,17 @@ def _parse_optimizer(value: Mapping[str, Any]) -> RepresentationAdamWConfig:
     )
 
 
-def _parse_scheduler(value: Mapping[str, Any]) -> RepresentationSchedulerConfig:
-    _exact_fields(value, {"kind", "total_steps", "warmup_steps"}, table="scheduler")
+def _parse_scheduler(
+    value: Mapping[str, Any],
+    *,
+    schema_version: str,
+) -> RepresentationSchedulerConfig:
+    fields = {"kind", "total_steps", "warmup_steps"}
+    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
+        fields.add("min_lr_ratio")
+    elif schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
+        raise ValueError("representation training config schema mismatch")
+    _exact_fields(value, fields, table="scheduler")
     kind_raw = _string(value, "kind", table="scheduler")
     try:
         kind = RepresentationSchedulerKind(kind_raw)
@@ -886,6 +1077,11 @@ def _parse_scheduler(value: Mapping[str, Any]) -> RepresentationSchedulerConfig:
         kind=kind,
         total_steps=_int(value, "total_steps", table="scheduler"),
         warmup_steps=_int(value, "warmup_steps", table="scheduler"),
+        min_lr_ratio=(
+            _float(value, "min_lr_ratio", table="scheduler")
+            if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2
+            else None
+        ),
     )
 
 
@@ -981,15 +1177,11 @@ def _parse_fsdp2(value: Mapping[str, Any]) -> RepresentationFSDP2TopologyConfig:
         device_type=_string(value, "device_type", table="fsdp2"),
         mesh_dim_name=_string(value, "mesh_dim_name", table="fsdp2"),
         mesh_shape=_int_tuple(value, "mesh_shape", table="fsdp2"),
-        reshard_after_forward=_boolean(
-            value, "reshard_after_forward", table="fsdp2"
-        ),
+        reshard_after_forward=_boolean(value, "reshard_after_forward", table="fsdp2"),
         parameter_dtype=_string(value, "parameter_dtype", table="fsdp2"),
         reduce_dtype=_string(value, "reduce_dtype", table="fsdp2"),
         output_dtype=_string(value, "output_dtype", table="fsdp2"),
-        cast_forward_inputs=_boolean(
-            value, "cast_forward_inputs", table="fsdp2"
-        ),
+        cast_forward_inputs=_boolean(value, "cast_forward_inputs", table="fsdp2"),
         offload_policy=_string(value, "offload_policy", table="fsdp2"),
     )
 
@@ -1009,9 +1201,7 @@ def _parse_training(value: Mapping[str, Any]) -> RepresentationTrainingLoopConfi
         gradient_accumulation_steps=_int(
             value, "gradient_accumulation_steps", table="training"
         ),
-        target_optimizer_steps=_int(
-            value, "target_optimizer_steps", table="training"
-        ),
+        target_optimizer_steps=_int(value, "target_optimizer_steps", table="training"),
         validation_every_optimizer_steps=_int(
             value, "validation_every_optimizer_steps", table="training"
         ),
@@ -1111,7 +1301,9 @@ def _verify_external_files(config: RepresentationTrainingConfig) -> None:
         ("train", config.data.train),
         ("validation", config.data.validation),
     ):
-        path = _existing_file_path(split.jsonl_path, field_name=f"data.{name}.jsonl_path")
+        path = _existing_file_path(
+            split.jsonl_path, field_name=f"data.{name}.jsonl_path"
+        )
         actual = sha256(path.read_bytes()).hexdigest()
         if actual != split.source_sha256:
             raise ValueError(
@@ -1219,9 +1411,7 @@ def _float_tuple(
     return tuple(item)
 
 
-def _path(
-    value: Mapping[str, Any], key: str, *, table: str, allow_empty: bool
-) -> Path:
+def _path(value: Mapping[str, Any], key: str, *, table: str, allow_empty: bool) -> Path:
     item = value.get(key)
     if not isinstance(item, str) or (not allow_empty and not item.strip()):
         raise TypeError(f"{table}.{key} must be a path string")
@@ -1312,17 +1502,20 @@ __all__ = [
     "NO_INITIALIZATION_SOURCE",
     "NO_RESUME_CHECKPOINT",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION",
+    "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2",
     "REPRESENTATION_TRAINING_SCOPE",
     "RepresentationAdamWConfig",
     "RepresentationCheckpointConfig",
     "RepresentationCodeConfig",
     "RepresentationDataConfig",
+    "RepresentationDataConfigV2",
     "RepresentationDataSplitConfig",
     "RepresentationExecutionConfig",
     "RepresentationFSDP2TopologyConfig",
     "RepresentationInitializationConfig",
     "RepresentationModelConfig",
     "RepresentationObjectiveExecutionConfig",
+    "RepresentationObjectiveExecutionConfigV2",
     "RepresentationOutputConfig",
     "RepresentationResumeConfig",
     "RepresentationTrainingConfig",

@@ -8,10 +8,70 @@ from tgvf_rl.representation.training.losses import (
     EVIDENCE_IGNORE_INDEX,
     causal_evidence_losses,
     evidence_readability_loss_terms,
+    historical_norm_loss_terms,
+    historical_sample_norm_loss,
+    historical_visual_token_norm_loss,
     same_image_matrix_ce_loss,
     same_image_matrix_ce_loss_terms,
     same_image_matrix_ce_score_gradients,
 )
+
+
+def test_historical_norm_formula_is_fp32_and_detaches_source() -> None:
+    d_tokens = torch.tensor(
+        [[3.0, 4.0], [5.0, 12.0]],
+        dtype=torch.bfloat16,
+        requires_grad=True,
+    )
+    source_tokens = torch.tensor(
+        [[0.0, 2.0], [0.0, 4.0], [0.0, 6.0]],
+        requires_grad=True,
+    )
+
+    loss = historical_visual_token_norm_loss(d_tokens, source_tokens)
+    expected = torch.log((torch.tensor([5.0, 13.0]) + 1e-6) / 4.0).square().mean()
+
+    assert loss.dtype == torch.float32
+    assert torch.allclose(loss, expected, atol=1e-7, rtol=0)
+    loss.backward()
+    assert d_tokens.grad is not None
+    assert torch.count_nonzero(d_tokens.grad).item() == d_tokens.numel()
+    assert source_tokens.grad is None
+
+
+def test_historical_sample_norm_reduces_branch_mean_then_main_equally() -> None:
+    main_d = torch.tensor([[3.0, 4.0]], requires_grad=True)
+    main_source = torch.tensor([[0.0, 2.0]])
+    branch_d = tuple(
+        torch.tensor([[value, 0.0]], requires_grad=True) for value in (2.0, 4.0, 8.0)
+    )
+    branch_source = tuple(torch.tensor([[value, 0.0]]) for value in (1.0, 2.0, 4.0))
+
+    sample = historical_sample_norm_loss(
+        main_d,
+        main_source,
+        branch_d,
+        branch_source,
+    )
+    main = historical_visual_token_norm_loss(main_d, main_source)
+    branches = torch.stack(
+        tuple(
+            historical_visual_token_norm_loss(d, source)
+            for d, source in zip(branch_d, branch_source, strict=True)
+        )
+    )
+    terms = historical_norm_loss_terms((sample, sample * 2))
+
+    assert torch.equal(sample, (main + branches.mean()) / 2)
+    assert terms.sample_count == 2
+    assert torch.equal(terms.numerator, sample * 3)
+    with pytest.raises(ValueError, match="exactly three"):
+        historical_sample_norm_loss(
+            main_d,
+            main_source,
+            branch_d[:2],
+            branch_source[:2],
+        )
 
 
 def test_causal_evidence_losses_shift_mask_and_reduce_per_sample() -> None:

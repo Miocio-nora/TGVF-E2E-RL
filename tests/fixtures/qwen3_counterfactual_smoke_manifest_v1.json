@@ -1,0 +1,16 @@
+{
+  "schema_version": "qwen3_counterfactual_manifest_v1",
+  "identity": "qwen3-counterfactual-smoke-only-v1",
+  "source_data_manifest_sha256": "d48a1900499ba3c3bbd031c1c296819ff3d6f3304b9c860d659f7474307d286c",
+  "pairs": [
+    {
+      "schema_version": "qwen3_counterfactual_pair_v1",
+      "pair_id": "status-open-closed",
+      "sample_a_id": "counterfactual-a",
+      "sample_b_id": "counterfactual-b",
+      "expected_value_a": "OPEN",
+      "expected_value_b": "CLOSED",
+      "pair_audit_identity": "synthetic-local-value-audit-v1"
+    }
+  ]
+}

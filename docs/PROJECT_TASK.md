@@ -199,9 +199,9 @@ boundary:
   and ID-identical; all original-image and tool-observation visual positions
   remain label `-100`. Qwen2.5-VL requires its own accepted transcript and
   expansion fixture and cannot reuse the Qwen3 thinking contract.
-- The manifold-loss contribution to optimization is exactly zero. Norm-loss
-  inclusion, mathematics, target, and weight remain open. No new norm mode or
-  speculative default is part of the initial implementation contract.
+- The manifold-loss contribution to optimization is exactly zero. The later
+  accepted decision `RPI-20260719-NORM-EVAL` fixes the sole Norm-loss formula,
+  reduction, and weight; no norm mode or target selector is introduced.
 - Alternative geometric or distance-based contrastive losses are a separate
   research comparison, not a silent replacement for Matrix CE. They require
   explicit mathematics, negative construction, branch handling, and an
@@ -210,6 +210,54 @@ boundary:
   inventoried and must be reproduced as exact mathematical parity fixtures or
   explicit native-protocol semantic adaptations. The authoritative inventory is
   [`REPRESENTATION_PARITY_INVENTORY.md`](REPRESENTATION_PARITY_INVENTORY.md).
+
+Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
+
+- The production representation prompt remains explicitly `[TBD]`. Smoke-only
+  prompt text may be used only by a named bounded fixture and must not become a
+  production default.
+- Norm loss is required and has one fixed historical formula rather than a
+  configurable family of modes. For one main or branch tensor `D` and its
+  corresponding frozen post-merger source tensor `V`, with `V` detached,
+  `L_norm(D,V) = mean_t(log((||D_t||_2 + 1e-6) /
+  clamp_min(mean_s ||V_s||_2, 1e-6))^2)`. One sample first averages the three
+  D-DeepStack branch losses, then averages that branch mean with the main loss;
+  the trainer takes the global sample mean across ranks and accumulation. The
+  baseline exposes only the scalar weight `0.1`; there is no norm mode, target,
+  or alternative formula selector. Raw and weighted norm values are logged.
+- The initial old-configuration comparison uses Matrix CE weight `1.0`,
+  `L_gen` weight `1.0`, AdamW learning rate `1e-4`, betas `(0.9,0.999)`, epsilon
+  `1e-8`, weight decay `0.01`, gradient clipping at `1.0`, and the exact
+  historical cosine schedule with 100 warmup steps and minimum learning-rate
+  ratio `0.1` over 2,000 optimizer steps. The production TOML remains blocked
+  on the prompt and selected provider, but these values are accepted for the
+  bounded K=4 execution/resume proof.
+- Same-image group size `K=4` is retained. On physical GPUs 2 and 3 the bounded
+  geometry proof uses four accumulation microsteps, giving 32 global rows and
+  eight complete `4x4` matrices per optimizer update. A measured throughput
+  result is required before estimating or launching the full 2,000-step run;
+  the K=2/one-step smoke is not throughput evidence.
+- The seven already-audited exact resolved-image-path overlaps are accepted as
+  recorded split metadata and do not block training. Configuration must select
+  an explicit allow-recorded-overlap policy, preserve and log the exact overlap
+  report, and must not describe the resulting validation split as image-path
+  disjoint. No rows are silently removed.
+- Both target-conditioning providers remain required code capabilities, but a
+  paired real-GPU provider comparison is not a prerequisite for one selected
+  provider's representation run. The selected provider must pass its own
+  bounded real execution gate; provider identity remains artifact-bound.
+- Internal evaluation is not complete merely because metric reducers have CPU
+  fixtures. Before a full representation run, an executable real-Qwen/data
+  runner must produce the correct-`D`, target-only, random-`D`, wrong-same-image,
+  and wrong-different-image readout controls; full query matrices and retrieval
+  reductions; main/branch distribution, norm, collapse, and attention health;
+  and native counterfactual-value-flip and free-continuation outputs. The runner
+  must retain per-sample records and deterministic checkpoint/data identities.
+- A two-rank K=4 teardown/resume proof compares the uninterrupted next optimizer
+  step with a separately reconstructed FSDP2 process. It binds Adapter,
+  optimizer, scheduler, sampler, RNG, validation history, and distributed shard
+  state, and records steady-state time and peak memory. It is a bounded smoke,
+  not a promoted representation artifact.
 
 ### 2.2 Remove Stage2 SFT
 
@@ -906,14 +954,15 @@ framework-neutral interfaces.
 - Implement `L_gen` as a separately configurable and logged readability term,
   including a controlled on/off ablation; do not infer its scientific
   necessity from historical use alone.
-- Keep manifold optimization weight at zero and leave norm-loss design unset;
-  do not add speculative norm modes to the initial implementation.
+- Keep manifold optimization weight at zero. Implement the single accepted
+  historical norm formula and scalar baseline weight from
+  `RPI-20260719-NORM-EVAL`; do not add norm modes.
 - Implement and test both contextual-hidden-state and target-token-embedding
-  condition providers behind the same TGVF Adapter boundary in separate paired
-  runs.
-- Reproduce the pinned historical internal representation tests and metrics,
-  distinguishing exact tensor/reduction parity from native-protocol semantic
-  adaptations.
+  condition providers behind the same TGVF Adapter boundary. A selected
+  provider's run does not require a paired real-GPU comparison.
+- Reproduce the pinned historical internal representation tests and metrics in
+  an executable real-Qwen/data runner, distinguishing exact tensor/reduction
+  parity from native-protocol semantic adaptations.
 - Train a new Qwen3-VL-8B-Thinking native-format TGVF Adapter checkpoint; do not
   initialize it directly from the historical TGVF Adapter checkpoint.
 - Run target-sensitivity, readout, counterfactual flip, and free-continuation

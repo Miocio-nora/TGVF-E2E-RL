@@ -31,11 +31,16 @@ from .checkpoint import (
     RepresentationInitializationIdentity,
     RepresentationOptimizerIdentity,
     RepresentationRunIdentity,
+    RepresentationRunIdentityV3,
     RepresentationSamplerContractIdentity,
     RepresentationSchedulerIdentity,
     RepresentationTrainerExecutionIdentity,
 )
-from .config import RepresentationTrainingConfig, load_representation_training_config
+from .config import (
+    RepresentationDataConfigV2,
+    RepresentationTrainingConfig,
+    load_representation_training_config,
+)
 from .data import (
     RepresentationDataset,
     load_retained_representation_jsonl,
@@ -49,13 +54,26 @@ from .distributed_checkpoint import (
     save_rank_zero_adapter_owned_state_export_atomic,
 )
 from .fsdp2 import apply_representation_fsdp2
+from .history import (
+    RepresentationMetricsHistoryIdentity,
+    load_representation_metrics_history,
+)
 from .native_pipeline import Qwen3NativeRepresentationGroupBuilder
+from .performance import (
+    RepresentationTrainStepPerformance,
+    measure_distributed_train_step,
+)
 from .runtime import create_qwen3_representation_runtime
 from .sampling import SameImageBatchSampler
 from .trainer import (
     RepresentationStepMetrics,
     RepresentationTrainer,
     build_representation_scheduler,
+)
+from .validation_identity import (
+    REPRESENTATION_VALIDATION_EVALUATOR_SCHEMA_VERSION,
+    RepresentationValidationDataAudit,
+    build_representation_validation_data_audit,
 )
 
 
@@ -71,6 +89,8 @@ _CODE_IDENTITY_PATHS = (
 
 def run_representation_training(
     config_path: str | Path,
+    *,
+    stop_after_global_step: int | None = None,
 ) -> dict[str, object] | None:
     """Run one strict representation configuration under ``torchrun``.
 
@@ -79,6 +99,7 @@ def run_representation_training(
     """
 
     config = load_representation_training_config(config_path)
+    _validate_invocation_stop(config, stop_after_global_step)
     _require_launch_environment(config)
     _verify_live_code_identity(config)
     torch.distributed.init_process_group(
@@ -87,7 +108,11 @@ def run_representation_training(
     )
     rank = torch.distributed.get_rank()
     try:
-        return _run_initialized(config, rank=rank)
+        return _run_initialized(
+            config,
+            rank=rank,
+            stop_after_global_step=stop_after_global_step,
+        )
     finally:
         if torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()
@@ -97,6 +122,7 @@ def _run_initialized(
     config: RepresentationTrainingConfig,
     *,
     rank: int,
+    stop_after_global_step: int | None = None,
 ) -> dict[str, object] | None:
     world_size = torch.distributed.get_world_size()
     local_rank = _environment_integer("LOCAL_RANK")
@@ -113,7 +139,26 @@ def _run_initialized(
         train_data.samples,
         validation_data.samples,
     )
-    overlap.require_disjoint()
+    validation_data_audit: RepresentationValidationDataAudit | None = None
+    if isinstance(config.data, RepresentationDataConfigV2):
+        validation_data_audit = build_representation_validation_data_audit(
+            train_dataset=train_data,
+            validation_dataset=validation_data,
+            validation_batch_k=config.data.validation.batch_size,
+            validation_sampler_seed=config.data.validation.sampler_seed,
+            validation_every_optimizer_steps=(
+                config.training.validation_every_optimizer_steps
+            ),
+            evaluator_schema_version=(
+                REPRESENTATION_VALIDATION_EVALUATOR_SCHEMA_VERSION
+            ),
+            overlap_policy=config.data.split_overlap_policy,
+            expected_overlap_report_sha256=(config.data.expected_overlap_report_sha256),
+        )
+        if validation_data_audit.overlap_report != overlap:
+            raise RuntimeError("validation-data audit changed the split-overlap report")
+    else:
+        overlap.require_disjoint()
     train_sampler = SameImageBatchSampler(
         train_data.samples,
         batch_size=config.data.train.batch_size,
@@ -171,7 +216,7 @@ def _run_initialized(
     trainer_execution = RepresentationTrainerExecutionIdentity.from_config(
         config.execution.trainer_config
     )
-    run_identity = RepresentationRunIdentity(
+    run_identity_fields = dict(
         run_id=config.run_id,
         code=config.code_identity,
         model=config.model_identity,
@@ -191,6 +236,17 @@ def _run_initialized(
             train_sampler
         ),
     )
+    run_identity: RepresentationRunIdentity
+    if isinstance(config.data, RepresentationDataConfigV2):
+        if validation_data_audit is None:
+            raise RuntimeError("config v2 did not materialize validation-data identity")
+        run_identity = RepresentationRunIdentityV3(
+            **run_identity_fields,
+            validation_identity=validation_data_audit.identity,
+            planned_target_optimizer_steps=(config.training.target_optimizer_steps),
+        )
+    else:
+        run_identity = RepresentationRunIdentity(**run_identity_fields)
     _require_same_string_across_ranks(
         run_identity.identity_sha256,
         name="representation run identity SHA256",
@@ -204,10 +260,28 @@ def _run_initialized(
         image_loader=_load_rgb_image,
     )
     initial_global_step = 0
+    next_validation_event_index = 0
     latest_checkpoint: Path | None = None
     latest_checkpoint_global_step: int | None = None
     if config.resume.enabled:
         assert config.resume.checkpoint_path is not None
+        expected_metrics_history: RepresentationMetricsHistoryIdentity | None = None
+        checkpoint_path_step = _checkpoint_step(
+            config.resume.checkpoint_path,
+            config.checkpoint.filename_prefix,
+        )
+        if isinstance(run_identity, RepresentationRunIdentityV3):
+            expected_metrics_history = load_representation_metrics_history(
+                config.output.metrics_jsonl_path,
+                run_id=config.run_id,
+                run_identity_sha256=run_identity.identity_sha256,
+                checkpoint_global_step=checkpoint_path_step,
+                runner_schema_version=REPRESENTATION_RUNNER_SCHEMA_VERSION,
+            ).identity
+            _require_same_string_across_ranks(
+                expected_metrics_history.identity_sha256,
+                name="representation metrics-history SHA256",
+            )
         resume = restore_distributed_representation_checkpoint(
             config.resume.checkpoint_path,
             binding=binding,
@@ -217,19 +291,32 @@ def _run_initialized(
             expected_run_identity=run_identity,
             accumulation=accumulation,
             trainer_execution=trainer_execution,
+            expected_metrics_history=expected_metrics_history,
         )
         initial_global_step = resume.global_step
+        if initial_global_step != checkpoint_path_step:
+            raise RuntimeError("checkpoint path step differs from restored global step")
+        if isinstance(run_identity, RepresentationRunIdentityV3):
+            if resume.next_validation_event_index is None:
+                raise RuntimeError("DCP v2 did not restore the validation cursor")
+            next_validation_event_index = resume.next_validation_event_index
         latest_checkpoint = config.resume.checkpoint_path
         latest_checkpoint_global_step = initial_global_step
-        _validate_resume_metrics_history_collective(
-            config.output.metrics_jsonl_path,
-            run_id=config.run_id,
-            run_identity_sha256=run_identity.identity_sha256,
-            checkpoint_global_step=initial_global_step,
-            rank=rank,
-        )
+        if not isinstance(run_identity, RepresentationRunIdentityV3):
+            _validate_resume_metrics_history_collective(
+                config.output.metrics_jsonl_path,
+                run_id=config.run_id,
+                run_identity_sha256=run_identity.identity_sha256,
+                checkpoint_global_step=initial_global_step,
+                rank=rank,
+            )
     if initial_global_step > config.training.target_optimizer_steps:
         raise ValueError("resume checkpoint is beyond the configured target step")
+    invocation_target_step = _invocation_target_step(
+        config,
+        initial_global_step=initial_global_step,
+        stop_after_global_step=stop_after_global_step,
+    )
     trainer = RepresentationTrainer(
         adapter=runtime.adapter,
         qwen_model=model,
@@ -245,28 +332,59 @@ def _run_initialized(
         initial_global_step=initial_global_step,
     )
 
-    _append_metric_rank_zero_collective(
-        config.output.metrics_jsonl_path,
-        {
-            "event": "resume" if config.resume.enabled else "start",
-            "schema_version": REPRESENTATION_RUNNER_SCHEMA_VERSION,
-            "run_id": config.run_id,
-            "run_identity_sha256": run_identity.identity_sha256,
-            "canonical_config_sha256": config.canonical_config_sha256,
-            "source_toml_sha256": config.source_toml_sha256,
-            "initial_global_step": initial_global_step,
-            "train_manifest_sha256": train_data.manifest.manifest_sha256,
-            "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
-            "conditioning_provider": config.provider.provider.value,
-        },
-    )
+    if not config.resume.enabled:
+        _append_metric_rank_zero_collective(
+            config.output.metrics_jsonl_path,
+            {
+                "event": "start",
+                "schema_version": REPRESENTATION_RUNNER_SCHEMA_VERSION,
+                "run_id": config.run_id,
+                "run_identity_sha256": run_identity.identity_sha256,
+                "canonical_config_sha256": config.canonical_config_sha256,
+                "source_toml_sha256": config.source_toml_sha256,
+                "initial_global_step": initial_global_step,
+                "invocation_target_step": invocation_target_step,
+                "planned_target_optimizer_steps": (
+                    config.training.target_optimizer_steps
+                ),
+                "train_manifest_sha256": train_data.manifest.manifest_sha256,
+                "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
+                "conditioning_provider": config.provider.provider.value,
+                "validation_data_identity_sha256": (
+                    None
+                    if validation_data_audit is None
+                    else validation_data_audit.identity.identity_sha256
+                ),
+                "split_overlap_report": overlap.canonical_payload(),
+                "split_overlap_report_sha256": overlap.identity_sha256,
+                "train_image_raw_byte_manifest_sha256": (
+                    None
+                    if validation_data_audit is None
+                    else validation_data_audit.train_image_manifest.manifest_sha256
+                ),
+                "validation_image_raw_byte_manifest_sha256": (
+                    None
+                    if validation_data_audit is None
+                    else validation_data_audit.validation_image_manifest.manifest_sha256
+                ),
+            },
+        )
+    # A resume attempt is operational rather than durable scientific state.
+    # Appending it here would advance the exact history past the checkpoint
+    # before the next checkpoint commits, making a retry after process failure
+    # impossible without manually truncating the JSONL file.  The invocation
+    # config and outcome remain in the command's stdout log.
 
     created_checkpoint_paths: list[Path] = []
-    validation_event_index = initial_global_step // (
-        config.training.validation_every_optimizer_steps
-    )
-    while trainer.global_step < config.training.target_optimizer_steps:
-        metrics = trainer.train_step()
+    validation_event_index = next_validation_event_index
+    while trainer.global_step < invocation_target_step:
+        metrics, performance = measure_distributed_train_step(
+            trainer.train_step,
+            device=device,
+            global_matrix_count=(
+                config.training.gradient_accumulation_steps * world_size
+            ),
+        )
         all_sample_ids = _gather_string_tuples(metrics.local_sample_ids)
         if metrics.global_step % config.training.log_every_optimizer_steps == 0:
             _log_training_metric(
@@ -274,12 +392,9 @@ def _run_initialized(
                 metrics=metrics,
                 all_sample_ids=all_sample_ids,
                 run_identity=run_identity,
+                performance=performance,
             )
-        if (
-            metrics.global_step
-            % config.training.validation_every_optimizer_steps
-            == 0
-        ):
+        if metrics.global_step % config.training.validation_every_optimizer_steps == 0:
             validation = _evaluate_validation(
                 config=config,
                 runtime=runtime,
@@ -287,15 +402,11 @@ def _run_initialized(
                 family_adapter=family_adapter,
                 samples=validation_data.samples,
                 group_builder=group_builder,
-                validation_manifest_sha256=(
-                    validation_data.manifest.manifest_sha256
-                ),
+                validation_manifest_sha256=(validation_data.manifest.manifest_sha256),
                 validation_event_index=validation_event_index,
             )
             validation_event_index += 1
-            validation_sample_ids = _gather_string_tuples(
-                validation.local_sample_ids
-            )
+            validation_sample_ids = _gather_string_tuples(validation.local_sample_ids)
             validation_group_keys = _gather_string_tuples(
                 (validation.local_image_group_key,)
             )
@@ -335,7 +446,8 @@ def _run_initialized(
             )
             latest_checkpoint_global_step = metrics.global_step
 
-    if config.checkpoint.save_final and (
+    invocation_complete = trainer.global_step == config.training.target_optimizer_steps
+    if (config.checkpoint.save_final or not invocation_complete) and (
         latest_checkpoint is None
         or latest_checkpoint_global_step != trainer.global_step
     ):
@@ -352,6 +464,42 @@ def _run_initialized(
             created_checkpoint_paths=created_checkpoint_paths,
         )
         latest_checkpoint_global_step = trainer.global_step
+
+    if not invocation_complete:
+        if latest_checkpoint is None:
+            raise RuntimeError("bounded invocation did not commit a resume checkpoint")
+        result = {
+            "schema_version": REPRESENTATION_RUNNER_SCHEMA_VERSION,
+            "status": "paused_at_optimizer_boundary",
+            "run_id": config.run_id,
+            "run_identity_sha256": run_identity.identity_sha256,
+            "canonical_config_sha256": config.canonical_config_sha256,
+            "source_toml_sha256": config.source_toml_sha256,
+            "global_step": trainer.global_step,
+            "planned_target_optimizer_steps": (config.training.target_optimizer_steps),
+            "conditioning_provider": config.provider.provider.value,
+            "train_manifest_sha256": train_data.manifest.manifest_sha256,
+            "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
+            "validation_data_identity_sha256": (
+                None
+                if validation_data_audit is None
+                else validation_data_audit.identity.identity_sha256
+            ),
+            "split_overlap_report_sha256": overlap.identity_sha256,
+            "final_artifact_path": None,
+            "latest_checkpoint_path": str(latest_checkpoint),
+            "metrics_jsonl_path": str(config.output.metrics_jsonl_path),
+            "tokenizer_length_before": tokenizer_length_before,
+            "tokenizer_length_after": len(processor.tokenizer),
+            "world_size": world_size,
+            "physical_gpu_ids": list(config.fsdp2.physical_gpu_ids),
+            "logical_gpu_ids": list(config.fsdp2.logical_gpu_ids),
+        }
+        # Deliberately keep the durable metrics prefix checkpoint-aligned.  The
+        # invocation result is written by the caller's stdout log; appending an
+        # operational pause record here would advance history beyond the
+        # checkpoint that the next process must verify before restore.
+        return result if rank == 0 else None
 
     export = gather_rank_zero_full_adapter_owned_state(
         binding=binding,
@@ -376,6 +524,12 @@ def _run_initialized(
         "conditioning_provider": config.provider.provider.value,
         "train_manifest_sha256": train_data.manifest.manifest_sha256,
         "validation_manifest_sha256": validation_data.manifest.manifest_sha256,
+        "validation_data_identity_sha256": (
+            None
+            if validation_data_audit is None
+            else validation_data_audit.identity.identity_sha256
+        ),
+        "split_overlap_report_sha256": overlap.identity_sha256,
         "final_artifact_path": str(config.output.final_artifact_path),
         "final_artifact_manifest_sha256": state_digest(export.manifest),
         "final_artifact_write_mode": artifact_write_mode,
@@ -392,6 +546,55 @@ def _run_initialized(
         {"event": "complete", **result},
     )
     return result if rank == 0 else None
+
+
+def _validate_invocation_stop(
+    config: RepresentationTrainingConfig,
+    stop_after_global_step: int | None,
+) -> None:
+    """Validate an operational stop without changing scientific identity.
+
+    The configured target remains the scheduler horizon and immutable run
+    identity.  This boundary only permits a process invocation to stop after a
+    durable optimizer-boundary checkpoint so teardown/resume can be tested
+    without constructing a different schedule.
+    """
+
+    if stop_after_global_step is None:
+        return
+    if (
+        isinstance(stop_after_global_step, bool)
+        or not isinstance(stop_after_global_step, int)
+        or stop_after_global_step <= 0
+    ):
+        raise ValueError("stop_after_global_step must be a positive integer")
+    if stop_after_global_step > config.training.target_optimizer_steps:
+        raise ValueError(
+            "stop_after_global_step cannot exceed the configured target step"
+        )
+    if stop_after_global_step % config.training.log_every_optimizer_steps:
+        raise ValueError(
+            "stop_after_global_step must align with a durable train-metric step"
+        )
+
+
+def _invocation_target_step(
+    config: RepresentationTrainingConfig,
+    *,
+    initial_global_step: int,
+    stop_after_global_step: int | None,
+) -> int:
+    _validate_invocation_stop(config, stop_after_global_step)
+    target = (
+        config.training.target_optimizer_steps
+        if stop_after_global_step is None
+        else stop_after_global_step
+    )
+    if target <= initial_global_step:
+        raise ValueError(
+            "invocation target step must be beyond the restored global step"
+        )
+    return target
 
 
 def _load_datasets(
@@ -430,14 +633,11 @@ def _load_qwen3(
         )
     except Exception as error:
         processor_error = _exception_text(error)
-    processor_errors: list[object] = [
-        None
-    ] * torch.distributed.get_world_size()
+    processor_errors: list[object] = [None] * torch.distributed.get_world_size()
     torch.distributed.all_gather_object(processor_errors, processor_error)
     if any(error is not None for error in processor_errors):
         raise RuntimeError(
-            "Qwen processor loading failed by rank: "
-            f"{tuple(processor_errors)}"
+            f"Qwen processor loading failed by rank: {tuple(processor_errors)}"
         )
     if processor is None:
         raise RuntimeError("current rank did not materialize the Qwen processor")
@@ -527,6 +727,19 @@ def _save_checkpoint(
     created_checkpoint_paths: list[Path],
 ) -> Path:
     path = _checkpoint_path(config, global_step)
+    metrics_history: RepresentationMetricsHistoryIdentity | None = None
+    if isinstance(run_identity, RepresentationRunIdentityV3):
+        metrics_history = load_representation_metrics_history(
+            config.output.metrics_jsonl_path,
+            run_id=config.run_id,
+            run_identity_sha256=run_identity.identity_sha256,
+            checkpoint_global_step=global_step,
+            runner_schema_version=REPRESENTATION_RUNNER_SCHEMA_VERSION,
+        ).identity
+        _require_same_string_across_ranks(
+            metrics_history.identity_sha256,
+            name="representation metrics-history SHA256",
+        )
     save_distributed_representation_checkpoint_atomic(
         path,
         binding=binding,
@@ -537,6 +750,7 @@ def _save_checkpoint(
         accumulation=accumulation,
         trainer_execution=trainer_execution,
         global_step=global_step,
+        metrics_history=metrics_history,
     )
     if path in created_checkpoint_paths:
         raise RuntimeError("current invocation attempted to recreate a checkpoint")
@@ -559,8 +773,7 @@ def _save_checkpoint(
     torch.distributed.broadcast_object_list(outcome, src=0)
     if outcome[0] is not None:
         raise RuntimeError(
-            "rank zero failed representation checkpoint retention: "
-            f"{outcome[0]}"
+            f"rank zero failed representation checkpoint retention: {outcome[0]}"
         )
     if excess:
         del created_checkpoint_paths[:excess]
@@ -606,13 +819,17 @@ def _remove_created_checkpoints_rank_zero(
     if current_resolved.parent != directory:
         raise RuntimeError("current checkpoint escaped its configured directory")
     if len(set(paths)) != len(paths):
-        raise RuntimeError("current invocation checkpoint retention contains duplicates")
+        raise RuntimeError(
+            "current invocation checkpoint retention contains duplicates"
+        )
     for path in paths:
         if path.parent != config.checkpoint.directory or path.is_symlink():
             raise RuntimeError("checkpoint retention received an unsafe created path")
         resolved = path.resolve(strict=True)
         if resolved == current_resolved or resolved.parent != directory:
-            raise RuntimeError("checkpoint retention resolved an unsafe deletion target")
+            raise RuntimeError(
+                "checkpoint retention resolved an unsafe deletion target"
+            )
         shutil.rmtree(resolved)
 
 
@@ -729,9 +946,7 @@ def _validate_resume_metrics_history(
             "run_identity_sha256" in record
             and record["run_identity_sha256"] != run_identity_sha256
         ):
-            raise ValueError(
-                f"metrics JSONL line {line_number} changes run identity"
-            )
+            raise ValueError(f"metrics JSONL line {line_number} changes run identity")
         step = record.get("global_step")
         if step is not None:
             if isinstance(step, bool) or not isinstance(step, int) or step < 0:
@@ -772,6 +987,7 @@ def _log_training_metric(
     metrics: RepresentationStepMetrics,
     all_sample_ids: tuple[tuple[str, ...], ...],
     run_identity: RepresentationRunIdentity,
+    performance: RepresentationTrainStepPerformance,
 ) -> None:
     payload = asdict(metrics)
     payload.pop("local_sample_ids")
@@ -780,6 +996,12 @@ def _log_training_metric(
             "event": "train",
             "run_identity_sha256": run_identity.identity_sha256,
             "sample_ids_by_rank": [list(values) for values in all_sample_ids],
+            "performance": {
+                **asdict(performance),
+                "max_rank_elapsed_seconds": (performance.max_rank_elapsed_seconds),
+                "global_rows_per_second": performance.global_rows_per_second,
+                "global_matrices_per_second": (performance.global_matrices_per_second),
+            },
         }
     )
     _append_metric_rank_zero_collective(
@@ -813,7 +1035,9 @@ def _save_rank_zero_export_collective(
     if torch.distributed.get_rank() == 0:
         try:
             if not getattr(export, "is_writer", False):
-                raise RuntimeError("rank zero did not receive the gathered export state")
+                raise RuntimeError(
+                    "rank zero did not receive the gathered export state"
+                )
             if path.exists():
                 if not allow_existing_identical:
                     raise FileExistsError("final Adapter artifact already exists")
@@ -838,7 +1062,9 @@ def _save_rank_zero_export_collective(
     if not isinstance(value, str):
         raise RuntimeError("rank zero did not report final Adapter artifact status")
     if value.startswith("ERROR:"):
-        raise RuntimeError(f"rank zero could not publish final Adapter artifact: {value[6:]}")
+        raise RuntimeError(
+            f"rank zero could not publish final Adapter artifact: {value[6:]}"
+        )
     if value not in {"written", "reused"}:
         raise RuntimeError("rank zero reported an invalid Adapter artifact status")
     return value
@@ -971,7 +1197,9 @@ def _verify_live_code_identity(config: RepresentationTrainingConfig) -> None:
                 raise ValueError("git returned an unsafe untracked code path")
             file_path = (root / relative).resolve(strict=True)
             if not file_path.is_file() or root not in file_path.parents:
-                raise ValueError("untracked code identity path is not a regular repo file")
+                raise ValueError(
+                    "untracked code identity path is not a regular repo file"
+                )
             digest.update(relative_raw)
             digest.update(b"\0")
             digest.update(file_path.read_bytes())
@@ -991,9 +1219,7 @@ def _run_git(root: Path, *arguments: str) -> str:
         timeout=30,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"git {' '.join(arguments)} failed: {result.stderr.strip()}"
-        )
+        raise RuntimeError(f"git {' '.join(arguments)} failed: {result.stderr.strip()}")
     return result.stdout
 
 

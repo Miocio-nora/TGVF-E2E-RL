@@ -20,8 +20,10 @@ from tgvf_rl.representation.training.checkpoint import (
     RepresentationInitializationIdentity,
     RepresentationOptimizerIdentity,
     RepresentationRunIdentity,
+    RepresentationRunIdentityV3,
     RepresentationSamplerContractIdentity,
     RepresentationSchedulerIdentity,
+    RepresentationSchedulerIdentityV2,
     RepresentationTrainerExecutionIdentity,
     capture_representation_rng_state,
     load_representation_adapter_artifact,
@@ -32,6 +34,7 @@ from tgvf_rl.representation.training.checkpoint import (
     save_representation_adapter_artifact_atomic,
     save_representation_training_checkpoint_atomic,
 )
+from tgvf_rl.representation.training.data import SplitOverlapPolicy
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveKind,
@@ -44,6 +47,10 @@ from tgvf_rl.representation.training.trainer import (
     RepresentationSchedulerKind,
     RepresentationTrainerConfig,
     build_representation_scheduler,
+)
+from tgvf_rl.representation.training.validation_identity import (
+    REPRESENTATION_VALIDATION_EVALUATOR_SCHEMA_VERSION,
+    RepresentationValidationDataIdentity,
 )
 
 
@@ -144,6 +151,55 @@ def _run_identity(
     )
 
 
+def _validation_identity() -> RepresentationValidationDataIdentity:
+    return RepresentationValidationDataIdentity(
+        train_retained_manifest_sha256=DATA_MANIFEST_SHA256,
+        validation_retained_manifest_sha256="4" * 64,
+        validation_batch_k=4,
+        validation_sampler_seed=73,
+        validation_every_optimizer_steps=5,
+        evaluator_schema_version=REPRESENTATION_VALIDATION_EVALUATOR_SCHEMA_VERSION,
+        overlap_policy=SplitOverlapPolicy.REQUIRE_DISJOINT,
+        overlap_report_sha256="5" * 64,
+        overlap_record_count=0,
+        overlap_kinds=(),
+        train_image_manifest_sha256="6" * 64,
+        train_image_file_count=2,
+        train_image_total_size_bytes=20,
+        validation_image_manifest_sha256="7" * 64,
+        validation_image_file_count=1,
+        validation_image_total_size_bytes=10,
+    )
+
+
+def _run_identity_v3(
+    adapter: TGVFAdapter,
+    *,
+    sampler: SameImageBatchSampler,
+    optimizer: torch.optim.Optimizer,
+    initialization_seed: int,
+    with_scheduler: bool,
+    planned_target_optimizer_steps: int = 2,
+) -> RepresentationRunIdentityV3:
+    legacy = _run_identity(
+        adapter,
+        sampler=sampler,
+        optimizer=optimizer,
+        initialization_seed=initialization_seed,
+        with_scheduler=with_scheduler,
+    )
+    common = {
+        name: getattr(legacy, name)
+        for name in RepresentationRunIdentity.__dataclass_fields__
+        if name != "schema_version"
+    }
+    return RepresentationRunIdentityV3(
+        **common,
+        validation_identity=_validation_identity(),
+        planned_target_optimizer_steps=planned_target_optimizer_steps,
+    )
+
+
 def _samples() -> tuple[RepresentationTrainingSample, ...]:
     return tuple(
         RepresentationTrainingSample(
@@ -187,6 +243,86 @@ def _scheduler_config() -> RepresentationSchedulerConfig:
         total_steps=SCHEDULER_TOTAL_STEPS,
         warmup_steps=0,
     )
+
+
+def test_scheduler_v2_identity_binds_minimum_ratio_without_changing_v1_type() -> None:
+    v1 = RepresentationSchedulerIdentity.from_config(_scheduler_config())
+    first_config = RepresentationSchedulerConfig(
+        kind=RepresentationSchedulerKind.HISTORICAL_COSINE,
+        total_steps=2000,
+        warmup_steps=100,
+        min_lr_ratio=0.1,
+    )
+    second_config = RepresentationSchedulerConfig(
+        kind=RepresentationSchedulerKind.HISTORICAL_COSINE,
+        total_steps=2000,
+        warmup_steps=100,
+        min_lr_ratio=0.2,
+    )
+    first = RepresentationSchedulerIdentity.from_config(first_config)
+    second = RepresentationSchedulerIdentity.from_config(second_config)
+
+    assert type(v1) is RepresentationSchedulerIdentity
+    assert isinstance(first, RepresentationSchedulerIdentityV2)
+    assert isinstance(second, RepresentationSchedulerIdentityV2)
+    assert first.min_lr_ratio == 0.1
+    assert second.min_lr_ratio == 0.2
+    assert first.identity_sha256 != second.identity_sha256
+
+
+def test_run_identity_v3_binds_validation_and_planned_horizon_without_breaking_v2(
+    tmp_path,
+) -> None:
+    adapter = _adapter(8)
+    sampler = _sampler()
+    optimizer = _optimizer(adapter)
+    legacy = _run_identity(
+        adapter,
+        sampler=sampler,
+        optimizer=optimizer,
+        initialization_seed=8,
+        with_scheduler=True,
+    )
+    identity = _run_identity_v3(
+        adapter,
+        sampler=sampler,
+        optimizer=optimizer,
+        initialization_seed=8,
+        with_scheduler=True,
+        planned_target_optimizer_steps=2,
+    )
+
+    assert type(legacy) is RepresentationRunIdentity
+    assert legacy.schema_version == "representation-run-identity-v2"
+    assert identity.schema_version == "representation-run-identity-v3"
+    assert identity.validation_identity == _validation_identity()
+    assert identity.planned_target_optimizer_steps == 2
+    assert replace(identity, planned_target_optimizer_steps=3).identity_sha256 != (
+        identity.identity_sha256
+    )
+    changed_validation = replace(
+        identity.validation_identity,
+        validation_sampler_seed=74,
+    )
+    assert replace(
+        identity, validation_identity=changed_validation
+    ).identity_sha256 != (identity.identity_sha256)
+    with pytest.raises(ValueError, match="exceed the scheduler horizon"):
+        replace(
+            identity,
+            planned_target_optimizer_steps=SCHEDULER_TOTAL_STEPS + 1,
+        )
+
+    path = tmp_path / "v3-adapter.pt"
+    save_representation_adapter_artifact_atomic(
+        path,
+        adapter=adapter,
+        run_identity=identity,
+        global_step=0,
+    )
+    loaded = load_representation_adapter_artifact(path)
+    assert loaded.manifest.run_identity == identity
+    assert isinstance(loaded.manifest.run_identity, RepresentationRunIdentityV3)
 
 
 def _training_step(

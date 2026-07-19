@@ -116,18 +116,19 @@ matrix items remain promotion gates rather than implicit passes.
   providers are both required capabilities. A run selects one as part of its
   experiment identity.
 - [x] `FIXED` — Provider types are not mixed in one representation run. Their
-  comparison uses separate paired runs with identical sample/group order,
-  initialization, batch plan, and seed.
+  optional comparison uses separate paired runs with identical sample/group
+  order, initialization, batch plan, and seed; a paired real-GPU comparison is
+  not required before one selected provider's run.
 - [x] `FIXED` — Same-image Matrix CE is a required target-specificity objective;
   ordinary independent shuffle is not a valid substitute for same-image
   multi-target grouping.
 - [x] `FIXED` — The representation baseline includes both Matrix CE and
-  `L_gen`, with separately logged, explicitly configured nonzero weights.
-  `L_gen=off` is a separately identified ablation rather than the baseline.
-  Exact numerical weights remain open and fail closed until bound.
+  `L_gen`, separately logged at weights `1.0` and `1.0` for the accepted initial
+  old-configuration comparison.
 - [x] `FIXED` — The manifold-loss optimizer contribution is exactly zero.
-- [x] `FIXED` — No new norm-loss mode, formula, target, or default weight is
-  accepted. Norm-loss design remains open.
+- [x] `FIXED` — Norm loss uses the one accepted historical formula, detached
+  source visual tensors, fixed main/branch reduction, and weight `0.1`; no norm
+  mode or target selector is exposed.
 - [x] `FIXED` — Pinned historical internal representation tests and metrics must
   be reproduced as exact parity fixtures or documented native-protocol
   adaptations; omissions require an explicit decision. This requirement does
@@ -541,10 +542,12 @@ the external data or start a production/GPU run.
     targets, 641 excluded rows, 108 leakage records, manifest
     `e44cbd6f86ff82879b3be312d9a23198b7267bccd710cbe7d1ecc1dc9954ea15`.
   Group key, stable UID, and content hash do not overlap, but seven distinct
-  resolved image paths do. No implementation silently filters these rows.
-  Dataset/image licenses, an accepted overlap/exclusion policy, replacement
-  manifests if the split changes, and a perceptual near-duplicate audit remain
-  blocking. The audited manifests are evidence, not production-ready artifacts.
+  resolved image paths do. The user accepts those seven paths as recorded split
+  metadata under `RPI-20260719-NORM-EVAL`; they do not block training and no
+  implementation may silently filter them. The loader/config must still record
+  the exact overlap report and must not claim image-path disjointness. Dataset/
+  image licenses and a perceptual near-duplicate audit remain open production
+  metadata items rather than grounds for silently changing this population.
 - [x] `FIXED AD-02A` — The protocol-neutral representation row contains the
   retained row `uid` as `sample_id`, exact image reference, already-rendered
   question text, target text, `evidence_description`, optional `image_id`, and
@@ -651,8 +654,13 @@ the external data or start a production/GPU run.
     loggable. Actual trainer logging remains part of `AD-05F`.
   - [x] `FIXED AD-05D` — Manifold-loss optimizer contribution is exactly zero.
     A diagnostic-only computation, if retained, must not contribute gradients.
-  - `AD-05E` — Norm-loss inclusion, mathematics, target, and weight remain
-    undecided. No speculative mode or default may enter configuration or code.
+  - [x] `FIXED AD-05E` — Norm loss uses the one accepted historical formula:
+    `mean_t(log((||D_t||_2 + 1e-6) / clamp_min(mean_s ||V_s||_2, 1e-6))^2)`
+    against detached corresponding post-merger source visual tensors. Per
+    sample, the three D-DeepStack branch losses are averaged and that branch
+    mean is averaged with the main loss; distributed/accumulated reduction is a
+    global sample mean. The baseline scalar weight is `0.1`. No mode, target, or
+    alternative-formula selector is accepted.
   - [ ] `OPEN_CONFIGURABLE AD-05F` — The trainer/config/checkpoint code exposes
     explicit nonzero Matrix-CE and `L_gen` weights, AdamW options, scheduler,
     precision, accumulation, clipping, validation/log cadence, and strict
@@ -708,9 +716,10 @@ the external data or start a production/GPU run.
   through one explicit shared configuration/runtime/native group-builder path,
   and provider identity is checkpoint-bound. Both have synthetic target-span,
   shape, determinism, and training-path fixtures. Corrected `RP-10` proves a
-  real-Qwen optimizer path for target-token-embedding conditioning. Paired
-  contextual-hidden-state execution and accepted target-specificity,
-  readability, and per-branch thresholds remain blocking.
+  real-Qwen optimizer path for target-token-embedding conditioning. A paired
+  real-GPU provider comparison is not a prerequisite for a selected provider's
+  run; the selected provider's own target-specificity, readability, and
+  per-branch evidence remains required.
 - [ ] `OPEN_BLOCKING AD-12` — Representation artifacts are explicitly bound to
   a Qwen model identity and provider contract in the implemented schema. Qwen3 and
   `Qwen/Qwen2.5-VL-7B-Instruct` compatibility must not be claimed by loading one
@@ -722,11 +731,11 @@ the external data or start a production/GPU run.
   evidence. Explicit acceptance of proposed exclusions plus real-Qwen metric
   thresholds/evaluations is still required. See
   `docs/REPRESENTATION_PARITY_INVENTORY.md`.
-- [ ] `OPEN_BLOCKING AD-14` — Contextual-hidden-state and
-  target-token-embedding providers run as separate paired experiments with
-  identical data/group order, Adapter initialization, batch plan, and seed;
-  both report target specificity, readability, branch, and optimization
-  metrics under their own artifact identities.
+- [ ] `OPEN_CONFIGURABLE AD-14` — A paired contextual-hidden-state versus
+  target-token-embedding experiment remains an optional named scientific
+  comparison. It is not a representation-training prerequisite. If run, it
+  uses identical data/group order, Adapter initialization, batch plan, and seed
+  and retains separate artifact identities.
 
 ## 8. Gate G0 — Before any GRPO optimizer step
 

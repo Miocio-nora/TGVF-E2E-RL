@@ -18,6 +18,7 @@ from tgvf_rl.representation.training.evaluation import (
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigV2,
     RepresentationObjectiveKind,
 )
 from tgvf_rl.representation.training.readout import (
@@ -148,9 +149,7 @@ def _supervision(token_ids: tuple[int, ...]) -> ModelEvidenceSupervision:
 class _RecordingGroupBuilder:
     def __init__(self, *, reverse: bool = False) -> None:
         self.reverse = reverse
-        self.calls: list[
-            tuple[tuple[str, ...], bool, bool, float, float]
-        ] = []
+        self.calls: list[tuple[tuple[str, ...], bool, bool, float, float]] = []
         self.collective_counts: list[int] = []
         self.padding_counts: list[int] = []
 
@@ -199,9 +198,7 @@ class _RecordingGroupBuilder:
                     d_positions=(3, 4),
                 )
             )
-            target = torch.full(
-                (3, 6), 0.1 + index * 0.1 + python_draw * 0.01
-            )
+            target = torch.full((3, 6), 0.1 + index * 0.1 + python_draw * 0.01)
             visual = torch.arange(32, dtype=torch.float32).reshape(8, 4) / 32
             visual = visual + torch_draw * 0.01
             output = adapter(
@@ -249,8 +246,7 @@ class _RecordingGroupBuilder:
                 RepresentationVisualTensorBundle(
                     main=output.main_d.unsqueeze(0),
                     deepstack=tuple(
-                        branch.unsqueeze(0)
-                        for branch in output.deepstack_visual_embeds
+                        branch.unsqueeze(0) for branch in output.deepstack_visual_embeds
                     ),
                     branch_layers=output.metadata.branch_layers,
                 )
@@ -275,6 +271,16 @@ def _objective() -> RepresentationObjectiveConfig:
     )
 
 
+def _objective_v2() -> RepresentationObjectiveConfigV2:
+    return RepresentationObjectiveConfigV2(
+        identity="validation-objective-with-norm",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=1.0,
+        l_gen_weight=1.0,
+        norm_weight=0.1,
+    )
+
+
 def _evaluate(
     *,
     adapter: TGVFAdapter,
@@ -283,6 +289,9 @@ def _evaluate(
     builder: _RecordingGroupBuilder,
     event: int,
     world_size: int = 1,
+    objective: RepresentationObjectiveConfig
+    | RepresentationObjectiveConfigV2
+    | None = None,
 ):
     return evaluate_representation_validation_event(
         adapter=adapter,
@@ -290,7 +299,7 @@ def _evaluate(
         family_adapter=Qwen3VLAdapter(),
         samples=samples,
         group_builder=builder,
-        objective=_objective(),
+        objective=_objective() if objective is None else objective,
         batch_size=2,
         sampler_seed=41,
         data_manifest_sha256=DATA_SHA256,
@@ -351,6 +360,28 @@ def test_validation_is_fresh_deterministic_no_grad_and_rng_isolated() -> None:
     assert not qwen.training
     assert all(not parameter.requires_grad for parameter in qwen.parameters())
     assert all(parameter.grad is None for parameter in qwen.parameters())
+
+
+def test_validation_v2_reports_raw_and_weighted_historical_norm() -> None:
+    metrics = _evaluate(
+        adapter=_adapter(),
+        qwen=_qwen(initially_trainable=False).eval(),
+        samples=_samples(),
+        builder=_RecordingGroupBuilder(),
+        event=0,
+        objective=_objective_v2(),
+    )
+
+    assert metrics.global_norm_loss is not None
+    assert metrics.global_norm_loss > 0
+    assert metrics.global_weighted_norm_loss == pytest.approx(
+        metrics.global_norm_loss * 0.1
+    )
+    assert metrics.global_total_loss == pytest.approx(
+        metrics.global_matrix_ce_loss
+        + metrics.global_l_gen_loss
+        + metrics.global_weighted_norm_loss
+    )
 
 
 def _groups_for_both_ranks() -> tuple[str, str]:

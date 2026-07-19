@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from hashlib import sha256
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from tgvf_rl.representation.training.checkpoint import (
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigV2,
     RepresentationObjectiveKind,
 )
 from tgvf_rl.representation.training.readout import (
@@ -226,8 +228,7 @@ class _GroupBuilder:
                 RepresentationVisualTensorBundle(
                     main=output.main_d.unsqueeze(0),
                     deepstack=tuple(
-                        branch.unsqueeze(0)
-                        for branch in output.deepstack_visual_embeds
+                        branch.unsqueeze(0) for branch in output.deepstack_visual_embeds
                     ),
                     branch_layers=output.metadata.branch_layers,
                 )
@@ -251,7 +252,24 @@ def _objective() -> RepresentationObjectiveConfig:
     )
 
 
-def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen() -> None:
+def _objective_v2() -> RepresentationObjectiveConfigV2:
+    return RepresentationObjectiveConfigV2(
+        identity="trainer-test-historical-norm-objective",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=0.6,
+        l_gen_weight=1.1,
+        norm_weight=0.1,
+    )
+
+
+@pytest.mark.parametrize(
+    "objective",
+    (_objective(), _objective_v2()),
+    ids=("historical-v1-no-norm", "v2-required-norm"),
+)
+def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
+    objective: RepresentationObjectiveConfig | RepresentationObjectiveConfigV2,
+) -> None:
     samples = _samples()
     adapter = _adapter()
     qwen = _qwen()
@@ -290,7 +308,7 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen() -> 
         samples=samples,
         sampler=sampler,
         group_builder=_GroupBuilder(),
-        objective=_objective(),
+        objective=objective,
         accumulation=RepresentationAccumulationIdentity(
             gradient_accumulation_steps=2,
             data_parallel_world_size=1,
@@ -311,9 +329,19 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen() -> 
     assert metrics.global_sample_count == 4
     assert metrics.global_matrix_ce_loss > 0
     assert metrics.global_l_gen_loss > 0
-    assert metrics.global_total_loss == pytest.approx(
+    expected_total = (
         metrics.global_matrix_ce_loss * 0.6 + metrics.global_l_gen_loss * 1.1
     )
+    if isinstance(objective, RepresentationObjectiveConfigV2):
+        assert metrics.global_norm_loss is not None
+        assert metrics.global_weighted_norm_loss == pytest.approx(
+            metrics.global_norm_loss * 0.1
+        )
+        expected_total += metrics.global_weighted_norm_loss
+    else:
+        assert metrics.global_norm_loss is None
+        assert metrics.global_weighted_norm_loss is None
+    assert metrics.global_total_loss == pytest.approx(expected_total)
     assert metrics.gradient_norm_before_clip > 0
     assert metrics.learning_rate == pytest.approx(1e-3)
     assert optimizer.param_groups[0]["lr"] == pytest.approx(5e-4)
@@ -363,6 +391,75 @@ def test_linear_scheduler_controls_the_learning_rate_used_by_each_update(
     assert optimizer.param_groups[0]["lr"] / base_learning_rate == pytest.approx(
         expected_final
     )
+
+
+def test_exact_historical_cosine_schedule_and_state_resume() -> None:
+    parameter = nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.SGD([parameter], lr=1.0)
+    config = RepresentationSchedulerConfig(
+        kind=RepresentationSchedulerKind.HISTORICAL_COSINE,
+        total_steps=6,
+        warmup_steps=2,
+        min_lr_ratio=0.1,
+    )
+    scheduler = build_representation_scheduler(optimizer, config)
+    used = []
+    checkpoint = None
+    for update in range(6):
+        used.append(float(optimizer.param_groups[0]["lr"]))
+        optimizer.step()
+        scheduler.step()
+        if update == 2:
+            checkpoint = (
+                deepcopy(optimizer.state_dict()),
+                deepcopy(scheduler.state_dict()),
+            )
+
+    # Values are the pinned launcher's (step+1) warmup/decay indexing and FP32
+    # torch.cos evaluation, not a generic library cosine default.
+    assert used == pytest.approx(
+        (
+            0.5,
+            1.0,
+            0.8681980460882187,
+            0.5499999803298753,
+            0.23180195391178132,
+            0.1,
+        ),
+        rel=0,
+        abs=1e-15,
+    )
+    assert optimizer.param_groups[0]["lr"] == 0.1
+
+    assert checkpoint is not None
+    resumed_parameter = nn.Parameter(torch.tensor(1.0))
+    resumed_optimizer = torch.optim.SGD([resumed_parameter], lr=1.0)
+    resumed_scheduler = build_representation_scheduler(resumed_optimizer, config)
+    resumed_optimizer.load_state_dict(checkpoint[0])
+    resumed_scheduler.load_state_dict(checkpoint[1])
+    resumed_used = []
+    for _ in range(3):
+        resumed_used.append(float(resumed_optimizer.param_groups[0]["lr"]))
+        resumed_optimizer.step()
+        resumed_scheduler.step()
+    assert resumed_used == used[3:]
+    assert resumed_scheduler.state_dict() == scheduler.state_dict()
+
+
+def test_historical_cosine_requires_explicit_bounded_minimum_ratio() -> None:
+    with pytest.raises(TypeError, match="explicit float"):
+        RepresentationSchedulerConfig(
+            kind=RepresentationSchedulerKind.HISTORICAL_COSINE,
+            total_steps=2000,
+            warmup_steps=100,
+        )
+    with pytest.raises(ValueError, match=r"\[0,1\]"):
+        RepresentationSchedulerConfig(
+            kind=RepresentationSchedulerKind.HISTORICAL_COSINE,
+            total_steps=2000,
+            warmup_steps=100,
+            min_lr_ratio=1.1,
+        )
 
 
 def test_collective_candidate_counts_use_each_microsteps_global_maximum(

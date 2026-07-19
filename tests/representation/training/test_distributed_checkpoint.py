@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import random
 import shutil
 from types import SimpleNamespace
@@ -14,7 +14,7 @@ from tgvf_rl.conditioning import (
     TargetConditioningConfig,
     TargetConditioningProviderKind,
 )
-from tgvf_rl.contracts.errors import ReplayMismatchError
+from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import CodeIdentity, ModelIdentity
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
 from tgvf_rl.representation.training.checkpoint import (
@@ -23,18 +23,24 @@ from tgvf_rl.representation.training.checkpoint import (
     RepresentationInitializationIdentity,
     RepresentationOptimizerIdentity,
     RepresentationRunIdentity,
+    RepresentationRunIdentityV3,
     RepresentationSamplerContractIdentity,
+    RepresentationSchedulerIdentity,
     RepresentationTrainerExecutionIdentity,
 )
 from tgvf_rl.representation.training import distributed_checkpoint as dcp_module
 from tgvf_rl.representation.training.distributed_checkpoint import (
+    DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
+    DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2,
     RankZeroAdapterOwnedStateExport,
     gather_rank_zero_full_adapter_owned_state,
+    load_distributed_representation_checkpoint_metadata,
     load_rank_zero_adapter_owned_state_export,
     restore_distributed_representation_checkpoint,
     save_distributed_representation_checkpoint_atomic,
     save_rank_zero_adapter_owned_state_export_atomic,
 )
+from tgvf_rl.representation.training.data import SplitOverlapPolicy
 from tgvf_rl.representation.training.fsdp2 import (
     RepresentationFSDP2Binding,
     RepresentationFSDP2Config,
@@ -44,11 +50,23 @@ from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveKind,
 )
+from tgvf_rl.representation.training.history import (
+    RepresentationMetricsHistoryIdentity,
+)
 from tgvf_rl.representation.training.sampling import (
     SameImageBatchSampler,
     same_image_group_owner,
 )
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
+from tgvf_rl.representation.training.trainer import (
+    RepresentationSchedulerConfig,
+    RepresentationSchedulerKind,
+    build_representation_scheduler,
+)
+from tgvf_rl.representation.training.validation_identity import (
+    REPRESENTATION_VALIDATION_EVALUATOR_SCHEMA_VERSION,
+    RepresentationValidationDataIdentity,
+)
 
 
 DATA_MANIFEST_SHA256 = "2" * 64
@@ -175,6 +193,7 @@ def _identity(
     sampler: SameImageBatchSampler,
     *,
     initialization_seed: int,
+    scheduler_identity: RepresentationSchedulerIdentity | None = None,
 ) -> RepresentationRunIdentity:
     return RepresentationRunIdentity(
         run_id="distributed-cpu-contract",
@@ -203,7 +222,7 @@ def _identity(
         ),
         accumulation=RepresentationAccumulationIdentity(1, 2),
         optimizer=RepresentationOptimizerIdentity.from_optimizer(optimizer),
-        scheduler=None,
+        scheduler=scheduler_identity,
         trainer_execution=RepresentationTrainerExecutionIdentity(
             precision="fp32",
             max_grad_norm=1.0,
@@ -216,6 +235,73 @@ def _identity(
             source_artifact_sha256=None,
         ),
         sampler_contract=RepresentationSamplerContractIdentity.from_sampler(sampler),
+    )
+
+
+def _validation_identity() -> RepresentationValidationDataIdentity:
+    return RepresentationValidationDataIdentity(
+        train_retained_manifest_sha256=DATA_MANIFEST_SHA256,
+        validation_retained_manifest_sha256="4" * 64,
+        validation_batch_k=4,
+        validation_sampler_seed=73,
+        validation_every_optimizer_steps=1,
+        evaluator_schema_version=REPRESENTATION_VALIDATION_EVALUATOR_SCHEMA_VERSION,
+        overlap_policy=SplitOverlapPolicy.REQUIRE_DISJOINT,
+        overlap_report_sha256="5" * 64,
+        overlap_record_count=0,
+        overlap_kinds=(),
+        train_image_manifest_sha256="6" * 64,
+        train_image_file_count=4,
+        train_image_total_size_bytes=40,
+        validation_image_manifest_sha256="7" * 64,
+        validation_image_file_count=1,
+        validation_image_total_size_bytes=10,
+    )
+
+
+def _identity_v3(
+    binding: RepresentationFSDP2Binding,
+    optimizer: torch.optim.Optimizer,
+    sampler: SameImageBatchSampler,
+    *,
+    initialization_seed: int,
+    scheduler_identity: RepresentationSchedulerIdentity | None = None,
+    planned_target_optimizer_steps: int = 2,
+) -> RepresentationRunIdentityV3:
+    legacy = _identity(
+        binding,
+        optimizer,
+        sampler,
+        initialization_seed=initialization_seed,
+        scheduler_identity=scheduler_identity,
+    )
+    common = {
+        name: getattr(legacy, name)
+        for name in RepresentationRunIdentity.__dataclass_fields__
+        if name != "schema_version"
+    }
+    return RepresentationRunIdentityV3(
+        **common,
+        validation_identity=_validation_identity(),
+        planned_target_optimizer_steps=planned_target_optimizer_steps,
+    )
+
+
+def _metrics_history(
+    identity: RepresentationRunIdentity,
+    *,
+    global_step: int,
+    raw_bytes_sha256: str = "8" * 64,
+    next_validation_event_index: int = 1,
+) -> RepresentationMetricsHistoryIdentity:
+    return RepresentationMetricsHistoryIdentity(
+        run_id=identity.run_id,
+        run_identity_sha256=identity.identity_sha256,
+        checkpoint_global_step=global_step,
+        raw_bytes_sha256=raw_bytes_sha256,
+        byte_count=123,
+        line_count=3,
+        next_validation_event_index=next_validation_event_index,
     )
 
 
@@ -403,6 +489,13 @@ def test_sharded_public_dcp_round_trip_preserves_owned_state_and_rank_state(
     expected_batch = sampler.next_batch()
 
     assert path.is_dir()
+    assert manifest.schema_version == (
+        DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
+    )
+    assert manifest.metrics_history is None
+    assert manifest.metrics_history_identity_sha256 is None
+    loaded_metadata = load_distributed_representation_checkpoint_metadata(path)
+    assert loaded_metadata.manifest == manifest
     assert manifest.owned_state_names == tuple(sorted(expected_state))
     assert len(manifest.model_local_shard_sha256) == 2
     assert len(manifest.optimizer_local_shard_sha256) == 2
@@ -436,6 +529,7 @@ def test_sharded_public_dcp_round_trip_preserves_owned_state_and_rank_state(
     )
 
     assert result.exact and result.global_step == 0 and result.next_global_step == 1
+    assert result.next_validation_event_index is None
     for name, expected in expected_state.items():
         torch.testing.assert_close(
             target.adapter.artifact_state_dict()[name], expected, rtol=0, atol=0
@@ -472,6 +566,200 @@ def test_sharded_public_dcp_round_trip_preserves_owned_state_and_rank_state(
             binding=rejected,
             optimizer=rejected_optimizer,
             scheduler=None,
+            sampler=_sampler(),
+            expected_run_identity=identity,
+            accumulation=identity.accumulation,
+            trainer_execution=identity.trainer_execution,
+        )
+
+
+def test_dcp_v2_binds_metrics_history_and_rejects_drift_before_state_load(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake = _FakeDCP()
+    monkeypatch.setattr(dcp_module, "_load_distributed_checkpoint_api", fake.api)
+    _mock_distributed(monkeypatch)
+    source = _binding(24)
+    optimizer = _optimizer(source)
+    sampler = _sampler()
+    identity = _identity_v3(
+        source,
+        optimizer,
+        sampler,
+        initialization_seed=24,
+    )
+    history = _metrics_history(
+        identity,
+        global_step=1,
+        next_validation_event_index=2,
+    )
+    path = tmp_path / "distributed-history-v2"
+
+    manifest = save_distributed_representation_checkpoint_atomic(
+        path,
+        binding=source,
+        optimizer=optimizer,
+        scheduler=None,
+        sampler=sampler,
+        run_identity=identity,
+        accumulation=identity.accumulation,
+        trainer_execution=identity.trainer_execution,
+        global_step=1,
+        metrics_history=history,
+    )
+
+    assert manifest.schema_version == (
+        DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
+    )
+    assert manifest.metrics_history == history
+    assert manifest.metrics_history_identity_sha256 == history.identity_sha256
+    metadata = load_distributed_representation_checkpoint_metadata(path)
+    assert metadata.manifest == manifest
+    with pytest.raises(ValueError, match="v1 cannot bind metrics history"):
+        replace(
+            manifest,
+            schema_version=DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
+        )
+    with pytest.raises(TypeError, match="metrics_history must be"):
+        replace(
+            manifest,
+            metrics_history=None,
+            metrics_history_identity_sha256=None,
+        )
+
+    target = _binding(25)
+    target_optimizer = _optimizer(target)
+    result = restore_distributed_representation_checkpoint(
+        path,
+        binding=target,
+        optimizer=target_optimizer,
+        scheduler=None,
+        sampler=_sampler(),
+        expected_run_identity=identity,
+        accumulation=identity.accumulation,
+        trainer_execution=identity.trainer_execution,
+        expected_metrics_history=history,
+    )
+    assert result.exact
+    assert result.next_validation_event_index == 2
+
+    drifted_history = replace(history, raw_bytes_sha256="9" * 64)
+    rejected = _binding(26)
+    rejected_optimizer = _optimizer(rejected)
+    before_load = fake.calls.count("dcp_load")
+    before_apply = fake.calls.count("set_model_state_dict")
+    with pytest.raises(ReplayMismatchError, match="metrics history mismatch"):
+        restore_distributed_representation_checkpoint(
+            path,
+            binding=rejected,
+            optimizer=rejected_optimizer,
+            scheduler=None,
+            sampler=_sampler(),
+            expected_run_identity=identity,
+            accumulation=identity.accumulation,
+            trainer_execution=identity.trainer_execution,
+            expected_metrics_history=drifted_history,
+        )
+    assert fake.calls.count("dcp_load") == before_load
+    assert fake.calls.count("set_model_state_dict") == before_apply
+
+    with pytest.raises(
+        ReplayMismatchError,
+        match="requires expected metrics history",
+    ):
+        restore_distributed_representation_checkpoint(
+            path,
+            binding=rejected,
+            optimizer=rejected_optimizer,
+            scheduler=None,
+            sampler=_sampler(),
+            expected_run_identity=identity,
+            accumulation=identity.accumulation,
+            trainer_execution=identity.trainer_execution,
+        )
+
+
+def test_distributed_scheduler_v2_sidecar_restore_and_ratio_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake = _FakeDCP()
+    monkeypatch.setattr(dcp_module, "_load_distributed_checkpoint_api", fake.api)
+    _mock_distributed(monkeypatch)
+    source = _binding(31)
+    optimizer = _optimizer(source)
+    config = RepresentationSchedulerConfig(
+        kind=RepresentationSchedulerKind.HISTORICAL_COSINE,
+        total_steps=2000,
+        warmup_steps=100,
+        min_lr_ratio=0.1,
+    )
+    scheduler = build_representation_scheduler(optimizer, config)
+    sampler = _sampler()
+    identity = _identity(
+        source,
+        optimizer,
+        sampler,
+        initialization_seed=31,
+        scheduler_identity=RepresentationSchedulerIdentity.from_config(config),
+    )
+    path = tmp_path / "distributed-cosine"
+
+    optimizer.zero_grad(set_to_none=True)
+    for group in optimizer.param_groups:
+        for parameter in group["params"]:
+            parameter.grad = torch.ones_like(parameter)
+    optimizer.step()
+    scheduler.step()
+    optimizer.zero_grad(set_to_none=True)
+
+    manifest = save_distributed_representation_checkpoint_atomic(
+        path,
+        binding=source,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        sampler=sampler,
+        run_identity=identity,
+        accumulation=identity.accumulation,
+        trainer_execution=identity.trainer_execution,
+        global_step=1,
+    )
+    assert manifest.scheduler_identity_sha256 == identity.scheduler_identity_sha256
+
+    target = _binding(32)
+    target_optimizer = _optimizer(target)
+    target_scheduler = build_representation_scheduler(target_optimizer, config)
+    result = restore_distributed_representation_checkpoint(
+        path,
+        binding=target,
+        optimizer=target_optimizer,
+        scheduler=target_scheduler,
+        sampler=_sampler(),
+        expected_run_identity=identity,
+        accumulation=identity.accumulation,
+        trainer_execution=identity.trainer_execution,
+    )
+    assert result.exact and result.global_step == 1 and result.next_global_step == 2
+    assert target_scheduler.state_dict() == scheduler.state_dict()
+
+    wrong_target = _binding(33)
+    wrong_optimizer = _optimizer(wrong_target)
+    wrong_scheduler = build_representation_scheduler(
+        wrong_optimizer,
+        RepresentationSchedulerConfig(
+            kind=RepresentationSchedulerKind.HISTORICAL_COSINE,
+            total_steps=2000,
+            warmup_steps=100,
+            min_lr_ratio=0.2,
+        ),
+    )
+    with pytest.raises(IdentityMismatchError, match="construction mismatch"):
+        restore_distributed_representation_checkpoint(
+            path,
+            binding=wrong_target,
+            optimizer=wrong_optimizer,
+            scheduler=wrong_scheduler,
             sampler=_sampler(),
             expected_run_identity=identity,
             accumulation=identity.accumulation,

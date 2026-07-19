@@ -10,11 +10,13 @@ import pytest
 from tgvf_rl.representation.training.data import (
     REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION,
     REPRESENTATION_DATA_TRANSFORM_VERSION,
+    SPLIT_OVERLAP_REPORT_SCHEMA_VERSION,
     DuplicateKind,
     RepresentationDataError,
     RepresentationDataLeakageWarning,
     RowExclusionReason,
     SplitOverlapKind,
+    SplitOverlapPolicy,
     load_retained_representation_jsonl,
     train_validation_group_overlap,
 )
@@ -251,12 +253,49 @@ def test_train_validation_overlap_reports_all_recorded_manifest_keys() -> None:
         SplitOverlapKind.ITEM_CONTENT_HASH,
     )
     assert all(len(record.value_sha256) == 64 for record in report.records)
+    assert report.canonical_payload()["schema_version"] == (
+        SPLIT_OVERLAP_REPORT_SCHEMA_VERSION
+    )
+    assert len(report.identity_sha256) == 64
     with pytest.raises(RepresentationDataError, match="overlap"):
         report.require_disjoint()
+    with pytest.raises(RepresentationDataError, match="cannot accept"):
+        report.validate_policy(
+            SplitOverlapPolicy.ALLOW_RECORDED_IMAGE_PATH,
+            expected_report_sha256=report.identity_sha256,
+        )
 
     disjoint = train_validation_group_overlap(train, (_sample("validation"),))
     assert disjoint.is_disjoint
     disjoint.require_disjoint()
+    disjoint.validate_policy(
+        SplitOverlapPolicy.REQUIRE_DISJOINT,
+        expected_report_sha256=None,
+    )
+
+
+def test_recorded_image_path_overlap_policy_is_content_bound() -> None:
+    train = (_sample("train"),)
+    validation = (_sample("path", image="/images/train.png"),)
+    report = train_validation_group_overlap(train, validation)
+
+    assert tuple(record.kind for record in report.records) == (
+        SplitOverlapKind.IMAGE_PATH,
+    )
+    report.validate_policy(
+        SplitOverlapPolicy.ALLOW_RECORDED_IMAGE_PATH,
+        expected_report_sha256=report.identity_sha256,
+    )
+    with pytest.raises(RepresentationDataError, match="differs"):
+        report.validate_policy(
+            SplitOverlapPolicy.ALLOW_RECORDED_IMAGE_PATH,
+            expected_report_sha256="0" * 64,
+        )
+    with pytest.raises(ValueError, match="requires"):
+        report.validate_policy(
+            SplitOverlapPolicy.ALLOW_RECORDED_IMAGE_PATH,
+            expected_report_sha256=None,
+        )
 
 
 def test_target_leakage_risk_is_metadata_not_the_legacy_overlap_signal(

@@ -20,14 +20,14 @@ Historical component names appear only as provenance.
 - Matrix CE and same-image multi-target grouping are required.
 - Ordinary independent shuffle is invalid for Matrix-CE training.
 - The accepted baseline retains both Matrix CE and `L_gen`, separately logged
-  with explicit nonzero weights. `L_gen=off` remains a separately identified
-  ablation; the exact baseline coefficient is still open.
+  at weights `1.0` and `1.0` for the initial old-configuration comparison.
 - Manifold-loss optimizer weight is exactly zero.
-- Norm-loss design is unresolved. No new mode, formula, target, or default is
-  authorized by this inventory.
+- Norm loss uses the single accepted historical log-ratio formula, with source
+  visual tensors detached, main/three-branch reduction fixed, and weight
+  `0.1`. There is no selectable norm mode or target.
 - Contextual-hidden-state and target-token-embedding providers run separately;
-  paired comparisons share sample/group order, Adapter initialization, batch
-  plan, and seed.
+  provider identity remains artifact-bound. A paired real-GPU provider run is
+  useful comparison evidence, not a prerequisite for one selected provider.
 - A geometric or distance-based contrastive objective is a later named
   experiment, not part of baseline parity.
 
@@ -359,7 +359,8 @@ These are required because the new system changes the protocol or capability:
   `RP-10` passes the real-8B embedding optimizer path, while the paired
   contextual run and provider comparison remain open;
 - [x] provider-specific configuration/checkpoint identity;
-- [ ] paired provider runs with identical data/order/initialization/seed;
+- [ ] optional paired provider comparison with identical
+  data/order/initialization/seed;
 - [x] synthetic main `D` and every D-DeepStack branch causal/readability and
   post-`D` source-key-block controls;
 - [ ] real-Qwen free continuation and counterfactual value-flip evaluation;
@@ -411,19 +412,16 @@ gates.
 
 ## Open scientific and production items
 
-- accept a train/validation split policy that resolves the seven exact resolved-
-  image-path overlaps without silent filtering; record dataset/image licenses
-  and perform a perceptual near-duplicate audit;
+- materialize the accepted recorded-image-path overlap policy in the production
+  TOML; record dataset/image licenses and perform a perceptual near-duplicate
+  audit;
 - replace the smoke-only golden prompt with an accepted production prompt
   identity and bind the contextual provider's hidden layer;
-- freeze Adapter initialization distribution/seed and final nonzero `L_gen` and
-  Matrix-CE weights; define the required Matrix-only ablation size;
-- decide whether any norm objective exists. No formula or default is currently
-  implemented, and manifold optimization remains zero;
-- freeze AdamW, scheduler, BF16, accumulation, clipping, validation cadence,
-  checkpoint cadence, and metric logging in a production TOML artifact;
-- run the real Qwen3 contextual-hidden-state group/readout backward as the
-  paired control, and complete two-rank checkpoint restore/next-step parity;
+- bind the accepted initialization seed, prompt, provider, data identity,
+  optimizer/scheduler, BF16, accumulation, cadence, and output paths in a
+  production TOML artifact;
+- complete the two-rank K=4 checkpoint teardown/restore and matching next-step
+  proof; a contextual-provider paired run remains optional comparison evidence;
 - complete exact historical-checkpoint/real-merger output and gradient parity;
 - set quantitative readout, retrieval, branch, causal-flip, free-continuation,
   and reasoning-retention promotion thresholds;

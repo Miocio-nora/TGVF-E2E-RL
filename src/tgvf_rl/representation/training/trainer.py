@@ -16,7 +16,11 @@ from tgvf_rl.qwen.base import QwenVLMFamilyAdapter
 from tgvf_rl.representation.adapter import TGVFAdapter
 
 from .checkpoint import RepresentationAccumulationIdentity
-from .objective import RepresentationObjectiveConfig
+from .objective import (
+    RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigLike,
+    RepresentationObjectiveConfigV2,
+)
 from .readout import SameImageReadoutGroup
 from .sampling import SameImageBatchSampler
 from .schema import RepresentationTrainingSample
@@ -41,6 +45,7 @@ class RepresentationPrecision(str, Enum):
 class RepresentationSchedulerKind(str, Enum):
     CONSTANT = "constant"
     LINEAR_WARMUP_DECAY = "linear_warmup_decay"
+    HISTORICAL_COSINE = "historical_cosine"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +76,7 @@ class RepresentationSchedulerConfig:
     kind: RepresentationSchedulerKind
     total_steps: int
     warmup_steps: int
+    min_lr_ratio: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, RepresentationSchedulerKind):
@@ -81,6 +87,17 @@ class RepresentationSchedulerConfig:
             raise ValueError("warmup_steps must be smaller than total_steps")
         if self.kind is RepresentationSchedulerKind.CONSTANT and self.warmup_steps:
             raise ValueError("constant scheduler cannot have warmup steps")
+        if self.kind is RepresentationSchedulerKind.HISTORICAL_COSINE:
+            if not isinstance(self.min_lr_ratio, float):
+                raise TypeError(
+                    "historical cosine min_lr_ratio must be an explicit float"
+                )
+            if not math.isfinite(self.min_lr_ratio) or not 0 <= self.min_lr_ratio <= 1:
+                raise ValueError("historical cosine min_lr_ratio must be in [0,1]")
+        elif self.min_lr_ratio is not None:
+            raise ValueError(
+                "min_lr_ratio is supported only by the historical cosine scheduler"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +131,8 @@ class RepresentationStepMetrics:
     global_step: int
     global_matrix_ce_loss: float
     global_l_gen_loss: float
+    global_norm_loss: float | None
+    global_weighted_norm_loss: float | None
     global_total_loss: float
     global_row_count: int
     global_sample_count: int
@@ -134,7 +153,7 @@ class RepresentationTrainer:
         samples: Sequence[RepresentationTrainingSample],
         sampler: SameImageBatchSampler,
         group_builder: RepresentationGroupBuilder,
-        objective: RepresentationObjectiveConfig,
+        objective: RepresentationObjectiveConfigLike,
         accumulation: RepresentationAccumulationIdentity,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None,
@@ -150,13 +169,18 @@ class RepresentationTrainer:
         if not samples or not all(
             isinstance(sample, RepresentationTrainingSample) for sample in samples
         ):
-            raise TypeError("samples must be non-empty RepresentationTrainingSample values")
+            raise TypeError(
+                "samples must be non-empty RepresentationTrainingSample values"
+            )
         if not isinstance(sampler, SameImageBatchSampler):
             raise TypeError("sampler must be SameImageBatchSampler")
         if not callable(group_builder):
             raise TypeError("group_builder must be callable")
-        if not isinstance(objective, RepresentationObjectiveConfig):
-            raise TypeError("objective must be RepresentationObjectiveConfig")
+        if not isinstance(
+            objective,
+            (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2),
+        ):
+            raise TypeError("objective must be a representation objective config")
         if not isinstance(accumulation, RepresentationAccumulationIdentity):
             raise TypeError("accumulation must be RepresentationAccumulationIdentity")
         if not isinstance(optimizer, torch.optim.Optimizer):
@@ -216,6 +240,9 @@ class RepresentationTrainer:
         self.optimizer.zero_grad(set_to_none=True)
         local_matrix_numerator = 0.0
         local_l_gen_numerator = 0.0
+        local_norm_numerator = (
+            0.0 if isinstance(self.objective, RepresentationObjectiveConfigV2) else None
+        )
         local_sample_ids: list[str] = []
         for indices, collective_candidate_count in zip(
             batch_indices,
@@ -257,6 +284,12 @@ class RepresentationTrainer:
             local_l_gen_numerator += float(
                 backward_metrics.l_gen_numerator.float().item()
             )
+            if local_norm_numerator is not None:
+                if backward_metrics.norm_numerator is None:
+                    raise RuntimeError("objective v2 did not return a norm numerator")
+                local_norm_numerator += float(
+                    backward_metrics.norm_numerator.float().item()
+                )
             local_sample_ids.extend(expected_ids)
 
         trainable = _adapter_owned_trainable_parameters(self.adapter)
@@ -276,21 +309,38 @@ class RepresentationTrainer:
         self.global_step += 1
         _assert_qwen_has_no_gradients(self.qwen_model)
 
-        global_matrix_numerator, global_l_gen_numerator = _global_float_sums(
+        (
+            global_matrix_numerator,
+            global_l_gen_numerator,
+            global_norm_numerator,
+        ) = _global_float_sums(
             local_matrix_numerator,
             local_l_gen_numerator,
+            local_norm_numerator,
             device=_parameter_device(self.adapter),
         )
         matrix_loss = global_matrix_numerator / global_rows
         l_gen_loss = global_l_gen_numerator / global_samples
+        norm_loss = (
+            None
+            if global_norm_numerator is None
+            else global_norm_numerator / global_samples
+        )
+        weighted_norm_loss = (
+            None if norm_loss is None else norm_loss * self.objective.norm_weight  # type: ignore[union-attr]
+        )
         total_loss = (
             matrix_loss * self.objective.matrix_ce_weight
             + l_gen_loss * self.objective.l_gen_weight
         )
+        if weighted_norm_loss is not None:
+            total_loss += weighted_norm_loss
         return RepresentationStepMetrics(
             global_step=self.global_step,
             global_matrix_ce_loss=matrix_loss,
             global_l_gen_loss=l_gen_loss,
+            global_norm_loss=norm_loss,
+            global_weighted_norm_loss=weighted_norm_loss,
             global_total_loss=total_loss,
             global_row_count=global_rows,
             global_sample_count=global_samples,
@@ -323,7 +373,9 @@ class RepresentationTrainer:
             return nullcontext()
         device_type = _parameter_device(self.adapter).type
         if device_type not in {"cpu", "cuda"}:
-            raise ValueError(f"BF16 autocast is unsupported on device type {device_type!r}")
+            raise ValueError(
+                f"BF16 autocast is unsupported on device type {device_type!r}"
+            )
         return torch.autocast(device_type=device_type, dtype=torch.bfloat16)
 
 
@@ -359,6 +411,26 @@ def build_representation_scheduler(
     def multiplier(step: int) -> float:
         if config.kind is RepresentationSchedulerKind.CONSTANT:
             return 1.0
+        if config.kind is RepresentationSchedulerKind.HISTORICAL_COSINE:
+            if config.warmup_steps > 0 and step < config.warmup_steps:
+                return max(
+                    float(step + 1) / float(config.warmup_steps),
+                    1e-8,
+                )
+            decay_steps = max(1, config.total_steps - config.warmup_steps)
+            progress = min(
+                1.0,
+                max(
+                    0.0,
+                    float(step - config.warmup_steps + 1) / float(decay_steps),
+                ),
+            )
+            # The pinned historical launcher evaluated cosine through a default
+            # FP32 torch scalar rather than Python's double-precision math.cos.
+            cosine = 0.5 * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item())
+            if config.min_lr_ratio is None:  # guarded by config validation
+                raise RuntimeError("historical cosine min_lr_ratio is absent")
+            return config.min_lr_ratio + (1.0 - config.min_lr_ratio) * cosine
         if step < config.warmup_steps:
             return float(step + 1) / float(config.warmup_steps)
         remaining = config.total_steps - step
@@ -485,10 +557,11 @@ def _clip_adapter_grad_norm_(
         raise RuntimeError("FSDP2 Adapter gradients cannot mix DTensor and plain state")
     if saw_dtensor:
         if not (
-            torch.distributed.is_available()
-            and torch.distributed.is_initialized()
+            torch.distributed.is_available() and torch.distributed.is_initialized()
         ):
-            raise RuntimeError("DTensor gradients require initialized distributed state")
+            raise RuntimeError(
+                "DTensor gradients require initialized distributed state"
+            )
         torch.distributed.all_reduce(
             squared_norm,
             op=torch.distributed.ReduceOp.SUM,
@@ -542,8 +615,7 @@ def _gather_missing_gradient_names(
     gathered: list[object] = [None] * torch.distributed.get_world_size()
     torch.distributed.all_gather_object(gathered, missing)
     if not all(
-        isinstance(value, tuple)
-        and all(isinstance(name, str) for name in value)
+        isinstance(value, tuple) and all(isinstance(name, str) for name in value)
         for value in gathered
     ):
         raise TypeError("distributed missing-gradient gather returned malformed state")
@@ -562,13 +634,19 @@ def _parameter_device_from_pairs(
 
 
 def _assert_qwen_has_no_gradients(model: nn.Module) -> None:
-    polluted = tuple(name for name, parameter in model.named_parameters() if parameter.grad is not None)
+    polluted = tuple(
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.grad is not None
+    )
     if polluted:
         raise RuntimeError(f"frozen Qwen parameters received gradients: {polluted}")
 
 
 def _assert_distributed_identity(expected_world_size: int) -> None:
-    distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+    distributed = (
+        torch.distributed.is_available() and torch.distributed.is_initialized()
+    )
     actual_world_size = torch.distributed.get_world_size() if distributed else 1
     if actual_world_size != expected_world_size:
         raise ValueError(
@@ -616,7 +694,9 @@ def synchronize_collective_candidate_counts(
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.all_reduce(values, op=torch.distributed.ReduceOp.MAX)
     result = tuple(int(value.item()) for value in values)
-    if any(global_count < local_count for global_count, local_count in zip(result, counts)):
+    if any(
+        global_count < local_count for global_count, local_count in zip(result, counts)
+    ):
         raise RuntimeError("collective candidate maximum is smaller than local K")
     return result
 
@@ -624,15 +704,21 @@ def synchronize_collective_candidate_counts(
 def _global_float_sums(
     matrix_numerator: float,
     l_gen_numerator: float,
+    norm_numerator: float | None,
     *,
     device: torch.device,
-) -> tuple[float, float]:
-    values = torch.tensor(
-        [matrix_numerator, l_gen_numerator], dtype=torch.float64, device=device
-    )
+) -> tuple[float, float, float | None]:
+    local_values = [matrix_numerator, l_gen_numerator]
+    if norm_numerator is not None:
+        local_values.append(norm_numerator)
+    values = torch.tensor(local_values, dtype=torch.float64, device=device)
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.all_reduce(values, op=torch.distributed.ReduceOp.SUM)
-    return float(values[0].item()), float(values[1].item())
+    return (
+        float(values[0].item()),
+        float(values[1].item()),
+        None if norm_numerator is None else float(values[2].item()),
+    )
 
 
 def _parameter_device(module: nn.Module) -> torch.device:

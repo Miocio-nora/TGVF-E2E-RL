@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -9,10 +10,14 @@ from tgvf_rl.representation.training.sampling import (
     partition_same_image_group,
     same_image_group_owner,
 )
+from tgvf_rl.representation.training.data import load_retained_representation_jsonl
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 
 
 DATA_MANIFEST_SHA256 = "1" * 64
+K4_TRAIN_SOURCE_SHA256 = (
+    "beb1b8a7c3f97811e8a8f9b0734d7484cc5de4d31861fe09b61342b3c88b61f2"
+)
 
 
 def _samples(group_sizes: dict[str, int]) -> tuple[RepresentationTrainingSample, ...]:
@@ -36,6 +41,44 @@ def _batch_group_keys(
     samples: tuple[RepresentationTrainingSample, ...], batch: tuple[int, ...]
 ) -> set[str]:
     return {samples[index].image_group_key for index in batch}
+
+
+def test_k4_two_rank_fixture_has_one_complete_group_per_rank_and_ga4_geometry() -> None:
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "representation_smoke"
+        / "train_k4.jsonl"
+    )
+    dataset = load_retained_representation_jsonl(
+        fixture,
+        expected_source_sha256=K4_TRAIN_SOURCE_SHA256,
+        warn_on_leakage=False,
+    )
+    assert len(dataset.samples) == 8
+    assert same_image_group_owner("repr-smoke-train-image", world_size=2) == 0
+    assert same_image_group_owner("repr-smoke-train-image-2", world_size=2) == 1
+
+    sample_ids_by_rank: list[tuple[tuple[str, ...], ...]] = []
+    for rank in range(2):
+        sampler = SameImageBatchSampler(
+            dataset.samples,
+            batch_size=4,
+            seed=71,
+            data_manifest_sha256=dataset.manifest.manifest_sha256,
+            rank=rank,
+            world_size=2,
+        )
+        assert sampler.local_epoch_batch_count == 1
+        groups = tuple(
+            tuple(dataset.samples[index].sample_id for index in sampler.next_batch())
+            for _ in range(4)
+        )
+        assert all(len(group) == 4 and len(set(group)) == 4 for group in groups)
+        sample_ids_by_rank.append(groups)
+
+    assert sum(len(group) for rank in sample_ids_by_rank for group in rank) == 32
+    assert sum(len(rank) for rank in sample_ids_by_rank) == 8
 
 
 @pytest.mark.parametrize(

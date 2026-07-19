@@ -41,8 +41,7 @@ def _adapter(*, dtype: torch.dtype) -> TGVFAdapter:
         attn_dim=5,
         main_projection=_projection("main", d_v=4, d_lm=6),
         deepstack_projections=tuple(
-            _projection(f"branch-{layer}", d_v=4, d_lm=6)
-            for layer in (8, 16, 24)
+            _projection(f"branch-{layer}", d_v=4, d_lm=6) for layer in (8, 16, 24)
         ),
         branch_layers=(8, 16, 24),
     )
@@ -179,8 +178,9 @@ def test_tgvf_adapter_matches_pinned_functional_output_and_gradient_oracle(
         torch.testing.assert_close(observed, expected, atol=atol, rtol=rtol)
 
     coefficients = tuple(
-        torch.linspace(0.2 + index, 1.2 + index, value.numel(), dtype=dtype)
-        .reshape_as(value)
+        torch.linspace(0.2 + index, 1.2 + index, value.numel(), dtype=dtype).reshape_as(
+            value
+        )
         for index, value in enumerate((actual.main_d, *actual.deepstack_visual_embeds))
     )
     actual_loss = sum(

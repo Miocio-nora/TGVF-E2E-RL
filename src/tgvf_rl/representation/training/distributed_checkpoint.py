@@ -28,9 +28,11 @@ from tgvf_rl.observations.store import tensor_checksum
 
 from .checkpoint import (
     REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION,
+    REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3,
     RepresentationAccumulationIdentity,
     RepresentationOptimizerIdentity,
     RepresentationRunIdentity,
+    RepresentationRunIdentityV3,
     RepresentationSamplerContractIdentity,
     RepresentationSchedulerIdentity,
     RepresentationTrainerExecutionIdentity,
@@ -38,11 +40,15 @@ from .checkpoint import (
     restore_representation_rng_state,
 )
 from .fsdp2 import RepresentationFSDP2Binding
+from .history import RepresentationMetricsHistoryIdentity
 from .sampling import SameImageBatchSampler
 
 
 DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION = (
     "distributed-representation-checkpoint-v1"
+)
+DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2 = (
+    "distributed-representation-checkpoint-v2"
 )
 DISTRIBUTED_REPRESENTATION_RANK_STATE_SCHEMA_VERSION = (
     "distributed-representation-rank-state-v1"
@@ -135,15 +141,11 @@ class DistributedRepresentationCheckpointManifest:
     optimizer_local_shard_sha256: tuple[str, ...]
     torch_version: str
     schema_version: str = DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
+    metrics_history: RepresentationMetricsHistoryIdentity | None = None
+    metrics_history_identity_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_identity, RepresentationRunIdentity):
-            raise TypeError("run_identity must be a RepresentationRunIdentity")
-        if (
-            self.run_identity.schema_version
-            != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
-        ):
-            raise ValueError("distributed checkpoint run identity schema mismatch")
+        _validate_run_identity(self.run_identity)
         _sha256(self.run_identity_sha256, field_name="run_identity_sha256")
         if self.run_identity_sha256 != self.run_identity.identity_sha256:
             raise ValueError("distributed checkpoint run identity digest mismatch")
@@ -210,7 +212,37 @@ class DistributedRepresentationCheckpointManifest:
             for digest in digests:
                 _sha256(digest, field_name=field_name)
         _non_empty_text(self.torch_version, field_name="torch_version")
-        if self.schema_version != DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION:
+        metrics_history = getattr(self, "metrics_history", None)
+        metrics_history_identity_sha256 = getattr(
+            self,
+            "metrics_history_identity_sha256",
+            None,
+        )
+        if self.schema_version == DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION:
+            if (
+                metrics_history is not None
+                or metrics_history_identity_sha256 is not None
+            ):
+                raise ValueError(
+                    "distributed checkpoint v1 cannot bind metrics history"
+                )
+        elif (
+            self.schema_version
+            == DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
+        ):
+            _validate_metrics_history_binding(
+                metrics_history,
+                expected_run_identity=self.run_identity,
+                expected_global_step=self.global_step,
+            )
+            assert isinstance(metrics_history, RepresentationMetricsHistoryIdentity)
+            _sha256(
+                metrics_history_identity_sha256,
+                field_name="metrics_history_identity_sha256",
+            )
+            if metrics_history_identity_sha256 != metrics_history.identity_sha256:
+                raise ValueError("distributed metrics-history digest mismatch")
+        else:
             raise ValueError("distributed representation checkpoint schema mismatch")
 
 
@@ -222,6 +254,11 @@ class DistributedRepresentationMetadata:
     def __post_init__(self) -> None:
         if not isinstance(self.manifest, DistributedRepresentationCheckpointManifest):
             raise TypeError("distributed metadata manifest has the wrong type")
+        self.manifest.__post_init__()
+        for record in self.rank_states:
+            if not isinstance(record, DistributedRepresentationRankState):
+                raise TypeError("distributed metadata rank state has the wrong type")
+            record.__post_init__()
         if len(self.rank_states) != self.manifest.world_size:
             raise ValueError("distributed metadata rank-state count mismatch")
         ranks = tuple(record.rank for record in self.rank_states)
@@ -248,6 +285,7 @@ class DistributedRepresentationResumeResult:
     next_global_step: int
     run_identity_sha256: str
     exact: bool = True
+    next_validation_event_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,13 +300,7 @@ class RankZeroAdapterOwnedStateManifest:
     schema_version: str = RANK_ZERO_ADAPTER_EXPORT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_identity, RepresentationRunIdentity):
-            raise TypeError("export run_identity must be a RepresentationRunIdentity")
-        if (
-            self.run_identity.schema_version
-            != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
-        ):
-            raise ValueError("rank-zero export run identity schema mismatch")
+        _validate_run_identity(self.run_identity)
         _sha256(self.run_identity_sha256, field_name="run_identity_sha256")
         if self.run_identity_sha256 != self.run_identity.identity_sha256:
             raise ValueError("rank-zero export run identity digest mismatch")
@@ -334,6 +366,7 @@ def save_distributed_representation_checkpoint_atomic(
     accumulation: RepresentationAccumulationIdentity,
     trainer_execution: RepresentationTrainerExecutionIdentity,
     global_step: int,
+    metrics_history: RepresentationMetricsHistoryIdentity | None = None,
     process_group: Any = None,
 ) -> DistributedRepresentationCheckpointManifest:
     """Collectively save sharded Adapter/optimizer plus exact rank-local state."""
@@ -359,6 +392,12 @@ def save_distributed_representation_checkpoint_atomic(
             world_size=context.world_size,
         )
         _non_negative_int(global_step, field_name="global_step")
+        if metrics_history is not None:
+            _validate_metrics_history_binding(
+                metrics_history,
+                expected_run_identity=run_identity,
+                expected_global_step=global_step,
+            )
         local_model_state, local_optimizer_state = _get_sharded_state(
             binding=binding,
             optimizer=optimizer,
@@ -384,6 +423,9 @@ def save_distributed_representation_checkpoint_atomic(
         scheduler=scheduler,
         global_step=global_step,
         run_identity=run_identity,
+        metrics_history_identity_sha256=(
+            None if metrics_history is None else metrics_history.identity_sha256
+        ),
         model_local_shard_sha256=model_digest,
         optimizer_local_shard_sha256=optimizer_digest,
     )
@@ -406,6 +448,15 @@ def save_distributed_representation_checkpoint_atomic(
         model_local_shard_sha256=model_digests,
         optimizer_local_shard_sha256=optimizer_digests,
         torch_version=torch.__version__,
+        schema_version=(
+            DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
+            if metrics_history is None
+            else DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
+        ),
+        metrics_history=metrics_history,
+        metrics_history_identity_sha256=(
+            None if metrics_history is None else metrics_history.identity_sha256
+        ),
     )
     metadata = DistributedRepresentationMetadata(manifest, rank_states)
     destination, temporary = _prepare_collective_destination(path, context=context)
@@ -448,6 +499,7 @@ def restore_distributed_representation_checkpoint(
     expected_run_identity: RepresentationRunIdentity,
     accumulation: RepresentationAccumulationIdentity,
     trainer_execution: RepresentationTrainerExecutionIdentity,
+    expected_metrics_history: RepresentationMetricsHistoryIdentity | None = None,
     process_group: Any = None,
 ) -> DistributedRepresentationResumeResult:
     """Collectively restore an exact sharded checkpoint into an existing FSDP2 graph."""
@@ -491,6 +543,7 @@ def restore_distributed_representation_checkpoint(
             expected_run_identity=expected_run_identity,
             accumulation=accumulation,
             trainer_execution=trainer_execution,
+            expected_metrics_history=expected_metrics_history,
             context=context,
         )
         local_model_state, local_optimizer_state = _get_sharded_state(
@@ -571,6 +624,11 @@ def restore_distributed_representation_checkpoint(
         global_step=metadata.manifest.global_step,
         next_global_step=metadata.manifest.global_step + 1,
         run_identity_sha256=metadata.manifest.run_identity_sha256,
+        next_validation_event_index=(
+            None
+            if getattr(metadata.manifest, "metrics_history", None) is None
+            else metadata.manifest.metrics_history.next_validation_event_index
+        ),
     )
 
 
@@ -833,6 +891,7 @@ def _gather_rank_states(
     scheduler: _Stateful | None,
     global_step: int,
     run_identity: RepresentationRunIdentity,
+    metrics_history_identity_sha256: str | None,
     model_local_shard_sha256: str,
     optimizer_local_shard_sha256: str,
 ) -> tuple[
@@ -848,6 +907,11 @@ def _gather_rank_states(
         optimizer_local_shard_sha256,
         field_name="optimizer_local_shard_sha256",
     )
+    if metrics_history_identity_sha256 is not None:
+        _sha256(
+            metrics_history_identity_sha256,
+            field_name="metrics_history_identity_sha256",
+        )
 
     def capture_local_rank_state() -> dict[str, object]:
         sampler_state = deepcopy(sampler.state_dict())
@@ -859,6 +923,7 @@ def _gather_rank_states(
             "rank": context.rank,
             "global_step": global_step,
             "run_identity_sha256": run_identity.identity_sha256,
+            "metrics_history_identity_sha256": metrics_history_identity_sha256,
             "sampler_identity_sha256": sampler.identity_sha256,
             "sampler_state": sampler_state,
             "rng_state": rng_state,
@@ -889,6 +954,13 @@ def _gather_rank_states(
             raise IdentityMismatchError("global_step differs across FSDP2 ranks")
         if item.get("run_identity_sha256") != run_identity.identity_sha256:
             raise IdentityMismatchError("run identity differs across FSDP2 ranks")
+        if (
+            item.get("metrics_history_identity_sha256")
+            != metrics_history_identity_sha256
+        ):
+            raise IdentityMismatchError(
+                "metrics-history identity differs across FSDP2 ranks"
+            )
         sampler_payload = item.get("sampler_state")
         rng_payload = item.get("rng_state")
         scheduler_payload = item.get("scheduler_state")
@@ -983,6 +1055,8 @@ def _validate_scheduler_runtime(
                 kind == identity.kind
                 and getattr(config, "total_steps", None) == identity.total_steps
                 and getattr(config, "warmup_steps", None) == identity.warmup_steps
+                and getattr(config, "min_lr_ratio", None)
+                == getattr(identity, "min_lr_ratio", None)
             ):
                 matched = True
                 break
@@ -1100,6 +1174,7 @@ def _validate_restore_metadata(
     expected_run_identity: RepresentationRunIdentity,
     accumulation: RepresentationAccumulationIdentity,
     trainer_execution: RepresentationTrainerExecutionIdentity,
+    expected_metrics_history: RepresentationMetricsHistoryIdentity | None,
     context: _DistributedContext,
 ) -> None:
     metadata.__post_init__()
@@ -1121,6 +1196,11 @@ def _validate_restore_metadata(
         raise IdentityMismatchError("distributed checkpoint trainer execution mismatch")
     if manifest.torch_version != torch.__version__:
         raise IdentityMismatchError("torch version differs from distributed checkpoint")
+    _validate_expected_metrics_history(
+        manifest,
+        expected_metrics_history=expected_metrics_history,
+        expected_run_identity=expected_run_identity,
+    )
     local = metadata.rank_states[context.rank]
     if local.sampler_identity_sha256 != sampler.identity_sha256:
         raise IdentityMismatchError("rank-local sampler identity mismatch")
@@ -1205,6 +1285,14 @@ def _load_metadata_collective(
     return payload[0]
 
 
+def load_distributed_representation_checkpoint_metadata(
+    path: str | Path,
+) -> DistributedRepresentationMetadata:
+    """Read and fully validate a committed DCP sidecar without distributed init."""
+
+    return _read_metadata(Path(path))
+
+
 def _read_metadata(path: Path) -> DistributedRepresentationMetadata:
     if not path.is_dir():
         raise FileNotFoundError("distributed checkpoint directory does not exist")
@@ -1218,8 +1306,24 @@ def _read_metadata(path: Path) -> DistributedRepresentationMetadata:
     value = torch.load(BytesIO(payload), map_location="cpu", weights_only=False)
     if not isinstance(value, DistributedRepresentationMetadata):
         raise ReplayMismatchError("distributed checkpoint metadata type mismatch")
+    _normalize_legacy_manifest_defaults(value.manifest)
     value.__post_init__()
     return value
+
+
+def _normalize_legacy_manifest_defaults(
+    manifest: object,
+) -> None:
+    """Populate fields absent from a pre-v2 frozen-slots pickle."""
+
+    if not isinstance(manifest, DistributedRepresentationCheckpointManifest):
+        return
+    for field_name in (
+        "metrics_history",
+        "metrics_history_identity_sha256",
+    ):
+        if not hasattr(manifest, field_name):
+            object.__setattr__(manifest, field_name, None)
 
 
 def _write_bytes_fsync(path: Path, payload: bytes) -> None:
@@ -1398,10 +1502,71 @@ def _digest_text(hasher: Any, value: str) -> None:
 def _validate_run_identity(identity: object) -> None:
     if not isinstance(identity, RepresentationRunIdentity):
         raise TypeError("run identity must be a RepresentationRunIdentity")
-    if identity.schema_version != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION:
+    if type(identity) is RepresentationRunIdentity:
+        expected_schema_version = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
+    elif type(identity) is RepresentationRunIdentityV3:
+        expected_schema_version = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3
+    else:
+        raise TypeError("unsupported representation run identity type")
+    if identity.schema_version != expected_schema_version:
         raise ValueError("representation run identity schema mismatch")
+    identity.__post_init__()
     # Re-hashing traverses every nested identity and fails on unsupported drift.
     _sha256(identity.identity_sha256, field_name="run identity digest")
+
+
+def _validate_metrics_history_binding(
+    metrics_history: object,
+    *,
+    expected_run_identity: RepresentationRunIdentity,
+    expected_global_step: int,
+) -> None:
+    if not isinstance(metrics_history, RepresentationMetricsHistoryIdentity):
+        raise TypeError(
+            "metrics_history must be a RepresentationMetricsHistoryIdentity"
+        )
+    metrics_history.__post_init__()
+    if metrics_history.run_id != expected_run_identity.run_id:
+        raise IdentityMismatchError("metrics history run_id mismatch")
+    if metrics_history.run_identity_sha256 != expected_run_identity.identity_sha256:
+        raise IdentityMismatchError("metrics history run identity mismatch")
+    if metrics_history.checkpoint_global_step != expected_global_step:
+        raise IdentityMismatchError("metrics history checkpoint step mismatch")
+
+
+def _validate_expected_metrics_history(
+    manifest: DistributedRepresentationCheckpointManifest,
+    *,
+    expected_metrics_history: RepresentationMetricsHistoryIdentity | None,
+    expected_run_identity: RepresentationRunIdentity,
+) -> None:
+    recorded = getattr(manifest, "metrics_history", None)
+    recorded_digest = getattr(manifest, "metrics_history_identity_sha256", None)
+    if manifest.schema_version == DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION:
+        if expected_metrics_history is not None:
+            raise IdentityMismatchError(
+                "distributed checkpoint v1 has no metrics-history binding"
+            )
+        return
+    if (
+        manifest.schema_version
+        != DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
+    ):
+        raise ValueError("distributed representation checkpoint schema mismatch")
+    if expected_metrics_history is None:
+        raise ReplayMismatchError(
+            "distributed checkpoint v2 requires expected metrics history"
+        )
+    _validate_metrics_history_binding(
+        expected_metrics_history,
+        expected_run_identity=expected_run_identity,
+        expected_global_step=manifest.global_step,
+    )
+    if (
+        recorded != expected_metrics_history
+        or recorded_digest != expected_metrics_history.identity_sha256
+    ):
+        raise ReplayMismatchError("distributed checkpoint metrics history mismatch")
 
 
 def _load_distributed_checkpoint_api() -> _DistributedCheckpointAPI:

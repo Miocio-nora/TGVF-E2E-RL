@@ -14,8 +14,16 @@ from tgvf_rl.qwen.base import (
 )
 from tgvf_rl.representation.deepstack import build_original_image_key_block_mask
 
-from .losses import CausalEvidenceLosses, causal_evidence_losses
-from .objective import RepresentationObjectiveConfig
+from .losses import (
+    CausalEvidenceLosses,
+    causal_evidence_losses,
+    historical_sample_norm_loss,
+)
+from .objective import (
+    RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigLike,
+    RepresentationObjectiveConfigV2,
+)
 from .readout import (
     RepresentationReadoutRow,
     RepresentationVisualTensorBundle,
@@ -32,6 +40,7 @@ class StreamingGroupScores:
     score_matrix: torch.Tensor
     diagonal_l_gen: torch.Tensor
     evidence_token_counts: torch.Tensor
+    historical_norm: torch.Tensor
 
     def __post_init__(self) -> None:
         size = len(self.sample_ids)
@@ -41,10 +50,13 @@ class StreamingGroupScores:
             raise ValueError("streaming L_gen values must have shape [K]")
         if self.evidence_token_counts.shape != (size,):
             raise ValueError("streaming evidence counts must have shape [K]")
+        if self.historical_norm.shape != (size,):
+            raise ValueError("streaming historical norm values must have shape [K]")
         for tensor in (
             self.score_matrix,
             self.diagonal_l_gen,
             self.evidence_token_counts,
+            self.historical_norm,
         ):
             if tensor.requires_grad:
                 raise ValueError("streaming first-pass values must be detached")
@@ -80,9 +92,11 @@ class StreamingBackwardMetrics:
 
     matrix_ce_numerator: torch.Tensor
     l_gen_numerator: torch.Tensor
+    norm_numerator: torch.Tensor | None
     local_row_count: int
     local_sample_count: int
     weighted_local_mean: torch.Tensor
+    weighted_norm_local_mean: torch.Tensor | None
 
 
 def score_streaming_same_image_group(
@@ -96,7 +110,17 @@ def score_streaming_same_image_group(
     score_rows: list[torch.Tensor] = []
     diagonal_l_gen: list[torch.Tensor] = []
     evidence_counts: list[torch.Tensor] = []
+    norm_losses: list[torch.Tensor] = []
     with torch.no_grad():
+        for candidate in group.candidates:
+            norm_losses.append(
+                historical_sample_norm_loss(
+                    candidate.visual.main,
+                    group.source_visual.main,
+                    candidate.visual.deepstack,
+                    group.source_visual.deepstack,
+                )
+            )
         for row_index, row in enumerate(group.rows):
             blocked_mask = _blocked_evidence_attention_mask(row, group.source_visual)
             row_scores: list[torch.Tensor] = []
@@ -119,6 +143,7 @@ def score_streaming_same_image_group(
         score_matrix=torch.stack(score_rows).detach(),
         diagonal_l_gen=torch.stack(diagonal_l_gen).detach(),
         evidence_token_counts=torch.stack(evidence_counts).detach(),
+        historical_norm=torch.stack(norm_losses).detach(),
     )
 
 
@@ -128,7 +153,7 @@ def backward_streaming_same_image_group(
     group: SameImageReadoutGroup,
     scores: StreamingGroupScores,
     *,
-    objective: RepresentationObjectiveConfig,
+    objective: RepresentationObjectiveConfigLike,
     normalization: StreamingGlobalNormalization,
 ) -> StreamingBackwardMetrics:
     """Recompute one cell at a time and backpropagate the exact global objective.
@@ -144,8 +169,10 @@ def backward_streaming_same_image_group(
     _validate_execution_inputs(family_adapter, model, group)
     if not isinstance(scores, StreamingGroupScores):
         raise TypeError("scores must be StreamingGroupScores")
-    if not isinstance(objective, RepresentationObjectiveConfig):
-        raise TypeError("objective must be RepresentationObjectiveConfig")
+    if not isinstance(
+        objective, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
+    ):
+        raise TypeError("objective must be a representation objective config")
     if not isinstance(normalization, StreamingGlobalNormalization):
         raise TypeError("normalization must be StreamingGlobalNormalization")
     sample_ids = tuple(row.sample_id for row in group.rows)
@@ -185,6 +212,41 @@ def backward_streaming_same_image_group(
         [torch.zeros_like(tensor) for tensor in tensors]
         for tensors in candidate_tensors
     ]
+    if isinstance(objective, RepresentationObjectiveConfigV2):
+        for column_index, (candidate, tensors) in enumerate(
+            zip(group.candidates, candidate_tensors, strict=True)
+        ):
+            live_norm = historical_sample_norm_loss(
+                candidate.visual.main,
+                group.source_visual.main,
+                candidate.visual.deepstack,
+                group.source_visual.deepstack,
+            )
+            if not torch.equal(
+                live_norm.detach(), scores.historical_norm[column_index]
+            ):
+                raise RuntimeError(
+                    "deterministic streaming recompute changed a norm value"
+                )
+            if objective.norm_weight:
+                norm_surrogate = live_norm * (
+                    objective.norm_weight
+                    * normalization.data_parallel_world_size
+                    / normalization.l_gen_samples
+                )
+                norm_gradients = torch.autograd.grad(
+                    norm_surrogate,
+                    tensors,
+                    retain_graph=False,
+                    create_graph=False,
+                    allow_unused=False,
+                )
+                for accumulator, gradient in zip(
+                    accumulated_candidate_gradients[column_index],
+                    norm_gradients,
+                    strict=True,
+                ):
+                    accumulator.add_(gradient.detach())
     for row_index, row in enumerate(group.rows):
         blocked_mask = _blocked_evidence_attention_mask(row, group.source_visual)
         for column_index, candidate in enumerate(group.candidates):
@@ -240,20 +302,32 @@ def backward_streaming_same_image_group(
     _backward_collective_padding(group.collective_padding)
 
     labels = torch.arange(size, device=scores.score_matrix.device)
-    matrix_numerator = F.cross_entropy(
-        scores.score_matrix, labels, reduction="sum"
-    )
+    matrix_numerator = F.cross_entropy(scores.score_matrix, labels, reduction="sum")
     l_gen_numerator = scores.diagonal_l_gen.sum()
+    norm_numerator = (
+        scores.historical_norm.sum()
+        if isinstance(objective, RepresentationObjectiveConfigV2)
+        else None
+    )
+    weighted_norm_local_mean = (
+        None
+        if norm_numerator is None
+        else norm_numerator / size * objective.norm_weight
+    )
     weighted_local_mean = (
         matrix_numerator / size * objective.matrix_ce_weight
         + l_gen_numerator / size * objective.l_gen_weight
     )
+    if weighted_norm_local_mean is not None:
+        weighted_local_mean = weighted_local_mean + weighted_norm_local_mean
     return StreamingBackwardMetrics(
         matrix_ce_numerator=matrix_numerator,
         l_gen_numerator=l_gen_numerator,
+        norm_numerator=norm_numerator,
         local_row_count=size,
         local_sample_count=size,
         weighted_local_mean=weighted_local_mean,
+        weighted_norm_local_mean=weighted_norm_local_mean,
     )
 
 

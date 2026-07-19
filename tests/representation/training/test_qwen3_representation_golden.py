@@ -29,6 +29,11 @@ from tgvf_rl.representation.training.native_pipeline import (
     render_native_action_target,
 )
 from tgvf_rl.representation.training.runtime import Qwen3RepresentationRuntime
+from tgvf_rl.representation.training.qwen3_counterfactual import (
+    QWEN3_D_ONLY_TOOL_REASONING,
+    _qwen3_geometry_carrier,
+    materialize_qwen3_d_only_processor_prefix,
+)
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 from tgvf_rl.representation.training.transcript import (
     CANONICAL_EVIDENCE_SCHEMA_VERSION,
@@ -40,6 +45,9 @@ from tgvf_rl.representation.training.transcript import (
 
 FIXTURE_PATH = (
     Path(__file__).parents[2] / "fixtures" / "qwen3_native_representation_smoke_v1.json"
+)
+D_ONLY_FIXTURE_PATH = (
+    Path(__file__).parents[2] / "fixtures" / "qwen3_native_d_only_smoke_v1.json"
 )
 _FIXTURE_SCHEMA = "qwen3_native_representation_processor_golden_v1"
 _MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
@@ -374,4 +382,53 @@ def _compute_golden() -> dict[str, Any]:
 def test_qwen3_native_representation_processor_golden() -> None:
     expected = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     actual = _compute_golden()
+    assert actual == expected
+
+
+def test_qwen3_native_d_only_processor_golden() -> None:
+    processor = _load_accepted_processor(Path(_MODEL_PATH))
+    renderer = NativeProtocolRenderer(
+        processor,
+        expected_tokenizer_length=_EXPECTED_TOKENIZER_LENGTH,
+    )
+    geometry_carrier = _qwen3_geometry_carrier(processor, (1, 16, 16))
+    prefix = materialize_qwen3_d_only_processor_prefix(
+        processor=processor,
+        renderer=renderer,
+        sample=_sample(),
+        prompt=_prompt(),
+        geometry_image=geometry_carrier,
+    )
+    expanded_ids = tuple(int(value) for value in prefix.input_ids[0].tolist())
+    image_token_id = int(renderer.tokenizer.convert_tokens_to_ids("<|image_pad|>"))
+    actual = {
+        "fixture_schema": "qwen3_native_d_only_processor_golden_v1",
+        "smoke_only": True,
+        "production_prompt": False,
+        "model_path": _MODEL_PATH,
+        "tokenizer_length": len(renderer.tokenizer),
+        "chat_template_sha256": renderer.chat_template_sha256,
+        "prompt_identity": prefix.prompt_identity,
+        "tool_reasoning": QWEN3_D_ONLY_TOOL_REASONING,
+        "source_image_placeholder_count": 0,
+        "geometry_carrier": {
+            "mode": geometry_carrier.mode,
+            "size": list(geometry_carrier.size),
+            "all_black": not any(geometry_carrier.tobytes()),
+        },
+        "canonical_d_placeholder_count": prefix.transcript.token_ids.count(
+            image_token_id
+        ),
+        "transcript": _transcript_record(prefix.transcript),
+        "processor_input": {
+            **_expanded_input_record(prefix.input_ids),
+            "attention_mask_all_one": bool(prefix.attention_mask.bool().all().item()),
+            "attention_mask_dtype": str(prefix.attention_mask.dtype),
+            "image_grid_thw": prefix.image_grid_thw.tolist(),
+            "expanded_image_token_count": expanded_ids.count(image_token_id),
+            "d_block": _block_record(prefix.d_positions),
+            "geometry_pixel_values_shape": list(prefix.geometry_pixel_values_shape),
+        },
+    }
+    expected = json.loads(D_ONLY_FIXTURE_PATH.read_text(encoding="utf-8"))
     assert actual == expected

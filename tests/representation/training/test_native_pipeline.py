@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -16,6 +17,11 @@ from tgvf_rl.conditioning import (
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.qwen.base import resolve_language_model
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
+from tgvf_rl.representation.training.internal_evaluation import (
+    NativeCausalValueFlipRequest,
+    NativeFreeContinuationRequest,
+    create_injected_native_counterfactual_evaluator,
+)
 from tgvf_rl.representation.training.native_pipeline import (
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
@@ -25,6 +31,10 @@ from tgvf_rl.representation.training.native_pipeline import (
 from tgvf_rl.representation.training.runtime import (
     QWEN3_REPRESENTATION_BRANCH_LAYERS,
     create_qwen3_representation_runtime,
+)
+from tgvf_rl.representation.training.qwen3_counterfactual import (
+    Qwen3CounterfactualCaseBuilder,
+    load_qwen3_counterfactual_manifest,
 )
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 from tgvf_rl.representation.training.streaming import (
@@ -97,20 +107,33 @@ class _Tokenizer:
     def convert_ids_to_tokens(self, token_id: int) -> str:
         return self._id_to_piece[token_id]
 
+    def decode(
+        self,
+        token_ids,
+        *,
+        skip_special_tokens: bool,
+        clean_up_tokenization_spaces: bool,
+    ) -> str:
+        assert not skip_special_tokens and not clean_up_tokenization_spaces
+        return "".join(
+            self._id_to_piece.get(int(token_id), f"<id:{int(token_id)}>")
+            for token_id in token_ids
+        )
+
 
 class _Processor:
     def __init__(self, tokenizer: _Tokenizer) -> None:
         self.tokenizer = tokenizer
         self.chat_template = tokenizer.chat_template
+        self.image_processor = SimpleNamespace(merge_size=2, patch_size=16)
 
     @staticmethod
     def _user(messages) -> str:
         prompt = next(
-            item["text"]
-            for item in messages[0]["content"]
-            if item["type"] == "text"
+            item["text"] for item in messages[0]["content"] if item["type"] == "text"
         )
-        return f"<user>{_IMAGE_TOKEN}{prompt}</user>\n"
+        has_image = any(item["type"] == "image" for item in messages[0]["content"])
+        return f"<user>{_IMAGE_TOKEN if has_image else ''}{prompt}</user>\n"
 
     @staticmethod
     def _call(messages) -> str:
@@ -138,13 +161,7 @@ class _Processor:
         call = self._call(messages)
         if len(messages) == 2:
             assert not add_generation_prompt
-            return (
-                user
-                + _ASSISTANT_PREFILL
-                + "\n</think>\n\n"
-                + call
-                + "<|im_end|>\n"
-            )
+            return user + _ASSISTANT_PREFILL + "\n</think>\n\n" + call + "<|im_end|>\n"
         history = user + "<assistant>" + call + "</assistant>\n"
         history += f"<tool_response>{_IMAGE_TOKEN}</tool_response>\n"
         if len(messages) == 3:
@@ -169,9 +186,9 @@ class _Processor:
         return {
             "input_ids": torch.tensor([expanded], dtype=torch.long),
             "attention_mask": torch.ones(1, len(expanded), dtype=torch.long),
-            "pixel_values": torch.arange(
-                len(images) * 4 * 3, dtype=torch.float32
-            ).view(len(images) * 4, 3)
+            "pixel_values": torch.arange(len(images) * 4 * 3, dtype=torch.float32).view(
+                len(images) * 4, 3
+            )
             % 12,
             "image_grid_thw": torch.tensor(
                 [[1, 2, 2] for _ in images], dtype=torch.long
@@ -196,8 +213,10 @@ class _VisionTower(nn.Module):
         self.deepstack_merger_list = nn.ModuleList(
             [_Merger(vision_width, language_width) for _ in range(3)]
         )
+        self.forward_calls = 0
 
     def forward(self, pixel_values: torch.Tensor, *, grid_thw: torch.Tensor):
+        self.forward_calls += 1
         hidden = self.patch_projection(pixel_values)
         return self.merger(hidden), [
             merger(hidden + index + 1)
@@ -243,7 +262,7 @@ class _Core(nn.Module):
         video_grid_thw,
         attention_mask,
     ):
-        assert video_grid_thw is None and image_grid_thw.shape == (2, 3)
+        assert video_grid_thw is None and image_grid_thw.shape in {(1, 3), (2, 3)}
         positions = torch.arange(input_ids.shape[1], device=input_ids.device)
         positions = positions.view(1, 1, -1).expand(3, 1, -1)
         return positions, torch.zeros(1, 1, dtype=torch.long)
@@ -303,6 +322,24 @@ def _sample(image: Path, index: int) -> RepresentationTrainingSample:
     )
 
 
+def _counterfactual_sample(
+    image: Path,
+    *,
+    sample_id: str,
+    image_id: str,
+    target: str,
+    evidence: str,
+) -> RepresentationTrainingSample:
+    return RepresentationTrainingSample(
+        sample_id=sample_id,
+        image=str(image),
+        image_id=image_id,
+        question="What is written on the status label?",
+        target=target,
+        evidence_description=evidence,
+    )
+
+
 def _prompt(template: str = "Question: {question}\nInspect local evidence."):
     return RepresentationPromptConfig(
         identity="tiny-native-prompt-v1",
@@ -328,9 +365,7 @@ def _runtime(provider: TargetConditioningProviderKind):
         if provider is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
         else TargetConditioningConfig(
             provider=provider,
-            embedding_identity=(
-                "/tiny-native-qwen3::language_model.input_embeddings"
-            ),
+            embedding_identity=("/tiny-native-qwen3::language_model.input_embeddings"),
         )
     )
     return create_qwen3_representation_runtime(
@@ -368,9 +403,12 @@ def test_native_action_target_uses_strict_raw_tool_span(tmp_path: Path) -> None:
     assert target.target_text == sample.target
     assert target.sampled_turn.sampled_text.startswith("\n</think>")
     assert target.sampled_turn.sampled_text.endswith("</tool_call>")
-    assert target.transcript.token_ids[
-        target.canonical_target_span.start : target.canonical_target_span.end
-    ] == target.canonical_target_token_ids
+    assert (
+        target.transcript.token_ids[
+            target.canonical_target_span.start : target.canonical_target_span.end
+        ]
+        == target.canonical_target_token_ids
+    )
 
 
 @pytest.mark.parametrize(
@@ -412,8 +450,16 @@ def test_real_group_builder_contract_supports_both_providers(
         candidate.target_conditioning_provider is provider
         for candidate in group.candidates
     )
+    assert all(candidate.visual.main.requires_grad for candidate in group.candidates)
+    assert all(candidate.attention is not None for candidate in group.candidates)
     assert all(
-        candidate.visual.main.requires_grad for candidate in group.candidates
+        candidate.attention is not None
+        and not candidate.attention.main.requires_grad
+        and len(candidate.attention.deepstack) == 3
+        and all(
+            not attention.requires_grad for attention in candidate.attention.deepstack
+        )
+        for candidate in group.candidates
     )
     assert group.collective_candidate_count == 3
     assert len(group.collective_padding) == 1
@@ -451,3 +497,149 @@ def test_group_builder_rejects_same_key_with_different_image_paths(
             runtime.adapter,
             collective_candidate_count=len(samples),
         )
+
+
+def test_qwen3_d_only_counterfactual_executes_actual_cpu_forward(
+    tmp_path: Path,
+) -> None:
+    image_a = tmp_path / "counterfactual-a.bin"
+    image_b = tmp_path / "counterfactual-b.bin"
+    image_a.write_bytes(b"counterfactual-image-a")
+    image_b.write_bytes(b"counterfactual-image-b")
+    runtime = _runtime(TargetConditioningProviderKind.TARGET_TOKEN_EMBEDDING)
+    family = Qwen3VLAdapter()
+    prompt = _prompt()
+
+    def image_loader(path: str) -> bytes:
+        return Path(path).read_bytes()
+
+    group_builder = Qwen3NativeRepresentationGroupBuilder(
+        runtime=runtime,
+        family_adapter=family,
+        prompt=prompt,
+        image_loader=image_loader,
+    )
+    primary_a = _counterfactual_sample(
+        image_a,
+        sample_id="counterfactual-a",
+        image_id="counterfactual-image-a",
+        target="status label",
+        evidence="The status label reads OPEN.",
+    )
+    primary_b = _counterfactual_sample(
+        image_b,
+        sample_id="counterfactual-b",
+        image_id="counterfactual-image-b",
+        target="status label",
+        evidence="The status label reads CLOSED.",
+    )
+    secondary_a = _counterfactual_sample(
+        image_a,
+        sample_id="counterfactual-a-secondary",
+        image_id="counterfactual-image-a",
+        target="serial label",
+        evidence="The serial label reads A-01.",
+    )
+    secondary_b = _counterfactual_sample(
+        image_b,
+        sample_id="counterfactual-b-secondary",
+        image_id="counterfactual-image-b",
+        target="serial label",
+        evidence="The serial label reads B-01.",
+    )
+    group_a = group_builder(
+        (primary_a, secondary_a),
+        runtime.adapter,
+        collective_candidate_count=2,
+    )
+    group_b = group_builder(
+        (primary_b, secondary_b),
+        runtime.adapter,
+        collective_candidate_count=2,
+    )
+    candidates = {
+        primary_a.sample_id: group_a.candidates[0],
+        primary_b.sample_id: group_b.candidates[0],
+    }
+    manifest_path = (
+        Path(__file__).parents[2]
+        / "fixtures"
+        / "qwen3_counterfactual_smoke_manifest_v1.json"
+    )
+    manifest = load_qwen3_counterfactual_manifest(manifest_path)
+    assert (
+        manifest.content_sha256
+        == load_qwen3_counterfactual_manifest(manifest_path).content_sha256
+    )
+    case_builder = Qwen3CounterfactualCaseBuilder(
+        runtime=runtime,
+        prompt=prompt,
+    )
+    with pytest.raises(ValueError, match="supplied dataset"):
+        case_builder.build(
+            manifest=manifest,
+            data_manifest_sha256="0" * 64,
+            samples=(primary_a, primary_b),
+            observations=candidates,
+        )
+    built = case_builder.build(
+        manifest=manifest,
+        data_manifest_sha256=manifest.source_data_manifest_sha256,
+        samples=(primary_a, primary_b),
+        observations=candidates,
+    )
+    case = built.cases[0]
+    context = case.context
+    assert context.source_image_positions == ()
+    assert context.image_grid_thw == ((1, 2, 2),)
+    assert context.position_ids.shape == (3, 1, context.input_ids.shape[1])
+    assert len(context.d_positions) == 1
+    assert not case.observation_a.main.requires_grad
+    value_ids = built.materializer.value_token_ids(context, "OPEN")
+    teacher = built.materializer.teacher_forced(
+        context=context,
+        observation=case.observation_a,
+        continuation_token_ids=value_ids,
+    )
+    assert torch.equal(
+        teacher.request.position_ids[..., : context.input_ids.shape[1]],
+        context.position_ids,
+    )
+    assert teacher.request.use_cache is False
+    assert tuple(block.kind for block in teacher.request.visual_blocks) == (
+        "focused_d",
+    )
+    assert len(teacher.request.visual_blocks[0].deepstack) == 3
+    with pytest.raises(ValueError, match="identity/content drifted"):
+        built.materializer.generation_step(
+            context=replace(context, image_grid_thw=((1, 4, 2),)),
+            observation=case.observation_a,
+            generated_token_ids=(),
+        )
+
+    with torch.no_grad():
+        runtime.model.lm_head.weight.zero_()
+    vision_calls = runtime.vision_tower.forward_calls
+    evaluator = create_injected_native_counterfactual_evaluator(
+        model=runtime.model,
+        family_adapter=family,
+        materializer=built.materializer,
+        eos_token_ids=(1023,),
+        max_new_tokens=2,
+    )
+    causal = evaluator.causal_value_flip(NativeCausalValueFlipRequest(case=case))
+    continuation = evaluator.free_continuation(
+        NativeFreeContinuationRequest(
+            case_id=case.case_id,
+            variant="value_a",
+            expected_value=case.expected_value_a,
+            context=context,
+            observation_identity=case.observation_a_identity,
+            observation=case.observation_a,
+        )
+    )
+    assert causal.case_id == case.case_id
+    assert continuation.generated_token_ids == (0, 0)
+    assert continuation.stop_reason == "length_cap"
+    assert runtime.vision_tower.forward_calls == vision_calls
+    assert len(runtime.tokenizer) == 1024

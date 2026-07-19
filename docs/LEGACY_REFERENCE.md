@@ -432,9 +432,12 @@ legacy source SHA256: ebae9266cafc4f83685f6a7d46a5b0fc501111f3ba9ee257c9e530e636
   78b465ec67d40c6d60863715c43171f373483b20c11447b13b56b6fe8e28384a
 symbols/lineage used: same_image_negative_matrix_ce_loss,
   same_image_negative_matrix_ce_score_gradients,
-  compute_v3_stage1_lm_losses_batched
+  compute_v3_stage1_lm_losses_batched, and the historical main/three-branch
+  visual-token norm objective
 semantic differences: pure tensor, phase-neutral API; no legacy model/protocol
-  execution; manifold and norm optimization losses are absent
+  execution; manifold optimization remains absent, while the one accepted norm
+  formula is isolated as an FP32 pure-tensor primitive with detached source
+  features and explicit sample/global reduction
 parity fixture: tests/representation/training/test_losses.py
 reviewed by: Codex RPI-20260719
 date: 2026-07-19 JST
@@ -513,13 +516,42 @@ legacy source SHA256: ebae9266cafc4f83685f6a7d46a5b0fc501111f3ba9ee257c9e530e636
   c54a2cbaee34d2f0d1a1e7a134eca666242c7bef263e0f083c43634d254dff30;
   07428d9214e5662ee0477a037a3bee41e93fbf3caf5c90af395bd603d925dc26
 symbols/lineage used: Matrix-CE score gradient, evidence-token L_gen,
-  same-image optimizer loop, clipping, and metric reductions
+  historical visual-token Norm gradient, same-image optimizer loop, clipping,
+  cosine/warmup schedule, and metric reductions
 semantic differences: memory-bounded cell recomputation, post-D source-key
   blocking, explicit global numerator/count normalization across accumulation
-  and data-parallel ranks, and strict frozen-Qwen/Adapter-only ownership
+  and data-parallel ranks, separately logged Matrix CE/L_gen/Norm values, and
+  strict frozen-Qwen/Adapter-only ownership
 parity fixture: tests/representation/training/test_streaming.py;
   tests/representation/training/test_trainer.py
 reviewed by: Codex RPI-20260719
+date: 2026-07-19 JST
+
+new path: src/tgvf_rl/representation/training/internal_evaluation.py;
+  src/tgvf_rl/representation/training/qwen3_counterfactual.py
+role: adapted historical metric execution plus new native-protocol causal controls
+legacy repository: /nvmesv/dredvpn009/projects/r-vlm/revisit_vlm
+legacy frozen commit/tag: a200437123afe6fbb481a6c9cf9b7ddf61ff36b8
+legacy source path: eval/eval_v3_readout.py;
+  eval/eval_v3_query_sensitivity.py; eval/eval_v3_fvt_distribution.py;
+  eval/v3_common.py; eval/metrics.py
+legacy source SHA256: 3df6f807d6b0b8d718d88e570451ac62be7eda5db311d48c311cde3622490e20;
+  3c241e3081dbcf760475d6837163cd0ff32c3019ea01d9bc32e07c60889bf791;
+  a84e525fc4ebe046c776f8da4f110280b7cd6c18718738cb9e580a31e3d9b4c5;
+  6400e7ac9fb76b3b4c5951b33ca26bf4e5619d0e30e30769a10d8f3bf43dcb38;
+  aa52ad8fca252ddbf7a36d4f47990e96dd7320898c76253fbc8e6c1c7404c794
+symbols/lineage used: correct/target-only/random/wrong-same/wrong-different
+  readout controls, full same-image query matrices and retrieval reductions,
+  main/branch distribution and attention diagnostics, and per-sample reports
+semantic differences: native Qwen tool-response D-only contexts, exact M-RoPE,
+  main-D plus all D-DeepStack branches as one atomic swap unit, teacher-forced
+  causal value flips, and no-cache free continuations are new protocol-semantic
+  adaptations rather than claims of byte-for-byte legacy transcript parity;
+  production evaluation prompt, audited pair population, extraction rule, and
+  acceptance thresholds remain open
+parity fixture: tests/representation/training/test_internal_evaluation.py;
+  tests/representation/training/test_qwen3_counterfactual.py
+reviewed by: Codex RPI-20260719-NORM-EVAL
 date: 2026-07-19 JST
 
 new path: src/tgvf_rl/representation/training/checkpoint.py;

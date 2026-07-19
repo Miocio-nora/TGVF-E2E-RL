@@ -10,6 +10,7 @@ from torch.nn import functional as F
 
 
 EVIDENCE_IGNORE_INDEX = -100
+HISTORICAL_NORM_EPS = 1e-6
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,20 @@ class SameImageMatrixCELossTerms:
         if self.valid_row_count <= 0:
             return self.numerator
         return self.numerator / self.valid_row_count
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalNormLossTerms:
+    """Unnormalized sample terms for the fixed historical norm objective."""
+
+    numerator: torch.Tensor
+    sample_count: int
+
+    @property
+    def mean(self) -> torch.Tensor:
+        if self.sample_count <= 0:
+            raise ValueError("historical norm terms require at least one sample")
+        return self.numerator / self.sample_count
 
 
 def causal_evidence_losses(
@@ -119,6 +134,93 @@ def evidence_readability_loss_terms(
     return EvidenceReadabilityLossTerms(
         numerator=values.sum(),
         sample_count=int(values.shape[0]),
+    )
+
+
+def historical_visual_token_norm_loss(
+    d_tokens: torch.Tensor,
+    source_tokens: torch.Tensor,
+) -> torch.Tensor:
+    """Return the one accepted historical norm loss for one visual path.
+
+    The computation deliberately follows the pinned implementation in FP32:
+    ``mean(log((||D_t|| + 1e-6) / clamp_min(mean ||V_s||, 1e-6))**2)``.
+    The post-merger source is detached inside this primitive, so the only
+    gradient-bearing input is ``D``.  There is intentionally no selectable
+    norm mode, target statistic, or epsilon.
+    """
+
+    _validate_norm_tensor(d_tokens, name="D tokens")
+    _validate_norm_tensor(source_tokens, name="source visual tokens")
+    if d_tokens.device != source_tokens.device:
+        raise ValueError("D and source visual tokens must share a device")
+    if d_tokens.shape[-1] != source_tokens.shape[-1]:
+        raise ValueError("D and source visual tokens must share hidden width")
+
+    d_norm = torch.linalg.vector_norm(d_tokens.float(), dim=-1)
+    source_reference = (
+        torch.linalg.vector_norm(source_tokens.detach().float(), dim=-1)
+        .mean()
+        .clamp_min(HISTORICAL_NORM_EPS)
+    )
+    log_ratio = torch.log((d_norm + HISTORICAL_NORM_EPS) / source_reference)
+    return log_ratio.square().mean()
+
+
+def historical_sample_norm_loss(
+    main_d: torch.Tensor,
+    main_source: torch.Tensor,
+    deepstack_d: Sequence[torch.Tensor],
+    deepstack_source: Sequence[torch.Tensor],
+) -> torch.Tensor:
+    """Reduce main plus the three corresponding D-DeepStack paths per sample.
+
+    The three branch losses are averaged first.  That branch mean and the main
+    loss are then averaged with equal weight, exactly as required by
+    ``RPI-20260719-NORM-EVAL``.
+    """
+
+    d_branches = tuple(deepstack_d)
+    source_branches = tuple(deepstack_source)
+    if len(d_branches) != 3 or len(source_branches) != 3:
+        raise ValueError("historical sample norm loss requires exactly three branches")
+    main_loss = historical_visual_token_norm_loss(main_d, main_source)
+    branch_losses = torch.stack(
+        tuple(
+            historical_visual_token_norm_loss(d_branch, source_branch)
+            for d_branch, source_branch in zip(d_branches, source_branches, strict=True)
+        )
+    )
+    return (main_loss + branch_losses.mean()) / 2
+
+
+def historical_norm_loss_terms(
+    per_sample_losses: Sequence[torch.Tensor],
+) -> HistoricalNormLossTerms:
+    """Return the sample numerator/count without local pre-normalization."""
+
+    values = tuple(per_sample_losses)
+    if not values:
+        raise ValueError("historical norm loss requires at least one sample")
+    first = values[0]
+    if not isinstance(first, torch.Tensor) or first.ndim != 0:
+        raise ValueError("every historical norm sample loss must be a scalar tensor")
+    if not first.dtype.is_floating_point:
+        raise TypeError("historical norm sample losses must use floating dtype")
+    for value in values:
+        if not isinstance(value, torch.Tensor) or value.ndim != 0:
+            raise ValueError(
+                "every historical norm sample loss must be a scalar tensor"
+            )
+        if value.device != first.device or value.dtype != first.dtype:
+            raise ValueError(
+                "historical norm sample losses must share device and dtype"
+            )
+        if not bool(torch.isfinite(value.detach()).item()):
+            raise ValueError("historical norm sample loss must be finite")
+    return HistoricalNormLossTerms(
+        numerator=torch.stack(values).sum(),
+        sample_count=len(values),
     )
 
 
@@ -226,6 +328,17 @@ def _validate_causal_evidence_inputs(
         raise TypeError("labels must have dtype torch.long")
     if logits.device != labels.device:
         raise ValueError("logits and labels must be on the same device")
+
+
+def _validate_norm_tensor(value: object, *, name: str) -> None:
+    if not isinstance(value, torch.Tensor):
+        raise TypeError(f"{name} must be a torch.Tensor")
+    if value.ndim < 2 or value.shape[-2] == 0 or value.shape[-1] == 0:
+        raise ValueError(f"{name} must contain non-empty token and hidden dimensions")
+    if not value.dtype.is_floating_point:
+        raise TypeError(f"{name} must use a floating dtype")
+    if not bool(torch.isfinite(value.detach()).all().item()):
+        raise ValueError(f"{name} must be finite")
 
 
 def _validate_score_matrices(

@@ -6,6 +6,7 @@ from pathlib import Path
 import random
 import subprocess
 import sys
+from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -121,9 +122,7 @@ def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
         calls.append("destroy")
         state["initialized"] = False
 
-    monkeypatch.setattr(
-        torch.distributed, "init_process_group", init_process_group
-    )
+    monkeypatch.setattr(torch.distributed, "init_process_group", init_process_group)
     monkeypatch.setattr(
         torch.distributed, "is_initialized", lambda: state["initialized"]
     )
@@ -134,8 +133,10 @@ def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
     monkeypatch.setattr(
         runner_module,
         "_run_initialized",
-        lambda value, *, rank: calls.append(("run", value, rank))
-        or {"status": "synthetic", "rank": rank},
+        lambda value, *, rank, stop_after_global_step: (
+            calls.append(("run", value, rank, stop_after_global_step))
+            or {"status": "synthetic", "rank": rank}
+        ),
     )
 
     result = runner_module.run_representation_training("/unused/config.toml")
@@ -150,6 +151,62 @@ def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
     ]
     assert calls[-1] == "destroy"
     assert state["initialized"] is False
+
+
+def test_invocation_stop_preserves_planned_scheduler_horizon() -> None:
+    config = SimpleNamespace(
+        training=SimpleNamespace(
+            target_optimizer_steps=2000,
+            log_every_optimizer_steps=1,
+        )
+    )
+
+    runner_module._validate_invocation_stop(config, 1)
+    assert (
+        runner_module._invocation_target_step(
+            config,
+            initial_global_step=0,
+            stop_after_global_step=1,
+        )
+        == 1
+    )
+    assert (
+        runner_module._invocation_target_step(
+            config,
+            initial_global_step=1,
+            stop_after_global_step=None,
+        )
+        == 2000
+    )
+
+
+@pytest.mark.parametrize("value", (True, 0, -1, 2001, 1.5))
+def test_invocation_stop_rejects_invalid_or_out_of_plan_steps(value: object) -> None:
+    config = SimpleNamespace(
+        training=SimpleNamespace(
+            target_optimizer_steps=2000,
+            log_every_optimizer_steps=1,
+        )
+    )
+
+    with pytest.raises(ValueError, match="stop_after_global_step"):
+        runner_module._validate_invocation_stop(config, value)  # type: ignore[arg-type]
+
+
+def test_invocation_target_must_advance_restored_state() -> None:
+    config = SimpleNamespace(
+        training=SimpleNamespace(
+            target_optimizer_steps=2,
+            log_every_optimizer_steps=1,
+        )
+    )
+
+    with pytest.raises(ValueError, match="beyond the restored global step"):
+        runner_module._invocation_target_step(
+            config,
+            initial_global_step=1,
+            stop_after_global_step=1,
+        )
 
 
 def test_checkpoint_path_and_step_have_one_strict_ascii_round_trip(
@@ -538,11 +595,15 @@ def test_cli_run_command_lazily_dispatches_and_prints_rank_zero_payload(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    calls: list[Path] = []
+    calls: list[tuple[Path, int | None]] = []
     fake_runner = ModuleType("tgvf_rl.representation.training.runner")
 
-    def fake_run(path: Path) -> dict[str, object]:
-        calls.append(path)
+    def fake_run(
+        path: Path,
+        *,
+        stop_after_global_step: int | None,
+    ) -> dict[str, object]:
+        calls.append((path, stop_after_global_step))
         return {"status": "synthetic", "gpu_work_launched": False}
 
     fake_runner.run_representation_training = fake_run  # type: ignore[attr-defined]
@@ -552,9 +613,69 @@ def test_cli_run_command_lazily_dispatches_and_prints_rank_zero_payload(
         fake_runner,
     )
 
-    assert cli.main(["run-representation", "/unused/representation.toml"]) == 0
-    assert calls == [Path("/unused/representation.toml")]
+    assert (
+        cli.main(
+            [
+                "run-representation",
+                "/unused/representation.toml",
+                "--stop-after-global-step",
+                "7",
+            ]
+        )
+        == 0
+    )
+    assert calls == [(Path("/unused/representation.toml"), 7)]
     assert json.loads(capsys.readouterr().out) == {
         "gpu_work_launched": False,
         "status": "synthetic",
     }
+
+
+def test_cli_resume_comparator_lazily_dispatches_all_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[dict[str, Path]] = []
+    fake_module = ModuleType("tgvf_rl.representation.training.resume_parity")
+
+    # ``asdict`` requires a real dataclass instance.
+    @dataclass(frozen=True)
+    class Result:
+        exact: bool = True
+
+    fake_module.compare_representation_resume_lanes = (  # type: ignore[attr-defined]
+        lambda **kwargs: calls.append(kwargs) or Result()
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "tgvf_rl.representation.training.resume_parity",
+        fake_module,
+    )
+    arguments = [
+        "compare-representation-resume",
+        "--continuous-artifact",
+        "/a.pt",
+        "--resumed-artifact",
+        "/b.pt",
+        "--continuous-checkpoint",
+        "/a-dcp",
+        "--resumed-checkpoint",
+        "/b-dcp",
+        "--continuous-metrics",
+        "/a.jsonl",
+        "--resumed-metrics",
+        "/b.jsonl",
+    ]
+
+    assert cli.main(arguments) == 0
+    assert calls == [
+        {
+            "continuous_artifact_path": Path("/a.pt"),
+            "resumed_artifact_path": Path("/b.pt"),
+            "continuous_checkpoint_path": Path("/a-dcp"),
+            "resumed_checkpoint_path": Path("/b-dcp"),
+            "continuous_metrics_path": Path("/a.jsonl"),
+            "resumed_metrics_path": Path("/b.jsonl"),
+        }
+    ]
+    assert json.loads(capsys.readouterr().out) == {"exact": True}

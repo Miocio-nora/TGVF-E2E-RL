@@ -45,6 +45,7 @@ from tgvf_rl.representation.adapter import (
 )
 
 from .readout import (
+    RepresentationAttentionTensorBundle,
     RepresentationCandidateObservation,
     RepresentationReadoutRow,
     RepresentationVisualTensorBundle,
@@ -97,7 +98,9 @@ class RepresentationPromptConfig:
                 "representation prompt fields are limited to {question} and {target}"
             )
         if any(conversion or format_spec for _, _, format_spec, conversion in parsed):
-            raise ValueError("representation prompt conversions/format specs are forbidden")
+            raise ValueError(
+                "representation prompt conversions/format specs are forbidden"
+            )
 
     @property
     def sha256(self) -> str:
@@ -241,9 +244,7 @@ def render_native_action_target(
         _ACTION_TEMPLATE_SUFFIX
     ):
         raise ValueError("native action transcript differs from generation prefill")
-    sampled_text = transcript.text[
-        len(prefill.text) : -len(_ACTION_TEMPLATE_SUFFIX)
-    ]
+    sampled_text = transcript.text[len(prefill.text) : -len(_ACTION_TEMPLATE_SUFFIX)]
     if not sampled_text:
         raise ValueError("native action completion is empty")
 
@@ -355,8 +356,7 @@ class Qwen3NativeRepresentationGroupBuilder:
             for messages in messages_by_sample
         )
         model_actions = tuple(
-            self._materialize_action(action, image)
-            for action in action_by_sample
+            self._materialize_action(action, image) for action in action_by_sample
         )
 
         first_action = model_actions[0]
@@ -372,7 +372,9 @@ class Qwen3NativeRepresentationGroupBuilder:
             if action.pixel_values.shape != first_action.pixel_values.shape or not (
                 torch.equal(action.pixel_values, first_action.pixel_values)
             ):
-                raise ValueError("same source image produced inconsistent pixel tensors")
+                raise ValueError(
+                    "same source image produced inconsistent pixel tensors"
+                )
 
         source_identity = _source_visual_identity(
             image_path=image_path,
@@ -402,6 +404,8 @@ class Qwen3NativeRepresentationGroupBuilder:
                         *output.metadata.deepstack_projection_identities,
                     ),
                     visual=candidate_visual,
+                    image_grid_thw=vision.image_grid_thw,
+                    attention=_adapter_output_attention_bundle(output),
                 )
             )
             rows.append(
@@ -500,7 +504,9 @@ class Qwen3NativeRepresentationGroupBuilder:
                 )
             raw_layers = getattr(output, "hidden_states", None)
             if not isinstance(raw_layers, (tuple, list)) or not raw_layers:
-                raise RuntimeError("frozen Qwen did not return contextual hidden states")
+                raise RuntimeError(
+                    "frozen Qwen did not return contextual hidden states"
+                )
             layers = tuple(layer.detach().clone() for layer in raw_layers)
             if any(layer.shape[:2] != action.input_ids.shape for layer in layers):
                 raise ValueError("Qwen contextual states do not align with action IDs")
@@ -704,6 +710,21 @@ def _adapter_output_bundle(
     )
 
 
+def _adapter_output_attention_bundle(
+    output: TGVFAdapterOutput,
+) -> RepresentationAttentionTensorBundle:
+    if not isinstance(output, TGVFAdapterOutput):
+        raise TypeError("TGVF Adapter must return a TGVFAdapterOutput")
+    return RepresentationAttentionTensorBundle(
+        main=output.main_attention.target_to_visual_attention.detach(),
+        deepstack=tuple(
+            attention.target_to_visual_attention.detach()
+            for attention in output.deepstack_attention
+        ),
+        branch_layers=output.metadata.branch_layers,
+    )
+
+
 def _source_visual_identity(
     *,
     image_path: str,
@@ -830,7 +851,9 @@ def _validate_single_input(
     if attention_mask.shape != input_ids.shape:
         raise ValueError("native representation attention_mask must match input_ids")
     if bool((attention_mask == 0).any().item()):
-        raise ValueError("unpadded native representation input cannot contain masked tokens")
+        raise ValueError(
+            "unpadded native representation input cannot contain masked tokens"
+        )
 
 
 def _offset(value: object) -> tuple[int, int]:

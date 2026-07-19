@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from importlib import metadata
 import json
 from pathlib import Path
@@ -146,6 +147,25 @@ def _parser() -> argparse.ArgumentParser:
         help="run a strict Qwen3 representation configuration under torchrun",
     )
     run_representation.add_argument("path", type=Path)
+    run_representation.add_argument(
+        "--stop-after-global-step",
+        type=int,
+        default=None,
+        help=(
+            "stop after this optimizer-boundary checkpoint without publishing "
+            "the final Adapter; the configured scheduler horizon is unchanged"
+        ),
+    )
+    compare_resume = subparsers.add_parser(
+        "compare-representation-resume",
+        help="compare continuous and teardown/resumed representation outputs",
+    )
+    compare_resume.add_argument("--continuous-artifact", type=Path, required=True)
+    compare_resume.add_argument("--resumed-artifact", type=Path, required=True)
+    compare_resume.add_argument("--continuous-checkpoint", type=Path, required=True)
+    compare_resume.add_argument("--resumed-checkpoint", type=Path, required=True)
+    compare_resume.add_argument("--continuous-metrics", type=Path, required=True)
+    compare_resume.add_argument("--resumed-metrics", type=Path, required=True)
     return parser
 
 
@@ -157,15 +177,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "validate-smoke-config":
             result = dict(validate_smoke_config(args.path))
         elif args.command == "validate-representation-config":
-            result = load_representation_training_config(
-                args.path
-            ).validation_payload()
+            result = load_representation_training_config(args.path).validation_payload()
         elif args.command == "run-representation":
             from tgvf_rl.representation.training.runner import (
                 run_representation_training,
             )
 
-            result = run_representation_training(args.path)
+            result = run_representation_training(
+                args.path,
+                stop_after_global_step=args.stop_after_global_step,
+            )
+        elif args.command == "compare-representation-resume":
+            from tgvf_rl.representation.training.resume_parity import (
+                compare_representation_resume_lanes,
+            )
+
+            result = asdict(
+                compare_representation_resume_lanes(
+                    continuous_artifact_path=args.continuous_artifact,
+                    resumed_artifact_path=args.resumed_artifact,
+                    continuous_checkpoint_path=args.continuous_checkpoint,
+                    resumed_checkpoint_path=args.resumed_checkpoint,
+                    continuous_metrics_path=args.continuous_metrics,
+                    resumed_metrics_path=args.resumed_metrics,
+                )
+            )
         else:  # pragma: no cover - argparse owns the command choices
             raise AssertionError(f"unhandled command {args.command}")
     except (OSError, TypeError, ValueError, RuntimeError) as error:

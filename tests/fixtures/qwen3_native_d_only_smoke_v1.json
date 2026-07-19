@@ -1,0 +1,50 @@
+{
+  "canonical_d_placeholder_count": 1,
+  "chat_template_sha256": "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956",
+  "fixture_schema": "qwen3_native_d_only_processor_golden_v1",
+  "geometry_carrier": {
+    "all_black": true,
+    "mode": "RGB",
+    "size": [
+      256,
+      256
+    ]
+  },
+  "model_path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking",
+  "processor_input": {
+    "attention_mask_all_one": true,
+    "attention_mask_dtype": "torch.int64",
+    "d_block": {
+      "end": 331,
+      "length": 64,
+      "start": 267
+    },
+    "expanded_image_token_count": 64,
+    "geometry_pixel_values_shape": [
+      256,
+      1536
+    ],
+    "image_grid_thw": [
+      [
+        1,
+        16,
+        16
+      ]
+    ],
+    "length": 341,
+    "token_ids_sha256": "54c2b0d0d11cd2cdd5fc09bcf2b50b3967967ae2cfedd6b408f5a0121b771e0a"
+  },
+  "production_prompt": false,
+  "prompt_identity": "qwen3-representation-smoke-only-v1",
+  "smoke_only": true,
+  "source_image_placeholder_count": 0,
+  "tokenizer_length": 151669,
+  "tool_reasoning": "I will inspect only the requested local field.",
+  "transcript": {
+    "text_characters": 1289,
+    "text_sha256": "cd888097e4e908a393d8403f72c42c40ba558a9d6e5198570754fd4fac534250",
+    "text_utf8_bytes": 1305,
+    "token_ids_sha256": "6d77fadf7671a6a5c7b09ff759b28ea02ca1c918d386882dfae645e03b09a27d",
+    "token_length": 278
+  }
+}

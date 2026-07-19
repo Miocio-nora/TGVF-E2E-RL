@@ -21,6 +21,7 @@ from .schema import RepresentationSampleIdentity, RepresentationTrainingSample
 
 REPRESENTATION_DATA_TRANSFORM_VERSION = "retained_focus_rows_v1"
 REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION = "representation_data_manifest_v1"
+SPLIT_OVERLAP_REPORT_SCHEMA_VERSION = "representation_split_overlap_report_v1"
 
 _FOCUS_TRAJECTORY_TYPE = "single_focus"
 _FOCUS_EVIDENCE_STATE = "need_local_visual_evidence"
@@ -68,6 +69,16 @@ class SplitOverlapKind(str, Enum):
     IMAGE_PATH = "image_path"
     STABLE_IMAGE_UID = "stable_image_uid"
     ITEM_CONTENT_HASH = "item_content_hash"
+
+
+class SplitOverlapPolicy(str, Enum):
+    """Explicit policy applied to one content-bound train/validation audit."""
+
+    REQUIRE_DISJOINT = "require_disjoint"
+    ALLOW_RECORDED_IMAGE_PATH = "allow_recorded_image_path"
+
+
+_SPLIT_OVERLAP_KIND_ORDER = {kind: index for index, kind in enumerate(SplitOverlapKind)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +278,29 @@ class SplitOverlapRecord:
     train_sample_ids: tuple[str, ...]
     validation_sample_ids: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, SplitOverlapKind):
+            raise TypeError("split overlap kind must be typed")
+        _require_sha256(self.value_sha256, field_name="overlap value_sha256")
+        for name, values in (
+            ("train_sample_ids", self.train_sample_ids),
+            ("validation_sample_ids", self.validation_sample_ids),
+        ):
+            if not isinstance(values, tuple) or not values:
+                raise ValueError(f"{name} must be a non-empty immutable tuple")
+            if values != tuple(sorted(values)) or len(values) != len(set(values)):
+                raise ValueError(f"{name} must be unique and sorted")
+            if any(not isinstance(value, str) or not value.strip() for value in values):
+                raise ValueError(f"{name} must contain non-empty strings")
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "kind": self.kind.value,
+            "value_sha256": self.value_sha256,
+            "train_sample_ids": list(self.train_sample_ids),
+            "validation_sample_ids": list(self.validation_sample_ids),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class SplitOverlapReport:
@@ -275,10 +309,38 @@ class SplitOverlapReport:
     def __post_init__(self) -> None:
         if not isinstance(self.records, tuple):
             raise TypeError("split overlap records must be an immutable tuple")
+        if any(not isinstance(record, SplitOverlapRecord) for record in self.records):
+            raise TypeError("split overlap report contains an untyped record")
+        keys = tuple(
+            (
+                _SPLIT_OVERLAP_KIND_ORDER[record.kind],
+                record.value_sha256,
+                record.train_sample_ids,
+                record.validation_sample_ids,
+            )
+            for record in self.records
+        )
+        if keys != tuple(sorted(keys)) or len(keys) != len(set(keys)):
+            raise ValueError("split overlap records must be unique and sorted")
 
     @property
     def is_disjoint(self) -> bool:
         return not self.records
+
+    @property
+    def identity_sha256(self) -> str:
+        encoded = json.dumps(
+            self.canonical_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return sha256(encoded).hexdigest()
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": SPLIT_OVERLAP_REPORT_SCHEMA_VERSION,
+            "records": [record.canonical_payload() for record in self.records],
+        }
 
     def require_disjoint(self) -> None:
         if self.records:
@@ -286,6 +348,45 @@ class SplitOverlapReport:
             raise RepresentationDataError(
                 "train/validation representation groups overlap for: "
                 + ", ".join(kinds)
+            )
+
+    def validate_policy(
+        self,
+        policy: SplitOverlapPolicy,
+        *,
+        expected_report_sha256: str | None,
+    ) -> None:
+        """Apply a fail-closed policy without deleting or rewriting any row."""
+
+        if not isinstance(policy, SplitOverlapPolicy):
+            raise TypeError("split overlap policy must be typed")
+        if policy is SplitOverlapPolicy.REQUIRE_DISJOINT:
+            if expected_report_sha256 is not None:
+                raise ValueError(
+                    "disjoint overlap policy cannot bind an accepted overlap report"
+                )
+            self.require_disjoint()
+            return
+        if expected_report_sha256 is None:
+            raise ValueError(
+                "recorded overlap policy requires an expected report SHA256"
+            )
+        _require_sha256(
+            expected_report_sha256,
+            field_name="expected split overlap report SHA256",
+        )
+        if self.identity_sha256 != expected_report_sha256:
+            raise RepresentationDataError(
+                "train/validation overlap report differs from the accepted identity"
+            )
+        disallowed = sorted(
+            {record.kind.value for record in self.records}
+            - {SplitOverlapKind.IMAGE_PATH.value}
+        )
+        if disallowed:
+            raise RepresentationDataError(
+                "recorded image-path overlap policy cannot accept: "
+                + ", ".join(disallowed)
             )
 
 

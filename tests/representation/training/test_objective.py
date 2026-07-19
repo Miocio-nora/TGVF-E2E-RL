@@ -5,13 +5,72 @@ import torch
 
 from tgvf_rl.representation.training.losses import (
     EvidenceReadabilityLossTerms,
+    HistoricalNormLossTerms,
     SameImageMatrixCELossTerms,
 )
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigV2,
     RepresentationObjectiveKind,
     compose_reference_representation_objective,
 )
+
+
+def test_v2_baseline_composes_and_logs_raw_and_weighted_norm() -> None:
+    config = RepresentationObjectiveConfigV2(
+        identity="native-qwen3-historical-norm-baseline",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=1.0,
+        l_gen_weight=1.0,
+        norm_weight=0.1,
+    )
+    result = compose_reference_representation_objective(
+        SameImageMatrixCELossTerms(torch.tensor(4.0), 2),
+        EvidenceReadabilityLossTerms(torch.tensor(8.0), 2),
+        config,
+        HistoricalNormLossTerms(torch.tensor(2.0), 2),
+    )
+
+    assert result.norm_loss is not None
+    assert result.weighted_norm is not None
+    assert torch.equal(result.norm_loss, torch.tensor(1.0))
+    assert torch.equal(result.weighted_norm, torch.tensor(0.1))
+    assert torch.equal(result.total_loss, torch.tensor(6.1))
+    assert result.norm_sample_count == 2
+
+
+def test_v2_rejects_no_norm_while_v1_retains_named_matrix_only_ablation() -> None:
+    with pytest.raises(ValueError, match="historical norm weight 0.1"):
+        RepresentationObjectiveConfigV2(
+            identity="bad-baseline",
+            kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+            matrix_ce_weight=1.0,
+            l_gen_weight=1.0,
+            norm_weight=0.0,
+        )
+    with pytest.raises(ValueError, match="requires the.*baseline"):
+        RepresentationObjectiveConfigV2(
+            identity="forbidden-matrix-only-v2",
+            kind=RepresentationObjectiveKind.MATRIX_CE_ONLY_ABLATION,
+            matrix_ce_weight=1.0,
+            l_gen_weight=0.0,
+            norm_weight=0.0,
+        )
+    v1_ablation = RepresentationObjectiveConfig(
+        identity="historical-matrix-only-v1",
+        kind=RepresentationObjectiveKind.MATRIX_CE_ONLY_ABLATION,
+        matrix_ce_weight=1.0,
+        l_gen_weight=0.0,
+    )
+    result = compose_reference_representation_objective(
+        SameImageMatrixCELossTerms(torch.tensor(2.0), 2),
+        EvidenceReadabilityLossTerms(torch.tensor(4.0), 2),
+        v1_ablation,
+    )
+
+    assert result.norm_loss is None
+    assert result.weighted_norm is None
+    assert result.total_loss.item() == 1.0
 
 
 def test_baseline_composes_and_returns_matrix_ce_and_l_gen_separately() -> None:
@@ -67,6 +126,14 @@ def test_baseline_rejects_zero_l_gen_but_named_ablation_requires_it() -> None:
     assert result.l_gen_loss.item() == 2.0
     assert result.weighted_l_gen.item() == 0.0
     assert result.total_loss.item() == 1.0
+
+    with pytest.raises(ValueError, match="v1 does not support"):
+        RepresentationObjectiveConfig(
+            identity="v2-kind-under-v1-schema",
+            kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+            matrix_ce_weight=1.0,
+            l_gen_weight=0.0,
+        )
 
 
 def test_objective_weights_and_reference_terms_fail_closed() -> None:

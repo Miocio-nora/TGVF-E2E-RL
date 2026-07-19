@@ -17,7 +17,11 @@ from tgvf_rl.qwen.base import QwenVLMFamilyAdapter
 from tgvf_rl.representation.adapter import TGVFAdapter
 
 from .losses import same_image_matrix_ce_loss_terms
-from .objective import RepresentationObjectiveConfig
+from .objective import (
+    RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigLike,
+    RepresentationObjectiveConfigV2,
+)
 from .readout import SameImageReadoutGroup
 from .sampling import SameImageBatchSampler
 from .schema import RepresentationTrainingSample
@@ -35,6 +39,8 @@ class RepresentationValidationMetrics:
     validation_event_index: int
     global_matrix_ce_loss: float
     global_l_gen_loss: float
+    global_norm_loss: float | None
+    global_weighted_norm_loss: float | None
     global_total_loss: float
     global_row_count: int
     global_sample_count: int
@@ -57,6 +63,14 @@ class RepresentationValidationMetrics:
             value = getattr(self, field_name)
             if not isinstance(value, float) or not math.isfinite(value):
                 raise ValueError(f"{field_name} must be a finite float")
+        for field_name in ("global_norm_loss", "global_weighted_norm_loss"):
+            value = getattr(self, field_name)
+            if value is not None and (
+                not isinstance(value, float) or not math.isfinite(value)
+            ):
+                raise ValueError(f"{field_name} must be None or a finite float")
+        if (self.global_norm_loss is None) != (self.global_weighted_norm_loss is None):
+            raise ValueError("raw and weighted validation norm metrics must align")
         for field_name in (
             "global_row_count",
             "global_sample_count",
@@ -81,7 +95,9 @@ class RepresentationValidationMetrics:
         if len(self.local_sample_ids) < 2 or len(set(self.local_sample_ids)) != len(
             self.local_sample_ids
         ):
-            raise ValueError("local validation sample IDs must contain unique K>=2 rows")
+            raise ValueError(
+                "local validation sample IDs must contain unique K>=2 rows"
+            )
 
 
 def evaluate_representation_validation_event(
@@ -91,7 +107,7 @@ def evaluate_representation_validation_event(
     family_adapter: QwenVLMFamilyAdapter,
     samples: Sequence[RepresentationTrainingSample],
     group_builder: RepresentationGroupBuilder,
-    objective: RepresentationObjectiveConfig,
+    objective: RepresentationObjectiveConfigLike,
     batch_size: int,
     sampler_seed: int,
     data_manifest_sha256: str,
@@ -120,19 +136,17 @@ def evaluate_representation_validation_event(
         raise TypeError("samples must be non-empty RepresentationTrainingSample values")
     if not callable(group_builder):
         raise TypeError("group_builder must be callable")
-    if not isinstance(objective, RepresentationObjectiveConfig):
-        raise TypeError("objective must be a RepresentationObjectiveConfig")
+    if not isinstance(
+        objective, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
+    ):
+        raise TypeError("objective must be a representation objective config")
     _positive_int(batch_size, field_name="batch_size")
     if batch_size < 2:
         raise ValueError("same-image validation requires batch_size >= 2")
     _integer(sampler_seed, field_name="sampler_seed")
     _sha256(data_manifest_sha256, field_name="data_manifest_sha256")
-    _non_negative_int(
-        validation_event_index, field_name="validation_event_index"
-    )
-    _positive_int(
-        data_parallel_world_size, field_name="data_parallel_world_size"
-    )
+    _non_negative_int(validation_event_index, field_name="validation_event_index")
+    _positive_int(data_parallel_world_size, field_name="data_parallel_world_size")
 
     rank, world_size = _distributed_identity(data_parallel_world_size)
     sampler = SameImageBatchSampler(
@@ -209,6 +223,11 @@ def evaluate_representation_validation_event(
     matrix_terms = same_image_matrix_ce_loss_terms((scores.score_matrix,))
     local_matrix_numerator = float(matrix_terms.numerator.float().item())
     local_l_gen_numerator = float(scores.diagonal_l_gen.float().sum().item())
+    local_norm_numerator = (
+        float(scores.historical_norm.float().sum().item())
+        if isinstance(objective, RepresentationObjectiveConfigV2)
+        else None
+    )
     local_evidence_tokens = int(scores.evidence_token_counts.sum().item())
     local_rows = matrix_terms.valid_row_count
     local_samples = len(scores.sample_ids)
@@ -216,9 +235,14 @@ def evaluate_representation_validation_event(
         raise RuntimeError("validation score counts differ from the selected batch")
 
     device = scores.score_matrix.device
-    global_matrix_numerator, global_l_gen_numerator = _global_float_sums(
+    (
+        global_matrix_numerator,
+        global_l_gen_numerator,
+        global_norm_numerator,
+    ) = _global_float_sums(
         local_matrix_numerator,
         local_l_gen_numerator,
+        local_norm_numerator,
         device=device,
     )
     (
@@ -235,14 +259,25 @@ def evaluate_representation_validation_event(
     )
     matrix_loss = global_matrix_numerator / global_rows
     l_gen_loss = global_l_gen_numerator / global_samples
-    total_loss = (
-        matrix_loss * objective.matrix_ce_weight
-        + l_gen_loss * objective.l_gen_weight
+    norm_loss = (
+        None
+        if global_norm_numerator is None
+        else global_norm_numerator / global_samples
     )
+    weighted_norm_loss = (
+        None if norm_loss is None else norm_loss * objective.norm_weight  # type: ignore[union-attr]
+    )
+    total_loss = (
+        matrix_loss * objective.matrix_ce_weight + l_gen_loss * objective.l_gen_weight
+    )
+    if weighted_norm_loss is not None:
+        total_loss += weighted_norm_loss
     return RepresentationValidationMetrics(
         validation_event_index=validation_event_index,
         global_matrix_ce_loss=matrix_loss,
         global_l_gen_loss=l_gen_loss,
+        global_norm_loss=norm_loss,
+        global_weighted_norm_loss=weighted_norm_loss,
         global_total_loss=total_loss,
         global_row_count=global_rows,
         global_sample_count=global_samples,
@@ -269,7 +304,9 @@ def _validate_group(
         raise ValueError("validation group builder changed sampler-owned sample order")
     expected_keys = {sample.image_group_key for sample in samples}
     if expected_keys != {group.image_group_key}:
-        raise ValueError("validation group builder changed the sampler-owned image group")
+        raise ValueError(
+            "validation group builder changed the sampler-owned image group"
+        )
     if group.collective_candidate_count != collective_candidate_count:
         raise ValueError(
             "validation group builder did not materialize the synchronized "
@@ -285,7 +322,9 @@ def _assert_visuals_do_not_require_grad(group: SameImageReadoutGroup) -> None:
     )
     for bundle in bundles:
         tensors = (bundle.main, *bundle.deepstack)
-        if any(tensor.requires_grad or tensor.grad_fn is not None for tensor in tensors):
+        if any(
+            tensor.requires_grad or tensor.grad_fn is not None for tensor in tensors
+        ):
             raise RuntimeError("validation visual tensors retained an autograd graph")
 
 
@@ -320,17 +359,23 @@ def _distributed_identity(expected_world_size: int) -> tuple[int, int]:
 def _global_float_sums(
     matrix_numerator: float,
     l_gen_numerator: float,
+    norm_numerator: float | None,
     *,
     device: torch.device,
-) -> tuple[float, float]:
-    values = torch.tensor(
-        (matrix_numerator, l_gen_numerator), dtype=torch.float64, device=device
-    )
+) -> tuple[float, float, float | None]:
+    local_values = [matrix_numerator, l_gen_numerator]
+    if norm_numerator is not None:
+        local_values.append(norm_numerator)
+    values = torch.tensor(local_values, dtype=torch.float64, device=device)
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.all_reduce(values, op=torch.distributed.ReduceOp.SUM)
     if not bool(torch.isfinite(values).all().item()):
         raise FloatingPointError("validation loss numerator is non-finite")
-    return float(values[0].item()), float(values[1].item())
+    return (
+        float(values[0].item()),
+        float(values[1].item()),
+        None if norm_numerator is None else float(values[2].item()),
+    )
 
 
 def _global_integer_sums(

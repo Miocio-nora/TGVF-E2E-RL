@@ -8,9 +8,14 @@ from torch import nn
 
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
-from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
+from tgvf_rl.representation.training.losses import (
+    EVIDENCE_IGNORE_INDEX,
+    historical_norm_loss_terms,
+    historical_sample_norm_loss,
+)
 from tgvf_rl.representation.training.objective import (
     RepresentationObjectiveConfig,
+    RepresentationObjectiveConfigV2,
     RepresentationObjectiveKind,
     compose_reference_representation_objective,
 )
@@ -144,8 +149,7 @@ def _group(*, padding_count: int = 0) -> SameImageReadoutGroup:
         rows=tuple(rows),
         candidates=tuple(candidates),
         collective_padding=tuple(
-            _bundle(10.0 + index, requires_grad=True)
-            for index in range(padding_count)
+            _bundle(10.0 + index, requires_grad=True) for index in range(padding_count)
         ),
     )
 
@@ -200,7 +204,9 @@ def test_streaming_backward_matches_full_graph_reference() -> None:
             l_gen_samples=2,
         ),
     )
-    actual_gradients = tuple(tensor.grad for tensor in _candidate_tensors(streaming_group))
+    actual_gradients = tuple(
+        tensor.grad for tensor in _candidate_tensors(streaming_group)
+    )
 
     assert metrics.local_row_count == 2
     assert metrics.local_sample_count == 2
@@ -211,7 +217,82 @@ def test_streaming_backward_matches_full_graph_reference() -> None:
     assert all(parameter.grad is None for parameter in streaming_model.parameters())
 
 
-def test_collective_padding_has_zero_gradient_and_does_not_change_real_objective() -> None:
+def test_streaming_v2_norm_matches_full_graph_and_reports_raw_weighted_values() -> None:
+    torch.manual_seed(29)
+    full_model = _frozen_model()
+    streaming_model = _frozen_model()
+    streaming_model.load_state_dict(full_model.state_dict())
+    full_group = _group()
+    streaming_group = _group()
+    objective = RepresentationObjectiveConfigV2(
+        identity="test-matrix-readable-historical-norm",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=0.7,
+        l_gen_weight=1.3,
+        norm_weight=0.1,
+    )
+
+    full_terms = synthetic_same_image_layout_readout_terms(
+        Qwen3VLAdapter(), full_model, full_group
+    )
+    norm_terms = historical_norm_loss_terms(
+        tuple(
+            historical_sample_norm_loss(
+                candidate.visual.main,
+                full_group.source_visual.main,
+                candidate.visual.deepstack,
+                full_group.source_visual.deepstack,
+            )
+            for candidate in full_group.candidates
+        )
+    )
+    full_value = compose_reference_representation_objective(
+        full_terms.matrix_ce,
+        full_terms.l_gen,
+        objective,
+        norm_terms,
+    )
+    # This local K=2 group is one half of a K=4 global accumulation window.
+    # Matrix, readability, and norm all use their global sample denominator.
+    expected_gradients = torch.autograd.grad(
+        full_value.total_loss / 2, _candidate_tensors(full_group)
+    )
+
+    scores = score_streaming_same_image_group(
+        Qwen3VLAdapter(), streaming_model, streaming_group
+    )
+    metrics = backward_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        scores,
+        objective=objective,
+        normalization=StreamingGlobalNormalization(
+            matrix_valid_rows=4,
+            l_gen_samples=4,
+        ),
+    )
+
+    assert metrics.norm_numerator is not None
+    assert metrics.weighted_norm_local_mean is not None
+    assert torch.equal(metrics.norm_numerator, norm_terms.numerator.detach())
+    assert torch.equal(
+        metrics.weighted_norm_local_mean,
+        norm_terms.mean.detach() * objective.norm_weight,
+    )
+    assert torch.allclose(metrics.weighted_local_mean, full_value.total_loss.detach())
+    for actual, expected in zip(
+        (tensor.grad for tensor in _candidate_tensors(streaming_group)),
+        expected_gradients,
+        strict=True,
+    ):
+        assert actual is not None
+        assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_collective_padding_has_zero_gradient_and_does_not_change_real_objective() -> (
+    None
+):
     torch.manual_seed(23)
     unpadded_model = _frozen_model()
     padded_model = _frozen_model()

@@ -13,9 +13,13 @@ from tgvf_rl.representation.training.config import (
     ACCEPTED_QWEN3_MODEL_DTYPE,
     ACCEPTED_QWEN3_MODEL_NAME,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
+    REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
     REPRESENTATION_TRAINING_SCOPE,
+    RepresentationDataConfigV2,
+    RepresentationObjectiveExecutionConfigV2,
     load_representation_training_config,
 )
+from tgvf_rl.representation.training.data import SplitOverlapReport
 from tgvf_rl.representation.training.distributed_checkpoint import (
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
 )
@@ -91,7 +95,7 @@ require_disjoint_validation = true
 
 [data.train]
 jsonl_path = "{train}"
-source_sha256 = "{_sha(train_bytes) if verify_data else '1' * 64}"
+source_sha256 = "{_sha(train_bytes) if verify_data else "1" * 64}"
 batch_size = 5
 sampler_seed = 71
 
@@ -169,8 +173,8 @@ validation_every_optimizer_steps = 1
 log_every_optimizer_steps = 1
 
 [output]
-final_artifact_path = "{tmp_path / 'output' / 'adapter.pt'}"
-metrics_jsonl_path = "{tmp_path / 'output' / 'metrics.jsonl'}"
+final_artifact_path = "{tmp_path / "output" / "adapter.pt"}"
+metrics_jsonl_path = "{tmp_path / "output" / "metrics.jsonl"}"
 allow_overwrite = false
 
 [resume]
@@ -179,7 +183,7 @@ checkpoint_path = "none"
 strict_identity = true
 
 [checkpoint]
-directory = "{tmp_path / 'checkpoints'}"
+directory = "{tmp_path / "checkpoints"}"
 filename_prefix = "representation-smoke"
 save_every_optimizer_steps = 1
 save_final = true
@@ -191,6 +195,41 @@ format = "distributed-representation-checkpoint-v1"
 """.lstrip()
     path = tmp_path / f"representation-{provider}.toml"
     path.write_text(content, encoding="utf-8")
+    return path
+
+
+def _upgrade_config_to_v2(path: Path) -> Path:
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION}"',
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2}"',
+    )
+    text = text.replace(
+        'kind = "matrix_ce_and_l_gen"',
+        'kind = "matrix_ce_l_gen_and_norm"',
+    ).replace(
+        'norm_loss = "unset_not_implemented"',
+        "norm_weight = 0.1",
+    )
+    text = text.replace(
+        '[scheduler]\nkind = "linear_warmup_decay"\ntotal_steps = 3\nwarmup_steps = 1',
+        '[scheduler]\nkind = "historical_cosine"\n'
+        "total_steps = 2000\nwarmup_steps = 100\nmin_lr_ratio = 0.1",
+    )
+    text = text.replace(
+        "target_optimizer_steps = 3",
+        "target_optimizer_steps = 2",
+    )
+    text = text.replace(
+        "require_disjoint_validation = true",
+        'split_overlap_policy = "require_disjoint"\n'
+        f'expected_overlap_report_sha256 = "{SplitOverlapReport(records=()).identity_sha256}"',
+    )
+    text = text.replace(
+        'format = "distributed-representation-checkpoint-v1"',
+        'format = "distributed-representation-checkpoint-v2"',
+    )
+    path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -216,11 +255,60 @@ def test_complete_config_maps_to_runtime_contracts_and_binds_both_hashes(
     assert config.fsdp2.runtime_config.world_size == 2
     assert config.accumulation_identity.gradient_accumulation_steps == 2
     assert (
-        config.checkpoint.format
-        == DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
+        config.checkpoint.format == DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION
     )
     assert config.source_toml_sha256 == _sha(path.read_bytes())
     assert len(config.canonical_config_sha256) == 64
+
+
+def test_v2_binds_norm_and_2000_step_cosine_while_allowing_bounded_target(
+    tmp_path: Path,
+) -> None:
+    path = _upgrade_config_to_v2(_write_config(tmp_path))
+
+    config = load_representation_training_config(path)
+
+    assert config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2
+    assert isinstance(config.data, RepresentationDataConfigV2)
+    assert config.data.expected_overlap_report_sha256 == (
+        SplitOverlapReport(records=()).identity_sha256
+    )
+    assert isinstance(config.objective, RepresentationObjectiveExecutionConfigV2)
+    assert config.objective.objective.norm_weight == 0.1
+    assert config.objective.manifold_weight == 0.0
+    assert config.scheduler.total_steps == 2000
+    assert config.scheduler.warmup_steps == 100
+    assert config.scheduler.min_lr_ratio == 0.1
+    assert config.training.target_optimizer_steps == 2
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "target_optimizer_steps = 2",
+            "target_optimizer_steps = 2001",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cannot exceed.*scheduler horizon"):
+        load_representation_training_config(path, verify_external_files=False)
+
+
+def test_v2_has_no_norm_mode_and_v1_remains_loadable_unchanged(tmp_path: Path) -> None:
+    v1_path = _write_config(tmp_path)
+    v1_raw = v1_path.read_bytes()
+    v1 = load_representation_training_config(v1_path, verify_external_files=False)
+    assert v1.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION
+    assert v1_path.read_bytes() == v1_raw
+
+    v2_path = _upgrade_config_to_v2(v1_path)
+    v2_path.write_text(
+        v2_path.read_text(encoding="utf-8").replace(
+            "norm_weight = 0.1",
+            'norm_weight = 0.1\nnorm_mode = "another-target"',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown.*norm_mode"):
+        load_representation_training_config(v2_path, verify_external_files=False)
 
 
 def test_target_token_embedding_is_a_real_exclusive_provider_choice(
@@ -243,9 +331,7 @@ def test_target_token_embedding_is_a_real_exclusive_provider_choice(
 def test_unknown_and_missing_fields_fail_closed(tmp_path: Path) -> None:
     unknown = _write_config(tmp_path, suffix="unknown_switch = true")
     with pytest.raises(ValueError, match="unknown"):
-        load_representation_training_config(
-            unknown, verify_external_files=False
-        )
+        load_representation_training_config(unknown, verify_external_files=False)
 
     missing = _write_config(tmp_path)
     text = missing.read_text(encoding="utf-8").replace(
@@ -253,9 +339,7 @@ def test_unknown_and_missing_fields_fail_closed(tmp_path: Path) -> None:
     )
     missing.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError, match="missing"):
-        load_representation_training_config(
-            missing, verify_external_files=False
-        )
+        load_representation_training_config(missing, verify_external_files=False)
 
 
 def test_every_checkpoint_step_must_have_a_durable_train_metric(
@@ -274,10 +358,12 @@ def test_every_checkpoint_step_must_have_a_durable_train_metric(
         base.replace(
             "save_every_optimizer_steps = 1",
             "save_every_optimizer_steps = 3",
-        ).replace(
+        )
+        .replace(
             "target_optimizer_steps = 3",
             "target_optimizer_steps = 4",
-        ).replace(
+        )
+        .replace(
             "total_steps = 3",
             "total_steps = 4",
         ),
@@ -351,9 +437,9 @@ def test_enabled_resume_requires_a_distributed_checkpoint_directory(
     resume_path = tmp_path / "resume-checkpoint"
     resume_path.mkdir()
     text = path.read_text(encoding="utf-8")
-    text = text.replace("[resume]\nenabled = false", "[resume]\nenabled = true").replace(
-        'checkpoint_path = "none"', f'checkpoint_path = "{resume_path}"'
-    )
+    text = text.replace(
+        "[resume]\nenabled = false", "[resume]\nenabled = true"
+    ).replace('checkpoint_path = "none"', f'checkpoint_path = "{resume_path}"')
     path.write_text(text, encoding="utf-8")
 
     config = load_representation_training_config(path)
@@ -381,10 +467,7 @@ def test_canonical_digest_ignores_toml_formatting_but_raw_digest_does_not(
         second, verify_external_files=False
     )
 
-    assert (
-        first_config.canonical_config_sha256
-        == second_config.canonical_config_sha256
-    )
+    assert first_config.canonical_config_sha256 == second_config.canonical_config_sha256
     assert first_config.source_toml_sha256 != second_config.source_toml_sha256
 
 

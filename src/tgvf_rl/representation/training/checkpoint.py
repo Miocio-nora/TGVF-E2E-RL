@@ -36,9 +36,14 @@ from .sampling import (
     SAMPLER_STATE_SCHEMA_VERSION,
     SameImageBatchSampler,
 )
+from .validation_identity import RepresentationValidationDataIdentity
 
 
 REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION = "representation-run-identity-v2"
+REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2 = (
+    REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
+)
+REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3 = "representation-run-identity-v3"
 REPRESENTATION_ACCUMULATION_SCHEMA_VERSION = "representation-accumulation-v1"
 REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION = "representation-adapter-contract-v1"
 REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION = (
@@ -46,6 +51,9 @@ REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION = (
 )
 REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION = (
     "representation-scheduler-identity-v1"
+)
+REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2 = (
+    "representation-scheduler-identity-v2"
 )
 REPRESENTATION_TRAINER_EXECUTION_SCHEMA_VERSION = "representation-trainer-execution-v1"
 REPRESENTATION_INITIALIZATION_SCHEMA_VERSION = "representation-initialization-v1"
@@ -267,6 +275,14 @@ class RepresentationSchedulerIdentity:
     def from_config(cls, config: object) -> RepresentationSchedulerIdentity:
         kind = getattr(config, "kind", None)
         kind_value = getattr(kind, "value", kind)
+        min_lr_ratio = getattr(config, "min_lr_ratio", None)
+        if min_lr_ratio is not None or kind_value == "historical_cosine":
+            return RepresentationSchedulerIdentityV2.project_lambda(
+                kind=kind_value,
+                total_steps=getattr(config, "total_steps", None),
+                warmup_steps=getattr(config, "warmup_steps", None),
+                min_lr_ratio=min_lr_ratio,
+            )
         return cls.project_lambda(
             kind=kind_value,
             total_steps=getattr(config, "total_steps", None),
@@ -276,6 +292,43 @@ class RepresentationSchedulerIdentity:
     @property
     def identity_sha256(self) -> str:
         return spec_identity_sha256(self)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RepresentationSchedulerIdentityV2(RepresentationSchedulerIdentity):
+    """Scheduler identity that binds the historical cosine minimum ratio."""
+
+    min_lr_ratio: float
+    schema_version: str = REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2
+
+    def __post_init__(self) -> None:
+        _non_empty_text(self.scheduler_type, field_name="scheduler_type")
+        if self.kind != "historical_cosine":
+            raise ValueError("scheduler identity v2 requires historical_cosine")
+        _positive_int(self.total_steps, field_name="total_steps")
+        _non_negative_int(self.warmup_steps, field_name="warmup_steps")
+        if self.warmup_steps >= self.total_steps:
+            raise ValueError("scheduler warmup_steps must be smaller than total_steps")
+        _finite_ratio(self.min_lr_ratio, field_name="min_lr_ratio")
+        if self.schema_version != REPRESENTATION_SCHEDULER_IDENTITY_SCHEMA_VERSION_V2:
+            raise ValueError("representation scheduler identity v2 schema mismatch")
+
+    @classmethod
+    def project_lambda(
+        cls,
+        *,
+        kind: str,
+        total_steps: int,
+        warmup_steps: int,
+        min_lr_ratio: float,
+    ) -> RepresentationSchedulerIdentityV2:
+        return cls(
+            scheduler_type="torch.optim.lr_scheduler.LambdaLR",
+            kind=kind,
+            total_steps=total_steps,
+            warmup_steps=warmup_steps,
+            min_lr_ratio=min_lr_ratio,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,6 +556,11 @@ class RepresentationRunIdentity:
     schema_version: str = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        self._validate_common_fields()
+        if self.schema_version != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2:
+            raise ValueError("representation run identity v2 schema mismatch")
+
+    def _validate_common_fields(self) -> None:
         _non_empty_text(self.run_id, field_name="run_id")
         if not isinstance(self.code, CodeIdentity):
             raise TypeError("code must be a CodeIdentity")
@@ -549,8 +607,6 @@ class RepresentationRunIdentity:
             != self.accumulation.data_parallel_world_size
         ):
             raise ValueError("sampler and accumulation world sizes must match")
-        if self.schema_version != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION:
-            raise ValueError("representation run identity schema mismatch")
 
     @property
     def identity_sha256(self) -> str:
@@ -571,6 +627,44 @@ class RepresentationRunIdentity:
     @property
     def scheduler_identity_sha256(self) -> str | None:
         return None if self.scheduler is None else self.scheduler.identity_sha256
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RepresentationRunIdentityV3(RepresentationRunIdentity):
+    """Run identity that also freezes validation data and the planned horizon."""
+
+    validation_identity: RepresentationValidationDataIdentity
+    planned_target_optimizer_steps: int
+    schema_version: str = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3
+
+    def __post_init__(self) -> None:
+        RepresentationRunIdentity._validate_common_fields(self)
+        if not isinstance(
+            self.validation_identity,
+            RepresentationValidationDataIdentity,
+        ):
+            raise TypeError(
+                "validation_identity must be a RepresentationValidationDataIdentity"
+            )
+        self.validation_identity.__post_init__()
+        if (
+            self.validation_identity.train_retained_manifest_sha256
+            != self.data_manifest_sha256
+        ):
+            raise ValueError(
+                "validation identity train manifest differs from run identity"
+            )
+        _positive_int(
+            self.planned_target_optimizer_steps,
+            field_name="planned_target_optimizer_steps",
+        )
+        if (
+            self.scheduler is not None
+            and self.planned_target_optimizer_steps > self.scheduler.total_steps
+        ):
+            raise ValueError("planned optimizer steps exceed the scheduler horizon")
+        if self.schema_version != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3:
+            raise ValueError("representation run identity v3 schema mismatch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -601,8 +695,7 @@ class RepresentationAdapterArtifactManifest:
     schema_version: str = REPRESENTATION_ADAPTER_ARTIFACT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_identity, RepresentationRunIdentity):
-            raise TypeError("run_identity must be a RepresentationRunIdentity")
+        _validate_run_identity(self.run_identity)
         _sha256(self.run_identity_sha256, field_name="run_identity_sha256")
         if self.run_identity_sha256 != self.run_identity.identity_sha256:
             raise ValueError("artifact run identity digest mismatch")
@@ -648,8 +741,7 @@ class RepresentationTrainingCheckpointManifest:
     schema_version: str = REPRESENTATION_TRAINING_CHECKPOINT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_identity, RepresentationRunIdentity):
-            raise TypeError("run_identity must be a RepresentationRunIdentity")
+        _validate_run_identity(self.run_identity)
         _sha256(self.run_identity_sha256, field_name="run_identity_sha256")
         if self.run_identity_sha256 != self.run_identity.identity_sha256:
             raise ValueError("checkpoint run identity digest mismatch")
@@ -1133,10 +1225,14 @@ def _validate_runtime_identity(
 def _validate_run_identity(identity: object) -> None:
     if not isinstance(identity, RepresentationRunIdentity):
         raise TypeError("run identity must be a RepresentationRunIdentity")
-    if (
-        getattr(identity, "schema_version", None)
-        != REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION
-    ):
+    schema_version = getattr(identity, "schema_version", None)
+    if type(identity) is RepresentationRunIdentity:
+        expected_schema_version = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V2
+    elif type(identity) is RepresentationRunIdentityV3:
+        expected_schema_version = REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3
+    else:
+        raise TypeError("unsupported representation run identity type")
+    if schema_version != expected_schema_version:
         raise ValueError("representation run identity schema mismatch")
     identity.code.__post_init__()
     identity.model.__post_init__()
@@ -1150,6 +1246,8 @@ def _validate_run_identity(identity: object) -> None:
     identity.trainer_execution.__post_init__()
     identity.initialization.__post_init__()
     identity.sampler_contract.__post_init__()
+    if isinstance(identity, RepresentationRunIdentityV3):
+        identity.validation_identity.__post_init__()
     identity.__post_init__()
 
 
@@ -1382,6 +1480,8 @@ def _validate_scheduler_identity(
                 kind_value == identity.kind
                 and getattr(config, "total_steps", None) == identity.total_steps
                 and getattr(config, "warmup_steps", None) == identity.warmup_steps
+                and getattr(config, "min_lr_ratio", None)
+                == getattr(identity, "min_lr_ratio", None)
             ):
                 matched = True
                 break
@@ -1628,6 +1728,11 @@ def _positive_finite_float(value: object, *, field_name: str) -> None:
 def _non_negative_finite_float(value: object, *, field_name: str) -> None:
     if not isinstance(value, float) or not math.isfinite(value) or value < 0:
         raise ValueError(f"{field_name} must be an explicit non-negative finite float")
+
+
+def _finite_ratio(value: object, *, field_name: str) -> None:
+    if not isinstance(value, float) or not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError(f"{field_name} must be an explicit finite float in [0,1]")
 
 
 def _runtime_float(value: object, *, field_name: str) -> float:

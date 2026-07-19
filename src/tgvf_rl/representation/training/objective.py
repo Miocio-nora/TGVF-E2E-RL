@@ -8,16 +8,22 @@ import math
 
 import torch
 
-from .losses import EvidenceReadabilityLossTerms, SameImageMatrixCELossTerms
+from .losses import (
+    EvidenceReadabilityLossTerms,
+    HistoricalNormLossTerms,
+    SameImageMatrixCELossTerms,
+)
 
 
 REPRESENTATION_OBJECTIVE_SCHEMA_VERSION = "representation_objective_v1"
+REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V2 = "representation_objective_v2"
 
 
 class RepresentationObjectiveKind(str, Enum):
     """Scientifically distinct representation objective identities."""
 
     MATRIX_CE_AND_L_GEN = "matrix_ce_and_l_gen"
+    MATRIX_CE_L_GEN_AND_NORM = "matrix_ce_l_gen_and_norm"
     MATRIX_CE_ONLY_ABLATION = "matrix_ce_only_ablation"
 
 
@@ -45,8 +51,52 @@ class RepresentationObjectiveConfig:
         if self.kind is RepresentationObjectiveKind.MATRIX_CE_AND_L_GEN:
             if self.l_gen_weight <= 0:
                 raise ValueError("the baseline requires a nonzero L_gen weight")
-        elif self.l_gen_weight != 0:
-            raise ValueError("the Matrix-CE-only ablation requires L_gen weight zero")
+        elif self.kind is RepresentationObjectiveKind.MATRIX_CE_ONLY_ABLATION:
+            if self.l_gen_weight != 0:
+                raise ValueError(
+                    "the Matrix-CE-only ablation requires L_gen weight zero"
+                )
+        else:
+            raise ValueError("objective v1 does not support the norm-aware v2 kind")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RepresentationObjectiveConfigV2(RepresentationObjectiveConfig):
+    """Norm-aware objective identity accepted after RPI-20260719-NORM-EVAL.
+
+    The baseline fixes the historical norm weight at ``0.1`` and requires
+    nonzero readability.  Historical Matrix-CE-only/no-norm fixtures remain
+    represented by objective v1; v2 intentionally exposes no no-norm option.
+    """
+
+    norm_weight: float
+    schema_version: str = REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V2
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, str) or not self.identity.strip():
+            raise ValueError("representation objective identity must be non-empty")
+        if not isinstance(self.kind, RepresentationObjectiveKind):
+            raise TypeError("representation objective kind must be explicit")
+        if self.schema_version != REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V2:
+            raise ValueError("representation objective v2 schema mismatch")
+        _validate_weight(self.matrix_ce_weight, field_name="matrix_ce_weight")
+        _validate_weight(self.l_gen_weight, field_name="l_gen_weight")
+        _validate_weight(self.norm_weight, field_name="norm_weight")
+        if self.matrix_ce_weight <= 0:
+            raise ValueError("Matrix-CE weight must be greater than zero")
+        if self.kind is not RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM:
+            raise ValueError(
+                "objective v2 requires the matrix_ce_l_gen_and_norm baseline"
+            )
+        if self.l_gen_weight <= 0:
+            raise ValueError("the v2 baseline requires a nonzero L_gen weight")
+        if self.norm_weight != 0.1:
+            raise ValueError("the v2 baseline requires historical norm weight 0.1")
+
+
+RepresentationObjectiveConfigLike = (
+    RepresentationObjectiveConfig | RepresentationObjectiveConfigV2
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +111,9 @@ class RepresentationObjectiveValue:
     weighted_l_gen: torch.Tensor
     matrix_valid_row_count: int
     l_gen_sample_count: int
+    norm_loss: torch.Tensor | None = None
+    weighted_norm: torch.Tensor | None = None
+    norm_sample_count: int = 0
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -75,12 +128,26 @@ class RepresentationObjectiveValue:
                 raise ValueError(f"{field_name} must be a scalar tensor")
         if self.matrix_valid_row_count <= 0 or self.l_gen_sample_count <= 0:
             raise ValueError("representation objective counts must be positive")
+        if isinstance(self.config, RepresentationObjectiveConfigV2):
+            for field_name in ("norm_loss", "weighted_norm"):
+                value = getattr(self, field_name)
+                if not isinstance(value, torch.Tensor) or value.ndim != 0:
+                    raise ValueError(f"{field_name} must be a scalar tensor for v2")
+            if self.norm_sample_count <= 0:
+                raise ValueError("representation objective norm count must be positive")
+        elif (
+            self.norm_loss is not None
+            or self.weighted_norm is not None
+            or self.norm_sample_count != 0
+        ):
+            raise ValueError("representation objective v1 cannot contain norm terms")
 
 
 def compose_reference_representation_objective(
     matrix_terms: SameImageMatrixCELossTerms,
     l_gen_terms: EvidenceReadabilityLossTerms,
-    config: RepresentationObjectiveConfig,
+    config: RepresentationObjectiveConfigLike,
+    norm_terms: HistoricalNormLossTerms | None = None,
 ) -> RepresentationObjectiveValue:
     """Compose one single-process logical batch without hidden scaling.
 
@@ -93,8 +160,10 @@ def compose_reference_representation_objective(
         raise TypeError("matrix_terms must be SameImageMatrixCELossTerms")
     if not isinstance(l_gen_terms, EvidenceReadabilityLossTerms):
         raise TypeError("l_gen_terms must be EvidenceReadabilityLossTerms")
-    if not isinstance(config, RepresentationObjectiveConfig):
-        raise TypeError("config must be RepresentationObjectiveConfig")
+    if not isinstance(
+        config, (RepresentationObjectiveConfig, RepresentationObjectiveConfigV2)
+    ):
+        raise TypeError("config must be a representation objective config")
     if matrix_terms.valid_row_count <= 0:
         raise ValueError("representation objective requires valid Matrix-CE rows")
     if l_gen_terms.sample_count <= 0:
@@ -103,6 +172,15 @@ def compose_reference_representation_objective(
         raise ValueError(
             "Matrix-CE rows and L_gen samples must come from the same logical batch"
         )
+    if isinstance(config, RepresentationObjectiveConfigV2):
+        if not isinstance(norm_terms, HistoricalNormLossTerms):
+            raise TypeError("objective v2 requires HistoricalNormLossTerms")
+        if norm_terms.sample_count != matrix_terms.valid_row_count:
+            raise ValueError(
+                "Matrix-CE rows and norm samples must come from the same logical batch"
+            )
+    elif norm_terms is not None:
+        raise ValueError("objective v1 cannot compose historical norm terms")
     _validate_scalar_numerator(matrix_terms.numerator, name="Matrix-CE numerator")
     _validate_scalar_numerator(l_gen_terms.numerator, name="L_gen numerator")
     if (
@@ -110,12 +188,29 @@ def compose_reference_representation_objective(
         or matrix_terms.numerator.dtype != l_gen_terms.numerator.dtype
     ):
         raise ValueError("Matrix-CE and L_gen numerators must share device and dtype")
+    if norm_terms is not None:
+        _validate_scalar_numerator(norm_terms.numerator, name="norm numerator")
+        if (
+            norm_terms.numerator.device != matrix_terms.numerator.device
+            or norm_terms.numerator.dtype != matrix_terms.numerator.dtype
+        ):
+            raise ValueError(
+                "Matrix-CE, L_gen, and norm numerators must share device and dtype"
+            )
 
     matrix_ce = matrix_terms.numerator / matrix_terms.valid_row_count
     l_gen = l_gen_terms.numerator / l_gen_terms.sample_count
     weighted_matrix = matrix_ce * config.matrix_ce_weight
     weighted_l_gen = l_gen * config.l_gen_weight
+    norm_loss = (
+        None if norm_terms is None else norm_terms.numerator / norm_terms.sample_count
+    )
+    weighted_norm = (
+        None if norm_loss is None else norm_loss * config.norm_weight  # type: ignore[union-attr]
+    )
     total = weighted_matrix + weighted_l_gen
+    if weighted_norm is not None:
+        total = total + weighted_norm
     return RepresentationObjectiveValue(
         config=config,
         total_loss=total,
@@ -125,6 +220,9 @@ def compose_reference_representation_objective(
         weighted_l_gen=weighted_l_gen,
         matrix_valid_row_count=matrix_terms.valid_row_count,
         l_gen_sample_count=l_gen_terms.sample_count,
+        norm_loss=norm_loss,
+        weighted_norm=weighted_norm,
+        norm_sample_count=0 if norm_terms is None else norm_terms.sample_count,
     )
 
 
