@@ -880,6 +880,137 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   promoted training, a contextual-provider comparison, single-device/FSDP
   numerical parity, or distributed restore/resumed-next-step parity.
 
+### RP-11-QWEN3-REPRESENTATION-FSDP2-EMBEDDING-K4-RESUME
+
+- Cell/matrix ID and mandatory/diagnostic class: `RP-11`; mandatory bounded
+  real-Qwen3 representation-phase K=4/GA=4 continuous-versus-process-teardown
+  resume smoke for the target-token-embedding provider.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: user-accepted
+  `I8H-20260719`, `RPI-20260719-NORM-EVAL`, `AD-05G`, `AD-06`, and `AD-07`;
+  runtime commit `41fb07d1c8bfdaf0388115de6062b1cc8732bcc0`; exact configs commit
+  `69534f2440c58bb623c26d4811b76bb903d1c754`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: do an uninterrupted two-update run and an otherwise identical run
+  stopped after update 1, fully torn down, reconstructed, restored, and advanced
+  through update 2 produce exact Adapter tensors, recorded optimizer/scheduler/
+  sampler/RNG/shard state, and scientific train/validation records?
+- Baseline and exact output path: corrected `RP-10` plus `346 passed` CPU tests.
+  New immutable lanes are
+  `artifacts/representation/RP-11-qwen3-representation-fsdp2-embedding-k4-resume/continuous/`
+  and `.../split/`; comparison output is `resume_comparison.json` in the RP-11
+  root. No RP-10 artifact is an initialization.
+- Model and processor identity: stable local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, Qwen3-VL-8B-Thinking,
+  tokenizer length `151669`, chat-template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  BF16, SDPA, local-only, no remote code and no tokenizer resize.
+- Representation checkpoint identity: fresh TGVF Adapter seed `20260719`, no
+  source artifact or legacy checkpoint; DCP v2, planned optimizer target 2,
+  historical scheduler horizon 2,000, checkpoint every update, keep-last 2.
+- N/A fields and justification: no policy/reference rollout, behavior logprob,
+  reward, GRPO, SDPO teacher, answer judge, vLLM sampling, KV replay, or policy
+  replay exists in this representation-only smoke.
+- Policy/reference initialization: N/A; original Qwen3 is frozen and only the
+  freshly initialized TGVF Adapter is trainable.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  representation updates with no intervening policy update.
+- Code commit and worktree state: runtime code
+  `41fb07d1c8bfdaf0388115de6062b1cc8732bcc0`, code-identity paths clean;
+  config commit `69534f2440c58bb623c26d4811b76bb903d1c754`. Launch HEAD and final
+  documentation-only state are recorded after execution.
+- Repository adapter/patch surface and hash: representation-training tree
+  `5e2b227c9b2db7ec7c80ff57be68e10f6d243e03`; Qwen tree
+  `6ae2676f7f08949f2425d736fe4d54751d53f69f`. Continuous/split-fresh/
+  split-resume TOML source SHA256 values are respectively
+  `7a5895c8c81173fecbe536fb5e791b1858a9ff75868a33ac872f023f469d4fc9`,
+  `30024f5c0acc46352a902e0105b8eb8e18c0563fb3b543eec1eca70b8e1ded43`,
+  and `ea2bbc9af5651de19c4fb2b8627fbf3979a4bbc4fdcd383e22445b3eadf819ea`;
+  canonical SHA256 values are `3981efdabc5eb1f848b48c89987b94df7a877f2663d17fda7216840ab909d887`,
+  `100427801783e61f68e2cdd42274898d62bf2f1d7c214c0e091228a85aeb383f`,
+  and `5f78964d39b475f0dd8ddbfb4b2a7fc7d9cc211e4816368f751334acbad741ba`.
+- Dataset/manifest, hashes, sample rule, and n: smoke train/validation JSONL
+  source SHA256 `beb1b8a7c3f97811e8a8f9b0734d7484cc5de4d31861fe09b61342b3c88b61f2`/
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`;
+  retained manifest `14b92fbfa061bcbfabd2790aaeec04dc429cb4d7e756f38d68be54d71da708f6`/
+  `e18eb856f4c8b03c03a2f2a683a8267bb0581498de05fed403c4246e5cca3a13`;
+  8 rows and two complete K=4 groups per split, rank 0/1 owns one group,
+  sampler seeds 71/73. Empty split-overlap report SHA256 is
+  `c23fe08408640a95d0fe9c482228908bc35e7816021e51b029cc6c9d6979c218`;
+  validation-data identity is
+  `fff7635f0e873bb45c8f6dc08e788e3bc1f33246d9751fb1842f69e1139591a0`.
+- Native prompt/tool schema hash: explicit smoke-only prompt SHA256
+  `ea2fb166448a2fb7af33017da635d85fe717265987e4c7073b588c443670ffd3`;
+  native `tgvf_focus_tool` schema SHA256
+  `1a0e7bc78b134c5f6d1258d894fa6cf130bb09226c59caffd6f1d0a871d2a361`.
+- Chat-template/token-fixture hash and token-ownership masks: accepted Qwen3
+  golden SHA256 `1df319f994e31db398d008880b0678afb56e1b4390123957e56f25ba9c165a68`;
+  evidence-description-only labels, all visual/template positions `-100`, and
+  no tokenizer growth.
+- D/DeepStack/position/mask identity: native main `D`, ordered branch layers
+  `(8,16,24)`, family-native M-RoPE, original-image post-D key blocking, and
+  one atomic main-plus-all-branches candidate observation.
+- Observation materialization/artifact identity used by all replays: no policy
+  replay; Matrix scoring and differentiable recomputation consume the same
+  in-update candidate observations. Resume binds exact validation image bytes,
+  metrics prefix/cursor, sampler and RNG state.
+- RL framework/version/environment lock: Python `3.12.3`, Torch `2.9.0+cu128`,
+  CUDA `12.8`, NCCL `2.27.5`, Transformers `4.57.6`, vLLM `0.12.0`, veRL
+  `0.9.0.dev0`, Pillow `12.3.0`; `requirements/compatibility.lock` SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: same-image diagonal-label Matrix CE
+  is a global valid-row mean; `L_gen` is the global sample mean of per-sample
+  causal evidence-token mean NLL; historical Norm is the global sample mean of
+  `mean_t(log((||D_t||+1e-6)/clamp_min(mean_s||V_s||,1e-6))^2)`, with the
+  three-branch mean averaged equally with main. Weights are `1.0/1.0/0.1`;
+  manifold is exactly zero. AdamW is `1e-4`, `(0.9,0.999)`, epsilon `1e-8`,
+  decay `.01`; clip `1.0`; cosine warmup 100, floor ratio `.1`, horizon 2,000.
+- Rollout/replay forward mode and adapter dropout/RNG contract: Qwen frozen and
+  eval, Adapter dropout zero, `use_cache=false`, deterministic algorithms,
+  TF32 off, cuDNN benchmark off, seed `20260719`, CUBLAS `:4096:8`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: token sampling/logprobs N/A;
+  deterministic same-image sampler seeds 71/73.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 weights/forward, FP32 reduction,
+  no quantization/KV/rollout TP, SDPA, FSDP2 `fsdp=[2]`, reshard after forward,
+  no offload.
+- Logit/logprob/loss/gradient parity tolerances: Adapter manifests/tensors use
+  exact equality; validated DCP model/optimizer/scheduler/sampler/RNG/shard
+  digests and all train/validation scientific records must match exactly.
+  Only timing and allocator evidence is excluded. Split step-1 DCP payload must
+  be restored and content-digest checked; final DCP comparison is sidecar-state
+  exact and does not claim a second independent payload restore.
+- World size, microbatch, accumulation, and global batch: world 2, local K=4,
+  four accumulation microsteps; 32 global rows/eight `4x4` matrices per update,
+  64 rows/16 matrices over two updates; validation every update.
+- GPUs: physical 2 `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, NVIDIA B200, logical 0/1.
+  Preflight showed 0 MiB used and 182,642 MiB free on each; no other GPU may
+  be visible.
+- Start/end timestamps, elapsed time, and session/process identity: `PENDING`,
+  recorded per invocation; each invocation has a 3,600-second wall limit.
+- Actual GPU-hours and peak scratch use: `PENDING`; train-step elapsed time and
+  allocated/reserved/peak CUDA memory are emitted per rank.
+- Command: continuous:
+  `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 3600s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/smoke/representation_qwen3_embedding_rp11_continuous.toml`;
+  split step 1: same environment/torchrun with
+  `representation_qwen3_embedding_rp11_split_fresh.toml --stop-after-global-step 1`;
+  split resume: same environment/torchrun with
+  `representation_qwen3_embedding_rp11_split_resume.toml`; then
+  `.venv312/bin/python -m tgvf_rl.cli compare-representation-resume` with both
+  exact artifacts, step-2 checkpoints, and metrics paths recorded above.
+- Outputs: `continuous/{adapter.pt,metrics.jsonl,checkpoints/,run.log}`;
+  `split/{adapter.pt,metrics.jsonl,checkpoints/,step1.log,resume.log}`; root
+  `resume_comparison.json`. File hashes are `PENDING`.
+- Scorer/parser identity: no answer scorer; strict config/native pipeline,
+  objective/evaluation, DCP/history, and resume comparator at runtime commit.
+- Metrics: `PENDING`. PASS requires two finite train/validation events per lane,
+  expected LR `1e-6` then `2e-6`, nonzero Adapter gradients, unchanged tokenizer,
+  successful fresh-process restore, and exact comparator result.
+- Conclusion: `PENDING`; this is a bounded execution/resume proof, not a
+  production prompt/data-quality result or promoted representation artifact.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
