@@ -320,33 +320,44 @@ def test_model_image_max_pixels_is_optional_and_exposed_by_validation(
     assert capped_model_payload["image_max_pixels"] == 262144
 
 
-def test_direct_groups_select_versioned_accumulation_identity_and_reject_accumulation(
+def test_direct_groups_select_versioned_accumulation_identity_and_partition_evenly(
     tmp_path: Path,
 ) -> None:
     path = _upgrade_config_to_v2(_write_config(tmp_path))
     text = path.read_text(encoding="utf-8").replace(
         "gradient_accumulation_steps = 2",
-        "gradient_accumulation_steps = 1\ngroups_per_rank_per_optimizer_step = 3",
+        "gradient_accumulation_steps = 2\ngroups_per_rank_per_optimizer_step = 4",
     )
     path.write_text(text, encoding="utf-8")
 
     config = load_representation_training_config(path)
     accumulation = config.accumulation_identity
 
-    assert config.training.groups_per_rank_per_optimizer_step == 3
+    assert config.training.groups_per_rank_per_optimizer_step == 4
     assert type(accumulation) is RepresentationAccumulationIdentityV2
-    assert accumulation.groups_per_rank_per_optimizer_step == 3
-    assert accumulation.gradient_accumulation_steps == 1
+    assert accumulation.groups_per_rank_per_optimizer_step == 4
+    assert accumulation.gradient_accumulation_steps == 2
+    assert accumulation.groups_per_accumulation_microstep == 2
     assert accumulation.schema_version == REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
 
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "gradient_accumulation_steps = 1",
-            "gradient_accumulation_steps = 2",
+            "groups_per_rank_per_optimizer_step = 4",
+            "groups_per_rank_per_optimizer_step = 3",
         ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="requires.*gradient_accumulation_steps = 1"):
+    with pytest.raises(ValueError, match="evenly divisible"):
+        load_representation_training_config(path, verify_external_files=False)
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "groups_per_rank_per_optimizer_step = 3",
+            "groups_per_rank_per_optimizer_step = 2",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="more than one group per accumulation"):
         load_representation_training_config(path, verify_external_files=False)
 
 

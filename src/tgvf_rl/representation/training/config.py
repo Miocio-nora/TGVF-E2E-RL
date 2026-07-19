@@ -497,14 +497,25 @@ class RepresentationTrainingLoopConfig:
             _positive_int(
                 getattr(self, field_name), field_name=f"training.{field_name}"
             )
-        if (
-            self.groups_per_rank_per_optimizer_step > 1
-            and self.gradient_accumulation_steps != 1
-        ):
-            raise ValueError(
-                "training.groups_per_rank_per_optimizer_step > 1 requires "
-                "training.gradient_accumulation_steps = 1"
-            )
+        if self.groups_per_rank_per_optimizer_step > 1:
+            if (
+                self.groups_per_rank_per_optimizer_step
+                % self.gradient_accumulation_steps
+                != 0
+            ):
+                raise ValueError(
+                    "training.groups_per_rank_per_optimizer_step must be evenly "
+                    "divisible by training.gradient_accumulation_steps"
+                )
+            if (
+                self.groups_per_rank_per_optimizer_step
+                // self.gradient_accumulation_steps
+                <= 1
+            ):
+                raise ValueError(
+                    "direct multi-group execution requires more than one group "
+                    "per accumulation microstep"
+                )
 
     def accumulation_identity(
         self, *, world_size: int

@@ -8,6 +8,7 @@ import pytest
 import torch
 from torch import nn
 
+import tgvf_rl.representation.training.trainer as trainer_module
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
@@ -360,7 +361,19 @@ def test_trainer_executes_accumulated_optimizer_step_and_keeps_qwen_frozen(
     assert all(parameter.grad is None for parameter in qwen.parameters())
 
 
-def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
+@pytest.mark.parametrize(
+    ("gradient_accumulation_steps", "expected_window_sizes", "expected_qwen_batches"),
+    (
+        (1, (4,), (32, 32)),
+        (2, (2, 2), (16, 16, 16, 16)),
+    ),
+)
+def test_trainer_partitions_four_direct_groups_without_changing_global_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+    gradient_accumulation_steps: int,
+    expected_window_sizes: tuple[int, ...],
+    expected_qwen_batches: tuple[int, ...],
+) -> None:
     samples = tuple(
         _sample(image, member) for image in ("a", "b", "c", "d") for member in range(4)
     )
@@ -389,7 +402,7 @@ def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
         group_builder=_GroupBuilder(),
         objective=_objective_v2(),
         accumulation=RepresentationAccumulationIdentityV2(
-            gradient_accumulation_steps=1,
+            gradient_accumulation_steps=gradient_accumulation_steps,
             data_parallel_world_size=1,
             groups_per_rank_per_optimizer_step=4,
         ),
@@ -401,6 +414,32 @@ def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
             require_all_adapter_gradients=True,
         ),
     )
+    original_score = trainer_module.score_streaming_same_image_groups
+    original_backward = trainer_module.backward_streaming_same_image_groups
+    score_windows: list[int] = []
+    backward_windows: list[int] = []
+    normalization_rows: list[int] = []
+
+    def record_score(family_adapter, model, groups, **kwargs):
+        score_windows.append(len(groups))
+        normalization_rows.append(kwargs["normalization"].matrix_valid_rows)
+        return original_score(family_adapter, model, groups, **kwargs)
+
+    def record_backward(family_adapter, model, groups, scores, **kwargs):
+        backward_windows.append(len(groups))
+        normalization_rows.append(kwargs["normalization"].matrix_valid_rows)
+        return original_backward(family_adapter, model, groups, scores, **kwargs)
+
+    monkeypatch.setattr(
+        trainer_module,
+        "score_streaming_same_image_groups",
+        record_score,
+    )
+    monkeypatch.setattr(
+        trainer_module,
+        "backward_streaming_same_image_groups",
+        record_backward,
+    )
 
     metrics = trainer.train_step()
 
@@ -409,7 +448,10 @@ def test_trainer_executes_four_direct_groups_in_one_optimizer_step() -> None:
     assert metrics.global_sample_count == 16
     assert len(metrics.local_sample_ids) == 16
     assert len(set(metrics.local_sample_ids)) == 16
-    assert metrics.local_qwen_forward_batch_sizes == (32, 32)
+    assert score_windows == list(expected_window_sizes)
+    assert backward_windows == list(expected_window_sizes)
+    assert normalization_rows == [16] * (2 * len(expected_window_sizes))
+    assert metrics.local_qwen_forward_batch_sizes == expected_qwen_batches
     assert metrics.global_norm_loss is not None
     assert metrics.gradient_norm_before_clip > 0
 

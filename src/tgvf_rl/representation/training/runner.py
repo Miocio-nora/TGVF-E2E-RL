@@ -390,10 +390,9 @@ def _run_initialized(
         metrics, performance = measure_distributed_train_step(
             trainer.train_step,
             device=device,
-            global_matrix_count=(
-                config.training.gradient_accumulation_steps
-                * config.training.groups_per_rank_per_optimizer_step
-                * world_size
+            global_matrix_count=_optimizer_step_global_matrix_count(
+                config,
+                world_size=world_size,
             ),
         )
         all_sample_ids = _gather_string_tuples(metrics.local_sample_ids)
@@ -563,6 +562,18 @@ def _run_initialized(
         {"event": "complete", **result},
     )
     return result if rank == 0 else None
+
+
+def _optimizer_step_global_matrix_count(
+    config: RepresentationTrainingConfig,
+    *,
+    world_size: int,
+) -> int:
+    """Return exact independent same-image matrices in one optimizer step."""
+
+    groups = config.training.groups_per_rank_per_optimizer_step
+    per_rank = config.training.gradient_accumulation_steps if groups == 1 else groups
+    return per_rank * world_size
 
 
 def _validate_invocation_stop(

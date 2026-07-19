@@ -137,13 +137,27 @@ class RepresentationAccumulationIdentityV2(RepresentationAccumulationIdentity):
                 "representation accumulation v2 requires more than one direct "
                 "group per rank per optimizer step"
             )
-        if self.gradient_accumulation_steps != 1:
+        if (
+            self.groups_per_rank_per_optimizer_step % self.gradient_accumulation_steps
+            != 0
+        ):
             raise ValueError(
-                "multiple direct groups per rank per optimizer step require "
-                "gradient_accumulation_steps=1"
+                "groups_per_rank_per_optimizer_step must be evenly divisible by "
+                "gradient_accumulation_steps"
+            )
+        if self.groups_per_accumulation_microstep <= 1:
+            raise ValueError(
+                "representation accumulation v2 requires more than one direct "
+                "group per accumulation microstep"
             )
         if self.schema_version != REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2:
             raise ValueError("representation accumulation v2 schema mismatch")
+
+    @property
+    def groups_per_accumulation_microstep(self) -> int:
+        return (
+            self.groups_per_rank_per_optimizer_step // self.gradient_accumulation_steps
+        )
 
 
 def _validate_accumulation_identity(identity: object) -> None:

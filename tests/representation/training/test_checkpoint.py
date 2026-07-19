@@ -285,11 +285,18 @@ def test_accumulation_v2_binds_direct_groups_without_changing_v1_type(
         data_parallel_world_size=1,
         groups_per_rank_per_optimizer_step=3,
     )
+    partitioned = RepresentationAccumulationIdentityV2(
+        gradient_accumulation_steps=2,
+        data_parallel_world_size=1,
+        groups_per_rank_per_optimizer_step=4,
+    )
 
     assert type(legacy) is RepresentationAccumulationIdentity
     assert legacy.schema_version == REPRESENTATION_ACCUMULATION_SCHEMA_VERSION
     assert type(direct) is RepresentationAccumulationIdentityV2
     assert direct.schema_version == REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2
+    assert partitioned.groups_per_accumulation_microstep == 2
+    assert partitioned.identity_sha256 != direct.identity_sha256
     assert direct.identity_sha256 != legacy.identity_sha256
     assert (
         direct.identity_sha256
@@ -305,11 +312,17 @@ def test_accumulation_v2_binds_direct_groups_without_changing_v1_type(
             data_parallel_world_size=1,
             groups_per_rank_per_optimizer_step=1,
         )
-    with pytest.raises(ValueError, match="gradient_accumulation_steps=1"):
+    with pytest.raises(ValueError, match="evenly divisible"):
         RepresentationAccumulationIdentityV2(
             gradient_accumulation_steps=2,
             data_parallel_world_size=1,
             groups_per_rank_per_optimizer_step=3,
+        )
+    with pytest.raises(ValueError, match="more than one direct group per accumulation"):
+        RepresentationAccumulationIdentityV2(
+            gradient_accumulation_steps=2,
+            data_parallel_world_size=1,
+            groups_per_rank_per_optimizer_step=2,
         )
 
     adapter = _adapter(23)
@@ -323,7 +336,7 @@ def test_accumulation_v2_binds_direct_groups_without_changing_v1_type(
             initialization_seed=23,
             with_scheduler=False,
         ),
-        accumulation=direct,
+        accumulation=partitioned,
     )
     path = tmp_path / "direct-groups-training.pt"
     save_representation_training_checkpoint_atomic(
@@ -333,7 +346,7 @@ def test_accumulation_v2_binds_direct_groups_without_changing_v1_type(
         scheduler=None,
         sampler=sampler,
         run_identity=identity,
-        accumulation=direct,
+        accumulation=partitioned,
         trainer_execution=identity.trainer_execution,
         global_step=0,
     )
@@ -342,7 +355,7 @@ def test_accumulation_v2_binds_direct_groups_without_changing_v1_type(
     assert type(loaded.manifest.run_identity.accumulation) is (
         RepresentationAccumulationIdentityV2
     )
-    assert loaded.manifest.run_identity.accumulation == direct
+    assert loaded.manifest.run_identity.accumulation == partitioned
 
 
 def test_run_identity_v3_binds_validation_and_planned_horizon_without_breaking_v2(

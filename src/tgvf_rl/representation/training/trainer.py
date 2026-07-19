@@ -233,15 +233,22 @@ class RepresentationTrainer:
             "groups_per_rank_per_optimizer_step",
             1,
         )
-        if direct_groups > 1 and self.accumulation.gradient_accumulation_steps != 1:
-            raise RuntimeError(
-                "direct multi-group execution requires gradient accumulation one"
-            )
-        group_count = (
-            direct_groups
-            if direct_groups > 1
-            else self.accumulation.gradient_accumulation_steps
-        )
+        accumulation_steps = self.accumulation.gradient_accumulation_steps
+        if direct_groups > 1:
+            if direct_groups % accumulation_steps != 0:
+                raise RuntimeError(
+                    "direct groups must divide evenly across accumulation steps"
+                )
+            groups_per_microstep = direct_groups // accumulation_steps
+            if groups_per_microstep <= 1:
+                raise RuntimeError(
+                    "direct multi-group execution requires more than one group "
+                    "per accumulation microstep"
+                )
+            group_count = direct_groups
+        else:
+            groups_per_microstep = 1
+            group_count = accumulation_steps
         batch_indices = tuple(self.sampler.next_batch() for _ in range(group_count))
         if any(not indices for indices in batch_indices):
             raise RuntimeError("representation sampler emitted an empty batch")
@@ -270,62 +277,73 @@ class RepresentationTrainer:
         local_sample_ids: list[str] = []
         local_qwen_forward_batch_sizes: list[int] = []
         if direct_groups > 1:
-            groups: list[SameImageReadoutGroup] = []
-            expected_ids_by_group: list[tuple[str, ...]] = []
-            with self._autocast_context():
-                for indices, collective_candidate_count in zip(
-                    batch_indices,
-                    collective_candidate_counts,
-                    strict=True,
+            for window_start in range(0, group_count, groups_per_microstep):
+                window_end = window_start + groups_per_microstep
+                window_indices = batch_indices[window_start:window_end]
+                window_candidate_counts = collective_candidate_counts[
+                    window_start:window_end
+                ]
+                groups: list[SameImageReadoutGroup] = []
+                expected_ids_by_group: list[tuple[str, ...]] = []
+                with self._autocast_context():
+                    for indices, collective_candidate_count in zip(
+                        window_indices,
+                        window_candidate_counts,
+                        strict=True,
+                    ):
+                        logical_samples = tuple(
+                            self.samples[index] for index in indices
+                        )
+                        group = self.group_builder(
+                            logical_samples,
+                            self.adapter,
+                            collective_candidate_count=collective_candidate_count,
+                        )
+                        expected_ids = tuple(
+                            sample.sample_id for sample in logical_samples
+                        )
+                        _assert_built_group_identity(
+                            group,
+                            expected_ids=expected_ids,
+                            collective_candidate_count=collective_candidate_count,
+                        )
+                        groups.append(group)
+                        expected_ids_by_group.append(expected_ids)
+                    scores = score_streaming_same_image_groups(
+                        self.family_adapter,
+                        self.qwen_model,
+                        groups,
+                        objective=self.objective,
+                        normalization=normalization,
+                    )
+                    backward_metrics = backward_streaming_same_image_groups(
+                        self.family_adapter,
+                        self.qwen_model,
+                        groups,
+                        scores,
+                        objective=self.objective,
+                        normalization=normalization,
+                    )
+                window_rows = sum(len(indices) for indices in window_indices)
+                if (
+                    backward_metrics.local_row_count != window_rows
+                    or backward_metrics.local_sample_count != window_rows
                 ):
-                    logical_samples = tuple(self.samples[index] for index in indices)
-                    group = self.group_builder(
-                        logical_samples,
-                        self.adapter,
-                        collective_candidate_count=collective_candidate_count,
+                    raise RuntimeError(
+                        "direct multi-group execution returned incorrect local counts"
                     )
-                    expected_ids = tuple(sample.sample_id for sample in logical_samples)
-                    _assert_built_group_identity(
-                        group,
-                        expected_ids=expected_ids,
-                        collective_candidate_count=collective_candidate_count,
-                    )
-                    groups.append(group)
-                    expected_ids_by_group.append(expected_ids)
-                scores = score_streaming_same_image_groups(
-                    self.family_adapter,
-                    self.qwen_model,
-                    groups,
-                    objective=self.objective,
-                    normalization=normalization,
+                _accumulate_local_metric_numerators_(
+                    local_metric_numerators,
+                    backward_metrics,
                 )
-                backward_metrics = backward_streaming_same_image_groups(
-                    self.family_adapter,
-                    self.qwen_model,
-                    groups,
-                    scores,
-                    objective=self.objective,
-                    normalization=normalization,
+                local_sample_ids.extend(
+                    sample_id
+                    for expected_ids in expected_ids_by_group
+                    for sample_id in expected_ids
                 )
-            if (
-                backward_metrics.local_row_count != local_rows
-                or backward_metrics.local_sample_count != local_rows
-            ):
-                raise RuntimeError(
-                    "direct multi-group execution returned incorrect local counts"
+                local_qwen_forward_batch_sizes.extend(
+                    getattr(backward_metrics, "qwen_forward_batch_sizes", ())
                 )
-            _accumulate_local_metric_numerators_(
-                local_metric_numerators,
-                backward_metrics,
-            )
-            local_sample_ids.extend(
-                sample_id
-                for expected_ids in expected_ids_by_group
-                for sample_id in expected_ids
-            )
-            local_qwen_forward_batch_sizes.extend(
-                getattr(backward_metrics, "qwen_forward_batch_sizes", ())
-            )
         else:
             for indices, collective_candidate_count in zip(
                 batch_indices,

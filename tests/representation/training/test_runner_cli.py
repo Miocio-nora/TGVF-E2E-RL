@@ -126,6 +126,28 @@ def test_candidate_runtime_lock_is_part_of_representation_code_identity() -> Non
     }.issubset(runner_module._CODE_IDENTITY_PATHS)
 
 
+@pytest.mark.parametrize(
+    ("accumulation_steps", "direct_groups", "expected"),
+    ((4, 1, 8), (1, 4, 8), (2, 4, 8)),
+)
+def test_global_matrix_count_uses_optimizer_step_group_identity(
+    accumulation_steps: int,
+    direct_groups: int,
+    expected: int,
+) -> None:
+    config = SimpleNamespace(
+        training=SimpleNamespace(
+            gradient_accumulation_steps=accumulation_steps,
+            groups_per_rank_per_optimizer_step=direct_groups,
+        )
+    )
+
+    assert (
+        runner_module._optimizer_step_global_matrix_count(config, world_size=2)
+        == expected
+    )
+
+
 def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
