@@ -9,6 +9,11 @@ phase executions and `BJ-*` identifies bounded benchmark-judge deployments. A
 materialized run ID is never renamed after execution; an identity collision is
 retained as `INVALID` and rerun under a new planned ID.
 
+Keep entries proportional to the run. Inference-only `BJ-*` rows record the
+accepted identity/config hash, command, devices, timing/memory, result and root
+cause; unrelated RL/training fields are covered by one concise N/A statement
+instead of repeated bullets.
+
 ## Bounded cells and outcomes
 
 ### SC-20-QWEN3-VLLM-LATENT
@@ -3888,8 +3893,8 @@ retained as `INVALID` and rerun under a new planned ID.
   path after R2 isolated FlashInfer's polluted CUDA JIT environment.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical user
   authorization and `EVAL-ARCH-20260720` scope to BJ-10.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: identical to R2, with the added gate that vLLM selects
   `TRITON_ATTN`, avoiding FlashInfer/NVCC while preserving exact 72B/TP2 service
   identity and the deterministic response contract.
@@ -3936,8 +3941,11 @@ retained as `INVALID` and rerun under a new planned ID.
 - World size, microbatch, accumulation, and global batch: TP world `2`, one
   request/completion; training batch/accumulation N/A.
 - GPUs: identical physical B200 indices, UUIDs and logical mapping to BJ-10.
-- Start/end timestamps, elapsed time, and session/process identity: pending.
-- Actual GPU-hours and peak scratch use: pending; no checkpoint.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T16:44:53+09:00` / `2026-07-20T16:47:26+09:00`, 153 seconds;
+  API PID 2477747, engine PID 2478043, workers 2478691 and 2478692.
+- Actual GPU-hours and peak scratch use: less than `0.085` two-device GPU-hours;
+  observed peak 157,724 MiB/GPU, then 0 MiB after shutdown; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CC=/usr/bin/gcc CXX=/usr/bin/g++
   CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12
   PATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -3951,10 +3959,16 @@ retained as `INVALID` and rerun under a new planned ID.
   --enable-prefix-caching`.
 - Outputs: exact paths above; service stopped after smoke and GPUs released.
 - Scorer/parser identity: unchanged smoke script; no benchmark scorer.
-- Metrics: pending exact response, usage, latency, load/warm-up time, memory,
-  process identity and log hash.
-- Conclusion: `PENDING`; deployment availability only, not calibration or
-  benchmark quality.
+- Metrics: 37 shards loaded in 24.87 seconds; engine warm-up 31.27 seconds.
+  The API returned exact model alias and `TGVF_JUDGE_READY`, finish `stop`, 41
+  prompt plus 7 completion tokens in 0.7323 seconds. Server log SHA256
+  `559546edc248c8486310e80d5efcfc732cc331809fec319ea358a77dc3c10e94`;
+  smoke JSON SHA256
+  `ceca5ca5917166df7a87111d5d8083e10b7d44ec480fef8ebedd644559b48d2e`.
+- Conclusion: `PASS` for local Qwen2.5-72B benchmark-judge deployment on the
+  fixed Torch/vLLM stack. Service was stopped and GPUs released. This is not
+  judge calibration, benchmark scoring, an RL reward, reference policy, or
+  SDPO teacher claim.
 
 ## Compatibility-spike status
 
