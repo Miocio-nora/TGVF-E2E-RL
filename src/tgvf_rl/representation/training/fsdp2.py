@@ -66,6 +66,7 @@ _EXPECTED_SET_RESHARD_AFTER_BACKWARD_PARAMETERS = (
     "recurse",
 )
 _EXPECTED_SET_IS_LAST_BACKWARD_PARAMETERS = ("self", "is_last_backward")
+_EXPECTED_RESHARD_PARAMETERS = ("self",)
 _OWNED_ATTENTION_LEAF_NAMES = (
     "target_norm",
     "target_proj",
@@ -254,6 +255,21 @@ class RepresentationFSDP2Binding:
         }
         if borrowed_ids & set(actual_ids):
             raise ValueError("optimizer contains a borrowed Qwen merger parameter")
+
+    def reshard_owned_parameters(self) -> None:
+        """Restore sharded registration after a forward with no backward.
+
+        The 52 owned leaves were passed to one grouped ``fully_shard`` call.
+        Torch's public ``reshard()`` API is non-recursive, so invoke it through
+        every registered group member. The shared operation is idempotent after
+        the first member restores the group's sharded parameters.
+        """
+
+        for module in self._owned_group_modules:
+            reshard = getattr(module, "reshard", None)
+            if not callable(reshard):
+                raise TypeError("Adapter-owned FSDP2 module does not expose reshard()")
+            reshard()
 
     def begin_microstep(self, *, index: int, count: int) -> None:
         """Configure FSDP2 for one exact gradient-accumulation microstep.
@@ -703,6 +719,11 @@ def _load_fsdp2_api() -> _FSDP2API:
         FSDPModule.set_is_last_backward,
         api_name="FSDPModule.set_is_last_backward",
         expected_parameters=_EXPECTED_SET_IS_LAST_BACKWARD_PARAMETERS,
+    )
+    _assert_public_signature(
+        FSDPModule.reshard,
+        api_name="FSDPModule.reshard",
+        expected_parameters=_EXPECTED_RESHARD_PARAMETERS,
     )
     for value, api_name, expected_module in (
         (FSDPModule, "FSDPModule", "torch.distributed.fsdp"),

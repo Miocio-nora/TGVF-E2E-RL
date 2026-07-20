@@ -435,7 +435,8 @@ def _run_initialized(
         elif performance is not None:
             raise RuntimeError("non-log train step unexpectedly collected telemetry")
         if metrics.global_step % config.training.validation_every_optimizer_steps == 0:
-            validation = _evaluate_validation(
+            validation = _evaluate_validation_at_sharded_optimizer_boundary(
+                binding=binding,
                 config=config,
                 runtime=runtime,
                 model=model,
@@ -445,6 +446,7 @@ def _run_initialized(
                 validation_manifest_sha256=(validation_data.manifest.manifest_sha256),
                 validation_event_index=validation_event_index,
             )
+            binding.assert_optimizer_ownership(optimizer)
             validation_event_index += 1
             validation_sample_ids = _gather_string_tuples(validation.local_sample_ids)
             validation_group_keys = _gather_string_tuples(
@@ -792,6 +794,19 @@ def _evaluate_validation(**kwargs: Any) -> Any:
         validation_event_index=kwargs.pop("validation_event_index"),
         data_parallel_world_size=config.fsdp2.world_size,
     )
+
+
+def _evaluate_validation_at_sharded_optimizer_boundary(
+    *,
+    binding: Any,
+    **kwargs: Any,
+) -> Any:
+    """Run no-grad validation and always restore FSDP2 sharded registration."""
+
+    try:
+        return _evaluate_validation(**kwargs)
+    finally:
+        binding.reshard_owned_parameters()
 
 
 def _save_checkpoint(

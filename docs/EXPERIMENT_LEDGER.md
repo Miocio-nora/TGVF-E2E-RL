@@ -4079,7 +4079,7 @@ instead of repeated bullets.
 
 ### REP-QWEN3-V4-CONTEXTUAL-V3
 
-- Lifecycle/result: `PLANNED` / `PENDING`; fresh replacement for contextual V2
+- Lifecycle/result: `CANCELLED` / `FAIL`; fresh replacement for contextual V2
   after accepted repair `RPI-20260720-TARGET-TOKEN-COVER-V1`.
 - Identity/output: code `2436861f027c319dadf1e775ffa9ef911f317dfb`;
   config source/canonical SHA256
@@ -4115,10 +4115,16 @@ instead of repeated bullets.
 - Acceptance: first prove step 219 or later with finite loss/gradients, then
   reach step 2000 with the configured validation/checkpoint cadence and final
   TGVF Adapter artifact.
+- Runtime/result: started `2026-07-20T18:29:58+09:00`, reached last durable
+  train metric step 470 with finite loss/gradients, and passed the prior
+  step-218 target-span failure. It was terminated at
+  `2026-07-20T19:09:24+09:00` before its first periodic boundary because the
+  paired run had already proven the shared checkpoint defect. No checkpoint or
+  Adapter artifact exists; the output and W&B run are diagnostic and immutable.
 
 ### REP-QWEN3-V4-TARGET-EMBEDDING-V2
 
-- Lifecycle/result: `PLANNED` / `PENDING`; paired fresh replacement for target-
+- Lifecycle/result: `COMPLETE` / `FAIL`; paired fresh replacement for target-
   embedding V1 under the same accepted repair and preflight evidence as
   contextual V3.
 - Identity/output: code `2436861f027c319dadf1e775ffa9ef911f317dfb`;
@@ -4146,6 +4152,15 @@ instead of repeated bullets.
 - Acceptance: first prove step 219 or later with finite loss/gradients, then
   reach step 2000 with the configured validation/checkpoint cadence and final
   TGVF Adapter artifact.
+- Runtime/result: started `2026-07-20T18:29:58+09:00`; step 500 training and
+  validation event 0 both completed with finite metrics. Immediately afterward,
+  DCP save preflight failed on both ranks because no-grad validation under
+  `reshard_after_forward=false` left module-visible full parameters resident
+  while AdamW retained the sharded DTensor parameters. The strict ownership
+  audit correctly rejected the mismatch; no checkpoint or Adapter artifact was
+  written. This is fixed only by
+  `RPI-20260720-PERIODIC-BOUNDARY-SMOKE-V1`; the old output and W&B run remain
+  diagnostic and immutable.
 
 ## Compatibility-spike status
 

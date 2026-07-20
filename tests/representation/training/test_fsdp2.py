@@ -157,7 +157,9 @@ class _FakeDTensor:
 
 
 class _FakeFSDPModule:
-    pass
+    def reshard(self) -> None:
+        calls = getattr(self, "_fake_reshard_calls", 0)
+        self._fake_reshard_calls = calls + 1
 
 
 class _RecordingAccumulationModule(nn.Module):
@@ -282,6 +284,12 @@ def test_apply_ignores_exact_borrowed_state_and_optimizer_owns_only_shards(
 
     optimizer = torch.optim.AdamW(binding.optimizer_parameters(), lr=1e-4)
     binding.assert_optimizer_ownership(optimizer)
+    binding.reshard_owned_parameters()
+    assert all(
+        getattr(module, "_fake_reshard_calls", 0) == 1
+        for module in binding.owned_group_modules
+    )
+    binding.assert_optimizer_ownership(optimizer)
     polluted = torch.optim.AdamW(
         (*binding.optimizer_parameters(), borrowed_before[0]), lr=1e-4
     )
@@ -313,6 +321,9 @@ def test_fsdp2_config_and_supported_torch_api_identity_are_exact() -> None:
         "ignored_params",
     )
     assert api.fsdp_module_type.__module__ == "torch.distributed.fsdp"
+    assert tuple(inspect.signature(api.fsdp_module_type.reshard).parameters) == (
+        "self",
+    )
     assert api.fsdp_module_type.__name__ == "FSDPModule"
     assert api.device_mesh_type.__module__ == "torch.distributed.device_mesh"
     assert api.device_mesh_type.__name__ == "DeviceMesh"

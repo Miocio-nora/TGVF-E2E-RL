@@ -264,6 +264,32 @@ distributed process group instead of entering a graceful collective teardown;
 the original exception remains primary. The failed output directories remain
 immutable, and replacement runs require new experiment identities.
 
+### 0.7 Accepted periodic-boundary smoke gate
+
+Decision ID: **RPI-20260720-PERIODIC-BOUNDARY-SMOKE-V1**
+
+Accepted by: **user**, on **2026-07-20 JST**, after the first formal
+representation runs exposed a checkpoint-path defect at optimizer step 500.
+
+Before a representation-phase run may be called training-ready, its selected
+physical stack and provider must execute a complete periodic boundary at cadence
+one: one optimizer step, validation, DCP checkpoint save, process exit, strict
+checkpoint reload/resume, one further optimizer step, and another checkpoint.
+The smoke must validate model, optimizer, scheduler, sampler, metrics-history,
+validation-cursor, and RNG restoration. A smoke that exercises ordinary train
+steps only is insufficient. Both required conditioning providers must pass when
+their formal runs are paired.
+
+With `reshard_after_forward=false`, every Adapter phase that performs forward
+without backward must explicitly return the grouped Adapter-owned parameters to
+their sharded registration before optimizer ownership checks, state-dict
+collection, checkpointing, or another phase. The implementation uses the public
+FSDP2 `reshard()` operation and retains the strict optimizer ownership check; it
+must not weaken that check to accept stale, missing, duplicate, or borrowed Qwen
+parameters. This repair may change only the FSDP2 lifecycle, runner boundary,
+tests/smoke configurations, and experiment records. It does not change data,
+prompt, loss, optimizer mathematics, batch semantics, or formal-run cadence.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

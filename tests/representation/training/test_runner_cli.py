@@ -257,6 +257,50 @@ def test_public_runner_aborts_process_group_on_rank_local_failure(
     assert calls == ["abort"]
 
 
+def test_validation_boundary_always_reshards_before_optimizer_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    binding = SimpleNamespace(
+        reshard_owned_parameters=lambda: calls.append("reshard"),
+        assert_optimizer_ownership=lambda _optimizer: calls.append("audit"),
+    )
+    optimizer = object()
+    monkeypatch.setattr(
+        runner_module,
+        "_evaluate_validation",
+        lambda **_kwargs: calls.append("validation") or "metrics",
+    )
+
+    result = runner_module._evaluate_validation_at_sharded_optimizer_boundary(
+        binding=binding
+    )
+    binding.assert_optimizer_ownership(optimizer)
+
+    assert result == "metrics"
+    assert calls == ["validation", "reshard", "audit"]
+
+
+def test_validation_boundary_reshards_when_validation_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    binding = SimpleNamespace(reshard_owned_parameters=lambda: calls.append("reshard"))
+
+    def fail(**_kwargs: object) -> None:
+        calls.append("validation")
+        raise ValueError("validation failed")
+
+    monkeypatch.setattr(runner_module, "_evaluate_validation", fail)
+
+    with pytest.raises(ValueError, match="validation failed"):
+        runner_module._evaluate_validation_at_sharded_optimizer_boundary(
+            binding=binding
+        )
+
+    assert calls == ["validation", "reshard"]
+
+
 def test_invocation_stop_preserves_planned_scheduler_horizon() -> None:
     config = SimpleNamespace(
         training=SimpleNamespace(
