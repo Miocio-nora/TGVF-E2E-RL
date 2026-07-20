@@ -188,6 +188,17 @@ the exact evaluation population, checkpoint, prompt, or required native
 counterfactual inputs are absent. It must not silently reinterpret the training
 validation split as an accepted held-out evaluation population.
 
+Because the two accepted representation artifacts completed with that switch
+disabled, an evaluation-only single-GPU entry point is also accepted. It loads
+the immutable full Adapter export, binds it to the original training identity,
+and invokes the same internal-evaluation implementation without resuming or
+mutating training. Its code commit, source training TOML, Adapter bytes and
+manifest, fixed ordered population, counterfactual manifest, seed, GPU, and
+no-overwrite report path are all explicit inputs. The first paired report uses
+the same deterministic 31 exact-K4 groups whose Qwen3 visual grid is
+`(1,26,38)` at `max_pixels=262144`; this is a new native population rather than
+a byte-identical Golden population.
+
 All external visual benchmark evaluation in this project uses upstream
 **VLMEvalKit** at the exact review commit recorded in
 `EXTERNAL_REFERENCES.md`. The project does not port the legacy benchmark parser

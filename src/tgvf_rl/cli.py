@@ -231,6 +231,11 @@ def _parser() -> argparse.ArgumentParser:
             "the final Adapter; the configured scheduler horizon is unchanged"
         ),
     )
+    run_representation_evaluation = subparsers.add_parser(
+        "run-representation-internal-evaluation",
+        help="evaluate one completed representation Adapter on a single GPU",
+    )
+    run_representation_evaluation.add_argument("path", type=Path)
     compare_resume = subparsers.add_parser(
         "compare-representation-resume",
         help="compare continuous and teardown/resumed representation outputs",
@@ -262,6 +267,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.path,
                 stop_after_global_step=args.stop_after_global_step,
             )
+        elif args.command == "run-representation-internal-evaluation":
+            from tgvf_rl.representation.training.evaluation_runner import (
+                run_representation_internal_evaluation_from_artifact,
+            )
+
+            result = run_representation_internal_evaluation_from_artifact(args.path)
         elif args.command == "compare-representation-resume":
             from tgvf_rl.representation.training.resume_parity import (
                 compare_representation_resume_lanes,
