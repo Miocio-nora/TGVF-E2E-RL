@@ -4575,7 +4575,7 @@ instead of repeated bullets.
 
 ### RP-45/48-QWEN3-REP-500STEP-MATRIX-CE-THREE-WAY-V4-GOLDEN
 
-- Lifecycle/result: `PLANNED` / `PENDING`; three-way step-500 contextual-hidden-
+- Lifecycle/result: `COMPLETE` / `PASS`; three-way step-500 contextual-hidden-
   state comparison on the exact RP-44 v4 Golden 200/46 population.
 - Cells: RP-45 is legacy summed-NLL/T=1.0 from RP-39; RP-44 is the completed
   mean-NLL/T=0.1 RP-40 result; RP-48 is mean-NLL/T=1.0 from the original
@@ -4589,10 +4589,20 @@ instead of repeated bullets.
   All non-objective fields, manifests, prompt, provider, seed, and score
   semantics are fixed. This three-way matrix separates length normalization
   and temperature better than the earlier two-way bundled comparison.
+- Result: all cells exited `0` on 200 rows/46 groups with tokenizer `151669`.
+  Summed-NLL/T1.0, mean-NLL/T0.1, and mean-NLL/T1.0 respectively yield
+  top-1 `0.72/0.735/0.59`, top-2 `0.905/0.87/0.805`, MRR
+  `0.84017/0.84158/0.75442`, and mean diagonal gap
+  `0.11473/0.13714/0.08649`. Report SHA256 values are
+  `8fe6572e...f4a`, `bfbac956...4a5`, and `c6ace5a1...66a`. At step 500,
+  mean-NLL/T0.1 improves top-1 by 1.5 points over legacy but does not improve
+  top-2 or wrong-same win rate; mean-NLL/T1.0 is materially worse. The evidence
+  therefore supports a small early top-1 benefit for the combined Balanced+
+  low-temperature setting, not a broad claim that normalization alone wins.
 
 ### RP-46/47-QWEN3-REP-2000STEP-PROVIDER-PAIR-V4-GOLDEN
 
-- Lifecycle/result: `PLANNED` / `PENDING`; exact provider comparison at 2000
+- Lifecycle/result: `COMPLETE` / `PASS`; exact provider comparison at 2000
   optimizer steps on the RP-44 v4 Golden 200/46 population.
 - Fixed pair: both use Balanced mean-NLL Matrix CE at T=1.0, identical model,
   data, prompt, objective weights, seed, schedule, batch, resolution, and
@@ -4604,6 +4614,16 @@ instead of repeated bullets.
   report roots under `artifacts/representation/RP-{46,47}-*`. Acceptance
   requires exact 200/46 binding, unchanged tokenizer, and complete reports for
   both cells before drawing a provider conclusion.
+- Result: both cells exited `0`, retained tokenizer `151669`, and evaluated
+  200 rows/46 groups. Contextual versus target embedding yields top-1
+  `0.83/0.70`, top-2 `0.96/0.875`, MRR `0.9075/0.8275`, mean diagonal gap
+  `2.4240/0.7743`, and wrong-same win rate `0.935/0.855`. Mean correct-D NLL
+  is nearly identical (`1.28734/1.28916`), so the 13-point top-1 difference is
+  target specificity rather than basic readability. Contextual also passes the
+  teacher-forced direction flip and both free continuations; target embedding
+  fails direction flip and one continuation. Report SHA256 values are
+  `137e48e7...ca6` / `1570978b...d8b`. Contextual hidden state is the selected
+  provider for the current Qwen3 representation artifact.
 
 ## Compatibility-spike status
 
