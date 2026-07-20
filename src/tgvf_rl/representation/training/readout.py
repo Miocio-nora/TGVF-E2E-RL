@@ -106,7 +106,6 @@ class RepresentationReadoutRow:
     position_ids: torch.Tensor
     source_positions: tuple[int, ...]
     d_positions: tuple[int, ...]
-    source_key_block_query_start: int
     canonical_input_ids_proof: _CanonicalInputIdsProof | None = None
 
     def __post_init__(self) -> None:
@@ -150,21 +149,6 @@ class RepresentationReadoutRow:
             )
         if any(position < 0 or position >= sequence for position in combined):
             raise ValueError("readout visual position is outside the model sequence")
-        if (
-            isinstance(self.source_key_block_query_start, bool)
-            or not isinstance(self.source_key_block_query_start, int)
-            or self.source_key_block_query_start < 0
-            or self.source_key_block_query_start >= sequence
-        ):
-            raise ValueError("source-key block query start is outside the sequence")
-        if self.source_key_block_query_start > self.d_positions[0]:
-            raise ValueError(
-                "source-key blocking must begin no later than the first D token"
-            )
-        if self.source_key_block_query_start <= self.source_positions[-1]:
-            raise ValueError(
-                "source-key blocking must begin after the source-image tokens"
-            )
 
     def assert_input_ids_authority(self) -> None:
         """Revalidate the exact input tensor without reading bound CUDA content."""

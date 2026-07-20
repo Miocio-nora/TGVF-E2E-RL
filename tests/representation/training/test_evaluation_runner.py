@@ -13,8 +13,20 @@ _SHA = "a" * 64
 _COMMIT = "b" * 40
 
 
-def _config_text(root: Path, *, dirty: str = "false", extra: str = "") -> str:
-    return f'''schema_version = "representation-internal-evaluation-run-v1"
+def _config_text(
+    root: Path,
+    *,
+    dirty: str = "false",
+    extra: str = "",
+    schema_version: str = "representation-internal-evaluation-run-v1",
+) -> str:
+    evaluation_data = ""
+    if schema_version == "representation-internal-evaluation-run-v2":
+        evaluation_data = f'''\n[evaluation_data]
+jsonl_path = "{root / 'v4-clean-imend-test.jsonl'}"
+source_sha256 = "{_SHA}"
+'''
+    return f'''schema_version = "{schema_version}"
 run_id = "RP-TEST-INTERNAL-EVAL"
 {extra}
 [code]
@@ -35,6 +47,7 @@ expected_global_step = 2000
 
 [execution]
 physical_gpu_id = 3
+{evaluation_data}
 
 [evaluation]
 evaluation_id = "qwen3-test-v1"
@@ -61,6 +74,22 @@ def test_loads_complete_evaluation_only_identity(tmp_path: Path) -> None:
     assert config.physical_gpu_id == 3
     assert config.evaluation.enabled is True
     assert config.evaluation.eos_token_ids == (151645,)
+
+
+def test_v2_binds_explicit_evaluation_dataset(tmp_path: Path) -> None:
+    path = tmp_path / "evaluation-v2.toml"
+    path.write_text(
+        _config_text(
+            tmp_path,
+            schema_version="representation-internal-evaluation-run-v2",
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_representation_internal_evaluation_run_config(path)
+
+    assert config.evaluation_data_path == tmp_path / "v4-clean-imend-test.jsonl"
+    assert config.evaluation_data_source_sha256 == _SHA
 
 
 def test_rejects_dirty_formal_evaluation_code(tmp_path: Path) -> None:

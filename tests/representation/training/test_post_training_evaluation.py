@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tgvf_rl.representation.training.post_training_evaluation import (
+    REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_LEGACY_SCHEMA_VERSION,
     REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION,
     load_internal_evaluation_group_manifest,
     materialize_internal_evaluation_groups,
@@ -30,13 +31,12 @@ def _write_manifest(
     *,
     data_manifest_sha256: str,
     groups: tuple[tuple[RepresentationTrainingSample, ...], ...],
+    schema_version: str = REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION,
 ) -> Path:
     path.write_text(
         json.dumps(
             {
-                "schema_version": (
-                    REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION
-                ),
+                "schema_version": schema_version,
                 "identity": "ordered-same-image-groups-v1",
                 "source_data_manifest_sha256": data_manifest_sha256,
                 "groups": [
@@ -114,7 +114,7 @@ def test_group_manifest_rejects_dataset_content_and_group_drift(tmp_path: Path) 
         )
 
 
-def test_group_manifest_requires_two_equal_sized_distinct_groups(tmp_path: Path) -> None:
+def test_legacy_group_manifest_requires_equal_sized_groups(tmp_path: Path) -> None:
     first = (_sample("a0", "image-a", "1"), _sample("a1", "image-a", "2"))
     second = (
         _sample("b0", "image-b", "3"),
@@ -127,5 +127,27 @@ def test_group_manifest_requires_two_equal_sized_distinct_groups(tmp_path: Path)
                 tmp_path / "groups.json",
                 data_manifest_sha256="4" * 64,
                 groups=(first, second),
+                schema_version=(
+                    REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_LEGACY_SCHEMA_VERSION
+                ),
             )
         )
+
+
+def test_v2_group_manifest_accepts_golden_variable_k(tmp_path: Path) -> None:
+    first = (_sample("a0", "image-a", "1"), _sample("a1", "image-a", "2"))
+    second = (
+        _sample("b0", "image-b", "3"),
+        _sample("b1", "image-b", "4"),
+        _sample("b2", "image-b", "5"),
+    )
+
+    manifest = load_internal_evaluation_group_manifest(
+        _write_manifest(
+            tmp_path / "groups-v2.json",
+            data_manifest_sha256="5" * 64,
+            groups=(first, second),
+        )
+    )
+
+    assert tuple(len(group.samples) for group in manifest.groups) == (2, 3)

@@ -1319,17 +1319,16 @@ def _blocked_evidence_attention_mask(
     row: RepresentationReadoutRow,
     source: RepresentationVisualTensorBundle,
 ) -> torch.Tensor:
-    """Block original-image keys from the native tool response onward."""
-
     if len(row.source_positions) != source.main.shape[1]:
         raise ValueError("source visual positions do not match source tokens")
+    first_evidence = row.supervision.evidence_token_positions[0]
     final_evidence = row.supervision.evidence_token_positions[-1]
-    if row.source_key_block_query_start <= 0:
-        raise ValueError("source-key blocking requires preceding causal context")
+    if first_evidence <= 0:
+        raise ValueError("evidence must have a preceding causal prediction query")
     return _build_original_image_key_block_mask_from_positions(
         attention_mask=row.attention_mask,
         original_image_token_positions=row.source_positions,
-        block_query_start=row.source_key_block_query_start,
+        block_query_start=first_evidence - 1,
         block_query_end=final_evidence,
         dtype=source.main.dtype,
     )

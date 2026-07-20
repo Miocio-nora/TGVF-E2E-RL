@@ -25,6 +25,7 @@ from tgvf_rl.representation.training.internal_evaluation import (
     NativeTeacherForcedForward,
     RepresentationInternalEvaluationIdentity,
     _deterministic_random_visual_bundle,
+    _mean_nll_matrix,
     _token_mean_nll_from_cell_score,
     create_injected_native_counterfactual_evaluator,
     run_representation_internal_evaluation,
@@ -39,6 +40,7 @@ from tgvf_rl.representation.training.readout import (
     SameImageReadoutGroup,
 )
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
+from tgvf_rl.representation.training.streaming import StreamingGroupScores
 from tgvf_rl.representation.training.transcript import ModelEvidenceSupervision
 
 
@@ -50,6 +52,20 @@ def test_bf16_cell_score_uses_the_same_reduction_order_as_l_gen() -> None:
 
     assert observed == expected == 4.0625
     assert observed != float((-summed_log_likelihood.float() / 5).item())
+
+
+def test_query_matrix_exports_token_mean_nll_for_each_variable_length_row() -> None:
+    scores = StreamingGroupScores(
+        sample_ids=("a", "b"),
+        score_matrix=torch.tensor([[-4.0, -6.0], [-8.0, -12.0]]),
+        diagonal_l_gen=torch.tensor([2.0, 3.0]),
+        evidence_token_counts=torch.tensor([2, 4]),
+        historical_norm=torch.zeros(2),
+    )
+
+    matrix = _mean_nll_matrix(scores)
+
+    assert torch.equal(matrix, torch.tensor([[2.0, 3.0], [2.0, 3.0]]))
 
 
 class _ToyMerger(nn.Module):
@@ -233,7 +249,6 @@ class _GroupBuilder:
                     position_ids=torch.arange(8).view(1, 8),
                     source_positions=(1, 2),
                     d_positions=(3, 4),
-                    source_key_block_query_start=3,
                 )
             )
             target = torch.arange(18, dtype=torch.float32).reshape(3, 6) / 30
@@ -456,7 +471,11 @@ def _identity() -> RepresentationInternalEvaluationIdentity:
     )
 
 
-def _run(*, builder: _GroupBuilder | None = None):
+def _run(
+    *,
+    builder: _GroupBuilder | None = None,
+    sample_groups: tuple[tuple[RepresentationTrainingSample, ...], ...] | None = None,
+):
     adapter = _adapter()
     adapter.train()
     qwen = _qwen()
@@ -468,13 +487,25 @@ def _run(*, builder: _GroupBuilder | None = None):
         adapter=adapter,
         qwen_model=qwen,
         family_adapter=family,
-        sample_groups=_sample_groups(),
+        sample_groups=sample_groups or _sample_groups(),
         group_builder=group_builder,
         native_counterfactual_cases=(_native_case(),),
         causal_value_flip_evaluator=native.causal,
         free_continuation_evaluator=native.continuation,
     )
     return report, adapter, qwen, family, group_builder, native
+
+
+def test_internal_runner_accepts_variable_k_groups() -> None:
+    groups = (
+        tuple(_sample("a", index) for index in range(2)),
+        tuple(_sample("b", index) for index in range(3)),
+    )
+
+    report, *_ = _run(sample_groups=groups)
+
+    assert tuple(len(group.sample_ids) for group in report.groups) == (2, 3)
+    assert report.query.sample_count == 5
 
 
 def test_internal_runner_executes_all_controls_health_and_native_callbacks(

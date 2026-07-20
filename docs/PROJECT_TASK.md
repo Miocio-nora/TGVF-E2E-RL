@@ -194,10 +194,21 @@ the immutable full Adapter export, binds it to the original training identity,
 and invokes the same internal-evaluation implementation without resuming or
 mutating training. Its code commit, source training TOML, Adapter bytes and
 manifest, fixed ordered population, counterfactual manifest, seed, GPU, and
-no-overwrite report path are all explicit inputs. The first paired report uses
-the same deterministic 31 exact-K4 groups whose Qwen3 visual grid is
-`(1,26,38)` at `max_pixels=262144`; this is a new native population rather than
-a byte-identical Golden population.
+no-overwrite report path are all explicit inputs. The earlier paired report
+used 31 exact-K4 groups from the v3 validation file whose Qwen3 visual grid was
+fixed to `(1,26,38)`. On 2026-07-21 the user rejected that population: it was
+neither the Golden evaluation split nor a representative validation slice, and
+its fixed-grid requirement over-selected ChartQA. Those reports remain
+historical invalid diagnostics only and cannot support artifact promotion.
+
+The accepted internal population is now the exact first 200 retained rows of
+the v4 clean-imend test split used by the historical Golden diagnostic. It
+contains the same ordered 46 image groups with variable `K` in `[3,6]`.
+Same-image KxK query/readout evaluation must support those variable group and
+visual shapes directly. Wrong-different-image D is an optional control and may
+be evaluated only when a distinct shape-compatible group exists; it must not
+force the primary population into one visual grid. The v3 validation population
+is not retained as an active validation or internal-evaluation lane.
 
 The paired report shows readable but weakly target-specific D. The accepted
 isolation test keeps the contextual provider and every data/model/optimizer/
@@ -479,6 +490,35 @@ admits capture only when there are no batches, update gates, or orphan entries
 in the manager-owned observation, behavior, and execute-once stores, and it
 rejects concurrent batch opens. Consumed observation tensors are transient and
 are not part of the Policy Pilot checkpoint payload.
+
+### 0.8.2 Accepted executable Policy Pilot vertical slice
+
+Decision ID: **POLICY-PILOT-V1-VERTICAL-SLICE-20260721**
+
+Accepted by: **user**, on **2026-07-21 JST**.
+
+The next implementation task is to connect the already accepted contracts into
+one executable Qwen3 Policy Pilot path. Completion requires a real DeepEyes
+runtime sample to flow through project-owned native prompt rendering, an
+eight-trajectory group, live vLLM sampling with actual processed behavior
+log-probabilities, bounded repeated `tgvf_focus_tool` execution, rollout-owned
+main `D` and every D-DeepStack branch, current/reference exact replay, one
+language-decoder-LoRA GRPO optimizer step through upstream veRL/FSDP2, weight
+synchronization, and save/resume in a clean process. A CLI, strict run config,
+worker cleanup boundary, and complete checkpoint ownership are part of this
+task; injectable test doubles and CPU-only contract composition do not satisfy
+it.
+
+This task does not silently resolve the formal Pilot inputs that remain open in
+section 0.8. A bounded implementation smoke may use a separately
+content-addressed MCQ fixture, deterministic rule reward, explicit smoke prompt
+and stop/error bytes, and a measured hardware topology. Such a smoke records
+the 72B judge as not applicable and cannot be promoted to the formal Pilot
+identity. It must nevertheless use `n=8`, the accepted sampling and GRPO
+mathematics, the real Qwen3 model, a separately identified representation
+artifact/provider, actual vLLM generation, exact observation replay, and the
+accepted LoRA freeze scope. GPU work requires its own `PLANNED` ledger entry
+before launch.
 
 ## 1. Objective
 

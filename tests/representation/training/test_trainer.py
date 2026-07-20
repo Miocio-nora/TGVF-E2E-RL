@@ -187,7 +187,6 @@ class _GroupBuilder:
                     position_ids=torch.arange(8).view(1, 8),
                     source_positions=(1, 2),
                     d_positions=(3, 4),
-                    source_key_block_query_start=3,
                 )
             )
             target = torch.full((3, 6), 0.1 + index * 0.1)

@@ -32,6 +32,9 @@ from .schema import RepresentationTrainingSample
 
 
 REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION = (
+    "representation_internal_evaluation_group_manifest_v2"
+)
+REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_LEGACY_SCHEMA_VERSION = (
     "representation_internal_evaluation_group_manifest_v1"
 )
 _SHA256_CHARS = frozenset("0123456789abcdef")
@@ -83,9 +86,10 @@ class RepresentationInternalEvaluationGroupManifest:
             self.source_data_manifest_sha256,
             name="source_data_manifest_sha256",
         )
-        if self.schema_version != (
-            REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION
-        ):
+        if self.schema_version not in {
+            REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION,
+            REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_LEGACY_SCHEMA_VERSION,
+        }:
             raise ValueError("internal-evaluation group manifest schema mismatch")
         if (
             not isinstance(self.groups, tuple)
@@ -97,7 +101,11 @@ class RepresentationInternalEvaluationGroupManifest:
         ):
             raise ValueError("internal evaluation requires at least two groups")
         sizes = {len(group.samples) for group in self.groups}
-        if len(sizes) != 1:
+        if (
+            self.schema_version
+            == REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_LEGACY_SCHEMA_VERSION
+            and len(sizes) != 1
+        ):
             raise ValueError("internal-evaluation groups must have equal K")
         keys = tuple(group.image_group_key for group in self.groups)
         if len(set(keys)) != len(keys):

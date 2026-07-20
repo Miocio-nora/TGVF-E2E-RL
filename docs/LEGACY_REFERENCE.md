@@ -250,15 +250,19 @@ the new native-format representation pipeline. The historical rendered format,
 serialization, launcher, and resume state are not reused as the new pipeline.
 
 The user selected the v4 clean-imend Protocol-C focus split for production
-training and the v3 val-2k accepted population for validation. The v3 accepted
-train population remains comparison-only. The following exact worktree files
-were identified and content-hashed before row inspection:
+training. On 2026-07-21 the earlier v3 val-2k selection was superseded after
+the actual Golden runtime sidecars proved that its diagnostic used the v4
+clean-imend test split. Both v3 populations are comparison-only and must not be
+used by an active training-validation or internal-evaluation configuration.
+The following exact worktree files were identified and content-hashed before
+row inspection:
 
 | Role | Exact legacy worktree path | SHA256 |
 |---|---|---|
 | comparison-only v3 train rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_50k/final/tgvf_teacher_items.accepted.jsonl` | `8406f8f843f927642aa2d728f1896579f20c44ca7329b86cb35b42544f73f666` |
 | selected v4 clean-imend Protocol-C focus train split | `data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.train.jsonl` | `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c` |
-| selected v3 validation rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
+| retired v3 validation rows, comparison only | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
+| selected v4 clean-imend test rows | `data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl` | `de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d` |
 
 These files are not committed at the frozen legacy commit and remain external
 data artifacts. Their hashes authorize bounded read-only schema/count/split
@@ -342,6 +346,28 @@ from v3; the observable file is a new teacher/schema/split with materially
 different questions, targets, evidence, answer taxonomy, and source mixture.
 The user therefore selects the v4 hash for training and retains the v3 train
 hash only for historical comparison; the two hashes are not interchangeable.
+
+### Golden data and diagnostic population correction
+
+The following exact read-only sidecars from the recorded Golden checkpoint
+directory were inspected on 2026-07-21 JST before adapting the evaluation
+population:
+
+| File | SHA256 | Bound fact |
+|---|---|---|
+| `stage1_micro4/clean_training_execution/dataset_runtime_identity.json` | `d677f4214e3805356c7d7fb4e973e833ec81cd3fc5243585a96b1bda0f60aa43` | Golden trained on the v4 clean-imend train hash `c94a38...` |
+| `stage1_micro4/internal_diagnostics_step2000_20260702_235026/runtime_config.json` | `8134ec7faf8d1eca56b323230f5c27bb254bd721cb1e62d1f1eb8470a8a01524` | Golden internal diagnostics used the v4 clean-imend test file, max 200 rows |
+| `stage1_micro4/internal_diagnostics_step2000_20260702_235026/query_sensitivity/per_group_results.jsonl` | `92eb4893f008dc5d455daf7d2642179a9309ce49a6b8d644ad3262d36aa9b84c` | exact 46 ordered same-image groups and matrices |
+| `stage1_micro4/internal_diagnostics_step2000_20260702_235026/query_sensitivity/per_item_results.jsonl` | `617146f8fd6825625a1406f745536749d4f16b97ce9393e603c08eeca5d0cd7e` | exact 200 ordered evaluation rows |
+| `stage1_micro4/internal_diagnostics_step2000_20260702_235026/query_sensitivity/query_sensitivity_report.json` | `56fd301f5a61994851eca208f8301ca140cf68bac075a89f333c4401b02afbb5` | 200 rows, 46 groups, top-1 `0.77` in that runtime |
+
+The selected v4 test file contains 867 rows and has retained-loader manifest
+SHA256 `534f5b1e648d0bca2b1ea2ff02f81e1fb7abbb456f16faacbb118ca94f7306b0`.
+Its first 200 retained rows are exactly the Golden diagnostic population: 46
+groups with `K=3/4/5/6` group counts `6/19/20/1`. The generic legacy suite's
+default v3 path was not the path used by this Golden run. Consequently there is
+no historical v4-train/v3-validation result behind the accepted Golden
+specificity metrics.
 
 ## Golden representation checkpoint
 

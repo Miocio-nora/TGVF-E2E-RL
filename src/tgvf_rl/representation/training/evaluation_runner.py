@@ -29,6 +29,9 @@ from .runtime import create_qwen3_representation_runtime
 
 
 REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION = (
+    "representation-internal-evaluation-run-v2"
+)
+REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_LEGACY_SCHEMA_VERSION = (
     "representation-internal-evaluation-run-v1"
 )
 _REQUIRED_CUBLAS_WORKSPACE = ":4096:8"
@@ -55,6 +58,8 @@ class RepresentationInternalEvaluationRunConfig:
     expected_run_identity_sha256: str
     expected_global_step: int
     physical_gpu_id: int
+    evaluation_data_path: Path | None
+    evaluation_data_source_sha256: str | None
     evaluation: RepresentationPostTrainingInternalEvaluationConfig
     source_path: Path
     source_sha256: str
@@ -69,7 +74,15 @@ def load_representation_internal_evaluation_run_config(
     source_path = Path(path).resolve()
     raw = source_path.read_bytes()
     payload = tomllib.loads(raw.decode("utf-8"))
-    if not isinstance(payload, Mapping) or set(payload) != {
+    if not isinstance(payload, Mapping):
+        raise ValueError("internal-evaluation run config fields differ")
+    schema_version = payload.get("schema_version")
+    if schema_version not in {
+        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION,
+        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_LEGACY_SCHEMA_VERSION,
+    }:
+        raise ValueError("internal-evaluation run config schema mismatch")
+    expected_fields = {
         "schema_version",
         "run_id",
         "code",
@@ -77,13 +90,12 @@ def load_representation_internal_evaluation_run_config(
         "artifact",
         "execution",
         "evaluation",
-    }:
+    }
+    if schema_version == REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION:
+        expected_fields.add("evaluation_data")
+    if set(payload) != expected_fields:
         raise ValueError("internal-evaluation run config fields differ")
     _require_text(payload["run_id"], name="run_id")
-    if payload["schema_version"] != (
-        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION
-    ):
-        raise ValueError("internal-evaluation run config schema mismatch")
     code = _table(payload, "code", {"repository", "commit", "dirty"})
     if code["repository"] != "Miocio-nora/TGVF-E2E-RL":
         raise ValueError("code.repository differs from the accepted repository")
@@ -105,6 +117,21 @@ def load_representation_internal_evaluation_run_config(
         },
     )
     execution = _table(payload, "execution", {"physical_gpu_id"})
+    evaluation_data_path: Path | None = None
+    evaluation_data_source_sha256: str | None = None
+    if schema_version == REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION:
+        evaluation_data = _table(
+            payload,
+            "evaluation_data",
+            {"jsonl_path", "source_sha256"},
+        )
+        evaluation_data_path = _absolute_path(
+            evaluation_data["jsonl_path"], name="evaluation_data.jsonl_path"
+        )
+        evaluation_data_source_sha256 = _sha256(
+            evaluation_data["source_sha256"],
+            name="evaluation_data.source_sha256",
+        )
     evaluation = _table(
         payload,
         "evaluation",
@@ -181,9 +208,12 @@ def load_representation_internal_evaluation_run_config(
         ),
         expected_global_step=expected_global_step,
         physical_gpu_id=physical_gpu_id,
+        evaluation_data_path=evaluation_data_path,
+        evaluation_data_source_sha256=evaluation_data_source_sha256,
         evaluation=eval_config,
         source_path=source_path,
         source_sha256=sha256(raw).hexdigest(),
+        schema_version=schema_version,
     )
 
 
@@ -245,17 +275,28 @@ def run_representation_internal_evaluation_from_artifact(
         raise ValueError("Adapter artifact global step mismatch")
     _validate_training_artifact_binding(training, run_identity)
 
-    validation = load_retained_representation_jsonl(
-        training.data.validation.jsonl_path,
-        expected_source_sha256=training.data.validation.source_sha256,
+    evaluation_data_path = (
+        config.evaluation_data_path
+        if config.evaluation_data_path is not None
+        else training.data.validation.jsonl_path
+    )
+    evaluation_data_source_sha256 = (
+        config.evaluation_data_source_sha256
+        if config.evaluation_data_source_sha256 is not None
+        else training.data.validation.source_sha256
+    )
+    evaluation_data = load_retained_representation_jsonl(
+        evaluation_data_path,
+        expected_source_sha256=evaluation_data_source_sha256,
         warn_on_leakage=training.data.warn_on_target_leakage,
     )
-    validation_identity = getattr(run_identity, "validation_identity", None)
-    if validation_identity is None or (
-        validation_identity.validation_retained_manifest_sha256
-        != validation.manifest.manifest_sha256
-    ):
-        raise ValueError("validation retained-manifest identity mismatch")
+    if config.evaluation_data_path is None:
+        validation_identity = getattr(run_identity, "validation_identity", None)
+        if validation_identity is None or (
+            validation_identity.validation_retained_manifest_sha256
+            != evaluation_data.manifest.manifest_sha256
+        ):
+            raise ValueError("validation retained-manifest identity mismatch")
 
     torch.cuda.set_device(0)
     device = torch.device("cuda", 0)
@@ -294,8 +335,8 @@ def run_representation_internal_evaluation_from_artifact(
         runtime=runtime,
         qwen_model=model,
         family_adapter=family_adapter,
-        validation_samples=validation.samples,
-        validation_manifest_sha256=validation.manifest.manifest_sha256,
+        validation_samples=evaluation_data.samples,
+        validation_manifest_sha256=evaluation_data.manifest.manifest_sha256,
         group_builder=group_builder,
         model_identity=state_digest(asdict(run_identity.model)),
         checkpoint_identity=config.artifact_manifest_sha256,
@@ -312,7 +353,9 @@ def run_representation_internal_evaluation_from_artifact(
         "evaluation_report_path": artifact.path,
         "evaluation_report_sha256": artifact.payload_sha256,
         "evaluation_report_byte_count": artifact.byte_count,
-        "validation_manifest_sha256": validation.manifest.manifest_sha256,
+        "evaluation_data_manifest_sha256": (
+            evaluation_data.manifest.manifest_sha256
+        ),
         "conditioning_provider": training.provider.provider.value,
         "physical_gpu_id": config.physical_gpu_id,
         "tokenizer_length_before": tokenizer_length_before,

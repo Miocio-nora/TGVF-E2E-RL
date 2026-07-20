@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
-"""Materialize the fixed Qwen3 representation internal-evaluation population."""
+"""Materialize the Golden-matched Qwen3 representation evaluation population."""
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter
 from hashlib import sha256
 import json
 from pathlib import Path
-
-from PIL import Image
-from transformers import AutoProcessor
 
 from tgvf_rl.representation.training.data import load_retained_representation_jsonl
 
 
 VALIDATION_PATH = Path(
     "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/"
-    "runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl"
+    "runs/tgvf_v4_teacher_50k_clean_imend/splits/"
+    "tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl"
 )
 VALIDATION_SOURCE_SHA256 = (
-    "a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308"
+    "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
 )
 RETAINED_MANIFEST_SHA256 = (
-    "f47bbff7c63ffa381ce2e2e263130c783057c6d408575ef4c4e3dd5b019c5a33"
+    "534f5b1e648d0bca2b1ea2ff02f81e1fb7abbb456f16faacbb118ca94f7306b0"
 )
-MODEL_PATH = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking")
-IMAGE_MAX_PIXELS = 262144
-EXPECTED_GRID = (1, 26, 38)
-SEED = 42
-PAIR_A = "tgvf_v3_teacher_val_2k:chartqa:train_004209:2"
-PAIR_B = "tgvf_v3_teacher_val_2k:chartqa:train_010577:0"
+GOLDEN_ROW_COUNT = 200
+GOLDEN_GROUP_COUNT = 46
+GOLDEN_K_COUNTS = {3: 6, 4: 19, 5: 20, 6: 1}
+FIRST_SAMPLE_ID = "tgvf_v4_teacher_50k:visual_genome:2410492:0::focus1"
+LAST_SAMPLE_ID = "tgvf_v4_teacher_50k:textocr:e08ccd92443c5924:3::focus1"
+PAIR_A = FIRST_SAMPLE_ID
+PAIR_B = "tgvf_v4_teacher_50k:visual_genome:2380160:0::focus1"
 OUTPUT_DIRECTORY = Path(
     "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/"
     "internal_evaluation"
@@ -43,57 +42,38 @@ def main() -> None:
         warn_on_leakage=False,
     )
     if dataset.manifest.manifest_sha256 != RETAINED_MANIFEST_SHA256:
-        raise RuntimeError("retained validation manifest changed")
-    groups: dict[str, list[object]] = defaultdict(list)
-    for sample in dataset.samples:
-        groups[sample.image_group_key].append(sample)
-    exact_k4 = {key: values for key, values in groups.items() if len(values) == 4}
+        raise RuntimeError("retained v4 clean-imend test manifest changed")
 
-    processor = AutoProcessor.from_pretrained(
-        MODEL_PATH,
-        local_files_only=True,
-        trust_remote_code=False,
-    )
-    image_processor_size = processor.image_processor.size
-    image_size = {
-        "shortest_edge": image_processor_size["shortest_edge"],
-        "longest_edge": IMAGE_MAX_PIXELS,
-    }
-    selected: list[tuple[str, list[object]]] = []
-    for key, samples in exact_k4.items():
-        with Image.open(samples[0].image) as image:
-            batch = processor(
-                text=["<|vision_start|><|image_pad|><|vision_end|>"],
-                images=[image.convert("RGB")],
-                return_tensors="pt",
-                images_kwargs={"size": image_size},
-            )
-        grid = tuple(int(value) for value in batch["image_grid_thw"][0].tolist())
-        if grid == EXPECTED_GRID:
-            selected.append((key, samples))
-    selected.sort(
-        key=lambda item: sha256(
-            (
-                "representation-internal-eval-groups-v1\0"
-                + RETAINED_MANIFEST_SHA256
-                + "\0"
-                + str(SEED)
-                + "\0"
-                + item[0]
-            ).encode("utf-8")
-        ).hexdigest()
-    )
-    selected_ids = {sample.sample_id for _, samples in selected for sample in samples}
-    if len(selected) != 31 or len(selected_ids) != 124:
+    selected = dataset.samples[:GOLDEN_ROW_COUNT]
+    if (
+        len(selected) != GOLDEN_ROW_COUNT
+        or selected[0].sample_id != FIRST_SAMPLE_ID
+        or selected[-1].sample_id != LAST_SAMPLE_ID
+    ):
+        raise RuntimeError("Golden first-200 row population changed")
+    groups: list[tuple[str, list[object]]] = []
+    for sample in selected:
+        if not groups or groups[-1][0] != sample.image_group_key:
+            groups.append((sample.image_group_key, []))
+        groups[-1][1].append(sample)
+    observed_k_counts = Counter(len(samples) for _, samples in groups)
+    if len(groups) != GOLDEN_GROUP_COUNT or dict(observed_k_counts) != GOLDEN_K_COUNTS:
         raise RuntimeError(
-            f"expected 31 exact-K4 groups/124 rows, got {len(selected)}/{len(selected_ids)}"
+            "Golden group population changed: "
+            f"groups={len(groups)}, K-counts={dict(observed_k_counts)}"
         )
-    if not {PAIR_A, PAIR_B}.issubset(selected_ids):
-        raise RuntimeError("fixed counterfactual pair is absent from selected groups")
+
+    selected_by_id = {sample.sample_id: sample for sample in selected}
+    if not {PAIR_A, PAIR_B}.issubset(selected_by_id):
+        raise RuntimeError("fixed v4 counterfactual pair is absent")
+    if selected_by_id[PAIR_A].short_answer != "white" or (
+        selected_by_id[PAIR_B].short_answer != "dark green"
+    ):
+        raise RuntimeError("fixed v4 counterfactual values changed")
 
     ordered_payload = {
-        "schema_version": "representation_internal_evaluation_group_manifest_v1",
-        "identity": "qwen3-v3-val2k-grid1x26x38-exact-k4-seed42-v1",
+        "schema_version": "representation_internal_evaluation_group_manifest_v2",
+        "identity": "qwen3-v4-clean-imend-test-golden-first200-variable-k-v1",
         "source_data_manifest_sha256": RETAINED_MANIFEST_SHA256,
         "groups": [
             {
@@ -106,34 +86,36 @@ def main() -> None:
                     for sample in samples
                 ],
             }
-            for key, samples in selected
+            for key, samples in groups
         ],
     }
     counterfactual_payload = {
         "schema_version": "qwen3_counterfactual_manifest_v1",
-        "identity": "qwen3-v3-val2k-chartqa-2016-value-pair-v1",
+        "identity": "qwen3-v4-clean-imend-test-golden-value-pair-v1",
         "source_data_manifest_sha256": RETAINED_MANIFEST_SHA256,
         "pairs": [
             {
                 "schema_version": "qwen3_counterfactual_pair_v1",
-                "pair_id": "chartqa-2016-value-262-vs-38",
+                "pair_id": "visual-genome-white-vs-dark-green",
                 "sample_a_id": PAIR_A,
                 "sample_b_id": PAIR_B,
-                "expected_value_a": "262",
-                "expected_value_b": "38",
+                "expected_value_a": "white",
+                "expected_value_b": "dark green",
                 "pair_audit_identity": (
-                    "v3-val2k-exact-question-target-distinct-image-"
-                    "matched-qwen3-grid-v1"
+                    "v4-clean-imend-golden-first200-distinct-image-"
+                    "shape-compatible-d-v1"
                 ),
             }
         ],
     }
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     outputs = {
-        OUTPUT_DIRECTORY / "qwen3_v3_val2k_grid1x26x38_exact_k4_seed42_v1.json": (
+        OUTPUT_DIRECTORY
+        / "qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json": (
             ordered_payload
         ),
-        OUTPUT_DIRECTORY / "qwen3_v3_val2k_chartqa_2016_counterfactual_v1.json": (
+        OUTPUT_DIRECTORY
+        / "qwen3_v4_clean_imend_test_golden_counterfactual_v1.json": (
             counterfactual_payload
         ),
     }

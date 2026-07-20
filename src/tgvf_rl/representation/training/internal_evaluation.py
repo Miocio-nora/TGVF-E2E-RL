@@ -66,7 +66,7 @@ from .readout import (
     assert_frozen_deterministic_readout_model,
 )
 from .schema import RepresentationTrainingSample
-from .streaming import score_streaming_same_image_group
+from .streaming import StreamingGroupScores, score_streaming_same_image_group
 from .trainer import RepresentationGroupBuilder
 
 
@@ -79,7 +79,7 @@ REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION = (
 DETERMINISTIC_RANDOM_D_ALGORITHM = "shared_feature_permutation_v1"
 ATTENTION_TOPK = 5
 READOUT_FORWARD_PATH = "family_injected_language_model_no_vision_rerun_v1"
-READOUT_MASK_MODE = "causal_tool_response_onward_original_image_key_block_v2"
+READOUT_MASK_MODE = "causal_post_evidence_original_image_key_block_v1"
 READOUT_POSITION_SOURCE = "family_native_group_builder_v1"
 READOUT_VISUAL_SWAP_UNIT = "atomic_main_and_all_deepstack_v1"
 CAUSAL_VALUE_FLIP_LOG_ODDS_CONTRACT = "summed_teacher_forced_token_logprob_v1"
@@ -680,8 +680,8 @@ def create_injected_native_counterfactual_evaluator(
 class RepresentationReadoutControlIdentity:
     correct_candidate_sample_id: str
     wrong_same_image_candidate_sample_id: str
-    wrong_different_image_candidate_sample_id: str
-    wrong_different_image_group_key: str
+    wrong_different_image_candidate_sample_id: str | None
+    wrong_different_image_group_key: str | None
     random_d_seed: int
     random_d_algorithm: str = DETERMINISTIC_RANDOM_D_ALGORITHM
 
@@ -723,7 +723,7 @@ class RepresentationInternalEvaluationGroupRecord:
     image_group_key: str
     source_visual_identity: str
     sample_ids: tuple[str, ...]
-    wrong_different_image_group_key: str
+    wrong_different_image_group_key: str | None
     query: QueryScoreMatrixMetrics
 
 
@@ -924,7 +924,7 @@ def run_representation_internal_evaluation(
         score_streaming_same_image_group(family_adapter, qwen_model, group)
         for group in groups
     )
-    nll_matrices = tuple(-record.score_matrix.float().cpu() for record in score_records)
+    nll_matrices = tuple(_mean_nll_matrix(record) for record in score_records)
     query_records = tuple(query_score_matrix_metrics(matrix) for matrix in nll_matrices)
 
     group_records: list[RepresentationInternalEvaluationGroupRecord] = []
@@ -932,13 +932,30 @@ def run_representation_internal_evaluation(
     for group_index, (group, scores, query) in enumerate(
         zip(groups, score_records, query_records, strict=True)
     ):
-        different_group = groups[(group_index + 1) % len(groups)]
+        wrong_different_pairs = tuple(
+            _find_wrong_different_candidate(
+                groups,
+                group_index=group_index,
+                row_index=row_index,
+                expected=candidate.visual,
+            )
+            for row_index, candidate in enumerate(group.candidates)
+        )
+        paired_group_keys = {
+            pair[0].image_group_key
+            for pair in wrong_different_pairs
+            if pair is not None
+        }
         group_records.append(
             RepresentationInternalEvaluationGroupRecord(
                 image_group_key=group.image_group_key,
                 source_visual_identity=group.source_visual_identity,
                 sample_ids=scores.sample_ids,
-                wrong_different_image_group_key=different_group.image_group_key,
+                wrong_different_image_group_key=(
+                    next(iter(paired_group_keys))
+                    if len(paired_group_keys) == 1
+                    else None
+                ),
                 query=query,
             )
         )
@@ -947,11 +964,11 @@ def run_representation_internal_evaluation(
         ):
             same_index = (row_index + 1) % len(group.candidates)
             wrong_same = group.candidates[same_index]
-            wrong_different = different_group.candidates[row_index]
-            _assert_visual_bundle_contract(
-                wrong_different.visual,
-                candidate.visual,
-                name="wrong-different-image D",
+            wrong_different_pair = wrong_different_pairs[row_index]
+            different_group, wrong_different = (
+                wrong_different_pair
+                if wrong_different_pair is not None
+                else (None, None)
             )
             random_seed = _random_control_seed(identity, row.sample_id)
             random_visual = _deterministic_random_visual_bundle(
@@ -985,14 +1002,20 @@ def run_representation_internal_evaluation(
                 row=row,
                 candidate=random_visual,
             )
-            different_nll, different_count = _score_readout_control(
-                family_adapter,
-                qwen_model,
-                source=group.source_visual,
-                row=row,
-                candidate=wrong_different.visual,
-            )
-            if {target_only_count, random_count, different_count} != {token_count}:
+            different_nll: float | None = None
+            different_count: int | None = None
+            if wrong_different is not None:
+                different_nll, different_count = _score_readout_control(
+                    family_adapter,
+                    qwen_model,
+                    source=group.source_visual,
+                    row=row,
+                    candidate=wrong_different.visual,
+                )
+            available_counts = {target_only_count, random_count}
+            if different_count is not None:
+                available_counts.add(different_count)
+            if available_counts != {token_count}:
                 raise RuntimeError(
                     "control evidence-token counts differ from correct D"
                 )
@@ -1023,9 +1046,13 @@ def run_representation_internal_evaluation(
                         wrong_same_image_candidate_sample_id=wrong_same.sample_id,
                         wrong_different_image_candidate_sample_id=(
                             wrong_different.sample_id
+                            if wrong_different is not None
+                            else None
                         ),
                         wrong_different_image_group_key=(
                             different_group.image_group_key
+                            if different_group is not None
+                            else None
                         ),
                         random_d_seed=random_seed,
                     ),
@@ -1083,6 +1110,22 @@ def _token_mean_nll_from_cell_score(
     if valid_token_count <= 0:
         raise ValueError("valid evidence-token count must be positive")
     return float((-summed_log_likelihood / valid_token_count).float().item())
+
+
+def _mean_nll_matrix(scores: StreamingGroupScores) -> torch.Tensor:
+    """Convert row-local summed log likelihoods to Golden-compatible mean NLL."""
+
+    if scores.score_matrix.ndim != 2 or scores.score_matrix.shape[0] != (
+        scores.evidence_token_counts.numel()
+    ):
+        raise ValueError("score matrix and evidence-token counts do not align")
+    if bool((scores.evidence_token_counts <= 0).any().item()):
+        raise ValueError("query matrix contains an empty evidence row")
+    rows = tuple(
+        (-scores.score_matrix[row_index] / int(token_count.item())).float().cpu()
+        for row_index, token_count in enumerate(scores.evidence_token_counts)
+    )
+    return torch.stack(rows)
 
 
 def save_representation_internal_evaluation_report_atomic(
@@ -1145,7 +1188,6 @@ def _validated_sample_groups(
         )
     all_ids: list[str] = []
     group_keys: list[str] = []
-    expected_size: int | None = None
     for group in materialized:
         if len(group) < 2 or any(
             not isinstance(sample, RepresentationTrainingSample) for sample in group
@@ -1154,10 +1196,6 @@ def _validated_sample_groups(
         keys = {sample.image_group_key for sample in group}
         if len(keys) != 1:
             raise ValueError("one internal-evaluation group must share one image key")
-        if expected_size is None:
-            expected_size = len(group)
-        elif len(group) != expected_size:
-            raise ValueError("wrong-image pairing requires equal group sizes")
         group_keys.append(next(iter(keys)))
         all_ids.extend(sample.sample_id for sample in group)
     if len(set(group_keys)) != len(group_keys):
@@ -1219,25 +1257,37 @@ def _validate_cross_group_contract(groups: tuple[SameImageReadoutGroup, ...]) ->
     first = groups[0]
     expected_projection = first.candidates[0].projection_identities
     expected_provider = first.candidates[0].target_conditioning_provider
-    expected_size = len(first.rows)
-    for group_index, group in enumerate(groups):
-        if len(group.rows) != expected_size:
-            raise ValueError("wrong-image controls require equal group sizes")
-        paired_group = groups[(group_index + 1) % len(groups)]
-        if group.source_visual_identity == paired_group.source_visual_identity:
-            raise ValueError(
-                "paired wrong-image controls must have distinct source IDs"
-            )
-        _assert_visual_bundle_contract(
-            group.source_visual,
-            first.source_visual,
-            name="source visual",
-        )
+    source_identities = tuple(group.source_visual_identity for group in groups)
+    if len(set(source_identities)) != len(source_identities):
+        raise ValueError("internal-evaluation source visual IDs must be distinct")
+    for group in groups:
         for candidate in group.candidates:
             if candidate.projection_identities != expected_projection:
                 raise ValueError("internal-evaluation groups mix projection identities")
             if candidate.target_conditioning_provider is not expected_provider:
                 raise ValueError("internal-evaluation groups mix providers")
+
+
+def _find_wrong_different_candidate(
+    groups: tuple[SameImageReadoutGroup, ...],
+    *,
+    group_index: int,
+    row_index: int,
+    expected: RepresentationVisualTensorBundle,
+) -> tuple[SameImageReadoutGroup, RepresentationCandidateObservation] | None:
+    """Select a deterministic compatible control without constraining the suite."""
+
+    for offset in range(1, len(groups)):
+        group = groups[(group_index + offset) % len(groups)]
+        preferred = row_index % len(group.candidates)
+        candidate_indices = (preferred, *(
+            index for index in range(len(group.candidates)) if index != preferred
+        ))
+        for candidate_index in candidate_indices:
+            candidate = group.candidates[candidate_index]
+            if _visual_bundle_contract_matches(candidate.visual, expected):
+                return group, candidate
+    return None
 
 
 def _score_readout_control(
@@ -1610,6 +1660,24 @@ def _assert_visual_bundle_contract(
             or actual_tensor.device != expected_tensor.device
         ):
             raise ValueError(f"{name} shape/dtype/device contract differs")
+
+
+def _visual_bundle_contract_matches(
+    actual: RepresentationVisualTensorBundle,
+    expected: RepresentationVisualTensorBundle,
+) -> bool:
+    if actual.branch_layers != expected.branch_layers:
+        return False
+    return all(
+        actual_tensor.shape == expected_tensor.shape
+        and actual_tensor.dtype == expected_tensor.dtype
+        and actual_tensor.device == expected_tensor.device
+        for actual_tensor, expected_tensor in zip(
+            (actual.main, *actual.deepstack),
+            (expected.main, *expected.deepstack),
+            strict=True,
+        )
+    )
 
 
 def _assert_adapter_state_unchanged(

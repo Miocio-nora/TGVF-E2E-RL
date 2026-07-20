@@ -122,7 +122,6 @@ def _group(
                 position_ids=torch.arange(8).view(1, 8),
                 source_positions=(1, 2),
                 d_positions=(3, 4),
-                source_key_block_query_start=3,
             )
         )
         candidates.append(
@@ -304,7 +303,6 @@ def test_row_rejects_swapping_source_and_d_placeholder_blocks() -> None:
             position_ids=row.position_ids,
             source_positions=row.d_positions,
             d_positions=row.source_positions,
-            source_key_block_query_start=row.source_key_block_query_start,
         )
 
 
