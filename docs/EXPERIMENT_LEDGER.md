@@ -4408,7 +4408,7 @@ instead of repeated bullets.
 
 ### RP-37-QWEN3-REPRESENTATION-INTERNAL-EVAL-CONTEXTUAL-V4-GPU0
 
-- Lifecycle/result: `PLANNED` / `PENDING`; exact replacement for RP-35 after
+- Lifecycle/result: `COMPLETE` / `FAIL`; exact replacement for RP-35 after
   preserving the score tensor's BF16 divide-before-export reduction order.
   All model, Adapter, population, prompt, deterministic evaluator, N/A fields,
   GPU UUID, command environment and acceptance remain exactly RP-35.
@@ -4417,10 +4417,13 @@ instead of repeated bullets.
   `9a051f2012d54b892874b8154e3be6eef01cd1788d995e4ed4c96d78b1bc4060`;
   command selects the contextual `internal_evaluation_v2.toml`; immutable
   output `artifacts/representation/RP-37-qwen3-internal-eval-contextual-v4-gpu0/`.
+- Result: exit `0`; correct-D beats target-only/random at `0.9516/0.9597`, but
+  same-image correct-D win rate is `0.5081` and K4 retrieval top-1 is `0.2984`.
+  The artifact is readable but fails target-specificity promotion.
 
 ### RP-38-QWEN3-REPRESENTATION-INTERNAL-EVAL-TARGET-EMBEDDING-V3-GPU3
 
-- Lifecycle/result: `PLANNED` / `PENDING`; exact paired replacement for RP-36.
+- Lifecycle/result: `COMPLETE` / `FAIL`; exact paired replacement for RP-36.
   All scientific/execution fields remain exactly RP-36/RP-37 except provider,
   bound Adapter and physical GPU 3.
 - Identity/output: clean code
@@ -4429,10 +4432,13 @@ instead of repeated bullets.
   command selects the target-embedding `internal_evaluation_v2.toml`; immutable
   output
   `artifacts/representation/RP-38-qwen3-internal-eval-target-embedding-v3-gpu3/`.
+- Result: exit `0`; correct-D beats target-only/random at `0.9677/0.9677`, but
+  same-image correct-D win rate is `0.5726` and K4 retrieval top-1 is `0.3468`.
+  This provider is directionally better but still fails target-specificity.
 
 ### RP-39-QWEN3-REP-MATRIXCE-LEGACY-CONTEXTUAL-500-GPU01
 
-- Lifecycle/result: `PLANNED` / `PENDING`; positive-control diagnosis for the
+- Lifecycle/result: `COMPLETE` / `PASS`; execution-only positive-control diagnosis for the
   readable-but-weakly-specific contextual V4 result.
 - Fixed identity: clean runtime code
   `fb64769c1dc04bf1c7fab793be951e9cbd37b257`; config source/canonical SHA256
@@ -4459,10 +4465,13 @@ instead of repeated bullets.
   tgvf_rl.cli run-representation
   configs/representation/qwen3_matrix_ce_legacy_contextual_500step_gpu01.toml`.
   RL rollout/reference/logprob/reward fields are N/A.
+- Result: step 500, validation Matrix CE `1.94921875`, exit `0`; artifact file/
+  manifest SHA256 `76ae764d...2475` / `88dd6a86...3d51b`. Semantic result is
+  supplied by RP-41 and does not promote this artifact.
 
 ### RP-40-QWEN3-REP-MATRIXCE-BALANCED-T01-CONTEXTUAL-500-GPU23
 
-- Lifecycle/result: `PLANNED` / `PENDING`; paired Matrix-CE calibration lane.
+- Lifecycle/result: `COMPLETE` / `PASS`; execution-only paired Matrix-CE calibration lane.
 - Fixed identity: clean runtime code
   `fb64769c1dc04bf1c7fab793be951e9cbd37b257`; config source/canonical SHA256
   `fc760ca089b816027af6024fe1aec61d8f91b08116f713bb3e38a35f8875baab` /
@@ -4477,6 +4486,83 @@ instead of repeated bullets.
   `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` /
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; deterministic RP-39 command with
   its balanced-T0.1 config. RL-only fields are N/A.
+- Result: step 500, validation Matrix CE `1.92578125`, exit `0`; artifact file/
+  manifest SHA256 `36166909...9ee` / `c071580b...06bc`. Semantic result is
+  supplied by RP-42 and does not promote this artifact.
+
+### RP-41/42-QWEN3-REP-INTERNAL-EVAL-MATRIXCE-STEP500
+
+- Lifecycle/result: `COMPLETE` / `FAIL`; paired post-hoc evaluation of the
+  completed RP-39 legacy and RP-40 Balanced-T0.1 step-500 artifacts.
+- Fixed comparison: the same 31xK4/124-row ordered manifest, native
+  counterfactual, seed 42, greedy 64-token readout, Qwen3 model, prompt,
+  contextual provider, and max-pixels 262144 used by RP-37/38. No training or
+  weight mutation occurs.
+- Artifacts: RP-39 file/manifest
+  `76ae764d3af41b0abcd74037bc110cf196de700cc7e8efc364e53a0c7a8a2475` /
+  `88dd6a86e8b6e3ff26c1c3bf6fce64ddf474b27d6fbfe6f12f914c7e97a3d51b`;
+  RP-40 file/manifest
+  `361669094a57472d179030b6ac9a55d93a174ab877e6171d042155dd7e1f19ee` /
+  `c071580bbb82c540a8493ce55aa90ac08cbdcd6f5aadfdf5e202a1b59ba370f7`.
+- Execution: clean fixed evaluation runtime `fb64769`, physical GPUs 4/5,
+  paired TOMLs `qwen3_matrix_ce_*_500step_internal_evaluation_gpu{4,5}.toml`;
+  immutable outputs `RP-41-*` and `RP-42-*` under `artifacts/representation/`.
+- Result: both exit `0`. RP-41 legacy versus RP-42 Balanced-T0.1 K4 top-1 is
+  `0.3145` versus `0.2823`; wrong-same-image win rate is `0.4919` versus
+  `0.5161`. Both remain near chance and fail promotion. Balanced-T0.1 improves
+  wrong-different-image readability (`0.9355` versus `0.7581`) but not target
+  specificity, so temperature calibration is not the isolated root cause.
+
+### RP-43-QWEN3-REP-MATRIXCE-MASK-BOUNDARY-DIAGNOSTIC
+
+- Lifecycle/result: `CANCELLED` / `INVALID`; both launches were stopped at user
+  request before an accepted artifact. The proposed mask was rejected as the
+  explanation for train/validation specificity divergence and the code was
+  restored to the preceding evidence-boundary behavior.
+- Fixed comparison: every RP-40 field remains unchanged except clean code
+  commit `5ad8c10941633f7e0e2fa5449db9efa42d509a7c`, mask identity
+  `causal_tool_response_onward_original_image_key_block_v2`, run/objective/
+  output identity, and physical GPUs 0/1. Original-image keys are blocked from
+  the exact native `<tool_response>` opener rather than only evidence queries.
+- Config identity: source/canonical SHA256
+  `1ef5dea8f3aeb33fd4fcb270e370095a338983008619906d90498262f5977ebd` /
+  `c460df44a78772e650b893e1e90ef580b118cab4879e6481e9761a58d6fc7023`;
+  `configs/representation/qwen3_matrix_ce_balanced_t01_contextual_maskfix_500step_gpu01.toml`.
+- Model/data/math: local Qwen3-VL-8B-Thinking, v4 clean-imend train/v3 val,
+  contextual layer -1, seed 42, max-pixels 262144, K4/B4/world2/GA4/global32,
+  Balanced-T0.1 Matrix CE + L_gen + Norm weights `1/1/.1`, manifold zero,
+  AdamW `1e-4`, unchanged 2,000-step scheduler horizon, target step 500.
+- GPUs/command/output: the final attempted launch used B200 GPUs 0/1;
+  deterministic clean-worktree
+  `torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation`
+  with the RP-43 config; immutable output
+  `artifacts/representation/RP-43-qwen3-matrix-ce-balanced-t01-maskfix-contextual-500-gpu01/`.
+- Acceptance: none; this cell must not be resumed or used as evidence.
+
+### RP-44-QWEN3-REP-INTERNAL-EVAL-BALANCED-T01-V4-GOLDEN-GPU3
+
+- Lifecycle/result: `PLANNED` / `PENDING`; post-hoc evaluation of the completed
+  RP-40 Balanced-T0.1 step-500 Adapter on the historical Golden's actual
+  same-distribution v4 clean-imend test population.
+- Code/config: clean code commit `ffa41467613b24376374e53d99be5bf29e9d0a0b`;
+  run config
+  `configs/representation/qwen3_matrix_ce_balanced_t01_contextual_500step_internal_evaluation_v4_golden_gpu3.toml`.
+- Fixed data identity: source SHA256 `de61c731...82d`, retained manifest
+  `534f5b1e...b0`, exact first 200 retained rows in 46 ordered same-image groups;
+  variable-K counts are K3/K4/K5/K6 = 6/19/20/1. Ordered manifest SHA256 is
+  `55e2cde5...d8`; counterfactual manifest SHA256 is `2fce6f96...d54`.
+- Artifact: RP-40 Adapter file/manifest SHA256 `36166909...9ee` /
+  `c071580b...06bc`; no training or mutation. Query matrices use evidence-token
+  mean NLL, matching the Golden score semantics. Shape-compatible
+  wrong-different-image D remains an optional secondary control.
+- GPU/command/output: physical GPU 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; deterministic single-GPU
+  evaluation-only CLI; immutable report path
+  `artifacts/representation/RP-44-qwen3-internal-eval-balanced-t01-v4-golden-gpu3/report.json`.
+- Acceptance: technical completion requires 200 samples, 46 groups, exact
+  manifest binding, tokenizer unchanged, and a complete immutable report.
+  Scientific comparison is against Golden top-1 `0.77`; no v3 result is an
+  active validation reference.
 
 ## Compatibility-spike status
 

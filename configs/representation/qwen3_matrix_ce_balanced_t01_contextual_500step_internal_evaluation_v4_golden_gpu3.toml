@@ -1,0 +1,36 @@
+schema_version = "representation-internal-evaluation-run-v2"
+run_id = "RP-44-QWEN3-REP-INTERNAL-EVAL-BALANCED-T01-V4-GOLDEN-GPU3"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "ffa41467613b24376374e53d99be5bf29e9d0a0b"
+dirty = false
+
+[source]
+training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_matrix_ce_balanced_t01_contextual_500step_gpu23.toml"
+training_config_sha256 = "fc760ca089b816027af6024fe1aec61d8f91b08116f713bb3e38a35f8875baab"
+
+[artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-40-qwen3-matrix-ce-balanced-t01-contextual-500-gpu23/adapter.pt"
+file_sha256 = "361669094a57472d179030b6ac9a55d93a174ab877e6171d042155dd7e1f19ee"
+manifest_sha256 = "c071580bbb82c540a8493ce55aa90ac08cbdcd6f5aadfdf5e202a1b59ba370f7"
+expected_run_identity_sha256 = "ea6471e4ff3036b2df1ffac71921103205faaa486552522c2aa8d7bef1de1f92"
+expected_global_step = 500
+
+[execution]
+physical_gpu_id = 3
+
+[evaluation_data]
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl"
+source_sha256 = "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
+
+[evaluation]
+evaluation_id = "qwen3-matrixce-balanced-t01-contextual-step500-v4-golden-first200-v1"
+ordered_group_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json"
+ordered_group_manifest_sha256 = "55e2cde5e118de77e4bcc099a422844129cdff1caf328d349dae5c7f11a634d8"
+counterfactual_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_counterfactual_v1.json"
+counterfactual_manifest_sha256 = "2fce6f96425c066358d66f44c204820be5630bcb93180a8e9c06fa66968a7d54"
+report_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-44-qwen3-internal-eval-balanced-t01-v4-golden-gpu3/report.json"
+random_seed = 42
+max_new_tokens = 64
+eos_token_ids = [151645]
