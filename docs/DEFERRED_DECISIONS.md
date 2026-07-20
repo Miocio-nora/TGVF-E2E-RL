@@ -9,7 +9,7 @@ from veRL, DeepEyes, SDPO, a legacy run, or a synthetic test fixture.
 
 ## Data and prompts
 
-- real representation-phase dataset manifest, license, v2 transform audit, and
+- real representation-phase dataset manifest, license, v1 transform audit, and
   split;
 - policy-RL prompt population, sampling rule, group construction, and held-out
   evaluation manifest;
@@ -23,7 +23,11 @@ The representation user-message wording is not deferred: decision
 plus unmodified dataset question, with no separately injected target field; the
 teacher target is serialized as the native assistant tool-call argument. Its
 fixed pre-tool reasoning, evidence reasoning, and final `short_answer`
-placement are likewise part of that versioned trajectory.
+placement are likewise the initial accepted v1 trajectory. The fixed identities
+are `qwen3-representation-image-question-v1`,
+`native_representation_prompt_v1`, `representation_sample_identity_v1`,
+`retained_focus_rows_v1`, and `canonical_evidence_supervision_v1`; there is no
+supported earlier answer-omitting or target-bearing compatibility schema.
 
 ## Reward and evaluation
 

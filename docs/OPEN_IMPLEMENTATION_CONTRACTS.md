@@ -557,22 +557,22 @@ the external data or start a production/GPU run.
 - [x] `FIXED AD-02A` — The protocol-neutral representation row contains the
   retained row `uid` as `sample_id`, exact image reference, already-rendered
   question text, target text, `evidence_description`, `short_answer`, optional
-  `image_id`, and the recorded evaluation metadata. The v2 sample identity
-  requires a non-empty `short_answer` and binds it into the immutable content
-  digest; v1 identities remain available only for exact historical replay and
-  do not retroactively change their digest. The group key is `image_id` with
-  exact image-reference fallback. The exact retained data has no separate
-  `choices` field; a future source with choices requires a new schema/transform
-  version rather than implicit prompt rendering inside this record.
+  `image_id`, and the recorded evaluation metadata.
+  `representation_sample_identity_v1` requires a non-empty `short_answer` and
+  binds it into the immutable content digest. It is the initial accepted sample
+  identity; no answer-omitting predecessor or replay compatibility identity is
+  supported. The group key is `image_id` with exact image-reference fallback.
+  The exact retained data has no separate `choices` field; a future source with
+  choices requires a new schema/transform version rather than implicit prompt
+  rendering inside this record.
 - [x] `FIXED AD-02B` — `retained_focus_rows_v1` implements source-hash
   validation, strict focus metadata, fail-closed fields/image resolution,
   duplicate handling, leakage records/warnings, every-row accepted/excluded
-  disposition, immutable manifest identity, and four-key split-overlap reports.
-  `retained_focus_rows_v2` preserves those semantics while additionally
-  requiring a non-empty `short_answer` and emitting v2 sample identities for
-  the accepted native trajectory. The transform and sample-identity versions
-  must agree; v1 remains the historical RP path rather than silently acquiring
-  v2 admission rules.
+  disposition, immutable manifest identity, four-key split-overlap reports, and
+  the non-empty `short_answer` admission rule. It emits
+  `representation_sample_identity_v1` for the accepted native trajectory. This
+  is the initial accepted transform; there is no executable earlier transform
+  path to retain.
   Evidence: `tests/representation/training/test_data.py` plus the exact audit in
   `docs/LEGACY_REFERENCE.md`. Leakage records are metadata, not implicit row
   removal.
@@ -614,26 +614,25 @@ the external data or start a production/GPU run.
     evidence mappings are singleton/contiguous/ID-identical and every visual
     position remains ignored. The executable mapping is Qwen3-specific;
     Qwen2.5-VL fails closed pending its separate family fixture/artifact.
+    This supervision contract is `canonical_evidence_supervision_v1`; it is the
+    initial accepted canonical schema and has no answer-omitting predecessor.
   - [x] `FIXED AD-03B` — The Qwen3 implementation constructs one original-image
     question-only user turn, one native `tgvf_focus_tool` action, one
     latent-image tool result, and the evidence-reasoning-plus-answer turn. The
     strict parser identifies the raw JSON target span and exact IDs before/after
-    processor expansion. The separate historical
-    `qwen3_native_representation_smoke_v1.json` golden uses an explicitly
-    non-production prompt, a deterministic 56×56 RGB image, a Unicode/slash
-    target, and evidence text; it freezes prompt, tokenizer/template/schema,
-    action/evidence transcript, target span, expanded-input, two-visual-block,
-    and evidence-label identities against the accepted local processor. It is
-    retained unchanged as provenance and does not validate the v2 trajectory;
-    the separately versioned `qwen3_native_representation_smoke_v2.json`
-    processor golden now freezes the current question-only trajectory,
-    answer placement, evidence-only labels, target span, and expanded visual
-    positions. Its prompt identity is
+    processor expansion. The accepted
+    `qwen3_native_representation_smoke_v1.json` processor golden uses a
+    deterministic 56×56 RGB image and Unicode/slash target and freezes the
+    question-only trajectory, final-answer placement, evidence-only labels,
+    target span, expanded input, two visual blocks, and expanded visual
+    positions against the accepted local processor. Its prompt identity is
     `qwen3-representation-image-question-v1` under schema
-    `native_representation_prompt_v2`.
+    `native_representation_prompt_v1`. The earlier target-bearing golden and
+    renderer branch were never accepted and are removed rather than preserved
+    as an executable historical version.
   - [ ] `OPEN_CONFIGURABLE AD-03C` — Accept the contextual hidden layer and bind
     the fixed `qwen3-representation-image-question-v1` /
-    `native_representation_prompt_v2` identity and hash in the production
+    `native_representation_prompt_v1` identity and hash in the production
     configuration. Separately injecting the teacher target into the user
     message is no longer configurable: it is forbidden. The policy-RL
     system/tool-use prompt remains a separate open contract.
@@ -1044,7 +1043,7 @@ the synthetic implementation smoke.
   teardown/restore matching-next-update proof with Matrix CE, `L_gen`, and Norm.
 - [ ] Accept the production representation data split, selected provider,
   scientific configuration, parity tolerances, semantic evaluation, and
-  promotion thresholds, and bind the fixed v2 transcript identity, before any
+  promotion thresholds, and bind the fixed v1 transcript identity, before any
   production training claim. A paired-provider run is optional comparison
   evidence, not a prerequisite.
 - [x] Implement the S0 Qwen-family boundary, both condition-provider

@@ -86,24 +86,25 @@ provider result, or accepted semantic thresholds.
 The repository now also contains an executable native Qwen3 representation
 trainer, without claiming a completed production run:
 
-- the representation transcript is versioned. Historical prompt/config v1/v2
-  paths retain their old empty-pre-reasoning/empty-answer behavior for exact
-  provenance, while config v3 selects the new trajectory: original image plus
-  unmodified question, fixed pre-tool reasoning, one target-bearing native
-  `tgvf_focus_tool` call, latent `D`, post-tool `evidence_description`, and
-  final dataset `short_answer`;
+- the first accepted representation transcript is
+  `qwen3-representation-image-question-v1` under
+  `native_representation_prompt_v1`: original image plus unmodified question,
+  fixed pre-tool reasoning, one target-bearing native `tgvf_focus_tool` call,
+  latent `D`, post-tool `evidence_description`, and final dataset
+  `short_answer`. The earlier target-bearing user-prompt branch was never
+  accepted and is removed rather than retained as a compatibility version;
 - canonical Qwen3 evidence supervision labels only `evidence_description` in
   the final post-tool assistant thinking turn. The fixed pre-tool reasoning,
   tool-call target/JSON, latent response, and final answer remain ignored, so
-  the accepted `L_gen` and Matrix-CE mathematics do not change;
+  the accepted `L_gen` and Matrix-CE mathematics do not change. The initial
+  data/supervision identities are `representation_sample_identity_v1`,
+  `retained_focus_rows_v1`, and `canonical_evidence_supervision_v1`;
 - the label boundary uses fast-tokenizer offsets. A local Qwen3 smoke observed
   that sentence-final punctuation may share the following template newline;
-  the committed smoke-only v1 real-processor golden fixes its historical
-  ownership and expanded visual positions. The separately versioned v2 golden
-  now freezes the new transcript, final-answer placement, evidence-only labels,
-  target span, and expanded visual positions without rewriting that provenance.
-  It binds `qwen3-representation-image-question-v1` under
-  `native_representation_prompt_v2`;
+  the accepted v1 real-processor golden freezes the question-only transcript,
+  final-answer placement, evidence-only labels, target span, ownership, and
+  expanded visual positions. The earlier target-bearing golden is deleted, not
+  retained as an executable provenance fixture;
 - a family-owned canonical-to-model map validates processor-expanded original-
   image and tool-observation placeholder runs, leaving every visual position
   ignored by `L_gen`. Qwen2.5-VL explicitly fails closed pending its own
@@ -123,7 +124,7 @@ trainer, without claiming a completed production run:
   wrong-same/wrong-different readout controls, full query matrices, main/branch
   distribution and attention health, plus a concrete Qwen3 native D-only
   teacher-forced/free-continuation path. Its audited pair manifest, extraction
-  rule, thresholds, and formal counterfactual evaluation under the v2
+  rule, thresholds, and formal counterfactual evaluation under the v1
   trajectory remain deliberately unset.
 
 Production data/manifests, selected provider and hyperparameter identity,
@@ -131,7 +132,8 @@ semantic thresholds, paired-provider comparison, exact legacy-state parity,
 and formal counterfactual evaluation remain open under Gate A0. The
 representation user-message structure is fixed, but it is not yet bound into a
 promoted production run. `RP-11` remains an executor/resume proof with its
-historical smoke-only data and prompt, not a trained-quality artifact.
+then-used data and prompt recorded only as ledger history, not a trained-quality
+artifact or supported current prompt identity.
 
 ## Model-family boundary
 

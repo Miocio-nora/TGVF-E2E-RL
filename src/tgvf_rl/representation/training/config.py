@@ -42,9 +42,8 @@ from .data import SplitOverlapPolicy
 from .fsdp2 import RepresentationFSDP2Config
 from .losses import MatrixCEScoreMode
 from .native_pipeline import (
-    REPRESENTATION_PROMPT_IDENTITY_V2,
+    REPRESENTATION_PROMPT_IDENTITY,
     REPRESENTATION_PROMPT_SCHEMA_VERSION,
-    REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
     RepresentationPromptConfig,
 )
 from .objective import (
@@ -647,9 +646,13 @@ class RepresentationTrainingConfig:
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
         }:
             raise ValueError("representation training config schema mismatch")
+        if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
+            raise ValueError("representation training requires prompt schema v1")
+        if self.prompt.identity != REPRESENTATION_PROMPT_IDENTITY:
+            raise ValueError(
+                "representation training requires the fixed image-question prompt identity"
+            )
         if self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
-            if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
-                raise ValueError("training config v1 requires prompt schema v1")
             if not isinstance(self.data, RepresentationDataConfig):
                 raise TypeError(
                     "training config v1 requires its historical data contract"
@@ -663,8 +666,6 @@ class RepresentationTrainingConfig:
             ):
                 raise ValueError("training config v1 requires DCP schema v1")
         elif self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
-            if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
-                raise ValueError("training config v2 requires prompt schema v1")
             if not isinstance(self.data, RepresentationDataConfigV2):
                 raise TypeError(
                     "training config v2 requires an overlap-bound data contract"
@@ -678,14 +679,6 @@ class RepresentationTrainingConfig:
             ):
                 raise ValueError("training config v2 requires DCP schema v2")
         else:
-            if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION_V2:
-                raise ValueError(
-                    "training config v3 requires question-only prompt schema v2"
-                )
-            if self.prompt.identity != REPRESENTATION_PROMPT_IDENTITY_V2:
-                raise ValueError(
-                    "training config v3 requires the fixed image-question prompt identity"
-                )
             if not isinstance(self.data, RepresentationDataConfigV2):
                 raise TypeError(
                     "training config v3 requires an overlap-bound data contract"

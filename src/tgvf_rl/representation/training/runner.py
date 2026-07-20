@@ -37,7 +37,6 @@ from .checkpoint import (
     RepresentationTrainerExecutionIdentity,
 )
 from .config import (
-    REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
     RepresentationDataConfigV2,
     RepresentationTrainingConfig,
     load_representation_training_config,
@@ -638,20 +637,15 @@ def _invocation_target_step(
 def _load_datasets(
     config: RepresentationTrainingConfig,
 ) -> tuple[RepresentationDataset, RepresentationDataset]:
-    require_short_answer = (
-        config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3
-    )
     train = load_retained_representation_jsonl(
         config.data.train.jsonl_path,
         expected_source_sha256=config.data.train.source_sha256,
         warn_on_leakage=config.data.warn_on_target_leakage,
-        require_short_answer=require_short_answer,
     )
     validation = load_retained_representation_jsonl(
         config.data.validation.jsonl_path,
         expected_source_sha256=config.data.validation.source_sha256,
         warn_on_leakage=config.data.warn_on_target_leakage,
-        require_short_answer=require_short_answer,
     )
     return train, validation
 

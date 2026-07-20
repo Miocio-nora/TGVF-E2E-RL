@@ -11,7 +11,6 @@ from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.transcript import (
     CANONICAL_EVIDENCE_SCHEMA_VERSION,
-    CANONICAL_EVIDENCE_SCHEMA_VERSION_V2,
     NATIVE_REPRESENTATION_PRE_REASONING,
     _build_visual_token_expansion,
     _render_native_evidence_labels_batch,
@@ -227,7 +226,7 @@ def test_only_final_post_tool_evidence_tokens_receive_canonical_labels() -> None
         + _ASSISTANT_SUFFIX
     )
     assert supervision.answer_text == "OPEN"
-    assert supervision.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION_V2
+    assert supervision.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION
     assert supervision.transcript.text.count(supervision.evidence_text) == 2
     assert supervision.evidence_char_start == len(supervision.generation_prefill.text)
     assert supervision.evidence_byte_end - supervision.evidence_byte_start == len(
@@ -357,7 +356,7 @@ def test_ambiguous_or_mismatched_offset_mapping_fails_closed(
         )
 
 
-def test_slow_tokenizer_and_invalid_version_pairings_fail_closed() -> None:
+def test_slow_tokenizer_and_invalid_native_contract_fail_closed() -> None:
     slow = _SlowTokenizer()
     with pytest.raises(TypeError, match="fast tokenizer"):
         render_native_evidence_labels(
@@ -368,7 +367,7 @@ def test_slow_tokenizer_and_invalid_version_pairings_fail_closed() -> None:
 
     tokenizer = _OffsetTokenizer()
     fabricated = _messages(pre_reasoning="I will inspect the target.")
-    with pytest.raises(ValueError, match="fixed native v2 pre-reasoning"):
+    with pytest.raises(ValueError, match="fixed native pre-reasoning"):
         render_native_evidence_labels(
             NativeProtocolRenderer(
                 _Processor(tokenizer), expected_tokenizer_length=4096
@@ -385,33 +384,6 @@ def test_slow_tokenizer_and_invalid_version_pairings_fail_closed() -> None:
             _messages(content=""),
             evidence_description="The sign reads OPEN.",
         )
-
-    with pytest.raises(ValueError, match="legacy.*empty answer"):
-        render_native_evidence_labels(
-            NativeProtocolRenderer(
-                _Processor(tokenizer), expected_tokenizer_length=4096
-            ),
-            _messages(pre_reasoning="", content="OPEN"),
-            evidence_description="The sign reads OPEN.",
-        )
-
-
-def test_legacy_empty_reasoning_and_answer_remain_renderable() -> None:
-    tokenizer = _OffsetTokenizer()
-    supervision = render_native_evidence_labels(
-        NativeProtocolRenderer(_Processor(tokenizer), expected_tokenizer_length=4096),
-        _messages(pre_reasoning="", content=""),
-        evidence_description="The sign reads OPEN.",
-    )
-
-    assert supervision.answer_text == ""
-    assert supervision.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION
-    assert supervision.transcript.text == (
-        supervision.generation_prefill.text
-        + supervision.evidence_text
-        + _COMPLETION_MIDDLE
-        + _ASSISTANT_SUFFIX
-    )
 
 
 @pytest.mark.parametrize(

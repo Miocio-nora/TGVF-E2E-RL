@@ -212,6 +212,7 @@ def _samples() -> tuple[RepresentationTrainingSample, ...]:
             question="What is visible?",
             target=f"target {target_index}",
             evidence_description=f"evidence {target_index}",
+            short_answer=f"answer {target_index}",
         )
         for image_id in ("image-a", "image-b")
         for target_index in range(4)

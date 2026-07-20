@@ -33,8 +33,6 @@ from .internal_evaluation import (
     NativeTeacherForcedForward,
 )
 from .native_pipeline import (
-    REPRESENTATION_PROMPT_SCHEMA_VERSION,
-    REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
     RepresentationPromptConfig,
     _processor_batch,
     _qwen3_position_ids,
@@ -53,7 +51,6 @@ QWEN3_COUNTERFACTUAL_PAIR_SCHEMA_VERSION = "qwen3_counterfactual_pair_v1"
 QWEN3_COUNTERFACTUAL_MANIFEST_SCHEMA_VERSION = "qwen3_counterfactual_manifest_v1"
 QWEN3_D_ONLY_CONTEXT_SCHEMA_VERSION = "qwen3_native_d_only_context_v1"
 QWEN3_COUNTERFACTUAL_BUILD_SCHEMA_VERSION = "qwen3_counterfactual_build_v1"
-QWEN3_D_ONLY_TOOL_REASONING = "I will inspect only the requested local field."
 _D_ONLY_CONTEXT_ID_SCHEMA = "qwen3_native_d_only_context_identity_v1"
 _OBSERVATION_ID_SCHEMA = "qwen3_counterfactual_observation_identity_v1"
 _FORBIDDEN_VALUE_FRAGMENTS = (
@@ -277,13 +274,6 @@ def build_qwen3_d_only_messages(
     if len(text_items) != 1:
         raise ValueError("D-only user context requires exactly one text item")
     tool_call = dict(messages[1])
-    if prompt.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION:
-        tool_call["reasoning_content"] = QWEN3_D_ONLY_TOOL_REASONING
-    elif prompt.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION_V2:
-        # Prompt v2 shares the exact accepted pre-tool reasoning with training.
-        pass
-    else:  # RepresentationPromptConfig rejects this; keep the control fail-closed.
-        raise ValueError("representation prompt schema mismatch")
     return (
         {"role": "user", "content": text_items},
         tool_call,
@@ -1107,7 +1097,6 @@ __all__ = [
     "QWEN3_COUNTERFACTUAL_MANIFEST_SCHEMA_VERSION",
     "QWEN3_COUNTERFACTUAL_PAIR_SCHEMA_VERSION",
     "QWEN3_D_ONLY_CONTEXT_SCHEMA_VERSION",
-    "QWEN3_D_ONLY_TOOL_REASONING",
     "Qwen3CounterfactualBuild",
     "Qwen3CounterfactualCaseBuilder",
     "Qwen3CounterfactualManifest",

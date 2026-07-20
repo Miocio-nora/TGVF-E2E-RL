@@ -129,6 +129,7 @@ def _sample(group: str, member: int) -> RepresentationTrainingSample:
         question="What is shown?",
         target=f"target-{member}",
         evidence_description=f"evidence-{member}",
+        short_answer=f"answer-{member}",
     )
 
 

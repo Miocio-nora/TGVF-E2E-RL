@@ -143,15 +143,15 @@ Required new fixtures:
 - [x] canonical exact label ownership and canonical-to-expanded-model visual
   mapping fixtures;
 - [x] pinned real local-Qwen3 representation transcript/model-input golden
-  fixture, using a clearly smoke-only prompt and deterministic 56×56 in-memory
-  RGB image; it freezes action/evidence transcript identities, strict target
-  span/IDs, processor-expanded IDs, two visual blocks, and evidence positions;
-- [x] separately versioned local-Qwen3 v2 trajectory golden with the unmodified
-  question-only user turn, fixed pre-tool reasoning, target-bearing native
-  call, evidence reasoning, final `short_answer`, and evidence-only labels; the
-  accepted identity is `qwen3-representation-image-question-v1` under
-  `native_representation_prompt_v2`, while the smoke-only v1 golden is
-  preserved unchanged as historical provenance;
+  fixture, using the unmodified question-only user turn, fixed pre-tool
+  reasoning, target-bearing native call, evidence reasoning, final
+  `short_answer`, evidence-only labels, and a deterministic 56×56 in-memory RGB
+  image. It freezes the accepted initial identities
+  `qwen3-representation-image-question-v1` /
+  `native_representation_prompt_v1`, strict target span/IDs,
+  processor-expanded IDs, two visual blocks, and evidence positions. The
+  earlier target-bearing user-prompt golden and renderer branch are removed,
+  not retained as an executable historical version;
 - [x] per-sample token-mean then sample-mean reduction, including unequal token
   counts;
 - [x] negative summed-NLL Matrix score;
@@ -262,7 +262,7 @@ explicit acceptance before Gate AD-13 can close.
 |---|---|---|
 | `test_teacher_guide_dataset_loads_jsonl_and_warns_on_leakage` | `DONE` | strict retained-JSONL loader, immutable full-disposition manifest, leakage record/warning, source hash, and overlap fixtures in `test_data.py` |
 | `test_default_loss_weights_are_conservative` | `PROPOSED_EXCLUSION` | historical defaults do not define the native objective; accepted weights need new identities |
-| `test_training_config_defaults_readout_prompt_target_dropout` | `DONE` | native semantic adaptation: config v1/v2 preserve their historical explicit prompt contract, while config v3 selects prompt schema v2, requires exact `{question}`, and forbids a separately injected target or hidden dropout in the user turn |
+| `test_training_config_defaults_readout_prompt_target_dropout` | `DONE` | native semantic adaptation: the current configuration selects `native_representation_prompt_v1`, requires exact `{question}`, and forbids a separately injected target or hidden dropout in the user turn; configuration schema numbering does not create another prompt version |
 | `test_token_direct_can_use_per_target_token_output_length` | `PROPOSED_EXCLUSION` | unused legacy Adapter variant; selected structure has image-layout-owned `D` length |
 | `test_non_token_direct_rejects_none_num_foveated_tokens` | `PROPOSED_EXCLUSION` | unused legacy variant-builder validation |
 | `test_visual_token_manifold_loss_returns_finite_scalar` | `PROPOSED_EXCLUSION` | manifold optimizer contribution is fixed to zero; no replacement loss is implemented |
@@ -276,8 +276,8 @@ explicit acceptance before Gate AD-13 can close.
 | `test_readout_inputs_mask_prompt_and_replace_only_fvt_positions` | `DONE` | exact evidence ownership, two-block processor mapping, and synthetic native readout integration in `test_transcript.py`, `test_native_pipeline.py`, and the real processor golden |
 | `test_readout_inputs_can_use_source_image_grid_positions` | `PARTIAL` | native Qwen3 group builder/real golden cover layout and corrected `RP-10` executes real 8B; intended-layer and numerical parity remain open |
 | `test_readout_inputs_reject_source_grid_token_count_mismatch` | `DONE` | typed runtime/readout/token-expansion contracts fail closed on grid, source-token, or visual-block disagreement |
-| `test_readout_prompt_can_omit_target` | `DONE` | prompt schema v2 requires the user text to be the exact unmodified `{question}`; separately appending the teacher target is not a matched-control option and the historical v1 prompt remains provenance only |
-| `test_readout_inputs_without_target_still_replace_fvt_positions` | `DONE` | the v2 native group-builder fixture excludes target from the user prompt while preserving strict assistant-call target extraction and both visual blocks |
+| `test_readout_prompt_can_omit_target` | `DONE` | `native_representation_prompt_v1` requires the user text to be the exact unmodified `{question}`; separately appending the teacher target is forbidden and the old executable prompt path is removed |
+| `test_readout_inputs_without_target_still_replace_fvt_positions` | `DONE` | the v1 native group-builder fixture excludes target from the user prompt while preserving strict assistant-call target extraction and both visual blocks |
 | `test_readout_loss_backprops_to_fvt_not_frozen_lm` | `DONE` | synthetic fixtures and corrected `RP-10` prove nonzero real-8B backward through main `D`/all branches/Adapter while Qwen stays frozen |
 | `test_tgvf_module_params_remain_trainable_when_qwen_is_frozen` | `DONE` | runtime fixtures and corrected `RP-10` enforce frozen Qwen plus every-and-only Adapter ownership under real FSDP2 |
 | `test_tgvf_checkpoint_saves_module_without_qwen_weights` | `DONE` | strict CPU fixtures, corrected `RP-10` 104-tensor export, and `RP-11` fresh-process distributed restore/next-update parity pass |
@@ -423,13 +423,16 @@ gates.
 - materialize the accepted recorded-image-path overlap policy in the production
   TOML; record dataset/image licenses and perform a perceptual near-duplicate
   audit;
-- preserve both the historical v1 and accepted v2 transcript/processor golden
-  identities, and bind the contextual provider's hidden layer;
+- preserve the single accepted v1 transcript/processor golden identity and bind
+  the contextual provider's hidden layer; earlier target-bearing text may
+  remain only as an immutable experiment-ledger fact;
 - bind the accepted initialization seed,
-  `qwen3-representation-image-question-v1` prompt schema/hash, provider, data
-  identity, optimizer/scheduler, BF16, accumulation, cadence, and output paths
-  in a production TOML artifact;
-- run the formal internal evaluation on the accepted v2 trajectory, audited
+  `qwen3-representation-image-question-v1` /
+  `native_representation_prompt_v1` prompt identity/hash,
+  `representation_sample_identity_v1`, `retained_focus_rows_v1`,
+  `canonical_evidence_supervision_v1`, provider, optimizer/scheduler, BF16,
+  accumulation, cadence, and output paths in a production TOML artifact;
+- run the formal internal evaluation on the accepted v1 trajectory, audited
   counterfactual pair manifest, extraction rule, and semantic thresholds; a
   contextual-provider paired run remains optional comparison evidence;
 - complete exact historical-checkpoint/real-merger output and gradient parity;

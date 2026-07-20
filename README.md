@@ -61,8 +61,8 @@ The live vLLM path requires the repository plugin and accepted attention split:
 [experiment ledger](docs/EXPERIMENT_LEDGER.md) for exact identities. These
 smokes and CPU fixtures are not policy training, production representation
 training, a promoted trained artifact, or semantic-quality evidence. `RP-11`
-closes the bounded executor/resume question, but its prompt and data are
-explicitly smoke-only.
+closes the bounded executor/resume question; its then-used prompt and data are
+ledger-only historical facts rather than supported current identities.
 
 For new representation configuration schema v3, the native trajectory is
 fixed to `Image + Q → pre reasoning → tool call(target) → D → evidence →
@@ -71,9 +71,11 @@ answer`. Here `Q` is the unmodified dataset question, evidence is
 as a separately injected user field; any lexical overlap can only come from the
 unmodified question. Only evidence-description tokens are training labels.
 The fixed Qwen3 identity is `qwen3-representation-image-question-v1` under
-schema `native_representation_prompt_v2`. Historical v1/v2 training-config
-prompt identities and their fixtures remain unchanged provenance rather than
-production candidates.
+schema `native_representation_prompt_v1`. This first accepted contract also
+uses `representation_sample_identity_v1`, `retained_focus_rows_v1`, and
+`canonical_evidence_supervision_v1`. The earlier target-bearing smoke text and
+its executable fixture/branch are removed; immutable experiment-ledger entries
+may still record earlier bounded use as historical fact.
 
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
@@ -254,7 +256,7 @@ be inherited silently from a library default.
 5. **Implemented and smoke-tested, not run on production data:** the native-
    format Qwen3 representation data/pipeline, both provider paths, streaming objective,
    trainer, FSDP2 ownership, configuration, and checkpoint/resume scaffolds.
-   Bind the fixed v2 transcript schema/hash and resolve the open production
+   Bind the fixed v1 transcript schema/hash and resolve the open production
    data/scientific contracts and semantic evaluation thresholds before
    training a new production Qwen3-VL-8B-Thinking TGVF Adapter. Require a
    separate family-specific artifact and full fixture suite before claiming

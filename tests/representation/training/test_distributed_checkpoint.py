@@ -168,6 +168,7 @@ def _samples() -> tuple[RepresentationTrainingSample, ...]:
             question="What is visible?",
             target=f"target {member}",
             evidence_description=f"evidence {member}",
+            short_answer=f"answer {member}",
         )
         for owner in (0, 1)
         for image in keys_by_owner[owner]

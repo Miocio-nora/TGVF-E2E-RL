@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -10,14 +9,10 @@ from tgvf_rl.representation.training.sampling import (
     partition_same_image_group,
     same_image_group_owner,
 )
-from tgvf_rl.representation.training.data import load_retained_representation_jsonl
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 
 
 DATA_MANIFEST_SHA256 = "1" * 64
-K4_TRAIN_SOURCE_SHA256 = (
-    "beb1b8a7c3f97811e8a8f9b0734d7484cc5de4d31861fe09b61342b3c88b61f2"
-)
 
 
 def _samples(group_sizes: dict[str, int]) -> tuple[RepresentationTrainingSample, ...]:
@@ -32,6 +27,7 @@ def _samples(group_sizes: dict[str, int]) -> tuple[RepresentationTrainingSample,
                     question=f"question {member}",
                     target=f"target {member}",
                     evidence_description=f"evidence {member}",
+                    short_answer=f"answer {member}",
                 )
             )
     return tuple(samples)
@@ -44,34 +40,28 @@ def _batch_group_keys(
 
 
 def test_k4_two_rank_fixture_has_one_complete_group_per_rank_and_ga4_geometry() -> None:
-    fixture = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures"
-        / "representation_smoke"
-        / "train_k4.jsonl"
+    samples = _samples(
+        {
+            "repr-smoke-train-image": 4,
+            "repr-smoke-train-image-2": 4,
+        }
     )
-    dataset = load_retained_representation_jsonl(
-        fixture,
-        expected_source_sha256=K4_TRAIN_SOURCE_SHA256,
-        warn_on_leakage=False,
-    )
-    assert len(dataset.samples) == 8
     assert same_image_group_owner("repr-smoke-train-image", world_size=2) == 0
     assert same_image_group_owner("repr-smoke-train-image-2", world_size=2) == 1
 
     sample_ids_by_rank: list[tuple[tuple[str, ...], ...]] = []
     for rank in range(2):
         sampler = SameImageBatchSampler(
-            dataset.samples,
+            samples,
             batch_size=4,
             seed=71,
-            data_manifest_sha256=dataset.manifest.manifest_sha256,
+            data_manifest_sha256=DATA_MANIFEST_SHA256,
             rank=rank,
             world_size=2,
         )
         assert sampler.local_epoch_batch_count == 1
         groups = tuple(
-            tuple(dataset.samples[index].sample_id for index in sampler.next_batch())
+            tuple(samples[index].sample_id for index in sampler.next_batch())
             for _ in range(4)
         )
         assert all(len(group) == 4 and len(set(group)) == 4 for group in groups)
@@ -296,6 +286,7 @@ def test_state_identity_binds_manifest_and_full_sample_content() -> None:
         question=original.question,
         target="changed target with the same row and group IDs",
         evidence_description=original.evidence_description,
+        short_answer=original.short_answer,
     )
     changed_content = SameImageBatchSampler(
         changed,
@@ -397,6 +388,7 @@ def test_duplicate_sample_identity_is_rejected() -> None:
         question="another question",
         target="another target",
         evidence_description="another evidence",
+        short_answer="another answer",
     )
 
     with pytest.raises(ValueError, match="sample_id values must be unique"):
@@ -418,6 +410,7 @@ def test_duplicate_target_within_one_image_group_is_rejected() -> None:
         question=original.question,
         target=samples[0].target,
         evidence_description=original.evidence_description,
+        short_answer=original.short_answer,
     )
 
     with pytest.raises(ValueError, match="exact distinct target strings"):

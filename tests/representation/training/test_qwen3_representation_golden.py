@@ -20,8 +20,8 @@ from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.native_pipeline import (
     NATIVE_ACTION_TARGET_SCHEMA_VERSION,
-    REPRESENTATION_PROMPT_IDENTITY_V2,
-    REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
+    REPRESENTATION_PROMPT_IDENTITY,
+    REPRESENTATION_PROMPT_SCHEMA_VERSION,
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
     _processor_batch,
@@ -31,17 +31,12 @@ from tgvf_rl.representation.training.native_pipeline import (
 )
 from tgvf_rl.representation.training.runtime import Qwen3RepresentationRuntime
 from tgvf_rl.representation.training.qwen3_counterfactual import (
-    QWEN3_D_ONLY_TOOL_REASONING,
     _qwen3_geometry_carrier,
     materialize_qwen3_d_only_processor_prefix,
 )
-from tgvf_rl.representation.training.schema import (
-    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
-    RepresentationTrainingSample,
-)
+from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 from tgvf_rl.representation.training.transcript import (
     CANONICAL_EVIDENCE_SCHEMA_VERSION,
-    CANONICAL_EVIDENCE_SCHEMA_VERSION_V2,
     MODEL_EVIDENCE_SCHEMA_VERSION,
     NATIVE_REPRESENTATION_PRE_REASONING,
     TOKEN_EXPANSION_SCHEMA_VERSION,
@@ -52,24 +47,13 @@ from tgvf_rl.representation.training.transcript import (
 FIXTURE_PATH = (
     Path(__file__).parents[2] / "fixtures" / "qwen3_native_representation_smoke_v1.json"
 )
-V2_FIXTURE_PATH = (
-    Path(__file__).parents[2] / "fixtures" / "qwen3_native_representation_smoke_v2.json"
-)
 D_ONLY_FIXTURE_PATH = (
     Path(__file__).parents[2] / "fixtures" / "qwen3_native_d_only_smoke_v1.json"
 )
 _FIXTURE_SCHEMA = "qwen3_native_representation_processor_golden_v1"
-_FIXTURE_SCHEMA_V2 = "qwen3_native_representation_processor_golden_v2"
 _MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
 _EXPECTED_TOKENIZER_LENGTH = 151669
-_PROMPT_IDENTITY = "qwen3-representation-smoke-only-v1"
-_PROMPT_TEMPLATE = (
-    "[SMOKE-ONLY REPRESENTATION FIXTURE; NOT A PRODUCTION PROMPT]\n"
-    "Question: {question}\n"
-    "Requested target: {target}\n"
-    "Use the native focus tool once for that target."
-)
-_PROMPT_TEMPLATE_V2 = "{question}"
+_PROMPT_TEMPLATE = "{question}"
 _QUESTION = "Which detail appears in the requested region?"
 _TARGET = "左侧铭牌/section-A"
 _EVIDENCE = "The focused crop shows 蓝色/C-7 on the metal tag."
@@ -155,19 +139,10 @@ def test_golden_image_max_pixels_cap_changes_real_processor_grid() -> None:
 def _prompt() -> RepresentationPromptConfig:
     prompt_sha256 = hashlib.sha256(_PROMPT_TEMPLATE.encode("utf-8")).hexdigest()
     return RepresentationPromptConfig(
-        identity=_PROMPT_IDENTITY,
+        identity=REPRESENTATION_PROMPT_IDENTITY,
         template=_PROMPT_TEMPLATE,
         expected_sha256=prompt_sha256,
-    )
-
-
-def _prompt_v2() -> RepresentationPromptConfig:
-    prompt_sha256 = hashlib.sha256(_PROMPT_TEMPLATE_V2.encode("utf-8")).hexdigest()
-    return RepresentationPromptConfig(
-        identity=REPRESENTATION_PROMPT_IDENTITY_V2,
-        template=_PROMPT_TEMPLATE_V2,
-        expected_sha256=prompt_sha256,
-        schema_version=REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
+        schema_version=REPRESENTATION_PROMPT_SCHEMA_VERSION,
     )
 
 
@@ -178,18 +153,7 @@ def _sample() -> RepresentationTrainingSample:
         question=_QUESTION,
         target=_TARGET,
         evidence_description=_EVIDENCE,
-    )
-
-
-def _sample_v2() -> RepresentationTrainingSample:
-    return RepresentationTrainingSample(
-        sample_id="qwen3-representation-smoke-row-v2",
-        image="in-memory://qwen3-representation-smoke-56x56-rgb",
-        question=_QUESTION,
-        target=_TARGET,
-        evidence_description=_EVIDENCE,
         short_answer=_SHORT_ANSWER,
-        identity_schema_version=REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
     )
 
 
@@ -239,13 +203,7 @@ def _block_record(block: Sequence[int]) -> dict[str, int]:
     }
 
 
-def _compute_golden(
-    *,
-    prompt: RepresentationPromptConfig | None = None,
-    sample: RepresentationTrainingSample | None = None,
-    fixture_schema: str = _FIXTURE_SCHEMA,
-    production_prompt: bool = False,
-) -> dict[str, Any]:
+def _compute_golden() -> dict[str, Any]:
     model_path = Path(_MODEL_PATH)
     processor = _load_accepted_processor(model_path)
     renderer = NativeProtocolRenderer(
@@ -253,24 +211,21 @@ def _compute_golden(
         expected_tokenizer_length=_EXPECTED_TOKENIZER_LENGTH,
     )
     runtime = _runtime(processor, renderer)
-    prompt = _prompt() if prompt is None else prompt
-    sample = _sample() if sample is None else sample
+    prompt = _prompt()
+    sample = _sample()
     image = _make_image()
     messages = build_native_representation_messages(sample, prompt)
-    is_v2 = prompt.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION_V2
-
-    if is_v2:
-        assert messages[0] == {
-            "role": "user",
-            "content": (
-                {"type": "image"},
-                {"type": "text", "text": sample.question},
-            ),
-        }
-        assert sample.target not in messages[0]["content"][1]["text"]
-        assert messages[1]["reasoning_content"] == NATIVE_REPRESENTATION_PRE_REASONING
-        assert messages[3]["reasoning_content"] == sample.evidence_description
-        assert messages[3]["content"] == sample.short_answer
+    assert messages[0] == {
+        "role": "user",
+        "content": (
+            {"type": "image"},
+            {"type": "text", "text": sample.question},
+        ),
+    }
+    assert sample.target not in messages[0]["content"][1]["text"]
+    assert messages[1]["reasoning_content"] == NATIVE_REPRESENTATION_PRE_REASONING
+    assert messages[3]["reasoning_content"] == sample.evidence_description
+    assert messages[3]["content"] == sample.short_answer
 
     action = render_native_action_target(runtime, messages)
     parsed = StrictToolCallParser().parse(action.sampled_turn)
@@ -289,11 +244,7 @@ def _compute_golden(
         messages,
         evidence_description=sample.evidence_description,
     )
-    assert canonical_evidence.schema_version == (
-        CANONICAL_EVIDENCE_SCHEMA_VERSION_V2
-        if is_v2
-        else CANONICAL_EVIDENCE_SCHEMA_VERSION
-    )
+    assert canonical_evidence.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION
     evidence_batch = _processor_batch(
         processor,
         text=canonical_evidence.transcript.text,
@@ -337,44 +288,40 @@ def _compute_golden(
     assert len(action_blocks) == 1
     assert len(evidence_blocks) == 2
 
-    answer_ignored_positions: tuple[int, ...] = ()
-    expanded_answer_ignored_positions: tuple[int, ...] = ()
-    if is_v2:
-        assert sample.short_answer is not None
-        assert canonical_evidence.answer_text == sample.short_answer
-        answer_start = canonical_evidence.transcript.text.rfind(sample.short_answer)
-        answer_end = answer_start + len(sample.short_answer)
-        assert answer_start > canonical_evidence.evidence_char_end
-        answer_ignored_positions = tuple(
-            position
-            for position, (start, end) in enumerate(canonical_evidence.token_offsets)
-            if start < answer_end and end > answer_start
-        )
-        assert answer_ignored_positions
-        assert all(
-            canonical_evidence.canonical_labels[position] == EVIDENCE_IGNORE_INDEX
-            for position in answer_ignored_positions
-        )
-        expanded_answer_ignored_positions = tuple(
-            model_position
-            for canonical_position in answer_ignored_positions
-            for model_position in model_evidence.canonical_to_model_positions[
-                canonical_position
-            ]
-        )
-        assert expanded_answer_ignored_positions
-        assert all(
-            model_evidence.labels[position] == EVIDENCE_IGNORE_INDEX
-            for position in expanded_answer_ignored_positions
-        )
+    assert sample.short_answer is not None
+    assert canonical_evidence.answer_text == sample.short_answer
+    answer_start = canonical_evidence.transcript.text.rfind(sample.short_answer)
+    answer_end = answer_start + len(sample.short_answer)
+    assert answer_start > canonical_evidence.evidence_char_end
+    answer_ignored_positions = tuple(
+        position
+        for position, (start, end) in enumerate(canonical_evidence.token_offsets)
+        if start < answer_end and end > answer_start
+    )
+    assert answer_ignored_positions
+    assert all(
+        canonical_evidence.canonical_labels[position] == EVIDENCE_IGNORE_INDEX
+        for position in answer_ignored_positions
+    )
+    expanded_answer_ignored_positions = tuple(
+        model_position
+        for canonical_position in answer_ignored_positions
+        for model_position in model_evidence.canonical_to_model_positions[
+            canonical_position
+        ]
+    )
+    assert expanded_answer_ignored_positions
+    assert all(
+        model_evidence.labels[position] == EVIDENCE_IGNORE_INDEX
+        for position in expanded_answer_ignored_positions
+    )
 
     sample_record = {
         "question": sample.question,
         "target": sample.target,
         "evidence_description": sample.evidence_description,
+        "short_answer": sample.short_answer,
     }
-    if is_v2:
-        sample_record["short_answer"] = sample.short_answer
 
     evidence_supervision = {
         "ignore_index": EVIDENCE_IGNORE_INDEX,
@@ -389,29 +336,22 @@ def _compute_golden(
         ),
         "processor_expanded_token_ids_sha256": _token_sha256(model_evidence_ids),
         "processor_expanded_labels_sha256": _signed_int_sha256(model_evidence.labels),
+        "answer_text": sample.short_answer,
+        "answer_ignored_canonical_positions": list(answer_ignored_positions),
+        "answer_ignored_canonical_positions_sha256": _token_sha256(
+            answer_ignored_positions
+        ),
+        "answer_ignored_processor_positions": list(expanded_answer_ignored_positions),
+        "answer_ignored_processor_positions_sha256": _token_sha256(
+            expanded_answer_ignored_positions
+        ),
     }
-    if is_v2:
-        evidence_supervision.update(
-            {
-                "answer_text": sample.short_answer,
-                "answer_ignored_canonical_positions": list(answer_ignored_positions),
-                "answer_ignored_canonical_positions_sha256": _token_sha256(
-                    answer_ignored_positions
-                ),
-                "answer_ignored_processor_positions": list(
-                    expanded_answer_ignored_positions
-                ),
-                "answer_ignored_processor_positions_sha256": _token_sha256(
-                    expanded_answer_ignored_positions
-                ),
-            }
-        )
 
     image_bytes = image.tobytes()
     golden = {
-        "fixture_schema": fixture_schema,
+        "fixture_schema": _FIXTURE_SCHEMA,
         "smoke_only": True,
-        "production_prompt": production_prompt,
+        "production_prompt": True,
         "model": {
             "family": "qwen3_vl",
             "path": _MODEL_PATH,
@@ -509,31 +449,19 @@ def _compute_golden(
         },
         "evidence_supervision": evidence_supervision,
     }
-    if is_v2:
-        golden["trajectory_contract"] = {
-            "user_text": messages[0]["content"][1]["text"],
-            "pre_reasoning": messages[1]["reasoning_content"],
-            "tool_target": parsed.target,
-            "post_reasoning": messages[3]["reasoning_content"],
-            "final_answer": messages[3]["content"],
-        }
+    golden["trajectory_contract"] = {
+        "user_text": messages[0]["content"][1]["text"],
+        "pre_reasoning": messages[1]["reasoning_content"],
+        "tool_target": parsed.target,
+        "post_reasoning": messages[3]["reasoning_content"],
+        "final_answer": messages[3]["content"],
+    }
     return golden
 
 
 def test_qwen3_native_representation_processor_golden() -> None:
     expected = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     actual = _compute_golden()
-    assert actual == expected
-
-
-def test_qwen3_native_representation_v2_processor_golden() -> None:
-    expected = json.loads(V2_FIXTURE_PATH.read_text(encoding="utf-8"))
-    actual = _compute_golden(
-        prompt=_prompt_v2(),
-        sample=_sample_v2(),
-        fixture_schema=_FIXTURE_SCHEMA_V2,
-        production_prompt=True,
-    )
     assert actual == expected
 
 
@@ -551,17 +479,22 @@ def test_qwen3_native_d_only_processor_golden() -> None:
         prompt=_prompt(),
         geometry_image=geometry_carrier,
     )
+    assert prefix.prompt_identity == REPRESENTATION_PROMPT_IDENTITY
+    assert prefix.transcript.text.count(_QUESTION) == 1
+    assert NATIVE_REPRESENTATION_PRE_REASONING in prefix.transcript.text
+    assert _TARGET in prefix.transcript.text
+    assert "Requested target:" not in prefix.transcript.text
     expanded_ids = tuple(int(value) for value in prefix.input_ids[0].tolist())
     image_token_id = int(renderer.tokenizer.convert_tokens_to_ids("<|image_pad|>"))
     actual = {
         "fixture_schema": "qwen3_native_d_only_processor_golden_v1",
         "smoke_only": True,
-        "production_prompt": False,
+        "production_prompt": True,
         "model_path": _MODEL_PATH,
         "tokenizer_length": len(renderer.tokenizer),
         "chat_template_sha256": renderer.chat_template_sha256,
         "prompt_identity": prefix.prompt_identity,
-        "tool_reasoning": QWEN3_D_ONLY_TOOL_REASONING,
+        "tool_reasoning": NATIVE_REPRESENTATION_PRE_REASONING,
         "source_image_placeholder_count": 0,
         "geometry_carrier": {
             "mode": geometry_carrier.mode,

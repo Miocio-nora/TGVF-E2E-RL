@@ -185,9 +185,13 @@ boundary:
   other project-authored prompt text. Any lexical overlap between question and
   target may therefore come only from the original question. The neutral native
   tool schema is supplied to Qwen's chat template separately from the user
-  message. This current Qwen3 contract is identified as
-  `qwen3-representation-image-question-v1` under prompt schema
-  `native_representation_prompt_v2`.
+  message. This is the first user-accepted representation prompt/transcript
+  contract and is identified as `qwen3-representation-image-question-v1`
+  under prompt schema `native_representation_prompt_v1`. Earlier
+  target-bearing smoke text was never accepted and is not a supported prompt
+  version, compatibility mode, or production candidate. Its executable
+  renderer branch and golden are removed; immutable experiment-ledger entries
+  may still mention it only as historical fact.
 - The teacher-constructed first assistant turn contains the fixed,
   target-independent pre-tool reasoning text `I need visual focus before
   answering.` followed by exactly one native `tgvf_focus_tool` call whose
@@ -200,13 +204,16 @@ boundary:
   `short_answer` in answer content. Representation data admitted by this
   contract must provide all of `question`, `target`, `evidence_description`,
   and `short_answer` as non-empty strings.
+- This is also the initial accepted data/supervision contract. Its identities
+  are `representation_sample_identity_v1`, `retained_focus_rows_v1`, and
+  `canonical_evidence_supervision_v1`. There is no earlier supported
+  answer-omitting sample/data/canonical schema and no compatibility branch for
+  one.
 - Only tokenizer positions owned exactly by `evidence_description` receive
   representation teacher-forcing labels. The fixed pre-tool reasoning,
   tool-call target/JSON, latent tool response, final `short_answer`, prompt
   text, and chat-template wrappers remain label `-100`; adding the answer to
   the native transcript does not change `L_gen` or Matrix-CE mathematics.
-  Historical smoke-only prompt/config identities remain provenance records and
-  are not production prompt candidates.
   Token ownership is derived from the rendered native transcript and tokenizer
   offsets. A token is evidence-owned when its start offset lies inside the
   evidence span; this deliberately owns
@@ -238,8 +245,10 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   explicitly `[TBD]`. Decision
   `RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY` supersedes that clause: the
   representation user turn is now exactly the original image plus unmodified
-  dataset question. Historical smoke-only prompt text remains valid only for
-  its named bounded fixtures. The policy-RL system/tool-use prompt remains a
+  dataset question. Earlier target-bearing smoke text is deleted from the
+  executable project rather than retained as a prompt version or compatibility
+  fixture; immutable experiment-ledger entries may still record that it was
+  used in earlier bounded runs. The policy-RL system/tool-use prompt remains a
   separate open contract.
 - Norm loss is required and has one fixed historical formula rather than a
   configurable family of modes. For one main or branch tensor `D` and its
@@ -288,8 +297,9 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   continuous and clean-teardown/resumed step 2 produced byte-identical
   104-tensor Adapter exports and exact recorded optimizer/scheduler/sampler/RNG,
   shard, train, and validation state. This closes executor/resume readiness,
-  not the production data identity or semantic thresholds; its historical
-  smoke-only prompt remains part of that run's immutable identity.
+  not the production data identity or semantic thresholds. The ledger may
+  retain that run's then-used prompt as historical fact, but current code does
+  not retain it as an executable prompt mode.
 - The post-RP-11 throughput comparison keeps its mathematical global batch at
   32 while removing configured gradient accumulation. With world size two,
   each rank directly materializes four independent same-image K=4 groups in
@@ -303,8 +313,8 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   seconds and raised row throughput from `1.571` to `1.974` rows/s at the same
   32-row/eight-matrix global update; peak allocated memory was about 31.0 GB.
   This supports GA=1 for this B200 geometry while leaving the final production
-  batch and data identities open; the RP-12 prompt identity remains historical
-  rather than a candidate for the new trajectory.
+  batch and data identities open. RP-12's then-used prompt remains ledger-only
+  history rather than a supported current identity.
 - Decision `RPI-20260719-B200-BATCHED-READOUT` fixes the next direct-batch
   executor correction. The two physical devices are B200 GPUs with about
   180 GB usable memory each, so the representation executor prioritizes
@@ -405,9 +415,10 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   GPU smoke. The follow-up default decision makes `balanced` with temperature
   `1.0` the resolved default for new representation configuration schema v3
   objectives and direct new v3 objective construction. An experiment may still
-  select `legacy_summed_nll` explicitly. Existing v1/v2 configurations and
-  recorded experiment identities retain their historical summed-NLL semantics;
-  they are not silently migrated or rewritten.
+  select `legacy_summed_nll` explicitly. Recorded earlier experiment identities
+  retain their historical summed-NLL facts in the immutable ledger; this does
+  not retain their unaccepted prompt/configuration path as an executable
+  compatibility mode.
 
 ### 2.2 Remove Stage2 SFT
 

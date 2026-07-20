@@ -119,42 +119,6 @@ def test_public_runner_checks_launch_contract_before_distributed_startup(
     assert verified == []
 
 
-@pytest.mark.parametrize(
-    ("schema_version", "expected"),
-    [
-        ("representation-training-config-v2", False),
-        ("representation-training-config-v3", True),
-    ],
-)
-def test_dataset_loader_requires_short_answer_only_for_native_trajectory_v2(
-    monkeypatch: pytest.MonkeyPatch,
-    schema_version: str,
-    expected: bool,
-) -> None:
-    split = SimpleNamespace(
-        jsonl_path=Path("/unused/data.jsonl"), source_sha256="1" * 64
-    )
-    config = SimpleNamespace(
-        schema_version=schema_version,
-        data=SimpleNamespace(
-            train=split,
-            validation=split,
-            warn_on_target_leakage=False,
-        ),
-    )
-    calls: list[bool] = []
-
-    def load(*_args: object, **kwargs: object) -> object:
-        calls.append(bool(kwargs["require_short_answer"]))
-        return object()
-
-    monkeypatch.setattr(runner_module, "load_retained_representation_jsonl", load)
-
-    runner_module._load_datasets(config)
-
-    assert calls == [expected, expected]
-
-
 def test_candidate_runtime_lock_is_part_of_representation_code_identity() -> None:
     assert {
         "requirements/compatibility.lock",

@@ -10,7 +10,6 @@ import pytest
 from tgvf_rl.representation.training.data import (
     REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION,
     REPRESENTATION_DATA_TRANSFORM_VERSION,
-    REPRESENTATION_DATA_TRANSFORM_VERSION_V2,
     SPLIT_OVERLAP_REPORT_SCHEMA_VERSION,
     DuplicateKind,
     RepresentationDataError,
@@ -21,10 +20,7 @@ from tgvf_rl.representation.training.data import (
     load_retained_representation_jsonl,
     train_validation_group_overlap,
 )
-from tgvf_rl.representation.training.schema import (
-    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
-    RepresentationTrainingSample,
-)
+from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 
 
 def _focus_row(**overrides: object) -> dict[str, object]:
@@ -163,7 +159,7 @@ def test_invalid_fields_and_missing_images_are_excluded_fail_closed(
     ]
 
 
-def test_strict_v2_contract_requires_and_preserves_short_answer(
+def test_contract_requires_and_preserves_short_answer(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "image.png").write_bytes(b"image")
@@ -177,16 +173,11 @@ def test_strict_v2_contract_requires_and_preserves_short_answer(
     source = tmp_path / "retained.jsonl"
     source_sha256 = _write_source(source, rows)
 
-    dataset = _load(source, source_sha256, require_short_answer=True)
+    dataset = _load(source, source_sha256)
 
     assert len(dataset.samples) == 1
     assert dataset.samples[0].short_answer == "OPEN"
-    assert dataset.samples[0].identity.schema_version == (
-        REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
-    )
-    assert (
-        dataset.manifest.transform_version == REPRESENTATION_DATA_TRANSFORM_VERSION_V2
-    )
+    assert dataset.manifest.transform_version == REPRESENTATION_DATA_TRANSFORM_VERSION
     assert [entry.reasons for entry in dataset.manifest.excluded_rows] == [
         (RowExclusionReason.INVALID_REQUIRED_FIELD,),
         (RowExclusionReason.INVALID_REQUIRED_FIELD,),

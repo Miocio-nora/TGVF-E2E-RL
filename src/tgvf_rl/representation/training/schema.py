@@ -8,13 +8,6 @@ import json
 
 
 REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION = "representation_sample_identity_v1"
-REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2 = "representation_sample_identity_v2"
-_REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSIONS = frozenset(
-    {
-        REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
-        REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +23,7 @@ class RepresentationSampleIdentity:
         _require_non_empty_text(self.sample_id, field_name="sample_id")
         _require_non_empty_text(self.image_group_key, field_name="image_group_key")
         _require_sha256(self.content_sha256, field_name="content_sha256")
-        if self.schema_version not in _REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSIONS:
+        if self.schema_version != REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION:
             raise ValueError("representation sample identity schema mismatch")
 
 
@@ -40,8 +33,6 @@ class RepresentationTrainingSample:
 
     The native transcript and target-conditioning tensors are deliberately not
     stored here: they are derived by the selected Qwen-family/provider pipeline.
-    ``short_answer`` remains optional only for exact v1 replay; v2 identities
-    require it and bind it into ``content_sha256``.
     """
 
     sample_id: str
@@ -49,7 +40,7 @@ class RepresentationTrainingSample:
     question: str
     target: str
     evidence_description: str
-    short_answer: str | None = None
+    short_answer: str
     image_id: str | None = None
     stable_image_uid: str | None = None
     item_content_hash: str | None = None
@@ -59,7 +50,6 @@ class RepresentationTrainingSample:
     answer_type: str | None = None
     visual_difficulty: str | None = None
     target_leakage_risk: str | None = None
-    identity_schema_version: str = REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -68,10 +58,10 @@ class RepresentationTrainingSample:
             "question",
             "target",
             "evidence_description",
+            "short_answer",
         ):
             _require_non_empty_text(getattr(self, field_name), field_name=field_name)
         for field_name in (
-            "short_answer",
             "image_id",
             "stable_image_uid",
             "item_content_hash",
@@ -85,17 +75,6 @@ class RepresentationTrainingSample:
             value = getattr(self, field_name)
             if value is not None:
                 _require_non_empty_text(value, field_name=field_name)
-        if self.identity_schema_version not in (
-            REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
-            REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
-        ):
-            raise ValueError("representation sample identity schema mismatch")
-        if (
-            self.identity_schema_version
-            == REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
-            and self.short_answer is None
-        ):
-            raise ValueError("short_answer is required by representation identity v2")
 
     @property
     def image_group_key(self) -> str:
@@ -109,7 +88,6 @@ class RepresentationTrainingSample:
             sample_id=self.sample_id,
             image_group_key=self.image_group_key,
             content_sha256=self.content_sha256,
-            schema_version=self.identity_schema_version,
         )
 
     @property
@@ -117,13 +95,14 @@ class RepresentationTrainingSample:
         """Digest every field that can change grouping or supervision."""
 
         payload = {
-            "schema_version": self.identity_schema_version,
+            "schema_version": REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
             "sample_id": self.sample_id,
             "image": self.image,
             "image_id": self.image_id,
             "question": self.question,
             "target": self.target,
             "evidence_description": self.evidence_description,
+            "short_answer": self.short_answer,
             "stable_image_uid": self.stable_image_uid,
             "item_content_hash": self.item_content_hash,
             "source_dataset": self.source_dataset,
@@ -133,11 +112,6 @@ class RepresentationTrainingSample:
             "visual_difficulty": self.visual_difficulty,
             "target_leakage_risk": self.target_leakage_risk,
         }
-        if (
-            self.identity_schema_version
-            == REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
-        ):
-            payload["short_answer"] = self.short_answer
         encoded = json.dumps(
             payload,
             ensure_ascii=False,

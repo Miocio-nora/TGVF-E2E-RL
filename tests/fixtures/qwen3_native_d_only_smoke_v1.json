@@ -15,9 +15,9 @@
     "attention_mask_all_one": true,
     "attention_mask_dtype": "torch.int64",
     "d_block": {
-      "end": 331,
+      "end": 287,
       "length": 64,
-      "start": 267
+      "start": 223
     },
     "expanded_image_token_count": 64,
     "geometry_pixel_values_shape": [
@@ -31,20 +31,20 @@
         16
       ]
     ],
-    "length": 341,
-    "token_ids_sha256": "54c2b0d0d11cd2cdd5fc09bcf2b50b3967967ae2cfedd6b408f5a0121b771e0a"
+    "length": 297,
+    "token_ids_sha256": "1c7dcfbaaf198da11cc44751c6455e7805514052c5dfa08474b91a3851fa7e33"
   },
-  "production_prompt": false,
-  "prompt_identity": "qwen3-representation-smoke-only-v1",
+  "production_prompt": true,
+  "prompt_identity": "qwen3-representation-image-question-v1",
   "smoke_only": true,
   "source_image_placeholder_count": 0,
   "tokenizer_length": 151669,
-  "tool_reasoning": "I will inspect only the requested local field.",
+  "tool_reasoning": "I need visual focus before answering.",
   "transcript": {
-    "text_characters": 1289,
-    "text_sha256": "cd888097e4e908a393d8403f72c42c40ba558a9d6e5198570754fd4fac534250",
-    "text_utf8_bytes": 1305,
-    "token_ids_sha256": "6d77fadf7671a6a5c7b09ff759b28ea02ca1c918d386882dfae645e03b09a27d",
-    "token_length": 278
+    "text_characters": 1128,
+    "text_sha256": "fcf2b20ed34618e23de4919e59d81e8b132cf24e221f197cf8d592d5083f3060",
+    "text_utf8_bytes": 1136,
+    "token_ids_sha256": "5371c6aabe57030aca54f8efda5c8e9c7714d56c7803ef8c9a753783dca92015",
+    "token_length": 234
   }
 }

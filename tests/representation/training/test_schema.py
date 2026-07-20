@@ -7,7 +7,6 @@ import pytest
 import tgvf_rl.representation.training as representation_training
 from tgvf_rl.representation.training.schema import (
     REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
-    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
     RepresentationSampleIdentity,
     RepresentationTrainingSample,
 )
@@ -35,7 +34,6 @@ def _sample(**overrides: object) -> RepresentationTrainingSample:
         "target": "the small sign beside the door",
         "evidence_description": "The sign reads OPEN.",
         "short_answer": "OPEN",
-        "identity_schema_version": REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
     }
     values.update(overrides)
     return RepresentationTrainingSample(**values)  # type: ignore[arg-type]
@@ -46,14 +44,10 @@ def test_sample_identity_is_immutable_and_uses_image_id_group_key() -> None:
 
     assert sample.image_group_key == "image-42"
     assert sample.identity == RepresentationSampleIdentity(
-        "row-001",
-        "image-42",
-        sample.content_sha256,
-        REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
+        "row-001", "image-42", sample.content_sha256
     )
     assert (
-        sample.identity.schema_version
-        == REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
+        sample.identity.schema_version == REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION
     )
     with pytest.raises(FrozenInstanceError):
         sample.target = "another target"  # type: ignore[misc]
@@ -96,28 +90,6 @@ def test_identity_rejects_invalid_direct_construction() -> None:
         RepresentationSampleIdentity("row", "", "a" * 64)
     with pytest.raises(ValueError, match="content_sha256"):
         RepresentationSampleIdentity("row", "image", "not-a-sha")
-
-
-def test_legacy_identity_ignores_optional_short_answer_for_exact_replay() -> None:
-    baseline = _sample(
-        identity_schema_version=REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
-    )
-
-    assert baseline.identity.schema_version == (
-        REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION
-    )
-    assert (
-        _sample(
-            short_answer="CLOSED",
-            identity_schema_version=REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
-        ).content_sha256
-        == baseline.content_sha256
-    )
-
-
-def test_v2_identity_requires_short_answer() -> None:
-    with pytest.raises(ValueError, match="short_answer"):
-        _sample(short_answer=None)
 
 
 def test_content_identity_changes_with_every_supervision_field() -> None:

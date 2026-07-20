@@ -13,7 +13,6 @@ from .losses import EVIDENCE_IGNORE_INDEX
 
 
 CANONICAL_EVIDENCE_SCHEMA_VERSION = "canonical_evidence_supervision_v1"
-CANONICAL_EVIDENCE_SCHEMA_VERSION_V2 = "canonical_evidence_supervision_v2"
 MODEL_EVIDENCE_SCHEMA_VERSION = "model_evidence_supervision_v1"
 TOKEN_EXPANSION_SCHEMA_VERSION = "canonical_to_model_token_expansion_v1"
 _EXECUTABLE_REPRESENTATION_FAMILY = "qwen3_vl"
@@ -59,23 +58,9 @@ class CanonicalEvidenceSupervision:
     schema_version: str = CANONICAL_EVIDENCE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version not in {
-            CANONICAL_EVIDENCE_SCHEMA_VERSION,
-            CANONICAL_EVIDENCE_SCHEMA_VERSION_V2,
-        }:
+        if self.schema_version != CANONICAL_EVIDENCE_SCHEMA_VERSION:
             raise ValueError("canonical evidence-supervision schema mismatch")
-        if not isinstance(self.answer_text, str):
-            raise TypeError("canonical answer_text must be a string")
-        if (
-            self.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION
-            and self.answer_text != ""
-        ):
-            raise ValueError("canonical evidence-supervision v1 requires empty answer")
-        if (
-            self.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION_V2
-            and not self.answer_text.strip()
-        ):
-            raise ValueError("canonical evidence-supervision v2 requires an answer")
+        _require_non_empty_text(self.answer_text, field_name="canonical answer_text")
         if len(self.canonical_labels) != len(self.transcript.token_ids):
             raise ValueError("canonical labels must align with transcript token ids")
         if len(self.token_offsets) != len(self.transcript.token_ids):
@@ -455,11 +440,6 @@ def _native_evidence_supervision_from_rendered(
         evidence_byte_end=evidence_byte_end,
         evidence_token_positions=positions,
         token_offsets=offsets,
-        schema_version=(
-            CANONICAL_EVIDENCE_SCHEMA_VERSION_V2
-            if answer_text
-            else CANONICAL_EVIDENCE_SCHEMA_VERSION
-        ),
     )
 
 
@@ -634,26 +614,19 @@ def _validate_post_tool_evidence_messages(
     call_turn = messages[-3]
     if call_turn.get("role") != "assistant":
         raise ValueError("the tool result must follow an assistant tool-call turn")
-    call_reasoning = call_turn.get("reasoning_content")
     if call_turn.get("content") != "":
         raise ValueError("the representation tool-call turn cannot contain answer text")
-    if call_reasoning == "":
-        if answer_text != "":
-            raise ValueError(
-                "legacy representation transcripts require empty answer content"
-            )
-    elif call_reasoning == NATIVE_REPRESENTATION_PRE_REASONING:
-        if not answer_text.strip():
-            raise ValueError(
-                "native representation v2 requires non-empty short answer content"
-            )
-        if any(fragment in answer_text for fragment in _NATIVE_CONTROL_FRAGMENTS):
-            raise ValueError("short answer content cannot contain native control tags")
-    else:
+    if call_turn.get("reasoning_content") != NATIVE_REPRESENTATION_PRE_REASONING:
         raise ValueError(
-            "the representation tool-call reasoning must be empty legacy text or "
-            "the fixed native v2 pre-reasoning"
+            "the representation tool-call reasoning must equal the fixed "
+            "native pre-reasoning"
         )
+    if not answer_text.strip():
+        raise ValueError(
+            "native representation requires non-empty short answer content"
+        )
+    if any(fragment in answer_text for fragment in _NATIVE_CONTROL_FRAGMENTS):
+        raise ValueError("short answer content cannot contain native control tags")
     calls = call_turn.get("tool_calls")
     if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes)):
         raise ValueError(

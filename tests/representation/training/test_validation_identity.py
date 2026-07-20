@@ -46,6 +46,7 @@ def _dataset(
             "evidence_state": "need_local_visual_evidence",
             "target": f"{split_name} target {index}",
             "evidence_description": f"{split_name} evidence {index}",
+            "short_answer": f"{split_name} answer {index}",
             "image_id": image_id,
             "stable_image_uid": f"{split_name}-stable-{index}",
             "item_content_hash": f"{split_name}-content-{index}",

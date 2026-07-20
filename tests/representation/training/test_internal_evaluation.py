@@ -139,6 +139,7 @@ def _sample(group: str, member: int) -> RepresentationTrainingSample:
         question="What local value is visible?",
         target=f"region-{member}",
         evidence_description=f"The local value is {group.upper()}{member}.",
+        short_answer=f"{group.upper()}{member}",
         evidence_type="text" if member == 0 else "symbol",
         source_profile=f"profile-{group}",
         answer_type="short",
