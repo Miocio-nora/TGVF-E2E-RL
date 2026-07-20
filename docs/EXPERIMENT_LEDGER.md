@@ -4430,6 +4430,54 @@ instead of repeated bullets.
   output
   `artifacts/representation/RP-38-qwen3-internal-eval-target-embedding-v3-gpu3/`.
 
+### RP-39-QWEN3-REP-MATRIXCE-LEGACY-CONTEXTUAL-500-GPU01
+
+- Lifecycle/result: `PLANNED` / `PENDING`; positive-control diagnosis for the
+  readable-but-weakly-specific contextual V4 result.
+- Fixed identity: clean runtime code
+  `fb64769c1dc04bf1c7fab793be951e9cbd37b257`; config source/canonical SHA256
+  `b57369d50da21f8ff002eef1bfc82e86e388cf998a9e983a773dea5cbea35195` /
+  `db585177f47f543720e35fcf83851c0bca2f5bd0b8f20a7416621f3be4672da4`;
+  immutable output
+  `artifacts/representation/RP-39-qwen3-matrix-ce-legacy-contextual-500-gpu01/`.
+- Scientific identity: Qwen3-VL-8B-Thinking BF16/SDPA, tokenizer 151669/no
+  resize, max-pixels 262144, contextual hidden state layer `-1`, native prompt
+  v1, exact V4 clean-imend train and v3 validation data/overlap identities,
+  same-image K4/B4/GA4/world2/global batch32, fresh seed42, AdamW `1e-4`,
+  L_gen/Norm `1/.1`, manifold 0, and no-reshard FSDP2 exactly as contextual V4.
+  The diagnostic objective changes Matrix-CE only to legacy summed NLL,
+  temperature 1.0 and keeps weight 1.0.
+- Horizon/acceptance: target 500 optimizer steps under the unchanged historical
+  cosine horizon 2000/warmup100/min-ratio.1; log every10, one validation and
+  DCP/final export at500. Training completion is not promotion. The artifact
+  must subsequently run the same 31×K4/124-row internal manifest and audited
+  counterfactual as RP-37/38.
+- GPU/command: physical GPUs 0/1
+  `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` /
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc`; deterministic environment;
+  `timeout 10800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m
+  tgvf_rl.cli run-representation
+  configs/representation/qwen3_matrix_ce_legacy_contextual_500step_gpu01.toml`.
+  RL rollout/reference/logprob/reward fields are N/A.
+
+### RP-40-QWEN3-REP-MATRIXCE-BALANCED-T01-CONTEXTUAL-500-GPU23
+
+- Lifecycle/result: `PLANNED` / `PENDING`; paired Matrix-CE calibration lane.
+- Fixed identity: clean runtime code
+  `fb64769c1dc04bf1c7fab793be951e9cbd37b257`; config source/canonical SHA256
+  `fc760ca089b816027af6024fe1aec61d8f91b08116f713bb3e38a35f8875baab` /
+  `6e3ed4bcc7deba804e197b28595687dbd24a0bf02c9930971ba063063bf30333`;
+  immutable output
+  `artifacts/representation/RP-40-qwen3-matrix-ce-balanced-t01-contextual-500-gpu23/`.
+- Paired identity: every scientific/horizon/acceptance field is RP-39 except
+  Matrix-CE uses Balanced mean NLL at fixed temperature 0.1 and the unique
+  objective/run/output identity. This pair isolates the accepted calibration
+  bundle, not normalization and temperature independently.
+- GPU/command: physical GPUs 2/3
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` /
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; deterministic RP-39 command with
+  its balanced-T0.1 config. RL-only fields are N/A.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

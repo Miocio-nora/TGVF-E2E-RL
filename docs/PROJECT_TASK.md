@@ -199,6 +199,14 @@ the same deterministic 31 exact-K4 groups whose Qwen3 visual grid is
 `(1,26,38)` at `max_pixels=262144`; this is a new native population rather than
 a byte-identical Golden population.
 
+The paired report shows readable but weakly target-specific D. The accepted
+isolation test keeps the contextual provider and every data/model/optimizer/
+execution value fixed, trains two fresh 500-step artifacts under the original
+2000-step scheduler horizon, and changes only Matrix-CE score calibration:
+legacy summed NLL at temperature 1 versus Balanced mean NLL at temperature
+0.1. The legacy lane is a positive control; neither diagnostic artifact is a
+formal replacement unless the fixed internal population supports promotion.
+
 All external visual benchmark evaluation in this project uses upstream
 **VLMEvalKit** at the exact review commit recorded in
 `EXTERNAL_REFERENCES.md`. The project does not port the legacy benchmark parser
