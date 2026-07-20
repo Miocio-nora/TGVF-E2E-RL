@@ -4,7 +4,7 @@ run_id = "REP-QWEN3-V4-TARGET-EMBEDDING-V1"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "2224e4947574252c312cbfda72c30e886caa494b"
+commit = "6496a4d135078f83430a63e59d9c14455fd85e69"
 dirty = false
 dirty_state_sha256 = "none"
 
@@ -95,7 +95,7 @@ allow_legacy_checkpoint_initialization = false
 [fsdp2]
 strategy = "fsdp2"
 world_size = 2
-physical_gpu_ids = [2, 3]
+physical_gpu_ids = [0, 1]
 logical_gpu_ids = [0, 1]
 device_type = "cuda"
 mesh_dim_name = "fsdp"

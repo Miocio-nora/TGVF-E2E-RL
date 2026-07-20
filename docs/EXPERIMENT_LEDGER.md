@@ -4022,6 +4022,42 @@ instead of repeated bullets.
   publish the final Adapter artifact. Expected train-core time is about 2.25 h
   from RP-30, plus validation/checkpoint overhead.
 
+### REP-QWEN3-V4-TARGET-EMBEDDING-V1
+
+- Lifecycle/result: `PLANNED` / `PENDING`; user-authorized paired formal
+  representation run on physical GPUs 0 and 1 while contextual V2 continues on
+  GPUs 2 and 3.
+- Identity/output: code `6496a4d135078f83430a63e59d9c14455fd85e69`;
+  config source/canonical SHA256
+  `d8d5f58e8ce2aba5fdc8ff8ca521a756a7e548aa6238981b31dcd2be001d1c71` /
+  `907ca84a8b8c5884f603eda648cbc399de41d7b75439be7d787897764a78b147`;
+  fresh output
+  `artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V1/`, overwrite
+  forbidden.
+- Paired contract: identical to contextual V2 for frozen Qwen3-VL-8B-Thinking,
+  v4/v3 data and overlap identity, native prompt v1, 512-square maximum pixel
+  area, seed 42, Balanced Matrix CE/L_gen/Norm `1/1/0.1`, manifold `0`, AdamW
+  and cosine schedule, K4/B4/GA4/world2/global-batch32, 2000 steps, validation
+  and DCP v2 every 500, and disabled post-training internal evaluation. The
+  selected provider is `target_token_embedding` using the frozen language-model
+  input-embedding table; no contextual hidden state is used.
+- Devices: physical GPU0 `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` and GPU1
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc`, both B200 183359 MiB and idle at
+  `2026-07-20T17:42:58+09:00`, exposed as logical 0/1. RL rollout/replay,
+  reward, GRPO, SDPO, judge, sampling and behavior logprobs are N/A.
+- Command: `CUDA_VISIBLE_DEVICES=0,1 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 28800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/representation/qwen3_v4_target_token_embedding_v1.toml`, captured in
+  the output root as `run.log`.
+- W&B/acceptance: planned project `mio_mi0/tgvf-e2e-rl`, run name
+  `representation-qwen3-target-embedding-v1`, stable ID
+  `rep-qwen3-v4-target-embedding-v1`. Accept only finite losses/gradients,
+  step-500 checkpoint/validation cadence, tokenizer invariance, step 2000 and a
+  final Adapter artifact; local JSONL remains authoritative.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

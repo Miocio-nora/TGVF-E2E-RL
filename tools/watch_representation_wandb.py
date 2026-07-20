@@ -70,6 +70,7 @@ def _wandb_config(config: dict[str, Any]) -> dict[str, Any]:
         "image_max_pixels": model["image_max_pixels"],
         "conditioning_provider": conditioning["provider"],
         "conditioning_hidden_layer": conditioning.get("hidden_layer"),
+        "conditioning_embedding_identity": conditioning.get("embedding_identity"),
         "prompt_identity": config["prompt"]["identity"],
         "objective_identity": objective["identity"],
         "matrix_ce_mode": objective["matrix_ce_mode"],
@@ -215,6 +216,7 @@ def main() -> int:
     import wandb
 
     args.wandb_dir.mkdir(parents=True, exist_ok=True)
+    provider_tag = str(config["conditioning"]["provider"]).replace("_", "-")
     run = wandb.init(
         entity=args.entity,
         project=args.project,
@@ -226,7 +228,7 @@ def main() -> int:
         tags=(
             "representation-phase",
             "qwen3-vl-8b-thinking",
-            "contextual-hidden-state",
+            provider_tag,
             "balanced-matrix-ce",
         ),
         config=_wandb_config(config),

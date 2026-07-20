@@ -93,9 +93,13 @@ registered files/symbols and parity requirements.
   veRL commit `e003163181731412595257a72ec173071efb125f` and the resolved lock;
   this does not freeze production placement or parallel topology. SDPO's
   bundled veRL tree is reference-only and is not installed as the framework.
-- GPU execution is restricted to physical GPU indices **2 and 3**. A process
-  may see them as logical devices 0 and 1 only after the physical-to-logical
-  mapping is recorded. No other physical GPU is authorized.
+- The original compatibility-work default restricts GPU execution to physical
+  indices **2 and 3**. Scoped decision
+  `RPI-20260720-TARGET-EMBEDDING-GPU01`, explicitly authorized by the user on
+  2026-07-20 JST, additionally permits physical GPUs **0 and 1** only for the
+  formal target-token-embedding representation run while the paired contextual
+  run occupies GPUs 2 and 3. Each process may see its recorded pair as logical
+  devices 0 and 1; this does not authorize other runs or physical GPUs.
 - Every GPU command still requires a complete `PLANNED` experiment-ledger row,
   exact command/environment identity, bounded timeout/resources, and applicable
   PASS/FAIL gates. I8H-20260719 supplies the user authorization for an in-scope
