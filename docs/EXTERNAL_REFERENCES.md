@@ -251,8 +251,17 @@ repository: https://github.com/open-compass/VLMEvalKit
 review commit: 7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f
 observed: 2026-07-20 JST
 role: sole external visual-benchmark execution and official-scoring framework
-dependency status: pinned integration target; not installed or vendored yet
+dependency status: pinned external checkout plus isolated CPU/CLI runtime overlay
 ```
+
+The clean detached checkout is deployed at
+`/nvmesv/dredvpn009/tools/VLMEvalKit/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f`.
+Its no-dependency runtime overlay is
+`/nvmesv/dredvpn009/tools/VLMEvalKit/runtime-7055d301/site-packages` and is
+loaded after the checkout with the repository's `.venv312` interpreter. The
+machine-readable identity and no-download validation command are documented in
+`docs/VLMEVALKIT.md`. This deployment does not vendor VLMEvalKit or change the
+production representation/RL dependency matrix.
 
 Official point-in-time sources reviewed for the accepted evaluation
 architecture are:

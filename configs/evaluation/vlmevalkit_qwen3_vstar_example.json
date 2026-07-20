@@ -1,0 +1,13 @@
+{
+  "model": {
+    "Qwen3-VL-8B-Thinking": {
+      "model_path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+    }
+  },
+  "data": {
+    "VStarBench": {
+      "class": "ImageMCQDataset",
+      "dataset": "VStarBench"
+    }
+  }
+}

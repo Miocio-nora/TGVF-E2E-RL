@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "identity": "vlmevalkit-7055d301-runtime-v1",
+  "checkout": "/nvmesv/dredvpn009/tools/VLMEvalKit/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f",
+  "commit": "7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f",
+  "run_py_sha256": "efe24021e6f5f6ec394eba0f59afc094f897301a2ed31c6a3ba5ba975e148653",
+  "python": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python",
+  "overlay": "/nvmesv/dredvpn009/tools/VLMEvalKit/runtime-7055d301/site-packages",
+  "shared_benchmark_root": "/nvmesv/dredvpn009/datasets/benchmarks",
+  "example_config": "configs/evaluation/vlmevalkit_qwen3_vstar_example.json",
+  "required_model": "Qwen3-VL-8B-Thinking",
+  "required_datasets": [
+    "VStarBench",
+    "HRBench4K",
+    "BLINK",
+    "OCRBench_v2",
+    "MMMU_Pro_10c",
+    "MathVista_MINI",
+    "MathVerse_MINI"
+  ]
+}

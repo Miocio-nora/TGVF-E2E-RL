@@ -286,6 +286,7 @@ be inherited silently from a library default.
 - [Controlled legacy provenance](docs/LEGACY_REFERENCE.md)
 - [Representation parity and open scientific gates](docs/REPRESENTATION_PARITY_INVENTORY.md)
 - [Controlled external references](docs/EXTERNAL_REFERENCES.md)
+- [VLMEvalKit deployment and direct-baseline example](docs/VLMEVALKIT.md)
 - [Experiment ledger](docs/EXPERIMENT_LEDGER.md)
 - [Compatibility environment setup](docs/SETUP.md)
 - [Framework implementation report](docs/IMPLEMENTATION_REPORT.md)
