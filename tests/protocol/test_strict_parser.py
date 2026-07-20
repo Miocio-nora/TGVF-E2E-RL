@@ -204,20 +204,53 @@ def test_explicit_terminal_suffix_is_allowed_but_trailing_answer_is_not() -> Non
     assert parsed.sampled_text == text
 
 
-def test_target_token_that_crosses_json_value_boundary_fails_closed() -> None:
+@pytest.mark.parametrize("crossing", ("left", "right", "both"))
+def test_target_span_uses_minimal_overlapping_sampled_token_cover(
+    crossing: str,
+) -> None:
     text = _call_text("target")
     exact = (
         StrictToolCallParser().parse(_character_token_turn(text)).target_span.offsets
     )
     total = len(text.encode("utf-8"))
-    # One token includes the opening quote and the first target byte.  The
-    # parser must reject this instead of guessing a target-token convention.
-    boundaries = [0, exact.byte_start - 1, exact.byte_start + 1, total]
+    if crossing == "left":
+        boundaries = [
+            0,
+            exact.byte_start - 1,
+            exact.byte_start + 1,
+            exact.byte_end,
+            total,
+        ]
+    elif crossing == "right":
+        boundaries = [
+            0,
+            exact.byte_start,
+            exact.byte_end - 1,
+            exact.byte_end + 1,
+            total,
+        ]
+    else:
+        boundaries = [
+            0,
+            exact.byte_start - 1,
+            exact.byte_start + 1,
+            exact.byte_end - 1,
+            exact.byte_end + 1,
+            total,
+        ]
     turn = _byte_chunk_turn(text, boundaries)
+    parsed = StrictToolCallParser().parse(turn)
+    overlapping = tuple(
+        span
+        for span in turn.token_byte_spans
+        if span.byte_end > exact.byte_start and span.byte_start < exact.byte_end
+    )
 
-    with pytest.raises(ToolCallParseError) as error:
-        StrictToolCallParser().parse(turn)
-    assert error.value.code is ParseErrorCode.AMBIGUOUS_TARGET_TOKEN_SPAN
+    assert parsed.target_span.offsets == exact
+    assert parsed.target_span.raw_json_value == "target"
+    assert parsed.target_span.token_start == overlapping[0].token_index
+    assert parsed.target_span.token_end == overlapping[-1].token_index + 1
+    assert parsed.target_span.token_ids == tuple(span.token_id for span in overlapping)
 
 
 def test_sampled_turn_requires_exact_byte_coverage_without_tokenizer_calls() -> None:

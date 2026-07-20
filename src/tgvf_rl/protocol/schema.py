@@ -22,6 +22,7 @@ IMAGE_ZOOM_IN_TOOL_NAME = "image_zoom_in_tool"
 POLICY_RL_TOOL_NAMES = (TGVF_FOCUS_TOOL_NAME, IMAGE_ZOOM_IN_TOOL_NAME)
 TOOL_CALL_OPEN = "<tool_call>"
 TOOL_CALL_CLOSE = "</tool_call>"
+TARGET_TOKEN_SPAN_RULE = "minimal_overlapping_sampled_token_cover_v1"
 
 _TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     "type": "function",

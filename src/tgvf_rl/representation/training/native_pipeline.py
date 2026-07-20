@@ -369,7 +369,7 @@ def _native_action_target_from_rendered(
         raise ValueError("action offset tokenization differs from rendered IDs")
     full_target_start = len(prefill.text) + parsed.target_span.offsets.char_start
     full_target_end = len(prefill.text) + parsed.target_span.offsets.char_end
-    positions = _owned_token_positions(
+    positions = _minimal_overlapping_token_positions(
         transcript.text,
         full_offsets,
         span_start=full_target_start,
@@ -1123,7 +1123,7 @@ def _byte_spans(
     return tuple(spans)
 
 
-def _owned_token_positions(
+def _minimal_overlapping_token_positions(
     text: str,
     offsets: tuple[tuple[int, int], ...],
     *,
@@ -1134,21 +1134,25 @@ def _owned_token_positions(
     if not (0 <= span_start < span_end <= len(text)):
         raise ValueError(f"{name} character span is invalid")
     positions: list[int] = []
-    cursor = span_start
     for index, (start, end) in enumerate(offsets):
         overlaps = start < span_end and end > span_start
         if not overlaps:
             continue
-        if start < span_start or end > span_end or end <= start:
-            raise ValueError(f"a tokenizer token crosses the {name} boundary")
-        if start != cursor:
-            raise ValueError(f"{name} token offsets are not contiguous")
+        if end <= start:
+            raise ValueError(f"a zero-width tokenizer token overlaps {name}")
         positions.append(index)
-        cursor = end
-    if not positions or cursor != span_end:
-        raise ValueError(f"{name} owns no exact contiguous token span")
+    if not positions:
+        raise ValueError(f"no tokenizer token overlaps {name}")
     if positions != list(range(positions[0], positions[-1] + 1)):
         raise ValueError(f"{name} token positions are not contiguous")
+    selected_offsets = tuple(offsets[index] for index in positions)
+    if selected_offsets[0][0] > span_start or selected_offsets[-1][1] < span_end:
+        raise ValueError(f"{name} token positions do not cover its character span")
+    if any(
+        left[1] != right[0]
+        for left, right in zip(selected_offsets, selected_offsets[1:])
+    ):
+        raise ValueError(f"{name} token offsets are not contiguous")
     return tuple(positions)
 
 

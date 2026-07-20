@@ -112,14 +112,31 @@ def run_representation_training(
     )
     rank = torch.distributed.get_rank()
     try:
-        return _run_initialized(
+        result = _run_initialized(
             config,
             rank=rank,
             stop_after_global_step=stop_after_global_step,
         )
-    finally:
+    except BaseException as error:
+        if torch.distributed.is_initialized():
+            try:
+                _abort_distributed_process_group()
+            except BaseException as abort_error:
+                error.add_note(
+                    "distributed process-group abort also failed: "
+                    f"{type(abort_error).__name__}: {abort_error}"
+                )
+        raise
+    else:
         if torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()
+        return result
+
+
+def _abort_distributed_process_group() -> None:
+    process_group = torch.distributed.group.WORLD
+    if process_group is not None:
+        process_group.abort()
 
 
 def _run_initialized(

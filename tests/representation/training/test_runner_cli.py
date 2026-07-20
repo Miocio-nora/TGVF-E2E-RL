@@ -209,6 +209,54 @@ def test_public_runner_lifecycle_can_be_wired_without_starting_distributed(
     assert state["initialized"] is False
 
 
+def test_public_runner_aborts_process_group_on_rank_local_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = object()
+    calls: list[str] = []
+    state = {"initialized": False}
+    monkeypatch.setattr(
+        runner_module, "load_representation_training_config", lambda _path: config
+    )
+    monkeypatch.setattr(runner_module, "_validate_invocation_stop", lambda *_args: None)
+    monkeypatch.setattr(
+        runner_module, "_require_launch_environment", lambda _value: None
+    )
+    monkeypatch.setattr(
+        runner_module, "_verify_live_code_identity", lambda _value: None
+    )
+
+    def init_process_group(*, backend: str, timeout: object) -> None:
+        assert backend == "nccl"
+        state["initialized"] = True
+
+    monkeypatch.setattr(torch.distributed, "init_process_group", init_process_group)
+    monkeypatch.setattr(
+        torch.distributed, "is_initialized", lambda: state["initialized"]
+    )
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
+    monkeypatch.setattr(
+        torch.distributed,
+        "destroy_process_group",
+        lambda: calls.append("destroy"),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_abort_distributed_process_group",
+        lambda: calls.append("abort"),
+    )
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("rank-local contract failure")
+
+    monkeypatch.setattr(runner_module, "_run_initialized", fail)
+
+    with pytest.raises(ValueError, match="rank-local contract failure"):
+        runner_module.run_representation_training("/unused/config.toml")
+
+    assert calls == ["abort"]
+
+
 def test_invocation_stop_preserves_planned_scheduler_horizon() -> None:
     config = SimpleNamespace(
         training=SimpleNamespace(

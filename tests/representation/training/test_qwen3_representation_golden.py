@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -463,6 +464,29 @@ def test_qwen3_native_representation_processor_golden() -> None:
     expected = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     actual = _compute_golden()
     assert actual == expected
+
+
+def test_qwen3_target_span_accepts_inseparable_period_and_json_quote() -> None:
+    processor = _load_accepted_processor(Path(_MODEL_PATH))
+    renderer = NativeProtocolRenderer(
+        processor,
+        expected_tokenizer_length=_EXPECTED_TOKENIZER_LENGTH,
+    )
+    runtime = _runtime(processor, renderer)
+    target = "large printed header text at the top left above Nashville, Tenn."
+    sample = replace(_sample(), target=target)
+    messages = build_native_representation_messages(sample, _prompt())
+
+    action = render_native_action_target(runtime, messages)
+    parsed = StrictToolCallParser().parse(action.sampled_turn)
+    last_span = action.sampled_turn.token_byte_spans[parsed.target_span.token_end - 1]
+
+    assert parsed.target == target
+    assert parsed.target_span.raw_json_value == target
+    assert parsed.target_span.token_ids[-1] == 1189
+    assert action.canonical_target_token_ids == parsed.target_span.token_ids
+    assert last_span.byte_start < parsed.target_span.offsets.byte_end
+    assert last_span.byte_end > parsed.target_span.offsets.byte_end
 
 
 def test_qwen3_native_d_only_processor_golden() -> None:

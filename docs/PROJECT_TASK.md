@@ -241,6 +241,29 @@ evaluation service identity, and the exact benchmark-arm decoding
 configurations. No benchmark-quality claim is allowed until those inputs and a
 real run artifact exist.
 
+### 0.6 Accepted target-token boundary repair
+
+Decision ID: **RPI-20260720-TARGET-TOKEN-COVER-V1**
+
+Accepted by: **user**, on **2026-07-20 JST**, as the bounded repair needed to
+continue the two already authorized representation-phase runs.
+
+The raw JSON target value remains identified by exact character and UTF-8 byte
+offsets in the immutable sampled assistant turn. Its conditioning token span is
+the unique minimal contiguous sequence of actual sampled tokens whose byte
+spans have non-empty overlap with that raw value. A boundary token may therefore
+also contain adjacent JSON syntax only when the tokenizer made those bytes
+inseparable. Both conditioning providers use this same rule.
+
+The repair must not retokenize or rewrite sampled text, use fuzzy text search,
+change target strings, discard affected rows, or add syntax tokens that do not
+overlap the raw target value. It includes parser/native-transcript regression
+fixtures for left, right, and both-boundary crossings plus the observed Qwen3
+`Tenn.`/closing-quote token. A rank-local contract failure must abort the
+distributed process group instead of entering a graceful collective teardown;
+the original exception remains primary. The failed output directories remain
+immutable, and replacement runs require new experiment identities.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

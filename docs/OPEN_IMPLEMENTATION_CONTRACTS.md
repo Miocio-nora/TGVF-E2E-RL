@@ -335,8 +335,13 @@ interfaces must be versioned and fail closed while unset.
 
 - [ ] `OPEN_BLOCKING RO-S01` — Strict JSON/parser behavior for malformed calls,
   unknown keys, trailing answers, tool errors, timeout, and loops.
-- [ ] `OPEN_BLOCKING RO-S02` — Exact target value span mapping across JSON
-  escapes, non-ASCII text, repeated strings, and boundary-crossing tokens.
+- [x] `FIXED RO-S02` — Exact target value span mapping uses
+  `minimal_overlapping_sampled_token_cover_v1`: raw JSON character/UTF-8 byte
+  offsets remain exact, while conditioning uses the unique minimal contiguous
+  sequence of actual sampled tokens with non-empty byte overlap. This covers
+  escapes, non-ASCII text, repeated strings, and tokenizer boundary crossings;
+  no retokenization, fuzzy matching, target rewriting, or row filtering is
+  permitted. Fixed by `RPI-20260720-TARGET-TOKEN-COVER-V1`.
 - [ ] `OPEN_BLOCKING RO-S03` — `Hq` identity:
   - included/excluded syntax tokens: `[TBD]`
   - hidden layer: `[TBD]`

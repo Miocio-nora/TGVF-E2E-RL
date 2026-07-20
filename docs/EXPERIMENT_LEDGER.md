@@ -3972,7 +3972,7 @@ instead of repeated bullets.
 
 ### REP-QWEN3-V4-CONTEXTUAL-V2
 
-- Lifecycle/result: `RUNNING` / `PENDING`; user-authorized full representation-
+- Lifecycle/result: `COMPLETE` / `FAIL`; user-authorized full representation-
   phase training, contextual-hidden-state provider first. The exact V1
   10-step preflight is retained unchanged as the baseline; V2 starts fresh
   because checkpoint code identity is strict.
@@ -4021,10 +4021,19 @@ instead of repeated bullets.
   500/1000/1500/2000 checkpoints and validation events; tokenizer unchanged;
   publish the final Adapter artifact. Expected train-core time is about 2.25 h
   from RP-30, plus validation/checkpoint overhead.
+- Failure: the last durable metric is step 210. At optimizer step 218, rank 1
+  rejected source sample
+  `tgvf_v4_teacher_50k:docvqa:ygjc0228_1:3::focus1` (source line 31416,
+  SHA256 `d86e300f92a0266b6d421dc21303c500ecd6c9ef6318e02375d02ab335b6053f`)
+  because Qwen token `1189` (`.\"`) overlaps the exact target-value end and
+  closing JSON quote. Rank 0 subsequently timed out in FSDP2 reduce-scatter
+  after 30 minutes. This is a deterministic target-span contract defect, not
+  OOM or W&B failure. No checkpoint or Adapter artifact was produced; the
+  output remains diagnostic-only and immutable.
 
 ### REP-QWEN3-V4-TARGET-EMBEDDING-V1
 
-- Lifecycle/result: `RUNNING` / `PENDING`; user-authorized paired formal
+- Lifecycle/result: `CANCELLED` / `FAIL`; user-authorized paired formal
   representation run on physical GPUs 0 and 1 while contextual V2 continues on
   GPUs 2 and 3.
 - Identity/output: code `6496a4d135078f83430a63e59d9c14455fd85e69`;
@@ -4062,6 +4071,11 @@ instead of repeated bullets.
   `f02221bff8ff38144fa1c455ed49d31b1057ee648d77804fa5756a5001896789`.
   Steps 10 and 20 completed with finite nonzero gradients; step 20 took
   `3.966164014` seconds. Live W&B upload is verified at the planned run URL.
+- Failure: the last durable metric is step 210. The identical data order reached
+  the same step-218 boundary-crossing sample as contextual V2; the run was
+  terminated at `2026-07-20T18:06:01+09:00` instead of waiting for a second
+  redundant 30-minute NCCL watchdog timeout. No checkpoint or Adapter artifact
+  was produced; the output remains diagnostic-only and immutable.
 
 ## Compatibility-spike status
 

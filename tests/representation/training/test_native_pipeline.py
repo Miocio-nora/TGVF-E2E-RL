@@ -31,6 +31,7 @@ from tgvf_rl.representation.training.native_pipeline import (
     _expand_native_visual_placeholders,
     _processor_batch,
     _render_native_action_targets_batch,
+    _minimal_overlapping_token_positions,
     _single_visual_expansion_count,
     _validate_single_input,
     build_native_representation_messages,
@@ -60,6 +61,30 @@ from tgvf_rl.representation.training.transcript import (
 
 _IMAGE_TOKEN = "<|image_pad|>"
 _ASSISTANT_PREFILL = "<|im_start|>assistant\n<think>\n"
+
+
+@pytest.mark.parametrize(
+    "offsets, expected",
+    (
+        (((0, 2), (2, 4), (4, 7), (7, 10)), (1, 2)),
+        (((0, 3), (3, 6), (6, 8), (8, 10)), (1, 2)),
+        (((0, 2), (2, 4), (4, 6), (6, 8), (8, 10)), (1, 2, 3)),
+    ),
+)
+def test_native_target_positions_use_minimal_overlapping_token_cover(
+    offsets: tuple[tuple[int, int], ...],
+    expected: tuple[int, ...],
+) -> None:
+    assert (
+        _minimal_overlapping_token_positions(
+            "0123456789",
+            offsets,
+            span_start=3,
+            span_end=7,
+            name="native action target",
+        )
+        == expected
+    )
 
 
 def test_bound_all_ones_mask_rejects_mutation_replacement_and_false_cpu_mask() -> None:

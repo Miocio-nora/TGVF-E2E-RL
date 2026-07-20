@@ -196,19 +196,10 @@ def _map_target_tokens(
             "no sampled token covers the raw target value",
         )
 
-    if (
-        overlapping[0].byte_start != offsets.byte_start
-        or overlapping[-1].byte_end != offsets.byte_end
-        or any(
-            span.byte_start < offsets.byte_start
-            or span.byte_end > offsets.byte_end
-            or span.byte_start == span.byte_end
-            for span in overlapping
-        )
-    ):
+    if any(span.byte_start == span.byte_end for span in overlapping):
         raise ToolCallParseError(
             ParseErrorCode.AMBIGUOUS_TARGET_TOKEN_SPAN,
-            "a sampled token crosses a raw target-value boundary",
+            "a zero-width sampled token overlaps the raw target value",
         )
 
     token_start = overlapping[0].token_index
@@ -219,6 +210,14 @@ def _map_target_tokens(
         raise ToolCallParseError(
             ParseErrorCode.AMBIGUOUS_TARGET_TOKEN_SPAN,
             "target token coverage is not contiguous",
+        )
+    if (
+        overlapping[0].byte_start > offsets.byte_start
+        or overlapping[-1].byte_end < offsets.byte_end
+    ):
+        raise ToolCallParseError(
+            ParseErrorCode.AMBIGUOUS_TARGET_TOKEN_SPAN,
+            "sampled target tokens do not cover the raw target value",
         )
     token_ids = turn.token_ids[token_start:token_end]
     return token_start, token_end, token_ids
