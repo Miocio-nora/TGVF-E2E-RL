@@ -25,7 +25,9 @@
     "dependency_lock_sha256": "df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058",
     "cc": "/usr/bin/gcc",
     "cxx": "/usr/bin/g++",
-    "cpath": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12"
+    "cpath": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12",
+    "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "ninja_sha256": "696f9628a79d9ce50314cf9556d7cd1a1d1ec52b8fd52828f6f9db1719565b67"
   },
   "devices": {
     "physical": [2, 3],

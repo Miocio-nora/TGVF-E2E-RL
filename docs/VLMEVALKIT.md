@@ -87,6 +87,7 @@ on physical GPUs 2 and 3. After recording the run in the experiment ledger:
 CUDA_VISIBLE_DEVICES=2,3 \
 CC=/usr/bin/gcc CXX=/usr/bin/g++ \
 CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 \
+PATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn \
 TOKENIZERS_PARALLELISM=false \
 .venv312/bin/python -m \

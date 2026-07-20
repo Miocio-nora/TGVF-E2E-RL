@@ -3707,8 +3707,8 @@ retained as `INVALID` and rerun under a new planned ID.
   `BJ-10`.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical user
   authorization and `EVAL-ARCH-20260720` scope to BJ-10.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: identical to BJ-10, with the added hard gate that both the API
   server and engine log the exact local 72B path supplied via explicit
   `--model`, never vLLM's default model.
@@ -3761,9 +3761,12 @@ retained as `INVALID` and rerun under a new planned ID.
 - World size, microbatch, accumulation, and global batch: TP world `2`, one
   request/completion; training batch/accumulation N/A.
 - GPUs: identical physical B200 indices, UUIDs and logical mapping to BJ-10.
-- Start/end timestamps, elapsed time, and session/process identity: pending
-  execution and will be recorded.
-- Actual GPU-hours and peak scratch use: pending execution; no checkpoint.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T16:34:18+09:00` / `2026-07-20T16:39:30+09:00`, 312 seconds;
+  API PID 2466090, engine PID 2466924, worker PIDs 2467284 and 2467285.
+- Actual GPU-hours and peak scratch use: less than `0.174` two-device GPU-hours
+  by wall-time upper bound; observed peak was 71,912 MiB per GPU while model
+  weights occupied 67.8004 GiB/rank. Log 88,625 bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CC=/usr/bin/gcc CXX=/usr/bin/g++
   CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12
   VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn TOKENIZERS_PARALLELISM=false
@@ -3777,10 +3780,17 @@ retained as `INVALID` and rerun under a new planned ID.
   GPUs released.
 - Scorer/parser identity: unchanged smoke script hash above; no benchmark
   scorer.
-- Metrics: pending exact response, token usage, latency, service load time, GPU
-  memory, process identity, and log hash.
-- Conclusion: `PENDING`; deployment availability only, not judge calibration or
-  benchmark quality.
+- Metrics: exact 72B identity and `Qwen2ForCausalLM` resolved; all 37 shards
+  loaded in 221.08 seconds, total model load 223.35 seconds, Torch compile 22.03
+  seconds, and 81.69 GiB/rank remained for a 535,376-token GPU KV cache. FlashInfer
+  warm-up then failed because its subprocess could not resolve the existing
+  `.venv312/bin/ninja`. Server-log SHA256
+  `85bd9ae2df19d691a77768298dbffed7451fbb3ebcc406e6bcb43008789645ce`.
+- Conclusion: `FAIL`; the model/vLLM/TP2 load is compatible, but the unactivated
+  virtual environment omitted its Ninja executable from subprocess `PATH`.
+  GPUs returned to 0 MiB and no endpoint response was accepted. Corrective
+  `BJ-10-R2` explicitly fixes the existing executable path; no dependency is
+  installed or changed, and no calibration or benchmark-quality claim follows.
 
 ## Compatibility-spike status
 
