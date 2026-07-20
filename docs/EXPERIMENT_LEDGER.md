@@ -4541,7 +4541,7 @@ instead of repeated bullets.
 
 ### RP-44-QWEN3-REP-INTERNAL-EVAL-BALANCED-T01-V4-GOLDEN-GPU3
 
-- Lifecycle/result: `PLANNED` / `PENDING`; post-hoc evaluation of the completed
+- Lifecycle/result: `COMPLETE` / `PASS`; post-hoc evaluation of the completed
   RP-40 Balanced-T0.1 step-500 Adapter on the historical Golden's actual
   same-distribution v4 clean-imend test population.
 - Code/config: clean code commit `ffa41467613b24376374e53d99be5bf29e9d0a0b`;
@@ -4563,6 +4563,15 @@ instead of repeated bullets.
   manifest binding, tokenizer unchanged, and a complete immutable report.
   Scientific comparison is against Golden top-1 `0.77`; no v3 result is an
   active validation reference.
+- Result: exit `0`; report SHA256
+  `bfbac956a98bbcc6e1edce5fd23faf8b2a3cfadd4916e8981f17b5cc78c4f4a5`.
+  Exact population checks passed (200 rows/46 groups), tokenizer remained
+  `151669`, retrieval top-1/top-2/MRR are `0.735/0.87/0.84158`, versus Golden
+  `0.77/0.915/0.86917`. Correct-D beats wrong-same-image D on `0.865` of rows;
+  target-only and random-D controls are both `1.0`. This invalidates the v3
+  fixed-grid report as a target-specificity diagnosis: RP-40 is strongly
+  separable on the actual same-distribution population and lies 3.5 percentage
+  points below Golden top-1 at step 500.
 
 ## Compatibility-spike status
 
