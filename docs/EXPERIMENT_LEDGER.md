@@ -3799,8 +3799,8 @@ retained as `INVALID` and rerun under a new planned ID.
   missing subprocess executable path.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: identical user
   authorization and `EVAL-ARCH-20260720` scope to BJ-10.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: identical to BJ-10-R1, with the additional gate that FlashInfer
   warm-up resolves the already installed `.venv312/bin/ninja` from an explicit
   deterministic `PATH`.
@@ -3851,8 +3851,12 @@ retained as `INVALID` and rerun under a new planned ID.
 - World size, microbatch, accumulation, and global batch: TP world `2`, one
   request/completion; training batch/accumulation N/A.
 - GPUs: identical physical B200 indices, UUIDs and logical mapping to BJ-10.
-- Start/end timestamps, elapsed time, and session/process identity: pending.
-- Actual GPU-hours and peak scratch use: pending; no checkpoint.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T16:41:28+09:00` / `2026-07-20T16:43:00+09:00`, 92 seconds;
+  API PID 2473721, engine PID 2474245, worker PIDs 2474615 and 2474616.
+- Actual GPU-hours and peak scratch use: less than `0.052` two-device GPU-hours
+  by wall-time upper bound; observed peak was 71,912 MiB per GPU. Log 98,053
+  bytes; no checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CC=/usr/bin/gcc CXX=/usr/bin/g++
   CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12
   PATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -3865,10 +3869,17 @@ retained as `INVALID` and rerun under a new planned ID.
   --enable-prefix-caching`.
 - Outputs: exact paths above; service stopped after smoke and GPUs released.
 - Scorer/parser identity: unchanged smoke script; no benchmark scorer.
-- Metrics: pending exact response, usage, latency, load/warm-up time, memory,
-  process identity and log hash.
-- Conclusion: `PENDING`; deployment availability only, not calibration or
-  benchmark quality.
+- Metrics: exact model loaded from OS cache in 23.40 seconds (25.66 seconds
+  including setup), Torch compile took 13.28 seconds, 82.10 GiB/rank remained
+  for a 538,064-token GPU KV cache, and Ninja was resolved. FlashInfer then
+  invoked the stale `revisit-vlm` Conda `nvcc`; compilation failed on missing
+  `cublasLt.h` and `nvrtc.h`. Server-log SHA256
+  `ee89824ffa22feed9d068108ff51914dd43d1dd736769bcbc6211c236688afcc`.
+- Conclusion: `FAIL`; explicit executable lookup closed the R1 failure, but the
+  auto-selected FlashInfer backend inherited a legacy CUDA compiler. No endpoint
+  response was accepted and GPUs returned to 0 MiB. `BJ-10-R3` uses the existing
+  `TRITON_ATTN` path already proven by the repository's Qwen3 vLLM smoke; no
+  dependency is installed or changed and no quality claim follows.
 
 ## Compatibility-spike status
 

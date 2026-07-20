@@ -49,7 +49,8 @@
     "max_num_seqs": 64,
     "seed": 42,
     "generation_config": "vllm",
-    "prefix_caching": true
+    "prefix_caching": true,
+    "attention_backend": "TRITON_ATTN"
   },
   "scope": {
     "allows_vlmevalkit_benchmark_judging": true,
