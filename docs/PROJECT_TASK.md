@@ -563,6 +563,34 @@ Until the summed-NLL endpoint exists, the evidence supports selection of
 contextual conditioning and promising Balanced behavior but does not establish
 that Balanced has a higher 2000-step ceiling than summed NLL.
 
+### 0.10 Accepted main-D-only representation ablation
+
+Decision ID: **RPI-20260721-MAIN-D-ONLY-ABLATION**
+
+Accepted by: **user**, on **2026-07-21 JST**.
+
+The final representation-phase ablation isolates the contribution of the
+TGVF Adapter's D-DeepStack branches. It preserves Qwen3's native original-image
+DeepStack path and the main D path, but the focused-D block supplies zero
+DeepStack additions. D-DeepStack branch adapters are absent from trainable
+parameters and the artifact. Matrix CE and L_gen therefore receive only main D
+as target-conditioned evidence, and the historical Norm term compares only
+main D with the corresponding main source visual features. Zero placeholders
+exist solely to satisfy Qwen3's fixed three-branch injected-forward interface;
+they are not observations, objectives, gradients, or artifact parameters.
+
+The paired experiment uses contextual hidden state, Balanced mean-NLL Matrix
+CE at temperature `1.0`, fresh seed 42, and exactly the completed contextual
+Balanced/T=1.0 baseline's model, native prompt, v4 clean-imend data, global
+batch 32, optimizer/scheduler, 2000-step horizon, max-pixels 262144, objective
+weights `1/1/.1`, manifold zero and checkpoint cadence. Its internal evaluation
+uses the same v4-Golden first-200/46-group manifest and reports main-D
+specificity/readability without presenting zero branch placeholders as learned
+D-DeepStack health. Before the full run, the altered parameter/checkpoint
+topology must pass focused loss/gradient tests and one fresh/resume periodic
+boundary smoke. This ablation does not change the production full-D-DeepStack
+Adapter contract or policy RL default.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the
