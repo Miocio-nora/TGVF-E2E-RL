@@ -217,6 +217,12 @@ def main() -> int:
 
     args.wandb_dir.mkdir(parents=True, exist_ok=True)
     provider_tag = str(config["conditioning"]["provider"]).replace("_", "-")
+    matrix_ce_mode_tag = str(config["objective"]["matrix_ce_mode"]).replace(
+        "_", "-"
+    )
+    matrix_ce_temperature_tag = (
+        f'matrix-ce-temperature-{config["objective"]["matrix_ce_temperature"]}'
+    )
     run = wandb.init(
         entity=args.entity,
         project=args.project,
@@ -229,7 +235,8 @@ def main() -> int:
             "representation-phase",
             "qwen3-vl-8b-thinking",
             provider_tag,
-            "balanced-matrix-ce",
+            f"matrix-ce-{matrix_ce_mode_tag}",
+            matrix_ce_temperature_tag,
         ),
         config=_wandb_config(config),
         dir=str(args.wandb_dir),

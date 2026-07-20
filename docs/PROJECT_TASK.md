@@ -2,7 +2,7 @@
 
 Status: **I8H-20260719 bounded framework implementation complete; production gates open**
 Recorded: **2026-07-18 JST**
-Updated: **2026-07-20 JST**
+Updated: **2026-07-21 JST**
 
 Unresolved implementation contracts and their promotion gates are tracked in
 [`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
@@ -527,6 +527,41 @@ mathematics, the real Qwen3 model, a separately identified representation
 artifact/provider, actual vLLM generation, exact observation replay, and the
 accepted LoRA freeze scope. GPU work requires its own `PLANNED` ledger entry
 before launch.
+
+### 0.9 Accepted contextual Matrix-CE 2000-step comparison
+
+Decision ID: **RPI-20260721-CONTEXTUAL-MATRIXCE-2000-PAIR**
+
+Accepted by: **user**, on **2026-07-21 JST**.
+
+The selected Qwen3 representation-phase conditioning provider is contextual
+hidden state at layer `-1`. The accepted next experiment completes two fresh,
+strictly paired 2000-optimizer-step runs: Balanced mean-NLL Matrix CE at fixed
+temperature `0.1`, and legacy summed-NLL Matrix CE at its fixed temperature
+`1.0`. They are compared with the completed contextual Balanced/T=1.0
+2000-step artifact. This three-cell comparison tests the endpoint effect of
+length normalization and the calibration suggested by the step-500 result; it
+does not add or change any objective.
+
+The two new runs keep identical Qwen3 model, TGVF Adapter, native image-plus-
+question prompt, v4 clean-imend training data, fresh seed 42 initialization,
+same-image K4 sampling, global batch 32, gradient accumulation 4, optimizer,
+2000-step cosine schedule, max-pixels 262144, L_gen/Matrix-CE/Norm weights
+`1/1/.1`, manifold weight zero, BF16/SDPA, FSDP2 no-reshard execution, and
+checkpoint/validation cadence 500. Periodic validation uses the v4 clean-imend
+test split; its two exact image-path overlaps with training are content-bound
+and explicitly accepted. The formal internal evaluation remains the exact
+v4-Golden first-200/46-group population and is run after training on both final
+artifacts.
+
+Physical GPUs 0/1 are authorized for the Balanced/T=0.1 cell and GPUs 2/3 for
+the summed-NLL/T=1.0 cell. Both may run concurrently under separate `tmux`
+sessions and separate W&B identities. Acceptance requires all four durable
+checkpoints, final Adapter publication, clean teardown, and the same immutable
+internal-evaluation reports used by the existing contextual/T=1.0 result.
+Until the summed-NLL endpoint exists, the evidence supports selection of
+contextual conditioning and promising Balanced behavior but does not establish
+that Balanced has a higher 2000-step ceiling than summed NLL.
 
 ## 1. Objective
 

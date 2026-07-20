@@ -4638,6 +4638,73 @@ instead of repeated bullets.
   chart, counting, object-part and pattern remain slightly below Golden and
   should not be hidden by the aggregate improvement.
 
+### RP-49-QWEN3-REP-MATRIXCE-BALANCED-T01-CONTEXTUAL-2000-GPU01
+
+- Cell/status: endpoint calibration cell / `PLANNED` / `PENDING`.
+- Question: with contextual hidden-state conditioning fixed, does Balanced
+  mean-NLL Matrix CE at temperature `0.1` improve the 2000-step target-
+  specificity result over the completed Balanced/T=1.0 artifact?
+- Code/config/output: clean runtime code
+  `ffa41467613b24376374e53d99be5bf29e9d0a0b`; config source/canonical SHA256
+  `16b02464586f5e9f8467727e0bfb1aa873c03e48483d0d3849cbd0fb49b09851` /
+  `bafdc28102de70584ba532f82c1dc233e37d43eed9880dacc3d12c4e1a8a9728`;
+  immutable output
+  `artifacts/representation/RP-49-qwen3-matrix-ce-balanced-t01-contextual-2000-gpu01/`.
+- Model/data: local Qwen3-VL-8B-Thinking, tokenizer 151669/no resize,
+  BF16/SDPA, max-pixels 262144; v4 clean-imend train SHA256 `c94a38b...443c`
+  and test SHA256 `de61c731...82d`, retained manifests `a089d13d...5a8c` /
+  `534f5b1e...b0`. The exact two-record image-path-only overlap report is
+  `3cad19a9...c27` and is accepted without row deletion.
+- Mathematics/execution: native image-plus-question prompt v1, contextual
+  layer `-1`, fresh seed 42, same-image K4/B4/world2/GA4/global batch 32;
+  Balanced mean-NLL/T=0.1 Matrix CE + L_gen + Norm weights `1/1/.1`, manifold
+  zero; AdamW `1e-4`, 2000-step cosine/warmup 100/min ratio .1, FSDP2
+  `reshard_after_forward=false`, DCP/validation every 500. RL rollout,
+  reference, behavior logprobs, KL and SDPO fields are N/A.
+- GPU/command: physical GPUs 0/1 UUIDs
+  `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` /
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc`; deterministic environment and
+  `timeout 28800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m
+  tgvf_rl.cli run-representation
+  configs/representation/qwen3_matrix_ce_balanced_t01_contextual_2000step_gpu01.toml`
+  in tmux session `tgvf-rp49-bal-t01-2k`.
+- Telemetry/acceptance: W&B `mio_mi0/tgvf-e2e-rl`, run/ID
+  `representation-rp49-balanced-t01-contextual-2k` /
+  `rep-rp49-balanced-t01-contextual-2k`. Require finite metrics, DCP at
+  500/1000/1500/2000, final Adapter, tokenizer invariance and clean teardown.
+  A separately content-bound post-hoc v4-Golden 200/46 evaluation is planned
+  only after the final artifact hashes exist.
+
+### RP-50-QWEN3-REP-MATRIXCE-LEGACY-T1-CONTEXTUAL-2000-GPU23
+
+- Cell/status: summed-NLL endpoint control / `PLANNED` / `PENDING`.
+- Question: what is the new native pipeline's contextual 2000-step endpoint
+  under unchanged legacy summed-NLL Matrix CE, so Balanced ceiling claims can
+  be made from a real paired endpoint rather than the historical Golden run?
+- Code/config/output: clean runtime code
+  `ffa41467613b24376374e53d99be5bf29e9d0a0b`; config source/canonical SHA256
+  `f089ff038c44796e996fa71cc55b9b29184d57cb9d4923ff262469c52517396d` /
+  `0e679f85224caf55f580ebaf35051e808afdb6d424146aab5b73cb868fe39ed0`;
+  immutable output
+  `artifacts/representation/RP-50-qwen3-matrix-ce-legacy-t1-contextual-2000-gpu23/`.
+- Paired identity: every model, data, prompt, provider, seed, batch, optimizer,
+  scheduler, resolution, objective weight, validation and checkpoint field is
+  identical to RP-49. The only scientific delta is legacy summed NLL/T=1.0;
+  run/output and physical-device identities necessarily differ. RL-only fields
+  are N/A.
+- GPU/command: physical GPUs 2/3 UUIDs
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` /
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; deterministic environment and
+  `timeout 28800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m
+  tgvf_rl.cli run-representation
+  configs/representation/qwen3_matrix_ce_legacy_contextual_2000step_gpu23.toml`
+  in tmux session `tgvf-rp50-legacy-t1-2k`.
+- Telemetry/acceptance: W&B `mio_mi0/tgvf-e2e-rl`, run/ID
+  `representation-rp50-legacy-t1-contextual-2k` /
+  `rep-rp50-legacy-t1-contextual-2k`; the same four-checkpoint, final artifact,
+  tokenizer and teardown gates as RP-49 apply. The final internal evaluation
+  uses the same post-hoc v4-Golden 200/46 population after artifact hashing.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
