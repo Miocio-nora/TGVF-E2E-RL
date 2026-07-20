@@ -4705,6 +4705,54 @@ instead of repeated bullets.
   tokenizer and teardown gates as RP-49 apply. The final internal evaluation
   uses the same post-hoc v4-Golden 200/46 population after artifact hashing.
 
+### RP-53-QWEN3-REP-MAIN-D-ONLY-PERIODIC-BOUNDARY-GPU01
+
+- Cell/status: mandatory main-D-only two-rank periodic checkpoint/resume
+  smoke / `PLANNED` / `PENDING`; launch only after GPUs 0/1 are free.
+- Code/config/output: runtime `673c0e4cdcf97b74feb5b0bae944d75f85988520`;
+  fresh source/canonical config SHA256 `9a3397da...aec6` /
+  `a578bd23...92d0`; resume `c105e9da...7ec1` /
+  `e50aa040...963`; immutable root
+  `artifacts/representation/RP-53-qwen3-main-d-only-periodic-boundary-gpu01/`.
+- Fixed identity: local Qwen3-VL-8B-Thinking, BF16/SDPA, no tokenizer resize,
+  max pixels 262144; v4 clean-imend train/test and recorded two-image-path
+  overlap; native image-question prompt v1; contextual hidden state layer -1;
+  main-D-only TGVF Adapter; seed 42; same-image K4/B4/world2/GA4/global batch
+  32; Balanced mean-NLL Matrix CE T=1 + L_gen + main-D Norm weights
+  1/1/.1, manifold 0; AdamW 1e-4 and 2000-step cosine schedule;
+  FSDP2 no-reshard.
+- Execution/acceptance: GPUs 0/1, fresh process stops after step 1 following
+  train, validation and DCP; a new process strictly restores step 1 and stops
+  after step 2 following the same boundary. Require finite metrics, 13
+  Adapter-owned FSDP leaves, no learned D-DeepStack artifact tensors, both rank
+  shards, exact cursor/history restore, and clean teardown. Policy/reference,
+  behavior logprobs, GRPO, SDPO, reward and judge fields are N/A.
+
+### RP-54-QWEN3-REP-MAIN-D-ONLY-BALANCED-T1-CONTEXTUAL-2000-GPU01
+
+- Cell/status: D-DeepStack ablation paired to RP-46 / `PLANNED` /
+  `PENDING`; launch only after RP-53 passes and GPUs 0/1 are free.
+- Code/config/output: runtime `673c0e4cdcf97b74feb5b0bae944d75f85988520`;
+  source/canonical config SHA256 `dba4455d...433c` /
+  `2a7bd7f4...3462`; immutable root
+  `artifacts/representation/RP-54-qwen3-main-d-only-balanced-t1-contextual-2000-gpu01/`.
+- Pair contract: every RP-46 scientific field remains fixed—local
+  Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer 151669/no resize, max pixels
+  262144, v4 clean-imend train/test, native image-question prompt v1,
+  contextual layer -1, seed 42, K4/B4/world2/GA4/global batch 32, Balanced
+  mean-NLL Matrix CE T=1 + L_gen + Norm weights 1/1/.1, manifold 0, AdamW
+  1e-4, 2000-step cosine/warmup 100/min ratio .1, FSDP2 no-reshard and
+  validation/DCP every 500. The sole method change is main-D-only: Qwen source
+  DeepStack remains native, while TGVF D-DeepStack contributes no observation,
+  objective, gradient, trainable parameter or artifact tensor; Norm is main-D
+  only.
+- Acceptance: finite steps 1--2000, validation and complete DCPs at
+  500/1000/1500/2000, final Adapter artifact with its v2 variant identity,
+  tokenizer unchanged, W&B telemetry including `adapter_variant=main_d_only`,
+  and later the exact v4 Golden first-200/46-group internal evaluation.
+  Policy/reference, behavior logprobs, GRPO, SDPO, reward and judge fields are
+  N/A.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
