@@ -4280,7 +4280,7 @@ instead of repeated bullets.
 
 ### REP-QWEN3-V4-CONTEXTUAL-V4
 
-- Lifecycle/result: `RUNNING` / `PENDING`; fresh formal replacement for V3
+- Lifecycle/result: `COMPLETE` / `PASS`; fresh formal replacement for V3
   after mandatory periodic-boundary smoke RP-33 passed.
 - Identity/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
   config source/canonical SHA256
@@ -4306,12 +4306,17 @@ instead of repeated bullets.
 - Runtime: started `2026-07-20T19:28:50+09:00`; torchrun PID `2800191`, rank
   PIDs `2800348/2800349`, run identity
   `6c74885183eba8cfc6d7393a296b897b3caf939c88ffe016028c3a02b5f3d5c0`.
-  Steps 10 and 20 completed with finite losses/gradients. W&B upload is live at
+  Completed step 2000 with all four DCP boundaries and a clean teardown. Final
+  validation Matrix CE/L_gen/Norm/total is
+  `1.32421875/1.5166015625/0.4899977744/2.8898200899`; the loader-verified
+  104-tensor artifact manifest is
+  `dfa992fcea0cee8a0fb48f19892ff10ac42a6cf040d32afcae748c7724e80e10`.
+  W&B finished and synced at
   `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-qwen3-v4-contextual-v4`.
 
 ### REP-QWEN3-V4-TARGET-EMBEDDING-V3
 
-- Lifecycle/result: `RUNNING` / `PENDING`; paired fresh formal replacement for
+- Lifecycle/result: `COMPLETE` / `PASS`; paired fresh formal replacement for
   V2 after mandatory periodic-boundary smoke RP-34 passed.
 - Identity/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
   config source/canonical SHA256
@@ -4329,7 +4334,12 @@ instead of repeated bullets.
 - Runtime: started `2026-07-20T19:28:50+09:00`; torchrun PID `2800187`, rank
   PIDs `2800335/2800336`, run identity
   `5d23fafd91ec3af9a926e52af4fd6ed163349ae3734ef3c78057a329f55ee245`.
-  Steps 10 and 20 completed with finite losses/gradients. W&B upload is live at
+  Completed step 2000 with all four DCP boundaries and a clean teardown. Final
+  validation Matrix CE/L_gen/Norm/total is
+  `1.5625/1.8115234375/0.4689098001/3.4209144175`; the loader-verified
+  104-tensor artifact manifest is
+  `3cccf99efd21fc3ea2cd62d780ad2c7ffcaec7dbb8c6c4a49892f675c11a7469`.
+  W&B finished and synced at
   `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-qwen3-v4-target-embedding-v3`.
 
 ## Compatibility-spike status
