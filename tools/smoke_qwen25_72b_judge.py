@@ -51,12 +51,15 @@ def main() -> int:
     choices = completion.get("choices", [])
     if not choices or not choices[0].get("message", {}).get("content"):
         raise RuntimeError("judge service returned no assistant content")
+    content = choices[0]["message"]["content"]
+    if content.strip() != "TGVF_JUDGE_READY":
+        raise RuntimeError(f"unexpected deterministic smoke response: {content!r}")
 
     result = {
         "status": "pass",
         "model": EXPECTED_MODEL,
         "served_models": served,
-        "response": choices[0]["message"]["content"],
+        "response": content,
         "finish_reason": choices[0].get("finish_reason"),
         "usage": completion.get("usage"),
         "elapsed_seconds": time.monotonic() - start,

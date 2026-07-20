@@ -6,7 +6,16 @@
     "repository": "Qwen/Qwen2.5-72B-Instruct",
     "revision": "495f39366efef23836d0cfae4fbe635880d2be31",
     "local_path": "/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct",
-    "served_name": "Qwen2.5-72B-Instruct"
+    "served_name": "Qwen2.5-72B-Instruct",
+    "weight_shards": 37,
+    "weight_bytes": 145412519312,
+    "config_sha256": "14ca217334fe0fd10148413592d68c99eeb33431ed89c1afa130fee560be2a29",
+    "generation_config_sha256": "ea35dfb6fc5051b01114f9b995820d55dab01ed33ee490f6378b442af82c09f9",
+    "weight_index_sha256": "6c1d85cad4513d35273d05a4c7206c04b4c8aea0ebd35ef2b26cb88ec56dfe66",
+    "tokenizer_json_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+    "tokenizer_config_sha256": "5b5d4f65d0acd3b2d56a35b56d374a36cbc1c8fa5cf3b3febbbfabf22f359583",
+    "tokenizer_length": 151665,
+    "chat_template_sha256": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f"
   },
   "runtime": {
     "python": "3.12.3",
