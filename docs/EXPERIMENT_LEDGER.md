@@ -3972,7 +3972,7 @@ instead of repeated bullets.
 
 ### REP-QWEN3-V4-CONTEXTUAL-V2
 
-- Lifecycle/result: `PLANNED` / `PENDING`; user-authorized full representation-
+- Lifecycle/result: `RUNNING` / `PENDING`; user-authorized full representation-
   phase training, contextual-hidden-state provider first. The exact V1
   10-step preflight is retained unchanged as the baseline; V2 starts fresh
   because checkpoint code identity is strict.
@@ -4002,7 +4002,11 @@ instead of repeated bullets.
   `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, both idle at planning
   `2026-07-20T17:11:35+09:00`. RL rollout/replay, reward, GRPO, SDPO, vLLM,
   sampling/logprobs, judge and answer scoring are N/A.
-- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+- Runtime: started `2026-07-20T17:12:57+09:00`; torchrun PID `2538519`, rank
+  PIDs `2538642`/`2538643`. Step 10 reproduced the V1 preflight losses exactly;
+  elapsed `4.764831926` seconds, all gradients finite, run identity
+  `4c68acf45718fae12e959803826bf6c1fdba7f5701d3c54b3bbfccbd89640bf3`.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 28800s
   .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
