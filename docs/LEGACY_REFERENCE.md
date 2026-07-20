@@ -197,13 +197,16 @@ are recorded here or in a linked immutable data artifact. It must be adapted to
 the new native-format representation pipeline. The historical rendered format,
 serialization, launcher, and resume state are not reused as the new pipeline.
 
-The user selected the same historical representation data population for the
-new pipeline. The following exact worktree files were identified by the pinned
-training documentation and content-hashed before row inspection:
+The user selected the historical representation data family for the new
+pipeline. The exact production train candidate remains a choice between the v3
+accepted population and the later v4 clean-imend Protocol-C focus split. The
+following exact worktree files were identified and content-hashed before row
+inspection:
 
 | Role | Exact legacy worktree path | SHA256 |
 |---|---|---|
 | candidate retained train rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_50k/final/tgvf_teacher_items.accepted.jsonl` | `8406f8f843f927642aa2d728f1896579f20c44ca7329b86cb35b42544f73f666` |
+| candidate clean-imend Protocol-C focus train split | `data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.train.jsonl` | `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c` |
 | candidate validation rows (not path-disjoint after audit) | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
 
 These files are not committed at the frozen legacy commit and remain external
@@ -213,11 +216,11 @@ copying the JSONL or image assets into this public repository. Dataset-source
 license, image-asset identities, duplicate/near-duplicate policy, and an
 accepted split decision remain Gate A0 items.
 
-The new `retained_focus_rows_v1` loader was run read-only against both exact
-source hashes. It records every source-line disposition, resolved image path,
-duplicate and historical target/short-answer leakage signal in an immutable
-`representation_data_manifest_v1`; leakage is a warning/record, not an
-automatic exclusion. The bounded audit produced:
+The new `retained_focus_rows_v1` loader was run read-only against the exact v3
+train and validation hashes. It records every source-line disposition,
+resolved image path, duplicate and historical target/short-answer leakage
+signal in an immutable `representation_data_manifest_v1`; leakage is a
+warning/record, not an automatic exclusion. The bounded v3 audit produced:
 
 | Audit value | Train | Validation |
 |---|---:|---:|
@@ -252,6 +255,42 @@ rows in each epoch because groups of one to three never form a batch and group
 remainders are dropped. Exact baseline parity preserves this behavior; using
 smaller or variable group sizes is a separately named data-efficiency
 experiment rather than a silent sampler change.
+
+### v3 versus v4 clean-imend train audit
+
+The pinned v4 file is not a tag-cleaned copy of the v3 rows. It is a new
+`tgvf_teacher_schema_v4_stage1_compat` focus-only split derived from v4 teacher
+traces. The bounded read-only comparison found:
+
+| Property | v3 accepted train | v4 clean-imend focus train |
+|---|---:|---:|
+| source rows | 50,022 | 39,998 |
+| representation-admissible focus rows | 35,542 | 39,998 |
+| unique image groups | 9,186 | 9,556 |
+| rows materialized by K=4 remainder-dropping | 25,592 | 32,836 |
+| natural-image share | 36.53% | 41.23% |
+| scene-text share | 28.83% | 31.62% |
+| document share | 24.28% | 18.28% |
+| chart share | 10.36% | 8.88% |
+
+The two candidates share 8,913 stable image identities, so their image pools
+substantially overlap. They do not share row identities: exact `uid`
+intersection is zero, only 987 image-plus-question keys match, and none of
+those 987 matches has an identical `(question, short_answer, target,
+evidence_description)` tuple. Among those matched questions, `target` is never
+identical and `evidence_description` is identical only eight times. v4 also
+changes the supervision population: every target uses
+`target_style=visual_descriptor`, 80.51% of rows are multiple-choice, and 686
+rows come from multi-refocus items (343 second-focus rows). v3 is a flat mix of
+single-focus and direct-answer teacher rows, of which only the focus subset is
+admitted.
+
+Neither structured JSONL contains a literal `<|im_end|>` string. Therefore the
+`clean_imend` run name must not be interpreted as the only semantic difference
+from v3; the observable file is a new teacher/schema/split with materially
+different questions, targets, evidence, answer taxonomy, and source mixture.
+The production train choice must be explicit rather than treating these two
+hashes as interchangeable.
 
 ## Golden representation checkpoint
 

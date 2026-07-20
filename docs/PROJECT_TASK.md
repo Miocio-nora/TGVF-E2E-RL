@@ -173,10 +173,9 @@ boundary:
 - `L_gen` and Matrix CE have separate intended roles. `L_gen` measures and
   trains whether frozen Qwen can read the evidence from `D`; Matrix CE applies
   relative target-specificity pressure within an image. The accepted baseline
-  uses both terms with independently configured, nonzero weights and separate
-  metrics. The exact numerical weights remain open and must be bound explicitly
-  by an experiment identity; a controlled `L_gen=off` comparison is an ablation,
-  not the baseline and not permission to remove the implementation.
+  uses both terms at weights `1.0` and `1.0`, with separate metrics. Balanced
+  Matrix CE uses temperature `1.0`. A controlled `L_gen=off` comparison is an
+  ablation, not the baseline and not permission to remove the implementation.
 - Decision `RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY` fixes the native
   representation transcript to the same simple role structure used by the
   policy RL phase. The user turn contains exactly the original image and the
@@ -263,10 +262,9 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   `L_gen` weight `1.0`, AdamW learning rate `1e-4`, betas `(0.9,0.999)`, epsilon
   `1e-8`, weight decay `0.01`, gradient clipping at `1.0`, and the exact
   historical cosine schedule with 100 warmup steps and minimum learning-rate
-  ratio `0.1` over 2,000 optimizer steps. The production TOML remains blocked
-  on the selected provider and other unresolved data/scientific identities;
-  the representation user-message wording is no longer one of those blockers.
-  These values are accepted for the bounded K=4 execution/resume proof.
+  ratio `0.1` over 2,000 optimizer steps. These are also the accepted values for
+  the initial paired provider runs; the production TOML remains blocked only on
+  the explicit v3-versus-v4 train-data choice and final artifact paths.
 - Same-image group size `K=4` is retained. On physical GPUs 2 and 3 the bounded
   geometry proof uses four accumulation microsteps, giving 32 global rows and
   eight complete `4x4` matrices per optimizer update. A measured throughput
@@ -277,10 +275,15 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   an explicit allow-recorded-overlap policy, preserve and log the exact overlap
   report, and must not describe the resulting validation split as image-path
   disjoint. No rows are silently removed.
-- Both target-conditioning providers remain required code capabilities, but a
-  paired real-GPU provider comparison is not a prerequisite for one selected
-  provider's representation run. The selected provider must pass its own
-  bounded real execution gate; provider identity remains artifact-bound.
+- Both target-conditioning providers remain required code capabilities. The
+  first run uses contextual hidden state from layer `-1`; the next paired run
+  uses target token embedding. Both use identical data/group order, fresh
+  Adapter initialization, seed `42`, batch plan, and all other objective and
+  execution values. Provider identity remains artifact-bound.
+- The accepted run pair uses K=4, per-rank batch 4, two-rank FSDP2, gradient
+  accumulation 4, global batch 32, 2,000 optimizer steps, log cadence 10, and
+  validation/checkpoint cadence 500. The seven recorded resolved-image-path
+  overlaps are logged and accepted without filtering or blocking comparison.
 - Internal evaluation is not complete merely because metric reducers have CPU
   fixtures. Before a full representation run, an executable real-Qwen/data
   runner must produce the correct-`D`, target-only, random-`D`, wrong-same-image,
@@ -337,8 +340,9 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   seconds, only `1.70%` faster than RP-12, so B32 is not a material throughput
   solution by itself. At global batch 32, two ranks each own four local K4
   groups; the pinned historical global-batch-32 run used eight ranks with one
-  local K4 group each. Final production batch geometry remains open rather
-  than being inferred from this smoke.
+  local K4 group each. The later user decision selects the historical two-rank
+  per-rank-B4/GA4/global-B32 geometry for the initial provider pair; it is not
+  inferred from the RP-13 B32-cell measurement.
 - Decision `RPI-20260720-GOLDEN-IMAGE-CAP-AB` accepts one bounded image-
   processing comparison against the pinned Golden representation path. The
   Golden lane sets the Qwen image processor's maximum pixel area to exactly
@@ -349,8 +353,10 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   materialization in the representation run. The comparison records source
   dimensions, `image_grid_thw`, pre-/post-merge visual-token counts, sustained
   GPU utilization, peak CUDA memory, and optimizer-step throughput on fixed
-  inputs. This is a diagnostic parity experiment, not a production-default
-  resolution decision or a promoted representation artifact.
+  inputs. The user now selects this aspect-ratio-preserving
+  `image_max_pixels=262144` cap for the initial contextual/embedding run pair;
+  it remains an explicit artifact identity and can be revisited only as a later
+  comparison.
 - Decision `RPI-20260720-CONTROL-STACK-OPTIMIZATION` accepts continued
   performance work on the already accepted Python 3.12 / Torch `2.9.0+cu128`
   / upstream veRL / FSDP2 / vLLM `0.12.0` control stack. Production dependency

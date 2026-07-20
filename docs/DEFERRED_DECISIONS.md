@@ -9,14 +9,12 @@ from veRL, DeepEyes, SDPO, a legacy run, or a synthetic test fixture.
 
 ## Data and prompts
 
-- real representation-phase dataset manifest, license, v1 transform audit, and
-  split;
+- final selection between the pinned v3 accepted train population and the
+  materially different pinned v4 clean-imend focus train split, followed by
+  its exact production manifest and license record;
 - policy-RL prompt population, sampling rule, group construction, and held-out
   evaluation manifest;
 - final policy-RL system/user prompt wording and native tool-call safety cap;
-- the exact JSON target-to-`Hq` rule: hidden layer, absolute token-time
-  alignment, quote/escape boundary policy, and contextual versus embedding
-  provider selection per experiment.
 
 The representation user-message wording is not deferred: decision
 `RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY` fixes it to the original image
@@ -28,6 +26,9 @@ are `qwen3-representation-image-question-v1`,
 `native_representation_prompt_v1`, `representation_sample_identity_v1`,
 `retained_focus_rows_v1`, and `canonical_evidence_supervision_v1`; there is no
 supported earlier answer-omitting or target-bearing compatibility schema.
+The provider order is also not deferred: contextual hidden state at layer `-1`
+runs first and target token embedding runs second, with identical seed `42`,
+data/group order, fresh initialization, objective, batch plan, and cadence.
 
 ## Reward and evaluation
 
@@ -35,8 +36,10 @@ supported earlier answer-omitting or target-bearing compatibility schema.
 - reward components, weights, failure values, tool cost, malformed-call cost,
   and any length/format terms;
 - target-quality or anti-leakage reward, if any;
-- promotion thresholds for target specificity, causal readability, policy
-  quality, and high-budget reasoning retention;
+- policy-quality and high-budget-reasoning promotion thresholds;
+- representation specificity/readability reuses the historical internal
+  metrics and Golden report values as its comparison baseline rather than
+  inventing new values;
 - whether and when the reserved Qwen2.5-72B judge is enabled, including its
   service/model revision, prompt, sampling, calibration, and failure policy.
 

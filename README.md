@@ -211,15 +211,13 @@ choices remain unset:
 
 - Qwen2.5 local/runtime path, family-specific representation artifact, and
   native prompt;
-- contextual hidden-layer choice, production binding of the fixed
-  question-only representation transcript identity, and real-Qwen
-  `Hq`/readout validation; the Qwen3 native span/processor path and both
-  provider code paths are implemented;
-- accepted train/validation manifests, resolution of the seven exact resolved-
-  path overlaps, dataset/image licenses, and perceptual duplicate policy;
-- representation initialization seed, Matrix-CE/`L_gen` weights, optimizer,
-  scheduler, precision, accumulation, clipping, validation cadence, and
-  promotion thresholds;
+- the final pinned v3-versus-v4 representation train choice, accepted
+  train/validation manifests, dataset/image licenses, and perceptual duplicate
+  policy; the seven exact resolved-path overlaps are recorded and accepted;
+- formal execution of the fixed contextual-hidden-state layer `-1` first run
+  and target-token-embedding second run. Both use seed `42`, the accepted v1
+  transcript, fixed objective/optimizer/batch/cadence, and historical Golden
+  evaluation baseline;
 - production actor/reference/rollout placement, FSDP2 sharding, and parallel
   topology; the compatibility veRL commit/environment and vLLM backend are
   fixed;

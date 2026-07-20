@@ -26,8 +26,9 @@ Historical component names appear only as provenance.
   visual tensors detached, main/three-branch reduction fixed, and weight
   `0.1`. There is no selectable norm mode or target.
 - Contextual-hidden-state and target-token-embedding providers run separately;
-  provider identity remains artifact-bound. A paired real-GPU provider run is
-  useful comparison evidence, not a prerequisite for one selected provider.
+  provider identity remains artifact-bound. The accepted pair runs contextual
+  hidden state layer `-1` first and target token embedding second with identical
+  seed `42`, data/order, initialization, objective, and batch plan.
 - A geometric or distance-based contrastive objective is a later named
   experiment, not part of baseline parity.
 
@@ -274,7 +275,7 @@ explicit acceptance before Gate AD-13 can close.
 | `test_same_image_negative_matrix_ce_prefers_diagonal_scores` | `DONE` | pure Matrix-CE value fixture |
 | `test_same_image_negative_matrix_ce_score_gradients_match_autograd` | `DONE` | FP32 autograd plus FP16/BF16 legacy-cast fixtures |
 | `test_readout_inputs_mask_prompt_and_replace_only_fvt_positions` | `DONE` | exact evidence ownership, two-block processor mapping, and synthetic native readout integration in `test_transcript.py`, `test_native_pipeline.py`, and the real processor golden |
-| `test_readout_inputs_can_use_source_image_grid_positions` | `PARTIAL` | native Qwen3 group builder/real golden cover layout and corrected `RP-10` executes real 8B; intended-layer and numerical parity remain open |
+| `test_readout_inputs_can_use_source_image_grid_positions` | `PARTIAL` | native Qwen3 group builder/real golden cover layout and corrected `RP-10` executes real 8B; the accepted remaining check is one fixed real-shape intended-layer/wiring validation |
 | `test_readout_inputs_reject_source_grid_token_count_mismatch` | `DONE` | typed runtime/readout/token-expansion contracts fail closed on grid, source-token, or visual-block disagreement |
 | `test_readout_prompt_can_omit_target` | `DONE` | `native_representation_prompt_v1` requires the user text to be the exact unmodified `{question}`; separately appending the teacher target is forbidden and the old executable prompt path is removed |
 | `test_readout_inputs_without_target_still_replace_fvt_positions` | `DONE` | the v1 native group-builder fixture excludes target from the user prompt while preserving strict assistant-call target extraction and both visual blocks |
@@ -286,7 +287,7 @@ explicit acceptance before Gate AD-13 can close.
 | `test_v3_stage1_dataset_keeps_focus_and_skips_direct_rows` | `DONE` | strict retained-focus transform and every-row disposition fixture in `test_data.py` |
 | `test_weak_strict_mask_blocks_only_post_tgvf_queries` | `DONE` | streaming native readout constructs and consumes the post-evidence source-key block; synthetic query-row fixture passes |
 | `test_v3_stage1_readout_loss_backprops_to_d_not_frozen_qwen` | `DONE` | synthetic fixtures plus corrected `RP-10` real-8B target-token-embedding backward and nonzero Adapter gradient norm |
-| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | corrected `RP-10` carries main `D` plus all branches through real Qwen/backward; intended-layer mapping and semantic thresholds remain open |
+| `test_v3_stage1_readout_can_inject_d_deepstack_features` | `PARTIAL` | corrected `RP-10` carries main `D` plus all branches through real Qwen/backward; one fixed real-shape intended-layer check remains, while quality is compared to the historical Golden report |
 | `test_qwen3_position_ids_unwraps_peft_like_model_but_uses_wrapper_embeddings` | `OPEN` | native Qwen-family/PEFT ownership replacement fixture |
 
 The table records semantic migration only. Historical names remain provenance
@@ -322,8 +323,8 @@ wrong different-image `D` controls. Report:
 
 The native suite additionally swaps main `D` and all D-DeepStack branches as
 one observation and verifies matched layout, positions, masks, dtype, and
-shape. Historical numeric results are comparison evidence, not automatic
-promotion thresholds.
+shape. Historical numeric results are the accepted comparison baseline; they
+are reported side by side rather than converted into newly invented cutoffs.
 
 ### Query-sensitivity metrics
 
@@ -400,17 +401,16 @@ prompt, objective, data, sampler, optimizer, scheduler, precision,
 accumulation, and initialization identities. The streaming readout consumes all
 branches and blocks original-image keys for evidence prediction.
 
-This is still not a Golden-checkpoint equivalence or trained-artifact claim. The
-remaining blockers are:
+This is still not a trained-artifact claim. Exact full-dimension equivalence to
+the historical trained checkpoint is no longer required. The remaining
+execution items are:
 
-- load the pinned historical 104-tensor state under the exact accepted Qwen3
-  merger snapshot and compare real-dimension outputs plus input/parameter
-  gradients under documented tolerances;
 - prove on the real model that each captured/injected branch maps to the intended
-  Qwen layer and that the complete native readout remains deterministic;
-- execute the contextual-hidden-state provider alongside completed `RP-10`
-  target-token-embedding and record paired target-span/`Hq`, specificity,
-  readability, and gradient evidence;
+  Qwen layer and that the complete native readout remains deterministic, using
+  the accepted single fixed real-shape check;
+- execute contextual hidden state layer `-1` first and target token embedding
+  second under the fixed paired identity, recording target-span/`Hq`,
+  specificity, readability, and gradient evidence;
 - train and validate a newly initialized native-format Adapter rather than
   loading the historical checkpoint.
 
@@ -423,20 +423,23 @@ gates.
 - materialize the accepted recorded-image-path overlap policy in the production
   TOML; record dataset/image licenses and perform a perceptual near-duplicate
   audit;
-- preserve the single accepted v1 transcript/processor golden identity and bind
-  the contextual provider's hidden layer; earlier target-bearing text may
-  remain only as an immutable experiment-ledger fact;
-- bind the accepted initialization seed,
+- preserve the single accepted v1 transcript/processor golden identity; the
+  first provider is contextual hidden state layer `-1` and the next paired
+  provider is target token embedding;
+- bind seed `42`,
   `qwen3-representation-image-question-v1` /
   `native_representation_prompt_v1` prompt identity/hash,
   `representation_sample_identity_v1`, `retained_focus_rows_v1`,
   `canonical_evidence_supervision_v1`, provider, optimizer/scheduler, BF16,
-  accumulation, cadence, and output paths in a production TOML artifact;
-- run the formal internal evaluation on the accepted v1 trajectory, audited
-  counterfactual pair manifest, extraction rule, and semantic thresholds; a
-  contextual-provider paired run remains optional comparison evidence;
-- complete exact historical-checkpoint/real-merger output and gradient parity;
-- set quantitative readout, retrieval, branch, causal-flip, free-continuation,
-  and reasoning-retention promotion thresholds;
+  K=4/per-rank-B4/two-rank/GA4/global-B32 accumulation, 10-step logging,
+  500-step validation/checkpoint cadence, `image_max_pixels=262144`, and output
+  paths in a production TOML artifact after the v3-versus-v4 data choice;
+- run the formal internal evaluation on the accepted v1 trajectory and audited
+  counterfactual pair manifest, reporting the historical Golden metrics as the
+  comparison baseline for both ordered provider runs;
+- retain the accepted small functional parity oracle and one fixed real-shape
+  main/branch wiring and nonzero-gradient check;
+- compare readout/retrieval/distribution results to the historical Golden report
+  and retain simple directional/finite native causal/free-continuation checks;
 - build a separately identified representation artifact and complete native
   transcript/DeepStack/objective fixtures before claiming Qwen2.5-VL support.

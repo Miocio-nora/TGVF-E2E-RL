@@ -90,7 +90,7 @@ scale gates below remain authoritative.
 
 No data or Adapter artifact is accepted for production use. Dataset/image
 licenses, the seven resolved-path split overlaps, representation
-hyperparameters and selected provider, the policy-RL prompt, reward values,
+v3-versus-v4 train choice, the policy-RL prompt, reward values,
 production GRPO/SDPO mathematics and configuration, any hybrid objective, long
 training, and the 72B judge remain open and fail closed. The representation
 user-message structure itself is fixed separately by
@@ -121,9 +121,9 @@ matrix items remain promotion gates rather than implicit passes.
   providers are both required capabilities. A run selects one as part of its
   experiment identity.
 - [x] `FIXED` — Provider types are not mixed in one representation run. Their
-  optional comparison uses separate paired runs with identical sample/group
-  order, initialization, batch plan, and seed; a paired real-GPU comparison is
-  not required before one selected provider's run.
+  accepted comparison uses contextual hidden state layer `-1` first and target
+  token embedding second, in separate runs with identical sample/group order,
+  fresh initialization, batch plan, and seed `42`.
 - [x] `FIXED` — Same-image Matrix CE is a required target-specificity objective;
   ordinary independent shuffle is not a valid substitute for same-image
   multi-target grouping.
@@ -630,19 +630,18 @@ the external data or start a production/GPU run.
     `native_representation_prompt_v1`. The earlier target-bearing golden and
     renderer branch were never accepted and are removed rather than preserved
     as an executable historical version.
-  - [ ] `OPEN_CONFIGURABLE AD-03C` — Accept the contextual hidden layer and bind
-    the fixed `qwen3-representation-image-question-v1` /
-    `native_representation_prompt_v1` identity and hash in the production
-    configuration. Separately injecting the teacher target into the user
-    message is no longer configurable: it is forbidden. The policy-RL
-    system/tool-use prompt remains a separate open contract.
-- [ ] `OPEN_BLOCKING AD-04` — TGVF Adapter initialization that does not use the
-  historical trained checkpoint directly. The config/runtime implement only
-  fresh initialization with an explicit seed and reject legacy checkpoint
-  initialization, but the production initialization distribution and seed are
-  `[TBD]`.
-- [ ] `OPEN_BLOCKING AD-05` — Exact representation objective and execution
-  contract is not yet fully closed. Its independently gated parts are:
+  - [x] `FIXED AD-03C` — The first representation run selects contextual hidden
+    state at layer `-1`; the next paired run selects target token embedding.
+    Both bind `qwen3-representation-image-question-v1` /
+    `native_representation_prompt_v1` and differ only by provider identity.
+    Separately injecting the teacher target into the user message is forbidden.
+    The policy-RL system/tool-use prompt remains a separate open contract.
+- [x] `FIXED AD-04` — TGVF Adapter initialization uses the repository's fresh
+  constructor under seed `42`; the historical trained checkpoint is never a
+  direct initialization. The paired provider runs share this seed and initial
+  data/order contract.
+- [x] `FIXED AD-05` — The representation objective and execution contract is
+  closed for the initial paired runs. Its independently recorded parts are:
   - [x] `FIXED AD-05A` — The pinned Matrix-CE equation is implemented: each
     same-image group produces a square score matrix with evidence/query on rows,
     candidate `D` plus all D-DeepStack branches on columns, the diagonal is the
@@ -676,8 +675,8 @@ the external data or start a production/GPU run.
     `AD-03A` evidence-token labels contribute. The reduction is the historical
     evidence-token mean NLL per sample followed by a global sample mean, and it
     is logged separately from Matrix CE. "Assistant supervision" is not a
-    separate module. The exact nonzero baseline coefficient remains
-    `OPEN_CONFIGURABLE` under `AD-05F` and must not receive a hidden default.
+    separate module. The nonzero baseline coefficient is fixed at `1.0` under
+    `AD-05F`.
     The executable objective identity enforces nonzero Matrix-CE and `L_gen`
     weights for the baseline and permits zero only for a named Matrix-only
     ablation; both raw and weighted components are separately returned and
@@ -691,12 +690,17 @@ the external data or start a production/GPU run.
     mean is averaged with the main loss; distributed/accumulated reduction is a
     global sample mean. The baseline scalar weight is `0.1`. No mode, target, or
     alternative-formula selector is accepted.
-  - [ ] `OPEN_CONFIGURABLE AD-05F` — The trainer/config/checkpoint code exposes
+  - [x] `FIXED AD-05F` — The trainer/config/checkpoint code exposes
     explicit nonzero Matrix-CE and `L_gen` weights, AdamW options, scheduler,
     precision, accumulation, clipping, validation/log cadence, and strict
     optimizer-boundary resume. CPU fixtures prove an accumulated optimizer step
-    and bitwise-identical next step after resume. Exact production values and
-    the accepted TOML identity remain `[TBD]` and receive no library defaults.
+    and bitwise-identical next step after resume. The accepted run pair uses
+    Matrix CE/L_gen/Norm weights `1.0/1.0/0.1`, balanced temperature `1.0`,
+    manifold zero, AdamW LR `1e-4`, cosine/100-step warmup/min-ratio `0.1`,
+    K=4, per-rank batch 4, two ranks, GA=4, global batch 32, 2,000 steps,
+    log-every 10, validate/save-every 500, BF16, clipping `1.0`, seed `42`, and
+    `image_max_pixels=262144`. The production TOML remains pending only on the
+    explicit v3-versus-v4 train data choice and final artifact paths.
     Historical `L_gen` first divides each sample's summed evidence NLL by that
     sample's evidence-token count, then sums those per-sample means and divides
     by the global sample count. Accumulation and DDP must aggregate that global
@@ -736,24 +740,31 @@ the external data or start a production/GPU run.
   blocked on production identity and semantic gates; final step-2 DCP payloads
   were compared through validated sidecar state rather than independently
   restored a second time.
-- [ ] `OPEN_BLOCKING AD-08` — Numerical output/gradient parity of the extracted
-  TGVF Adapter core against its pinned reference. The independent small-shape
-  functional oracle now checks outputs and target/visual/104-owned-parameter
-  gradients in FP32 (`2e-6`) and BF16 (`3e-2`). Exact `4096/1152` historical-
-  checkpoint state plus accepted Qwen merger parity remains `[TBD tolerance]`.
-- [ ] `OPEN_BLOCKING AD-09` — Target specificity, readout, causal flip, and free
-  continuation thresholds: `[TBD]`
+- [x] `FIXED AD-08` — The accepted parity scope is deliberately small: retain
+  the independent small-shape output/input/owned-parameter gradient oracle and
+  run one fixed real-shape finite/shape/main-plus-branch wiring and nonzero-
+  gradient check. Exact full-dimension equality to the historical trained
+  checkpoint is not required because the native target context is different.
+- [x] `FIXED AD-09` — Reuse the historical internal metric definitions and
+  Golden report as the comparison baseline rather than inventing new absolute
+  thresholds. The reference report records correct-D beat rates of `1.0`
+  versus target-only/random, `0.9045` versus wrong-same-image, `0.9592` versus
+  wrong-different-image; retrieval top-1/top-2 `0.7778/0.9471`, MRR `0.8794`,
+  finite rate `1.0`, and collapse rate `0.0`. Native causal/free-continuation
+  additions receive simple directional/finite sanity checks and retained
+  outputs, not an invented historical threshold.
 - [ ] `OPEN_BLOCKING AD-10` — Synthetic sensitivity/gradient tests cover main
   `D` and every D-DeepStack branch. All branches must still pass real-Qwen
   controlled semantic gates and accepted thresholds.
-- [ ] `OPEN_BLOCKING AD-11` — Both required target-conditioning providers pass
+- [x] `FIXED AD-11` — Both required target-conditioning providers pass
   through one explicit shared configuration/runtime/native group-builder path,
   and provider identity is checkpoint-bound. Both have synthetic target-span,
   shape, determinism, and training-path fixtures. Corrected `RP-10` proves a
   real-Qwen optimizer path for target-token-embedding conditioning. A paired
-  real-GPU provider comparison is not a prerequisite for a selected provider's
-  run; the selected provider's own target-specificity, readability, and
-  per-branch evidence remains required.
+  first real run uses contextual hidden state layer `-1`; the next paired run
+  uses target token embedding with identical data/order, initialization seed
+  `42`, objective, batch plan, and cadence. Each artifact retains its provider
+  identity and its own specificity/readability report.
 - [ ] `OPEN_BLOCKING AD-12` — Representation artifacts are explicitly bound to
   a Qwen model identity and provider contract in the implemented schema. Qwen3 and
   `Qwen/Qwen2.5-VL-7B-Instruct` compatibility must not be claimed by loading one
@@ -765,11 +776,10 @@ the external data or start a production/GPU run.
   evidence. Explicit acceptance of proposed exclusions plus real-Qwen metric
   thresholds/evaluations is still required. See
   `docs/REPRESENTATION_PARITY_INVENTORY.md`.
-- [ ] `OPEN_CONFIGURABLE AD-14` — A paired contextual-hidden-state versus
-  target-token-embedding experiment remains an optional named scientific
-  comparison. It is not a representation-training prerequisite. If run, it
-  uses identical data/group order, Adapter initialization, batch plan, and seed
-  and retains separate artifact identities.
+- [x] `FIXED AD-14` — Run contextual hidden state first and target token
+  embedding second as a paired comparison. They use identical data/group
+  order, fresh Adapter initialization, batch plan, seed `42`, and separate
+  artifact identities.
 
 ## 8. Gate G0 — Before any GRPO optimizer step
 
@@ -1041,11 +1051,10 @@ the synthetic implementation smoke.
   without making a production-training or promoted-artifact claim.
 - [x] Run `RP-11`, the bounded real-Qwen3 K=4/GA=4 continuous versus clean
   teardown/restore matching-next-update proof with Matrix CE, `L_gen`, and Norm.
-- [ ] Accept the production representation data split, selected provider,
-  scientific configuration, parity tolerances, semantic evaluation, and
-  promotion thresholds, and bind the fixed v1 transcript identity, before any
-  production training claim. A paired-provider run is optional comparison
-  evidence, not a prerequisite.
+- [ ] Select the pinned v3 or v4 production train population, bind its manifest
+  and final artifact paths, then execute the already fixed contextual-first /
+  embedding-second pair and historical-baseline evaluation before any
+  production training claim.
 - [x] Implement the S0 Qwen-family boundary, both condition-provider
   interfaces, SDPO teacher/objective/checkpoint boundary, and optional
   judge-provider interface. This does not close Qwen2.5 end-to-end or D0

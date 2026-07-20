@@ -79,7 +79,8 @@ fixture. The earlier technical side result remains invalid because its `SC-40`
 prefix collides with the reserved SDPO cell; `RP-10` is the accepted bounded
 identity. `RP-11` supplies the bounded real distributed restore/next-step
 parity result. None of these results implies production data quality, a paired
-provider result, or accepted semantic thresholds.
+provider result, or a historical-baseline quality result under the accepted v1
+trajectory.
 
 ## Representation-parity work after the bounded framework build
 
@@ -123,15 +124,15 @@ trainer, without claiming a completed production run:
 - the executable internal evaluation reproduces correct/target-only/random/
   wrong-same/wrong-different readout controls, full query matrices, main/branch
   distribution and attention health, plus a concrete Qwen3 native D-only
-  teacher-forced/free-continuation path. Its audited pair manifest, extraction
-  rule, thresholds, and formal counterfactual evaluation under the v1
-  trajectory remain deliberately unset.
+  teacher-forced/free-continuation path. The historical Golden report is the
+  accepted comparison baseline; formal execution under the v1 trajectory is
+  pending the final v3-versus-v4 train choice.
 
-Production data/manifests, selected provider and hyperparameter identity,
-semantic thresholds, paired-provider comparison, exact legacy-state parity,
-and formal counterfactual evaluation remain open under Gate A0. The
-representation user-message structure is fixed, but it is not yet bound into a
-promoted production run. `RP-11` remains an executor/resume proof with its
+Production data/manifests, the v3-versus-v4 train choice, paired-provider
+execution, and formal counterfactual evaluation remain open under Gate A0. The
+provider order, seed `42`, hyperparameters, simple parity scope, historical
+evaluation baseline, and representation user-message structure are fixed, but
+not yet bound into a promoted production run. `RP-11` remains an executor/resume proof with its
 then-used data and prompt recorded only as ledger history, not a trained-quality
 artifact or supported current prompt identity.
 
