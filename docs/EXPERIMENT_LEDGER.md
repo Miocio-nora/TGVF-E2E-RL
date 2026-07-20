@@ -4640,7 +4640,7 @@ instead of repeated bullets.
 
 ### RP-49-QWEN3-REP-MATRIXCE-BALANCED-T01-CONTEXTUAL-2000-GPU01
 
-- Cell/status: endpoint calibration cell / `PLANNED` / `PENDING`.
+- Cell/status: endpoint calibration cell / `COMPLETE` / `PASS`.
 - Question: with contextual hidden-state conditioning fixed, does Balanced
   mean-NLL Matrix CE at temperature `0.1` improve the 2000-step target-
   specificity result over the completed Balanced/T=1.0 artifact?
@@ -4674,10 +4674,16 @@ instead of repeated bullets.
   500/1000/1500/2000, final Adapter, tokenizer invariance and clean teardown.
   A separately content-bound post-hoc v4-Golden 200/46 evaluation is planned
   only after the final artifact hashes exist.
+- Result: all 2000 optimizer steps completed with finite train/validation
+  metrics, complete two-rank DCP checkpoints at 500/1000/1500/2000, and no
+  tokenizer growth (`151669` before/after). The final artifact file/manifest/run
+  SHA256 values are `fcda0b96...fc14` / `3ff14e66...f49e` /
+  `980e4136...1bea`; metrics SHA256 is `a5a0bd0f...82b7`. W&B completed under
+  `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-rp49-balanced-t01-contextual-2k`.
 
 ### RP-50-QWEN3-REP-MATRIXCE-LEGACY-T1-CONTEXTUAL-2000-GPU23
 
-- Cell/status: summed-NLL endpoint control / `PLANNED` / `PENDING`.
+- Cell/status: summed-NLL endpoint control / `COMPLETE` / `PASS`.
 - Question: what is the new native pipeline's contextual 2000-step endpoint
   under unchanged legacy summed-NLL Matrix CE, so Balanced ceiling claims can
   be made from a real paired endpoint rather than the historical Golden run?
@@ -4704,11 +4710,17 @@ instead of repeated bullets.
   `rep-rp50-legacy-t1-contextual-2k`; the same four-checkpoint, final artifact,
   tokenizer and teardown gates as RP-49 apply. The final internal evaluation
   uses the same post-hoc v4-Golden 200/46 population after artifact hashing.
+- Result: all 2000 optimizer steps completed with finite train/validation
+  metrics, complete two-rank DCP checkpoints at 500/1000/1500/2000, and no
+  tokenizer growth (`151669` before/after). The final artifact file/manifest/run
+  SHA256 values are `dfd9c8cc...43d2` / `bc5b78c2...5b7f` /
+  `684bf3d6...4846`; metrics SHA256 is `7542f334...c20`. W&B completed under
+  `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-rp50-legacy-t1-contextual-2k`.
 
 ### RP-51/52-QWEN3-REP-2000STEP-MATRIXCE-ENDPOINT-V4-GOLDEN
 
-- Cell/status: paired post-hoc internal evaluations / `PLANNED` /
-  `PENDING`. RP-51 evaluates contextual Balanced mean-NLL/T=0.1 artifact
+- Cell/status: paired post-hoc internal evaluations / `COMPLETE` /
+  `PASS`. RP-51 evaluates contextual Balanced mean-NLL/T=0.1 artifact
   RP-49 on physical GPU 0; RP-52 evaluates contextual legacy summed-NLL/T=1.0
   artifact RP-50 on physical GPU 2.
 - Frozen evaluator/data: clean code
@@ -4732,11 +4744,26 @@ instead of repeated bullets.
   tokenizer length 151669, contain finite readout/query/health metrics and both
   native counterfactual cases, and exit cleanly. Comparison is withheld until
   both cells pass.
+- Result: both cells contain exactly 200 rows/46 groups, preserve tokenizer
+  length 151669, bind the declared artifacts/data/transcript, and exit cleanly.
+  RP-51 report SHA256 `7354f04f...2376` records top-1/top-2/MRR
+  `0.835/0.965/0.91083`, mean/median diagonal gap `0.42064/0.30859`, mean
+  correct-D NLL `1.25962`, and wrong-same-image win/advantage `0.95/0.75032`.
+  RP-52 report SHA256 `8fb7bd54...a854` records
+  `0.87/0.975/0.93017`, gap `0.30798/0.23047`, mean correct-D NLL `1.37649`,
+  and wrong-same-image `0.945/0.57077`. RP-51 has one value-consistent native
+  continuation but neither report produces the expected direction flip; RP-52
+  has no value-consistent continuation. Against RP-46 Balanced/T=1.0
+  (`0.83/0.96/0.9075`, mean gap `2.4240`, expected direction flip and both
+  continuations), T=0.1 does not improve the 2000-step causal endpoint. Legacy
+  has the best retrieval rank but substantially weaker separation/readability;
+  these metrics therefore do not support replacing Balanced/T=1.0 with either
+  endpoint.
 
 ### RP-53-QWEN3-REP-MAIN-D-ONLY-PERIODIC-BOUNDARY-GPU01
 
 - Cell/status: mandatory main-D-only two-rank periodic checkpoint/resume
-  smoke / `PLANNED` / `PENDING`; launch only after GPUs 0/1 are free.
+  smoke / `COMPLETE` / `PASS`.
 - Code/config/output: runtime `673c0e4cdcf97b74feb5b0bae944d75f85988520`;
   fresh source/canonical config SHA256 `9a3397da...aec6` /
   `a578bd23...92d0`; resume `c105e9da...7ec1` /
@@ -4755,6 +4782,13 @@ instead of repeated bullets.
   Adapter-owned FSDP leaves, no learned D-DeepStack artifact tensors, both rank
   shards, exact cursor/history restore, and clean teardown. Policy/reference,
   behavior logprobs, GRPO, SDPO, reward and judge fields are N/A.
+- Result: a fresh process completed train/validation/DCP at step 1 and a new
+  process strictly restored it before completing the same boundary at step 2.
+  Event history is exactly `start, train1, validation1, train2, validation2`;
+  both checkpoints contain both rank shards. Loaded metadata binds run identity
+  `2acc4883...1d5b`, structural variant `main_d_only`, 13 Adapter-owned FSDP
+  leaves/26 state names, and zero branch-owned names. Both processes exited
+  cleanly and released GPUs 0/1.
 
 ### RP-54-QWEN3-REP-MAIN-D-ONLY-BALANCED-T1-CONTEXTUAL-2000-GPU01
 
