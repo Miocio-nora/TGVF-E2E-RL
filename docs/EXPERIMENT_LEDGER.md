@@ -4792,8 +4792,8 @@ instead of repeated bullets.
 
 ### RP-54-QWEN3-REP-MAIN-D-ONLY-BALANCED-T1-CONTEXTUAL-2000-GPU01
 
-- Cell/status: D-DeepStack ablation paired to RP-46 / `PLANNED` /
-  `PENDING`; launch only after RP-53 passes and GPUs 0/1 are free.
+- Cell/status: D-DeepStack ablation paired to RP-46 / `COMPLETE` /
+  `PASS`.
 - Code/config/output: runtime `673c0e4cdcf97b74feb5b0bae944d75f85988520`;
   source/canonical config SHA256 `dba4455d...433c` /
   `2a7bd7f4...3462`; immutable root
@@ -4814,6 +4814,43 @@ instead of repeated bullets.
   and later the exact v4 Golden first-200/46-group internal evaluation.
   Policy/reference, behavior logprobs, GRPO, SDPO, reward and judge fields are
   N/A.
+- Result: all 2000 optimizer steps completed with finite metrics and complete
+  two-rank DCP checkpoints at 500/1000/1500/2000. Tokenizer length remained
+  151669. Final artifact file/manifest/run SHA256 values are
+  `ab971b83...d723` / `c80c616c...fc8b` / `884e417b...54b`; metrics SHA256 is
+  `31dd2d26...1705`. The artifact contains exactly 26 main-attention tensors,
+  binds adapter-contract v2 variant `main_d_only`, and contains no learned
+  D-DeepStack branch tensor. W&B synchronized all 206 metric rows and exited
+  cleanly at
+  `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-rp54-main-d-only-balanced-t1-contextual-2k`.
+
+### RP-55-QWEN3-REP-MAIN-D-ONLY-2000STEP-V4-GOLDEN
+
+- Cell/status: post-hoc main-D-only internal evaluation / `PLANNED` /
+  `PENDING`; launch only after this entry and its config are committed and GPU
+  0 is free.
+- Frozen evaluator/config: clean code
+  `673c0e4cdcf97b74feb5b0bae944d75f85988520`; config
+  `configs/representation/qwen3_main_d_only_balanced_t1_contextual_2000step_internal_evaluation_v4_golden_gpu0.toml`
+  SHA256 `5eaf3a4f...bcc2`.
+- Artifact identity: RP-54 file/manifest/run SHA256
+  `ab971b83...d723` / `c80c616c...fc8b` / `884e417b...54b`, expected step
+  2000 and adapter variant `main_d_only`.
+- Evaluation identity: v4 clean-imend test source `de61c731...82d`; exact
+  Golden first-200/46-group ordered manifest `55e2cde5...34d8`;
+  counterfactual manifest `4589d14f...4cc4`; native image-question prompt v1,
+  contextual hidden-state provider, seed 42, max-new-tokens 64 and EOS 151645.
+  The source-image Qwen native DeepStack remains active; focused-D readout is
+  main D only and branch-health output must be empty rather than reporting the
+  zero interface placeholders.
+- GPU/output/acceptance: physical GPU 0 UUID
+  `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2`; immutable output
+  `artifacts/representation/RP-55-qwen3-internal-eval-main-d-only-balanced-t1-contextual-2000-v4-golden-gpu0/report.json`.
+  Require exact artifact/config/data/transcript identities, 200 rows/46 groups,
+  tokenizer 151669, finite query/readout/main-health metrics, empty learned
+  branch health, both native counterfactual variants, and clean teardown.
+  Training, policy/reference replay, behavior logprobs, reward, GRPO, SDPO and
+  judge are N/A.
 
 ## Compatibility-spike status
 
