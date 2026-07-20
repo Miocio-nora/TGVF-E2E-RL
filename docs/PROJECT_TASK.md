@@ -210,6 +210,14 @@ be evaluated only when a distinct shape-compatible group exists; it must not
 force the primary population into one visual grid. The v3 validation population
 is not retained as an active validation or internal-evaluation lane.
 
+For a requested optimizer-step ablation, a durable FSDP2 representation
+checkpoint may be materialized into an immutable Adapter-only evaluation
+export without resuming training. The materializer must bind the checkpoint
+metadata and original run identity, load only the recorded Adapter tensors,
+recompute every tensor digest, record the checkpoint global step, and refuse
+to overwrite an existing export. Such an export is evaluation-only and must
+not be presented as a separately trained artifact.
+
 The paired report shows readable but weakly target-specific D. The accepted
 isolation test keeps the contextual provider and every data/model/optimizer/
 execution value fixed, trains two fresh 500-step artifacts under the original

@@ -4573,6 +4573,38 @@ instead of repeated bullets.
   separable on the actual same-distribution population and lies 3.5 percentage
   points below Golden top-1 at step 500.
 
+### RP-45/48-QWEN3-REP-500STEP-MATRIX-CE-THREE-WAY-V4-GOLDEN
+
+- Lifecycle/result: `PLANNED` / `PENDING`; three-way step-500 contextual-hidden-
+  state comparison on the exact RP-44 v4 Golden 200/46 population.
+- Cells: RP-45 is legacy summed-NLL/T=1.0 from RP-39; RP-44 is the completed
+  mean-NLL/T=0.1 RP-40 result; RP-48 is mean-NLL/T=1.0 from the original
+  `REP-QWEN3-V4-CONTEXTUAL-V4` durable step-500 checkpoint.
+- Step-500 materialization: the original DCP checkpoint is loaded without
+  training into an evaluation-only Adapter export. File/manifest SHA256 are
+  `4b54650b...ff6` / `2b676976...b7a`; original run identity remains
+  `6c748851...5c0`. It is not a separately trained artifact.
+- Execution: clean evaluator code `ffa4146`; RP-45/RP-48 use physical GPUs 0/3
+  and immutable report roots under `artifacts/representation/RP-{45,48}-*`.
+  All non-objective fields, manifests, prompt, provider, seed, and score
+  semantics are fixed. This three-way matrix separates length normalization
+  and temperature better than the earlier two-way bundled comparison.
+
+### RP-46/47-QWEN3-REP-2000STEP-PROVIDER-PAIR-V4-GOLDEN
+
+- Lifecycle/result: `PLANNED` / `PENDING`; exact provider comparison at 2000
+  optimizer steps on the RP-44 v4 Golden 200/46 population.
+- Fixed pair: both use Balanced mean-NLL Matrix CE at T=1.0, identical model,
+  data, prompt, objective weights, seed, schedule, batch, resolution, and
+  evaluation. RP-46 uses contextual hidden state; RP-47 uses target token
+  embedding.
+- Artifacts: contextual file/manifest SHA256 `50179c70...e75` /
+  `dfa992fc...e10`; target-embedding `646a1b60...e88` / `3cccf99e...469`.
+- Execution: clean evaluator code `ffa4146`; physical GPUs 1/2; immutable
+  report roots under `artifacts/representation/RP-{46,47}-*`. Acceptance
+  requires exact 200/46 binding, unchanged tokenizer, and complete reports for
+  both cells before drawing a provider conclusion.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

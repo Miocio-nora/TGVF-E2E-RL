@@ -1,0 +1,36 @@
+schema_version = "representation-internal-evaluation-run-v2"
+run_id = "RP-48-QWEN3-REP-INTERNAL-EVAL-BALANCED-T1-500-V4-GOLDEN-GPU3"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "ffa41467613b24376374e53d99be5bf29e9d0a0b"
+dirty = false
+
+[source]
+training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_v4_contextual_hidden_state_v4.toml"
+training_config_sha256 = "416bf6f4813407265f0eeaa00bfd75d65908a8db975b3c128cd9b49e07eb380b"
+
+[artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V4-STEP500-EVAL/adapter.pt"
+file_sha256 = "4b54650bc63e725f0f09bea73a5e31967189f58cc1251333fd7d35d75af58ff6"
+manifest_sha256 = "2b67697691d857d8ebe3f98920274ad1d6415dbf40114e8cee28bfc38819db7a"
+expected_run_identity_sha256 = "6c74885183eba8cfc6d7393a296b897b3caf939c88ffe016028c3a02b5f3d5c0"
+expected_global_step = 500
+
+[execution]
+physical_gpu_id = 3
+
+[evaluation_data]
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl"
+source_sha256 = "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
+
+[evaluation]
+evaluation_id = "qwen3-balanced-t1-contextual-step500-v4-golden-first200-v1"
+ordered_group_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json"
+ordered_group_manifest_sha256 = "55e2cde5e118de77e4bcc099a422844129cdff1caf328d349dae5c7f11a634d8"
+counterfactual_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_counterfactual_v1.json"
+counterfactual_manifest_sha256 = "4589d14f196ccde48c3439405700220bc0fb63487edae0e74bc6b3713d7f4cc4"
+report_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-48-qwen3-internal-eval-balanced-t1-500-v4-golden-gpu3/report.json"
+random_seed = 42
+max_new_tokens = 64
+eos_token_ids = [151645]
