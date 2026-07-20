@@ -100,7 +100,7 @@ class RepresentationObjectiveConfigV2(RepresentationObjectiveConfig):
 class RepresentationObjectiveConfigV3(RepresentationObjectiveConfigV2):
     """Norm-aware objective with an explicit Matrix-CE cell-score identity."""
 
-    matrix_ce_mode: MatrixCEScoreMode
+    matrix_ce_mode: MatrixCEScoreMode = MatrixCEScoreMode.BALANCED
     matrix_ce_temperature: float = 1.0
     schema_version: str = REPRESENTATION_OBJECTIVE_SCHEMA_VERSION_V3
 

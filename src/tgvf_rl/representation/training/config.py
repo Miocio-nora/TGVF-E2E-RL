@@ -3,9 +3,9 @@
 The representation phase deliberately has no implicit runnable experiment.
 Every field that can change the model, native prompt, data population,
 optimization, distributed topology, or checkpoint continuation participates
-in the canonical configuration digest.  The one accepted optional scientific
-field is balanced Matrix-CE temperature, whose registered default is ``1.0``;
-its resolved value is still bound by the objective/run identity.
+in the canonical configuration digest.  Schema v3 defaults Matrix-CE mode to
+``balanced`` and its fixed temperature to ``1.0`` when those fields are
+omitted; their resolved values remain bound by the objective/run identity.
 
 Loading a configuration is read-only.  In particular, it never initializes
 CUDA, creates an output directory, loads model weights, or starts training.
@@ -675,7 +675,7 @@ class RepresentationTrainingConfig:
                 )
             if not isinstance(self.objective, RepresentationObjectiveExecutionConfigV3):
                 raise TypeError(
-                    "training config v3 requires its explicit Matrix-CE objective"
+                    "training config v3 requires its mode-aware Matrix-CE objective"
                 )
             if self.scheduler.kind is not RepresentationSchedulerKind.HISTORICAL_COSINE:
                 raise ValueError("training config v3 requires historical cosine")
@@ -1073,26 +1073,29 @@ def _parse_objective(
             "matrix_ce_weight",
             "l_gen_weight",
             "norm_weight",
-            "matrix_ce_mode",
             "manifold_enabled",
             "manifold_weight",
         }
-        optional = (
-            {"matrix_ce_temperature"} if "matrix_ce_temperature" in value else set()
-        )
+        optional = {
+            field
+            for field in ("matrix_ce_mode", "matrix_ce_temperature")
+            if field in value
+        }
         _exact_fields(value, required | optional, table="objective")
         kind_raw = _string(value, "kind", table="objective")
         try:
             kind = RepresentationObjectiveKind(kind_raw)
         except ValueError as error:
             raise ValueError(f"objective.kind is unsupported: {kind_raw!r}") from error
-        mode_raw = _string(value, "matrix_ce_mode", table="objective")
-        try:
-            mode = MatrixCEScoreMode(mode_raw)
-        except ValueError as error:
-            raise ValueError(
-                f"objective.matrix_ce_mode is unsupported: {mode_raw!r}"
-            ) from error
+        mode = MatrixCEScoreMode.BALANCED
+        if "matrix_ce_mode" in value:
+            mode_raw = _string(value, "matrix_ce_mode", table="objective")
+            try:
+                mode = MatrixCEScoreMode(mode_raw)
+            except ValueError as error:
+                raise ValueError(
+                    f"objective.matrix_ce_mode is unsupported: {mode_raw!r}"
+                ) from error
         return RepresentationObjectiveExecutionConfigV3(
             objective=RepresentationObjectiveConfigV3(
                 identity=_string(value, "identity", table="objective"),

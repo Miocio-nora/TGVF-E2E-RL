@@ -429,6 +429,13 @@ def test_v2_has_no_norm_mode_and_v1_remains_loadable_unchanged(tmp_path: Path) -
 
 def test_v3_selects_balanced_matrix_ce_and_defaults_temperature(tmp_path: Path) -> None:
     path = _upgrade_config_to_v3(_write_config(tmp_path))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'matrix_ce_mode = "balanced"\n',
+            "",
+        ),
+        encoding="utf-8",
+    )
 
     defaulted = load_representation_training_config(
         path,
@@ -441,6 +448,24 @@ def test_v3_selects_balanced_matrix_ce_and_defaults_temperature(tmp_path: Path) 
     assert defaulted.objective.objective.matrix_ce_temperature == 1.0
     assert defaulted.validation_payload()["matrix_ce_mode"] == "balanced"
     assert defaulted.validation_payload()["matrix_ce_temperature"] == 1.0
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "norm_weight = 0.1",
+            'norm_weight = 0.1\nmatrix_ce_mode = "balanced"',
+        ),
+        encoding="utf-8",
+    )
+    explicit_balanced = load_representation_training_config(
+        path,
+        verify_external_files=False,
+    )
+    assert spec_identity_sha256(explicit_balanced.objective.objective) == (
+        spec_identity_sha256(defaulted.objective.objective)
+    )
+    assert explicit_balanced.canonical_config_sha256 != (
+        defaulted.canonical_config_sha256
+    )
 
     path.write_text(
         path.read_text(encoding="utf-8").replace(

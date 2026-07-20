@@ -58,6 +58,21 @@ def test_v3_binds_balanced_matrix_ce_mode_and_temperature() -> None:
         )
 
 
+def test_v3_defaults_to_balanced_matrix_ce_at_unit_temperature() -> None:
+    objective = RepresentationObjectiveConfigV3(
+        identity="balanced-matrix-ce-default",
+        kind=RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM,
+        matrix_ce_weight=1.0,
+        l_gen_weight=1.0,
+        norm_weight=0.1,
+    )
+
+    assert resolve_matrix_ce_score_config(objective) == (
+        MatrixCEScoreMode.BALANCED,
+        1.0,
+    )
+
+
 def test_v2_baseline_composes_and_logs_raw_and_weighted_norm() -> None:
     config = RepresentationObjectiveConfigV2(
         identity="native-qwen3-historical-norm-baseline",
