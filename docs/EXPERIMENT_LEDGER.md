@@ -5,8 +5,9 @@ authorize production training. Only physical GPUs 2 and 3 may be exposed.
 
 Experiment namespaces are disjoint: `SC-*` is reserved for cells fixed by the
 veRL compatibility matrix, while `RP-*` identifies bounded representation-
-phase executions. A materialized run ID is never renamed after execution; an
-identity collision is retained as `INVALID` and rerun under a new planned ID.
+phase executions and `BJ-*` identifies bounded benchmark-judge deployments. A
+materialized run ID is never renamed after execution; an identity collision is
+retained as `INVALID` and rerun under a new planned ID.
 
 ## Bounded cells and outcomes
 
@@ -3594,6 +3595,100 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   admission, Balanced Matrix CE/L_gen/Norm backward, two-rank K4/GA4 update and
   durable step-10 checkpoint. This is a bounded resumable prefix, not the
   2,000-step result or formal internal-evaluation promotion.
+
+### BJ-10-QWEN25-72B-VLLM-SERVICE
+
+- Cell/matrix ID and mandatory/diagnostic class: `BJ-10`; bounded deployment
+  smoke for the accepted CoreDev VLMEvalKit benchmark judge.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: user authorized
+  Qwen2.5-72B deployment and continuation on 2026-07-20 JST; accepted evaluation
+  architecture `EVAL-ARCH-20260720` plus Project Task §0.5.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: can the exact local `Qwen/Qwen2.5-72B-Instruct` snapshot load under
+  the accepted vLLM/Torch stack with TP=2 on physical GPUs 2 and 3, expose the
+  slash-free `Qwen2.5-72B-Instruct` OpenAI-compatible model identity, and return
+  one deterministic nonempty chat completion with the exact requested text?
+- Baseline and exact output path: no competing judge backend; output root
+  `artifacts/evaluation/BJ-10-qwen25-72b-vllm-service-53b5c66`, server log
+  `server.log`, snapshot validation `snapshot_validation.json`, service smoke
+  `smoke.json`, and GPU sample `gpu.csv`.
+- Model and processor identity: Hugging Face
+  `Qwen/Qwen2.5-72B-Instruct` revision
+  `495f39366efef23836d0cfae4fbe635880d2be31`, local path
+  `/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct`; 37 BF16 shards,
+  145,412,519,312 weight bytes, tokenizer length 151665, chat-template SHA256
+  `cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f`.
+- Representation checkpoint identity: N/A; this is a text-only benchmark judge
+  and does not load a TGVF Adapter.
+- N/A fields and justification: policy/reference initialization, rollout policy
+  version/staleness, behavior log probabilities, D/DeepStack observation,
+  replay, reward, GRPO, SDPO, optimizer, gradient and checkpoint are N/A because
+  this cell performs one inference-only service health request and no scoring.
+- Policy/reference initialization: N/A as above; the judge is forbidden from
+  acting as either role.
+- Rollout policy version and allowed asynchronous staleness: N/A; no rollout or
+  policy update.
+- Code commit and worktree state: runtime code commit
+  `53b5c665e937e5c5e67949e01e08510e2d97ea27`; launch worktree must be clean
+  except for this subsequently committed ledger plan.
+- Repository adapter/patch surface and hash: service config SHA256
+  `d2437fd7165ed0ead92feb3191009873d017e80eb550640d995c68d1a25d328b`;
+  smoke script SHA256
+  `b7dea272a2eb2a4bc98257a5aec48d2004f0c10afe718a4e2c3655d0ec1c4ca7`;
+  no external-checkout or site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: synthetic one-request health
+  fixture, `n=1`; no benchmark rows are evaluated.
+- Native prompt/tool schema hash: no native tool schema; canonical request JSON
+  SHA256 `30486f0066f51a616e4cf6d53403b067c6346abcbb017f414369ebe13c7e767e`.
+- Chat-template/token-fixture hash and token-ownership masks: model chat-template
+  hash above; token-ownership masks N/A because no training objective exists.
+- D/DeepStack/position/mask identity: N/A; text-only judge.
+- Observation materialization/artifact identity used by all replays: N/A; no
+  replay.
+- RL framework/version/environment lock: vLLM `0.12.0`, Torch `2.9.0+cu128`,
+  Transformers `4.57.6`, Python `3.12.3`; compatibility lock SHA256
+  `df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058`.
+- Objective equations and normalization: N/A; no loss or update.
+- Rollout/replay forward mode and adapter dropout/RNG contract: vLLM V1 server,
+  prefix caching enabled, model eval inference; no Adapter or replay.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM `0.12.0`; request seed `42`,
+  temperature `0`, maximum 32 output tokens; all other sampling controls use
+  vLLM greedy defaults because `--generation-config vllm`; no custom logit
+  processor and no log probabilities requested.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 weights, auto KV dtype, no
+  quantization, vLLM-selected attention, TP=2, max model length 32768,
+  GPU-memory utilization 0.85, maximum 64 sequences, no training mesh.
+- Logit/logprob/loss/gradient parity tolerances: N/A; success requires exact
+  served-model identity plus response text `TGVF_JUDGE_READY` and a normal
+  finish reason.
+- World size, microbatch, accumulation, and global batch: TP world `2`, one
+  request/completion; batch and accumulation N/A.
+- GPUs: physical `2` = `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical
+  `3` = `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; both NVIDIA B200 183359
+  MiB; logical mapping `2->0`, `3->1`.
+- Start/end timestamps, elapsed time, and session/process identity: pending
+  execution and will be recorded from the service process.
+- Actual GPU-hours and peak scratch use: pending execution; no checkpoint.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CC=/usr/bin/gcc CXX=/usr/bin/g++
+  CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12
+  VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn TOKENIZERS_PARALLELISM=false
+  .venv312/bin/python -m vllm.entrypoints.openai.api_server
+  /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct --served-model-name
+  Qwen2.5-72B-Instruct --host 127.0.0.1 --port 8012 --tensor-parallel-size 2
+  --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization 0.85
+  --max-num-seqs 64 --seed 42 --generation-config vllm
+  --enable-prefix-caching`.
+- Outputs: exact paths above; the service is stopped after the request so GPUs
+  2 and 3 are released.
+- Scorer/parser identity: `tools/smoke_qwen25_72b_judge.py` hash above; no
+  benchmark scorer invoked.
+- Metrics: pending exact response, usage, latency, service load time, GPU memory
+  sample, process identity, and log hash.
+- Conclusion: `PENDING`; this cell can establish deployment availability only,
+  not numerical judge calibration or benchmark quality.
 
 ## Compatibility-spike status
 
