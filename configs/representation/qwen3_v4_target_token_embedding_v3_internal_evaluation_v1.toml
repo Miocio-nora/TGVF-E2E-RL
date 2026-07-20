@@ -1,0 +1,32 @@
+schema_version = "representation-internal-evaluation-run-v1"
+run_id = "RP-36-QWEN3-REPRESENTATION-INTERNAL-EVAL-TARGET-EMBEDDING-V3-GPU3"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "463108ed559a11210ef8703dfdbcc451038b2d7d"
+dirty = false
+
+[source]
+training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_v4_target_token_embedding_v3.toml"
+training_config_sha256 = "9662a163212a2de36f61b093f692c8262cba50daf548a9dfb95833c2bfc3b3eb"
+
+[artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V3/adapter.pt"
+file_sha256 = "646a1b60523cdcc01ac2926d4cf5c1aa46cbfa3d43833be0c396aba730ce9e88"
+manifest_sha256 = "3cccf99efd21fc3ea2cd62d780ad2c7ffcaec7dbb8c6c4a49892f675c11a7469"
+expected_run_identity_sha256 = "5d23fafd91ec3af9a926e52af4fd6ed163349ae3734ef3c78057a329f55ee245"
+expected_global_step = 2000
+
+[execution]
+physical_gpu_id = 3
+
+[evaluation]
+evaluation_id = "qwen3-v4-target-embedding-v3-native-internal-eval-v1"
+ordered_group_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v3_val2k_grid1x26x38_exact_k4_seed42_v1.json"
+ordered_group_manifest_sha256 = "dc327967279cee32f014a3806a473b2442d3cd51df6cf4efa46a33b1f5806ab8"
+counterfactual_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v3_val2k_chartqa_2016_counterfactual_v1.json"
+counterfactual_manifest_sha256 = "17238100d1fb807038befbffdc6e6d5808dbf9e6d63ceeb1904e03b596b474a0"
+report_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-36-qwen3-internal-eval-target-embedding-v3-gpu3/report.json"
+random_seed = 42
+max_new_tokens = 64
+eos_token_ids = [151645]

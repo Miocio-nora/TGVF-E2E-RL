@@ -4342,6 +4342,63 @@ instead of repeated bullets.
   W&B finished and synced at
   `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-qwen3-v4-target-embedding-v3`.
 
+### RP-35-QWEN3-REPRESENTATION-INTERNAL-EVAL-CONTEXTUAL-V4-GPU0
+
+- Lifecycle/result: `PLANNED` / `PENDING`; formal post-hoc internal evaluation
+  of completed contextual artifact, without training resume or weight mutation.
+- Identity: code `463108ed559a11210ef8703dfdbcc451038b2d7d`, clean;
+  evaluation TOML SHA256
+  `a3dd5f5f592637a6210233923dee7043ecb20fe3ea8c95689d323907265534f8`;
+  original training TOML SHA256
+  `416bf6f4813407265f0eeaa00bfd75d65908a8db975b3c128cd9b49e07eb380b`;
+  training run identity
+  `6c74885183eba8cfc6d7393a296b897b3caf939c88ffe016028c3a02b5f3d5c0`.
+- Model/artifact: local Qwen3-VL-8B-Thinking, BF16/SDPA,
+  max-pixels 262144, tokenizer 151669/no resize, native prompt v1 and chat
+  template from the original run; contextual layer `-1`; step-2000 Adapter file
+  SHA256 `50179c709c5788d83ffc58d13dcde9e15ed448b2cf3233a5db67cb7501106e75`,
+  manifest `dfa992fcea0cee8a0fb48f19892ff10ac42a6cf040d32afcae748c7724e80e10`.
+- Population: fixed retained validation manifest
+  `f47bbff7c63ffa381ce2e2e263130c783057c6d408575ef4c4e3dd5b019c5a33`;
+  31 exact-K4/grid-`(1,26,38)` groups, 124 unique rows, seed 42, ordered
+  manifest `dc327967279cee32f014a3806a473b2442d3cd51df6cf4efa46a33b1f5806ab8`;
+  one audited same-question/target native counterfactual `262` versus `38`,
+  manifest `17238100d1fb807038befbffdc6e6d5808dbf9e6d63ceeb1904e03b596b474a0`.
+- Execution: frozen Qwen and Adapter in eval mode; main D and all three
+  D-DeepStack branches remain atomic; deterministic forward, seed 42, greedy
+  native free continuation bounded at 64 tokens/EOS 151645. RL behavior,
+  reference, rollout, objective, logprob, clipping, optimizer, batch and
+  framework fields are N/A because no RL or optimization occurs.
+- GPU/command/output: physical GPU 0
+  `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2`, idle at preflight
+  `2026-07-20`; `CUDA_VISIBLE_DEVICES=0 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 7200s .venv312/bin/python
+  -m tgvf_rl.cli run-representation-internal-evaluation
+  configs/representation/qwen3_v4_contextual_hidden_state_v4_internal_evaluation_v1.toml`.
+  Immutable output directory
+  `artifacts/representation/RP-35-qwen3-internal-eval-contextual-v4-gpu0/`.
+
+### RP-36-QWEN3-REPRESENTATION-INTERNAL-EVAL-TARGET-EMBEDDING-V3-GPU3
+
+- Lifecycle/result: `PLANNED` / `PENDING`; exact paired evaluation of the
+  target-token-embedding artifact. Population, model, prompt, deterministic
+  evaluator, N/A fields and acceptance are identical to RP-35.
+- Identity/artifact: code
+  `463108ed559a11210ef8703dfdbcc451038b2d7d`, clean; evaluation TOML SHA256
+  `2827799b1a258e058a736eedfb6a2bd03970a72b94540df034e68cdc795577fd`;
+  original training TOML SHA256
+  `9662a163212a2de36f61b093f692c8262cba50daf548a9dfb95833c2bfc3b3eb`;
+  training run identity
+  `5d23fafd91ec3af9a926e52af4fd6ed163349ae3734ef3c78057a329f55ee245`;
+  step-2000 Adapter file SHA256
+  `646a1b60523cdcc01ac2926d4cf5c1aa46cbfa3d43833be0c396aba730ce9e88`,
+  manifest `3cccf99efd21fc3ea2cd62d780ad2c7ffcaec7dbb8c6c4a49892f675c11a7469`.
+- GPU/command/output: physical GPU 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, idle at preflight
+  `2026-07-20`; the RP-35 deterministic command with `CUDA_VISIBLE_DEVICES=3`
+  and target-embedding evaluation TOML. Immutable output directory
+  `artifacts/representation/RP-36-qwen3-internal-eval-target-embedding-v3-gpu3/`.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
