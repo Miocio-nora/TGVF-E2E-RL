@@ -7,9 +7,15 @@ import hashlib
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.tokens import TokenOwnership
 from tgvf_rl.observations.store import ObservationStore
+from tgvf_rl.observations.schema import CropObservationRecord, FocusedObservationRecord
 
 from .behavior import BehaviorTraceStore
-from .schema import TrajectoryBatch, TrajectoryRecord, TrajectoryStop
+from .schema import (
+    CropToolCallRecord,
+    TrajectoryBatch,
+    TrajectoryRecord,
+    TrajectoryStop,
+)
 
 
 class TrajectoryValidator:
@@ -52,38 +58,62 @@ class TrajectoryValidator:
                 raise IdentityMismatchError(
                     "observation model differs from trajectory model"
                 )
-            if record.condition.policy_version != trajectory.behavior_policy:
-                raise IdentityMismatchError(
-                    "observation materialization policy differs from behavior policy"
-                )
-            if record.condition.trajectory_ids != (trajectory.identity.canonical_id,):
-                raise IdentityMismatchError(
-                    "observation provenance differs from trajectory identity"
-                )
-            if record.condition.call_indices != (call.call_index,):
-                raise IdentityMismatchError(
-                    "observation provenance differs from trajectory call"
-                )
-            expected_target_sha = hashlib.sha256(
-                call.target.encode("utf-8")
-            ).hexdigest()
-            if record.condition.sampled_target_text_sha256 != expected_target_sha:
-                raise IdentityMismatchError(
-                    "observation target differs from sampled tool target"
-                )
-            if (
-                record.condition.sampled_target_token_start,
-                record.condition.sampled_target_token_end,
-            ) != (call.target_token_span.start, call.target_token_span.end):
-                raise IdentityMismatchError(
-                    "observation target token span differs from sampled tool call"
-                )
-            if representation is None:
-                representation = record.representation
-            elif record.representation != representation:
-                raise IdentityMismatchError(
-                    "representation artifact changed within one trajectory"
-                )
+            if isinstance(call, CropToolCallRecord):
+                if not isinstance(record, CropObservationRecord):
+                    raise IdentityMismatchError(
+                        "crop call received a non-crop observation"
+                    )
+                if record.policy_version != trajectory.behavior_policy:
+                    raise IdentityMismatchError(
+                        "crop materialization policy differs from behavior policy"
+                    )
+                if record.trajectory_id != trajectory.identity.canonical_id:
+                    raise IdentityMismatchError(
+                        "crop observation differs from trajectory identity"
+                    )
+                if record.requested_bbox_2d != call.bbox_2d:
+                    raise IdentityMismatchError(
+                        "crop observation bbox differs from sampled tool call"
+                    )
+            else:
+                if not isinstance(record, FocusedObservationRecord):
+                    raise IdentityMismatchError(
+                        "TGVF call received a non-TGVF observation"
+                    )
+                if record.condition.policy_version != trajectory.behavior_policy:
+                    raise IdentityMismatchError(
+                        "observation materialization policy differs from behavior policy"
+                    )
+                if record.condition.trajectory_ids != (
+                    trajectory.identity.canonical_id,
+                ):
+                    raise IdentityMismatchError(
+                        "observation provenance differs from trajectory identity"
+                    )
+                if record.condition.call_indices != (call.call_index,):
+                    raise IdentityMismatchError(
+                        "observation provenance differs from trajectory call"
+                    )
+                expected_target_sha = hashlib.sha256(
+                    call.target.encode("utf-8")
+                ).hexdigest()
+                if record.condition.sampled_target_text_sha256 != expected_target_sha:
+                    raise IdentityMismatchError(
+                        "observation target differs from sampled tool target"
+                    )
+                if (
+                    record.condition.sampled_target_token_start,
+                    record.condition.sampled_target_token_end,
+                ) != (call.target_token_span.start, call.target_token_span.end):
+                    raise IdentityMismatchError(
+                        "observation target token span differs from sampled tool call"
+                    )
+                if representation is None:
+                    representation = record.representation
+                elif record.representation != representation:
+                    raise IdentityMismatchError(
+                        "representation artifact changed within one trajectory"
+                    )
             if call.assistant_turn_index >= len(trajectory.assistant_turns):
                 raise ReplayMismatchError(
                     "tool call references a missing assistant turn"

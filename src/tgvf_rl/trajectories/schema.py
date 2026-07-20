@@ -70,6 +70,31 @@ class ToolCallRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CropToolCallRecord:
+    call_index: int
+    assistant_turn_index: int
+    function_name: str
+    bbox_2d: tuple[int, int, int, int]
+    raw_call_text: str
+
+    def __post_init__(self) -> None:
+        if self.function_name != "image_zoom_in_tool":
+            raise ValueError("unexpected crop tool function")
+        if self.call_index < 0 or self.assistant_turn_index < 0:
+            raise ValueError("crop call indices must be non-negative")
+        if len(self.bbox_2d) != 4 or any(
+            type(value) is not int for value in self.bbox_2d
+        ):
+            raise ValueError("crop bbox must contain exactly four integers")
+        left, top, right, bottom = self.bbox_2d
+        if right <= left or bottom <= top:
+            raise ValueError("crop bbox must be non-empty")
+
+
+NativeToolCallRecord = ToolCallRecord | CropToolCallRecord
+
+
+@dataclass(frozen=True, slots=True)
 class ToolObservationRecord:
     call_index: int
     handle: ObservationHandle
@@ -90,7 +115,7 @@ class TrajectoryRecord:
     model: ModelIdentity
     behavior_policy: PolicyVersion
     assistant_turns: tuple[AssistantTurnRecord, ...]
-    tool_calls: tuple[ToolCallRecord, ...]
+    tool_calls: tuple[NativeToolCallRecord, ...]
     observations: tuple[ToolObservationRecord, ...]
     final_answer: str | None
     stop: TrajectoryStop

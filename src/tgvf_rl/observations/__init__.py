@@ -1,6 +1,6 @@
 """Immutable focused-observation schema and storage."""
 
-from .schema import FocusedObservationRecord
+from .schema import CropObservationRecord, CropVisualState, FocusedObservationRecord
 from .store import (
     ObservationHandle,
     ObservationStore,
@@ -11,6 +11,8 @@ from .store import (
 
 __all__ = [
     "FocusedObservationRecord",
+    "CropObservationRecord",
+    "CropVisualState",
     "ObservationHandle",
     "ObservationStore",
     "TrajectoryReplayHandle",

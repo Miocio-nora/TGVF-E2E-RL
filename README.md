@@ -89,11 +89,11 @@ original image + question + native Qwen tool schema
         ↓
 selected Qwen-VL policy reasoning
         ↓
-direct answer OR tgvf_focus_tool(target)
+direct answer OR tgvf_focus_tool(target) OR image_zoom_in_tool(bbox_2d)
         ↓
-TGVF Adapter produces target-conditioned main D + D-DeepStack
+TGVF Adapter produces latent D, or crop returns exact RGB pixels
         ↓
-D is appended as a native multimodal tool response
+the exact latent/image observation is appended as a native multimodal response
         ↓
 the same Qwen-VL policy continues reasoning
         ↓
@@ -102,16 +102,18 @@ zero or more additional tool calls
 final answer
 ```
 
-The canonical tool is:
+The policy RL visual tools are:
 
 ```text
 tgvf_focus_tool(target: str)
+image_zoom_in_tool(bbox_2d: [left, top, right, bottom])
 ```
 
-Repeated calls are a first-class capability. The exact safety cap is
-configurable and remains to be frozen. Each assistant action turn contains at
-most one complete tool-call object, while a trajectory may contain multiple
-action/response turns.
+The crop uses half-open integer pixel coordinates over the immutable original
+image, clamps to its bounds, and records the exact RGB8 pixels plus rollout-time
+processed visual state. Repeated mixed calls are a first-class capability: crop
+then TGVF and TGVF then crop share one ordered trajectory and one configurable
+safety cap. Each assistant action turn contains at most one complete call.
 
 ## System structure
 
@@ -119,7 +121,7 @@ action/response turns.
 |---|---|
 | **representation phase** | Train target-specific visual evidence `D` that the base/frozen Qwen language model can causally read. |
 | **TGVF Adapter** | Consume target conditioning and original-image visual features; produce main `D` and every D-DeepStack branch. |
-| **policy RL phase** | Learn routing, target generation, native tool use, post-`D` reasoning, repeated calls, and final answering. |
+| **policy RL phase** | Learn routing, target/bbox generation, native crop and TGVF use, post-observation reasoning, mixed repeated calls, and final answering. |
 | **Qwen VLM family adapter** | Isolate Qwen3-VL and Qwen2.5-VL processor, visual, M-RoPE, DeepStack, transcript, and forward differences. |
 | **target-condition providers** | Supply contextual-hidden-state or target-token-embedding conditioning through one typed interface; every run selects one explicitly with no default. |
 | **veRL integration** | Provide distributed rollout and optimization infrastructure, with required FSDP2 support. |
@@ -141,7 +143,8 @@ intermediate policy SFT and no Golden policy adapter.
 - Use Qwen's native tool, tool-response, thinking, and vision tokens through its
   native chat template.
 - Never resize the tokenizer or add protocol-specific embedding/lm-head rows.
-- Support multiple `tgvf_focus_tool` calls in one trajectory.
+- Support ordered mixtures of `tgvf_focus_tool` and `image_zoom_in_tool` calls
+  in one trajectory under a shared safety cap.
 - Start policy RL from the original Qwen reasoning policy.
 - Use Qwen3-VL-8B-Thinking first and keep
   `Qwen/Qwen2.5-VL-7B-Instruct` support behind a tested family adapter;
@@ -154,7 +157,8 @@ intermediate policy SFT and no Golden policy adapter.
 - Freeze the TGVF Adapter for the first policy RL proof.
 - Preserve the actual behavior log probability of every policy-sampled token.
 - Replay policy, old-policy, and reference likelihoods against the same exact
-  rollout-materialized `D` observation for every tool call.
+  rollout-materialized observation for every call: latent main `D` plus every
+  D-DeepStack branch for TGVF, or exact crop pixels plus processed visual state.
 - Treat exact GRPO mathematics as a project artifact, not a framework default.
 - Implement SDPO as a real implementation track in the current framework goal,
   using pinned

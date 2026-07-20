@@ -9,7 +9,13 @@ from .behavior import (
     behavior_trace_checksum,
     verify_behavior_trace_pair,
 )
-from .schema import TrajectoryRecord, trajectory_checksum
+from .schema import (
+    CropToolCallRecord,
+    NativeToolCallRecord,
+    ToolCallRecord,
+    TrajectoryRecord,
+    trajectory_checksum,
+)
 from .validation import TrajectoryValidator
 
 __all__ = [
@@ -17,6 +23,9 @@ __all__ = [
     "BehaviorTraceHandle",
     "BehaviorTraceRecord",
     "BehaviorTraceStore",
+    "CropToolCallRecord",
+    "NativeToolCallRecord",
+    "ToolCallRecord",
     "TrajectoryRecord",
     "TrajectoryValidator",
     "VLLMBehaviorRecorder",

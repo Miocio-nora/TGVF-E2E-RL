@@ -17,6 +17,7 @@ from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayHandle,
 )
+from tgvf_rl.observations.schema import CropObservationRecord, FocusedObservationRecord
 from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
 
 
@@ -57,7 +58,7 @@ class _NativeStreamingForwardConstructionProof:
 
 @dataclass(frozen=True, slots=True)
 class RecordedVisualBlock:
-    """One store-verified source-image or focused-D block."""
+    """One store-verified source-image, crop-image, or focused-D block."""
 
     kind: str
     observation_handle: ObservationHandle
@@ -68,7 +69,7 @@ class RecordedVisualBlock:
     deepstack_positions: tuple[tuple[int, ...], ...]
 
     def __post_init__(self) -> None:
-        if self.kind not in {"source_image", "focused_d"}:
+        if self.kind not in {"source_image", "crop_image", "focused_d"}:
             raise ValueError("unknown recorded visual block kind")
         if self.call_index < 0:
             raise ValueError("recorded visual call index must be non-negative")
@@ -78,7 +79,7 @@ class RecordedVisualBlock:
 
 @dataclass(frozen=True, slots=True)
 class InjectedVisualBlock:
-    """One live, differentiable source-image or focused-D tensor block."""
+    """One live, differentiable source-image, crop-image, or focused-D block."""
 
     kind: str
     positions: tuple[int, ...]
@@ -87,7 +88,7 @@ class InjectedVisualBlock:
     deepstack_positions: tuple[tuple[int, ...], ...]
 
     def __post_init__(self) -> None:
-        if self.kind not in {"source_image", "focused_d"}:
+        if self.kind not in {"source_image", "crop_image", "focused_d"}:
             raise ValueError("unknown injected visual block kind")
         if len(self.deepstack) != len(self.deepstack_positions):
             raise ValueError("DeepStack tensors and injection positions must align")
@@ -278,17 +279,18 @@ def resolve_replay_request(
     blocks: list[RecordedVisualBlock] = []
     if observations:
         first = observations[0]
+        source_positions = _original_image_positions(first)
         source_embeddings = _normalize_recorded_features(
             store.resolve_verified(first.source_visual.merged_main),
             input_ids.shape[0],
-            len(first.layout.original_image_positions),
+            len(source_positions),
             "source visual embeddings",
         )
         source_deepstack = tuple(
             _normalize_recorded_features(
                 store.resolve_verified(ref),
                 input_ids.shape[0],
-                len(first.layout.original_image_positions),
+                len(source_positions),
                 f"source DeepStack branch {index}",
             )
             for index, ref in enumerate(first.source_visual.merged_deepstack)
@@ -298,41 +300,57 @@ def resolve_replay_request(
                 kind="source_image",
                 observation_handle=replay.observation_handles[0],
                 call_index=0,
-                positions=first.layout.original_image_positions,
+                positions=source_positions,
                 embeddings=source_embeddings,
                 deepstack=source_deepstack,
-                deepstack_positions=tuple(
-                    first.layout.original_image_positions for _ in source_deepstack
-                ),
+                deepstack_positions=tuple(source_positions for _ in source_deepstack),
             )
         )
     for handle, record in zip(replay.observation_handles, observations, strict=True):
-        focused = _normalize_recorded_features(
-            store.resolve_verified(record.payload.main_d),
+        if isinstance(record, FocusedObservationRecord):
+            embeddings_ref = record.payload.main_d
+            positions = record.layout.d_positions
+            branch_refs = tuple(branch.d_tensor for branch in record.branches)
+            branch_positions = tuple(
+                branch.injection_positions for branch in record.branches
+            )
+            kind = "focused_d"
+            label = "main D"
+        elif isinstance(record, CropObservationRecord):
+            embeddings_ref = record.crop_visual.merged_main
+            positions = record.crop_visual.positions
+            branch_refs = record.crop_visual.merged_deepstack
+            branch_positions = record.crop_visual.deepstack_injection_positions
+            kind = "crop_image"
+            label = "crop image"
+        else:  # pragma: no cover - ObservationStore already rejects this type.
+            raise TypeError("unknown observation record type")
+        embeddings = _normalize_recorded_features(
+            store.resolve_verified(embeddings_ref),
             input_ids.shape[0],
-            len(record.layout.d_positions),
-            f"call {record.call_index} main D",
+            len(positions),
+            f"call {record.call_index} {label}",
         )
         branches = tuple(
             _normalize_recorded_features(
-                store.resolve_verified(branch.d_tensor),
+                store.resolve_verified(ref),
                 input_ids.shape[0],
-                len(branch.injection_positions),
-                f"call {record.call_index} D-DeepStack branch {branch.layer}",
+                len(injection_positions),
+                f"call {record.call_index} {label} DeepStack branch {index}",
             )
-            for branch in record.branches
+            for index, (ref, injection_positions) in enumerate(
+                zip(branch_refs, branch_positions, strict=True)
+            )
         )
         blocks.append(
             RecordedVisualBlock(
-                kind="focused_d",
+                kind=kind,
                 observation_handle=handle,
                 call_index=record.call_index,
-                positions=record.layout.d_positions,
-                embeddings=focused,
+                positions=positions,
+                embeddings=embeddings,
                 deepstack=branches,
-                deepstack_positions=tuple(
-                    branch.injection_positions for branch in record.branches
-                ),
+                deepstack_positions=branch_positions,
             )
         )
     request = RecordedReplayRequest(
@@ -346,6 +364,14 @@ def resolve_replay_request(
     )
     validate_replay_request(request)
     return request
+
+
+def _original_image_positions(
+    record: FocusedObservationRecord | CropObservationRecord,
+) -> tuple[int, ...]:
+    if isinstance(record, FocusedObservationRecord):
+        return record.layout.original_image_positions
+    return record.original_image_positions
 
 
 def validate_replay_request(request: RecordedReplayRequest) -> tuple[int, int]:

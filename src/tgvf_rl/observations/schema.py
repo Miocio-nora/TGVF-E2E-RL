@@ -216,6 +216,137 @@ class FocusedObservationRecord:
                 )
 
 
+@dataclass(frozen=True, slots=True)
+class CropVisualState:
+    """Exact rollout-time model visual state for one RGB crop."""
+
+    crop_pixels: TensorArtifactRef
+    merged_main: TensorArtifactRef
+    merged_deepstack: tuple[TensorArtifactRef, ...]
+    image_grid_thw: tuple[int, int, int]
+    spatial_merge_size: int
+    positions: tuple[int, ...]
+    deepstack_branch_layers: tuple[int, ...]
+    deepstack_injection_positions: tuple[tuple[int, ...], ...]
+
+    def __post_init__(self) -> None:
+        if self.crop_pixels.descriptor.dtype != "uint8" or (
+            len(self.crop_pixels.descriptor.shape) != 3
+            or self.crop_pixels.descriptor.shape[-1] != 3
+        ):
+            raise ValueError("crop pixels must be RGB uint8 [H,W,3]")
+        if any(value <= 0 for value in self.crop_pixels.descriptor.shape[:2]):
+            raise ValueError("crop pixels must have positive height and width")
+        if self.spatial_merge_size <= 0:
+            raise ValueError("crop spatial_merge_size must be positive")
+        if len(self.image_grid_thw) != 3 or any(
+            type(value) is not int or value <= 0 for value in self.image_grid_thw
+        ):
+            raise ValueError("crop image_grid_thw must contain three positive ints")
+        if len(self.merged_deepstack) != len(self.deepstack_branch_layers) or len(
+            self.merged_deepstack
+        ) != len(self.deepstack_injection_positions):
+            raise ValueError("crop DeepStack tensors, layers, and positions must align")
+        if len(set(self.deepstack_branch_layers)) != len(self.deepstack_branch_layers):
+            raise ValueError("crop DeepStack branch layers must be unique")
+        if any(layer < 0 for layer in self.deepstack_branch_layers):
+            raise ValueError("crop DeepStack branch layers must be non-negative")
+        if not self.positions:
+            raise ValueError("crop visual positions must be non-empty")
+        if _feature_count(self.merged_main) != len(self.positions):
+            raise ValueError("crop merged features and positions differ")
+        if len(set(self.positions)) != len(self.positions):
+            raise ValueError("crop positions must be unique")
+        for index, (ref, positions) in enumerate(
+            zip(
+                self.merged_deepstack,
+                self.deepstack_injection_positions,
+                strict=True,
+            )
+        ):
+            if _feature_count(ref) != len(positions):
+                raise ValueError(
+                    f"crop DeepStack branch {index} features and positions differ"
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class CropObservationRecord:
+    """Content-identified crop pixels and their exact processed visual state."""
+
+    schema_version: str
+    observation_id: str
+    call_index: int
+    model: ModelIdentity
+    policy_version: PolicyVersion
+    trajectory_id: str
+    source_pixels_sha256: str
+    source_width: int
+    source_height: int
+    requested_bbox_2d: tuple[int, int, int, int]
+    effective_bbox_2d: tuple[int, int, int, int]
+    source_visual: SourceVisualState
+    sequence_length: int
+    original_image_positions: tuple[int, ...]
+    crop_visual: CropVisualState
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "crop-observation-v1" or not self.observation_id:
+            raise ValueError("crop observation schema version and ID are required")
+        if self.call_index < 0 or not self.trajectory_id:
+            raise ValueError("crop observation call/trajectory identity is invalid")
+        _validate_sha256(self.source_pixels_sha256)
+        if self.source_width <= 0 or self.source_height <= 0:
+            raise ValueError("crop source dimensions must be positive")
+        for name, bbox in (
+            ("requested", self.requested_bbox_2d),
+            ("effective", self.effective_bbox_2d),
+        ):
+            if len(bbox) != 4 or any(type(value) is not int for value in bbox):
+                raise ValueError(f"{name} bbox must contain exactly four integers")
+            left, top, right, bottom = bbox
+            if right <= left or bottom <= top:
+                raise ValueError(f"{name} bbox must be non-empty")
+        left, top, right, bottom = self.effective_bbox_2d
+        if (
+            left < 0
+            or top < 0
+            or right > self.source_width
+            or bottom > self.source_height
+        ):
+            raise ValueError("effective crop bbox lies outside the source image")
+        crop_height, crop_width, _ = self.crop_visual.crop_pixels.descriptor.shape
+        if (crop_width, crop_height) != (right - left, bottom - top):
+            raise ValueError("effective bbox dimensions differ from crop pixels")
+        if self.sequence_length <= 0:
+            raise ValueError("crop observation sequence length must be positive")
+        all_positions = self.original_image_positions + self.crop_visual.positions
+        if any(
+            position < 0 or position >= self.sequence_length
+            for position in all_positions
+        ):
+            raise ValueError("crop observation visual position lies outside sequence")
+        if len(set(all_positions)) != len(all_positions):
+            raise ValueError("source-image and crop positions must not overlap")
+        for positions in self.crop_visual.deepstack_injection_positions:
+            if len(set(positions)) != len(positions) or any(
+                position < 0 or position >= self.sequence_length
+                for position in positions
+            ):
+                raise ValueError("crop DeepStack positions are invalid")
+        if _feature_count(self.source_visual.merged_main) != len(
+            self.original_image_positions
+        ):
+            raise ValueError("source visual features and positions differ")
+        if len(self.source_visual.merged_deepstack) != len(
+            self.crop_visual.merged_deepstack
+        ):
+            raise ValueError("source and crop DeepStack branch counts differ")
+
+
+ObservationRecord = FocusedObservationRecord | CropObservationRecord
+
+
 def _feature_count(ref: TensorArtifactRef) -> int:
     shape = ref.descriptor.shape
     if len(shape) == 2:

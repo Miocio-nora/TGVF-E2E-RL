@@ -9,7 +9,11 @@ from typing import Any, Mapping, Sequence
 
 from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
 
-from .schema import TGVF_FOCUS_TOOL_SCHEMA_SHA256, build_tgvf_focus_tool_schema
+from .schema import (
+    TGVF_FOCUS_TOOL_NAME,
+    build_native_tool_schemas,
+    native_tool_set_sha256,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +30,13 @@ class RenderedTranscript:
 class NativeProtocolRenderer:
     """Uses the model's own template and forbids tokenizer growth."""
 
-    def __init__(self, processor: Any, *, expected_tokenizer_length: int) -> None:
+    def __init__(
+        self,
+        processor: Any,
+        *,
+        expected_tokenizer_length: int,
+        tool_names: tuple[str, ...] = (TGVF_FOCUS_TOOL_NAME,),
+    ) -> None:
         tokenizer = getattr(processor, "tokenizer", processor)
         if not hasattr(processor, "apply_chat_template"):
             raise TypeError("processor must expose apply_chat_template")
@@ -46,6 +56,9 @@ class NativeProtocolRenderer:
         self.processor = processor
         self.tokenizer = tokenizer
         self.expected_tokenizer_length = expected_tokenizer_length
+        self.tool_names = tuple(tool_names)
+        self.tool_schemas = tuple(build_native_tool_schemas(self.tool_names))
+        self.tool_schema_sha256 = native_tool_set_sha256(self.tool_names)
         self.chat_template_sha256 = hashlib.sha256(template.encode("utf-8")).hexdigest()
 
     def render(
@@ -58,7 +71,7 @@ class NativeProtocolRenderer:
         self.assert_chat_template_identity()
         text = self.processor.apply_chat_template(
             list(messages),
-            tools=[build_tgvf_focus_tool_schema()],
+            tools=[dict(schema) for schema in self.tool_schemas],
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
         )
@@ -115,7 +128,7 @@ class NativeProtocolRenderer:
         try:
             batch_result = self.processor.apply_chat_template(
                 [list(messages) for messages in conversations],
-                tools=[build_tgvf_focus_tool_schema()],
+                tools=[dict(schema) for schema in self.tool_schemas],
                 tokenize=False,
                 add_generation_prompt=add_generation_prompt,
             )
@@ -133,7 +146,7 @@ class NativeProtocolRenderer:
         for messages in conversations:
             text = self.processor.apply_chat_template(
                 list(messages),
-                tools=[build_tgvf_focus_tool_schema()],
+                tools=[dict(schema) for schema in self.tool_schemas],
                 tokenize=False,
                 add_generation_prompt=add_generation_prompt,
             )
@@ -215,7 +228,7 @@ class NativeProtocolRenderer:
             token_ids_sha256=hashlib.sha256(raw_ids).hexdigest(),
             text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             chat_template_sha256=self.chat_template_sha256,
-            tool_schema_sha256=TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+            tool_schema_sha256=self.tool_schema_sha256,
             tokenizer_length=effective_tokenizer_length(self.tokenizer),
         )
 

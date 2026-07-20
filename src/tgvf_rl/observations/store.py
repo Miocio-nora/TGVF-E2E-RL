@@ -18,7 +18,7 @@ from tgvf_rl.contracts.tensors import (
     TensorDescriptor,
 )
 
-from .schema import FocusedObservationRecord
+from .schema import CropObservationRecord, FocusedObservationRecord, ObservationRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +66,13 @@ class TrajectoryReplayTensorRefs:
             len(position_shape) == 3 and position_shape[-2:] == (batch, sequence)
         ):
             raise ValueError("position_ids must have shape [B,S] or [R,B,S]")
-        if self.token_type_ids is not None and self.token_type_ids.descriptor.shape != (
-            batch,
-            sequence,
+        if (
+            self.token_type_ids is not None
+            and self.token_type_ids.descriptor.shape
+            != (
+                batch,
+                sequence,
+            )
         ):
             raise ValueError("token_type_ids must have shape [B,S]")
 
@@ -123,7 +127,7 @@ def _canonical(value: object) -> object:
     return value
 
 
-def record_checksum(record: FocusedObservationRecord) -> str:
+def record_checksum(record: ObservationRecord) -> str:
     payload = json.dumps(
         _canonical(asdict(record)),
         sort_keys=True,
@@ -148,7 +152,7 @@ class ObservationStore:
 
     def __init__(self) -> None:
         self._tensors: dict[str, torch.Tensor] = {}
-        self._records: dict[str, FocusedObservationRecord] = {}
+        self._records: dict[str, ObservationRecord] = {}
         self._record_digests: dict[str, str] = {}
         self._replays: dict[str, TrajectoryReplayRecord] = {}
         self._replay_digests: dict[str, str] = {}
@@ -180,7 +184,7 @@ class ObservationStore:
         self._tensors[checksum] = stored
         return ref
 
-    def put(self, record: FocusedObservationRecord) -> ObservationHandle:
+    def put(self, record: ObservationRecord) -> ObservationHandle:
         refs = tuple(_walk_tensor_refs(record))
         missing = [
             ref.address.digest
@@ -207,7 +211,7 @@ class ObservationStore:
         self._verify_ref(ref)
         return self._tensors[ref.address.digest].clone()
 
-    def resolve_record(self, handle: ObservationHandle) -> FocusedObservationRecord:
+    def resolve_record(self, handle: ObservationHandle) -> ObservationRecord:
         try:
             record = self._records[handle.observation_id]
         except KeyError as exc:
@@ -224,7 +228,7 @@ class ObservationStore:
 
     def batch(
         self, handles: Iterable[ObservationHandle]
-    ) -> tuple[FocusedObservationRecord, ...]:
+    ) -> tuple[ObservationRecord, ...]:
         return tuple(self.resolve_record(handle) for handle in handles)
 
     def put_replay(self, replay: TrajectoryReplayRecord) -> TrajectoryReplayHandle:
@@ -241,47 +245,54 @@ class ObservationStore:
             )
         if observations:
             first = observations[0]
-            source_identity = (
-                first.source_visual.image_sha256,
-                first.source_visual.merged_main.address.digest,
-                tuple(
-                    ref.address.digest for ref in first.source_visual.merged_deepstack
-                ),
-            )
-            occupied = set(first.layout.original_image_positions)
+            source_identity = _source_identity(first)
+            occupied = set(_original_image_positions(first))
+            representation = None
+            source_pixels_sha256 = None
             for record in observations:
                 if record.model != replay.model:
                     raise IdentityMismatchError(
                         "trajectory replay model differs from observation"
                     )
-                if record.condition.policy_version != replay.behavior_policy:
+                if _record_policy_version(record) != replay.behavior_policy:
                     raise IdentityMismatchError(
                         "trajectory replay policy differs from observation materialization"
                     )
-                current_source = (
-                    record.source_visual.image_sha256,
-                    record.source_visual.merged_main.address.digest,
-                    tuple(
-                        ref.address.digest
-                        for ref in record.source_visual.merged_deepstack
-                    ),
-                )
-                if current_source != source_identity:
+                if _source_identity(record) != source_identity:
                     raise ReplayMismatchError(
                         "multi-call replay changed the original visual state"
                     )
-                d_positions = set(record.layout.d_positions)
-                if occupied & d_positions:
+                if _original_image_positions(record) != _original_image_positions(
+                    first
+                ):
+                    raise ReplayMismatchError(
+                        "multi-call replay changed original-image positions"
+                    )
+                if isinstance(record, FocusedObservationRecord):
+                    if representation is None:
+                        representation = record.representation
+                    elif record.representation != representation:
+                        raise IdentityMismatchError(
+                            "representation artifact changed within one replay"
+                        )
+                elif source_pixels_sha256 is None:
+                    source_pixels_sha256 = record.source_pixels_sha256
+                elif record.source_pixels_sha256 != source_pixels_sha256:
+                    raise ReplayMismatchError(
+                        "multi-crop replay changed the immutable source pixels"
+                    )
+                positions = set(_tool_visual_positions(record))
+                if occupied & positions:
                     raise ReplayMismatchError(
                         "multi-call replay visual positions overlap"
                     )
-                occupied.update(d_positions)
+                occupied.update(positions)
         sequence = replay.tensors.input_ids.descriptor.shape[-1]
         if observations and any(
             position >= sequence
             for record in observations
             for position in (
-                record.layout.original_image_positions + record.layout.d_positions
+                _original_image_positions(record) + _tool_visual_positions(record)
             )
         ):
             raise ReplayMismatchError(
@@ -349,7 +360,9 @@ class ObservationStore:
         if len(store._tensors) != len(tensors):
             raise ReplayMismatchError("checkpoint contains non-tensor payload")
         for observation_id, record in store._records.items():
-            if not isinstance(record, FocusedObservationRecord):
+            if not isinstance(
+                record, (FocusedObservationRecord, CropObservationRecord)
+            ):
                 raise ReplayMismatchError(
                     "checkpoint contains invalid observation record"
                 )
@@ -394,3 +407,32 @@ def _walk_tensor_refs(value: object) -> Iterable[TensorArtifactRef]:
     elif isinstance(value, (tuple, list)):
         for item in value:
             yield from _walk_tensor_refs(item)
+
+
+def _record_policy_version(record: ObservationRecord) -> PolicyVersion:
+    if isinstance(record, FocusedObservationRecord):
+        return record.condition.policy_version
+    return record.policy_version
+
+
+def _source_identity(record: ObservationRecord) -> tuple[object, ...]:
+    source = record.source_visual
+    return (
+        source.image_sha256,
+        source.merged_main.address.digest,
+        tuple(ref.address.digest for ref in source.merged_deepstack),
+        source.image_grid_thw,
+        source.spatial_merge_size,
+    )
+
+
+def _original_image_positions(record: ObservationRecord) -> tuple[int, ...]:
+    if isinstance(record, FocusedObservationRecord):
+        return record.layout.original_image_positions
+    return record.original_image_positions
+
+
+def _tool_visual_positions(record: ObservationRecord) -> tuple[int, ...]:
+    if isinstance(record, FocusedObservationRecord):
+        return record.layout.d_positions
+    return record.crop_visual.positions

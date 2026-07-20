@@ -1,4 +1,4 @@
-"""Strict parser for one native ``tgvf_focus_tool`` call."""
+"""Strict parser for one registered native visual-tool call."""
 
 from __future__ import annotations
 
@@ -8,8 +8,12 @@ from typing import Any
 
 from .schema import (
     ParseErrorCode,
+    ParsedImageZoomInCall,
     ParsedToolCall,
+    NativeToolCall,
     SampledAssistantTurn,
+    IMAGE_ZOOM_IN_TOOL_NAME,
+    POLICY_RL_TOOL_NAMES,
     TGVF_FOCUS_TOOL_NAME,
     TOOL_CALL_CLOSE,
     TOOL_CALL_OPEN,
@@ -225,6 +229,7 @@ class StrictToolCallParser:
     """Parse exactly one complete native tool call without rewriting it."""
 
     allowed_terminal_suffixes: tuple[str, ...] = ()
+    enabled_tool_names: tuple[str, ...] = POLICY_RL_TOOL_NAMES
 
     def __post_init__(self) -> None:
         suffixes = tuple(self.allowed_terminal_suffixes)
@@ -235,8 +240,15 @@ class StrictToolCallParser:
                 "allowed terminal suffixes must be unique non-empty strings"
             )
         object.__setattr__(self, "allowed_terminal_suffixes", suffixes)
+        names = tuple(self.enabled_tool_names)
+        if not names or len(set(names)) != len(names):
+            raise ValueError("enabled tool names must be non-empty and unique")
+        unknown = set(names) - set(POLICY_RL_TOOL_NAMES)
+        if unknown:
+            raise ValueError(f"unknown enabled tool names: {sorted(unknown)!r}")
+        object.__setattr__(self, "enabled_tool_names", names)
 
-    def parse(self, turn: SampledAssistantTurn) -> ParsedToolCall:
+    def parse(self, turn: SampledAssistantTurn) -> NativeToolCall:
         text = turn.sampled_text
         opening_count = text.count(TOOL_CALL_OPEN)
         closing_count = text.count(TOOL_CALL_CLOSE)
@@ -288,12 +300,25 @@ class StrictToolCallParser:
                 ParseErrorCode.INVALID_CALL_SHAPE,
                 "call object must contain exactly 'name' and 'arguments'",
             )
-        if decoded["name"] != TGVF_FOCUS_TOOL_NAME:
+        tool_name = decoded["name"]
+        if tool_name not in self.enabled_tool_names:
             raise ToolCallParseError(
                 ParseErrorCode.INVALID_TOOL_NAME,
-                f"expected {TGVF_FOCUS_TOOL_NAME!r}",
+                f"expected one of {self.enabled_tool_names!r}",
             )
         arguments = decoded["arguments"]
+        if tool_name == IMAGE_ZOOM_IN_TOOL_NAME:
+            return self._parse_crop_call(
+                decoded=decoded,
+                arguments=arguments,
+                turn=turn,
+                text=text,
+                raw_json=raw_json,
+                call_start=call_start,
+                call_end=call_end,
+                json_start=json_start,
+                json_end=json_end,
+            )
         if type(arguments) is not dict or set(arguments) != {"target"}:
             raise ToolCallParseError(
                 ParseErrorCode.INVALID_ARGUMENTS,
@@ -344,6 +369,52 @@ class StrictToolCallParser:
                 token_end=token_end,
                 token_ids=target_token_ids,
             ),
+        )
+
+    @staticmethod
+    def _parse_crop_call(
+        *,
+        decoded: dict[str, Any],
+        arguments: Any,
+        turn: SampledAssistantTurn,
+        text: str,
+        raw_json: str,
+        call_start: int,
+        call_end: int,
+        json_start: int,
+        json_end: int,
+    ) -> ParsedImageZoomInCall:
+        if type(arguments) is not dict or set(arguments) != {"bbox_2d"}:
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_ARGUMENTS,
+                "crop arguments must contain exactly 'bbox_2d'",
+            )
+        bbox = arguments["bbox_2d"]
+        if (
+            type(bbox) is not list
+            or len(bbox) != 4
+            or any(type(value) is not int for value in bbox)
+        ):
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_BBOX,
+                "bbox_2d must be a JSON array of exactly four integers",
+            )
+        left, top, right, bottom = bbox
+        if right <= left or bottom <= top:
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_BBOX,
+                "bbox_2d must have positive requested width and height",
+            )
+        return ParsedImageZoomInCall(
+            name=decoded["name"],
+            bbox_2d=(left, top, right, bottom),
+            sampled_text=text,
+            sampled_token_ids=turn.token_ids,
+            sampled_token_byte_spans=turn.token_byte_spans,
+            raw_tool_call=text[call_start:call_end],
+            raw_json=raw_json,
+            call_offsets=_text_offsets(text, call_start, call_end),
+            json_offsets=_text_offsets(text, json_start, json_end),
         )
 
     def _terminal_suffix_is_allowed(self, suffix: str) -> bool:

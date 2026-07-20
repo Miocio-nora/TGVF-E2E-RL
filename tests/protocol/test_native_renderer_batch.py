@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from tgvf_rl.protocol.native import NativeProtocolRenderer
+from tgvf_rl.protocol.schema import POLICY_RL_TOOL_NAMES, native_tool_set_sha256
 
 
 class _BatchTokenizer:
@@ -160,3 +161,32 @@ def test_render_many_empty_batch_is_a_no_op() -> None:
     assert processor.scalar_calls == 0
     assert tokenizer.batch_calls == 0
     assert tokenizer.scalar_calls == 0
+
+
+def test_policy_rl_renderer_supplies_both_tools_in_declared_order() -> None:
+    class CapturingProcessor(_BatchProcessor):
+        def __init__(self, tokenizer):
+            super().__init__(tokenizer)
+            self.tool_names = ()
+
+        def apply_chat_template(
+            self, messages, *, tools, tokenize, add_generation_prompt
+        ):
+            self.tool_names = tuple(item["function"]["name"] for item in tools)
+            return super().apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=tokenize,
+                add_generation_prompt=add_generation_prompt,
+            )
+
+    tokenizer = _BatchTokenizer()
+    processor = CapturingProcessor(tokenizer)
+    renderer = NativeProtocolRenderer(
+        processor,
+        expected_tokenizer_length=4096,
+        tool_names=POLICY_RL_TOOL_NAMES,
+    )
+    result = renderer.render(_messages()[0], add_generation_prompt=False)
+    assert processor.tool_names == ("tgvf_focus_tool", "image_zoom_in_tool")
+    assert result.tool_schema_sha256 == native_tool_set_sha256(POLICY_RL_TOOL_NAMES)

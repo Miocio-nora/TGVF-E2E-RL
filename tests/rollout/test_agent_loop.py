@@ -11,6 +11,7 @@ from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import TokenByteSpan
 from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
+from tgvf_rl.trajectories.schema import CropToolCallRecord, ToolCallRecord
 from tgvf_rl.trajectories import BehaviorTraceStore, VLLMBehaviorRecorder
 
 
@@ -115,6 +116,62 @@ def test_framework_neutral_loop_preserves_two_calls_and_actual_logprobs() -> Non
         for turn in trajectory.assistant_turns
     )
     assert trajectory.final_answer == "blue"
+
+
+def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = SamplingIdentity(
+        version,
+        "vllm",
+        "fixture",
+        9,
+        SHA,
+        0.7,
+        0.9,
+        20,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+    )
+    crop = _sample(
+        "reason\n</think>\n<tool_call>"
+        '{"name":"image_zoom_in_tool","arguments":{"bbox_2d":[1,2,9,10]}}'
+        "</tool_call>",
+        sampling,
+    )
+    focus = _sample(
+        "reason\n</think>\n<tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"serial number"}}'
+        "</tool_call>",
+        sampling,
+    )
+    answer = _sample("reason\n</think>\n42", sampling)
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((crop, focus, answer)),
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=3,
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "mixed", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            (1, 2, 3),
+            {},
+        )
+    )
+    assert isinstance(trajectory.tool_calls[0], CropToolCallRecord)
+    assert isinstance(trajectory.tool_calls[1], ToolCallRecord)
+    assert trajectory.tool_calls[0].bbox_2d == (1, 2, 9, 10)
+    assert trajectory.tool_calls[1].target == "serial number"
+    assert tuple(item.call_index for item in trajectory.observations) == (0, 1)
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
 
 
 def test_tool_error_does_not_fabricate_a_call_or_observation() -> None:

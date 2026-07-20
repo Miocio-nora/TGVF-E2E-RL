@@ -15,9 +15,12 @@ from tgvf_rl.contracts.tokens import (
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, ToolCallParseError
+from tgvf_rl.protocol.schema import ParsedImageZoomInCall
 from tgvf_rl.protocol.state_machine import AgentEvent, AgentPhase, MultiCallStateMachine
 from tgvf_rl.trajectories.schema import (
     AssistantTurnRecord,
+    CropToolCallRecord,
+    NativeToolCallRecord,
     ToolCallRecord,
     ToolObservationRecord,
     TrajectoryIdentity,
@@ -115,7 +118,7 @@ class FrameworkNeutralAgentLoop:
         prompt = tuple(request.initial_prompt_token_ids)
         state = self.machine.initial_state()
         turns: list[AssistantTurnRecord] = []
-        calls: list[ToolCallRecord] = []
+        calls: list[NativeToolCallRecord] = []
         observations: list[ToolObservationRecord] = []
         final_answer: str | None = None
         stop: TrajectoryStop | None = None
@@ -199,22 +202,33 @@ class FrameworkNeutralAgentLoop:
                 state = self.machine.apply(state, AgentEvent.tool_error()).state
                 stop = TrajectoryStop.TOOL_ERROR
                 break
-            calls.append(
-                ToolCallRecord(
-                    call_index=call_index,
-                    assistant_turn_index=len(turns) - 1,
-                    function_name=parsed.name,
-                    target=parsed.target,
-                    target_token_span=TokenSpan(
-                        parsed.target_span.token_start, parsed.target_span.token_end
-                    ),
-                    target_char_span=(
-                        parsed.target_span.offsets.char_start,
-                        parsed.target_span.offsets.char_end,
-                    ),
-                    raw_call_text=parsed.raw_tool_call,
+            if isinstance(parsed, ParsedImageZoomInCall):
+                calls.append(
+                    CropToolCallRecord(
+                        call_index=call_index,
+                        assistant_turn_index=len(turns) - 1,
+                        function_name=parsed.name,
+                        bbox_2d=parsed.bbox_2d,
+                        raw_call_text=parsed.raw_tool_call,
+                    )
                 )
-            )
+            else:
+                calls.append(
+                    ToolCallRecord(
+                        call_index=call_index,
+                        assistant_turn_index=len(turns) - 1,
+                        function_name=parsed.name,
+                        target=parsed.target,
+                        target_token_span=TokenSpan(
+                            parsed.target_span.token_start, parsed.target_span.token_end
+                        ),
+                        target_char_span=(
+                            parsed.target_span.offsets.char_start,
+                            parsed.target_span.offsets.char_end,
+                        ),
+                        raw_call_text=parsed.raw_tool_call,
+                    )
+                )
             observations.append(
                 ToolObservationRecord(call_index, handle, environment_tokens)
             )

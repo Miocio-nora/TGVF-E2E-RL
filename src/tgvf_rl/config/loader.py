@@ -9,6 +9,7 @@ from enum import Enum
 
 from tgvf_rl.conditioning.base import TargetConditioningConfig
 from tgvf_rl.contracts.errors import ContractUnsetError
+from tgvf_rl.protocol.schema import POLICY_RL_TOOL_NAMES
 
 from .schema import RunConfig, RunGate
 
@@ -39,12 +40,22 @@ def validate_run_config(config: RunConfig) -> None:
         )
     if config.gate is RunGate.SKELETON:
         return
-    if config.prompt_identity is None or config.max_tool_calls is None:
+    if (
+        config.prompt_identity is None
+        or config.max_tool_calls is None
+        or config.enabled_tool_names is None
+    ):
         raise ContractUnsetError(
-            "rollout requires explicit prompt identity and tool-call cap"
+            "rollout requires explicit prompt identity, enabled tools, and tool-call cap"
         )
     if config.max_tool_calls <= 1:
         raise ValueError("multi-call safety cap must be greater than one")
+    tool_names = tuple(config.enabled_tool_names)
+    if not tool_names or len(set(tool_names)) != len(tool_names):
+        raise ValueError("enabled rollout tool names must be non-empty and unique")
+    unknown_tools = set(tool_names) - set(POLICY_RL_TOOL_NAMES)
+    if unknown_tools:
+        raise ValueError(f"unknown enabled rollout tools: {sorted(unknown_tools)!r}")
     if config.gate in {RunGate.GRPO_SMOKE, RunGate.SDPO_SMOKE, RunGate.PRODUCTION}:
         if config.objective_identity is None:
             raise ContractUnsetError(

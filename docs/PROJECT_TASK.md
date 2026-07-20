@@ -2,7 +2,7 @@
 
 Status: **I8H-20260719 bounded framework implementation complete; production gates open**
 Recorded: **2026-07-18 JST**
-Updated: **2026-07-19 JST**
+Updated: **2026-07-20 JST**
 
 Unresolved implementation contracts and their promotion gates are tracked in
 [`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
@@ -107,6 +107,43 @@ registered files/symbols and parity requirements.
 - The implementation stops and reports evidence if upstream veRL/vLLM cannot
   meet actual-logprob, exact-observation, public-extension, deterministic
   replay, or FSDP2 requirements without a private trainer fork.
+
+### 0.4 Accepted crop-tool extension
+
+Decision ID: **CROP-FUSION-20260720**
+
+Accepted by: **user**, on **2026-07-20 JST**
+
+The policy RL phase has a second native visual tool named
+`image_zoom_in_tool`, compatible at the public call boundary with the pinned
+DeepEyes `image_zoom_in_tool`. Its exact arguments are
+`{"bbox_2d": [left, top, right, bottom]}`. Coordinates are integer pixel
+coordinates in the immutable original source image and use the PIL-compatible
+half-open convention `[left, top, right, bottom)`. The executor clamps each
+edge to source bounds and rejects an empty box after clamping. It does not add
+DeepEyes-specific minimum-size, aspect-ratio, prompt, reward, or retry policy.
+
+Every crop is taken from the immutable original image, never recursively from
+the previous crop. The runtime records the requested and effective boxes,
+source/crop dimensions and hashes, and the exact RGB crop pixels. The model's
+rollout-time processed visual state for that crop is materialized alongside
+the trajectory before replay. Policy, reference, and teacher replay consume
+the same recorded crop pixels and processed state; they must not execute the
+crop again from an external path or silently reprocess different pixels.
+
+`image_zoom_in_tool` and `tgvf_focus_tool` share one ordered multi-tool state
+machine and one configurable total call cap greater than one. Any ordering is
+valid, including crop then TGVF and TGVF then crop. A later policy turn can use
+the accumulated native observations, while every TGVF Adapter invocation
+continues to use the immutable original-image visual features as its visual
+source. This is the initial crop/TGVF fusion contract: fusion occurs through
+the shared policy trajectory and exact ordered replay, not by feeding crop
+pixels into the TGVF Adapter or turning `D` into pixels.
+
+Crop response content is environment-owned and receives no behavior log
+probability or policy loss. Reward coefficients, crop-call cost, training-data
+mixture, and any recursive-crop experiment remain open. This extension does
+not modify the representation-phase transcript, loss, data, or checkpoint.
 
 ## 1. Objective
 
@@ -597,8 +634,8 @@ These are already part of the base tokenizer. The tokenizer length must remain
 `151669` for this model snapshot; there is no resize and no new embedding/head
 row payload.
 
-The tool is provided through `apply_chat_template(..., tools=[schema])` with a
-single function contract equivalent to:
+The tools are provided through `apply_chat_template(..., tools=[...])`. The
+TGVF function contract remains equivalent to:
 
 ```json
 {
@@ -615,6 +652,31 @@ single function contract equivalent to:
         }
       },
       "required": ["target"],
+      "additionalProperties": false
+    }
+  }
+}
+```
+
+The policy RL tool set additionally contains:
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "image_zoom_in_tool",
+    "description": "Crop one rectangular region from the original image.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bbox_2d": {
+          "type": "array",
+          "items": {"type": "integer"},
+          "minItems": 4,
+          "maxItems": 4
+        }
+      },
+      "required": ["bbox_2d"],
       "additionalProperties": false
     }
   }
@@ -668,17 +730,19 @@ serializes that observation under a user-framed `<tool_response>` turn. The new
 runtime must follow the template exactly; it must not resurrect the historical
 `<|im_start|>tool` framing.
 
-Repeated tool calls are a first-class runtime requirement. A trajectory may
-alternate between policy reasoning, `tgvf_focus_tool`, and a new `D`
-observation more than once before the final answer. A configurable safety cap
-greater than one is required; its exact value and stopping policy remain open.
+Repeated and mixed tool calls are a first-class runtime requirement. A
+trajectory may alternate among policy reasoning, `tgvf_focus_tool`, a new `D`
+observation, `image_zoom_in_tool`, and an exact crop observation more than once
+before the final answer. A configurable shared safety cap greater than one is
+required; its exact value and stopping policy remain open.
 
 The parser is fail-closed:
 
 - exactly one complete tool-call object per assistant action turn;
 - strict `json.loads`;
-- exact function name and argument keys;
-- non-empty, non-generic target;
+- an exact registered function name and exact per-function argument keys;
+- a non-empty, non-generic TGVF target, or exactly four integer crop
+  coordinates defining a non-empty box after source-bound clamping;
 - target byte/character offsets mapped back to the original sampled token IDs,
   including JSON escapes; ambiguous boundary-crossing tokens are rejected or
   handled by one predeclared deterministic rule;
@@ -707,18 +771,27 @@ For each prompt and each sampled group member:
      visual layout, positions, multimodal types, mask, and cache contract;
    - append the native tool-response turn and its template-owned next-assistant
      thinking prefix.
-5. Continue the same trajectory to post-`D` reasoning. The policy may answer or
-   emit another valid `tgvf_focus_tool` call; repeat step 4 until a final answer,
-   a malformed action, or the configured safety limit terminates the loop.
-6. Record the complete action mask, tool/environment spans, rewards, stop
+5. If it emits a valid `image_zoom_in_tool` call:
+   - preserve the exact sampled call tokens and behavior log probabilities;
+   - clamp the requested integer box to the immutable original-image bounds
+     and reject an empty result;
+   - materialize a contiguous RGB8 crop plus its content/provenance record;
+   - append the native image-bearing tool response and retain its exact
+     rollout-time processed visual state for replay.
+6. Continue the same trajectory after either observation. The policy may
+   answer or emit either registered tool call; repeat the applicable execution
+   step until a final answer, a malformed action, or the shared safety limit
+   terminates the loop.
+7. Record the complete action mask, tool/environment spans, rewards, stop
    causes, and all identity fields needed for mathematically identical replay.
-7. Replay policy/reference log probabilities only on policy-generated tokens
+8. Replay policy/reference log probabilities only on policy-generated tokens
    from every assistant turn; template prefill and tool-observation tokens are
    environment output and receive no policy loss.
-8. For every tool call, policy, old-policy, and frozen-reference replay all
-   consume that call's same rollout-recorded `D` observation. They may recompute
+9. For every tool call, policy, old-policy, and frozen-reference replay all
+   consume that call's same rollout-recorded observation. They may recompute
    logits on the recorded trajectory, but they never regenerate `Hq`, main `D`,
-   or D-DeepStack from their own or updated parameters.
+   or D-DeepStack from their own or updated parameters, and never recrop or
+   substitute crop pixels.
 
 The minimal framework-facing trajectory record must retain:
 
@@ -1053,9 +1126,10 @@ The exact external commits and permitted topics are recorded in
   tree is not vendored or selected as the production framework.
 - `Visual-Agent/DeepEyes` may inform multi-turn agent-loop, dynamic multimodal
   observation, tool registry, Qwen-VL M-RoPE/mask, data, reward, judge-service,
-  tracing, and evaluation interfaces.
-- DeepEyes crop tools, rendered prompts, reward coefficients, asynchronous
-  behavior, and logprob/replay conventions are not inherited.
+  tracing, evaluation interfaces, and the public `image_zoom_in_tool` /
+  `bbox_2d` crop-call boundary pinned in `EXTERNAL_REFERENCES.md`.
+- DeepEyes implementation code, rendered prompts, reward coefficients,
+  asynchronous behavior, and logprob/replay conventions are not inherited.
 - The legacy `revisit_vlm_clean` code is an eligible exact-file, read-only design
   reference under `docs/LEGACY_REFERENCE.md`; “clean” is not blanket reuse
   permission. Registered files may inform new interfaces, while wholesale
@@ -1175,6 +1249,9 @@ Protocol-C serialization.
   compatibility fixture.
 - Support repeated `tgvf_focus_tool` calls with a configurable safety cap
   greater than one and per-call immutable observation records.
+- Support mixed repeated `image_zoom_in_tool` and `tgvf_focus_tool` calls under
+  the same safety cap, with content-identified crop pixels and exact ordered
+  replay of crop visual state and TGVF latent state.
 - Prove no tokenizer resize, exact template-generated transcript/token round
   trip, correct ownership masks, and no duplicate opening `<think>` in either
   assistant turn.

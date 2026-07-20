@@ -138,9 +138,10 @@ matrix items remain promotion gates rather than implicit passes.
   be reproduced as exact parity fixtures or documented native-protocol
   adaptations; omissions require an explicit decision. This requirement does
   not mark the still-open AD-13 inventory as complete.
-- [x] `FIXED` — The native function name is `tgvf_focus_tool`.
-- [x] `FIXED` — A trajectory supports zero or more tool calls; the safety cap is
-  configurable and greater than one.
+- [x] `FIXED` — Native function names are `tgvf_focus_tool` and
+  `image_zoom_in_tool`; crop takes exactly one `bbox_2d` integer array.
+- [x] `FIXED` — A trajectory supports zero or more ordered TGVF/crop calls; one
+  shared safety cap is configurable and greater than one.
 - [x] `FIXED` — Qwen native tool/thinking/vision tokens are used without
   tokenizer growth.
 - [x] `FIXED` — There is no intermediate policy SFT or Golden policy adapter.
@@ -154,7 +155,8 @@ matrix items remain promotion gates rather than implicit passes.
   the first policy RL proof.
 - [x] `FIXED` — The TGVF Adapter is frozen for the first policy RL proof.
 - [x] `FIXED` — For each tool call, policy, old-policy, and reference replay
-  consume the same rollout-materialized `D` observation.
+  consume the same rollout-materialized observation: exact `D` state or exact
+  crop pixels plus their rollout-time processed visual state.
 - [x] `FIXED` — SDPO compatibility is part of the initial skeleton. Its reference
   repository is `lasgroup/SDPO` at
   `7c457fc1b1f636ae794eb0362ba37d4743b06fbc`; its bundled veRL tree is not the
@@ -307,8 +309,12 @@ interfaces must be versioned and fail closed while unset.
   processor, tokenizer, chat template, family adapter, golden token fixtures,
   and fixture hashes for the primary rollout. Full weight-shard hashes are not
   required.
-- [ ] `OPEN_BLOCKING RO-P02` — Pin exact native tool schema and schema hash for
-  `tgvf_focus_tool`. Description/argument wording: `[TBD]`
+- [x] `FIXED RO-P02A` — Exact native schemas and schema hashes are implemented
+  for `tgvf_focus_tool(target)` and `image_zoom_in_tool(bbox_2d)` under decision
+  `CROP-FUSION-20260720`.
+- [ ] `OPEN_BLOCKING RO-P02B` — Pin the real Qwen3 processor-rendered system
+  prompt/token golden and combined tool-set hash for the two-tool policy RL
+  prompt. Representation-phase TGVF-only golden identity remains unchanged.
 - [ ] `OPEN_BLOCKING RO-P03` — Pin one initial prompt version and exact hash.
   Prompt text: `[TBD]`
 - [ ] `OPEN_BLOCKING RO-P04` — Golden token-ID fixtures for direct answer, one

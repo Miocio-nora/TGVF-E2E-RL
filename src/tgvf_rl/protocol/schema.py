@@ -18,6 +18,8 @@ from typing import Any, Mapping
 
 
 TGVF_FOCUS_TOOL_NAME = "tgvf_focus_tool"
+IMAGE_ZOOM_IN_TOOL_NAME = "image_zoom_in_tool"
+POLICY_RL_TOOL_NAMES = (TGVF_FOCUS_TOOL_NAME, IMAGE_ZOOM_IN_TOOL_NAME)
 TOOL_CALL_OPEN = "<tool_call>"
 TOOL_CALL_CLOSE = "</tool_call>"
 
@@ -35,6 +37,28 @@ _TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
                 }
             },
             "required": ["target"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": IMAGE_ZOOM_IN_TOOL_NAME,
+        "description": "Crop one rectangular region from the original image.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "bbox_2d": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "description": "[left, top, right, bottom] pixel coordinates.",
+                }
+            },
+            "required": ["bbox_2d"],
             "additionalProperties": False,
         },
     },
@@ -63,6 +87,18 @@ TGVF_FOCUS_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
 TGVF_FOCUS_TOOL_SCHEMA_SHA256 = sha256(
     TGVF_FOCUS_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
 ).hexdigest()
+IMAGE_ZOOM_IN_TOOL_SCHEMA: Mapping[str, Any] = _freeze_json(
+    _IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE
+)
+IMAGE_ZOOM_IN_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
+    _IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE,
+    ensure_ascii=False,
+    separators=(",", ":"),
+    sort_keys=True,
+)
+IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256 = sha256(
+    IMAGE_ZOOM_IN_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
+).hexdigest()
 
 
 def build_tgvf_focus_tool_schema() -> dict[str, Any]:
@@ -72,6 +108,45 @@ def build_tgvf_focus_tool_schema() -> dict[str, Any]:
     # system-prompt token identity, while the separate canonical JSON remains
     # the order-independent schema digest.
     return deepcopy(_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE)
+
+
+def build_image_zoom_in_tool_schema() -> dict[str, Any]:
+    """Return a fresh copy of the accepted DeepEyes-compatible crop schema."""
+
+    return deepcopy(_IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE)
+
+
+def build_native_tool_schemas(
+    tool_names: tuple[str, ...] = POLICY_RL_TOOL_NAMES,
+) -> list[dict[str, Any]]:
+    """Build an ordered, duplicate-free set of registered native tool schemas."""
+
+    names = tuple(tool_names)
+    if not names or len(set(names)) != len(names):
+        raise ValueError("native tool names must be non-empty and unique")
+    builders = {
+        TGVF_FOCUS_TOOL_NAME: build_tgvf_focus_tool_schema,
+        IMAGE_ZOOM_IN_TOOL_NAME: build_image_zoom_in_tool_schema,
+    }
+    unknown = tuple(name for name in names if name not in builders)
+    if unknown:
+        raise ValueError(f"unknown native tool names: {unknown!r}")
+    return [builders[name]() for name in names]
+
+
+def native_tool_set_sha256(tool_names: tuple[str, ...]) -> str:
+    """Hash the exact ordered tool set passed to the Qwen chat template."""
+
+    names = tuple(tool_names)
+    if names == (TGVF_FOCUS_TOOL_NAME,):
+        return TGVF_FOCUS_TOOL_SCHEMA_SHA256
+    canonical = json.dumps(
+        build_native_tool_schemas(names),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class ParseErrorCode(str, Enum):
@@ -84,6 +159,7 @@ class ParseErrorCode(str, Enum):
     INVALID_TOOL_NAME = "invalid_tool_name"
     INVALID_ARGUMENTS = "invalid_arguments"
     EMPTY_TARGET = "empty_target"
+    INVALID_BBOX = "invalid_bbox"
     AMBIGUOUS_TARGET_TOKEN_SPAN = "ambiguous_target_token_span"
 
 
@@ -218,6 +294,47 @@ class ParsedToolCall:
             raise ValueError(f"unsupported tool name: {self.name!r}")
         if self.target != self.target_span.target_text:
             raise ValueError("parsed target and target span disagree")
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedImageZoomInCall:
+    """A validated crop call retaining the exact sampled representation."""
+
+    name: str
+    bbox_2d: tuple[int, int, int, int]
+    sampled_text: str
+    sampled_token_ids: tuple[int, ...]
+    sampled_token_byte_spans: tuple[TokenByteSpan, ...]
+    raw_tool_call: str
+    raw_json: str
+    call_offsets: TextOffsets
+    json_offsets: TextOffsets
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bbox_2d", tuple(self.bbox_2d))
+        object.__setattr__(self, "sampled_token_ids", tuple(self.sampled_token_ids))
+        object.__setattr__(
+            self,
+            "sampled_token_byte_spans",
+            tuple(self.sampled_token_byte_spans),
+        )
+        SampledAssistantTurn(
+            self.sampled_text,
+            self.sampled_token_ids,
+            self.sampled_token_byte_spans,
+        )
+        if self.name != IMAGE_ZOOM_IN_TOOL_NAME:
+            raise ValueError(f"unsupported crop tool name: {self.name!r}")
+        if len(self.bbox_2d) != 4 or any(
+            type(value) is not int for value in self.bbox_2d
+        ):
+            raise ValueError("bbox_2d must contain exactly four integers")
+        left, top, right, bottom = self.bbox_2d
+        if right <= left or bottom <= top:
+            raise ValueError("bbox_2d must have positive requested width and height")
+
+
+NativeToolCall = ParsedToolCall | ParsedImageZoomInCall
 
 
 class TerminationReason(str, Enum):

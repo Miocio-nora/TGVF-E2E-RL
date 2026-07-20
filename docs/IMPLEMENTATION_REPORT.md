@@ -5,7 +5,7 @@ Branch: `main`
 Base commit: `168b3ab`
 Authorization commit: `2ffa28e`
 Representation implementation commit: `ce6a15f`
-Updated: **2026-07-19 JST**
+Updated: **2026-07-20 JST**
 
 ## Result
 
@@ -21,6 +21,21 @@ The runtime uses vLLM only. Live Qwen3 launches fail closed unless
 `VLLM_ATTENTION_BACKEND=TRITON_ATTN`; the vLLM multimodal encoder uses
 `TORCH_SDPA`. No SGLang runtime, SDPO-bundled veRL tree, private trainer fork,
 or site-package patch is used.
+
+## Policy RL crop-tool extension
+
+Decision `CROP-FUSION-20260720` adds the native
+`image_zoom_in_tool(bbox_2d)` beside `tgvf_focus_tool`. The implementation
+strictly parses four integer coordinates, crops the immutable original RGB8
+image with half-open/clamped bounds, content-addresses the exact pixels, and
+stores the rollout-time main/DeepStack visual state. One registry and one call
+cap preserve arbitrary mixed order. Qwen policy/reference/teacher replay and
+the Qwen3 vLLM precomputed transport now resolve source image, crop images, and
+focused `D` blocks from the same ordered observation handles without recropping
+or regenerating TGVF output. The TGVF-only representation renderer and golden
+identity are unchanged. The post-extension CPU regression result is `499`
+passed and `1` skipped; the skip is the pre-existing optional
+`transfer_queue`-dependent live synchronization smoke.
 
 ## Implemented framework
 

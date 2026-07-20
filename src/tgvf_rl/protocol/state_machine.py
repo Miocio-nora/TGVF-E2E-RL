@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from .schema import ParsedToolCall, TerminationReason
+from .schema import NativeToolCall, TerminationReason
 
 
 class AgentPhase(str, Enum):
@@ -30,7 +30,7 @@ class InvalidTransitionError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class AgentEvent:
     kind: AgentEventType
-    tool_call: ParsedToolCall | None = None
+    tool_call: NativeToolCall | None = None
 
     def __post_init__(self) -> None:
         if self.kind is AgentEventType.VALID_TOOL_CALL and self.tool_call is None:
@@ -44,7 +44,7 @@ class AgentEvent:
             raise ValueError("only a valid-tool-call event may carry a parsed call")
 
     @classmethod
-    def valid_tool_call(cls, call: ParsedToolCall) -> "AgentEvent":
+    def valid_tool_call(cls, call: NativeToolCall) -> "AgentEvent":
         return cls(AgentEventType.VALID_TOOL_CALL, call)
 
     @classmethod

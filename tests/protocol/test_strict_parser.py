@@ -5,6 +5,8 @@ import json
 import pytest
 
 from tgvf_rl.protocol import (
+    IMAGE_ZOOM_IN_TOOL_NAME,
+    IMAGE_ZOOM_IN_TOOL_SCHEMA,
     ParseErrorCode,
     SampledAssistantTurn,
     StrictToolCallParser,
@@ -13,6 +15,8 @@ from tgvf_rl.protocol import (
     TokenByteSpan,
     ToolCallParseError,
     build_tgvf_focus_tool_schema,
+    build_image_zoom_in_tool_schema,
+    build_native_tool_schemas,
 )
 
 
@@ -60,6 +64,59 @@ def test_fixed_schema_is_exact_and_returned_as_a_fresh_json_object() -> None:
     assert first["function"]["parameters"]["additionalProperties"] is False
     first["function"]["name"] = "mutated"
     assert second["function"]["name"] == TGVF_FOCUS_TOOL_NAME
+
+
+def test_crop_schema_and_policy_tool_set_are_explicit() -> None:
+    first = build_image_zoom_in_tool_schema()
+    second = build_image_zoom_in_tool_schema()
+    assert IMAGE_ZOOM_IN_TOOL_SCHEMA["function"]["name"] == IMAGE_ZOOM_IN_TOOL_NAME
+    assert first["function"]["parameters"]["required"] == ["bbox_2d"]
+    assert first["function"]["parameters"]["additionalProperties"] is False
+    first["function"]["name"] = "mutated"
+    assert second["function"]["name"] == IMAGE_ZOOM_IN_TOOL_NAME
+    assert [item["function"]["name"] for item in build_native_tool_schemas()] == [
+        TGVF_FOCUS_TOOL_NAME,
+        IMAGE_ZOOM_IN_TOOL_NAME,
+    ]
+
+
+def test_parse_crop_preserves_exact_call_and_integer_bbox() -> None:
+    text = (
+        "</think>\n<tool_call>"
+        '{"name":"image_zoom_in_tool","arguments":{"bbox_2d":[-3,2,40,31]}}'
+        "</tool_call>"
+    )
+    turn = _character_token_turn(text)
+    parsed = StrictToolCallParser().parse(turn)
+    assert parsed.name == IMAGE_ZOOM_IN_TOOL_NAME
+    assert parsed.bbox_2d == (-3, 2, 40, 31)
+    assert parsed.raw_tool_call == text[text.index("<tool_call>") :]
+    assert parsed.sampled_token_ids == turn.token_ids
+
+
+@pytest.mark.parametrize(
+    "bbox_json",
+    ("[1,2,3]", "[1,2,3,4.0]", "[1,2,true,4]", "[3,2,1,4]"),
+)
+def test_invalid_crop_bbox_fails_closed(bbox_json: str) -> None:
+    text = (
+        '<tool_call>{"name":"image_zoom_in_tool","arguments":{"bbox_2d":'
+        f"{bbox_json}}}}}</tool_call>"
+    )
+    with pytest.raises(ToolCallParseError) as error:
+        StrictToolCallParser().parse(_character_token_turn(text))
+    assert error.value.code is ParseErrorCode.INVALID_BBOX
+
+
+def test_parser_can_fail_closed_when_crop_is_disabled() -> None:
+    text = (
+        '<tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,0,2,2]}}</tool_call>'
+    )
+    parser = StrictToolCallParser(enabled_tool_names=(TGVF_FOCUS_TOOL_NAME,))
+    with pytest.raises(ToolCallParseError) as error:
+        parser.parse(_character_token_turn(text))
+    assert error.value.code is ParseErrorCode.INVALID_TOOL_NAME
 
 
 def test_parse_preserves_exact_sampled_text_tokens_and_unicode_offsets() -> None:

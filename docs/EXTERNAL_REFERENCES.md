@@ -211,11 +211,21 @@ step.
 repository: https://github.com/Visual-Agent/DeepEyes
 review commit: 11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1
 observed: 2026-07-19 JST
-role: small configuration and family-adapter design reference only
+role: crop-call behavior, small configuration, and family-adapter design reference
 dependency status: reference only; do not install or vendor
 ```
 
-Permitted reference topics are limited to small configuration-composition,
+The crop behavior reference is the file
+[`verl/workers/agent/envs/mm_process_engine/visual_toolbox_v2.py`](https://github.com/Visual-Agent/DeepEyes/blob/11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1/verl/workers/agent/envs/mm_process_engine/visual_toolbox_v2.py),
+whose bytes at the review commit have SHA-256
+`0d56b2ff584fe56e68f20bbb4d25a9774ecbab605ad02cdaf1dac7cd6fa8bc60`.
+It establishes the public name `image_zoom_in_tool`, the `bbox_2d` argument,
+clamping to source-image bounds, and cropping from the immutable original
+image. Those small observable behaviors may be re-expressed behind this
+project's schemas. DeepEyes-specific size/aspect heuristics, parser, prompt,
+retry behavior, and rotation tool are not adopted.
+
+Other permitted topics are limited to small configuration-composition,
 family-adapter dispatch, launcher layout, and test-organization ideas that can
 be re-expressed behind this project's contracts. DeepEyes code, veRL tree, and
 runtime are not dependencies.
@@ -228,11 +238,11 @@ reward role, and deployment topology remain unset.
 
 Forbidden inheritance includes its observation schema or materialization,
 rollout/behavior log probabilities, replay semantics, sampled-token masks,
-agent loop, crop/zoom tool identity, rendered prompts, dataset assumptions,
-reward coefficients, checkpoint state, and asynchronous-staleness behavior.
-DeepEyes cannot supply compatibility evidence for any of those fields.
-`tgvf_focus_tool`, native Qwen trajectories, rollout-recorded probabilities,
-and exact TGVF observations remain authoritative.
+agent loop implementation, rendered prompts, dataset assumptions, reward
+coefficients, checkpoint state, and asynchronous-staleness behavior. DeepEyes
+cannot supply compatibility evidence for any of those fields. This project's
+native trajectories, rollout-recorded probabilities, content-addressed crop
+observations, and exact TGVF observations remain authoritative.
 
 ## Model roles and current identities
 

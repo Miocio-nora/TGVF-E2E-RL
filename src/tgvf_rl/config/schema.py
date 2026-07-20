@@ -53,3 +53,4 @@ class RunConfig:
     reward_identity: ArtifactIdentity | None
     objective_identity: ArtifactIdentity | None
     max_tool_calls: int | None
+    enabled_tool_names: tuple[str, ...] | None
