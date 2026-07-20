@@ -4705,6 +4705,34 @@ instead of repeated bullets.
   tokenizer and teardown gates as RP-49 apply. The final internal evaluation
   uses the same post-hoc v4-Golden 200/46 population after artifact hashing.
 
+### RP-51/52-QWEN3-REP-2000STEP-MATRIXCE-ENDPOINT-V4-GOLDEN
+
+- Cell/status: paired post-hoc internal evaluations / `PLANNED` /
+  `PENDING`. RP-51 evaluates contextual Balanced mean-NLL/T=0.1 artifact
+  RP-49 on physical GPU 0; RP-52 evaluates contextual legacy summed-NLL/T=1.0
+  artifact RP-50 on physical GPU 2.
+- Frozen evaluator/data: clean code
+  `ffa41467613b24376374e53d99be5bf29e9d0a0b`; v4 clean-imend test source
+  `de61c731...82d`; exact Golden first-200/46-group ordered manifest
+  `55e2cde5...34d8`; counterfactual manifest `4589d14f...4cc4`; seed 42,
+  max-new-tokens 64 and EOS 151645. Both use the same frozen Qwen3 readout,
+  main-D plus all three learned D-DeepStack branches and native continuation
+  contract; no training, policy rollout, reward, GRPO, SDPO or judge exists.
+- RP-51 identity: config SHA256 `0017e309...cb2`; artifact file/manifest/run
+  SHA256 `fcda0b96...fc14` / `3ff14e66...f49e` /
+  `980e4136...1bea`; output
+  `artifacts/representation/RP-51-qwen3-internal-eval-balanced-t01-contextual-2000-v4-golden-gpu0/report.json`;
+  GPU 0 UUID `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2`.
+- RP-52 identity: config SHA256 `3c27bc11...011e`; artifact
+  file/manifest/run SHA256 `dfd9c8cc...43d2` /
+  `bc5b78c2...5b7f` / `684bf3d6...4846`; output
+  `artifacts/representation/RP-52-qwen3-internal-eval-legacy-contextual-2000-v4-golden-gpu2/report.json`;
+  GPU 2 UUID `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`.
+- Acceptance: each report must bind exactly 200 rows/46 groups, preserve
+  tokenizer length 151669, contain finite readout/query/health metrics and both
+  native counterfactual cases, and exit cleanly. Comparison is withheld until
+  both cells pass.
+
 ### RP-53-QWEN3-REP-MAIN-D-ONLY-PERIODIC-BOUNDARY-GPU01
 
 - Cell/status: mandatory main-D-only two-rank periodic checkpoint/resume
