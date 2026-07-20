@@ -4024,7 +4024,7 @@ instead of repeated bullets.
 
 ### REP-QWEN3-V4-TARGET-EMBEDDING-V1
 
-- Lifecycle/result: `PLANNED` / `PENDING`; user-authorized paired formal
+- Lifecycle/result: `RUNNING` / `PENDING`; user-authorized paired formal
   representation run on physical GPUs 0 and 1 while contextual V2 continues on
   GPUs 2 and 3.
 - Identity/output: code `6496a4d135078f83430a63e59d9c14455fd85e69`;
@@ -4057,6 +4057,11 @@ instead of repeated bullets.
   `rep-qwen3-v4-target-embedding-v1`. Accept only finite losses/gradients,
   step-500 checkpoint/validation cadence, tokenizer invariance, step 2000 and a
   final Adapter artifact; local JSONL remains authoritative.
+- Runtime: torchrun PID `2577005` started `2026-07-20T17:43:45+09:00`; rank
+  PIDs `2577303`/`2577305`; run identity
+  `f02221bff8ff38144fa1c455ed49d31b1057ee648d77804fa5756a5001896789`.
+  Steps 10 and 20 completed with finite nonzero gradients; step 20 took
+  `3.966164014` seconds. Live W&B upload is verified at the planned run URL.
 
 ## Compatibility-spike status
 
