@@ -17,8 +17,12 @@ from tgvf_rl.data import (
     DEEPEYES47K_TOTAL_ROWS,
 )
 from tgvf_rl.policy import (
+    POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_JUDGE_MODEL_NAME,
+    POLICY_PILOT_V1_MODEL_FAMILY,
+    POLICY_PILOT_V1_MODEL_NAME,
     POLICY_PILOT_V1_MODEL_PATH,
+    POLICY_PILOT_V1_TOKENIZER_LENGTH,
     PilotExecutionBindings,
     PilotJudgeBindings,
     PilotObjectiveBindings,
@@ -53,11 +57,11 @@ def _manifest() -> PolicyPilotV1RunManifest:
         run_id="pilot-001",
         policy=PolicyPilotV1Config(sampling=_sampling()),
         base_model=ModelIdentity(
-            family="qwen3_vl",
-            model_name="Qwen3-VL-8B-Thinking",
+            family=POLICY_PILOT_V1_MODEL_FAMILY,
+            model_name=POLICY_PILOT_V1_MODEL_NAME,
             revision_or_path=POLICY_PILOT_V1_MODEL_PATH,
-            tokenizer_length=151_936,
-            chat_template_sha256=SHA1,
+            tokenizer_length=POLICY_PILOT_V1_TOKENIZER_LENGTH,
+            chat_template_sha256=POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
         ),
         processor=_artifact("qwen3-processor"),
         tokenizer_fixture=_artifact("tokenizer-golden", SHA1),
@@ -116,6 +120,13 @@ def test_manifest_binds_fixed_pilot_and_all_open_run_identities() -> None:
     assert record["policy"]["sampling"]["trajectories_per_prompt"] == 8
     assert record["policy"]["lora"]["rank"] == 64
     assert record["reward_weights"] == [0.8, 0.2, 1.2]
+    assert record["base_model"] == {
+        "chat_template_sha256": POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+        "family": POLICY_PILOT_V1_MODEL_FAMILY,
+        "model_name": POLICY_PILOT_V1_MODEL_NAME,
+        "revision_or_path": POLICY_PILOT_V1_MODEL_PATH,
+        "tokenizer_length": POLICY_PILOT_V1_TOKENIZER_LENGTH,
+    }
     assert record["execution"]["hardware_topology"]["name"] == "hardware-topology"
     assert json.loads(manifest.canonical_json) == record
     assert len(manifest.identity_sha256) == 64
@@ -124,9 +135,13 @@ def test_manifest_binds_fixed_pilot_and_all_open_run_identities() -> None:
     by_name = {item.name: item.sha256 for item in hashes.hashes}
     assert by_name["pilot_manifest"] == manifest.identity_sha256
     assert by_name["policy_config"] == manifest.policy.identity_sha256
+    assert by_name["chat_template"] == POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256
+    assert by_name["chat_template_fixture"] == SHA2
     assert by_name["data_manifest"] == SHA0
     assert by_name["prompt"] == SHA1
     assert by_name["tgvf_adapter"] == SHA2
+    assert by_name["tokenizer_fixture"] == SHA1
+    assert by_name["native_transcript_fixture"] == SHA0
 
 
 def test_manifest_is_deterministic_and_every_binding_changes_aggregate_identity() -> None:
@@ -165,6 +180,49 @@ def test_manifest_fails_closed_on_unbound_or_incompatible_inputs() -> None:
         )
     with pytest.raises(TypeError, match="target_conditioning"):
         replace(manifest, target_conditioning="contextual_hidden_state")
+
+
+@pytest.mark.parametrize(
+    "field, value, error",
+    [
+        ("family", "qwen3-vl", "base-model family"),
+        ("model_name", "Qwen3-VL-8B-Instruct", "base-model name"),
+        ("tokenizer_length", 151_936, "base-model tokenizer length"),
+        ("chat_template_sha256", SHA1, "base-model chat-template SHA256"),
+    ],
+)
+def test_manifest_rejects_drift_from_fixed_qwen3_identity(
+    field: str, value: object, error: str
+) -> None:
+    manifest = _manifest()
+    with pytest.raises(ValueError, match=error):
+        replace(manifest, base_model=replace(manifest.base_model, **{field: value}))
+
+
+def test_protocol_fixture_artifacts_remain_independent_run_bindings() -> None:
+    manifest = _manifest()
+    changed_chat_template_fixture = replace(
+        manifest,
+        chat_template_fixture=replace(manifest.chat_template_fixture, sha256=SHA1),
+    )
+    changed_tokenizer = replace(
+        manifest,
+        tokenizer_fixture=replace(manifest.tokenizer_fixture, sha256=SHA2),
+    )
+    changed_transcript = replace(
+        manifest,
+        native_transcript_fixture=replace(
+            manifest.native_transcript_fixture,
+            sha256=SHA2,
+        ),
+    )
+
+    assert manifest.chat_template_fixture.sha256 != (
+        manifest.base_model.chat_template_sha256
+    )
+    assert changed_chat_template_fixture.identity_sha256 != manifest.identity_sha256
+    assert changed_tokenizer.identity_sha256 != manifest.identity_sha256
+    assert changed_transcript.identity_sha256 != manifest.identity_sha256
 
 
 @pytest.mark.parametrize(

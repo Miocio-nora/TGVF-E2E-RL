@@ -26,7 +26,14 @@ from tgvf_rl.data import (
 from tgvf_rl.protocol import TGVF_FOCUS_TOOL_SCHEMA_SHA256
 
 from .checkpoint import PilotRunIdentityHashes
-from .config import PolicyPilotV1Config
+from .config import (
+    POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+    POLICY_PILOT_V1_MODEL_FAMILY,
+    POLICY_PILOT_V1_MODEL_NAME,
+    POLICY_PILOT_V1_MODEL_PATH,
+    POLICY_PILOT_V1_TOKENIZER_LENGTH,
+    PolicyPilotV1Config,
+)
 
 
 POLICY_PILOT_V1_RUN_MANIFEST_SCHEMA = "policy-pilot-v1-run-manifest-v1"
@@ -158,10 +165,26 @@ class PolicyPilotV1RunManifest:
             )
         if not isinstance(self.base_model, ModelIdentity):
             raise TypeError("base_model must be a ModelIdentity")
-        if self.base_model.family != self.policy.model_family:
-            raise ValueError("base-model family differs from the Pilot policy")
-        if self.base_model.revision_or_path != self.policy.model_path:
-            raise ValueError("base-model path differs from the Pilot policy")
+        for name, value, expected in (
+            ("family", self.base_model.family, POLICY_PILOT_V1_MODEL_FAMILY),
+            ("name", self.base_model.model_name, POLICY_PILOT_V1_MODEL_NAME),
+            ("path", self.base_model.revision_or_path, POLICY_PILOT_V1_MODEL_PATH),
+            (
+                "tokenizer length",
+                self.base_model.tokenizer_length,
+                POLICY_PILOT_V1_TOKENIZER_LENGTH,
+            ),
+            (
+                "chat-template SHA256",
+                self.base_model.chat_template_sha256,
+                POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+            ),
+        ):
+            if value != expected:
+                raise ValueError(
+                    f"Policy Pilot v1 requires base-model {name}={expected!r}, "
+                    f"got {value!r}"
+                )
         if not isinstance(self.target_conditioning, TargetConditioningConfig):
             raise TypeError(
                 "target_conditioning must be a TargetConditioningConfig"
@@ -253,7 +276,9 @@ class PolicyPilotV1RunManifest:
             self.run_id,
             {
                 "chat_template": self.base_model.chat_template_sha256,
+                "chat_template_fixture": self.chat_template_fixture.sha256,
                 "data_manifest": self.dataset_manifest.sha256,
+                "native_transcript_fixture": self.native_transcript_fixture.sha256,
                 "pilot_manifest": self.identity_sha256,
                 "policy_config": self.policy.identity_sha256,
                 "prompt": self.prompt.sha256,
