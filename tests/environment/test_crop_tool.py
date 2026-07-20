@@ -198,6 +198,9 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
             trajectory_ids=("trajectory",),
             call_indices=(1,),
             hidden_layer=18,
+            contextual_forward_identity=ArtifactIdentity(
+                "policy", "contextual-forward", "fixture", SHA1
+            ),
             policy_version=policy,
         ),
         source_visual=source,

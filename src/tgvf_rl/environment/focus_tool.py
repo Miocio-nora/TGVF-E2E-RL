@@ -65,6 +65,7 @@ class ToolExecutionRequest:
     layout: ReplayLayoutTensors
     model: ModelIdentity
     policy_version: PolicyVersion
+    contextual_forward_identity: ArtifactIdentity | None
     representation: ArtifactIdentity
     branch_merger_identities: tuple[ArtifactIdentity, ...]
 
@@ -99,6 +100,15 @@ class TGVFFocusTool:
             )
         if provenance.model != request.model:
             raise ValueError("conditioning provenance differs from runtime model")
+        if provenance.provider == "contextual_hidden_state":
+            if not isinstance(request.contextual_forward_identity, ArtifactIdentity):
+                raise ValueError(
+                    "contextual conditioning requires its exact forward identity"
+                )
+        elif request.contextual_forward_identity is not None:
+            raise ValueError(
+                "target embedding conditioning cannot name a contextual forward"
+            )
         source = request.source_visual
         if len(source.premerge_deepstack) != len(request.branch_merger_identities):
             raise ValueError("source DeepStack and merger identities differ")
@@ -118,31 +128,28 @@ class TGVFFocusTool:
         ):
             raise ValueError("adapter and replay layout DeepStack layers differ")
 
-        source_premerge = self.store.put_tensor(
+        def put(name: str, tensor: torch.Tensor):
+            return self.store.put_tensor(
+                name, tensor, trajectory_id=request.trajectory_id
+            )
+
+        source_premerge = put(
             f"call.{request.call_index}.source.premerge.main", source.premerge_main
         )
         source_premerge_branches = tuple(
-            self.store.put_tensor(
-                f"call.{request.call_index}.source.premerge.deepstack.{index}", tensor
-            )
+            put(f"call.{request.call_index}.source.premerge.deepstack.{index}", tensor)
             for index, tensor in enumerate(source.premerge_deepstack)
         )
-        source_merged = self.store.put_tensor(
+        source_merged = put(
             f"call.{request.call_index}.source.merged.main", source.merged_main
         )
         source_merged_branches = tuple(
-            self.store.put_tensor(
-                f"call.{request.call_index}.source.merged.deepstack.{index}", tensor
-            )
+            put(f"call.{request.call_index}.source.merged.deepstack.{index}", tensor)
             for index, tensor in enumerate(source.merged_deepstack)
         )
-        main_d = self.store.put_tensor(
-            f"call.{request.call_index}.main_d", adapter_output.main_d
-        )
+        main_d = put(f"call.{request.call_index}.main_d", adapter_output.main_d)
         d_branches = tuple(
-            self.store.put_tensor(
-                f"call.{request.call_index}.d_deepstack.{layer}", tensor
-            )
+            put(f"call.{request.call_index}.d_deepstack.{layer}", tensor)
             for layer, tensor in zip(
                 adapter_output.metadata.branch_layers,
                 adapter_output.deepstack_visual_embeds,
@@ -150,31 +157,29 @@ class TGVFFocusTool:
             )
         )
         layout = request.layout
-        position_ids = self.store.put_tensor(
+        position_ids = put(
             f"call.{request.call_index}.position_ids", layout.position_ids
         )
-        attention_mask = self.store.put_tensor(
+        attention_mask = put(
             f"call.{request.call_index}.attention_mask", layout.attention_mask
         )
-        policy_mask = self.store.put_tensor(
+        policy_mask = put(
             f"call.{request.call_index}.policy_visible", layout.policy_visible_mask
         )
-        reference_mask = self.store.put_tensor(
+        reference_mask = put(
             f"call.{request.call_index}.reference_visible",
             layout.reference_visible_mask,
         )
-        teacher_mask = self.store.put_tensor(
+        teacher_mask = put(
             f"call.{request.call_index}.teacher_visible", layout.teacher_visible_mask
         )
         token_type_ids = (
-            self.store.put_tensor(
-                f"call.{request.call_index}.token_type_ids", layout.token_type_ids
-            )
+            put(f"call.{request.call_index}.token_type_ids", layout.token_type_ids)
             if layout.token_type_ids is not None
             else None
         )
         key_block = (
-            self.store.put_tensor(
+            put(
                 f"call.{request.call_index}.original_image_key_block",
                 layout.original_image_key_block_mask,
             )
@@ -182,16 +187,12 @@ class TGVFFocusTool:
             else None
         )
         cache_position = (
-            self.store.put_tensor(
-                f"call.{request.call_index}.cache_position", layout.cache_position
-            )
+            put(f"call.{request.call_index}.cache_position", layout.cache_position)
             if layout.cache_position is not None
             else None
         )
         rope_delta = (
-            self.store.put_tensor(
-                f"call.{request.call_index}.rope_delta", layout.rope_delta
-            )
+            put(f"call.{request.call_index}.rope_delta", layout.rope_delta)
             if layout.rope_delta is not None
             else None
         )
@@ -210,6 +211,7 @@ class TGVFFocusTool:
             trajectory_ids=provenance.trajectory_ids,
             call_indices=provenance.call_indices,
             hidden_layer=provenance.hidden_layer,
+            contextual_forward_identity=request.contextual_forward_identity,
             policy_version=request.policy_version,
             embedding_identity=provenance.embedding_identity,
         )

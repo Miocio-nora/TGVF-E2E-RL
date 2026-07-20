@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from threading import Event, Thread
+import time
 
 import pytest
 import torch
@@ -25,6 +27,7 @@ from tgvf_rl.environment.focus_runtime import (
     FocusExecutionLedger,
     FocusRuntimeCallIdentity,
     TGVFFocusToolRuntime,
+    _LedgerEntry,
     _source_binding_sha256,
 )
 from tgvf_rl.environment.focus_tool import (
@@ -62,6 +65,10 @@ class _HiddenCapture:
         self.requests = []
         self.identity_override = None
         self.layer_offset = 0
+        self.forward_identity = ArtifactIdentity(
+            "policy", "contextual-forward", "fixture", SHA3
+        )
+        self.forward_identity_override = None
 
     def capture(self, request):
         self.requests.append(request)
@@ -75,6 +82,7 @@ class _HiddenCapture:
             identity=self.identity_override or request.call.identity,
             input_ids=request.input_ids,
             hidden_layer=request.hidden_layer + self.layer_offset,
+            forward_identity=(self.forward_identity_override or self.forward_identity),
             hidden_states=hidden,
         )
 
@@ -280,11 +288,14 @@ def _runtime(provider_kind: str = "contextual_hidden_state"):
         replay_layout=layout,
         focus_tool=tool,
         representation=ArtifactIdentity("tgvf", "adapter", "pilot", SHA2),
-        branch_merger_identities=(
-            ArtifactIdentity("qwen", "merger-8", "pilot", SHA3),
-        ),
+        branch_merger_identities=(ArtifactIdentity("qwen", "merger-8", "pilot", SHA3),),
         conditioning_input_device=torch.device("cpu"),
         contextual_hidden_layer=hidden_layer,
+        contextual_forward_identity=(
+            hidden.forward_identity
+            if provider_kind == "contextual_hidden_state"
+            else None
+        ),
         execution_ledger=FocusExecutionLedger(),
     )
     return runtime, hidden, source, layout, tool, source_binding, embedding_owner
@@ -340,6 +351,9 @@ def test_runtime_offsets_exact_span_and_executes_every_source_once(
         assert capture.call.identity.prior_observation_handles == (
             ObservationHandle("prior", SHA0),
         )
+        assert record.condition.contextual_forward_identity == (hidden.forward_identity)
+    else:
+        assert record.condition.contextual_forward_identity is None
     different_sampled, different_parsed = _sampled("blue label")
     with pytest.raises(ValueError, match="reused with different content"):
         runtime.execute(
@@ -363,6 +377,93 @@ def test_runtime_rejects_parsed_turn_and_bound_model_mismatch_before_ports() -> 
     assert not source.requests
     assert not layout.requests
     assert not tool.requests
+
+
+def test_execute_once_rejects_changed_sampled_token_byte_identity() -> None:
+    runtime, hidden, source, layout, tool, source_binding, _embedding_owner = _runtime()
+    context = _context(source_binding)
+    parsed = StrictToolCallParser().parse(context.sampled_turn.parser_turn())
+
+    handle = runtime.execute(parsed, context)
+
+    changed_spans = list(context.sampled_turn.token_byte_spans)
+    changed_spans[0] = TokenByteSpan(
+        token_index=0,
+        token_id=context.sampled_turn.token_ids[0],
+        byte_start=0,
+        byte_end=0,
+    )
+    changed_spans[1] = TokenByteSpan(
+        token_index=1,
+        token_id=context.sampled_turn.token_ids[1],
+        byte_start=0,
+        byte_end=2,
+    )
+    changed_turn = replace(
+        context.sampled_turn,
+        token_byte_spans=tuple(changed_spans),
+    )
+    changed_parsed = StrictToolCallParser().parse(changed_turn.parser_turn())
+
+    assert changed_parsed.sampled_text == parsed.sampled_text
+    assert changed_parsed.sampled_token_ids == parsed.sampled_token_ids
+    assert changed_parsed.sampled_token_byte_spans != (parsed.sampled_token_byte_spans)
+    with pytest.raises(ValueError, match="reused with different content"):
+        runtime.execute(changed_parsed, replace(context, sampled_turn=changed_turn))
+
+    assert runtime.execute(parsed, context) == handle
+    assert len(hidden.requests) == len(source.requests) == 1
+    assert len(layout.requests) == len(tool.requests) == 1
+
+
+def test_ledger_release_wakes_waiter_without_reexecuting_released_call() -> None:
+    ledger = FocusExecutionLedger()
+    trajectory_id = "pilot/waiter-release/0/group"
+    key = (trajectory_id, 0)
+    handle = ObservationHandle("completed-before-release", SHA0)
+    fingerprint = "waiter-release-fingerprint"
+    with ledger._condition:
+        ledger._entries[key] = _LedgerEntry(fingerprint=fingerprint)
+
+    operation_started = Event()
+    errors: list[BaseException] = []
+
+    def wait_for_existing_call() -> None:
+        try:
+            ledger.execute_once(
+                key=key,
+                fingerprint=fingerprint,
+                operation=lambda: operation_started.set() or handle,
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    waiter = Thread(target=wait_for_existing_call)
+    waiter.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        with ledger._condition:
+            if ledger._condition._waiters:
+                break
+        time.sleep(0.001)
+    else:
+        pytest.fail("focus execute-once caller did not enter the wait state")
+
+    # Hold the condition across completion and release so the notified waiter
+    # can resume only after the completed entry has been removed.
+    with ledger._condition:
+        entry = ledger._entries[key]
+        entry.handle = handle
+        entry.running = False
+        ledger._condition.notify_all()
+        assert ledger.release_trajectories((trajectory_id,)) == 1
+
+    waiter.join(timeout=2.0)
+    assert not waiter.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert "already been released" in str(errors[0])
+    assert not operation_started.is_set()
 
 
 def test_second_call_capture_includes_prior_observation_and_full_prefix_offset() -> (
@@ -447,8 +548,23 @@ def test_contextual_runtime_rejects_capture_layer_drift_without_tool_execution()
     assert not source.requests and not layout.requests and not tool.requests
 
 
+def test_contextual_runtime_rejects_capture_forward_identity_drift() -> None:
+    runtime, hidden, source, layout, tool, source_binding, _embedding_owner = _runtime()
+    context = _context(source_binding)
+    parsed = StrictToolCallParser().parse(context.sampled_turn.parser_turn())
+    hidden.forward_identity_override = ArtifactIdentity(
+        "policy", "other-contextual-forward", "fixture", "9" * 64
+    )
+
+    with pytest.raises(ValueError, match="different forward identity"):
+        runtime.execute(parsed, context)
+
+    assert len(hidden.requests) == 1
+    assert not source.requests and not layout.requests and not tool.requests
+
+
 def _expected_identity(runtime, parsed, context):
-    del runtime, parsed
+    del parsed
     input_ids = torch.tensor(context.conditioning_input_ids, dtype=torch.long)
     proof = _bind_canonical_input_ids(input_ids, context.conditioning_input_ids)
     return FocusRuntimeCallIdentity(
@@ -458,9 +574,8 @@ def _expected_identity(runtime, parsed, context):
         call_index=context.call_index,
         model=context.model,
         behavior_policy=context.behavior_policy,
+        contextual_forward_identity=runtime.contextual_forward_identity,
         source_input_ids_sha256=proof.digest,
-        source_binding_sha256=_source_binding_sha256(
-            context.trajectory_source_visual
-        ),
+        source_binding_sha256=_source_binding_sha256(context.trajectory_source_visual),
         prior_observation_handles=context.prior_observation_handles,
     )

@@ -118,6 +118,9 @@ def _replay(*, branches: int, calls: int = 2):
                 trajectory_ids=("trajectory",),
                 call_indices=(call_index,),
                 hidden_layer=1,
+                contextual_forward_identity=ArtifactIdentity(
+                    "policy", "contextual-forward", "fixture", "4" * 64
+                ),
                 policy_version=policy,
             ),
             source_visual=SourceVisualState(
@@ -176,9 +179,7 @@ def _replay(*, branches: int, calls: int = 2):
             ),
             positions=(1, 2),
             deepstack_branch_layers=tuple(range(branches)),
-            deepstack_injection_positions=tuple(
-                (1, 2) for _ in range(branches)
-            ),
+            deepstack_injection_positions=tuple((1, 2) for _ in range(branches)),
         ),
         observation_handles=tuple(handles),
         tensors=TrajectoryReplayTensorRefs(
@@ -212,9 +213,7 @@ def test_zero_tool_policy_and_reference_consume_the_same_source_bundle() -> None
     adapter = Qwen3VLAdapter()
 
     policy = adapter.forward_replay_bundle(model, bundle, ReplayConsumer.POLICY)
-    reference = adapter.forward_replay_bundle(
-        model, bundle, ReplayConsumer.REFERENCE
-    )
+    reference = adapter.forward_replay_bundle(model, bundle, ReplayConsumer.REFERENCE)
 
     torch.testing.assert_close(policy.logits, reference.logits, rtol=0, atol=0)
     assert torch.equal(policy.visual_position_mask, reference.visual_position_mask)

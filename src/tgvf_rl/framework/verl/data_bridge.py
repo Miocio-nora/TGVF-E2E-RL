@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
+from threading import RLock
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
@@ -59,6 +60,17 @@ _PADDING_FIELDS = frozenset(
     }
 )
 
+_SIDECAR_RELEASE_SCHEMA_VERSION = "tgvf-dataproto-sidecar-release-v1"
+_SIDECAR_RELEASE_SCHEMA_FIELD = "tgvf_sidecar_release_schema_version"
+_SIDECAR_RELEASE_FIELDS_FIELD = "tgvf_sidecar_release_fields"
+
+
+@dataclass(slots=True)
+class _TrackedVerlDataProto:
+    data: object
+    non_tensor_batch: dict[str, object]
+    field_values: dict[str, object]
+
 
 @dataclass(frozen=True, slots=True)
 class DataProtoPayload:
@@ -67,15 +79,122 @@ class DataProtoPayload:
     tensor_batch: Mapping[str, torch.Tensor]
     non_tensor_batch: Mapping[str, object]
     meta_info: Mapping[str, object]
+    _non_tensor_storage: dict[str, object] = field(
+        init=False, repr=False, compare=False
+    )
+    _sidecar_lock: RLock = field(init=False, repr=False, compare=False)
+    _sidecars_released: bool = field(
+        init=False, repr=False, compare=False, default=False
+    )
+    _tracked_verl_data: list[_TrackedVerlDataProto] = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
+        tensor_storage = dict(self.tensor_batch)
+        non_tensor_storage = dict(self.non_tensor_batch)
+        meta_storage = dict(self.meta_info)
+        object.__setattr__(self, "tensor_batch", MappingProxyType(tensor_storage))
         object.__setattr__(
-            self, "tensor_batch", MappingProxyType(dict(self.tensor_batch))
+            self, "non_tensor_batch", MappingProxyType(non_tensor_storage)
         )
-        object.__setattr__(
-            self, "non_tensor_batch", MappingProxyType(dict(self.non_tensor_batch))
-        )
-        object.__setattr__(self, "meta_info", MappingProxyType(dict(self.meta_info)))
+        object.__setattr__(self, "meta_info", MappingProxyType(meta_storage))
+        object.__setattr__(self, "_non_tensor_storage", non_tensor_storage)
+        object.__setattr__(self, "_sidecar_lock", RLock())
+        object.__setattr__(self, "_sidecars_released", False)
+        object.__setattr__(self, "_tracked_verl_data", [])
+
+    @property
+    def sidecars_released(self) -> bool:
+        with self._sidecar_lock:
+            return self._sidecars_released
+
+    def assert_sidecars_available(self) -> None:
+        with self._sidecar_lock:
+            self._assert_sidecars_available_locked()
+
+    def _assert_sidecars_available_locked(self) -> None:
+        if self._sidecars_released:
+            raise RuntimeError("DataProto exact-replay sidecars have been released")
+        for tracked in self._tracked_verl_data:
+            if getattr(tracked.data, "non_tensor_batch", None) is not (
+                tracked.non_tensor_batch
+            ):
+                raise RuntimeError(
+                    "tracked veRL DataProto replaced its exact-replay sidecar mapping"
+                )
+            for name, expected in tracked.field_values.items():
+                if tracked.non_tensor_batch.get(name) is not expected:
+                    raise RuntimeError(
+                        "tracked veRL DataProto changed an exact-replay sidecar "
+                        f"before lifecycle release: {name!r}"
+                    )
+
+    def _materialize_verl_data_proto(self, from_dict: Any) -> Any:
+        """Construct and lease the local public DataProto under one lock."""
+
+        with self._sidecar_lock:
+            self._assert_sidecars_available_locked()
+            non_tensors = dict(self.non_tensor_batch)
+            meta_info = dict(self.meta_info)
+            reserved = {
+                _SIDECAR_RELEASE_SCHEMA_FIELD,
+                _SIDECAR_RELEASE_FIELDS_FIELD,
+            }
+            collisions = reserved & set(meta_info)
+            if collisions:
+                raise ValueError(
+                    "DataProto meta_info collides with sidecar release fields: "
+                    f"{sorted(collisions)!r}"
+                )
+            meta_info[_SIDECAR_RELEASE_SCHEMA_FIELD] = _SIDECAR_RELEASE_SCHEMA_VERSION
+            meta_info[_SIDECAR_RELEASE_FIELDS_FIELD] = tuple(non_tensors)
+            data = from_dict(
+                tensors=dict(self.tensor_batch),
+                non_tensors=non_tensors,
+                meta_info=meta_info,
+            )
+            production = getattr(data, "non_tensor_batch", None)
+            if type(production) is not dict:
+                non_tensors.clear()
+                raise TypeError(
+                    "public DataProto.non_tensor_batch must remain a mutable "
+                    "built-in dict for exact-replay lifecycle release"
+                )
+            if set(non_tensors) != set(production):
+                non_tensors.clear()
+                production.clear()
+                raise RuntimeError(
+                    "public DataProto changed sidecar fields during construction"
+                )
+            _sidecar_release_fields(data)
+            self._tracked_verl_data.append(
+                _TrackedVerlDataProto(
+                    data=data,
+                    non_tensor_batch=production,
+                    field_values={name: production[name] for name in production},
+                )
+            )
+            return data
+
+    def release_sidecars(self) -> bool:
+        """Drop transient exact-replay objects after the batch update barrier.
+
+        Tensor fields contain only ordinary token/log-probability batch tensors;
+        the potentially large replay bundles live in ``non_tensor_batch``.
+        Returning ``False`` on a repeated call makes cleanup idempotent.
+        """
+
+        with self._sidecar_lock:
+            if self._sidecars_released:
+                return False
+            self._assert_sidecars_available_locked()
+            for tracked in self._tracked_verl_data:
+                release_verl_data_proto_sidecars(tracked.data)
+            self._non_tensor_storage.clear()
+            self._tracked_verl_data.clear()
+            object.__setattr__(self, "_sidecars_released", True)
+            return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,8 +272,7 @@ def build_padded_data_proto_payload(
         for row in rows
     ]
     response_rows = [
-        row.response_ids
-        + (pad_token_id,) * (response_width - len(row.response_ids))
+        row.response_ids + (pad_token_id,) * (response_width - len(row.response_ids))
         for row in rows
     ]
     response_mask_rows = [
@@ -162,8 +280,7 @@ def build_padded_data_proto_payload(
         for row in rows
     ]
     response_logprob_rows = [
-        row.response_logprobs
-        + (0.0,) * (response_width - len(row.response_logprobs))
+        row.response_logprobs + (0.0,) * (response_width - len(row.response_logprobs))
         for row in rows
     ]
     prompt_ownership_rows = [
@@ -178,8 +295,7 @@ def build_padded_data_proto_payload(
         )
         response_ownership_rows.append(
             exact_ownership
-            + (TokenOwnership.PADDING.value,)
-            * (response_width - len(row.response_ids))
+            + (TokenOwnership.PADDING.value,) * (response_width - len(row.response_ids))
         )
     return _build_payload(
         rows,
@@ -226,9 +342,7 @@ def _build_payload(
         "response_mask": torch.tensor(response_mask_rows, dtype=torch.int64),
         # Match AgentLoopOutput.as_dict/_postprocess.  The exact Python values
         # remain alongside this public tensor so float32 transport is auditable.
-        "rollout_log_probs": torch.tensor(
-            response_logprob_rows, dtype=torch.float32
-        ),
+        "rollout_log_probs": torch.tensor(response_logprob_rows, dtype=torch.float32),
     }
     non_tensors: dict[str, object] = {
         BRIDGE_SCHEMA_FIELD: _object_array([BRIDGE_SCHEMA_VERSION for _ in rows]),
@@ -271,7 +385,9 @@ def _build_payload(
     if padding_fields is not None:
         collisions = set(padding_fields) & set(non_tensors)
         if collisions:
-            raise RuntimeError(f"padding fields collide with bridge fields: {collisions}")
+            raise RuntimeError(
+                f"padding fields collide with bridge fields: {collisions}"
+            )
         non_tensors.update(padding_fields)
     extra_names = sorted({name for row in rows for name in row.extra_fields})
     padding_collisions = _PADDING_FIELDS & set(extra_names)
@@ -301,11 +417,54 @@ def to_verl_data_proto(
     from_dict = getattr(data_proto_cls, "from_dict", None)
     if not callable(from_dict):
         raise TypeError("public DataProto type must expose from_dict")
-    return from_dict(
-        tensors=dict(payload.tensor_batch),
-        non_tensors=dict(payload.non_tensor_batch),
-        meta_info=dict(payload.meta_info),
-    )
+    return payload._materialize_verl_data_proto(from_dict)
+
+
+def _sidecar_release_fields(data: object) -> tuple[str, ...]:
+    meta_info = getattr(data, "meta_info", None)
+    if not isinstance(meta_info, Mapping):
+        raise TypeError("DataProto.meta_info must preserve sidecar release metadata")
+    if meta_info.get(_SIDECAR_RELEASE_SCHEMA_FIELD) != (
+        _SIDECAR_RELEASE_SCHEMA_VERSION
+    ):
+        raise RuntimeError("DataProto sidecar release schema is missing or changed")
+    fields = meta_info.get(_SIDECAR_RELEASE_FIELDS_FIELD)
+    if (
+        not isinstance(fields, tuple)
+        or not fields
+        or any(not isinstance(name, str) or not name for name in fields)
+        or len(set(fields)) != len(fields)
+    ):
+        raise RuntimeError("DataProto sidecar release field lease is malformed")
+    return fields
+
+
+def release_verl_data_proto_sidecars(data: object) -> int:
+    """Release one local/worker DataProto's project-owned sidecar references.
+
+    Ray-deserialized DataProto copies are separate owners.  Their worker must
+    call this function in its own ``finally`` block; releasing the driver
+    ``DataProtoPayload`` cannot reach remote-process copies.
+    """
+
+    non_tensors = getattr(data, "non_tensor_batch", None)
+    if type(non_tensors) is not dict:
+        raise TypeError(
+            "DataProto.non_tensor_batch must be a mutable built-in dict for release"
+        )
+    fields = _sidecar_release_fields(data)
+    present = tuple(name for name in fields if name in non_tensors)
+    if not present:
+        return 0
+    if len(present) != len(fields):
+        missing = tuple(name for name in fields if name not in non_tensors)
+        raise RuntimeError(
+            "DataProto sidecars were partially released outside the lifecycle: "
+            f"missing={missing!r}"
+        )
+    for name in fields:
+        del non_tensors[name]
+    return len(fields)
 
 
 def build_verl_data_proto(
@@ -313,6 +472,13 @@ def build_verl_data_proto(
     *,
     data_proto_cls: type[Any] | None = None,
 ) -> Any:
+    """Build a standalone caller-owned DataProto.
+
+    This convenience path has no retained ``DataProtoPayload`` owner.  The
+    caller must invoke :func:`release_verl_data_proto_sidecars` in ``finally``;
+    Policy Pilot lifecycle code must use the retained-payload path instead.
+    """
+
     return to_verl_data_proto(
         build_data_proto_payload(records), data_proto_cls=data_proto_cls
     )
@@ -324,7 +490,12 @@ def build_padded_verl_data_proto(
     pad_token_id: int,
     data_proto_cls: type[Any] | None = None,
 ) -> Any:
-    """Construct a public DataProto from the explicit variable-padding API."""
+    """Construct a standalone caller-owned, explicitly padded DataProto.
+
+    The caller owns worker/local sidecar release through
+    :func:`release_verl_data_proto_sidecars`; this is not the retained Policy
+    Pilot lifecycle path.
+    """
 
     return to_verl_data_proto(
         build_padded_data_proto_payload(records, pad_token_id=pad_token_id),
@@ -495,16 +666,16 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
     present_padding_fields = _PADDING_FIELDS & set(non_tensors)
     if present_padding_fields and present_padding_fields != _PADDING_FIELDS:
         missing = sorted(_PADDING_FIELDS - present_padding_fields)
-        raise ValueError(f"DataProto variable-padding contract is incomplete: {missing}")
+        raise ValueError(
+            f"DataProto variable-padding contract is incomplete: {missing}"
+        )
     padding_enabled = bool(present_padding_fields)
     pad_token_id: int | None = None
     prompt_ownership_rows: tuple[object, ...] | None = None
     response_ownership_rows: tuple[object, ...] | None = None
     if padding_enabled:
         padding_schemas = _row_values(
-            _required(
-                non_tensors, PADDING_SCHEMA_FIELD, "DataProto.non_tensor_batch"
-            ),
+            _required(non_tensors, PADDING_SCHEMA_FIELD, "DataProto.non_tensor_batch"),
             batch_size,
             PADDING_SCHEMA_FIELD,
         )
@@ -564,8 +735,7 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         if not exact_response_ids or len(exact_response_ids) > width:
             raise ValueError("exact response token sidecar is malformed")
         if not padding_enabled and (
-            len(exact_prompt_ids) != prompt_width
-            or len(exact_response_ids) != width
+            len(exact_prompt_ids) != prompt_width or len(exact_response_ids) != width
         ):
             raise ValueError(
                 "short exact token sidecars require the explicit variable-padding "
@@ -591,14 +761,11 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
             if not bool(
                 (prompts[row_index, :prompt_padding] == pad_token_id).all().item()
             ):
-                raise ValueError("left prompt padding differs from explicit pad_token_id")
-            if not bool(
-                (
-                    responses[
-                        row_index, len(exact_response_ids) :
-                    ]
-                    == pad_token_id
+                raise ValueError(
+                    "left prompt padding differs from explicit pad_token_id"
                 )
+            if not bool(
+                (responses[row_index, len(exact_response_ids) :] == pad_token_id)
                 .all()
                 .item()
             ):
@@ -670,10 +837,9 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
             bridge_record.trajectory_payload,
             bridge_record.behavior_trace_records,
         )
-        expected_prompt_ownership = (
-            (TokenOwnership.PADDING,) * (prompt_width - len(exact_prompt_ids))
-            + (TokenOwnership.TEMPLATE,) * len(exact_prompt_ids)
-        )
+        expected_prompt_ownership = (TokenOwnership.PADDING,) * (
+            prompt_width - len(exact_prompt_ids)
+        ) + (TokenOwnership.TEMPLATE,) * len(exact_prompt_ids)
         expected_response_ownership = tuple(
             TokenOwnership(value) for value in exact_response_ownership
         ) + (TokenOwnership.PADDING,) * (width - len(exact_response_ids))

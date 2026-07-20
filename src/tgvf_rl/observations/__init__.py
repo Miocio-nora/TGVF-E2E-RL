@@ -9,6 +9,7 @@ from .schema import (
 )
 from .store import (
     ObservationHandle,
+    ObservationReleaseCounts,
     ObservationStore,
     ReplayTensorPayload,
     TrajectoryReplayBundle,
@@ -31,6 +32,7 @@ __all__ = [
     "SourceVisualState",
     "TrajectorySourceVisual",
     "ObservationHandle",
+    "ObservationReleaseCounts",
     "ObservationStore",
     "ReplayTensorPayload",
     "TrajectoryReplayBundle",

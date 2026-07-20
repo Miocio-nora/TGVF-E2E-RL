@@ -93,6 +93,9 @@ def populated_observation_store() -> tuple[ObservationStore, ObservationHandle]:
             trajectory_ids=("smoke/sample/0/group",),
             call_indices=(0,),
             hidden_layer=18,
+            contextual_forward_identity=ArtifactIdentity(
+                "policy", "contextual-forward", "fixture", SHA1
+            ),
             policy_version=policy_version(),
         ),
         source_visual=SourceVisualState(

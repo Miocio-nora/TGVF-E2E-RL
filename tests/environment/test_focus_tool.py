@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
 import torch
 from torch import nn
 
@@ -7,6 +10,7 @@ from tgvf_rl.conditioning import (
     ContextualHiddenStateConditionProvider,
     TargetConditioningRequest,
 )
+from tgvf_rl.contracts.errors import IdentityMismatchError
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.environment.focus_tool import (
@@ -16,7 +20,7 @@ from tgvf_rl.environment.focus_tool import (
     ToolExecutionRequest,
 )
 from tgvf_rl.observations.schema import VisualLayout
-from tgvf_rl.observations.store import ObservationStore
+from tgvf_rl.observations.store import ObservationStore, record_checksum
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
 from tgvf_rl.representation.adapter import TGVFAdapter
@@ -116,6 +120,9 @@ def test_focus_tool_materializes_main_and_deepstack_once() -> None:
         ),
         model=model_id,
         policy_version=PolicyVersion("smoke", 0, "2" * 64),
+        contextual_forward_identity=ArtifactIdentity(
+            "policy", "contextual-forward", "synthetic", "5" * 64
+        ),
         representation=ArtifactIdentity("tgvf", "adapter", "synthetic", "3" * 64),
         branch_merger_identities=(
             ArtifactIdentity("qwen", "merger-8", "synthetic", "4" * 64),
@@ -133,4 +140,20 @@ def test_focus_tool_materializes_main_and_deepstack_once() -> None:
         replay.condition.source_input_ids_sha256
         == condition.provenance.source_input_ids_sha256
     )
+    assert replay.condition.contextual_forward_identity == (
+        request.contextual_forward_identity
+    )
     assert len(replay.payload.deepstack) == 1
+
+    tampered = replace(
+        replay,
+        condition=replace(
+            replay.condition,
+            contextual_forward_identity=ArtifactIdentity(
+                "policy", "tampered-forward", "synthetic", "6" * 64
+            ),
+        ),
+    )
+    assert record_checksum(tampered) != result.handle.record_sha256
+    with pytest.raises(IdentityMismatchError, match="reused with different content"):
+        store.put(tampered)

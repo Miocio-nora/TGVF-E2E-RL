@@ -1,5 +1,20 @@
 """Framework-neutral TGVF tool environment."""
 
+from .adapter_runtime import (
+    BehaviorHiddenStateDependency,
+    BehaviorHiddenStateMaterialization,
+    BranchMergerRuntimeBinding,
+    FrozenBehaviorHiddenStateCapturePort,
+    FrozenTGVFFocusTool,
+    LoadedFrozenTGVFAdapter,
+    PolicyPilotFocusRuntimeBridge,
+    ReplayLayoutBuilderDependency,
+    RepresentationArtifactRuntimeBinding,
+    StoredSourceVisualPort,
+    VerifiedReplayLayoutPort,
+    build_policy_pilot_focus_runtime,
+    load_frozen_tgvf_adapter,
+)
 from .focus_tool import TGVFFocusTool, ToolExecutionRequest, ToolExecutionResult
 from .focus_runtime import (
     BehaviorHiddenStateCapture,
@@ -32,6 +47,9 @@ from .source_visual import record_trajectory_source_visual
 from .tool_registry import NativeToolRuntimeRegistry, ToolRuntimeBinding
 
 __all__ = [
+    "BehaviorHiddenStateDependency",
+    "BehaviorHiddenStateMaterialization",
+    "BranchMergerRuntimeBinding",
     "FrameworkNeutralAgentLoop",
     "BehaviorHiddenStateCapture",
     "BehaviorHiddenStateCapturePort",
@@ -46,7 +64,13 @@ __all__ = [
     "FocusRuntimeCallIdentity",
     "FocusRuntimeCallRequest",
     "FocusExecutionLedger",
+    "FrozenBehaviorHiddenStateCapturePort",
+    "FrozenTGVFFocusTool",
+    "LoadedFrozenTGVFAdapter",
     "NativeToolRuntimeRegistry",
+    "PolicyPilotFocusRuntimeBridge",
+    "ReplayLayoutBuilderDependency",
+    "RepresentationArtifactRuntimeBinding",
     "RolloutRequest",
     "ReplayLayoutPort",
     "SampledPolicyTurn",
@@ -57,6 +81,10 @@ __all__ = [
     "ToolExecutionContext",
     "ToolRuntimeBinding",
     "SourceVisualPort",
+    "StoredSourceVisualPort",
+    "VerifiedReplayLayoutPort",
+    "build_policy_pilot_focus_runtime",
     "clamp_bbox_to_image",
     "record_trajectory_source_visual",
+    "load_frozen_tgvf_adapter",
 ]

@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import hashlib
 import json
+from threading import RLock
 from typing import Mapping
 
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
@@ -120,26 +121,52 @@ class BehaviorTraceStore:
     """Content-addressed behavior evidence minted only by a recorder boundary."""
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._records: dict[str, BehaviorTraceRecord] = {}
+        self._released_trajectory_ids: set[str] = set()
 
     def _put_from_recorder(self, record: BehaviorTraceRecord) -> BehaviorTraceHandle:
-        digest = behavior_trace_checksum(record)
-        existing = self._records.get(digest)
-        if existing is not None and existing != record:
-            raise IdentityMismatchError("SHA256 collision for behavior trace")
-        self._records[digest] = record
-        return BehaviorTraceHandle(f"{_TRACE_ID_PREFIX}{digest}", digest)
+        with self._lock:
+            if record.trajectory_id in self._released_trajectory_ids:
+                raise ReplayMismatchError(
+                    "cannot record behavior for a released trajectory"
+                )
+            digest = behavior_trace_checksum(record)
+            existing = self._records.get(digest)
+            if existing is not None and existing != record:
+                raise IdentityMismatchError("SHA256 collision for behavior trace")
+            self._records[digest] = record
+            return BehaviorTraceHandle(f"{_TRACE_ID_PREFIX}{digest}", digest)
 
     def resolve(self, handle: BehaviorTraceHandle) -> BehaviorTraceRecord:
-        try:
-            record = self._records[handle.record_sha256]
-        except KeyError as error:
-            raise ReplayMismatchError("unknown behavior trace") from error
-        verify_behavior_trace_pair(handle, record)
-        return record
+        with self._lock:
+            try:
+                record = self._records[handle.record_sha256]
+            except KeyError as error:
+                raise ReplayMismatchError("unknown behavior trace") from error
+            verify_behavior_trace_pair(handle, record)
+            return record
+
+    def release_trajectories(self, trajectory_ids: tuple[str, ...]) -> int:
+        identities = _trajectory_id_set(trajectory_ids)
+        with self._lock:
+            digests = tuple(
+                digest
+                for digest, record in self._records.items()
+                if record.trajectory_id in identities
+            )
+            for digest in digests:
+                del self._records[digest]
+            self._released_trajectory_ids.update(identities)
+            return len(digests)
+
+    def record_count(self) -> int:
+        with self._lock:
+            return len(self._records)
 
     def checkpoint_state(self) -> dict[str, object]:
-        return {"records": dict(self._records)}
+        with self._lock:
+            return {"records": dict(self._records)}
 
     @classmethod
     def from_checkpoint_state(cls, state: Mapping[str, object]) -> "BehaviorTraceStore":
@@ -156,6 +183,17 @@ class BehaviorTraceStore:
                 raise ReplayMismatchError("behavior-trace checkpoint checksum mismatch")
             store._records[digest] = record
         return store
+
+
+def _trajectory_id_set(trajectory_ids: tuple[str, ...]) -> tuple[str, ...]:
+    identities = tuple(trajectory_ids)
+    if not identities or any(
+        not isinstance(identity, str) or not identity for identity in identities
+    ):
+        raise ValueError("trajectory_ids must contain non-empty strings")
+    if len(set(identities)) != len(identities):
+        raise ValueError("trajectory_ids must be unique")
+    return identities
 
 
 class VLLMBehaviorRecorder:

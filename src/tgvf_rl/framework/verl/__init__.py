@@ -48,6 +48,7 @@ from .data_bridge import (
     build_padded_data_proto_payload,
     build_padded_verl_data_proto,
     build_verl_data_proto,
+    release_verl_data_proto_sidecars,
     to_verl_data_proto,
     validate_data_proto_integrity,
 )
@@ -155,6 +156,7 @@ __all__ = [
     "register_sdpo_teacher_checkpoint",
     "require_vllm_backend",
     "rollout_provenance_checksum",
+    "release_verl_data_proto_sidecars",
     "to_verl_data_proto",
     "token_ownership_checksum",
     "trajectory_to_rollout_bridge",

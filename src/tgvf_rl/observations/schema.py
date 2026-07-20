@@ -26,6 +26,7 @@ class ConditionProvenance:
     trajectory_ids: tuple[str, ...]
     call_indices: tuple[int, ...]
     hidden_layer: int | None
+    contextual_forward_identity: ArtifactIdentity | None
     policy_version: PolicyVersion
     embedding_identity: str | None = None
 
@@ -37,13 +38,11 @@ class ConditionProvenance:
         if self.sampled_target_token_end <= self.sampled_target_token_start:
             raise ValueError("target token span must be non-empty")
         if self.conditioning_target_token_start < 0 or (
-            self.conditioning_target_token_end
-            <= self.conditioning_target_token_start
+            self.conditioning_target_token_end <= self.conditioning_target_token_start
         ):
             raise ValueError("conditioning target token span must be non-empty")
         if (
-            self.conditioning_target_token_end
-            - self.conditioning_target_token_start
+            self.conditioning_target_token_end - self.conditioning_target_token_start
             != self.sampled_target_token_end - self.sampled_target_token_start
         ):
             raise ValueError("sampled and conditioning target spans must align")
@@ -58,9 +57,19 @@ class ConditionProvenance:
         ):
             raise ValueError("conditioning trajectory/call provenance must align")
         if self.provider == "contextual_hidden_state":
-            if self.hidden_layer is None or self.embedding_identity is not None:
-                raise ValueError("contextual provenance requires only a hidden layer")
-        elif self.hidden_layer is not None or not self.embedding_identity:
+            if (
+                self.hidden_layer is None
+                or not isinstance(self.contextual_forward_identity, ArtifactIdentity)
+                or self.embedding_identity is not None
+            ):
+                raise ValueError(
+                    "contextual provenance requires a hidden layer and forward identity"
+                )
+        elif (
+            self.hidden_layer is not None
+            or self.contextual_forward_identity is not None
+            or not self.embedding_identity
+        ):
             raise ValueError("embedding provenance requires only an embedding identity")
 
 
@@ -104,16 +113,16 @@ class TrajectorySourceVisual:
             raise TypeError("trajectory source visual state must be SourceVisualState")
         if not self.positions:
             raise ValueError("trajectory source visual positions must be non-empty")
-        if any(type(position) is not int or position < 0 for position in self.positions):
+        if any(
+            type(position) is not int or position < 0 for position in self.positions
+        ):
             raise ValueError(
                 "trajectory source visual positions must be non-negative integers"
             )
         if len(set(self.positions)) != len(self.positions):
             raise ValueError("trajectory source visual positions must be unique")
         if _feature_count(self.state.merged_main) != len(self.positions):
-            raise ValueError(
-                "trajectory source merged features and positions differ"
-            )
+            raise ValueError("trajectory source merged features and positions differ")
         branch_count = len(self.state.merged_deepstack)
         if branch_count != len(self.deepstack_branch_layers) or branch_count != len(
             self.deepstack_injection_positions

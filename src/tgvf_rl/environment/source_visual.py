@@ -34,20 +34,28 @@ def record_trajectory_source_visual(
     state = SourceVisualState(
         image_sha256=source_visual.image_sha256,
         premerge_main=observation_store.put_tensor(
-            f"{prefix}.premerge.main", source_visual.premerge_main
+            f"{prefix}.premerge.main",
+            source_visual.premerge_main,
+            trajectory_id=trajectory_id,
         ),
         premerge_deepstack=tuple(
             observation_store.put_tensor(
-                f"{prefix}.premerge.deepstack.{index}", tensor
+                f"{prefix}.premerge.deepstack.{index}",
+                tensor,
+                trajectory_id=trajectory_id,
             )
             for index, tensor in enumerate(source_visual.premerge_deepstack)
         ),
         merged_main=observation_store.put_tensor(
-            f"{prefix}.merged.main", source_visual.merged_main
+            f"{prefix}.merged.main",
+            source_visual.merged_main,
+            trajectory_id=trajectory_id,
         ),
         merged_deepstack=tuple(
             observation_store.put_tensor(
-                f"{prefix}.merged.deepstack.{index}", tensor
+                f"{prefix}.merged.deepstack.{index}",
+                tensor,
+                trajectory_id=trajectory_id,
             )
             for index, tensor in enumerate(source_visual.merged_deepstack)
         ),

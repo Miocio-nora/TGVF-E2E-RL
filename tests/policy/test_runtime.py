@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import gc
 import hashlib
+import weakref
 
+import pytest
 import torch
 
 from tgvf_rl.contracts.identity import (
@@ -17,6 +20,7 @@ from tgvf_rl.contracts.tokens import (
     TokenSpan,
 )
 from tgvf_rl.environment import (
+    FocusExecutionLedger,
     FrameworkNeutralAgentLoop,
     RolloutRequest,
     SampledPolicyTurn,
@@ -45,6 +49,8 @@ from tgvf_rl.observations import (
 )
 from tgvf_rl.policy import (
     PilotGroupRuntimeRequest,
+    PolicyBatchLifecycleManager,
+    PolicyBatchMilestone,
     PolicyPilotRuntime,
     PolicyReplayMaterialization,
 )
@@ -145,9 +151,7 @@ class _ScriptedSampler:
             token_byte_spans=byte_spans,
             behavior_logprobs=behavior_logprobs,
             sampling=sampling,
-            think_token_span=TokenSpan(
-                0, text.index("</think>") + len("</think>")
-            ),
+            think_token_span=TokenSpan(0, text.index("</think>") + len("</think>")),
             stop_reason="stop",
             backend_request_sha256=_digest(f"request-{seed}"),
             backend_response_sha256=_digest(f"response-{seed}"),
@@ -155,9 +159,15 @@ class _ScriptedSampler:
 
 
 class _FakeTGVFToolRuntime:
-    def __init__(self, store: ObservationStore, source: ObservationHandle) -> None:
+    def __init__(
+        self,
+        store: ObservationStore,
+        source: ObservationHandle,
+        execution_ledger: FocusExecutionLedger,
+    ) -> None:
         self.store = store
         self.base = store.resolve_record(source)
+        self.execution_ledger = execution_ledger
 
     def execute(self, parsed_call, context) -> ObservationHandle:
         if parsed_call.target == "fail":
@@ -301,9 +311,7 @@ class _ReplayFinalizer:
                 source_visual=self.source_visual,
                 tensors=MaterializedTrajectoryReplayTensors(
                     input_ids=torch.tensor([final_ids], dtype=torch.int64),
-                    position_ids=torch.arange(sequence_length).view(
-                        1, sequence_length
-                    ),
+                    position_ids=torch.arange(sequence_length).view(1, sequence_length),
                     base_attention_mask=visible,
                     policy_attention_mask=visible,
                     reference_attention_mask=visible,
@@ -330,7 +338,7 @@ class _ReplayFinalizer:
             observation_store=self.observation_store,
             behavior_store=self.behavior_store,
         )
-        self.records.append(bridge)
+        self.records.append(bridge.replay_bundle.bundle_sha256)
         return bridge
 
 
@@ -357,7 +365,7 @@ def _role(
 class _PolicyReplayMaterializer:
     def __init__(self) -> None:
         self.current = None
-        self.bundles = ()
+        self.bundle_sha256s = ()
 
     def materialize(self, payload):
         behavior = payload.tensor_batch["rollout_log_probs"].to(torch.float64).clone()
@@ -369,10 +377,9 @@ class _PolicyReplayMaterializer:
             dtype=behavior.dtype,
         ).view_as(behavior)
         self.current = (behavior + offsets).detach().clone().requires_grad_(True)
-        self.bundles = tuple(
-            payload.non_tensor_batch[TRAJECTORY_REPLAY_BUNDLE_FIELD]
-        )
-        bundle_sha256s = tuple(bundle.bundle_sha256 for bundle in self.bundles)
+        bundles = tuple(payload.non_tensor_batch[TRAJECTORY_REPLAY_BUNDLE_FIELD])
+        bundle_sha256s = tuple(bundle.bundle_sha256 for bundle in bundles)
+        self.bundle_sha256s = bundle_sha256s
         return PolicyReplayMaterialization(
             logprobs=PolicyLogProbSet(
                 behavior=_role(
@@ -426,10 +433,13 @@ def test_cpu_policy_pilot_runtime_preserves_mixed_n8_group_and_backpropagates() 
     observation_store, source_handle = populated_observation_store()
     source_record = observation_store.resolve_record(source_handle)
     behavior_store = BehaviorTraceStore()
+    execution_ledger = FocusExecutionLedger()
     sampler = _ScriptedSampler()
     agent_loop = FrameworkNeutralAgentLoop(
         sampler=sampler,
-        tool_runtime=_FakeTGVFToolRuntime(observation_store, source_handle),
+        tool_runtime=_FakeTGVFToolRuntime(
+            observation_store, source_handle, execution_ledger
+        ),
         appender=_FakeNativeAppender(),
         parser=StrictToolCallParser(),
         behavior_recorder=VLLMBehaviorRecorder(behavior_store),
@@ -442,6 +452,11 @@ def test_cpu_policy_pilot_runtime_preserves_mixed_n8_group_and_backpropagates() 
         trajectory_source_visual(source_record),
     )
     policy_replay = _PolicyReplayMaterializer()
+    lifecycle_manager = PolicyBatchLifecycleManager(
+        observation_store=observation_store,
+        behavior_store=behavior_store,
+        focus_execution_ledger=execution_ledger,
+    )
     runtime = PolicyPilotRuntime(
         agent_loop=agent_loop,
         reward_pipeline=_reward_pipeline(),
@@ -451,6 +466,7 @@ def test_cpu_policy_pilot_runtime_preserves_mixed_n8_group_and_backpropagates() 
         grpo_spec=policy_pilot_v1_grpo_spec(
             diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE
         ),
+        batch_lifecycle_manager=lifecycle_manager,
     )
     model = source_record.model
     requests = tuple(
@@ -470,6 +486,12 @@ def test_cpu_policy_pilot_runtime_preserves_mixed_n8_group_and_backpropagates() 
             group_uid="runtime-group",
             rollout_requests=requests,
             pad_token_id=0,
+            lifecycle=lifecycle_manager.open_batch(
+                batch_id="runtime-group",
+                trajectory_ids=tuple(
+                    request.identity.canonical_id for request in requests
+                ),
+            ),
         )
     )
 
@@ -526,11 +548,15 @@ def test_cpu_policy_pilot_runtime_preserves_mixed_n8_group_and_backpropagates() 
     exact_bundles = tuple(
         result.payload.non_tensor_batch[TRAJECTORY_REPLAY_BUNDLE_FIELD]
     )
+    replay_tensor_ref = weakref.ref(exact_bundles[0].tensor_payloads[0].tensor)
+    current_values_ref = weakref.ref(result.policy_replay.logprobs.current.values)
+    objective_loss_ref = weakref.ref(result.objective.loss)
+    payload = result.payload
     for row, grouped in enumerate(result.grouped_rollouts):
         bridge = grouped.rollout
         assert exact_logprobs[row] == bridge.response_logprobs
         assert exact_bundles[row] is bridge.replay_bundle
-        assert policy_replay.bundles[row] is bridge.replay_bundle
+        assert policy_replay.bundle_sha256s[row] == bridge.replay_bundle.bundle_sha256
         for turn, trace in zip(
             bridge.trajectory_payload.assistant_turns,
             bridge.behavior_trace_records,
@@ -539,13 +565,37 @@ def test_cpu_policy_pilot_runtime_preserves_mixed_n8_group_and_backpropagates() 
             assert behavior_store.resolve(turn.behavior_trace) == trace
             assert trace.behavior.logprobs
 
-    result.objective.loss.backward()
-    assert policy_replay.current is not None
-    assert policy_replay.current.grad is not None
-    mask = result.payload.tensor_batch["response_mask"].bool()
-    assert torch.count_nonzero(policy_replay.current.grad[mask]).item() > 0
-    assert torch.count_nonzero(policy_replay.current.grad[~mask]).item() == 0
-    assert torch.isfinite(result.objective.loss)
+    with result.lifecycle.consume(PolicyBatchMilestone.LOSS_BACKWARD):
+        result.objective.loss.backward()
+        assert policy_replay.current is not None
+        assert policy_replay.current.grad is not None
+        mask = result.payload.tensor_batch["response_mask"].bool()
+        assert torch.count_nonzero(policy_replay.current.grad[mask]).item() > 0
+        assert torch.count_nonzero(policy_replay.current.grad[~mask]).item() == 0
+        assert torch.isfinite(result.objective.loss)
+    policy_replay.current = None
+    with result.lifecycle.consume(PolicyBatchMilestone.OPTIMIZER_STEP):
+        pass
+    with result.lifecycle.consume(PolicyBatchMilestone.ZERO_STALENESS_BARRIER):
+        pass
+    del bridge, grouped, exact_bundles
+    report = result.lifecycle.close()
+    assert report.replay_records == 8
+    assert report.behavior_traces == sum(
+        len(trajectory.assistant_turns) for trajectory in result.trajectories
+    )
+    assert report.transient_owners == 1
+    assert payload.sidecars_released
+    assert not payload.non_tensor_batch
+    assert result.released
+    assert result.replay_bundle_sha256s == tuple(replay_finalizer.records)
+    for name in ("grouped_rollouts", "payload", "policy_replay", "objective"):
+        with pytest.raises(RuntimeError, match="transient state has been released"):
+            getattr(result, name)
+    gc.collect()
+    assert replay_tensor_ref() is None
+    assert current_values_ref() is None
+    assert objective_loss_ref() is None
 
 
 def _trajectory_identity(index: int) -> TrajectoryIdentity:

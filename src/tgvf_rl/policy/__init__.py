@@ -68,6 +68,14 @@ from .manifest import (
     PilotObjectiveBindings,
     PolicyPilotV1RunManifest,
 )
+from .lifecycle import (
+    PolicyBatchLifecycle,
+    PolicyBatchLifecycleManager,
+    PolicyBatchMilestone,
+    PolicyBatchReleaseReport,
+    PolicyBatchState,
+    PolicyBatchTransientState,
+)
 from .runtime import (
     PilotGroupRuntimeRequest,
     PilotGroupRuntimeResult,
@@ -76,6 +84,16 @@ from .runtime import (
     PolicyReplayMaterializerPort,
     RewardContextProvider,
     TrajectoryReplayFinalizerPort,
+)
+from .exact_replay import (
+    ExactPolicyReplayMaterialization,
+    ExactPolicyReplayMaterializer,
+    RecordedPolicyForwardBinding,
+    RecordedPolicyForwardOutput,
+    RecordedPolicyForwardPort,
+    RecordedPolicyForwardStateProof,
+    ReplayParameterization,
+    require_single_sequence_replay_bundle,
 )
 
 __all__ = [
@@ -99,6 +117,8 @@ __all__ = [
     "ROLLOUT_SAMPLER_OWNER",
     "CheckpointIdentityHash",
     "DecoderLoRAConfig",
+    "ExactPolicyReplayMaterialization",
+    "ExactPolicyReplayMaterializer",
     "ModelScopeAudit",
     "MetricReductionContract",
     "PILOT_V1_METRIC_REDUCTIONS",
@@ -124,12 +144,23 @@ __all__ = [
     "PilotRunIdentityHashes",
     "PilotSamplingConfig",
     "PilotTrajectoryMetricsObservation",
+    "PolicyBatchLifecycle",
+    "PolicyBatchLifecycleManager",
+    "PolicyBatchMilestone",
+    "PolicyBatchReleaseReport",
+    "PolicyBatchState",
+    "PolicyBatchTransientState",
     "PolicyPilotScopeAudit",
     "PolicyPilotRuntime",
     "PolicyPilotV1Config",
     "PolicyPilotV1RunManifest",
     "PolicyReplayMaterialization",
     "PolicyReplayMaterializerPort",
+    "RecordedPolicyForwardBinding",
+    "RecordedPolicyForwardOutput",
+    "RecordedPolicyForwardPort",
+    "RecordedPolicyForwardStateProof",
+    "ReplayParameterization",
     "RewardContextProvider",
     "ToolErrorCount",
     "TrajectoryReplayFinalizerPort",
@@ -142,4 +173,5 @@ __all__ = [
     "materialize_policy_pilot_group_batch",
     "resolve_qwen3_decoder_lora_targets",
     "restore_pilot_project_checkpoint",
+    "require_single_sequence_replay_bundle",
 ]

@@ -105,15 +105,26 @@ class ImageZoomInTool:
         _validate_visual(visual, request.layout)
 
         source_state = _store_source_visual(
-            self.store, request.source_visual, call_index=request.call_index
+            self.store,
+            request.source_visual,
+            call_index=request.call_index,
+            trajectory_id=request.trajectory_id,
         )
-        crop_pixels = self.store.put_tensor(f"call.{request.call_index}.crop.rgb", crop)
+        crop_pixels = self.store.put_tensor(
+            f"call.{request.call_index}.crop.rgb",
+            crop,
+            trajectory_id=request.trajectory_id,
+        )
         merged_main = self.store.put_tensor(
-            f"call.{request.call_index}.crop.merged.main", visual.merged_main
+            f"call.{request.call_index}.crop.merged.main",
+            visual.merged_main,
+            trajectory_id=request.trajectory_id,
         )
         merged_deepstack = tuple(
             self.store.put_tensor(
-                f"call.{request.call_index}.crop.merged.deepstack.{layer}", tensor
+                f"call.{request.call_index}.crop.merged.deepstack.{layer}",
+                tensor,
+                trajectory_id=request.trajectory_id,
             )
             for layer, tensor in zip(
                 visual.deepstack_branch_layers,
@@ -210,18 +221,35 @@ def _store_source_visual(
     source: SourceVisualTensorBundle,
     *,
     call_index: int,
+    trajectory_id: str,
 ) -> SourceVisualState:
     prefix = f"call.{call_index}.source"
     return SourceVisualState(
         image_sha256=source.image_sha256,
-        premerge_main=store.put_tensor(f"{prefix}.premerge.main", source.premerge_main),
+        premerge_main=store.put_tensor(
+            f"{prefix}.premerge.main",
+            source.premerge_main,
+            trajectory_id=trajectory_id,
+        ),
         premerge_deepstack=tuple(
-            store.put_tensor(f"{prefix}.premerge.deepstack.{index}", tensor)
+            store.put_tensor(
+                f"{prefix}.premerge.deepstack.{index}",
+                tensor,
+                trajectory_id=trajectory_id,
+            )
             for index, tensor in enumerate(source.premerge_deepstack)
         ),
-        merged_main=store.put_tensor(f"{prefix}.merged.main", source.merged_main),
+        merged_main=store.put_tensor(
+            f"{prefix}.merged.main",
+            source.merged_main,
+            trajectory_id=trajectory_id,
+        ),
         merged_deepstack=tuple(
-            store.put_tensor(f"{prefix}.merged.deepstack.{index}", tensor)
+            store.put_tensor(
+                f"{prefix}.merged.deepstack.{index}",
+                tensor,
+                trajectory_id=trajectory_id,
+            )
             for index, tensor in enumerate(source.merged_deepstack)
         ),
         image_grid_thw=source.image_grid_thw,

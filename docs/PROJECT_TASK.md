@@ -415,6 +415,52 @@ optimizer/scheduler plus their remaining precision, accumulation, minibatch,
 and weight-sync details. These fields fail closed and may not inherit library
 defaults.
 
+### 0.8.1 Policy Pilot exact-observation batch lifecycle
+
+This is an implementation-safety contract within the already accepted Policy
+Pilot runtime surface; it does not select a new objective or experiment value.
+Every rollout/update batch owns a unique lifecycle spanning behavior evidence,
+current-policy replay, frozen-reference replay, loss/backward consumption, the
+optimizer step, and the zero-staleness barrier. Main `D`, all D-DeepStack
+branches, behavior traces, replay records, execute-once ledger entries, and
+DataProto exact-replay sidecars must remain live until all of those consumers
+have completed. The lifecycle is opened before source-visual recording and is
+bound to the exact trajectory identities supplied to the runtime. In the
+current one-group runtime, `group_uid` is also the unique rollout/update batch
+instance identity: it must include an execution nonce or step and must never be
+only a reusable dataset sample ID. Batch and trajectory identities are
+process-lifetime tombstones and cannot be reused after close or abort.
+A retained neutral payload owns and releases each local DataProto materialized
+from it. The standalone bridge helpers instead return caller-owned DataProto
+objects that require the explicit release helper in `finally`; the Policy
+Pilot adapter rejects that ownerless convenience path. A Ray-deserialized
+DataProto is a separate worker-local owner and must call the same helper from a
+worker `finally`; driver release cannot reclaim remote references, so live veRL
+worker assembly remains fail-closed until that `finally` boundary is wired and
+tested.
+
+Normal release is permitted only after the complete lifecycle and is
+idempotent. It removes only that batch's ledger/store entries and sidecars and
+preserves resources still owned by another batch. Release first preflights all
+rejecting checks, then exhausts every project-owned cleanup operation; it does
+not claim transactional atomicity across stores. An unexpected cleanup error
+leaves the batch in terminal `cleanup_failed` state and blocks checkpointing and
+continued execution instead of returning it to `open`. An exception may abort
+an incomplete batch only after all active consumers have unwound and before a
+successful optimizer step. Once parameters change, the owned zero-staleness
+barrier must succeed; failed barrier work retains the update gate.
+An optimizer exception is terminal `commit_unknown`: the manager retains its
+update gate and forbids abort, new batches, and checkpoint capture.
+
+The initial Pilot uses a conservative update cohort: an optimizer consumer is
+admitted only when its batch is the sole open batch, and new batches are
+rejected until that batch's zero-staleness barrier succeeds. Checkpoint capture
+must hold the manager's checkpoint context for its entire duration. That guard
+admits capture only when there are no batches, update gates, or orphan entries
+in the manager-owned observation, behavior, and execute-once stores, and it
+rejects concurrent batch opens. Consumed observation tensors are transient and
+are not part of the Policy Pilot checkpoint payload.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from enum import Enum
+from threading import RLock
 from typing import Iterable, Mapping
 
 import torch
@@ -37,6 +38,13 @@ class ObservationHandle:
 class TrajectoryReplayHandle:
     replay_id: str
     record_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationReleaseCounts:
+    records: int
+    replays: int
+    tensors: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +83,9 @@ class TrajectoryReplayBundle:
             raise ReplayMismatchError("bundle replay handle/record checksum mismatch")
         if self.replay_record.replay_id != self.replay_handle.replay_id:
             raise ReplayMismatchError("bundle replay handle/record ID mismatch")
-        record_digests = tuple(record_checksum(record) for record in self.observation_records)
+        record_digests = tuple(
+            record_checksum(record) for record in self.observation_records
+        )
         expected_handles = tuple(
             ObservationHandle(record.observation_id, digest)
             for record, digest in zip(
@@ -108,11 +118,14 @@ class TrajectoryReplayBundle:
             raise ReplayMismatchError(
                 "bundle tensors differ from replay/observation references"
             )
-        if _replay_bundle_checksum(
-            self.replay_handle,
-            self.observation_records,
-            self.tensor_payloads,
-        ) != self.bundle_sha256:
+        if (
+            _replay_bundle_checksum(
+                self.replay_handle,
+                self.observation_records,
+                self.tensor_payloads,
+            )
+            != self.bundle_sha256
+        ):
             raise ReplayMismatchError("trajectory replay bundle checksum mismatch")
 
 
@@ -149,13 +162,9 @@ class TrajectoryReplayTensorRefs:
             len(position_shape) == 3 and position_shape[-2:] == (batch, sequence)
         ):
             raise ValueError("position_ids must have shape [B,S] or [R,B,S]")
-        if (
-            self.token_type_ids is not None
-            and self.token_type_ids.descriptor.shape
-            != (
-                batch,
-                sequence,
-            )
+        if self.token_type_ids is not None and self.token_type_ids.descriptor.shape != (
+            batch,
+            sequence,
         ):
             raise ValueError("token_type_ids must have shape [B,S]")
 
@@ -299,17 +308,29 @@ class ObservationStore:
     """Stores cloned CPU tensors; callers can never mutate recorded rollout data."""
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._tensors: dict[str, torch.Tensor] = {}
+        self._tensor_owners: dict[str, set[str]] = {}
         self._records: dict[str, ObservationRecord] = {}
         self._record_digests: dict[str, str] = {}
         self._replays: dict[str, TrajectoryReplayRecord] = {}
         self._replay_digests: dict[str, str] = {}
+        self._released_trajectory_ids: set[str] = set()
 
     def put_tensor(
-        self, name: str, tensor: torch.Tensor, *, alias_id: str | None = None
+        self,
+        name: str,
+        tensor: torch.Tensor,
+        *,
+        alias_id: str | None = None,
+        trajectory_id: str | None = None,
     ) -> TensorArtifactRef:
         if not name:
             raise ValueError("tensor name must be non-empty")
+        if trajectory_id is not None and (
+            not isinstance(trajectory_id, str) or not trajectory_id
+        ):
+            raise ValueError("tensor trajectory_id must be a non-empty string")
         stored = tensor.detach().to(device="cpu").contiguous().clone()
         raw = _raw_tensor_bytes(stored)
         checksum = hashlib.sha256(raw).hexdigest()
@@ -326,53 +347,86 @@ class ObservationStore:
             address=ContentAddress("sha256", checksum, len(raw)),
             descriptor=descriptor,
         )
-        existing = self._tensors.get(checksum)
-        if existing is not None and not torch.equal(existing, stored):
-            raise IdentityMismatchError("SHA256 collision for tensor payload")
-        self._tensors[checksum] = stored
+        with self._lock:
+            if trajectory_id in self._released_trajectory_ids:
+                raise ReplayMismatchError(
+                    "cannot add a tensor for a released trajectory"
+                )
+            existing = self._tensors.get(checksum)
+            if existing is not None:
+                if not _same_stored_tensor_semantics(existing, stored):
+                    raise IdentityMismatchError(
+                        "raw tensor SHA256 was reused by a different dtype/shape/"
+                        "stride payload"
+                    )
+            else:
+                self._tensors[checksum] = stored
+            if trajectory_id is not None:
+                self._tensor_owners.setdefault(checksum, set()).add(trajectory_id)
         return ref
 
     def put(self, record: ObservationRecord) -> ObservationHandle:
-        refs = tuple(_walk_tensor_refs(record))
-        missing = [
-            ref.address.digest
-            for ref in refs
-            if ref.address.digest not in self._tensors
-        ]
-        if missing:
-            raise ReplayMismatchError(
-                f"observation references missing tensors: {missing}"
-            )
-        for ref in refs:
-            self._verify_ref(ref)
-        digest = record_checksum(record)
-        old = self._record_digests.get(record.observation_id)
-        if old is not None and old != digest:
-            raise IdentityMismatchError(
-                "observation ID was reused with different content"
-            )
-        self._records[record.observation_id] = record
-        self._record_digests[record.observation_id] = digest
-        return ObservationHandle(record.observation_id, digest)
+        trajectory_id = _record_trajectory_id(record)
+        with self._lock:
+            self._assert_trajectory_live(trajectory_id)
+            refs = tuple(_walk_tensor_refs(record))
+            missing = [
+                ref.address.digest
+                for ref in refs
+                if ref.address.digest not in self._tensors
+            ]
+            if missing:
+                raise ReplayMismatchError(
+                    f"observation references missing tensors: {missing}"
+                )
+            for ref in refs:
+                self._verify_ref(ref)
+            digest = record_checksum(record)
+            old = self._record_digests.get(record.observation_id)
+            if old is not None and old != digest:
+                raise IdentityMismatchError(
+                    "observation ID was reused with different content"
+                )
+            self._records[record.observation_id] = record
+            self._record_digests[record.observation_id] = digest
+            self._claim_refs(trajectory_id, refs)
+            return ObservationHandle(record.observation_id, digest)
 
     def resolve_verified(self, ref: TensorArtifactRef) -> torch.Tensor:
-        self._verify_ref(ref)
-        return self._tensors[ref.address.digest].clone()
+        with self._lock:
+            self._verify_ref(ref)
+            return self._tensors[ref.address.digest].clone()
+
+    def resolve_verified_for_trajectory(
+        self, ref: TensorArtifactRef, *, trajectory_id: str
+    ) -> torch.Tensor:
+        """Resolve a tensor while enforcing the batch's liveness boundary."""
+
+        with self._lock:
+            self._assert_trajectory_live(trajectory_id)
+            owners = self._tensor_owners.get(ref.address.digest, set())
+            if trajectory_id not in owners:
+                raise ReplayMismatchError(
+                    "tensor is not owned by the requested trajectory"
+                )
+            self._verify_ref(ref)
+            return self._tensors[ref.address.digest].clone()
 
     def resolve_record(self, handle: ObservationHandle) -> ObservationRecord:
-        try:
-            record = self._records[handle.observation_id]
-        except KeyError as exc:
-            raise ReplayMismatchError(
-                f"unknown observation {handle.observation_id!r}"
-            ) from exc
-        actual = record_checksum(record)
-        if (
-            actual != handle.record_sha256
-            or actual != self._record_digests[handle.observation_id]
-        ):
-            raise ReplayMismatchError("observation record checksum mismatch")
-        return record
+        with self._lock:
+            try:
+                record = self._records[handle.observation_id]
+            except KeyError as exc:
+                raise ReplayMismatchError(
+                    f"unknown observation {handle.observation_id!r}"
+                ) from exc
+            actual = record_checksum(record)
+            if (
+                actual != handle.record_sha256
+                or actual != self._record_digests[handle.observation_id]
+            ):
+                raise ReplayMismatchError("observation record checksum mismatch")
+            return record
 
     def batch(
         self, handles: Iterable[ObservationHandle]
@@ -380,6 +434,13 @@ class ObservationStore:
         return tuple(self.resolve_record(handle) for handle in handles)
 
     def put_replay(self, replay: TrajectoryReplayRecord) -> TrajectoryReplayHandle:
+        with self._lock:
+            self._assert_trajectory_live(replay.trajectory_id)
+            return self._put_replay_locked(replay)
+
+    def _put_replay_locked(
+        self, replay: TrajectoryReplayRecord
+    ) -> TrajectoryReplayHandle:
         refs = tuple(_walk_tensor_refs((replay.tensors, replay.source_visual)))
         for ref in refs:
             self._verify_ref(ref)
@@ -465,60 +526,65 @@ class ObservationStore:
             raise IdentityMismatchError("replay ID was reused with different content")
         self._replays[replay.replay_id] = replay
         self._replay_digests[replay.replay_id] = digest
+        self._claim_refs(replay.trajectory_id, refs)
         return TrajectoryReplayHandle(replay.replay_id, digest)
 
     def resolve_replay(self, handle: TrajectoryReplayHandle) -> TrajectoryReplayRecord:
-        try:
-            replay = self._replays[handle.replay_id]
-        except KeyError as exc:
-            raise ReplayMismatchError(f"unknown replay {handle.replay_id!r}") from exc
-        actual = replay_checksum(replay)
-        if (
-            actual != handle.record_sha256
-            or actual != self._replay_digests[handle.replay_id]
-        ):
-            raise ReplayMismatchError("trajectory replay checksum mismatch")
-        for ref in _walk_tensor_refs((replay.tensors, replay.source_visual)):
-            self._verify_ref(ref)
-        _validate_trajectory_source_visual(
-            replay.source_visual,
-            sequence=replay.tensors.input_ids.descriptor.shape[-1],
-        )
-        for observation in replay.observation_handles:
-            self.resolve_record(observation)
-        return replay
+        with self._lock:
+            try:
+                replay = self._replays[handle.replay_id]
+            except KeyError as exc:
+                raise ReplayMismatchError(
+                    f"unknown replay {handle.replay_id!r}"
+                ) from exc
+            actual = replay_checksum(replay)
+            if (
+                actual != handle.record_sha256
+                or actual != self._replay_digests[handle.replay_id]
+            ):
+                raise ReplayMismatchError("trajectory replay checksum mismatch")
+            for ref in _walk_tensor_refs((replay.tensors, replay.source_visual)):
+                self._verify_ref(ref)
+            _validate_trajectory_source_visual(
+                replay.source_visual,
+                sequence=replay.tensors.input_ids.descriptor.shape[-1],
+            )
+            for observation in replay.observation_handles:
+                self.resolve_record(observation)
+            return replay
 
     def export_replay_bundle(
         self, handle: TrajectoryReplayHandle
     ) -> TrajectoryReplayBundle:
         """Export only tensors/records reachable from one exact trajectory replay."""
 
-        replay = self.resolve_replay(handle)
-        records = tuple(
-            self.resolve_record(observation)
-            for observation in replay.observation_handles
-        )
-        digests = tuple(
-            sorted(
-                {
-                    ref.address.digest
-                    for value in (replay.tensors, replay.source_visual, *records)
-                    for ref in _walk_tensor_refs(value)
-                }
+        with self._lock:
+            replay = self.resolve_replay(handle)
+            records = tuple(
+                self.resolve_record(observation)
+                for observation in replay.observation_handles
             )
-        )
-        payloads = tuple(
-            ReplayTensorPayload(digest, self._tensors[digest]) for digest in digests
-        )
-        bundle_sha256 = _replay_bundle_checksum(handle, records, payloads)
-        return TrajectoryReplayBundle(
-            schema_version="trajectory-replay-bundle-v1",
-            replay_handle=handle,
-            replay_record=replay,
-            observation_records=records,
-            tensor_payloads=payloads,
-            bundle_sha256=bundle_sha256,
-        )
+            digests = tuple(
+                sorted(
+                    {
+                        ref.address.digest
+                        for value in (replay.tensors, replay.source_visual, *records)
+                        for ref in _walk_tensor_refs(value)
+                    }
+                )
+            )
+            payloads = tuple(
+                ReplayTensorPayload(digest, self._tensors[digest]) for digest in digests
+            )
+            bundle_sha256 = _replay_bundle_checksum(handle, records, payloads)
+            return TrajectoryReplayBundle(
+                schema_version="trajectory-replay-bundle-v1",
+                replay_handle=handle,
+                replay_record=replay,
+                observation_records=records,
+                tensor_payloads=payloads,
+                bundle_sha256=bundle_sha256,
+            )
 
     @classmethod
     def from_replay_bundle(
@@ -554,14 +620,84 @@ class ObservationStore:
             raise ReplayMismatchError("imported replay handle changed")
         return store, replay_handle
 
+    def prepare_release_trajectories(
+        self, trajectory_ids: Iterable[str]
+    ) -> tuple[str, ...]:
+        """Validate a selective release without mutating stored evidence."""
+
+        identities = _trajectory_id_set(trajectory_ids)
+        with self._lock:
+            self._prepare_release_locked(identities)
+        return identities
+
+    def release_trajectories(
+        self, trajectory_ids: Iterable[str]
+    ) -> ObservationReleaseCounts:
+        """Release one batch while retaining content shared by live batches."""
+
+        identities = _trajectory_id_set(trajectory_ids)
+        with self._lock:
+            self._prepare_release_locked(identities)
+            replay_ids = tuple(
+                replay_id
+                for replay_id, replay in self._replays.items()
+                if replay.trajectory_id in identities
+            )
+            record_ids = tuple(
+                observation_id
+                for observation_id, record in self._records.items()
+                if _record_trajectory_id(record) in identities
+            )
+            for replay_id in replay_ids:
+                del self._replays[replay_id]
+                del self._replay_digests[replay_id]
+            for observation_id in record_ids:
+                del self._records[observation_id]
+                del self._record_digests[observation_id]
+
+            candidate_digests: set[str] = set()
+            for digest, owners in tuple(self._tensor_owners.items()):
+                if owners.intersection(identities):
+                    candidate_digests.add(digest)
+                    owners.difference_update(identities)
+                    if not owners:
+                        del self._tensor_owners[digest]
+            live_digests = {
+                ref.address.digest
+                for value in (*self._records.values(), *self._replays.values())
+                for ref in _walk_tensor_refs(value)
+            }
+            removed_tensors = 0
+            for digest in candidate_digests:
+                if digest not in self._tensor_owners and digest not in live_digests:
+                    if self._tensors.pop(digest, None) is not None:
+                        removed_tensors += 1
+            self._released_trajectory_ids.update(identities)
+            return ObservationReleaseCounts(
+                records=len(record_ids),
+                replays=len(replay_ids),
+                tensors=removed_tensors,
+            )
+
+    def resource_counts(self) -> ObservationReleaseCounts:
+        with self._lock:
+            return ObservationReleaseCounts(
+                records=len(self._records),
+                replays=len(self._replays),
+                tensors=len(self._tensors),
+            )
+
     def checkpoint_state(self) -> dict[str, object]:
-        return {
-            "records": dict(self._records),
-            "record_digests": dict(self._record_digests),
-            "replays": dict(self._replays),
-            "replay_digests": dict(self._replay_digests),
-            "tensors": {key: tensor.clone() for key, tensor in self._tensors.items()},
-        }
+        with self._lock:
+            return {
+                "records": dict(self._records),
+                "record_digests": dict(self._record_digests),
+                "replays": dict(self._replays),
+                "replay_digests": dict(self._replay_digests),
+                "tensors": {
+                    key: tensor.clone() for key, tensor in self._tensors.items()
+                },
+            }
 
     @classmethod
     def from_checkpoint_state(cls, state: Mapping[str, object]) -> "ObservationStore":
@@ -600,8 +736,10 @@ class ObservationStore:
             expected = store._record_digests.get(observation_id)
             if expected != record_checksum(record):
                 raise ReplayMismatchError("checkpoint record checksum mismatch")
-            for ref in _walk_tensor_refs(record):
+            refs = tuple(_walk_tensor_refs(record))
+            for ref in refs:
                 store._verify_ref(ref)
+            store._claim_refs(_record_trajectory_id(record), refs)
         for replay_id, replay in store._replays.items():
             if not isinstance(replay, TrajectoryReplayRecord):
                 raise ReplayMismatchError(
@@ -609,8 +747,10 @@ class ObservationStore:
                 )
             if store._replay_digests.get(replay_id) != replay_checksum(replay):
                 raise ReplayMismatchError("checkpoint replay checksum mismatch")
-            for ref in _walk_tensor_refs((replay.tensors, replay.source_visual)):
+            refs = tuple(_walk_tensor_refs((replay.tensors, replay.source_visual)))
+            for ref in refs:
                 store._verify_ref(ref)
+            store._claim_refs(replay.trajectory_id, refs)
             _validate_trajectory_source_visual(
                 replay.source_visual,
                 sequence=replay.tensors.input_ids.descriptor.shape[-1],
@@ -618,6 +758,39 @@ class ObservationStore:
             for handle in replay.observation_handles:
                 store.resolve_record(handle)
         return store
+
+    def _prepare_release_locked(self, trajectory_ids: tuple[str, ...]) -> None:
+        already_released = set(trajectory_ids) & self._released_trajectory_ids
+        if already_released:
+            # Releasing the same trajectories is an idempotent no-op.  A batch
+            # manager prevents an old identity from being opened again.
+            return
+        record_owners = {
+            observation_id: _record_trajectory_id(record)
+            for observation_id, record in self._records.items()
+        }
+        for replay in self._replays.values():
+            if replay.trajectory_id in trajectory_ids:
+                continue
+            foreign = tuple(
+                handle.observation_id
+                for handle in replay.observation_handles
+                if record_owners.get(handle.observation_id) in trajectory_ids
+            )
+            if foreign:
+                raise ReplayMismatchError(
+                    "cannot release observations referenced by another batch"
+                )
+
+    def _assert_trajectory_live(self, trajectory_id: str) -> None:
+        if trajectory_id in self._released_trajectory_ids:
+            raise ReplayMismatchError("trajectory observation resources were released")
+
+    def _claim_refs(
+        self, trajectory_id: str, refs: Iterable[TensorArtifactRef]
+    ) -> None:
+        for ref in refs:
+            self._tensor_owners.setdefault(ref.address.digest, set()).add(trajectory_id)
 
     def _verify_ref(self, ref: TensorArtifactRef) -> None:
         try:
@@ -631,6 +804,36 @@ class ObservationStore:
             raise ReplayMismatchError(f"tensor shape mismatch for {ref.name!r}")
         if str(tensor.dtype).removeprefix("torch.") != ref.descriptor.dtype:
             raise ReplayMismatchError(f"tensor dtype mismatch for {ref.name!r}")
+        if tuple(tensor.stride()) != ref.descriptor.stride:
+            raise ReplayMismatchError(f"tensor stride mismatch for {ref.name!r}")
+
+
+def _same_stored_tensor_semantics(first: torch.Tensor, second: torch.Tensor) -> bool:
+    return (
+        first.dtype == second.dtype
+        and tuple(first.shape) == tuple(second.shape)
+        and tuple(first.stride()) == tuple(second.stride())
+        and _raw_tensor_bytes(first) == _raw_tensor_bytes(second)
+    )
+
+
+def _trajectory_id_set(trajectory_ids: Iterable[str]) -> tuple[str, ...]:
+    identities = tuple(trajectory_ids)
+    if not identities or any(
+        not isinstance(identity, str) or not identity for identity in identities
+    ):
+        raise ValueError("trajectory_ids must contain non-empty strings")
+    if len(set(identities)) != len(identities):
+        raise ValueError("trajectory_ids must be unique")
+    return identities
+
+
+def _record_trajectory_id(record: ObservationRecord) -> str:
+    if isinstance(record, FocusedObservationRecord):
+        return record.condition.trajectory_ids[0]
+    if isinstance(record, CropObservationRecord):
+        return record.trajectory_id
+    raise TypeError("unknown observation record type")
 
 
 def _walk_tensor_refs(value: object) -> Iterable[TensorArtifactRef]:

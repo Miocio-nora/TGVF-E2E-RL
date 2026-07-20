@@ -38,9 +38,7 @@ from tgvf_rl.observations.store import (
 )
 
 
-def _recorded_replay(
-    *, branch_layers: tuple[int, ...] = (8, 16, 24), calls: int = 2
-):
+def _recorded_replay(*, branch_layers: tuple[int, ...] = (8, 16, 24), calls: int = 2):
     if calls not in {0, 1, 2}:
         raise ValueError("fixture supports zero, one, or two calls")
     store = ObservationStore()
@@ -86,9 +84,7 @@ def _recorded_replay(
         "replay.position_ids", torch.arange(sequence).view(1, sequence)
     )
     handles = []
-    for call_index, d_positions in enumerate(
-        ((6, 7, 8, 9), (11, 12, 13, 14))[:calls]
-    ):
+    for call_index, d_positions in enumerate(((6, 7, 8, 9), (11, 12, 13, 14))[:calls]):
         main_d = store.put_tensor(
             f"call.{call_index}.main_d",
             torch.full((4, 2), float(20 + call_index)),
@@ -122,6 +118,9 @@ def _recorded_replay(
                 trajectory_ids=("trajectory",),
                 call_indices=(call_index,),
                 hidden_layer=1,
+                contextual_forward_identity=ArtifactIdentity(
+                    "policy", "contextual-forward", "fixture", "7" * 64
+                ),
                 policy_version=policy,
             ),
             source_visual=source_state,
@@ -162,9 +161,7 @@ def _recorded_replay(
             state=source_state,
             positions=(1, 2, 3, 4),
             deepstack_branch_layers=branch_layers,
-            deepstack_injection_positions=tuple(
-                (1, 2, 3, 4) for _ in branch_layers
-            ),
+            deepstack_injection_positions=tuple((1, 2, 3, 4) for _ in branch_layers),
         ),
         observation_handles=tuple(handles),
         tensors=TrajectoryReplayTensorRefs(

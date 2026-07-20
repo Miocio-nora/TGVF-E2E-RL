@@ -34,6 +34,12 @@ from .batch import (
     PilotGroupedRollout,
     materialize_policy_pilot_group_batch,
 )
+from .lifecycle import (
+    PolicyBatchLifecycle,
+    PolicyBatchLifecycleManager,
+    PolicyBatchMilestone,
+    PolicyBatchTransientState,
+)
 
 if TYPE_CHECKING:
     from tgvf_rl.environment.agent_loop import (
@@ -85,16 +91,21 @@ class PolicyReplayMaterialization:
 
 
 class PolicyReplayMaterializerPort(Protocol):
-    def materialize(
-        self, payload: DataProtoPayload
-    ) -> PolicyReplayMaterialization: ...
+    def materialize(self, payload: DataProtoPayload) -> PolicyReplayMaterialization: ...
 
 
 @dataclass(frozen=True, slots=True)
 class PilotGroupRuntimeRequest:
+    """One n=8 group in a unique rollout-batch lifecycle instance.
+
+    ``group_uid`` identifies this rollout/update instance.  It must include an
+    execution nonce/step and must never be a reusable dataset sample ID.
+    """
+
     group_uid: str
     rollout_requests: tuple[RolloutRequest, ...]
     pad_token_id: int
+    lifecycle: PolicyBatchLifecycle
 
     def __post_init__(self) -> None:
         if not isinstance(self.group_uid, str) or not self.group_uid.strip():
@@ -128,17 +139,84 @@ class PilotGroupRuntimeRequest:
             raise ValueError("one Pilot group requires identical exact prompt IDs")
         if type(self.pad_token_id) is not int or self.pad_token_id < 0:
             raise ValueError("pad_token_id must be an explicit non-negative integer")
+        if not isinstance(self.lifecycle, PolicyBatchLifecycle):
+            raise TypeError("request lifecycle must be PolicyBatchLifecycle")
+        if self.lifecycle.batch_id != self.group_uid:
+            raise ValueError("request lifecycle batch identity differs from group_uid")
+        if self.lifecycle.trajectory_ids != identities:
+            raise ValueError(
+                "request lifecycle trajectories differ from rollout requests"
+            )
+        self.lifecycle.assert_open()
 
 
-@dataclass(frozen=True, slots=True)
 class PilotGroupRuntimeResult:
-    trajectories: tuple[TrajectoryRecord, ...]
-    reward_contexts: tuple[RewardContext, ...]
-    rewards: tuple[RewardResult, ...]
-    grouped_rollouts: tuple[PilotGroupedRollout, ...]
-    payload: DataProtoPayload
-    policy_replay: PolicyReplayMaterialization
-    objective: ObjectiveResult
+    """Runtime outputs whose replay-heavy fields expire with their batch."""
+
+    __slots__ = (
+        "trajectories",
+        "reward_contexts",
+        "rewards",
+        "replay_bundle_sha256s",
+        "lifecycle",
+        "_transient_state",
+    )
+
+    def __init__(
+        self,
+        *,
+        trajectories: tuple[TrajectoryRecord, ...],
+        reward_contexts: tuple[RewardContext, ...],
+        rewards: tuple[RewardResult, ...],
+        grouped_rollouts: tuple[PilotGroupedRollout, ...],
+        payload: DataProtoPayload,
+        policy_replay: PolicyReplayMaterialization,
+        objective: ObjectiveResult,
+        lifecycle: PolicyBatchLifecycle,
+    ) -> None:
+        self.trajectories = tuple(trajectories)
+        self.reward_contexts = tuple(reward_contexts)
+        self.rewards = tuple(rewards)
+        self.replay_bundle_sha256s = tuple(
+            grouped.rollout.replay_bundle.bundle_sha256 for grouped in grouped_rollouts
+        )
+        self.lifecycle = lifecycle
+        self._transient_state = PolicyBatchTransientState(
+            {
+                "grouped_rollouts": tuple(grouped_rollouts),
+                "payload": payload,
+                "policy_replay": policy_replay,
+                "objective": objective,
+            }
+        )
+
+    @property
+    def grouped_rollouts(self) -> tuple[PilotGroupedRollout, ...]:
+        value = self._transient_state.get("grouped_rollouts")
+        assert isinstance(value, tuple)
+        return value
+
+    @property
+    def payload(self) -> DataProtoPayload:
+        value = self._transient_state.get("payload")
+        assert isinstance(value, DataProtoPayload)
+        return value
+
+    @property
+    def policy_replay(self) -> PolicyReplayMaterialization:
+        value = self._transient_state.get("policy_replay")
+        assert isinstance(value, PolicyReplayMaterialization)
+        return value
+
+    @property
+    def objective(self) -> ObjectiveResult:
+        value = self._transient_state.get("objective")
+        assert isinstance(value, ObjectiveResult)
+        return value
+
+    @property
+    def released(self) -> bool:
+        return self._transient_state.released
 
 
 class PolicyPilotRuntime:
@@ -153,6 +231,7 @@ class PolicyPilotRuntime:
         replay_finalizer: TrajectoryReplayFinalizerPort,
         policy_replay_materializer: PolicyReplayMaterializerPort,
         grpo_spec: GRPOSpec,
+        batch_lifecycle_manager: PolicyBatchLifecycleManager,
     ) -> None:
         if not isinstance(agent_loop, _agent_loop_type()):
             raise TypeError("agent_loop must be FrameworkNeutralAgentLoop")
@@ -171,19 +250,106 @@ class PolicyPilotRuntime:
                 raise TypeError(f"{name} must implement {method}()")
         if not isinstance(grpo_spec, GRPOSpec):
             raise TypeError("grpo_spec must be GRPOSpec")
+        if not isinstance(batch_lifecycle_manager, PolicyBatchLifecycleManager):
+            raise TypeError(
+                "batch_lifecycle_manager must be PolicyBatchLifecycleManager"
+            )
         if grpo_spec.expected_group_size != POLICY_PILOT_V1_GROUP_SIZE:
             raise ValueError("runtime GRPO spec must require Pilot n=8 groups")
+        _validate_lifecycle_store_assembly(
+            agent_loop=agent_loop,
+            replay_finalizer=replay_finalizer,
+            manager=batch_lifecycle_manager,
+        )
         self.agent_loop = agent_loop
         self.reward_pipeline = reward_pipeline
         self.reward_context_provider = reward_context_provider
         self.replay_finalizer = replay_finalizer
         self.policy_replay_materializer = policy_replay_materializer
         self.grpo_spec = grpo_spec
+        self.batch_lifecycle_manager = batch_lifecycle_manager
 
     def run_group(self, request: PilotGroupRuntimeRequest) -> PilotGroupRuntimeResult:
         if not isinstance(request, PilotGroupRuntimeRequest):
             raise TypeError("request must be PilotGroupRuntimeRequest")
 
+        lifecycle = request.lifecycle
+        self.batch_lifecycle_manager.assert_owns(lifecycle)
+        try:
+            return self._run_group_open(request, lifecycle)
+        except BaseException as error:
+            try:
+                lifecycle.abort()
+            except BaseException as cleanup_error:
+                error.add_note(
+                    "Policy batch cleanup also failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise
+
+    def _run_group_open(
+        self,
+        request: PilotGroupRuntimeRequest,
+        lifecycle: PolicyBatchLifecycle,
+    ) -> PilotGroupRuntimeResult:
+        with lifecycle.consume(PolicyBatchMilestone.BEHAVIOR_REPLAY):
+            (
+                trajectories,
+                contexts,
+                rewards,
+                grouped_rollouts,
+                payload,
+            ) = self._rollout_and_materialize_payload(request)
+            lifecycle.attach_data_proto(payload)
+
+        with (
+            lifecycle.consume(PolicyBatchMilestone.CURRENT_REPLAY),
+            lifecycle.consume(PolicyBatchMilestone.REFERENCE_REPLAY),
+        ):
+            policy_replay = self.policy_replay_materializer.materialize(payload)
+            if not isinstance(policy_replay, PolicyReplayMaterialization):
+                raise TypeError(
+                    "policy replay materializer must return PolicyReplayMaterialization"
+                )
+            self._validate_policy_replay(payload, policy_replay)
+
+        exact_rewards = torch.tensor(
+            tuple(payload.non_tensor_batch[PILOT_EXACT_REWARD_FIELD]),
+            dtype=policy_replay.logprobs.current.values.dtype,
+            device=policy_replay.logprobs.current.values.device,
+        )
+        group_ids = _integer_group_ids(
+            tuple(payload.non_tensor_batch[VERL_GRPO_GROUP_UID_FIELD]),
+            device=exact_rewards.device,
+        )
+        objective = compute_grpo_loss(
+            self.grpo_spec,
+            policy_replay.logprobs,
+            exact_rewards,
+            group_ids,
+        )
+        result = PilotGroupRuntimeResult(
+            trajectories=trajectories,
+            reward_contexts=contexts,
+            rewards=rewards,
+            grouped_rollouts=grouped_rollouts,
+            payload=payload,
+            policy_replay=policy_replay,
+            objective=objective,
+            lifecycle=lifecycle,
+        )
+        lifecycle.attach_transient_state(result._transient_state)
+        return result
+
+    def _rollout_and_materialize_payload(
+        self, request: PilotGroupRuntimeRequest
+    ) -> tuple[
+        tuple[TrajectoryRecord, ...],
+        tuple[RewardContext, ...],
+        tuple[RewardResult, ...],
+        tuple[PilotGroupedRollout, ...],
+        DataProtoPayload,
+    ]:
         trajectories: list[TrajectoryRecord] = []
         contexts: list[RewardContext] = []
         rewards: list[RewardResult] = []
@@ -222,40 +388,14 @@ class PolicyPilotRuntime:
             grouped_rollouts,
             pad_token_id=request.pad_token_id,
         )
-        if payload.tensor_batch["responses"].shape[0] != len(
-            request.rollout_requests
-        ):
+        if payload.tensor_batch["responses"].shape[0] != len(request.rollout_requests):
             raise RuntimeError("Pilot materializer dropped or duplicated a trajectory")
-
-        policy_replay = self.policy_replay_materializer.materialize(payload)
-        if not isinstance(policy_replay, PolicyReplayMaterialization):
-            raise TypeError(
-                "policy replay materializer must return PolicyReplayMaterialization"
-            )
-        self._validate_policy_replay(payload, policy_replay)
-        exact_rewards = torch.tensor(
-            tuple(payload.non_tensor_batch[PILOT_EXACT_REWARD_FIELD]),
-            dtype=policy_replay.logprobs.current.values.dtype,
-            device=policy_replay.logprobs.current.values.device,
-        )
-        group_ids = _integer_group_ids(
-            tuple(payload.non_tensor_batch[VERL_GRPO_GROUP_UID_FIELD]),
-            device=exact_rewards.device,
-        )
-        objective = compute_grpo_loss(
-            self.grpo_spec,
-            policy_replay.logprobs,
-            exact_rewards,
-            group_ids,
-        )
-        return PilotGroupRuntimeResult(
-            trajectories=tuple(trajectories),
-            reward_contexts=tuple(contexts),
-            rewards=tuple(rewards),
-            grouped_rollouts=tuple(grouped_rollouts),
-            payload=payload,
-            policy_replay=policy_replay,
-            objective=objective,
+        return (
+            tuple(trajectories),
+            tuple(contexts),
+            tuple(rewards),
+            tuple(grouped_rollouts),
+            payload,
         )
 
     @staticmethod
@@ -284,7 +424,9 @@ class PolicyPilotRuntime:
         if replay.policy_replay_bundle_sha256s != expected_bundle_sha256s:
             raise ValueError("policy replay did not consume the exact rollout bundles")
         if replay.reference_replay_bundle_sha256s != expected_bundle_sha256s:
-            raise ValueError("reference replay did not consume the exact rollout bundles")
+            raise ValueError(
+                "reference replay did not consume the exact rollout bundles"
+            )
 
         rm_scores = payload.tensor_batch["rm_scores"]
         exact_rewards = torch.tensor(
@@ -321,6 +463,41 @@ def _rollout_request_type() -> type[RolloutRequest]:
     from tgvf_rl.environment.agent_loop import RolloutRequest
 
     return RolloutRequest
+
+
+def _validate_lifecycle_store_assembly(
+    *,
+    agent_loop: FrameworkNeutralAgentLoop,
+    replay_finalizer: TrajectoryReplayFinalizerPort,
+    manager: PolicyBatchLifecycleManager,
+) -> None:
+    if getattr(agent_loop.behavior_recorder, "store", None) is not (
+        manager.behavior_store
+    ):
+        raise ValueError(
+            "Policy lifecycle manager and agent loop must share BehaviorTraceStore"
+        )
+    if getattr(replay_finalizer, "observation_store", None) is not (
+        manager.observation_store
+    ):
+        raise ValueError(
+            "Policy lifecycle manager and replay finalizer must share ObservationStore"
+        )
+    tool_runtime = agent_loop.tool_runtime
+    tool_store = getattr(tool_runtime, "store", None)
+    if tool_store is None:
+        focus_tool = getattr(tool_runtime, "focus_tool", None)
+        tool_store = getattr(focus_tool, "store", None)
+    if tool_store is not manager.observation_store:
+        raise ValueError(
+            "Policy lifecycle manager and tool runtime must share ObservationStore"
+        )
+    if getattr(tool_runtime, "execution_ledger", None) is not (
+        manager.focus_execution_ledger
+    ):
+        raise ValueError(
+            "Policy lifecycle manager and tool runtime must share FocusExecutionLedger"
+        )
 
 
 __all__ = [

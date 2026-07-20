@@ -164,17 +164,11 @@ class VerlAdapterConfig:
                     "actor_rollout_ref.actor.policy_loss.loss_mode": (
                         grpo.verl_execution_loss_mode
                     ),
-                    "actor_rollout_ref.actor.entropy_coeff": (
-                        grpo.entropy_coefficient
-                    ),
+                    "actor_rollout_ref.actor.entropy_coeff": (grpo.entropy_coefficient),
                     "actor_rollout_ref.actor.calculate_entropy": False,
                     "actor_rollout_ref.actor.use_kl_loss": False,
-                    "actor_rollout_ref.actor.kl_loss_coef": (
-                        grpo.kl_loss_coefficient
-                    ),
-                    "actor_rollout_ref.rollout.n": (
-                        sampling.trajectories_per_prompt
-                    ),
+                    "actor_rollout_ref.actor.kl_loss_coef": (grpo.kl_loss_coefficient),
+                    "actor_rollout_ref.rollout.n": (sampling.trajectories_per_prompt),
                     "actor_rollout_ref.rollout.temperature": sampling.temperature,
                     "actor_rollout_ref.rollout.top_p": sampling.top_p,
                     "actor_rollout_ref.rollout.top_k": sampling.top_k,
@@ -279,9 +273,7 @@ class VerlAdapter:
                 expected_commit=self.config.runtime.verl_commit
             )
             if self.config.policy_pilot is not None:
-                import_module(
-                    self.config.policy_pilot.grpo.verl_external_loss_module
-                )
+                import_module(self.config.policy_pilot.grpo.verl_external_loss_module)
                 validate_policy_pilot_v1_verl_grpo_parity(public_api)
             self._public_api = public_api
         return self._public_api
@@ -296,6 +288,12 @@ class VerlAdapter:
         )
 
     def build_data_proto(self, records: Iterable[RolloutBridgeRecord]) -> Any:
+        if self.config.policy_pilot is not None:
+            raise RuntimeError(
+                "Policy Pilot DataProto construction requires a retained "
+                "DataProtoPayload attached to PolicyBatchLifecycle; use "
+                "build_data_proto_payload/to_verl_data_proto explicitly"
+            )
         return build_verl_data_proto(records, data_proto_cls=self.public_api.data_proto)
 
     @staticmethod

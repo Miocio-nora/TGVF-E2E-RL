@@ -30,6 +30,7 @@ from tgvf_rl.framework.verl import (
     TORCH211_CANDIDATE_VERL_COMMIT,
     VERL_AGENT_LOOP_RETURN_TRANSPORT,
     VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT,
+    VerlAdapter,
     VerlAdapterConfig,
     VerlConfigurationError,
     VerlCompatibilityError,
@@ -42,6 +43,7 @@ from tgvf_rl.framework.verl import (
     load_verl_public_api,
     make_objective_sentinels,
     parse_agent_loop_output,
+    release_verl_data_proto_sidecars,
     register_project_policy_loss,
     register_sdpo_teacher_checkpoint,
     require_vllm_backend,
@@ -116,9 +118,7 @@ def _record(
         raise ValueError("fixture supports zero, one or two tool calls")
     observation_store, observation_handle = populated_observation_store()
     version = policy_version()
-    trajectory_id = TrajectoryIdentity(
-        "smoke", f"sample-{suffix}", suffix, "group"
-    )
+    trajectory_id = TrajectoryIdentity("smoke", f"sample-{suffix}", suffix, "group")
     sampling = SamplingIdentity(
         policy_version=version,
         backend="vllm",
@@ -600,6 +600,37 @@ def test_dataproto_roundtrip_keeps_exact_sidecars_and_detects_tensor_overwrite()
         validate_data_proto_integrity(data)
 
 
+def test_worker_local_dataproto_sidecar_release_is_explicit_and_idempotent() -> None:
+    payload = build_data_proto_payload((_record(),))
+    driver_data = to_verl_data_proto(payload, data_proto_cls=_FakeDataProto)
+    worker_data = _FakeDataProto(
+        driver_data.batch,
+        dict(driver_data.non_tensor_batch),
+        dict(driver_data.meta_info),
+    )
+    worker_data.non_tensor_batch["worker_metric"] = "preserve"
+    expected_count = len(payload.non_tensor_batch)
+
+    assert release_verl_data_proto_sidecars(worker_data) == expected_count
+    assert release_verl_data_proto_sidecars(worker_data) == 0
+    assert worker_data.non_tensor_batch == {"worker_metric": "preserve"}
+    assert driver_data.non_tensor_batch
+
+    assert payload.release_sidecars()
+    assert not driver_data.non_tensor_batch
+
+
+def test_policy_pilot_adapter_rejects_ownerless_dataproto_convenience() -> None:
+    pilot = PolicyPilotV1Config(sampling=PilotSamplingConfig(min_p=0.0))
+    adapter = VerlAdapter(
+        VerlAdapterConfig(policy_pilot=pilot),
+        public_api=SimpleNamespace(data_proto=_FakeDataProto),
+    )
+
+    with pytest.raises(RuntimeError, match="retained DataProtoPayload"):
+        adapter.build_data_proto((_record(),))
+
+
 def test_explicit_variable_padding_preserves_direct_one_and_multi_call_rows() -> None:
     pad_token_id = 99
     records = (
@@ -622,16 +653,13 @@ def test_explicit_variable_padding_preserves_direct_one_and_multi_call_rows() ->
             record.response_ids
         )
         assert bool(
-            (
-                data.batch["responses"][index, response_length:] == pad_token_id
-            ).all()
+            (data.batch["responses"][index, response_length:] == pad_token_id).all()
         )
-        assert tuple(
-            data.batch["response_mask"][index, :response_length].tolist()
-        ) == record.response_mask
-        assert bool(
-            (data.batch["response_mask"][index, response_length:] == 0).all()
+        assert (
+            tuple(data.batch["response_mask"][index, :response_length].tolist())
+            == record.response_mask
         )
+        assert bool((data.batch["response_mask"][index, response_length:] == 0).all())
         assert bool(
             (data.batch["rollout_log_probs"][index, response_length:] == 0).all()
         )
@@ -645,9 +673,7 @@ def test_explicit_variable_padding_preserves_direct_one_and_multi_call_rows() ->
         TokenOwnership.PADDING,
         TokenOwnership.TEMPLATE,
     )
-    assert view.response_token_ownership[0][4:] == (
-        TokenOwnership.PADDING,
-    ) * 7
+    assert view.response_token_ownership[0][4:] == (TokenOwnership.PADDING,) * 7
     assert all(
         owner.policy_loss_mask == 0 and not owner.requires_behavior_logprob
         for ownership in (
@@ -687,9 +713,7 @@ def test_variable_padding_is_fail_closed_and_rejects_integrity_tampering() -> No
     )
     ownership = list(data.non_tensor_batch["tgvf_batched_response_token_ownership"][0])
     ownership[-1] = TokenOwnership.TOOL_OBSERVATION.value
-    data.non_tensor_batch["tgvf_batched_response_token_ownership"][0] = tuple(
-        ownership
-    )
+    data.non_tensor_batch["tgvf_batched_response_token_ownership"][0] = tuple(ownership)
     with pytest.raises(ValueError, match="response token ownership"):
         validate_data_proto_integrity(data)
 
@@ -923,20 +947,12 @@ def test_policy_pilot_uses_real_e003_lora_and_optimizer_fields() -> None:
     assert overrides["actor_rollout_ref.actor.optim.clip_grad"] == 1.0
     assert overrides["actor_rollout_ref.actor.ppo_epochs"] == 1
     assert overrides["actor_rollout_ref.actor.clip_ratio_c"] == 3.0
-    assert (
-        overrides["actor_rollout_ref.actor.policy_loss.loss_mode"]
-        == "bypass_mode"
-    )
+    assert overrides["actor_rollout_ref.actor.policy_loss.loss_mode"] == "bypass_mode"
     assert overrides["algorithm.rollout_correction.bypass_mode"] is True
     assert overrides["algorithm.rollout_correction.loss_type"] == "ppo_clip"
     assert overrides["algorithm.rollout_correction.rollout_is"] is None
     assert overrides["algorithm.rollout_correction.rollout_rs"] is None
-    assert (
-        overrides[
-            "algorithm.rollout_correction.rollout_is_batch_normalize"
-        ]
-        is False
-    )
+    assert overrides["algorithm.rollout_correction.rollout_is_batch_normalize"] is False
     assert overrides["actor_rollout_ref.actor.use_kl_loss"] is False
     assert overrides["actor_rollout_ref.actor.kl_loss_coef"] == 0.0
     assert overrides["actor_rollout_ref.actor.entropy_coeff"] == 0.0

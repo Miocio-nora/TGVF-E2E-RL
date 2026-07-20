@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tgvf_rl.contracts.errors import ReplayMismatchError
+from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayRecord,
@@ -43,6 +43,24 @@ def test_unknown_observation_fails_closed() -> None:
     bad = type(handle)("missing", handle.record_sha256)
     with pytest.raises(ReplayMismatchError, match="unknown observation"):
         store.resolve_record(bad)
+
+
+def test_raw_digest_collision_never_overwrites_tensor_semantics() -> None:
+    store = ObservationStore()
+    int_ref = store.put_tensor("int32-zero", torch.tensor([0], dtype=torch.int32))
+    assert (
+        int_ref.address.digest
+        == store.put_tensor(
+            "second-int32-zero", torch.tensor([0], dtype=torch.int32)
+        ).address.digest
+    )
+
+    with pytest.raises(IdentityMismatchError, match="different dtype/shape/stride"):
+        store.put_tensor("float32-zero", torch.tensor([0.0], dtype=torch.float32))
+
+    retained = store.resolve_verified(int_ref)
+    assert retained.dtype is torch.int32
+    torch.testing.assert_close(retained, torch.tensor([0], dtype=torch.int32))
 
 
 def _put_replay(store: ObservationStore, observation_handle):

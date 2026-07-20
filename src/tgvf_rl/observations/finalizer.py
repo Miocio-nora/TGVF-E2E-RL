@@ -98,7 +98,11 @@ class TrajectoryReplayFinalizationRequest:
             raise TypeError("finalization requires a trajectory source visual")
         if not isinstance(self.tensors, MaterializedTrajectoryReplayTensors):
             raise TypeError("finalization requires materialized replay tensors")
-        if not self.replay_schema_version or not self.replay_id or not self.trajectory_id:
+        if (
+            not self.replay_schema_version
+            or not self.replay_id
+            or not self.trajectory_id
+        ):
             raise ValueError("all replay identities must be explicit and non-empty")
         if not isinstance(self.model, ModelIdentity):
             raise TypeError("finalization model identity must be explicit")
@@ -113,8 +117,7 @@ class TrajectoryReplayFinalizationRequest:
         ):
             raise ValueError("exact initial prompt token IDs must be supplied")
         if not isinstance(self.native_tool_appended_token_ids, tuple) or any(
-            not isinstance(row, tuple)
-            for row in self.native_tool_appended_token_ids
+            not isinstance(row, tuple) for row in self.native_tool_appended_token_ids
         ):
             raise TypeError("native appended tool token IDs must be tuple rows")
         if not isinstance(self.sentinel_fields, Mapping):
@@ -156,6 +159,7 @@ def finalize_trajectory_replay(
     refs = _store_materialized_tensors(
         observation_store,
         request.replay_id,
+        request.trajectory_id,
         request.tensors,
     )
     replay = TrajectoryReplayRecord(
@@ -196,6 +200,7 @@ def finalize_trajectory_replay(
 def _store_materialized_tensors(
     store: ObservationStore,
     replay_id: str,
+    trajectory_id: str,
     tensors: MaterializedTrajectoryReplayTensors,
 ) -> TrajectoryReplayTensorRefs:
     prefix = f"trajectory-replay.{replay_id}"
@@ -203,7 +208,7 @@ def _store_materialized_tensors(
     def put(name: str, tensor: torch.Tensor | None):
         if tensor is None:
             return None
-        return store.put_tensor(f"{prefix}.{name}", tensor)
+        return store.put_tensor(f"{prefix}.{name}", tensor, trajectory_id=trajectory_id)
 
     return TrajectoryReplayTensorRefs(
         input_ids=put("input_ids", tensors.input_ids),
