@@ -4,7 +4,7 @@ run_id = "REP-QWEN3-V4-TARGET-EMBEDDING-V1"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "f32470cc0ffca49ec2834757389ed8e2e065d90e"
+commit = "2224e4947574252c312cbfda72c30e886caa494b"
 dirty = false
 dirty_state_sha256 = "none"
 
