@@ -4550,7 +4550,7 @@ instead of repeated bullets.
 - Fixed data identity: source SHA256 `de61c731...82d`, retained manifest
   `534f5b1e...b0`, exact first 200 retained rows in 46 ordered same-image groups;
   variable-K counts are K3/K4/K5/K6 = 6/19/20/1. Ordered manifest SHA256 is
-  `55e2cde5...d8`; counterfactual manifest SHA256 is `2fce6f96...d54`.
+  `55e2cde5...d8`; counterfactual manifest SHA256 is `4589d14f...cc4`.
 - Artifact: RP-40 Adapter file/manifest SHA256 `36166909...9ee` /
   `c071580b...06bc`; no training or mutation. Query matrices use evidence-token
   mean NLL, matching the Golden score semantics. Shape-compatible

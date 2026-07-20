@@ -27,8 +27,8 @@ GOLDEN_GROUP_COUNT = 46
 GOLDEN_K_COUNTS = {3: 6, 4: 19, 5: 20, 6: 1}
 FIRST_SAMPLE_ID = "tgvf_v4_teacher_50k:visual_genome:2410492:0::focus1"
 LAST_SAMPLE_ID = "tgvf_v4_teacher_50k:textocr:e08ccd92443c5924:3::focus1"
-PAIR_A = FIRST_SAMPLE_ID
-PAIR_B = "tgvf_v4_teacher_50k:visual_genome:2380160:0::focus1"
+PAIR_A = "tgvf_v4_teacher_50k:chartqa:train_017485:0::focus1"
+PAIR_B = "tgvf_v4_teacher_50k:chartqa:train_015867:0::focus1"
 OUTPUT_DIRECTORY = Path(
     "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/"
     "internal_evaluation"
@@ -66,8 +66,8 @@ def main() -> None:
     selected_by_id = {sample.sample_id: sample for sample in selected}
     if not {PAIR_A, PAIR_B}.issubset(selected_by_id):
         raise RuntimeError("fixed v4 counterfactual pair is absent")
-    if selected_by_id[PAIR_A].short_answer != "white" or (
-        selected_by_id[PAIR_B].short_answer != "dark green"
+    if selected_by_id[PAIR_A].short_answer != "2019" or (
+        selected_by_id[PAIR_B].short_answer != "2017"
     ):
         raise RuntimeError("fixed v4 counterfactual values changed")
 
@@ -96,14 +96,14 @@ def main() -> None:
         "pairs": [
             {
                 "schema_version": "qwen3_counterfactual_pair_v1",
-                "pair_id": "visual-genome-white-vs-dark-green",
+                "pair_id": "chartqa-tallest-bar-year-2019-vs-2017",
                 "sample_a_id": PAIR_A,
                 "sample_b_id": PAIR_B,
-                "expected_value_a": "white",
-                "expected_value_b": "dark green",
+                "expected_value_a": "2019",
+                "expected_value_b": "2017",
                 "pair_audit_identity": (
-                    "v4-clean-imend-golden-first200-distinct-image-"
-                    "shape-compatible-d-v1"
+                    "v4-clean-imend-golden-first200-exact-question-target-"
+                    "distinct-image-matched-qwen3-grid-v1"
                 ),
             }
         ],
