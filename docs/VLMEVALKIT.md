@@ -35,5 +35,72 @@ CUDA_VISIBLE_DEVICES=<gpu_ids> .venv312/bin/python \
 ```
 
 This JSON is an original-Qwen direct baseline, not the crop/TGVF policy-agent
-adapter. CoreDev-2511 still requires seven separately materialized and hashed
-TSV slices before it can be run or scored.
+adapter.
+
+## CoreDev-2511
+
+The seven ordered slices are already materialized at
+`/nvmesv/dredvpn009/datasets/benchmarks/coredev_2511_vlmevalkit_7055d301_v1`.
+Their pinned identity is
+`configs/evaluation/coredev_2511_vlmevalkit_v1.json`. Verify every TSV/image
+hash, row order, official class, prompt construction, and inherited scorer with:
+
+```bash
+.venv312/bin/python tools/validate_coredev_2511.py
+```
+
+They use the same pinned VLMEvalKit prompt and scorer implementation as each
+source benchmark. Only the evaluated row population is sliced, so their metrics
+are CoreDev subset metrics, not full-dataset leaderboard scores. Historical
+CoreDev numbers from the legacy custom evaluator are comparison provenance, not
+scorer parity evidence.
+
+Judge routing is fixed as follows:
+
+- OCRBench_v2 is rule based and uses no LLM judge.
+- VStarBench, HRBench4K, BLINK, and MMMU_Pro_10c use Qwen2.5-72B only when the
+  official MCQ extractor cannot resolve a choice deterministically.
+- MathVista_MINI and MathVerse_MINI require Qwen2.5-72B.
+- GPT fallback is forbidden.
+
+Inference may be run without the judge. Evaluation fails closed unless the
+exact Qwen model and service URL are supplied:
+
+```bash
+.venv312/bin/python tools/run_coredev_2511_vlmevalkit.py \
+  --config configs/evaluation/coredev_2511_qwen3_direct_v1.json \
+  --work-dir artifacts/evaluation/coredev_2511_qwen3_direct \
+  --mode all \
+  --judge Qwen2.5-72B-Instruct \
+  --judge-base-url http://127.0.0.1:8012/v1 \
+  --judge-api-nproc 8
+```
+
+## Qwen2.5-72B benchmark judge
+
+The service identity is
+`configs/evaluation/qwen25_72b_judge_service_v1.json`. It uses the exact
+Hugging Face revision recorded there, vLLM 0.12.0, BF16, and tensor parallel 2
+on physical GPUs 2 and 3. After recording the run in the experiment ledger:
+
+```bash
+CUDA_VISIBLE_DEVICES=2,3 \
+CC=/usr/bin/gcc CXX=/usr/bin/g++ \
+CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12 \
+VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn \
+TOKENIZERS_PARALLELISM=false \
+.venv312/bin/python -m \
+  vllm.entrypoints.openai.api_server \
+  /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct \
+  --served-model-name Qwen2.5-72B-Instruct \
+  --host 127.0.0.1 --port 8012 \
+  --tensor-parallel-size 2 --dtype bfloat16 \
+  --max-model-len 32768 --gpu-memory-utilization 0.85 \
+  --max-num-seqs 64 --seed 42 --generation-config vllm \
+  --enable-prefix-caching
+```
+
+This deployment is a benchmark evaluator only. It is not an RL reward, frozen
+reference policy, or SDPO teacher. The slash-free served name is intentional:
+VLMEvalKit embeds the judge string in intermediate filenames; the underlying
+model identity remains `Qwen/Qwen2.5-72B-Instruct` at the pinned revision.

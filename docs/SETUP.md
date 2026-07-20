@@ -97,9 +97,11 @@ shards. Native transcript, tokenizer length, processor behavior, and chat
 template remain fixture identities.
 
 No Qwen2.5-VL local/runtime path or family-specific representation artifact has
-been accepted. The current Qwen2.5 code is a fail-closed family boundary and
-main-D synthetic contract, not an end-to-end compatibility claim. The reserved
-72B judge is not installed or started.
+been accepted. The current Qwen2.5-VL code is a fail-closed family boundary and
+main-D synthetic contract, not an end-to-end compatibility claim. The separate
+text-only `Qwen/Qwen2.5-72B-Instruct` benchmark judge is deployed at
+`/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct`; its service identity and
+launch command are documented in `docs/VLMEVALKIT.md`.
 
 ## GPU safety boundary
 

@@ -233,8 +233,9 @@ runtime are not dependencies.
 DeepEyes uses Qwen2.5-VL policy models and documents
 `Qwen/Qwen2.5-72B-Instruct` as an LLM-as-judge example. The user has now fixed
 our secondary policy model to `Qwen/Qwen2.5-VL-7B-Instruct` and approved
-reserving—without first-pilot deployment—the 72B judge provider. Judge prompt,
-reward role, and deployment topology remain unset.
+the 72B model as the sole LLM judge for VLMEvalKit benchmark evaluation. This
+does not accept its use as an RL reward. Reward prompt and calibration remain
+unset.
 
 Forbidden inheritance includes its observation schema or materialization,
 rollout/behavior log probabilities, replay semantics, sampled-token masks,
@@ -343,11 +344,15 @@ There are two explicit support levels:
 ### Optional answer judge
 
 ```text
-reserved model: Qwen/Qwen2.5-72B-Instruct
-exact local path/service/snapshot: [TBD]
-role: optional semantic answer verifier only; disabled for first pilot
+model: Qwen/Qwen2.5-72B-Instruct
+Hugging Face revision: 495f39366efef23836d0cfae4fbe635880d2be31
+local path: /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct
+benchmark service: vLLM 0.12.0, OpenAI-compatible, BF16, TP=2
+role: required/fallback semantic answer verifier for fixed benchmark routes;
+  optional and disabled as an RL reward for the first pilot
 ```
 
 The judge is independently versioned and calibrated. It is not the frozen RL
 reference policy, the SDPO self-teacher, or a replacement for executable
-verifiers.
+verifiers. The local snapshot download and service smoke are recorded in the
+experiment ledger; numerical benchmark-judge calibration remains open.

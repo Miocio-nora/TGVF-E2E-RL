@@ -1,0 +1,37 @@
+{
+  "model": {
+    "Qwen3-VL-8B-Thinking": {
+      "model_path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+    }
+  },
+  "data": {
+    "VStarBench": {
+      "class": "CoreDev2511VStarBenchSlice",
+      "dataset": "VStarBench"
+    },
+    "HRBench4K": {
+      "class": "CoreDev2511HRBench4KSlice",
+      "dataset": "HRBench4K"
+    },
+    "BLINK": {
+      "class": "CoreDev2511BLINKSlice",
+      "dataset": "BLINK"
+    },
+    "OCRBench_v2": {
+      "class": "CoreDev2511OCRBenchv2Slice",
+      "dataset": "OCRBench_v2"
+    },
+    "MMMU_Pro_10c": {
+      "class": "CoreDev2511MMMUPro10cSlice",
+      "dataset": "MMMU_Pro_10c"
+    },
+    "MathVista_MINI": {
+      "class": "CoreDev2511MathVistaMINISlice",
+      "dataset": "MathVista_MINI"
+    },
+    "MathVerse_MINI": {
+      "class": "CoreDev2511MathVerseMINISlice",
+      "dataset": "MathVerse_MINI"
+    }
+  }
+}

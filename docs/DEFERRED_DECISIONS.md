@@ -39,8 +39,9 @@ data/group order, fresh initialization, objective, batch plan, and cadence.
 - representation specificity/readability reuses the historical internal
   metrics and Golden report values as its comparison baseline rather than
   inventing new values;
-- whether and when the reserved Qwen2.5-72B judge is enabled, including its
-  service/model revision, prompt, sampling, calibration, and failure policy.
+- whether and when Qwen2.5-72B is enabled as an RL reward, including its reward
+  prompt, sampling, calibration, and failure policy. Its separate use as the
+  fixed VLMEvalKit benchmark judge is accepted and must never fall back to GPT.
 
 ## GRPO production contract
 

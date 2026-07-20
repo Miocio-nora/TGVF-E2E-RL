@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "identity": "coredev-2511-vlmevalkit-7055d301-v1",
+  "artifact_root": "/nvmesv/dredvpn009/datasets/benchmarks/coredev_2511_vlmevalkit_7055d301_v1",
+  "artifact_manifest": "coredev_2511_vlmevalkit_artifacts.json",
+  "membership_manifest_sha256": "a461d9b482b7165b42b9bbb0fbf0ea6aff31fde0a838c13d953f070e770b0579",
+  "membership_source_file_sha256": "3a013b2bcc64316054d28239a3cea3f44211cadbfe19787be3b7f285620fa5c1",
+  "vlmevalkit_commit": "7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f",
+  "llm_judge_repository": "Qwen/Qwen2.5-72B-Instruct",
+  "llm_judge_model": "Qwen2.5-72B-Instruct",
+  "sample_count": 2511,
+  "slices": [
+    {
+      "dataset": "VStarBench",
+      "dataset_class": "ImageMCQDataset",
+      "sample_count": 191,
+      "tsv_md5": "0ff9a6005d6f329a6755b3dfb0f99185",
+      "tsv_sha256": "dc3118ddfef156f5ab2a5b586f21f495ba6b2a494cdb26c79b379682842f63d1",
+      "judge_contract": "qwen2_5_72b_fallback_or_exact_matching"
+    },
+    {
+      "dataset": "HRBench4K",
+      "dataset_class": "HRBenchDataset",
+      "sample_count": 200,
+      "tsv_md5": "03106e9546570d9d9aaba90c7eecb81d",
+      "tsv_sha256": "226b51c2ecbcb973f45fa911641475770061ee5b07eb99f76ce25e815efc607c",
+      "judge_contract": "qwen2_5_72b_fallback_or_exact_matching"
+    },
+    {
+      "dataset": "BLINK",
+      "dataset_class": "ImageMCQDataset",
+      "sample_count": 420,
+      "tsv_md5": "f0135ff8ad8b7a36ae2891746d2b7114",
+      "tsv_sha256": "e226a3d9d21cad34126f821e291c765e32ae78aa04f02cd30c9076db95b2d489",
+      "judge_contract": "qwen2_5_72b_fallback_or_exact_matching"
+    },
+    {
+      "dataset": "OCRBench_v2",
+      "dataset_class": "OCRBench_v2",
+      "sample_count": 600,
+      "tsv_md5": "3de0170608f90293ae5bc4ac5e326dab",
+      "tsv_sha256": "d9413e7acd5ac7573432b8483259e529b2c484a81856687529f96dd56f2d5493",
+      "judge_contract": "none_rule_based"
+    },
+    {
+      "dataset": "MMMU_Pro_10c",
+      "dataset_class": "MMMUProDataset",
+      "sample_count": 300,
+      "tsv_md5": "d7fb6534c208b5c67b0f5c605af4fc6d",
+      "tsv_sha256": "5cf25de59e0cc225ec13e1e114ed83ca27876b62eef41c029c8da76ebdd7ba30",
+      "judge_contract": "qwen2_5_72b_fallback_or_exact_matching"
+    },
+    {
+      "dataset": "MathVista_MINI",
+      "dataset_class": "MathVista",
+      "sample_count": 300,
+      "tsv_md5": "3a167476997df5e01bce60a7e6d8608c",
+      "tsv_sha256": "b72580ff6bc7af2e4fc92d089a1a9bacdab13c47a30a710429f0ec90cbaa92e8",
+      "judge_contract": "required_qwen2_5_72b_judge"
+    },
+    {
+      "dataset": "MathVerse_MINI",
+      "dataset_class": "MathVerse",
+      "sample_count": 500,
+      "tsv_md5": "ff1b04a7eaf42a1b7d90b888cfd2bcca",
+      "tsv_sha256": "c3d7ee494786cc92191708b487dae44c40cca776a493d98c0c0714e8ad2850a3",
+      "judge_contract": "required_qwen2_5_72b_judge"
+    }
+  ]
+}

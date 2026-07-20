@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "identity": "qwen25-72b-judge-vllm-012-tp2-bf16-v1",
+  "role": "vlmevalkit_benchmark_judge_only",
+  "model": {
+    "repository": "Qwen/Qwen2.5-72B-Instruct",
+    "revision": "495f39366efef23836d0cfae4fbe635880d2be31",
+    "local_path": "/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct",
+    "served_name": "Qwen2.5-72B-Instruct"
+  },
+  "runtime": {
+    "python": "3.12.3",
+    "torch": "2.9.0+cu128",
+    "transformers": "4.57.6",
+    "vllm": "0.12.0",
+    "dependency_lock_sha256": "df49237a21b66cd9009b55aee419a08715a3ad1d462cdb31bf842c16f5cd8058",
+    "cc": "/usr/bin/gcc",
+    "cxx": "/usr/bin/g++",
+    "cpath": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12"
+  },
+  "devices": {
+    "physical": [2, 3],
+    "logical": [0, 1],
+    "tensor_parallel_size": 2,
+    "uuids": [
+      "GPU-11d59daa-e835-5f46-faaf-356bfebcabe3",
+      "GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b"
+    ]
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8012,
+    "base_url": "http://127.0.0.1:8012/v1",
+    "dtype": "bfloat16",
+    "max_model_len": 32768,
+    "gpu_memory_utilization": 0.85,
+    "max_num_seqs": 64,
+    "seed": 42,
+    "generation_config": "vllm",
+    "prefix_caching": true
+  },
+  "scope": {
+    "allows_vlmevalkit_benchmark_judging": true,
+    "allows_rl_reward": false,
+    "allows_reference_policy": false,
+    "allows_sdpo_teacher": false,
+    "allows_gpt_fallback": false
+  }
+}

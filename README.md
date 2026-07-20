@@ -226,9 +226,9 @@ choices remain unset:
   evaluation baseline;
 - the ordered same-image and real counterfactual manifests required to enable
   the once-after-training representation internal-evaluation switch;
-- materialized, hashed VLMEvalKit slices for the fixed seven-source
-  CoreDev-2511 manifest, plus their official-scorer parity fixtures and exact
-  benchmark-arm decoding identities;
+- numerical official-scorer parity fixtures and exact benchmark-arm decoding
+  identities for the already materialized, hashed seven-source CoreDev-2511
+  VLMEvalKit slices;
 - production actor/reference/rollout placement, FSDP2 sharding, and parallel
   topology; the compatibility veRL commit/environment and vLLM backend are
   fixed;
@@ -239,8 +239,9 @@ choices remain unset:
 - tool-call safety cap and exploration curriculum;
 - exact SDPO equations, feedback/teacher policy, target approximation, and any
   separately defined hybrid or later joint TGVF Adapter update;
-- the future activation conditions and exact service/prompt/calibration identity
-  for the reserved `Qwen/Qwen2.5-72B-Instruct` judge.
+- the future RL-reward activation conditions and reward-prompt/calibration
+  identity for `Qwen/Qwen2.5-72B-Instruct`; its separate VLMEvalKit
+  benchmark-judge service is fixed.
 
 These values must remain explicit `[TBD]` fields until accepted. They must not
 be inherited silently from a library default.

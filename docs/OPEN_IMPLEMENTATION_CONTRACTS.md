@@ -902,10 +902,19 @@ pilot is identified or launched.
 
 - [ ] `OPEN_BLOCKING EV-01` — Evaluation framework is fixed to VLMEvalKit
   `7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f`; the shared data root and
-  historical CoreDev-2511 ordered manifest are pinned. Still required before a
-  run: seven source-specific hashed TSV slices, their official dataset/scorer
-  bindings and score-parity fixtures, plus the separately audited
-  representation internal-evaluation group/counterfactual manifests.
+  historical CoreDev-2511 ordered manifest are pinned. Seven source-specific
+  hashed TSV slices are materialized as
+  `coredev-2511-vlmevalkit-7055d301-v1`, and CPU validation proves that their
+  runtime locator subclasses inherit the corresponding official dataset
+  classes and scorers. Still required before a scored quality claim: numerical
+  score-parity fixtures and the separately audited representation
+  internal-evaluation group/counterfactual manifests.
+- [x] `FIXED EV-04` — CoreDev LLM judging uses only
+  `Qwen/Qwen2.5-72B-Instruct` through an independently identified local
+  OpenAI-compatible service; GPT judge services are forbidden. OCRBench_v2 is
+  rule based, the four MCQ sources use Qwen only as extraction fallback, and
+  MathVista_MINI/MathVerse_MINI require Qwen judging. This does not close or
+  activate reward contract `RW-05`.
 - [ ] `OPEN_BLOCKING EV-02` — Direct/tool/counterfactual rows and reasoning
   retention metrics/thresholds: `[TBD]`
 - [ ] `OPEN_BLOCKING EV-03` — Checkpoint ladder, early-stop conditions, and
@@ -1079,7 +1088,7 @@ the synthetic implementation smoke.
   production-mathematics gates.
 - [ ] Configure the local/runtime path for the fixed
   `Qwen/Qwen2.5-VL-7B-Instruct` model before its executable fixture.
-- [x] Keep the reserved `Qwen/Qwen2.5-72B-Instruct` judge disabled for the first
-  pilot; specify service/prompt/calibration only before a later activation.
+- [x] Keep `Qwen/Qwen2.5-72B-Instruct` disabled as a first-pilot RL reward. Its
+  separately fixed VLMEvalKit benchmark-judge role does not activate `RW-05`.
 - [ ] Convert each accepted `[TBD]` into a versioned project artifact rather
   than embedding it only in code or an experiment command.

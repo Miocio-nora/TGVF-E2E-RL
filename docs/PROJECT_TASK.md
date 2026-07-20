@@ -214,11 +214,28 @@ dataset is forbidden. The historical CoreDev-2511 scores remain comparison
 provenance only because they were produced by the old custom benchmark path,
 not VLMEvalKit.
 
-Open implementation inputs are the audited post-training internal-evaluation
-population/counterfactual manifest, the seven VLMEvalKit slice TSV identities
-and score-parity fixtures, the policy evaluation service identity, and the
-exact benchmark-arm decoding configurations. No benchmark-quality claim is
-allowed until those inputs and a real run artifact exist.
+CoreDev benchmark judging is fixed separately from policy-RL reward judging.
+Any VLMEvalKit path that requires an LLM must use the locally served
+`Qwen/Qwen2.5-72B-Instruct`; GPT services are forbidden. VStarBench,
+HRBench4K, BLINK, and MMMU_Pro_10c use that model only as the official MCQ
+fallback when deterministic option extraction is insufficient. OCRBench_v2 is
+rule based and uses no judge. MathVista_MINI and MathVerse_MINI require the
+Qwen2.5-72B judge. The model snapshot, service, and invocation are independently
+identified from the evaluated policy. This benchmark decision does not enable
+an LLM reward component, change the frozen RL reference, or select an SDPO
+teacher.
+The OpenAI-compatible served-model alias is `Qwen2.5-72B-Instruct` (without a
+slash) because VLMEvalKit includes the judge string in intermediate filenames;
+the repository and revision remain the model identity.
+
+The seven source slices are materialized under identity
+`coredev-2511-vlmevalkit-7055d301-v1`; their exact TSV and image-tree hashes are
+recorded in `configs/evaluation/coredev_2511_vlmevalkit_v1.json`. The remaining
+implementation inputs are the audited post-training internal-evaluation
+population/counterfactual manifest, numerical score-parity fixtures, the policy
+evaluation service identity, and the exact benchmark-arm decoding
+configurations. No benchmark-quality claim is allowed until those inputs and a
+real run artifact exist.
 
 ## 1. Objective
 
@@ -1416,9 +1433,9 @@ identity, throughput, memory, and resume behavior are recorded and reproducible.
    exploration curriculum.
 8. Original-image visibility and DeepStack mask scope after each `D`.
 9. Training population, reward benchmarks, and held-out evaluation manifests.
-10. Later activation conditions and exact service, prompt, sampling,
-    calibration, and reward scope for the reserved
-    `Qwen/Qwen2.5-72B-Instruct` judge. It is disabled for the first pilot.
+10. Later reward activation conditions, prompt, sampling, calibration, and
+    reward scope for `Qwen/Qwen2.5-72B-Instruct`. Its use as the fixed
+    VLMEvalKit benchmark judge does not activate it as an RL reward.
 11. Local/runtime path and family-specific representation artifact plan for the
     fixed `Qwen/Qwen2.5-VL-7B-Instruct` compatibility model.
 
