@@ -184,13 +184,54 @@ def test_contract_requires_and_preserves_short_answer(
     ]
 
 
-def test_choices_requires_a_new_transform_version(tmp_path: Path) -> None:
+def test_choices_are_preserved_as_ordered_identity_metadata(tmp_path: Path) -> None:
     (tmp_path / "image.png").write_bytes(b"image")
     source = tmp_path / "retained.jsonl"
-    source_sha256 = _write_source(source, [_focus_row(choices=[])])
+    source_sha256 = _write_source(
+        source,
+        [
+            _focus_row(
+                choices=[
+                    {"label": "A", "text": "OPEN"},
+                    {"label": "B", "text": "CLOSED"},
+                ]
+            )
+        ],
+    )
 
-    with pytest.raises(RepresentationDataError, match="choices"):
-        _load(source, source_sha256)
+    dataset = _load(source, source_sha256)
+
+    assert tuple(
+        (choice.label, choice.text) for choice in dataset.samples[0].choices
+    ) == (
+        ("A", "OPEN"),
+        ("B", "CLOSED"),
+    )
+
+
+@pytest.mark.parametrize(
+    "choices",
+    [None, {}, [{"label": "A"}], [{"label": "A", "text": " "}]],
+)
+def test_malformed_choices_are_excluded_fail_closed(
+    tmp_path: Path, choices: object
+) -> None:
+    (tmp_path / "image.png").write_bytes(b"image")
+    source = tmp_path / "retained.jsonl"
+    source_sha256 = _write_source(
+        source,
+        [
+            _focus_row(uid="malformed", choices=choices),
+            _focus_row(uid="valid", target="another target"),
+        ],
+    )
+
+    dataset = _load(source, source_sha256)
+
+    assert tuple(sample.sample_id for sample in dataset.samples) == ("valid",)
+    assert dataset.manifest.excluded_rows[0].reasons == (
+        RowExclusionReason.INVALID_OPTIONAL_FIELD,
+    )
 
 
 def test_duplicate_rows_ids_and_group_targets_are_recorded_and_excluded(
@@ -324,6 +365,25 @@ def test_recorded_image_path_overlap_policy_is_content_bound() -> None:
             SplitOverlapPolicy.ALLOW_RECORDED_IMAGE_PATH,
             expected_report_sha256=None,
         )
+
+
+def test_overlap_records_follow_the_content_hash_contract_order() -> None:
+    train = (
+        _sample("train-z", image="/images/z.png"),
+        _sample("train-a", image="/images/a.png"),
+    )
+    validation = (
+        _sample("validation-z", image="/images/z.png"),
+        _sample("validation-a", image="/images/a.png"),
+    )
+
+    report = train_validation_group_overlap(train, validation)
+
+    for kind in (SplitOverlapKind.IMAGE_GROUP_KEY, SplitOverlapKind.IMAGE_PATH):
+        hashes = tuple(
+            record.value_sha256 for record in report.records if record.kind is kind
+        )
+        assert hashes == tuple(sorted(hashes))
 
 
 def test_target_leakage_risk_is_metadata_not_the_legacy_overlap_signal(

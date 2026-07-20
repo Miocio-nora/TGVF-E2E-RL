@@ -45,7 +45,10 @@ from tgvf_rl.representation.training.qwen3_counterfactual import (
     build_qwen3_d_only_messages,
     load_qwen3_counterfactual_manifest,
 )
-from tgvf_rl.representation.training.schema import RepresentationTrainingSample
+from tgvf_rl.representation.training.schema import (
+    RepresentationChoice,
+    RepresentationTrainingSample,
+)
 from tgvf_rl.representation.training.streaming import (
     score_streaming_same_image_group,
 )
@@ -513,7 +516,10 @@ def test_prompt_hash_and_fields_are_explicit() -> None:
 def test_initial_representation_message_contract_hides_target_from_user(
     tmp_path: Path,
 ) -> None:
-    sample = _sample(tmp_path / "unused.png", 0)
+    sample = replace(
+        _sample(tmp_path / "unused.png", 0),
+        choices=(RepresentationChoice(label="A", text="choice-only text"),),
+    )
 
     native = build_native_representation_messages(sample, _prompt())
     assert native[0] == {
@@ -524,6 +530,7 @@ def test_initial_representation_message_contract_hides_target_from_user(
         ),
     }
     assert sample.target not in native[0]["content"][1]["text"]
+    assert sample.choices[0].text not in native[0]["content"][1]["text"]
     assert native[1]["reasoning_content"] == NATIVE_REPRESENTATION_PRE_REASONING
     assert native[1]["content"] == ""
     assert native[1]["tool_calls"][0]["function"]["arguments"] == {

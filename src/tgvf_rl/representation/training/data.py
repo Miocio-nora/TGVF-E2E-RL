@@ -16,7 +16,11 @@ import json
 from pathlib import Path
 import warnings
 
-from .schema import RepresentationSampleIdentity, RepresentationTrainingSample
+from .schema import (
+    RepresentationChoice,
+    RepresentationSampleIdentity,
+    RepresentationTrainingSample,
+)
 
 
 REPRESENTATION_DATA_TRANSFORM_VERSION = "retained_focus_rows_v1"
@@ -458,10 +462,6 @@ def load_retained_representation_jsonl(
             )
 
         row = _decode_json_object(raw_line, source_line=source_line)
-        if "choices" in row:
-            raise RepresentationDataError(
-                f"line {source_line}: choices requires a new transform version"
-            )
         sample_id = _optional_non_empty_string(row.get("uid"))
 
         filter_reasons = _focus_filter_reasons(row)
@@ -515,6 +515,7 @@ def load_retained_representation_jsonl(
             target=row["target"],
             evidence_description=row["evidence_description"],
             short_answer=row["short_answer"],
+            choices=_parse_choices(row.get("choices", [])),
             **optional_fields,
         )
 
@@ -622,6 +623,14 @@ def train_validation_group_overlap(
                     validation_sample_ids=tuple(sorted(validation_values[value])),
                 )
             )
+    records.sort(
+        key=lambda record: (
+            _SPLIT_OVERLAP_KIND_ORDER[record.kind],
+            record.value_sha256,
+            record.train_sample_ids,
+            record.validation_sample_ids,
+        )
+    )
     return SplitOverlapReport(records=tuple(records))
 
 
@@ -666,7 +675,35 @@ def _sample_field_validation_reason(
             and _optional_non_empty_string(row[name]) is None
         ):
             return RowExclusionReason.INVALID_OPTIONAL_FIELD
+    if "choices" in row and not _valid_choices(row["choices"]):
+        return RowExclusionReason.INVALID_OPTIONAL_FIELD
     return None
+
+
+def _valid_choices(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    labels: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"label", "text"}:
+            return False
+        label = _optional_non_empty_string(item["label"])
+        text = _optional_non_empty_string(item["text"])
+        if label is None or text is None or label in labels:
+            return False
+        labels.add(label)
+    return True
+
+
+def _parse_choices(value: object) -> tuple[RepresentationChoice, ...]:
+    """Parse choices after ``_sample_field_validation_reason`` accepted them."""
+
+    assert isinstance(value, list)
+    return tuple(
+        RepresentationChoice(label=item["label"], text=item["text"])
+        for item in value
+        if isinstance(item, dict)
+    )
 
 
 def _resolve_source_image(image_reference: str, *, source_parent: Path) -> Path | None:

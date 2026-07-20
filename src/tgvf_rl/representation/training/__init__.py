@@ -78,6 +78,7 @@ from .sampling import (
 )
 from .schema import (
     REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
+    RepresentationChoice,
     RepresentationSampleIdentity,
     RepresentationTrainingSample,
 )
@@ -326,6 +327,7 @@ __all__ = [
     "ReadoutSampleMetrics",
     "RepresentationHealthSummary",
     "RepresentationCandidateObservation",
+    "RepresentationChoice",
     "RepresentationAttentionTensorBundle",
     "RepresentationBranchHealthRecord",
     "RepresentationBranchHealthSummary",

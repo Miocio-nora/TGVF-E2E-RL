@@ -203,6 +203,11 @@ boundary:
   `short_answer` in answer content. Representation data admitted by this
   contract must provide all of `question`, `target`, `evidence_description`,
   and `short_answer` as non-empty strings.
+- The selected v4 source carries structured multiple-choice metadata. The v1
+  transform preserves each ordered `(label, text)` choice in the immutable
+  sample/data identity, but the accepted user message remains exactly the
+  source `question`: choices are not appended, rendered, or trained as labels.
+  Open-answer rows preserve an empty choice tuple.
 - This is also the initial accepted data/supervision contract. Its identities
   are `representation_sample_identity_v1`, `retained_focus_rows_v1`, and
   `canonical_evidence_supervision_v1`. There is no earlier supported

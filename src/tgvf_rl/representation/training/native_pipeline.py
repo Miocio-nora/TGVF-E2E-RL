@@ -6,9 +6,9 @@ Qwen action transcript, extracts the tool-call target span, builds either
 accepted target-conditioning representation, runs the TGVF Adapter, and
 constructs the two-visual-block causal evidence readout.
 
-The user prompt contract is explicitly versioned. Historical v1 runs retain
-their exact hashed prompt template, while v2 fixes the user text to the sample's
-unmodified question. The second image passed to the processor is only a
+The user prompt contract is explicitly versioned and fixes the user text to
+the sample's unmodified question. Structured source choices remain data
+identity metadata and are not rendered. The second image passed to the processor is only a
 geometry carrier: the resulting visual positions are replaced by the live TGVF
 Adapter tensors before the frozen language-model readout.
 """

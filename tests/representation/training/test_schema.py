@@ -7,6 +7,7 @@ import pytest
 import tgvf_rl.representation.training as representation_training
 from tgvf_rl.representation.training.schema import (
     REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
+    RepresentationChoice,
     RepresentationSampleIdentity,
     RepresentationTrainingSample,
 )
@@ -110,5 +111,23 @@ def test_content_identity_changes_with_every_supervision_field() -> None:
         ("answer_type", "another-answer-type"),
         ("visual_difficulty", "hard"),
         ("target_leakage_risk", "high"),
+        ("choices", (RepresentationChoice(label="A", text="OPEN"),)),
     ):
         assert _sample(**{field_name: value}).content_sha256 != baseline.content_sha256
+
+
+def test_choices_are_immutable_ordered_and_uniquely_labeled() -> None:
+    choices = (
+        RepresentationChoice(label="A", text="OPEN"),
+        RepresentationChoice(label="B", text="CLOSED"),
+    )
+    sample = _sample(choices=choices)
+
+    assert sample.choices == choices
+    assert _sample(choices=tuple(reversed(choices))).content_sha256 != (
+        sample.content_sha256
+    )
+    with pytest.raises(TypeError, match="tuple"):
+        _sample(choices=list(choices))
+    with pytest.raises(ValueError, match="unique"):
+        _sample(choices=(choices[0], choices[0]))

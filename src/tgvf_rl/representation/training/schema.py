@@ -28,6 +28,18 @@ class RepresentationSampleIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class RepresentationChoice:
+    """One ordered source choice retained as data identity metadata."""
+
+    label: str
+    text: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty_text(self.label, field_name="choice.label")
+        _require_non_empty_text(self.text, field_name="choice.text")
+
+
+@dataclass(frozen=True, slots=True)
 class RepresentationTrainingSample:
     """Protocol-neutral fields required by representation training.
 
@@ -50,6 +62,7 @@ class RepresentationTrainingSample:
     answer_type: str | None = None
     visual_difficulty: str | None = None
     target_leakage_risk: str | None = None
+    choices: tuple[RepresentationChoice, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -75,6 +88,13 @@ class RepresentationTrainingSample:
             value = getattr(self, field_name)
             if value is not None:
                 _require_non_empty_text(value, field_name=field_name)
+        if not isinstance(self.choices, tuple):
+            raise TypeError("choices must be a tuple")
+        if any(not isinstance(choice, RepresentationChoice) for choice in self.choices):
+            raise TypeError("each choice must be a RepresentationChoice")
+        labels = tuple(choice.label for choice in self.choices)
+        if len(set(labels)) != len(labels):
+            raise ValueError("choice labels must be unique")
 
     @property
     def image_group_key(self) -> str:
@@ -111,6 +131,9 @@ class RepresentationTrainingSample:
             "answer_type": self.answer_type,
             "visual_difficulty": self.visual_difficulty,
             "target_leakage_risk": self.target_leakage_risk,
+            "choices": [
+                {"label": choice.label, "text": choice.text} for choice in self.choices
+            ],
         }
         encoded = json.dumps(
             payload,
