@@ -4006,6 +4006,10 @@ instead of repeated bullets.
   PIDs `2538642`/`2538643`. Step 10 reproduced the V1 preflight losses exactly;
   elapsed `4.764831926` seconds, all gradients finite, run identity
   `4c68acf45718fae12e959803826bf6c1fdba7f5701d3c54b3bbfccbd89640bf3`.
+- W&B telemetry: read-only sidecar at code `997c476`, project
+  `mio_mi0/tgvf-e2e-rl`, run `representation-qwen3-contextual-v2` / ID
+  `rep-qwen3-v4-contextual-v2`; historical backfill and live upload verified
+  through step 170. The runner-owned local JSONL remains authoritative.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
   PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
   TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 28800s
