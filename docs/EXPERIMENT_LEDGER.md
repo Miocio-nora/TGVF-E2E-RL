@@ -4280,7 +4280,7 @@ instead of repeated bullets.
 
 ### REP-QWEN3-V4-CONTEXTUAL-V4
 
-- Lifecycle/result: `PLANNED` / `PENDING`; fresh formal replacement for V3
+- Lifecycle/result: `RUNNING` / `PENDING`; fresh formal replacement for V3
   after mandatory periodic-boundary smoke RP-33 passed.
 - Identity/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
   config source/canonical SHA256
@@ -4303,10 +4303,15 @@ instead of repeated bullets.
   configs/representation/qwen3_v4_contextual_hidden_state_v4.toml`.
 - Acceptance: finite train/validation metrics, DCP v2 at 500/1000/1500/2000,
   final step 2000 Adapter artifact, tokenizer invariance and clean teardown.
+- Runtime: started `2026-07-20T19:28:50+09:00`; torchrun PID `2800191`, rank
+  PIDs `2800348/2800349`, run identity
+  `6c74885183eba8cfc6d7393a296b897b3caf939c88ffe016028c3a02b5f3d5c0`.
+  Steps 10 and 20 completed with finite losses/gradients. W&B upload is live at
+  `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-qwen3-v4-contextual-v4`.
 
 ### REP-QWEN3-V4-TARGET-EMBEDDING-V3
 
-- Lifecycle/result: `PLANNED` / `PENDING`; paired fresh formal replacement for
+- Lifecycle/result: `RUNNING` / `PENDING`; paired fresh formal replacement for
   V2 after mandatory periodic-boundary smoke RP-34 passed.
 - Identity/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
   config source/canonical SHA256
@@ -4321,6 +4326,11 @@ instead of repeated bullets.
   `rep-qwen3-v4-target-embedding-v3`. Command uses the deterministic V2
   environment and `configs/representation/qwen3_v4_target_token_embedding_v3.toml`
   under the same 28800-second bound. RL-only fields are N/A.
+- Runtime: started `2026-07-20T19:28:50+09:00`; torchrun PID `2800187`, rank
+  PIDs `2800335/2800336`, run identity
+  `5d23fafd91ec3af9a926e52af4fd6ed163349ae3734ef3c78057a329f55ee245`.
+  Steps 10 and 20 completed with finite losses/gradients. W&B upload is live at
+  `https://wandb.ai/mio_mi0/tgvf-e2e-rl/runs/rep-qwen3-v4-target-embedding-v3`.
 
 ## Compatibility-spike status
 
