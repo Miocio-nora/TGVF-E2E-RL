@@ -263,8 +263,9 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   `1e-8`, weight decay `0.01`, gradient clipping at `1.0`, and the exact
   historical cosine schedule with 100 warmup steps and minimum learning-rate
   ratio `0.1` over 2,000 optimizer steps. These are also the accepted values for
-  the initial paired provider runs; the production TOML remains blocked only on
-  the explicit v3-versus-v4 train-data choice and final artifact paths.
+  the initial paired provider runs. The selected data pair is v4 clean-imend
+  Protocol-C focus train plus v3 val-2k accepted validation; the production
+  TOMLs remain pending their materialized manifests and final artifact paths.
 - Same-image group size `K=4` is retained. On physical GPUs 2 and 3 the bounded
   geometry proof uses four accumulation microsteps, giving 32 global rows and
   eight complete `4x4` matrices per optimizer update. A measured throughput

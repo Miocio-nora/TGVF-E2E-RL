@@ -197,17 +197,16 @@ are recorded here or in a linked immutable data artifact. It must be adapted to
 the new native-format representation pipeline. The historical rendered format,
 serialization, launcher, and resume state are not reused as the new pipeline.
 
-The user selected the historical representation data family for the new
-pipeline. The exact production train candidate remains a choice between the v3
-accepted population and the later v4 clean-imend Protocol-C focus split. The
-following exact worktree files were identified and content-hashed before row
-inspection:
+The user selected the v4 clean-imend Protocol-C focus split for production
+training and the v3 val-2k accepted population for validation. The v3 accepted
+train population remains comparison-only. The following exact worktree files
+were identified and content-hashed before row inspection:
 
 | Role | Exact legacy worktree path | SHA256 |
 |---|---|---|
-| candidate retained train rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_50k/final/tgvf_teacher_items.accepted.jsonl` | `8406f8f843f927642aa2d728f1896579f20c44ca7329b86cb35b42544f73f666` |
-| candidate clean-imend Protocol-C focus train split | `data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.train.jsonl` | `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c` |
-| candidate validation rows (not path-disjoint after audit) | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
+| comparison-only v3 train rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_50k/final/tgvf_teacher_items.accepted.jsonl` | `8406f8f843f927642aa2d728f1896579f20c44ca7329b86cb35b42544f73f666` |
+| selected v4 clean-imend Protocol-C focus train split | `data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.train.jsonl` | `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c` |
+| selected v3 validation rows | `data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl` | `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308` |
 
 These files are not committed at the frozen legacy commit and remain external
 data artifacts. Their hashes authorize bounded read-only schema/count/split
@@ -289,8 +288,8 @@ Neither structured JSONL contains a literal `<|im_end|>` string. Therefore the
 `clean_imend` run name must not be interpreted as the only semantic difference
 from v3; the observable file is a new teacher/schema/split with materially
 different questions, targets, evidence, answer taxonomy, and source mixture.
-The production train choice must be explicit rather than treating these two
-hashes as interchangeable.
+The user therefore selects the v4 hash for training and retains the v3 train
+hash only for historical comparison; the two hashes are not interchangeable.
 
 ## Golden representation checkpoint
 

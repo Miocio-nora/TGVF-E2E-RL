@@ -433,7 +433,8 @@ gates.
   `canonical_evidence_supervision_v1`, provider, optimizer/scheduler, BF16,
   K=4/per-rank-B4/two-rank/GA4/global-B32 accumulation, 10-step logging,
   500-step validation/checkpoint cadence, `image_max_pixels=262144`, and output
-  paths in a production TOML artifact after the v3-versus-v4 data choice;
+  paths in production TOMLs using the selected pinned v4 clean-imend train and
+  v3 val-2k validation populations;
 - run the formal internal evaluation on the accepted v1 trajectory and audited
   counterfactual pair manifest, reporting the historical Golden metrics as the
   comparison baseline for both ordered provider runs;

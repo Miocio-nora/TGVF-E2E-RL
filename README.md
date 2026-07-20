@@ -211,9 +211,9 @@ choices remain unset:
 
 - Qwen2.5 local/runtime path, family-specific representation artifact, and
   native prompt;
-- the final pinned v3-versus-v4 representation train choice, accepted
-  train/validation manifests, dataset/image licenses, and perceptual duplicate
-  policy; the seven exact resolved-path overlaps are recorded and accepted;
+- materialized manifests and dataset/image licenses for the selected pinned v4
+  clean-imend train and v3 val-2k validation populations, plus the perceptual
+  duplicate policy; recorded exact overlaps are accepted without filtering;
 - formal execution of the fixed contextual-hidden-state layer `-1` first run
   and target-token-embedding second run. Both use seed `42`, the accepted v1
   transcript, fixed objective/optimizer/batch/cadence, and historical Golden

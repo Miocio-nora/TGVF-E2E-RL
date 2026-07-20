@@ -126,10 +126,10 @@ trainer, without claiming a completed production run:
   distribution and attention health, plus a concrete Qwen3 native D-only
   teacher-forced/free-continuation path. The historical Golden report is the
   accepted comparison baseline; formal execution under the v1 trajectory is
-  pending the final v3-versus-v4 train choice.
+  pending manifest binding for the selected v4 train/v3 validation pair.
 
-Production data/manifests, the v3-versus-v4 train choice, paired-provider
-execution, and formal counterfactual evaluation remain open under Gate A0. The
+Production data-manifest binding, paired-provider execution, and formal
+counterfactual evaluation remain open under Gate A0. The
 provider order, seed `42`, hyperparameters, simple parity scope, historical
 evaluation baseline, and representation user-message structure are fixed, but
 not yet bound into a promoted production run. `RP-11` remains an executor/resume proof with its

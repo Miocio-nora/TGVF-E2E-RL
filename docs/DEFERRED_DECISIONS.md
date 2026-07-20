@@ -9,9 +9,8 @@ from veRL, DeepEyes, SDPO, a legacy run, or a synthetic test fixture.
 
 ## Data and prompts
 
-- final selection between the pinned v3 accepted train population and the
-  materially different pinned v4 clean-imend focus train split, followed by
-  its exact production manifest and license record;
+- materialization of the selected pinned v4 clean-imend train and v3 val-2k
+  validation manifests, plus their dataset/image license record;
 - policy-RL prompt population, sampling rule, group construction, and held-out
   evaluation manifest;
 - final policy-RL system/user prompt wording and native tool-call safety cap;

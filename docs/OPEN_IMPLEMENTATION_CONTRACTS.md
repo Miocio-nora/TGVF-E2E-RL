@@ -90,7 +90,7 @@ scale gates below remain authoritative.
 
 No data or Adapter artifact is accepted for production use. Dataset/image
 licenses, the seven resolved-path split overlaps, representation
-v3-versus-v4 train choice, the policy-RL prompt, reward values,
+manifest materialization, the policy-RL prompt, reward values,
 production GRPO/SDPO mathematics and configuration, any hybrid objective, long
 training, and the 72B judge remain open and fail closed. The representation
 user-message structure itself is fixed separately by
@@ -699,8 +699,9 @@ the external data or start a production/GPU run.
     manifold zero, AdamW LR `1e-4`, cosine/100-step warmup/min-ratio `0.1`,
     K=4, per-rank batch 4, two ranks, GA=4, global batch 32, 2,000 steps,
     log-every 10, validate/save-every 500, BF16, clipping `1.0`, seed `42`, and
-    `image_max_pixels=262144`. The production TOML remains pending only on the
-    explicit v3-versus-v4 train data choice and final artifact paths.
+    `image_max_pixels=262144`. Training uses the pinned v4 clean-imend focus
+    split and validation uses pinned v3 val-2k; the production TOMLs remain
+    pending their materialized manifests and final artifact paths.
     Historical `L_gen` first divides each sample's summed evidence NLL by that
     sample's evidence-token count, then sums those per-sample means and divides
     by the global sample count. Accumulation and DDP must aggregate that global
@@ -1051,8 +1052,8 @@ the synthetic implementation smoke.
   without making a production-training or promoted-artifact claim.
 - [x] Run `RP-11`, the bounded real-Qwen3 K=4/GA=4 continuous versus clean
   teardown/restore matching-next-update proof with Matrix CE, `L_gen`, and Norm.
-- [ ] Select the pinned v3 or v4 production train population, bind its manifest
-  and final artifact paths, then execute the already fixed contextual-first /
+- [ ] Bind the selected pinned v4-train/v3-validation manifests and final
+  artifact paths, then execute the already fixed contextual-first /
   embedding-second pair and historical-baseline evaluation before any
   production training claim.
 - [x] Implement the S0 Qwen-family boundary, both condition-provider
