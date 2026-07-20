@@ -3881,6 +3881,81 @@ retained as `INVALID` and rerun under a new planned ID.
   `TRITON_ATTN` path already proven by the repository's Qwen3 vLLM smoke; no
   dependency is installed or changed and no quality claim follows.
 
+### BJ-10-R3-QWEN25-72B-VLLM-SERVICE
+
+- Cell/matrix ID and mandatory/diagnostic class: `BJ-10-R3`; bounded corrective
+  judge deployment smoke using the repository's already proven Triton attention
+  path after R2 isolated FlashInfer's polluted CUDA JIT environment.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: identical user
+  authorization and `EVAL-ARCH-20260720` scope to BJ-10.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: identical to R2, with the added gate that vLLM selects
+  `TRITON_ATTN`, avoiding FlashInfer/NVCC while preserving exact 72B/TP2 service
+  identity and the deterministic response contract.
+- Baseline and exact output path: failed R2; output root
+  `artifacts/evaluation/BJ-10-R3-qwen25-72b-vllm-service-5581164`, server log
+  `server.log`, copied snapshot validation `snapshot_validation.json`, service
+  smoke `smoke.json`, and GPU sample `gpu.csv`.
+- Model and processor identity: identical fixed 72B snapshot, shards, tokenizer
+  and chat-template identity to BJ-10.
+- Representation checkpoint identity: N/A; text-only judge.
+- N/A fields and justification: identical inference-only N/A fields to BJ-10.
+- Policy/reference initialization: N/A; forbidden judge roles unchanged.
+- Rollout policy version and allowed asynchronous staleness: N/A.
+- Code commit and worktree state: runtime code commit
+  `5581164249c32d936c6390c6b3c4643ee883b4f4`; launch worktree must be clean
+  except for this subsequently committed ledger plan.
+- Repository adapter/patch surface and hash: service config SHA256
+  `85114f295ba57ec39c98785890e2041de7c756f73e04abee5424ca4eecc5f0e4`;
+  smoke script SHA256
+  `b7dea272a2eb2a4bc98257a5aec48d2004f0c10afe718a4e2c3655d0ec1c4ca7`;
+  no dependency, external-checkout or site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: synthetic `n=1` request, no
+  benchmark rows; request SHA256
+  `30486f0066f51a616e4cf6d53403b067c6346abcbb017f414369ebe13c7e767e`.
+- Native prompt/tool schema hash: no tool schema; request hash above.
+- Chat-template/token-fixture hash and token-ownership masks: identical to
+  BJ-10; masks N/A.
+- D/DeepStack/position/mask identity: N/A.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: identical to BJ-10; vLLM 0.12, Torch
+  2.9.0+cu128, Transformers 4.57.6, Python 3.12.3 and the exact lock hash.
+- Objective equations and normalization: N/A; no loss/update.
+- Rollout/replay forward mode and adapter dropout/RNG contract: vLLM V1 server,
+  prefix caching, Triton attention, eval inference; no Adapter/replay.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: identical to BJ-10; seed 42,
+  temperature 0, maximum 32 tokens, greedy vLLM defaults, no processors/logprobs.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16, auto KV, no quantization,
+  `TRITON_ATTN`, TP=2, max length 32768, utilization 0.85, 64 maximum sequences,
+  no training mesh.
+- Logit/logprob/loss/gradient parity tolerances: exact engine/served identity,
+  exact response `TGVF_JUDGE_READY`, normal finish; objective parity N/A.
+- World size, microbatch, accumulation, and global batch: TP world `2`, one
+  request/completion; training batch/accumulation N/A.
+- GPUs: identical physical B200 indices, UUIDs and logical mapping to BJ-10.
+- Start/end timestamps, elapsed time, and session/process identity: pending.
+- Actual GPU-hours and peak scratch use: pending; no checkpoint.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CC=/usr/bin/gcc CXX=/usr/bin/g++
+  CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12
+  PATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn
+  VLLM_ATTENTION_BACKEND=TRITON_ATTN TOKENIZERS_PARALLELISM=false
+  .venv312/bin/python -m vllm.entrypoints.openai.api_server --model
+  /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct --served-model-name
+  Qwen2.5-72B-Instruct --host 127.0.0.1 --port 8012 --tensor-parallel-size 2
+  --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization 0.85
+  --max-num-seqs 64 --seed 42 --generation-config vllm
+  --enable-prefix-caching`.
+- Outputs: exact paths above; service stopped after smoke and GPUs released.
+- Scorer/parser identity: unchanged smoke script; no benchmark scorer.
+- Metrics: pending exact response, usage, latency, load/warm-up time, memory,
+  process identity and log hash.
+- Conclusion: `PENDING`; deployment availability only, not calibration or
+  benchmark quality.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
