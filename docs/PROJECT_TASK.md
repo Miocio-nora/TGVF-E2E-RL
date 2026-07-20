@@ -1355,6 +1355,13 @@ framework-neutral interfaces.
 
 ### Phase 4: native representation training and family compatibility
 
+- Decision `RPI-20260720-WANDB-TELEMETRY` accepts a CPU-only W&B sidecar for
+  user-authorized formal representation runs. It may read the immutable TOML
+  identity and tail the runner-owned metrics JSONL, backfill existing metric
+  events, and upload a small flattened parameter/metric set to a separately
+  named project. It must not mutate training state, infer missing metrics,
+  upload sample IDs, alter checkpoint/resume identity, or become a training
+  dependency. The local JSONL remains the authoritative scientific record.
 - Compare old Protocol-C and native-tool `Hq`/`D` behavior.
 - Build the new native-format representation data/training/checkpoint pipeline.
 - Reproduce the pinned same-image multi-target sampler and exact Matrix-CE
