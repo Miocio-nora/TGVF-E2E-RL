@@ -3970,6 +3970,50 @@ instead of repeated bullets.
   judge calibration, benchmark scoring, an RL reward, reference policy, or
   SDPO teacher claim.
 
+### REP-QWEN3-V4-CONTEXTUAL-V2
+
+- Lifecycle/result: `PLANNED` / `PENDING`; user-authorized full representation-
+  phase training, contextual-hidden-state provider first. The exact V1
+  10-step preflight is retained unchanged as the baseline; V2 starts fresh
+  because checkpoint code identity is strict.
+- Identity: code `6496a4d135078f83430a63e59d9c14455fd85e69` with no bound-code
+  dirt; config source/canonical SHA256 `c4888c33d72b85c7d7054082d0483b74d80c63b0e19eb0ba5b8cf8200e5b300d` /
+  `43568e93ecb3e7a748fd8e8a6ec8efb60607084a2ee7786c35a3d18ec473ac25`.
+  Output is exclusively
+  `artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V2/`, overwrite forbidden.
+- Model/data/prompt: frozen local Qwen3-VL-8B-Thinking, BF16 SDPA, tokenizer
+  151669 with no resize, chat-template SHA256 `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  aspect-ratio-preserving `max_pixels=262144`; v4 clean-imend train
+  SHA256 `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c`
+  (`n=39998`) and v3 validation SHA256
+  `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308`
+  (`n=1382`), with the accepted recorded seven-image overlap. Native prompt v1
+  is exactly `{question}`, SHA256
+  `bf085a6e12c9d0e23a9dd157df084f933b2ef021caba82def1494bfb84a723c9`.
+- Training identity: fresh TGVF Adapter seed 42; contextual layer `-1`; main D
+  plus all three D-DeepStack branches; Balanced Matrix CE/L_gen/Norm weights
+  `1/1/0.1`, temperature `1`, manifold `0`; AdamW LR `1e-4`, historical cosine,
+  100 warmup, min ratio `.1`; 2000 optimizer steps, K4/B4 per rank, GA4,
+  world2/global batch32, validation and DCP v2 every 500 steps, logging every
+  10, internal evaluation disabled for this run.
+- Execution: deterministic frozen-Qwen/Adapter-only FSDP2, `fsdp=[2]`,
+  `reshard_after_forward=false`, BF16 parameters/outputs and FP32 reductions;
+  physical GPU2 `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and GPU3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`, both idle at planning
+  `2026-07-20T17:11:35+09:00`. RL rollout/replay, reward, GRPO, SDPO, vLLM,
+  sampling/logprobs, judge and answer scoring are N/A.
+- Planned command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 28800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/representation/qwen3_v4_contextual_hidden_state_v2.toml`, with stdout
+  and stderr captured as `run.log` under the output root.
+- Acceptance: reach step 2000; finite logged losses/gradients; strict step
+  500/1000/1500/2000 checkpoints and validation events; tokenizer unchanged;
+  publish the final Adapter artifact. Expected train-core time is about 2.25 h
+  from RP-30, plus validation/checkpoint overhead.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

@@ -1,10 +1,10 @@
-schema_version = "representation-training-config-v3"
+schema_version = "representation-training-config-v4"
 scope = "qwen3_native_representation_phase_training"
-run_id = "REP-QWEN3-V4-CONTEXTUAL-V1"
+run_id = "REP-QWEN3-V4-CONTEXTUAL-V2"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "f32470cc0ffca49ec2834757389ed8e2e065d90e"
+commit = "6496a4d135078f83430a63e59d9c14455fd85e69"
 dirty = false
 dirty_state_sha256 = "none"
 
@@ -114,9 +114,12 @@ target_optimizer_steps = 2000
 validation_every_optimizer_steps = 500
 log_every_optimizer_steps = 10
 
+[post_training_internal_evaluation]
+enabled = false
+
 [output]
-final_artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V1/adapter.pt"
-metrics_jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V1/metrics.jsonl"
+final_artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V2/adapter.pt"
+metrics_jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V2/metrics.jsonl"
 allow_overwrite = false
 
 [resume]
@@ -125,8 +128,8 @@ checkpoint_path = "none"
 strict_identity = true
 
 [checkpoint]
-directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V1/checkpoints"
-filename_prefix = "representation-qwen3-v4-contextual-v1"
+directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V2/checkpoints"
+filename_prefix = "representation-qwen3-v4-contextual-v2"
 save_every_optimizer_steps = 500
 save_final = true
 keep_last = 4
