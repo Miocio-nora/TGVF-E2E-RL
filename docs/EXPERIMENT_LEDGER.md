@@ -4798,9 +4798,9 @@ instead of repeated bullets.
   source/canonical config SHA256 `dba4455d...433c` /
   `2a7bd7f4...3462`; immutable root
   `artifacts/representation/RP-54-qwen3-main-d-only-balanced-t1-contextual-2000-gpu01/`.
-- Pair contract: every RP-46 scientific field remains fixed—local
+- Optimizer-update pair contract: every RP-46 training field remains fixed—local
   Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer 151669/no resize, max pixels
-  262144, v4 clean-imend train/test, native image-question prompt v1,
+  262144, v4 clean-imend train split, native image-question prompt v1,
   contextual layer -1, seed 42, K4/B4/world2/GA4/global batch 32, Balanced
   mean-NLL Matrix CE T=1 + L_gen + Norm weights 1/1/.1, manifold 0, AdamW
   1e-4, 2000-step cosine/warmup 100/min ratio .1, FSDP2 no-reshard and
@@ -4808,6 +4808,14 @@ instead of repeated bullets.
   DeepStack remains native, while TGVF D-DeepStack contributes no observation,
   objective, gradient, trainable parameter or artifact tensor; Norm is main-D
   only.
+- Diagnostic-split caveat: RP-46's historical periodic validation used the v3
+  accepted validation file, whereas RP-54 follows the later user decision to
+  use the v4 clean-imend test split. Periodic validation has no optimizer,
+  scheduler, checkpoint-selection or early-stopping feedback, so the 2000
+  training updates remain paired. The promoted RP-46 and RP-55 internal
+  evaluations are exactly matched on the same immutable v4-Golden 200/46
+  population. This difference must not be described as literal all-field
+  training-run identity.
 - Acceptance: finite steps 1--2000, validation and complete DCPs at
   500/1000/1500/2000, final Adapter artifact with its v2 variant identity,
   tokenizer unchanged, W&B telemetry including `adapter_variant=main_d_only`,

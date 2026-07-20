@@ -581,8 +581,8 @@ they are not observations, objectives, gradients, or artifact parameters.
 
 The paired experiment uses contextual hidden state, Balanced mean-NLL Matrix
 CE at temperature `1.0`, fresh seed 42, and exactly the completed contextual
-Balanced/T=1.0 baseline's model, native prompt, v4 clean-imend data, global
-batch 32, optimizer/scheduler, 2000-step horizon, max-pixels 262144, objective
+Balanced/T=1.0 baseline's model, native prompt, v4 clean-imend training data,
+global batch 32, optimizer/scheduler, 2000-step horizon, max-pixels 262144, objective
 weights `1/1/.1`, manifold zero and checkpoint cadence. Its internal evaluation
 uses the same v4-Golden first-200/46-group manifest and reports main-D
 specificity/readability without presenting zero branch placeholders as learned
@@ -590,6 +590,14 @@ D-DeepStack health. Before the full run, the altered parameter/checkpoint
 topology must pass focused loss/gradient tests and one fresh/resume periodic
 boundary smoke. This ablation does not change the production full-D-DeepStack
 Adapter contract or policy RL default.
+
+The historical full-D baseline used a v3 file only for its non-feedback
+periodic validation diagnostics; the ablation uses the later accepted v4
+clean-imend test split. Both use the identical v4 clean-imend training split,
+and their promoted internal evaluations use the identical v4-Golden 200/46
+population. Because periodic validation does not affect optimizer updates,
+scheduling, checkpoint selection or early stopping, this is a recorded
+diagnostic-split difference rather than an optimizer-update confound.
 
 Completion evidence (2026-07-21 JST): RP-53 passed the required two-rank
 fresh/resume boundary; RP-54 completed 2000 steps with all four durable
