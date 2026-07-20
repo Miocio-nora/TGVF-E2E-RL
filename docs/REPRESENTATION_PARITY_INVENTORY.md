@@ -420,21 +420,15 @@ gates.
 
 ## Open scientific and production items
 
-- materialize the accepted recorded-image-path overlap policy in the production
-  TOML; record dataset/image licenses and perform a perceptual near-duplicate
-  audit;
+- record dataset/image licenses and perform a perceptual near-duplicate audit;
 - preserve the single accepted v1 transcript/processor golden identity; the
   first provider is contextual hidden state layer `-1` and the next paired
   provider is target token embedding;
-- bind seed `42`,
-  `qwen3-representation-image-question-v1` /
-  `native_representation_prompt_v1` prompt identity/hash,
-  `representation_sample_identity_v1`, `retained_focus_rows_v1`,
-  `canonical_evidence_supervision_v1`, provider, optimizer/scheduler, BF16,
-  K=4/per-rank-B4/two-rank/GA4/global-B32 accumulation, 10-step logging,
-  500-step validation/checkpoint cadence, `image_max_pixels=262144`, and output
-  paths in production TOMLs using the selected pinned v4 clean-imend train and
-  v3 val-2k validation populations;
+- retain the now-bound seed `42`, v1 prompt/data/evidence identities,
+  provider, optimizer/scheduler, BF16, K4/B4/two-rank/GA4/global-B32 geometry,
+  10-step logging, 500-step validation/checkpoint cadence,
+  `image_max_pixels=262144`, selected v4/v3 populations and exact overlap
+  report in both production TOMLs;
 - run the formal internal evaluation on the accepted v1 trajectory and audited
   counterfactual pair manifest, reporting the historical Golden metrics as the
   comparison baseline for both ordered provider runs;

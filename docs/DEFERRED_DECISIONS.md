@@ -9,8 +9,8 @@ from veRL, DeepEyes, SDPO, a legacy run, or a synthetic test fixture.
 
 ## Data and prompts
 
-- materialization of the selected pinned v4 clean-imend train and v3 val-2k
-  validation manifests, plus their dataset/image license record;
+- dataset/image license record for the now-materialized selected pinned v4
+  clean-imend train and v3 val-2k validation manifests;
 - policy-RL prompt population, sampling rule, group construction, and held-out
   evaluation manifest;
 - final policy-RL system/user prompt wording and native tool-call safety cap;
@@ -85,5 +85,6 @@ experiment identities, not reasons to leave the implementation as a stub.
   inferred, so `pyproject.toml` intentionally has no license metadata and the
   repository currently grants no explicit reuse license.
 
-Only physical GPU indices 2 and 3 are authorized for the current smoke. This
-file does not authorize real training.
+Only physical GPU indices 2 and 3 were authorized for the completed bounded
+contextual preflight. This file does not authorize continuation to the full
+2,000-step run.

@@ -1,0 +1,135 @@
+schema_version = "representation-training-config-v3"
+scope = "qwen3_native_representation_phase_training"
+run_id = "REP-QWEN3-V4-TARGET-EMBEDDING-V1"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "f32470cc0ffca49ec2834757389ed8e2e065d90e"
+dirty = false
+dirty_state_sha256 = "none"
+
+[model]
+family = "qwen3_vl"
+model_name = "Qwen3-VL-8B-Thinking"
+local_path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+tokenizer_length = 151669
+chat_template_sha256 = "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956"
+dtype = "bfloat16"
+attention_backend = "sdpa"
+local_files_only = true
+trust_remote_code = false
+tokenizer_resize = false
+image_max_pixels = 262144
+
+[conditioning]
+provider = "target_token_embedding"
+embedding_identity = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking::language_model.input_embeddings"
+
+[data]
+warn_on_target_leakage = false
+split_overlap_policy = "allow_recorded_image_path"
+expected_overlap_report_sha256 = "e79a939ae8a757e42f49377b07d224338071396667e1a3330b91a35a3057987c"
+
+[data.train]
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.train.jsonl"
+source_sha256 = "c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c"
+batch_size = 4
+sampler_seed = 42
+
+[data.validation]
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl"
+source_sha256 = "a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308"
+batch_size = 4
+sampler_seed = 42
+
+[prompt]
+schema_version = "native_representation_prompt_v1"
+identity = "qwen3-representation-image-question-v1"
+template = "{question}"
+sha256 = "bf085a6e12c9d0e23a9dd157df084f933b2ef021caba82def1494bfb84a723c9"
+
+[objective]
+identity = "balanced-matrix-ce-l-gen-norm-v1"
+kind = "matrix_ce_l_gen_and_norm"
+matrix_ce_weight = 1.0
+l_gen_weight = 1.0
+norm_weight = 0.1
+matrix_ce_mode = "balanced"
+matrix_ce_temperature = 1.0
+manifold_enabled = false
+manifold_weight = 0.0
+
+[optimizer]
+type = "adamw"
+learning_rate = 0.0001
+betas = [0.9, 0.999]
+eps = 0.00000001
+weight_decay = 0.01
+amsgrad = false
+maximize = false
+foreach = false
+capturable = false
+differentiable = false
+fused = false
+decoupled_weight_decay = true
+
+[scheduler]
+kind = "historical_cosine"
+total_steps = 2000
+warmup_steps = 100
+min_lr_ratio = 0.1
+
+[execution]
+precision = "bf16"
+max_grad_norm = 1.0
+require_all_adapter_gradients = true
+gradient_clip_norm_type = 2.0
+gradient_clip_error_if_nonfinite = true
+
+[initialization]
+kind = "fresh_random"
+seed = 42
+source_artifact_sha256 = "none"
+allow_legacy_checkpoint_initialization = false
+
+[fsdp2]
+strategy = "fsdp2"
+world_size = 2
+physical_gpu_ids = [2, 3]
+logical_gpu_ids = [0, 1]
+device_type = "cuda"
+mesh_dim_name = "fsdp"
+mesh_shape = [2]
+reshard_after_forward = false
+parameter_dtype = "bfloat16"
+reduce_dtype = "float32"
+output_dtype = "bfloat16"
+cast_forward_inputs = true
+offload_policy = "none"
+
+[training]
+gradient_accumulation_steps = 4
+groups_per_rank_per_optimizer_step = 1
+target_optimizer_steps = 2000
+validation_every_optimizer_steps = 500
+log_every_optimizer_steps = 10
+
+[output]
+final_artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V1/adapter.pt"
+metrics_jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V1/metrics.jsonl"
+allow_overwrite = false
+
+[resume]
+enabled = false
+checkpoint_path = "none"
+strict_identity = true
+
+[checkpoint]
+directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V1/checkpoints"
+filename_prefix = "representation-qwen3-v4-target-embedding-v1"
+save_every_optimizer_steps = 500
+save_final = true
+keep_last = 4
+strict_identity = true
+optimizer_boundary_only = true
+format = "distributed-representation-checkpoint-v2"

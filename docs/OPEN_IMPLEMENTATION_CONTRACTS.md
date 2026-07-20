@@ -700,8 +700,8 @@ the external data or start a production/GPU run.
     K=4, per-rank batch 4, two ranks, GA=4, global batch 32, 2,000 steps,
     log-every 10, validate/save-every 500, BF16, clipping `1.0`, seed `42`, and
     `image_max_pixels=262144`. Training uses the pinned v4 clean-imend focus
-    split and validation uses pinned v3 val-2k; the production TOMLs remain
-    pending their materialized manifests and final artifact paths.
+    split and validation uses pinned v3 val-2k. Both production TOMLs,
+    materialized manifests, overlap report and final artifact paths are bound.
     Historical `L_gen` first divides each sample's summed evidence NLL by that
     sample's evidence-token count, then sums those per-sample means and divides
     by the global sample count. Accumulation and DDP must aggregate that global
@@ -1052,10 +1052,12 @@ the synthetic implementation smoke.
   without making a production-training or promoted-artifact claim.
 - [x] Run `RP-11`, the bounded real-Qwen3 K=4/GA=4 continuous versus clean
   teardown/restore matching-next-update proof with Matrix CE, `L_gen`, and Norm.
-- [ ] Bind the selected pinned v4-train/v3-validation manifests and final
-  artifact paths, then execute the already fixed contextual-first /
-  embedding-second pair and historical-baseline evaluation before any
-  production training claim.
+- [x] Bind the selected pinned v4-train/v3-validation manifests, seven-path
+  overlap report, provider-ordered production TOMLs and final artifact paths.
+  The contextual configuration also passed a bounded real two-rank step-10
+  preflight.
+- [ ] Complete the contextual-first / embedding-second pair and
+  historical-baseline evaluation before any trained-quality artifact claim.
 - [x] Implement the S0 Qwen-family boundary, both condition-provider
   interfaces, SDPO teacher/objective/checkpoint boundary, and optional
   judge-provider interface. This does not close Qwen2.5 end-to-end or D0

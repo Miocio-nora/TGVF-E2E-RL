@@ -270,12 +270,15 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   ratio `0.1` over 2,000 optimizer steps. These are also the accepted values for
   the initial paired provider runs. The selected data pair is v4 clean-imend
   Protocol-C focus train plus v3 val-2k accepted validation; the production
-  TOMLs remain pending their materialized manifests and final artifact paths.
+  TOMLs, materialized manifests, overlap report, and final artifact paths are
+  bound under `configs/representation/`.
 - Same-image group size `K=4` is retained. On physical GPUs 2 and 3 the bounded
   geometry proof uses four accumulation microsteps, giving 32 global rows and
   eight complete `4x4` matrices per optimizer update. A measured throughput
-  result is required before estimating or launching the full 2,000-step run;
-  the K=2/one-step smoke is not throughput evidence.
+  result is required before launching the full 2,000-step run. RP-30 measured
+  4.0565 seconds/step for target-token embedding, and the formal contextual
+  step-10 preflight measured 4.7256 seconds/step. The latter implies about
+  2.63 train-core hours for 2,000 steps before validation/checkpoint overhead.
 - The seven already-audited exact resolved-image-path overlaps are accepted as
   recorded split metadata and do not block training. Configuration must select
   an explicit allow-recorded-overlap policy, preserve and log the exact overlap
@@ -388,6 +391,13 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   GPU2/GPU3 utilization rose from `33.8%`/`36.0%` to about `84.5%`/`83.8%`.
   This retained path estimates `2.2536` train-core hours for 2,000 steps;
   periodic validation/checkpoint time remains additional.
+- Formal preflight `REP-QWEN3-V4-CONTEXTUAL-V1-PREFLIGHT` binds the selected
+  v4/v3 manifests, seven recorded image-path overlaps, initial v1 prompt,
+  Balanced Matrix CE/L_gen/Norm objective, contextual layer `-1`, seed 42 and
+  K4/B4/two-rank/GA4 geometry. Its bounded first 10 steps passed with finite
+  nonzero Adapter gradients and a durable resumable checkpoint; step 10 took
+  `4.7256` seconds. This is execution readiness, not the 2,000-step result or
+  historical-baseline internal-evaluation promotion.
 - Decision `RPI-20260720-CONTINUOUS-REPRESENTATION-EXECUTION` accepts a
   mathematics-preserving refactor of the Qwen3 native representation group
   builder to remove CPU/GPU bubbles measured in RP-17 and RP-18. For one

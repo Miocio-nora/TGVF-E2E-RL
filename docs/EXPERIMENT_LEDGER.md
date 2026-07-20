@@ -3471,6 +3471,130 @@ identity collision is retained as `INVALID` and rerun under a new planned ID.
   invariant and ordered batch transcript path. The repeated merged-vocabulary
   scans were the principal cause of the previously discontinuous GPU usage.
 
+### REP-QWEN3-V4-CONTEXTUAL-V1-PREFLIGHT
+
+- Cell/matrix ID and mandatory/diagnostic class: representation-phase formal
+  configuration preflight; mandatory real-Qwen/provider wiring and gradient
+  check, bounded to the exact run's first 10 optimizer steps.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: representation
+  contract in `PROJECT_TASK.md`; user-approved implementation continuation on
+  2026-07-20 JST. This is not a veRL compatibility-spike cell.
+- Lifecycle status: COMPLETE
+- Result: PASS
+- Question: can the accepted contextual-hidden-state provider, selected formal
+  data, native v1 prompt, Balanced Matrix CE objective and real Qwen3/TGVF
+  Adapter execute a nonzero-gradient optimizer update under the production
+  two-rank geometry?
+- Baseline and exact output path:
+  `artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V1/`; operational stop at
+  optimizer step 10, with no final Adapter publication.
+- Model and processor identity: local `Qwen3-VL-8B-Thinking`, tokenizer length
+  151669, chat-template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  BF16, SDPA, `image_max_pixels=262144`, no tokenizer resize.
+- Representation checkpoint identity: fresh TGVF Adapter seed 42; contextual
+  hidden state layer `-1`; no legacy or other source checkpoint; DCP v2 strict
+  optimizer-boundary checkpoint. The bounded invocation is resumable but is
+  not a promoted representation artifact.
+- N/A fields and justification: rollout, policy/reference/teacher replay,
+  reward, scorer, sampling and logprob fields are N/A because this is
+  representation training, not policy RL or SDPO.
+- Policy/reference initialization: N/A; frozen base Qwen, trainable TGVF
+  Adapter only.
+- Rollout policy version and allowed asynchronous staleness: N/A; synchronous
+  teacher-forced representation update.
+- Code commit and worktree state: code identity
+  `f32470cc0ffca49ec2834757389ed8e2e065d90e`, clean across the runner's bound
+  code paths; config source SHA256
+  `2e7e1ea09174a0b435d1009a38c8d7d901e14787850698b347b3a165efe16faf`,
+  canonical config SHA256
+  `eb42fb3cb6873fe20b3c17d67306f569343096e4abc63f3088410892efdcef6e`.
+- Repository adapter/patch surface and hash: repository-owned Qwen3 runtime,
+  family adapter, TGVF Adapter, native representation builder, streaming loss,
+  trainer and DCP runner at the code commit above; no runtime patch.
+- Dataset/manifest, hashes, sample rule, and n: v4 clean-imend train source
+  `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c`,
+  retained manifest
+  `a089d13d46bb74d1870aee8dc9b056925c4524164233d11e81d0edb9a5b45a8c`,
+  n=39998; v3 val-2k source
+  `a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308`,
+  retained manifest
+  `f47bbff7c63ffa381ce2e2e263130c783057c6d408575ef4c4e3dd5b019c5a33`,
+  n=1382; exact seven-image-path overlap report
+  `e79a939ae8a757e42f49377b07d224338071396667e1a3330b91a35a3057987c`
+  is recorded and accepted without row filtering.
+- Native prompt/tool schema hash: `native_representation_prompt_v1`, prompt
+  identity `qwen3-representation-image-question-v1`, exact `{question}` SHA256
+  `bf085a6e12c9d0e23a9dd157df084f933b2ef021caba82def1494bfb84a723c9`;
+  native `tgvf_focus_tool` action and native tool-response image.
+- Chat-template/token-fixture hash and token-ownership masks: accepted local
+  Qwen chat-template hash above; canonical action/target spans and evidence
+  label masks from the bound native representation pipeline; choices remain
+  non-rendered data identity metadata.
+- D/DeepStack/position/mask identity: TGVF Adapter main D and three Qwen3
+  D-DeepStack branches, native source-grid positions, two-visual-block causal
+  evidence readout and repository-bound masks.
+- Observation materialization/artifact identity used by all replays: N/A for RL
+  replay; every Matrix CE column uses the one materialized complete candidate
+  observation for that target in the current same-image group.
+- RL framework/version/environment lock: N/A for veRL; repository `.venv312`
+  control stack with Torch 2.9.0/CUDA 12.9 compatibility lock.
+- Objective equations and normalization: Balanced Matrix CE score
+  `-(evidence NLL sum / valid evidence-token count) / 1.0`, row-wise CE with
+  diagonal targets and global valid-row mean; L_gen is the global sample mean
+  of per-sample mean evidence NLL; historical norm formula at weight 0.1;
+  weights Matrix CE/L_gen/Norm = 1.0/1.0/0.1; manifold contribution zero.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic
+  teacher-forced forward, frozen Qwen, fresh Adapter seed 42, no asynchronous
+  update and deterministic runner settings.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: N/A; same-image sampler seed 42,
+  no generation sampling in the training update.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 weights/outputs, FP32 FSDP reduce,
+  no quantization or KV-cache rollout, SDPA; two-rank `fsdp=[2]`, no offload,
+  `reshard_after_forward=false`.
+- Logit/logprob/loss/gradient parity tolerances: finite scalar/gradient and
+  nonzero required Adapter gradients; previously accepted synthetic functional
+  parity remains the numerical oracle. RL logprob parity is N/A.
+- World size, microbatch, accumulation, and global batch: world size 2, one K=4
+  same-image matrix per rank/microstep, GA=4, eight matrices and 32 rows per
+  optimizer step.
+- GPUs: physical GPUs 2 and 3 only; logical CUDA devices 0 and 1.
+- Start/end timestamps, elapsed time, and session/process identity: torchrun
+  PID 2220272 started `2026-07-20 12:59:30 +09:00` and exited zero at
+  `13:01:11 +09:00`; 101.1 seconds wall time.
+- Actual GPU-hours and peak scratch use: approximately 0.0562 aggregate
+  GPU-hours by two-device wall time. Rank peak allocated memory was
+  42,000,555,520 / 63,945,762,304 bytes and peak reserved memory was
+  93,935,632,384 / 80,717,283,328 bytes. The exact output tree is 403 MiB.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 1800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/representation/qwen3_v4_contextual_hidden_state_v1.toml
+  --stop-after-global-step 10`.
+- Outputs: exact step-10 DCP at
+  `checkpoints/representation-qwen3-v4-contextual-v1-step-00000010`, metrics
+  JSONL and `run-step10.log` under the output root above. DCP contains both
+  rank shards, metadata and metadata SHA256. A CPU sidecar reload verified DCP
+  v2, step 10, world size 2, the exact run identity and all 104 owned tensors;
+  no final Adapter was published.
+- Scorer/parser identity: native representation evidence supervision and
+  strict tool-call parser at the code commit above; external scorer N/A.
+- Metrics: status `paused_at_optimizer_boundary`, global step 10, run identity
+  `4d0493ea3cfa052abf66f336f357ad015f7dbacee64ee54d7efe0c085e6969f3`;
+  tokenizer stayed 151669. Step 10 processed 8 matrices / 32 rows in
+  4.725605814 seconds (1.6929 matrices/s, 6.7716 rows/s); Matrix CE
+  `1.3847746104`, L_gen `2.9906668067`, Norm `0.3271957580`, weighted Norm
+  `0.0327195758`, total `4.4081609929`, and pre-clip gradient norm
+  `1.5775129795`, all finite.
+- Conclusion: `PASS` for formal contextual-provider wiring, exact selected-data
+  admission, Balanced Matrix CE/L_gen/Norm backward, two-rank K4/GA4 update and
+  durable step-10 checkpoint. This is a bounded resumable prefix, not the
+  2,000-step result or formal internal-evaluation promotion.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

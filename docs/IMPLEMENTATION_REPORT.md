@@ -125,14 +125,16 @@ trainer, without claiming a completed production run:
   wrong-same/wrong-different readout controls, full query matrices, main/branch
   distribution and attention health, plus a concrete Qwen3 native D-only
   teacher-forced/free-continuation path. The historical Golden report is the
-  accepted comparison baseline; formal execution under the v1 trajectory is
-  pending manifest binding for the selected v4 train/v3 validation pair.
+  accepted comparison baseline. The selected v4 train/v3 validation manifests,
+  exact seven-path overlap report and both formal provider TOMLs are now bound;
+  the contextual-first configuration passed a real two-rank 10-step prefix.
 
-Production data-manifest binding, paired-provider execution, and formal
-counterfactual evaluation remain open under Gate A0. The
+Paired-provider completion and formal counterfactual evaluation remain open
+under Gate A0. The
 provider order, seed `42`, hyperparameters, simple parity scope, historical
 evaluation baseline, and representation user-message structure are fixed, but
-not yet bound into a promoted production run. `RP-11` remains an executor/resume proof with its
+no trained-quality artifact has been promoted. `RP-11` remains an
+executor/resume proof with its
 then-used data and prompt recorded only as ledger history, not a trained-quality
 artifact or supported current prompt identity.
 

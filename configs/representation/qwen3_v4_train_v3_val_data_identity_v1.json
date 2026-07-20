@@ -1,0 +1,88 @@
+{
+  "schema_version": "representation_formal_data_binding_v1",
+  "train": {
+    "source_path": "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.train.jsonl",
+    "source_sha256": "c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c",
+    "accepted_sample_count": 39998,
+    "excluded_row_count": 0,
+    "duplicate_record_count": 0,
+    "target_leakage_record_count": 8371,
+    "rows_with_choices": 32203,
+    "retained_manifest_sha256": "a089d13d46bb74d1870aee8dc9b056925c4524164233d11e81d0edb9a5b45a8c",
+    "image_file_count": 9463,
+    "image_total_size_bytes": 2665893751,
+    "image_manifest_sha256": "06c15a2fc9de791025e35cb5d2885708c41fb44f29a0b90288333ed54b5c98b7"
+  },
+  "validation": {
+    "source_path": "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v3_teacher_val_2k/final/tgvf_teacher_items.accepted.jsonl",
+    "source_sha256": "a228d28db76625d166dab874806c9034a244a683d41c7cecdc7f10f1aa754308",
+    "accepted_sample_count": 1382,
+    "excluded_row_count": 641,
+    "duplicate_record_count": 0,
+    "target_leakage_record_count": 108,
+    "rows_with_choices": 0,
+    "retained_manifest_sha256": "f47bbff7c63ffa381ce2e2e263130c783057c6d408575ef4c4e3dd5b019c5a33",
+    "image_file_count": 376,
+    "image_total_size_bytes": 105224229,
+    "image_manifest_sha256": "dc1bc1b201f9e981d5f26b2814fb6da58bd0e363f259b7c511df6dc8a2097f4a"
+  },
+  "validation_data_identity": {
+    "schema_version": "representation_validation_data_identity_v1",
+    "identity_sha256": "32885f7fac3aee9a1db97afe833817b819a7cc277477b761e7c4164ca0262d50",
+    "evaluator_schema_version": "representation_validation_event_v1",
+    "validation_batch_k": 4,
+    "validation_sampler_seed": 42,
+    "validation_every_optimizer_steps": 500,
+    "overlap_policy": "allow_recorded_image_path",
+    "overlap_report_sha256": "e79a939ae8a757e42f49377b07d224338071396667e1a3330b91a35a3057987c",
+    "overlap_record_count": 7,
+    "overlap_kinds": ["image_path"]
+  },
+  "overlap_report": {
+    "schema_version": "representation_split_overlap_report_v1",
+    "records": [
+      {
+        "kind": "image_path",
+        "value_sha256": "1b3a888b3c82e8ce75f6969d5ff797f286a7b252a8e0a1bb33076c18c5f235f1",
+        "train_sample_ids": ["tgvf_v4_teacher_50k:textocr:00d3ca35721256a5:0::focus1", "tgvf_v4_teacher_50k:textocr:00d3ca35721256a5:1::focus1", "tgvf_v4_teacher_50k:textocr:00d3ca35721256a5:2::focus1", "tgvf_v4_teacher_50k:textocr:00d3ca35721256a5:3::focus1"],
+        "validation_sample_ids": ["tgvf_v3_teacher_val_2k:textvqa:00d3ca35721256a5:0", "tgvf_v3_teacher_val_2k:textvqa:00d3ca35721256a5:1", "tgvf_v3_teacher_val_2k:textvqa:00d3ca35721256a5:2", "tgvf_v3_teacher_val_2k:textvqa:00d3ca35721256a5:3"]
+      },
+      {
+        "kind": "image_path",
+        "value_sha256": "3121bcd5426673194a3a8338516531fb3637256416ab8b3ba0a78579180d9be0",
+        "train_sample_ids": ["tgvf_v4_teacher_50k:textocr:12ca20f49ad64890:0::focus1", "tgvf_v4_teacher_50k:textocr:12ca20f49ad64890:1::focus1", "tgvf_v4_teacher_50k:textocr:12ca20f49ad64890:2::focus1", "tgvf_v4_teacher_50k:textocr:12ca20f49ad64890:3::focus1"],
+        "validation_sample_ids": ["tgvf_v3_teacher_val_2k:textvqa:12ca20f49ad64890:0", "tgvf_v3_teacher_val_2k:textvqa:12ca20f49ad64890:1", "tgvf_v3_teacher_val_2k:textvqa:12ca20f49ad64890:2"]
+      },
+      {
+        "kind": "image_path",
+        "value_sha256": "37cc519e266342ecfc251b94f808f2db9ad141f2b58137a7395d7ed8b1cf0e32",
+        "train_sample_ids": ["tgvf_v4_teacher_50k:textocr:edb0f044e7a1c9b7:0::focus1", "tgvf_v4_teacher_50k:textocr:edb0f044e7a1c9b7:1::focus1", "tgvf_v4_teacher_50k:textocr:edb0f044e7a1c9b7:2::focus1", "tgvf_v4_teacher_50k:textocr:edb0f044e7a1c9b7:3::focus1", "tgvf_v4_teacher_50k:textocr:edb0f044e7a1c9b7:4::focus1"],
+        "validation_sample_ids": ["tgvf_v3_teacher_val_2k:textvqa:edb0f044e7a1c9b7:0", "tgvf_v3_teacher_val_2k:textvqa:edb0f044e7a1c9b7:1", "tgvf_v3_teacher_val_2k:textvqa:edb0f044e7a1c9b7:2"]
+      },
+      {
+        "kind": "image_path",
+        "value_sha256": "91d32896a105e9a3ba81a75394a254532afa4d6dba15c1efe8794388ca8e1080",
+        "train_sample_ids": ["tgvf_v4_teacher_50k:textvqa:043a59888f5bcb7b:0::focus1", "tgvf_v4_teacher_50k:textvqa:043a59888f5bcb7b:1::focus1", "tgvf_v4_teacher_50k:textvqa:043a59888f5bcb7b:2::focus1", "tgvf_v4_teacher_50k:textvqa:043a59888f5bcb7b:3::focus1", "tgvf_v4_teacher_50k:textvqa:043a59888f5bcb7b:4::focus1"],
+        "validation_sample_ids": ["tgvf_v3_teacher_val_2k:textocr:043a59888f5bcb7b:0", "tgvf_v3_teacher_val_2k:textocr:043a59888f5bcb7b:1", "tgvf_v3_teacher_val_2k:textocr:043a59888f5bcb7b:2"]
+      },
+      {
+        "kind": "image_path",
+        "value_sha256": "b6f52bd361d971ee5b635d392f7d3c6082174b02f3f173b7ce5fefb9553f70d1",
+        "train_sample_ids": ["tgvf_v4_teacher_50k:textocr:08a6ffd1da3ec055:0::focus1", "tgvf_v4_teacher_50k:textocr:08a6ffd1da3ec055:1::focus1", "tgvf_v4_teacher_50k:textocr:08a6ffd1da3ec055:2::focus1", "tgvf_v4_teacher_50k:textocr:08a6ffd1da3ec055:3::focus1", "tgvf_v4_teacher_50k:textocr:08a6ffd1da3ec055:4::focus1"],
+        "validation_sample_ids": ["tgvf_v3_teacher_val_2k:textvqa:08a6ffd1da3ec055:0", "tgvf_v3_teacher_val_2k:textvqa:08a6ffd1da3ec055:1", "tgvf_v3_teacher_val_2k:textvqa:08a6ffd1da3ec055:2", "tgvf_v3_teacher_val_2k:textvqa:08a6ffd1da3ec055:3"]
+      },
+      {
+        "kind": "image_path",
+        "value_sha256": "d7a025da698ec102f1b94fe9b455de644f07adb3c5fb30f1abb4a0ff9ab372f4",
+        "train_sample_ids": ["tgvf_v4_teacher_50k:textvqa:2147e4bbc5eeb3bd:0::focus1", "tgvf_v4_teacher_50k:textvqa:2147e4bbc5eeb3bd:1::focus1", "tgvf_v4_teacher_50k:textvqa:2147e4bbc5eeb3bd:2::focus1", "tgvf_v4_teacher_50k:textvqa:2147e4bbc5eeb3bd:3::focus1"],
+        "validation_sample_ids": ["tgvf_v3_teacher_val_2k:textocr:2147e4bbc5eeb3bd:0", "tgvf_v3_teacher_val_2k:textocr:2147e4bbc5eeb3bd:1", "tgvf_v3_teacher_val_2k:textocr:2147e4bbc5eeb3bd:2", "tgvf_v3_teacher_val_2k:textocr:2147e4bbc5eeb3bd:3"]
+      },
+      {
+        "kind": "image_path",
+        "value_sha256": "dbabac498459200dab68df1fa4bfafecb12d1bd7a9d138af95ceb1928842c28d",
+        "train_sample_ids": ["tgvf_v4_teacher_50k:textvqa:e452fdd9a9d458e9:0::focus1", "tgvf_v4_teacher_50k:textvqa:e452fdd9a9d458e9:1::focus1", "tgvf_v4_teacher_50k:textvqa:e452fdd9a9d458e9:2::focus1", "tgvf_v4_teacher_50k:textvqa:e452fdd9a9d458e9:3::focus1"],
+        "validation_sample_ids": ["tgvf_v3_teacher_val_2k:textocr:e452fdd9a9d458e9:0", "tgvf_v3_teacher_val_2k:textocr:e452fdd9a9d458e9:1", "tgvf_v3_teacher_val_2k:textocr:e452fdd9a9d458e9:2", "tgvf_v3_teacher_val_2k:textocr:e452fdd9a9d458e9:3"]
+      }
+    ]
+  }
+}
