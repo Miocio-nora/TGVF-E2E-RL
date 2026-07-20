@@ -25,6 +25,7 @@ from tgvf_rl.representation.training.internal_evaluation import (
     NativeTeacherForcedForward,
     RepresentationInternalEvaluationIdentity,
     _deterministic_random_visual_bundle,
+    _token_mean_nll_from_cell_score,
     create_injected_native_counterfactual_evaluator,
     run_representation_internal_evaluation,
     save_representation_internal_evaluation_report_atomic,
@@ -39,6 +40,16 @@ from tgvf_rl.representation.training.readout import (
 )
 from tgvf_rl.representation.training.schema import RepresentationTrainingSample
 from tgvf_rl.representation.training.transcript import ModelEvidenceSupervision
+
+
+def test_bf16_cell_score_uses_the_same_reduction_order_as_l_gen() -> None:
+    summed_log_likelihood = torch.tensor(-20.25, dtype=torch.bfloat16)
+    expected = float((-summed_log_likelihood / 5).float().item())
+
+    observed = _token_mean_nll_from_cell_score(summed_log_likelihood, 5)
+
+    assert observed == expected == 4.0625
+    assert observed != float((-summed_log_likelihood.float() / 5).item())
 
 
 class _ToyMerger(nn.Module):

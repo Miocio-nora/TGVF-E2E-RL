@@ -960,20 +960,16 @@ def run_representation_internal_evaluation(
             token_count = int(scores.evidence_token_counts[row_index].item())
             if token_count <= 0:
                 raise RuntimeError("internal readout has no evidence token")
-            correct_nll = float(
-                (
-                    -scores.score_matrix[row_index, row_index].float() / token_count
-                ).item()
+            correct_nll = _token_mean_nll_from_cell_score(
+                scores.score_matrix[row_index, row_index], token_count
             )
             diagonal_l_gen = float(scores.diagonal_l_gen[row_index].float().item())
             if not math.isclose(
                 correct_nll, diagonal_l_gen, rel_tol=1e-6, abs_tol=1e-6
             ):
                 raise RuntimeError("query diagonal and readability NLL diverged")
-            wrong_same_nll = float(
-                (
-                    -scores.score_matrix[row_index, same_index].float() / token_count
-                ).item()
+            wrong_same_nll = _token_mean_nll_from_cell_score(
+                scores.score_matrix[row_index, same_index], token_count
             )
             target_only_nll, target_only_count = _score_readout_control(
                 family_adapter,
@@ -1038,7 +1034,6 @@ def run_representation_internal_evaluation(
                     health=_sample_health(group, candidate),
                 )
             )
-
     sample_record_tuple = tuple(sample_records)
     readout_rows = tuple(record.nlls for record in sample_record_tuple)
     readout_summary = summarize_readout(readout_rows)
@@ -1070,6 +1065,24 @@ def run_representation_internal_evaluation(
         health=health,
         native_counterfactuals=native_records,
     )
+
+
+def _token_mean_nll_from_cell_score(
+    summed_log_likelihood: torch.Tensor,
+    valid_token_count: int,
+) -> float:
+    """Preserve the score tensor's reduction dtype before exporting FP32."""
+
+    if (
+        summed_log_likelihood.ndim != 0
+        or not summed_log_likelihood.dtype.is_floating_point
+    ):
+        raise TypeError("Matrix-CE cell score must be one floating scalar")
+    if isinstance(valid_token_count, bool) or not isinstance(valid_token_count, int):
+        raise TypeError("valid evidence-token count must be an integer")
+    if valid_token_count <= 0:
+        raise ValueError("valid evidence-token count must be positive")
+    return float((-summed_log_likelihood / valid_token_count).float().item())
 
 
 def save_representation_internal_evaluation_report_atomic(
