@@ -497,8 +497,9 @@ def _run(
     *,
     builder: _GroupBuilder | None = None,
     sample_groups: tuple[tuple[RepresentationTrainingSample, ...], ...] | None = None,
+    adapter_variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
 ):
-    adapter = _adapter()
+    adapter = _adapter(adapter_variant)
     adapter.train()
     qwen = _qwen()
     family = _RecordingFamilyAdapter()
@@ -528,6 +529,15 @@ def test_internal_runner_accepts_variable_k_groups() -> None:
 
     assert tuple(len(group.sample_ids) for group in report.groups) == (2, 3)
     assert report.query.sample_count == 5
+
+
+def test_internal_runner_reports_main_d_only_without_learned_branch_health() -> None:
+    report, *_ = _run(adapter_variant=TGVFAdapterVariant.MAIN_D_ONLY)
+
+    assert report.health.main.sample_count == 4
+    assert report.health.main_attention.observation_count == 4
+    assert report.health.branches == ()
+    assert all(len(sample.health.branches) == 0 for sample in report.samples)
 
 
 def test_internal_runner_executes_all_controls_health_and_native_callbacks(
