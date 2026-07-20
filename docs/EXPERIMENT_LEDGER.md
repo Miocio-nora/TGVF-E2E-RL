@@ -3792,6 +3792,84 @@ retained as `INVALID` and rerun under a new planned ID.
   `BJ-10-R2` explicitly fixes the existing executable path; no dependency is
   installed or changed, and no calibration or benchmark-quality claim follows.
 
+### BJ-10-R2-QWEN25-72B-VLLM-SERVICE
+
+- Cell/matrix ID and mandatory/diagnostic class: `BJ-10-R2`; bounded corrective
+  deployment smoke after R1 proved the exact model load and exposed only the
+  missing subprocess executable path.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: identical user
+  authorization and `EVAL-ARCH-20260720` scope to BJ-10.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: identical to BJ-10-R1, with the additional gate that FlashInfer
+  warm-up resolves the already installed `.venv312/bin/ninja` from an explicit
+  deterministic `PATH`.
+- Baseline and exact output path: failed BJ-10-R1; output root
+  `artifacts/evaluation/BJ-10-R2-qwen25-72b-vllm-service-bda4a7f`, server log
+  `server.log`, copied snapshot validation `snapshot_validation.json`, service
+  smoke `smoke.json`, and GPU sample `gpu.csv`.
+- Model and processor identity: identical fixed 72B snapshot, 37 shards,
+  tokenizer and chat-template identity to BJ-10.
+- Representation checkpoint identity: N/A; text-only judge.
+- N/A fields and justification: identical inference-only N/A fields to BJ-10.
+- Policy/reference initialization: N/A; forbidden judge roles remain unchanged.
+- Rollout policy version and allowed asynchronous staleness: N/A.
+- Code commit and worktree state: runtime code commit
+  `bda4a7ff1612b987cebd3cc05809d8a119d14a7c`; launch worktree must be clean
+  except for this subsequently committed ledger plan.
+- Repository adapter/patch surface and hash: service config SHA256
+  `80db006c3b75f5c40775aae8df16462bfb10ecf0724d6069b01ad58bc55e646d`;
+  smoke script SHA256
+  `b7dea272a2eb2a4bc98257a5aec48d2004f0c10afe718a4e2c3655d0ec1c4ca7`;
+  Ninja executable SHA256
+  `696f9628a79d9ce50314cf9556d7cd1a1d1ec52b8fd52828f6f9db1719565b67`;
+  no package, external-checkout or site-package patch.
+- Dataset/manifest, hashes, sample rule, and n: identical synthetic one-request
+  fixture to BJ-10; `n=1`, no benchmark rows.
+- Native prompt/tool schema hash: no tool schema; request SHA256
+  `30486f0066f51a616e4cf6d53403b067c6346abcbb017f414369ebe13c7e767e`.
+- Chat-template/token-fixture hash and token-ownership masks: identical to
+  BJ-10; masks N/A.
+- D/DeepStack/position/mask identity: N/A; text-only judge.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: identical vLLM/Torch/Transformers/
+  Python and lock identity to BJ-10; only deterministic executable lookup is
+  added.
+- Objective equations and normalization: N/A; no loss/update.
+- Rollout/replay forward mode and adapter dropout/RNG contract: identical to
+  BJ-10.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: identical to BJ-10: vLLM 0.12,
+  seed 42, temperature 0, maximum 32 tokens, greedy defaults, no custom
+  processor or log probabilities.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/auto-KV, no quantization,
+  FlashInfer selected by vLLM, TP=2, max length 32768, utilization 0.85,
+  maximum 64 sequences, no training mesh.
+- Logit/logprob/loss/gradient parity tolerances: exact engine/served identity,
+  response `TGVF_JUDGE_READY`, and normal finish; objective parity N/A.
+- World size, microbatch, accumulation, and global batch: TP world `2`, one
+  request/completion; training batch/accumulation N/A.
+- GPUs: identical physical B200 indices, UUIDs and logical mapping to BJ-10.
+- Start/end timestamps, elapsed time, and session/process identity: pending.
+- Actual GPU-hours and peak scratch use: pending; no checkpoint.
+- Command: `CUDA_VISIBLE_DEVICES=2,3 CC=/usr/bin/gcc CXX=/usr/bin/g++
+  CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12
+  PATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn TOKENIZERS_PARALLELISM=false
+  .venv312/bin/python -m vllm.entrypoints.openai.api_server --model
+  /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct --served-model-name
+  Qwen2.5-72B-Instruct --host 127.0.0.1 --port 8012 --tensor-parallel-size 2
+  --dtype bfloat16 --max-model-len 32768 --gpu-memory-utilization 0.85
+  --max-num-seqs 64 --seed 42 --generation-config vllm
+  --enable-prefix-caching`.
+- Outputs: exact paths above; service stopped after smoke and GPUs released.
+- Scorer/parser identity: unchanged smoke script; no benchmark scorer.
+- Metrics: pending exact response, usage, latency, load/warm-up time, memory,
+  process identity and log hash.
+- Conclusion: `PENDING`; deployment availability only, not calibration or
+  benchmark quality.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
