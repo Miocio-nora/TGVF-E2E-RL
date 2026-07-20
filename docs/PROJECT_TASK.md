@@ -374,7 +374,12 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   and gradient behavior. This task changes only the normal autograd and
   streaming/manual-gradient score paths and their CPU tests; it adds no margin,
   symmetric, embedding-contrastive, Norm, or other objective and requires no
-  GPU smoke.
+  GPU smoke. The follow-up default decision makes `balanced` with temperature
+  `1.0` the resolved default for new representation configuration schema v3
+  objectives and direct new v3 objective construction. An experiment may still
+  select `legacy_summed_nll` explicitly. Existing v1/v2 configurations and
+  recorded experiment identities retain their historical summed-NLL semantics;
+  they are not silently migrated or rewritten.
 
 ### 2.2 Remove Stage2 SFT
 
