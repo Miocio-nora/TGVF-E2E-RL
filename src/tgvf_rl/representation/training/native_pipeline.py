@@ -76,6 +76,7 @@ REPRESENTATION_PROMPT_SCHEMA_VERSION = "native_representation_prompt_v1"
 REPRESENTATION_PROMPT_IDENTITY = "qwen3-representation-image-question-v1"
 NATIVE_ACTION_TARGET_SCHEMA_VERSION = "native_action_target_v1"
 _ACTION_TEMPLATE_SUFFIX = "<|im_end|>\n"
+_NATIVE_TOOL_RESPONSE_OPEN = "<tool_response>"
 _ALL_ONES_ATTENTION_MASK_PROOF_SEAL = object()
 
 
@@ -696,7 +697,7 @@ class Qwen3NativeRepresentationGroupBuilder:
         source_identity: str,
     ) -> RepresentationReadoutRow:
         expected_tokens = int(vision.merged_main.shape[-2])
-        model_token_ids, _expansion = _expand_native_visual_placeholders(
+        model_token_ids, expansion = _expand_native_visual_placeholders(
             self.runtime,
             canonical.transcript.token_ids,
             visual_token_counts=(expected_tokens, expected_tokens),
@@ -742,11 +743,40 @@ class Qwen3NativeRepresentationGroupBuilder:
             position_ids=position_ids,
             source_positions=blocks[0],
             d_positions=blocks[1],
+            source_key_block_query_start=_tool_response_model_token_start(
+                canonical,
+                expansion,
+            ),
             canonical_input_ids_proof=_bind_canonical_input_ids(
                 input_ids,
                 (supervision.model_token_ids,),
             ),
         )
+
+
+def _tool_response_model_token_start(
+    canonical: CanonicalEvidenceSupervision,
+    expansion: CanonicalToModelTokenExpansion,
+) -> int:
+    """Return the exact first native tool-response token after expansion."""
+
+    text = canonical.transcript.text
+    if text.count(_NATIVE_TOOL_RESPONSE_OPEN) != 1:
+        raise ValueError(
+            "native representation transcript must contain one tool response"
+        )
+    char_start = text.index(_NATIVE_TOOL_RESPONSE_OPEN)
+    canonical_positions = _minimal_overlapping_token_positions(
+        text,
+        canonical.token_offsets,
+        span_start=char_start,
+        span_end=char_start + len(_NATIVE_TOOL_RESPONSE_OPEN),
+        name="native tool response opener",
+    )
+    first_mapping = expansion.canonical_to_model_positions[canonical_positions[0]]
+    if len(first_mapping) != 1:
+        raise ValueError("native tool response opener cannot be visually expanded")
+    return first_mapping[0]
 
 
 def _model_action_from_expansion(

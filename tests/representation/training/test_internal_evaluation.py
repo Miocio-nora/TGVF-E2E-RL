@@ -233,6 +233,7 @@ class _GroupBuilder:
                     position_ids=torch.arange(8).view(1, 8),
                     source_positions=(1, 2),
                     d_positions=(3, 4),
+                    source_key_block_query_start=3,
                 )
             )
             target = torch.arange(18, dtype=torch.float32).reshape(3, 6) / 30

@@ -162,6 +162,7 @@ def _group(
                 position_ids=torch.arange(8).view(1, 8),
                 source_positions=(1, 2),
                 d_positions=(3, 4),
+                source_key_block_query_start=3,
             )
         )
         candidates.append(
@@ -200,6 +201,26 @@ def _candidate_tensors(group: SameImageReadoutGroup) -> tuple[torch.Tensor, ...]
         for candidate in group.candidates
         for tensor in (candidate.visual.main, *candidate.visual.deepstack)
     )
+
+
+def test_source_keys_are_blocked_from_d_context_not_only_evidence() -> None:
+    group = _group()
+    row = group.rows[0]
+    mask = streaming_module._blocked_evidence_attention_mask(
+        row,
+        group.source_visual,
+    )
+    minimum = torch.finfo(mask.dtype).min
+
+    assert torch.equal(mask[0, 0, 2, torch.tensor((1, 2))], torch.zeros(2))
+    for query_position in range(
+        row.source_key_block_query_start,
+        row.supervision.evidence_token_positions[-1],
+    ):
+        assert torch.equal(
+            mask[0, 0, query_position, torch.tensor((1, 2))],
+            torch.full((2,), minimum),
+        )
 
 
 def _mixed_length_group(*, group_id: str) -> SameImageReadoutGroup:
@@ -1032,7 +1053,7 @@ def test_collective_padding_has_zero_gradient_and_does_not_change_real_objective
             assert torch.count_nonzero(tensor.grad).item() == 0
 
 
-def test_streaming_readout_blocks_source_keys_for_causal_evidence_queries() -> None:
+def test_streaming_readout_blocks_source_keys_from_tool_response_onward() -> None:
     torch.manual_seed(5)
     model = _frozen_model()
 
@@ -1041,9 +1062,11 @@ def test_streaming_readout_blocks_source_keys_for_causal_evidence_queries() -> N
     mask = model.model.language_model.attention_masks[0]
     assert mask.shape == (4, 1, 8, 8)
     minimum = torch.finfo(mask.dtype).min
+    assert mask[0, 0, 3, 1].item() == minimum
+    assert mask[0, 0, 4, 1].item() == minimum
     assert mask[0, 0, 5, 1].item() == minimum
     assert mask[0, 0, 6, 2].item() == minimum
-    assert mask[0, 0, 4, 1].item() == 0.0
+    assert mask[0, 0, 2, 1].item() == 0.0
 
 
 def test_streaming_normalization_fails_closed() -> None:
