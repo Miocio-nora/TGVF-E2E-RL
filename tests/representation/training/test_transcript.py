@@ -10,6 +10,9 @@ from tgvf_rl.qwen.qwen25_vl import Qwen25VLAdapter
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
 from tgvf_rl.representation.training.transcript import (
+    CANONICAL_EVIDENCE_SCHEMA_VERSION,
+    CANONICAL_EVIDENCE_SCHEMA_VERSION_V2,
+    NATIVE_REPRESENTATION_PRE_REASONING,
     _build_visual_token_expansion,
     _render_native_evidence_labels_batch,
     render_native_evidence_labels,
@@ -18,7 +21,8 @@ from tgvf_rl.protocol.native import NativeProtocolRenderer
 
 
 _ASSISTANT_PREFILL = "<|im_start|>assistant\n<think>\n"
-_COMPLETION_SUFFIX = "\n</think>\n\n<|im_end|>\n"
+_COMPLETION_MIDDLE = "\n</think>\n\n"
+_ASSISTANT_SUFFIX = "<|im_end|>\n"
 
 
 class _OffsetTokenizer:
@@ -138,7 +142,13 @@ class _Processor:
         if add_generation_prompt:
             return prefill
         evidence = messages[-1]["reasoning_content"].strip("\n")
-        return prefill + evidence + _COMPLETION_SUFFIX
+        return (
+            prefill
+            + evidence
+            + _COMPLETION_MIDDLE
+            + messages[-1]["content"]
+            + _ASSISTANT_SUFFIX
+        )
 
 
 class _TinyLanguageModel(nn.Module):
@@ -157,7 +167,12 @@ class _TinyQwen(nn.Module):
         self.lm_head = nn.Linear(4, 4096, bias=False)
 
 
-def _messages(*, evidence: str = "The sign reads OPEN.", content: str = ""):
+def _messages(
+    *,
+    evidence: str = "The sign reads OPEN.",
+    content: str = "OPEN",
+    pre_reasoning: str = NATIVE_REPRESENTATION_PRE_REASONING,
+):
     return [
         {
             "role": "user",
@@ -168,7 +183,7 @@ def _messages(*, evidence: str = "The sign reads OPEN.", content: str = ""):
         },
         {
             "role": "assistant",
-            "reasoning_content": "",
+            "reasoning_content": pre_reasoning,
             "content": "",
             "tool_calls": [
                 {
@@ -207,8 +222,12 @@ def test_only_final_post_tool_evidence_tokens_receive_canonical_labels() -> None
     assert supervision.transcript.text == (
         supervision.generation_prefill.text
         + supervision.evidence_text
-        + _COMPLETION_SUFFIX
+        + _COMPLETION_MIDDLE
+        + supervision.answer_text
+        + _ASSISTANT_SUFFIX
     )
+    assert supervision.answer_text == "OPEN"
+    assert supervision.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION_V2
     assert supervision.transcript.text.count(supervision.evidence_text) == 2
     assert supervision.evidence_char_start == len(supervision.generation_prefill.text)
     assert supervision.evidence_byte_end - supervision.evidence_byte_start == len(
@@ -224,6 +243,19 @@ def test_only_final_post_tool_evidence_tokens_receive_canonical_labels() -> None
         )
     ):
         assert label == (token_id if position in owned else EVIDENCE_IGNORE_INDEX)
+
+    answer_start = supervision.transcript.text.rfind(supervision.answer_text)
+    answer_positions = tuple(
+        position
+        for position, (start, _end) in enumerate(supervision.token_offsets)
+        if answer_start <= start < answer_start + len(supervision.answer_text)
+    )
+    assert answer_positions
+    assert not owned.intersection(answer_positions)
+    assert all(
+        supervision.canonical_labels[position] == EVIDENCE_IGNORE_INDEX
+        for position in answer_positions
+    )
 
     _, offsets = tokenizer._tokenize(supervision.transcript.text)
     final_start, final_end = offsets[supervision.evidence_token_positions[-1]]
@@ -325,7 +357,7 @@ def test_ambiguous_or_mismatched_offset_mapping_fails_closed(
         )
 
 
-def test_slow_tokenizer_and_nonempty_answer_content_fail_closed() -> None:
+def test_slow_tokenizer_and_invalid_version_pairings_fail_closed() -> None:
     slow = _SlowTokenizer()
     with pytest.raises(TypeError, match="fast tokenizer"):
         render_native_evidence_labels(
@@ -335,9 +367,8 @@ def test_slow_tokenizer_and_nonempty_answer_content_fail_closed() -> None:
         )
 
     tokenizer = _OffsetTokenizer()
-    fabricated = _messages()
-    fabricated[-3]["reasoning_content"] = "I will inspect the target."
-    with pytest.raises(ValueError, match="cannot fabricate reasoning"):
+    fabricated = _messages(pre_reasoning="I will inspect the target.")
+    with pytest.raises(ValueError, match="fixed native v2 pre-reasoning"):
         render_native_evidence_labels(
             NativeProtocolRenderer(
                 _Processor(tokenizer), expected_tokenizer_length=4096
@@ -346,14 +377,41 @@ def test_slow_tokenizer_and_nonempty_answer_content_fail_closed() -> None:
             evidence_description="The sign reads OPEN.",
         )
 
-    with pytest.raises(ValueError, match="empty answer content"):
+    with pytest.raises(ValueError, match="requires non-empty short answer"):
         render_native_evidence_labels(
             NativeProtocolRenderer(
                 _Processor(tokenizer), expected_tokenizer_length=4096
             ),
-            _messages(content="The answer is OPEN."),
+            _messages(content=""),
             evidence_description="The sign reads OPEN.",
         )
+
+    with pytest.raises(ValueError, match="legacy.*empty answer"):
+        render_native_evidence_labels(
+            NativeProtocolRenderer(
+                _Processor(tokenizer), expected_tokenizer_length=4096
+            ),
+            _messages(pre_reasoning="", content="OPEN"),
+            evidence_description="The sign reads OPEN.",
+        )
+
+
+def test_legacy_empty_reasoning_and_answer_remain_renderable() -> None:
+    tokenizer = _OffsetTokenizer()
+    supervision = render_native_evidence_labels(
+        NativeProtocolRenderer(_Processor(tokenizer), expected_tokenizer_length=4096),
+        _messages(pre_reasoning="", content=""),
+        evidence_description="The sign reads OPEN.",
+    )
+
+    assert supervision.answer_text == ""
+    assert supervision.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION
+    assert supervision.transcript.text == (
+        supervision.generation_prefill.text
+        + supervision.evidence_text
+        + _COMPLETION_MIDDLE
+        + _ASSISTANT_SUFFIX
+    )
 
 
 @pytest.mark.parametrize(

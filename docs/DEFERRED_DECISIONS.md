@@ -1,7 +1,7 @@
 # Deferred Decisions After the Framework Build
 
 Status: **intentionally unset; implementation must fail closed**
-Updated: **2026-07-19 JST**
+Updated: **2026-07-20 JST**
 
 This is the short operational checklist requested for decisions that are not
 needed to build and smoke-test the framework. These values must not be inferred
@@ -9,14 +9,21 @@ from veRL, DeepEyes, SDPO, a legacy run, or a synthetic test fixture.
 
 ## Data and prompts
 
-- real representation-phase dataset manifest, license, transforms, split, and
-  native-tool target-span construction;
+- real representation-phase dataset manifest, license, v2 transform audit, and
+  split;
 - policy-RL prompt population, sampling rule, group construction, and held-out
   evaluation manifest;
-- final system/user prompt wording and native tool-call safety cap;
+- final policy-RL system/user prompt wording and native tool-call safety cap;
 - the exact JSON target-to-`Hq` rule: hidden layer, absolute token-time
   alignment, quote/escape boundary policy, and contextual versus embedding
   provider selection per experiment.
+
+The representation user-message wording is not deferred: decision
+`RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY` fixes it to the original image
+plus unmodified dataset question, with no separately injected target field; the
+teacher target is serialized as the native assistant tool-call argument. Its
+fixed pre-tool reasoning, evidence reasoning, and final `short_answer`
+placement are likewise part of that versioned trajectory.
 
 ## Reward and evaluation
 

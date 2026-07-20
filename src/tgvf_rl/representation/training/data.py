@@ -16,10 +16,16 @@ import json
 from pathlib import Path
 import warnings
 
-from .schema import RepresentationSampleIdentity, RepresentationTrainingSample
+from .schema import (
+    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
+    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
+    RepresentationSampleIdentity,
+    RepresentationTrainingSample,
+)
 
 
 REPRESENTATION_DATA_TRANSFORM_VERSION = "retained_focus_rows_v1"
+REPRESENTATION_DATA_TRANSFORM_VERSION_V2 = "retained_focus_rows_v2"
 REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION = "representation_data_manifest_v1"
 SPLIT_OVERLAP_REPORT_SCHEMA_VERSION = "representation_split_overlap_report_v1"
 
@@ -145,7 +151,10 @@ class RepresentationDataManifest:
     def __post_init__(self) -> None:
         if self.schema_version != REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION:
             raise ValueError("representation data manifest schema mismatch")
-        if self.transform_version != REPRESENTATION_DATA_TRANSFORM_VERSION:
+        if self.transform_version not in (
+            REPRESENTATION_DATA_TRANSFORM_VERSION,
+            REPRESENTATION_DATA_TRANSFORM_VERSION_V2,
+        ):
             raise ValueError("representation data transform mismatch")
         _require_sha256(self.source_sha256, field_name="source_sha256")
         if not self.source_path:
@@ -182,6 +191,18 @@ class RepresentationDataManifest:
         accepted_ids = tuple(row.sample.sample_id for row in self.accepted_rows)
         if len(accepted_ids) != len(set(accepted_ids)):
             raise ValueError("accepted manifest sample IDs must be unique")
+        expected_sample_schema = (
+            REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
+            if self.transform_version == REPRESENTATION_DATA_TRANSFORM_VERSION_V2
+            else REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION
+        )
+        if any(
+            row.sample.schema_version != expected_sample_schema
+            for row in self.accepted_rows
+        ):
+            raise ValueError(
+                "representation transform and accepted sample identity versions differ"
+            )
         accepted_line_to_id = {
             row.source_line: row.sample.sample_id for row in self.accepted_rows
         }
@@ -395,6 +416,7 @@ def load_retained_representation_jsonl(
     *,
     expected_source_sha256: str,
     warn_on_leakage: bool = True,
+    require_short_answer: bool = False,
 ) -> RepresentationDataset:
     """Load one exact retained JSONL snapshot under the fixed focus transform.
 
@@ -403,12 +425,17 @@ def load_retained_representation_jsonl(
     ``need_focus is True``, ``trajectory_type == 'single_focus'``, and
     ``evidence_state == 'need_local_visual_evidence'``.  Missing or loosely
     typed focus metadata is excluded instead of inheriting the historical
-    truthy/default behavior.
+    truthy/default behavior.  ``require_short_answer=True`` selects the v2
+    transform, which also requires a non-empty answer and binds it into each
+    accepted sample's v2 content identity.  The default preserves exact v1
+    admission and identity behavior.
     """
 
     _require_sha256(expected_source_sha256, field_name="expected_source_sha256")
     if type(warn_on_leakage) is not bool:
         raise TypeError("warn_on_leakage must be a bool")
+    if type(require_short_answer) is not bool:
+        raise TypeError("require_short_answer must be a bool")
     try:
         path = Path(source_path).expanduser().resolve(strict=True)
     except (FileNotFoundError, OSError) as exc:
@@ -476,7 +503,10 @@ def load_retained_representation_jsonl(
             )
             continue
 
-        invalid_reason = _sample_field_validation_reason(row)
+        invalid_reason = _sample_field_validation_reason(
+            row,
+            require_short_answer=require_short_answer,
+        )
         if invalid_reason is not None:
             excluded.append(
                 ExcludedRowManifestEntry(
@@ -508,12 +538,19 @@ def load_retained_representation_jsonl(
         optional_fields = {
             name: row[name] if name in row else None for name in _OPTIONAL_SAMPLE_FIELDS
         }
+        short_answer = _optional_non_empty_string(row.get("short_answer"))
         sample = RepresentationTrainingSample(
             sample_id=sample_id,
             image=str(resolved_image),
             question=row["question"],
             target=row["target"],
             evidence_description=row["evidence_description"],
+            short_answer=short_answer,
+            identity_schema_version=(
+                REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
+                if require_short_answer
+                else REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION
+            ),
             **optional_fields,
         )
 
@@ -555,7 +592,7 @@ def load_retained_representation_jsonl(
         sample_id_first_line[sample.sample_id] = source_line
         group_target_first_line[group_target_key] = source_line
 
-        leakage = _legacy_leakage_record(row, source_line=source_line, sample=sample)
+        leakage = _legacy_leakage_record(source_line=source_line, sample=sample)
         if leakage is not None:
             leakages.append(leakage)
             if warn_on_leakage:
@@ -580,7 +617,11 @@ def load_retained_representation_jsonl(
 
     manifest = RepresentationDataManifest(
         schema_version=REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION,
-        transform_version=REPRESENTATION_DATA_TRANSFORM_VERSION,
+        transform_version=(
+            REPRESENTATION_DATA_TRANSFORM_VERSION_V2
+            if require_short_answer
+            else REPRESENTATION_DATA_TRANSFORM_VERSION
+        ),
         source_path=str(path),
         source_sha256=actual_sha256,
         accepted_rows=tuple(accepted),
@@ -647,10 +688,23 @@ def _focus_filter_reasons(
 
 def _sample_field_validation_reason(
     row: Mapping[str, object],
+    *,
+    require_short_answer: bool,
 ) -> RowExclusionReason | None:
-    for name in ("uid", "image", "question", "target", "evidence_description"):
+    for name in (
+        "uid",
+        "image",
+        "question",
+        "target",
+        "evidence_description",
+    ):
         if _optional_non_empty_string(row.get(name)) is None:
             return RowExclusionReason.INVALID_REQUIRED_FIELD
+    if (
+        require_short_answer
+        and _optional_non_empty_string(row.get("short_answer")) is None
+    ):
+        return RowExclusionReason.INVALID_REQUIRED_FIELD
     for name in _OPTIONAL_SAMPLE_FIELDS:
         if (
             name in row
@@ -659,7 +713,8 @@ def _sample_field_validation_reason(
         ):
             return RowExclusionReason.INVALID_OPTIONAL_FIELD
     if (
-        "short_answer" in row
+        not require_short_answer
+        and "short_answer" in row
         and row["short_answer"] is not None
         and not isinstance(row["short_answer"], str)
     ):
@@ -719,15 +774,15 @@ def _legacy_terms(text: str) -> frozenset[str]:
 
 
 def _legacy_leakage_record(
-    row: Mapping[str, object],
     *,
     source_line: int,
     sample: RepresentationTrainingSample,
 ) -> LeakageRecord | None:
-    short_answer = row.get("short_answer")
-    if not isinstance(short_answer, str) or not short_answer:
+    if sample.short_answer is None:
         return None
-    overlap = tuple(sorted(_legacy_terms(sample.target) & _legacy_terms(short_answer)))
+    overlap = tuple(
+        sorted(_legacy_terms(sample.target) & _legacy_terms(sample.short_answer))
+    )
     if not overlap:
         return None
     return LeakageRecord(

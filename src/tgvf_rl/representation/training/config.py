@@ -41,7 +41,12 @@ from .distributed_checkpoint import (
 from .data import SplitOverlapPolicy
 from .fsdp2 import RepresentationFSDP2Config
 from .losses import MatrixCEScoreMode
-from .native_pipeline import RepresentationPromptConfig
+from .native_pipeline import (
+    REPRESENTATION_PROMPT_IDENTITY_V2,
+    REPRESENTATION_PROMPT_SCHEMA_VERSION,
+    REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
+    RepresentationPromptConfig,
+)
 from .objective import (
     RepresentationObjectiveConfig,
     RepresentationObjectiveConfigV2,
@@ -643,6 +648,8 @@ class RepresentationTrainingConfig:
         }:
             raise ValueError("representation training config schema mismatch")
         if self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
+            if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
+                raise ValueError("training config v1 requires prompt schema v1")
             if not isinstance(self.data, RepresentationDataConfig):
                 raise TypeError(
                     "training config v1 requires its historical data contract"
@@ -656,6 +663,8 @@ class RepresentationTrainingConfig:
             ):
                 raise ValueError("training config v1 requires DCP schema v1")
         elif self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2:
+            if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
+                raise ValueError("training config v2 requires prompt schema v1")
             if not isinstance(self.data, RepresentationDataConfigV2):
                 raise TypeError(
                     "training config v2 requires an overlap-bound data contract"
@@ -669,6 +678,14 @@ class RepresentationTrainingConfig:
             ):
                 raise ValueError("training config v2 requires DCP schema v2")
         else:
+            if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION_V2:
+                raise ValueError(
+                    "training config v3 requires question-only prompt schema v2"
+                )
+            if self.prompt.identity != REPRESENTATION_PROMPT_IDENTITY_V2:
+                raise ValueError(
+                    "training config v3 requires the fixed image-question prompt identity"
+                )
             if not isinstance(self.data, RepresentationDataConfigV2):
                 raise TypeError(
                     "training config v3 requires an overlap-bound data contract"
@@ -767,6 +784,7 @@ class RepresentationTrainingConfig:
             },
             "conditioning_provider": self.provider.provider.value,
             "prompt_identity": self.prompt.identity,
+            "prompt_schema_version": self.prompt.schema_version,
             "prompt_sha256": self.prompt.sha256,
             "objective_identity": self.objective.objective.identity,
             "objective_schema_version": self.objective.objective.schema_version,
@@ -832,7 +850,10 @@ def load_representation_training_config(
         _table(value, "data", table="root"),
         schema_version=schema_version,
     )
-    prompt = _parse_prompt(_table(value, "prompt", table="root"))
+    prompt = _parse_prompt(
+        _table(value, "prompt", table="root"),
+        config_schema_version=schema_version,
+    )
     objective = _parse_objective(
         _table(value, "objective", table="root"),
         schema_version=schema_version,
@@ -1048,12 +1069,31 @@ def _parse_data_split(
     )
 
 
-def _parse_prompt(value: Mapping[str, Any]) -> RepresentationPromptConfig:
-    _exact_fields(value, {"identity", "template", "sha256"}, table="prompt")
+def _parse_prompt(
+    value: Mapping[str, Any],
+    *,
+    config_schema_version: str,
+) -> RepresentationPromptConfig:
+    if config_schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3:
+        _exact_fields(
+            value,
+            {"schema_version", "identity", "template", "sha256"},
+            table="prompt",
+        )
+        prompt_schema_version = _string(value, "schema_version", table="prompt")
+    elif config_schema_version in {
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
+    }:
+        _exact_fields(value, {"identity", "template", "sha256"}, table="prompt")
+        prompt_schema_version = REPRESENTATION_PROMPT_SCHEMA_VERSION
+    else:
+        raise ValueError("representation training config schema mismatch")
     return RepresentationPromptConfig(
         identity=_string(value, "identity", table="prompt"),
         template=_string(value, "template", table="prompt"),
         expected_sha256=_string(value, "sha256", table="prompt"),
+        schema_version=prompt_schema_version,
     )
 
 

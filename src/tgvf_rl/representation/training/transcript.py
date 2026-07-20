@@ -13,11 +13,14 @@ from .losses import EVIDENCE_IGNORE_INDEX
 
 
 CANONICAL_EVIDENCE_SCHEMA_VERSION = "canonical_evidence_supervision_v1"
+CANONICAL_EVIDENCE_SCHEMA_VERSION_V2 = "canonical_evidence_supervision_v2"
 MODEL_EVIDENCE_SCHEMA_VERSION = "model_evidence_supervision_v1"
 TOKEN_EXPANSION_SCHEMA_VERSION = "canonical_to_model_token_expansion_v1"
 _EXECUTABLE_REPRESENTATION_FAMILY = "qwen3_vl"
 
-_QWEN_THINKING_COMPLETION_SUFFIX = "\n</think>\n\n<|im_end|>\n"
+NATIVE_REPRESENTATION_PRE_REASONING = "I need visual focus before answering."
+_QWEN_THINKING_COMPLETION_MIDDLE = "\n</think>\n\n"
+_QWEN_ASSISTANT_TURN_SUFFIX = "<|im_end|>\n"
 _NATIVE_CONTROL_FRAGMENTS = (
     "<|im_",
     "<|vision_",
@@ -45,6 +48,7 @@ class CanonicalEvidenceSupervision:
     transcript: RenderedTranscript
     generation_prefill: RenderedTranscript
     evidence_text: str
+    answer_text: str
     canonical_labels: tuple[int, ...]
     evidence_char_start: int
     evidence_char_end: int
@@ -55,8 +59,23 @@ class CanonicalEvidenceSupervision:
     schema_version: str = CANONICAL_EVIDENCE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != CANONICAL_EVIDENCE_SCHEMA_VERSION:
+        if self.schema_version not in {
+            CANONICAL_EVIDENCE_SCHEMA_VERSION,
+            CANONICAL_EVIDENCE_SCHEMA_VERSION_V2,
+        }:
             raise ValueError("canonical evidence-supervision schema mismatch")
+        if not isinstance(self.answer_text, str):
+            raise TypeError("canonical answer_text must be a string")
+        if (
+            self.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION
+            and self.answer_text != ""
+        ):
+            raise ValueError("canonical evidence-supervision v1 requires empty answer")
+        if (
+            self.schema_version == CANONICAL_EVIDENCE_SCHEMA_VERSION_V2
+            and not self.answer_text.strip()
+        ):
+            raise ValueError("canonical evidence-supervision v2 requires an answer")
         if len(self.canonical_labels) != len(self.transcript.token_ids):
             raise ValueError("canonical labels must align with transcript token ids")
         if len(self.token_offsets) != len(self.transcript.token_ids):
@@ -98,7 +117,9 @@ class CanonicalEvidenceSupervision:
             self.transcript.text
             != self.generation_prefill.text
             + self.evidence_text
-            + _QWEN_THINKING_COMPLETION_SUFFIX
+            + _QWEN_THINKING_COMPLETION_MIDDLE
+            + self.answer_text
+            + _QWEN_ASSISTANT_TURN_SUFFIX
         ):
             raise ValueError("canonical evidence placement differs from native prefill")
         derived_positions = _evidence_owned_token_positions(
@@ -294,7 +315,7 @@ def render_native_evidence_labels(
 
     if not isinstance(renderer, NativeProtocolRenderer):
         raise TypeError("renderer must be a NativeProtocolRenderer")
-    _validate_native_evidence_request(messages, evidence_description)
+    answer_text = _validate_native_evidence_request(messages, evidence_description)
 
     history = messages[:-1]
     generation_prefill = renderer.render(history, add_generation_prompt=True)
@@ -303,6 +324,7 @@ def render_native_evidence_labels(
     return _native_evidence_supervision_from_rendered(
         renderer,
         evidence_description=evidence_description,
+        answer_text=answer_text,
         generation_prefill=generation_prefill,
         transcript=transcript,
     )
@@ -330,10 +352,12 @@ def _render_native_evidence_labels_batch(
         raise ValueError("native evidence batch cannot be empty")
     if len(messages_batch) != len(evidence_descriptions):
         raise ValueError("native evidence messages and descriptions must align")
-    for messages, evidence_description in zip(
-        messages_batch, evidence_descriptions, strict=True
-    ):
+    answer_texts = tuple(
         _validate_native_evidence_request(messages, evidence_description)
+        for messages, evidence_description in zip(
+            messages_batch, evidence_descriptions, strict=True
+        )
+    )
 
     generation_prefills = renderer.render_many(
         tuple(messages[:-1] for messages in messages_batch),
@@ -353,11 +377,13 @@ def _render_native_evidence_labels_batch(
         _native_evidence_supervision_from_rendered(
             renderer,
             evidence_description=evidence_description,
+            answer_text=answer_text,
             generation_prefill=generation_prefill,
             transcript=transcript,
         )
-        for evidence_description, generation_prefill, transcript in zip(
+        for evidence_description, answer_text, generation_prefill, transcript in zip(
             evidence_descriptions,
+            answer_texts,
             generation_prefills,
             transcripts,
             strict=True,
@@ -368,7 +394,7 @@ def _render_native_evidence_labels_batch(
 def _validate_native_evidence_request(
     messages: Sequence[Mapping[str, Any]],
     evidence_description: str,
-) -> None:
+) -> str:
     if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
         raise TypeError("messages must be a sequence of mappings")
     if not isinstance(evidence_description, str) or not evidence_description.strip():
@@ -377,20 +403,23 @@ def _validate_native_evidence_request(
         raise ValueError("evidence_description cannot have leading/trailing newlines")
     if any(fragment in evidence_description for fragment in _NATIVE_CONTROL_FRAGMENTS):
         raise ValueError("evidence_description cannot contain native control tags")
-    _validate_post_tool_evidence_messages(messages, evidence_description)
+    return _validate_post_tool_evidence_messages(messages, evidence_description)
 
 
 def _native_evidence_supervision_from_rendered(
     renderer: NativeProtocolRenderer,
     *,
     evidence_description: str,
+    answer_text: str,
     generation_prefill: RenderedTranscript,
     transcript: RenderedTranscript,
 ) -> CanonicalEvidenceSupervision:
     expected_text = (
         generation_prefill.text
         + evidence_description
-        + _QWEN_THINKING_COMPLETION_SUFFIX
+        + _QWEN_THINKING_COMPLETION_MIDDLE
+        + answer_text
+        + _QWEN_ASSISTANT_TURN_SUFFIX
     )
     if transcript.text != expected_text:
         raise ValueError(
@@ -418,6 +447,7 @@ def _native_evidence_supervision_from_rendered(
         transcript=transcript,
         generation_prefill=generation_prefill,
         evidence_text=evidence_description,
+        answer_text=answer_text,
         canonical_labels=canonical_labels,
         evidence_char_start=evidence_start,
         evidence_char_end=evidence_end,
@@ -425,6 +455,11 @@ def _native_evidence_supervision_from_rendered(
         evidence_byte_end=evidence_byte_end,
         evidence_token_positions=positions,
         token_offsets=offsets,
+        schema_version=(
+            CANONICAL_EVIDENCE_SCHEMA_VERSION_V2
+            if answer_text
+            else CANONICAL_EVIDENCE_SCHEMA_VERSION
+        ),
     )
 
 
@@ -546,7 +581,7 @@ def _materialize_model_evidence_supervision(
 
 def _validate_post_tool_evidence_messages(
     messages: Sequence[Mapping[str, Any]], evidence_description: str
-) -> None:
+) -> str:
     if len(messages) != 4 or not all(
         isinstance(message, Mapping) for message in messages
     ):
@@ -575,10 +610,9 @@ def _validate_post_tool_evidence_messages(
         raise ValueError(
             "final assistant reasoning_content must equal evidence_description exactly"
         )
-    if evidence_turn.get("content") != "":
-        raise ValueError(
-            "the representation evidence turn must have empty answer content"
-        )
+    answer_text = evidence_turn.get("content")
+    if not isinstance(answer_text, str):
+        raise ValueError("the representation answer content must be a string")
     if evidence_turn.get("tool_calls"):
         raise ValueError("the evidence readout turn cannot contain another tool call")
     if messages[-2].get("role") != "tool":
@@ -600,9 +634,25 @@ def _validate_post_tool_evidence_messages(
     call_turn = messages[-3]
     if call_turn.get("role") != "assistant":
         raise ValueError("the tool result must follow an assistant tool-call turn")
-    if call_turn.get("reasoning_content") != "" or call_turn.get("content") != "":
+    call_reasoning = call_turn.get("reasoning_content")
+    if call_turn.get("content") != "":
+        raise ValueError("the representation tool-call turn cannot contain answer text")
+    if call_reasoning == "":
+        if answer_text != "":
+            raise ValueError(
+                "legacy representation transcripts require empty answer content"
+            )
+    elif call_reasoning == NATIVE_REPRESENTATION_PRE_REASONING:
+        if not answer_text.strip():
+            raise ValueError(
+                "native representation v2 requires non-empty short answer content"
+            )
+        if any(fragment in answer_text for fragment in _NATIVE_CONTROL_FRAGMENTS):
+            raise ValueError("short answer content cannot contain native control tags")
+    else:
         raise ValueError(
-            "the representation tool-call turn cannot fabricate reasoning/answer text"
+            "the representation tool-call reasoning must be empty legacy text or "
+            "the fixed native v2 pre-reasoning"
         )
     calls = call_turn.get("tool_calls")
     if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes)):
@@ -627,6 +677,7 @@ def _validate_post_tool_evidence_messages(
         or not arguments["target"].strip()
     ):
         raise ValueError("the representation tool call requires one non-empty target")
+    return answer_text
 
 
 def _tokenize_with_exact_offsets(

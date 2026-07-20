@@ -89,11 +89,14 @@ only; later rollout, production representation, objective, model-family, and
 scale gates below remain authoritative.
 
 No data or Adapter artifact is accepted for production use. Dataset/image
-licenses, the seven resolved-path split overlaps, final representation prompt
-and hyperparameters, reward values, production GRPO/SDPO mathematics and
-configuration, any hybrid objective, long training, and the 72B judge remain
-open and fail closed. A synthetic optimizer smoke may run only after its exact
-test-contract equations and pure-tensor oracle are recorded.
+licenses, the seven resolved-path split overlaps, representation
+hyperparameters and selected provider, the policy-RL prompt, reward values,
+production GRPO/SDPO mathematics and configuration, any hybrid objective, long
+training, and the 72B judge remain open and fail closed. The representation
+user-message structure itself is fixed separately by
+`RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY`. A synthetic optimizer smoke
+may run only after its exact test-contract equations and pure-tensor oracle are
+recorded.
 
 Where older text in this file or `VERL_COMPATIBILITY_SPIKE_PLAN.md` conflicts,
 this section and Project Task §0 take precedence. The earlier proposal status,
@@ -553,16 +556,23 @@ the external data or start a production/GPU run.
   metadata items rather than grounds for silently changing this population.
 - [x] `FIXED AD-02A` — The protocol-neutral representation row contains the
   retained row `uid` as `sample_id`, exact image reference, already-rendered
-  question text, target text, `evidence_description`, optional `image_id`, and
-  the recorded evaluation metadata. Its immutable content digest binds every
-  field, and the group key is `image_id` with exact image-reference fallback.
-  The exact retained data has no separate `choices` field; a future source with
-  choices requires a new schema/transform version rather than implicit prompt
-  rendering inside this record.
+  question text, target text, `evidence_description`, `short_answer`, optional
+  `image_id`, and the recorded evaluation metadata. The v2 sample identity
+  requires a non-empty `short_answer` and binds it into the immutable content
+  digest; v1 identities remain available only for exact historical replay and
+  do not retroactively change their digest. The group key is `image_id` with
+  exact image-reference fallback. The exact retained data has no separate
+  `choices` field; a future source with choices requires a new schema/transform
+  version rather than implicit prompt rendering inside this record.
 - [x] `FIXED AD-02B` — `retained_focus_rows_v1` implements source-hash
   validation, strict focus metadata, fail-closed fields/image resolution,
   duplicate handling, leakage records/warnings, every-row accepted/excluded
   disposition, immutable manifest identity, and four-key split-overlap reports.
+  `retained_focus_rows_v2` preserves those semantics while additionally
+  requiring a non-empty `short_answer` and emitting v2 sample identities for
+  the accepted native trajectory. The transform and sample-identity versions
+  must agree; v1 remains the historical RP path rather than silently acquiring
+  v2 admission rules.
   Evidence: `tests/representation/training/test_data.py` plus the exact audit in
   `docs/LEGACY_REFERENCE.md`. Leakage records are metadata, not implicit row
   removal.
@@ -577,17 +587,23 @@ the external data or start a production/GPU run.
   consumed by a retained manifest. The current source/transform identities bind
   each image path but do not detect an in-place image-file replacement. This is
   explicitly not closed by the repository-owned synthetic smoke images.
-- [ ] `OPEN_BLOCKING AD-03` — New pipeline transcript/prompt construction and
-  production `Hq` contract are not fully closed:
+- [ ] `OPEN_BLOCKING AD-03` — The Qwen3 representation trajectory is fixed;
+  the production `Hq` and remaining model/provider evidence are not fully
+  closed:
   - [x] `FIXED AD-03A` — `evidence_description` is the reasoning content of the
-    assistant turn after the latent `tgvf_focus_tool` result. Only the exact
-    tokenizer positions owned by this rendered evidence span receive
-    teacher-forcing labels. The prompt, first assistant tool-call turn,
-    tool-call JSON, tool result, template wrappers, and answer content are
-    ignored; the representation evidence turn itself has empty answer content.
-    Its preceding teacher-constructed call turn has empty reasoning/answer
-    content and only the native target call, so no intermediate reasoning label
-    or hidden prompt text is invented.
+    assistant turn after the latent `tgvf_focus_tool` result, and the exact
+    dataset `short_answer` is the answer content of that same turn. The user
+    turn is exactly the original image plus unmodified dataset question. It
+    adds no separate target field, tutorial, focus-force instruction, or other
+    project-authored text; any question/target lexical overlap can only be
+    inherited from the original question. The preceding teacher-constructed
+    assistant turn contains the fixed target-independent reasoning `I need
+    visual focus before answering.` and one native tool call carrying the
+    dataset target.
+    Only the exact tokenizer positions owned by the rendered
+    `evidence_description` span receive teacher-forcing labels. The fixed
+    pre-tool reasoning, tool-call JSON/target, tool result, `short_answer`,
+    template wrappers, and visual positions are ignored by `L_gen`.
     Offset ownership must match the rendered token ids exactly. A
     token is evidence-owned iff its start offset lies inside the evidence span;
     this includes Qwen's observed sentence-final token that also carries the
@@ -599,18 +615,28 @@ the external data or start a production/GPU run.
     position remains ignored. The executable mapping is Qwen3-specific;
     Qwen2.5-VL fails closed pending its separate family fixture/artifact.
   - [x] `FIXED AD-03B` — The Qwen3 implementation constructs one original-image
-    user turn, one native `tgvf_focus_tool` action, one latent-image tool result,
-    and the evidence reasoning turn. The strict parser identifies the raw JSON
-    target span and exact IDs before/after processor expansion. The separate
+    question-only user turn, one native `tgvf_focus_tool` action, one
+    latent-image tool result, and the evidence-reasoning-plus-answer turn. The
+    strict parser identifies the raw JSON target span and exact IDs before/after
+    processor expansion. The separate historical
     `qwen3_native_representation_smoke_v1.json` golden uses an explicitly
     non-production prompt, a deterministic 56×56 RGB image, a Unicode/slash
     target, and evidence text; it freezes prompt, tokenizer/template/schema,
     action/evidence transcript, target span, expanded-input, two-visual-block,
-    and evidence-label identities against the accepted local processor.
-  - [ ] `OPEN_CONFIGURABLE AD-03C` — Accept the production prompt wording/hash,
-    contextual hidden layer, and any target-visible versus target-omitted
-    matched-control policy. The smoke-only prompt is forbidden as a production
-    default.
+    and evidence-label identities against the accepted local processor. It is
+    retained unchanged as provenance and does not validate the v2 trajectory;
+    the separately versioned `qwen3_native_representation_smoke_v2.json`
+    processor golden now freezes the current question-only trajectory,
+    answer placement, evidence-only labels, target span, and expanded visual
+    positions. Its prompt identity is
+    `qwen3-representation-image-question-v1` under schema
+    `native_representation_prompt_v2`.
+  - [ ] `OPEN_CONFIGURABLE AD-03C` — Accept the contextual hidden layer and bind
+    the fixed `qwen3-representation-image-question-v1` /
+    `native_representation_prompt_v2` identity and hash in the production
+    configuration. Separately injecting the teacher target into the user
+    message is no longer configurable: it is forbidden. The policy-RL
+    system/tool-use prompt remains a separate open contract.
 - [ ] `OPEN_BLOCKING AD-04` — TGVF Adapter initialization that does not use the
   historical trained checkpoint directly. The config/runtime implement only
   fresh initialization with an explicit seed and reject legacy checkpoint
@@ -1016,10 +1042,11 @@ the synthetic implementation smoke.
   without making a production-training or promoted-artifact claim.
 - [x] Run `RP-11`, the bounded real-Qwen3 K=4/GA=4 continuous versus clean
   teardown/restore matching-next-update proof with Matrix CE, `L_gen`, and Norm.
-- [ ] Accept the production representation data split, prompt, scientific
-  configuration, parity tolerances, semantic evaluation, and promotion
-  thresholds before any production training claim. A paired-provider run is
-  optional comparison evidence, not a prerequisite.
+- [ ] Accept the production representation data split, selected provider,
+  scientific configuration, parity tolerances, semantic evaluation, and
+  promotion thresholds, and bind the fixed v2 transcript identity, before any
+  production training claim. A paired-provider run is optional comparison
+  evidence, not a prerequisite.
 - [x] Implement the S0 Qwen-family boundary, both condition-provider
   interfaces, SDPO teacher/objective/checkpoint boundary, and optional
   judge-provider interface. This does not close Qwen2.5 end-to-end or D0

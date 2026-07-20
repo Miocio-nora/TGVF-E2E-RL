@@ -10,6 +10,7 @@ import pytest
 from tgvf_rl.representation.training.data import (
     REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION,
     REPRESENTATION_DATA_TRANSFORM_VERSION,
+    REPRESENTATION_DATA_TRANSFORM_VERSION_V2,
     SPLIT_OVERLAP_REPORT_SCHEMA_VERSION,
     DuplicateKind,
     RepresentationDataError,
@@ -20,7 +21,10 @@ from tgvf_rl.representation.training.data import (
     load_retained_representation_jsonl,
     train_validation_group_overlap,
 )
-from tgvf_rl.representation.training.schema import RepresentationTrainingSample
+from tgvf_rl.representation.training.schema import (
+    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
+    RepresentationTrainingSample,
+)
 
 
 def _focus_row(**overrides: object) -> dict[str, object]:
@@ -33,6 +37,7 @@ def _focus_row(**overrides: object) -> dict[str, object]:
         "evidence_state": "need_local_visual_evidence",
         "target": "the red-sign beside the door",
         "evidence_description": "The red sign reads OPEN.",
+        "short_answer": "OPEN",
     }
     row.update(overrides)
     return row
@@ -81,6 +86,7 @@ def test_loads_focus_rows_resolves_images_and_records_every_disposition(
     assert sample.sample_id == "row-1"
     assert sample.image == str(image.resolve())
     assert sample.image_group_key == "image-1"
+    assert sample.short_answer == "red/sign"
     manifest = dataset.manifest
     assert manifest.schema_version == REPRESENTATION_DATA_MANIFEST_SCHEMA_VERSION
     assert manifest.transform_version == REPRESENTATION_DATA_TRANSFORM_VERSION
@@ -157,6 +163,36 @@ def test_invalid_fields_and_missing_images_are_excluded_fail_closed(
     ]
 
 
+def test_strict_v2_contract_requires_and_preserves_short_answer(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "image.png").write_bytes(b"image")
+    missing_answer = _focus_row(uid="missing-answer")
+    del missing_answer["short_answer"]
+    rows = [
+        _focus_row(short_answer="OPEN"),
+        missing_answer,
+        _focus_row(uid="blank-answer", short_answer=" "),
+    ]
+    source = tmp_path / "retained.jsonl"
+    source_sha256 = _write_source(source, rows)
+
+    dataset = _load(source, source_sha256, require_short_answer=True)
+
+    assert len(dataset.samples) == 1
+    assert dataset.samples[0].short_answer == "OPEN"
+    assert dataset.samples[0].identity.schema_version == (
+        REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
+    )
+    assert (
+        dataset.manifest.transform_version == REPRESENTATION_DATA_TRANSFORM_VERSION_V2
+    )
+    assert [entry.reasons for entry in dataset.manifest.excluded_rows] == [
+        (RowExclusionReason.INVALID_REQUIRED_FIELD,),
+        (RowExclusionReason.INVALID_REQUIRED_FIELD,),
+    ]
+
+
 def test_choices_requires_a_new_transform_version(tmp_path: Path) -> None:
     (tmp_path / "image.png").write_bytes(b"image")
     source = tmp_path / "retained.jsonl"
@@ -227,6 +263,7 @@ def _sample(sample_id: str, **overrides: object) -> RepresentationTrainingSample
         "question": "Question?",
         "target": f"target {sample_id}",
         "evidence_description": "Evidence.",
+        "short_answer": "Answer.",
         "stable_image_uid": f"stable-{sample_id}",
         "item_content_hash": f"content-{sample_id}",
     }

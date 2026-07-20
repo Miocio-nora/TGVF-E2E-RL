@@ -177,18 +177,39 @@ boundary:
   metrics. The exact numerical weights remain open and must be bound explicitly
   by an experiment identity; a controlled `L_gen=off` comparison is an ablation,
   not the baseline and not permission to remove the implementation.
-- In the native representation transcript, `evidence_description` is emitted
-  as the reasoning content of the assistant turn after the latent tool result.
-  That representation-only assistant turn has empty answer content.
-  The preceding teacher-constructed tool-call turn has empty reasoning and
-  answer content and contains only the native call; it does not fabricate an
-  intermediate reasoning target.
-  Only tokenizer positions owned exactly by that `evidence_description` span
-  receive teacher-forcing labels. Prompt text, the first assistant tool call,
-  tool-call JSON, the latent tool response, chat-template wrappers, and any
-  answer content are ignored by `L_gen`. Token ownership is derived from the
-  rendered native transcript and tokenizer offsets. A token is evidence-owned
-  when its start offset lies inside the evidence span; this deliberately owns
+- Decision `RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY` fixes the native
+  representation transcript to the same simple role structure used by the
+  policy RL phase. The user turn contains exactly the original image and the
+  unmodified dataset question. It must not separately inject or append the
+  teacher target, a representation tutorial, a focus-force instruction, or any
+  other project-authored prompt text. Any lexical overlap between question and
+  target may therefore come only from the original question. The neutral native
+  tool schema is supplied to Qwen's chat template separately from the user
+  message. This current Qwen3 contract is identified as
+  `qwen3-representation-image-question-v1` under prompt schema
+  `native_representation_prompt_v2`.
+- The teacher-constructed first assistant turn contains the fixed,
+  target-independent pre-tool reasoning text `I need visual focus before
+  answering.` followed by exactly one native `tgvf_focus_tool` call whose
+  `target` argument is the dataset target. The target is therefore present in
+  the assistant tool call and is never serialized as an additional user-prompt
+  field.
+- The tool turn carries the exact main `D` and all model-supported
+  D-DeepStack branches. The final assistant turn places
+  `evidence_description` in post-tool reasoning and the dataset
+  `short_answer` in answer content. Representation data admitted by this
+  contract must provide all of `question`, `target`, `evidence_description`,
+  and `short_answer` as non-empty strings.
+- Only tokenizer positions owned exactly by `evidence_description` receive
+  representation teacher-forcing labels. The fixed pre-tool reasoning,
+  tool-call target/JSON, latent tool response, final `short_answer`, prompt
+  text, and chat-template wrappers remain label `-100`; adding the answer to
+  the native transcript does not change `L_gen` or Matrix-CE mathematics.
+  Historical smoke-only prompt/config identities remain provenance records and
+  are not production prompt candidates.
+  Token ownership is derived from the rendered native transcript and tokenizer
+  offsets. A token is evidence-owned when its start offset lies inside the
+  evidence span; this deliberately owns
   Qwen's common sentence-final token that also carries the following template
   newline, while excluding tokens that begin in the closing wrapper. A token
   that begins before and crosses into evidence is rejected as ambiguous.
@@ -213,9 +234,13 @@ boundary:
 
 Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
 
-- The production representation prompt remains explicitly `[TBD]`. Smoke-only
-  prompt text may be used only by a named bounded fixture and must not become a
-  production default.
+- This earlier decision left the production representation user prompt
+  explicitly `[TBD]`. Decision
+  `RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY` supersedes that clause: the
+  representation user turn is now exactly the original image plus unmodified
+  dataset question. Historical smoke-only prompt text remains valid only for
+  its named bounded fixtures. The policy-RL system/tool-use prompt remains a
+  separate open contract.
 - Norm loss is required and has one fixed historical formula rather than a
   configurable family of modes. For one main or branch tensor `D` and its
   corresponding frozen post-merger source tensor `V`, with `V` detached,
@@ -230,8 +255,9 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   `1e-8`, weight decay `0.01`, gradient clipping at `1.0`, and the exact
   historical cosine schedule with 100 warmup steps and minimum learning-rate
   ratio `0.1` over 2,000 optimizer steps. The production TOML remains blocked
-  on the prompt and selected provider, but these values are accepted for the
-  bounded K=4 execution/resume proof.
+  on the selected provider and other unresolved data/scientific identities;
+  the representation user-message wording is no longer one of those blockers.
+  These values are accepted for the bounded K=4 execution/resume proof.
 - Same-image group size `K=4` is retained. On physical GPUs 2 and 3 the bounded
   geometry proof uses four accumulation microsteps, giving 32 global rows and
   eight complete `4x4` matrices per optimizer update. A measured throughput
@@ -262,7 +288,8 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   continuous and clean-teardown/resumed step 2 produced byte-identical
   104-tensor Adapter exports and exact recorded optimizer/scheduler/sampler/RNG,
   shard, train, and validation state. This closes executor/resume readiness,
-  not the still-open production prompt, data identity, or semantic thresholds.
+  not the production data identity or semantic thresholds; its historical
+  smoke-only prompt remains part of that run's immutable identity.
 - The post-RP-11 throughput comparison keeps its mathematical global batch at
   32 while removing configured gradient accumulation. With world size two,
   each rank directly materializes four independent same-image K=4 groups in
@@ -276,7 +303,8 @@ Decision `RPI-20260719-NORM-EVAL` extends that accepted boundary:
   seconds and raised row throughput from `1.571` to `1.974` rows/s at the same
   32-row/eight-matrix global update; peak allocated memory was about 31.0 GB.
   This supports GA=1 for this B200 geometry while leaving the final production
-  batch and data/prompt identities open.
+  batch and data identities open; the RP-12 prompt identity remains historical
+  rather than a candidate for the new trajectory.
 - Decision `RPI-20260719-B200-BATCHED-READOUT` fixes the next direct-batch
   executor correction. The two physical devices are B200 GPUs with about
   180 GB usable memory each, so the representation executor prioritizes

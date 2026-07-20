@@ -33,6 +33,11 @@ from tgvf_rl.representation.training.distributed_checkpoint import (
     DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION,
 )
 from tgvf_rl.representation.training.losses import MatrixCEScoreMode
+from tgvf_rl.representation.training.native_pipeline import (
+    REPRESENTATION_PROMPT_IDENTITY_V2,
+    REPRESENTATION_PROMPT_SCHEMA_VERSION,
+    REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
+)
 from tgvf_rl.representation.training.runtime import (
     ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256,
     ACCEPTED_QWEN3_MODEL_PATH,
@@ -253,6 +258,23 @@ def _upgrade_config_to_v3(path: Path) -> Path:
         "norm_weight = 0.1",
         'norm_weight = 0.1\nmatrix_ce_mode = "balanced"',
     )
+    legacy_prompt = "Question: {question}\\nInspect the requested target."
+    legacy_prompt_table = (
+        '[prompt]\nidentity = "representation-native-prompt-smoke-v1"\n'
+        f"template = {json.dumps(legacy_prompt)}\n"
+        f'sha256 = "{_sha(legacy_prompt.encode("utf-8"))}"'
+    )
+    question_only = "{question}"
+    native_prompt_table = (
+        "[prompt]\n"
+        f'schema_version = "{REPRESENTATION_PROMPT_SCHEMA_VERSION_V2}"\n'
+        f'identity = "{REPRESENTATION_PROMPT_IDENTITY_V2}"\n'
+        f"template = {json.dumps(question_only)}\n"
+        f'sha256 = "{_sha(question_only.encode("utf-8"))}"'
+    )
+    if legacy_prompt_table not in text:
+        raise AssertionError("v1 prompt table was not found during v3 upgrade")
+    text = text.replace(legacy_prompt_table, native_prompt_table)
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -443,11 +465,17 @@ def test_v3_selects_balanced_matrix_ce_and_defaults_temperature(tmp_path: Path) 
     )
 
     assert defaulted.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3
+    assert defaulted.prompt.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION_V2
+    assert defaulted.prompt.template == "{question}"
     assert isinstance(defaulted.objective, RepresentationObjectiveExecutionConfigV3)
     assert defaulted.objective.objective.matrix_ce_mode is MatrixCEScoreMode.BALANCED
     assert defaulted.objective.objective.matrix_ce_temperature == 1.0
     assert defaulted.validation_payload()["matrix_ce_mode"] == "balanced"
     assert defaulted.validation_payload()["matrix_ce_temperature"] == 1.0
+    assert (
+        defaulted.validation_payload()["prompt_schema_version"]
+        == REPRESENTATION_PROMPT_SCHEMA_VERSION_V2
+    )
 
     path.write_text(
         path.read_text(encoding="utf-8").replace(
@@ -522,9 +550,35 @@ def test_existing_v2_objective_identity_remains_unchanged() -> None:
     )
 
     assert isinstance(config.objective, RepresentationObjectiveExecutionConfigV2)
+    assert config.prompt.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION
     assert spec_identity_sha256(config.objective.objective) == (
         "3203b12dc9474f60e8fc0b1a224471fedfb648ee3dd1fa73dcd79a08a487d7c9"
     )
+
+
+def test_v3_rejects_legacy_or_target_bearing_prompt_contract(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v3(_write_config(tmp_path))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f'schema_version = "{REPRESENTATION_PROMPT_SCHEMA_VERSION_V2}"',
+            f'schema_version = "{REPRESENTATION_PROMPT_SCHEMA_VERSION}"',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="prompt schema v2"):
+        load_representation_training_config(path, verify_external_files=False)
+
+    path = _upgrade_config_to_v3(_write_config(tmp_path))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            REPRESENTATION_PROMPT_IDENTITY_V2,
+            "unbound-question-only-alias",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="fixed image-question prompt identity"):
+        load_representation_training_config(path, verify_external_files=False)
 
 
 def test_target_token_embedding_is_a_real_exclusive_provider_choice(

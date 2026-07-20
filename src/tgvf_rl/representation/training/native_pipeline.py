@@ -6,10 +6,11 @@ Qwen action transcript, extracts the tool-call target span, builds either
 accepted target-conditioning representation, runs the TGVF Adapter, and
 constructs the two-visual-block causal evidence readout.
 
-No prompt wording is defaulted here.  A run must supply an exact, hashed prompt
-template.  The second image passed to the processor is only a geometry carrier:
-the resulting visual positions are replaced by the live TGVF Adapter tensors
-before the frozen language-model readout.
+The user prompt contract is explicitly versioned. Historical v1 runs retain
+their exact hashed prompt template, while v2 fixes the user text to the sample's
+unmodified question. The second image passed to the processor is only a
+geometry carrier: the resulting visual positions are replaced by the live TGVF
+Adapter tensors before the frozen language-model readout.
 """
 
 from __future__ import annotations
@@ -62,16 +63,22 @@ from .runtime import (
     Qwen3VisionFeatures,
     Qwen3VisionPreMergeRequest,
 )
-from .schema import RepresentationTrainingSample
+from .schema import (
+    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
+    RepresentationTrainingSample,
+)
 from .transcript import (
     CanonicalEvidenceSupervision,
     CanonicalToModelTokenExpansion,
+    NATIVE_REPRESENTATION_PRE_REASONING,
     _build_visual_token_expansion,
     _render_native_evidence_labels_batch,
 )
 
 
 REPRESENTATION_PROMPT_SCHEMA_VERSION = "native_representation_prompt_v1"
+REPRESENTATION_PROMPT_SCHEMA_VERSION_V2 = "native_representation_prompt_v2"
+REPRESENTATION_PROMPT_IDENTITY_V2 = "qwen3-representation-image-question-v1"
 NATIVE_ACTION_TARGET_SCHEMA_VERSION = "native_action_target_v1"
 _ACTION_TEMPLATE_SUFFIX = "<|im_end|>\n"
 _ALLOWED_PROMPT_FIELDS = frozenset({"question", "target"})
@@ -91,10 +98,21 @@ class RepresentationPromptConfig:
         _require_non_empty_text(self.identity, field_name="prompt identity")
         _require_non_empty_text(self.template, field_name="prompt template")
         _require_sha256(self.expected_sha256, field_name="prompt expected_sha256")
-        if self.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
+        if self.schema_version not in {
+            REPRESENTATION_PROMPT_SCHEMA_VERSION,
+            REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
+        }:
             raise ValueError("representation prompt schema mismatch")
         if self.sha256 != self.expected_sha256:
             raise ValueError("representation prompt template SHA256 mismatch")
+
+        if (
+            self.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION_V2
+            and self.template != "{question}"
+        ):
+            raise ValueError(
+                "native_representation_prompt_v2 requires template exactly {question}"
+            )
 
         parsed = tuple(Formatter().parse(self.template))
         fields = tuple(field for _, field, _, _ in parsed if field is not None)
@@ -116,6 +134,8 @@ class RepresentationPromptConfig:
     def render(self, sample: RepresentationTrainingSample) -> str:
         if not isinstance(sample, RepresentationTrainingSample):
             raise TypeError("prompt sample must be RepresentationTrainingSample")
+        if self.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION_V2:
+            return sample.question
         rendered = self.template.format(
             question=sample.question,
             target=sample.target,
@@ -247,17 +267,44 @@ def build_native_representation_messages(
         raise TypeError("sample must be RepresentationTrainingSample")
     if not isinstance(prompt, RepresentationPromptConfig):
         raise TypeError("prompt must be RepresentationPromptConfig")
+    if prompt.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION:
+        user_text = prompt.render(sample)
+        pre_reasoning = ""
+        answer = ""
+    elif prompt.schema_version == REPRESENTATION_PROMPT_SCHEMA_VERSION_V2:
+        user_text = prompt.render(sample)
+        if user_text != sample.question:
+            raise ValueError(
+                "native_representation_prompt_v2 must preserve the sample question"
+            )
+        if (
+            sample.identity_schema_version
+            != REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2
+        ):
+            raise ValueError(
+                "native_representation_prompt_v2 requires representation sample "
+                "identity v2"
+            )
+        _require_non_empty_text(
+            sample.short_answer,
+            field_name="native representation v2 short_answer",
+        )
+        pre_reasoning = NATIVE_REPRESENTATION_PRE_REASONING
+        answer = sample.short_answer
+    else:  # RepresentationPromptConfig rejects this, keep the builder fail-closed.
+        raise ValueError("representation prompt schema mismatch")
+
     return (
         {
             "role": "user",
             "content": (
                 {"type": "image"},
-                {"type": "text", "text": prompt.render(sample)},
+                {"type": "text", "text": user_text},
             ),
         },
         {
             "role": "assistant",
-            "reasoning_content": "",
+            "reasoning_content": pre_reasoning,
             "content": "",
             "tool_calls": (
                 {
@@ -273,7 +320,7 @@ def build_native_representation_messages(
         {
             "role": "assistant",
             "reasoning_content": sample.evidence_description,
-            "content": "",
+            "content": answer,
         },
     )
 
@@ -1275,6 +1322,8 @@ def _require_sha256(value: object, *, field_name: str) -> None:
 __all__ = [
     "NATIVE_ACTION_TARGET_SCHEMA_VERSION",
     "REPRESENTATION_PROMPT_SCHEMA_VERSION",
+    "REPRESENTATION_PROMPT_SCHEMA_VERSION_V2",
+    "REPRESENTATION_PROMPT_IDENTITY_V2",
     "ModelActionTarget",
     "NativeActionTarget",
     "Qwen3NativeRepresentationGroupBuilder",

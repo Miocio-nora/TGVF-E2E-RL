@@ -23,6 +23,7 @@ from tgvf_rl.representation.training.internal_evaluation import (
     create_injected_native_counterfactual_evaluator,
 )
 from tgvf_rl.representation.training.native_pipeline import (
+    REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
     Qwen3NativeRepresentationGroupBuilder,
     RepresentationPromptConfig,
     _bind_all_ones_attention_mask,
@@ -40,18 +41,25 @@ from tgvf_rl.representation.training.runtime import (
 )
 from tgvf_rl.representation.training.qwen3_counterfactual import (
     Qwen3CounterfactualCaseBuilder,
+    build_qwen3_d_only_messages,
     load_qwen3_counterfactual_manifest,
 )
-from tgvf_rl.representation.training.schema import RepresentationTrainingSample
+from tgvf_rl.representation.training.schema import (
+    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
+    REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
+    RepresentationTrainingSample,
+)
 from tgvf_rl.representation.training.streaming import (
     score_streaming_same_image_group,
 )
-from tgvf_rl.representation.training.transcript import render_native_evidence_labels
+from tgvf_rl.representation.training.transcript import (
+    NATIVE_REPRESENTATION_PRE_REASONING,
+    render_native_evidence_labels,
+)
 
 
 _IMAGE_TOKEN = "<|image_pad|>"
 _ASSISTANT_PREFILL = "<|im_start|>assistant\n<think>\n"
-_EVIDENCE_SUFFIX = "\n</think>\n\n<|im_end|>\n"
 
 
 def test_bound_all_ones_mask_rejects_mutation_replacement_and_false_cpu_mask() -> None:
@@ -223,8 +231,22 @@ class _Processor:
         call = self._call(messages)
         if len(messages) == 2:
             assert not add_generation_prompt
-            return user + _ASSISTANT_PREFILL + "\n</think>\n\n" + call + "<|im_end|>\n"
-        history = user + "<assistant>" + call + "</assistant>\n"
+            return (
+                user
+                + _ASSISTANT_PREFILL
+                + messages[1]["reasoning_content"]
+                + "\n</think>\n\n"
+                + call
+                + "<|im_end|>\n"
+            )
+        history = (
+            user
+            + _ASSISTANT_PREFILL
+            + messages[1]["reasoning_content"]
+            + "\n</think>\n\n"
+            + call
+            + "<|im_end|>\n"
+        )
         history += f"<tool_response>{_IMAGE_TOKEN}</tool_response>\n"
         if len(messages) == 3:
             assert add_generation_prompt
@@ -234,7 +256,9 @@ class _Processor:
             history
             + _ASSISTANT_PREFILL
             + messages[-1]["reasoning_content"]
-            + _EVIDENCE_SUFFIX
+            + "\n</think>\n\n"
+            + messages[-1]["content"]
+            + "<|im_end|>\n"
         )
 
     def __call__(self, *, text, images, padding, return_tensors):
@@ -402,6 +426,8 @@ def _sample(image: Path, index: int) -> RepresentationTrainingSample:
         question="What is written on the label?",
         target=f"label section {index}",
         evidence_description=f"Section {index} reads OPEN.",
+        short_answer="OPEN",
+        identity_schema_version=REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
     )
 
 
@@ -420,10 +446,23 @@ def _counterfactual_sample(
         question="What is written on the status label?",
         target=target,
         evidence_description=evidence,
+        short_answer=evidence.rsplit(" ", 1)[-1].rstrip("."),
+        identity_schema_version=REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION_V2,
     )
 
 
-def _prompt(template: str = "Question: {question}\nInspect local evidence."):
+def _prompt() -> RepresentationPromptConfig:
+    template = "{question}"
+    return RepresentationPromptConfig(
+        identity="tiny-native-prompt-v2",
+        template=template,
+        expected_sha256=hashlib.sha256(template.encode()).hexdigest(),
+        schema_version=REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
+    )
+
+
+def _legacy_prompt() -> RepresentationPromptConfig:
+    template = "Question: {question}\nInspect local evidence for {target}."
     return RepresentationPromptConfig(
         identity="tiny-native-prompt-v1",
         template=template,
@@ -474,6 +513,60 @@ def test_prompt_hash_and_fields_are_explicit() -> None:
             identity="bad",
             template=template,
             expected_sha256=hashlib.sha256(template.encode()).hexdigest(),
+        )
+    non_native_template = "Question: {question}"
+    with pytest.raises(ValueError, match="requires template exactly"):
+        RepresentationPromptConfig(
+            identity="bad-v2",
+            template=non_native_template,
+            expected_sha256=hashlib.sha256(non_native_template.encode()).hexdigest(),
+            schema_version=REPRESENTATION_PROMPT_SCHEMA_VERSION_V2,
+        )
+
+
+def test_representation_message_contract_is_versioned_and_v2_hides_target_from_user(
+    tmp_path: Path,
+) -> None:
+    sample = _sample(tmp_path / "unused.png", 0)
+
+    legacy = build_native_representation_messages(sample, _legacy_prompt())
+    assert legacy[0]["content"][1]["text"] == (
+        "Question: What is written on the label?\n"
+        "Inspect local evidence for label section 0."
+    )
+    assert legacy[1]["reasoning_content"] == ""
+    assert legacy[-1]["content"] == ""
+
+    native = build_native_representation_messages(sample, _prompt())
+    assert native[0] == {
+        "role": "user",
+        "content": (
+            {"type": "image"},
+            {"type": "text", "text": sample.question},
+        ),
+    }
+    assert sample.target not in native[0]["content"][1]["text"]
+    assert native[1]["reasoning_content"] == NATIVE_REPRESENTATION_PRE_REASONING
+    assert native[1]["content"] == ""
+    assert native[1]["tool_calls"][0]["function"]["arguments"] == {
+        "target": sample.target
+    }
+    assert native[2] == {"role": "tool", "content": ({"type": "image"},)}
+    assert native[3] == {
+        "role": "assistant",
+        "reasoning_content": sample.evidence_description,
+        "content": sample.short_answer,
+    }
+    d_only = build_qwen3_d_only_messages(sample, _prompt())
+    assert d_only[1]["reasoning_content"] == NATIVE_REPRESENTATION_PRE_REASONING
+
+    with pytest.raises(ValueError, match="sample identity v2"):
+        build_native_representation_messages(
+            replace(
+                sample,
+                identity_schema_version=REPRESENTATION_SAMPLE_IDENTITY_SCHEMA_VERSION,
+            ),
+            _prompt(),
         )
 
 
@@ -544,7 +637,9 @@ def test_native_action_target_uses_strict_raw_tool_span(tmp_path: Path) -> None:
     target = render_native_action_target(runtime, messages)
 
     assert target.target_text == sample.target
-    assert target.sampled_turn.sampled_text.startswith("\n</think>")
+    assert target.sampled_turn.sampled_text.startswith(
+        NATIVE_REPRESENTATION_PRE_REASONING + "\n</think>"
+    )
     assert target.sampled_turn.sampled_text.endswith("</tool_call>")
     assert (
         target.transcript.token_ids[

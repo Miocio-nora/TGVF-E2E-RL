@@ -9,8 +9,8 @@ end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 > implemented on `main`. `RP-11` passes a real-Qwen3/two-rank K=4/GA=4
 > continuous-versus-process-teardown resume smoke with Matrix CE, `L_gen`, and
 > the fixed historical Norm loss. No production
-> data/prompt/hyperparameter contract, production representation run, promoted
-> TGVF Adapter, policy RL run, or task evaluation result exists yet.
+> data/hyperparameter contract, production representation run, promoted TGVF
+> Adapter, policy RL prompt/run, or task evaluation result exists yet.
 
 The bounded [veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
 selected upstream veRL commit
@@ -63,6 +63,17 @@ smokes and CPU fixtures are not policy training, production representation
 training, a promoted trained artifact, or semantic-quality evidence. `RP-11`
 closes the bounded executor/resume question, but its prompt and data are
 explicitly smoke-only.
+
+For new representation configuration schema v3, the native trajectory is
+fixed to `Image + Q → pre reasoning → tool call(target) → D → evidence →
+answer`. Here `Q` is the unmodified dataset question, evidence is
+`evidence_description`, and answer is `short_answer`. The target never appears
+as a separately injected user field; any lexical overlap can only come from the
+unmodified question. Only evidence-description tokens are training labels.
+The fixed Qwen3 identity is `qwen3-representation-image-question-v1` under
+schema `native_representation_prompt_v2`. Historical v1/v2 training-config
+prompt identities and their fixtures remain unchanged provenance rather than
+production candidates.
 
 The goal is to train one policy that can decide whether to answer directly or
 request target-conditioned visual evidence, consume that evidence, continue
@@ -198,9 +209,10 @@ choices remain unset:
 
 - Qwen2.5 local/runtime path, family-specific representation artifact, and
   native prompt;
-- production representation prompt wording, contextual hidden-layer choice,
-  and real-Qwen `Hq`/readout validation; the Qwen3 native span/processor smoke
-  contract and both provider code paths are implemented;
+- contextual hidden-layer choice, production binding of the fixed
+  question-only representation transcript identity, and real-Qwen
+  `Hq`/readout validation; the Qwen3 native span/processor path and both
+  provider code paths are implemented;
 - accepted train/validation manifests, resolution of the seven exact resolved-
   path overlaps, dataset/image licenses, and perceptual duplicate policy;
 - representation initialization seed, Matrix-CE/`L_gen` weights, optimizer,
@@ -242,11 +254,11 @@ be inherited silently from a library default.
 5. **Implemented and smoke-tested, not run on production data:** the native-
    format Qwen3 representation data/pipeline, both provider paths, streaming objective,
    trainer, FSDP2 ownership, configuration, and checkpoint/resume scaffolds.
-   Resolve the open production prompt/data/scientific contracts and semantic
-   evaluation thresholds before training a new production
-   Qwen3-VL-8B-Thinking TGVF Adapter. Require a separate family-specific
-   artifact and full fixture suite before claiming Qwen2.5-VL end-to-end
-   support.
+   Bind the fixed v2 transcript schema/hash and resolve the open production
+   data/scientific contracts and semantic evaluation thresholds before
+   training a new production Qwen3-VL-8B-Thinking TGVF Adapter. Require a
+   separate family-specific artifact and full fixture suite before claiming
+   Qwen2.5-VL end-to-end support.
 6. Bind the GRPO equations and run a minimal frozen-Adapter policy proof.
 7. Freeze the production SDPO equations, feedback/teacher policy, approximation,
    and placement, then validate the implemented path on real two-call
