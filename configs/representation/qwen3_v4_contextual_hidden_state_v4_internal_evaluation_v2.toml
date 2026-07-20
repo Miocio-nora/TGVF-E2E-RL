@@ -1,0 +1,32 @@
+schema_version = "representation-internal-evaluation-run-v1"
+run_id = "RP-37-QWEN3-REPRESENTATION-INTERNAL-EVAL-CONTEXTUAL-V4-GPU0"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "fb64769c1dc04bf1c7fab793be951e9cbd37b257"
+dirty = false
+
+[source]
+training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_v4_contextual_hidden_state_v4.toml"
+training_config_sha256 = "416bf6f4813407265f0eeaa00bfd75d65908a8db975b3c128cd9b49e07eb380b"
+
+[artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V4/adapter.pt"
+file_sha256 = "50179c709c5788d83ffc58d13dcde9e15ed448b2cf3233a5db67cb7501106e75"
+manifest_sha256 = "dfa992fcea0cee8a0fb48f19892ff10ac42a6cf040d32afcae748c7724e80e10"
+expected_run_identity_sha256 = "6c74885183eba8cfc6d7393a296b897b3caf939c88ffe016028c3a02b5f3d5c0"
+expected_global_step = 2000
+
+[execution]
+physical_gpu_id = 0
+
+[evaluation]
+evaluation_id = "qwen3-v4-contextual-v4-native-internal-eval-v2"
+ordered_group_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v3_val2k_grid1x26x38_exact_k4_seed42_v1.json"
+ordered_group_manifest_sha256 = "dc327967279cee32f014a3806a473b2442d3cd51df6cf4efa46a33b1f5806ab8"
+counterfactual_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v3_val2k_chartqa_2016_counterfactual_v1.json"
+counterfactual_manifest_sha256 = "17238100d1fb807038befbffdc6e6d5808dbf9e6d63ceeb1904e03b596b474a0"
+report_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-37-qwen3-internal-eval-contextual-v4-gpu0/report.json"
+random_seed = 42
+max_new_tokens = 64
+eos_token_ids = [151645]

@@ -4344,7 +4344,7 @@ instead of repeated bullets.
 
 ### RP-35-QWEN3-REPRESENTATION-INTERNAL-EVAL-CONTEXTUAL-V4-GPU0
 
-- Lifecycle/result: `PLANNED` / `PENDING`; formal post-hoc internal evaluation
+- Lifecycle/result: `COMPLETE` / `INVALID`; formal post-hoc internal evaluation
   of completed contextual artifact, without training resume or weight mutation.
 - Identity: code `463108ed559a11210ef8703dfdbcc451038b2d7d`, clean;
   evaluation TOML SHA256
@@ -4377,10 +4377,14 @@ instead of repeated bullets.
   configs/representation/qwen3_v4_contextual_hidden_state_v4_internal_evaluation_v1.toml`.
   Immutable output directory
   `artifacts/representation/RP-35-qwen3-internal-eval-contextual-v4-gpu0/`.
+- Result: model and Adapter loading succeeded, then the report reducer rejected
+  the first BF16 row because it compared FP32-divided summed NLL with
+  BF16-divided L_gen at `1e-6`. Exit 2; no report was published and no weights
+  or training records changed. Superseded by RP-37.
 
 ### RP-36-QWEN3-REPRESENTATION-INTERNAL-EVAL-TARGET-EMBEDDING-V3-GPU3
 
-- Lifecycle/result: `PLANNED` / `PENDING`; exact paired evaluation of the
+- Lifecycle/result: `COMPLETE` / `INVALID`; exact paired evaluation of the
   target-token-embedding artifact. Population, model, prompt, deterministic
   evaluator, N/A fields and acceptance are identical to RP-35.
 - Identity/artifact: code
@@ -4398,6 +4402,33 @@ instead of repeated bullets.
   `2026-07-20`; the RP-35 deterministic command with `CUDA_VISIBLE_DEVICES=3`
   and target-embedding evaluation TOML. Immutable output directory
   `artifacts/representation/RP-36-qwen3-internal-eval-target-embedding-v3-gpu3/`.
+- Result: same pre-report BF16 reduction-order rejection as RP-35. Exit 2; no
+  report was published and no weights or training records changed. Superseded
+  by RP-38.
+
+### RP-37-QWEN3-REPRESENTATION-INTERNAL-EVAL-CONTEXTUAL-V4-GPU0
+
+- Lifecycle/result: `PLANNED` / `PENDING`; exact replacement for RP-35 after
+  preserving the score tensor's BF16 divide-before-export reduction order.
+  All model, Adapter, population, prompt, deterministic evaluator, N/A fields,
+  GPU UUID, command environment and acceptance remain exactly RP-35.
+- Identity/output: clean code
+  `fb64769c1dc04bf1c7fab793be951e9cbd37b257`; evaluation TOML SHA256
+  `9a051f2012d54b892874b8154e3be6eef01cd1788d995e4ed4c96d78b1bc4060`;
+  command selects the contextual `internal_evaluation_v2.toml`; immutable
+  output `artifacts/representation/RP-37-qwen3-internal-eval-contextual-v4-gpu0/`.
+
+### RP-38-QWEN3-REPRESENTATION-INTERNAL-EVAL-TARGET-EMBEDDING-V3-GPU3
+
+- Lifecycle/result: `PLANNED` / `PENDING`; exact paired replacement for RP-36.
+  All scientific/execution fields remain exactly RP-36/RP-37 except provider,
+  bound Adapter and physical GPU 3.
+- Identity/output: clean code
+  `fb64769c1dc04bf1c7fab793be951e9cbd37b257`; evaluation TOML SHA256
+  `80fed1529d1b79e2d5abf4e2ad06569c1ccef196eaf06531620f49dae4c80e05`;
+  command selects the target-embedding `internal_evaluation_v2.toml`; immutable
+  output
+  `artifacts/representation/RP-38-qwen3-internal-eval-target-embedding-v3-gpu3/`.
 
 ## Compatibility-spike status
 
