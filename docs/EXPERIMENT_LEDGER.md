@@ -4624,6 +4624,19 @@ instead of repeated bullets.
   fails direction flip and one continuation. Report SHA256 values are
   `137e48e7...ca6` / `1570978b...d8b`. Contextual hidden state is the selected
   provider for the current Qwen3 representation artifact.
+- Golden comparison: the historical Golden report on the exact same ordered
+  200 rows/46 groups records top-1/top-2/MRR `0.77/0.915/0.86917`, mean/median
+  diagonal gap `0.19563/0.15234`. The new contextual artifact records
+  `0.83/0.96/0.9075` and `2.4240/1.7070`, improving top-1 by 6 points, top-2 by
+  4.5 points, and MRR by 0.0383. This establishes that the new native artifact
+  exceeds the Golden baseline on the accepted same-distribution specificity
+  benchmark. It is not a strict training-method A/B: Golden used custom
+  Protocol-C rows and tokenizer resize, its focus-force transcript, legacy
+  Matrix CE and seed `20260525`; the new artifact uses the native transcript,
+  no tokenizer resize, Balanced mean-NLL/T1.0 and seed 42. Evidence-type gains
+  are strongest for OCR text, color, shape boundary and texture/material;
+  chart, counting, object-part and pattern remain slightly below Golden and
+  should not be hidden by the aggregate improvement.
 
 ## Compatibility-spike status
 
