@@ -27,6 +27,7 @@ def reward_context_from_trajectory(
     question: str,
     expected_answer: str,
     task_kind: AnswerTaskKind,
+    data_source: str | None = None,
 ) -> RewardContext:
     """Retain invalid/error trajectories while deriving their reward facts."""
 
@@ -57,6 +58,7 @@ def reward_context_from_trajectory(
         has_valid_final_answer=has_final_answer,
         successful_tgvf_observation_count=successful_tgvf,
         tool_error_codes=tuple(error.code for error in trajectory.tool_errors),
+        data_source=data_source,
     )
 
 

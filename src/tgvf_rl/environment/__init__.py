@@ -43,6 +43,13 @@ from .crop_tool import (
     ImageZoomInTool,
     clamp_bbox_to_image,
 )
+from .native_appender import (
+    NativeToolTurnRegistrar,
+    QWEN_NATIVE_IMAGE_PLACEHOLDER,
+    QWEN_NATIVE_RESPONSE_SUFFIX,
+    QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
+    QwenNativeToolObservationAppender,
+)
 from .source_visual import record_trajectory_source_visual
 from .tool_registry import NativeToolRuntimeRegistry, ToolRuntimeBinding
 
@@ -68,7 +75,12 @@ __all__ = [
     "FrozenTGVFFocusTool",
     "LoadedFrozenTGVFAdapter",
     "NativeToolRuntimeRegistry",
+    "NativeToolTurnRegistrar",
     "PolicyPilotFocusRuntimeBridge",
+    "QWEN_NATIVE_IMAGE_PLACEHOLDER",
+    "QWEN_NATIVE_RESPONSE_SUFFIX",
+    "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
+    "QwenNativeToolObservationAppender",
     "ReplayLayoutBuilderDependency",
     "RepresentationArtifactRuntimeBinding",
     "RolloutRequest",

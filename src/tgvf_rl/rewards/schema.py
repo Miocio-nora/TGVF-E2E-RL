@@ -28,6 +28,7 @@ class RewardContext:
     has_valid_final_answer: bool = True
     successful_tgvf_observation_count: int = 0
     tool_error_codes: tuple[str, ...] = ()
+    data_source: str | None = None
 
     def __post_init__(self) -> None:
         if not self.sample_id or not self.question:
@@ -40,6 +41,10 @@ class RewardContext:
             raise ValueError("successful TGVF observations cannot exceed tool calls")
         if any(not code for code in self.tool_error_codes):
             raise ValueError("tool error codes must be non-empty")
+        if self.data_source is not None and (
+            not isinstance(self.data_source, str) or not self.data_source.strip()
+        ):
+            raise ValueError("reward data_source must be non-empty text when present")
 
 
 @dataclass(frozen=True, slots=True)

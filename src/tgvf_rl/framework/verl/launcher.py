@@ -1,0 +1,614 @@
+"""Read-only launch-plan bridge for the pinned upstream veRL v0 runner.
+
+This module translates one fully validated :class:`PolicyE2ESmokeRunConfig`
+into dotted Hydra overrides.  Building or composing a plan has no runtime side
+effects: it does not import ``verl.trainer.main_ppo``, initialize Ray/CUDA, or
+create output files.  Fields that are not owned by the smoke identity remain
+explicit blockers instead of silently inheriting an operational choice.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import json
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+
+from .adapter import LOSSLESS_AGENT_LOOP_MANAGER_FQN, VerlAdapterConfig
+from .compatibility import (
+    FSDP2BridgeConfig,
+    SPIKE_CANDIDATE_VERL_COMMIT,
+    VerlRuntimeRequirements,
+)
+from .exact_replay_engine import TGVF_EXACT_REPLAY_MODEL_TYPE
+from .smoke_dataset import VerlSelectedSampleDatasetBinding
+
+
+UPSTREAM_VERL_MAIN_MODULE = "verl.trainer.main_ppo"
+UPSTREAM_VERL_CONFIG_NAME = "ppo_trainer"
+UPSTREAM_VERL_V0_RUNNER_FQN = "verl.trainer.main_ppo_v0.TaskRunner"
+
+SELECTED_SAMPLE_DATASET_CLASS_NAME = "TGVFSelectedSampleDataset"
+NATIVE_AGENT_LOOP_NAME = "tgvf_native_policy"
+NATIVE_AGENT_LOOP_FQN = (
+    "tgvf_rl.framework.verl.native_agent_loop.VerlFrameworkNeutralAgentLoop"
+)
+NATIVE_INVOCATION_FACTORY_FQN = (
+    "tgvf_rl.framework.verl.native_agent_loop."
+    "BoundVerlNativeAgentLoopInvocationFactory"
+)
+EXACT_REPLAY_EXTERNAL_MODULE = (
+    "tgvf_rl.framework.verl.exact_bypass_loss"
+)
+EXACT_REPLAY_ENGINE_REGISTRAR_FQN = (
+    "tgvf_rl.framework.verl.exact_replay_engine."
+    "register_qwen3_exact_replay_fsdp2_engine"
+)
+EXACT_REPLAY_FORWARD_PORT_FQN = (
+    "tgvf_rl.policy.qwen_replay.Qwen3RecordedPolicyForwardPort"
+)
+EXACT_CURRENT_REFERENCE_REPLAY_FQN = (
+    "tgvf_rl.policy.qwen_replay.replay_qwen3_current_reference"
+)
+POLICY_REWARD_PIPELINE_FQN = "tgvf_rl.rewards.pipeline.PilotRewardPipeline"
+
+VERL_POLICY_SMOKE_LAUNCH_SCHEMA = "tgvf-verl-policy-smoke-launch-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class UpstreamVerlLaunchPlan:
+    """Auditable, non-executing description of one upstream invocation."""
+
+    run_identity_sha256: str
+    overrides: Mapping[str, object]
+    environment: Mapping[str, str]
+    external_components: Mapping[str, str]
+    launch_blockers: tuple[str, ...]
+    inherited_upstream_fields: tuple[str, ...]
+    verl_commit: str = SPIKE_CANDIDATE_VERL_COMMIT
+    main_module: str = UPSTREAM_VERL_MAIN_MODULE
+    config_name: str = UPSTREAM_VERL_CONFIG_NAME
+    runner_fqn: str = UPSTREAM_VERL_V0_RUNNER_FQN
+    schema_version: str = VERL_POLICY_SMOKE_LAUNCH_SCHEMA
+
+    def __post_init__(self) -> None:
+        if self.schema_version != VERL_POLICY_SMOKE_LAUNCH_SCHEMA:
+            raise ValueError("veRL launch-plan schema differs")
+        if self.verl_commit != SPIKE_CANDIDATE_VERL_COMMIT:
+            raise ValueError("Policy smoke launch requires the accepted e003 pin")
+        if self.main_module != UPSTREAM_VERL_MAIN_MODULE:
+            raise ValueError("upstream veRL main module differs")
+        if self.config_name != UPSTREAM_VERL_CONFIG_NAME:
+            raise ValueError("upstream veRL Hydra config name differs")
+        if self.runner_fqn != UPSTREAM_VERL_V0_RUNNER_FQN:
+            raise ValueError("accepted e003 launch must use the v0 TaskRunner")
+        _require_sha256(self.run_identity_sha256, "run_identity_sha256")
+        object.__setattr__(self, "overrides", MappingProxyType(dict(self.overrides)))
+        object.__setattr__(
+            self, "environment", MappingProxyType(dict(self.environment))
+        )
+        object.__setattr__(
+            self,
+            "external_components",
+            MappingProxyType(dict(self.external_components)),
+        )
+        object.__setattr__(self, "launch_blockers", tuple(self.launch_blockers))
+        object.__setattr__(
+            self,
+            "inherited_upstream_fields",
+            tuple(self.inherited_upstream_fields),
+        )
+        if self.overrides.get("trainer.use_v1") is not False:
+            raise ValueError("accepted e003 launch must retain trainer.use_v1=false")
+        if (
+            self.overrides.get(
+                "actor_rollout_ref.rollout.agent.agent_loop_manager_class"
+            )
+            != LOSSLESS_AGENT_LOOP_MANAGER_FQN
+        ):
+            raise ValueError("launch plan lost the accepted lossless v0 manager")
+
+    @property
+    def launch_ready(self) -> bool:
+        return not self.launch_blockers
+
+    def assert_launch_ready(self) -> None:
+        if self.launch_blockers:
+            raise RuntimeError(
+                "upstream veRL launch remains blocked: "
+                + "; ".join(self.launch_blockers)
+            )
+
+    def as_nested_mapping(self) -> dict[str, object]:
+        """Return the project-owned overrides as a plain nested mapping."""
+
+        result: dict[str, object] = {}
+        for dotted_path, value in self.overrides.items():
+            _insert_dotted(result, dotted_path, _plain(value))
+        return result
+
+    def to_omegaconf(self) -> object:
+        """Create an OmegaConf object without importing veRL or Hydra."""
+
+        from omegaconf import OmegaConf
+
+        return OmegaConf.create(self.as_nested_mapping())
+
+    def hydra_override_args(self) -> tuple[str, ...]:
+        """Render stable add-or-replace overrides accepted by Hydra 1.3."""
+
+        return tuple(
+            f"++{path}={_hydra_literal(value)}"
+            for path, value in self.overrides.items()
+        )
+
+
+def build_policy_e2e_smoke_verl_plan(
+    config: PolicyE2ESmokeRunConfig,
+) -> UpstreamVerlLaunchPlan:
+    """Map one strict smoke identity onto pinned veRL's public config paths."""
+
+    if not isinstance(config, PolicyE2ESmokeRunConfig):
+        raise TypeError("config must be PolicyE2ESmokeRunConfig")
+    if not config.policy.sampling.is_run_bound:
+        raise ValueError("Policy smoke sampling identity must be fully run-bound")
+    if (
+        "</tool_call>" in (config.policy.sampling.stop_strings or ())
+        and config.policy.sampling.include_stop_str_in_output is not True
+    ):
+        raise ValueError("native tool-call closer must remain policy-sampled")
+
+    distributed = config.distributed
+    fsdp = FSDP2BridgeConfig(
+        world_size=distributed.world_size,
+        fsdp_size=distributed.world_size,
+    )
+    runtime = VerlRuntimeRequirements(fsdp2=fsdp)
+    adapter = VerlAdapterConfig(
+        runtime=runtime,
+        max_tool_calls=config.protocol.maximum_tool_calls,
+        policy_pilot=config.policy,
+    )
+    values = dict(adapter.public_config_overrides())
+    if values.get("trainer.use_v1") is not False:
+        raise RuntimeError("accepted e003 adapter unexpectedly selected trainer v1")
+
+    sampling = config.policy.sampling
+    accumulation = config.accumulation
+    optimizer = config.optimizer
+    scheduler = config.scheduler
+    training = config.training
+    binding = VerlSelectedSampleDatasetBinding.from_run_config(config)
+    actor_batch = _actor_batch_contract(config)
+    save_frequency = _checkpoint_frequency(
+        training.checkpoint_steps,
+        maximum_step=training.maximum_optimizer_steps,
+    )
+    dataset_module = Path(__file__).with_name("smoke_dataset.py").resolve()
+    precision = {
+        "param_dtype": _precision_name(config.precision.parameter_dtype),
+        "reduce_dtype": _precision_name(config.precision.reduce_dtype),
+        "buffer_dtype": _precision_name(config.precision.optimizer_state_dtype),
+    }
+    conditioning = config.representation.conditioning
+    conditioning_record = {
+        "schema_version": conditioning.schema_version,
+        "provider": conditioning.provider.value,
+        "hidden_layer": conditioning.hidden_layer,
+        "embedding_identity": conditioning.embedding_identity,
+    }
+    if config.policy.grpo.verl_external_loss_module != EXACT_REPLAY_EXTERNAL_MODULE:
+        raise ValueError("Policy loss and exact replay external module identities differ")
+
+    values.update(
+        {
+            # The custom Dataset consumes the selected materialized DeepEyes
+            # row directly; it performs no upstream parquet conversion.
+            "data.train_files": [str(binding.samples_path)],
+            "data.val_files": [str(binding.samples_path)],
+            "data.train_max_samples": -1,
+            "data.val_max_samples": -1,
+            "data.custom_cls.path": str(dataset_module),
+            "data.custom_cls.name": SELECTED_SAMPLE_DATASET_CLASS_NAME,
+            "data.tgvf_selected_sample": binding.as_config(),
+            "data.train_batch_size": accumulation.global_prompt_batch_size,
+            "data.gen_batch_size": accumulation.global_prompt_batch_size,
+            "data.shuffle": False,
+            "data.seed": config.dataset.runtime_binding.shuffle_seed,
+            "data.validation_shuffle": False,
+            "data.return_raw_chat": True,
+            "data.return_multi_modal_inputs": True,
+            "data.max_response_length": sampling.max_response_length,
+            "data.mm_processor_kwargs.max_pixels": config.policy.image_max_pixels,
+            # Model/engine identity.  Both actor and reference use the same
+            # registered exact-observation model type; the engine selects the
+            # current/reference role from forward_only.
+            "actor_rollout_ref.model.external_lib": EXACT_REPLAY_EXTERNAL_MODULE,
+            "actor_rollout_ref.model.model_type": TGVF_EXACT_REPLAY_MODEL_TYPE,
+            "actor_rollout_ref.actor.ppo_mini_batch_size": (
+                actor_batch["upstream_ppo_mini_batch_size_prompts"]
+            ),
+            "actor_rollout_ref.actor.ppo_micro_batch_size": None,
+            "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": (
+                actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"]
+            ),
+            "actor_rollout_ref.actor.fsdp_config.reshard_after_forward": (
+                distributed.fsdp_reshard_after_forward
+            ),
+            "actor_rollout_ref.ref.fsdp_config.reshard_after_forward": (
+                distributed.fsdp_reshard_after_forward
+            ),
+            "actor_rollout_ref.actor.fsdp_config.mixed_precision": precision,
+            "actor_rollout_ref.ref.fsdp_config.mixed_precision": precision,
+            "actor_rollout_ref.actor.optim.optimizer": "AdamW",
+            "actor_rollout_ref.actor.optim.optimizer_impl": "torch.optim",
+            "actor_rollout_ref.actor.optim.lr": optimizer.learning_rate,
+            "actor_rollout_ref.actor.optim.betas": [
+                optimizer.beta1,
+                optimizer.beta2,
+            ],
+            "actor_rollout_ref.actor.optim.weight_decay": optimizer.weight_decay,
+            "actor_rollout_ref.actor.optim.override_optimizer_config": {
+                "eps": optimizer.epsilon
+            },
+            "actor_rollout_ref.actor.optim.clip_grad": (
+                optimizer.maximum_gradient_norm
+            ),
+            "actor_rollout_ref.actor.optim.lr_warmup_steps": (
+                scheduler.warmup_steps
+            ),
+            "actor_rollout_ref.actor.optim.total_training_steps": (
+                scheduler.total_steps
+            ),
+            "actor_rollout_ref.actor.optim.lr_scheduler_type": scheduler.name,
+            "actor_rollout_ref.actor.optim.min_lr_ratio": (
+                scheduler.minimum_learning_rate_ratio
+            ),
+            "actor_rollout_ref.rollout.log_prob_micro_batch_size": None,
+            "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": (
+                accumulation.rollout_prompt_micro_batch_size_per_engine
+                * sampling.trajectories_per_prompt
+            ),
+            "actor_rollout_ref.ref.log_prob_micro_batch_size": None,
+            "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": (
+                actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"]
+            ),
+            "actor_rollout_ref.hybrid_engine": (
+                distributed.placement == "colocated"
+            ),
+            "actor_rollout_ref.rollout.nnodes": 1,
+            "actor_rollout_ref.rollout.n_gpus_per_node": distributed.world_size,
+            "actor_rollout_ref.rollout.tensor_model_parallel_size": (
+                distributed.vllm_tensor_parallel_size
+            ),
+            "actor_rollout_ref.rollout.seed": config.rollout_rng.master_seed,
+            "actor_rollout_ref.rollout.ignore_eos": sampling.ignore_eos,
+            "actor_rollout_ref.rollout.agent.default_agent_loop": (
+                NATIVE_AGENT_LOOP_NAME
+            ),
+            # Pinned upstream has no top-level fields for the full stopping and
+            # replay identity.  The custom AgentLoop/factory consumes these
+            # project-owned values instead of relying on vLLM defaults.
+            "actor_rollout_ref.rollout.custom": {
+                "schema_version": VERL_POLICY_SMOKE_LAUNCH_SCHEMA,
+                "run_id": config.run_id,
+                "run_identity_sha256": config.identity_sha256,
+                "sampling": {
+                    "min_p": sampling.min_p,
+                    "presence_penalty": sampling.presence_penalty,
+                    "frequency_penalty": sampling.frequency_penalty,
+                    "stop_token_ids": list(sampling.stop_token_ids or ()),
+                    "stop_strings": list(sampling.stop_strings or ()),
+                    "include_stop_str_in_output": (
+                        sampling.include_stop_str_in_output
+                    ),
+                    "ignore_eos": sampling.ignore_eos,
+                    "logit_processors": list(sampling.logit_processors),
+                    "logprob_measurement": sampling.logprob_measurement.value,
+                    "rollout_master_seed": config.rollout_rng.master_seed,
+                    "seed_derivation_name": config.rollout_rng.derivation_name,
+                    "seed_derivation_sha256": (
+                        config.rollout_rng.derivation_sha256
+                    ),
+                },
+                "protocol": {
+                    "prompt_sha256": config.protocol.prompt_sha256,
+                    "tool_schema_sha256": config.protocol.tool_schema_sha256,
+                    "cap_error_sha256": config.protocol.cap_error_sha256,
+                    "maximum_tool_calls": config.protocol.maximum_tool_calls,
+                },
+                "representation": {
+                    "artifact_path": str(config.representation.artifact_path),
+                    "artifact_file_sha256": (
+                        config.representation.artifact_file_sha256
+                    ),
+                    "artifact_manifest_sha256": (
+                        config.representation.artifact.sha256
+                    ),
+                    "expected_run_id": config.representation.expected_run_id,
+                    "expected_run_identity_sha256": (
+                        config.representation.expected_run_identity_sha256
+                    ),
+                    "conditioning": conditioning_record,
+                },
+                "agent_loop": {
+                    "target_fqn": NATIVE_AGENT_LOOP_FQN,
+                    "invocation_factory_fqn": NATIVE_INVOCATION_FACTORY_FQN,
+                },
+                "exact_replay": {
+                    "model_type": TGVF_EXACT_REPLAY_MODEL_TYPE,
+                    "registration_module": EXACT_REPLAY_EXTERNAL_MODULE,
+                    "engine_registrar_fqn": EXACT_REPLAY_ENGINE_REGISTRAR_FQN,
+                    "forward_port_fqn": EXACT_REPLAY_FORWARD_PORT_FQN,
+                    "current_reference_replay_fqn": (
+                        EXACT_CURRENT_REFERENCE_REPLAY_FQN
+                    ),
+                },
+                "reward": {
+                    "pipeline_fqn": POLICY_REWARD_PIPELINE_FQN,
+                    "task_kind": config.reward.task_kind,
+                    "answer_verifier": config.reward.answer_verifier,
+                    "answer_verifier_sha256": (
+                        config.reward.answer_verifier_sha256
+                    ),
+                    "judge_mode": config.reward.judge_mode,
+                    "answer_weight": config.reward.answer_weight,
+                    "format_weight": config.reward.format_weight,
+                    "conditional_tool_weight": (
+                        config.reward.conditional_tool_weight
+                    ),
+                },
+                "weight_sync": {
+                    "mode": distributed.weight_sync_mode,
+                    "interval_optimizer_steps": (
+                        distributed.weight_sync_interval_optimizer_steps
+                    ),
+                },
+                "checkpoint_steps": list(training.checkpoint_steps),
+                "actor_batch_contract": actor_batch,
+                "metrics_path": str(config.output.metrics_path),
+            },
+            "trainer.total_epochs": training.total_training_epochs,
+            "trainer.total_training_steps": training.maximum_optimizer_steps,
+            "trainer.nnodes": 1,
+            "trainer.n_gpus_per_node": distributed.world_size,
+            "trainer.project_name": "tgvf-e2e-rl",
+            "trainer.experiment_name": config.run_id,
+            "trainer.save_freq": save_frequency,
+            "trainer.default_local_dir": str(config.output.checkpoint_directory),
+        }
+    )
+
+    external_components = {
+        "dataset": (
+            "tgvf_rl.framework.verl.smoke_dataset."
+            + SELECTED_SAMPLE_DATASET_CLASS_NAME
+        ),
+        "agent_loop_manager": LOSSLESS_AGENT_LOOP_MANAGER_FQN,
+        "agent_loop": NATIVE_AGENT_LOOP_FQN,
+        "invocation_factory": NATIVE_INVOCATION_FACTORY_FQN,
+        "exact_replay_registration": EXACT_REPLAY_ENGINE_REGISTRAR_FQN,
+        "exact_replay_forward": EXACT_REPLAY_FORWARD_PORT_FQN,
+        "exact_current_reference_replay": EXACT_CURRENT_REFERENCE_REPLAY_FQN,
+        "reward_pipeline": POLICY_REWARD_PIPELINE_FQN,
+    }
+    environment = dict(adapter.required_environment())
+    environment["CUDA_VISIBLE_DEVICES"] = ",".join(
+        str(device) for device in distributed.physical_gpu_ids
+    )
+
+    # These are genuine runtime seams, not optional documentation items.  A
+    # caller cannot turn this plan into a command until each has a concrete
+    # project-owned implementation/value.
+    blockers = (
+        "actor_rollout_ref.rollout.agent.agent_loop_config_path: a checked-in "
+        "Hydra composition for the concrete current-policy/components providers "
+        "is not yet implemented",
+        "data.max_prompt_length and actor/rollout max-token-per-GPU bounds are "
+        "not present in the accepted smoke identity",
+        "the veRL reward adapter that emits the exact 0.8/0.2/1.2 trajectory "
+        "reward into rm_scores is not yet wired",
+        "the zero-weight reference diagnostic replay needs an explicit upstream "
+        "worker route while use_kl_loss=false",
+        "trainer logger/validation/resume choices are not bound by the smoke identity",
+        "vLLM gpu_memory_utilization, max_num_batched_tokens, max_model_len, and "
+        "max_num_seqs remain unbound throughput inputs",
+    )
+    inherited = (
+        "data.max_prompt_length",
+        "actor_rollout_ref.actor.ppo_max_token_len_per_gpu",
+        "actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu",
+        "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu",
+        "actor_rollout_ref.rollout.gpu_memory_utilization",
+        "actor_rollout_ref.rollout.max_num_batched_tokens",
+        "actor_rollout_ref.rollout.max_model_len",
+        "actor_rollout_ref.rollout.max_num_seqs",
+        "trainer.logger",
+        "trainer.val_before_train",
+        "trainer.test_freq",
+        "trainer.resume_mode",
+    )
+    return UpstreamVerlLaunchPlan(
+        run_identity_sha256=config.identity_sha256,
+        overrides=values,
+        environment=environment,
+        external_components=external_components,
+        launch_blockers=blockers,
+        inherited_upstream_fields=inherited,
+    )
+
+
+def compose_upstream_verl_config(
+    plan: UpstreamVerlLaunchPlan,
+    *,
+    config_directory: str | Path,
+) -> object:
+    """Compose pinned upstream YAML for a CPU-only config-parse check.
+
+    This imports Hydra, not ``verl.trainer.main_ppo``.  It never launches the
+    plan and intentionally permits a blocked plan so mapping tests can inspect
+    unresolved fields.
+    """
+
+    if not isinstance(plan, UpstreamVerlLaunchPlan):
+        raise TypeError("plan must be UpstreamVerlLaunchPlan")
+    directory = Path(config_directory).resolve()
+    if not directory.is_dir():
+        raise ValueError("upstream veRL config directory must exist")
+    from hydra import compose, initialize_config_dir
+
+    with initialize_config_dir(version_base="1.3", config_dir=str(directory)):
+        return compose(
+            config_name=plan.config_name,
+            overrides=list(plan.hydra_override_args()),
+        )
+
+
+def _checkpoint_frequency(steps: Sequence[int], *, maximum_step: int) -> int:
+    normalized = tuple(steps)
+    if not normalized or normalized[0] != 0 or normalized[-1] != maximum_step:
+        raise ValueError("checkpoint steps must include zero and the final step")
+    positive = normalized[1:]
+    if not positive:
+        raise ValueError("checkpoint plan requires at least one positive step")
+    frequency = positive[0]
+    expected = tuple(range(frequency, maximum_step + 1, frequency))
+    if positive != expected:
+        raise ValueError(
+            "upstream save_freq cannot represent the configured checkpoint steps"
+        )
+    return frequency
+
+
+def _actor_batch_contract(
+    config: PolicyE2ESmokeRunConfig,
+) -> dict[str, int]:
+    """Prove prompt-unit config maps to one pinned-veRL optimizer update.
+
+    Pinned e003 v0 treats ``actor.ppo_mini_batch_size`` as prompts and multiplies
+    it by ``rollout.n`` in ``RayPPOTrainer._update_actor``.  FSDP's
+    ``ppo_micro_batch_size_per_gpu``, however, counts the already-expanded
+    trajectories.  Therefore the project prompt micro-batch must also be
+    multiplied by ``n``; otherwise veRL would silently accumulate ``n`` times
+    more micro-batches than the run identity declares.
+    """
+
+    prompts = config.accumulation.global_prompt_batch_size
+    prompt_micro = config.accumulation.prompt_micro_batch_size_per_rank
+    n = config.policy.sampling.trajectories_per_prompt
+    dp_size = config.distributed.world_size
+    trajectory_mini = prompts * n
+    trajectory_micro_per_gpu = prompt_micro * n
+    denominator = dp_size * trajectory_micro_per_gpu
+    if trajectory_mini % denominator:
+        raise ValueError(
+            "expanded trajectory mini-batch is not divisible by FSDP2 micro-batches"
+        )
+    derived_accumulation = trajectory_mini // denominator
+    configured_accumulation = config.accumulation.gradient_accumulation_steps
+    if derived_accumulation != configured_accumulation:
+        raise ValueError(
+            "pinned veRL derived gradient accumulation differs from the run identity"
+        )
+    return {
+        "global_prompt_batch_size": prompts,
+        "rollouts_per_prompt": n,
+        "fsdp_data_parallel_size": dp_size,
+        "prompt_micro_batch_size_per_rank": prompt_micro,
+        "configured_gradient_accumulation_steps": configured_accumulation,
+        "upstream_ppo_mini_batch_size_prompts": prompts,
+        "upstream_internal_mini_batch_size_trajectories": trajectory_mini,
+        "upstream_ppo_micro_batch_size_per_gpu_trajectories": (
+            trajectory_micro_per_gpu
+        ),
+        "derived_gradient_accumulation_steps": derived_accumulation,
+        "optimizer_steps_per_trainer_step": 1,
+    }
+
+
+def _precision_name(value: str) -> str:
+    names = {"bfloat16": "bf16", "float32": "fp32"}
+    try:
+        return names[value]
+    except KeyError as error:
+        raise ValueError(f"unsupported veRL precision identity {value!r}") from error
+
+
+def _insert_dotted(root: dict[str, object], path: str, value: object) -> None:
+    parts = path.split(".")
+    if not path or any(not part for part in parts):
+        raise ValueError(f"invalid dotted config path {path!r}")
+    current = root
+    for part in parts[:-1]:
+        existing = current.get(part)
+        if existing is None:
+            child: dict[str, object] = {}
+            current[part] = child
+            current = child
+        elif isinstance(existing, dict):
+            current = existing
+        else:
+            raise ValueError(f"dotted config path collides at {part!r}")
+    leaf = parts[-1]
+    if leaf in current:
+        raise ValueError(f"duplicate dotted config path {path!r}")
+    current[leaf] = value
+
+
+def _plain(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain(item) for item in value]
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def _hydra_literal(value: object) -> str:
+    plain = _plain(value)
+    if isinstance(plain, Mapping):
+        fields: list[str] = []
+        for key in sorted(plain):
+            if not key or any(
+                not (character.isalnum() or character in "_-")
+                for character in key
+            ):
+                raise ValueError(f"Hydra mapping key is not override-safe: {key!r}")
+            fields.append(f"{key}:{_hydra_literal(plain[key])}")
+        return "{" + ",".join(fields) + "}"
+    if isinstance(plain, list):
+        return "[" + ",".join(_hydra_literal(item) for item in plain) + "]"
+    return json.dumps(
+        plain,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _require_sha256(value: str, name: str) -> None:
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"{name} must be a lowercase SHA256")
+
+
+__all__ = [
+    "EXACT_CURRENT_REFERENCE_REPLAY_FQN",
+    "EXACT_REPLAY_ENGINE_REGISTRAR_FQN",
+    "EXACT_REPLAY_FORWARD_PORT_FQN",
+    "NATIVE_AGENT_LOOP_FQN",
+    "NATIVE_AGENT_LOOP_NAME",
+    "NATIVE_INVOCATION_FACTORY_FQN",
+    "UPSTREAM_VERL_CONFIG_NAME",
+    "UPSTREAM_VERL_MAIN_MODULE",
+    "UPSTREAM_VERL_V0_RUNNER_FQN",
+    "UpstreamVerlLaunchPlan",
+    "build_policy_e2e_smoke_verl_plan",
+    "compose_upstream_verl_config",
+]

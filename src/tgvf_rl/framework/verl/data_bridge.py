@@ -47,6 +47,8 @@ from .rollout_bridge import (
 
 
 VARIABLE_LENGTH_PADDING_SCHEMA_VERSION = "tgvf-verl-variable-padding-v1"
+DATAPROTO_META_SCHEMA_VERSION = "tgvf-verl-dataproto-meta-v1"
+DATAPROTO_META_SCHEMA_FIELD = "tgvf_dataproto_meta_schema_version"
 PADDING_SCHEMA_FIELD = "tgvf_padding_schema_version"
 PAD_TOKEN_ID_FIELD = "tgvf_explicit_pad_token_id"
 PROMPT_TOKEN_OWNERSHIP_FIELD = "tgvf_batched_prompt_token_ownership"
@@ -137,6 +139,13 @@ class DataProtoPayload:
             self._assert_sidecars_available_locked()
             non_tensors = dict(self.non_tensor_batch)
             meta_info = dict(self.meta_info)
+            existing_meta_schema = meta_info.get(DATAPROTO_META_SCHEMA_FIELD)
+            if existing_meta_schema not in {
+                None,
+                DATAPROTO_META_SCHEMA_VERSION,
+            }:
+                raise ValueError("DataProto meta schema identity was changed")
+            meta_info[DATAPROTO_META_SCHEMA_FIELD] = DATAPROTO_META_SCHEMA_VERSION
             reserved = {
                 _SIDECAR_RELEASE_SCHEMA_FIELD,
                 _SIDECAR_RELEASE_FIELDS_FIELD,
@@ -401,7 +410,7 @@ def _build_payload(
     return DataProtoPayload(
         tensor_batch=tensors,
         non_tensor_batch=non_tensors,
-        meta_info={"tgvf_bridge_schema_version": BRIDGE_SCHEMA_VERSION},
+        meta_info={DATAPROTO_META_SCHEMA_FIELD: DATAPROTO_META_SCHEMA_VERSION},
     )
 
 
@@ -421,6 +430,7 @@ def to_verl_data_proto(
 
 
 def _sidecar_release_fields(data: object) -> tuple[str, ...]:
+    _validate_dataproto_meta_schema(data)
     meta_info = getattr(data, "meta_info", None)
     if not isinstance(meta_info, Mapping):
         raise TypeError("DataProto.meta_info must preserve sidecar release metadata")
@@ -534,6 +544,8 @@ def _row_values(value: object, batch_size: int, field_name: str) -> tuple[object
 def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
     """Prove public DataProto transport did not overwrite project-owned state."""
 
+    if hasattr(data, "meta_info"):
+        _validate_dataproto_meta_schema(data)
     batch, non_tensors = _data_parts(data)
     prompts = _required(batch, "prompts", "DataProto.batch")
     responses = _required(batch, "responses", "DataProto.batch")
@@ -901,6 +913,14 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         prompt_token_ownership=tuple(validated_prompt_ownership),
         response_token_ownership=tuple(validated_response_ownership),
     )
+
+
+def _validate_dataproto_meta_schema(data: object) -> None:
+    meta_info = getattr(data, "meta_info", None)
+    if not isinstance(meta_info, Mapping):
+        raise TypeError("DataProto.meta_info must preserve the transport schema")
+    if meta_info.get(DATAPROTO_META_SCHEMA_FIELD) != DATAPROTO_META_SCHEMA_VERSION:
+        raise RuntimeError("DataProto meta transport schema was lost or changed")
 
 
 def _ownership_row(

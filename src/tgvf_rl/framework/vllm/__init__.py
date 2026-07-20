@@ -1,5 +1,13 @@
 """Optional exact-latent vLLM bridge; importing it does not require vLLM."""
 
+from .live_client import (
+    SamplingParamsFactory,
+    VLLMLivePolicyTurnClient,
+    VLLMLivePromptInputs,
+    VLLMLivePromptInputsPort,
+    VLLMTokenByteSpanDecoderPort,
+)
+
 from .packer import (
     QWEN3_DEEPSTACK_BRANCH_COUNT,
     QWEN3_DEEPSTACK_BRANCH_LAYERS,
@@ -39,19 +47,39 @@ from .sampler import (
     VLLMTurnRNGPort,
     VLLMTurnTerminationContract,
 )
+from .turn_runtime import (
+    ContentAddressedVLLMTurnRNG,
+    FastTokenizerTokenByteSpanDecoder,
+    LiveVLLMTurnContextRegistry,
+    TURN_CONTEXT_SCHEMA,
+    TURN_RNG_SCHEMA,
+    VLLMObservationPayloadResolver,
+    VLLMResolvedObservationPayload,
+    prompt_token_ids_sha256,
+)
 
 __all__ = [
     "QWEN3_DEEPSTACK_BRANCH_COUNT",
     "QWEN3_DEEPSTACK_BRANCH_LAYERS",
+    "ContentAddressedVLLMTurnRNG",
+    "FastTokenizerTokenByteSpanDecoder",
+    "LiveVLLMTurnContextRegistry",
     "SUPPORTED_VLLM_VERSION",
     "SUPPORTED_VLLM_VERSIONS",
     "TGVF_QWEN3_VLLM_ARCHITECTURE",
     "TGVF_VLLM_ATTENTION_BACKEND",
     "TGVF_VLLM_MM_ENCODER_ATTN_BACKEND",
+    "TURN_CONTEXT_SCHEMA",
+    "TURN_RNG_SCHEMA",
     "PackedQwen3ImageItem",
     "PackedQwen3Replay",
+    "SamplingParamsFactory",
     "VLLMCompatibilityError",
+    "VLLMLivePolicyTurnClient",
+    "VLLMLivePromptInputs",
+    "VLLMLivePromptInputsPort",
     "VLLMOutputDecodingContract",
+    "VLLMObservationPayloadResolver",
     "VLLMPolicySampler",
     "VLLMPolicyTurnClient",
     "VLLMPolicyTurnRequest",
@@ -60,8 +88,10 @@ __all__ = [
     "VLLMPluginRegistration",
     "VLLMPublicPluginAPI",
     "VLLMRequestContextIdentityPort",
+    "VLLMResolvedObservationPayload",
     "VLLMTerminationOutcome",
     "VLLMTokenLogprob",
+    "VLLMTokenByteSpanDecoderPort",
     "VLLMTurnRNGIdentity",
     "VLLMTurnRNGPort",
     "VLLMTurnTerminationContract",
@@ -72,6 +102,7 @@ __all__ = [
     "load_vllm_public_plugin_api",
     "pack_qwen3_vllm_replay",
     "pack_qwen3_vllm_replay_bundle",
+    "prompt_token_ids_sha256",
     "register_tgvf_qwen3_vllm_plugin",
     "vllm_is_available",
 ]

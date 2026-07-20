@@ -15,6 +15,8 @@ import torch
 
 from verl.trainer.ppo.core_algos import register_policy_loss
 
+from .exact_replay_engine import register_qwen3_exact_replay_fsdp2_engine
+
 
 EXACT_BYPASS_LOSS_REGISTRY_NAME = "bypass_mode"
 POLICY_PILOT_V1_EXACT_BYPASS_MODULE = (
@@ -180,8 +182,15 @@ def compute_policy_pilot_v1_exact_bypass_loss(
     return loss, metrics
 
 
+# ``HFModelConfig.__post_init__`` imports this module before TrainingWorker
+# calls EngineRegistry.new().  Registering here makes the custom model type
+# reachable in every Ray worker through the existing external_lib hook.
+QWEN3_EXACT_REPLAY_ENGINE_CLASS = register_qwen3_exact_replay_fsdp2_engine()
+
+
 __all__ = [
     "EXACT_BYPASS_LOSS_REGISTRY_NAME",
     "POLICY_PILOT_V1_EXACT_BYPASS_MODULE",
+    "QWEN3_EXACT_REPLAY_ENGINE_CLASS",
     "compute_policy_pilot_v1_exact_bypass_loss",
 ]

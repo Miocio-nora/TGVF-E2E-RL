@@ -9,12 +9,13 @@ from tgvf_rl.conditioning import (
     TargetConditioningConfig,
     TargetConditioningProviderKind,
 )
-from tgvf_rl.contracts.errors import ContractUnsetError
+from tgvf_rl.contracts.errors import ContractUnsetError, IdentityMismatchError
 from tgvf_rl.contracts.identity import ArtifactIdentity, CodeIdentity, ModelIdentity
 from tgvf_rl.data import (
     DEEPEYES47K_DATASET_ID,
     DEEPEYES47K_SNAPSHOT,
     DEEPEYES47K_TOTAL_ROWS,
+    DeepEyes47KRuntimeBinding,
 )
 from tgvf_rl.policy import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
@@ -29,6 +30,7 @@ from tgvf_rl.policy import (
     PilotSamplingConfig,
     PolicyPilotV1Config,
     PolicyPilotV1RunManifest,
+    bind_formal_deepeyes47k_to_pilot,
 )
 from tgvf_rl.protocol import TGVF_FOCUS_TOOL_SCHEMA_SHA256
 
@@ -142,6 +144,48 @@ def test_manifest_binds_fixed_pilot_and_all_open_run_identities() -> None:
     assert by_name["tgvf_adapter"] == SHA2
     assert by_name["tokenizer_fixture"] == SHA1
     assert by_name["native_transcript_fixture"] == SHA0
+
+
+def test_formal_deepeyes_runtime_binding_matches_manifest_hash_and_seed() -> None:
+    manifest = _manifest()
+    runtime_binding = DeepEyes47KRuntimeBinding.formal(
+        manifest_file_sha256=manifest.dataset_manifest.sha256,
+        content_sha256=SHA1,
+        shuffle_seed=manifest.dataset_shuffle_seed,
+    )
+
+    bound = bind_formal_deepeyes47k_to_pilot(manifest, runtime_binding)
+    assert bound.run_id == manifest.run_id
+    assert bound.pilot_manifest_sha256 == manifest.identity_sha256
+    assert bound.manifest_file_sha256 == manifest.dataset_manifest.sha256
+    assert bound.content_sha256 == SHA1
+    assert bound.shuffle_seed == 42
+    assert len(bound.identity_sha256) == 64
+
+    wrong_hash = DeepEyes47KRuntimeBinding.formal(
+        manifest_file_sha256=SHA1,
+        content_sha256=SHA1,
+        shuffle_seed=42,
+    )
+    with pytest.raises(IdentityMismatchError, match="manifest-file SHA"):
+        bind_formal_deepeyes47k_to_pilot(manifest, wrong_hash)
+
+    wrong_seed = DeepEyes47KRuntimeBinding.formal(
+        manifest_file_sha256=SHA0,
+        content_sha256=SHA1,
+        shuffle_seed=43,
+    )
+    with pytest.raises(IdentityMismatchError, match="shuffle seed"):
+        bind_formal_deepeyes47k_to_pilot(manifest, wrong_seed)
+
+    fixture = DeepEyes47KRuntimeBinding.fixture_binding(
+        manifest_file_sha256=SHA0,
+        content_sha256=SHA1,
+        shuffle_seed=42,
+        expected_sample_count=1,
+    )
+    with pytest.raises(IdentityMismatchError, match="fixture"):
+        bind_formal_deepeyes47k_to_pilot(manifest, fixture)
 
 
 def test_manifest_is_deterministic_and_every_binding_changes_aggregate_identity() -> None:
