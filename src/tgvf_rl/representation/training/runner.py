@@ -537,6 +537,32 @@ def _run_initialized(
     )
     if latest_checkpoint is None:
         raise RuntimeError("rank zero did not commit the final representation outputs")
+    final_artifact_manifest_sha256 = state_digest(export.manifest)
+    post_training_internal_evaluation: dict[str, object] = {"status": "disabled"}
+    evaluation_config = config.post_training_internal_evaluation
+    if evaluation_config is not None and evaluation_config.enabled:
+        from .post_training_evaluation import (
+            run_post_training_internal_evaluation,
+        )
+
+        evaluation_artifact = run_post_training_internal_evaluation(
+            config=evaluation_config,
+            runtime=runtime,
+            qwen_model=model,
+            family_adapter=family_adapter,
+            validation_samples=validation_data.samples,
+            validation_manifest_sha256=validation_data.manifest.manifest_sha256,
+            group_builder=group_builder,
+            model_identity=state_digest(asdict(config.model_identity)),
+            checkpoint_identity=final_artifact_manifest_sha256,
+            prompt_identity=f"{config.prompt.identity}:{config.prompt.sha256}",
+        )
+        post_training_internal_evaluation = {
+            "status": "complete",
+            "path": evaluation_artifact.path,
+            "payload_sha256": evaluation_artifact.payload_sha256,
+            "byte_count": evaluation_artifact.byte_count,
+        }
     result: dict[str, object] = {
         "schema_version": REPRESENTATION_RUNNER_SCHEMA_VERSION,
         "status": "complete",
@@ -556,8 +582,9 @@ def _run_initialized(
         ),
         "split_overlap_report_sha256": overlap.identity_sha256,
         "final_artifact_path": str(config.output.final_artifact_path),
-        "final_artifact_manifest_sha256": state_digest(export.manifest),
+        "final_artifact_manifest_sha256": final_artifact_manifest_sha256,
         "final_artifact_write_mode": artifact_write_mode,
+        "post_training_internal_evaluation": post_training_internal_evaluation,
         "latest_checkpoint_path": str(latest_checkpoint),
         "metrics_jsonl_path": str(config.output.metrics_jsonl_path),
         "tokenizer_length_before": tokenizer_length_before,
@@ -896,6 +923,14 @@ def _prepare_output_paths(
                 parents=True,
                 exist_ok=True,
             )
+            evaluation = config.post_training_internal_evaluation
+            if evaluation is not None and evaluation.enabled:
+                assert evaluation.report_path is not None
+                if evaluation.report_path.exists():
+                    raise FileExistsError(
+                        "post-training internal-evaluation report already exists"
+                    )
+                evaluation.report_path.parent.mkdir(parents=True, exist_ok=True)
             config.checkpoint.directory.mkdir(parents=True, exist_ok=True)
         except Exception as exception:
             error[0] = f"{type(exception).__name__}: {exception}"

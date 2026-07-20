@@ -107,7 +107,9 @@ from .config import (
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+    REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
     RepresentationDataConfigV2,
+    RepresentationPostTrainingInternalEvaluationConfig,
     RepresentationTrainingConfig,
     load_representation_training_config,
 )
@@ -145,6 +147,15 @@ from .performance import (
     RepresentationRankTrainStepResources,
     RepresentationTrainStepPerformance,
     measure_distributed_train_step,
+)
+from .post_training_evaluation import (
+    REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION,
+    RepresentationInternalEvaluationGroupManifest,
+    RepresentationInternalEvaluationGroupRef,
+    RepresentationInternalEvaluationSampleRef,
+    load_internal_evaluation_group_manifest,
+    materialize_internal_evaluation_groups,
+    run_post_training_internal_evaluation,
 )
 from .resume_parity import (
     REPRESENTATION_RESUME_PARITY_SCHEMA_VERSION,
@@ -288,6 +299,7 @@ __all__ = [
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3",
+    "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4",
     "REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION",
     "REPRESENTATION_INTERNAL_EVALUATION_SCHEMA_VERSION",
     "QWEN3_COUNTERFACTUAL_BUILD_SCHEMA_VERSION",
@@ -373,6 +385,14 @@ __all__ = [
     "RepresentationTrainerExecutionIdentity",
     "RepresentationTrainingSample",
     "RepresentationTrainingConfig",
+    "RepresentationPostTrainingInternalEvaluationConfig",
+    "REPRESENTATION_INTERNAL_EVALUATION_GROUP_MANIFEST_SCHEMA_VERSION",
+    "RepresentationInternalEvaluationGroupManifest",
+    "RepresentationInternalEvaluationGroupRef",
+    "RepresentationInternalEvaluationSampleRef",
+    "load_internal_evaluation_group_manifest",
+    "materialize_internal_evaluation_groups",
+    "run_post_training_internal_evaluation",
     "RepresentationValidationMetrics",
     "RepresentationVisualTensorBundle",
     "Qwen3CounterfactualBuild",

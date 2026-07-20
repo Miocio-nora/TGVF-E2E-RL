@@ -1,4 +1,4 @@
-schema_version = "representation-training-config-v3"
+schema_version = "representation-training-config-v4"
 scope = "qwen3_native_representation_phase_training"
 run_id = "REP-QWEN3-V4-TARGET-EMBEDDING-V1"
 
@@ -113,6 +113,9 @@ groups_per_rank_per_optimizer_step = 1
 target_optimizer_steps = 2000
 validation_every_optimizer_steps = 500
 log_every_optimizer_steps = 10
+
+[post_training_internal_evaluation]
+enabled = false
 
 [output]
 final_artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V1/adapter.pt"

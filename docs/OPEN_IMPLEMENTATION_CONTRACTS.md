@@ -900,8 +900,12 @@ pilot is identified or launched.
 
 ### 9.4 Evaluation and promotion
 
-- [ ] `OPEN_BLOCKING EV-01` — Held-out manifests, official scorers, and exact
-  sample pairing: `[TBD]`
+- [ ] `OPEN_BLOCKING EV-01` — Evaluation framework is fixed to VLMEvalKit
+  `7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f`; the shared data root and
+  historical CoreDev-2511 ordered manifest are pinned. Still required before a
+  run: seven source-specific hashed TSV slices, their official dataset/scorer
+  bindings and score-parity fixtures, plus the separately audited
+  representation internal-evaluation group/counterfactual manifests.
 - [ ] `OPEN_BLOCKING EV-02` — Direct/tool/counterfactual rows and reasoning
   retention metrics/thresholds: `[TBD]`
 - [ ] `OPEN_BLOCKING EV-03` — Checkpoint ladder, early-stop conditions, and

@@ -150,6 +150,76 @@ probability or policy loss. Reward coefficients, crop-call cost, training-data
 mixture, and any recursive-crop experiment remain open. This extension does
 not modify the representation-phase transcript, loss, data, or checkpoint.
 
+### 0.5 Accepted evaluation architecture
+
+Decision ID: **EVAL-ARCH-20260720**
+
+Accepted by: **user**, on **2026-07-20 JST**
+
+This task separates representation diagnostics from policy benchmark scoring.
+The implementation objective is an identity-safe post-training switch plus a
+VLMEvalKit-owned benchmark path. It may modify the representation configuration,
+runner closeout, `src/tgvf_rl/evaluation/`, evaluation configurations, and their
+tests. It does not modify representation losses, training data, the TGVF
+Adapter, policy objectives, or tool semantics. Verification is CPU contract and
+CLI testing only until a separately planned GPU evaluation is recorded.
+
+The representation **internal evaluation** is not periodic validation. Periodic
+validation remains loss monitoring at `validation_every_optimizer_steps`.
+Internal evaluation is an explicit configuration switch which, when enabled,
+runs once only after the configured training target and final Adapter artifact
+have been completed. A bounded `--stop-after-global-step` invocation must not
+run it. A resumed invocation may run it only when it reaches the final target.
+Its report is immutable and content identified; a pre-existing report currently
+fails closed rather than causing a second evaluation. Automatic finalizer-only
+recovery after a crash between report publication and the training `complete`
+event remains an explicit follow-up contract. The switch must fail closed if
+the exact evaluation population, checkpoint, prompt, or required native
+counterfactual inputs are absent. It must not silently reinterpret the training
+validation split as an accepted held-out evaluation population.
+
+All external visual benchmark evaluation in this project uses upstream
+**VLMEvalKit** at the exact review commit recorded in
+`EXTERNAL_REFERENCES.md`. The project does not port the legacy benchmark parser
+or scorer. The project-owned adapter executes the complete direct/crop/TGVF
+agent loop, supplies only the final answer as VLMEvalKit's `prediction`, and
+stores trajectory/tool/config identities in `extra_records`. Every arm freezes
+its own decoding identity; VLMEvalKit's built-in Qwen3 sampling defaults are
+not inherited implicitly.
+
+Benchmark data is read from the shared cross-project physical root
+`/nvmesv/dredvpn009/datasets/benchmarks` through an explicit `LMUData` binding.
+The historical `/home/dredvpn009/Flash_Storage/datasets/benchmarks` spelling is
+only an alias to the same directory. Project wrappers, prompts, predictions,
+run manifests, and results remain in this repository.
+
+The first recovered fixed subset is **CoreDev-2511**, logical manifest SHA256
+`a461d9b482b7165b42b9bbb0fbf0ea6aff31fde0a838c13d953f070e770b0579`,
+seed `20260625`, with this exact allocation:
+
+- VStarBench: 191;
+- HRBench4K: 200;
+- BLINK: 420;
+- OCRBench_v2: 600;
+- MMMU_Pro_10c: 300;
+- MathVista_MINI: 300;
+- MathVerse_MINI: 500.
+
+VLMEvalKit has no generic subset filter and its generic `CustomVQADataset`
+does not implement scoring. CoreDev-2511 must therefore be materialized as
+seven ordered, hashed source slices. Each slice binds to its corresponding
+official dataset class/scorer, reports its own metric, and only then enters a
+separately identified 2,511-row aggregate. A mixed TSV scored as one generic
+dataset is forbidden. The historical CoreDev-2511 scores remain comparison
+provenance only because they were produced by the old custom benchmark path,
+not VLMEvalKit.
+
+Open implementation inputs are the audited post-training internal-evaluation
+population/counterfactual manifest, the seven VLMEvalKit slice TSV identities
+and score-parity fixtures, the policy evaluation service identity, and the
+exact benchmark-arm decoding configurations. No benchmark-quality claim is
+allowed until those inputs and a real run artifact exist.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

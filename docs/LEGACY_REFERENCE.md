@@ -184,6 +184,58 @@ files are registered before content inspection or adaptation:
 | `revisit_vlm_clean/src/revisit_vlm_clean/tgvf_protocol.py` | `9af43f4c884f4a20b3a05c61d235ba4ed555f12154c3d4bbe460b791eefb955d` | negative/specification comparison only; legacy protocol implementation is forbidden |
 | `revisit_vlm_clean/tests/test_tgvf_protocol.py` | `2284d34f5f980abfc7aaa3ec4e93cda063fbf0b78a580c5bc088445dcf26f64a` | negative test ideas only; no legacy serialization fixture becomes canonical |
 
+### Registered benchmark and CoreDev-2511 references
+
+The user explicitly requested recovery of the benchmark inventory, the fixed
+2,511-row subset, and the shared cross-project data location. The following
+read-only inspection was performed against the same legacy commit
+`a200437123afe6fbb481a6c9cf9b7ddf61ff36b8`. Every repository file in this
+table was tracked and clean at that commit:
+
+| Committed path | SHA256 | Permitted purpose |
+|---|---|---|
+| `revisit_vlm_clean/benchmark_manifests/core_balanced_dev_2511_seed20260625.json` | `3a013b2bcc64316054d28239a3cea3f44211cadbfe19787be3b7f285620fa5c1` | exact ordered CoreDev-2511 sample identity; logical manifest SHA256 `a461d9b482b7165b42b9bbb0fbf0ea6aff31fde0a838c13d953f070e770b0579` |
+| `revisit_vlm_clean/benchmark_manifests/core_smoke_256_seed20260625.json` | `cd16c6298ffab5190f7914dd2873b6643e8bb9c0182f623fed63ca6e2773358b` | historical 256-row smoke identity only |
+| `revisit_vlm_clean/benchmark_manifests/core_full_19562.json` | `b43b7d03f368fb9d7dc6712f0129932917e1ef6150e640a79fc92f7e5b5745f3` | historical full-population identity only |
+| `revisit_vlm_clean/src/revisit_vlm_clean/populations.py` | `adc758ae2e13286e069465aee20be26f4db991a233a997047d53d836105447a7` | specification-only population names, source rows, and stable sample-ID construction |
+| `revisit_vlm_clean/src/revisit_vlm_clean/manifest.py` | `09e0cba23a4e8f0eb85bb18c9ac4282bd56532fa90d0a74edc21047513c1ef0e` | specification-only manifest validation and logical identity |
+| `revisit_vlm_clean/src/revisit_vlm_clean/benchmark_data.py` | `b14335249daf6010c1746ee0778d33f0227504e5a9ebb3f61c84c372508a3580` | specification-only mapping from manifest entries to shared source data |
+| `revisit_vlm_clean/src/revisit_vlm_clean/scoring.py` | `7c9aced9d5ae43de622f1a1583fd04571da6e4603b01bd7be14541d8a2dc53e1` | negative comparison only; the old scorer is not ported |
+| `revisit_vlm_clean/src/revisit_vlm_clean/valkit.py` | `adc15cbc29c1fbb3bd88ad2442bdbffa1e3878f48a9b4b45cac0c1ca9770b814` | specification-only historical named-dataset VLMEvalKit handoff |
+| `revisit_vlm_clean/src/revisit_vlm_clean/cli/valkit.py` | `2e3f34e835a871ce20e77fb1ca13c0c0227a9d5ff2da45ad950a632333b75326` | specification-only historical CLI handoff |
+| `scripts/run_vlmevalkit_tgvf.sh` | `25d17babe76bdc95e7444408f1bc15ab2b7ccaf0e5edbbf26548974280f3ca12` | negative/specification comparison; it cannot preserve CoreDev-2511 membership |
+| `docs/COREDEV2511_BENCHMARK_TABLE_20260629.md` | `db5cdcebd6cdb678d8b55f921cdef54abbce9e429599a7b0f3c7adb01f523e5a` | historical benchmark table provenance |
+| `docs/COREDEV2511_EVAL_RESULTS_20260702.md` | `f3877b015ba2ace7ae8f00e83347854d72f24e5fa71481c3c67497508baf6c5e` | historical result provenance only |
+
+CoreDev-2511 contains exactly VStar 191, HRBench4K 200, BLINK 420,
+OCRBench-v2 600, MMMU-Pro 300, MathVista 300, and MathVerse 500 rows. Its
+stable sample IDs derive from population, source-file slug, raw ID, and row
+index. The corresponding VLMEvalKit names at the separately pinned official
+revision are `VStarBench`, `HRBench4K`, `BLINK`, `OCRBench_v2`,
+`MMMU_Pro_10c`, `MathVista_MINI`, and `MathVerse_MINI`.
+
+The canonical shared physical data root is
+`/nvmesv/dredvpn009/datasets/benchmarks`. Its `README.md` SHA256 is
+`5fcee696387c72cce2123f95e1655b47f40b380b9eb24a2d4d60818020ff17f4`;
+it states that data is shared across projects while wrappers, prompts,
+predictions, and results remain project-local. The legacy
+`/home/dredvpn009/Flash_Storage/datasets/benchmarks` path resolves to the same
+physical directory and is not a second dataset identity.
+
+The verified historical CoreDev-2511 summary artifacts have SHA256
+`587f5d419adf7b3a68bba2e925ebaa33766589be7b9450ad4f60e58332f571e1`
+(original Qwen),
+`df80f2ba2a60d8eb7b4659c4a67a1a4998ac1d0fc5b705e6fb4c331aaab55711`
+(legacy free tool path), and
+`1c22119c88b877c72d5bb36e9349871a073fd965e7c7030c095d0f6d39fa1db9`
+(legacy soft-force path). They were produced by the old custom
+`dynamic_benchmark` scorer rather than VLMEvalKit and are comparison baselines,
+not current benchmark evidence.
+
+The ignored legacy checkout `third_party/VLMEvalKit` was at commit
+`58fdeb6b980bda22096d912d70d1c858dedc84fd` with modified and untracked model
+files. It is explicitly rejected as a production dependency or source pin.
+
 The clean executor delegates the underlying TGVF mathematics to the already
 registered `src/revisit_vlm/tgvf_foveal.py` symbols. Therefore the clean subtree
 is the preferred orchestration/specification reference, while any mathematical

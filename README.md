@@ -224,6 +224,11 @@ choices remain unset:
   and target-token-embedding second run. Both use seed `42`, the accepted v1
   transcript, fixed objective/optimizer/batch/cadence, and historical Golden
   evaluation baseline;
+- the ordered same-image and real counterfactual manifests required to enable
+  the once-after-training representation internal-evaluation switch;
+- materialized, hashed VLMEvalKit slices for the fixed seven-source
+  CoreDev-2511 manifest, plus their official-scorer parity fixtures and exact
+  benchmark-arm decoding identities;
 - production actor/reference/rollout placement, FSDP2 sharding, and parallel
   topology; the compatibility veRL commit/environment and vLLM backend are
   fixed;

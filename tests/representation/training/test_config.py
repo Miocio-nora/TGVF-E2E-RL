@@ -16,6 +16,7 @@ from tgvf_rl.representation.training.config import (
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+    REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
     REPRESENTATION_TRAINING_SCOPE,
     RepresentationDataConfigV2,
     RepresentationObjectiveExecutionConfigV2,
@@ -264,6 +265,21 @@ def _upgrade_config_to_v3(path: Path) -> Path:
     text = text.replace(
         "[prompt]\n",
         f'[prompt]\nschema_version = "{REPRESENTATION_PROMPT_SCHEMA_VERSION}"\n',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _upgrade_config_to_v4(path: Path, *, evaluation_table: str) -> Path:
+    path = _upgrade_config_to_v3(path)
+    text = path.read_text(encoding="utf-8").replace(
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3}"',
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4}"',
+    )
+    text = text.replace(
+        "\n[output]\n",
+        f"\n[post_training_internal_evaluation]\n{evaluation_table}\n\n[output]\n",
         1,
     )
     path.write_text(text, encoding="utf-8")
@@ -529,6 +545,78 @@ def test_v3_legacy_mode_is_selectable_but_cannot_be_tempered(tmp_path: Path) -> 
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="legacy_summed_nll requires"):
+        load_representation_training_config(path, verify_external_files=False)
+
+
+def test_v4_has_an_explicit_disabled_post_training_evaluation_switch(
+    tmp_path: Path,
+) -> None:
+    path = _upgrade_config_to_v4(
+        _write_config(tmp_path),
+        evaluation_table="enabled = false",
+    )
+
+    config = load_representation_training_config(path, verify_external_files=False)
+
+    assert config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4
+    assert config.post_training_internal_evaluation is not None
+    assert config.post_training_internal_evaluation.enabled is False
+    assert (
+        config.validation_payload()["post_training_internal_evaluation_enabled"]
+        is False
+    )
+
+
+def test_v4_enabled_post_training_evaluation_requires_every_identity(
+    tmp_path: Path,
+) -> None:
+    groups = tmp_path / "groups.json"
+    counterfactuals = tmp_path / "counterfactuals.json"
+    groups.write_text("{}", encoding="utf-8")
+    counterfactuals.write_text("{}", encoding="utf-8")
+    table = "\n".join(
+        (
+            "enabled = true",
+            'evaluation_id = "representation-internal-eval-v1"',
+            f'ordered_group_manifest_path = "{groups}"',
+            f'ordered_group_manifest_sha256 = "{_sha(groups.read_bytes())}"',
+            f'counterfactual_manifest_path = "{counterfactuals}"',
+            f'counterfactual_manifest_sha256 = "{_sha(counterfactuals.read_bytes())}"',
+            f'report_path = "{tmp_path / "report.json"}"',
+            "random_seed = 20260525",
+            "max_new_tokens = 64",
+            "eos_token_ids = [151645]",
+        )
+    )
+    path = _upgrade_config_to_v4(_write_config(tmp_path), evaluation_table=table)
+
+    config = load_representation_training_config(path, verify_external_files=False)
+
+    evaluation = config.post_training_internal_evaluation
+    assert evaluation is not None and evaluation.enabled
+    assert evaluation.ordered_group_manifest_path == groups
+    assert evaluation.counterfactual_manifest_path == counterfactuals
+    assert evaluation.eos_token_ids == (151645,)
+
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("max_new_tokens = 64\n", ""),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="missing=.*max_new_tokens"):
+        load_representation_training_config(path, verify_external_files=False)
+
+
+def test_v3_rejects_post_training_evaluation_table(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v3(_write_config(tmp_path))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "\n[output]\n",
+            "\n[post_training_internal_evaluation]\nenabled = false\n\n[output]\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown=.*post_training_internal_evaluation"):
         load_representation_training_config(path, verify_external_files=False)
 
 

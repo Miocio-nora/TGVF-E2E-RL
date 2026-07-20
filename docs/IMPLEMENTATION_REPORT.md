@@ -174,3 +174,22 @@ production GRPO and SDPO mathematics, any hybrid objective, policy trainable
 scope, production sharding/placement/topology, long training, and activation of
 the reserved 72B judge remain deliberately unset and fail closed. See
 [`DEFERRED_DECISIONS.md`](DEFERRED_DECISIONS.md).
+
+## Evaluation architecture update
+
+The representation training schema now has a strict v4
+`post_training_internal_evaluation` switch. Disabled mode carries no hidden
+selection defaults. Enabled mode requires exact ordered-group and Qwen3
+counterfactual manifest paths/hashes, report identity/path, seed, generation
+cap, and EOS IDs. The runner invokes it only after final training completion
+and Adapter export; the bounded-pause return occurs earlier. Both formal
+provider configurations remain explicitly disabled until real manifests are
+audited.
+
+External benchmark execution is fixed to official VLMEvalKit commit
+`7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f`. The repository-owned boundary
+records the shared `LMUData` root, exact seven-source CoreDev-2511 membership,
+launcher environment, and agent-style final-answer/`extra_records` separation.
+It does not install or vendor VLMEvalKit and does not claim a benchmark run.
+CoreDev-2511 still needs seven materialized source slices and official-scorer
+parity fixtures before execution.

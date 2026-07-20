@@ -244,6 +244,41 @@ cannot supply compatibility evidence for any of those fields. This project's
 native trajectories, rollout-recorded probabilities, content-addressed crop
 observations, and exact TGVF observations remain authoritative.
 
+## VLMEvalKit
+
+```text
+repository: https://github.com/open-compass/VLMEvalKit
+review commit: 7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f
+observed: 2026-07-20 JST
+role: sole external visual-benchmark execution and official-scoring framework
+dependency status: pinned integration target; not installed or vendored yet
+```
+
+Official point-in-time sources reviewed for the accepted evaluation
+architecture are:
+
+- [`run.py`](https://github.com/open-compass/VLMEvalKit/blob/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f/run.py), SHA256 `efe24021e6f5f6ec394eba0f59afc094f897301a2ed31c6a3ba5ba975e148653`;
+- [model integration documentation](https://github.com/open-compass/VLMEvalKit/blob/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f/docs/en/Development.md), SHA256 `6572bda9bc30c7c1e870139837b649f4a7563e067d83410745b431f418288c27`;
+- [configuration documentation](https://github.com/open-compass/VLMEvalKit/blob/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f/docs/en/ConfigSystem.md), SHA256 `b1577ec11bfd2a3db91f0d25f261e55b52809bee774d3cc299126ca09a7ee006`;
+- [`BaseAPI`](https://github.com/open-compass/VLMEvalKit/blob/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f/vlmeval/api/base.py), SHA256 `ae6dc70cde9f51e2b5eea2415789c0a62a3b006323785ee71174511a26e444f9`;
+- [official agent-style `extra_records` example](https://github.com/open-compass/VLMEvalKit/blob/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f/vlmeval/api/arm_thinker.py), SHA256 `22174ccc6e7eb4703372110e7d6bf64770ebf3439f94947e723bcfceb6a64488`;
+- [`image_vqa.py`](https://github.com/open-compass/VLMEvalKit/blob/7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f/vlmeval/dataset/image_vqa.py), SHA256 `c7e2eb8708d867efb10ee5645e8acd78c3ca7e0887a210125eb0143c8d5dcf26`.
+
+The project-owned adapter follows the official `BaseAPI` boundary but owns the
+complete crop/TGVF loop. It returns final answer text as `prediction` and
+identity-safe trajectory metadata as `extra_records`; tensors and latent
+observations remain in project-owned artifacts. Built-in `Qwen3VLChat` is
+eligible only for an explicitly configured original-Qwen direct baseline. It
+does not execute this project's tools, and its sampling defaults are not a
+policy-evaluation configuration.
+
+VLMEvalKit reads shared data through `LMUData`. It exposes no generic fixed-row
+subset filter, and `CustomVQADataset.evaluate()` is not an available scorer.
+Each source slice of a composite subset must therefore retain the official
+dataset/scorer class and pass a score-parity fixture before use. The ignored,
+dirty legacy checkout at `revisit_vlm/third_party/VLMEvalKit` is explicitly not
+this dependency identity and must not be reused.
+
 ## Model roles and current identities
 
 ### Primary policy/reference family

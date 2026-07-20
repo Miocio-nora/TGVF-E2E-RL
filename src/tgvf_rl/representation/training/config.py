@@ -71,6 +71,7 @@ from .trainer import (
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION = "representation-training-config-v1"
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2 = "representation-training-config-v2"
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3 = "representation-training-config-v3"
+REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4 = "representation-training-config-v4"
 REPRESENTATION_TRAINING_SCOPE = "qwen3_native_representation_phase_training"
 ACCEPTED_QWEN3_MODEL_NAME = "Qwen3-VL-8B-Thinking"
 ACCEPTED_QWEN3_MODEL_DTYPE = "bfloat16"
@@ -100,6 +101,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "checkpoint",
     }
 )
+_POST_TRAINING_INTERNAL_EVALUATION_FIELD = "post_training_internal_evaluation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +547,85 @@ class RepresentationTrainingLoopConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RepresentationPostTrainingInternalEvaluationConfig:
+    """Explicit once-after-completion internal-evaluation switch."""
+
+    enabled: bool
+    evaluation_id: str | None = None
+    ordered_group_manifest_path: Path | None = None
+    ordered_group_manifest_sha256: str | None = None
+    counterfactual_manifest_path: Path | None = None
+    counterfactual_manifest_sha256: str | None = None
+    report_path: Path | None = None
+    random_seed: int | None = None
+    max_new_tokens: int | None = None
+    eos_token_ids: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        _bool(self.enabled, field_name="post_training_internal_evaluation.enabled")
+        optional_values = (
+            self.evaluation_id,
+            self.ordered_group_manifest_path,
+            self.ordered_group_manifest_sha256,
+            self.counterfactual_manifest_path,
+            self.counterfactual_manifest_sha256,
+            self.report_path,
+            self.random_seed,
+            self.max_new_tokens,
+            self.eos_token_ids,
+        )
+        if not self.enabled:
+            if any(value is not None for value in optional_values):
+                raise ValueError(
+                    "disabled post-training internal evaluation cannot carry inputs"
+                )
+            return
+        _non_empty_text(
+            self.evaluation_id,
+            field_name="post_training_internal_evaluation.evaluation_id",
+        )
+        for name, path in (
+            ("ordered_group_manifest_path", self.ordered_group_manifest_path),
+            ("counterfactual_manifest_path", self.counterfactual_manifest_path),
+            ("report_path", self.report_path),
+        ):
+            if not isinstance(path, Path):
+                raise TypeError(f"post_training_internal_evaluation.{name} must be a Path")
+            _absolute_path(path, field_name=f"post_training_internal_evaluation.{name}")
+        for name, digest in (
+            ("ordered_group_manifest_sha256", self.ordered_group_manifest_sha256),
+            ("counterfactual_manifest_sha256", self.counterfactual_manifest_sha256),
+        ):
+            _sha256(digest, field_name=f"post_training_internal_evaluation.{name}")
+        if (
+            isinstance(self.random_seed, bool)
+            or not isinstance(self.random_seed, int)
+            or self.random_seed < 0
+        ):
+            raise ValueError(
+                "post_training_internal_evaluation.random_seed must be a non-negative integer"
+            )
+        _positive_int(
+            self.max_new_tokens,
+            field_name="post_training_internal_evaluation.max_new_tokens",
+        )
+        if (
+            not isinstance(self.eos_token_ids, tuple)
+            or not self.eos_token_ids
+            or len(set(self.eos_token_ids)) != len(self.eos_token_ids)
+            or any(
+                isinstance(token_id, bool)
+                or not isinstance(token_id, int)
+                or token_id < 0
+                for token_id in self.eos_token_ids
+            )
+        ):
+            raise ValueError(
+                "post_training_internal_evaluation.eos_token_ids must be unique non-negative integers"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RepresentationOutputConfig:
     final_artifact_path: Path
     metrics_jsonl_path: Path
@@ -635,6 +716,9 @@ class RepresentationTrainingConfig:
     output: RepresentationOutputConfig
     resume: RepresentationResumeConfig
     checkpoint: RepresentationCheckpointConfig
+    post_training_internal_evaluation: (
+        RepresentationPostTrainingInternalEvaluationConfig | None
+    )
     source_path: Path
     source_toml_sha256: str
     canonical_config_sha256: str
@@ -644,6 +728,7 @@ class RepresentationTrainingConfig:
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION,
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
         }:
             raise ValueError("representation training config schema mismatch")
         if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
@@ -693,6 +778,15 @@ class RepresentationTrainingConfig:
                 DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
             ):
                 raise ValueError("training config v3 requires DCP schema v2")
+        if self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4:
+            if self.post_training_internal_evaluation is None:
+                raise ValueError(
+                    "training config v4 requires post-training internal evaluation"
+                )
+        elif self.post_training_internal_evaluation is not None:
+            raise ValueError(
+                "training config v1-v3 cannot carry post-training internal evaluation"
+            )
         if self.scope != REPRESENTATION_TRAINING_SCOPE:
             raise ValueError("representation training scope mismatch")
         _non_empty_text(self.run_id, field_name="run_id")
@@ -799,6 +893,11 @@ class RepresentationTrainingConfig:
             "physical_gpu_ids": list(self.fsdp2.physical_gpu_ids),
             "target_optimizer_steps": self.training.target_optimizer_steps,
             "resume_enabled": self.resume.enabled,
+            "post_training_internal_evaluation_enabled": (
+                False
+                if self.post_training_internal_evaluation is None
+                else self.post_training_internal_evaluation.enabled
+            ),
             "gpu_work_launched": False,
         }
 
@@ -828,10 +927,13 @@ def load_representation_training_config(
         raise ValueError(f"invalid representation training TOML: {error}") from error
     if not isinstance(value, dict):  # tomllib currently always returns dict
         raise TypeError("representation training TOML root must be a table")
-    _exact_fields(value, _TOP_LEVEL_FIELDS, table="root")
+    schema_version = _string(value, "schema_version", table="root")
+    root_fields = _TOP_LEVEL_FIELDS
+    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4:
+        root_fields = root_fields | {_POST_TRAINING_INTERNAL_EVALUATION_FIELD}
+    _exact_fields(value, root_fields, table="root")
     canonical_config_sha256 = _canonical_mapping_sha256(value)
 
-    schema_version = _string(value, "schema_version", table="root")
     scope = _string(value, "scope", table="root")
     run_id = _string(value, "run_id", table="root")
     code = _parse_code(_table(value, "code", table="root"))
@@ -865,6 +967,13 @@ def load_representation_training_config(
     output = _parse_output(_table(value, "output", table="root"))
     resume = _parse_resume(_table(value, "resume", table="root"))
     checkpoint = _parse_checkpoint(_table(value, "checkpoint", table="root"))
+    post_training_internal_evaluation = (
+        _parse_post_training_internal_evaluation(
+            _table(value, _POST_TRAINING_INTERNAL_EVALUATION_FIELD, table="root")
+        )
+        if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4
+        else None
+    )
 
     config = RepresentationTrainingConfig(
         schema_version=schema_version,
@@ -885,6 +994,7 @@ def load_representation_training_config(
         output=output,
         resume=resume,
         checkpoint=checkpoint,
+        post_training_internal_evaluation=post_training_internal_evaluation,
         source_path=source_path,
         source_toml_sha256=source_toml_sha256,
         canonical_config_sha256=canonical_config_sha256,
@@ -987,6 +1097,7 @@ def _parse_data(
     if schema_version in {
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
     }:
         _exact_fields(
             value,
@@ -1067,7 +1178,10 @@ def _parse_prompt(
     *,
     config_schema_version: str,
 ) -> RepresentationPromptConfig:
-    if config_schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3:
+    if config_schema_version in {
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+    }:
         _exact_fields(
             value,
             {"schema_version", "identity", "template", "sha256"},
@@ -1099,7 +1213,10 @@ def _parse_objective(
     | RepresentationObjectiveExecutionConfigV2
     | RepresentationObjectiveExecutionConfigV3
 ):
-    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3:
+    if schema_version in {
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+    }:
         required = {
             "identity",
             "kind",
@@ -1256,6 +1373,7 @@ def _parse_scheduler(
     if schema_version in {
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
     }:
         fields.add("min_lr_ratio")
     elif schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
@@ -1276,6 +1394,7 @@ def _parse_scheduler(
             in {
                 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
                 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
+                REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
             }
             else None
         ),
@@ -1419,6 +1538,75 @@ def _parse_training(value: Mapping[str, Any]) -> RepresentationTrainingLoopConfi
     )
 
 
+def _parse_post_training_internal_evaluation(
+    value: Mapping[str, Any],
+) -> RepresentationPostTrainingInternalEvaluationConfig:
+    enabled = _boolean(value, "enabled", table="post_training_internal_evaluation")
+    if not enabled:
+        _exact_fields(
+            value,
+            {"enabled"},
+            table="post_training_internal_evaluation",
+        )
+        return RepresentationPostTrainingInternalEvaluationConfig(enabled=False)
+    fields = {
+        "enabled",
+        "evaluation_id",
+        "ordered_group_manifest_path",
+        "ordered_group_manifest_sha256",
+        "counterfactual_manifest_path",
+        "counterfactual_manifest_sha256",
+        "report_path",
+        "random_seed",
+        "max_new_tokens",
+        "eos_token_ids",
+    }
+    _exact_fields(value, fields, table="post_training_internal_evaluation")
+    return RepresentationPostTrainingInternalEvaluationConfig(
+        enabled=True,
+        evaluation_id=_string(
+            value, "evaluation_id", table="post_training_internal_evaluation"
+        ),
+        ordered_group_manifest_path=_path(
+            value,
+            "ordered_group_manifest_path",
+            table="post_training_internal_evaluation",
+            allow_empty=False,
+        ),
+        ordered_group_manifest_sha256=_string(
+            value,
+            "ordered_group_manifest_sha256",
+            table="post_training_internal_evaluation",
+        ),
+        counterfactual_manifest_path=_path(
+            value,
+            "counterfactual_manifest_path",
+            table="post_training_internal_evaluation",
+            allow_empty=False,
+        ),
+        counterfactual_manifest_sha256=_string(
+            value,
+            "counterfactual_manifest_sha256",
+            table="post_training_internal_evaluation",
+        ),
+        report_path=_path(
+            value,
+            "report_path",
+            table="post_training_internal_evaluation",
+            allow_empty=False,
+        ),
+        random_seed=_int(
+            value, "random_seed", table="post_training_internal_evaluation"
+        ),
+        max_new_tokens=_int(
+            value, "max_new_tokens", table="post_training_internal_evaluation"
+        ),
+        eos_token_ids=_int_tuple(
+            value, "eos_token_ids", table="post_training_internal_evaluation"
+        ),
+    )
+
+
 def _parse_output(value: Mapping[str, Any]) -> RepresentationOutputConfig:
     _exact_fields(
         value,
@@ -1533,6 +1721,41 @@ def _verify_external_files(config: RepresentationTrainingConfig) -> None:
             raise ValueError(
                 "resume.checkpoint_path must be an existing distributed "
                 f"checkpoint directory: {config.resume.checkpoint_path}"
+            )
+    evaluation = config.post_training_internal_evaluation
+    if evaluation is not None and evaluation.enabled:
+        for name, path, expected_sha256 in (
+            (
+                "ordered_group_manifest_path",
+                evaluation.ordered_group_manifest_path,
+                evaluation.ordered_group_manifest_sha256,
+            ),
+            (
+                "counterfactual_manifest_path",
+                evaluation.counterfactual_manifest_path,
+                evaluation.counterfactual_manifest_sha256,
+            ),
+        ):
+            assert path is not None and expected_sha256 is not None
+            actual_path = _existing_file_path(
+                path,
+                field_name=f"post_training_internal_evaluation.{name}",
+            )
+            actual_sha256 = sha256(actual_path.read_bytes()).hexdigest()
+            if actual_sha256 != expected_sha256:
+                raise ValueError(
+                    f"post_training_internal_evaluation.{name} SHA256 mismatch: "
+                    f"expected {expected_sha256}, got {actual_sha256}"
+                )
+        assert evaluation.report_path is not None
+        report_parent = _nearest_existing_parent(evaluation.report_path.parent)
+        if not report_parent.is_dir():
+            raise ValueError(
+                "post_training_internal_evaluation.report_path has no usable parent"
+            )
+        if evaluation.report_path.exists():
+            raise ValueError(
+                "post_training_internal_evaluation.report_path already exists"
             )
 
 
@@ -1712,6 +1935,7 @@ __all__ = [
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3",
+    "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4",
     "REPRESENTATION_TRAINING_SCOPE",
     "RepresentationAdamWConfig",
     "RepresentationCheckpointConfig",
@@ -1727,6 +1951,7 @@ __all__ = [
     "RepresentationObjectiveExecutionConfigV2",
     "RepresentationObjectiveExecutionConfigV3",
     "RepresentationOutputConfig",
+    "RepresentationPostTrainingInternalEvaluationConfig",
     "RepresentationResumeConfig",
     "RepresentationTrainingConfig",
     "RepresentationTrainingLoopConfig",
