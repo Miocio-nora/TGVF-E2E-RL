@@ -15,6 +15,19 @@ class TokenOwnership(str, Enum):
     TEMPLATE = "template"
     POLICY_SAMPLED = "policy_sampled"
     TOOL_OBSERVATION = "tool_observation"
+    PADDING = "padding"
+
+    @property
+    def policy_loss_mask(self) -> int:
+        """Only actual behavior-policy samples participate in policy loss."""
+
+        return int(self is TokenOwnership.POLICY_SAMPLED)
+
+    @property
+    def requires_behavior_logprob(self) -> bool:
+        """Padding and every environment/template token have no behavior logprob."""
+
+        return self is TokenOwnership.POLICY_SAMPLED
 
 
 class LogProbMeasurement(str, Enum):
@@ -69,6 +82,12 @@ class SamplingIdentity:
     asynchronous_staleness_steps: int
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
+    max_tokens: int | None = None
+    do_sample: bool | None = None
+    stop_token_ids: tuple[int, ...] | None = None
+    stop_strings: tuple[str, ...] | None = None
+    include_stop_str_in_output: bool | None = None
+    ignore_eos: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.backend or not self.backend_version:
@@ -95,6 +114,31 @@ class SamplingIdentity:
             raise ValueError("repetition_penalty must be positive")
         if self.asynchronous_staleness_steps < 0:
             raise ValueError("staleness must be non-negative")
+        if self.max_tokens is not None and (
+            type(self.max_tokens) is not int or self.max_tokens <= 0
+        ):
+            raise ValueError("max_tokens must be a positive integer when recorded")
+        if self.do_sample is not None and not isinstance(self.do_sample, bool):
+            raise TypeError("do_sample must be bool when recorded")
+        if self.stop_token_ids is not None:
+            object.__setattr__(self, "stop_token_ids", tuple(self.stop_token_ids))
+            if any(
+                type(token_id) is not int or token_id < 0
+                for token_id in self.stop_token_ids
+            ):
+                raise ValueError("stop token IDs must be non-negative integers")
+            if len(set(self.stop_token_ids)) != len(self.stop_token_ids):
+                raise ValueError("stop token IDs must be unique")
+        if self.stop_strings is not None:
+            object.__setattr__(self, "stop_strings", tuple(self.stop_strings))
+            if any(not item for item in self.stop_strings):
+                raise ValueError("stop strings must be non-empty")
+        for name, value in (
+            ("include_stop_str_in_output", self.include_stop_str_in_output),
+            ("ignore_eos", self.ignore_eos),
+        ):
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"{name} must be bool when recorded")
         if any(not item for item in self.logit_processors):
             raise ValueError("logit processor identities must be non-empty")
         _validate_sha256(self.rng_state_sha256)
@@ -116,6 +160,23 @@ class SamplingIdentity:
             "frequency_penalty": self.frequency_penalty,
             "logit_processors": self.logit_processors,
             "measurement": self.measurement.value,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @property
+    def request_identity_sha256(self) -> str:
+        """Identity of transforms plus stopping/length request semantics."""
+
+        payload = {
+            "schema": "sampling-request-v1",
+            "transform_identity_sha256": self.transform_identity_sha256,
+            "max_tokens": self.max_tokens,
+            "do_sample": self.do_sample,
+            "stop_token_ids": self.stop_token_ids,
+            "stop_strings": self.stop_strings,
+            "include_stop_str_in_output": self.include_stop_str_in_output,
+            "ignore_eos": self.ignore_eos,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()

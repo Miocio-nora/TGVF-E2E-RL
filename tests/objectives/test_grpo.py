@@ -12,6 +12,7 @@ from tgvf_rl.objectives import (
     GroupStdMode,
     LogProbSource,
     LossReduction,
+    POLICY_PILOT_V1_GRPO_CONTRACT_ID,
     PolicyLogProbSet,
     RatioDenominator,
     ReductionSpec,
@@ -21,6 +22,7 @@ from tgvf_rl.objectives import (
     ZeroVarianceBehavior,
     compute_grpo_loss,
     compute_group_advantages,
+    policy_pilot_v1_grpo_spec,
 )
 
 
@@ -229,3 +231,161 @@ def test_sample_standard_deviation_rejects_singleton_group() -> None:
             torch.tensor([0, 1]),
             spec,
         )
+
+
+def test_policy_pilot_v1_factory_freezes_math_but_requires_kl_identity() -> None:
+    spec = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE
+    )
+
+    assert POLICY_PILOT_V1_GRPO_CONTRACT_ID == "POLICY-PILOT-V1-20260720"
+    assert spec.center_rewards is True
+    assert spec.scale_by_group_std is True
+    assert spec.group_std_mode is GroupStdMode.SAMPLE
+    assert spec.group_std_epsilon == 1.0e-6
+    assert spec.zero_variance_behavior is ZeroVarianceBehavior.ZERO_ADVANTAGE
+    assert spec.expected_group_size == 8
+    assert spec.ratio_denominator is RatioDenominator.BEHAVIOR
+    assert spec.clip_ratio_min == 0.8
+    assert spec.clip_ratio_max == 1.2
+    assert spec.dual_clip == 3.0
+    assert spec.reference_kl.coefficient == 0.0
+    assert spec.reduction == ReductionSpec(LossReduction.TOKEN_MEAN, None)
+
+    same = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE
+    )
+    different_diagnostic = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K1_SIGNED_LOG_RATIO
+    )
+    assert spec.identity_sha256 == same.identity_sha256
+    assert spec.identity_sha256 != different_diagnostic.identity_sha256
+    assert (
+        spec.identity_sha256 != replace(spec, expected_group_size=None).identity_sha256
+    )
+
+    with pytest.raises(TypeError, match="diagnostic_kl_estimator"):
+        policy_pilot_v1_grpo_spec(diagnostic_kl_estimator=None)  # type: ignore[arg-type]
+
+
+def test_policy_pilot_v1_uses_sample_std_plus_epsilon_and_zeroes_equal_group() -> None:
+    spec = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE
+    )
+    varying = torch.arange(8, dtype=torch.float64)
+    equal = torch.full((8,), 7.0, dtype=torch.float64)
+    rewards = torch.stack((varying, equal), dim=1).reshape(-1)
+    groups = torch.tensor([41, -7] * 8)
+
+    actual = compute_group_advantages(rewards, groups, spec)
+    varying_centered = varying - varying.mean()
+    expected_varying = varying_centered / (
+        varying.std(correction=1) + spec.group_std_epsilon
+    )
+    expected = torch.stack(
+        (expected_varying, torch.zeros_like(expected_varying)), dim=1
+    ).reshape(-1)
+
+    torch.testing.assert_close(actual, expected, rtol=1e-12, atol=1e-12)
+    assert not torch.allclose(
+        actual[::2],
+        varying_centered / varying.std(correction=1),
+        rtol=0.0,
+        atol=1e-12,
+    )
+    assert torch.equal(actual[1::2], torch.zeros(8, dtype=torch.float64))
+
+    equal_decimal = compute_group_advantages(
+        torch.full((8,), 0.8, dtype=torch.float64),
+        torch.full((8,), 5, dtype=torch.int64),
+        spec,
+    )
+    assert torch.equal(equal_decimal, torch.zeros_like(equal_decimal))
+
+
+def test_policy_pilot_v1_rejects_non_eight_groups_without_breaking_generic_mode() -> (
+    None
+):
+    pilot = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE
+    )
+    rewards = torch.arange(15, dtype=torch.float64)
+    groups = torch.tensor([3] * 8 + [9] * 7)
+
+    with pytest.raises(ReplayMismatchError, match="exactly 8"):
+        compute_group_advantages(rewards, groups, pilot)
+
+    generic = replace(pilot, expected_group_size=None)
+    actual = compute_group_advantages(rewards, groups, generic)
+    assert actual.shape == rewards.shape
+    assert torch.isfinite(actual).all()
+
+
+def test_policy_pilot_v1_loss_matches_dual_clip_global_token_mean_oracle() -> None:
+    spec = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE
+    )
+    rewards = torch.arange(8, dtype=torch.float64)
+    groups = torch.full((8,), 73, dtype=torch.int64)
+    sequence_ratios = torch.tensor(
+        [5.0, 0.1, 1.0, 2.0, 0.1, 5.0, 0.7, 1.1], dtype=torch.float64
+    )
+    behavior = torch.full((8, 4), -2.0, dtype=torch.float64)
+    current = (behavior + sequence_ratios.log()[:, None]).clone().requires_grad_(True)
+    reference = torch.full((8, 4), -2.4, dtype=torch.float64)
+    mask = torch.tensor(
+        [
+            [True, False, False, False],
+            [True, True, False, False],
+            [True, True, True, False],
+            [True, True, True, True],
+            [True, False, False, False],
+            [True, True, False, False],
+            [True, True, True, False],
+            [True, True, True, True],
+        ]
+    )
+    policy = _policy(
+        current,
+        behavior_values=behavior,
+        reference_values=reference,
+        mask=mask,
+    )
+
+    result = compute_grpo_loss(spec, policy, rewards, groups)
+
+    advantages = (rewards - rewards.mean()) / (rewards.std(correction=1) + 1.0e-6)
+    ratios = torch.exp(current - behavior)
+    broadcast_advantages = advantages[:, None]
+    clipped_surrogate = torch.minimum(
+        ratios * broadcast_advantages,
+        ratios.clamp(0.8, 1.2) * broadcast_advantages,
+    )
+    expected_surrogate = torch.where(
+        broadcast_advantages < 0,
+        torch.maximum(clipped_surrogate, 3.0 * broadcast_advantages),
+        clipped_surrogate,
+    )
+    expected_loss = (-expected_surrogate)[mask].mean()
+    per_token_k3 = torch.exp(-(current - reference)) + (current - reference) - 1.0
+    expected_kl_diagnostic = per_token_k3[mask].mean()
+
+    torch.testing.assert_close(result.loss, expected_loss)
+    torch.testing.assert_close(result.metrics["policy_loss"], expected_loss.detach())
+    torch.testing.assert_close(
+        result.metrics["reference_kl"], expected_kl_diagnostic.detach()
+    )
+    assert result.metrics["reference_kl_contribution"].item() == 0.0
+    assert torch.count_nonzero(result.per_token_loss[~mask]).item() == 0
+
+    sequence_means = torch.stack(
+        [(-expected_surrogate[row])[mask[row]].mean() for row in range(8)]
+    ).mean()
+    assert not torch.isclose(expected_loss, sequence_means)
+
+    expected_gradient = torch.autograd.grad(expected_loss, current, retain_graph=True)[
+        0
+    ]
+    actual_gradient = torch.autograd.grad(result.loss, current)[0]
+    torch.testing.assert_close(actual_gradient, expected_gradient)
+    assert torch.count_nonzero(actual_gradient[~mask]).item() == 0

@@ -9,10 +9,12 @@ from tgvf_rl.contracts.tensors import TensorPayloadSet
 from tgvf_rl.observations.schema import (
     CacheContract,
     ConditionProvenance,
+    CropObservationRecord,
     DeepStackBranchRecord,
     FocusedObservationRecord,
     ObservationMasks,
     SourceVisualState,
+    TrajectorySourceVisual,
     VisualLayout,
 )
 from tgvf_rl.observations.store import ObservationHandle, ObservationStore
@@ -25,6 +27,25 @@ SHA2 = "2" * 64
 
 def policy_version() -> PolicyVersion:
     return PolicyVersion("smoke", 0, SHA0)
+
+
+def trajectory_source_visual(
+    record: FocusedObservationRecord | CropObservationRecord,
+) -> TrajectorySourceVisual:
+    if isinstance(record, FocusedObservationRecord):
+        positions = record.layout.original_image_positions
+        branch_layers = record.layout.deepstack_branch_layers
+    else:
+        positions = record.original_image_positions
+        branch_layers = record.crop_visual.deepstack_branch_layers
+    return TrajectorySourceVisual(
+        state=record.source_visual,
+        positions=positions,
+        deepstack_branch_layers=branch_layers,
+        deepstack_injection_positions=tuple(
+            positions for _ in record.source_visual.merged_deepstack
+        ),
+    )
 
 
 def populated_observation_store() -> tuple[ObservationStore, ObservationHandle]:
@@ -65,6 +86,9 @@ def populated_observation_store() -> tuple[ObservationStore, ObservationHandle]:
             sampled_target_text_sha256=hashlib.sha256(b"red label").hexdigest(),
             sampled_target_token_start=1,
             sampled_target_token_end=3,
+            conditioning_target_token_start=1,
+            conditioning_target_token_end=3,
+            source_sequence_length=3,
             source_input_ids_sha256=SHA0,
             trajectory_ids=("smoke/sample/0/group",),
             call_indices=(0,),

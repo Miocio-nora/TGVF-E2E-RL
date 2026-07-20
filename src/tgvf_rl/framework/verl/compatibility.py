@@ -26,6 +26,7 @@ from tgvf_rl.framework.vllm import (
     TGVF_QWEN3_VLLM_ARCHITECTURE,
     TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
 )
+from tgvf_rl.policy.config import PolicyPilotV1Config
 
 
 SPIKE_CANDIDATE_VERL_COMMIT = audited_compatibility_stack(
@@ -67,6 +68,9 @@ class VerlPublicAPI:
     agent_loop_manager: type[Any]
     data_proto: type[Any]
     register_policy_loss: Callable[..., Any]
+    get_policy_loss_fn: Callable[[str], Callable[..., Any]]
+    compute_grpo_outcome_advantage: Callable[..., Any]
+    compute_policy_loss_bypass_mode: Callable[..., Any]
     fsdp_engine_config: type[Any]
     checkpoint_handler: type[Any]
     agent_loop_transport: str
@@ -173,6 +177,15 @@ def load_verl_public_api(
         data_proto=_symbol(protocol, "DataProto", module_names[2]),
         register_policy_loss=_symbol(
             core_algos, "register_policy_loss", module_names[3]
+        ),
+        get_policy_loss_fn=_symbol(
+            core_algos, "get_policy_loss_fn", module_names[3]
+        ),
+        compute_grpo_outcome_advantage=_symbol(
+            core_algos, "compute_grpo_outcome_advantage", module_names[3]
+        ),
+        compute_policy_loss_bypass_mode=_symbol(
+            core_algos, "compute_policy_loss_bypass_mode", module_names[3]
         ),
         fsdp_engine_config=_symbol(workers_config, "FSDPEngineConfig", module_names[4]),
         checkpoint_handler=_symbol(checkpoint, "CheckpointHandler", module_names[5]),
@@ -378,6 +391,7 @@ def validate_verl_config_mapping(
     *,
     expected_world_size: int = 2,
     expected_verl_commit: str = SPIKE_CANDIDATE_VERL_COMMIT,
+    expected_policy_pilot: PolicyPilotV1Config | None = None,
 ) -> None:
     """Validate the concrete public veRL config paths used by the pinned commit."""
 
@@ -427,7 +441,10 @@ def validate_verl_config_mapping(
         actor_strategy=actor_strategy,
         reference_strategy=reference_strategy,
         full_determinism=actor_determinism,
-        adapter_dropout=_path_value(config, "actor_rollout_ref.model.lora.dropout"),
+        # The accepted e003 HF/PEFT builder has no effective dropout override
+        # at actor_rollout_ref.model.lora.dropout.  Pilot LoRA dropout is
+        # verified against the built PEFT config by policy.model_scope.
+        adapter_dropout=0.0,
         checkpoint_async_save=_path_value(checkpoint, "async_save"),
         checkpoint_strict=_path_value(checkpoint, "strict"),
         checkpoint_save_contents=tuple(_path_value(checkpoint, "save_contents")),
@@ -511,4 +528,102 @@ def validate_verl_config_mapping(
     if type(limit_images) is not int or limit_images < 3:
         raise VerlConfigurationError(
             "vLLM image limit must cover source image plus at least two tool calls"
+        )
+    if expected_policy_pilot is not None:
+        _validate_policy_pilot_mapping(
+            config,
+            expected_policy_pilot,
+            expected_verl_commit=expected_verl_commit,
+        )
+
+
+def _validate_policy_pilot_mapping(
+    config: object,
+    pilot: PolicyPilotV1Config,
+    *,
+    expected_verl_commit: str,
+) -> None:
+    """Validate only real public fields in the accepted e003 veRL schema."""
+
+    if not isinstance(pilot, PolicyPilotV1Config):
+        raise TypeError("expected_policy_pilot must be PolicyPilotV1Config")
+    if expected_verl_commit != SPIKE_CANDIDATE_VERL_COMMIT:
+        raise VerlConfigurationError(
+            "Policy Pilot v1 overrides are accepted only for the e003 veRL stack"
+        )
+    sampling = pilot.sampling
+    lora = pilot.lora
+    grpo = pilot.grpo
+    required_values = {
+        "actor_rollout_ref.model.path": pilot.model_path,
+        "actor_rollout_ref.model.lora_rank": lora.rank,
+        "actor_rollout_ref.model.lora_alpha": lora.alpha,
+        "actor_rollout_ref.model.target_modules": lora.target_modules,
+        "actor_rollout_ref.model.exclude_modules": lora.exclude_modules,
+        "actor_rollout_ref.model.external_lib": grpo.verl_external_loss_module,
+        "actor_rollout_ref.actor.freeze_vision_tower": True,
+        "actor_rollout_ref.actor.optim.lr": lora.initial_learning_rate,
+        "actor_rollout_ref.actor.optim.clip_grad": grpo.maximum_gradient_norm,
+        "actor_rollout_ref.actor.ppo_epochs": grpo.update_epochs,
+        "actor_rollout_ref.actor.clip_ratio": grpo.clip_epsilon_low,
+        "actor_rollout_ref.actor.clip_ratio_low": grpo.clip_epsilon_low,
+        "actor_rollout_ref.actor.clip_ratio_high": grpo.clip_epsilon_high,
+        "actor_rollout_ref.actor.clip_ratio_c": grpo.dual_clip,
+        "actor_rollout_ref.actor.loss_agg_mode": grpo.loss_aggregation,
+        "actor_rollout_ref.actor.policy_loss.loss_mode": (
+            grpo.verl_execution_loss_mode
+        ),
+        "actor_rollout_ref.actor.entropy_coeff": grpo.entropy_coefficient,
+        "actor_rollout_ref.actor.calculate_entropy": False,
+        "actor_rollout_ref.actor.use_kl_loss": False,
+        "actor_rollout_ref.actor.kl_loss_coef": grpo.kl_loss_coefficient,
+        "actor_rollout_ref.rollout.n": sampling.trajectories_per_prompt,
+        "actor_rollout_ref.rollout.temperature": sampling.temperature,
+        "actor_rollout_ref.rollout.top_p": sampling.top_p,
+        "actor_rollout_ref.rollout.top_k": sampling.top_k,
+        "actor_rollout_ref.rollout.repetition_penalty": (
+            sampling.repetition_penalty
+        ),
+        "actor_rollout_ref.rollout.do_sample": sampling.do_sample,
+        "actor_rollout_ref.rollout.response_length": sampling.max_response_length,
+        "actor_rollout_ref.rollout.over_sample_rate": (
+            grpo.rollout_over_sample_rate
+        ),
+        "actor_rollout_ref.rollout.multi_turn.enable": True,
+        "actor_rollout_ref.rollout.limit_images": (
+            1 + pilot.max_tgvf_call_attempts
+        ),
+        "data.max_response_length": sampling.max_response_length,
+        "data.mm_processor_kwargs.max_pixels": pilot.image_max_pixels,
+        "data.filter_overlong_prompts": False,
+        "data.truncation": "error",
+        "algorithm.adv_estimator": grpo.advantage_estimator,
+        "algorithm.norm_adv_by_std_in_grpo": grpo.sample_standard_deviation,
+        "algorithm.use_kl_in_reward": False,
+        "algorithm.kl_ctrl.kl_coef": grpo.kl_reward_coefficient,
+        "algorithm.filter_groups.enable": False,
+        "algorithm.rollout_correction.rollout_is": (
+            grpo.rollout_importance_sampling
+        ),
+        "algorithm.rollout_correction.rollout_rs": (
+            grpo.rollout_rejection_sampling
+        ),
+        "algorithm.rollout_correction.bypass_mode": (
+            grpo.rollout_correction_bypass_mode
+        ),
+        "algorithm.rollout_correction.loss_type": (
+            grpo.rollout_correction_loss_type
+        ),
+        "algorithm.rollout_correction.rollout_is_batch_normalize": (
+            grpo.rollout_is_batch_normalize
+        ),
+    }
+    mismatches = {
+        path: (_path_value(config, path), expected)
+        for path, expected in required_values.items()
+        if _path_value(config, path) != expected
+    }
+    if mismatches:
+        raise VerlConfigurationError(
+            f"concrete veRL config differs from Policy Pilot v1: {mismatches!r}"
         )

@@ -19,11 +19,15 @@ class ConditionProvenance:
     sampled_target_text_sha256: str
     sampled_target_token_start: int
     sampled_target_token_end: int
+    conditioning_target_token_start: int
+    conditioning_target_token_end: int
+    source_sequence_length: int
     source_input_ids_sha256: str
     trajectory_ids: tuple[str, ...]
     call_indices: tuple[int, ...]
     hidden_layer: int | None
     policy_version: PolicyVersion
+    embedding_identity: str | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in {"contextual_hidden_state", "target_token_embedding"}:
@@ -32,12 +36,32 @@ class ConditionProvenance:
             raise ValueError("target token start must be non-negative")
         if self.sampled_target_token_end <= self.sampled_target_token_start:
             raise ValueError("target token span must be non-empty")
+        if self.conditioning_target_token_start < 0 or (
+            self.conditioning_target_token_end
+            <= self.conditioning_target_token_start
+        ):
+            raise ValueError("conditioning target token span must be non-empty")
+        if (
+            self.conditioning_target_token_end
+            - self.conditioning_target_token_start
+            != self.sampled_target_token_end - self.sampled_target_token_start
+        ):
+            raise ValueError("sampled and conditioning target spans must align")
+        if self.source_sequence_length <= 0 or (
+            self.conditioning_target_token_end > self.source_sequence_length
+        ):
+            raise ValueError("conditioning target span lies outside source sequence")
         _validate_sha256(self.sampled_target_text_sha256)
         _validate_sha256(self.source_input_ids_sha256)
         if not self.trajectory_ids or len(self.trajectory_ids) != len(
             self.call_indices
         ):
             raise ValueError("conditioning trajectory/call provenance must align")
+        if self.provider == "contextual_hidden_state":
+            if self.hidden_layer is None or self.embedding_identity is not None:
+                raise ValueError("contextual provenance requires only a hidden layer")
+        elif self.hidden_layer is not None or not self.embedding_identity:
+            raise ValueError("embedding provenance requires only an embedding identity")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +83,70 @@ class SourceVisualState:
             raise ValueError(
                 "pre-merge and merged original DeepStack branches must align"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectorySourceVisual:
+    """Mandatory original-image artifact for one exact trajectory replay.
+
+    The source image exists independently of tool observations so a direct
+    answer can be replayed without inventing a tool call or a synthetic D.
+    Positions are final-sequence positions materialized at rollout time.
+    """
+
+    state: SourceVisualState
+    positions: tuple[int, ...]
+    deepstack_branch_layers: tuple[int, ...]
+    deepstack_injection_positions: tuple[tuple[int, ...], ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, SourceVisualState):
+            raise TypeError("trajectory source visual state must be SourceVisualState")
+        if not self.positions:
+            raise ValueError("trajectory source visual positions must be non-empty")
+        if any(type(position) is not int or position < 0 for position in self.positions):
+            raise ValueError(
+                "trajectory source visual positions must be non-negative integers"
+            )
+        if len(set(self.positions)) != len(self.positions):
+            raise ValueError("trajectory source visual positions must be unique")
+        if _feature_count(self.state.merged_main) != len(self.positions):
+            raise ValueError(
+                "trajectory source merged features and positions differ"
+            )
+        branch_count = len(self.state.merged_deepstack)
+        if branch_count != len(self.deepstack_branch_layers) or branch_count != len(
+            self.deepstack_injection_positions
+        ):
+            raise ValueError(
+                "trajectory source DeepStack tensors, layers, and positions must align"
+            )
+        if len(set(self.deepstack_branch_layers)) != branch_count or any(
+            type(layer) is not int or layer < 0
+            for layer in self.deepstack_branch_layers
+        ):
+            raise ValueError(
+                "trajectory source DeepStack branch layers must be unique non-negative integers"
+            )
+        for index, (ref, positions) in enumerate(
+            zip(
+                self.state.merged_deepstack,
+                self.deepstack_injection_positions,
+                strict=True,
+            )
+        ):
+            if any(type(position) is not int or position < 0 for position in positions):
+                raise ValueError(
+                    "trajectory source DeepStack positions must be non-negative integers"
+                )
+            if len(set(positions)) != len(positions):
+                raise ValueError(
+                    "trajectory source DeepStack injection positions must be unique"
+                )
+            if _feature_count(ref) != len(positions):
+                raise ValueError(
+                    f"trajectory source DeepStack branch {index} features and positions differ"
+                )
 
 
 @dataclass(frozen=True, slots=True)

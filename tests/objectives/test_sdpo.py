@@ -51,7 +51,7 @@ from tgvf_rl.qwen.base import (
     resolve_replay_request,
 )
 
-from tests.support import populated_observation_store
+from tests.support import populated_observation_store, trajectory_source_visual
 
 
 SHA0 = "0" * 64
@@ -172,6 +172,7 @@ def _teacher_bundle():
         trajectory_id="sdpo-trajectory",
         model=observation.model,
         behavior_policy=observation.condition.policy_version,
+        source_visual=trajectory_source_visual(observation),
         observation_handles=(observation_handle,),
         tensors=TrajectoryReplayTensorRefs(
             input_ids=input_ids,

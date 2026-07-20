@@ -21,6 +21,7 @@ from tgvf_rl.observations.schema import (
     FocusedObservationRecord,
     ObservationMasks,
     SourceVisualState,
+    TrajectorySourceVisual,
     VisualLayout,
 )
 from tgvf_rl.observations.store import (
@@ -110,6 +111,9 @@ def _replay(*, branches: int, calls: int = 2):
                 sampled_target_text_sha256="5" * 64,
                 sampled_target_token_start=1,
                 sampled_target_token_end=2,
+                conditioning_target_token_start=1,
+                conditioning_target_token_end=2,
+                source_sequence_length=sequence,
                 source_input_ids_sha256="6" * 64,
                 trajectory_ids=("trajectory",),
                 call_indices=(call_index,),
@@ -160,6 +164,22 @@ def _replay(*, branches: int, calls: int = 2):
         trajectory_id="trajectory",
         model=model,
         behavior_policy=policy,
+        source_visual=TrajectorySourceVisual(
+            state=SourceVisualState(
+                image_sha256="7" * 64,
+                premerge_main=source,
+                premerge_deepstack=source_branches,
+                merged_main=source,
+                merged_deepstack=source_branches,
+                image_grid_thw=(1, 2, 2),
+                spatial_merge_size=1,
+            ),
+            positions=(1, 2),
+            deepstack_branch_layers=tuple(range(branches)),
+            deepstack_injection_positions=tuple(
+                (1, 2) for _ in range(branches)
+            ),
+        ),
         observation_handles=tuple(handles),
         tensors=TrajectoryReplayTensorRefs(
             input_ids=input_ids,
@@ -182,6 +202,23 @@ def test_qwen3_recorded_forward_is_deterministic_and_uses_all_branches() -> None
     second = adapter.forward_recorded(model, store, replay, ReplayConsumer.POLICY)
     torch.testing.assert_close(first.logits, second.logits, rtol=0, atol=0)
     assert first.visual_position_mask.sum().item() == 6
+
+
+def test_zero_tool_policy_and_reference_consume_the_same_source_bundle() -> None:
+    torch.manual_seed(13)
+    model = TinyQwen()
+    store, replay = _replay(branches=3, calls=0)
+    bundle = store.export_replay_bundle(replay)
+    adapter = Qwen3VLAdapter()
+
+    policy = adapter.forward_replay_bundle(model, bundle, ReplayConsumer.POLICY)
+    reference = adapter.forward_replay_bundle(
+        model, bundle, ReplayConsumer.REFERENCE
+    )
+
+    torch.testing.assert_close(policy.logits, reference.logits, rtol=0, atol=0)
+    assert torch.equal(policy.visual_position_mask, reference.visual_position_mask)
+    assert policy.visual_position_mask.sum().item() == 2
 
 
 def test_qwen25_support_is_not_misrepresented_as_qwen3_deepstack() -> None:

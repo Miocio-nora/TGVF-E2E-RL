@@ -27,16 +27,19 @@ class StackConfig:
     physical_gpu_ids: tuple[int, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "physical_gpu_ids", tuple(self.physical_gpu_ids))
         if self.rollout_backend.lower() != "vllm":
             raise ValueError("vLLM is the only rollout backend")
         if self.sharding_strategy.lower() != "fsdp2":
             raise ValueError("FSDP2 is required")
         if not self.full_determinism:
             raise ValueError("full determinism is required for smoke")
-        if self.physical_gpu_ids and any(
-            device not in {2, 3} for device in self.physical_gpu_ids
+        if any(
+            type(device) is not int or device < 0 for device in self.physical_gpu_ids
         ):
-            raise ValueError("only physical GPUs 2 and 3 are authorized")
+            raise ValueError("physical GPU IDs must be non-negative integers")
+        if len(set(self.physical_gpu_ids)) != len(self.physical_gpu_ids):
+            raise ValueError("physical GPU IDs must be distinct")
 
 
 @dataclass(frozen=True, slots=True)

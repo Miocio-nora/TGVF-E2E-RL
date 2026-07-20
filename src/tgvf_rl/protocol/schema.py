@@ -23,6 +23,7 @@ POLICY_RL_TOOL_NAMES = (TGVF_FOCUS_TOOL_NAME, IMAGE_ZOOM_IN_TOOL_NAME)
 TOOL_CALL_OPEN = "<tool_call>"
 TOOL_CALL_CLOSE = "</tool_call>"
 TARGET_TOKEN_SPAN_RULE = "minimal_overlapping_sampled_token_cover_v1"
+STANDARD_TOOL_ERROR_SCHEMA_VERSION = "tgvf-native-tool-error-v1"
 
 _TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     "type": "function",
@@ -162,6 +163,60 @@ class ParseErrorCode(str, Enum):
     EMPTY_TARGET = "empty_target"
     INVALID_BBOX = "invalid_bbox"
     AMBIGUOUS_TARGET_TOKEN_SPAN = "ambiguous_target_token_span"
+
+
+class ToolErrorCode(str, Enum):
+    TOOL_NOT_ENABLED = "tool_not_enabled"
+    TOOL_EXECUTION_FAILED = "tool_execution_failed"
+    TOOL_RESPONSE_APPEND_FAILED = "tool_response_append_failed"
+    TOOL_CALL_LIMIT_EXCEEDED = "tool_call_limit_exceeded"
+
+
+@dataclass(frozen=True, slots=True)
+class StandardToolError:
+    """Deterministic environment-owned native tool-error observation."""
+
+    code: str
+    message: str
+    attempt_index: int
+    recoverable: bool
+    maximum_tool_calls: int
+    schema_version: str = STANDARD_TOOL_ERROR_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not self.schema_version or not self.code or not self.message:
+            raise ValueError("tool error identity/code/message must be non-empty")
+        if self.attempt_index < 0:
+            raise ValueError("tool error attempt index must be non-negative")
+        if self.maximum_tool_calls <= 1:
+            raise ValueError("tool error maximum_tool_calls must be greater than one")
+
+    @property
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "ok": False,
+            "error": {
+                "schema_version": self.schema_version,
+                "code": self.code,
+                "message": self.message,
+                "attempt_index": self.attempt_index,
+                "maximum_tool_calls": self.maximum_tool_calls,
+                "recoverable": self.recoverable,
+            },
+        }
+
+    @property
+    def canonical_json(self) -> str:
+        return json.dumps(
+            self.canonical_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    @property
+    def payload_sha256(self) -> str:
+        return sha256(self.canonical_json.encode("utf-8")).hexdigest()
 
 
 class ToolCallParseError(ValueError):

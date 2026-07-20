@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from tgvf_rl.environment.agent_loop import ToolExecutionContext
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol.schema import NativeToolCall, POLICY_RL_TOOL_NAMES
 
 
-ToolExecutor = Callable[[NativeToolCall, int], ObservationHandle]
+ToolExecutor = Callable[[NativeToolCall, ToolExecutionContext], ObservationHandle]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,15 +40,17 @@ class NativeToolRuntimeRegistry:
         return tuple(self._bindings)
 
     def execute(
-        self, parsed_call: NativeToolCall, call_index: int
+        self, parsed_call: NativeToolCall, context: ToolExecutionContext
     ) -> ObservationHandle:
+        if not isinstance(context, ToolExecutionContext):
+            raise TypeError("tool runtime context must be ToolExecutionContext")
         try:
             binding = self._bindings[parsed_call.name]
         except KeyError as error:
             raise ValueError(
                 f"no runtime binding for native tool {parsed_call.name!r}"
             ) from error
-        handle = binding.execute(parsed_call, call_index)
+        handle = binding.execute(parsed_call, context)
         if not isinstance(handle, ObservationHandle):
             raise TypeError("native tool runtime must return an ObservationHandle")
         return handle

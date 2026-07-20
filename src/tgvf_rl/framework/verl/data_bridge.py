@@ -9,7 +9,13 @@ from typing import Any, Iterable, Mapping
 
 import torch
 
-from tgvf_rl.observations.store import ObservationHandle, TrajectoryReplayHandle
+from tgvf_rl.contracts.tokens import TokenOwnership
+from tgvf_rl.observations.store import (
+    ObservationHandle,
+    TrajectoryReplayBundle,
+    TrajectoryReplayHandle,
+    validate_replay_bundle,
+)
 from tgvf_rl.trajectories.behavior import BehaviorTraceHandle, BehaviorTraceRecord
 from tgvf_rl.trajectories.schema import TrajectoryRecord
 
@@ -30,10 +36,27 @@ from .rollout_bridge import (
     TRAJECTORY_ID_FIELD,
     TRAJECTORY_PAYLOAD_FIELD,
     TRAJECTORY_REPLAY_HANDLE_FIELD,
+    TRAJECTORY_REPLAY_BUNDLE_FIELD,
     TRAJECTORY_SHA256_FIELD,
     RolloutBridgeRecord,
     _mint_rollout_bridge_record,
+    _trajectory_response_materialization,
     _validate_handle,
+)
+
+
+VARIABLE_LENGTH_PADDING_SCHEMA_VERSION = "tgvf-verl-variable-padding-v1"
+PADDING_SCHEMA_FIELD = "tgvf_padding_schema_version"
+PAD_TOKEN_ID_FIELD = "tgvf_explicit_pad_token_id"
+PROMPT_TOKEN_OWNERSHIP_FIELD = "tgvf_batched_prompt_token_ownership"
+RESPONSE_TOKEN_OWNERSHIP_FIELD = "tgvf_batched_response_token_ownership"
+_PADDING_FIELDS = frozenset(
+    {
+        PADDING_SCHEMA_FIELD,
+        PAD_TOKEN_ID_FIELD,
+        PROMPT_TOKEN_OWNERSHIP_FIELD,
+        RESPONSE_TOKEN_OWNERSHIP_FIELD,
+    }
 )
 
 
@@ -66,10 +89,14 @@ class DataProtoIntegrityView:
     objective_sentinels: tuple[Mapping[str, object], ...]
     trajectory_payloads: tuple[TrajectoryRecord, ...]
     replay_handles: tuple[TrajectoryReplayHandle, ...]
+    replay_bundles: tuple[TrajectoryReplayBundle, ...]
     trajectory_ids: tuple[str, ...]
     trajectory_sha256s: tuple[str, ...]
     token_ownership_sha256s: tuple[str, ...]
     rollout_provenance_sha256s: tuple[str, ...]
+    pad_token_id: int | None
+    prompt_token_ownership: tuple[tuple[TokenOwnership, ...], ...]
+    response_token_ownership: tuple[tuple[TokenOwnership, ...], ...]
 
 
 def _object_array(values: list[object]) -> object:
@@ -87,30 +114,120 @@ def _object_array(values: list[object]) -> object:
 def build_data_proto_payload(
     records: Iterable[RolloutBridgeRecord],
 ) -> DataProtoPayload:
-    """Build an unmodified, equal-width batch; padding belongs to AgentLoop."""
+    """Build the legacy unmodified equal-width batch."""
 
-    rows = tuple(records)
-    if not rows:
-        raise ValueError("at least one rollout record is required")
-    if any(not isinstance(row, RolloutBridgeRecord) for row in rows):
-        raise TypeError("all rows must be RolloutBridgeRecord values")
+    rows = _validated_rows(records)
     prompt_widths = {len(row.prompt_ids) for row in rows}
     response_widths = {len(row.response_ids) for row in rows}
     if len(prompt_widths) != 1 or len(response_widths) != 1:
         raise ValueError("the neutral bridge never pads or truncates rollout tokens")
 
+    return _build_payload(
+        rows,
+        prompt_rows=[row.prompt_ids for row in rows],
+        response_rows=[row.response_ids for row in rows],
+        response_mask_rows=[row.response_mask for row in rows],
+        response_logprob_rows=[row.response_logprobs for row in rows],
+    )
+
+
+def build_padded_data_proto_payload(
+    records: Iterable[RolloutBridgeRecord],
+    *,
+    pad_token_id: int,
+) -> DataProtoPayload:
+    """Losslessly batch variable lengths with explicit left/right padding.
+
+    Prompts are left-padded and responses are right-padded.  The padding token
+    is a caller-owned run binding: this function never reads tokenizer EOS or
+    padding defaults.  Exact token/logprob/replay sidecars remain untouched.
+    """
+
+    if type(pad_token_id) is not int or pad_token_id < 0:
+        raise ValueError("pad_token_id must be an explicit non-negative integer")
+    rows = _validated_rows(records)
+    prompt_width = max(len(row.prompt_ids) for row in rows)
+    response_width = max(len(row.response_ids) for row in rows)
+    prompt_rows = [
+        (pad_token_id,) * (prompt_width - len(row.prompt_ids)) + row.prompt_ids
+        for row in rows
+    ]
+    response_rows = [
+        row.response_ids
+        + (pad_token_id,) * (response_width - len(row.response_ids))
+        for row in rows
+    ]
+    response_mask_rows = [
+        row.response_mask + (0,) * (response_width - len(row.response_mask))
+        for row in rows
+    ]
+    response_logprob_rows = [
+        row.response_logprobs
+        + (0.0,) * (response_width - len(row.response_logprobs))
+        for row in rows
+    ]
+    prompt_ownership_rows = [
+        (TokenOwnership.PADDING.value,) * (prompt_width - len(row.prompt_ids))
+        + (TokenOwnership.TEMPLATE.value,) * len(row.prompt_ids)
+        for row in rows
+    ]
+    response_ownership_rows = []
+    for row in rows:
+        _, _, _, exact_ownership = _trajectory_response_materialization(
+            row.trajectory_payload, row.behavior_trace_records
+        )
+        response_ownership_rows.append(
+            exact_ownership
+            + (TokenOwnership.PADDING.value,)
+            * (response_width - len(row.response_ids))
+        )
+    return _build_payload(
+        rows,
+        prompt_rows=prompt_rows,
+        response_rows=response_rows,
+        response_mask_rows=response_mask_rows,
+        response_logprob_rows=response_logprob_rows,
+        padding_fields={
+            PADDING_SCHEMA_FIELD: _object_array(
+                [VARIABLE_LENGTH_PADDING_SCHEMA_VERSION for _ in rows]
+            ),
+            PAD_TOKEN_ID_FIELD: _object_array([pad_token_id for _ in rows]),
+            PROMPT_TOKEN_OWNERSHIP_FIELD: _object_array(prompt_ownership_rows),
+            RESPONSE_TOKEN_OWNERSHIP_FIELD: _object_array(response_ownership_rows),
+        },
+    )
+
+
+def _validated_rows(
+    records: Iterable[RolloutBridgeRecord],
+) -> tuple[RolloutBridgeRecord, ...]:
+    rows = tuple(records)
+    if not rows:
+        raise ValueError("at least one rollout record is required")
+    if any(not isinstance(row, RolloutBridgeRecord) for row in rows):
+        raise TypeError("all rows must be RolloutBridgeRecord values")
+    return rows
+
+
+def _build_payload(
+    rows: tuple[RolloutBridgeRecord, ...],
+    *,
+    prompt_rows: list[tuple[int, ...]],
+    response_rows: list[tuple[int, ...]],
+    response_mask_rows: list[tuple[int, ...]],
+    response_logprob_rows: list[tuple[float, ...]],
+    padding_fields: Mapping[str, object] | None = None,
+) -> DataProtoPayload:
+    """Assemble tensors while preserving every unpadded sidecar verbatim."""
+
     tensors = {
-        "prompts": torch.tensor([row.prompt_ids for row in rows], dtype=torch.int64),
-        "responses": torch.tensor(
-            [row.response_ids for row in rows], dtype=torch.int64
-        ),
-        "response_mask": torch.tensor(
-            [row.response_mask for row in rows], dtype=torch.int64
-        ),
+        "prompts": torch.tensor(prompt_rows, dtype=torch.int64),
+        "responses": torch.tensor(response_rows, dtype=torch.int64),
+        "response_mask": torch.tensor(response_mask_rows, dtype=torch.int64),
         # Match AgentLoopOutput.as_dict/_postprocess.  The exact Python values
         # remain alongside this public tensor so float32 transport is auditable.
         "rollout_log_probs": torch.tensor(
-            [row.response_logprobs for row in rows], dtype=torch.float32
+            response_logprob_rows, dtype=torch.float32
         ),
     }
     non_tensors: dict[str, object] = {
@@ -140,6 +257,9 @@ def build_data_proto_payload(
         TRAJECTORY_REPLAY_HANDLE_FIELD: _object_array(
             [row.replay_handle for row in rows]
         ),
+        TRAJECTORY_REPLAY_BUNDLE_FIELD: _object_array(
+            [row.replay_bundle for row in rows]
+        ),
         TOKEN_OWNERSHIP_SHA256_FIELD: _object_array(
             [row.token_ownership_sha256 for row in rows]
         ),
@@ -148,7 +268,18 @@ def build_data_proto_payload(
         ),
         "__num_turns__": _object_array([row.num_turns for row in rows]),
     }
+    if padding_fields is not None:
+        collisions = set(padding_fields) & set(non_tensors)
+        if collisions:
+            raise RuntimeError(f"padding fields collide with bridge fields: {collisions}")
+        non_tensors.update(padding_fields)
     extra_names = sorted({name for row in rows for name in row.extra_fields})
+    padding_collisions = _PADDING_FIELDS & set(extra_names)
+    if padding_collisions:
+        raise ValueError(
+            "rollout extra_fields collide with variable-padding fields: "
+            f"{sorted(padding_collisions)}"
+        )
     for name in extra_names:
         non_tensors[name] = _object_array([row.extra_fields.get(name) for row in rows])
     return DataProtoPayload(
@@ -184,6 +315,20 @@ def build_verl_data_proto(
 ) -> Any:
     return to_verl_data_proto(
         build_data_proto_payload(records), data_proto_cls=data_proto_cls
+    )
+
+
+def build_padded_verl_data_proto(
+    records: Iterable[RolloutBridgeRecord],
+    *,
+    pad_token_id: int,
+    data_proto_cls: type[Any] | None = None,
+) -> Any:
+    """Construct a public DataProto from the explicit variable-padding API."""
+
+    return to_verl_data_proto(
+        build_padded_data_proto_payload(records, pad_token_id=pad_token_id),
+        data_proto_cls=data_proto_cls,
     )
 
 
@@ -246,6 +391,7 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         raise ValueError("response_mask must remain binary")
 
     batch_size, width = responses.shape
+    prompt_width = prompts.shape[1]
     schemas = _row_values(
         _required(non_tensors, BRIDGE_SCHEMA_FIELD, "DataProto.non_tensor_batch"),
         batch_size,
@@ -318,6 +464,13 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         batch_size,
         TRAJECTORY_REPLAY_HANDLE_FIELD,
     )
+    replay_bundle_rows = _row_values(
+        _required(
+            non_tensors, TRAJECTORY_REPLAY_BUNDLE_FIELD, "DataProto.non_tensor_batch"
+        ),
+        batch_size,
+        TRAJECTORY_REPLAY_BUNDLE_FIELD,
+    )
     ownership_sha_rows = _row_values(
         _required(
             non_tensors, TOKEN_OWNERSHIP_SHA256_FIELD, "DataProto.non_tensor_batch"
@@ -339,6 +492,55 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         batch_size,
         "__num_turns__",
     )
+    present_padding_fields = _PADDING_FIELDS & set(non_tensors)
+    if present_padding_fields and present_padding_fields != _PADDING_FIELDS:
+        missing = sorted(_PADDING_FIELDS - present_padding_fields)
+        raise ValueError(f"DataProto variable-padding contract is incomplete: {missing}")
+    padding_enabled = bool(present_padding_fields)
+    pad_token_id: int | None = None
+    prompt_ownership_rows: tuple[object, ...] | None = None
+    response_ownership_rows: tuple[object, ...] | None = None
+    if padding_enabled:
+        padding_schemas = _row_values(
+            _required(
+                non_tensors, PADDING_SCHEMA_FIELD, "DataProto.non_tensor_batch"
+            ),
+            batch_size,
+            PADDING_SCHEMA_FIELD,
+        )
+        if any(
+            schema != VARIABLE_LENGTH_PADDING_SCHEMA_VERSION
+            for schema in padding_schemas
+        ):
+            raise ValueError("DataProto variable-padding schema was lost or changed")
+        pad_token_rows = _row_values(
+            _required(non_tensors, PAD_TOKEN_ID_FIELD, "DataProto.non_tensor_batch"),
+            batch_size,
+            PAD_TOKEN_ID_FIELD,
+        )
+        if any(type(value) is not int or value < 0 for value in pad_token_rows):
+            raise ValueError("DataProto pad_token_id binding is malformed")
+        if len(set(pad_token_rows)) != 1:
+            raise ValueError("one DataProto batch cannot mix pad_token_id bindings")
+        pad_token_id = pad_token_rows[0]
+        prompt_ownership_rows = _row_values(
+            _required(
+                non_tensors,
+                PROMPT_TOKEN_OWNERSHIP_FIELD,
+                "DataProto.non_tensor_batch",
+            ),
+            batch_size,
+            PROMPT_TOKEN_OWNERSHIP_FIELD,
+        )
+        response_ownership_rows = _row_values(
+            _required(
+                non_tensors,
+                RESPONSE_TOKEN_OWNERSHIP_FIELD,
+                "DataProto.non_tensor_batch",
+            ),
+            batch_size,
+            RESPONSE_TOKEN_OWNERSHIP_FIELD,
+        )
 
     validated_handles: list[tuple[ObservationHandle, ...]] = []
     validated_behavior_handles: list[tuple[BehaviorTraceHandle, ...]] = []
@@ -347,10 +549,13 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
     validated_sentinels: list[Mapping[str, object]] = []
     validated_trajectories: list[TrajectoryRecord] = []
     validated_replays: list[TrajectoryReplayHandle] = []
+    validated_replay_bundles: list[TrajectoryReplayBundle] = []
     validated_trajectory_ids: list[str] = []
     validated_trajectory_shas: list[str] = []
     validated_ownership_shas: list[str] = []
     validated_provenance_shas: list[str] = []
+    validated_prompt_ownership: list[tuple[TokenOwnership, ...]] = []
+    validated_response_ownership: list[tuple[TokenOwnership, ...]] = []
     for row_index in range(batch_size):
         exact_prompt_ids = tuple(exact_prompt_rows[row_index])
         exact_response_ids = tuple(exact_response_rows[row_index])
@@ -358,6 +563,14 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
             raise ValueError("exact prompt token sidecar is malformed")
         if not exact_response_ids or len(exact_response_ids) > width:
             raise ValueError("exact response token sidecar is malformed")
+        if not padding_enabled and (
+            len(exact_prompt_ids) != prompt_width
+            or len(exact_response_ids) != width
+        ):
+            raise ValueError(
+                "short exact token sidecars require the explicit variable-padding "
+                "contract"
+            )
         prompt_tensor_values = tuple(
             int(value)
             for value in prompts[row_index, -len(exact_prompt_ids) :].tolist()
@@ -372,6 +585,26 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
             raise ValueError(
                 "responses tensor differs from exact trajectory token order"
             )
+        if padding_enabled:
+            assert pad_token_id is not None
+            prompt_padding = prompt_width - len(exact_prompt_ids)
+            if not bool(
+                (prompts[row_index, :prompt_padding] == pad_token_id).all().item()
+            ):
+                raise ValueError("left prompt padding differs from explicit pad_token_id")
+            if not bool(
+                (
+                    responses[
+                        row_index, len(exact_response_ids) :
+                    ]
+                    == pad_token_id
+                )
+                .all()
+                .item()
+            ):
+                raise ValueError(
+                    "right response padding differs from explicit pad_token_id"
+                )
         handles = tuple(
             _validate_handle(handle) for handle in tuple(handle_rows[row_index])
         )
@@ -406,6 +639,10 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         replay_handle = replay_handle_rows[row_index]
         if not isinstance(replay_handle, TrajectoryReplayHandle):
             raise TypeError("replay sidecar must be a TrajectoryReplayHandle")
+        replay_bundle = replay_bundle_rows[row_index]
+        if not isinstance(replay_bundle, TrajectoryReplayBundle):
+            raise TypeError("replay bundle sidecar must be a TrajectoryReplayBundle")
+        validate_replay_bundle(replay_bundle)
         bridge_record = _mint_rollout_bridge_record(
             prompt_ids=exact_prompt_ids,
             response_ids=exact_response_ids,
@@ -424,10 +661,48 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
             trajectory_id=trajectory_id_rows[row_index],
             trajectory_sha256=trajectory_sha_rows[row_index],
             replay_handle=replay_handle,
+            replay_bundle=replay_bundle,
             token_ownership_sha256=ownership_sha_rows[row_index],
             rollout_provenance_sha256=provenance_sha_rows[row_index],
             trajectory_payload=trajectory,
         )
+        _, _, _, exact_response_ownership = _trajectory_response_materialization(
+            bridge_record.trajectory_payload,
+            bridge_record.behavior_trace_records,
+        )
+        expected_prompt_ownership = (
+            (TokenOwnership.PADDING,) * (prompt_width - len(exact_prompt_ids))
+            + (TokenOwnership.TEMPLATE,) * len(exact_prompt_ids)
+        )
+        expected_response_ownership = tuple(
+            TokenOwnership(value) for value in exact_response_ownership
+        ) + (TokenOwnership.PADDING,) * (width - len(exact_response_ids))
+        if padding_enabled:
+            assert prompt_ownership_rows is not None
+            assert response_ownership_rows is not None
+            actual_prompt_ownership = _ownership_row(
+                prompt_ownership_rows[row_index],
+                width=prompt_width,
+                field_name=PROMPT_TOKEN_OWNERSHIP_FIELD,
+            )
+            actual_response_ownership = _ownership_row(
+                response_ownership_rows[row_index],
+                width=width,
+                field_name=RESPONSE_TOKEN_OWNERSHIP_FIELD,
+            )
+            if actual_prompt_ownership != expected_prompt_ownership:
+                raise ValueError("batched prompt token ownership was changed")
+            if actual_response_ownership != expected_response_ownership:
+                raise ValueError("batched response token ownership was changed")
+        else:
+            actual_prompt_ownership = expected_prompt_ownership
+            actual_response_ownership = expected_response_ownership
+        if any(
+            owner is TokenOwnership.PADDING
+            and (owner.policy_loss_mask != 0 or owner.requires_behavior_logprob)
+            for owner in actual_prompt_ownership + actual_response_ownership
+        ):
+            raise RuntimeError("TokenOwnership.PADDING contract is internally invalid")
         validated_handles.append(handles)
         validated_behavior_handles.append(bridge_record.behavior_trace_handles)
         validated_behavior_records.append(bridge_record.behavior_trace_records)
@@ -435,10 +710,13 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         validated_sentinels.append(sentinels)
         validated_trajectories.append(trajectory)
         validated_replays.append(replay_handle)
+        validated_replay_bundles.append(replay_bundle)
         validated_trajectory_ids.append(bridge_record.trajectory_id)
         validated_trajectory_shas.append(bridge_record.trajectory_sha256)
         validated_ownership_shas.append(bridge_record.token_ownership_sha256)
         validated_provenance_shas.append(bridge_record.rollout_provenance_sha256)
+        validated_prompt_ownership.append(actual_prompt_ownership)
+        validated_response_ownership.append(actual_response_ownership)
 
     return DataProtoIntegrityView(
         observation_handles=tuple(validated_handles),
@@ -448,8 +726,28 @@ def validate_data_proto_integrity(data: object) -> DataProtoIntegrityView:
         objective_sentinels=tuple(validated_sentinels),
         trajectory_payloads=tuple(validated_trajectories),
         replay_handles=tuple(validated_replays),
+        replay_bundles=tuple(validated_replay_bundles),
         trajectory_ids=tuple(validated_trajectory_ids),
         trajectory_sha256s=tuple(validated_trajectory_shas),
         token_ownership_sha256s=tuple(validated_ownership_shas),
         rollout_provenance_sha256s=tuple(validated_provenance_shas),
+        pad_token_id=pad_token_id,
+        prompt_token_ownership=tuple(validated_prompt_ownership),
+        response_token_ownership=tuple(validated_response_ownership),
     )
+
+
+def _ownership_row(
+    value: object,
+    *,
+    width: int,
+    field_name: str,
+) -> tuple[TokenOwnership, ...]:
+    if not hasattr(value, "__len__") or not hasattr(value, "__getitem__"):
+        raise TypeError(f"{field_name} row must be an indexable sequence")
+    if len(value) != width:
+        raise ValueError(f"{field_name} row has the wrong width")
+    try:
+        return tuple(TokenOwnership(value[index]) for index in range(width))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} row contains unknown ownership") from error

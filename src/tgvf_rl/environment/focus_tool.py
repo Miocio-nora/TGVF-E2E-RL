@@ -97,6 +97,8 @@ class TGVFFocusTool:
             raise ValueError(
                 "conditioning provenance differs from exact sampled target tokens"
             )
+        if provenance.model != request.model:
+            raise ValueError("conditioning provenance differs from runtime model")
         source = request.source_visual
         if len(source.premerge_deepstack) != len(request.branch_merger_identities):
             raise ValueError("source DeepStack and merger identities differ")
@@ -199,13 +201,17 @@ class TGVFFocusTool:
             sampled_target_text_sha256=hashlib.sha256(
                 request.parsed_call.target.encode("utf-8")
             ).hexdigest(),
-            sampled_target_token_start=provenance.target_span.start,
-            sampled_target_token_end=provenance.target_span.end,
+            sampled_target_token_start=request.parsed_call.target_span.token_start,
+            sampled_target_token_end=request.parsed_call.target_span.token_end,
+            conditioning_target_token_start=provenance.target_span.start,
+            conditioning_target_token_end=provenance.target_span.end,
+            source_sequence_length=provenance.source_sequence_length,
             source_input_ids_sha256=provenance.source_input_ids_sha256,
             trajectory_ids=provenance.trajectory_ids,
             call_indices=provenance.call_indices,
             hidden_layer=provenance.hidden_layer,
             policy_version=request.policy_version,
+            embedding_identity=provenance.embedding_identity,
         )
         record = FocusedObservationRecord(
             schema_version="focused-observation-v1",

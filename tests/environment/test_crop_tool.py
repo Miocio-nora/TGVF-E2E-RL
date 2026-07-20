@@ -9,6 +9,8 @@ import torch
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.tensors import TensorPayloadSet
+from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, TokenSpan
+from tgvf_rl.environment.agent_loop import SampledPolicyTurn, ToolExecutionContext
 from tgvf_rl.environment.crop_tool import (
     CropReplayLayout,
     CropToolExecutionRequest,
@@ -39,6 +41,8 @@ from tgvf_rl.observations.store import (
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
 from tgvf_rl.qwen.base import ReplayConsumer, resolve_replay_request
+from tgvf_rl.trajectories.schema import TrajectoryIdentity
+from tests.support import populated_observation_store, trajectory_source_visual
 
 
 SHA0 = "0" * 64
@@ -187,6 +191,9 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
             sampled_target_text_sha256=hashlib.sha256(b"serial number").hexdigest(),
             sampled_target_token_start=1,
             sampled_target_token_end=2,
+            conditioning_target_token_start=1,
+            conditioning_target_token_end=2,
+            source_sequence_length=2,
             source_input_ids_sha256=SHA0,
             trajectory_ids=("trajectory",),
             call_indices=(1,),
@@ -224,6 +231,7 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
         trajectory_id="trajectory",
         model=model,
         behavior_policy=policy,
+        source_visual=trajectory_source_visual(crop.record),
         observation_handles=(crop.handle, focus_handle),
         crop_vision_replay_mode="shared_frozen_recorded_features",
         tensors=TrajectoryReplayTensorRefs(
@@ -271,10 +279,64 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
 
 def test_runtime_registry_dispatches_both_tools_without_reordering() -> None:
     calls: list[tuple[str, int]] = []
+    binding_store, binding_handle = populated_observation_store()
+    source_binding = trajectory_source_visual(
+        binding_store.resolve_record(binding_handle)
+    )
 
-    def execute(parsed, call_index):
-        calls.append((parsed.name, call_index))
-        return ObservationHandle(f"observation-{call_index}", str(call_index) * 64)
+    policy = PolicyVersion("run", 0, SHA0)
+    model = ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA1)
+    sampled_text = "reason</think>"
+    sampled_ids = tuple(range(100, 100 + len(sampled_text)))
+    sampled = SampledPolicyTurn(
+        text=sampled_text,
+        token_ids=sampled_ids,
+        token_byte_spans=tuple(
+            TokenByteSpan(index, token_id, index, index + 1)
+            for index, token_id in enumerate(sampled_ids)
+        ),
+        behavior_logprobs=tuple(-0.1 for _ in sampled_ids),
+        sampling=SamplingIdentity(
+            policy,
+            "vllm",
+            "fixture",
+            7,
+            SHA2,
+            1.0,
+            1.0,
+            -1,
+            0.0,
+            1.0,
+            (),
+            LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+            0,
+        ),
+        think_token_span=TokenSpan(0, len(sampled_ids)),
+        stop_reason="stop",
+        backend_request_sha256=SHA1,
+        backend_response_sha256=SHA2,
+    )
+
+    def context(call_index: int) -> ToolExecutionContext:
+        return ToolExecutionContext(
+            trajectory_identity=TrajectoryIdentity("run", "sample", 0, "group"),
+            model=model,
+            behavior_policy=policy,
+            trajectory_source_visual=source_binding,
+            prior_observation_handles=(binding_handle,)[:call_index],
+            prompt_token_ids_before_turn=(1, 2),
+            sampled_turn=sampled,
+            assistant_turn_index=call_index,
+            attempt_index=call_index,
+            call_index=call_index,
+        )
+
+    def execute(parsed, execution_context):
+        calls.append((parsed.name, execution_context.call_index))
+        return ObservationHandle(
+            f"observation-{execution_context.call_index}",
+            str(execution_context.call_index) * 64,
+        )
 
     registry = NativeToolRuntimeRegistry(
         (
@@ -289,6 +351,6 @@ def test_runtime_registry_dispatches_both_tools_without_reordering() -> None:
             '"arguments":{"target":"serial number"}}</tool_call>'
         )
     )
-    registry.execute(crop, 0)
-    registry.execute(focus, 1)
+    registry.execute(crop, context(0))
+    registry.execute(focus, context(1))
     assert calls == [("image_zoom_in_tool", 0), ("tgvf_focus_tool", 1)]

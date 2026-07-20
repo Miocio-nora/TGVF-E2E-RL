@@ -6,6 +6,7 @@ from .packer import (
     PackedQwen3ImageItem,
     PackedQwen3Replay,
     pack_qwen3_vllm_replay,
+    pack_qwen3_vllm_replay_bundle,
 )
 from .registration import (
     SUPPORTED_VLLM_VERSION,
@@ -40,6 +41,7 @@ __all__ = [
     "VLLMUnavailableError",
     "load_vllm_public_plugin_api",
     "pack_qwen3_vllm_replay",
+    "pack_qwen3_vllm_replay_bundle",
     "register_tgvf_qwen3_vllm_plugin",
     "vllm_is_available",
 ]

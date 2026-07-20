@@ -19,3 +19,7 @@ class ReplayMismatchError(TGVFContractError):
 
 class UnsupportedSupportLevelError(TGVFContractError):
     """Raised when a model-family capability is claimed but not implemented."""
+
+
+class RecoverableToolExecutionError(RuntimeError):
+    """An expected tool/environment failure that may become a tool error turn."""

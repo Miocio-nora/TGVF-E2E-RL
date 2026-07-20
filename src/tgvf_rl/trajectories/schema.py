@@ -50,6 +50,7 @@ class AssistantTurnRecord:
     behavior_trace: BehaviorTraceHandle
     think_span: TokenSpan | None
     is_tool_call: bool
+    stop_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,12 +62,19 @@ class ToolCallRecord:
     target_token_span: TokenSpan
     target_char_span: tuple[int, int]
     raw_call_text: str
+    attempt_index: int | None = None
 
     def __post_init__(self) -> None:
         if self.function_name != "tgvf_focus_tool":
             raise ValueError("unexpected tool function")
         if not self.target.strip():
             raise ValueError("tool target must be non-empty")
+        if self.call_index < 0 or self.assistant_turn_index < 0:
+            raise ValueError("tool call indices must be non-negative")
+        if self.attempt_index is None:
+            object.__setattr__(self, "attempt_index", self.call_index)
+        elif self.attempt_index < 0:
+            raise ValueError("tool attempt index must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,12 +84,17 @@ class CropToolCallRecord:
     function_name: str
     bbox_2d: tuple[int, int, int, int]
     raw_call_text: str
+    attempt_index: int | None = None
 
     def __post_init__(self) -> None:
         if self.function_name != "image_zoom_in_tool":
             raise ValueError("unexpected crop tool function")
         if self.call_index < 0 or self.assistant_turn_index < 0:
             raise ValueError("crop call indices must be non-negative")
+        if self.attempt_index is None:
+            object.__setattr__(self, "attempt_index", self.call_index)
+        elif self.attempt_index < 0:
+            raise ValueError("crop attempt index must be non-negative")
         if len(self.bbox_2d) != 4 or any(
             type(value) is not int for value in self.bbox_2d
         ):
@@ -102,6 +115,29 @@ class ToolObservationRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolErrorRecord:
+    """One environment-owned error response; never a visual observation."""
+
+    attempt_index: int
+    assistant_turn_index: int
+    code: str
+    payload_json: str
+    payload_sha256: str
+    template_token_ids: tuple[int, ...]
+    recoverable: bool
+    function_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.attempt_index < 0 or self.assistant_turn_index < 0:
+            raise ValueError("tool error indices must be non-negative")
+        if not self.code or not self.payload_json or not self.template_token_ids:
+            raise ValueError("tool error code/payload/environment tokens are required")
+        actual = hashlib.sha256(self.payload_json.encode("utf-8")).hexdigest()
+        if actual != self.payload_sha256:
+            raise ValueError("tool error payload checksum mismatch")
+
+
+@dataclass(frozen=True, slots=True)
 class FeedbackEvent:
     source: str
     text: str
@@ -119,6 +155,7 @@ class TrajectoryRecord:
     observations: tuple[ToolObservationRecord, ...]
     final_answer: str | None
     stop: TrajectoryStop
+    tool_errors: tuple[ToolErrorRecord, ...] = ()
     rewards: tuple[tuple[str, float], ...] = ()
     feedback: tuple[FeedbackEvent, ...] = ()
 

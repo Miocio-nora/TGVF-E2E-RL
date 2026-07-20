@@ -13,6 +13,7 @@ from .schema import (
     CropToolCallRecord,
     NativeToolCallRecord,
     ToolCallRecord,
+    ToolErrorRecord,
     TrajectoryRecord,
     trajectory_checksum,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "CropToolCallRecord",
     "NativeToolCallRecord",
     "ToolCallRecord",
+    "ToolErrorRecord",
     "TrajectoryRecord",
     "TrajectoryValidator",
     "VLLMBehaviorRecorder",

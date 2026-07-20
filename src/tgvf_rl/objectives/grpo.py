@@ -15,15 +15,20 @@ import torch
 from tgvf_rl.contracts.errors import ReplayMismatchError
 
 from .base import (
+    LossReduction,
     ObjectiveResult,
     PolicyLogProbSet,
     RatioDenominator,
     ReductionSpec,
+    ReferenceKLEstimator,
     ReferenceKLSpec,
     reduce_token_loss,
     reference_kl_per_token,
     spec_identity_sha256,
 )
+
+
+POLICY_PILOT_V1_GRPO_CONTRACT_ID = "POLICY-PILOT-V1-20260720"
 
 
 class GroupStdMode(str, Enum):
@@ -51,6 +56,7 @@ class GRPOSpec:
     dual_clip: float | None
     reference_kl: ReferenceKLSpec
     reduction: ReductionSpec
+    expected_group_size: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.center_rewards, bool) or not isinstance(
@@ -69,6 +75,10 @@ class GRPOSpec:
             raise TypeError("reference_kl must be ReferenceKLSpec")
         if not isinstance(self.reduction, ReductionSpec):
             raise TypeError("reduction must be ReductionSpec")
+        if self.expected_group_size is not None and (
+            type(self.expected_group_size) is not int or self.expected_group_size <= 0
+        ):
+            raise ValueError("expected_group_size must be None or a positive integer")
         _require_real(self.group_std_epsilon, "group_std_epsilon")
         if not math.isfinite(self.group_std_epsilon) or self.group_std_epsilon <= 0:
             raise ValueError("group_std_epsilon must be finite and positive")
@@ -90,6 +100,40 @@ class GRPOSpec:
     @property
     def identity_sha256(self) -> str:
         return spec_identity_sha256(self)
+
+
+def policy_pilot_v1_grpo_spec(
+    *, diagnostic_kl_estimator: ReferenceKLEstimator
+) -> GRPOSpec:
+    """Build the exact pure-loss contract accepted for Policy Pilot v1.
+
+    The reference-KL estimator deliberately has no default because section 0.8
+    leaves that diagnostic identity unresolved.  Its coefficient is fixed to
+    zero, so it is reported without contributing to the loss.
+    """
+
+    if not isinstance(diagnostic_kl_estimator, ReferenceKLEstimator):
+        raise TypeError("diagnostic_kl_estimator must be ReferenceKLEstimator")
+    return GRPOSpec(
+        center_rewards=True,
+        scale_by_group_std=True,
+        group_std_mode=GroupStdMode.SAMPLE,
+        group_std_epsilon=1.0e-6,
+        zero_variance_behavior=ZeroVarianceBehavior.ZERO_ADVANTAGE,
+        ratio_denominator=RatioDenominator.BEHAVIOR,
+        clip_ratio_min=0.8,
+        clip_ratio_max=1.2,
+        dual_clip=3.0,
+        reference_kl=ReferenceKLSpec(
+            estimator=diagnostic_kl_estimator,
+            coefficient=0.0,
+        ),
+        reduction=ReductionSpec(
+            mode=LossReduction.TOKEN_MEAN,
+            fixed_token_normalizer=None,
+        ),
+        expected_group_size=8,
+    )
 
 
 def compute_group_advantages(
@@ -124,29 +168,67 @@ def compute_group_advantages(
     if not bool(torch.isfinite(rewards).all().item()):
         raise ValueError("rewards must be finite")
 
-    advantages = torch.empty_like(rewards)
-    for group_id in torch.unique(group_ids, sorted=True):
-        group_mask = group_ids == group_id
-        group_rewards = rewards[group_mask]
-        values = group_rewards
-        if spec.center_rewards:
-            values = values - group_rewards.mean()
+    _, inverse, counts = torch.unique(
+        group_ids,
+        sorted=True,
+        return_inverse=True,
+        return_counts=True,
+    )
+    if spec.expected_group_size is not None and bool(
+        torch.any(counts != spec.expected_group_size).item()
+    ):
+        raise ReplayMismatchError(
+            f"every GRPO group must contain exactly {spec.expected_group_size} trajectories"
+        )
+    if spec.group_std_mode is GroupStdMode.SAMPLE and bool(
+        torch.any(counts < 2).item()
+    ):
+        raise ValueError(
+            "sample standard deviation requires at least two items per group"
+        )
 
-        if spec.scale_by_group_std:
-            if spec.group_std_mode is GroupStdMode.SAMPLE and group_rewards.numel() < 2:
-                raise ValueError(
-                    "sample standard deviation requires at least two items per group"
+    group_sums = torch.zeros(
+        counts.shape[0], dtype=rewards.dtype, device=rewards.device
+    )
+    group_sums.scatter_add_(0, inverse, rewards)
+    group_means = group_sums / counts.to(dtype=rewards.dtype)
+    centered_rewards = rewards - group_means[inverse]
+    advantages = centered_rewards if spec.center_rewards else rewards
+
+    if not spec.scale_by_group_std:
+        return advantages
+
+    squared_deviation_sums = torch.zeros_like(group_sums)
+    squared_deviation_sums.scatter_add_(0, inverse, centered_rewards.square())
+    correction = 1 if spec.group_std_mode is GroupStdMode.SAMPLE else 0
+    variance_denominators = (counts - correction).to(dtype=rewards.dtype)
+    group_variances = squared_deviation_sums / variance_denominators
+    group_standard_deviations = torch.sqrt(group_variances)
+    advantages = advantages / (
+        group_standard_deviations[inverse] + spec.group_std_epsilon
+    )
+    if spec.zero_variance_behavior is ZeroVarianceBehavior.ZERO_ADVANTAGE:
+        # The accepted Pilot contract says *identical input rewards* produce
+        # exact zero. Computing the mean first can make equal non-binary values
+        # such as 0.8 acquire the same tiny nonzero centered residual, so test
+        # equality on the original rewards rather than using a tolerance.
+        group_rewards_are_identical = torch.stack(
+            tuple(
+                torch.all(
+                    rewards[inverse == group_index]
+                    == rewards[inverse == group_index][0]
                 )
-            correction = 1 if spec.group_std_mode is GroupStdMode.SAMPLE else 0
-            standard_deviation = group_rewards.std(correction=correction)
-            if standard_deviation.item() == 0.0 and (
-                spec.zero_variance_behavior is ZeroVarianceBehavior.ZERO_ADVANTAGE
-            ):
-                values = torch.zeros_like(values)
-            else:
-                denominator = standard_deviation.clamp_min(spec.group_std_epsilon)
-                values = values / denominator
-        advantages[group_mask] = values
+                for group_index in range(counts.numel())
+            )
+        )
+        zero_variance_rows = group_rewards_are_identical[inverse] | (
+            group_variances[inverse] == 0
+        )
+        advantages = torch.where(
+            zero_variance_rows,
+            torch.zeros_like(advantages),
+            advantages,
+        )
     return advantages
 
 

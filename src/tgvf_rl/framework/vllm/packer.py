@@ -18,9 +18,15 @@ import torch
 
 from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.tensors import TensorArtifactRef
-from tgvf_rl.observations.schema import CropObservationRecord, FocusedObservationRecord
+from tgvf_rl.observations.schema import (
+    CropObservationRecord,
+    FocusedObservationRecord,
+    SourceVisualState,
+    TrajectorySourceVisual,
+)
 from tgvf_rl.observations.store import (
     ObservationStore,
+    TrajectoryReplayBundle,
     TrajectoryReplayHandle,
     tensor_checksum,
 )
@@ -183,35 +189,33 @@ def pack_qwen3_vllm_replay(
     replay = store.resolve_replay(replay_handle)
     if replay.model.family != "qwen3_vl":
         raise ReplayMismatchError("Qwen3 vLLM packer received a different model family")
-    if not replay.observation_handles:
-        raise ReplayMismatchError("precomputed-D vLLM replay requires an observation")
     records = tuple(
         store.resolve_record(handle) for handle in replay.observation_handles
     )
-    _validate_record_sequence(records, expected_branch_layers)
+    source = replay.source_visual
+    _validate_record_sequence(source, records, expected_branch_layers)
 
-    first = records[0]
-    grid = first.source_visual.image_grid_thw
-    merge_size = first.source_visual.spatial_merge_size
+    grid = source.state.image_grid_thw
+    merge_size = source.state.spatial_merge_size
     source_main = _resolve_features(
-        store, first.source_visual.merged_main, "source main"
+        store, source.state.merged_main, "source main"
     )
     source_branches = tuple(
         _resolve_features(store, ref, f"source DeepStack branch {index}")
-        for index, ref in enumerate(first.source_visual.merged_deepstack)
+        for index, ref in enumerate(source.state.merged_deepstack)
     )
     _validate_grid(grid, merge_size, source_main.shape[0])
     items = [
         _pack_item(
             kind="source_image",
             call_index=None,
-            positions=_original_image_positions(first),
+            positions=source.positions,
             grid=grid,
             main=source_main,
             branches=source_branches,
             component_digests=(
-                first.source_visual.merged_main.address.digest,
-                *(ref.address.digest for ref in first.source_visual.merged_deepstack),
+                source.state.merged_main.address.digest,
+                *(ref.address.digest for ref in source.state.merged_deepstack),
             ),
         )
     ]
@@ -261,24 +265,45 @@ def pack_qwen3_vllm_replay(
     )
 
 
+def pack_qwen3_vllm_replay_bundle(
+    bundle: TrajectoryReplayBundle,
+    *,
+    expected_branch_layers: tuple[int, ...] = QWEN3_DEEPSTACK_BRANCH_LAYERS,
+) -> PackedQwen3Replay:
+    """Pack a transported worker-local bundle without observation recomputation."""
+
+    store, replay_handle = ObservationStore.from_replay_bundle(bundle)
+    return pack_qwen3_vllm_replay(
+        store,
+        replay_handle,
+        expected_branch_layers=expected_branch_layers,
+    )
+
+
 def _validate_record_sequence(
+    source: TrajectorySourceVisual,
     records: tuple[FocusedObservationRecord | CropObservationRecord, ...],
     expected_branch_layers: tuple[int, ...],
 ) -> None:
-    first = records[0]
-    source_identity = (
-        first.source_visual.image_sha256,
-        first.source_visual.merged_main.address.digest,
-        tuple(ref.address.digest for ref in first.source_visual.merged_deepstack),
-        first.source_visual.image_grid_thw,
-        first.source_visual.spatial_merge_size,
-        _original_image_positions(first),
-    )
+    if source.deepstack_branch_layers != expected_branch_layers:
+        raise ReplayMismatchError(
+            "recorded source DeepStack branch order/layers differ from Qwen3"
+        )
+    if len(source.state.merged_deepstack) != len(expected_branch_layers):
+        raise ReplayMismatchError(
+            "source image does not contain three DeepStack branches"
+        )
+    if any(
+        injection_positions != source.positions
+        for injection_positions in source.deepstack_injection_positions
+    ):
+        raise ReplayMismatchError(
+            "vLLM source DeepStack positions must exactly equal the main visual positions"
+        )
+    source_identity = _source_state_identity(source.state)
     representation = None
-    previous_end = -1
-    for block_name, positions in (("source image", _original_image_positions(first)),):
-        _validate_contiguous_positions(positions, block_name)
-        previous_end = positions[-1]
+    _validate_contiguous_positions(source.positions, "source image")
+    previous_end = source.positions[-1]
 
     for expected_call, record in enumerate(records):
         if record.call_index != expected_call:
@@ -292,15 +317,9 @@ def _validate_record_sequence(
                 raise ReplayMismatchError(
                     "representation identity changed within replay"
                 )
-        current_source = (
-            record.source_visual.image_sha256,
-            record.source_visual.merged_main.address.digest,
-            tuple(ref.address.digest for ref in record.source_visual.merged_deepstack),
-            record.source_visual.image_grid_thw,
-            record.source_visual.spatial_merge_size,
-            _original_image_positions(record),
-        )
-        if current_source != source_identity:
+        if _source_state_identity(record.source_visual) != source_identity or (
+            _original_image_positions(record) != source.positions
+        ):
             raise ReplayMismatchError(
                 "recorded source visual state changed across calls"
             )
@@ -325,10 +344,6 @@ def _validate_record_sequence(
         if branch_record_layers != expected_branch_layers:
             raise ReplayMismatchError(
                 f"{label} DeepStack branch records are out of order"
-            )
-        if len(record.source_visual.merged_deepstack) != len(expected_branch_layers):
-            raise ReplayMismatchError(
-                "source image does not contain three DeepStack branches"
             )
         if any(
             injection_positions != positions for injection_positions in branch_positions
@@ -454,6 +469,18 @@ def _item_checksum(
     return hashlib.sha256(payload).hexdigest()
 
 
+def _source_state_identity(source: SourceVisualState) -> tuple[object, ...]:
+    return (
+        source.image_sha256,
+        source.premerge_main.address.digest,
+        tuple(ref.address.digest for ref in source.premerge_deepstack),
+        source.merged_main.address.digest,
+        tuple(ref.address.digest for ref in source.merged_deepstack),
+        source.image_grid_thw,
+        source.spatial_merge_size,
+    )
+
+
 def _original_image_positions(
     record: FocusedObservationRecord | CropObservationRecord,
 ) -> tuple[int, ...]:
@@ -468,4 +495,5 @@ __all__ = [
     "PackedQwen3ImageItem",
     "PackedQwen3Replay",
     "pack_qwen3_vllm_replay",
+    "pack_qwen3_vllm_replay_bundle",
 ]

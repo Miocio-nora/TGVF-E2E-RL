@@ -17,9 +17,11 @@ from .base import (
 from .grpo import (
     GRPOSpec,
     GroupStdMode,
+    POLICY_PILOT_V1_GRPO_CONTRACT_ID,
     ZeroVarianceBehavior,
     compute_grpo_loss,
     compute_group_advantages,
+    policy_pilot_v1_grpo_spec,
 )
 from .registry import (
     OBJECTIVE_REGISTRY,
@@ -60,6 +62,7 @@ __all__ = [
     "ObjectiveRegistry",
     "ObjectiveResult",
     "PolicyLogProbSet",
+    "POLICY_PILOT_V1_GRPO_CONTRACT_ID",
     "RatioDenominator",
     "ReductionSpec",
     "ReferenceKLEstimator",
@@ -84,6 +87,7 @@ __all__ = [
     "compute_sdpo_loss",
     "get_objective",
     "parameter_mapping_sha256",
+    "policy_pilot_v1_grpo_spec",
     "replay_teacher_on_recorded_observations",
     "reduce_token_loss",
     "reference_kl_per_token",

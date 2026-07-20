@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
+from tgvf_rl.contracts.errors import (
+    IdentityMismatchError,
+    RecoverableToolExecutionError,
+)
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, TokenSpan
 from tgvf_rl.environment.agent_loop import (
@@ -8,14 +16,20 @@ from tgvf_rl.environment.agent_loop import (
     SampledPolicyTurn,
 )
 from tgvf_rl.observations.store import ObservationHandle
+from tgvf_rl.policy import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
-from tgvf_rl.protocol.schema import TokenByteSpan
+from tgvf_rl.protocol.schema import StandardToolError, TokenByteSpan
 from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
 from tgvf_rl.trajectories.schema import CropToolCallRecord, ToolCallRecord
 from tgvf_rl.trajectories import BehaviorTraceStore, VLLMBehaviorRecorder
+from tests.support import populated_observation_store, trajectory_source_visual
 
 
 SHA = "0" * 64
+_SOURCE_STORE, _SOURCE_HANDLE = populated_observation_store()
+SOURCE_VISUAL = trajectory_source_visual(
+    _SOURCE_STORE.resolve_record(_SOURCE_HANDLE)
+)
 
 
 def _sample(text: str, sampling: SamplingIdentity) -> SampledPolicyTurn:
@@ -46,8 +60,14 @@ class Sampler:
 
 
 class Runtime:
-    def execute(self, parsed_call, call_index):
-        return ObservationHandle(f"observation-{call_index}", str(call_index) * 64)
+    def __init__(self):
+        self.contexts = []
+
+    def execute(self, parsed_call, context):
+        self.contexts.append(context)
+        return ObservationHandle(
+            f"observation-{context.call_index}", str(context.call_index) * 64
+        )
 
 
 class Appender:
@@ -86,9 +106,10 @@ def test_framework_neutral_loop_preserves_two_calls_and_actual_logprobs() -> Non
         _sample(call("lower label"), sampling),
         _sample("answer reasoning\n</think>\n\nblue", sampling),
     )
+    runtime = Runtime()
     loop = FrameworkNeutralAgentLoop(
         sampler=Sampler(turns),
-        tool_runtime=Runtime(),
+        tool_runtime=runtime,
         appender=Appender(),
         parser=StrictToolCallParser(),
         behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
@@ -100,6 +121,7 @@ def test_framework_neutral_loop_preserves_two_calls_and_actual_logprobs() -> Non
             TrajectoryIdentity("smoke", "sample", 0, "group"),
             ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
             version,
+            SOURCE_VISUAL,
             (1, 2, 3),
             {"temperature": 0.7},
         )
@@ -116,6 +138,12 @@ def test_framework_neutral_loop_preserves_two_calls_and_actual_logprobs() -> Non
         for turn in trajectory.assistant_turns
     )
     assert trajectory.final_answer == "blue"
+    assert runtime.contexts[0].prompt_token_ids_before_turn == (1, 2, 3)
+    assert runtime.contexts[0].conditioning_input_ids == (
+        (1, 2, 3) + turns[0].token_ids
+    )
+    assert runtime.contexts[0].behavior_policy == version
+    assert tuple(context.call_index for context in runtime.contexts) == (0, 1)
 
 
 def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
@@ -162,6 +190,7 @@ def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
             TrajectoryIdentity("smoke", "mixed", 0, "group"),
             ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
             version,
+            SOURCE_VISUAL,
             (1, 2, 3),
             {},
         )
@@ -174,7 +203,7 @@ def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
     assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
 
 
-def test_tool_error_does_not_fabricate_a_call_or_observation() -> None:
+def test_tool_error_returns_standard_observation_and_allows_recovery() -> None:
     version = PolicyVersion("smoke", 0, SHA)
     sampling = SamplingIdentity(
         version,
@@ -199,14 +228,24 @@ def test_tool_error_does_not_fabricate_a_call_or_observation() -> None:
     )
 
     class FailingRuntime:
-        def execute(self, parsed_call, call_index):
-            raise RuntimeError("fixture tool failure")
+        def execute(self, parsed_call, context):
+            raise RecoverableToolExecutionError("fixture tool failure")
 
     behavior_store = BehaviorTraceStore()
+    answer = _sample("recovered\n</think>\nblue", sampling)
+    appender_values = []
+
+    class RecordingAppender(Appender):
+        def append(self, prompt_token_ids, sampled_turn, observation, *, call_index):
+            appender_values.append(observation)
+            return super().append(
+                prompt_token_ids, sampled_turn, observation, call_index=call_index
+            )
+
     loop = FrameworkNeutralAgentLoop(
-        sampler=Sampler((sampled,)),
+        sampler=Sampler((sampled, answer)),
         tool_runtime=FailingRuntime(),
-        appender=Appender(),
+        appender=RecordingAppender(),
         parser=StrictToolCallParser(),
         behavior_recorder=VLLMBehaviorRecorder(behavior_store),
         max_tool_calls=3,
@@ -217,11 +256,320 @@ def test_tool_error_does_not_fabricate_a_call_or_observation() -> None:
             TrajectoryIdentity("smoke", "sample", 1, "group"),
             ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
             version,
+            SOURCE_VISUAL,
             (1, 2, 3),
             {},
         )
     )
-    assert trajectory.stop is TrajectoryStop.TOOL_ERROR
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
     assert trajectory.tool_calls == ()
     assert trajectory.observations == ()
+    assert len(trajectory.tool_errors) == 1
+    assert trajectory.tool_errors[0].code == "tool_execution_failed"
+    assert trajectory.tool_errors[0].attempt_index == 0
+    assert isinstance(appender_values[0], StandardToolError)
+    assert trajectory.final_answer == "blue"
     assert behavior_store.resolve(trajectory.assistant_turns[0].behavior_trace)
+
+
+def test_tool_contract_failure_propagates_instead_of_becoming_tool_error() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = SamplingIdentity(
+        version,
+        "vllm",
+        "fixture",
+        7,
+        SHA,
+        1.0,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+    )
+    sampled = _sample(
+        "reason</think><tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"red"}}'
+        "</tool_call>",
+        sampling,
+    )
+
+    class ContractFailingRuntime:
+        def execute(self, parsed_call, context):
+            raise IdentityMismatchError("fixture identity drift")
+
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=ContractFailingRuntime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=3,
+    )
+    with pytest.raises(IdentityMismatchError, match="identity drift"):
+        loop.run(
+            RolloutRequest(
+                "trajectory-v1",
+                TrajectoryIdentity("smoke", "fatal", 0, "group"),
+                ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+                version,
+                SOURCE_VISUAL,
+                (1, 2, 3),
+                {},
+            )
+        )
+
+
+def test_fifth_attempt_is_not_executed_and_receives_cap_error() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = SamplingIdentity(
+        version,
+        "vllm",
+        "fixture",
+        7,
+        SHA,
+        1.0,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+    )
+
+    def call(target: str) -> SampledPolicyTurn:
+        return _sample(
+            "reason\n</think>\n<tool_call>"
+            f'{{"name":"tgvf_focus_tool","arguments":{{"target":"{target}"}}}}'
+            "</tool_call>",
+            sampling,
+        )
+
+    executed = []
+
+    class CountingRuntime(Runtime):
+        def execute(self, parsed_call, context):
+            executed.append((parsed_call.target, context.call_index))
+            return super().execute(parsed_call, context)
+
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler(tuple(call(str(index)) for index in range(5))),
+        tool_runtime=CountingRuntime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        enabled_tool_names=("tgvf_focus_tool",),
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "cap", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1, 2, 3),
+            {},
+        )
+    )
+
+    assert len(executed) == 4
+    assert len(trajectory.tool_calls) == 4
+    assert len(trajectory.observations) == 4
+    assert trajectory.stop is TrajectoryStop.CALL_CAP
+    assert len(trajectory.tool_errors) == 1
+    assert trajectory.tool_errors[0].attempt_index == 4
+    assert trajectory.tool_errors[0].code == "tool_call_limit_exceeded"
+
+
+def test_disabled_crop_returns_error_without_executing_runtime() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = SamplingIdentity(
+        version,
+        "vllm",
+        "fixture",
+        8,
+        SHA,
+        1.0,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+    )
+    crop = _sample(
+        "reason\n</think>\n<tool_call>"
+        '{"name":"image_zoom_in_tool","arguments":{"bbox_2d":[1,2,9,10]}}'
+        "</tool_call>",
+        sampling,
+    )
+    answer = _sample("reason\n</think>\nanswer", sampling)
+
+    class ForbiddenRuntime:
+        def execute(self, parsed_call, context):
+            raise AssertionError("disabled crop must not execute")
+
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((crop, answer)),
+        tool_runtime=ForbiddenRuntime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        enabled_tool_names=("tgvf_focus_tool",),
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "disabled", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert trajectory.tool_calls == ()
+    assert trajectory.tool_errors[0].code == "tool_not_enabled"
+
+
+def test_typed_pilot_sampling_contract_controls_each_remaining_turn_budget() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling_contract = PilotSamplingConfig().bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
+    )
+    sampling = SamplingIdentity(
+        version,
+        "vllm",
+        "0.12.0",
+        42,
+        SHA,
+        1.0,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+        max_tokens=8192,
+        do_sample=True,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
+    )
+    call = _sample(
+        "reason\n</think>\n<tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+        "</tool_call>",
+        sampling,
+    )
+    answer = _sample(
+        "reason\n</think>\nanswer",
+        replace(sampling, seed=43, max_tokens=8192 - len(call.token_ids)),
+    )
+
+    class RecordingSampler(Sampler):
+        def __init__(self, turns):
+            super().__init__(turns)
+            self.parameters = []
+
+        def sample(self, prompt_token_ids, sampling_parameters, *, turn_index):
+            self.parameters.append(dict(sampling_parameters))
+            return super().sample(
+                prompt_token_ids, sampling_parameters, turn_index=turn_index
+            )
+
+    sampler = RecordingSampler((call, answer))
+    loop = FrameworkNeutralAgentLoop(
+        sampler=sampler,
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        enabled_tool_names=("tgvf_focus_tool",),
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "sampling", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+            sampling_contract,
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert sampler.parameters[0]["max_tokens"] == 8192
+    assert sampler.parameters[1]["max_tokens"] == 8192 - len(call.token_ids)
+    assert sampler.parameters[0]["top_k"] == -1
+    assert sampler.parameters[0]["min_p"] == 0.0
+
+
+def test_typed_pilot_sampling_rejects_backend_probability_mismatch() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling_contract = PilotSamplingConfig().bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
+    )
+    bad_sampling = SamplingIdentity(
+        version,
+        "vllm",
+        "0.12.0",
+        42,
+        SHA,
+        0.9,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+        max_tokens=8192,
+        do_sample=True,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
+    )
+    answer = _sample("reason\n</think>\nanswer", bad_sampling)
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((answer,)),
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+    )
+    with pytest.raises(IdentityMismatchError, match="SamplingIdentity differs"):
+        loop.run(
+            RolloutRequest(
+                "trajectory-v1",
+                TrajectoryIdentity("smoke", "bad-sampling", 0, "group"),
+                ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+                version,
+                SOURCE_VISUAL,
+                (1,),
+                {},
+                sampling_contract,
+            )
+        )

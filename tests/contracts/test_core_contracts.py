@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from tgvf_rl.contracts.identity import ArtifactIdentity, PolicyVersion
@@ -76,3 +78,36 @@ def test_greedy_behavior_requires_point_mass_logprobability() -> None:
     with pytest.raises(ValueError, match="point mass"):
         BehaviorLogProbBlock((1,), (7,), (-0.5,), sampling)
     assert BehaviorLogProbBlock((1,), (7,), (0.0,), sampling).logprobs == (0.0,)
+
+
+def test_sampling_request_identity_records_length_and_stop_semantics() -> None:
+    sampling = SamplingIdentity(
+        policy_version=PolicyVersion("run", 0, SHA),
+        backend="vllm",
+        backend_version="0.12.0",
+        seed=7,
+        rng_state_sha256=SHA,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=-1,
+        min_p=0.0,
+        repetition_penalty=1.0,
+        logit_processors=(),
+        measurement=LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        asynchronous_staleness_steps=0,
+        max_tokens=8192,
+        do_sample=True,
+        stop_token_ids=(151645,),
+        stop_strings=("</tool_call>",),
+        include_stop_str_in_output=True,
+        ignore_eos=False,
+    )
+
+    assert sampling.request_identity_sha256 != replace(
+        sampling, max_tokens=4096
+    ).request_identity_sha256
+    assert sampling.request_identity_sha256 != replace(
+        sampling, ignore_eos=True
+    ).request_identity_sha256
+    with pytest.raises(ValueError, match="stop token IDs"):
+        replace(sampling, stop_token_ids=(1, 1))

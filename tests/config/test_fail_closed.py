@@ -39,9 +39,15 @@ def test_production_config_does_not_invent_data_reward_or_prompt() -> None:
         validate_run_config(config)
 
 
-def test_gpu_scope_rejects_unapproved_physical_devices() -> None:
-    with pytest.raises(ValueError, match="only physical GPUs"):
-        StackConfig("e003163", "vllm", "fsdp2", True, (0, 1))
+def test_generic_gpu_scope_is_not_bound_to_a_temporary_physical_pair() -> None:
+    assert StackConfig("e003163", "vllm", "fsdp2", True, (0, 1)).physical_gpu_ids == (
+        0,
+        1,
+    )
+    with pytest.raises(ValueError, match="non-negative"):
+        StackConfig("e003163", "vllm", "fsdp2", True, (-1, 1))
+    with pytest.raises(ValueError, match="distinct"):
+        StackConfig("e003163", "vllm", "fsdp2", True, (2, 2))
 
 
 def test_provider_selection_is_part_of_run_identity() -> None:

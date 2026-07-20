@@ -15,6 +15,7 @@ from tgvf_rl.contracts.tokens import SamplingIdentity
 from tgvf_rl.observations.store import (
     ObservationHandle,
     ObservationStore,
+    TrajectoryReplayBundle,
     TrajectoryReplayHandle,
 )
 from tgvf_rl.observations.schema import CropObservationRecord, FocusedObservationRecord
@@ -61,8 +62,8 @@ class RecordedVisualBlock:
     """One store-verified source-image, crop-image, or focused-D block."""
 
     kind: str
-    observation_handle: ObservationHandle
-    call_index: int
+    observation_handle: ObservationHandle | None
+    call_index: int | None
     positions: tuple[int, ...]
     embeddings: torch.Tensor
     deepstack: tuple[torch.Tensor, ...]
@@ -71,8 +72,17 @@ class RecordedVisualBlock:
     def __post_init__(self) -> None:
         if self.kind not in {"source_image", "crop_image", "focused_d"}:
             raise ValueError("unknown recorded visual block kind")
-        if self.call_index < 0:
-            raise ValueError("recorded visual call index must be non-negative")
+        if self.kind == "source_image":
+            if self.observation_handle is not None or self.call_index is not None:
+                raise ValueError(
+                    "trajectory source image must not borrow a tool observation identity"
+                )
+        elif self.observation_handle is None or (
+            self.call_index is None or self.call_index < 0
+        ):
+            raise ValueError(
+                "recorded tool visual block requires a non-negative call identity"
+            )
         if len(self.deepstack) != len(self.deepstack_positions):
             raise ValueError("DeepStack tensors and injection positions must align")
 
@@ -167,6 +177,17 @@ class QwenVLMFamilyAdapter(ABC):
         raise NotImplementedError(
             f"{self.capabilities.family} has no accepted live injected forward"
         )
+
+    def forward_replay_bundle(
+        self,
+        model: Any,
+        bundle: TrajectoryReplayBundle,
+        consumer: ReplayConsumer,
+    ) -> RecordedReplayResult:
+        """Rehydrate and verify the exact rollout bundle on a replay worker."""
+
+        store, replay_handle = ObservationStore.from_replay_bundle(bundle)
+        return self.forward_recorded(model, store, replay_handle, consumer)
 
     def materialize_representation_supervision(
         self,
@@ -276,36 +297,40 @@ def resolve_replay_request(
     observations = tuple(
         store.resolve_record(handle) for handle in replay.observation_handles
     )
-    blocks: list[RecordedVisualBlock] = []
-    if observations:
-        first = observations[0]
-        source_positions = _original_image_positions(first)
-        source_embeddings = _normalize_recorded_features(
-            store.resolve_verified(first.source_visual.merged_main),
+    source = replay.source_visual
+    source_positions = source.positions
+    source_embeddings = _normalize_recorded_features(
+        store.resolve_verified(source.state.merged_main),
+        input_ids.shape[0],
+        len(source_positions),
+        "source visual embeddings",
+    )
+    source_deepstack = tuple(
+        _normalize_recorded_features(
+            store.resolve_verified(ref),
             input_ids.shape[0],
-            len(source_positions),
-            "source visual embeddings",
+            len(injection_positions),
+            f"source DeepStack branch {index}",
         )
-        source_deepstack = tuple(
-            _normalize_recorded_features(
-                store.resolve_verified(ref),
-                input_ids.shape[0],
-                len(source_positions),
-                f"source DeepStack branch {index}",
-            )
-            for index, ref in enumerate(first.source_visual.merged_deepstack)
-        )
-        blocks.append(
-            RecordedVisualBlock(
-                kind="source_image",
-                observation_handle=replay.observation_handles[0],
-                call_index=0,
-                positions=source_positions,
-                embeddings=source_embeddings,
-                deepstack=source_deepstack,
-                deepstack_positions=tuple(source_positions for _ in source_deepstack),
+        for index, (ref, injection_positions) in enumerate(
+            zip(
+                source.state.merged_deepstack,
+                source.deepstack_injection_positions,
+                strict=True,
             )
         )
+    )
+    blocks: list[RecordedVisualBlock] = [
+        RecordedVisualBlock(
+            kind="source_image",
+            observation_handle=None,
+            call_index=None,
+            positions=source_positions,
+            embeddings=source_embeddings,
+            deepstack=source_deepstack,
+            deepstack_positions=source.deepstack_injection_positions,
+        )
+    ]
     for handle, record in zip(replay.observation_handles, observations, strict=True):
         if isinstance(record, FocusedObservationRecord):
             embeddings_ref = record.payload.main_d
@@ -364,14 +389,6 @@ def resolve_replay_request(
     )
     validate_replay_request(request)
     return request
-
-
-def _original_image_positions(
-    record: FocusedObservationRecord | CropObservationRecord,
-) -> tuple[int, ...]:
-    if isinstance(record, FocusedObservationRecord):
-        return record.layout.original_image_positions
-    return record.original_image_positions
 
 
 def validate_replay_request(request: RecordedReplayRequest) -> tuple[int, int]:

@@ -18,7 +18,8 @@ Rules:
 - Except for the explicit I8H-20260719 acceptance below, this checklist does not
   itself authorize implementation, dependency installation, legacy inspection,
   or GPU execution.
-- Exact data, reward coefficients, and prompt wording may be late-bound. Token
+- Except where Policy Pilot v1 §1.2 now freezes them, exact data, reward
+  coefficients, and prompt wording may be late-bound. Token
   ownership, actual behavior log probabilities, observation identity,
   deterministic replay, and objective equations may not.
 
@@ -88,12 +89,14 @@ These results close framework construction and bounded implementation evidence
 only; later rollout, production representation, objective, model-family, and
 scale gates below remain authoritative.
 
-No data or Adapter artifact is accepted for production use. Dataset/image
-licenses, the seven resolved-path split overlaps, representation
-manifest materialization, the policy-RL prompt, reward values,
-production GRPO/SDPO mathematics and configuration, any hybrid objective, long
-training, and the 72B judge remain open and fail closed. The representation
-user-message structure itself is fixed separately by
+Under the earlier I8H scope, no data or Adapter artifact was accepted for
+production use. Policy Pilot v1 §1.2 now supersedes that statement only for its
+DeepEyes source snapshot, GRPO/reward mathematics, LoRA envelope, and required
+72B-judge activation. Dataset/image-license evidence, Pilot manifest
+materialization/hash, the policy-RL prompt, TGVF Adapter artifact/provider,
+optimizer/scheduler, exact judge service/prompt/calibration, production SDPO or
+hybrid mathematics, and long training remain open and fail closed. The
+representation user-message structure itself is fixed separately by
 `RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY`. A synthetic optimizer smoke
 may run only after its exact test-contract equations and pure-tensor oracle are
 recorded.
@@ -106,6 +109,78 @@ reply, and separate post-report skeleton approval are superseded. Technical
 criteria still apply to any cell that claims the corresponding evidence;
 exact-identity records and ledger requirements remain in force. Unrun original
 matrix items remain promotion gates rather than implicit passes.
+
+### 1.2 Authoritative Policy Pilot v1 contract
+
+Decision ID: **POLICY-PILOT-V1-20260720**
+
+Accepted by the user on **2026-07-20 JST**. The complete authoritative 13-item
+contract and equations are in
+[`PROJECT_TASK.md` §0.8](PROJECT_TASK.md#08-authoritative-policy-pilot-v1-runtime-envelope).
+For Policy Pilot v1, that decision supersedes older `[TBD]` or conflicting
+Pilot text without deleting the historical register. In compact form it fixes:
+
+1. Qwen3-VL-8B-Thinking, native DeepStack enabled, and only
+   `tgvf_focus_tool`; crop/TGVF fusion is deferred.
+2. `ChenShawn/DeepEyes-Datasets-47k` snapshot
+   `5546681e28fa2eda9f60a9ea9dd0cf291216ded3`, three files/47,052 rows, with
+   the historical zoom prompt disabled.
+3. Original-image processor `max_pixels=262144` plus actual visual-token,
+   call-attempt, and step-time telemetry.
+4. `n=8`, temperature `1.0`, `top_p=1.0`, top-k disabled, and all repetition,
+   frequency, and presence penalties disabled.
+5. At most one TGVF call per assistant action turn and four admitted call
+   attempts per trajectory; success and standard tool error both consume an
+   attempt, while the unexecuted fifth attempt receives the standard cap error.
+6. `max_response_length=8192` policy-generated tokens across the complete
+   response; template, observation/image, and padding tokens have loss mask
+   zero.
+7. Actual transformed-distribution behavior logprobs, zero staleness, frozen
+   base reference without LoRA, and exact rollout-recorded `D` replay without
+   observation recomputation.
+8. Group mean plus sample standard deviation,
+   `A=(r-mean)/(sample_std+1e-6)`, all-equal rewards mapped to zero advantages,
+   no group filtering/dropped trajectories, and trajectory advantage broadcast
+   only to its policy tokens.
+9. Current/behavior ratio, symmetric clip epsilon `0.2/0.2`, dual clip `c=3`,
+   global policy-token mean, one update epoch, entropy coefficient zero,
+   maximum gradient norm `1`, and optimization KL coefficient zero.
+10. `R=0.8*answer_reward + 0.2*format_reward +
+    1.2*conditional_tool_reward`, with the component semantics and once-per-
+    trajectory conditional-tool cap in Project Task §0.8.
+11. Language-decoder-only LoRA, rank/alpha `64/64`, dropout zero, initial
+    learning rate `1e-5`, with vision/merger/native-DeepStack/TGVF-Adapter/
+    input-embedding/`lm_head` frozen.
+12. Formal-Pilot `Qwen/Qwen2.5-72B-Instruct` judging enabled: MCQ rule/exact,
+    required math semantic fallback, and optional open-VQA semantic fallback.
+13. A strict run/checkpoint identity binds every selected artifact, state, and
+    resume cursor named in Project Task §0.8.
+
+### 1.3 Policy Pilot v1 decisions still open
+
+The following user decisions were **not** selected by the Pilot v1 decision and
+remain fail-closed. No library or historical-project default may fill them:
+
+- `PPV1-O01` — physical hardware assignment, actor/reference/rollout worker
+  placement, device mesh, FSDP2 sharding, tensor parallelism, and the concrete
+  parallel topology;
+- `PPV1-O02` — the materialized/filtered manifest and hash for the already
+  fixed DeepEyes snapshot, held-out leakage report, and numeric shuffle seed;
+- `PPV1-O03` — exact policy-RL prompt bytes/hash, tool-description bytes,
+  stop/EOS ownership, min-p/stop settings, rollout RNG seed/derivation, exact
+  cap-error bytes/hash, and post-cap-error recovery/termination semantics;
+- `PPV1-O04` — the native TGVF Adapter artifact/checkpoint and the active
+  target-conditioning provider for this Pilot;
+- `PPV1-O05` — the estimator and normalization used for diagnostic
+  current-policy versus frozen-base-reference KL. Its optimization coefficient
+  is already fixed to zero;
+- `PPV1-O06` — optimizer, scheduler, precision/scaler, implementation of the
+  fixed gradient-norm bound, minibatch/accumulation, and weight-sync details
+  beyond the fixed `1e-5` learning rate, maximum gradient norm one, one update
+  epoch, and zero staleness; and
+- `PPV1-O07` — service, prompt, sampling, calibration, and failure-policy
+  identities for the required formal-Pilot `Qwen/Qwen2.5-72B-Instruct` judge.
+  Judge activation/model/routing are fixed, not open.
 
 ## 2. Fixed directions
 
@@ -141,7 +216,10 @@ matrix items remain promotion gates rather than implicit passes.
 - [x] `FIXED` — Native function names are `tgvf_focus_tool` and
   `image_zoom_in_tool`; crop takes exactly one `bbox_2d` integer array.
 - [x] `FIXED` — A trajectory supports zero or more ordered TGVF/crop calls; one
-  shared safety cap is configurable and greater than one.
+  shared safety cap is configurable and greater than one in a later fusion
+  experiment. Policy Pilot v1 enables only `tgvf_focus_tool`, admits four TGVF
+  call attempts counting success and standard tool error, and returns an
+  environment-owned cap error without executing the fifth attempt.
 - [x] `FIXED` — Qwen native tool/thinking/vision tokens are used without
   tokenizer growth.
 - [x] `FIXED` — There is no intermediate policy SFT or Golden policy adapter.
@@ -170,8 +248,9 @@ matrix items remain promotion gates rather than implicit passes.
   distinct objective identities. The reference SDPO implementation replaces
   the policy loss and does not define a GRPO-plus-SDPO sum.
 - [x] `FIXED` — An external answer judge, frozen RL reference, and SDPO
-  self-teacher are separate roles. The `Qwen/Qwen2.5-72B-Instruct` provider is
-  reserved but disabled for the first pilot.
+  self-teacher are separate roles. The formal Policy Pilot v1 requires
+  `Qwen/Qwen2.5-72B-Instruct` judging with the routing in §1.2; its exact
+  service/prompt/sampling/calibration/failure-policy artifacts remain open.
 - [x] `FIXED` — Full weight-directory hashing is not required for the stable
   local Qwen3 path. Exact tokenizer/chat-template transcript fixtures and hashes
   remain mandatory protocol artifacts.
@@ -214,6 +293,24 @@ matrix items remain promotion gates rather than implicit passes.
   reply.” Replacement: the I8H authorization covers in-scope rows after the
   agent completes their ledger and gates; exceeding scope still requires new
   authority.
+- [x] `SUPERSEDED C-12` — “The first Pilot tool-call cap and cap-hit behavior
+  are entirely `[TBD]`.” Replacement: Policy Pilot v1 enables only TGVF and
+  admits four attempts, counting both success and standard tool error; it
+  returns an environment-owned cap error without executing the fifth attempt.
+  Exact error bytes and recovery/stop fixture remain `PPV1-O03`.
+- [x] `SUPERSEDED C-13` — “The first Pilot may inherit sampling count,
+  temperature, filtering, penalties, response length, staleness, or update
+  epochs from framework defaults.” Replacement: the values in §1.2 are
+  authoritative; every remaining sampling identity is explicit under
+  `PPV1-O03`.
+- [x] `SUPERSEDED C-14` — “DeepEyes 47K is only a first-Pilot candidate.”
+  Replacement: Policy Pilot v1 fixes the exact snapshot in §1.2; only its
+  materialized manifest/hash, leakage artifact, and shuffle-seed number remain
+  open.
+- [x] `SUPERSEDED C-15` — “Pilot GRPO mathematics, reward weights, LoRA scope,
+  and 72B judge activation are open.” Replacement: §1.2 and Project Task §0.8
+  freeze those decisions. Only the separately enumerated implementation/run
+  identities in §1.3 remain open.
 
 ## 4. Gate S0 — Before framework-skeleton implementation
 
@@ -318,12 +415,14 @@ interfaces must be versioned and fail closed while unset.
   for `tgvf_focus_tool(target)` and `image_zoom_in_tool(bbox_2d)` under decision
   `CROP-FUSION-20260720`.
 - [ ] `OPEN_BLOCKING RO-P02B` — Pin the real Qwen3 processor-rendered system
-  prompt/token golden and combined tool-set hash for the two-tool policy RL
-  prompt. Representation-phase TGVF-only golden identity remains unchanged.
+  prompt/token golden and TGVF-only tool-set hash for Policy Pilot v1.
+  The combined crop/TGVF prompt/hash belongs to the deferred fusion experiment.
+  Representation-phase TGVF-only golden identity remains unchanged.
 - [ ] `OPEN_BLOCKING RO-P03` — Pin one initial prompt version and exact hash.
   Prompt text: `[TBD]`
 - [ ] `OPEN_BLOCKING RO-P04` — Golden token-ID fixtures for direct answer, one
-  call, and at least two calls.
+  call, repeated calls, four admitted attempts, and the unexecuted fifth-attempt
+  cap-error response.
 - [ ] `OPEN_BLOCKING RO-P05` — Prove tokenizer length unchanged and no added
   embedding/lm-head rows.
 - [ ] `OPEN_BLOCKING RO-P06` — Freeze assistant prefill and stop semantics,
@@ -347,9 +446,13 @@ interfaces must be versioned and fail closed while unset.
   - hidden layer: `[TBD]`
   - token-time alignment: `[TBD]`
   - pooling/sequence contract: `[TBD]`
-- [ ] `OPEN_CONFIGURABLE RO-S04` — Tool-call cap greater than one.
-  - Initial value: `[TBD]`
-  - cap-hit/timeout/tool-error termination: `[TBD]`
+- [ ] `OPEN_BLOCKING RO-S04` — Implement and fixture the Policy Pilot v1 cap
+  selected in §1.2: four admitted TGVF attempts, with successful execution and
+  standard tool error both consuming the bound; the fifth attempted call is not
+  executed and receives one environment-owned standardized cap-exceeded error.
+  Exact error bytes/hash and recovery/termination after that response remain
+  `PPV1-O03`; timeout and malformed-action behavior remain separately open.
+  Later experiments may select a different explicit cap or enable crop fusion.
 - [ ] `OPEN_BLOCKING RO-S05` — Multi-call cache/history contract, including
   append/reset/reuse behavior for text KV, original image, main `D`, and all
   D-DeepStack branches.
@@ -359,15 +462,18 @@ interfaces must be versioned and fail closed while unset.
 
 ### 5.3 Token ownership and loss masks
 
-- [ ] `OPEN_BLOCKING RO-M01` — Mutually exclusive, exhaustive ownership masks:
+- [ ] `OPEN_BLOCKING RO-M01` — Implement and prove mutually exclusive,
+  exhaustive ownership masks under the fixed Pilot v1 semantics:
   template-owned, policy-sampled, environment/tool-observation, and padding.
-- [ ] `OPEN_BLOCKING RO-M02` — Policy/loss mask includes every actual sampled
-  token in every assistant turn and excludes template prefixes, tool responses,
-  image positions, and padding.
+- [ ] `OPEN_BLOCKING RO-M02` — Under the fixed Pilot v1 semantics, policy/loss
+  mask includes every actual sampled token in every assistant turn and excludes
+  template prefixes, tool responses (including the cap error), image positions,
+  and padding.
 - [ ] `OPEN_BLOCKING RO-M03` — Freeze stop/EOS tokens' ownership and whether each
   participates in behavior logprob and loss.
-- [ ] `OPEN_BLOCKING RO-M04` — Single, batched, one-call, and two-call mask
-  fixtures have exact expected token counts.
+- [ ] `OPEN_BLOCKING RO-M04` — Single, batched, zero/one/repeated/four-attempt,
+  and fifth-cap-error mask fixtures have exact expected token counts and prove
+  every tool/error observation remains outside policy loss.
 
 ### 5.4 Actual behavior log probabilities
 
@@ -375,11 +481,12 @@ interfaces must be versioned and fail closed while unset.
   every policy-sampled token. Length must equal the sampled-token mask count.
 - [ ] `OPEN_BLOCKING RO-L02` — Explicitly forbid replayed
   `new_logprobs.detach()` as behavior log probabilities.
-- [ ] `OPEN_BLOCKING RO-L03` — Define and separately name:
-  - raw model-distribution logprob: `[TBD]`
-  - post-temperature/top-k/top-p/min-p/penalty/processor sampling logprob:
-    `[TBD]`
-  - distribution used in the policy ratio: `[TBD]`
+- [ ] `OPEN_BLOCKING RO-L03` — Implement and prove the fixed Pilot convention:
+  the stored behavior logprob and GRPO ratio denominator are the actual
+  post-temperature/filter/penalty/processor sampling-distribution logprobs.
+  Any raw-model-distribution logprob is separately named diagnostic data and
+  may never replace the behavior denominator; whether to retain that optional
+  diagnostic remains a run-storage choice.
 - [ ] `OPEN_BLOCKING RO-L04` — Record processor ordering and any stateful
   repetition/frequency/presence penalty state.
 - [ ] `OPEN_BLOCKING RO-L05` — Logprob dtype, storage format, finite-value
@@ -387,6 +494,11 @@ interfaces must be versioned and fail closed while unset.
 
 ### 5.5 Sampling identity
 
+- [x] `FIXED POLICY-PILOT-V1 RO-I00` — Pilot v1 uses `n = 8`, temperature
+  `1.0`, `top_p = 1.0`, top-k disabled, repetition penalty disabled, frequency
+  and presence penalties disabled, and a policy-generated response-token budget
+  of `8192` across the multi-turn trajectory. This is not a total-context limit.
+  Min-p, stop identities, and RNG seed/derivation remain `PPV1-O03`.
 - [ ] `OPEN_BLOCKING RO-I01` — Each trajectory records:
   - rollout policy/checkpoint/adapter and weight-sync version;
   - veRL commit and rollout backend/version;
@@ -395,10 +507,9 @@ interfaces must be versioned and fail closed while unset.
   - global/per-sample seed, RNG derivation/state, rank, and worker;
   - raw-versus-transformed logprob convention;
   - rollout/update staleness.
-- [ ] `OPEN_BLOCKING RO-I02` — First-proof staleness and update barrier.
-  - Proposed: `staleness = 0`; no update between sampling and consuming its
-    behavior log probabilities.
-  - Accepted value: `[TBD]`
+- [ ] `OPEN_BLOCKING RO-I02` — Implement and prove the accepted Pilot v1
+  staleness/update barrier: `staleness = 0`, with no update between sampling and
+  consuming the trajectory's behavior log probabilities.
 
 ### 5.6 Exact per-call `D` observation
 
@@ -804,26 +915,41 @@ This gate applies even to a one-step smoke test.
 
 ### 8.1 Exact GRPO mathematics
 
-- [ ] `OPEN_BLOCKING GR-01` — Group construction, group size, invalid trajectory
-  handling, and scalar reward aggregation: `[TBD]`
-- [ ] `OPEN_BLOCKING GR-02` — Group mean and population-versus-sample standard
-  deviation: `[TBD]`
-- [ ] `OPEN_BLOCKING GR-03` — Epsilon, zero-variance behavior, and advantage
-  scaling/broadcast to tokens: `[TBD]`
-- [ ] `OPEN_BLOCKING GR-04` — Behavior/current policy ratio and exact logprob
-  distribution used: `[TBD equation]`
-- [ ] `OPEN_BLOCKING GR-05` — Symmetric/asymmetric/dual clipping and parameters:
-  `[TBD equation]`
-- [ ] `OPEN_BLOCKING GR-06` — Policy-token mask and token-sum/token-mean/
-  sequence-mean/two-level normalization across variable-length multi-turn
-  trajectories: `[TBD equation]`
-- [ ] `OPEN_BLOCKING GR-07` — Frozen reference identity and KL estimator:
-  `[TBD equation]`
-- [ ] `OPEN_BLOCKING GR-08` — Whether KL is in reward or loss, coefficient
-  schedule, mask, and normalization; double counting is forbidden: `[TBD]`
-- [ ] `OPEN_BLOCKING GR-09` — Entropy or other auxiliary terms: `[TBD or none]`
-- [ ] `OPEN_BLOCKING GR-10` — Update epochs, minibatches, policy-version rule,
-  gradient clipping, overflow/NaN handling: `[TBD]`
+- [ ] `OPEN_BLOCKING GR-01` — Implement and prove the fixed Pilot grouping:
+  eight sampled trajectories per prompt remain in the original group; no group
+  filter, low-reward drop, or invalid-trajectory removal is permitted. Scalar
+  reward is the fixed `RW-06` equation.
+- [ ] `OPEN_BLOCKING GR-02` — Implement and prove group mean plus **sample**
+  standard deviation (`N-1` denominator), not population standard deviation.
+- [ ] `OPEN_BLOCKING GR-03` — Implement and prove
+  `A_i=(r_i-mean(r))/(sample_std(r)+1e-6)`; all-identical group rewards produce
+  exactly zero advantages. Each trajectory scalar is broadcast only to its
+  policy-generated tokens.
+- [ ] `OPEN_BLOCKING GR-04` — Implement and prove
+  `rho_t=exp(log pi_current,t - log pi_behavior,t)` using the actual
+  rollout-recorded, post-sampling-transform behavior logprob.
+- [ ] `OPEN_BLOCKING GR-05` — Implement and prove symmetric PPO clip epsilon
+  `0.2/0.2` (ratio interval `[0.8,1.2]`) plus dual clip `c=3` on negative
+  advantages: `s=min(rho*A,clip(rho,0.8,1.2)*A)`, then use `max(s,3*A)` for
+  `A<0` and `s` otherwise; policy loss is the negative masked mean.
+- [ ] `OPEN_BLOCKING GR-06` — Implement and prove one global token mean over all
+  policy-generated tokens. Template prefixes, tool/error responses, image
+  positions, and padding are excluded; there is no sequence-mean or two-level
+  reduction in Pilot v1.
+- [ ] `OPEN_BLOCKING GR-07` — Reference identity is fixed to the original frozen
+  Qwen3-VL-8B-Thinking base without policy LoRA. Freeze the still-open estimator,
+  mask, and normalization for diagnostic current/reference KL: `[TBD equation]`.
+  Policy Pilot v1 does not select a KL reward/loss contribution; adding one
+  requires a separate accepted objective contract.
+- [x] `FIXED POLICY-PILOT-V1 GR-08` — KL coefficient is zero in both reward and
+  loss. Current-versus-frozen-base KL is logged only as a diagnostic; its
+  estimator remains `PPV1-O05`. Double counting is forbidden.
+- [x] `FIXED POLICY-PILOT-V1 GR-09` — Entropy coefficient and all other
+  auxiliary optimization terms are zero.
+- [ ] `OPEN_BLOCKING GR-10` — Policy Pilot v1 fixes update epochs to exactly
+  one and maximum gradient norm to `1`. Minibatch/accumulation mechanics,
+  policy-version mechanics beyond zero staleness, precision/scaler, and
+  overflow/NaN handling remain run/implementation identities.
 - [ ] `OPEN_BLOCKING GR-11` — Gradient accumulation and FSDP2 numerator/
   denominator reductions preserve the declared global objective: `[TBD]`
 - [ ] `OPEN_BLOCKING GR-12` — Pure-tensor oracle, veRL loss parity, one-step
@@ -844,15 +970,23 @@ This gate applies even to a one-step smoke test.
 - [ ] `OPEN_BLOCKING PR-02C` — Before claiming end-to-end secondary-model
   support, configure its local/runtime identity and pass its full family-specific
   Adapter/representation fixture: `[TBD path/artifact]`
-- [ ] `OPEN_BLOCKING PR-03` — Reference model identity and prompt/schema:
-  `[TBD]`
-- [ ] `OPEN_BLOCKING PR-04` — LoRA/full scope, modules, rank, alpha, dropout,
-  bias, trainable whitelist: `[TBD]`
+- [ ] `OPEN_BLOCKING PR-03` — Reference model is the original frozen
+  Qwen3-VL-8B-Thinking base with no policy LoRA. Bind the still-open exact
+  Pilot prompt/schema golden and verify the reference consumes the same
+  rollout-recorded observation as policy replay.
+- [ ] `OPEN_BLOCKING PR-04` — Implement and record the fixed Pilot whitelist:
+  LoRA on Qwen3 language-decoder modules only, rank `64`, alpha `64`, dropout
+  `0`. The exact decoder module names are a pinned architecture/implementation
+  artifact rather than a research choice; no broad regex may capture frozen
+  modules.
 - [x] `FIXED PR-05` — TGVF Adapter frozen for the first policy RL proof.
-- [ ] `OPEN_BLOCKING PR-06` — Vision tower, visual mergers, DeepStack, and all
-  other module freeze/trainable states: `[TBD]`
-- [ ] `OPEN_BLOCKING PR-07` — Optimizer, scheduler, precision, gradient scaling,
-  rollout weight-sync version/barrier: `[TBD]`
+- [ ] `OPEN_BLOCKING PR-06` — Prove Pilot freeze state for the vision encoder,
+  visual merger, native DeepStack modules, TGVF Adapter, input embeddings, and
+  `lm_head`; only the accepted decoder LoRA is trainable.
+- [ ] `OPEN_BLOCKING PR-07` — Initial learning rate is fixed to `1e-5`.
+  Optimizer, scheduler, precision/scaler, minibatch/accumulation mechanics, and
+  rollout weight-sync implementation remain `PPV1-O06`; zero staleness is
+  already fixed.
 
 ## 9. Gate P0 — Before the first policy RL pilot
 
@@ -861,46 +995,67 @@ pilot is identified or launched.
 
 ### 9.1 Data
 
-- [ ] `OPEN_CONFIGURABLE DA-01` — RL data source(s), versions, licenses, and
-  canonical raw schema: `[TBD]`
-- [ ] `OPEN_CONFIGURABLE DA-02` — DeepEyes 47K status: candidate only; accepted
-  role and pinned snapshot `[TBD]`
-- [ ] `OPEN_BLOCKING DA-03` — Fixed pilot manifest, sample rule, source weights,
-  group construction, shuffle seed, and hashes: `[TBD]`
+- [ ] `OPEN_BLOCKING DA-01` — Materialize the fixed Pilot source into the
+  repository canonical schema and record its license/provenance audit:
+  `ChenShawn/DeepEyes-Datasets-47k` at Hugging Face snapshot
+  `5546681e28fa2eda9f60a9ea9dd0cf291216ded3`, exactly three source files and
+  47,052 source records.
+- [x] `FIXED POLICY-PILOT-V1 DA-02` — DeepEyes 47K is the formal Pilot source,
+  not a candidate. The historical rendered zoom/crop prompt is discarded; this
+  project's TGVF-only native prompt is rendered at runtime.
+- [ ] `OPEN_BLOCKING DA-03` — Materialize and hash the exact Pilot manifest and
+  leakage report, then bind the still-open numeric shuffle seed. Each prompt
+  produces one `n=8` group; there is no source mixture or group filtering.
 - [ ] `OPEN_BLOCKING DA-04` — Exact/near-duplicate image and normalized-question
   leakage checks against held-out evaluation.
-- [ ] `OPEN_BLOCKING DA-05` — Broken/ambiguous sample handling, answer types, and
-  verifier routing: `[TBD]`
+- [ ] `OPEN_BLOCKING DA-05` — Bind broken/ambiguous-row disposition and answer
+  types while materializing `PPV1-O02`; all retained/excluded IDs enter the
+  manifest hash. Verifier routing follows fixed `RW-01` rather than becoming a
+  separate data-dependent reward rule.
 - [x] `FIXED DA-06` — Canonical samples do not contain one irreversible rendered
   prompt; prompts are versioned at runtime.
+- [ ] `OPEN_BLOCKING DA-07` — Implement and fixture original-image processor
+  `max_pixels=262144`; record actual original-image visual tokens, total
+  trajectory visual tokens, mean call attempts, and step time. This is an
+  initial cost/distribution-alignment setting, not a final-method claim.
 
 ### 9.2 Reward
 
-- [ ] `OPEN_CONFIGURABLE RW-01` — Final-answer extraction, normalization, and
-  verifier router/version: `[TBD]`
-- [ ] `OPEN_CONFIGURABLE RW-02` — Malformed call, tool error, timeout, loop,
-  cap-hit, and invalid final output rewards/penalties: `[TBD]`
-- [ ] `OPEN_CONFIGURABLE RW-03` — Optional tool bonus and per-call/token/latency
-  costs: `[TBD enabled/coefficients]`
-- [ ] `OPEN_CONFIGURABLE RW-04` — Target/evidence reward components: `[TBD or
-  explicitly disabled]`
-- [ ] `OPEN_CONFIGURABLE RW-05` — Judge scope, model, prompt, sampling identity,
-  and calibration: `[TBD or none]`
-  - Reserved model: `Qwen/Qwen2.5-72B-Instruct` via a separately versioned
-    provider/service; disabled for the first pilot.
-  - It is not the RL reference or the SDPO teacher.
-- [ ] `OPEN_BLOCKING RW-06` — Component ranges, clipping, total reward equation,
-  verifier-failure behavior, and separate logging: `[TBD]`
+- [ ] `OPEN_BLOCKING RW-01` — Implement/version final-answer extraction and the
+  fixed `answer_reward`: correct final answer `1`, otherwise `0`. MCQ uses
+  deterministic rule/exact scoring; math uses required 72B semantic fallback,
+  and open-ended VQA may use 72B semantic fallback.
+- [ ] `OPEN_BLOCKING RW-02` — Implement the fixed `format_reward`: valid
+  protocol plus valid final answer `0`; invalid protocol or no valid final
+  answer `-1`. Tool errors/cap events retain typed logs but receive no separate
+  differentiated reward or penalty.
+- [x] `FIXED POLICY-PILOT-V1 RW-03` — There is no separate per-call, token,
+  latency, malformed-call, cap-hit, or tool-error cost. Only `RW-04` supplies a
+  tool-conditional component.
+- [ ] `OPEN_BLOCKING RW-04` — Implement `conditional_tool_reward=1` exactly when
+  the final answer is correct and at least one successful TGVF observation is
+  present; otherwise `0`. Award it at most once per trajectory.
+- [ ] `OPEN_BLOCKING RW-05` — Formal-Pilot judging is enabled with
+  `Qwen/Qwen2.5-72B-Instruct` and the routing in `RW-01`. Bind its still-open
+  provider/service, prompt, sampling, calibration, and failure-policy identity.
+  It is not the RL reference or the SDPO teacher.
+- [ ] `OPEN_BLOCKING RW-06` — Implement, separately log, and fixture
+  `R=0.8*answer_reward + 0.2*format_reward +
+  1.2*conditional_tool_reward`; no hidden component or clipping is permitted.
 
 ### 9.3 Prompt and tool policy
 
 - [ ] `OPEN_CONFIGURABLE PM-01` — Exact system/tool prompt text and hash: `[TBD]`
 - [ ] `OPEN_CONFIGURABLE PM-02` — Exact tool description and target wording:
   `[TBD]`
-- [ ] `OPEN_CONFIGURABLE PM-03` — Tool-call safety cap and exploration
-  curriculum: `[TBD]`
+- [ ] `OPEN_BLOCKING PM-03` — Policy Pilot v1 enables only
+  `tgvf_focus_tool`; crop/TGVF fusion is deferred. It admits four TGVF call
+  attempts, counting both successful observation and standard tool error, and
+  gives the unexecuted fifth attempt a standard environment-owned cap error.
+  Exact error bytes and recovery/termination semantics remain `PPV1-O03`.
 - [ ] `OPEN_BLOCKING PM-04` — Prompt acceptance fixtures for parse rate,
-  non-empty target, continuation, two calls, no duplicate think opener, and no
+  non-empty target, continuation, repeated calls, four-attempt accounting,
+  fifth-attempt standard error, no crop call, no duplicate think opener, and no
   example copying.
 
 ### 9.4 Evaluation and promotion
@@ -1093,7 +1248,9 @@ the synthetic implementation smoke.
   production-mathematics gates.
 - [ ] Configure the local/runtime path for the fixed
   `Qwen/Qwen2.5-VL-7B-Instruct` model before its executable fixture.
-- [x] Keep `Qwen/Qwen2.5-72B-Instruct` disabled as a first-pilot RL reward. Its
-  separately fixed VLMEvalKit benchmark-judge role does not activate `RW-05`.
+- [ ] Bind and validate the required formal-Pilot
+  `Qwen/Qwen2.5-72B-Instruct` judge service, prompt, sampling, calibration, and
+  failure-policy identity under `RW-05`. This RL-judge identity remains
+  separate from its VLMEvalKit benchmark-judge role.
 - [ ] Convert each accepted `[TBD]` into a versioned project artifact rather
   than embedding it only in code or an experiment command.

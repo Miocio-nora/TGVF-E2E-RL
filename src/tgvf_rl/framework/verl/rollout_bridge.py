@@ -11,7 +11,11 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from tgvf_rl.contracts.tokens import TokenOwnership
-from tgvf_rl.observations.store import ObservationHandle, TrajectoryReplayHandle
+from tgvf_rl.observations.store import (
+    ObservationHandle,
+    TrajectoryReplayBundle,
+    TrajectoryReplayHandle,
+)
 from tgvf_rl.trajectories.behavior import (
     BehaviorTraceHandle,
     BehaviorTraceRecord,
@@ -45,6 +49,7 @@ TRAJECTORY_PAYLOAD_FIELD = "tgvf_trajectory_payload"
 TRAJECTORY_ID_FIELD = "tgvf_trajectory_id"
 TRAJECTORY_SHA256_FIELD = "tgvf_trajectory_sha256"
 TRAJECTORY_REPLAY_HANDLE_FIELD = "tgvf_trajectory_replay_handle"
+TRAJECTORY_REPLAY_BUNDLE_FIELD = "tgvf_trajectory_replay_bundle"
 TOKEN_OWNERSHIP_SHA256_FIELD = "tgvf_token_ownership_sha256"
 ROLLOUT_PROVENANCE_SHA256_FIELD = "tgvf_rollout_provenance_sha256"
 
@@ -61,6 +66,7 @@ _RESERVED_EXTRA_FIELDS = {
     TRAJECTORY_ID_FIELD,
     TRAJECTORY_SHA256_FIELD,
     TRAJECTORY_REPLAY_HANDLE_FIELD,
+    TRAJECTORY_REPLAY_BUNDLE_FIELD,
     TOKEN_OWNERSHIP_SHA256_FIELD,
     ROLLOUT_PROVENANCE_SHA256_FIELD,
 }
@@ -114,6 +120,11 @@ def _trajectory_response_materialization(
     observations_by_call = {
         observation.call_index: observation for observation in trajectory.observations
     }
+    errors_by_turn = {
+        error.assistant_turn_index: error for error in trajectory.tool_errors
+    }
+    if set(calls_by_turn) & set(errors_by_turn):
+        raise ValueError("one assistant turn cannot carry success and error responses")
     response_ids: list[int] = []
     response_mask: list[int] = []
     response_logprobs: list[float] = []
@@ -172,6 +183,15 @@ def _trajectory_response_materialization(
                 TokenOwnership.TOOL_OBSERVATION.value
                 for _ in observation.template_token_ids
             )
+        error = errors_by_turn.get(turn.turn_index)
+        if error is not None:
+            response_ids.extend(error.template_token_ids)
+            response_mask.extend(0 for _ in error.template_token_ids)
+            response_logprobs.extend(0.0 for _ in error.template_token_ids)
+            ownership.extend(
+                TokenOwnership.TOOL_OBSERVATION.value
+                for _ in error.template_token_ids
+            )
 
     return (
         tuple(response_ids),
@@ -205,6 +225,7 @@ def rollout_provenance_checksum(
     trajectory_id: str,
     trajectory_sha256: str,
     replay_handle: TrajectoryReplayHandle,
+    replay_bundle_sha256: str,
     observation_handles: tuple[ObservationHandle, ...],
     behavior_trace_handles: tuple[BehaviorTraceHandle, ...],
     token_ownership_sha256: str,
@@ -213,12 +234,13 @@ def rollout_provenance_checksum(
 
     return _json_sha256(
         {
-            "schema": "tgvf-rollout-provenance-v1",
+            "schema": "tgvf-rollout-provenance-v2",
             "trajectory_id": trajectory_id,
             "trajectory_sha256": trajectory_sha256,
             "replay": {
                 "id": replay_handle.replay_id,
                 "sha256": replay_handle.record_sha256,
+                "bundle_sha256": replay_bundle_sha256,
             },
             "observations": [
                 {"id": handle.observation_id, "sha256": handle.record_sha256}
@@ -249,6 +271,7 @@ class RolloutBridgeRecord:
     trajectory_id: str
     trajectory_sha256: str
     replay_handle: TrajectoryReplayHandle
+    replay_bundle: TrajectoryReplayBundle
     token_ownership_sha256: str
     rollout_provenance_sha256: str
     trajectory_payload: TrajectoryRecord
@@ -283,6 +306,10 @@ class RolloutBridgeRecord:
         object.__setattr__(
             self, "replay_handle", _validate_replay_handle(self.replay_handle)
         )
+        if not isinstance(self.replay_bundle, TrajectoryReplayBundle):
+            raise TypeError("replay_bundle must be a TrajectoryReplayBundle")
+        if self.replay_bundle.replay_handle != self.replay_handle:
+            raise ValueError("replay provenance bundle and replay handle differ")
         object.__setattr__(
             self,
             "sentinel_fields",
@@ -401,6 +428,7 @@ class RolloutBridgeRecord:
             trajectory_id=self.trajectory_id,
             trajectory_sha256=self.trajectory_sha256,
             replay_handle=self.replay_handle,
+            replay_bundle_sha256=self.replay_bundle.bundle_sha256,
             observation_handles=self.exact_observation_handles,
             behavior_trace_handles=self.behavior_trace_handles,
             token_ownership_sha256=self.token_ownership_sha256,
@@ -427,6 +455,7 @@ class RolloutBridgeRecord:
                 TRAJECTORY_ID_FIELD: self.trajectory_id,
                 TRAJECTORY_SHA256_FIELD: self.trajectory_sha256,
                 TRAJECTORY_REPLAY_HANDLE_FIELD: self.replay_handle,
+                TRAJECTORY_REPLAY_BUNDLE_FIELD: self.replay_bundle,
                 TOKEN_OWNERSHIP_SHA256_FIELD: self.token_ownership_sha256,
                 ROLLOUT_PROVENANCE_SHA256_FIELD: self.rollout_provenance_sha256,
             }
@@ -456,8 +485,20 @@ def trajectory_to_rollout_bridge(
     validator.validate(trajectory)
     prompt_ids = tuple(initial_prompt_token_ids)
     native_tokens = tuple(tuple(row) for row in native_tool_appended_token_ids)
+    observation_by_turn = {
+        call.assistant_turn_index: observation.template_token_ids
+        for call, observation in zip(
+            trajectory.tool_calls, trajectory.observations, strict=True
+        )
+    }
+    error_by_turn = {
+        error.assistant_turn_index: error.template_token_ids
+        for error in trajectory.tool_errors
+    }
     recorded_native_tokens = tuple(
-        observation.template_token_ids for observation in trajectory.observations
+        observation_by_turn.get(turn.turn_index, error_by_turn.get(turn.turn_index))
+        for turn in trajectory.assistant_turns
+        if turn.turn_index in observation_by_turn or turn.turn_index in error_by_turn
     )
     if native_tokens != recorded_native_tokens:
         raise ValueError("native appended tool tokens differ from trajectory record")
@@ -469,6 +510,7 @@ def trajectory_to_rollout_bridge(
         _trajectory_response_materialization(trajectory, behavior_records)
     )
     replay = validator.store.resolve_replay(replay_handle)
+    replay_bundle = validator.store.export_replay_bundle(replay_handle)
     if replay.trajectory_id != trajectory.identity.canonical_id:
         raise ValueError("trajectory replay is bound to another trajectory")
     if replay.model != trajectory.model:
@@ -508,11 +550,13 @@ def trajectory_to_rollout_bridge(
         trajectory_id=trajectory_id,
         trajectory_sha256=trajectory_sha256,
         replay_handle=replay_handle,
+        replay_bundle=replay_bundle,
         token_ownership_sha256=ownership_sha256,
         rollout_provenance_sha256=rollout_provenance_checksum(
             trajectory_id=trajectory_id,
             trajectory_sha256=trajectory_sha256,
             replay_handle=replay_handle,
+            replay_bundle_sha256=replay_bundle.bundle_sha256,
             observation_handles=observation_handles,
             behavior_trace_handles=behavior_handles,
             token_ownership_sha256=ownership_sha256,
@@ -605,6 +649,7 @@ def parse_agent_loop_output(output: object) -> RolloutBridgeRecord:
         trajectory_id=extra.get(TRAJECTORY_ID_FIELD),
         trajectory_sha256=extra.get(TRAJECTORY_SHA256_FIELD),
         replay_handle=extra.get(TRAJECTORY_REPLAY_HANDLE_FIELD),
+        replay_bundle=extra.get(TRAJECTORY_REPLAY_BUNDLE_FIELD),
         token_ownership_sha256=extra.get(TOKEN_OWNERSHIP_SHA256_FIELD),
         rollout_provenance_sha256=extra.get(ROLLOUT_PROVENANCE_SHA256_FIELD),
         trajectory_payload=extra.get(TRAJECTORY_PAYLOAD_FIELD),

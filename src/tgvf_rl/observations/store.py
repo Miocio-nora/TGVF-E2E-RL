@@ -18,7 +18,13 @@ from tgvf_rl.contracts.tensors import (
     TensorDescriptor,
 )
 
-from .schema import CropObservationRecord, FocusedObservationRecord, ObservationRecord
+from .schema import (
+    CropObservationRecord,
+    FocusedObservationRecord,
+    ObservationRecord,
+    SourceVisualState,
+    TrajectorySourceVisual,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +37,83 @@ class ObservationHandle:
 class TrajectoryReplayHandle:
     replay_id: str
     record_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayTensorPayload:
+    """One bit-preserving CPU tensor carried across a worker boundary."""
+
+    sha256: str
+    tensor: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tensor, torch.Tensor):
+            raise TypeError("replay tensor payload must be a torch.Tensor")
+        stored = self.tensor.detach().to(device="cpu").contiguous().clone()
+        object.__setattr__(self, "tensor", stored)
+        if tensor_checksum(stored) != self.sha256:
+            raise ReplayMismatchError("replay tensor payload checksum mismatch")
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectoryReplayBundle:
+    """Self-contained exact replay payload transferable to policy/reference."""
+
+    schema_version: str
+    replay_handle: TrajectoryReplayHandle
+    replay_record: TrajectoryReplayRecord
+    observation_records: tuple[ObservationRecord, ...]
+    tensor_payloads: tuple[ReplayTensorPayload, ...]
+    bundle_sha256: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "trajectory-replay-bundle-v1":
+            raise ValueError("unknown trajectory replay bundle schema")
+        object.__setattr__(self, "observation_records", tuple(self.observation_records))
+        object.__setattr__(self, "tensor_payloads", tuple(self.tensor_payloads))
+        if replay_checksum(self.replay_record) != self.replay_handle.record_sha256:
+            raise ReplayMismatchError("bundle replay handle/record checksum mismatch")
+        if self.replay_record.replay_id != self.replay_handle.replay_id:
+            raise ReplayMismatchError("bundle replay handle/record ID mismatch")
+        record_digests = tuple(record_checksum(record) for record in self.observation_records)
+        expected_handles = tuple(
+            ObservationHandle(record.observation_id, digest)
+            for record, digest in zip(
+                self.observation_records, record_digests, strict=True
+            )
+        )
+        if expected_handles != self.replay_record.observation_handles:
+            raise ReplayMismatchError(
+                "bundle observation records differ from replay handles"
+            )
+        payload_digests = tuple(payload.sha256 for payload in self.tensor_payloads)
+        if payload_digests != tuple(sorted(set(payload_digests))):
+            raise ReplayMismatchError(
+                "bundle tensor payloads must be unique and digest-sorted"
+            )
+        expected_tensor_digests = tuple(
+            sorted(
+                {
+                    ref.address.digest
+                    for value in (
+                        self.replay_record.tensors,
+                        self.replay_record.source_visual,
+                        *self.observation_records,
+                    )
+                    for ref in _walk_tensor_refs(value)
+                }
+            )
+        )
+        if payload_digests != expected_tensor_digests:
+            raise ReplayMismatchError(
+                "bundle tensors differ from replay/observation references"
+            )
+        if _replay_bundle_checksum(
+            self.replay_handle,
+            self.observation_records,
+            self.tensor_payloads,
+        ) != self.bundle_sha256:
+            raise ReplayMismatchError("trajectory replay bundle checksum mismatch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +169,7 @@ class TrajectoryReplayRecord:
     trajectory_id: str
     model: ModelIdentity
     behavior_policy: PolicyVersion
+    source_visual: TrajectorySourceVisual
     observation_handles: tuple[ObservationHandle, ...]
     tensors: TrajectoryReplayTensorRefs
     crop_vision_replay_mode: str = "no_crop"
@@ -97,6 +181,10 @@ class TrajectoryReplayRecord:
     def __post_init__(self) -> None:
         if not self.schema_version or not self.replay_id or not self.trajectory_id:
             raise ValueError("trajectory replay identities must be non-empty")
+        if not isinstance(self.source_visual, TrajectorySourceVisual):
+            raise TypeError(
+                "trajectory replay requires a mandatory source visual artifact"
+            )
         if self.crop_vision_replay_mode not in {
             "no_crop",
             "shared_frozen_recorded_features",
@@ -151,6 +239,60 @@ def replay_checksum(record: TrajectoryReplayRecord) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _replay_bundle_checksum(
+    replay_handle: TrajectoryReplayHandle,
+    observation_records: tuple[ObservationRecord, ...],
+    tensor_payloads: tuple[ReplayTensorPayload, ...],
+) -> str:
+    payload = {
+        "schema": "trajectory-replay-bundle-v1",
+        "replay": {
+            "id": replay_handle.replay_id,
+            "sha256": replay_handle.record_sha256,
+        },
+        "observations": [
+            {"id": record.observation_id, "sha256": record_checksum(record)}
+            for record in observation_records
+        ],
+        "tensors": [
+            {
+                "sha256": item.sha256,
+                "shape": tuple(item.tensor.shape),
+                "dtype": str(item.tensor.dtype).removeprefix("torch."),
+                "stride": tuple(item.tensor.stride()),
+                "bytes": item.tensor.numel() * item.tensor.element_size(),
+            }
+            for item in tensor_payloads
+        ],
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_replay_bundle(
+    bundle: TrajectoryReplayBundle,
+) -> TrajectoryReplayBundle:
+    """Revalidate a transported bundle, including its mutable tensor bytes."""
+
+    if not isinstance(bundle, TrajectoryReplayBundle):
+        raise TypeError("bundle must be TrajectoryReplayBundle")
+    for payload in bundle.tensor_payloads:
+        if tensor_checksum(payload.tensor) != payload.sha256:
+            raise ReplayMismatchError("transport changed replay tensor payload")
+    # Re-run all graph/manifest checks after the transport boundary.
+    TrajectoryReplayBundle(
+        schema_version=bundle.schema_version,
+        replay_handle=bundle.replay_handle,
+        replay_record=bundle.replay_record,
+        observation_records=bundle.observation_records,
+        tensor_payloads=bundle.tensor_payloads,
+        bundle_sha256=bundle.bundle_sha256,
+    )
+    return bundle
 
 
 class ObservationStore:
@@ -238,9 +380,11 @@ class ObservationStore:
         return tuple(self.resolve_record(handle) for handle in handles)
 
     def put_replay(self, replay: TrajectoryReplayRecord) -> TrajectoryReplayHandle:
-        refs = tuple(_walk_tensor_refs(replay.tensors))
+        refs = tuple(_walk_tensor_refs((replay.tensors, replay.source_visual)))
         for ref in refs:
             self._verify_ref(ref)
+        sequence = replay.tensors.input_ids.descriptor.shape[-1]
+        _validate_trajectory_source_visual(replay.source_visual, sequence=sequence)
         observations = tuple(
             self.resolve_record(handle) for handle in replay.observation_handles
         )
@@ -249,50 +393,51 @@ class ObservationStore:
             raise ReplayMismatchError(
                 "trajectory replay observations must have contiguous call indices"
             )
-        if observations:
-            first = observations[0]
-            source_identity = _source_identity(first)
-            occupied = set(_original_image_positions(first))
-            representation = None
-            source_pixels_sha256 = None
-            for record in observations:
-                if record.model != replay.model:
+        source_identity = _source_state_identity(replay.source_visual.state)
+        occupied = set(replay.source_visual.positions)
+        representation = None
+        source_pixels_sha256 = None
+        for record in observations:
+            if record.model != replay.model:
+                raise IdentityMismatchError(
+                    "trajectory replay model differs from observation"
+                )
+            if _record_policy_version(record) != replay.behavior_policy:
+                raise IdentityMismatchError(
+                    "trajectory replay policy differs from observation materialization"
+                )
+            if _source_state_identity(record.source_visual) != source_identity:
+                raise ReplayMismatchError(
+                    "tool observation source visual differs from trajectory source"
+                )
+            if _original_image_positions(record) != replay.source_visual.positions:
+                raise ReplayMismatchError(
+                    "tool observation source positions differ from trajectory source"
+                )
+            if (
+                _record_branch_layers(record)
+                != replay.source_visual.deepstack_branch_layers
+            ):
+                raise ReplayMismatchError(
+                    "tool observation source DeepStack layers differ from trajectory source"
+                )
+            if isinstance(record, FocusedObservationRecord):
+                if representation is None:
+                    representation = record.representation
+                elif record.representation != representation:
                     raise IdentityMismatchError(
-                        "trajectory replay model differs from observation"
+                        "representation artifact changed within one replay"
                     )
-                if _record_policy_version(record) != replay.behavior_policy:
-                    raise IdentityMismatchError(
-                        "trajectory replay policy differs from observation materialization"
-                    )
-                if _source_identity(record) != source_identity:
-                    raise ReplayMismatchError(
-                        "multi-call replay changed the original visual state"
-                    )
-                if _original_image_positions(record) != _original_image_positions(
-                    first
-                ):
-                    raise ReplayMismatchError(
-                        "multi-call replay changed original-image positions"
-                    )
-                if isinstance(record, FocusedObservationRecord):
-                    if representation is None:
-                        representation = record.representation
-                    elif record.representation != representation:
-                        raise IdentityMismatchError(
-                            "representation artifact changed within one replay"
-                        )
-                elif source_pixels_sha256 is None:
-                    source_pixels_sha256 = record.source_pixels_sha256
-                elif record.source_pixels_sha256 != source_pixels_sha256:
-                    raise ReplayMismatchError(
-                        "multi-crop replay changed the immutable source pixels"
-                    )
-                positions = set(_tool_visual_positions(record))
-                if occupied & positions:
-                    raise ReplayMismatchError(
-                        "multi-call replay visual positions overlap"
-                    )
-                occupied.update(positions)
+            elif source_pixels_sha256 is None:
+                source_pixels_sha256 = record.source_pixels_sha256
+            elif record.source_pixels_sha256 != source_pixels_sha256:
+                raise ReplayMismatchError(
+                    "multi-crop replay changed the immutable source pixels"
+                )
+            positions = set(_tool_visual_positions(record))
+            if occupied & positions:
+                raise ReplayMismatchError("multi-call replay visual positions overlap")
+            occupied.update(positions)
         has_crop = any(
             isinstance(record, CropObservationRecord) for record in observations
         )
@@ -306,13 +451,10 @@ class ObservationStore:
             raise ReplayMismatchError(
                 "crop vision replay mode was set without a crop observation"
             )
-        sequence = replay.tensors.input_ids.descriptor.shape[-1]
-        if observations and any(
+        if any(
             position >= sequence
             for record in observations
-            for position in (
-                _original_image_positions(record) + _tool_visual_positions(record)
-            )
+            for position in _tool_visual_positions(record)
         ):
             raise ReplayMismatchError(
                 "observation visual position lies outside final replay sequence"
@@ -336,11 +478,81 @@ class ObservationStore:
             or actual != self._replay_digests[handle.replay_id]
         ):
             raise ReplayMismatchError("trajectory replay checksum mismatch")
-        for ref in _walk_tensor_refs(replay.tensors):
+        for ref in _walk_tensor_refs((replay.tensors, replay.source_visual)):
             self._verify_ref(ref)
+        _validate_trajectory_source_visual(
+            replay.source_visual,
+            sequence=replay.tensors.input_ids.descriptor.shape[-1],
+        )
         for observation in replay.observation_handles:
             self.resolve_record(observation)
         return replay
+
+    def export_replay_bundle(
+        self, handle: TrajectoryReplayHandle
+    ) -> TrajectoryReplayBundle:
+        """Export only tensors/records reachable from one exact trajectory replay."""
+
+        replay = self.resolve_replay(handle)
+        records = tuple(
+            self.resolve_record(observation)
+            for observation in replay.observation_handles
+        )
+        digests = tuple(
+            sorted(
+                {
+                    ref.address.digest
+                    for value in (replay.tensors, replay.source_visual, *records)
+                    for ref in _walk_tensor_refs(value)
+                }
+            )
+        )
+        payloads = tuple(
+            ReplayTensorPayload(digest, self._tensors[digest]) for digest in digests
+        )
+        bundle_sha256 = _replay_bundle_checksum(handle, records, payloads)
+        return TrajectoryReplayBundle(
+            schema_version="trajectory-replay-bundle-v1",
+            replay_handle=handle,
+            replay_record=replay,
+            observation_records=records,
+            tensor_payloads=payloads,
+            bundle_sha256=bundle_sha256,
+        )
+
+    @classmethod
+    def from_replay_bundle(
+        cls, bundle: TrajectoryReplayBundle
+    ) -> tuple["ObservationStore", TrajectoryReplayHandle]:
+        """Reconstruct and re-verify an isolated worker-local exact store."""
+
+        validate_replay_bundle(bundle)
+        # Reconstructing the immutable dataclass reruns its full manifest and
+        # tensor checksum validation after any transport/pickle boundary.
+        verified = TrajectoryReplayBundle(
+            schema_version=bundle.schema_version,
+            replay_handle=bundle.replay_handle,
+            replay_record=bundle.replay_record,
+            observation_records=bundle.observation_records,
+            tensor_payloads=tuple(
+                ReplayTensorPayload(payload.sha256, payload.tensor)
+                for payload in bundle.tensor_payloads
+            ),
+            bundle_sha256=bundle.bundle_sha256,
+        )
+        store = cls()
+        for payload in verified.tensor_payloads:
+            tensor = payload.tensor.detach().cpu().contiguous().clone()
+            if tensor_checksum(tensor) != payload.sha256:
+                raise ReplayMismatchError("transport changed replay tensor payload")
+            store._tensors[payload.sha256] = tensor
+        handles = tuple(store.put(record) for record in verified.observation_records)
+        if handles != verified.replay_record.observation_handles:
+            raise ReplayMismatchError("imported observation handles changed")
+        replay_handle = store.put_replay(verified.replay_record)
+        if replay_handle != verified.replay_handle:
+            raise ReplayMismatchError("imported replay handle changed")
+        return store, replay_handle
 
     def checkpoint_state(self) -> dict[str, object]:
         return {
@@ -397,8 +609,12 @@ class ObservationStore:
                 )
             if store._replay_digests.get(replay_id) != replay_checksum(replay):
                 raise ReplayMismatchError("checkpoint replay checksum mismatch")
-            for ref in _walk_tensor_refs(replay.tensors):
+            for ref in _walk_tensor_refs((replay.tensors, replay.source_visual)):
                 store._verify_ref(ref)
+            _validate_trajectory_source_visual(
+                replay.source_visual,
+                sequence=replay.tensors.input_ids.descriptor.shape[-1],
+            )
             for handle in replay.observation_handles:
                 store.resolve_record(handle)
         return store
@@ -434,10 +650,11 @@ def _record_policy_version(record: ObservationRecord) -> PolicyVersion:
     return record.policy_version
 
 
-def _source_identity(record: ObservationRecord) -> tuple[object, ...]:
-    source = record.source_visual
+def _source_state_identity(source: SourceVisualState) -> tuple[object, ...]:
     return (
         source.image_sha256,
+        source.premerge_main.address.digest,
+        tuple(ref.address.digest for ref in source.premerge_deepstack),
         source.merged_main.address.digest,
         tuple(ref.address.digest for ref in source.merged_deepstack),
         source.image_grid_thw,
@@ -455,3 +672,23 @@ def _tool_visual_positions(record: ObservationRecord) -> tuple[int, ...]:
     if isinstance(record, FocusedObservationRecord):
         return record.layout.d_positions
     return record.crop_visual.positions
+
+
+def _record_branch_layers(record: ObservationRecord) -> tuple[int, ...]:
+    if isinstance(record, FocusedObservationRecord):
+        return record.layout.deepstack_branch_layers
+    return record.crop_visual.deepstack_branch_layers
+
+
+def _validate_trajectory_source_visual(
+    source: TrajectorySourceVisual, *, sequence: int
+) -> None:
+    positions = source.positions + tuple(
+        position
+        for branch_positions in source.deepstack_injection_positions
+        for position in branch_positions
+    )
+    if any(position >= sequence for position in positions):
+        raise ReplayMismatchError(
+            "trajectory source visual position lies outside final replay sequence"
+        )

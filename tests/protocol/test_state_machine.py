@@ -7,6 +7,7 @@ import pytest
 from tgvf_rl.protocol import (
     AgentEvent,
     AgentPhase,
+    CapErrorBehavior,
     InvalidTransitionError,
     MultiCallStateMachine,
     SampledAssistantTurn,
@@ -46,6 +47,7 @@ def test_two_sequential_calls_and_responses_then_final_answer() -> None:
     assert first.call_index == 0
     assert first.state.phase is AgentPhase.AWAITING_TOOL_RESPONSE
     assert first.state.tool_call_count == 1
+    assert first.state.successful_tool_call_count == 0
 
     state = machine.apply(first.state, AgentEvent.tool_response()).state
     assert state.phase is AgentPhase.AWAITING_ASSISTANT
@@ -63,9 +65,10 @@ def test_two_sequential_calls_and_responses_then_final_answer() -> None:
     assert finished.state.phase is AgentPhase.TERMINATED
     assert finished.state.termination_reason is TerminationReason.FINAL_ANSWER
     assert finished.state.tool_call_count == 2
+    assert finished.state.successful_tool_call_count == 2
 
 
-def test_call_beyond_cap_terminates_without_tool_execution() -> None:
+def test_call_beyond_cap_emits_one_error_then_terminates_without_execution() -> None:
     machine = MultiCallStateMachine(max_tool_calls=2)
     state = machine.initial_state()
     for target in ("first", "second"):
@@ -75,40 +78,58 @@ def test_call_beyond_cap_terminates_without_tool_execution() -> None:
 
     capped = machine.apply(state, AgentEvent.valid_tool_call(_parsed_call("third")))
     assert capped.execute_tool is False
+    assert capped.emit_error is True
     assert capped.call_index is None
-    assert capped.state.phase is AgentPhase.TERMINATED
-    assert capped.state.termination_reason is TerminationReason.TOOL_CALL_CAP
-    assert capped.state.tool_call_count == 2
+    assert capped.attempt_index == 2
+    assert capped.state.phase is AgentPhase.AWAITING_TOOL_RESPONSE
+    assert capped.state.tool_call_count == 3
+    terminated = machine.apply(capped.state, AgentEvent.tool_error())
+    assert terminated.state.phase is AgentPhase.TERMINATED
+    assert terminated.state.termination_reason is TerminationReason.TOOL_CALL_CAP
 
 
-@pytest.mark.parametrize(
-    ("event", "reason"),
-    [
-        (AgentEvent.malformed_action(), TerminationReason.MALFORMED_ACTION),
-        (AgentEvent.timeout(), TerminationReason.TIMEOUT),
-    ],
-)
-def test_assistant_failures_terminate(
-    event: AgentEvent, reason: TerminationReason
-) -> None:
-    result = MultiCallStateMachine(3).apply(
-        MultiCallStateMachine(3).initial_state(),
-        event,
-    )
-    assert result.state.phase is AgentPhase.TERMINATED
-    assert result.state.termination_reason is reason
-    assert result.execute_tool is False
+def test_malformed_action_consumes_attempt_emits_error_and_recovers() -> None:
+    machine = MultiCallStateMachine(3)
+    result = machine.apply(machine.initial_state(), AgentEvent.malformed_action())
+    assert result.emit_error is True
+    assert result.attempt_index == 0
+    recovered = machine.apply(result.state, AgentEvent.tool_error()).state
+    assert recovered.phase is AgentPhase.AWAITING_ASSISTANT
+    assert recovered.tool_attempt_count == 1
+    assert recovered.successful_tool_call_count == 0
 
 
-def test_tool_error_terminates_pending_call() -> None:
+def test_assistant_timeout_terminates() -> None:
+    machine = MultiCallStateMachine(3)
+    result = machine.apply(machine.initial_state(), AgentEvent.timeout())
+    assert result.state.termination_reason is TerminationReason.TIMEOUT
+
+
+def test_tool_error_returns_to_assistant_without_counting_success() -> None:
     machine = MultiCallStateMachine(3)
     pending = machine.apply(
         machine.initial_state(),
         AgentEvent.valid_tool_call(_parsed_call("serial number")),
     ).state
     result = machine.apply(pending, AgentEvent.tool_error())
-    assert result.state.termination_reason is TerminationReason.TOOL_ERROR
+    assert result.state.phase is AgentPhase.AWAITING_ASSISTANT
     assert result.state.tool_call_count == 1
+    assert result.state.successful_tool_call_count == 0
+
+
+def test_cap_error_can_allow_exactly_one_final_answer_turn() -> None:
+    machine = MultiCallStateMachine(
+        2, CapErrorBehavior.ONE_FINAL_ANSWER_TURN
+    )
+    state = machine.initial_state()
+    for target in ("first", "second"):
+        call = machine.apply(state, AgentEvent.valid_tool_call(_parsed_call(target)))
+        state = machine.apply(call.state, AgentEvent.tool_response()).state
+    cap = machine.apply(state, AgentEvent.valid_tool_call(_parsed_call("third")))
+    final_only = machine.apply(cap.state, AgentEvent.tool_error()).state
+    assert final_only.phase is AgentPhase.AWAITING_FINAL_ANSWER
+    terminated = machine.apply(final_only, AgentEvent.final_answer()).state
+    assert terminated.termination_reason is TerminationReason.FINAL_ANSWER
 
 
 def test_invalid_event_order_and_post_termination_transition_fail_closed() -> None:

@@ -107,7 +107,10 @@ registered files/symbols and parity requirements.
 - Real training data, real reward coefficients, a final production prompt,
   production objective mathematics/configuration, long training, the 72B
   judge, and production checkpoint promotion are outside this goal. Their
-  interfaces remain explicit and fail closed while unset.
+  interfaces remain explicit and fail closed while unset. This describes the
+  earlier I8H framework goal; the later Policy Pilot v1 decision in §0.8
+  independently fixes its data source, GRPO/reward/LoRA envelope, and required
+  72B-judge role while retaining the listed launch-blocking identities.
 - The implementation stops and reports evidence if upstream veRL/vLLM cannot
   meet actual-logprob, exact-observation, public-extension, deterministic
   replay, or FSDP2 requirements without a private trainer fork.
@@ -150,9 +153,12 @@ the shared policy trajectory and exact ordered replay, not by feeding crop
 pixels into the TGVF Adapter or turning `D` into pixels.
 
 Crop response content is environment-owned and receives no behavior log
-probability or policy loss. Reward coefficients, crop-call cost, training-data
-mixture, and any recursive-crop experiment remain open. This extension does
+probability or policy loss. Crop-specific reward coefficients, crop-call cost,
+fusion training-data mixture, and any recursive-crop experiment remain open;
+this does not reopen the TGVF-only Pilot v1 reward in §0.8. This extension does
 not modify the representation-phase transcript, loss, data, or checkpoint.
+Policy Pilot v1 explicitly defers this extension: its enabled tool set contains
+only `tgvf_focus_tool`. Crop/TGVF fusion requires a later experiment identity.
 
 ### 0.5 Accepted evaluation architecture
 
@@ -225,9 +231,10 @@ HRBench4K, BLINK, and MMMU_Pro_10c use that model only as the official MCQ
 fallback when deterministic option extraction is insufficient. OCRBench_v2 is
 rule based and uses no judge. MathVista_MINI and MathVerse_MINI require the
 Qwen2.5-72B judge. The model snapshot, service, and invocation are independently
-identified from the evaluated policy. This benchmark decision does not enable
-an LLM reward component, change the frozen RL reference, or select an SDPO
-teacher.
+identified from the evaluated policy. This benchmark decision itself does not
+enable an LLM reward component, change the frozen RL reference, or select an
+SDPO teacher; the later independent Policy Pilot v1 decision in §0.8 does
+require a separately identified 72B RL-judge service.
 The OpenAI-compatible served-model alias is `Qwen2.5-72B-Instruct` (without a
 slash) because VLMEvalKit includes the judge string in intermediate filenames;
 the repository and revision remain the model identity.
@@ -289,6 +296,124 @@ must not weaken that check to accept stale, missing, duplicate, or borrowed Qwen
 parameters. This repair may change only the FSDP2 lifecycle, runner boundary,
 tests/smoke configurations, and experiment records. It does not change data,
 prompt, loss, optimizer mathematics, batch semantics, or formal-run cadence.
+
+### 0.8 Authoritative Policy Pilot v1 runtime envelope
+
+Decision ID: **POLICY-PILOT-V1-20260720**
+
+Accepted by: **user**, on **2026-07-20 JST**.
+
+This section is authoritative for the first formal policy RL pilot wherever
+older sections in this document, `OPEN_IMPLEMENTATION_CONTRACTS.md`, or the
+initial implementation specification leave a Pilot value `[TBD]` or describe
+DeepEyes 47K, GRPO mathematics, reward, LoRA, or the 72B judge as only a
+candidate. It applies only to Policy Pilot v1; later experiments require their
+own explicit identity.
+
+The complete accepted Pilot v1 decision set is:
+
+1. **Model and enabled capability.** The policy is the original
+   Qwen3-VL-8B-Thinking model with its native DeepStack path enabled. Pilot v1
+   exposes only `tgvf_focus_tool`. Crop/TGVF fusion and
+   `image_zoom_in_tool` are deferred and must not appear in the Pilot tool
+   schema, prompt, rollout, reward, or data transform.
+2. **Training population.** Use the official
+   `ChenShawn/DeepEyes-Datasets-47k` Hugging Face snapshot
+   `5546681e28fa2eda9f60a9ea9dd0cf291216ded3`: three source files and 47,052
+   total records. Preserve canonical source fields and render this project's
+   native prompt at runtime; the historical DeepEyes zoom/crop prompt is
+   forbidden. The materialized filtered manifest/hash and numeric shuffle seed
+   remain run-identity inputs.
+3. **Image preprocessing and telemetry.** Apply
+   `max_pixels = 512 * 512 = 262144` to the original-image processor. This is
+   an initial cost and representation-distribution alignment choice, not a
+   claim that 512-square input is the final method. Log actual original-image
+   visual-token count, total trajectory visual-token count, mean tool-call
+   attempts, and step time.
+4. **Rollout sampling.** Sample exactly `n = 8` trajectories per prompt with
+   temperature `1.0`, `top_p = 1.0`, top-k disabled, repetition penalty
+   disabled (neutral `1.0`), and frequency/presence penalties disabled
+   (neutral `0.0`). Min-p, stop identities, and rollout RNG seed/derivation
+   remain explicit run inputs.
+5. **Native multi-turn call bound.** A trajectory may answer directly or use
+   repeated TGVF action/observation turns, with at most one complete tool call
+   in each assistant action turn. At most four TGVF call attempts are admitted.
+   An admitted attempt consumes the bound whether execution returns a
+   successful observation or a standard tool error, preventing an infinite
+   error loop. The fifth attempted call is not executed and receives one
+   deterministic environment-owned cap-exceeded error response. Exact error
+   bytes/hash and post-error recovery/termination remain prompt/golden inputs.
+6. **Response budget and ownership.** `max_response_length = 8192` is a hard
+   budget on policy-generated tokens across the complete multi-turn response,
+   not total context length. Actually sampled assistant tokens are policy-owned
+   and mask one. Template prefixes are template-owned, TGVF/error responses and
+   visual observation positions are environment-owned, and padding is
+   padding-owned; all three non-policy classes have policy/loss mask zero.
+   Stop/EOS ownership remains to be frozen in the exact golden fixture.
+7. **Behavior, reference, and observation identity.** Preserve actual
+   post-sampling-transform behavior log probabilities for every policy token.
+   Rollout/update staleness is exactly zero. The reference is the frozen base
+   Qwen3-VL-8B-Thinking checkpoint without policy LoRA. Policy and reference
+   replay consume the exact rollout-recorded main `D`, all D-DeepStack branches,
+   layouts, positions, and masks; neither may recompute the observation.
+8. **Group advantages.** Keep all eight trajectories in their original group:
+   do not filter a group, discard low-reward samples, or remove an invalid
+   trajectory. For group rewards `r_i`, use the group mean and sample standard
+   deviation, then
+   `A_i = (r_i - mean(r)) / (sample_std(r) + 1e-6)`. If all group rewards are
+   identical, set every `A_i = 0`. Broadcast each trajectory advantage only to
+   that trajectory's policy-generated tokens.
+9. **GRPO policy loss.** Use the actual behavior policy in
+   `rho_t = exp(log pi_current - log pi_behavior)`. PPO clipping is symmetric
+   with low/high epsilon `0.2/0.2`, hence ratio bounds `[0.8, 1.2]`, and dual
+   clip is enabled with `c = 3`: define
+   `s_t=min(rho_t*A, clip(rho_t,0.8,1.2)*A)` and use
+   `max(s_t,3*A)` when `A<0`, otherwise `s_t`; the policy loss is its negative.
+   Reduce by one global mean over policy-generated tokens; template, image, and
+   tool-response tokens never enter the loss. Use one update epoch, entropy
+   coefficient `0`, maximum gradient norm `1`, and no KL contribution to reward
+   or loss. Current versus frozen-base reference KL is diagnostic only; its
+   exact estimator remains an explicit unresolved diagnostic identity.
+10. **Reward.** The scalar trajectory reward is
+    `0.8 * answer_reward + 0.2 * format_reward + 1.2 * conditional_tool_reward`.
+    `answer_reward` is `1` for a correct final answer and `0` otherwise.
+    `format_reward` is `0` for a valid protocol/final answer and `-1` when no
+    valid final answer exists or the protocol is invalid.
+    `conditional_tool_reward` is `1` only when the final answer is correct and
+    the trajectory contains at least one successful TGVF observation, otherwise
+    `0`, and is awarded at most once per trajectory. Tool errors retain typed
+    diagnostic logging but receive no separate differentiated penalty.
+11. **Trainable policy scope.** Train LoRA on the language decoder only, with
+    rank `64`, alpha `64`, dropout `0`, and initial learning rate `1e-5`.
+    Freeze the vision encoder, visual merger, native DeepStack modules, TGVF
+    Adapter, input embeddings, and `lm_head`. The exact decoder module whitelist
+    is a pinned Qwen3 structure/implementation artifact, not a new research
+    choice. Optimizer and scheduler identities remain explicit run inputs.
+12. **Formal Pilot judge.** The formal Pilot must enable
+    `Qwen/Qwen2.5-72B-Instruct` as its only LLM judge. MCQ answers use
+    deterministic rule/exact scoring. Mathematical answers that deterministic
+    normalization cannot resolve must invoke the 72B semantic fallback;
+    open-ended VQA may invoke the same semantic fallback. The judge service,
+    prompt, sampling, calibration, and failure policy must be bound before
+    launch and remain distinct from the frozen RL reference and any SDPO
+    teacher.
+13. **Checkpointed experiment identity.** The Pilot manifest binds every fixed
+    value above plus model/processor/template, code and dependency revisions,
+    TGVF Adapter artifact and target-conditioning provider, data manifest,
+    hardware topology, optimizer/scheduler, sampler/RNG, reward/verifier, judge,
+    and prompt identities. Checkpoint/resume must preserve the policy LoRA,
+    optimizer/scheduler/scaler, sampler/RNG, data cursor, policy/reference
+    versions, rollout barrier, and metrics state.
+
+Only the following user decisions remain open for this Pilot: concrete
+hardware topology; the materialized DeepEyes manifest/hash and shuffle-seed
+number; exact RL prompt bytes/hash; selected TGVF Adapter artifact and active
+conditioning provider; 72B judge prompt/service/sampling/calibration/failure
+policy; the diagnostic KL estimator; cap-error bytes/recovery semantics; min-p,
+stops, stop/EOS ownership, and rollout RNG; and
+optimizer/scheduler plus their remaining precision, accumulation, minibatch,
+and weight-sync details. These fields fail closed and may not inherit library
+defaults.
 
 ## 1. Objective
 
@@ -665,13 +790,13 @@ resume behavior. It may be implemented after the common trajectory/replay
 substrate during I8H-20260719, but an interface-only placeholder is not a
 completed result.
 
-GRPO is also not identified by its name alone. Before any GRPO optimizer step,
-the project must version the exact equations and conventions for group standard
-deviation, advantage scaling, clipping, KL, per-token versus per-sequence
-normalization, and masking, and verify them with a pure-tensor oracle. A
-framework default is never the mathematical specification. Production choices
-may remain open while framework code and non-production synthetic fixtures are
-built.
+GRPO is also not identified by its name alone. Policy Pilot v1 freezes its exact
+equations and conventions in §0.8: sample-standard-deviation advantages,
+behavior-policy ratios, symmetric `0.2/0.2` clipping, dual clip `c=3`, global
+policy-token mean, zero optimization KL and entropy, one update epoch, and
+maximum gradient norm `1`. Those values still require a versioned pure-tensor
+oracle and veRL parity before an optimizer step. They are not framework
+defaults and do not select the later SDPO contract.
 
 ### 2.4 Use upstream veRL as the RL framework
 
@@ -803,7 +928,9 @@ TGVF function contract remains equivalent to:
 }
 ```
 
-The policy RL tool set additionally contains:
+A deferred crop/TGVF-fusion experiment may additionally contain the following
+schema. Policy Pilot v1 must not pass it to `tools=[...]`; its tool list contains
+only the TGVF schema above.
 
 ```json
 {
@@ -879,7 +1006,11 @@ Repeated and mixed tool calls are a first-class runtime requirement. A
 trajectory may alternate among policy reasoning, `tgvf_focus_tool`, a new `D`
 observation, `image_zoom_in_tool`, and an exact crop observation more than once
 before the final answer. A configurable shared safety cap greater than one is
-required; its exact value and stopping policy remain open.
+required for that later fusion experiment. Policy Pilot v1 does not enable the
+crop tool: §0.8 binds a TGVF-only budget of four admitted call attempts, counting
+both successful execution and standard tool errors, and gives the unexecuted
+fifth attempt an environment-owned standardized cap error. Later fusion caps
+and the still-unfrozen Pilot error bytes/recovery-turn detail remain open.
 
 The parser is fail-closed:
 
@@ -892,7 +1023,9 @@ The parser is fail-closed:
   including JSON escapes; ambiguous boundary-crossing tokens are rejected or
   handled by one predeclared deterministic rule;
 - no answer leakage or trailing assistant answer after the tool call;
-- explicit configurable maximum tool-call count greater than one;
+- an explicit configurable maximum tool-call count greater than one; Pilot v1
+  binds it to four TGVF call attempts and an unexecuted fifth-call standard
+  error;
 - malformed calls receive no tool execution.
 
 ## 4. End-to-end runtime contract
@@ -916,17 +1049,20 @@ For each prompt and each sampled group member:
      visual layout, positions, multimodal types, mask, and cache contract;
    - append the native tool-response turn and its template-owned next-assistant
      thinking prefix.
-5. If it emits a valid `image_zoom_in_tool` call:
+5. In a later crop/TGVF-fusion experiment, if it emits a valid
+   `image_zoom_in_tool` call:
    - preserve the exact sampled call tokens and behavior log probabilities;
    - clamp the requested integer box to the immutable original-image bounds
      and reject an empty result;
    - materialize a contiguous RGB8 crop plus its content/provenance record;
    - append the native image-bearing tool response and retain its exact
      rollout-time processed visual state for replay.
-6. Continue the same trajectory after either observation. The policy may
-   answer or emit either registered tool call; repeat the applicable execution
-   step until a final answer, a malformed action, or the shared safety limit
-   terminates the loop.
+6. Continue the same trajectory after each enabled observation. A later fusion
+   experiment may enable either registered tool. Policy Pilot v1 enables only
+   `tgvf_focus_tool`: its first four admitted attempts consume the bound whether
+   they succeed or return a standard tool error; a fifth attempt appends the
+   standardized environment-owned cap error defined in §0.8 and never invokes
+   the tool.
 7. Record the complete action mask, tool/environment spans, rewards, stop
    causes, and all identity fields needed for mathematically identical replay.
 8. Replay policy/reference log probabilities only on policy-generated tokens
@@ -992,9 +1128,12 @@ newly defined policy adapter scope. The following are fixed or unresolved:
   initialization.
 - Target conditioning: both contextual-hidden-state and target-token-embedding
   providers are required; the active provider is an experiment identity.
-- Policy trainable scope: unresolved; LoRA is expected, but module/rank/dropout
-  must be selected and recorded rather than inherited from Golden.
-- Original vision tower and frozen Qwen visual mergers: frozen by default.
+- Policy trainable scope for Pilot v1: language-decoder LoRA only, rank `64`,
+  alpha `64`, dropout `0`, initial learning rate `1e-5`; the exact decoder
+  module whitelist is pinned from the Qwen3 structure in the implementation
+  artifact.
+- Pilot v1 freezes the vision encoder, visual merger, native DeepStack modules,
+  input embeddings, `lm_head`, and TGVF Adapter.
 
 Keeping the TGVF Adapter parameters frozen for the first RL proof
 reduces one source of drift, but it does **not** make the tool environment
@@ -1006,28 +1145,29 @@ observation/replay contract.
 
 ## 6. Reward contract
 
-The reward is decomposed and logged; no opaque single judge score is allowed.
-Candidate components are:
+Policy Pilot v1 uses the decomposed scalar reward fixed in §0.8:
 
-- benchmark-correct final answer score using a final-answer-only official or
-  benchmark-compatible scorer;
-- valid native tool syntax and successful execution;
-- target validity, locality, non-genericity, and answer-leak penalty;
-- target/evidence utility or sampled correct-`D` causal advantage;
-- malformed protocol, redundant duplicate call, runtime error, loop, cap-hit,
-  and non-termination penalties;
-- tool/token/latency cost so the policy does not call TGVF indiscriminately;
-- KL/reference regularization against the original Qwen policy.
+```text
+R = 0.8 * answer_reward
+  + 0.2 * format_reward
+  + 1.2 * conditional_tool_reward
+```
 
-Do not reward longer reasoning. Health metrics and correctness are separate.
-Judge-model rewards, if used, require calibration against human-audited
-examples and must never replace executable answer/tool checks.
+`answer_reward` is one for a correct final answer and zero otherwise.
+`format_reward` is zero for a valid protocol/final answer and negative one when
+the protocol is invalid or no valid final answer exists. The conditional tool
+term is one only for a correct final answer with at least one successful TGVF
+observation, otherwise zero, and is awarded at most once per trajectory. Tool
+errors are classified and logged but receive no additional differentiated
+penalty. There is no reward for longer reasoning, no entropy bonus, and no KL
+reward/loss contribution in this Pilot.
 
-The optional external judge is `Qwen/Qwen2.5-72B-Instruct`, following the
-pinned DeepEyes reference. Its provider interface is reserved, but it is
-disabled for the first pilot. Before any later activation, its exact
-local/service identity, prompt, sampling, calibration set, and scope must be
-accepted. The answer judge, frozen RL reference, and SDPO self-teacher are three
+The formal Pilot enables `Qwen/Qwen2.5-72B-Instruct` as its only LLM judge.
+MCQ uses deterministic rule/exact scoring. Mathematical answers that
+deterministic normalization cannot resolve must use the 72B semantic fallback;
+open-ended VQA may use it as a semantic fallback. Its exact service, prompt,
+sampling, calibration, and failure policy remain launch-blocking identities.
+The answer judge, frozen RL reference, and SDPO self-teacher remain three
 separate roles and states.
 
 ## 7. Representation gates
@@ -1482,28 +1622,36 @@ identity, throughput, memory, and resume behavior are recorded and reproducible.
    native-format training interface.
 3. Whether the TGVF Adapter is frozen for all policy RL or only for
    the first proof; the first proof is fixed to frozen.
-4. Policy LoRA/full-parameter scope and reference/KL contract.
+4. Later full-parameter policy scope and diagnostic-KL estimator. Policy Pilot
+   v1 already fixes decoder-only LoRA `r64/alpha64/dropout0`, learning rate
+   `1e-5`, the frozen base reference, and zero KL optimization coefficient.
 5. Production actor/reference/rollout/teacher placement and concrete
    FSDP2/parallel topology. The compatibility veRL commit, dependency
    environment, and vLLM-only backend are already fixed.
 6. Exact SDPO equations, feedback/reprompt contract, teacher regularization,
    approximation, and whether any separately named hybrid is scientifically
    required. The paper/repository identity is already fixed.
-7. Tool-call safety cap greater than one, prompt wording, and initial
-   exploration curriculum.
+7. Later-experiment tool-call caps, prompt wording, and initial exploration
+   curriculum. Policy Pilot v1 already fixes a TGVF-only bound of four admitted
+   attempts, counting success and standard tool error, and requires a standard
+   cap error rather than execution on the fifth attempt; its exact error
+   bytes/recovery-turn fixture remains open.
 8. Original-image visibility and DeepStack mask scope after each `D`.
-9. Training population, reward benchmarks, and held-out evaluation manifests.
-10. Later reward activation conditions, prompt, sampling, calibration, and
-    reward scope for `Qwen/Qwen2.5-72B-Instruct`. Its use as the fixed
-    VLMEvalKit benchmark judge does not activate it as an RL reward.
+9. The materialized Pilot data manifest/hash, numeric shuffle seed, and held-out
+   leakage artifact. The source is already fixed to the recorded DeepEyes 47K
+   snapshot, and the Pilot reward equation is fixed in §0.8.
+10. Prompt, service, sampling, calibration, and failure-policy artifacts for
+    the required Pilot `Qwen/Qwen2.5-72B-Instruct` judge. Its enablement and
+    routing role are already fixed in §0.8.
 11. Local/runtime path and family-specific representation artifact plan for the
     fixed `Qwen/Qwen2.5-VL-7B-Instruct` compatibility model.
 
 No item above may be silently promoted into a production experiment. Under
 I8H-20260719, implementation may expose it as an explicit unset configuration
-or use a clearly named synthetic test identity with an oracle; real data,
-reward, final prompt, production mathematics, and production configuration
-remain open after the eight-hour goal.
+or use a clearly named synthetic test identity with an oracle. The later Policy
+Pilot v1 decision in §0.8 fixes its source snapshot, reward, GRPO mathematics,
+LoRA envelope, and judge role; the explicitly enumerated unresolved run
+identities at the end of §0.8 remain open after the eight-hour goal.
 
 ## 14. Definition of project success
 

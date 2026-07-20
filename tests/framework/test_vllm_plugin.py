@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import inspect
 from importlib import metadata
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from tgvf_rl.framework.vllm import (
     VLLMPublicPluginAPI,
     load_vllm_public_plugin_api,
     pack_qwen3_vllm_replay,
+    pack_qwen3_vllm_replay_bundle,
     register_tgvf_qwen3_vllm_plugin,
 )
 from tgvf_rl.observations.schema import (
@@ -26,6 +28,7 @@ from tgvf_rl.observations.schema import (
     FocusedObservationRecord,
     ObservationMasks,
     SourceVisualState,
+    TrajectorySourceVisual,
     VisualLayout,
 )
 from tgvf_rl.observations.store import (
@@ -35,7 +38,11 @@ from tgvf_rl.observations.store import (
 )
 
 
-def _recorded_replay(*, branch_layers: tuple[int, ...] = (8, 16, 24)):
+def _recorded_replay(
+    *, branch_layers: tuple[int, ...] = (8, 16, 24), calls: int = 2
+):
+    if calls not in {0, 1, 2}:
+        raise ValueError("fixture supports zero, one, or two calls")
     store = ObservationStore()
     model = ModelIdentity("qwen3_vl", "tiny", "/tiny", 32, "1" * 64)
     policy = PolicyVersion("run", 0, "2" * 64)
@@ -64,13 +71,24 @@ def _recorded_replay(*, branch_layers: tuple[int, ...] = (8, 16, 24)):
         )
         for i, layer in enumerate(branch_layers)
     )
+    source_state = SourceVisualState(
+        image_sha256="a" * 64,
+        premerge_main=source_premerge,
+        premerge_deepstack=source_premerge_branches,
+        merged_main=source_main,
+        merged_deepstack=source_branches,
+        image_grid_thw=(1, 4, 4),
+        spatial_merge_size=2,
+    )
     sequence = 16
     mask = store.put_tensor("replay.mask", torch.ones(1, sequence, dtype=torch.bool))
     position_ids = store.put_tensor(
         "replay.position_ids", torch.arange(sequence).view(1, sequence)
     )
     handles = []
-    for call_index, d_positions in enumerate(((6, 7, 8, 9), (11, 12, 13, 14))):
+    for call_index, d_positions in enumerate(
+        ((6, 7, 8, 9), (11, 12, 13, 14))[:calls]
+    ):
         main_d = store.put_tensor(
             f"call.{call_index}.main_d",
             torch.full((4, 2), float(20 + call_index)),
@@ -97,21 +115,16 @@ def _recorded_replay(*, branch_layers: tuple[int, ...] = (8, 16, 24)):
                 sampled_target_text_sha256="8" * 64,
                 sampled_target_token_start=1,
                 sampled_target_token_end=2,
+                conditioning_target_token_start=1,
+                conditioning_target_token_end=2,
+                source_sequence_length=sequence,
                 source_input_ids_sha256="9" * 64,
                 trajectory_ids=("trajectory",),
                 call_indices=(call_index,),
                 hidden_layer=1,
                 policy_version=policy,
             ),
-            source_visual=SourceVisualState(
-                image_sha256="a" * 64,
-                premerge_main=source_premerge,
-                premerge_deepstack=source_premerge_branches,
-                merged_main=source_main,
-                merged_deepstack=source_branches,
-                image_grid_thw=(1, 4, 4),
-                spatial_merge_size=2,
-            ),
+            source_visual=source_state,
             payload=TensorPayloadSet(
                 main_d=main_d,
                 deepstack=d_branches,
@@ -141,10 +154,18 @@ def _recorded_replay(*, branch_layers: tuple[int, ...] = (8, 16, 24)):
     )
     replay = TrajectoryReplayRecord(
         schema_version="trajectory-replay-v1",
-        replay_id="replay",
+        replay_id=f"replay-{calls}",
         trajectory_id="trajectory",
         model=model,
         behavior_policy=policy,
+        source_visual=TrajectorySourceVisual(
+            state=source_state,
+            positions=(1, 2, 3, 4),
+            deepstack_branch_layers=branch_layers,
+            deepstack_injection_positions=tuple(
+                (1, 2, 3, 4) for _ in branch_layers
+            ),
+        ),
         observation_handles=tuple(handles),
         tensors=TrajectoryReplayTensorRefs(
             input_ids=input_ids,
@@ -186,20 +207,66 @@ def test_packer_emits_source_then_each_call_with_main_plus_three_branches() -> N
     expected_source = torch.cat(
         (
             store.resolve_verified(
-                store.resolve_record(
-                    store.resolve_replay(replay).observation_handles[0]
-                ).source_visual.merged_main
+                store.resolve_replay(replay).source_visual.state.merged_main
             ),
             *(
                 store.resolve_verified(ref)
-                for ref in store.resolve_record(
-                    store.resolve_replay(replay).observation_handles[0]
-                ).source_visual.merged_deepstack
+                for ref in store.resolve_replay(
+                    replay
+                ).source_visual.state.merged_deepstack
             ),
         ),
         dim=-1,
     )
     torch.testing.assert_close(packed.items[0].image_embeds, expected_source)
+
+
+def test_vllm_worker_packs_the_transported_replay_bundle_without_recompute() -> None:
+    store, replay = _recorded_replay()
+    direct = pack_qwen3_vllm_replay(store, replay)
+    transported = pack_qwen3_vllm_replay_bundle(store.export_replay_bundle(replay))
+
+    assert transported.replay_handle == direct.replay_handle
+    assert transported.image_uuids == direct.image_uuids
+    torch.testing.assert_close(
+        transported.image_embeds, direct.image_embeds, rtol=0, atol=0
+    )
+
+
+def test_vllm_zero_call_replay_packs_only_the_mandatory_source() -> None:
+    store, replay = _recorded_replay(calls=0)
+    assert store.resolve_replay(replay).observation_handles == ()
+
+    packed = pack_qwen3_vllm_replay_bundle(store.export_replay_bundle(replay))
+
+    assert tuple((item.kind, item.call_index) for item in packed.items) == (
+        ("source_image", None),
+    )
+    assert len(packed.as_vllm_multi_modal_data()["image"]) == 1
+
+
+def test_multi_call_replay_rejects_observation_source_identity_mismatch() -> None:
+    store, replay_handle = _recorded_replay()
+    replay = store.resolve_replay(replay_handle)
+    second = store.resolve_record(replay.observation_handles[1])
+    mismatched = replace(
+        second,
+        observation_id="observation-1-mismatched-source",
+        source_visual=replace(second.source_visual, image_sha256="b" * 64),
+    )
+    mismatched_handle = store.put(mismatched)
+
+    with pytest.raises(ReplayMismatchError, match="trajectory source"):
+        store.put_replay(
+            replace(
+                replay,
+                replay_id="replay-mismatched-source",
+                observation_handles=(
+                    replay.observation_handles[0],
+                    mismatched_handle,
+                ),
+            )
+        )
 
 
 def test_packer_fails_closed_on_wrong_layers_and_post_pack_mutation() -> None:

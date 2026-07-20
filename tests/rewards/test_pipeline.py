@@ -1,13 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+import pytest
+
 from tgvf_rl.contracts.identity import ArtifactIdentity
-from tgvf_rl.rewards.pipeline import ExactTextVerifier, RewardPipeline
+from tgvf_rl.judges import JudgeResult
+from tgvf_rl.rewards.pipeline import (
+    ExactTextVerifier,
+    PilotRewardPipeline,
+    RewardPipeline,
+)
 from tgvf_rl.rewards.schema import (
+    AnswerTaskKind,
+    AnswerVerificationResult,
     NormalizationSpec,
+    PilotRewardSpec,
     RewardComponentSpec,
     RewardContext,
     RewardPipelineSpec,
 )
+from tgvf_rl.rewards.verifiers import RuleFirstAnswerVerifier
 
 
 def test_explicit_reward_pipeline_is_decomposed_and_deterministic() -> None:
@@ -20,3 +33,182 @@ def test_explicit_reward_pipeline_is_decomposed_and_deterministic() -> None:
     result = pipeline.score(RewardContext("s", "q", " Blue  label ", "blue label", 1))
     assert result.total == 2.0
     assert result.components[0].raw_score == 1.0
+
+
+def _identity(name: str, digit: str) -> ArtifactIdentity:
+    return ArtifactIdentity("policy-pilot-v1", name, "v1", digit * 64)
+
+
+@dataclass(frozen=True)
+class _FixedVerifier:
+    correct: bool
+    identity: ArtifactIdentity
+
+    def verify(self, context: RewardContext) -> AnswerVerificationResult:
+        return AnswerVerificationResult(
+            self.correct, "fixture", "fixture verdict", self.identity
+        )
+
+
+def _pilot_spec() -> PilotRewardSpec:
+    return PilotRewardSpec(
+        pipeline_identity=_identity("reward", "1"),
+        answer_verifier_identity=_identity("answer", "2"),
+        format_verifier_identity=_identity("format", "3"),
+        tool_verifier_identity=_identity("tool", "4"),
+    )
+
+
+def test_policy_pilot_reward_equation_and_one_time_tool_bonus() -> None:
+    spec = _pilot_spec()
+    pipeline = PilotRewardPipeline(
+        spec, _FixedVerifier(True, spec.answer_verifier_identity)
+    )
+    context = RewardContext(
+        "sample",
+        "question",
+        "answer",
+        "answer",
+        tool_call_count=4,
+        successful_tgvf_observation_count=3,
+        tool_error_codes=("tool_execution_failed",),
+    )
+    result = pipeline.score(context)
+
+    assert result.total == pytest.approx(2.0)
+    assert tuple(component.raw_score for component in result.components) == (
+        1.0,
+        0.0,
+        1.0,
+    )
+    assert tuple(component.weighted_score for component in result.components) == (
+        0.8,
+        0.0,
+        1.2,
+    )
+
+
+def test_policy_pilot_format_penalty_and_no_invented_tool_error_penalty() -> None:
+    spec = _pilot_spec()
+    pipeline = PilotRewardPipeline(
+        spec, _FixedVerifier(False, spec.answer_verifier_identity)
+    )
+    result = pipeline.score(
+        RewardContext(
+            "sample",
+            "question",
+            "bad",
+            "good",
+            tool_call_count=1,
+            protocol_valid=False,
+            successful_tgvf_observation_count=0,
+            tool_error_codes=("invalid_json",),
+        )
+    )
+
+    assert result.total == pytest.approx(-0.2)
+    assert tuple(component.raw_score for component in result.components) == (
+        0.0,
+        -1.0,
+        0.0,
+    )
+
+
+class _Judge:
+    def __init__(self, result: JudgeResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    def judge(self, request):
+        self.calls += 1
+        return self.result
+
+
+def _rule_first_verifier(*, judge_score: float = 1.0):
+    model = _identity("qwen2.5-72b", "5")
+    service = _identity("judge-service", "6")
+    sampling = _identity("judge-sampling", "7")
+    calibration = _identity("judge-calibration", "8")
+    prompt = _identity("judge-prompt", "9")
+    judge = _Judge(
+        JudgeResult(
+            score=judge_score,
+            rationale="binary semantic verdict",
+            service_identity=service,
+            model_identity=model,
+            sampling_identity=sampling,
+            calibration_identity=calibration,
+        )
+    )
+    verifier = RuleFirstAnswerVerifier(
+        rule_identity=_identity("rules", "a"),
+        normalization=NormalizationSpec(True, True, True),
+        judge=judge,
+        judge_prompt_identity=prompt,
+        judge_model_identity=model,
+        judge_service_identity=service,
+        judge_sampling_identity=sampling,
+        judge_calibration_identity=calibration,
+    )
+    return verifier, judge
+
+
+def test_answer_router_uses_rules_for_mcq_and_numeric_math_before_judge() -> None:
+    verifier, judge = _rule_first_verifier()
+    mcq = verifier.verify(
+        RewardContext(
+            "mcq",
+            "choose",
+            "(B). explanation",
+            "B",
+            0,
+            task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+        )
+    )
+    math = verifier.verify(
+        RewardContext(
+            "math",
+            "compute",
+            "0.5",
+            r"\frac{1}{2}",
+            0,
+            task_kind=AnswerTaskKind.MATH,
+        )
+    )
+
+    assert mcq.correct and mcq.route == "multiple_choice_rule"
+    assert math.correct and math.route == "math_numeric_rule"
+    assert judge.calls == 0
+
+
+def test_open_vqa_and_undecidable_math_use_bound_72b_judge() -> None:
+    verifier, judge = _rule_first_verifier(judge_score=1.0)
+    result = verifier.verify(
+        RewardContext(
+            "open",
+            "what is shown?",
+            "a crimson automobile",
+            "a red car",
+            0,
+            task_kind=AnswerTaskKind.OPEN_VQA,
+        )
+    )
+
+    assert result.correct
+    assert result.route == "qwen2.5_72b_semantic_fallback"
+    assert judge.calls == 1
+
+
+def test_formal_judge_must_return_binary_verdict() -> None:
+    verifier, _ = _rule_first_verifier(judge_score=0.5)
+    with pytest.raises(ValueError, match="binary"):
+        verifier.verify(
+            RewardContext(
+                "open",
+                "question",
+                "candidate",
+                "reference",
+                0,
+                task_kind=AnswerTaskKind.OPEN_VQA,
+            )
+        )

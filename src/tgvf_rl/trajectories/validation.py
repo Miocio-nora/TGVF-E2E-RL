@@ -45,6 +45,34 @@ class TrajectoryValidator:
             raise ReplayMismatchError(
                 "every valid tool call must have one ordered observation"
             )
+        attempts = tuple(
+            sorted(
+                (
+                    (call.attempt_index, call.assistant_turn_index, "success")
+                    for call in trajectory.tool_calls
+                ),
+            )
+        ) + tuple(
+            sorted(
+                (
+                    (error.attempt_index, error.assistant_turn_index, "error")
+                    for error in trajectory.tool_errors
+                ),
+            )
+        )
+        attempts = tuple(sorted(attempts, key=lambda item: item[0]))
+        attempt_indices = tuple(item[0] for item in attempts)
+        if any(index is None for index in attempt_indices):
+            raise ReplayMismatchError("tool attempt identity must be materialized")
+        if attempt_indices != tuple(range(len(attempt_indices))):
+            raise ReplayMismatchError("tool attempts must have contiguous indices")
+        attempt_turns = tuple(item[1] for item in attempts)
+        if len(set(attempt_turns)) != len(attempt_turns):
+            raise ReplayMismatchError(
+                "each assistant action turn may produce at most one tool event"
+            )
+        if attempt_turns != tuple(sorted(attempt_turns)):
+            raise ReplayMismatchError("tool attempts must follow assistant-turn order")
         representation = None
         for item, call in zip(
             trajectory.observations, trajectory.tool_calls, strict=True
@@ -123,9 +151,34 @@ class TrajectoryValidator:
                 raise ReplayMismatchError(
                     "tool call references a non-tool assistant turn"
                 )
-            if call.assistant_turn_index != call.call_index:
+            if isinstance(record, FocusedObservationRecord):
+                sampled_length = len(assistant_turn.tokens.token_ids)
+                if call.target_token_span.end > sampled_length:
+                    raise ReplayMismatchError(
+                        "sampled target span lies outside its assistant turn"
+                    )
+                prefix_length = (
+                    record.condition.source_sequence_length - sampled_length
+                )
+                expected_full_span = (
+                    prefix_length + call.target_token_span.start,
+                    prefix_length + call.target_token_span.end,
+                )
+                if prefix_length < 0 or (
+                    record.condition.conditioning_target_token_start,
+                    record.condition.conditioning_target_token_end,
+                ) != expected_full_span:
+                    raise IdentityMismatchError(
+                        "conditioning target span differs from sampled-turn offset"
+                    )
+        for error in trajectory.tool_errors:
+            if error.assistant_turn_index >= len(trajectory.assistant_turns):
                 raise ReplayMismatchError(
-                    "each accepted action turn must contain exactly one ordered tool call"
+                    "tool error references a missing assistant turn"
+                )
+            if not trajectory.assistant_turns[error.assistant_turn_index].is_tool_call:
+                raise ReplayMismatchError(
+                    "tool error references a non-tool assistant turn"
                 )
 
         for turn in trajectory.assistant_turns:
@@ -186,9 +239,9 @@ class TrajectoryValidator:
                 raise ReplayMismatchError(
                     "tool-terminal trajectory must end in a tool-call assistant turn"
                 )
-            if len(trajectory.assistant_turns) != len(trajectory.tool_calls) + 1:
+            if not attempts or attempts[-1][1] != len(trajectory.assistant_turns) - 1:
                 raise ReplayMismatchError(
-                    "failed/capped tool attempt must not fabricate a call or observation"
+                    "tool-terminal trajectory must record its final tool attempt"
                 )
 
     def validate_batch(self, batch: TrajectoryBatch) -> None:

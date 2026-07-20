@@ -205,6 +205,34 @@ SDPO+GRPO hybrid remain distinct, fail-closed objective identities: exact
 mathematics and parity must be accepted before either performs a model optimizer
 step.
 
+## EasyR1
+
+```text
+repository: https://github.com/hiyouga/EasyR1
+review commit: 07cae10c28d686a6604546617663d32e4f1089e6
+observed: 2026-07-20 JST
+role: Qwen3-VL decoder-only LoRA target and small Pilot configuration reference
+dependency status: reference only; do not install or vendor
+```
+
+Only the exact Qwen3-VL LoRA target-module selection and the corresponding
+small configuration surface may inform the Pilot implementation.  The user has
+independently fixed rank 64, alpha 64, dropout zero, and an initial learning
+rate of `1e-5`; those values are project decisions rather than inherited
+EasyR1 defaults.  This pin does not authorize copying EasyR1's veRL fork,
+trainer, rollout loop, reward code, prompts, data pipeline, or dependency lock.
+Upstream veRL and the repository-owned exact-observation/replay contracts remain
+authoritative.
+
+The reviewed source is limited to the exact
+[`examples/qwen3_vl_4b_geo3k_grpo_lora.sh`](https://github.com/hiyouga/EasyR1/blob/07cae10c28d686a6604546617663d32e4f1089e6/examples/qwen3_vl_4b_geo3k_grpo_lora.sh)
+launcher and the LoRA stanza in
+[`examples/config.yaml`](https://github.com/hiyouga/EasyR1/blob/07cae10c28d686a6604546617663d32e4f1089e6/examples/config.yaml#L43-L57).
+The latter uses `all-linear` plus a visual-module exclusion. The project must
+use a positive language-decoder whitelist and verify actual trainable parameter
+names instead, because a name-only visual exclusion is insufficient to prove
+that the merger, native DeepStack, embeddings, head, and TGVF Adapter are frozen.
+
 ## DeepEyes
 
 ```text
@@ -230,12 +258,34 @@ family-adapter dispatch, launcher layout, and test-organization ideas that can
 be re-expressed behind this project's contracts. DeepEyes code, veRL tree, and
 runtime are not dependencies.
 
+The Pilot training data source is separately pinned to the public
+[`ChenShawn/DeepEyes-Datasets-47k`](https://huggingface.co/datasets/ChenShawn/DeepEyes-Datasets-47k)
+snapshot `5546681e28fa2eda9f60a9ea9dd0cf291216ded3` (Apache-2.0). Its complete
+47K snapshot is the concatenation of these three immutable LFS objects:
+
+| file | rows | LFS SHA-256 | bytes |
+|---|---:|---|---:|
+| `data_0.1.2_visual_toolbox_v2.parquet` | 22,362 | `42992bf5de25e8d766f820fb9730ece275563ba80dd41e3377bf678c9ba2c2c1` | 990,263,397 |
+| `data_thinklite_reasoning_acc.parquet` | 11,031 | `660cea5ff8f74d19f993b575f30b6f5406b6c330dd8f9aacc6be59e299238967` | 1,656,152,904 |
+| `data_v0.8_visual_toolbox_v2.parquet` | 13,659 | `96fc256e6f73e098c1b586f1c37baad616ecbddf1105bfca71aa07a5dda7da5a` | 2,198,504,506 |
+
+Total row count is 47,052. The source `prompt` and its zoom-tool instructions
+are forbidden inputs to the Pilot renderer. Materialization may retain only
+image payload, `extra_info.question`, `reward_model.ground_truth`,
+`data_source`, and the minimum typed metadata needed for verification and
+provenance. The materialized manifest, row identities, shuffle seed, and
+policy-prompt hash remain separate project artifacts.
+
 DeepEyes uses Qwen2.5-VL policy models and documents
 `Qwen/Qwen2.5-72B-Instruct` as an LLM-as-judge example. The user has now fixed
 our secondary policy model to `Qwen/Qwen2.5-VL-7B-Instruct` and approved
-the 72B model as the sole LLM judge for VLMEvalKit benchmark evaluation. This
-does not accept its use as an RL reward. Reward prompt and calibration remain
-unset.
+the 72B model both as the sole LLM judge for VLMEvalKit benchmark evaluation
+and as the fallback answer verifier for the formal Policy Pilot. The latter is
+a separately identified RL-reward role: multiple choice remains rule/exact,
+mathematics uses a math verifier before fallback, and open visual QA uses rules
+before semantic-equivalence fallback. The RL-judge prompt, service identity,
+sampling, timeout/retry policy, calibration set, and failure behavior remain
+unset and must not be inherited from DeepEyes or the benchmark judge config.
 
 Forbidden inheritance includes its observation schema or materialization,
 rollout/behavior log probabilities, replay semantics, sampled-token masks,

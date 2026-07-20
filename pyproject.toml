@@ -26,6 +26,6 @@ test = ["pytest>=8.3", "ruff>=0.12"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 testpaths = ["tests"]
 pythonpath = ["src"]
