@@ -4164,7 +4164,7 @@ instead of repeated bullets.
 
 ### RP-31-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-CONTEXTUAL-GPU23
 
-- Cell/status: mandatory periodic-boundary regression, `PLANNED` / `PENDING`,
+- Cell/status: mandatory periodic-boundary regression, `COMPLETE` / `INVALID`,
   authorized by `RPI-20260720-PERIODIC-BOUNDARY-SMOKE-V1`. It asks whether the
   real Torch 2.9 FSDP2 no-reshard path can execute train -> validation ->
   explicit reshard/ownership audit -> DCP v2 save, then restore and repeat.
@@ -4198,10 +4198,14 @@ instead of repeated bullets.
 - Acceptance: step-1 train and validation events, a complete DCP v2 directory,
   clean teardown, exact restore, step-2 train/validation and second DCP; finite
   metrics, exact cursor/history binding, and no ownership error.
+- Result: rejected before model load at `2026-07-20T19:20:52+09:00`; the reused
+  historical K4 fixture predates the current strict retained-focus transform
+  and produces zero accepted rows. No training metric or checkpoint exists.
+  Output is immutable; the replacement uses the exact formal data contract.
 
 ### RP-32-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-TARGET-EMBEDDING-GPU01
 
-- Cell/status: paired mandatory regression, `PLANNED` / `PENDING`, with every
+- Cell/status: paired mandatory regression, `COMPLETE` / `INVALID`, with every
   scientific/lifecycle field identical to RP-31 except the selected provider,
   GPUs and output identity. Provider is `target_token_embedding` from the
   frozen language-model input embedding.
@@ -4219,6 +4223,48 @@ instead of repeated bullets.
   torchrun invocations as RP-31 with the RP-32 fresh/resume config paths and
   operational stops 1/2. Acceptance is identical to RP-31; RL-only fields are
   N/A.
+- Result: rejected before model load at `2026-07-20T19:20:54+09:00` for the
+  same zero-accepted-row historical fixture as RP-31. No training metric or
+  checkpoint exists; output is immutable.
+
+### RP-33-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-FORMALDATA-CONTEXTUAL-GPU23
+
+- Cell/status: `PLANNED` / `PENDING`; valid-data replacement for RP-31. The
+  model, contextual provider, prompt, objective, optimizer, 2000-step scheduler
+  horizon, K4/B4/GA4/world2 topology, no-reshard lifecycle, cadence-one
+  train/validation/DCP and two-process stop-1/resume-to-2 acceptance are
+  identical to RP-31.
+- Data/code/output: exact formal v4 clean-imend train and v3 validation contract
+  from contextual V3, including recorded overlap identity; code
+  `705018b0d5bb1e02d0bae87c5e1503680db37eb9`. Fresh config source/canonical
+  SHA256 `477d68574e20981fdeba1662ee42ddbaf52ade9c313b23a469483a443d837d56` /
+  `290e32a4282382e50d72f31cf9d92aee1be99b3ac149818324fb3fa3b2594b2c`;
+  resume config `3691dbc444cd1d342bb3e9b3175f1e281203e7fb62da46cfd87ead5a0b6e2879` /
+  `0d00232d5a97272bd06741bbbe13fb51520de9e207fd5251e12fb95bbc35b05c`;
+  immutable output
+  `artifacts/representation/RP-33-qwen3-periodic-boundary-formaldata-contextual-gpu23/`.
+- Command/resources: deterministic environment and two commands follow RP-31,
+  substituting RP-33 fresh/resume configs; physical GPUs 2/3 were idle at
+  `2026-07-20T19:22:03+09:00`. Each invocation is bounded by 1800 seconds. RL
+  fields remain N/A.
+
+### RP-34-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-FORMALDATA-TARGET-EMBEDDING-GPU01
+
+- Cell/status: `PLANNED` / `PENDING`; target-token-embedding pair of RP-33 and
+  valid-data replacement for RP-32. All fields and acceptance match RP-33
+  except provider/device/output identity.
+- Code/config/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
+  fresh source/canonical SHA256
+  `8a0b1cf6705d4cdc1c09473eb0031af55cc7229d6e2ada041729a98bcd59d7f6` /
+  `53de05dc03294cedc57bc72c53c58d28a940eed3d189f295a3aa652c64d14a43`;
+  resume source/canonical SHA256
+  `bec760676fe160f589aa3acb15c3541d2cfd2cf09a740266827393306dba41ca` /
+  `86ec0d24719b521d0525c203c1f8a7c04736b797c697e4a059c7c24d25a7c1e0`;
+  immutable output
+  `artifacts/representation/RP-34-qwen3-periodic-boundary-formaldata-target-embedding-gpu01/`.
+- Command/resources: RP-34 fresh/resume configs with operational stops 1/2 on
+  physical GPUs 0/1, idle at `2026-07-20T19:22:03+09:00`; 1800-second bounds;
+  RL fields N/A.
 
 ## Compatibility-spike status
 
