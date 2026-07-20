@@ -4162,6 +4162,64 @@ instead of repeated bullets.
   `RPI-20260720-PERIODIC-BOUNDARY-SMOKE-V1`; the old output and W&B run remain
   diagnostic and immutable.
 
+### RP-31-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-CONTEXTUAL-GPU23
+
+- Cell/status: mandatory periodic-boundary regression, `PLANNED` / `PENDING`,
+  authorized by `RPI-20260720-PERIODIC-BOUNDARY-SMOKE-V1`. It asks whether the
+  real Torch 2.9 FSDP2 no-reshard path can execute train -> validation ->
+  explicit reshard/ownership audit -> DCP v2 save, then restore and repeat.
+- Code/config/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
+  fresh config source/canonical SHA256
+  `210da220d659cf2219c5b0daa7c33cffe8b8f6be5a3aebf0ac0b066481ebf073` /
+  `e98351628541e0dc3db2902c0dbb55ea9c8ab10e3747a7a74dc6f68450c0ad81`;
+  resume config source/canonical SHA256
+  `d0b08899d24a0868ac71d0bc460b95ebf54524bf484424f1c040e0f1274045fe` /
+  `5e14592d4580a908da46bb8ba2cb216c2c1a1cd6405fcc9529317365f3b1a85c`;
+  immutable output
+  `artifacts/representation/RP-31-qwen3-periodic-boundary-contextual-gpu23/`.
+- Identity: frozen local Qwen3-VL-8B-Thinking, BF16 SDPA, tokenizer 151669/no
+  resize, max pixels 262144; current native prompt v1 `{question}`; fixed K4
+  train/validation fixtures SHA256 `7351cdcd81adf8861ed867144c27e2faa67587f3b31531fa54658cf54134800d` /
+  `5a0ab5148d75d6b3df5c7c4e3ee61a5d824ddf2b82df6474769af730f6db4d12`;
+  contextual hidden-state provider layer `-1`, fresh seed 42, Balanced Matrix
+  CE/L_gen/Norm `1/1/.1`, temperature 1, manifold 0, AdamW `1e-4`, 2000-step
+  historical-cosine horizon, K4/B4/GA4/world2/global batch32.
+- Execution: FSDP2 `reshard_after_forward=false`; log, validation and DCP
+  cadence all 1. Invocation A stops operationally after step 1; invocation B is
+  a new torchrun restoring step 1 and stopping after step 2. RL, rollout,
+  behavior logprobs, reward, GRPO, SDPO, vLLM and judge fields are N/A. GPUs 2
+  and 3 were idle at `2026-07-20T19:19:40+09:00` with UUIDs already recorded in
+  contextual V3.
+- Commands: common deterministic environment from contextual V3, then
+  `torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation
+  configs/smoke/representation_qwen3_contextual_rp31_periodic_boundary_gpu23.toml
+  --stop-after-global-step 1`; repeat in a fresh process with the `_resume.toml`
+  config and `--stop-after-global-step 2`, each bounded by 1800 seconds.
+- Acceptance: step-1 train and validation events, a complete DCP v2 directory,
+  clean teardown, exact restore, step-2 train/validation and second DCP; finite
+  metrics, exact cursor/history binding, and no ownership error.
+
+### RP-32-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-TARGET-EMBEDDING-GPU01
+
+- Cell/status: paired mandatory regression, `PLANNED` / `PENDING`, with every
+  scientific/lifecycle field identical to RP-31 except the selected provider,
+  GPUs and output identity. Provider is `target_token_embedding` from the
+  frozen language-model input embedding.
+- Code/config/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
+  fresh config source/canonical SHA256
+  `9e375da0ac616c67465789fa95eabbc0443704f45a3c9a1ffafe0245846c61fa` /
+  `2f5fe6b432474d5d31d5301ade236b9d3306e9c96bde7e64a11b98f887e44e41`;
+  resume config source/canonical SHA256
+  `473ec1bb8ee16b31a36442b543756cf1a0eba9200cc0c401b413834409e304e2` /
+  `a98a2558dd45c29c9b2c06e412782d052e03ba0dfb53ca875f6dbfbd3f4e9821`;
+  immutable output
+  `artifacts/representation/RP-32-qwen3-periodic-boundary-target-embedding-gpu01/`.
+- Execution/commands: physical GPUs 0/1 were idle at
+  `2026-07-20T19:19:40+09:00`; use the same two 1800-second deterministic
+  torchrun invocations as RP-31 with the RP-32 fresh/resume config paths and
+  operational stops 1/2. Acceptance is identical to RP-31; RL-only fields are
+  N/A.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
