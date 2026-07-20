@@ -3603,8 +3603,8 @@ retained as `INVALID` and rerun under a new planned ID.
 - Spike-plan git revision and VA0/VA1/VA2 approval references: user authorized
   Qwen2.5-72B deployment and continuation on 2026-07-20 JST; accepted evaluation
   architecture `EVAL-ARCH-20260720` plus Project Task §0.5.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: can the exact local `Qwen/Qwen2.5-72B-Instruct` snapshot load under
   the accepted vLLM/Torch stack with TP=2 on physical GPUs 2 and 3, expose the
   slash-free `Qwen2.5-72B-Instruct` OpenAI-compatible model identity, and return
@@ -3669,9 +3669,13 @@ retained as `INVALID` and rerun under a new planned ID.
 - GPUs: physical `2` = `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and physical
   `3` = `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; both NVIDIA B200 183359
   MiB; logical mapping `2->0`, `3->1`.
-- Start/end timestamps, elapsed time, and session/process identity: pending
-  execution and will be recorded from the service process.
-- Actual GPU-hours and peak scratch use: pending execution; no checkpoint.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-20T16:30:26+09:00` / `2026-07-20T16:31:32+09:00`, 66 seconds;
+  API PID 2460166, engine PID 2461196, worker PIDs 2461730 and 2461731.
+- Actual GPU-hours and peak scratch use: less than `0.037` two-device GPU-hours
+  by wall-time upper bound; pre/post samples were 0 MiB and no 72B weights
+  loaded, but no continuous peak sample was captured. Log 11,508 bytes; no
+  checkpoint.
 - Command: `CUDA_VISIBLE_DEVICES=2,3 CC=/usr/bin/gcc CXX=/usr/bin/g++
   CPATH=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12
   VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn TOKENIZERS_PARALLELISM=false
@@ -3685,10 +3689,16 @@ retained as `INVALID` and rerun under a new planned ID.
   2 and 3 are released.
 - Scorer/parser identity: `tools/smoke_qwen25_72b_judge.py` hash above; no
   benchmark scorer invoked.
-- Metrics: pending exact response, usage, latency, service load time, GPU memory
-  sample, process identity, and log hash.
-- Conclusion: `PENDING`; this cell can establish deployment availability only,
-  not numerical judge calibration or benchmark quality.
+- Metrics: no endpoint or chat response was produced. The server parsed the
+  positional path only as `model_tag`, while its engine retained the vLLM 0.12
+  default `model='Qwen/Qwen3-0.6B'`, resolved `Qwen3ForCausalLM`, and began
+  loading that wrong model. The process was stopped immediately. Server-log
+  SHA256 `f331acfd032e3bc90d43fabf08fd476ece02328a5b95b619d0b7fafd5d46c911`.
+- Conclusion: `FAIL`; vLLM 0.12 requires the explicit `--model` option for this
+  API-server path. The failure is identity-safe: no wrong-model completion was
+  accepted and GPUs returned to 0 MiB. A separately planned `BJ-10-R1` uses the
+  corrected command and is required for deployment availability; this cell
+  makes no calibration or benchmark-quality claim.
 
 ## Compatibility-spike status
 

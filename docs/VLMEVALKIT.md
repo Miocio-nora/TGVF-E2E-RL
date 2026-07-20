@@ -91,7 +91,7 @@ VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn \
 TOKENIZERS_PARALLELISM=false \
 .venv312/bin/python -m \
   vllm.entrypoints.openai.api_server \
-  /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct \
+  --model /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct \
   --served-model-name Qwen2.5-72B-Instruct \
   --host 127.0.0.1 --port 8012 \
   --tensor-parallel-size 2 --dtype bfloat16 \

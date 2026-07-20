@@ -37,6 +37,7 @@
     ]
   },
   "server": {
+    "model_cli_argument": "--model",
     "host": "127.0.0.1",
     "port": 8012,
     "base_url": "http://127.0.0.1:8012/v1",
