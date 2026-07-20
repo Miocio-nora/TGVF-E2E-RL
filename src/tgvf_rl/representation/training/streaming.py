@@ -23,6 +23,7 @@ from .losses import (
     EVIDENCE_IGNORE_INDEX,
     MatrixCEScoreMode,
     _causal_evidence_losses_from_native_labels,
+    _historical_main_norm_loss_unchecked,
     _historical_sample_norm_loss_unchecked,
     _materialize_native_causal_evidence_labels,
     causal_evidence_losses,
@@ -310,12 +311,7 @@ def _score_streaming_groups(
     with torch.no_grad():
         norm_losses = [
             [
-                _historical_sample_norm_loss_unchecked(
-                    candidate.visual.main,
-                    group.source_visual.main,
-                    candidate.visual.deepstack,
-                    group.source_visual.deepstack,
-                )
+                _candidate_norm_loss(candidate.visual, group.source_visual)
                 for candidate in group.candidates
             ]
             for group in groups
@@ -633,12 +629,7 @@ def _backward_streaming_groups(
         _validate_streaming_norm_tensors_finite(groups)
         live_norms = tuple(
             tuple(
-                _historical_sample_norm_loss_unchecked(
-                    candidate.visual.main,
-                    group.source_visual.main,
-                    candidate.visual.deepstack,
-                    group.source_visual.deepstack,
-                )
+                _candidate_norm_loss(candidate.visual, group.source_visual)
                 for candidate in group.candidates
             )
             for group in groups
@@ -831,7 +822,25 @@ def _assert_gradient_contract(
 def _candidate_output_tensors(
     visual: RepresentationVisualTensorBundle,
 ) -> tuple[torch.Tensor, ...]:
-    return (visual.main, *visual.deepstack)
+    return (
+        (visual.main, *visual.deepstack)
+        if visual.d_deepstack_active
+        else (visual.main,)
+    )
+
+
+def _candidate_norm_loss(
+    candidate: RepresentationVisualTensorBundle,
+    source: RepresentationVisualTensorBundle,
+) -> torch.Tensor:
+    if candidate.d_deepstack_active:
+        return _historical_sample_norm_loss_unchecked(
+            candidate.main,
+            source.main,
+            candidate.deepstack,
+            source.deepstack,
+        )
+    return _historical_main_norm_loss_unchecked(candidate.main, source.main)
 
 
 def _validate_streaming_norm_tensors_finite(
@@ -848,22 +857,24 @@ def _validate_streaming_norm_tensors_finite(
                 (group.source_visual.main, "source visual tokens"),
             )
         )
-        for d_branch, source_branch in zip(
-            first_candidate.visual.deepstack,
-            group.source_visual.deepstack,
-            strict=True,
-        ):
-            named_tensors.extend(
-                (
-                    (d_branch, "D tokens"),
-                    (source_branch, "source visual tokens"),
+        if first_candidate.visual.d_deepstack_active:
+            for d_branch, source_branch in zip(
+                first_candidate.visual.deepstack,
+                group.source_visual.deepstack,
+                strict=True,
+            ):
+                named_tensors.extend(
+                    (
+                        (d_branch, "D tokens"),
+                        (source_branch, "source visual tokens"),
+                    )
                 )
-            )
         for candidate in remaining_candidates:
             named_tensors.append((candidate.visual.main, "D tokens"))
-            named_tensors.extend(
-                (branch, "D tokens") for branch in candidate.visual.deepstack
-            )
+            if candidate.visual.d_deepstack_active:
+                named_tensors.extend(
+                    (branch, "D tokens") for branch in candidate.visual.deepstack
+                )
 
     reference_device = named_tensors[0][0].device
     if any(tensor.device != reference_device for tensor, _ in named_tensors[1:]):
@@ -1279,7 +1290,7 @@ def _backward_collective_padding(
     """
 
     for visual in padding:
-        tensors = (visual.main, *visual.deepstack)
+        tensors = _candidate_output_tensors(visual)
         if any(not tensor.requires_grad for tensor in tensors):
             raise ValueError(
                 "training collective padding must retain every Adapter graph"

@@ -1280,9 +1280,10 @@ def _find_wrong_different_candidate(
     for offset in range(1, len(groups)):
         group = groups[(group_index + offset) % len(groups)]
         preferred = row_index % len(group.candidates)
-        candidate_indices = (preferred, *(
-            index for index in range(len(group.candidates)) if index != preferred
-        ))
+        candidate_indices = (
+            preferred,
+            *(index for index in range(len(group.candidates)) if index != preferred),
+        )
         for candidate_index in candidate_indices:
             candidate = group.candidates[candidate_index]
             if _visual_bundle_contract_matches(candidate.visual, expected):
@@ -1440,6 +1441,7 @@ def _deterministic_random_visual_bundle(
         main=tensors[0],
         deepstack=tensors[1:],
         branch_layers=visual.branch_layers,
+        d_deepstack_active=visual.d_deepstack_active,
     )
 
 
@@ -1468,26 +1470,27 @@ def _sample_health(
     if main_attention is None:
         raise RuntimeError("main Adapter attention is not evaluable")
     branches: list[RepresentationBranchHealthRecord] = []
-    for layer, d, source, weights in zip(
-        candidate.visual.branch_layers,
-        candidate.visual.deepstack,
-        group.source_visual.deepstack,
-        attention.deepstack,
-        strict=True,
-    ):
-        branch_attention = attention_diagnostics(
-            sub_slot_attention_weights=weights,
-            topk=ATTENTION_TOPK,
-        )
-        if branch_attention is None:
-            raise RuntimeError("D-DeepStack Adapter attention is not evaluable")
-        branches.append(
-            RepresentationBranchHealthRecord(
-                branch_layer=layer,
-                norm=norm_comparison_diagnostics(d, source),
-                attention=branch_attention,
+    if candidate.visual.d_deepstack_active:
+        for layer, d, source, weights in zip(
+            candidate.visual.branch_layers,
+            candidate.visual.deepstack,
+            group.source_visual.deepstack,
+            attention.deepstack,
+            strict=True,
+        ):
+            branch_attention = attention_diagnostics(
+                sub_slot_attention_weights=weights,
+                topk=ATTENTION_TOPK,
             )
-        )
+            if branch_attention is None:
+                raise RuntimeError("D-DeepStack Adapter attention is not evaluable")
+            branches.append(
+                RepresentationBranchHealthRecord(
+                    branch_layer=layer,
+                    norm=norm_comparison_diagnostics(d, source),
+                    attention=branch_attention,
+                )
+            )
     return RepresentationSampleHealthRecord(
         main=norm_comparison_diagnostics(
             candidate.visual.main, group.source_visual.main
@@ -1647,6 +1650,8 @@ def _assert_visual_bundle_contract(
     *,
     name: str,
 ) -> None:
+    if actual.d_deepstack_active != expected.d_deepstack_active:
+        raise ValueError(f"{name} D-DeepStack activity differs")
     if actual.branch_layers != expected.branch_layers:
         raise ValueError(f"{name} branch layer order differs")
     for actual_tensor, expected_tensor in zip(
@@ -1666,6 +1671,8 @@ def _visual_bundle_contract_matches(
     actual: RepresentationVisualTensorBundle,
     expected: RepresentationVisualTensorBundle,
 ) -> bool:
+    if actual.d_deepstack_active != expected.d_deepstack_active:
+        return False
     if actual.branch_layers != expected.branch_layers:
         return False
     return all(

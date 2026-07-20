@@ -12,7 +12,7 @@ from torch import nn
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.base import InjectedForwardRequest, InjectedVisualBlock
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
-from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
+from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter, TGVFAdapterVariant
 from tgvf_rl.representation.training.internal_evaluation import (
     DETERMINISTIC_RANDOM_D_ALGORITHM,
     NativeCausalValueFlipRequest,
@@ -26,6 +26,7 @@ from tgvf_rl.representation.training.internal_evaluation import (
     RepresentationInternalEvaluationIdentity,
     _deterministic_random_visual_bundle,
     _mean_nll_matrix,
+    _sample_health,
     _token_mean_nll_from_cell_score,
     create_injected_native_counterfactual_evaluator,
     run_representation_internal_evaluation,
@@ -87,7 +88,9 @@ def _projection(identity: str) -> FrozenProjectionPort:
     )
 
 
-def _adapter() -> TGVFAdapter:
+def _adapter(
+    variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
+) -> TGVFAdapter:
     torch.manual_seed(500)
     return TGVFAdapter(
         d_lm=6,
@@ -98,6 +101,7 @@ def _adapter() -> TGVFAdapter:
             _projection(f"branch-{layer}") for layer in (8, 16, 24)
         ),
         branch_layers=(8, 16, 24),
+        variant=variant,
     )
 
 
@@ -281,6 +285,10 @@ class _GroupBuilder:
                             for branch in output.deepstack_visual_embeds
                         ),
                         branch_layers=output.metadata.branch_layers,
+                        d_deepstack_active=(
+                            output.metadata.variant
+                            is TGVFAdapterVariant.FULL_D_DEEPSTACK
+                        ),
                     ),
                     attention=(
                         RepresentationAttentionTensorBundle(
@@ -291,7 +299,12 @@ class _GroupBuilder:
                                 branch.target_to_visual_attention.detach().clone()
                                 for branch in output.deepstack_attention
                             ),
-                            branch_layers=output.metadata.branch_layers,
+                            branch_layers=(
+                                output.metadata.branch_layers
+                                if output.deepstack_attention
+                                else ()
+                            ),
+                            d_deepstack_active=bool(output.deepstack_attention),
                         )
                         if self.retain_attention
                         else None
@@ -316,6 +329,15 @@ def _bundle(value: float) -> RepresentationVisualTensorBundle:
         ),
         branch_layers=(8, 16, 24),
     )
+
+
+def test_main_d_only_health_does_not_report_zero_placeholders_as_branches() -> None:
+    adapter = _adapter(TGVFAdapterVariant.MAIN_D_ONLY)
+    group = _GroupBuilder()(_sample_groups()[0], adapter, collective_candidate_count=2)
+
+    health = _sample_health(group, group.candidates[0])
+
+    assert health.branches == ()
 
 
 def _native_case() -> NativeCounterfactualCase:

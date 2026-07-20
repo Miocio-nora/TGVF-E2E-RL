@@ -53,6 +53,7 @@ def _wandb_config(config: dict[str, Any]) -> dict[str, Any]:
     training = config["training"]
     fsdp2 = config["fsdp2"]
     initialization = config["initialization"]
+    adapter_variant = config.get("adapter", {}).get("variant", "full_d_deepstack")
     global_batch = (
         data["train"]["batch_size"]
         * fsdp2["world_size"]
@@ -71,6 +72,7 @@ def _wandb_config(config: dict[str, Any]) -> dict[str, Any]:
         "conditioning_provider": conditioning["provider"],
         "conditioning_hidden_layer": conditioning.get("hidden_layer"),
         "conditioning_embedding_identity": conditioning.get("embedding_identity"),
+        "adapter_variant": adapter_variant,
         "prompt_identity": config["prompt"]["identity"],
         "objective_identity": objective["identity"],
         "matrix_ce_mode": objective["matrix_ce_mode"],
@@ -86,9 +88,7 @@ def _wandb_config(config: dict[str, Any]) -> dict[str, Any]:
         "warmup_steps": scheduler["warmup_steps"],
         "target_optimizer_steps": training["target_optimizer_steps"],
         "validation_every_steps": training["validation_every_optimizer_steps"],
-        "checkpoint_every_steps": config["checkpoint"][
-            "save_every_optimizer_steps"
-        ],
+        "checkpoint_every_steps": config["checkpoint"]["save_every_optimizer_steps"],
         "micro_batch_size_per_rank": data["train"]["batch_size"],
         "gradient_accumulation_steps": training["gradient_accumulation_steps"],
         "world_size": fsdp2["world_size"],
@@ -209,7 +209,9 @@ def main() -> int:
     config = _read_toml(args.config)
     current_records = _records(args.metrics)
     if args.dry_run:
-        payloads = [payload for row in current_records if (payload := metric_payload(row))]
+        payloads = [
+            payload for row in current_records if (payload := metric_payload(row))
+        ]
         print(json.dumps({"config": _wandb_config(config), "metrics": payloads}))
         return 0
 
@@ -217,12 +219,13 @@ def main() -> int:
 
     args.wandb_dir.mkdir(parents=True, exist_ok=True)
     provider_tag = str(config["conditioning"]["provider"]).replace("_", "-")
-    matrix_ce_mode_tag = str(config["objective"]["matrix_ce_mode"]).replace(
-        "_", "-"
-    )
+    matrix_ce_mode_tag = str(config["objective"]["matrix_ce_mode"]).replace("_", "-")
     matrix_ce_temperature_tag = (
-        f'matrix-ce-temperature-{config["objective"]["matrix_ce_temperature"]}'
+        f"matrix-ce-temperature-{config['objective']['matrix_ce_temperature']}"
     )
+    adapter_variant_tag = str(
+        config.get("adapter", {}).get("variant", "full_d_deepstack")
+    ).replace("_", "-")
     run = wandb.init(
         entity=args.entity,
         project=args.project,
@@ -235,6 +238,7 @@ def main() -> int:
             "representation-phase",
             "qwen3-vl-8b-thinking",
             provider_tag,
+            f"adapter-{adapter_variant_tag}",
             f"matrix-ce-{matrix_ce_mode_tag}",
             matrix_ce_temperature_tag,
         ),

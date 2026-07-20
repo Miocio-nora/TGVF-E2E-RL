@@ -7,6 +7,7 @@ from .adapter import (
     TGVFAdapterInput,
     TGVFAdapterMetadata,
     TGVFAdapterOutput,
+    TGVFAdapterVariant,
     TGVFBidirectionalAttention,
 )
 from .deepstack import (
@@ -28,6 +29,7 @@ __all__ = [
     "TGVFAdapterInput",
     "TGVFAdapterMetadata",
     "TGVFAdapterOutput",
+    "TGVFAdapterVariant",
     "TGVFBidirectionalAttention",
     "build_original_image_key_block_mask",
 ]

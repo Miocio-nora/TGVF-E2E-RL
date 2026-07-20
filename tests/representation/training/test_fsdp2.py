@@ -7,7 +7,7 @@ import pytest
 import torch
 from torch import nn
 
-from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
+from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter, TGVFAdapterVariant
 from tgvf_rl.representation.training import fsdp2 as fsdp2_module
 from tgvf_rl.representation.training.fsdp2 import (
     SUPPORTED_REPRESENTATION_TORCH_IDENTITIES,
@@ -44,7 +44,11 @@ def _projection(module: nn.Module, identity: str) -> FrozenProjectionPort:
     )
 
 
-def _owned_pair(*, device: str = "cpu") -> tuple[_QwenMergerOwner, TGVFAdapter]:
+def _owned_pair(
+    *,
+    device: str = "cpu",
+    variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
+) -> tuple[_QwenMergerOwner, TGVFAdapter]:
     with torch.device(device):
         qwen = _QwenMergerOwner()
         adapter = TGVFAdapter(
@@ -57,6 +61,7 @@ def _owned_pair(*, device: str = "cpu") -> tuple[_QwenMergerOwner, TGVFAdapter]:
                 for index, module in enumerate(qwen.deepstack_mergers)
             ),
             branch_layers=(8, 16, 24),
+            variant=variant,
         )
     qwen.requires_grad_(False)
     qwen.eval()
@@ -84,6 +89,18 @@ def test_cpu_and_meta_plans_inventory_owned_and_borrowed_state() -> None:
         )
         assert len(plan.owned_group_module_names) == 52
         assert plan.owned_parameter_numel > plan.borrowed_parameter_numel
+
+
+def test_main_d_only_plan_owns_only_main_attention_leaves() -> None:
+    qwen, adapter = _owned_pair(variant=TGVFAdapterVariant.MAIN_D_ONLY)
+    plan = build_representation_fsdp2_plan(adapter, qwen)
+
+    assert len(plan.owned_group_module_names) == 13
+    assert all(
+        not name.startswith("d_deepstack_branch_adapters.")
+        for name in plan.owned_parameter_names
+    )
+    assert len(plan.borrowed_buffer_names) == 4
 
 
 def test_plan_rejects_wrong_qwen_owner_and_parameter_freeze_drift() -> None:

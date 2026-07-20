@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from math import sqrt
 
 import torch
@@ -24,10 +25,18 @@ from .deepstack import (
 
 
 TGVF_ADAPTER_OUTPUT_SCHEMA_VERSION = "tgvf-adapter-output-v2"
+MAIN_D_ONLY_ZERO_PROJECTION_IDENTITY_PREFIX = "main-d-only-zero-deepstack"
 _BORROWED_PROJECTION_STATE_PREFIXES = (
     "main_projection.",
     "d_deepstack_projections.",
 )
+
+
+class TGVFAdapterVariant(str, Enum):
+    """Explicit full-observation versus main-D-only ablation identity."""
+
+    FULL_D_DEEPSTACK = "full_d_deepstack"
+    MAIN_D_ONLY = "main_d_only"
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +217,7 @@ class TGVFAdapterMetadata:
     pre_merge_visual_token_count: int
     d_token_count: int
     condition_provenance: TargetConditioningProvenance | None
+    variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK
     schema_version: str = TGVF_ADAPTER_OUTPUT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -224,8 +234,13 @@ class TGVFAdapterMetadata:
             <= 0
         ):
             raise ValueError("TGVF Adapter token counts must be positive")
-        if len(self.branch_layers) != len(self.deepstack_projection_identities):
-            raise ValueError("branch layers and projection identities must align")
+        if not isinstance(self.variant, TGVFAdapterVariant):
+            raise TypeError("TGVF Adapter variant must be explicit")
+        if self.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+            if len(self.branch_layers) != len(self.deepstack_projection_identities):
+                raise ValueError("branch layers and projection identities must align")
+        elif self.deepstack_projection_identities:
+            raise ValueError("main-D-only metadata cannot identify learned D branches")
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,14 +255,22 @@ class TGVFAdapterOutput:
 
     def __post_init__(self) -> None:
         _validate_token_tensor(self.main_d, name="main D")
-        if len(self.conditioned_deepstack_pre_merge_visual_tokens) != len(
-            self.d_deepstack.branches
+        if self.metadata.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+            if len(self.conditioned_deepstack_pre_merge_visual_tokens) != len(
+                self.d_deepstack.branches
+            ):
+                raise ValueError(
+                    "conditioned and projected D-DeepStack branches must align"
+                )
+            if len(self.deepstack_attention) != len(self.d_deepstack.branches):
+                raise ValueError(
+                    "D-DeepStack attention records must align with branches"
+                )
+        elif (
+            self.conditioned_deepstack_pre_merge_visual_tokens
+            or self.deepstack_attention
         ):
-            raise ValueError(
-                "conditioned and projected D-DeepStack branches must align"
-            )
-        if len(self.deepstack_attention) != len(self.d_deepstack.branches):
-            raise ValueError("D-DeepStack attention records must align with branches")
+            raise ValueError("main-D-only output cannot retain D-DeepStack state")
         for branch in self.d_deepstack.branches:
             if branch.shape != self.main_d.shape:
                 raise ValueError("main D and all D-DeepStack outputs must share shape")
@@ -274,8 +297,11 @@ class TGVFAdapter(TGVFBidirectionalAttention):
         | Sequence[FrozenProjectionPort],
         branch_layers: Sequence[int] = (8, 16, 24),
         attn_dim: int | None = None,
+        variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
     ) -> None:
         super().__init__(d_lm=d_lm, d_v=d_v, attn_dim=attn_dim)
+        if not isinstance(variant, TGVFAdapterVariant):
+            raise TypeError("variant must be a TGVFAdapterVariant")
         if not isinstance(main_projection, FrozenProjectionPort):
             raise TypeError("main_projection must be a FrozenProjectionPort")
         if isinstance(deepstack_projections, DDeepStackProjectionPorts):
@@ -318,12 +344,17 @@ class TGVFAdapter(TGVFBidirectionalAttention):
         self.main_projection = main_projection
         self.d_deepstack_projections = projection_ports
         self.d_deepstack_branch_layers = projection_ports.branch_layers
+        self.variant = variant
         self.d_deepstack_branch_adapters = nn.ModuleDict(
             {
                 str(layer): TGVFBidirectionalAttention(
                     d_lm=self.d_lm, d_v=self.d_v, attn_dim=self.attn_dim
                 )
-                for layer in self.d_deepstack_branch_layers
+                for layer in (
+                    self.d_deepstack_branch_layers
+                    if variant is TGVFAdapterVariant.FULL_D_DEEPSTACK
+                    else ()
+                )
             }
         )
 
@@ -444,22 +475,40 @@ class TGVFAdapter(TGVFBidirectionalAttention):
             target_hidden_states=adapter_input.target_hidden_states,
             pre_merge_visual_tokens=adapter_input.pre_merge_visual_tokens,
         )
-        branch_attention = tuple(
-            self.d_deepstack_branch_adapters[str(layer)](
-                target_hidden_states=adapter_input.target_hidden_states,
-                pre_merge_visual_tokens=branch,
+        branch_attention = (
+            tuple(
+                self.d_deepstack_branch_adapters[str(layer)](
+                    target_hidden_states=adapter_input.target_hidden_states,
+                    pre_merge_visual_tokens=branch,
+                )
+                for layer, branch in zip(
+                    self.d_deepstack_branch_layers,
+                    adapter_input.deepstack_pre_merge_visual_tokens,
+                    strict=True,
+                )
             )
-            for layer, branch in zip(
-                self.d_deepstack_branch_layers,
-                adapter_input.deepstack_pre_merge_visual_tokens,
-                strict=True,
-            )
+            if self.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK
+            else ()
         )
         conditioned_branches = tuple(
             output.conditioned_visual_tokens for output in branch_attention
         )
         main_d = self.main_projection(main_attention.conditioned_visual_tokens)
-        d_deepstack = self.d_deepstack_projections(conditioned_branches)
+        if self.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+            d_deepstack = self.d_deepstack_projections(conditioned_branches)
+            metadata_projection_identities = d_deepstack.projection_identities
+        else:
+            d_deepstack = DDeepStackPayload(
+                branch_layers=self.d_deepstack_branch_layers,
+                branches=tuple(
+                    torch.zeros_like(main_d) for _ in self.d_deepstack_branch_layers
+                ),
+                projection_identities=tuple(
+                    f"{MAIN_D_ONLY_ZERO_PROJECTION_IDENTITY_PREFIX}:{layer}"
+                    for layer in self.d_deepstack_branch_layers
+                ),
+            )
+            metadata_projection_identities = ()
 
         batched = main_d.ndim == 3
         batch_size = int(main_d.shape[0]) if batched else 1
@@ -473,7 +522,7 @@ class TGVFAdapter(TGVFBidirectionalAttention):
             metadata=TGVFAdapterMetadata(
                 branch_layers=self.d_deepstack_branch_layers,
                 main_projection_identity=self.main_projection.identity,
-                deepstack_projection_identities=d_deepstack.projection_identities,
+                deepstack_projection_identities=metadata_projection_identities,
                 batched=batched,
                 batch_size=batch_size,
                 target_token_count=int(adapter_input.target_hidden_states.shape[-2]),
@@ -482,6 +531,7 @@ class TGVFAdapter(TGVFBidirectionalAttention):
                 ),
                 d_token_count=int(main_d.shape[-2]),
                 condition_provenance=adapter_input.condition_provenance,
+                variant=self.variant,
             ),
         )
 
@@ -496,10 +546,12 @@ def _cross_attention(
 
 __all__ = [
     "TGVF_ADAPTER_OUTPUT_SCHEMA_VERSION",
+    "MAIN_D_ONLY_ZERO_PROJECTION_IDENTITY_PREFIX",
     "BidirectionalAttentionOutput",
     "TGVFAdapter",
     "TGVFAdapterInput",
     "TGVFAdapterMetadata",
     "TGVFAdapterOutput",
+    "TGVFAdapterVariant",
     "TGVFBidirectionalAttention",
 ]

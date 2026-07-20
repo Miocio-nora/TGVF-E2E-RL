@@ -829,6 +829,7 @@ def _detached_visual(
         main=visual.main.detach().clone(),
         deepstack=tuple(branch.detach().clone() for branch in visual.deepstack),
         branch_layers=visual.branch_layers,
+        d_deepstack_active=visual.d_deepstack_active,
     )
 
 
@@ -836,6 +837,8 @@ def _assert_visual_contract(
     actual: RepresentationVisualTensorBundle,
     expected: RepresentationVisualTensorBundle,
 ) -> None:
+    if actual.d_deepstack_active != expected.d_deepstack_active:
+        raise ValueError("counterfactual observation D-DeepStack activity differs")
     if actual.branch_layers != expected.branch_layers:
         raise ValueError("counterfactual observation branch order differs")
     for actual_tensor, expected_tensor in zip(
@@ -999,6 +1002,11 @@ def _observation_identity(candidate: RepresentationCandidateObservation) -> str:
             "projection_identities": candidate.projection_identities,
             "image_grid_thw": candidate.image_grid_thw,
             "branch_layers": candidate.visual.branch_layers,
+            **(
+                {"d_deepstack_active": False}
+                if not candidate.visual.d_deepstack_active
+                else {}
+            ),
             "tensor_sha256": tuple(
                 _floating_tensor_sha256(tensor) for tensor in tensors
             ),

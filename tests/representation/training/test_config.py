@@ -17,12 +17,14 @@ from tgvf_rl.representation.training.config import (
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
     REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+    REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
     REPRESENTATION_TRAINING_SCOPE,
     RepresentationDataConfigV2,
     RepresentationObjectiveExecutionConfigV2,
     RepresentationObjectiveExecutionConfigV3,
     load_representation_training_config,
 )
+from tgvf_rl.representation import TGVFAdapterVariant
 from tgvf_rl.representation.training.checkpoint import (
     REPRESENTATION_ACCUMULATION_SCHEMA_VERSION,
     REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2,
@@ -280,6 +282,21 @@ def _upgrade_config_to_v4(path: Path, *, evaluation_table: str) -> Path:
     text = text.replace(
         "\n[output]\n",
         f"\n[post_training_internal_evaluation]\n{evaluation_table}\n\n[output]\n",
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _upgrade_config_to_v5(path: Path, *, variant: str) -> Path:
+    path = _upgrade_config_to_v4(path, evaluation_table="enabled = false")
+    text = path.read_text(encoding="utf-8").replace(
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4}"',
+        f'schema_version = "{REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5}"',
+    )
+    text = text.replace(
+        "\n[conditioning]\n",
+        f'\n[adapter]\nvariant = "{variant}"\n\n[conditioning]\n',
         1,
     )
     path.write_text(text, encoding="utf-8")
@@ -565,6 +582,16 @@ def test_v4_has_an_explicit_disabled_post_training_evaluation_switch(
         config.validation_payload()["post_training_internal_evaluation_enabled"]
         is False
     )
+
+
+def test_v5_content_binds_main_d_only_adapter_variant(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v5(_write_config(tmp_path), variant="main_d_only")
+
+    config = load_representation_training_config(path, verify_external_files=False)
+
+    assert config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5
+    assert config.adapter_variant is TGVFAdapterVariant.MAIN_D_ONLY
+    assert config.validation_payload()["adapter_variant"] == "main_d_only"
 
 
 def test_v4_enabled_post_training_evaluation_requires_every_identity(

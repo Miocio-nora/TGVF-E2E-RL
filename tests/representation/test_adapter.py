@@ -4,7 +4,11 @@ import pytest
 import torch
 from torch import nn
 
-from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
+from tgvf_rl.representation import (
+    FrozenProjectionPort,
+    TGVFAdapter,
+    TGVFAdapterVariant,
+)
 
 
 class ToyMerger(nn.Module):
@@ -26,7 +30,9 @@ def _projection(identity: str) -> FrozenProjectionPort:
     )
 
 
-def _adapter() -> TGVFAdapter:
+def _adapter(
+    variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
+) -> TGVFAdapter:
     torch.manual_seed(11)
     return TGVFAdapter(
         d_lm=6,
@@ -37,6 +43,7 @@ def _adapter() -> TGVFAdapter:
             _projection(identity) for identity in ("merger-8", "merger-16", "merger-24")
         ),
         branch_layers=(8, 16, 24),
+        variant=variant,
     )
 
 
@@ -223,3 +230,37 @@ def test_adapter_artifact_state_excludes_every_borrowed_qwen_merger() -> None:
     polluted["main_projection.projection.weight"] = torch.zeros(1)
     with pytest.raises(ValueError, match="artifact keys mismatch"):
         target.load_artifact_state_dict(polluted)
+
+
+def test_main_d_only_has_no_learned_branch_parameters_or_branch_objective() -> None:
+    adapter = _adapter(TGVFAdapterVariant.MAIN_D_ONLY)
+    target = torch.randn(3, 6, requires_grad=True)
+    main_visual = torch.randn(8, 4, requires_grad=True)
+    branch_visual = tuple(torch.randn(8, 4, requires_grad=True) for _ in range(3))
+
+    output = adapter(
+        target_hidden_states=target,
+        pre_merge_visual_tokens=main_visual,
+        deepstack_pre_merge_visual_tokens=branch_visual,
+    )
+
+    assert len(adapter.d_deepstack_branch_adapters) == 0
+    assert len(adapter.artifact_state_dict()) == 26
+    assert not any(
+        name.startswith("d_deepstack_branch_adapters.")
+        for name in adapter.artifact_state_dict()
+    )
+    assert output.metadata.variant is TGVFAdapterVariant.MAIN_D_ONLY
+    assert output.metadata.deepstack_projection_identities == ()
+    assert output.conditioned_deepstack_pre_merge_visual_tokens == ()
+    assert output.deepstack_attention == ()
+    assert all(
+        torch.count_nonzero(branch).item() == 0
+        for branch in output.deepstack_visual_embeds
+    )
+    assert all(not branch.requires_grad for branch in output.deepstack_visual_embeds)
+
+    output.main_d.sum().backward()
+    assert target.grad is not None
+    assert main_visual.grad is not None
+    assert all(branch.grad is None for branch in branch_visual)

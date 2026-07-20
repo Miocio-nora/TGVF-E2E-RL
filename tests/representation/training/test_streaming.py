@@ -136,6 +136,18 @@ def _bundle(value: float, *, requires_grad: bool) -> RepresentationVisualTensorB
     )
 
 
+def _main_d_only_bundle(
+    value: float, *, requires_grad: bool
+) -> RepresentationVisualTensorBundle:
+    main = torch.full((1, 2, 4), value, requires_grad=requires_grad)
+    return RepresentationVisualTensorBundle(
+        main=main,
+        deepstack=tuple(torch.zeros_like(main, requires_grad=False) for _ in range(3)),
+        branch_layers=(8, 16, 24),
+        d_deepstack_active=False,
+    )
+
+
 def _group(
     *,
     padding_count: int = 0,
@@ -200,6 +212,19 @@ def _candidate_tensors(group: SameImageReadoutGroup) -> tuple[torch.Tensor, ...]
         for candidate in group.candidates
         for tensor in (candidate.visual.main, *candidate.visual.deepstack)
     )
+
+
+def _main_d_only_group(*, group_id: str) -> SameImageReadoutGroup:
+    group = _group(group_id=group_id)
+    candidates = tuple(
+        replace(
+            candidate,
+            projection_identities=("main",),
+            visual=_main_d_only_bundle(float(index + 1), requires_grad=True),
+        )
+        for index, candidate in enumerate(group.candidates)
+    )
+    return replace(group, candidates=candidates)
 
 
 def _mixed_length_group(*, group_id: str) -> SameImageReadoutGroup:
@@ -621,6 +646,58 @@ def test_explicit_legacy_streaming_mode_is_bitwise_historical() -> None:
         explicit.evidence_token_counts,
         historical.evidence_token_counts,
     )
+
+
+def test_main_d_only_streaming_gradients_match_autograd_for_main_only() -> None:
+    torch.manual_seed(61)
+    autograd_model = _frozen_model()
+    streaming_model = _frozen_model()
+    streaming_model.load_state_dict(autograd_model.state_dict())
+    autograd_group = _main_d_only_group(group_id="main-only")
+    streaming_group = _main_d_only_group(group_id="main-only")
+    objective = _objective()
+
+    full_terms = synthetic_same_image_layout_readout_terms(
+        Qwen3VLAdapter(), autograd_model, autograd_group
+    )
+    reference = compose_reference_representation_objective(
+        full_terms.matrix_ce,
+        full_terms.l_gen,
+        objective,
+    )
+    expected = torch.autograd.grad(
+        reference.total_loss,
+        tuple(candidate.visual.main for candidate in autograd_group.candidates),
+    )
+    normalization = StreamingGlobalNormalization(
+        matrix_valid_rows=2,
+        l_gen_samples=2,
+    )
+
+    scores = score_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        objective=objective,
+        normalization=normalization,
+    )
+    backward_streaming_same_image_group(
+        Qwen3VLAdapter(),
+        streaming_model,
+        streaming_group,
+        scores,
+        objective=objective,
+        normalization=normalization,
+    )
+
+    for candidate, expected_gradient in zip(
+        streaming_group.candidates, expected, strict=True
+    ):
+        assert candidate.visual.main.grad is not None
+        assert torch.allclose(
+            candidate.visual.main.grad, expected_gradient, atol=1e-6, rtol=1e-6
+        )
+        assert all(branch.grad is None for branch in candidate.visual.deepstack)
 
 
 def test_right_padded_mixed_length_rows_match_unpadded_reference() -> None:

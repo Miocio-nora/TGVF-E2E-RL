@@ -37,9 +37,12 @@ class RepresentationVisualTensorBundle:
     main: torch.Tensor
     deepstack: tuple[torch.Tensor, ...]
     branch_layers: tuple[int, ...]
+    d_deepstack_active: bool = True
 
     def __post_init__(self) -> None:
         _validate_visual_tensor(self.main, name="main visual tensor")
+        if type(self.d_deepstack_active) is not bool:
+            raise TypeError("D-DeepStack activity must be explicit")
         if not self.deepstack:
             raise ValueError(
                 "a representation visual bundle requires DeepStack branches"
@@ -72,13 +75,18 @@ class RepresentationAttentionTensorBundle:
     main: torch.Tensor
     deepstack: tuple[torch.Tensor, ...]
     branch_layers: tuple[int, ...]
+    d_deepstack_active: bool = True
 
     def __post_init__(self) -> None:
         _validate_attention_tensor(self.main, name="main attention tensor")
+        if type(self.d_deepstack_active) is not bool:
+            raise TypeError("attention D-DeepStack activity must be explicit")
         if len(self.deepstack) != len(self.branch_layers):
             raise ValueError("attention tensors and branch layers must align")
-        if not self.deepstack:
+        if self.d_deepstack_active and not self.deepstack:
             raise ValueError("attention diagnostics require DeepStack branches")
+        if not self.d_deepstack_active and (self.deepstack or self.branch_layers):
+            raise ValueError("main-D-only attention cannot contain branch diagnostics")
         if len(set(self.branch_layers)) != len(self.branch_layers):
             raise ValueError("attention branch layers must be unique")
         for index, branch in enumerate(self.deepstack):
@@ -204,7 +212,10 @@ class RepresentationCandidateObservation:
             for identity in self.projection_identities
         ):
             raise ValueError("candidate projection identities must be non-empty")
-        if len(self.projection_identities) != 1 + len(self.visual.deepstack):
+        expected_projection_count = 1 + (
+            len(self.visual.deepstack) if self.visual.d_deepstack_active else 0
+        )
+        if len(self.projection_identities) != expected_projection_count:
             raise ValueError("candidate must identify main and every branch projection")
         if self.image_grid_thw is not None and (
             not isinstance(self.image_grid_thw, tuple)
@@ -218,7 +229,11 @@ class RepresentationCandidateObservation:
         if self.attention is not None:
             if not isinstance(self.attention, RepresentationAttentionTensorBundle):
                 raise TypeError("candidate attention must be a typed attention bundle")
-            if self.attention.branch_layers != self.visual.branch_layers:
+            if self.attention.d_deepstack_active != self.visual.d_deepstack_active:
+                raise ValueError("candidate visual and attention activity differs")
+            if self.visual.d_deepstack_active and (
+                self.attention.branch_layers != self.visual.branch_layers
+            ):
                 raise ValueError(
                     "candidate visual and attention branch layer order differs"
                 )
@@ -260,7 +275,10 @@ class SameImageReadoutGroup:
             candidate.target_conditioning_provider for candidate in self.candidates
         }
         projections = {candidate.projection_identities for candidate in self.candidates}
-        if len(providers) != 1 or len(projections) != 1:
+        activity = {
+            candidate.visual.d_deepstack_active for candidate in self.candidates
+        }
+        if len(providers) != 1 or len(projections) != 1 or len(activity) != 1:
             raise ValueError(
                 "one readout group cannot mix provider/projection identities"
             )
@@ -298,6 +316,11 @@ class SameImageReadoutGroup:
                 raise TypeError("collective padding must contain visual bundles")
             if padding.branch_layers != self.source_visual.branch_layers:
                 raise ValueError("collective padding DeepStack layer order differs")
+            if (
+                padding.d_deepstack_active
+                != self.candidates[0].visual.d_deepstack_active
+            ):
+                raise ValueError("collective padding D-DeepStack activity differs")
             if (
                 padding.main.device != self.source_visual.main.device
                 or padding.main.dtype != self.source_visual.main.dtype

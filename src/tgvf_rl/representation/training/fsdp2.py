@@ -5,7 +5,7 @@ Calling ``fully_shard(adapter)`` without an ignore set would incorrectly move
 those shared parameters into the Adapter's FSDP ownership domain. The Adapter
 also returns a custom dataclass, so a parameter-owning FSDP root cannot install
 the tensor pre-backward hook required after resharding. This module instead
-forms one FSDP group from the 52 fixed Adapter-owned tensor-returning leaves,
+forms one FSDP group from the Adapter-owned tensor-returning leaves,
 then installs a parameterless orchestration root over the Adapter. Every
 borrowed merger parameter is explicitly ignored in both calls.
 
@@ -26,7 +26,7 @@ import torch
 from torch import nn
 
 from tgvf_rl.compatibility_stack import AUDITED_COMPATIBILITY_STACKS
-from tgvf_rl.representation.adapter import TGVFAdapter
+from tgvf_rl.representation.adapter import TGVFAdapter, TGVFAdapterVariant
 
 
 _BORROWED_PROJECTION_PREFIXES = (
@@ -179,10 +179,13 @@ class RepresentationFSDP2Plan:
             raise ValueError("borrowed FSDP2 parameter names must be unique")
         if set(self.owned_parameter_names) & set(self.borrowed_parameter_names):
             raise ValueError("owned and borrowed FSDP2 names cannot overlap")
-        if len(self.owned_group_module_names) != 52 or len(
+        if len(self.owned_group_module_names) not in (13, 52) or len(
             set(self.owned_group_module_names)
         ) != len(self.owned_group_module_names):
-            raise ValueError("FSDP2 requires 52 unique Adapter-owned leaf modules")
+            raise ValueError(
+                "FSDP2 requires 13 main-D-only or 52 full unique Adapter-owned "
+                "leaf modules"
+            )
         if self.owned_parameter_numel <= 0 or self.borrowed_parameter_numel <= 0:
             raise ValueError("FSDP2 parameter inventories must be non-empty")
 
@@ -259,7 +262,7 @@ class RepresentationFSDP2Binding:
     def reshard_owned_parameters(self) -> None:
         """Restore sharded registration after a forward with no backward.
 
-        The 52 owned leaves were passed to one grouped ``fully_shard`` call.
+        The owned leaves were passed to one grouped ``fully_shard`` call.
         Torch's public ``reshard()`` API is non-recursive, so invoke it through
         every registered group member. The shared operation is idempotent after
         the first member restores the group's sharded parameters.
@@ -578,10 +581,12 @@ def _owned_group_modules(
     adapter: TGVFAdapter,
     partition: _ParameterPartition,
 ) -> tuple[tuple[str, ...], tuple[nn.Module, ...]]:
-    prefixes = ("",) + tuple(
-        f"d_deepstack_branch_adapters.{layer}."
-        for layer in adapter.d_deepstack_branch_layers
-    )
+    prefixes = ("",)
+    if adapter.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+        prefixes += tuple(
+            f"d_deepstack_branch_adapters.{layer}."
+            for layer in adapter.d_deepstack_branch_layers
+        )
     expected_names = tuple(
         f"{prefix}{leaf}" for prefix in prefixes for leaf in _OWNED_ATTENTION_LEAF_NAMES
     )

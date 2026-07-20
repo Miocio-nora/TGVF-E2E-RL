@@ -27,6 +27,7 @@ from tgvf_rl.conditioning import (
     TargetConditioningProviderKind,
 )
 from tgvf_rl.contracts.identity import CodeIdentity, ModelIdentity
+from tgvf_rl.representation.adapter import TGVFAdapterVariant
 
 from .checkpoint import (
     MATRIX_CE_GLOBAL_REDUCTION,
@@ -72,6 +73,7 @@ REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION = "representation-training-config-
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2 = "representation-training-config-v2"
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3 = "representation-training-config-v3"
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4 = "representation-training-config-v4"
+REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5 = "representation-training-config-v5"
 REPRESENTATION_TRAINING_SCOPE = "qwen3_native_representation_phase_training"
 ACCEPTED_QWEN3_MODEL_NAME = "Qwen3-VL-8B-Thinking"
 ACCEPTED_QWEN3_MODEL_DTYPE = "bfloat16"
@@ -102,6 +104,7 @@ _TOP_LEVEL_FIELDS = frozenset(
     }
 )
 _POST_TRAINING_INTERNAL_EVALUATION_FIELD = "post_training_internal_evaluation"
+_ADAPTER_FIELD = "adapter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,7 +593,9 @@ class RepresentationPostTrainingInternalEvaluationConfig:
             ("report_path", self.report_path),
         ):
             if not isinstance(path, Path):
-                raise TypeError(f"post_training_internal_evaluation.{name} must be a Path")
+                raise TypeError(
+                    f"post_training_internal_evaluation.{name} must be a Path"
+                )
             _absolute_path(path, field_name=f"post_training_internal_evaluation.{name}")
         for name, digest in (
             ("ordered_group_manifest_sha256", self.ordered_group_manifest_sha256),
@@ -699,6 +704,7 @@ class RepresentationTrainingConfig:
     run_id: str
     code: RepresentationCodeConfig
     model: RepresentationModelConfig
+    adapter_variant: TGVFAdapterVariant
     provider: TargetConditioningConfig
     data: RepresentationDataConfig | RepresentationDataConfigV2
     prompt: RepresentationPromptConfig
@@ -729,6 +735,7 @@ class RepresentationTrainingConfig:
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
         }:
             raise ValueError("representation training config schema mismatch")
         if self.prompt.schema_version != REPRESENTATION_PROMPT_SCHEMA_VERSION:
@@ -778,7 +785,15 @@ class RepresentationTrainingConfig:
                 DISTRIBUTED_REPRESENTATION_CHECKPOINT_SCHEMA_VERSION_V2
             ):
                 raise ValueError("training config v3 requires DCP schema v2")
-        if self.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4:
+        if not isinstance(self.adapter_variant, TGVFAdapterVariant):
+            raise TypeError("representation Adapter variant must be explicit")
+        if self.schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5:
+            if self.adapter_variant is not TGVFAdapterVariant.FULL_D_DEEPSTACK:
+                raise ValueError("main-D-only requires training config schema v5")
+        if self.schema_version in {
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
+        }:
             if self.post_training_internal_evaluation is None:
                 raise ValueError(
                     "training config v4 requires post-training internal evaluation"
@@ -869,6 +884,7 @@ class RepresentationTrainingConfig:
                 "attention_backend": self.model.attention_backend,
                 "image_max_pixels": self.model.image_max_pixels,
             },
+            "adapter_variant": self.adapter_variant.value,
             "conditioning_provider": self.provider.provider.value,
             "prompt_identity": self.prompt.identity,
             "prompt_schema_version": self.prompt.schema_version,
@@ -929,8 +945,13 @@ def load_representation_training_config(
         raise TypeError("representation training TOML root must be a table")
     schema_version = _string(value, "schema_version", table="root")
     root_fields = _TOP_LEVEL_FIELDS
-    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4:
+    if schema_version in {
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
+    }:
         root_fields = root_fields | {_POST_TRAINING_INTERNAL_EVALUATION_FIELD}
+    if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5:
+        root_fields = root_fields | {_ADAPTER_FIELD}
     _exact_fields(value, root_fields, table="root")
     canonical_config_sha256 = _canonical_mapping_sha256(value)
 
@@ -938,6 +959,11 @@ def load_representation_training_config(
     run_id = _string(value, "run_id", table="root")
     code = _parse_code(_table(value, "code", table="root"))
     model = _parse_model(_table(value, "model", table="root"))
+    adapter_variant = (
+        _parse_adapter(_table(value, _ADAPTER_FIELD, table="root"))
+        if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5
+        else TGVFAdapterVariant.FULL_D_DEEPSTACK
+    )
     provider = _parse_conditioning(
         _table(value, "conditioning", table="root"), model.identity
     )
@@ -971,7 +997,11 @@ def load_representation_training_config(
         _parse_post_training_internal_evaluation(
             _table(value, _POST_TRAINING_INTERNAL_EVALUATION_FIELD, table="root")
         )
-        if schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4
+        if schema_version
+        in {
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+            REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
+        }
         else None
     )
 
@@ -981,6 +1011,7 @@ def load_representation_training_config(
         run_id=run_id,
         code=code,
         model=model,
+        adapter_variant=adapter_variant,
         provider=provider,
         data=data,
         prompt=prompt,
@@ -1019,6 +1050,15 @@ def _parse_code(value: Mapping[str, Any]) -> RepresentationCodeConfig:
         dirty=dirty,
         dirty_state_sha256=dirty_sha,
     )
+
+
+def _parse_adapter(value: Mapping[str, Any]) -> TGVFAdapterVariant:
+    _exact_fields(value, {"variant"}, table="adapter")
+    raw = _string(value, "variant", table="adapter")
+    try:
+        return TGVFAdapterVariant(raw)
+    except ValueError as error:
+        raise ValueError(f"adapter.variant is unsupported: {raw!r}") from error
 
 
 def _parse_model(value: Mapping[str, Any]) -> RepresentationModelConfig:
@@ -1098,6 +1138,7 @@ def _parse_data(
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
     }:
         _exact_fields(
             value,
@@ -1181,6 +1222,7 @@ def _parse_prompt(
     if config_schema_version in {
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
     }:
         _exact_fields(
             value,
@@ -1216,6 +1258,7 @@ def _parse_objective(
     if schema_version in {
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
     }:
         required = {
             "identity",
@@ -1374,6 +1417,7 @@ def _parse_scheduler(
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
         REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+        REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
     }:
         fields.add("min_lr_ratio")
     elif schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION:
@@ -1395,6 +1439,7 @@ def _parse_scheduler(
                 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2,
                 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3,
                 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
+                REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
             }
             else None
         ),
@@ -1936,6 +1981,7 @@ __all__ = [
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3",
     "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4",
+    "REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5",
     "REPRESENTATION_TRAINING_SCOPE",
     "RepresentationAdamWConfig",
     "RepresentationCheckpointConfig",

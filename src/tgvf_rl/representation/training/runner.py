@@ -27,7 +27,6 @@ from tgvf_rl.checkpoint.coordinator import state_digest
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 
 from .checkpoint import (
-    RepresentationAdapterContractIdentity,
     RepresentationInitializationIdentity,
     RepresentationOptimizerIdentity,
     RepresentationRunIdentity,
@@ -35,6 +34,7 @@ from .checkpoint import (
     RepresentationSamplerContractIdentity,
     RepresentationSchedulerIdentity,
     RepresentationTrainerExecutionIdentity,
+    representation_adapter_contract_identity,
 )
 from .config import (
     RepresentationDataConfigV2,
@@ -199,6 +199,7 @@ def _run_initialized(
         model_identity=config.model_identity,
         conditioning_config=config.provider,
         adapter_dtype=_torch_dtype(config.fsdp2.parameter_dtype),
+        adapter_variant=config.adapter_variant,
         fixture_mode=False,
     )
     if len(processor.tokenizer) != tokenizer_length_before:
@@ -245,9 +246,7 @@ def _run_initialized(
         data_manifest_sha256=train_data.manifest.manifest_sha256,
         prompt_sha256=config.prompt.sha256,
         objective=config.objective.objective,
-        adapter_contract=RepresentationAdapterContractIdentity.from_adapter(
-            runtime.adapter
-        ),
+        adapter_contract=representation_adapter_contract_identity(runtime.adapter),
         accumulation=accumulation,
         optimizer=RepresentationOptimizerIdentity.from_optimizer(optimizer),
         scheduler=RepresentationSchedulerIdentity.from_config(config.scheduler),

@@ -37,7 +37,11 @@ from tgvf_rl.conditioning.base import BoundTargetConditionProvider
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.protocol.native import NativeProtocolRenderer
 from tgvf_rl.qwen.base import resolve_language_model
-from tgvf_rl.representation.adapter import TGVFAdapter, TGVFAdapterInput
+from tgvf_rl.representation.adapter import (
+    TGVFAdapter,
+    TGVFAdapterInput,
+    TGVFAdapterVariant,
+)
 from tgvf_rl.representation.deepstack import (
     DDeepStackProjectionPorts,
     FrozenProjectionPort,
@@ -640,6 +644,7 @@ def create_qwen3_representation_runtime(
     conditioning_config: TargetConditioningConfig,
     adapter_dtype: torch.dtype,
     attn_dim: int | None = None,
+    adapter_variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
     component_paths: Qwen3RepresentationComponentPaths | None = None,
     fixture_mode: bool = False,
 ) -> Qwen3RepresentationRuntime:
@@ -662,6 +667,8 @@ def create_qwen3_representation_runtime(
         )
     if not isinstance(conditioning_config, TargetConditioningConfig):
         raise TypeError("conditioning_config must be TargetConditioningConfig")
+    if not isinstance(adapter_variant, TGVFAdapterVariant):
+        raise TypeError("adapter_variant must be a TGVFAdapterVariant")
     if (
         not isinstance(adapter_dtype, torch.dtype)
         or not adapter_dtype.is_floating_point
@@ -765,6 +772,7 @@ def create_qwen3_representation_runtime(
                 projections=ports[1:],
             ),
             branch_layers=architecture.branch_layers,
+            variant=adapter_variant,
         )
     _cast_adapter_owned_modules(adapter, device=weight.device, dtype=adapter_dtype)
     adapter.train(True)

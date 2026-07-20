@@ -364,6 +364,22 @@ def _historical_sample_norm_loss_unchecked(
     return (main_loss + branch_losses.mean()) / 2
 
 
+def _historical_main_norm_loss_unchecked(
+    main_d: torch.Tensor,
+    main_source: torch.Tensor,
+) -> torch.Tensor:
+    """Compute the accepted path formula after streaming-wide validation."""
+
+    d_norm = torch.linalg.vector_norm(main_d.float(), dim=-1)
+    source_reference = (
+        torch.linalg.vector_norm(main_source.detach().float(), dim=-1)
+        .mean()
+        .clamp_min(HISTORICAL_NORM_EPS)
+    )
+    log_ratio = torch.log((d_norm + HISTORICAL_NORM_EPS) / source_reference)
+    return log_ratio.square().mean()
+
+
 def historical_norm_loss_terms(
     per_sample_losses: Sequence[torch.Tensor],
 ) -> HistoricalNormLossTerms:

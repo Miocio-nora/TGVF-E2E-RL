@@ -47,6 +47,7 @@ from tgvf_rl.representation.adapter import (
     TGVFAdapter,
     TGVFAdapterInput,
     TGVFAdapterOutput,
+    TGVFAdapterVariant,
 )
 
 from .readout import (
@@ -1017,6 +1018,9 @@ def _adapter_output_bundle(
             _as_batched(branch) for branch in output.deepstack_visual_embeds
         ),
         branch_layers=output.metadata.branch_layers,
+        d_deepstack_active=(
+            output.metadata.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK
+        ),
     )
 
 
@@ -1025,13 +1029,19 @@ def _adapter_output_attention_bundle(
 ) -> RepresentationAttentionTensorBundle:
     if not isinstance(output, TGVFAdapterOutput):
         raise TypeError("TGVF Adapter must return a TGVFAdapterOutput")
+    active = output.metadata.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK
     return RepresentationAttentionTensorBundle(
         main=output.main_attention.target_to_visual_attention.detach(),
-        deepstack=tuple(
-            attention.target_to_visual_attention.detach()
-            for attention in output.deepstack_attention
+        deepstack=(
+            tuple(
+                attention.target_to_visual_attention.detach()
+                for attention in output.deepstack_attention
+            )
+            if active
+            else ()
         ),
-        branch_layers=output.metadata.branch_layers,
+        branch_layers=output.metadata.branch_layers if active else (),
+        d_deepstack_active=active,
     )
 
 

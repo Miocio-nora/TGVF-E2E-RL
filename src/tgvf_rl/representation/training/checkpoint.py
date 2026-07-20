@@ -28,7 +28,7 @@ from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import CodeIdentity, ModelIdentity
 from tgvf_rl.objectives.base import spec_identity_sha256
 from tgvf_rl.observations.store import tensor_checksum
-from tgvf_rl.representation.adapter import TGVFAdapter
+from tgvf_rl.representation.adapter import TGVFAdapter, TGVFAdapterVariant
 
 from .objective import RepresentationObjectiveConfig
 from .sampling import (
@@ -47,6 +47,7 @@ REPRESENTATION_RUN_IDENTITY_SCHEMA_VERSION_V3 = "representation-run-identity-v3"
 REPRESENTATION_ACCUMULATION_SCHEMA_VERSION = "representation-accumulation-v1"
 REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2 = "representation-accumulation-v2"
 REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION = "representation-adapter-contract-v1"
+REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2 = "representation-adapter-contract-v2"
 REPRESENTATION_OPTIMIZER_IDENTITY_SCHEMA_VERSION = (
     "representation-optimizer-identity-v1"
 )
@@ -569,6 +570,10 @@ class RepresentationAdapterContractIdentity:
         cls, adapter: TGVFAdapter
     ) -> RepresentationAdapterContractIdentity:
         _require_adapter(adapter)
+        if adapter.variant is not TGVFAdapterVariant.FULL_D_DEEPSTACK:
+            raise ValueError(
+                "adapter contract v1 can identify only the full D-DeepStack variant"
+            )
         return cls(
             d_lm=adapter.d_lm,
             d_v=adapter.d_v,
@@ -590,6 +595,79 @@ class RepresentationAdapterContractIdentity:
     @property
     def identity_sha256(self) -> str:
         return spec_identity_sha256(self)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RepresentationAdapterContractIdentityV2(RepresentationAdapterContractIdentity):
+    """Adapter contract that content-binds the selected structural variant."""
+
+    variant: str
+    schema_version: str = REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2
+
+    def __post_init__(self) -> None:
+        for field_name in ("d_lm", "d_v", "attention_dim", "spatial_merge_size"):
+            _positive_int(getattr(self, field_name), field_name=field_name)
+        _strictly_increasing_non_negative_ints(
+            self.deepstack_branch_layers, field_name="deepstack_branch_layers"
+        )
+        _non_empty_text(
+            self.main_projection_identity, field_name="main_projection_identity"
+        )
+        if len(self.deepstack_projection_identities) != len(
+            self.deepstack_branch_layers
+        ):
+            raise ValueError(
+                "D-DeepStack projection identities must align with branch layers"
+            )
+        for identity in self.deepstack_projection_identities:
+            _non_empty_text(identity, field_name="deepstack_projection_identity")
+        all_projection_identities = (
+            self.main_projection_identity,
+            *self.deepstack_projection_identities,
+        )
+        if len(set(all_projection_identities)) != len(all_projection_identities):
+            raise ValueError(
+                "main and D-DeepStack projection identities must be unique"
+            )
+        if self.variant not in {variant.value for variant in TGVFAdapterVariant}:
+            raise ValueError("unknown TGVF Adapter structural variant")
+        if self.schema_version != REPRESENTATION_ADAPTER_CONTRACT_SCHEMA_VERSION_V2:
+            raise ValueError("representation Adapter contract v2 schema mismatch")
+
+    @classmethod
+    def from_adapter(
+        cls, adapter: TGVFAdapter
+    ) -> RepresentationAdapterContractIdentityV2:
+        _require_adapter(adapter)
+        return cls(
+            d_lm=adapter.d_lm,
+            d_v=adapter.d_v,
+            attention_dim=adapter.attn_dim,
+            spatial_merge_size=adapter.spatial_merge_size,
+            deepstack_branch_layers=tuple(adapter.d_deepstack_branch_layers),
+            main_projection_identity=adapter.main_projection.identity,
+            deepstack_projection_identities=tuple(
+                port.identity for port in adapter.d_deepstack_projections.projections
+            ),
+            variant=adapter.variant.value,
+        )
+
+    def assert_matches(self, adapter: TGVFAdapter) -> None:
+        if self != type(self).from_adapter(adapter):
+            raise IdentityMismatchError(
+                "TGVF Adapter architecture/projection/variant identity mismatch"
+            )
+
+
+def representation_adapter_contract_identity(
+    adapter: TGVFAdapter,
+) -> RepresentationAdapterContractIdentity:
+    """Keep existing full artifacts v1-compatible; use v2 for new variants."""
+
+    _require_adapter(adapter)
+    if adapter.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+        return RepresentationAdapterContractIdentity.from_adapter(adapter)
+    return RepresentationAdapterContractIdentityV2.from_adapter(adapter)
 
 
 @dataclass(frozen=True, slots=True)

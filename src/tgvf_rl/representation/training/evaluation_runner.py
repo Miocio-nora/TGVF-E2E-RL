@@ -310,6 +310,7 @@ def run_representation_internal_evaluation_from_artifact(
         model_identity=training.model_identity,
         conditioning_config=training.provider,
         adapter_dtype=_torch_dtype(training.model.dtype),
+        adapter_variant=training.adapter_variant,
         fixture_mode=False,
     )
     if len(processor.tokenizer) != tokenizer_length_before:
@@ -353,9 +354,7 @@ def run_representation_internal_evaluation_from_artifact(
         "evaluation_report_path": artifact.path,
         "evaluation_report_sha256": artifact.payload_sha256,
         "evaluation_report_byte_count": artifact.byte_count,
-        "evaluation_data_manifest_sha256": (
-            evaluation_data.manifest.manifest_sha256
-        ),
+        "evaluation_data_manifest_sha256": (evaluation_data.manifest.manifest_sha256),
         "conditioning_provider": training.provider.provider.value,
         "physical_gpu_id": config.physical_gpu_id,
         "tokenizer_length_before": tokenizer_length_before,

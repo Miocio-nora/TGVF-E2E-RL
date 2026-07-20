@@ -13,13 +13,14 @@ from tgvf_rl.conditioning import (
 )
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import CodeIdentity, ModelIdentity
-from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
+from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter, TGVFAdapterVariant
 from tgvf_rl.representation.training.checkpoint import (
     REPRESENTATION_ACCUMULATION_SCHEMA_VERSION,
     REPRESENTATION_ACCUMULATION_SCHEMA_VERSION_V2,
     RepresentationAccumulationIdentity,
     RepresentationAccumulationIdentityV2,
     RepresentationAdapterContractIdentity,
+    RepresentationAdapterContractIdentityV2,
     RepresentationInitializationIdentity,
     RepresentationOptimizerIdentity,
     RepresentationRunIdentity,
@@ -29,6 +30,7 @@ from tgvf_rl.representation.training.checkpoint import (
     RepresentationSchedulerIdentityV2,
     RepresentationTrainerExecutionIdentity,
     capture_representation_rng_state,
+    representation_adapter_contract_identity,
     load_representation_adapter_artifact,
     load_representation_training_checkpoint,
     restore_representation_adapter_artifact,
@@ -80,7 +82,10 @@ def _projection(identity: str) -> FrozenProjectionPort:
     )
 
 
-def _adapter(seed: int) -> TGVFAdapter:
+def _adapter(
+    seed: int,
+    variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
+) -> TGVFAdapter:
     torch.manual_seed(seed)
     return TGVFAdapter(
         d_lm=6,
@@ -91,7 +96,22 @@ def _adapter(seed: int) -> TGVFAdapter:
             _projection(f"qwen-merger-{layer}@model-revision") for layer in (8, 16, 24)
         ),
         branch_layers=(8, 16, 24),
+        variant=variant,
     )
+
+
+def test_main_d_only_contract_content_binds_structural_variant() -> None:
+    adapter = _adapter(3, TGVFAdapterVariant.MAIN_D_ONLY)
+
+    contract = representation_adapter_contract_identity(adapter)
+
+    assert isinstance(contract, RepresentationAdapterContractIdentityV2)
+    assert contract.variant == "main_d_only"
+    contract.assert_matches(adapter)
+    with pytest.raises(ValueError, match="only the full D-DeepStack"):
+        RepresentationAdapterContractIdentity.from_adapter(adapter)
+    with pytest.raises(IdentityMismatchError, match="variant"):
+        contract.assert_matches(_adapter(3))
 
 
 def _run_identity(
