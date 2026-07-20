@@ -591,6 +591,16 @@ topology must pass focused loss/gradient tests and one fresh/resume periodic
 boundary smoke. This ablation does not change the production full-D-DeepStack
 Adapter contract or policy RL default.
 
+Completion evidence (2026-07-21 JST): RP-53 passed the required two-rank
+fresh/resume boundary; RP-54 completed 2000 steps with all four durable
+checkpoints and a 26-tensor main-D-only artifact; RP-55 completed the exact
+v4-Golden 200-row/46-group evaluation with empty branch health. Relative to the
+paired full-D-DeepStack result, main-D-only preserved correct-D NLL and the
+accepted single native counterfactual but reduced query top-1 from `0.83` to
+`0.49` and mean diagonal gap from `2.4240` to `0.05113`. This closes the
+ablation task and supports retaining learned D-DeepStack branches in the
+production TGVF Adapter.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

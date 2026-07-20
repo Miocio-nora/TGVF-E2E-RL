@@ -4826,9 +4826,8 @@ instead of repeated bullets.
 
 ### RP-55-QWEN3-REP-MAIN-D-ONLY-2000STEP-V4-GOLDEN
 
-- Cell/status: post-hoc main-D-only internal evaluation / `PLANNED` /
-  `PENDING`; launch only after this entry and its config are committed and GPU
-  0 is free.
+- Cell/status: post-hoc main-D-only internal evaluation / `COMPLETE` /
+  `PASS`.
 - Frozen evaluator/config: clean code
   `673c0e4cdcf97b74feb5b0bae944d75f85988520`; config
   `configs/representation/qwen3_main_d_only_balanced_t1_contextual_2000step_internal_evaluation_v4_golden_gpu0.toml`
@@ -4851,6 +4850,49 @@ instead of repeated bullets.
   branch health, both native counterfactual variants, and clean teardown.
   Training, policy/reference replay, behavior logprobs, reward, GRPO, SDPO and
   judge are N/A.
+- Result: report SHA256 `4279e4b6...e68b` binds the declared artifact, source
+  config SHA256 `5eaf3a4f...bcc2`, v4 data/prompt/provider identities, exactly
+  200 rows/46 groups and tokenizer length 151669 before/after. Query
+  top-1/top-2/MRR are `0.49/0.78/0.70083`; mean/median diagonal gap is
+  `0.05113/0.0`. Mean correct-D NLL is `1.29352`; wrong-same-image D
+  win/advantage is `0.76/0.23184`. Main D is finite and non-collapsed with mean
+  D/source norm ratio `1.47824`; learned branch health is exactly empty. Both
+  native counterfactual continuations terminate naturally with the expected
+  values and the expected direction flip. The process exited cleanly and
+  released GPU 0.
+
+### Representation-phase endpoint evidence summary
+
+- Provider: under the same Balanced/T=1.0 2000-step identity, contextual hidden
+  state outperforms target token embedding on top-1 `0.83` versus `0.70`, mean
+  diagonal gap `2.4240` versus `0.7743`, and wrong-same-image win rate `0.935`
+  versus `0.855`, while correct-D NLL is essentially identical. Contextual also
+  passes the accepted direction-flip and both continuations. This supports the
+  selected contextual provider; target token embedding remains an implemented
+  and validated alternative rather than the selected artifact.
+- Matrix CE: contextual Balanced/T=0.1 reaches top-1 `0.835` and legacy summed
+  NLL/T=1.0 reaches `0.87`, but their mean gaps are only `0.4206/0.3080` and
+  neither passes the direction flip. Contextual Balanced/T=1.0 reaches top-1
+  `0.83`, mean gap `2.4240`, wrong-same-image advantage `4.6433`, and passes the
+  full native causal fixture. Thus retrieval rank alone exposes a real legacy
+  counter-result, but the combined specificity/readability/causal evidence
+  supports retaining Balanced/T=1.0 as the current default; lowering its
+  training temperature to 0.1 is not an endpoint improvement.
+- D-DeepStack: removing the learned focused-D branches while preserving Qwen's
+  original-image native DeepStack lowers top-1 from `0.83` to `0.49`, MRR from
+  `0.9075` to `0.70083`, mean gap from `2.4240` to `0.05113`, and
+  wrong-same-image win rate from `0.935` to `0.76`. Correct-D NLL remains nearly
+  unchanged (`1.28734` versus `1.29352`) and the one native counterfactual still
+  passes. The learned D-DeepStack branches therefore supply broad target
+  discrimination/separation rather than merely making an already-correct main
+  D readable; the full-D-DeepStack variant remains the production default.
+- Norm: the historical weight-0.1 objective is active but does not enforce
+  strict D/source equality. Across full-D endpoints, main-D/source mean ratios
+  span approximately `1.15--1.44`, with branch ratios reaching approximately
+  `2.0--4.15`; main-D-only is `1.478`. These magnitudes do not monotonically
+  explain specificity, so no stronger norm claim or new norm objective is
+  accepted from this matrix. The measured ratios remain health diagnostics and
+  any change to the norm mathematics requires a separate experiment.
 
 ## Compatibility-spike status
 
