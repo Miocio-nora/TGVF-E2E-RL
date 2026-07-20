@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha256
+import subprocess
+import sys
 
 import pytest
 
@@ -31,6 +33,23 @@ SHA0 = "0" * 64
 SHA1 = "1" * 64
 SHA2 = "2" * 64
 POLICY = PolicyVersion("pilot", 7, SHA0)
+
+
+def test_sampler_module_is_safe_under_agent_loop_first_import_order() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import tgvf_rl.environment.agent_loop; "
+                "import tgvf_rl.framework.vllm.sampler"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _char_tokens(text: str) -> tuple[tuple[int, ...], tuple[TokenByteSpan, ...]]:

@@ -22,7 +22,7 @@ import hashlib
 import json
 import math
 from types import MappingProxyType
-from typing import Mapping, Protocol
+from typing import TYPE_CHECKING, Mapping, Protocol
 
 from tgvf_rl.contracts.errors import (
     ContractUnsetError,
@@ -35,7 +35,6 @@ from tgvf_rl.contracts.tokens import (
     SamplingIdentity,
     TokenSpan,
 )
-from tgvf_rl.environment.agent_loop import SampledPolicyTurn
 from tgvf_rl.protocol.schema import (
     SampledAssistantTurn,
     TOOL_CALL_CLOSE,
@@ -43,6 +42,9 @@ from tgvf_rl.protocol.schema import (
 )
 
 from .registration import SUPPORTED_VLLM_VERSION
+
+if TYPE_CHECKING:
+    from tgvf_rl.environment.agent_loop import SampledPolicyTurn
 
 
 VLLM_POLICY_TURN_REQUEST_SCHEMA = "tgvf-vllm-policy-turn-request-v1"
@@ -522,6 +524,10 @@ class VLLMPolicySampler:
         *,
         turn_index: int,
     ) -> SampledPolicyTurn:
+        # Keep the optional vLLM package importable while ``agent_loop`` itself
+        # is being initialized through ``tgvf_rl.policy``.
+        from tgvf_rl.environment.agent_loop import SampledPolicyTurn
+
         prompt = tuple(prompt_token_ids)
         if not prompt or any(
             type(token_id) is not int or token_id < 0 for token_id in prompt
