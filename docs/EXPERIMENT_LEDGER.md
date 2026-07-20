@@ -4229,7 +4229,7 @@ instead of repeated bullets.
 
 ### RP-33-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-FORMALDATA-CONTEXTUAL-GPU23
 
-- Cell/status: `PLANNED` / `PENDING`; valid-data replacement for RP-31. The
+- Cell/status: `COMPLETE` / `PASS`; valid-data replacement for RP-31. The
   model, contextual provider, prompt, objective, optimizer, 2000-step scheduler
   horizon, K4/B4/GA4/world2 topology, no-reshard lifecycle, cadence-one
   train/validation/DCP and two-process stop-1/resume-to-2 acceptance are
@@ -4247,10 +4247,17 @@ instead of repeated bullets.
   substituting RP-33 fresh/resume configs; physical GPUs 2/3 were idle at
   `2026-07-20T19:22:03+09:00`. Each invocation is bounded by 1800 seconds. RL
   fields remain N/A.
+- Result: fresh torchrun completed train step 1, validation event 0, DCP v2
+  step 1 and clean paused teardown. A new process strictly restored it and
+  completed train step 2, validation event 1, DCP v2 step 2 and clean teardown.
+  Metrics history is exactly `start, train1, validation1, train2, validation2`;
+  checkpoint cursors are `(step=1,next_validation=1)` and
+  `(step=2,next_validation=2)`. Both checkpoints contain both rank shards and
+  validated metadata; no ownership/restore error occurred.
 
 ### RP-34-QWEN3-REPRESENTATION-PERIODIC-BOUNDARY-FORMALDATA-TARGET-EMBEDDING-GPU01
 
-- Cell/status: `PLANNED` / `PENDING`; target-token-embedding pair of RP-33 and
+- Cell/status: `COMPLETE` / `PASS`; target-token-embedding pair of RP-33 and
   valid-data replacement for RP-32. All fields and acceptance match RP-33
   except provider/device/output identity.
 - Code/config/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
@@ -4265,6 +4272,55 @@ instead of repeated bullets.
 - Command/resources: RP-34 fresh/resume configs with operational stops 1/2 on
   physical GPUs 0/1, idle at `2026-07-20T19:22:03+09:00`; 1800-second bounds;
   RL fields N/A.
+- Result: identical PASS shape to RP-33: fresh train/validation/DCP step 1,
+  strict new-process restore, resumed train/validation/DCP step 2, exact
+  metrics-history and validation cursors 1/2, both rank shards present, clean
+  teardowns and no ownership/restore error. GPUs 0--3 were released by
+  `2026-07-20T19:25:56+09:00`.
+
+### REP-QWEN3-V4-CONTEXTUAL-V4
+
+- Lifecycle/result: `PLANNED` / `PENDING`; fresh formal replacement for V3
+  after mandatory periodic-boundary smoke RP-33 passed.
+- Identity/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
+  config source/canonical SHA256
+  `416bf6f4813407265f0eeaa00bfd75d65908a8db975b3c128cd9b49e07eb380b` /
+  `8d04f5370252c61f9dd1c9b24dc8c70843d22c46d985b05c32318b94de32ce9d`;
+  immutable fresh output `artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V4/`.
+- Scientific/execution identity: exactly contextual V3 for model, formal
+  train/validation data and recorded overlap, current native prompt v1, seed
+  42, contextual layer `-1`, TGVF Adapter/main D/three DeepStack branches,
+  Balanced Matrix CE/L_gen/Norm `1/1/.1`, temperature 1, manifold 0, AdamW and
+  2000-step cosine, max pixels 262144, K4/B4/GA4/world2/global batch32,
+  `reshard_after_forward=false`, logs every 10 and validation/DCP every 500.
+  Only the accepted target-span and validation-reshard repairs, run/output and
+  code identities differ. RL-only fields are N/A.
+- GPU/W&B/command: physical GPUs 2/3 were idle at
+  `2026-07-20T19:27:57+09:00`; W&B project `mio_mi0/tgvf-e2e-rl`, run
+  `representation-qwen3-contextual-v4`, ID `rep-qwen3-v4-contextual-v4`.
+  Deterministic environment from V3; `timeout 28800s .venv312/bin/torchrun
+  --standalone --nproc-per-node=2 -m tgvf_rl.cli run-representation
+  configs/representation/qwen3_v4_contextual_hidden_state_v4.toml`.
+- Acceptance: finite train/validation metrics, DCP v2 at 500/1000/1500/2000,
+  final step 2000 Adapter artifact, tokenizer invariance and clean teardown.
+
+### REP-QWEN3-V4-TARGET-EMBEDDING-V3
+
+- Lifecycle/result: `PLANNED` / `PENDING`; paired fresh formal replacement for
+  V2 after mandatory periodic-boundary smoke RP-34 passed.
+- Identity/output: code `705018b0d5bb1e02d0bae87c5e1503680db37eb9`;
+  config source/canonical SHA256
+  `9662a163212a2de36f61b093f692c8262cba50daf548a9dfb95833c2bfc3b3eb` /
+  `99c2058f2a67ce39366f2517dec9c7e2e1c73aa491fd5a77e6f0300c42c9a437`;
+  immutable fresh output
+  `artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V3/`.
+- Paired identity: every field and acceptance is identical to contextual V4
+  except target-token-embedding provider, GPUs and run/output/W&B identities.
+  Physical GPUs 0/1 were idle at `2026-07-20T19:27:57+09:00`; W&B run
+  `representation-qwen3-target-embedding-v3`, ID
+  `rep-qwen3-v4-target-embedding-v3`. Command uses the deterministic V2
+  environment and `configs/representation/qwen3_v4_target_token_embedding_v3.toml`
+  under the same 28800-second bound. RL-only fields are N/A.
 
 ## Compatibility-spike status
 
