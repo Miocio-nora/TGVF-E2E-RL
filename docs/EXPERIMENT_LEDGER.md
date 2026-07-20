@@ -4077,6 +4077,76 @@ instead of repeated bullets.
   redundant 30-minute NCCL watchdog timeout. No checkpoint or Adapter artifact
   was produced; the output remains diagnostic-only and immutable.
 
+### REP-QWEN3-V4-CONTEXTUAL-V3
+
+- Lifecycle/result: `PLANNED` / `PENDING`; fresh replacement for contextual V2
+  after accepted repair `RPI-20260720-TARGET-TOKEN-COVER-V1`.
+- Identity/output: code `2436861f027c319dadf1e775ffa9ef911f317dfb`;
+  config source/canonical SHA256
+  `156ffbfc83ef5209e85a6da745425baf3c20cdcc62bcf13a0ef03872de66e513` /
+  `89e418f7702ff2d7bc7481cceb955b2bdf9779ccf79d421eff064197bb9cc236`;
+  fresh output
+  `artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V3/`, overwrite forbidden.
+- Fixed contract/preflight: raw target offsets plus
+  `minimal_overlapping_sampled_token_cover_v1`; rank-local exceptions abort the
+  process group. Eighty-eight targeted tests passed. A CPU scan passed all
+  sampler-reachable action targets: train `36117/39998` rows in 8209 usable
+  image groups and validation `959/1382` rows in 226 usable image groups, with
+  zero failures.
+- Scientific identity: frozen local Qwen3-VL-8B-Thinking, BF16 SDPA, tokenizer
+  length 151669/no resize, native prompt v1 `{question}`, max pixels 262144;
+  v4 clean-imend train plus v3 validation and the recorded overlap; fresh seed
+  42 contextual hidden state at layer `-1`; main D plus three D-DeepStack
+  branches; Balanced Matrix CE/L_gen/Norm weights `1/1/0.1`, temperature `1`,
+  manifold `0`; AdamW `1e-4`, historical cosine, warmup 100/min ratio `.1`.
+- Execution: FSDP2 world 2, `fsdp=[2]`, `reshard_after_forward=false`, K4/B4
+  per rank, GA4/global batch32, 2000 optimizer steps, log every 10 and
+  validation/DCP v2 every 500; internal evaluation disabled. Physical GPUs 2
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` and 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b` were idle at
+  `2026-07-20T18:28:32+09:00`. RL/reward/GRPO/SDPO/judge/rollout fields are N/A.
+- W&B/command: project `mio_mi0/tgvf-e2e-rl`, run
+  `representation-qwen3-contextual-v3`, ID `rep-qwen3-v4-contextual-v3`;
+  `CUDA_VISIBLE_DEVICES=2,3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0
+  TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN
+  timeout 28800s .venv312/bin/torchrun --standalone --nproc-per-node=2 -m
+  tgvf_rl.cli run-representation
+  configs/representation/qwen3_v4_contextual_hidden_state_v3.toml`.
+- Acceptance: first prove step 219 or later with finite loss/gradients, then
+  reach step 2000 with the configured validation/checkpoint cadence and final
+  TGVF Adapter artifact.
+
+### REP-QWEN3-V4-TARGET-EMBEDDING-V2
+
+- Lifecycle/result: `PLANNED` / `PENDING`; paired fresh replacement for target-
+  embedding V1 under the same accepted repair and preflight evidence as
+  contextual V3.
+- Identity/output: code `2436861f027c319dadf1e775ffa9ef911f317dfb`;
+  config source/canonical SHA256
+  `ff8e69ea09dbcdc6cebab7bbd1a2e2439b1849e4707dd2f3c589f2c55f02749d` /
+  `a3b8ae806e751fd05d37e8141577fd63125113f8e5234196146772338ec6e55f`;
+  fresh output
+  `artifacts/representation/REP-QWEN3-V4-TARGET-EMBEDDING-V2/`, overwrite
+  forbidden.
+- Paired identity: every model/data/prompt/objective/optimizer/schedule/batch,
+  cadence, determinism, span and preflight field is identical to contextual V3;
+  only the provider is `target_token_embedding` from the frozen language-model
+  input-embedding table and the device/output/run identities differ. Physical
+  GPUs 0 `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` and 1
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc` were idle at
+  `2026-07-20T18:28:32+09:00`. RL/reward/GRPO/SDPO/judge/rollout fields are N/A.
+- W&B/command: project `mio_mi0/tgvf-e2e-rl`, run
+  `representation-qwen3-target-embedding-v2`, ID
+  `rep-qwen3-v4-target-embedding-v2`; `CUDA_VISIBLE_DEVICES=0,1
+  CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false
+  TORCH_DEVICE_BACKEND_AUTOLOAD=0 NCCL_DEBUG=WARN timeout 28800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation
+  configs/representation/qwen3_v4_target_token_embedding_v2.toml`.
+- Acceptance: first prove step 219 or later with finite loss/gradients, then
+  reach step 2000 with the configured validation/checkpoint cadence and final
+  TGVF Adapter artifact.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
