@@ -111,9 +111,11 @@ image_zoom_in_tool(bbox_2d: [left, top, right, bottom])
 
 The crop uses half-open integer pixel coordinates over the immutable original
 image, clamps to its bounds, and records the exact RGB8 pixels plus rollout-time
-processed visual state. Repeated mixed calls are a first-class capability: crop
-then TGVF and TGVF then crop share one ordered trajectory and one configurable
-safety cap. Each assistant action turn contains at most one complete call.
+processed visual state. Reusing the processed state requires an explicit shared
+frozen-vision identity; trainable-vision replay must re-encode the same pixels
+and currently fails closed. Repeated mixed calls are a first-class capability:
+crop then TGVF and TGVF then crop share one ordered trajectory and one
+configurable safety cap. Each assistant action turn contains at most one call.
 
 ## System structure
 

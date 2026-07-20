@@ -88,6 +88,7 @@ class TrajectoryReplayRecord:
     behavior_policy: PolicyVersion
     observation_handles: tuple[ObservationHandle, ...]
     tensors: TrajectoryReplayTensorRefs
+    crop_vision_replay_mode: str = "no_crop"
     cache_mode: str = "no_cache"
     cache_prefix_length: int = 0
     deterministic_forward: bool = True
@@ -96,6 +97,11 @@ class TrajectoryReplayRecord:
     def __post_init__(self) -> None:
         if not self.schema_version or not self.replay_id or not self.trajectory_id:
             raise ValueError("trajectory replay identities must be non-empty")
+        if self.crop_vision_replay_mode not in {
+            "no_crop",
+            "shared_frozen_recorded_features",
+        }:
+            raise ValueError("unknown crop vision replay mode")
         if self.cache_mode not in {"no_cache", "prefill_decode", "recorded_cache"}:
             raise ValueError("unknown trajectory replay cache mode")
         if self.cache_prefix_length < 0:
@@ -287,6 +293,19 @@ class ObservationStore:
                         "multi-call replay visual positions overlap"
                     )
                 occupied.update(positions)
+        has_crop = any(
+            isinstance(record, CropObservationRecord) for record in observations
+        )
+        if has_crop and replay.crop_vision_replay_mode != (
+            "shared_frozen_recorded_features"
+        ):
+            raise ReplayMismatchError(
+                "crop replay requires an explicit shared frozen-vision contract"
+            )
+        if not has_crop and replay.crop_vision_replay_mode != "no_crop":
+            raise ReplayMismatchError(
+                "crop vision replay mode was set without a crop observation"
+            )
         sequence = replay.tensors.input_ids.descriptor.shape[-1]
         if observations and any(
             position >= sequence

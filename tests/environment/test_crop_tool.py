@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 
 import pytest
 import torch
 
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
+from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.tensors import TensorPayloadSet
 from tgvf_rl.environment.crop_tool import (
     CropReplayLayout,
@@ -223,6 +225,7 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
         model=model,
         behavior_policy=policy,
         observation_handles=(crop.handle, focus_handle),
+        crop_vision_replay_mode="shared_frozen_recorded_features",
         tensors=TrajectoryReplayTensorRefs(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -232,6 +235,8 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
             teacher_attention_mask=common_mask,
         ),
     )
+    with pytest.raises(ReplayMismatchError, match="shared frozen-vision"):
+        store.put_replay(replace(replay, crop_vision_replay_mode="no_crop"))
     replay_handle = store.put_replay(replay)
 
     policy_request = resolve_replay_request(store, replay_handle, ReplayConsumer.POLICY)

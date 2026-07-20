@@ -29,11 +29,14 @@ Decision `CROP-FUSION-20260720` adds the native
 strictly parses four integer coordinates, crops the immutable original RGB8
 image with half-open/clamped bounds, content-addresses the exact pixels, and
 stores the rollout-time main/DeepStack visual state. One registry and one call
-cap preserve arbitrary mixed order. Qwen policy/reference/teacher replay and
-the Qwen3 vLLM precomputed transport now resolve source image, crop images, and
-focused `D` blocks from the same ordered observation handles without recropping
-or regenerating TGVF output. The TGVF-only representation renderer and golden
-identity are unchanged. The post-extension CPU regression result is `499`
+cap preserve arbitrary mixed order. Under the explicit
+`shared_frozen_recorded_features` test contract, Qwen
+policy/reference/teacher replay and the Qwen3 vLLM precomputed transport resolve
+source image, crop images, and focused `D` blocks from the same ordered
+observation handles without recropping or regenerating TGVF output. A
+trainable/different vision-encoder replay is deliberately fail-closed pending
+exact-pixel per-consumer re-encoding. The TGVF-only representation renderer and
+golden identity are unchanged. The post-extension CPU regression result is `499`
 passed and `1` skipped; the skip is the pre-existing optional
 `transfer_queue`-dependent live synchronization smoke.
 

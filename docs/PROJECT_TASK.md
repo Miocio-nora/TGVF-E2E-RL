@@ -127,9 +127,14 @@ Every crop is taken from the immutable original image, never recursively from
 the previous crop. The runtime records the requested and effective boxes,
 source/crop dimensions and hashes, and the exact RGB crop pixels. The model's
 rollout-time processed visual state for that crop is materialized alongside
-the trajectory before replay. Policy, reference, and teacher replay consume
-the same recorded crop pixels and processed state; they must not execute the
-crop again from an external path or silently reprocess different pixels.
+the trajectory as behavior-forward evidence. The current fast replay path may
+consume that processed state only in explicit
+`shared_frozen_recorded_features` mode, which requires policy, reference, and
+teacher to share an identity-proven frozen vision encoder. Otherwise the exact
+crop pixels remain the observation and each consumer must re-encode those same
+pixels with its own model state; that trainable-vision path remains fail-closed
+until implemented. No replay may execute the crop again from an external path
+or substitute different pixels.
 
 `image_zoom_in_tool` and `tgvf_focus_tool` share one ordered multi-tool state
 machine and one configurable total call cap greater than one. Any ordering is

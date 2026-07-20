@@ -156,7 +156,12 @@ matrix items remain promotion gates rather than implicit passes.
 - [x] `FIXED` — The TGVF Adapter is frozen for the first policy RL proof.
 - [x] `FIXED` — For each tool call, policy, old-policy, and reference replay
   consume the same rollout-materialized observation: exact `D` state or exact
-  crop pixels plus their rollout-time processed visual state.
+  crop pixels. Reuse of rollout-time crop visual features requires an explicit
+  `shared_frozen_recorded_features` identity/freeze proof.
+- [ ] `OPEN_BLOCKING RO-CROP-01` — Decide whether policy RL freezes the Qwen
+  vision encoder. If it is trainable or differs across policy/reference/teacher,
+  implement exact-pixel per-consumer re-encoding and behavior-forward parity;
+  the recorded-feature fast path remains rejected.
 - [x] `FIXED` — SDPO compatibility is part of the initial skeleton. Its reference
   repository is `lasgroup/SDPO` at
   `7c457fc1b1f636ae794eb0362ba37d4743b06fbc`; its bundled veRL tree is not the
