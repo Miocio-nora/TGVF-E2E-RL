@@ -5401,6 +5401,50 @@ instead of repeated bullets.
 - Gate/command: R6's GPU0 VStar gate and command, adding the local runtime-lib
   directory to `LIBRARY_PATH` and using the R7 output root. Launch GPUs 1--3
   only after real rows and throughput evidence.
+- Throughput side result: the runtime repair passed and all four GPUs entered
+  real generation. VStar exact reuse also passed: an intentional interruption
+  after 40 materialized rows resumed with exactly 151 rows pending. A 20-second
+  GPU0 sample showed 19/20 observations at 88% utilization and about 160--177
+  output tokens/s. However, pinned VLMEvalKit submits one request at a time;
+  observed Thinking rows reached the 40,960-token cap and blocked a card for
+  three to four minutes. VStar was deliberately stopped with 130/191 durable
+  scalar rows, HRBench4K completed 200/200 with no missing prediction, and
+  BLINK/OCR scalar jobs remain diagnostic only. None may be mixed into the
+  request-seeded batched baseline.
+
+### BE-02-QWEN3-DIRECT-COREDEV2511-B8-GPU0123
+
+- Cell/status/result: deterministic batched original-policy inference and
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Fixed identity: model, tokenizer, native prompts, max pixels `262144`, all
+  decoding parameters including max generated tokens `40960`, image-only
+  modality restriction, vLLM 0.12 V1, decoder FlashInfer, vision SDPA,
+  `max_model_len=65536`, CoreDev-2511 membership and later scorer remain R7.
+  Code commit `a0c2b95`; direct config SHA256 `4623ca19...67329`; launcher
+  SHA256 `ece8ddd6...c364c`; output root
+  `artifacts/evaluation/BE-02-qwen3-direct-coredev2511-b8`.
+- Batch/sampling identity: physical inference batch `8`, engine
+  `max_num_seqs=8`, engine seed `0`. Each row's request seed is the low 31 bits
+  of SHA256 over canonical compact JSON `[namespace, 0, dataset_name,
+  str(canonical_index)]`, namespace
+  `coredev-2511-qwen3-direct-batched-v1`. The bridge invokes the pinned scalar
+  wrapper to materialize each exact request and SamplingParams, submits the
+  ordered eight-request list once, and maps outputs in input order. CPU result:
+  16 tests passed; Ruff/compileall and pinned deployment validation passed.
+- Durability: atomically dump the complete accumulated auxiliary dictionary
+  after every finished batch. A restart may redo only an unfinished batch;
+  per-row seeds make its regenerated content independent of batch position.
+  Scalar R7 auxiliary files are forbidden as reuse sources.
+- Initial gate/topology: run complete VStarBench on GPU0 in tmux. Confirm real
+  B8 generation, aggregate output throughput, utilization, memory, exact eight
+  rows in the first durable checkpoint, then intentionally interrupt/reuse.
+  If B8 is healthy and materially faster on long-tail overlap, stop remaining
+  scalar diagnostics and launch independent B8 replicas on GPUs 1--3 before
+  continuing all seven slices.
+- Command template: R7 command and runtime include/library environment, with
+  code/config above, `<official_alias>`, and per-slice work directory under the
+  BE-02 root. No `--reuse` on first launch; exact restart adds
+  `--reuse --reuse-aux infer` in the same directory.
 
 ## Compatibility-spike status
 
