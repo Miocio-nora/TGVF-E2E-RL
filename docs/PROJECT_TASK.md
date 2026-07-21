@@ -736,7 +736,12 @@ The baseline configuration must make the pinned VLMEvalKit Qwen3-Thinking
 decoding behavior explicit: vLLM, native dataset prompt, temperature `1.0`,
 top-p `0.95`, top-k `20`, maximum `40960` generated tokens, repetition penalty
 `1.0`, presence penalty `0.0`, sampling enabled, and engine seed `0`. The model
-and tokenizer are unchanged. Inference and scoring are separate durable
+and tokenizer are unchanged. The B200 runtime keeps vLLM's selected FlashInfer
+backend for language attention, fixes only the multimodal encoder attention
+backend to PyTorch SDPA because the bundled FlashAttention2 PTX is incompatible
+with B200, and caps the engine context at `65536` tokens (still leaving at
+least `24576` input-token capacity beside the accepted `40960` generation
+cap). Inference and scoring are separate durable
 phases: four independent single-B200 replicas on physical GPUs 0--3 generate
 predictions first; the separately identified Qwen2.5-72B service on GPUs 2--3
 then evaluates the exact saved predictions. GPT fallback remains forbidden.

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,7 @@ from tgvf_rl.evaluation.vlmevalkit import (
     CoreDevSliceSpec,
     TGVFPolicyEvaluationResult,
     VLMEvalKitLaunchPlan,
+    inject_vllm_engine_options_from_factory_kwargs,
     isolate_torchrun_environment_for_spawned_factory,
     materialize_coredev_subset_config,
 )
@@ -127,7 +129,45 @@ def test_coredev_qwen3_direct_baseline_freezes_decoding_identity() -> None:
         "post_process": False,
         "system_prompt": None,
         "gpu_utils": 0.9,
+        "max_model_len": 65536,
+        "mm_encoder_attn_backend": "TORCH_SDPA",
     }
+
+
+def test_qwen_factory_forwards_only_accepted_vllm_engine_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def original_llm(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return object()
+
+    fake_vllm = SimpleNamespace(LLM=original_llm)
+    monkeypatch.setitem(__import__("sys").modules, "vllm", fake_vllm)
+
+    def factory(**kwargs: object) -> tuple[dict[str, object], object]:
+        from vllm import LLM
+
+        return kwargs, LLM(model="model", max_num_seqs=8)
+
+    wrapped = inject_vllm_engine_options_from_factory_kwargs(factory)
+    remaining, _ = wrapped(
+        max_model_len=65536,
+        mm_encoder_attn_backend="TORCH_SDPA",
+        max_new_tokens=40960,
+    )
+
+    assert remaining == {"max_new_tokens": 40960}
+    assert calls == [
+        {
+            "model": "model",
+            "max_num_seqs": 8,
+            "max_model_len": 65536,
+            "mm_encoder_attn_backend": "TORCH_SDPA",
+        }
+    ]
+    assert fake_vllm.LLM is original_llm
 
 
 def test_nested_vllm_spawn_does_not_inherit_torchrun_rank_environment(

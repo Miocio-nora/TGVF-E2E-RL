@@ -52,6 +52,7 @@ def main() -> int:
         verify_coredev_2511_artifacts,
     )
     from tgvf_rl.evaluation.vlmevalkit import (  # noqa: PLC0415
+        inject_vllm_engine_options_from_factory_kwargs,
         isolate_torchrun_environment_for_spawned_factory,
         materialize_coredev_subset_config,
     )
@@ -96,13 +97,13 @@ def main() -> int:
     import vlmeval.dataset as dataset_module  # noqa: PLC0415
 
     register_coredev_vlmevalkit_slices(dataset_module, artifacts)
+    model_name = "Qwen3-VL-8B-Thinking"
+    model_factory = inject_vllm_engine_options_from_factory_kwargs(
+        model_config_module.supported_VLM[model_name]
+    )
     if int(os.environ.get("LOCAL_WORLD_SIZE", "1")) > 1:
-        model_name = "Qwen3-VL-8B-Thinking"
-        model_config_module.supported_VLM[model_name] = (
-            isolate_torchrun_environment_for_spawned_factory(
-                model_config_module.supported_VLM[model_name]
-            )
-        )
+        model_factory = isolate_torchrun_environment_for_spawned_factory(model_factory)
+    model_config_module.supported_VLM[model_name] = model_factory
 
     mode = sys.argv[sys.argv.index("--mode") + 1] if "--mode" in sys.argv else "all"
     if "--help" not in sys.argv and mode in {"all", "eval"}:

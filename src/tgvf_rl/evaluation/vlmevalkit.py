@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import wraps
 from hashlib import sha256
+import importlib
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,10 @@ _TORCHRUN_PROCESS_ENV = (
     "TORCHELASTIC_MAX_RESTARTS",
     "TORCHELASTIC_ERROR_FILE",
 )
+_VLLM_ENGINE_RUNTIME_FIELDS = (
+    "max_model_len",
+    "mm_encoder_attn_backend",
+)
 
 
 def isolate_torchrun_environment_for_spawned_factory(factory: Any) -> Any:
@@ -72,6 +77,50 @@ def isolate_torchrun_environment_for_spawned_factory(factory: Any) -> Any:
                     os.environ[key] = value
 
     return isolated_factory
+
+
+def inject_vllm_engine_options_from_factory_kwargs(factory: Any) -> Any:
+    """Forward accepted engine options through VLMEvalKit's Qwen wrapper.
+
+    The pinned Qwen3-VL wrapper accepts arbitrary model configuration fields,
+    but constructs :class:`vllm.LLM` with a closed argument list. Keep the
+    external checkout immutable while forwarding only the accepted engine
+    fields during model construction. The original constructor is restored
+    immediately, including when construction fails.
+    """
+
+    @wraps(factory)
+    def configured_factory(*args: Any, **kwargs: Any) -> Any:
+        engine_options = {
+            name: kwargs.pop(name)
+            for name in _VLLM_ENGINE_RUNTIME_FIELDS
+            if name in kwargs
+        }
+        if not engine_options:
+            return factory(*args, **kwargs)
+
+        vllm_module = importlib.import_module("vllm")
+        original_llm = vllm_module.LLM
+
+        @wraps(original_llm)
+        def configured_llm(*llm_args: Any, **llm_kwargs: Any) -> Any:
+            conflicts = {
+                name
+                for name, value in engine_options.items()
+                if name in llm_kwargs and llm_kwargs[name] != value
+            }
+            if conflicts:
+                names = ", ".join(sorted(conflicts))
+                raise RuntimeError(f"conflicting vLLM engine options: {names}")
+            return original_llm(*llm_args, **llm_kwargs, **engine_options)
+
+        vllm_module.LLM = configured_llm
+        try:
+            return factory(*args, **kwargs)
+        finally:
+            vllm_module.LLM = original_llm
+
+    return configured_factory
 
 
 def materialize_coredev_subset_config(
