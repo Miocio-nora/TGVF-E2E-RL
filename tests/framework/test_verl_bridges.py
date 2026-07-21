@@ -1234,6 +1234,8 @@ def test_policy_pilot_uses_real_e003_lora_and_optimizer_fields() -> None:
 
     assert config.max_tool_calls == 4
     assert overrides["actor_rollout_ref.rollout.limit_images"] == 5
+    assert overrides["actor_rollout_ref.rollout.free_cache_engine"] is False
+    assert overrides["actor_rollout_ref.rollout.enable_sleep_mode"] is False
     assert overrides["actor_rollout_ref.rollout.n"] == 8
     assert overrides["actor_rollout_ref.rollout.do_sample"] is True
     assert overrides["actor_rollout_ref.rollout.response_length"] == 16384
