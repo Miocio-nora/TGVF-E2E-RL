@@ -20,6 +20,15 @@ SUPPORTED_VLLM_VERSIONS = frozenset(
 TGVF_QWEN3_VLLM_ARCHITECTURE = "TGVFQwen3VLForConditionalGeneration"
 TGVF_VLLM_ATTENTION_BACKEND = "TRITON_ATTN"
 TGVF_VLLM_MM_ENCODER_ATTN_BACKEND = "TORCH_SDPA"
+VLLM_012_TRITON_VERSION = "3.5.0"
+VLLM_012_LORA_PDL_MODE = "vllm-0.12-triton-3.5-lora-pdl-disabled-v1"
+VLLM_UPSTREAM_LORA_PDL_MODE = "upstream"
+_VLLM_LORA_PDL_MODULES = (
+    "vllm.lora.ops.triton_ops.utils",
+    "vllm.lora.ops.triton_ops.lora_expand_op",
+    "vllm.lora.ops.triton_ops.lora_shrink_op",
+    "vllm.lora.ops.triton_ops.fused_moe_lora_op",
+)
 
 
 class VLLMPluginError(RuntimeError):
@@ -51,6 +60,45 @@ class VLLMPluginRegistration:
     model_cls: type[Any]
     processor_cls: type[Any]
     version: str
+    lora_pdl_mode: str
+
+
+def _lora_pdl_disabled(_device: object | None = None) -> bool:
+    return False
+
+
+def install_vllm_lora_pdl_compatibility(
+    *,
+    vllm_version: str,
+    triton_version: str,
+    importer: Callable[[str], Any] = import_module,
+) -> str:
+    """Disable optional Punica PDL on the one audited failing stack.
+
+    vLLM 0.12 enables PDL/GDC on every SM90+ device.  Triton 3.5 cannot
+    predicate the resulting inline assembly while compiling the LoRA expand
+    kernel for SM100.  PDL is a launch optimization, so replacing only the
+    imported capability aliases leaves the Punica LoRA computation unchanged.
+    """
+
+    if vllm_version != SUPPORTED_VLLM_VERSION:
+        return VLLM_UPSTREAM_LORA_PDL_MODE
+    if triton_version != VLLM_012_TRITON_VERSION:
+        raise VLLMCompatibilityError(
+            "vLLM 0.12 LoRA PDL compatibility requires exact Triton 3.5.0"
+        )
+    for module_name in _VLLM_LORA_PDL_MODULES:
+        module = importer(module_name)
+        if not callable(getattr(module, "supports_pdl", None)):
+            raise VLLMCompatibilityError(
+                f"vLLM LoRA PDL surface is missing in {module_name}"
+            )
+        module.supports_pdl = _lora_pdl_disabled
+        if module.supports_pdl(None) is not False:
+            raise VLLMCompatibilityError(
+                f"vLLM LoRA PDL patch did not bind {module_name}"
+            )
+    return VLLM_012_LORA_PDL_MODE
 
 
 def vllm_is_available() -> bool:
@@ -134,13 +182,31 @@ def register_tgvf_qwen3_vllm_plugin(
     site-package mutation.  Any missing or changed API aborts registration.
     """
 
-    public = load_vllm_public_plugin_api() if api is None else api
+    live_registration = api is None
+    public = load_vllm_public_plugin_api() if live_registration else api
     if public.version not in SUPPORTED_VLLM_VERSIONS:
         raise VLLMCompatibilityError("injected vLLM API has an unsupported version")
     register_processor = getattr(public.multimodal_registry, "register_processor", None)
     register_model = getattr(public.model_registry, "register_model", None)
     if not callable(register_processor) or not callable(register_model):
         raise VLLMCompatibilityError("public vLLM registration methods are unavailable")
+
+    if live_registration:
+        try:
+            triton_version = metadata.version("triton")
+        except metadata.PackageNotFoundError as error:
+            raise VLLMCompatibilityError(
+                "the audited vLLM LoRA runtime requires Triton metadata"
+            ) from error
+        lora_pdl_mode = install_vllm_lora_pdl_compatibility(
+            vllm_version=public.version,
+            triton_version=triton_version,
+        )
+    else:
+        # Injected APIs are registration fixtures and must not mutate an
+        # unrelated installed vLLM process. The patch helper is tested
+        # independently with an injected importer.
+        lora_pdl_mode = VLLM_UPSTREAM_LORA_PDL_MODE
 
     decorator = register_processor(
         public.processor_cls,
@@ -158,6 +224,7 @@ def register_tgvf_qwen3_vllm_plugin(
         model_cls=public.model_cls,
         processor_cls=public.processor_cls,
         version=public.version,
+        lora_pdl_mode=lora_pdl_mode,
     )
 
 
@@ -167,12 +234,16 @@ __all__ = [
     "TGVF_QWEN3_VLLM_ARCHITECTURE",
     "TGVF_VLLM_ATTENTION_BACKEND",
     "TGVF_VLLM_MM_ENCODER_ATTN_BACKEND",
+    "VLLM_012_LORA_PDL_MODE",
+    "VLLM_012_TRITON_VERSION",
+    "VLLM_UPSTREAM_LORA_PDL_MODE",
     "VLLMCompatibilityError",
     "VLLMPluginError",
     "VLLMPluginRegistration",
     "VLLMPublicPluginAPI",
     "VLLMUnavailableError",
     "load_vllm_public_plugin_api",
+    "install_vllm_lora_pdl_compatibility",
     "register_tgvf_qwen3_vllm_plugin",
     "vllm_is_available",
 ]

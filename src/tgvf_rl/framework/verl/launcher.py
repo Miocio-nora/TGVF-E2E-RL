@@ -17,6 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
 
 from .adapter import LOSSLESS_AGENT_LOOP_MANAGER_FQN, VerlAdapterConfig
 from .compatibility import (
@@ -663,6 +664,7 @@ def build_policy_e2e_smoke_verl_plan(
             "tgvf_rl.framework.verl.policy_task_runner."
             "make_policy_pilot_ray_trainer_class"
         ),
+        "vllm_lora_pdl_compatibility": VLLM_012_LORA_PDL_MODE,
     }
     environment = dict(adapter.required_environment())
     environment["CUDA_VISIBLE_DEVICES"] = ",".join(

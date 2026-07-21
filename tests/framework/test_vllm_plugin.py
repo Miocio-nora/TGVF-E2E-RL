@@ -14,10 +14,13 @@ from tgvf_rl.contracts.tensors import TensorPayloadSet
 from tgvf_rl.framework.vllm import (
     SUPPORTED_VLLM_VERSIONS,
     TGVF_QWEN3_VLLM_ARCHITECTURE,
+    VLLM_012_LORA_PDL_MODE,
+    VLLM_UPSTREAM_LORA_PDL_MODE,
     Qwen3VLLMObservationPayloadResolver,
     VLLMCompatibilityError,
     VLLMPublicPluginAPI,
     load_vllm_public_plugin_api,
+    install_vllm_lora_pdl_compatibility,
     pack_qwen3_vllm_replay,
     pack_qwen3_vllm_replay_bundle,
     register_tgvf_qwen3_vllm_plugin,
@@ -359,6 +362,44 @@ def test_public_registration_rejects_an_unaudited_neighbor_build() -> None:
                 version="0.23.0",
             )
         )
+
+
+def test_vllm_012_lora_pdl_compatibility_disables_every_imported_alias() -> None:
+    modules = {
+        name: SimpleNamespace(supports_pdl=lambda _device=None: True)
+        for name in (
+            "vllm.lora.ops.triton_ops.utils",
+            "vllm.lora.ops.triton_ops.lora_expand_op",
+            "vllm.lora.ops.triton_ops.lora_shrink_op",
+            "vllm.lora.ops.triton_ops.fused_moe_lora_op",
+        )
+    }
+
+    mode = install_vllm_lora_pdl_compatibility(
+        vllm_version="0.12.0",
+        triton_version="3.5.0",
+        importer=modules.__getitem__,
+    )
+
+    assert mode == VLLM_012_LORA_PDL_MODE
+    assert all(module.supports_pdl(None) is False for module in modules.values())
+
+
+def test_vllm_lora_pdl_compatibility_is_version_locked() -> None:
+    with pytest.raises(VLLMCompatibilityError, match="exact Triton 3.5.0"):
+        install_vllm_lora_pdl_compatibility(
+            vllm_version="0.12.0",
+            triton_version="3.5.1",
+            importer=lambda _name: SimpleNamespace(supports_pdl=lambda: True),
+        )
+    assert (
+        install_vllm_lora_pdl_compatibility(
+            vllm_version="0.23.0+cu129",
+            triton_version="3.5.1",
+            importer=lambda _name: pytest.fail("newer vLLM must remain upstream"),
+        )
+        == VLLM_UPSTREAM_LORA_PDL_MODE
+    )
 
 
 def test_processing_info_selects_tgvf_parser_for_three_latent_items(

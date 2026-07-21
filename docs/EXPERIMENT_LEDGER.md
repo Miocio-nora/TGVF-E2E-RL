@@ -6463,8 +6463,8 @@ instead of repeated bullets.
   synthetic vLLM LoRA expand-kernel parity gate.
 - Spike-plan git revision and approval references: Policy Pilot vertical-slice
   authorization plus sealed R5 and DIAG-01 records.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `PASS`.
 - Question: with the corrected two-dimensional Torch oracle, does the
   PDL-disabled vLLM LoRA expand kernel compile on B200 and pass BF16 parity?
 - Baseline and exact output path: DIAG-01 compiled successfully but had a
@@ -6501,14 +6501,20 @@ instead of repeated bullets.
 - World size, microbatch, accumulation, and global batch: world 1, one token,
   no accumulation.
 - GPUs: physical/logical GPU 0, B200 183359 MiB; recheck idle before launch.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  foreground bounded diagnostic.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T20:12:39+09:00` to `2026-07-21T20:12:45+09:00`, 6 seconds;
+  foreground bounded diagnostic, exit 0.
+- Actual GPU-hours and peak scratch use: less than 0.002 GPU-hours; GPU 0
+  returned to zero allocation.
 - Command: exact DIAG-01 command with only the corrected oracle indexing.
-- Outputs: pending.
+- Outputs: `artifacts/policy/PRL-DIAG-02-vllm-lora-no-pdl-gpu0.log`, 128
+  bytes, SHA256 `9c0d56fb...1a6d`.
 - Scorer/parser identity: corrected Torch matmul oracle in the same process.
-- Metrics: pending.
-- Conclusion: pending.
+- Metrics: output finite; max absolute BF16-versus-FP32-oracle error
+  `0.000686049`, below the accepted `0.25` bound.
+- Conclusion: PASS. Disabling optional PDL/GDC removes R5's sm100 compiler
+  failure without changing the LoRA expand computation. The production plugin
+  may apply the same behavior only to the exact vLLM 0.12.0/Triton 3.5.0 stack.
 
 ## Compatibility-spike status
 
