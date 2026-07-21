@@ -7394,9 +7394,9 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 - `PLANNED`; continuous 80-step TGVF-only run on physical GPUs 0--3, BS16,
   `n=8`, GA4, checkpoints 0/10/20/45/80. Config SHA256
-  `a462a8798fd6a519e2ceb0ff5d41bda38785a377243d04fc162a01bda1991005`,
-  run identity `b1ebac0a983597c9211ee62d37e896706689ecf2d1463c8f693f81a26294883b`,
-  code `3db2444f674a9008f5cbabb57d1a34e70159f3a8`.
+  `d6d502c4612a4ac5693700bd85a316bf9c31676dd22b2ce6f7ace1d736e99c7c`,
+  run identity `f33ddf971d4f9cb833e5f921d968044a6e5ebc6b77a3713e67ef133661019e6c`,
+  code `8f33abe2a36290aa99d68c8276f24b903b754e66`.
 - Config `configs/policy/runs/prl_01_r33_qwen3_grpo_bs16_tgvf_80step_gpu0123.toml`;
   output `artifacts/policy/PRL-01-R33-qwen3-grpo-bs16-tgvf-80step-gpu0123`;
   tmux `prl01_r33_gpu0123`. R32 proved the selected BS16 capacity; acceptance
