@@ -1,11 +1,15 @@
 # Experiment Ledger
 
 I8H-20260719 authorizes the bounded compatibility cells below. It does not
-authorize production training. Only physical GPUs 2 and 3 may be exposed.
+authorize production training. Its physical-GPU 2/3 restriction remains fixed
+for those cells. On 2026-07-21 the user separately authorized physical GPUs
+0--3 for the original-policy benchmark baseline and its throughput work; that
+authorization does not retroactively alter any earlier cell.
 
 Experiment namespaces are disjoint: `SC-*` is reserved for cells fixed by the
 veRL compatibility matrix, while `RP-*` identifies bounded representation-
-phase executions and `BJ-*` identifies bounded benchmark-judge deployments. A
+phase executions, `BE-*` identifies benchmark evaluation runs, and `BJ-*`
+identifies bounded benchmark-judge deployments. A
 materialized run ID is never renamed after execution; an identity collision is
 retained as `INVALID` and rerun under a new planned ID.
 
@@ -5138,6 +5142,47 @@ instead of repeated bullets.
   explain specificity, so no stronger norm claim or new norm objective is
   accepted from this matrix. The measured ratios remain health diagnostics and
   any change to the norm mathematics requires a separate experiment.
+
+### BE-01-QWEN3-DIRECT-COREDEV2511-GPU0123
+
+- Cell/status/result: original-policy CoreDev-2511 inference baseline plus
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Accepted task/code: `EVAL-QWEN3-DIRECT-BASELINE-20260721`; code commit
+  `c8a6133`; direct config SHA256 `782e2518...94f1`; launcher SHA256
+  `2d718cd9...e128`. Output root is
+  `artifacts/evaluation/BE-01-qwen3-direct-coredev2511-gpu0123` and must not
+  contain predictions from another decoding identity.
+- Model/arm: immutable local Qwen3-VL-8B-Thinking; config/generation config/
+  tokenizer config/tokenizer JSON SHA256 `5cd45286...3661` /
+  `fe72e865...e656` / `7b501e63...a7d5` / `a5d85b6d...3c7`; no TGVF Adapter,
+  tool schema, tool call, crop, agent loop, policy update, reward, GRPO, SDPO,
+  reference replay or judge during inference.
+- Data/scorer: seven ordered CoreDev-2511 slices, 2,511 rows, identity
+  `coredev-2511-vlmevalkit-7055d301-v1`, membership SHA256
+  `a461d9b4...0579`; pinned config SHA256 `eb2a34b3...a267`. The deployment and
+  full artifact/prompt/scorer validators must pass before launch.
+- Prompt/decoding: upstream VLMEvalKit commit `7055d301...79f`, `run.py`
+  SHA256 `efe24021...8653`, inherited official per-dataset prompts, no custom
+  system prompt, max pixels `262144`; vLLM 0.12, V1, TRITON attention, BF16,
+  TP1 per replica, engine seed 0, temperature 1.0, top-p 0.95, top-k 20,
+  maximum 40960 generated tokens, repetition/presence penalties 1.0/0.0 and
+  sampling enabled. No tokenizer growth.
+- Topology: four torchrun ranks and four independent model replicas on physical
+  GPUs 0/1/2/3 (UUID suffixes `dfb2`, `dcdc`, `abe3`, `1f2b`). Inference and
+  evaluation are separate; the later evaluator reuses the exact prediction
+  TSVs and may deploy the separately identified 72B judge on GPUs 2/3.
+- Throughput/resume gate: inspect early VStarBench progress, generated-token
+  counts, wall time, per-GPU utilization and peak memory. After at least one
+  durable per-rank checkpoint, intentionally interrupt once and require an
+  exact same-directory `--reuse --reuse-aux infer` restart without regenerating
+  completed rows. If the one-request path is materially underutilized, stop
+  before the full suite and optimize concurrency without changing this arm.
+- Command: `CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_USE_V1=1
+  VLLM_ATTENTION_BACKEND=TRITON_ATTN TOKENIZERS_PARALLELISM=false
+  PYTHONHASHSEED=42 .venv312/bin/torchrun --standalone --nproc-per-node=4
+  tools/run_coredev_2511_vlmevalkit.py --config
+  configs/evaluation/coredev_2511_qwen3_direct_v1.json --work-dir
+  artifacts/evaluation/BE-01-qwen3-direct-coredev2511-gpu0123 --mode infer`.
 
 ## Compatibility-spike status
 
