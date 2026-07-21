@@ -6719,7 +6719,7 @@ instead of repeated bullets.
 
 ### PRL-DIAG-10-QWEN3-LIVE-TWO-CALL-CHAIN-GPU3
 
-- Lifecycle/result: `PLANNED` / `PENDING`; diagnostic single-GPU real-model
+- Lifecycle/result: `COMPLETE` / `PASS`; diagnostic single-GPU real-model
   gate, not a training or quality experiment.
 - Question: can the real selected sample execute two contextual TGVF calls so
   the second forward consumes the first recorded main D plus all three
@@ -6747,6 +6747,43 @@ instead of repeated bullets.
   .venv312/bin/python tools/smoke_policy_live_tool_chain.py --config
   configs/policy/runs/prl_01_r9_qwen3_grpo_1step_autoresume_gpu0123.toml
   --physical-gpu 3`.
+- Result: `2026-07-21T21:20:51+09:00`--`21:20:59+09:00`, 7.36 s,
+  exit 0. Two observations were materialized as main D `(234,4096)`; the third
+  turn bound source + D1 + D2 as three `(234,16384)` vLLM items over 1330
+  prompt tokens. Log SHA256 `ee53039b...74b6ac`; GPU 3 was released.
+
+### PRL-01-R10-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r10_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `466654ca...01776`, run identity `1142dfaa...9bff3`; this config is
+  authoritative for all model, data, prompt/tool, representation, sampling,
+  reward, GRPO, optimizer, replay, precision, capacity, topology, checkpoint,
+  and output fields.
+- Code/delta: implementation commit `cac41286c554cfdda67822c0cf29b9f21950e1d0`;
+  R9 plus only single-sequence `[1,N,H]` normalization at the live injected
+  forward boundary and the explicit veRL variable-padding sidecar contract.
+  The observation store remains `[N,H]`; no objective or sampling change.
+- Preflight evidence: 95 related tests passed; the real-model two-call gate
+  `PRL-DIAG-10` passed. It exercised source + main D + all three D-DeepStack
+  branches across two calls and the third-turn vLLM payload.
+- Question: does the composed path now complete generation, tool execution,
+  exact current/reference replay, one optimizer step, step-1 checkpoint, and
+  clean resume without an extra update?
+- GPUs/output/session: physical/logical B200 0--3, required world size 4;
+  output `artifacts/policy/PRL-01-R10-qwen3-grpo-1step-auto-resume-gpu0123`
+  must be absent at launch; tmux `prl01_r10_gpu0123`.
+- Exact launch: `CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_PLUGINS=tgvf_qwen3_precomputed
+  VLLM_ATTENTION_BACKEND=TRITON_ATTN VLLM_USE_V1=1
+  VLLM_WORKER_MULTIPROC_METHOD=spawn CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=42 TOKENIZERS_PARALLELISM=false TORCH_DEVICE_BACKEND_AUTOLOAD=0
+  timeout 3600s .venv312/bin/python -m tgvf_rl.cli run-policy <absolute-R10-config>
+  --python <absolute-.venv312-python>` with the accepted compiler/Python-header
+  environment used by R9.
+- Start/end, process identity, GPU-hours, logs, metrics, checkpoint and resume
+  result: pending.
 
 ## Compatibility-spike status
 
