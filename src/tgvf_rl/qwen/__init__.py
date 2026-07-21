@@ -1,6 +1,7 @@
 """Qwen VLM family adapters."""
 
 from .base import (
+    CachedTokenForwardRequest,
     FamilyCapabilities,
     InjectedForwardRequest,
     InjectedVisualBlock,
@@ -14,6 +15,7 @@ from .qwen25_vl import Qwen25VLAdapter
 from .qwen3_vl import Qwen3VLAdapter
 
 __all__ = [
+    "CachedTokenForwardRequest",
     "FamilyCapabilities",
     "InjectedForwardRequest",
     "InjectedVisualBlock",

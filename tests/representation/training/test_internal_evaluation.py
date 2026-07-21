@@ -108,6 +108,15 @@ def _adapter(
     )
 
 
+class _TinyCache:
+    def __init__(self, cumulative: torch.Tensor, sequence_length: int) -> None:
+        self.cumulative = cumulative
+        self.sequence_length = sequence_length
+
+    def get_seq_length(self) -> int:
+        return self.sequence_length
+
+
 class _TinyLanguageModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -119,17 +128,36 @@ class _TinyLanguageModel(nn.Module):
     def forward(
         self,
         *,
-        inputs_embeds,
-        visual_pos_masks,
-        deepstack_visual_embeds,
+        input_ids=None,
+        inputs_embeds=None,
+        visual_pos_masks=None,
+        deepstack_visual_embeds=None,
+        past_key_values=None,
+        use_cache=False,
         **kwargs,
     ):
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
         hidden = inputs_embeds.clone()
-        for branch in deepstack_visual_embeds:
-            hidden = hidden.clone()
-            hidden[visual_pos_masks] += branch
-        hidden = hidden + hidden.cumsum(dim=1) * 0.03
-        return SimpleNamespace(last_hidden_state=hidden, past_key_values=None)
+        if deepstack_visual_embeds is not None:
+            for branch in deepstack_visual_embeds:
+                hidden = hidden.clone()
+                hidden[visual_pos_masks] += branch
+        cumulative = hidden.cumsum(dim=1)
+        previous_length = 0
+        if past_key_values is not None:
+            cumulative = cumulative + past_key_values.cumulative
+            previous_length = past_key_values.get_seq_length()
+        output = hidden + cumulative * 0.03
+        cache = (
+            _TinyCache(
+                cumulative[:, -1:].clone(),
+                previous_length + hidden.shape[1],
+            )
+            if use_cache
+            else None
+        )
+        return SimpleNamespace(last_hidden_state=output, past_key_values=cache)
 
 
 class _TinyContainer(nn.Module):
@@ -157,12 +185,22 @@ class _RecordingFamilyAdapter(Qwen3VLAdapter):
     def __init__(self) -> None:
         super().__init__()
         self.visual_block_contracts: list[tuple[tuple[str, int], ...]] = []
+        self.cache_prefill_count = 0
+        self.cached_token_count = 0
 
     def forward_injected(self, model, request):
         self.visual_block_contracts.append(
             tuple((block.kind, len(block.deepstack)) for block in request.visual_blocks)
         )
         return super().forward_injected(model, request)
+
+    def prefill_injected_cache(self, model, request):
+        self.cache_prefill_count += 1
+        return super().prefill_injected_cache(model, request)
+
+    def forward_cached_token(self, model, request):
+        self.cached_token_count += 1
+        return super().forward_cached_token(model, request)
 
 
 def _sample(group: str, member: int) -> RepresentationTrainingSample:
@@ -824,6 +862,16 @@ def test_concrete_native_evaluator_executes_real_injected_qwen_forwards() -> Non
             observation=case.observation_a,
         )
     )
+    oracle = evaluator.free_continuation_no_cache(
+        NativeFreeContinuationRequest(
+            case_id=case.case_id,
+            variant="value_a",
+            expected_value=case.expected_value_a,
+            context=case.context,
+            observation_identity=case.observation_a_identity,
+            observation=case.observation_a,
+        )
+    )
 
     assert math.isfinite(causal.observation_a_log_odds_a_over_b)
     assert math.isfinite(causal.observation_b_log_odds_a_over_b)
@@ -831,6 +879,24 @@ def test_concrete_native_evaluator_executes_real_injected_qwen_forwards() -> Non
     assert 1 <= len(continuation.generated_token_ids) <= 2
     assert continuation.generated_text.startswith("tokens:")
     assert continuation.stop_reason in {"natural_stop", "length_cap"}
+    assert continuation == oracle
+    assert family.cache_prefill_count == 1
+    assert family.cached_token_count == len(continuation.generated_token_ids) - 1
+    parity = evaluator.continuation_cache_parity(
+        NativeFreeContinuationRequest(
+            case_id=case.case_id,
+            variant="value_a",
+            expected_value=case.expected_value_a,
+            context=case.context,
+            observation_identity=case.observation_a_identity,
+            observation=case.observation_a,
+        ),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+    assert parity.output == continuation
+    assert parity.compared_logit_steps == len(continuation.generated_token_ids)
+    assert parity.max_abs_logit_difference <= 1e-6
     assert len(family.visual_block_contracts) >= 5
     assert all(
         contract == (("focused_d", 3),) for contract in family.visual_block_contracts

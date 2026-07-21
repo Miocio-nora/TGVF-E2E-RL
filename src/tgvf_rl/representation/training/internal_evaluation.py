@@ -29,6 +29,7 @@ from torch import nn
 
 from tgvf_rl.conditioning.base import TargetConditioningProviderKind
 from tgvf_rl.qwen.base import (
+    CachedTokenForwardRequest,
     InjectedForwardRequest,
     InjectedVisualBlock,
     QwenVLMFamilyAdapter,
@@ -470,6 +471,25 @@ class NativeFreeContinuationOutput:
             raise ValueError("unknown free-continuation stop reason")
 
 
+@dataclass(frozen=True, slots=True)
+class NativeContinuationCacheParity:
+    output: NativeFreeContinuationOutput
+    compared_logit_steps: int
+    max_abs_logit_difference: float
+    atol: float
+    rtol: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.output, NativeFreeContinuationOutput):
+            raise TypeError("cache parity output must be a continuation output")
+        if self.compared_logit_steps != len(self.output.generated_token_ids):
+            raise ValueError("cache parity logit count differs from generated tokens")
+        for name in ("max_abs_logit_difference", "atol", "rtol"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+
+
 class NativeFreeContinuationEvaluator(Protocol):
     def __call__(
         self, request: NativeFreeContinuationRequest
@@ -538,7 +558,7 @@ class NativeTargetPresenceCase:
 
 
 class InjectedNativeCounterfactualEvaluator:
-    """Concrete no-cache value-flip and greedy-continuation evaluator.
+    """Concrete exact-D scoring and cached greedy-continuation evaluator.
 
     This class performs real :meth:`QwenVLMFamilyAdapter.forward_injected`
     calls.  A family-native materializer supplies complete requests because the
@@ -559,6 +579,8 @@ class InjectedNativeCounterfactualEvaluator:
             raise TypeError("native counterfactual model must be an nn.Module")
         if not isinstance(family_adapter, QwenVLMFamilyAdapter):
             raise TypeError("family_adapter must be QwenVLMFamilyAdapter")
+        if not family_adapter.capabilities.native_injected_kv_cache:
+            raise ValueError("family adapter has no accepted injected KV-cache path")
         required_methods = (
             "value_token_ids",
             "teacher_forced",
@@ -672,14 +694,98 @@ class InjectedNativeCounterfactualEvaluator:
     def free_continuation(
         self, request: NativeFreeContinuationRequest
     ) -> NativeFreeContinuationOutput:
-        if not isinstance(request, NativeFreeContinuationRequest):
-            raise TypeError("free continuation input must be a typed request")
-        if request.context.family != self.family_adapter.capabilities.family:
-            raise ValueError("free-continuation context differs from Qwen family")
-        if len(request.observation.deepstack) != (
-            self.family_adapter.capabilities.deepstack_branch_count
-        ):
-            raise ValueError("free-continuation branch count differs from Qwen family")
+        """Decode with one injected-D prefill followed by cached text tokens."""
+
+        return self._free_continuation_cached(request, captured_logits=None)
+
+    def _free_continuation_cached(
+        self,
+        request: NativeFreeContinuationRequest,
+        *,
+        captured_logits: list[torch.Tensor] | None,
+    ) -> NativeFreeContinuationOutput:
+
+        self._validate_free_continuation_request(request)
+        generated: list[int] = []
+        stop_reason: ContinuationStopReason = "length_cap"
+        materialized = self.materializer.generation_step(
+            context=request.context,
+            observation=request.observation,
+            generated_token_ids=(),
+        )
+        self._validate_generation_materialization(
+            request=request,
+            materialized=materialized,
+            generated=(),
+        )
+        with torch.no_grad():
+            result = self.family_adapter.prefill_injected_cache(
+                self.model,
+                materialized.request,
+            )
+        past_key_values = result.past_key_values
+        next_logits = result.logits[0, materialized.next_token_logit_position].float()
+
+        for token_index in range(self.max_new_tokens):
+            if captured_logits is not None:
+                captured_logits.append(next_logits.detach().cpu())
+            token_id = _greedy_token_id(next_logits)
+            generated.append(token_id)
+            if token_id in self.eos_token_ids:
+                stop_reason = "natural_stop"
+                break
+            if token_index + 1 == self.max_new_tokens:
+                break
+            materialized = self.materializer.generation_step(
+                context=request.context,
+                observation=request.observation,
+                generated_token_ids=tuple(generated),
+            )
+            self._validate_generation_materialization(
+                request=request,
+                materialized=materialized,
+                generated=tuple(generated),
+            )
+            full_request = materialized.request
+            cache_position = torch.tensor(
+                (full_request.input_ids.shape[1] - 1,),
+                dtype=torch.long,
+                device=full_request.input_ids.device,
+            )
+            with torch.no_grad():
+                result = self.family_adapter.forward_cached_token(
+                    self.model,
+                    CachedTokenForwardRequest(
+                        input_ids=full_request.input_ids[:, -1:],
+                        attention_mask=full_request.attention_mask,
+                        position_ids=full_request.position_ids[..., -1:],
+                        past_key_values=past_key_values,
+                        cache_position=cache_position,
+                    ),
+                )
+            past_key_values = result.past_key_values
+            next_logits = result.logits[0, -1].float()
+        return self._finalize_continuation(
+            request=request,
+            generated=generated,
+            stop_reason=stop_reason,
+        )
+
+    def free_continuation_no_cache(
+        self, request: NativeFreeContinuationRequest
+    ) -> NativeFreeContinuationOutput:
+        """Bounded full-prefix oracle retained only for cache parity tests."""
+
+        return self._free_continuation_no_cache(request, captured_logits=None)
+
+    def _free_continuation_no_cache(
+        self,
+        request: NativeFreeContinuationRequest,
+        *,
+        captured_logits: list[torch.Tensor] | None,
+    ) -> NativeFreeContinuationOutput:
+
+        self._validate_free_continuation_request(request)
         generated: list[int] = []
         stop_reason: ContinuationStopReason = "length_cap"
         for _ in range(self.max_new_tokens):
@@ -688,13 +794,10 @@ class InjectedNativeCounterfactualEvaluator:
                 observation=request.observation,
                 generated_token_ids=tuple(generated),
             )
-            if not isinstance(materialized, NativeGenerationForward):
-                raise TypeError("generation materializer returned an invalid forward")
-            _validate_materialized_request(
-                materialized.request,
-                context=request.context,
-                observation=request.observation,
-                generated_prefix=tuple(generated),
+            self._validate_generation_materialization(
+                request=request,
+                materialized=materialized,
+                generated=tuple(generated),
             )
             with torch.no_grad():
                 result = self.family_adapter.forward_injected(
@@ -703,15 +806,104 @@ class InjectedNativeCounterfactualEvaluator:
             next_logits = result.logits[
                 0, materialized.next_token_logit_position
             ].float()
-            if next_logits.ndim != 1 or not bool(torch.isfinite(next_logits).all()):
-                raise RuntimeError(
-                    "native generation produced invalid next-token logits"
-                )
-            token_id = int(torch.argmax(next_logits).item())
+            if captured_logits is not None:
+                captured_logits.append(next_logits.detach().cpu())
+            token_id = _greedy_token_id(next_logits)
             generated.append(token_id)
             if token_id in self.eos_token_ids:
                 stop_reason = "natural_stop"
                 break
+        return self._finalize_continuation(
+            request=request,
+            generated=generated,
+            stop_reason=stop_reason,
+        )
+
+    def continuation_cache_parity(
+        self,
+        request: NativeFreeContinuationRequest,
+        *,
+        atol: float,
+        rtol: float,
+    ) -> NativeContinuationCacheParity:
+        """Compare every cached next-token logit with the full-prefix oracle."""
+
+        for name, value in (("atol", atol), ("rtol", rtol)):
+            if not isinstance(value, float) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be a finite non-negative float")
+        cached_logits: list[torch.Tensor] = []
+        oracle_logits: list[torch.Tensor] = []
+        cached = self._free_continuation_cached(
+            request,
+            captured_logits=cached_logits,
+        )
+        oracle = self._free_continuation_no_cache(
+            request,
+            captured_logits=oracle_logits,
+        )
+        if cached != oracle:
+            raise RuntimeError("cached continuation differs from no-cache oracle")
+        if len(cached_logits) != len(oracle_logits) or not cached_logits:
+            raise RuntimeError("cached and no-cache logit traces differ in length")
+        max_abs_difference = 0.0
+        for index, (cached_step, oracle_step) in enumerate(
+            zip(cached_logits, oracle_logits, strict=True)
+        ):
+            difference = float((cached_step - oracle_step).abs().max().item())
+            max_abs_difference = max(max_abs_difference, difference)
+            if not torch.allclose(
+                cached_step,
+                oracle_step,
+                atol=atol,
+                rtol=rtol,
+            ):
+                raise RuntimeError(
+                    "cached continuation logit parity failed at step "
+                    f"{index}: max_abs_difference={difference}"
+                )
+        return NativeContinuationCacheParity(
+            output=cached,
+            compared_logit_steps=len(cached_logits),
+            max_abs_logit_difference=max_abs_difference,
+            atol=atol,
+            rtol=rtol,
+        )
+
+    def _validate_free_continuation_request(
+        self, request: NativeFreeContinuationRequest
+    ) -> None:
+        if not isinstance(request, NativeFreeContinuationRequest):
+            raise TypeError("free continuation input must be a typed request")
+        if request.context.family != self.family_adapter.capabilities.family:
+            raise ValueError("free-continuation context differs from Qwen family")
+        if len(request.observation.deepstack) != (
+            self.family_adapter.capabilities.deepstack_branch_count
+        ):
+            raise ValueError("free-continuation branch count differs from Qwen family")
+
+    def _validate_generation_materialization(
+        self,
+        *,
+        request: NativeFreeContinuationRequest,
+        materialized: NativeGenerationForward,
+        generated: tuple[int, ...],
+    ) -> None:
+        if not isinstance(materialized, NativeGenerationForward):
+            raise TypeError("generation materializer returned an invalid forward")
+        _validate_materialized_request(
+            materialized.request,
+            context=request.context,
+            observation=request.observation,
+            generated_prefix=generated,
+        )
+
+    def _finalize_continuation(
+        self,
+        *,
+        request: NativeFreeContinuationRequest,
+        generated: list[int],
+        stop_reason: ContinuationStopReason,
+    ) -> NativeFreeContinuationOutput:
         generated_ids = tuple(generated)
         generated_text = self.materializer.decode_generated(generated_ids)
         _non_empty_text(generated_text, name="decoded free continuation")
@@ -799,6 +991,12 @@ class InjectedNativeCounterfactualEvaluator:
         if not bool(torch.isfinite(value).item()):
             raise RuntimeError("teacher-forced value log probability is non-finite")
         return float(value.item())
+
+
+def _greedy_token_id(logits: torch.Tensor) -> int:
+    if logits.ndim != 1 or not bool(torch.isfinite(logits).all()):
+        raise RuntimeError("native generation produced invalid next-token logits")
+    return int(torch.argmax(logits).item())
 
 
 def create_injected_native_counterfactual_evaluator(
@@ -2278,6 +2476,7 @@ __all__ = [
     "NativeCounterfactualCase",
     "NativeCounterfactualEvaluationRecord",
     "NativeCounterfactualSummary",
+    "NativeContinuationCacheParity",
     "NativeDOnlyContext",
     "NativeGenerationForward",
     "NativeInjectedRequestMaterializer",

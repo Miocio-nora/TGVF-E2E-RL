@@ -30,6 +30,7 @@ class FamilyCapabilities:
     deepstack_branch_count: int
     recorded_d_forward: bool
     native_tool_template: bool
+    native_injected_kv_cache: bool = False
 
 
 class ReplayConsumer(str, Enum):
@@ -147,6 +148,52 @@ class InjectedForwardRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class CachedTokenForwardRequest:
+    """One incremental text token following an exact injected-D prefill."""
+
+    input_ids: torch.Tensor
+    attention_mask: torch.Tensor
+    position_ids: torch.Tensor
+    past_key_values: Any
+    cache_position: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.input_ids.dtype != torch.long or self.input_ids.ndim != 2:
+            raise ValueError(
+                "cached token input_ids must have shape [B,1] and long dtype"
+            )
+        if self.input_ids.shape[1] != 1:
+            raise ValueError("cached token forward must contain exactly one token")
+        batch = int(self.input_ids.shape[0])
+        if (
+            self.attention_mask.ndim != 2
+            or self.attention_mask.shape[0] != batch
+            or self.attention_mask.shape[1] == 0
+        ):
+            raise ValueError("cached token attention mask must have shape [B,S]")
+        if self.position_ids.ndim not in {2, 3}:
+            raise ValueError("cached token position_ids must have rank two or three")
+        if self.position_ids.shape[-2:] != (batch, 1):
+            raise ValueError("cached token position_ids must end in [B,1]")
+        if (
+            self.cache_position.dtype != torch.long
+            or self.cache_position.ndim != 1
+            or self.cache_position.shape[0] != 1
+        ):
+            raise ValueError("cached token cache_position must be one long index")
+        cache_index = int(self.cache_position.item())
+        if cache_index < 0 or self.attention_mask.shape[1] != cache_index + 1:
+            raise ValueError(
+                "cached token attention length differs from cache position"
+            )
+        if self.past_key_values is None:
+            raise ValueError("cached token forward requires past_key_values")
+        get_seq_length = getattr(self.past_key_values, "get_seq_length", None)
+        if callable(get_seq_length) and int(get_seq_length()) != cache_index:
+            raise ValueError("past_key_values length differs from cache position")
+
+
+@dataclass(frozen=True, slots=True)
 class RecordedReplayResult:
     logits: torch.Tensor
     hidden_states: torch.Tensor
@@ -176,6 +223,28 @@ class QwenVLMFamilyAdapter(ABC):
 
         raise NotImplementedError(
             f"{self.capabilities.family} has no accepted live injected forward"
+        )
+
+    def prefill_injected_cache(
+        self,
+        model: Any,
+        request: InjectedForwardRequest,
+    ) -> RecordedReplayResult:
+        """Prefill one exact injected observation and return its native KV cache."""
+
+        raise NotImplementedError(
+            f"{self.capabilities.family} has no accepted injected KV-cache prefill"
+        )
+
+    def forward_cached_token(
+        self,
+        model: Any,
+        request: CachedTokenForwardRequest,
+    ) -> RecordedReplayResult:
+        """Advance one text token without reinjecting or recomputing visual state."""
+
+        raise NotImplementedError(
+            f"{self.capabilities.family} has no accepted injected KV-cache decode"
         )
 
     def forward_replay_bundle(
