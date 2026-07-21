@@ -7144,6 +7144,23 @@ instead of repeated bullets.
   not pickle that structure. No generation, optimizer step, or checkpoint
   occurred; all four GPUs were released.
 
+### PRL-01-R26-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r26_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `5668336f...d3fd1`, identity `d86a92dd...99c8d`, implementation
+  `0926f146c7b10525d99684dcbb6f9bc81952c482`, GPU 0--3, tmux
+  `prl01_r26_gpu0123`.
+- R25 mathematics, data, sampling, replay, capacity, topology, and lifecycle
+  are unchanged. The sole runtime delta serializes source processor tensors as
+  explicit bytes/shape/dtype across vLLM's untyped utility boundary and
+  reconstructs them inside the colocated worker. The same vLLM msgpack decode
+  followed by Python pickle now passes, with exact tensor recovery; the focused
+  suite passed 11 tests.
+- Question: does source vision now materialize inside all four sticky rollout
+  workers and allow the first real vLLM generation, then exact replay, one GRPO
+  update, LoRA synchronization, step-1 checkpoint, and clean resume?
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
