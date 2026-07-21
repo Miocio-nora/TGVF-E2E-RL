@@ -5262,7 +5262,7 @@ instead of repeated bullets.
 ### BE-01-R3-QWEN3-DIRECT-COREDEV2511-INDEPENDENT-GPU0123
 
 - Cell/status/result: corrected independent-process inference and
-  throughput/resume gate / `PLANNED` / `PENDING`.
+  throughput/resume gate / `COMPLETE` / `FAIL`.
 - Identity/delta: exactly BE-01-R2, code `7e61e54`, except the Qwen3-VL policy
   process no longer sets the incompatible `VLLM_ATTENTION_BACKEND=TRITON_ATTN`.
   The pinned vLLM 0.12 runtime selects its supported backend; the actual backend
@@ -5275,6 +5275,44 @@ instead of repeated bullets.
   same early throughput plus durable VStar interruption/reuse gates from R2.
   The R2 command template applies with the R3 root and without an attention
   environment override.
+- Result: launched on GPU0 at `2026-07-21T13:03:09+09:00`. The independent
+  engine selected FlashInfer for decoder attention, loaded all weights in
+  about 8 seconds (`16.97 GiB` model memory), and then failed during multimodal
+  KV-profile vision execution. vLLM's bundled FlashAttention2 extension raised
+  `CUDA error: the provided PTX was compiled with an unsupported toolchain` on
+  B200. No prediction was generated and GPU0 released cleanly. The failure
+  also exposed an unnecessary default `max_seq_len=262144`. Launcher log
+  SHA256 `61fc87a8...61161`.
+
+### BE-01-R4-QWEN3-DIRECT-COREDEV2511-B200-SDPA-GPU0123
+
+- Cell/status/result: B200-safe independent original-policy inference plus
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Fixed identity: original local Qwen3-VL-8B-Thinking, tokenizer, native
+  per-dataset prompts, max pixels `262144`, sampling fields, seven CoreDev-2511
+  slice membership, and later official scorers remain BE-01. Code commit
+  `742a63c`; direct config SHA256 `5e0099ad...33e0d`; launcher SHA256
+  `4ac6f60d...ab70`. Output root is
+  `artifacts/evaluation/BE-01-R4-qwen3-direct-coredev2511`.
+- Runtime delta: keep vLLM 0.12 V1's selected FlashInfer decoder attention,
+  explicitly set only `mm_encoder_attn_backend=TORCH_SDPA`, and cap
+  `max_model_len=65536`. The project-owned factory bridge forwards only those
+  two fields without changing the pinned VLMEvalKit checkout. The 65,536-token
+  engine budget preserves at least 24,576 input tokens next to the accepted
+  40,960 generation cap; prompts, sampling, output token budget, scores and
+  model weights are unchanged. Unit/contract result: 12 passed; Ruff passed.
+- Initial topology/gate: GPU0 runs the complete 191-row VStarBench slice as one
+  independent TP1 process, engine seed 0, BF16 weights, `gpu_utils=0.9`. Require
+  logs to confirm `max_seq_len=65536`, decoder FlashInfer and vision SDPA, then
+  require real generated rows and inspect wall time, output-token rate,
+  utilization and peak memory. Only after that evidence may GPUs 1/2/3 launch
+  HRBench4K/BLINK/OCRBench_v2; later free GPUs take the remaining three slices.
+  The durable interruption and exact same-directory reuse gate remains required.
+- Command template: `CUDA_VISIBLE_DEVICES=<gpu> VLLM_USE_V1=1
+  TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=42 .venv312/bin/python
+  tools/run_coredev_2511_vlmevalkit.py --config
+  configs/evaluation/coredev_2511_qwen3_direct_v1.json --coredev-data
+  <official_alias> --work-dir <R4_root>/<official_alias> --mode infer`.
 
 ## Compatibility-spike status
 
