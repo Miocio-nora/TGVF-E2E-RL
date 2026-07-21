@@ -6927,7 +6927,7 @@ instead of repeated bullets.
 
 ### PRL-01-R15-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step plus
   immediate step-1 checkpoint and clean no-extra-update resume.
 - Complete identity: config
   `configs/policy/runs/prl_01_r15_qwen3_grpo_1step_autoresume_gpu0123.toml`,
@@ -6949,6 +6949,37 @@ instead of repeated bullets.
   after a successful checkpoint. Standard accepted `.venv312` four-GPU launch,
   `CUDA_VISIBLE_DEVICES=0,1,2,3`, vLLM 0.12.0 TP=1, BF16, SDPA actor/reference,
   Triton rollout attention, timeout 3600 s.
+- Result: `2026-07-21T23:28+09:00`--`23:34:25+09:00`, exit 1; W&B
+  `0j1f06ne`; launch-log SHA256 `bb1afbb...6d43`. Rollout, retained invalid
+  reward rows, batch compaction, and group advantage completed. Reference exact
+  replay then called the injected inner Qwen language model without the root
+  FSDP2 pre-forward hook, leaving the root-owned final norm as a DTensor while
+  hidden states were ordinary tensors. It failed at `aten.mul.Tensor`; no
+  actor replay, backward, optimizer step, checkpoint, or resume occurred.
+
+### PRL-01-R16-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  immediate step-1 checkpoint and clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r16_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `418faf13...300a`, run identity `ad6efd7e...790e`, implementation
+  commit `5c143e36e70af50dd7ae238cab837612223c0af0`; all other identities remain
+  authoritative in that config.
+- Delta/preflight: R15 plus one exact-replay change: synchronously unshard only
+  the non-recursive FSDP2 root parameter group before the injected inner
+  language-model path. Child decoder, embedding, and lm-head FSDP2 hooks remain
+  upstream-owned; the root remains unsharded as in pinned veRL/PyTorch FSDP2
+  and through actor backward. Fourteen focused engine/Qwen tests passed.
+- Question: does root materialization clear reference replay and allow exact
+  current replay, GRPO backward, one optimizer step, paired step-1 checkpoint,
+  and clean resume without step 2?
+- GPUs/output/session: idle physical/logical B200 0--3, world size 4; output
+  `artifacts/policy/PRL-01-R16-qwen3-grpo-1step-auto-resume-gpu0123` must be
+  absent; tmux `prl01_r16_gpu0123`, followed by a distinct resume session only
+  after a successful checkpoint. Standard accepted `.venv312` launch,
+  `CUDA_VISIBLE_DEVICES=0,1,2,3`, vLLM 0.12.0 TP=1, BF16, SDPA
+  actor/reference, Triton rollout attention, timeout 3600 s.
 
 ## Compatibility-spike status
 
