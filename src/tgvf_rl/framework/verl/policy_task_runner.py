@@ -58,6 +58,7 @@ from .data_bridge import (
     validate_data_proto_integrity,
 )
 from .exact_replay_engine import _operational_base_identity_sha256
+from .padding_compat import install_verl_sdpa_padding_compat
 from .policy_weight_sync import (
     PolicyWeightSyncState,
     load_latest_policy_version,
@@ -75,6 +76,63 @@ POLICY_PILOT_TASK_RUNNER_FQN = (
 )
 POLICY_PILOT_TRAINER_LIFECYCLE_SCHEMA = "tgvf-policy-trainer-lifecycle-v1"
 POLICY_REFERENCE_DIAGNOSTIC_ENABLED = True
+
+
+def _completed_resume_checkpoint_step(
+    trainer: object,
+    *,
+    latest_checkpoint_resolver: object | None = None,
+) -> int | None:
+    """Return an already-complete resume step without mutating trainer state."""
+
+    config = getattr(getattr(trainer, "config", None), "trainer", None)
+    if config is None:
+        raise TypeError("Policy trainer config is unavailable")
+    mode = getattr(config, "resume_mode", None)
+    if mode == "disable":
+        return None
+    if mode not in {"auto", "resume_path"}:
+        raise ValueError("unsupported Policy trainer resume_mode")
+    if getattr(config, "default_hdfs_dir", None) is not None:
+        return None  # Let pinned veRL retain ownership of its explicit error.
+
+    checkpoint_path: str | None
+    if mode == "auto":
+        resolver = latest_checkpoint_resolver
+        if resolver is None:
+            from verl.utils.checkpoint.checkpoint_manager import (
+                find_latest_ckpt_path,
+            )
+
+            resolver = find_latest_ckpt_path
+        if not callable(resolver):
+            raise TypeError("latest checkpoint resolver must be callable")
+        checkpoint_path = resolver(getattr(config, "default_local_dir", None))
+    else:
+        raw_path = getattr(config, "resume_from_path", None)
+        checkpoint_path = raw_path if isinstance(raw_path, str) else None
+    if checkpoint_path is None:
+        return None
+
+    resolved = Path(checkpoint_path)
+    if not resolved.is_absolute():
+        resolved = Path.cwd() / resolved
+    if not resolved.is_dir():
+        return None  # Pinned veRL will produce the canonical missing-path error.
+    prefix = "global_step_"
+    if not resolved.name.startswith(prefix):
+        raise RuntimeError("Policy resume checkpoint name does not encode a step")
+    try:
+        checkpoint_step = int(resolved.name.removeprefix(prefix))
+    except ValueError as error:
+        raise RuntimeError("Policy resume checkpoint step is malformed") from error
+
+    total_steps = getattr(trainer, "total_training_steps", None)
+    if type(total_steps) is not int or total_steps <= 0:
+        raise TypeError("Policy trainer total_training_steps must be positive")
+    if checkpoint_step > total_steps:
+        raise RuntimeError("Policy resume checkpoint exceeds configured total steps")
+    return checkpoint_step if checkpoint_step == total_steps else None
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -395,6 +453,26 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self._policy_step_started_at = None
             return result
 
+        def fit(self):
+            completed_step = _completed_resume_checkpoint_step(self)
+            if completed_step is None:
+                return super().fit()
+
+            # Pinned veRL increments ``global_steps`` before checking its loop
+            # bound, so resuming an already-complete one-step run would perform
+            # an unauthorized extra update.  Load and validate the complete
+            # paired checkpoint, publish exactly those weights, then exit.
+            self.global_steps = 0
+            self._load_checkpoint()
+            if self.global_steps != completed_step:
+                raise RuntimeError("loaded Policy resume step changed")
+            resumed = getattr(self._policy_checkpoint_state, "last_resume", None)
+            if getattr(resumed, "optimizer_step", None) != completed_step:
+                raise RuntimeError("paired Policy resume step differs from veRL")
+            self.checkpoint_manager.update_weights(self.global_steps)
+            self._shutdown_dump_executor()
+            return None
+
         def _get_gen_batch(self, *args, **kwargs):
             self._policy_step_started_at = perf_counter()
             return super()._get_gen_batch(*args, **kwargs)
@@ -622,6 +700,7 @@ def run_policy_pilot_v0_task(runner: object, config: object, *, trainer_cls: typ
     from verl.utils.fs import copy_to_local
 
     print(f"PolicyPilotTaskRunner hostname: {socket.gethostname()}, PID: {os.getpid()}")
+    install_verl_sdpa_padding_compat()
     pprint(OmegaConf.to_container(config, resolve=True))
     OmegaConf.resolve(config)
     actor_rollout_cls, ray_worker_group_cls = runner.add_actor_rollout_worker(config)

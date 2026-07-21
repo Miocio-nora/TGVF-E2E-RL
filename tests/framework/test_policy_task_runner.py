@@ -14,6 +14,7 @@ from tgvf_rl.framework.verl.data_bridge import (
 from tgvf_rl.framework.verl.policy_task_runner import (
     CheckpointAfterWeightSyncManager,
     PairedActorWorkerGroup,
+    _completed_resume_checkpoint_step,
     add_policy_actor_rollout_worker,
     make_policy_pilot_ray_trainer_class,
 )
@@ -233,3 +234,59 @@ def test_actor_update_rejects_invalid_batch_before_optimizer_mutation(
         trainer._update_actor(object())
 
     assert events == ["release"]
+
+
+def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> None:
+    events: list[object] = []
+    checkpoint_root = tmp_path / "checkpoints"
+    checkpoint = checkpoint_root / "global_step_1"
+    checkpoint.mkdir(parents=True)
+    (checkpoint_root / "latest_checkpointed_iteration.txt").write_text("1")
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            events.append("optimizer_mutation")
+
+        def _save_checkpoint(self):
+            return None
+
+        def fit(self):
+            events.append("upstream_fit")
+
+        def _load_checkpoint(self):
+            events.append("load")
+            self.global_steps = 1
+            self._policy_checkpoint_state.last_resume = SimpleNamespace(
+                optimizer_step=1
+            )
+
+        def _shutdown_dump_executor(self):
+            events.append("shutdown")
+
+    class CheckpointManager:
+        def update_weights(self, step):
+            events.append(("sync", step))
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.config = SimpleNamespace(
+        trainer=SimpleNamespace(
+            resume_mode="auto",
+            resume_from_path=None,
+            default_hdfs_dir=None,
+            default_local_dir=str(checkpoint_root),
+        )
+    )
+    trainer.total_training_steps = 1
+    trainer._policy_checkpoint_state = SimpleNamespace(last_resume=None)
+    trainer.checkpoint_manager = CheckpointManager()
+
+    assert _completed_resume_checkpoint_step(trainer) == 1
+    assert trainer.fit() is None
+    assert events == ["load", ("sync", 1), "shutdown"]

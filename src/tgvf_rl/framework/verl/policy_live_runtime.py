@@ -978,7 +978,7 @@ def _default_metrics_factory(
 ) -> object:
     del trajectory, reward
     try:
-        from verl.experimental.agent_loop import AgentLoopMetrics
+        from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics
     except ImportError as error:  # pragma: no cover - accepted live env owns veRL
         raise RuntimeError("live AgentLoop metrics require the pinned veRL") from error
     return AgentLoopMetrics()

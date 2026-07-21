@@ -6795,7 +6795,7 @@ instead of repeated bullets.
 
 ### PRL-01-R11-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step plus
   clean no-extra-update resume.
 - Complete identity: config
   `configs/policy/runs/prl_01_r11_qwen3_grpo_1step_autoresume_gpu0123.toml`,
@@ -6817,7 +6817,15 @@ instead of repeated bullets.
   absent; tmux `prl01_r11_gpu0123`.
 - Exact launch: same accepted R10 environment and command, substituting the
   absolute R11 config/output paths; timeout 3600 s.
-- Start/end, GPU-hours, W&B, metrics, checkpoint and resume result: pending.
+- Result: `2026-07-21T21:48:15+09:00`--`21:53:26+09:00`, tmux
+  `prl01_r11_gpu0123`, exit 1, about 0.35 GPU-hours; GPUs released. W&B
+  `ej0peov6`; log SHA256 `a3225dd2...a7bc7d2`. The exact sampled-token fix
+  passed and a native trajectory completed through generation/tool-loop
+  execution. Its output builder then imported `AgentLoopMetrics` from veRL's
+  package root although pinned veRL defines but does not export it there.
+  Therefore no batched reward/replay/update/checkpoint/resume result exists.
+- Conclusion: R12 uses the pinned definition module and directly exercises the
+  default live metrics factory; no algorithm, sampling, or trajectory change.
 
 ## Compatibility-spike status
 

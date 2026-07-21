@@ -8,6 +8,7 @@ from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
+    _default_metrics_factory,
     _injected_visual_blocks,
     _single_sequence_visual_features,
 )
@@ -26,6 +27,12 @@ from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
 
 SHA = "7" * 64
 BRANCH_LAYERS = (8, 16, 24)
+
+
+def test_default_live_metrics_factory_uses_the_pinned_verl_public_model() -> None:
+    from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics
+
+    assert isinstance(_default_metrics_factory(object(), object()), AgentLoopMetrics)
 
 
 def test_live_visual_features_restore_the_single_sequence_batch_axis() -> None:
