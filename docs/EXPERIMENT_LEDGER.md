@@ -6829,7 +6829,7 @@ instead of repeated bullets.
 
 ### PRL-01-R12-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step plus
   clean no-extra-update resume.
 - Complete identity: config
   `configs/policy/runs/prl_01_r12_qwen3_grpo_1step_autoresume_gpu0123.toml`,
@@ -6852,7 +6852,14 @@ instead of repeated bullets.
   after a successful step-1 checkpoint.
 - Exact launch: same accepted R11 environment and command, substituting the
   absolute R12 config/output paths; timeout 3600 s.
-- Start/end, GPU-hours, W&B, metrics, checkpoint and resume result: pending.
+- Result: `2026-07-21T22:04:22+09:00`--`22:10:07+09:00`, tmux
+  `prl01_r12_gpu0123`, exit 1, about 0.38 GPU-hours; GPUs released. W&B
+  `k8ecnc8i`; launch-log SHA256 `5f0a7e9f...624e9`. Native generation and tool
+  execution reached the observation appender, which incorrectly re-tokenized
+  policy-owned sampled text and rejected a legal non-canonical ByteLevel token
+  segmentation. No batched replay, update, step-1 checkpoint, or resume
+  occurred. R13 removes that re-tokenization: exact sampled IDs remain
+  authoritative and only environment-owned response text is encoded.
 
 ## Compatibility-spike status
 

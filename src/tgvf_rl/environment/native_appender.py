@@ -96,11 +96,12 @@ class QwenNativeToolObservationAppender:
         if type(call_index) is not int or call_index < 0:
             raise ValueError("call_index must be a non-negative integer")
 
-        sampled_ids = self._encode(sampled_turn.text)
-        if sampled_ids != sampled_turn.token_ids:
-            raise ValueError(
-                "sampled assistant text does not round-trip to its exact token IDs"
-            )
+        # The sampled token IDs are authoritative policy output.  Do not
+        # re-tokenize policy-owned text here: several byte-level token
+        # sequences decode to the same text even though a fresh encode chooses
+        # a different, canonical segmentation.  The sampler's exact byte-span
+        # decoder and SampledAssistantTurn validate the text/token alignment
+        # before parsing; this boundary must preserve those IDs verbatim.
         if isinstance(observation, ObservationHandle):
             if parsed_call is None:
                 raise ValueError("successful tool response requires its parsed call")

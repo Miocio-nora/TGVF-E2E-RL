@@ -30,6 +30,20 @@ class _CharacterTokenizer:
         return [ord(character) for character in text]
 
 
+class _CanonicalizingTokenizer(_CharacterTokenizer):
+    """Tokenizer whose fresh encode merges one already-sampled sequence."""
+
+    def __init__(self, sampled_text: str) -> None:
+        self.sampled_text = sampled_text
+        self.encoded_texts: list[str] = []
+
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+        self.encoded_texts.append(text)
+        if text == self.sampled_text:
+            return [999_999]
+        return super().encode(text, add_special_tokens=add_special_tokens)
+
+
 class _ImagePadTokenizer(_CharacterTokenizer):
     image_token_id = 9876
 
@@ -218,6 +232,29 @@ def test_error_append_uses_canonical_json_without_visual_placeholder() -> None:
             call_index=0,
             parsed_call=None,
         )
+
+
+def test_policy_sampled_tokens_are_appended_verbatim_without_reencoding() -> None:
+    sampled, parsed = _ascii_sampled_call(
+        "tgvf_focus_tool", {"target": "the red label text"}
+    )
+    tokenizer = _CanonicalizingTokenizer(sampled.text)
+    registrar = _Registrar()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer, registrar=registrar
+    )
+
+    updated, environment_ids = appender.append(
+        (7, 8),
+        sampled,
+        ObservationHandle("obs-noncanonical", "5" * 64),
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    assert tokenizer.sampled_text not in tokenizer.encoded_texts
+    assert updated == (7, 8) + sampled.token_ids + environment_ids
+    assert updated[2 : 2 + len(sampled.token_ids)] == sampled.token_ids
 
 
 def test_success_expands_placeholder_to_store_resolved_visual_token_count() -> None:
