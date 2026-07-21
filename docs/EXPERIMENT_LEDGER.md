@@ -6925,6 +6925,31 @@ instead of repeated bullets.
   retaining the row with answer 0 and format -1. No replay, update, checkpoint,
   or resume occurred.
 
+### PRL-01-R15-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  immediate step-1 checkpoint and clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r15_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `5dfd8d3f...8901b`, run identity `19957776...55a79`, implementation
+  commit `7a53bf506e27c8a227467253c7b5497c78441eed`; that config is authoritative
+  for model, data, protocol, representation, sampling, reward, GRPO, replay,
+  optimizer, precision, topology, capacity, and checkpoint fields.
+- Delta/preflight: R14 plus only the deterministic missing-answer MCQ reward
+  route. Such rows remain in the original n=8 group with answer 0, format -1,
+  conditional-tool 0, and no judge call. Reward through replay/update static
+  audit found no second deterministic blocker; 74 focused reward, DataProto,
+  GRPO, exact-replay, actor lifecycle, and checkpoint tests passed.
+- Question: can one composed mixed-length batch complete reward, exact
+  current/reference replay, GRPO backward, one FSDP2 optimizer step, LoRA
+  weight sync, step-1 paired checkpoint, and clean resume without step 2?
+- GPUs/output/session: idle physical/logical B200 0--3, world size 4; output
+  `artifacts/policy/PRL-01-R15-qwen3-grpo-1step-auto-resume-gpu0123` must be
+  absent; tmux `prl01_r15_gpu0123`, followed by a distinct resume session only
+  after a successful checkpoint. Standard accepted `.venv312` four-GPU launch,
+  `CUDA_VISIBLE_DEVICES=0,1,2,3`, vLLM 0.12.0 TP=1, BF16, SDPA actor/reference,
+  Triton rollout attention, timeout 3600 s.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
