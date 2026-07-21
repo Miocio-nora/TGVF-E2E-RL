@@ -5889,6 +5889,120 @@ instead of repeated bullets.
   `pkg://` import route and requires a direct loader regression gate before its
   separately planned launch.
 
+### PRL-01-R1-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: mandatory executable Policy
+  Pilot vertical-slice smoke; one optimizer step followed by a clean-process
+  latest-checkpoint resume check. This is a fresh identity, not a retry written
+  into PRL-01.
+- Spike-plan git revision and approval references: accepted tasks
+  `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
+  `POLICY-PILOT-V1-FOUR-GPU-20260721` in `PROJECT_TASK.md` sections 0.8.2 and
+  0.8.3.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: after correcting only the veRL Dataset import route, can the exact
+  PRL-01 native-tool trajectory complete rollout, exact-observation current and
+  reference replay, one FSDP2 decoder-LoRA GRPO update, checkpoint, and
+  clean-process auto-resume?
+- Baseline and exact output path: PRL-01 failed before CUDA allocation;
+  immutable new root
+  `artifacts/policy/PRL-01-R1-qwen3-grpo-1step-auto-resume-gpu0123`, confirmed
+  absent at planning time. Initial/resume logs are `launch.log` and
+  `resume.log` there.
+- Model and processor identity: local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, tokenizer length 151669,
+  native chat-template SHA256 `36e042fe...8956`, native DeepStack enabled,
+  original-image `max_pixels=262144`; no tokenizer resize.
+- Representation checkpoint identity: contextual hidden state layer `-1`;
+  RP-49 Balanced Matrix CE T=0.1 step-2000 Adapter, file/manifest SHA256
+  `fcda0b96...fc14` / `3ff14e66...f49e`, run identity
+  `980e4136...e1bea`.
+- N/A fields and justification: non-formal MCQ smoke, so 72B judge is not
+  applicable; Qwen2.5-VL, crop tools, SDPO, full fine-tuning, nonzero KL and
+  quality conclusions are out of scope.
+- Policy/reference initialization: original Qwen3 base plus fresh decoder-only
+  LoRA rank/alpha/dropout `64/64/0`; vision, merger, native DeepStack, TGVF
+  Adapter, input embedding and lm_head frozen. Reference is a distinct frozen
+  base forward engine without LoRA. LR `1e-5`.
+- Rollout policy version and allowed asynchronous staleness: exact step-0 LoRA
+  snapshot is installed in vLLM and each local tool runtime before generation;
+  staleness zero, with no update between sampling and replay.
+- Code commit and worktree state: executable code commit
+  `5f5504ff3320793b01295ccbbb6c903467c57c69`; launch is allowed only from its
+  clean descendant containing this config and ledger row.
+- Repository adapter/patch surface and hash: strict config
+  `configs/policy/runs/prl_01_r1_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  source SHA256 `3cc6d4db...8a931`, run identity `248ed669...eb74`; the sole
+  runtime delta from PRL-01 is veRL's public
+  `pkg://tgvf_rl.framework.verl.smoke_dataset` Dataset import route. Its direct
+  `load_extern_object` regression plus focused suite passed (23 tests), and
+  upstream config composition/validation passed.
+- Dataset/manifest, hashes, sample rule, and n: DeepEyes 47K snapshot
+  `5546681e...6ded3`, 47,052 rows, seed 42; manifest/content/sample/iteration
+  SHA256 `3483c317...6f477` / `2ddb3635...791a` /
+  `e3937c67...fb51e` / `6ee358c9...3ad8c`; audited MCQ cursor 7, answer C;
+  global prompt batch 4 and eight trajectories per prompt.
+- Native prompt/tool schema hash: TGVF-only v1 prompt SHA256
+  `390b334e...99f5`; `tgvf_focus_tool` schema SHA256 `f33f61d4...6aba5`;
+  four admitted calls, deterministic fifth-call error SHA256
+  `1f649e1d...ad200`, and one recovery turn.
+- Chat-template/token-fixture hash and token-ownership masks: 724-token initial
+  expanded prompt, 234 image-pad positions, token-ID SHA256
+  `221b8952...d4d`; only actual assistant samples participate in policy loss.
+- D/DeepStack/position/mask identity: every successful call records main D,
+  D-DeepStack branches `(8,16,24)`, positions, layout, masks and source binding;
+  missing/dummy branches, retokenization and recomputation fail closed.
+- Observation materialization/artifact identity used by all replays: each
+  source/tool observation is materialized once by rollout; current and frozen
+  reference replay consume that exact content-addressed bundle.
+- RL framework/version/environment lock: upstream veRL `0.9.0.dev` commit
+  `e003163181731412595257a72ec173071efb125f`, Python 3.12.3, Torch
+  2.9.0+cu128, Transformers 4.57.6, vLLM 0.12.0, PEFT 0.19.1, Ray 2.56.1.
+- Objective equations and normalization: sample-std GRPO
+  `A=(r-group_mean)/(group_std+1e-6)` with constant groups zero; reward
+  `0.8*answer + 0.2*format + 1.2*conditional_tool`; ratio against recorded
+  behavior logprobs, clip `[0.8,1.2]`, dual clip 3, global policy-token mean,
+  one update epoch, KL/entropy coefficients zero, max grad norm 1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic
+  eval replay, LoRA dropout zero, recorded post-transform behavior logprobs,
+  content-addressed turn RNG v1, master seed 42, derivation SHA256
+  `fe8d2da9...e867e`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM 0.12.0; temperature/top-p
+  `1/1`, top-k `-1`, min-p 0, repetition/presence/frequency `1/0/0`, no logit
+  processors, post-transform logprobs, EOS 151645, `</tool_call>` stop, total
+  response budget 8192.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 actor/reference/tool model, FP32
+  reductions/optimizer, no quantization; HF SDPA, vLLM TRITON_ATTN with
+  TORCH_SDPA multimodal encoder; TP1, four-rank FSDP2,
+  `reshard_after_forward=false`, no activation checkpointing/remove-padding,
+  no torch.compile, colocated placement.
+- Logit/logprob/loss/gradient parity tolerances: exact token/mask/bundle/current
+  and reference observation identities; finite selected logprobs/loss/gradient;
+  at pre-update zero staleness, clip fraction zero and absolute mean PPO KL no
+  greater than 0.015625.
+- World size, microbatch, accumulation, and global batch: world 4; global
+  prompt batch 4; prompt/rollout microbatch one per rank; 32 trajectories;
+  actor/reference logprob microbatch 8 per GPU; gradient accumulation 1.
+- GPUs: physical/logical IDs `0,1,2,3`, four B200 183359 MiB; availability must
+  be rechecked immediately before launch.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  planned tmux sessions `prl01_r1_gpu0123` then
+  `prl01_r1_resume_gpu0123`.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: both processes use `PYTHONPATH=src .venv312/bin/python -m
+  tgvf_rl.cli run-policy <absolute-R1-config> --python
+  /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python`; resume
+  starts only after the first exits and must load step 1 without a second
+  update because total steps is one.
+- Outputs: pending.
+- Scorer/parser identity: deterministic MCQ exact verifier SHA256
+  `2a3d5fa4...2e1c`; strict native tool parser; no judge fallback.
+- Metrics: pending.
+- Conclusion: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
