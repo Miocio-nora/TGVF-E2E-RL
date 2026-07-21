@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import math
 from threading import RLock
@@ -24,6 +26,9 @@ from .compatibility import load_verl_public_api
 from .objective_bridge import validate_objective_sentinels
 from .rollout_bridge import (
     ACTUAL_RESPONSE_LOGPROBS_FIELD,
+    AGENT_LOOP_EXACT_SIDECAR_FIELDS,
+    DATAPROTO_META_SCHEMA_FIELD,
+    DATAPROTO_META_SCHEMA_VERSION,
     BEHAVIOR_TRACE_HANDLES_FIELD,
     BEHAVIOR_TRACE_RECORDS_FIELD,
     BRIDGE_SCHEMA_FIELD,
@@ -33,6 +38,9 @@ from .rollout_bridge import (
     EXACT_OBSERVATION_HANDLES_FIELD,
     OBJECTIVE_SENTINELS_FIELD,
     ROLLOUT_PROVENANCE_SHA256_FIELD,
+    SIDECAR_RELEASE_FIELDS_FIELD,
+    SIDECAR_RELEASE_SCHEMA_FIELD,
+    SIDECAR_RELEASE_SCHEMA_VERSION,
     TOKEN_OWNERSHIP_SHA256_FIELD,
     TRAJECTORY_ID_FIELD,
     TRAJECTORY_PAYLOAD_FIELD,
@@ -47,8 +55,6 @@ from .rollout_bridge import (
 
 
 VARIABLE_LENGTH_PADDING_SCHEMA_VERSION = "tgvf-verl-variable-padding-v1"
-DATAPROTO_META_SCHEMA_VERSION = "tgvf-verl-dataproto-meta-v1"
-DATAPROTO_META_SCHEMA_FIELD = "tgvf_dataproto_meta_schema_version"
 PADDING_SCHEMA_FIELD = "tgvf_padding_schema_version"
 PAD_TOKEN_ID_FIELD = "tgvf_explicit_pad_token_id"
 PROMPT_TOKEN_OWNERSHIP_FIELD = "tgvf_batched_prompt_token_ownership"
@@ -62,9 +68,9 @@ _PADDING_FIELDS = frozenset(
     }
 )
 
-_SIDECAR_RELEASE_SCHEMA_VERSION = "tgvf-dataproto-sidecar-release-v1"
-_SIDECAR_RELEASE_SCHEMA_FIELD = "tgvf_sidecar_release_schema_version"
-_SIDECAR_RELEASE_FIELDS_FIELD = "tgvf_sidecar_release_fields"
+_SIDECAR_RELEASE_SCHEMA_VERSION = SIDECAR_RELEASE_SCHEMA_VERSION
+_SIDECAR_RELEASE_SCHEMA_FIELD = SIDECAR_RELEASE_SCHEMA_FIELD
+_SIDECAR_RELEASE_FIELDS_FIELD = SIDECAR_RELEASE_FIELDS_FIELD
 
 
 @dataclass(slots=True)
@@ -429,6 +435,46 @@ def to_verl_data_proto(
     return payload._materialize_verl_data_proto(from_dict)
 
 
+def bind_agent_loop_data_proto_sidecar_lease(data: object) -> object:
+    """Attach the exact-sidecar lease to a live AgentLoop-manager DataProto.
+
+    Pinned veRL constructs this DataProto itself, so the neutral
+    :class:`DataProtoPayload` constructor never has an opportunity to add its
+    transport metadata.  The repo-owned lossless manager invokes this hook on
+    the driver before validation or any TensorDict/Ray dispatch.
+    """
+
+    non_tensors = getattr(data, "non_tensor_batch", None)
+    meta_info = getattr(data, "meta_info", None)
+    if type(non_tensors) is not dict or type(meta_info) is not dict:
+        raise TypeError("live AgentLoop DataProto must expose mutable built-in mappings")
+    missing = tuple(
+        name for name in AGENT_LOOP_EXACT_SIDECAR_FIELDS if name not in non_tensors
+    )
+    if missing:
+        raise RuntimeError(
+            f"live AgentLoop DataProto is missing exact sidecars: {missing!r}"
+        )
+    existing_release_fields = meta_info.get(_SIDECAR_RELEASE_FIELDS_FIELD)
+    if existing_release_fields is not None:
+        existing = _sidecar_release_fields(data)
+        if not set(AGENT_LOOP_EXACT_SIDECAR_FIELDS).issubset(existing):
+            raise RuntimeError("existing DataProto lease omits AgentLoop exact sidecars")
+        return data
+    expected = {
+        DATAPROTO_META_SCHEMA_FIELD: DATAPROTO_META_SCHEMA_VERSION,
+        _SIDECAR_RELEASE_SCHEMA_FIELD: _SIDECAR_RELEASE_SCHEMA_VERSION,
+        _SIDECAR_RELEASE_FIELDS_FIELD: AGENT_LOOP_EXACT_SIDECAR_FIELDS,
+    }
+    for name, value in expected.items():
+        existing_value = meta_info.get(name)
+        if existing_value is not None and existing_value != value:
+            raise RuntimeError(f"live AgentLoop DataProto changed lease field {name!r}")
+        meta_info[name] = value
+    _sidecar_release_fields(data)
+    return data
+
+
 def _sidecar_release_fields(data: object) -> tuple[str, ...]:
     _validate_dataproto_meta_schema(data)
     meta_info = getattr(data, "meta_info", None)
@@ -475,6 +521,227 @@ def release_verl_data_proto_sidecars(data: object) -> int:
     for name in fields:
         del non_tensors[name]
     return len(fields)
+
+
+@contextmanager
+def worker_data_proto_sidecar_scope(data: object) -> Iterator[object]:
+    """Validate and release one worker-local DataProto in ``finally``.
+
+    Ray serialization creates a new owner of every object in
+    ``non_tensor_batch``.  The driver's retained :class:`DataProtoPayload`
+    cannot release that copy.  A veRL worker entry point must therefore wrap
+    its complete use of the deserialized DataProto in this scope.  Validation
+    happens before the consumer runs, and cleanup is attempted for success,
+    consumer failure, and validation failure alike.
+
+    If both the consumer and cleanup fail, the consumer exception remains the
+    primary error and receives a cleanup note.  This prevents a release defect
+    from hiding the failure that may have left optimizer commit status unknown.
+    """
+
+    active_error: BaseException | None = None
+    try:
+        validate_data_proto_integrity(data)
+        yield data
+    except BaseException as error:
+        active_error = error
+        raise
+    finally:
+        try:
+            release_verl_data_proto_sidecars(data)
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            active_error.add_note(
+                "veRL worker DataProto sidecar cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+
+
+def release_verl_worker_tensordict_sidecars(data: object) -> int:
+    """Release exact-replay objects after DataProto-to-TensorDict dispatch.
+
+    The pinned veRL driver converts a DataProto to TensorDict before Ray actor
+    and reference calls.  Its conversion carries the release lease through
+    non-tensor metadata, so the worker can delete exactly the project-owned
+    fields without touching ordinary tensors or worker metrics.
+    """
+
+    if not hasattr(data, "__contains__") or not hasattr(data, "__delitem__"):
+        raise TypeError("veRL worker TensorDict must be mutable and mapping-like")
+    schema = _worker_non_tensor_value(
+        data[DATAPROTO_META_SCHEMA_FIELD]
+        if DATAPROTO_META_SCHEMA_FIELD in data
+        else None
+    )
+    if schema != DATAPROTO_META_SCHEMA_VERSION:
+        raise RuntimeError("worker TensorDict lost the DataProto meta schema")
+    release_schema = _worker_non_tensor_value(
+        data[_SIDECAR_RELEASE_SCHEMA_FIELD]
+        if _SIDECAR_RELEASE_SCHEMA_FIELD in data
+        else None
+    )
+    if release_schema != _SIDECAR_RELEASE_SCHEMA_VERSION:
+        raise RuntimeError("worker TensorDict lost the sidecar release schema")
+    fields = _worker_non_tensor_value(
+        data[_SIDECAR_RELEASE_FIELDS_FIELD]
+        if _SIDECAR_RELEASE_FIELDS_FIELD in data
+        else None
+    )
+    if (
+        not isinstance(fields, tuple)
+        or not fields
+        or any(not isinstance(name, str) or not name for name in fields)
+        or len(set(fields)) != len(fields)
+    ):
+        raise RuntimeError("worker TensorDict sidecar release lease is malformed")
+    present = tuple(name for name in fields if name in data)
+    if not present:
+        return 0
+    if len(present) != len(fields):
+        missing = tuple(name for name in fields if name not in data)
+        raise RuntimeError(
+            "worker TensorDict sidecars were partially released: "
+            f"missing={missing!r}"
+        )
+    for name in fields:
+        del data[name]
+    return len(fields)
+
+
+@contextmanager
+def worker_tensordict_sidecar_scope(data: object) -> Iterator[object]:
+    """Own one Ray-local TensorDict sidecar lease through a worker call."""
+
+    active_error: BaseException | None = None
+    try:
+        # Validate the lease before invoking model code; exact replay performs
+        # the full semantic integrity check on each microbatch.
+        _worker_sidecar_fields(data)
+        yield data
+    except BaseException as error:
+        active_error = error
+        raise
+    finally:
+        try:
+            release_verl_worker_tensordict_sidecars(data)
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            active_error.add_note(
+                "veRL worker TensorDict sidecar cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+
+
+def make_sidecar_releasing_training_worker_class(
+    upstream_worker_cls: type[Any],
+) -> type[Any]:
+    """Wrap pinned veRL TrainingWorker entry points with worker ``finally``.
+
+    The returned class is intended for ``ActorRolloutRefWorker.actor_worker_cls``
+    and ``ref_worker_cls``.  All model execution remains upstream-owned; only
+    the lifetime of the Ray-local exact-replay sidecars changes.
+    """
+
+    if not isinstance(upstream_worker_cls, type):
+        raise TypeError("upstream TrainingWorker must be a class")
+    for method_name in ("train_mini_batch", "infer_batch"):
+        if not callable(getattr(upstream_worker_cls, method_name, None)):
+            raise TypeError(
+                f"upstream TrainingWorker is missing {method_name}()"
+            )
+
+    class SidecarReleasingTrainingWorker(upstream_worker_cls):
+        def train_mini_batch(self, data, *args, **kwargs):
+            with worker_tensordict_sidecar_scope(data):
+                return super().train_mini_batch(data, *args, **kwargs)
+
+        def infer_batch(self, data, *args, **kwargs):
+            with worker_tensordict_sidecar_scope(data):
+                return super().infer_batch(data, *args, **kwargs)
+
+    SidecarReleasingTrainingWorker.__name__ = "SidecarReleasingTrainingWorker"
+    SidecarReleasingTrainingWorker.__qualname__ = "SidecarReleasingTrainingWorker"
+    SidecarReleasingTrainingWorker.__module__ = __name__
+    return SidecarReleasingTrainingWorker
+
+
+def make_sidecar_releasing_actor_rollout_ref_worker_class(
+    upstream_worker_cls: type[Any],
+    *,
+    upstream_training_worker_cls: type[Any] | None = None,
+) -> type[Any]:
+    """Bind the cleanup TrainingWorker into veRL's public role worker class."""
+
+    if not isinstance(upstream_worker_cls, type):
+        raise TypeError("upstream ActorRolloutRefWorker must be a class")
+    training_cls = upstream_training_worker_cls or getattr(
+        upstream_worker_cls, "actor_worker_cls", None
+    )
+    wrapped_training_cls = make_sidecar_releasing_training_worker_class(training_cls)
+
+    class SidecarReleasingActorRolloutRefWorker(upstream_worker_cls):
+        actor_worker_cls = wrapped_training_cls
+        ref_worker_cls = wrapped_training_cls
+
+    SidecarReleasingActorRolloutRefWorker.__name__ = (
+        "SidecarReleasingActorRolloutRefWorker"
+    )
+    SidecarReleasingActorRolloutRefWorker.__qualname__ = (
+        "SidecarReleasingActorRolloutRefWorker"
+    )
+    SidecarReleasingActorRolloutRefWorker.__module__ = __name__
+    return SidecarReleasingActorRolloutRefWorker
+
+
+def _worker_sidecar_fields(data: object) -> tuple[str, ...]:
+    if not hasattr(data, "__contains__") or not hasattr(data, "__getitem__"):
+        raise TypeError("veRL worker TensorDict must be mapping-like")
+    schema = _worker_non_tensor_value(
+        data[DATAPROTO_META_SCHEMA_FIELD]
+        if DATAPROTO_META_SCHEMA_FIELD in data
+        else None
+    )
+    if schema != DATAPROTO_META_SCHEMA_VERSION:
+        raise RuntimeError("worker TensorDict lost the DataProto meta schema")
+    release_schema = _worker_non_tensor_value(
+        data[_SIDECAR_RELEASE_SCHEMA_FIELD]
+        if _SIDECAR_RELEASE_SCHEMA_FIELD in data
+        else None
+    )
+    if release_schema != _SIDECAR_RELEASE_SCHEMA_VERSION:
+        raise RuntimeError("worker TensorDict lost the sidecar release schema")
+    fields = _worker_non_tensor_value(
+        data[_SIDECAR_RELEASE_FIELDS_FIELD]
+        if _SIDECAR_RELEASE_FIELDS_FIELD in data
+        else None
+    )
+    if (
+        not isinstance(fields, tuple)
+        or not fields
+        or any(not isinstance(name, str) or not name for name in fields)
+        or len(set(fields)) != len(fields)
+    ):
+        raise RuntimeError("worker TensorDict sidecar release lease is malformed")
+    missing = tuple(name for name in fields if name not in data)
+    if missing:
+        raise RuntimeError(
+            f"worker TensorDict is missing leased sidecars: {missing!r}"
+        )
+    return fields
+
+
+def _worker_non_tensor_value(value: object) -> object:
+    unwrapped = getattr(value, "data", value)
+    if unwrapped is value:
+        item = getattr(value, "item", None)
+        if callable(item):
+            try:
+                return item()
+            except (TypeError, ValueError):
+                return value
+    return unwrapped
 
 
 def build_verl_data_proto(

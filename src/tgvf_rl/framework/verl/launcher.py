@@ -14,7 +14,6 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
 
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
 
@@ -28,7 +27,10 @@ from .exact_replay_engine import TGVF_EXACT_REPLAY_MODEL_TYPE
 from .smoke_dataset import VerlSelectedSampleDatasetBinding
 
 
-UPSTREAM_VERL_MAIN_MODULE = "verl.trainer.main_ppo"
+# Pinned e003's upstream main hard-codes its own TaskRunner.  The repo-owned
+# module composes the same upstream config and delegates to ``run_ppo`` with the
+# lifecycle-wired v0 TaskRunner.
+UPSTREAM_VERL_MAIN_MODULE = "tgvf_rl.framework.verl.policy_main"
 UPSTREAM_VERL_CONFIG_NAME = "ppo_trainer"
 UPSTREAM_VERL_V0_RUNNER_FQN = "verl.trainer.main_ppo_v0.TaskRunner"
 
@@ -55,6 +57,10 @@ EXACT_CURRENT_REFERENCE_REPLAY_FQN = (
     "tgvf_rl.policy.qwen_replay.replay_qwen3_current_reference"
 )
 POLICY_REWARD_PIPELINE_FQN = "tgvf_rl.rewards.pipeline.PilotRewardPipeline"
+POLICY_CHECKPOINT_ENGINE_MANAGER_FQN = (
+    "tgvf_rl.framework.verl.policy_weight_sync."
+    "TGVFPolicyCheckpointEngineManager"
+)
 
 VERL_POLICY_SMOKE_LAUNCH_SCHEMA = "tgvf-verl-policy-smoke-launch-v1"
 
@@ -111,6 +117,39 @@ class UpstreamVerlLaunchPlan:
             != LOSSLESS_AGENT_LOOP_MANAGER_FQN
         ):
             raise ValueError("launch plan lost the accepted lossless v0 manager")
+        if self.environment.get("CUDA_VISIBLE_DEVICES") != "0,1,2,3":
+            raise ValueError("initial Policy Pilot launch must bind physical GPUs 0-3")
+        if self.overrides.get("trainer.n_gpus_per_node") != 4:
+            raise ValueError("initial Policy Pilot launch must bind world size four")
+        if (
+            self.overrides.get(
+                "actor_rollout_ref.rollout.tensor_model_parallel_size"
+            )
+            != 1
+        ):
+            raise ValueError("initial Policy Pilot launch must bind vLLM TP=1")
+        if self.overrides.get("actor_rollout_ref.rollout.agent.num_workers") != 4:
+            raise ValueError("initial Policy Pilot launch requires four AgentLoop workers")
+        if self.overrides.get("actor_rollout_ref.actor.fsdp_config.forward_only") is not False:
+            raise ValueError("Policy actor exact-replay engine must be trainable")
+        if self.overrides.get("actor_rollout_ref.ref.fsdp_config.forward_only") is not True:
+            raise ValueError("Policy reference exact-replay engine must be forward-only")
+        if (
+            self.overrides.get("actor_rollout_ref.rollout.checkpoint_manager_class")
+            != POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
+        ):
+            raise ValueError("launch plan lost the Policy checkpoint engine manager")
+        if self.environment.get("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES") != "1":
+            raise ValueError("local AgentLoop workers must retain the physical GPU view")
+        if self.environment.get("TGVF_POLICY_RUN_IDENTITY") != self.run_identity_sha256:
+            raise ValueError("runtime Policy identity environment differs from plan")
+        if self.environment.get("TGVF_POLICY_RUN_IDENTITY_SHA256") != self.run_identity_sha256:
+            raise ValueError("runtime Policy SHA256 identity environment differs from plan")
+        state_dir = self.environment.get("TGVF_POLICY_STATE_DIR", "")
+        if not state_dir.endswith("/runtime-policy-state"):
+            raise ValueError("runtime Policy state directory is not explicitly bound")
+        if self.inherited_upstream_fields:
+            raise ValueError("Policy Pilot plan still inherits launch-critical fields")
 
     @property
     def launch_ready(self) -> bool:
@@ -146,6 +185,59 @@ class UpstreamVerlLaunchPlan:
             for path, value in self.overrides.items()
         )
 
+    def command(
+        self,
+        python_executable: str | Path,
+        *,
+        allow_blocked: bool = False,
+    ) -> tuple[str, ...]:
+        """Build the exact upstream argv without starting Python, Ray, or CUDA."""
+
+        if not allow_blocked:
+            self.assert_launch_ready()
+        executable = Path(python_executable)
+        if not executable.is_absolute() or not executable.exists():
+            raise ValueError("policy launch Python must be an existing absolute path")
+        if executable.is_dir():
+            raise ValueError("policy launch Python must not be a directory")
+        return (
+            str(executable),
+            "-m",
+            self.main_module,
+            *self.hydra_override_args(),
+        )
+
+    def as_record(
+        self,
+        *,
+        python_executable: str | Path | None = None,
+        allow_blocked_command: bool = False,
+    ) -> dict[str, object]:
+        """Return a JSON-safe audit record for a CLI plan response."""
+
+        record: dict[str, object] = {
+            "schema_version": self.schema_version,
+            "run_identity_sha256": self.run_identity_sha256,
+            "verl_commit": self.verl_commit,
+            "main_module": self.main_module,
+            "config_name": self.config_name,
+            "runner_fqn": self.runner_fqn,
+            "launch_ready": self.launch_ready,
+            "launch_blockers": list(self.launch_blockers),
+            "inherited_upstream_fields": list(self.inherited_upstream_fields),
+            "environment": dict(self.environment),
+            "external_components": dict(self.external_components),
+            "overrides": _plain(self.overrides),
+        }
+        if python_executable is not None:
+            record["command"] = list(
+                self.command(
+                    python_executable,
+                    allow_blocked=allow_blocked_command,
+                )
+            )
+        return record
+
 
 def build_policy_e2e_smoke_verl_plan(
     config: PolicyE2ESmokeRunConfig,
@@ -179,6 +271,8 @@ def build_policy_e2e_smoke_verl_plan(
 
     sampling = config.policy.sampling
     accumulation = config.accumulation
+    capacity = config.capacity
+    framework = config.framework
     optimizer = config.optimizer
     scheduler = config.scheduler
     training = config.training
@@ -223,6 +317,7 @@ def build_policy_e2e_smoke_verl_plan(
             "data.return_raw_chat": True,
             "data.return_multi_modal_inputs": True,
             "data.max_response_length": sampling.max_response_length,
+            "data.max_prompt_length": capacity.max_prompt_length,
             "data.mm_processor_kwargs.max_pixels": config.policy.image_max_pixels,
             # Model/engine identity.  Both actor and reference use the same
             # registered exact-observation model type; the engine selects the
@@ -236,12 +331,20 @@ def build_policy_e2e_smoke_verl_plan(
             "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": (
                 actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"]
             ),
+            "actor_rollout_ref.actor.ppo_max_token_len_per_gpu": (
+                capacity.actor_ppo_max_token_len_per_gpu
+            ),
             "actor_rollout_ref.actor.fsdp_config.reshard_after_forward": (
                 distributed.fsdp_reshard_after_forward
             ),
             "actor_rollout_ref.ref.fsdp_config.reshard_after_forward": (
                 distributed.fsdp_reshard_after_forward
             ),
+            # These bits select current-versus-frozen-reference behavior in
+            # the registered exact-replay engine.  They are semantic run
+            # inputs, so never inherit them from veRL's YAML defaults.
+            "actor_rollout_ref.actor.fsdp_config.forward_only": False,
+            "actor_rollout_ref.ref.fsdp_config.forward_only": True,
             "actor_rollout_ref.actor.fsdp_config.mixed_precision": precision,
             "actor_rollout_ref.ref.fsdp_config.mixed_precision": precision,
             "actor_rollout_ref.actor.optim.optimizer": "AdamW",
@@ -273,9 +376,15 @@ def build_policy_e2e_smoke_verl_plan(
                 accumulation.rollout_prompt_micro_batch_size_per_engine
                 * sampling.trajectories_per_prompt
             ),
+            "actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu": (
+                capacity.rollout_log_prob_max_token_len_per_gpu
+            ),
             "actor_rollout_ref.ref.log_prob_micro_batch_size": None,
             "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": (
                 actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"]
+            ),
+            "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu": (
+                capacity.reference_log_prob_max_token_len_per_gpu
             ),
             "actor_rollout_ref.hybrid_engine": (
                 distributed.placement == "colocated"
@@ -285,10 +394,33 @@ def build_policy_e2e_smoke_verl_plan(
             "actor_rollout_ref.rollout.tensor_model_parallel_size": (
                 distributed.vllm_tensor_parallel_size
             ),
+            "actor_rollout_ref.rollout.gpu_memory_utilization": (
+                capacity.vllm_gpu_memory_utilization
+            ),
+            "actor_rollout_ref.rollout.max_num_batched_tokens": (
+                capacity.vllm_max_num_batched_tokens
+            ),
+            "actor_rollout_ref.rollout.max_model_len": (
+                capacity.vllm_max_model_len
+            ),
+            "actor_rollout_ref.rollout.max_num_seqs": capacity.vllm_max_num_seqs,
+            "actor_rollout_ref.rollout.enable_chunked_prefill": (
+                capacity.vllm_enable_chunked_prefill
+            ),
+            "actor_rollout_ref.rollout.enforce_eager": capacity.vllm_enforce_eager,
             "actor_rollout_ref.rollout.seed": config.rollout_rng.master_seed,
             "actor_rollout_ref.rollout.ignore_eos": sampling.ignore_eos,
             "actor_rollout_ref.rollout.agent.default_agent_loop": (
                 NATIVE_AGENT_LOOP_NAME
+            ),
+            "actor_rollout_ref.rollout.agent.num_workers": distributed.world_size,
+            "actor_rollout_ref.rollout.agent.agent_loop_config_path": str(
+                framework.agent_loop_config_path
+            ),
+            # Pinned veRL names this field ``checkpoint_manager_class`` even
+            # though its value is a fully-qualified class name.
+            "actor_rollout_ref.rollout.checkpoint_manager_class": (
+                POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
             ),
             # Pinned upstream has no top-level fields for the full stopping and
             # replay identity.  The custom AgentLoop/factory consumes these
@@ -338,6 +470,32 @@ def build_policy_e2e_smoke_verl_plan(
                 "agent_loop": {
                     "target_fqn": NATIVE_AGENT_LOOP_FQN,
                     "invocation_factory_fqn": NATIVE_INVOCATION_FACTORY_FQN,
+                    "runtime_invocation_factory_fqn": (
+                        framework.runtime_invocation_factory_fqn
+                    ),
+                    "config_path": str(framework.agent_loop_config_path),
+                    "config_sha256": framework.agent_loop_config_sha256,
+                    "server_timeout_seconds": framework.server_timeout_seconds,
+                },
+                "capacity": {
+                    "max_prompt_length": capacity.max_prompt_length,
+                    "actor_ppo_max_token_len_per_gpu": (
+                        capacity.actor_ppo_max_token_len_per_gpu
+                    ),
+                    "rollout_log_prob_max_token_len_per_gpu": (
+                        capacity.rollout_log_prob_max_token_len_per_gpu
+                    ),
+                    "reference_log_prob_max_token_len_per_gpu": (
+                        capacity.reference_log_prob_max_token_len_per_gpu
+                    ),
+                    "vllm_gpu_memory_utilization": (
+                        capacity.vllm_gpu_memory_utilization
+                    ),
+                    "vllm_max_num_batched_tokens": (
+                        capacity.vllm_max_num_batched_tokens
+                    ),
+                    "vllm_max_model_len": capacity.vllm_max_model_len,
+                    "vllm_max_num_seqs": capacity.vllm_max_num_seqs,
                 },
                 "exact_replay": {
                     "model_type": TGVF_EXACT_REPLAY_MODEL_TYPE,
@@ -362,6 +520,12 @@ def build_policy_e2e_smoke_verl_plan(
                         config.reward.conditional_tool_weight
                     ),
                 },
+                "reference_diagnostic": {
+                    "enabled": True,
+                    "coefficient": 0.0,
+                    "worker_route": "colocated_frozen_base_exact_replay",
+                    "observation_source": "rollout_materialized_exact_bundle",
+                },
                 "weight_sync": {
                     "mode": distributed.weight_sync_mode,
                     "interval_optimizer_steps": (
@@ -369,6 +533,9 @@ def build_policy_e2e_smoke_verl_plan(
                     ),
                 },
                 "checkpoint_steps": list(training.checkpoint_steps),
+                "runtime_state_directory": str(
+                    config.output.root / "runtime-policy-state"
+                ),
                 "actor_batch_contract": actor_batch,
                 "metrics_path": str(config.output.metrics_path),
             },
@@ -376,8 +543,21 @@ def build_policy_e2e_smoke_verl_plan(
             "trainer.total_training_steps": training.maximum_optimizer_steps,
             "trainer.nnodes": 1,
             "trainer.n_gpus_per_node": distributed.world_size,
-            "trainer.project_name": "tgvf-e2e-rl",
+            "trainer.project_name": training.project_name,
             "trainer.experiment_name": config.run_id,
+            "trainer.logger": list(training.logger),
+            "trainer.val_before_train": training.validation_before_training,
+            "trainer.val_only": False,
+            "trainer.test_freq": training.validation_frequency,
+            "trainer.resume_mode": training.resume_mode,
+            "trainer.resume_from_path": (
+                str(training.resume_from_path)
+                if training.resume_from_path is not None
+                else None
+            ),
+            "trainer.max_actor_ckpt_to_keep": (
+                training.maximum_actor_checkpoints_to_keep
+            ),
             "trainer.save_freq": save_frequency,
             "trainer.default_local_dir": str(config.output.checkpoint_directory),
         }
@@ -391,47 +571,42 @@ def build_policy_e2e_smoke_verl_plan(
         "agent_loop_manager": LOSSLESS_AGENT_LOOP_MANAGER_FQN,
         "agent_loop": NATIVE_AGENT_LOOP_FQN,
         "invocation_factory": NATIVE_INVOCATION_FACTORY_FQN,
+        "runtime_invocation_factory": framework.runtime_invocation_factory_fqn,
+        "checkpoint_engine_manager": POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
+        "task_runner_lifecycle": (
+            "tgvf_rl.framework.verl.policy_task_runner."
+            "create_policy_pilot_task_runner_class"
+        ),
         "exact_replay_registration": EXACT_REPLAY_ENGINE_REGISTRAR_FQN,
         "exact_replay_forward": EXACT_REPLAY_FORWARD_PORT_FQN,
         "exact_current_reference_replay": EXACT_CURRENT_REFERENCE_REPLAY_FQN,
         "reward_pipeline": POLICY_REWARD_PIPELINE_FQN,
+        "reference_diagnostic": (
+            "tgvf_rl.framework.verl.policy_task_runner."
+            "make_policy_pilot_ray_trainer_class"
+        ),
     }
     environment = dict(adapter.required_environment())
     environment["CUDA_VISIBLE_DEVICES"] = ",".join(
         str(device) for device in distributed.physical_gpu_ids
     )
+    environment["TGVF_POLICY_RUN_CONFIG_PATH"] = str(config.source_path)
+    environment["TGVF_POLICY_RUN_ID"] = config.run_id
+    environment["TGVF_POLICY_RUN_IDENTITY"] = config.identity_sha256
+    environment["TGVF_POLICY_RUN_IDENTITY_SHA256"] = config.identity_sha256
+    environment["TGVF_POLICY_STATE_DIR"] = str(
+        config.output.root / "runtime-policy-state"
+    )
+    environment["TGVF_POLICY_SERVER_TIMEOUT_SECONDS"] = (
+        format(framework.server_timeout_seconds, ".17g")
+    )
+    environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
+    environment["PYTHONHASHSEED"] = str(config.rollout_rng.master_seed)
+    environment["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    environment["TOKENIZERS_PARALLELISM"] = "false"
 
-    # These are genuine runtime seams, not optional documentation items.  A
-    # caller cannot turn this plan into a command until each has a concrete
-    # project-owned implementation/value.
-    blockers = (
-        "actor_rollout_ref.rollout.agent.agent_loop_config_path: a checked-in "
-        "Hydra composition for the concrete current-policy/components providers "
-        "is not yet implemented",
-        "data.max_prompt_length and actor/rollout max-token-per-GPU bounds are "
-        "not present in the accepted smoke identity",
-        "the veRL reward adapter that emits the exact 0.8/0.2/1.2 trajectory "
-        "reward into rm_scores is not yet wired",
-        "the zero-weight reference diagnostic replay needs an explicit upstream "
-        "worker route while use_kl_loss=false",
-        "trainer logger/validation/resume choices are not bound by the smoke identity",
-        "vLLM gpu_memory_utilization, max_num_batched_tokens, max_model_len, and "
-        "max_num_seqs remain unbound throughput inputs",
-    )
-    inherited = (
-        "data.max_prompt_length",
-        "actor_rollout_ref.actor.ppo_max_token_len_per_gpu",
-        "actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu",
-        "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu",
-        "actor_rollout_ref.rollout.gpu_memory_utilization",
-        "actor_rollout_ref.rollout.max_num_batched_tokens",
-        "actor_rollout_ref.rollout.max_model_len",
-        "actor_rollout_ref.rollout.max_num_seqs",
-        "trainer.logger",
-        "trainer.val_before_train",
-        "trainer.test_freq",
-        "trainer.resume_mode",
-    )
+    blockers: tuple[str, ...] = ()
+    inherited: tuple[str, ...] = ()
     return UpstreamVerlLaunchPlan(
         run_identity_sha256=config.identity_sha256,
         overrides=values,
@@ -605,6 +780,7 @@ __all__ = [
     "NATIVE_AGENT_LOOP_FQN",
     "NATIVE_AGENT_LOOP_NAME",
     "NATIVE_INVOCATION_FACTORY_FQN",
+    "POLICY_CHECKPOINT_ENGINE_MANAGER_FQN",
     "UPSTREAM_VERL_CONFIG_NAME",
     "UPSTREAM_VERL_MAIN_MODULE",
     "UPSTREAM_VERL_V0_RUNNER_FQN",

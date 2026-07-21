@@ -13,6 +13,8 @@ from typing import Any
 
 import torch
 
+from .preexpanded_prompt import split_preexpanded_prompt_contract
+
 
 VLLM_IMPORT_ERROR: BaseException | None = None
 
@@ -23,7 +25,7 @@ try:
         Qwen3VLMultiModalProcessor,
         Qwen3VLProcessingInfo as _Qwen3VLProcessingInfo,
     )
-    from vllm.multimodal.inputs import MultiModalFieldConfig
+    from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalInputs
     from vllm.multimodal.parse import (
         DictEmbeddingItems,
         ImageItem,
@@ -167,7 +169,91 @@ if VLLM_IMPORT_ERROR is None:
             return TGVFQwen3VLDataParser(merge_size, **parser_kwargs)
 
     class TGVFQwen3VLMultiModalProcessor(Qwen3VLMultiModalProcessor):
-        """Stock Qwen3 prompt semantics with corrected merged-embed sizing."""
+        """Qwen3 processor with one fail-closed expanded-token coordinate.
+
+        Production rollout submits token IDs whose image-pad runs already have
+        the merged visual feature length.  Calling the stock token-prompt path
+        would replace the first token of each run and can produce ``2N-1``
+        tokens.  The reserved per-turn contract instead makes this path locate
+        the already-expanded placeholders and prove that vLLM retained the
+        submitted hash, length, ranges, and item order exactly.
+        """
+
+        def apply(
+            self,
+            prompt: str | list[int],
+            mm_data: Mapping[str, Any],
+            hf_processor_mm_kwargs: Mapping[str, object],
+            tokenization_kwargs: Mapping[str, object] | None = None,
+            *,
+            mm_uuids: Mapping[str, list[str | None] | str] | None = None,
+        ) -> MultiModalInputs:
+            # Keep stock string processing for vLLM's dummy/profile lifecycle.
+            # Every production policy turn uses token IDs and must carry the
+            # contract; absence or mismatch fails before model execution.
+            if isinstance(prompt, str):
+                return super().apply(
+                    prompt,
+                    mm_data,
+                    hf_processor_mm_kwargs,
+                    tokenization_kwargs,
+                    mm_uuids=mm_uuids,
+                )
+
+            contract, clean_mm_kwargs = split_preexpanded_prompt_contract(
+                hf_processor_mm_kwargs
+            )
+            mm_items = self._to_mm_items(mm_data)
+            item_counts = mm_items.get_all_counts()
+            if set(item_counts) != {"image"}:
+                raise ValueError(
+                    "TGVF pre-expanded processor requires exactly image items"
+                )
+            contract.validate_submitted_prompt(
+                prompt,
+                expected_image_items=item_counts["image"],
+            )
+            actual_image_token_id = self.info.get_hf_processor(
+                **clean_mm_kwargs
+            ).image_token_id
+            if contract.image_token_id != actual_image_token_id:
+                raise ValueError(
+                    "pre-expanded contract image token differs from Qwen processor"
+                )
+
+            if tokenization_kwargs is None:
+                tokenization_kwargs = {}
+            prompt_ids, mm_info, is_update_applied = self._cached_apply_hf_processor(
+                prompt,
+                mm_items,
+                clean_mm_kwargs,
+                tokenization_kwargs=tokenization_kwargs,
+                mm_uuids=mm_uuids,
+            )
+            if is_update_applied:
+                raise RuntimeError(
+                    "token-ID pre-expanded prompt unexpectedly reports an HF update"
+                )
+
+            # Intentionally do not call _maybe_apply_prompt_updates().  Locate
+            # each complete N-token replacement already present in the input.
+            mm_placeholders = self._find_mm_placeholders(
+                prompt_ids,
+                mm_info.prompt_updates,
+            )
+            self._validate_mm_placeholders(mm_placeholders, item_counts)
+            mm_placeholder_ranges = {
+                modality: [item.to_range() for item in placeholders]
+                for modality, placeholders in mm_placeholders.items()
+            }
+            contract.validate_processed_prompt(prompt_ids, mm_placeholder_ranges)
+            return MultiModalInputs(
+                type="multimodal",
+                prompt_token_ids=prompt_ids,
+                mm_kwargs=mm_info.kwargs,
+                mm_hashes=mm_info.hashes,
+                mm_placeholders=mm_placeholder_ranges,
+            )
 
         def _get_data_parser(self) -> TGVFQwen3VLDataParser:
             merge_size = int(self.info.get_hf_config().vision_config.spatial_merge_size)

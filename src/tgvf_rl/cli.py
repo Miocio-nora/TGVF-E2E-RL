@@ -246,6 +246,33 @@ def _parser() -> argparse.ArgumentParser:
     compare_resume.add_argument("--resumed-checkpoint", type=Path, required=True)
     compare_resume.add_argument("--continuous-metrics", type=Path, required=True)
     compare_resume.add_argument("--resumed-metrics", type=Path, required=True)
+    validate_policy = subparsers.add_parser(
+        "validate-policy-config",
+        help="validate one strict non-formal Policy E2E smoke identity",
+    )
+    validate_policy.add_argument("path", type=Path)
+    plan_policy = subparsers.add_parser(
+        "plan-policy",
+        help="print the exact upstream veRL Policy E2E launch plan without execution",
+    )
+    plan_policy.add_argument("path", type=Path)
+    plan_policy.add_argument(
+        "--python",
+        type=Path,
+        default=Path(sys.executable).absolute(),
+        help="absolute Python executable for the rendered upstream command",
+    )
+    run_policy = subparsers.add_parser(
+        "run-policy",
+        help="replace this process with a launch-ready upstream veRL Policy E2E run",
+    )
+    run_policy.add_argument("path", type=Path)
+    run_policy.add_argument(
+        "--python",
+        type=Path,
+        default=Path(sys.executable).absolute(),
+        help="absolute audited-stack Python executable (default: current Python)",
+    )
     return parser
 
 
@@ -287,6 +314,67 @@ def main(argv: Sequence[str] | None = None) -> int:
                     continuous_metrics_path=args.continuous_metrics,
                     resumed_metrics_path=args.resumed_metrics,
                 )
+            )
+        elif args.command == "validate-policy-config":
+            from tgvf_rl.policy.run_config import (
+                load_policy_e2e_smoke_run_config,
+            )
+
+            config = load_policy_e2e_smoke_run_config(args.path)
+            result = {
+                "schema_version": config.schema_version,
+                "run_id": config.run_id,
+                "run_identity_sha256": config.identity_sha256,
+                "source_sha256": config.source_sha256,
+                "formal_pilot": config.formal_pilot,
+                "physical_gpu_ids": list(config.distributed.physical_gpu_ids),
+                "world_size": config.distributed.world_size,
+                "placement": config.distributed.placement,
+                "vllm_tensor_parallel_size": (
+                    config.distributed.vllm_tensor_parallel_size
+                ),
+                "vllm_capacity": {
+                    "gpu_memory_utilization": (
+                        config.capacity.vllm_gpu_memory_utilization
+                    ),
+                    "max_num_batched_tokens": (
+                        config.capacity.vllm_max_num_batched_tokens
+                    ),
+                    "max_model_len": config.capacity.vllm_max_model_len,
+                    "max_num_seqs": config.capacity.vllm_max_num_seqs,
+                },
+                "gpu_work_launched": False,
+            }
+        elif args.command == "plan-policy":
+            from tgvf_rl.policy.launch import build_policy_launch_record
+            from tgvf_rl.policy.run_config import (
+                load_policy_e2e_smoke_run_config,
+            )
+
+            config = load_policy_e2e_smoke_run_config(args.path)
+            result = build_policy_launch_record(
+                config,
+                python_executable=args.python,
+            )
+            result["gpu_work_launched"] = False
+        elif args.command == "run-policy":
+            from tgvf_rl.policy.launch import execute_policy_e2e_smoke
+            from tgvf_rl.policy.run_config import (
+                load_policy_e2e_smoke_run_config,
+            )
+
+            config = load_policy_e2e_smoke_run_config(args.path)
+            _assert_installed_stack_identity(
+                audited_compatibility_stack(CONTROL_COMPATIBILITY_STACK)
+            )
+            verify_verl_distribution_identity(
+                expected_commit=audited_compatibility_stack(
+                    CONTROL_COMPATIBILITY_STACK
+                ).verl_commit
+            )
+            execute_policy_e2e_smoke(
+                config,
+                python_executable=args.python,
             )
         else:  # pragma: no cover - argparse owns the command choices
             raise AssertionError(f"unhandled command {args.command}")

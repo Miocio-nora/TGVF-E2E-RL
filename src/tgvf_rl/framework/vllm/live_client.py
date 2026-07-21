@@ -21,6 +21,7 @@ from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.protocol.schema import TokenByteSpan
 
 from .registration import SUPPORTED_VLLM_VERSION
+from .preexpanded_prompt import require_preexpanded_prompt_contract
 from .sampler import (
     VLLM_PROCESSED_LOGPROBS_MODE,
     VLLMOutputDecodingContract,
@@ -140,6 +141,12 @@ class VLLMLivePolicyTurnClient:
             raise IdentityMismatchError(
                 "materialized vLLM prompt payload differs from the request identity"
             )
+        image_items = _exact_image_items(inputs.multi_modal_data)
+        require_preexpanded_prompt_contract(
+            inputs.mm_processor_kwargs,
+            prompt_token_ids=request.prompt_token_ids,
+            expected_image_items=len(image_items),
+        )
 
         prompt: dict[str, object] = {
             "prompt_token_ids": list(request.prompt_token_ids),
@@ -243,6 +250,19 @@ def _default_sampling_params_factory(
 
     values["output_kind"] = RequestOutputKind.FINAL_ONLY
     return SamplingParams(**values)
+
+
+def _exact_image_items(multi_modal_data: Mapping[str, object]) -> Sequence[object]:
+    if set(multi_modal_data) != {"image"}:
+        raise ReplayMismatchError(
+            "pre-expanded live vLLM prompt requires exactly image items"
+        )
+    items = multi_modal_data["image"]
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        raise TypeError("live vLLM image data must be an item sequence")
+    if not items:
+        raise ReplayMismatchError("live vLLM image data cannot be empty")
+    return items
 
 
 def _single_final_completion(

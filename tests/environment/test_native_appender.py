@@ -30,6 +30,38 @@ class _CharacterTokenizer:
         return [ord(character) for character in text]
 
 
+class _ImagePadTokenizer(_CharacterTokenizer):
+    image_token_id = 9876
+
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+        assert add_special_tokens is False
+        result: list[int] = []
+        cursor = 0
+        token = "<|image_pad|>"
+        while cursor < len(text):
+            if text.startswith(token, cursor):
+                result.append(self.image_token_id)
+                cursor += len(token)
+            else:
+                result.append(ord(text[cursor]))
+                cursor += 1
+        return result
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        assert token == "<|image_pad|>"
+        return self.image_token_id
+
+
+class _VisualTokenCountStore:
+    def __init__(self, counts: dict[str, int]) -> None:
+        self.counts = counts
+        self.calls: list[ObservationHandle] = []
+
+    def resolve_visual_token_count(self, observation: ObservationHandle) -> int:
+        self.calls.append(observation)
+        return self.counts[observation.observation_id]
+
+
 class _Registrar:
     def __init__(self) -> None:
         self.calls = []
@@ -186,6 +218,34 @@ def test_error_append_uses_canonical_json_without_visual_placeholder() -> None:
             call_index=0,
             parsed_call=None,
         )
+
+
+def test_success_expands_placeholder_to_store_resolved_visual_token_count() -> None:
+    tokenizer = _ImagePadTokenizer()
+    registrar = _Registrar()
+    store = _VisualTokenCountStore({"obs-expanded": 6})
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=registrar,
+        visual_token_count_resolver=store,
+    )
+    sampled, parsed = _ascii_sampled_call(
+        "tgvf_focus_tool", {"target": "the red label text"}
+    )
+    handle = ObservationHandle("obs-expanded", "5" * 64)
+
+    updated, environment_ids = appender.append(
+        (7, 8),
+        sampled,
+        handle,
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    assert environment_ids.count(tokenizer.image_token_id) == 6
+    assert store.calls == [handle]
+    assert updated == (7, 8) + sampled.token_ids + environment_ids
+    assert registrar.calls[-1]["updated_prompt_token_ids"] == updated
 
 
 def test_qwen3_appended_tokens_equal_native_chat_template() -> None:

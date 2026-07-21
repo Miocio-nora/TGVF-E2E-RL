@@ -28,6 +28,10 @@ from tgvf_rl.protocol.schema import (
 )
 
 from .live_client import VLLMLivePromptInputs
+from .preexpanded_prompt import (
+    rebind_preexpanded_prompt_contract,
+    require_preexpanded_prompt_contract,
+)
 from .sampler import (
     VLLMOutputDecodingContract,
     VLLMPolicyTurnRequest,
@@ -307,6 +311,11 @@ class LiveVLLMTurnContextRegistry:
             raise ValueError("initial prompt must use turn_index 0")
         if not isinstance(inputs, VLLMLivePromptInputs):
             raise TypeError("initial prompt requires exact VLLMLivePromptInputs")
+        require_preexpanded_prompt_contract(
+            inputs.mm_processor_kwargs,
+            prompt_token_ids=prompt,
+            expected_image_items=_image_item_count(inputs.multi_modal_data),
+        )
         prompt_sha = prompt_token_ids_sha256(prompt)
         with self._lock:
             if self._turns:
@@ -435,6 +444,12 @@ class LiveVLLMTurnContextRegistry:
                     turn.inputs, error=observation, call_index=call_index
                 )
 
+            rebound_mm_processor_kwargs = rebind_preexpanded_prompt_contract(
+                next_inputs.mm_processor_kwargs,
+                prompt_token_ids=updated_prompt,
+                expected_image_items=_image_item_count(next_inputs.multi_modal_data),
+            )
+
             updated_prompt_sha = prompt_token_ids_sha256(updated_prompt)
             next_context_sha = _canonical_sha256(
                 {
@@ -452,7 +467,7 @@ class LiveVLLMTurnContextRegistry:
             next_inputs = VLLMLivePromptInputs(
                 backend_prompt_payload_sha256=next_context_sha,
                 multi_modal_data=next_inputs.multi_modal_data,
-                mm_processor_kwargs=next_inputs.mm_processor_kwargs,
+                mm_processor_kwargs=rebound_mm_processor_kwargs,
                 multi_modal_uuids=next_inputs.multi_modal_uuids,
             )
             self._insert_turn(
@@ -621,6 +636,19 @@ class LiveVLLMTurnContextRegistry:
         if len(matches) != 1:
             raise ReplayMismatchError("previous prompt has no unique live turn context")
         return matches[0]
+
+
+def _image_item_count(multi_modal_data: Mapping[str, object]) -> int:
+    if set(multi_modal_data) != {"image"}:
+        raise ReplayMismatchError(
+            "pre-expanded live context requires exactly the image modality"
+        )
+    items = multi_modal_data["image"]
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        raise TypeError("live image multimodal data must be an item sequence")
+    if not items:
+        raise ReplayMismatchError("live image multimodal data cannot be empty")
+    return len(items)
 
 
 __all__ = [

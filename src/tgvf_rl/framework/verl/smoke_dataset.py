@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import struct
 from typing import Any
 
 import torch
@@ -189,6 +190,7 @@ class TGVFSelectedSampleDataset(Dataset):
         binding = VerlSelectedSampleDatasetBinding.from_config(
             _config_value(config, "tgvf_selected_sample")
         )
+        image_max_pixels = _configured_image_max_pixels(config)
         paths = (
             (data_files,) if isinstance(data_files, (str, Path)) else tuple(data_files)
         )
@@ -217,6 +219,16 @@ class TGVFSelectedSampleDataset(Dataset):
             raise ValueError(
                 "selected native prompt text SHA256 differs from run config"
             )
+        model_prompt_token_ids = _materialize_source_image_prompt_token_ids(
+            processor=processor,
+            canonical_token_ids=rendered.token_ids,
+            prompt_text=rendered.text,
+            image_path=binding.image_path,
+            image_max_pixels=image_max_pixels,
+        )
+        renderer.assert_tokenizer_length()
+        renderer.assert_chat_template_identity()
+        renderer.assert_tool_schema_identity()
 
         self.binding = binding
         self._row: Mapping[str, object] = {
@@ -231,9 +243,11 @@ class TGVFSelectedSampleDataset(Dataset):
                 }
                 for message in raw_prompt
             ],
-            "initial_prompt_token_ids": rendered.token_ids,
+            "initial_prompt_token_ids": model_prompt_token_ids,
             "initial_prompt_text_sha256": rendered.text_sha256,
-            "initial_prompt_token_ids_sha256": rendered.token_ids_sha256,
+            "initial_prompt_token_ids_sha256": _token_ids_sha256(
+                model_prompt_token_ids
+            ),
             "sample_id": binding.sample_id,
             "dataset_iteration_identity_sha256": (binding.iteration_identity_sha256),
             "source_image_path": str(binding.image_path),
@@ -323,6 +337,137 @@ def _config_value(config: object, key: str) -> object:
         return getattr(config, key)
     except AttributeError as error:
         raise ValueError(f"data.{key} is missing") from error
+
+
+def _configured_image_max_pixels(config: object) -> int:
+    processor_kwargs = _plain_mapping(
+        _config_value(config, "mm_processor_kwargs"),
+        "data.mm_processor_kwargs",
+    )
+    value = processor_kwargs.get("max_pixels")
+    if type(value) is not int or value <= 0:
+        raise ValueError("data.mm_processor_kwargs.max_pixels must be positive")
+    return value
+
+
+def _materialize_source_image_prompt_token_ids(
+    *,
+    processor: object,
+    canonical_token_ids: Sequence[int],
+    prompt_text: str,
+    image_path: Path,
+    image_max_pixels: int,
+) -> tuple[int, ...]:
+    """Expand one source-image placeholder with processor-owned merged tokens."""
+
+    image_processor = getattr(processor, "image_processor", None)
+    size = getattr(image_processor, "size", None)
+    if not isinstance(size, Mapping):
+        raise TypeError("Qwen image processor must expose a size mapping")
+    shortest_edge = size.get("shortest_edge")
+    merge_size = getattr(image_processor, "merge_size", None)
+    if type(shortest_edge) is not int or shortest_edge <= 0:
+        raise ValueError("Qwen image processor shortest_edge must be positive")
+    if type(merge_size) is not int or merge_size <= 0:
+        raise ValueError("Qwen image processor merge_size must be positive")
+    if image_max_pixels < shortest_edge:
+        raise ValueError("image max pixels is below the processor minimum")
+    if not callable(processor):
+        raise TypeError("Qwen processor must be callable for image materialization")
+
+    try:
+        from PIL import Image
+    except ImportError as error:  # pragma: no cover - production dependency guard
+        raise RuntimeError("Pillow is required to materialize source images") from error
+    with Image.open(image_path) as opened:
+        image = opened.convert("RGB")
+        batch = processor(
+            text=[prompt_text],
+            images=[image],
+            padding=False,
+            return_tensors="pt",
+            images_kwargs={
+                "size": {
+                    "shortest_edge": shortest_edge,
+                    "longest_edge": image_max_pixels,
+                }
+            },
+        )
+    if not isinstance(batch, Mapping):
+        raise TypeError("Qwen processor output must be a mapping")
+    model_token_ids = _one_integer_row(batch.get("input_ids"), "input_ids")
+    image_grid = _one_integer_row(batch.get("image_grid_thw"), "image_grid_thw")
+    if len(image_grid) != 3 or any(value <= 0 for value in image_grid):
+        raise ValueError("Qwen processor image_grid_thw must be one positive [T,H,W] row")
+    premerge_count = image_grid[0] * image_grid[1] * image_grid[2]
+    merge_area = merge_size**2
+    if premerge_count % merge_area:
+        raise ValueError("Qwen processor image grid is not divisible by merge area")
+    merged_count = premerge_count // merge_area
+
+    tokenizer = getattr(processor, "tokenizer", None)
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if not callable(convert):
+        raise TypeError("Qwen tokenizer must resolve the image placeholder token")
+    visual_token_id = convert("<|image_pad|>")
+    if type(visual_token_id) is not int or visual_token_id < 0:
+        raise TypeError("Qwen image placeholder must resolve to a token ID")
+    _assert_single_visual_expansion(
+        canonical_token_ids=canonical_token_ids,
+        model_token_ids=model_token_ids,
+        visual_token_id=visual_token_id,
+        expected_visual_tokens=merged_count,
+    )
+    return model_token_ids
+
+
+def _one_integer_row(value: object, field_name: str) -> tuple[int, ...]:
+    if isinstance(value, torch.Tensor):
+        if value.ndim != 2 or value.shape[0] != 1:
+            raise ValueError(f"Qwen processor {field_name} must have one row")
+        value = value.detach().to(device="cpu").tolist()
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError(f"Qwen processor {field_name} must be a sequence")
+    rows = tuple(value)
+    if len(rows) != 1 or not isinstance(rows[0], Sequence) or isinstance(
+        rows[0], (str, bytes)
+    ):
+        raise ValueError(f"Qwen processor {field_name} must have one row")
+    row = tuple(rows[0])
+    if not row or any(type(item) is not int or item < 0 for item in row):
+        raise ValueError(
+            f"Qwen processor {field_name} must contain non-negative integers"
+        )
+    return row
+
+
+def _assert_single_visual_expansion(
+    *,
+    canonical_token_ids: Sequence[int],
+    model_token_ids: Sequence[int],
+    visual_token_id: int,
+    expected_visual_tokens: int,
+) -> None:
+    canonical = tuple(canonical_token_ids)
+    model = tuple(model_token_ids)
+    if canonical.count(visual_token_id) != 1:
+        raise ValueError("selected native prompt must contain one source image placeholder")
+    if expected_visual_tokens <= 0:
+        raise ValueError("source image must produce at least one merged visual token")
+    visual_position = canonical.index(visual_token_id)
+    prefix = canonical[:visual_position]
+    suffix = canonical[visual_position + 1 :]
+    expected = prefix + (visual_token_id,) * expected_visual_tokens + suffix
+    if model != expected:
+        raise ValueError(
+            "processor tokenization differs from the canonical prompt outside the "
+            "source-image expansion"
+        )
+
+
+def _token_ids_sha256(token_ids: Sequence[int]) -> str:
+    raw = b"".join(struct.pack("<I", token_id) for token_id in token_ids)
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _require_sha256(value: object, field_name: str) -> str:

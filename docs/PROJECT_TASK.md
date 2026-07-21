@@ -597,6 +597,29 @@ artifact/provider, actual vLLM generation, exact observation replay, and the
 accepted LoRA freeze scope. GPU work requires its own `PLANNED` ledger entry
 before launch.
 
+### 0.8.3 Accepted four-GPU Policy Pilot execution scope
+
+Decision ID: **POLICY-PILOT-V1-FOUR-GPU-20260721**
+
+Accepted by: **user**, on **2026-07-21 JST**.
+
+The first executable Policy Pilot vertical slice and its bounded throughput
+work use all four local B200 devices, exposed as physical GPU indices
+`0,1,2,3`. This closes the Pilot's device-count selection; it does not turn a
+library default into the final parallel topology. The first implementation
+cell uses a four-rank FSDP2 actor and colocated rollout workers with TP1 as an
+explicit starting configuration. TP size, micro-batches, global prompt batch,
+gradient accumulation, FSDP2 resharding, vLLM capacity fields, and checkpoint
+cadence remain cell identities selected from the smallest bounded correctness
+and throughput comparisons. Any subsequent topology differs by a new ledger
+cell rather than mutating an existing run identity.
+
+No long Pilot may start from this authorization alone. The executable vertical
+slice still must pass live behavior-logprob capture, exact recorded main
+`D`/D-DeepStack current/reference replay, one decoder-LoRA GRPO optimizer step,
+weight synchronization, and clean-process checkpoint/resume. Every GPU command
+requires a complete `PLANNED` entry in `EXPERIMENT_LEDGER.md` before launch.
+
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 
 Decision ID: **RPI-20260721-CONTEXTUAL-MATRIXCE-2000-PAIR**

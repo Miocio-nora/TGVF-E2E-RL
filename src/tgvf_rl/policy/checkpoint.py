@@ -480,13 +480,38 @@ def restore_pilot_project_checkpoint(
 
     if not isinstance(metrics_accumulator, PilotMetricsAccumulator):
         raise TypeError("metrics_accumulator must be PilotMetricsAccumulator")
+    state = validate_pilot_project_checkpoint_restore(
+        payload,
+        expected_run_identity=expected_run_identity,
+        loaded_policy_version=loaded_policy_version,
+        loaded_reference_version=loaded_reference_version,
+    )
+    metrics_accumulator.restore_checkpoint_state(state.metrics_state)
+    return state
+
+
+def validate_pilot_project_checkpoint_restore(
+    payload: object,
+    *,
+    expected_run_identity: PilotRunIdentityHashes,
+    loaded_policy_version: PolicyVersion,
+    loaded_reference_version: PolicyVersion,
+) -> PilotProjectCheckpointState:
+    """Validate a project adjunct without mutating any runtime owner.
+
+    A clean-process veRL resume must load the framework-owned LoRA, optimizer,
+    and scheduler before it can prove their policy/reference identities.  This
+    split validation entry point lets that orchestration validate the complete
+    adjunct and the loaded framework state before restoring the data cursor,
+    rollout sampler/RNG, or metrics.
+    """
+
     state = _coerce_project_checkpoint(payload)
     state.validate_restore_identity(
         expected_run_identity=expected_run_identity,
         loaded_policy_version=loaded_policy_version,
         loaded_reference_version=loaded_reference_version,
     )
-    metrics_accumulator.restore_checkpoint_state(state.metrics_state)
     return state
 
 

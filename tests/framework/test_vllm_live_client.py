@@ -16,6 +16,7 @@ from tgvf_rl.framework.vllm import (
     VLLMOutputDecodingContract,
     VLLMPolicyTurnRequest,
     VLLMTurnRNGIdentity,
+    bind_preexpanded_prompt_contract,
 )
 from tgvf_rl.protocol import TokenByteSpan
 
@@ -182,7 +183,12 @@ def _client(
 ]:
     latent = object()
     mm_data = {"image": [latent]}
-    mm_kwargs = {"do_resize": False}
+    mm_kwargs = bind_preexpanded_prompt_contract(
+        {"do_resize": False},
+        prompt_token_ids=(10, 20),
+        image_token_id=20,
+        expected_image_items=1,
+    )
     mm_uuids = {"image": ["source-and-recorded-d"]}
     inputs_value = VLLMLivePromptInputs(
         backend_prompt_payload_sha256=payload_sha256,

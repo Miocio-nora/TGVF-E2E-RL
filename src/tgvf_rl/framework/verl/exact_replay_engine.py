@@ -60,6 +60,7 @@ from .rollout_bridge import (
     TRAJECTORY_REPLAY_HANDLE_FIELD,
     TRAJECTORY_SHA256_FIELD,
 )
+from .policy_weight_sync import wrap_lora_parameter_stream_for_snapshot
 
 
 TGVF_EXACT_REPLAY_MODEL_TYPE = "tgvf_exact_replay_language_model"
@@ -368,6 +369,47 @@ def make_exact_replay_fsdp2_engine_class(
                 module.eval()
                 return module
             return super()._build_lora_module(module)
+
+        def get_per_tensor_param(
+            self,
+            layered_summon=False,
+            base_sync_done=False,
+            **kwargs,
+        ):
+            """Preserve veRL's stream while publishing the exact actor LoRA.
+
+            The pinned naive checkpoint path uses ``base_sync_done=True`` for
+            the adapter-only stream and ``False`` for the one-time base-model
+            stream.  Only the current-policy adapter stream is tee'd.  The
+            reference worker and base-model stream are returned byte-for-byte
+            through the upstream path without requiring publication state.
+            """
+
+            result = super().get_per_tensor_param(
+                layered_summon=layered_summon,
+                base_sync_done=base_sync_done,
+                **kwargs,
+            )
+            if not isinstance(result, tuple) or len(result) != 2:
+                raise TypeError(
+                    "pinned FSDP2 get_per_tensor_param() must return "
+                    "(parameter_stream, peft_config)"
+                )
+            parameter_stream, peft_config = result
+            if not base_sync_done or _engine_role(self) is ComponentRole.REFERENCE:
+                return parameter_stream, peft_config
+            if peft_config is None:
+                raise ReplayMismatchError(
+                    "current Policy Pilot adapter sync did not expose a LoRA-only "
+                    "parameter stream"
+                )
+            return (
+                wrap_lora_parameter_stream_for_snapshot(
+                    parameter_stream,
+                    base_sync_done=True,
+                ),
+                peft_config,
+            )
 
         def forward_step(self, micro_batch, loss_function, forward_only):
             return exact_replay_forward_step(
@@ -808,13 +850,25 @@ def _validate_upstream_response_slice(
 def _validate_upstream_engine_surface(upstream_engine_cls: type[Any]) -> None:
     if not isinstance(upstream_engine_cls, type):
         raise TypeError("upstream FSDP engine must be a class")
-    for name in ("_build_module", "forward_step"):
+    for name in ("_build_module", "forward_step", "get_per_tensor_param"):
         if not callable(getattr(upstream_engine_cls, name, None)):
             raise TypeError(f"upstream FSDP engine is missing {name}()")
     parameters = tuple(inspect.signature(upstream_engine_cls.forward_step).parameters)
     if parameters != ("self", "micro_batch", "loss_function", "forward_only"):
         raise RuntimeError(
             "pinned FSDPEngineWithLMHead.forward_step signature changed"
+        )
+    weight_parameters = tuple(
+        inspect.signature(upstream_engine_cls.get_per_tensor_param).parameters
+    )
+    if weight_parameters != (
+        "self",
+        "layered_summon",
+        "base_sync_done",
+        "kwargs",
+    ):
+        raise RuntimeError(
+            "pinned FSDPEngineWithLMHead.get_per_tensor_param signature changed"
         )
 
 

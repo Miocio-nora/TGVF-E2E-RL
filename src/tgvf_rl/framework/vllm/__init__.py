@@ -18,6 +18,16 @@ from .packer import (
     pack_qwen3_vllm_replay_bundle,
 )
 from .observation_resolver import Qwen3VLLMObservationPayloadResolver
+from .preexpanded_prompt import (
+    PREEXPANDED_PROMPT_CONTRACT_KWARG,
+    PREEXPANDED_PROMPT_SCHEMA,
+    VLLMPreExpandedPromptContract,
+    VLLMVisualPlaceholderRange,
+    bind_preexpanded_prompt_contract,
+    rebind_preexpanded_prompt_contract,
+    require_preexpanded_prompt_contract,
+    split_preexpanded_prompt_contract,
+)
 from .registration import (
     SUPPORTED_VLLM_VERSION,
     SUPPORTED_VLLM_VERSIONS,
@@ -75,6 +85,8 @@ __all__ = [
     "TURN_RNG_SCHEMA",
     "PackedQwen3ImageItem",
     "PackedQwen3Replay",
+    "PREEXPANDED_PROMPT_CONTRACT_KWARG",
+    "PREEXPANDED_PROMPT_SCHEMA",
     "Qwen3VLLMObservationPayloadResolver",
     "SamplingParamsFactory",
     "VLLMCompatibilityError",
@@ -87,6 +99,7 @@ __all__ = [
     "VLLMPolicyTurnClient",
     "VLLMPolicyTurnRequest",
     "VLLMPolicyTurnResponse",
+    "VLLMPreExpandedPromptContract",
     "VLLMPluginError",
     "VLLMPluginRegistration",
     "VLLMPublicPluginAPI",
@@ -95,6 +108,7 @@ __all__ = [
     "VLLMTerminationOutcome",
     "VLLMTokenLogprob",
     "VLLMTokenByteSpanDecoderPort",
+    "VLLMVisualPlaceholderRange",
     "VLLMTurnRNGIdentity",
     "VLLMTurnRNGPort",
     "VLLMTurnTerminationContract",
@@ -103,10 +117,14 @@ __all__ = [
     "VLLM_POLICY_TURN_RESPONSE_SCHEMA",
     "VLLM_PROCESSED_LOGPROBS_MODE",
     "load_vllm_public_plugin_api",
+    "bind_preexpanded_prompt_contract",
     "pack_qwen3_vllm_observation",
     "pack_qwen3_vllm_replay",
     "pack_qwen3_vllm_replay_bundle",
     "prompt_token_ids_sha256",
+    "rebind_preexpanded_prompt_contract",
     "register_tgvf_qwen3_vllm_plugin",
+    "require_preexpanded_prompt_contract",
+    "split_preexpanded_prompt_contract",
     "vllm_is_available",
 ]

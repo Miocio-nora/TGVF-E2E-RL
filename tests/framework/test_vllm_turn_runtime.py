@@ -19,7 +19,9 @@ from tgvf_rl.framework.vllm import (
     VLLMPolicyTurnRequest,
     VLLMResolvedObservationPayload,
     VLLMTurnRNGIdentity,
+    bind_preexpanded_prompt_contract,
     prompt_token_ids_sha256,
+    split_preexpanded_prompt_contract,
 )
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol import TokenByteSpan
@@ -31,6 +33,7 @@ SHA1 = "1" * 64
 SHA2 = "2" * 64
 POLICY = PolicyVersion("pilot-runtime", 7, SHA0)
 DECODING = VLLMOutputDecodingContract(True, False, False, "final_only")
+IMAGE_TOKEN_ID = 9000
 
 
 class _FastTokenizer:
@@ -168,11 +171,16 @@ class _Resolver:
         )
 
 
-def _initial_inputs() -> VLLMLivePromptInputs:
+def _initial_inputs(prompt) -> VLLMLivePromptInputs:
     return VLLMLivePromptInputs(
         backend_prompt_payload_sha256=SHA1,
         multi_modal_data={"image": [{"source": object()}]},
-        mm_processor_kwargs={"do_resize": False},
+        mm_processor_kwargs=bind_preexpanded_prompt_contract(
+            {"do_resize": False},
+            prompt_token_ids=prompt,
+            image_token_id=IMAGE_TOKEN_ID,
+            expected_image_items=1,
+        ),
         multi_modal_uuids={"image": ["source-image"]},
     )
 
@@ -250,14 +258,24 @@ def _resolve_turn(registry, prompt, *, turn_index):
 def test_registry_appends_success_payload_and_preserves_it_across_error() -> None:
     resolver = _Resolver()
     registry = LiveVLLMTurnContextRegistry(observation_resolver=resolver)
-    prompt0 = (10, 20)
-    initial = _initial_inputs()
+    prompt0 = (10, IMAGE_TOKEN_ID, IMAGE_TOKEN_ID, 20)
+    initial = _initial_inputs(prompt0)
     registry.register_initial_prompt(prompt0, initial)
 
     request0, returned0 = _resolve_turn(registry, prompt0, turn_index=0)
     assert returned0 is initial
     sampled0 = _sampled(request0, suffix="zero")
-    prompt1 = prompt0 + sampled0.token_ids + (9000, 9001)
+    prompt1 = (
+        prompt0
+        + sampled0.token_ids
+        + (
+            9001,
+            IMAGE_TOKEN_ID,
+            IMAGE_TOKEN_ID,
+            IMAGE_TOKEN_ID,
+            9002,
+        )
+    )
     handle = ObservationHandle("observation-0", sha256(b"record-0").hexdigest())
     registry.register_tool_turn(
         previous_prompt_token_ids=prompt0,
@@ -299,15 +317,18 @@ def test_registry_appends_success_payload_and_preserves_it_across_error() -> Non
     }
     assert returned2.multi_modal_data is returned1.multi_modal_data
     assert returned2.multi_modal_uuids is returned1.multi_modal_uuids
-    assert returned2.mm_processor_kwargs is returned1.mm_processor_kwargs
+    contract1, clean1 = split_preexpanded_prompt_contract(returned1.mm_processor_kwargs)
+    contract2, clean2 = split_preexpanded_prompt_contract(returned2.mm_processor_kwargs)
+    assert clean1 == clean2 == {"do_resize": False}
+    assert contract1.prompt_token_ids_sha256 != contract2.prompt_token_ids_sha256
     assert resolver.calls == [(handle, 0)]
 
 
 def test_registry_rejects_prompt_turn_hash_request_and_call_reuse() -> None:
     resolver = _Resolver()
     registry = LiveVLLMTurnContextRegistry(observation_resolver=resolver)
-    prompt = (1, 2)
-    initial = _initial_inputs()
+    prompt = (1, IMAGE_TOKEN_ID, IMAGE_TOKEN_ID, 2)
+    initial = _initial_inputs(prompt)
     registry.register_initial_prompt(prompt, initial)
     with pytest.raises(ReplayMismatchError, match="already registered"):
         registry.register_initial_prompt(prompt, initial)
@@ -328,7 +349,16 @@ def test_registry_rejects_prompt_turn_hash_request_and_call_reuse() -> None:
         registry.for_request(request)
 
     sampled = _sampled(request, suffix="reuse")
-    updated = prompt + sampled.token_ids + (99,)
+    updated = (
+        prompt
+        + sampled.token_ids
+        + (
+            99,
+            IMAGE_TOKEN_ID,
+            IMAGE_TOKEN_ID,
+            100,
+        )
+    )
     handle = ObservationHandle("observation-0", sha256(b"record-0").hexdigest())
     with pytest.raises(ReplayMismatchError, match="unique and contiguous"):
         registry.register_tool_turn(
@@ -357,8 +387,8 @@ def test_registry_rejects_prompt_turn_hash_request_and_call_reuse() -> None:
 
 def test_registry_rejects_error_call_mismatch_without_consuming_turn() -> None:
     registry = LiveVLLMTurnContextRegistry(observation_resolver=_Resolver())
-    prompt = (3, 4)
-    registry.register_initial_prompt(prompt, _initial_inputs())
+    prompt = (3, IMAGE_TOKEN_ID, IMAGE_TOKEN_ID, 4)
+    registry.register_initial_prompt(prompt, _initial_inputs(prompt))
     request, _ = _resolve_turn(registry, prompt, turn_index=0)
     sampled = _sampled(request, suffix="error")
     updated = prompt + sampled.token_ids + (77,)
@@ -388,8 +418,8 @@ def test_registry_rejects_error_call_mismatch_without_consuming_turn() -> None:
 
 def test_registry_context_claim_is_thread_safe_and_single_use() -> None:
     registry = LiveVLLMTurnContextRegistry(observation_resolver=_Resolver())
-    prompt = (5, 6)
-    registry.register_initial_prompt(prompt, _initial_inputs())
+    prompt = (5, IMAGE_TOKEN_ID, IMAGE_TOKEN_ID, 6)
+    registry.register_initial_prompt(prompt, _initial_inputs(prompt))
     barrier = Barrier(2)
 
     def claim():

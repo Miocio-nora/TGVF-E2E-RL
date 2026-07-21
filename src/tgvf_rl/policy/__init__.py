@@ -23,6 +23,7 @@ from .checkpoint import (
     PilotRunIdentityHashes,
     capture_pilot_project_checkpoint,
     restore_pilot_project_checkpoint,
+    validate_pilot_project_checkpoint_restore,
 )
 from .config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
@@ -224,6 +225,7 @@ __all__ = [
     "materialize_policy_pilot_group_batch",
     "resolve_qwen3_decoder_lora_targets",
     "restore_pilot_project_checkpoint",
+    "validate_pilot_project_checkpoint_restore",
     "require_single_sequence_replay_bundle",
     "replay_qwen3_current_reference",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from hashlib import sha256
 from types import SimpleNamespace
 
@@ -27,6 +28,8 @@ from tgvf_rl.framework.vllm import (
     VLLMTerminationOutcome,
     VLLMTurnRNGIdentity,
     VLLMTurnTerminationContract,
+    bind_preexpanded_prompt_contract,
+    split_preexpanded_prompt_contract,
 )
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy.config import PilotSamplingConfig
@@ -53,6 +56,8 @@ TERMINATION = VLLMTurnTerminationContract(
 )
 _SOURCE_STORE, _SOURCE_HANDLE = populated_observation_store()
 SOURCE_VISUAL = trajectory_source_visual(_SOURCE_STORE.resolve_record(_SOURCE_HANDLE))
+IMAGE_TOKEN_ID = 9876
+IMAGE_TOKEN = "<|image_pad|>"
 
 
 class _CharacterTokenizer:
@@ -60,7 +65,21 @@ class _CharacterTokenizer:
 
     def encode(self, text, *, add_special_tokens):
         assert add_special_tokens is False
-        return [ord(character) for character in text]
+        result: list[int] = []
+        cursor = 0
+        while True:
+            start = text.find(IMAGE_TOKEN, cursor)
+            if start < 0:
+                result.extend(ord(character) for character in text[cursor:])
+                return result
+            result.extend(ord(character) for character in text[cursor:start])
+            result.append(IMAGE_TOKEN_ID)
+            cursor = start + len(IMAGE_TOKEN)
+
+    @staticmethod
+    def convert_tokens_to_ids(token):
+        assert token == IMAGE_TOKEN
+        return IMAGE_TOKEN_ID
 
     def decode(
         self,
@@ -73,7 +92,10 @@ class _CharacterTokenizer:
         assert skip_special_tokens is False
         assert clean_up_tokenization_spaces is False
         assert spaces_between_special_tokens is False
-        return "".join(chr(token_id) for token_id in token_ids)
+        return "".join(
+            IMAGE_TOKEN if token_id == IMAGE_TOKEN_ID else chr(token_id)
+            for token_id in token_ids
+        )
 
     def __call__(
         self,
@@ -113,6 +135,11 @@ class _ObservationResolver:
             ).hexdigest(),
             multi_modal_uuid=None,
         )
+
+    @staticmethod
+    def resolve_visual_token_count(observation):
+        assert isinstance(observation, ObservationHandle)
+        return 3
 
 
 class _ToolRuntime:
@@ -167,13 +194,18 @@ class _InvocationFactory:
         self.resolver = _ObservationResolver()
         self.registry = LiveVLLMTurnContextRegistry(observation_resolver=self.resolver)
         self.initial_image_item = {"source_image": object()}
-        self.initial_prompt = (10, 20, 30)
+        self.initial_prompt = (10, IMAGE_TOKEN_ID, IMAGE_TOKEN_ID, 30)
         self.registry.register_initial_prompt(
             self.initial_prompt,
             VLLMLivePromptInputs(
                 backend_prompt_payload_sha256=SHA1,
                 multi_modal_data={"image": [self.initial_image_item]},
-                mm_processor_kwargs={"do_resize": False},
+                mm_processor_kwargs=bind_preexpanded_prompt_contract(
+                    {"do_resize": False},
+                    prompt_token_ids=self.initial_prompt,
+                    image_token_id=IMAGE_TOKEN_ID,
+                    expected_image_items=1,
+                ),
                 multi_modal_uuids=None,
             ),
         )
@@ -201,6 +233,7 @@ class _InvocationFactory:
                 appender=QwenNativeToolObservationAppender(
                     tokenizer=self.tokenizer,
                     registrar=self.registry,
+                    visual_token_count_resolver=self.resolver,
                 ),
                 parser=StrictToolCallParser(),
                 behavior_recorder=VLLMBehaviorRecorder(self.behavior_store),
@@ -256,6 +289,72 @@ class _InvocationFactory:
         )
 
 
+class _HydraPartialFactory:
+    def __init__(
+        self,
+        *,
+        run_config_path,
+        expected_run_identity_sha256,
+        trainer_config,
+        server_manager,
+        tokenizer,
+        processor,
+        dataset_cls,
+        data_config,
+    ) -> None:
+        self.arguments = {
+            "run_config_path": run_config_path,
+            "expected_run_identity_sha256": expected_run_identity_sha256,
+            "trainer_config": trainer_config,
+            "server_manager": server_manager,
+            "tokenizer": tokenizer,
+            "processor": processor,
+            "dataset_cls": dataset_cls,
+            "data_config": data_config,
+        }
+
+    def build(self, *, sampling_params, sample_fields):
+        del sampling_params, sample_fields
+        raise AssertionError("constructor-only fixture must not build a rollout")
+
+
+def test_agent_loop_completes_hydra_runtime_factory_partial() -> None:
+    trainer_config = object()
+    server_manager = object()
+    tokenizer = _CharacterTokenizer()
+    processor = object()
+    dataset_cls = object
+    data_config = object()
+    factory = partial(
+        _HydraPartialFactory,
+        run_config_path="/fixture/policy.toml",
+        expected_run_identity_sha256=SHA0,
+    )
+
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=trainer_config,
+        server_manager=server_manager,
+        tokenizer=tokenizer,
+        processor=processor,
+        dataset_cls=dataset_cls,
+        data_config=data_config,
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+    )
+
+    assert isinstance(bridge.invocation_factory, _HydraPartialFactory)
+    assert bridge.invocation_factory.arguments == {
+        "run_config_path": "/fixture/policy.toml",
+        "expected_run_identity_sha256": SHA0,
+        "trainer_config": trainer_config,
+        "server_manager": server_manager,
+        "tokenizer": tokenizer,
+        "processor": processor,
+        "dataset_cls": dataset_cls,
+        "data_config": data_config,
+    }
+
+
 def _sampling_parameters(**updates):
     values = {
         "temperature": 1.0,
@@ -307,7 +406,15 @@ def test_upstream_agent_loop_bridge_preserves_multiturn_inputs_and_logprobs() ->
     assert first["image_data"][0] is factory.initial_image_item
     assert second["image_data"][0] is factory.initial_image_item
     assert second["image_data"][1] is factory.resolver.items[0]
-    assert first["mm_processor_kwargs"] == {"do_resize": False}
+    first_contract, first_clean_kwargs = split_preexpanded_prompt_contract(
+        first["mm_processor_kwargs"]
+    )
+    second_contract, second_clean_kwargs = split_preexpanded_prompt_contract(
+        second["mm_processor_kwargs"]
+    )
+    assert first_clean_kwargs == second_clean_kwargs == {"do_resize": False}
+    assert len(first_contract.ordered_visual_placeholder_ranges) == 1
+    assert len(second_contract.ordered_visual_placeholder_ranges) == 2
     assert first["sampling_params"]["logprobs"] is True
     assert "output_kind" not in first["sampling_params"]
     assert first["sampling_params"]["stop"] == ["</tool_call>"]

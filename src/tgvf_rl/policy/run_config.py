@@ -37,7 +37,9 @@ from tgvf_rl.data import (
 )
 from tgvf_rl.protocol import (
     NativeToolCapabilityProfile,
+    StandardToolError,
     TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+    ToolErrorCode,
 )
 
 from .config import (
@@ -55,13 +57,82 @@ from .config import (
 )
 
 
-POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v2"
+POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v3"
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
 POLICY_E2E_SMOKE_ANSWER_VERIFIER = "exact_match"
+POLICY_E2E_SMOKE_SEED_DERIVATION_NAME = "content-addressed-vllm-turn-rng-v1"
+
+
+def _fixed_contract_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256 = _fixed_contract_sha256(
+    {
+        "schema": POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
+        "rng_state_schema": "tgvf-vllm-turn-rng-v1",
+        "rng_state_fields": (
+            "master_seed",
+            "stream_identity_sha256",
+            "behavior_policy.run_id",
+            "behavior_policy.optimizer_step",
+            "behavior_policy.weights_sha256",
+            "prompt_token_ids_sha256",
+            "turn_index",
+        ),
+        "rng_state_digest": "sha256-canonical-json",
+        "seed_digest": "sha256(bytes('tgvf-vllm-seed-v1\\0') + rng_state_sha256)",
+        "seed_projection": "first-8-big-endian-mod-(2**31-1)",
+    }
+)
+POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
+    {
+        "schema": "policy-e2e-smoke-mcq-verifier-v1",
+        "task": POLICY_E2E_SMOKE_REWARD_TASK,
+        "route": "multiple_choice_rule",
+        "candidate": "first-leading-A-through-H-after-answer-or-boxed-wrapper",
+        "expected": "same-letter-parser",
+        "fallback_when_unparsed": "strip-casefold-collapse-whitespace-exact",
+        "judge": "disabled",
+    }
+)
+POLICY_E2E_SMOKE_CAP_ERROR_SHA256 = StandardToolError(
+    code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+    message=(
+        "The maximum of 4 tool-call attempts has been reached; "
+        "this call was not executed."
+    ),
+    attempt_index=4,
+    recoverable=True,
+    maximum_tool_calls=4,
+).payload_sha256
+POLICY_E2E_AGENT_LOOP_CONFIG_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "configs"
+    / "policy"
+    / "agent_loops"
+    / "tgvf_native_policy_v1.yaml"
+)
+POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN = (
+    "tgvf_rl.framework.verl.policy_runtime."
+    "PolicyE2ERuntimeInvocationFactory"
+)
 
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SAFE_PROJECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_FQN = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$"
+)
 _GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _MCQ_OPTION_PATTERN = re.compile(
     r"(?im)(?:^|\n)\s*(?:\(([A-H])\)|([A-H])[.):.])\s+\S"
@@ -83,6 +154,8 @@ _TOP_LEVEL_FIELDS = {
     "precision",
     "accumulation",
     "distributed",
+    "capacity",
+    "framework",
     "training",
     "output",
 }
@@ -216,10 +289,39 @@ class SmokeDistributedBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class SmokeCapacityBinding:
+    max_prompt_length: int
+    actor_ppo_max_token_len_per_gpu: int
+    rollout_log_prob_max_token_len_per_gpu: int
+    reference_log_prob_max_token_len_per_gpu: int
+    vllm_gpu_memory_utilization: float
+    vllm_max_num_batched_tokens: int
+    vllm_max_model_len: int
+    vllm_max_num_seqs: int
+    vllm_enable_chunked_prefill: bool
+    vllm_enforce_eager: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SmokeFrameworkBinding:
+    agent_loop_config_path: Path
+    agent_loop_config_sha256: str
+    runtime_invocation_factory_fqn: str
+    server_timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class SmokeTrainingBinding:
     total_training_epochs: int
     maximum_optimizer_steps: int
     checkpoint_steps: tuple[int, ...]
+    logger: tuple[str, ...]
+    project_name: str
+    validation_before_training: bool
+    validation_frequency: int
+    resume_mode: str
+    resume_from_path: Path | None
+    maximum_actor_checkpoints_to_keep: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +349,8 @@ class PolicyE2ESmokeRunConfig:
     precision: SmokePrecisionBinding
     accumulation: SmokeAccumulationBinding
     distributed: SmokeDistributedBinding
+    capacity: SmokeCapacityBinding
+    framework: SmokeFrameworkBinding
     training: SmokeTrainingBinding
     output: SmokeOutputBinding
     source_path: Path
@@ -532,13 +636,19 @@ def load_policy_e2e_smoke_run_config(
         "protocol.tool_schema_sha256",
     )
     _require_exact(protocol_table["maximum_tool_calls"], 4, "protocol.maximum_tool_calls")
+    cap_error_sha256 = _sha256(
+        protocol_table["cap_error_sha256"], name="protocol.cap_error_sha256"
+    )
+    _require_exact(
+        cap_error_sha256,
+        POLICY_E2E_SMOKE_CAP_ERROR_SHA256,
+        "protocol.cap_error_sha256",
+    )
     protocol = SmokeProtocolBinding(
         prompt_sha256=_sha256(
             protocol_table["prompt_sha256"], name="protocol.prompt_sha256"
         ),
-        cap_error_sha256=_sha256(
-            protocol_table["cap_error_sha256"], name="protocol.cap_error_sha256"
-        ),
+        cap_error_sha256=cap_error_sha256,
         tool_profile=tool_profile,
         tool_schema_sha256=protocol_table["tool_schema_sha256"],
         enabled_tool_names=enabled_tools,
@@ -631,19 +741,31 @@ def load_policy_e2e_smoke_run_config(
             "sampling.include_stop_str_in_output must be true when </tool_call> "
             "is a stop string so the complete closing tag remains policy-sampled"
         )
+    derivation_name = _text(
+        sampling_table["seed_derivation_name"],
+        name="sampling.seed_derivation_name",
+    )
+    derivation_sha256 = _sha256(
+        sampling_table["seed_derivation_sha256"],
+        name="sampling.seed_derivation_sha256",
+    )
+    _require_exact(
+        derivation_name,
+        POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
+        "sampling.seed_derivation_name",
+    )
+    _require_exact(
+        derivation_sha256,
+        POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256,
+        "sampling.seed_derivation_sha256",
+    )
     rollout_rng = SmokeRolloutRNGBinding(
         master_seed=_nonnegative_int(
             sampling_table["rollout_master_seed"],
             name="sampling.rollout_master_seed",
         ),
-        derivation_name=_text(
-            sampling_table["seed_derivation_name"],
-            name="sampling.seed_derivation_name",
-        ),
-        derivation_sha256=_sha256(
-            sampling_table["seed_derivation_sha256"],
-            name="sampling.seed_derivation_sha256",
-        ),
+        derivation_name=derivation_name,
+        derivation_sha256=derivation_sha256,
     )
 
     reward_table = _table(
@@ -667,13 +789,19 @@ def load_policy_e2e_smoke_run_config(
         "reward.answer_verifier",
     )
     _require_exact(reward_table["judge_mode"], POLICY_E2E_SMOKE_JUDGE_MODE, "reward.judge_mode")
+    answer_verifier_sha256 = _sha256(
+        reward_table["answer_verifier_sha256"],
+        name="reward.answer_verifier_sha256",
+    )
+    _require_exact(
+        answer_verifier_sha256,
+        POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
+        "reward.answer_verifier_sha256",
+    )
     reward = SmokeRewardBinding(
         task_kind=reward_table["task_kind"],
         answer_verifier=reward_table["answer_verifier"],
-        answer_verifier_sha256=_sha256(
-            reward_table["answer_verifier_sha256"],
-            name="reward.answer_verifier_sha256",
-        ),
+        answer_verifier_sha256=answer_verifier_sha256,
         judge_mode=reward_table["judge_mode"],
         judge_reason=_text(reward_table["judge_reason"], name="reward.judge_reason"),
         answer_weight=_exact_real(reward_table["answer_weight"], 0.8, "reward.answer_weight"),
@@ -789,11 +917,196 @@ def load_policy_e2e_smoke_run_config(
     if accumulation.global_prompt_batch_size != expected_global_batch:
         raise ValueError("accumulation global prompt batch is inconsistent with world size")
 
+    capacity_table = _table(
+        payload,
+        "capacity",
+        {
+            "max_prompt_length",
+            "actor_ppo_max_token_len_per_gpu",
+            "rollout_log_prob_max_token_len_per_gpu",
+            "reference_log_prob_max_token_len_per_gpu",
+            "vllm_gpu_memory_utilization",
+            "vllm_max_num_batched_tokens",
+            "vllm_max_model_len",
+            "vllm_max_num_seqs",
+            "vllm_enable_chunked_prefill",
+            "vllm_enforce_eager",
+        },
+    )
+    capacity = SmokeCapacityBinding(
+        max_prompt_length=_positive_int(
+            capacity_table["max_prompt_length"],
+            name="capacity.max_prompt_length",
+        ),
+        actor_ppo_max_token_len_per_gpu=_positive_int(
+            capacity_table["actor_ppo_max_token_len_per_gpu"],
+            name="capacity.actor_ppo_max_token_len_per_gpu",
+        ),
+        rollout_log_prob_max_token_len_per_gpu=_positive_int(
+            capacity_table["rollout_log_prob_max_token_len_per_gpu"],
+            name="capacity.rollout_log_prob_max_token_len_per_gpu",
+        ),
+        reference_log_prob_max_token_len_per_gpu=_positive_int(
+            capacity_table["reference_log_prob_max_token_len_per_gpu"],
+            name="capacity.reference_log_prob_max_token_len_per_gpu",
+        ),
+        vllm_gpu_memory_utilization=_unit_interval(
+            capacity_table["vllm_gpu_memory_utilization"],
+            name="capacity.vllm_gpu_memory_utilization",
+        ),
+        vllm_max_num_batched_tokens=_positive_int(
+            capacity_table["vllm_max_num_batched_tokens"],
+            name="capacity.vllm_max_num_batched_tokens",
+        ),
+        vllm_max_model_len=_positive_int(
+            capacity_table["vllm_max_model_len"],
+            name="capacity.vllm_max_model_len",
+        ),
+        vllm_max_num_seqs=_positive_int(
+            capacity_table["vllm_max_num_seqs"],
+            name="capacity.vllm_max_num_seqs",
+        ),
+        vllm_enable_chunked_prefill=_boolean(
+            capacity_table["vllm_enable_chunked_prefill"],
+            name="capacity.vllm_enable_chunked_prefill",
+        ),
+        vllm_enforce_eager=_boolean(
+            capacity_table["vllm_enforce_eager"],
+            name="capacity.vllm_enforce_eager",
+        ),
+    )
+    minimum_context = capacity.max_prompt_length + sampling.max_response_length
+    if capacity.vllm_max_model_len < minimum_context:
+        raise ValueError(
+            "capacity.vllm_max_model_len cannot hold max prompt plus response"
+        )
+    minimum_actor_tokens = (
+        accumulation.prompt_micro_batch_size_per_rank
+        * sampling.trajectories_per_prompt
+        * minimum_context
+    )
+    if capacity.actor_ppo_max_token_len_per_gpu < minimum_actor_tokens:
+        raise ValueError(
+            "capacity.actor_ppo_max_token_len_per_gpu is smaller than one "
+            "expanded Policy Pilot micro-batch"
+        )
+    if (
+        capacity.rollout_log_prob_max_token_len_per_gpu
+        < capacity.actor_ppo_max_token_len_per_gpu
+        or capacity.reference_log_prob_max_token_len_per_gpu
+        < capacity.actor_ppo_max_token_len_per_gpu
+    ):
+        raise ValueError(
+            "rollout/reference log-prob token bounds cannot be smaller than the "
+            "actor bound"
+        )
+    if capacity.vllm_max_num_batched_tokens > capacity.vllm_max_model_len:
+        raise ValueError(
+            "capacity.vllm_max_num_batched_tokens cannot exceed max_model_len"
+        )
+    if (
+        capacity.vllm_max_num_seqs
+        < accumulation.rollout_prompt_micro_batch_size_per_engine
+        * sampling.trajectories_per_prompt
+    ):
+        raise ValueError(
+            "capacity.vllm_max_num_seqs cannot hold one rollout engine micro-batch"
+        )
+
+    framework_table = _table(
+        payload,
+        "framework",
+        {
+            "agent_loop_config_path",
+            "agent_loop_config_sha256",
+            "runtime_invocation_factory_fqn",
+            "server_timeout_seconds",
+        },
+    )
+    agent_loop_config_path = _existing_file(
+        framework_table["agent_loop_config_path"],
+        name="framework.agent_loop_config_path",
+    )
+    if agent_loop_config_path != POLICY_E2E_AGENT_LOOP_CONFIG_PATH:
+        raise ValueError(
+            "framework.agent_loop_config_path differs from the checked-in "
+            "Policy Pilot composition"
+        )
+    agent_loop_config_sha256 = _sha256(
+        framework_table["agent_loop_config_sha256"],
+        name="framework.agent_loop_config_sha256",
+    )
+    if _sha256_file(agent_loop_config_path) != agent_loop_config_sha256:
+        raise ValueError("framework AgentLoop config SHA256 mismatch")
+    runtime_factory_fqn = _fqn(
+        framework_table["runtime_invocation_factory_fqn"],
+        name="framework.runtime_invocation_factory_fqn",
+    )
+    _require_exact(
+        runtime_factory_fqn,
+        POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
+        "framework.runtime_invocation_factory_fqn",
+    )
+    framework = SmokeFrameworkBinding(
+        agent_loop_config_path=agent_loop_config_path,
+        agent_loop_config_sha256=agent_loop_config_sha256,
+        runtime_invocation_factory_fqn=runtime_factory_fqn,
+        server_timeout_seconds=_positive_real(
+            framework_table["server_timeout_seconds"],
+            name="framework.server_timeout_seconds",
+        ),
+    )
+
     training_table = _table(
         payload,
         "training",
-        {"total_training_epochs", "maximum_optimizer_steps", "checkpoint_steps"},
+        {
+            "total_training_epochs",
+            "maximum_optimizer_steps",
+            "checkpoint_steps",
+            "logger",
+            "project_name",
+            "validation_before_training",
+            "validation_frequency",
+            "resume_mode",
+            "resume_from_path",
+            "maximum_actor_checkpoints_to_keep",
+        },
     )
+    loggers = _text_tuple(training_table["logger"], name="training.logger")
+    if not loggers or len(set(loggers)) != len(loggers):
+        raise ValueError("training.logger must be non-empty and unique")
+    unsupported_loggers = set(loggers).difference({"console", "wandb"})
+    if unsupported_loggers:
+        raise ValueError(
+            f"training.logger contains unsupported backends: {sorted(unsupported_loggers)!r}"
+        )
+    validation_frequency = _integer(
+        training_table["validation_frequency"],
+        name="training.validation_frequency",
+    )
+    if validation_frequency != -1:
+        raise ValueError(
+            "bounded Policy E2E smoke requires training.validation_frequency=-1"
+        )
+    resume_mode = _text(training_table["resume_mode"], name="training.resume_mode")
+    if resume_mode not in {"auto", "disable", "resume_path"}:
+        raise ValueError(
+            "training.resume_mode must be auto, disable, or resume_path"
+        )
+    resume_from_path = _optional_absolute_path(
+        training_table["resume_from_path"],
+        name="training.resume_from_path",
+    )
+    if resume_mode in {"auto", "disable"} and resume_from_path is not None:
+        raise ValueError(
+            "training.resume_from_path must be empty in auto/disable mode"
+        )
+    if resume_mode == "resume_path":
+        if resume_from_path is None or not resume_from_path.is_dir():
+            raise ValueError(
+                "training.resume_from_path must be an existing directory in resume_path mode"
+            )
     training = SmokeTrainingBinding(
         total_training_epochs=_positive_int(
             training_table["total_training_epochs"], name="training.total_training_epochs"
@@ -803,7 +1116,24 @@ def load_policy_e2e_smoke_run_config(
             name="training.maximum_optimizer_steps",
         ),
         checkpoint_steps=_checkpoint_steps(training_table["checkpoint_steps"]),
+        logger=loggers,
+        project_name=_safe_project_name(training_table["project_name"]),
+        validation_before_training=_boolean(
+            training_table["validation_before_training"],
+            name="training.validation_before_training",
+        ),
+        validation_frequency=validation_frequency,
+        resume_mode=resume_mode,
+        resume_from_path=resume_from_path,
+        maximum_actor_checkpoints_to_keep=_positive_int(
+            training_table["maximum_actor_checkpoints_to_keep"],
+            name="training.maximum_actor_checkpoints_to_keep",
+        ),
     )
+    if training.validation_before_training:
+        raise ValueError(
+            "bounded Policy E2E smoke does not own a validation population"
+        )
     if training.checkpoint_steps[-1] > training.maximum_optimizer_steps:
         raise ValueError("training checkpoint step exceeds maximum_optimizer_steps")
     if scheduler.total_steps != training.maximum_optimizer_steps:
@@ -823,6 +1153,8 @@ def load_policy_e2e_smoke_run_config(
     metrics_path = _absolute_path(output_table["metrics_path"], name="output.metrics_path")
     _require_within(checkpoint_directory, output_root, name="output.checkpoint_directory")
     _require_within(metrics_path, output_root, name="output.metrics_path")
+    if resume_from_path is not None:
+        _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
     policy = PolicyPilotV1Config(
@@ -862,6 +1194,8 @@ def load_policy_e2e_smoke_run_config(
         precision=precision,
         accumulation=accumulation,
         distributed=distributed,
+        capacity=capacity,
+        framework=framework,
         training=training,
         output=output,
         source_path=source_path,
@@ -1030,14 +1364,22 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
     world_size = _positive_int(table["world_size"], name="distributed.world_size")
     if logical != tuple(range(len(logical))) or len(physical) != len(logical):
         raise ValueError("distributed physical/logical GPU mapping is invalid")
+    if physical != (0, 1, 2, 3) or logical != (0, 1, 2, 3):
+        raise ValueError(
+            "this Policy E2E smoke identity requires physical/logical GPUs 0-3"
+        )
     if actor != logical or world_size != len(actor):
         raise ValueError("this smoke requires every logical GPU in the FSDP2 actor world")
+    if world_size != 4:
+        raise ValueError("this Policy E2E smoke identity requires world_size=4")
     placement = _text(table["placement"], name="distributed.placement")
     if placement != "colocated" or rollout != actor:
         raise ValueError("this smoke requires colocated actor/rollout placement")
     _require_exact(table["fsdp_strategy"], "fsdp2", "distributed.fsdp_strategy")
     _require_exact(table["rollout_backend"], "vllm", "distributed.rollout_backend")
     tp = _positive_int(table["vllm_tensor_parallel_size"], name="distributed.vllm_tensor_parallel_size")
+    if tp != 1:
+        raise ValueError("the initial 4-GPU Policy E2E smoke requires vLLM TP=1")
     if len(rollout) % tp != 0:
         raise ValueError("vLLM tensor parallel size must divide rollout GPUs")
     return SmokeDistributedBinding(
@@ -1070,6 +1412,20 @@ def _safe_run_id(value: object) -> str:
     text = _text(value, name="run_id")
     if _SAFE_RUN_ID.fullmatch(text) is None or text in {".", ".."}:
         raise ValueError("run_id is not a safe path-independent identity")
+    return text
+
+
+def _safe_project_name(value: object) -> str:
+    text = _text(value, name="training.project_name")
+    if _SAFE_PROJECT_NAME.fullmatch(text) is None or text in {".", ".."}:
+        raise ValueError("training.project_name is not a safe logger identity")
+    return text
+
+
+def _fqn(value: object, *, name: str) -> str:
+    text = _text(value, name=name)
+    if _FQN.fullmatch(text) is None:
+        raise ValueError(f"{name} must be a dotted Python symbol")
     return text
 
 
@@ -1206,6 +1562,12 @@ def _absolute_path(value: object, *, name: str) -> Path:
     return path.resolve(strict=False)
 
 
+def _optional_absolute_path(value: object, *, name: str) -> Path | None:
+    if value == "":
+        return None
+    return _absolute_path(value, name=name)
+
+
 def _require_within(path: Path, root: Path, *, name: str) -> None:
     try:
         path.relative_to(root)
@@ -1250,16 +1612,24 @@ def _normalize_json(value: object) -> object:
 
 
 __all__ = [
+    "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
+    "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
+    "POLICY_E2E_SMOKE_CAP_ERROR_SHA256",
     "POLICY_E2E_SMOKE_CODE_REPOSITORY",
     "POLICY_E2E_SMOKE_CONFIG_SCHEMA",
     "POLICY_E2E_SMOKE_JUDGE_MODE",
     "POLICY_E2E_SMOKE_REWARD_TASK",
+    "POLICY_E2E_SMOKE_SEED_DERIVATION_NAME",
+    "POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256",
+    "POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN",
     "PolicyE2ESmokeRunConfig",
     "SmokeAccumulationBinding",
+    "SmokeCapacityBinding",
     "SmokeDatasetSelection",
     "SmokeSelectedMCQSample",
     "SmokeDistributedBinding",
+    "SmokeFrameworkBinding",
     "SmokeOptimizerBinding",
     "SmokeOutputBinding",
     "SmokePrecisionBinding",

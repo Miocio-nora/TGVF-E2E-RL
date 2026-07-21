@@ -53,6 +53,34 @@ TRAJECTORY_REPLAY_BUNDLE_FIELD = "tgvf_trajectory_replay_bundle"
 TOKEN_OWNERSHIP_SHA256_FIELD = "tgvf_token_ownership_sha256"
 ROLLOUT_PROVENANCE_SHA256_FIELD = "tgvf_rollout_provenance_sha256"
 
+# The live AgentLoop manager builds its DataProto directly from
+# ``AgentLoopOutput.extra_fields``; it does not pass through DataProtoPayload.
+# Carry the release lease as ordinary non-tensor fields so the subsequent
+# DataProto -> TensorDict conversion can preserve it across the Ray boundary.
+DATAPROTO_META_SCHEMA_VERSION = "tgvf-verl-dataproto-meta-v1"
+DATAPROTO_META_SCHEMA_FIELD = "tgvf_dataproto_meta_schema_version"
+SIDECAR_RELEASE_SCHEMA_VERSION = "tgvf-dataproto-sidecar-release-v1"
+SIDECAR_RELEASE_SCHEMA_FIELD = "tgvf_sidecar_release_schema_version"
+SIDECAR_RELEASE_FIELDS_FIELD = "tgvf_sidecar_release_fields"
+
+AGENT_LOOP_EXACT_SIDECAR_FIELDS = (
+    BRIDGE_SCHEMA_FIELD,
+    EXACT_PROMPT_IDS_FIELD,
+    EXACT_RESPONSE_IDS_FIELD,
+    EXACT_OBSERVATION_HANDLES_FIELD,
+    ACTUAL_RESPONSE_LOGPROBS_FIELD,
+    BEHAVIOR_TRACE_HANDLES_FIELD,
+    BEHAVIOR_TRACE_RECORDS_FIELD,
+    OBJECTIVE_SENTINELS_FIELD,
+    TRAJECTORY_PAYLOAD_FIELD,
+    TRAJECTORY_ID_FIELD,
+    TRAJECTORY_SHA256_FIELD,
+    TRAJECTORY_REPLAY_HANDLE_FIELD,
+    TRAJECTORY_REPLAY_BUNDLE_FIELD,
+    TOKEN_OWNERSHIP_SHA256_FIELD,
+    ROLLOUT_PROVENANCE_SHA256_FIELD,
+)
+
 _RESERVED_EXTRA_FIELDS = {
     BRIDGE_SCHEMA_FIELD,
     EXACT_PROMPT_IDS_FIELD,
@@ -716,11 +744,17 @@ class _LosslessAgentLoopManagerBase:
         if self.expected_transport == VERL_AGENT_LOOP_TRANSFER_QUEUE_TRANSPORT:
             return _map_maybe_awaitable(generated, _require_transfer_queue_dispatch)
 
-        from .data_bridge import validate_data_proto_integrity
+        from .data_bridge import (
+            bind_agent_loop_data_proto_sidecar_lease,
+            validate_data_proto_integrity,
+        )
 
         return _map_maybe_awaitable(
             generated,
-            lambda output: _validate_and_return(output, validate_data_proto_integrity),
+            lambda output: _validate_and_return(
+                bind_agent_loop_data_proto_sidecar_lease(output),
+                validate_data_proto_integrity,
+            ),
         )
 
     def __getattr__(self, name: str) -> object:

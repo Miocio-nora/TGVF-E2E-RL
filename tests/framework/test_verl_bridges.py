@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from copy import deepcopy
 import hashlib
 import importlib
+import pickle
 from types import SimpleNamespace
 
 import pytest
@@ -41,6 +42,8 @@ from tgvf_rl.framework.verl import (
     build_data_proto_payload,
     build_padded_data_proto_payload,
     load_verl_public_api,
+    make_sidecar_releasing_actor_rollout_ref_worker_class,
+    make_sidecar_releasing_training_worker_class,
     make_objective_sentinels,
     parse_agent_loop_output,
     release_verl_data_proto_sidecars,
@@ -54,6 +57,8 @@ from tgvf_rl.framework.verl import (
     validate_verl_config_mapping,
     verl_is_available,
     verify_verl_distribution_identity,
+    worker_data_proto_sidecar_scope,
+    worker_tensordict_sidecar_scope,
 )
 from tgvf_rl.contracts.tokens import (
     LogProbMeasurement,
@@ -618,6 +623,87 @@ def test_worker_local_dataproto_sidecar_release_is_explicit_and_idempotent() -> 
 
     assert payload.release_sidecars()
     assert not driver_data.non_tensor_batch
+
+
+def test_worker_sidecar_scope_releases_ray_local_copy_on_success_and_error() -> None:
+    payload = build_data_proto_payload((_record(),))
+    driver_data = to_verl_data_proto(payload, data_proto_cls=_FakeDataProto)
+
+    successful_copy = pickle.loads(pickle.dumps(driver_data))
+    successful_copy.non_tensor_batch["worker_metric"] = "preserve"
+    with worker_data_proto_sidecar_scope(successful_copy) as leased:
+        assert leased is successful_copy
+        validate_data_proto_integrity(successful_copy)
+    assert successful_copy.non_tensor_batch == {"worker_metric": "preserve"}
+
+    failed_copy = pickle.loads(pickle.dumps(driver_data))
+    failed_copy.non_tensor_batch["worker_metric"] = "preserve"
+    with pytest.raises(ValueError, match="worker failed"):
+        with worker_data_proto_sidecar_scope(failed_copy):
+            raise ValueError("worker failed")
+    assert failed_copy.non_tensor_batch == {"worker_metric": "preserve"}
+
+    assert driver_data.non_tensor_batch
+    assert payload.release_sidecars()
+
+
+def test_training_worker_wrapper_releases_dispatched_tensordict_in_finally() -> None:
+    payload = build_data_proto_payload((_record(),))
+    driver_data = to_verl_data_proto(payload, data_proto_cls=_FakeDataProto)
+
+    def worker_copy():
+        value = dict(driver_data.non_tensor_batch)
+        value.update(driver_data.meta_info)
+        value["worker_metric"] = "preserve"
+        return value
+
+    release_fields = driver_data.meta_info["tgvf_sidecar_release_fields"]
+
+    class UpstreamWorker:
+        def train_mini_batch(self, data, *, fail=False):
+            assert all(name in data for name in release_fields)
+            if fail:
+                raise ValueError("training worker failed")
+            return "trained"
+
+        def infer_batch(self, data, *, fail=False):
+            assert all(name in data for name in release_fields)
+            if fail:
+                raise ValueError("inference worker failed")
+            return "inferred"
+
+    Worker = make_sidecar_releasing_training_worker_class(UpstreamWorker)
+    worker = Worker()
+
+    train_data = worker_copy()
+    assert worker.train_mini_batch(train_data) == "trained"
+    assert not any(name in train_data for name in release_fields)
+    assert train_data["worker_metric"] == "preserve"
+
+    infer_data = worker_copy()
+    with pytest.raises(ValueError, match="inference worker failed"):
+        worker.infer_batch(infer_data, fail=True)
+    assert not any(name in infer_data for name in release_fields)
+    assert infer_data["worker_metric"] == "preserve"
+
+    direct_data = worker_copy()
+    with worker_tensordict_sidecar_scope(direct_data):
+        assert all(name in direct_data for name in release_fields)
+    assert not any(name in direct_data for name in release_fields)
+
+    class UpstreamActorRolloutRefWorker:
+        actor_worker_cls = UpstreamWorker
+        ref_worker_cls = UpstreamWorker
+
+    RoleWorker = make_sidecar_releasing_actor_rollout_ref_worker_class(
+        UpstreamActorRolloutRefWorker
+    )
+    assert RoleWorker.actor_worker_cls is RoleWorker.ref_worker_cls
+    role_actor = RoleWorker.actor_worker_cls()
+    role_data = worker_copy()
+    assert role_actor.train_mini_batch(role_data) == "trained"
+    assert not any(name in role_data for name in release_fields)
+    assert payload.release_sidecars()
 
 
 def test_policy_pilot_adapter_rejects_ownerless_dataproto_convenience() -> None:

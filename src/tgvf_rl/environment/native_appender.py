@@ -38,6 +38,12 @@ class NativeToolTurnRegistrar(Protocol):
     ) -> None: ...
 
 
+class NativeObservationVisualTokenCountResolver(Protocol):
+    """Resolve the merged visual-token count from one verified record handle."""
+
+    def resolve_visual_token_count(self, observation: ObservationHandle) -> int: ...
+
+
 class QwenNativeToolObservationAppender:
     """Append environment-owned native bytes without rerendering prior turns.
 
@@ -49,14 +55,27 @@ class QwenNativeToolObservationAppender:
     """
 
     def __init__(
-        self, *, tokenizer: object, registrar: NativeToolTurnRegistrar
+        self,
+        *,
+        tokenizer: object,
+        registrar: NativeToolTurnRegistrar,
+        visual_token_count_resolver: NativeObservationVisualTokenCountResolver
+        | None = None,
     ) -> None:
         if not callable(getattr(tokenizer, "encode", None)):
             raise TypeError("Qwen native appender requires tokenizer.encode()")
         if not callable(getattr(registrar, "register_tool_turn", None)):
             raise TypeError("registrar must implement register_tool_turn()")
+        if visual_token_count_resolver is not None and not callable(
+            getattr(visual_token_count_resolver, "resolve_visual_token_count", None)
+        ):
+            raise TypeError(
+                "visual_token_count_resolver must implement "
+                "resolve_visual_token_count()"
+            )
         self.tokenizer = tokenizer
         self.registrar = registrar
+        self.visual_token_count_resolver = visual_token_count_resolver
 
     def append(
         self,
@@ -98,6 +117,14 @@ class QwenNativeToolObservationAppender:
                 + QWEN_NATIVE_RESPONSE_SUFFIX
             )
         environment_ids = self._encode(environment_text)
+        if (
+            isinstance(observation, ObservationHandle)
+            and self.visual_token_count_resolver is not None
+        ):
+            environment_ids = self._expand_visual_placeholder(
+                environment_ids,
+                observation,
+            )
         if not environment_ids:
             raise ValueError("native tool response encoded to no tokens")
         updated = prompt + sampled_turn.token_ids + environment_ids
@@ -117,6 +144,43 @@ class QwenNativeToolObservationAppender:
         ):
             raise TypeError("tokenizer returned invalid native token IDs")
         return tuple(token_ids)
+
+    def _expand_visual_placeholder(
+        self,
+        environment_ids: tuple[int, ...],
+        observation: ObservationHandle,
+    ) -> tuple[int, ...]:
+        resolver = self.visual_token_count_resolver
+        if resolver is None:  # pragma: no cover - guarded by caller
+            return environment_ids
+        count = resolver.resolve_visual_token_count(observation)
+        if type(count) is not int or count <= 0:
+            raise ValueError(
+                "observation visual token count must be a positive integer"
+            )
+        convert = getattr(self.tokenizer, "convert_tokens_to_ids", None)
+        if not callable(convert):
+            raise TypeError(
+                "visual expansion requires tokenizer.convert_tokens_to_ids()"
+            )
+        visual_token_id = convert("<|image_pad|>")
+        if type(visual_token_id) is not int or visual_token_id < 0:
+            raise TypeError("Qwen image placeholder must resolve to a token ID")
+        positions = tuple(
+            index
+            for index, token_id in enumerate(environment_ids)
+            if token_id == visual_token_id
+        )
+        if len(positions) != 1:
+            raise ValueError(
+                "successful native tool response must encode one image placeholder"
+            )
+        position = positions[0]
+        return (
+            environment_ids[:position]
+            + (visual_token_id,) * count
+            + environment_ids[position + 1 :]
+        )
 
 
 def render_qwen_native_success_payload(parsed_call: NativeToolCall) -> str:
@@ -168,6 +232,7 @@ def _validate_parsed_call_matches_turn(
 
 
 __all__ = [
+    "NativeObservationVisualTokenCountResolver",
     "NativeToolTurnRegistrar",
     "QWEN_NATIVE_IMAGE_PLACEHOLDER",
     "QWEN_NATIVE_RESPONSE_SUFFIX",

@@ -22,6 +22,7 @@ from tgvf_rl.protocol.schema import (
     NativeToolCall,
     ParsedCropTGVFCall,
     ParsedImageZoomInCall,
+    ParsedToolCall,
 )
 
 from .agent_loop import ToolExecutionContext
@@ -204,6 +205,162 @@ class Qwen3NativeToolLayoutBuilder:
             cache_prefix_length=0,
         )
 
+    def build_focus(
+        self,
+        context: ToolExecutionContext,
+        source_visual: SourceVisualTensorBundle,
+        parsed_call: ParsedToolCall,
+    ) -> ReplayLayoutTensors:
+        """Build the exact layout for one source-image TGVF observation.
+
+        A focus observation has the same visual geometry as the immutable
+        source image.  It is nevertheless a distinct multimodal item: the new
+        positions receive main ``D`` while the three recorded branch tensors
+        are injected at those same positions.
+        """
+
+        if not isinstance(source_visual, SourceVisualTensorBundle):
+            raise TypeError("focus layout requires SourceVisualTensorBundle")
+        if not isinstance(parsed_call, ParsedToolCall):
+            raise TypeError("focus layout requires ParsedToolCall")
+        _validate_parsed_call_context(parsed_call, context)
+        expanded = self._expand(
+            context,
+            new_grid=source_visual.image_grid_thw,
+            new_merge_size=source_visual.spatial_merge_size,
+            parsed_call=parsed_call,
+        )
+        return self._focus_replay_layout(
+            expanded,
+            source_visual=source_visual,
+            original_positions=context.trajectory_source_visual.positions,
+        )
+
+    def build_focus_from_recorded_prefix(
+        self,
+        *,
+        conditioning_input_ids: Sequence[int],
+        parsed_call: ParsedToolCall,
+        trajectory_source_visual: TrajectorySourceVisual,
+        prior_observation_handles: Sequence[object],
+        source_visual: SourceVisualTensorBundle,
+    ) -> ReplayLayoutTensors:
+        """Build focus layout from the neutral runtime request fields."""
+
+        if not isinstance(parsed_call, ParsedToolCall):
+            raise TypeError("focus layout requires ParsedToolCall")
+        if not isinstance(trajectory_source_visual, TrajectorySourceVisual):
+            raise TypeError("focus layout requires TrajectorySourceVisual")
+        if not isinstance(source_visual, SourceVisualTensorBundle):
+            raise TypeError("focus layout requires SourceVisualTensorBundle")
+        expected = [
+            (
+                trajectory_source_visual.state.image_grid_thw,
+                trajectory_source_visual.state.spatial_merge_size,
+                trajectory_source_visual.positions,
+            )
+        ]
+        for expected_call, handle in enumerate(tuple(prior_observation_handles)):
+            record = self.store.resolve_record(handle)
+            if record.call_index != expected_call:
+                raise ReplayMismatchError("prior focus observations are out of order")
+            expected.append(_record_visual_geometry(record))
+        expected.append(
+            (
+                source_visual.image_grid_thw,
+                source_visual.spatial_merge_size,
+                None,
+            )
+        )
+        environment_ids = tuple(
+            self.tokenizer.encode(
+                render_qwen_native_success_environment_text(parsed_call),
+                add_special_tokens=False,
+            )
+        )
+        if not environment_ids:
+            raise ValueError("Qwen3 native success response encoded to no tokens")
+        expanded = self._expand_sequence(
+            tuple(conditioning_input_ids) + environment_ids,
+            tuple(expected),
+        )
+        return self._focus_replay_layout(
+            expanded,
+            source_visual=source_visual,
+            original_positions=trajectory_source_visual.positions,
+        )
+
+    @staticmethod
+    def _focus_replay_layout(
+        expanded: _ExpandedNativeVisualLayout,
+        *,
+        source_visual: SourceVisualTensorBundle,
+        original_positions: tuple[int, ...],
+    ) -> ReplayLayoutTensors:
+        if len(source_visual.merged_deepstack) != len(
+            QWEN3_DEEPSTACK_BRANCH_LAYERS
+        ):
+            raise ValueError("focus source is missing Qwen3 DeepStack branches")
+        positions = expanded.new_positions
+        sequence = int(expanded.input_ids.shape[-1])
+        visible = torch.ones((1, sequence), dtype=torch.bool)
+        return ReplayLayoutTensors(
+            position_ids=expanded.position_ids,
+            attention_mask=expanded.attention_mask,
+            policy_visible_mask=visible.clone(),
+            reference_visible_mask=visible.clone(),
+            teacher_visible_mask=visible.clone(),
+            token_type_ids=None,
+            original_image_key_block_mask=None,
+            cache_position=None,
+            rope_delta=None,
+            visual_layout=VisualLayout(
+                sequence_length=sequence,
+                original_image_positions=original_positions,
+                d_positions=positions,
+                deepstack_branch_layers=QWEN3_DEEPSTACK_BRANCH_LAYERS,
+                deepstack_injection_positions=tuple(
+                    positions for _ in QWEN3_DEEPSTACK_BRANCH_LAYERS
+                ),
+            ),
+            cache_mode="no_cache",
+            cache_prefix_length=0,
+        )
+
+    def expand_recorded_visual_sequence(
+        self,
+        token_ids: Sequence[int],
+        *,
+        trajectory_source_visual: TrajectorySourceVisual,
+        observation_handles: Sequence[object],
+    ) -> _ExpandedNativeVisualLayout:
+        """Expand/validate a sequence containing only recorded visual items.
+
+        This is shared by contextual behavior forward and final replay
+        materialization.  It never runs the vision tower or the TGVF Adapter;
+        all geometry and positions come from the immutable source/observation
+        records.  Already-expanded native blocks remain byte/token identical.
+        """
+
+        if not isinstance(trajectory_source_visual, TrajectorySourceVisual):
+            raise TypeError("recorded sequence requires TrajectorySourceVisual")
+        handles = tuple(observation_handles)
+        expected = [
+            (
+                trajectory_source_visual.state.image_grid_thw,
+                trajectory_source_visual.state.spatial_merge_size,
+                trajectory_source_visual.positions,
+            )
+        ]
+        for expected_call, handle in enumerate(handles):
+            record = self.store.resolve_record(handle)
+            if record.call_index != expected_call:
+                raise ReplayMismatchError(
+                    "recorded visual observations are out of order"
+                )
+            expected.append(_record_visual_geometry(record))
+        return self._expand_sequence(tuple(token_ids), tuple(expected))
+
     def build_crop(
         self,
         context: ToolExecutionContext,
@@ -271,15 +428,24 @@ class Qwen3NativeToolLayoutBuilder:
             + context.sampled_turn.token_ids
             + environment_success_token_ids
         )
+        return self._expand_sequence(canonical_ids, tuple(expected))
+
+    def _expand_sequence(
+        self,
+        token_ids: tuple[int, ...],
+        expected: tuple[
+            tuple[tuple[int, int, int], int, tuple[int, ...] | None], ...
+        ],
+    ) -> _ExpandedNativeVisualLayout:
         blocks = _vision_blocks(
-            canonical_ids,
+            token_ids,
             vision_start_id=self.vision_start_id,
             image_pad_id=self.image_pad_id,
             vision_end_id=self.vision_end_id,
         )
         if len(blocks) != len(expected):
             raise ReplayMismatchError(
-                "native visual block count differs from source/prior/new observations"
+                "native visual block count differs from recorded visual items"
             )
 
         expanded: list[int] = []
@@ -288,19 +454,19 @@ class Qwen3NativeToolLayoutBuilder:
         for block, (grid, merge_size, recorded_positions) in zip(
             blocks, expected, strict=True
         ):
-            start, pad_start, pad_end, end = block
-            expanded.extend(canonical_ids[cursor:pad_start])
+            _start, pad_start, pad_end, end = block
+            expanded.extend(token_ids[cursor:pad_start])
             count = _merged_token_count(grid, merge_size)
             positions = tuple(range(len(expanded), len(expanded) + count))
             expanded.extend((self.image_pad_id,) * count)
-            expanded.extend(canonical_ids[pad_end:end])
+            expanded.extend(token_ids[pad_end:end])
             expanded_positions.append(positions)
             if recorded_positions is not None and positions != recorded_positions:
                 raise ReplayMismatchError(
                     "expanded native visual positions differ from rollout record"
                 )
             cursor = end
-        expanded.extend(canonical_ids[cursor:])
+        expanded.extend(token_ids[cursor:])
 
         input_ids = torch.tensor((tuple(expanded),), dtype=torch.long)
         attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
@@ -349,9 +515,9 @@ def _validate_parsed_call_context(
 ) -> None:
     if not isinstance(
         parsed_call,
-        (ParsedImageZoomInCall, ParsedCropTGVFCall),
+        (ParsedToolCall, ParsedImageZoomInCall, ParsedCropTGVFCall),
     ):
-        raise TypeError("Qwen3 crop layout requires a parsed crop call")
+        raise TypeError("Qwen3 native layout requires a parsed visual call")
     sampled = context.sampled_turn
     if (
         parsed_call.sampled_text != sampled.text

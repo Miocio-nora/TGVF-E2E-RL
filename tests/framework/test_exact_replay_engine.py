@@ -9,6 +9,7 @@ from torch import nn
 
 from tests.policy.test_exact_replay import _payload
 from tests.policy.test_qwen_replay import _TinyQwen3
+from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.identity import ComponentRole
 from tgvf_rl.contracts.tokens import TokenOwnership
 from tgvf_rl.framework.verl.data_bridge import (
@@ -21,7 +22,13 @@ from tgvf_rl.framework.verl.data_bridge import (
 from tgvf_rl.framework.verl.exact_replay_engine import (
     TGVF_EXACT_REPLAY_MODEL_TYPE,
     Qwen3ConfigBoundReplayPortFactory,
+    make_exact_replay_fsdp2_engine_class,
     register_exact_replay_fsdp2_engine,
+)
+from tgvf_rl.framework.verl.policy_weight_sync import (
+    PolicyWeightSyncState,
+    load_latest_lora_snapshot,
+    publish_policy_weight_sync_request,
 )
 from tgvf_rl.framework.verl.rollout_bridge import (
     EXACT_PROMPT_IDS_FIELD,
@@ -101,6 +108,9 @@ class _FakeUpstreamFSDPEngineWithLMHead:
         self._module_to_build = module
         self.module = module
         self.exact_replay_evidence = None
+        self.parameter_stream = iter(())
+        self.peft_config = None
+        self.weight_sync_calls: list[tuple[bool, bool, dict[str, object]]] = []
 
     def _build_module(self):
         assert self.model_config.model_type == "language_model"
@@ -108,6 +118,17 @@ class _FakeUpstreamFSDPEngineWithLMHead:
 
     def forward_step(self, micro_batch, loss_function, forward_only):
         raise AssertionError((micro_batch, loss_function, forward_only))
+
+    def get_per_tensor_param(
+        self,
+        layered_summon=False,
+        base_sync_done=False,
+        **kwargs,
+    ):
+        self.weight_sync_calls.append(
+            (layered_summon, base_sync_done, dict(kwargs))
+        )
+        return self.parameter_stream, self.peft_config
 
     def get_data_parallel_group(self):
         return None
@@ -165,6 +186,110 @@ def _concrete_engine_config(bundle, *, reference: bool):
         ),
         _autocast_dtype=torch.float32,
     )
+
+
+def _weight_sync_engine(*, reference: bool = False):
+    engine_cls = make_exact_replay_fsdp2_engine_class(
+        _FakeUpstreamFSDPEngineWithLMHead,
+        port_factory=lambda **_: None,
+    )
+    return engine_cls(
+        model_config=SimpleNamespace(model_type=TGVF_EXACT_REPLAY_MODEL_TYPE),
+        engine_config=SimpleNamespace(strategy="fsdp2", forward_only=reference),
+        module=_NoRawForwardModel(0.5),
+    )
+
+
+def test_actor_lora_weight_stream_publishes_snapshot_without_mutating_items(
+    tmp_path, monkeypatch
+) -> None:
+    state_directory = (tmp_path / "policy-state").resolve()
+    environment = {
+        "TGVF_POLICY_STATE_DIR": str(state_directory),
+        "TGVF_POLICY_RUN_ID": "policy-pilot-weight-sync",
+        "TGVF_POLICY_RUN_IDENTITY_SHA256": "8" * 64,
+        "RANK": "0",
+        "WORLD_SIZE": "4",
+    }
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    state = PolicyWeightSyncState.from_environment(environment)
+    request = publish_policy_weight_sync_request(state, 3, nonce="engine-sync")
+    source = [
+        ("decoder.q_proj.lora_A.weight", torch.tensor([[1.0, 2.0]])),
+        ("decoder.q_proj.lora_B.weight", torch.tensor([[3.0], [4.0]])),
+    ]
+    source_iterator = iter(source)
+    peft_config = {"rank": 64}
+    engine = _weight_sync_engine()
+    engine.parameter_stream = source_iterator
+    engine.peft_config = peft_config
+
+    stream, actual_config = engine.get_per_tensor_param(
+        layered_summon=True,
+        base_sync_done=True,
+        transport="naive",
+    )
+    observed = list(stream)
+
+    assert actual_config is peft_config
+    assert engine.weight_sync_calls == [(True, True, {"transport": "naive"})]
+    assert all(
+        actual is expected
+        for actual, expected in zip(observed, source, strict=True)
+    )
+    snapshot = load_latest_lora_snapshot(
+        state,
+        expected_optimizer_step=3,
+        expected_request_sha256=request.request_sha256,
+    )
+    assert tuple(sorted(snapshot.tensors)) == tuple(sorted(name for name, _ in source))
+    for name, tensor in source:
+        torch.testing.assert_close(snapshot.tensors[name], tensor, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    ("reference", "base_sync_done"),
+    [(False, False), (True, True)],
+)
+def test_base_and_reference_weight_streams_remain_exact_upstream_objects(
+    reference: bool,
+    base_sync_done: bool,
+) -> None:
+    source = iter([("base.weight", torch.ones(1))])
+    peft_config = {"identity": "same-object"}
+    engine = _weight_sync_engine(reference=reference)
+    engine.parameter_stream = source
+    engine.peft_config = peft_config
+
+    actual_stream, actual_config = engine.get_per_tensor_param(
+        layered_summon=False,
+        base_sync_done=base_sync_done,
+    )
+
+    assert actual_stream is source
+    assert actual_config is peft_config
+
+
+def test_actor_adapter_sync_fails_closed_without_lora_stream() -> None:
+    engine = _weight_sync_engine()
+    engine.parameter_stream = iter([("base.weight", torch.ones(1))])
+    engine.peft_config = None
+
+    with pytest.raises(ReplayMismatchError, match="LoRA-only parameter stream"):
+        engine.get_per_tensor_param(base_sync_done=True)
+
+
+def test_engine_registration_rejects_changed_weight_export_signature() -> None:
+    class ChangedWeightExport(_FakeUpstreamFSDPEngineWithLMHead):
+        def get_per_tensor_param(self):
+            return iter(()), None
+
+    with pytest.raises(RuntimeError, match="get_per_tensor_param signature changed"):
+        make_exact_replay_fsdp2_engine_class(
+            ChangedWeightExport,
+            port_factory=lambda **_: None,
+        )
 
 
 def test_live_dataproto_meta_schema_reaches_worker_tensordict() -> None:

@@ -23,6 +23,7 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
+from functools import partial
 import hashlib
 import inspect
 import json
@@ -47,6 +48,9 @@ from tgvf_rl.framework.vllm import (
     VLLMTurnTerminationContract,
 )
 from tgvf_rl.framework.vllm.live_client import VLLMLivePromptInputsPort
+from tgvf_rl.framework.vllm.preexpanded_prompt import (
+    require_preexpanded_prompt_contract,
+)
 from tgvf_rl.framework.vllm.registration import SUPPORTED_VLLM_VERSION
 from tgvf_rl.framework.vllm.sampler import VLLMRequestContextIdentityPort
 from .compatibility import SUPPORTED_LOGPROBS_MODE
@@ -160,6 +164,13 @@ class VerlAsyncServerPolicyTurnClient:
         image_data = inputs.multi_modal_data["image"]
         if not isinstance(image_data, Sequence) or isinstance(image_data, (str, bytes)):
             raise TypeError("recorded image_data must be a multimodal item sequence")
+        if not image_data:
+            raise ReplayMismatchError("recorded image_data cannot be empty")
+        require_preexpanded_prompt_contract(
+            inputs.mm_processor_kwargs,
+            prompt_token_ids=request.prompt_token_ids,
+            expected_image_items=len(image_data),
+        )
 
         sampling_params = _verl_server_sampling_parameters(
             request, max_model_len=self.max_model_len
@@ -605,7 +616,9 @@ class BoundVerlNativeAgentLoopInvocationFactory:
                 raise ReplayMismatchError("upstream reused a completed n=8 group uid")
             index = self._next_rollout_index.get(group_uid, 0)
             if index >= self.rollouts_per_prompt:
-                raise ReplayMismatchError("upstream generated more than n=8 trajectories")
+                raise ReplayMismatchError(
+                    "upstream generated more than n=8 trajectories"
+                )
             if index + 1 == self.rollouts_per_prompt:
                 self._next_rollout_index.pop(group_uid, None)
                 self._completed_group_uids.add(group_uid)
@@ -685,9 +698,7 @@ def _required_prompt_ids(value: object) -> tuple[int, ...]:
     if not result or any(
         type(token_id) is not int or token_id < 0 for token_id in result
     ):
-        raise ValueError(
-            "initial_prompt_token_ids must contain non-negative integers"
-        )
+        raise ValueError("initial_prompt_token_ids must contain non-negative integers")
     return result
 
 
@@ -709,14 +720,26 @@ class VerlFrameworkNeutralAgentLoop:
         dataset_cls: object,
         data_config: object,
         *,
-        invocation_factory: VerlNativeAgentLoopInvocationFactory,
+        invocation_factory: VerlNativeAgentLoopInvocationFactory | partial[object],
         logprobs_mode: str,
         server_timeout_seconds: float = 600.0,
         **kwargs: object,
     ) -> None:
-        del trainer_config, processor, dataset_cls, data_config, kwargs
+        del kwargs
+        if isinstance(invocation_factory, partial):
+            invocation_factory = invocation_factory(
+                trainer_config=trainer_config,
+                server_manager=server_manager,
+                tokenizer=tokenizer,
+                processor=processor,
+                dataset_cls=dataset_cls,
+                data_config=data_config,
+            )
         if not callable(getattr(invocation_factory, "build", None)):
-            raise TypeError("invocation_factory must implement build()")
+            raise TypeError(
+                "invocation_factory must implement build() or be the Hydra "
+                "partial for PolicyE2ERuntimeInvocationFactory"
+            )
         self.server_manager = server_manager
         self.tokenizer = tokenizer
         self.invocation_factory = invocation_factory

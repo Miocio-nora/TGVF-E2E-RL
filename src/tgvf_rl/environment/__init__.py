@@ -57,6 +57,7 @@ from .crop_tgvf_tool import (
 )
 from .crop_tgvf_runtime import AtomicCropTGVFToolRuntime
 from .native_appender import (
+    NativeObservationVisualTokenCountResolver,
     NativeToolTurnRegistrar,
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
     QWEN_NATIVE_RESPONSE_SUFFIX,
@@ -99,6 +100,7 @@ __all__ = [
     "FrozenTGVFFocusTool",
     "LoadedFrozenTGVFAdapter",
     "NativeToolRuntimeRegistry",
+    "NativeObservationVisualTokenCountResolver",
     "NativeToolTurnRegistrar",
     "PolicyPilotFocusRuntimeBridge",
     "QWEN_NATIVE_IMAGE_PLACEHOLDER",

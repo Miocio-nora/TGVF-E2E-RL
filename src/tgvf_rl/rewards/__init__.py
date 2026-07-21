@@ -11,6 +11,16 @@ from .schema import (
     RewardResult,
 )
 from .verifiers import RuleFirstAnswerVerifier
+from .verl_adapter import (
+    PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD,
+    PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+    PILOT_VERL_REWARD_COMPONENTS_FIELD,
+    PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD,
+    PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD,
+    PilotRewardContextProvider,
+    PilotVerlTrajectoryReward,
+    PilotVerlTrajectoryRewardScorer,
+)
 
 __all__ = [
     "AnswerTaskKind",
@@ -18,6 +28,14 @@ __all__ = [
     "ExactTextVerifier",
     "PilotRewardPipeline",
     "PilotRewardSpec",
+    "PilotRewardContextProvider",
+    "PilotVerlTrajectoryReward",
+    "PilotVerlTrajectoryRewardScorer",
+    "PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD",
+    "PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION",
+    "PILOT_VERL_REWARD_COMPONENTS_FIELD",
+    "PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD",
+    "PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD",
     "RewardContext",
     "RewardPipeline",
     "RewardPipelineSpec",

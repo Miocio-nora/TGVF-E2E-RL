@@ -25,12 +25,19 @@ from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_VLLM_VERSION,
 )
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
+    POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
+    POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
+    POLICY_E2E_SMOKE_CAP_ERROR_SHA256,
     POLICY_E2E_SMOKE_CONFIG_SCHEMA,
+    POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
+    POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256,
     formal_deepeyes47k_iteration_identity_sha256,
     load_policy_e2e_smoke_run_config,
 )
 from tgvf_rl.framework.verl.launcher import (
     NATIVE_INVOCATION_FACTORY_FQN,
+    POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
     UPSTREAM_VERL_V0_RUNNER_FQN,
     build_policy_e2e_smoke_verl_plan,
     compose_upstream_verl_config,
@@ -38,6 +45,7 @@ from tgvf_rl.framework.verl.launcher import (
 from tgvf_rl.framework.verl.smoke_dataset import (
     VerlSelectedSampleDatasetBinding,
 )
+from tgvf_rl.policy.launch import policy_child_environment
 from tgvf_rl.protocol import TGVF_FOCUS_TOOL_SCHEMA_SHA256
 
 
@@ -139,6 +147,9 @@ def _q(value: object) -> str:
 
 def _config_text(root: Path, external: dict[str, object]) -> str:
     output_root = root / "never-created-output"
+    agent_loop_sha256 = hashlib.sha256(
+        POLICY_E2E_AGENT_LOOP_CONFIG_PATH.read_bytes()
+    ).hexdigest()
     return f'''schema_version = "{POLICY_E2E_SMOKE_CONFIG_SCHEMA}"
 formal_pilot = false
 run_id = "policy-smoke-test-001"
@@ -186,7 +197,7 @@ hidden_layer = -1
 
 [protocol]
 prompt_sha256 = "{SHA_A}"
-cap_error_sha256 = "{SHA_B}"
+cap_error_sha256 = "{POLICY_E2E_SMOKE_CAP_ERROR_SHA256}"
 tool_profile = "tgvf_only"
 tool_schema_sha256 = "{TGVF_FOCUS_TOOL_SCHEMA_SHA256}"
 enabled_tool_names = ["tgvf_focus_tool"]
@@ -213,13 +224,13 @@ stop_strings = ["</tool_call>"]
 include_stop_str_in_output = true
 ignore_eos = false
 rollout_master_seed = 42
-seed_derivation_name = "sha256-run-group-rollout-turn-v1"
-seed_derivation_sha256 = "{SHA_A}"
+seed_derivation_name = "{POLICY_E2E_SMOKE_SEED_DERIVATION_NAME}"
+seed_derivation_sha256 = "{POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256}"
 
 [reward]
 task_kind = "multiple_choice"
 answer_verifier = "exact_match"
-answer_verifier_sha256 = "{SHA_B}"
+answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"
 judge_mode = "not_applicable"
 judge_reason = "bounded non-formal MCQ smoke"
 answer_weight = 0.8
@@ -250,17 +261,17 @@ gradient_scaler_enabled = false
 allow_tf32 = true
 
 [accumulation]
-global_prompt_batch_size = 2
+global_prompt_batch_size = 4
 prompt_micro_batch_size_per_rank = 1
 rollout_prompt_micro_batch_size_per_engine = 1
 gradient_accumulation_steps = 1
 
 [distributed]
-physical_gpu_ids = [0, 3]
-logical_gpu_ids = [0, 1]
-world_size = 2
-actor_logical_gpu_ids = [0, 1]
-rollout_logical_gpu_ids = [0, 1]
+physical_gpu_ids = [0, 1, 2, 3]
+logical_gpu_ids = [0, 1, 2, 3]
+world_size = 4
+actor_logical_gpu_ids = [0, 1, 2, 3]
+rollout_logical_gpu_ids = [0, 1, 2, 3]
 fsdp_strategy = "fsdp2"
 fsdp_reshard_after_forward = false
 rollout_backend = "vllm"
@@ -269,10 +280,35 @@ placement = "colocated"
 weight_sync_mode = "nccl_lora_state_v1"
 weight_sync_interval_optimizer_steps = 1
 
+[capacity]
+max_prompt_length = 4096
+actor_ppo_max_token_len_per_gpu = 98304
+rollout_log_prob_max_token_len_per_gpu = 98304
+reference_log_prob_max_token_len_per_gpu = 98304
+vllm_gpu_memory_utilization = 0.5
+vllm_max_num_batched_tokens = 32768
+vllm_max_model_len = 32768
+vllm_max_num_seqs = 8
+vllm_enable_chunked_prefill = true
+vllm_enforce_eager = false
+
+[framework]
+agent_loop_config_path = {_q(POLICY_E2E_AGENT_LOOP_CONFIG_PATH)}
+agent_loop_config_sha256 = "{agent_loop_sha256}"
+runtime_invocation_factory_fqn = "{POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN}"
+server_timeout_seconds = 600.0
+
 [training]
 total_training_epochs = 1
 maximum_optimizer_steps = 2
 checkpoint_steps = [0, 1, 2]
+logger = ["console"]
+project_name = "tgvf-policy-rl"
+validation_before_training = false
+validation_frequency = -1
+resume_mode = "disable"
+resume_from_path = ""
+maximum_actor_checkpoints_to_keep = 2
 
 [output]
 root = {_q(output_root)}
@@ -309,10 +345,12 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
     )
     assert config.reward.judge_mode == "not_applicable"
     assert config.protocol.tool_profile.value == "tgvf_only"
-    assert config.distributed.physical_gpu_ids == (0, 3)
-    assert config.distributed.logical_gpu_ids == (0, 1)
+    assert config.distributed.physical_gpu_ids == (0, 1, 2, 3)
+    assert config.distributed.logical_gpu_ids == (0, 1, 2, 3)
     assert config.distributed.fsdp_strategy == "fsdp2"
     assert config.distributed.vllm_tensor_parallel_size == 1
+    assert config.capacity.vllm_max_model_len == 32768
+    assert config.framework.agent_loop_config_path == POLICY_E2E_AGENT_LOOP_CONFIG_PATH
     assert config.training.checkpoint_steps == (0, 1, 2)
     assert config.as_record()["sampling"]["rollout_master_seed"] == 42
     assert config.identity_sha256 == repeated.identity_sha256
@@ -323,6 +361,41 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
     assert not output_root.exists()
 
 
+def test_auto_resume_keeps_one_identity_before_and_after_output_exists(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace('resume_mode = "disable"', 'resume_mode = "auto"', 1),
+        encoding="utf-8",
+    )
+
+    first = load_policy_e2e_smoke_run_config(path)
+    first.output.root.mkdir()
+    resumed = load_policy_e2e_smoke_run_config(path)
+
+    assert first.training.resume_mode == resumed.training.resume_mode == "auto"
+    assert first.training.resume_from_path is resumed.training.resume_from_path is None
+    assert first.identity_sha256 == resumed.identity_sha256
+
+
+def test_auto_resume_rejects_explicit_resume_path(tmp_path: Path) -> None:
+    path, text, _ = _write_config(tmp_path)
+    resume_path = tmp_path / "checkpoint"
+    resume_path.mkdir()
+    path.write_text(
+        text.replace('resume_mode = "disable"', 'resume_mode = "auto"', 1).replace(
+            'resume_from_path = ""',
+            f"resume_from_path = {_q(resume_path)}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="empty in auto/disable mode"):
+        load_policy_e2e_smoke_run_config(path)
+
+
 @pytest.mark.parametrize(
     "old, new, error",
     [
@@ -331,6 +404,21 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
         ('judge_mode = "not_applicable"', 'judge_mode = "qwen72b"', "judge_mode"),
         ('tool_profile = "tgvf_only"', 'tool_profile = "crop_tgvf"', "tool_profile"),
         ('fsdp_strategy = "fsdp2"', 'fsdp_strategy = "fsdp1"', "fsdp_strategy"),
+        (
+            f'cap_error_sha256 = "{POLICY_E2E_SMOKE_CAP_ERROR_SHA256}"',
+            f'cap_error_sha256 = "{SHA_A}"',
+            "protocol.cap_error_sha256 differs",
+        ),
+        (
+            f'seed_derivation_sha256 = "{POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256}"',
+            f'seed_derivation_sha256 = "{SHA_A}"',
+            "sampling.seed_derivation_sha256 differs",
+        ),
+        (
+            f'answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"',
+            f'answer_verifier_sha256 = "{SHA_A}"',
+            "reward.answer_verifier_sha256 differs",
+        ),
     ],
 )
 def test_rejects_missing_or_mismatched_run_inputs(
@@ -463,16 +551,36 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.overrides["algorithm.adv_estimator"] == "grpo"
     assert plan.overrides["actor_rollout_ref.model.lora_rank"] == 64
     assert plan.overrides["actor_rollout_ref.actor.strategy"] == "fsdp2"
+    assert plan.overrides["actor_rollout_ref.actor.fsdp_config.forward_only"] is False
+    assert plan.overrides["actor_rollout_ref.ref.fsdp_config.forward_only"] is True
     # e003 v0 multiplies ppo_mini_batch_size by n internally, while its FSDP
     # micro-batch field counts expanded trajectories.
-    assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 2
+    assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 4
     assert (
         plan.overrides[
             "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
         ]
         == 8
     )
-    assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,3"
+    assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
+    assert plan.environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
+    assert plan.environment["TGVF_POLICY_RUN_CONFIG_PATH"] == str(path)
+    assert plan.environment["TGVF_POLICY_RUN_ID"] == config.run_id
+    assert plan.environment["TGVF_POLICY_RUN_IDENTITY"] == config.identity_sha256
+    assert plan.environment["TGVF_POLICY_STATE_DIR"] == str(
+        config.output.root / "runtime-policy-state"
+    )
+    assert plan.overrides["actor_rollout_ref.rollout.max_model_len"] == 32768
+    assert plan.overrides["actor_rollout_ref.rollout.max_num_seqs"] == 8
+    assert plan.overrides["data.max_prompt_length"] == 4096
+    assert plan.overrides[
+        "actor_rollout_ref.rollout.agent.agent_loop_config_path"
+    ] == str(POLICY_E2E_AGENT_LOOP_CONFIG_PATH)
+    assert plan.overrides["actor_rollout_ref.rollout.agent.num_workers"] == 4
+    assert plan.overrides[
+        "actor_rollout_ref.rollout.checkpoint_manager_class"
+    ] == POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
+    assert plan.inherited_upstream_fields == ()
     assert plan.external_components["invocation_factory"] == (
         NATIVE_INVOCATION_FACTORY_FQN
     )
@@ -481,10 +589,43 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.overrides["trainer.default_local_dir"] == str(
         config.output.checkpoint_directory
     )
-    assert plan.launch_ready is False
-    with pytest.raises(RuntimeError, match="launch remains blocked"):
-        plan.assert_launch_ready()
+    assert plan.launch_ready is True
+    assert plan.launch_blockers == ()
+    plan.assert_launch_ready()
+    assert plan.overrides["actor_rollout_ref.rollout.custom"][
+        "reference_diagnostic"
+    ] == {
+        "enabled": True,
+        "coefficient": 0.0,
+        "worker_route": "colocated_frozen_base_exact_replay",
+        "observation_source": "rollout_materialized_exact_bundle",
+    }
     assert not output_root.exists()
+
+
+def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
+    tmp_path: Path,
+) -> None:
+    path, _, _ = _write_config(tmp_path)
+    config = load_policy_e2e_smoke_run_config(path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+
+    environment = policy_child_environment(
+        plan,
+        base={
+            "CUDA_VISIBLE_DEVICES": "7",
+            "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES": "0",
+            "TGVF_POLICY_RUN_ID": "wrong-run",
+            "UNRELATED": "preserved",
+        },
+    )
+
+    assert environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
+    assert environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
+    assert environment["TGVF_POLICY_RUN_ID"] == config.run_id
+    assert environment["TGVF_POLICY_RUN_IDENTITY"] == config.identity_sha256
+    assert environment["UNRELATED"] == "preserved"
+    assert not config.output.root.exists()
 
     upstream_config_dir = (
         Path(__file__).resolve().parents[2]
@@ -499,8 +640,15 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     )
     assert composed.trainer.use_v1 is False
     assert composed.actor_rollout_ref.rollout.n == 8
-    assert composed.actor_rollout_ref.actor.ppo_mini_batch_size == 2
+    assert composed.actor_rollout_ref.rollout.agent.num_workers == 4
+    assert (
+        composed.actor_rollout_ref.rollout.checkpoint_manager_class
+        == POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
+    )
+    assert composed.actor_rollout_ref.actor.ppo_mini_batch_size == 4
     assert composed.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu == 8
+    assert composed.actor_rollout_ref.actor.fsdp_config.forward_only is False
+    assert composed.actor_rollout_ref.ref.fsdp_config.forward_only is True
     assert (
         composed.actor_rollout_ref.rollout.custom.actor_batch_contract[
             "derived_gradient_accumulation_steps"
@@ -511,7 +659,7 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert composed.actor_rollout_ref.rollout.custom.sampling.stop_strings == [
         "</tool_call>"
     ]
-    assert not output_root.exists()
+    assert not config.output.root.exists()
 
 
 def test_selected_sample_dataset_binding_is_exact_and_read_only(tmp_path: Path) -> None:
@@ -522,7 +670,7 @@ def test_selected_sample_dataset_binding_is_exact_and_read_only(tmp_path: Path) 
     assert binding.sample_id == SAMPLE_ID
     assert binding.question.endswith("A. first\nB. second")
     assert binding.ground_truth == "B"
-    assert binding.repeat_count == 4
+    assert binding.repeat_count == 8
     assert binding.as_config()["samples_sha256"] == config.dataset.samples_sha256
     assert not config.output.root.exists()
 
@@ -531,7 +679,7 @@ def test_verl_actor_batch_mapping_preserves_nontrivial_gradient_accumulation(
     tmp_path: Path,
 ) -> None:
     path, text, _ = _write_config(tmp_path)
-    text = text.replace("global_prompt_batch_size = 2", "global_prompt_batch_size = 4")
+    text = text.replace("global_prompt_batch_size = 4", "global_prompt_batch_size = 8")
     text = text.replace("gradient_accumulation_steps = 1", "gradient_accumulation_steps = 2")
     path.write_text(text, encoding="utf-8")
     config = load_policy_e2e_smoke_run_config(path)
@@ -540,13 +688,13 @@ def test_verl_actor_batch_mapping_preserves_nontrivial_gradient_accumulation(
         "actor_batch_contract"
     ]
 
-    assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 4
+    assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 8
     assert (
         plan.overrides[
             "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
         ]
         == 8
     )
-    assert contract["upstream_internal_mini_batch_size_trajectories"] == 32
+    assert contract["upstream_internal_mini_batch_size_trajectories"] == 64
     assert contract["derived_gradient_accumulation_steps"] == 2
     assert contract["optimizer_steps_per_trainer_step"] == 1
