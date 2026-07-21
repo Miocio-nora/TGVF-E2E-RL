@@ -406,3 +406,19 @@ The judge is independently versioned and calibrated. It is not the frozen RL
 reference policy, the SDPO self-teacher, or a replacement for executable
 verifiers. The local snapshot download and service smoke are recorded in the
 experiment ledger; numerical benchmark-judge calibration remains open.
+
+## Local LaTeX layout reference
+
+```text
+file: /home/dredvpn009/Flash_Storage/projects/brian/reports/BRIAN_RC_KV_Implementation_Report.tex
+file SHA256: 3c647d7decca2d95eeae635e216cb0f4a2df14a99451dade7c998e34babb7019
+observed: 2026-07-21 JST
+role: typography and report-organization reference only
+```
+
+The user explicitly selected this exact local file as the layout reference for
+the TGVF representation-phase report. Reuse is limited to the compact A4
+two-column `ctexart` presentation pattern and the high-level ordering of
+method, verification, limitations, and conclusions. No BRIAN implementation,
+algorithm, experiment result, prose, bibliography, or project identity is
+ported into TGVF.
