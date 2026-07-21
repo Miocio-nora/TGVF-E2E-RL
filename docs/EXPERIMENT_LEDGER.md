@@ -7059,6 +7059,15 @@ instead of repeated bullets.
 
 ## Compatibility-spike status
 
+### PRL-01-R20-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r20_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `4166e843...52b5`, identity `ac43521d...2930`, code
+  `6dacd1613cce4ecf55352f1ea3ce866b509f5842`, GPU 0--3, tmux
+  `prl01_r20_gpu0123`. R19 plus actor-local PPO rollout-correction values
+  matching the already frozen algorithm values; all other fields unchanged.
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
