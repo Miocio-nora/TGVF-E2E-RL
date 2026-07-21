@@ -5146,7 +5146,7 @@ instead of repeated bullets.
 ### BE-01-QWEN3-DIRECT-COREDEV2511-GPU0123
 
 - Cell/status/result: original-policy CoreDev-2511 inference baseline plus
-  throughput/resume gate / `PLANNED` / `PENDING`.
+  throughput/resume gate / `COMPLETE` / `FAIL`.
 - Accepted task/code: `EVAL-QWEN3-DIRECT-BASELINE-20260721`; code commit
   `c8a6133`; direct config SHA256 `782e2518...94f1`; launcher SHA256
   `2d718cd9...e128`. Output root is
@@ -5183,6 +5183,32 @@ instead of repeated bullets.
   tools/run_coredev_2511_vlmevalkit.py --config
   configs/evaluation/coredev_2511_qwen3_direct_v1.json --work-dir
   artifacts/evaluation/BE-01-qwen3-direct-coredev2511-gpu0123 --mode infer`.
+- Result: launched in tmux at `2026-07-21T12:49:09+09:00` and failed before
+  model load or prediction at `12:49:52`. Each outer rank correctly saw one
+  B200, but the spawned vLLM EngineCore inherited `LOCAL_WORLD_SIZE=4`; when it
+  re-imported upstream `run.py`, the one-GPU child tripped the upstream
+  `NGPU >= LOCAL_WORLD_SIZE` assertion. No row was generated and all four GPUs
+  were released. This output root is retained as failed evidence and is not
+  reused.
+
+### BE-01-R1-QWEN3-DIRECT-COREDEV2511-GPU0123
+
+- Cell/status/result: corrected original-policy inference and throughput/resume
+  gate / `PLANNED` / `PENDING`.
+- Fixed identity: all model, data, prompt, sampling, resolution, four-replica
+  topology and later scorer fields are exactly BE-01. Code commit `a56bdb2`;
+  launcher SHA256 `1f1d7e2f...990c`; output root
+  `artifacts/evaluation/BE-01-R1-qwen3-direct-coredev2511-gpu0123`.
+- Bounded repair: only while constructing a nested vLLM engine, the project
+  wrapper removes the outer torchrun rank/rendezvous variables inherited by
+  the spawned EngineCore and restores them before dataset inference. It keeps
+  each rank's already isolated `CUDA_VISIBLE_DEVICES`, does not modify the
+  pinned checkout, and does not change model inputs, outputs or decoding.
+  CPU tests require inner absence and exact outer restoration.
+- Acceptance/command: require four successful TP1 engine initializations,
+  early VStarBench throughput and utilization evidence, then the same durable
+  interruption/reuse proof and full-suite inference criteria as BE-01. Command
+  is identical to BE-01 except for the R1 output root.
 
 ## Compatibility-spike status
 
