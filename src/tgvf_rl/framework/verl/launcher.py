@@ -484,7 +484,9 @@ def build_policy_e2e_smoke_verl_plan(
             ),
             "actor_rollout_ref.ref.log_prob_micro_batch_size": None,
             "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": (
-                actor_batch["upstream_ppo_micro_batch_size_per_gpu_trajectories"]
+                actor_batch[
+                    "upstream_inference_micro_batch_size_per_gpu_trajectories"
+                ]
             ),
             "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu": (
                 capacity.reference_log_prob_max_token_len_per_gpu
@@ -763,11 +765,14 @@ def _actor_batch_contract(
     """Prove prompt-unit config maps to one pinned-veRL optimizer update.
 
     Pinned e003 v0 treats ``actor.ppo_mini_batch_size`` as prompts and multiplies
-    it by ``rollout.n`` in ``RayPPOTrainer._update_actor``.  FSDP's
-    ``ppo_micro_batch_size_per_gpu``, however, counts the already-expanded
-    trajectories.  Therefore the project prompt micro-batch must also be
-    multiplied by ``n``; otherwise veRL would silently accumulate ``n`` times
-    more micro-batches than the run identity declares.
+    it by ``rollout.n`` in ``RayPPOTrainer._update_actor``. FSDP's
+    ``ppo_micro_batch_size_per_gpu`` counts already-expanded trajectories.
+    Actor autograd must not retain all ``n`` trajectory graphs at once, so the
+    configured per-rank prompt micro-batch is the conservative trajectory
+    micro-batch too. The resulting ``n`` internal forward/backward calls still
+    form one upstream mini-batch and one optimizer step; they do not change the
+    prompt-level gradient-accumulation identity. Reference replay is no-grad
+    and retains the expanded inference micro-batch.
     """
 
     prompts = config.accumulation.global_prompt_batch_size
@@ -775,17 +780,19 @@ def _actor_batch_contract(
     n = config.policy.sampling.trajectories_per_prompt
     dp_size = config.distributed.world_size
     trajectory_mini = prompts * n
-    trajectory_micro_per_gpu = prompt_micro * n
-    denominator = dp_size * trajectory_micro_per_gpu
+    actor_trajectory_micro_per_gpu = prompt_micro
+    inference_trajectory_micro_per_gpu = prompt_micro * n
+    denominator = dp_size * actor_trajectory_micro_per_gpu
     if trajectory_mini % denominator:
         raise ValueError(
             "expanded trajectory mini-batch is not divisible by FSDP2 micro-batches"
         )
-    derived_accumulation = trajectory_mini // denominator
+    actor_forward_backward_microbatches = trajectory_mini // denominator
     configured_accumulation = config.accumulation.gradient_accumulation_steps
-    if derived_accumulation != configured_accumulation:
+    expected_actor_microbatches = configured_accumulation * n
+    if actor_forward_backward_microbatches != expected_actor_microbatches:
         raise ValueError(
-            "pinned veRL derived gradient accumulation differs from the run identity"
+            "pinned veRL actor microbatches differ from prompt accumulation times n"
         )
     return {
         "global_prompt_batch_size": prompts,
@@ -796,9 +803,15 @@ def _actor_batch_contract(
         "upstream_ppo_mini_batch_size_prompts": prompts,
         "upstream_internal_mini_batch_size_trajectories": trajectory_mini,
         "upstream_ppo_micro_batch_size_per_gpu_trajectories": (
-            trajectory_micro_per_gpu
+            actor_trajectory_micro_per_gpu
         ),
-        "derived_gradient_accumulation_steps": derived_accumulation,
+        "upstream_inference_micro_batch_size_per_gpu_trajectories": (
+            inference_trajectory_micro_per_gpu
+        ),
+        "derived_actor_forward_backward_microbatches": (
+            actor_forward_backward_microbatches
+        ),
+        "derived_gradient_accumulation_steps": configured_accumulation,
         "optimizer_steps_per_trainer_step": 1,
     }
 

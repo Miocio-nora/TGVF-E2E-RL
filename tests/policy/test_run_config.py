@@ -576,10 +576,10 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert (
         plan.overrides["actor_rollout_ref.ref.fsdp_config.use_torch_compile"] is False
     )
-    # e003 v0 multiplies ppo_mini_batch_size by n internally, while its FSDP
-    # micro-batch field counts expanded trajectories.
+    # e003 v0 multiplies ppo_mini_batch_size by n internally. Actor autograd
+    # consumes those expanded trajectories one at a time on each rank.
     assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 4
-    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 8
+    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 1
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
     assert plan.environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
     assert plan.environment["TGVF_POLICY_RUN_CONFIG_PATH"] == str(path)
@@ -685,7 +685,8 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
         == POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
     )
     assert composed.actor_rollout_ref.actor.ppo_mini_batch_size == 4
-    assert composed.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu == 8
+    assert composed.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu == 1
+    assert composed.actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu == 8
     assert composed.actor_rollout_ref.actor.fsdp_config.forward_only is False
     assert composed.actor_rollout_ref.ref.fsdp_config.forward_only is True
     assert (
@@ -716,6 +717,12 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
             "derived_gradient_accumulation_steps"
         ]
         == 1
+    )
+    assert (
+        composed.actor_rollout_ref.rollout.custom.actor_batch_contract[
+            "derived_actor_forward_backward_microbatches"
+        ]
+        == 8
     )
     assert composed.data.custom_cls.name == "TGVFSelectedSampleDataset"
     assert composed.data.custom_cls.path == SELECTED_SAMPLE_DATASET_MODULE_PATH
@@ -779,7 +786,9 @@ def test_verl_actor_batch_mapping_preserves_nontrivial_gradient_accumulation(
     ]
 
     assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 8
-    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 8
+    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 1
+    assert plan.overrides["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] == 8
     assert contract["upstream_internal_mini_batch_size_trajectories"] == 64
     assert contract["derived_gradient_accumulation_steps"] == 2
+    assert contract["derived_actor_forward_backward_microbatches"] == 16
     assert contract["optimizer_steps_per_trainer_step"] == 1
