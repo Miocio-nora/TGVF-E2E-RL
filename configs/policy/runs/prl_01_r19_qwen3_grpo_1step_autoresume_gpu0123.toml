@@ -4,7 +4,7 @@ run_id = "PRL-01-R19-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "57c0772f78cbc89a63d816cc9b6e69080caad55b"
+commit = "1e043b534537cb2c047d18615ffdf171ac2f9b80"
 dirty = false
 
 [model]
@@ -162,5 +162,3 @@ maximum_actor_checkpoints_to_keep = 2
 root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-01-R19-qwen3-grpo-1step-auto-resume-gpu0123"
 checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-01-R19-qwen3-grpo-1step-auto-resume-gpu0123/checkpoints"
 metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-01-R19-qwen3-grpo-1step-auto-resume-gpu0123/metrics.jsonl"
-
-

@@ -7042,8 +7042,8 @@ instead of repeated bullets.
   immediate step-1 checkpoint and clean no-extra-update resume.
 - Complete identity: config
   `configs/policy/runs/prl_01_r19_qwen3_grpo_1step_autoresume_gpu0123.toml`,
-  SHA256 `60a6a975...4836`, run identity `f7c99c20...11bc`, implementation
-  commit `57c0772f78cbc89a63d816cc9b6e69080caad55b`.
+  SHA256 `2bc80d41...d80f`, run identity `46a95cac...1473`, implementation
+  commit `1e043b534537cb2c047d18615ffdf171ac2f9b80`.
 - Delta/preflight: R17 with only vLLM `max_model_len` and
   `max_num_batched_tokens` reduced from 32,768 to 16,384. This preserves the
   required 4,096 prompt + 8,192 response and leaves a 4,096 environment-token
