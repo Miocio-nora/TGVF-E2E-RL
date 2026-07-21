@@ -6793,6 +6793,32 @@ instead of repeated bullets.
   and exact per-token ByteLevel bytes, including non-canonical token
   segmentation and Unicode splits.
 
+### PRL-01-R11-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r11_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `ed53d54b...5228b`, run identity `3c9b7312...a8bda`; the config is
+  authoritative for every model/data/protocol/representation/GRPO/replay/
+  optimizer/topology/checkpoint field.
+- Code/delta: `ce7a2047f262b4ce5ab0c8238e0ce33a3c432ee2`; R10 plus only the exact
+  Qwen ByteLevel sampled-token byte-span correction. Sampled IDs, rather than
+  canonical re-tokenization, are authoritative; added-token literal bytes and
+  ordinary ByteLevel bytes must reconstruct the decoded text exactly.
+- Preflight: 130 related tests passed. Real local Qwen3 CPU checks passed for
+  split Unicode, non-canonical `a`+`b`, leading whitespace, repeated newline,
+  decomposed Unicode and native added tokens; all 151669 vocabulary rows use
+  the accepted alphabet with no empty piece.
+- Question: does rollout now pass exact text/token ownership and complete tool
+  execution, current/reference replay, one update, checkpoint and clean resume?
+- GPUs/output/session: idle physical/logical B200 0--3; output
+  `artifacts/policy/PRL-01-R11-qwen3-grpo-1step-auto-resume-gpu0123` must be
+  absent; tmux `prl01_r11_gpu0123`.
+- Exact launch: same accepted R10 environment and command, substituting the
+  absolute R11 config/output paths; timeout 3600 s.
+- Start/end, GPU-hours, W&B, metrics, checkpoint and resume result: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
