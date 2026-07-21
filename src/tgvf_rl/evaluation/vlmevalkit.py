@@ -47,6 +47,7 @@ _TORCHRUN_PROCESS_ENV = (
     "TORCHELASTIC_ERROR_FILE",
 )
 _VLLM_ENGINE_RUNTIME_FIELDS = (
+    "limit_mm_per_prompt",
     "max_model_len",
     "mm_encoder_attn_backend",
 )
@@ -104,15 +105,46 @@ def inject_vllm_engine_options_from_factory_kwargs(factory: Any) -> Any:
 
         @wraps(original_llm)
         def configured_llm(*llm_args: Any, **llm_kwargs: Any) -> Any:
+            requested_limits = engine_options.get("limit_mm_per_prompt")
+            if requested_limits is not None:
+                if not isinstance(requested_limits, Mapping):
+                    raise TypeError("limit_mm_per_prompt must be a mapping")
+                wrapper_limits = llm_kwargs.get("limit_mm_per_prompt", {})
+                if not isinstance(wrapper_limits, Mapping):
+                    raise TypeError("wrapper limit_mm_per_prompt must be a mapping")
+                limit_conflicts = {
+                    modality
+                    for modality, value in requested_limits.items()
+                    if modality in wrapper_limits and wrapper_limits[modality] != value
+                }
+                if limit_conflicts:
+                    names = ", ".join(sorted(limit_conflicts))
+                    raise RuntimeError(
+                        f"conflicting vLLM multimodal limits: {names}"
+                    )
+                llm_kwargs["limit_mm_per_prompt"] = {
+                    **wrapper_limits,
+                    **requested_limits,
+                }
+
             conflicts = {
                 name
                 for name, value in engine_options.items()
-                if name in llm_kwargs and llm_kwargs[name] != value
+                if name != "limit_mm_per_prompt"
+                and name in llm_kwargs
+                and llm_kwargs[name] != value
             }
             if conflicts:
                 names = ", ".join(sorted(conflicts))
                 raise RuntimeError(f"conflicting vLLM engine options: {names}")
-            return original_llm(*llm_args, **llm_kwargs, **engine_options)
+            llm_kwargs.update(
+                {
+                    name: value
+                    for name, value in engine_options.items()
+                    if name != "limit_mm_per_prompt"
+                }
+            )
+            return original_llm(*llm_args, **llm_kwargs)
 
         vllm_module.LLM = configured_llm
         try:

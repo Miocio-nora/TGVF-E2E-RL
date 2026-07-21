@@ -129,6 +129,7 @@ def test_coredev_qwen3_direct_baseline_freezes_decoding_identity() -> None:
         "post_process": False,
         "system_prompt": None,
         "gpu_utils": 0.9,
+        "limit_mm_per_prompt": {"image": 24, "video": 0},
         "max_model_len": 65536,
         "mm_encoder_attn_backend": "TORCH_SDPA",
     }
@@ -149,10 +150,15 @@ def test_qwen_factory_forwards_only_accepted_vllm_engine_options(
     def factory(**kwargs: object) -> tuple[dict[str, object], object]:
         from vllm import LLM
 
-        return kwargs, LLM(model="model", max_num_seqs=8)
+        return kwargs, LLM(
+            model="model",
+            max_num_seqs=8,
+            limit_mm_per_prompt={"image": 24},
+        )
 
     wrapped = inject_vllm_engine_options_from_factory_kwargs(factory)
     remaining, _ = wrapped(
+        limit_mm_per_prompt={"image": 24, "video": 0},
         max_model_len=65536,
         mm_encoder_attn_backend="TORCH_SDPA",
         max_new_tokens=40960,
@@ -163,6 +169,7 @@ def test_qwen_factory_forwards_only_accepted_vllm_engine_options(
         {
             "model": "model",
             "max_num_seqs": 8,
+            "limit_mm_per_prompt": {"image": 24, "video": 0},
             "max_model_len": 65536,
             "mm_encoder_attn_backend": "TORCH_SDPA",
         }

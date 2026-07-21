@@ -17,6 +17,10 @@
       "post_process": false,
       "system_prompt": null,
       "gpu_utils": 0.9,
+      "limit_mm_per_prompt": {
+        "image": 24,
+        "video": 0
+      },
       "max_model_len": 65536,
       "mm_encoder_attn_backend": "TORCH_SDPA"
     }

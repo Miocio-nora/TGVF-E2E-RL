@@ -741,7 +741,10 @@ backend for language attention, fixes only the multimodal encoder attention
 backend to PyTorch SDPA because the bundled FlashAttention2 PTX is incompatible
 with B200, and caps the engine context at `65536` tokens (still leaving at
 least `24576` input-token capacity beside the accepted `40960` generation
-cap). Inference and scoring are separate durable
+cap). Because every accepted CoreDev-2511 row is image-only, vLLM retains the
+upstream 24-image prompt limit and explicitly disables video input and its
+otherwise wasteful maximum-video encoder profiling. Inference and scoring are
+separate durable
 phases: four independent single-B200 replicas on physical GPUs 0--3 generate
 predictions first; the separately identified Qwen2.5-72B service on GPUs 2--3
 then evaluates the exact saved predictions. GPT fallback remains forbidden.
