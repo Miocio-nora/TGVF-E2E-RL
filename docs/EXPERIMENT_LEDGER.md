@@ -5194,7 +5194,7 @@ instead of repeated bullets.
 ### BE-01-R1-QWEN3-DIRECT-COREDEV2511-GPU0123
 
 - Cell/status/result: corrected original-policy inference and throughput/resume
-  gate / `PLANNED` / `PENDING`.
+  gate / `COMPLETE` / `FAIL`.
 - Fixed identity: all model, data, prompt, sampling, resolution, four-replica
   topology and later scorer fields are exactly BE-01. Code commit `a56bdb2`;
   launcher SHA256 `1f1d7e2f...990c`; output root
@@ -5209,6 +5209,47 @@ instead of repeated bullets.
   early VStarBench throughput and utilization evidence, then the same durable
   interruption/reuse proof and full-suite inference criteria as BE-01. Command
   is identical to BE-01 except for the R1 output root.
+- Result: launched at `2026-07-21T12:53:00+09:00`. The repair passed BE-01's
+  assertion: all four EngineCore processes reported vLLM 0.12, BF16, TP1,
+  seed 0 and independent rank-0 worlds. The nested outer-NCCL/inner-vLLM
+  topology then made no progress beyond EngineCore initialization: the log
+  stopped at `12:53:49`, every card remained at 2,494 MiB and 0% utilization,
+  and no process reached weight loading or generated a row. The run was
+  terminated rather than left idle; four orphan EngineCore PIDs required
+  explicit cleanup and GPUs 0--3 returned to 0 MiB. Log SHA256
+  `9d25f333...e357`. The environment-isolation unit contract remains valid,
+  but nested torchrun is rejected for this baseline.
+
+### BE-01-R2-QWEN3-DIRECT-COREDEV2511-INDEPENDENT-GPU0123
+
+- Cell/status/result: independent-process original-policy inference plus
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Fixed identity: model, tokenizer, max-pixels, prompt, sampling and all seven
+  official slice/scorer contracts remain exactly BE-01. Code commit `7e61e54`;
+  launcher SHA256 `e8dbbf51...7f66`; output root
+  `artifacts/evaluation/BE-01-R2-qwen3-direct-coredev2511`.
+- Execution repair: remove the outer torchrun/NCCL layer. Each process owns one
+  physical B200, one vLLM V1 TP1 engine and one or more complete official
+  dataset slices. `--coredev-data` materializes a content-addressed config from
+  the pinned full config; it may select only known complete slices in canonical
+  order and cannot change the model block. Seven per-slice prediction TSVs are
+  later evaluated and summarized under the same 2,511-row suite identity.
+- Initial wave/topology: GPU0=`VStarBench` (191), GPU1=`HRBench4K` (200),
+  GPU2=`BLINK` (420), GPU3=`OCRBench_v2` (600). After observed completion,
+  schedule `MMMU_Pro_10c`, `MathVista_MINI`, and `MathVerse_MINI` onto released
+  GPUs. Every slice has its own tmux session, work directory and launcher log.
+- Acceptance: one engine must first reach real generation; then compare early
+  examples/s, output-token rate, utilization and memory across the four slice
+  types. Intentionally interrupt VStarBench after a durable checkpoint and
+  require same-directory `--reuse --reuse-aux infer` recovery without changing
+  completed predictions. If single-request utilization is still materially
+  poor, stop the wave and replace it with batched/concurrent submission under a
+  new identity before consuming the full suite.
+- Command template: `CUDA_VISIBLE_DEVICES=<gpu> VLLM_USE_V1=1
+  VLLM_ATTENTION_BACKEND=TRITON_ATTN TOKENIZERS_PARALLELISM=false
+  PYTHONHASHSEED=42 .venv312/bin/python tools/run_coredev_2511_vlmevalkit.py
+  --config configs/evaluation/coredev_2511_qwen3_direct_v1.json --coredev-data
+  <official_alias> --work-dir <R2_root>/<official_alias> --mode infer`.
 
 ## Compatibility-spike status
 
