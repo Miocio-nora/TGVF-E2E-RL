@@ -7087,6 +7087,18 @@ instead of repeated bullets.
   (`free_cache_engine=false`, `enable_sleep_mode=false`) to remove wake-up
   duplication during LoRA synchronization.
 
+### PRL-01-R23-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r23_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `f02bc177...903f`, identity `0158286f...0e1d`, code
+  `df718146052ef78dcce50c3eb06f27519b5b8d35`, GPU 0--3, tmux
+  `prl01_r23_gpu0123`. R22 with only vLLM reserved GPU memory reduced from
+  `0.50` to `0.25`; model length, sampling, exact replay, objective, batches,
+  resident-weight synchronization, and checkpoint/resume contract unchanged.
+  This tests whether releasing about 45 GiB of unused rollout KV reservation
+  permits the already-reached actor update and subsequent LoRA sync.
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
