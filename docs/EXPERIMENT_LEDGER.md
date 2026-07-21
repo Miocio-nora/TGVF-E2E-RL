@@ -6221,14 +6221,14 @@ instead of repeated bullets.
 - Spike-plan git revision and approval references: accepted task sections
   0.8.2--0.8.3, identities `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
   `POLICY-PILOT-V1-FOUR-GPU-20260721`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: does the exact R3 contract complete when the rollout truthfully
   uses request-seeded, batch-sensitive TRITON execution while replay remains
   fully deterministic?
-- Baseline and exact output path: R3 reached vLLM init; fresh root
-  `artifacts/policy/PRL-01-R4-qwen3-grpo-1step-auto-resume-gpu0123`, absent at
-  planning time; `launch.log`/`resume.log`.
+- Baseline and exact output path: R3 reached vLLM init; R4 root
+  `artifacts/policy/PRL-01-R4-qwen3-grpo-1step-auto-resume-gpu0123` contains
+  the immutable failed `launch.log`; resume was not started.
 - Model and processor identity: Qwen3-VL-8B-Thinking local path, tokenizer
   151669, template `36e042fe...8956`, DeepStack on, max pixels 262144.
 - Representation checkpoint identity: RP-49 contextual layer -1, Balanced CE
@@ -6280,15 +6280,28 @@ instead of repeated bullets.
   4, prompt/rollout microbatch 1/rank, logprob microbatch 8/GPU, 32
   trajectories, accumulation 1.
 - GPUs: physical/logical 0--3, B200 183359 MiB; recheck before launch.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  tmux `prl01_r4_gpu0123`, then `prl01_r4_resume_gpu0123`.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T19:49:38+09:00` to the final logged output at
+  `2026-07-21T19:53:48+09:00`, 250 seconds; tmux
+  `prl01_r4_gpu0123`, Ray task PID 286796. The failed process tree was
+  explicitly stopped after it stalled during teardown; resume was not started.
+- Actual GPU-hours and peak scratch use: less than 0.28 GPU-hours; observed
+  peak device allocation was about 94.7 GiB/GPU during vLLM CUDA-graph capture.
+  All four GPUs returned to zero allocation.
 - Command: standard absolute R4 `run-policy` command in `.venv312`; clean
   resume only after successful step 1 and must make no second update.
-- Outputs: pending.
+- Outputs: failed `launch.log`, 219,578 bytes, SHA256
+  `66b5351e...3d15`; no checkpoint, metrics file, resume log, or W&B run.
 - Scorer/parser identity: exact MCQ `2a3d5fa4...2e1c`, strict native parser.
-- Metrics: pending.
-- Conclusion: pending.
+- Metrics: zero optimizer steps, completed rollouts, generated trajectories,
+  rewards, or tool observations. Dataset, decoder LoRA, four-rank FSDP2, and
+  vLLM model initialization all passed before the first real LoRA forward.
+- Conclusion: Triton's lazily compiled CUDA launcher inherited Python 3.12
+  sysconfig's nonexistent `/usr/include/python3.12` and failed on `Python.h`.
+  This is an environment-preflight failure, not an RL result. R5 binds
+  `/usr/bin/gcc`, `/usr/bin/g++`, and the already accepted repo-local Python
+  3.12 development headers; a matching compiler preflight passed. No
+  `LIBRARY_PATH` change is needed because the same command resolves `libcuda`.
 
 ## Compatibility-spike status
 

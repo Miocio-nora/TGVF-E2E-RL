@@ -582,6 +582,14 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.environment["TGVF_POLICY_STATE_DIR"] == str(
         config.output.root / "runtime-policy-state"
     )
+    repository_root = Path(__file__).resolve().parents[2]
+    python_include_root = repository_root / ".deps/python312-dev/root/usr/include"
+    assert plan.environment["CC"] == "/usr/bin/gcc"
+    assert plan.environment["CXX"] == "/usr/bin/g++"
+    assert plan.environment["CPATH"] == (
+        f"{python_include_root}:{python_include_root / 'python3.12'}"
+    )
+    assert (python_include_root / "python3.12/Python.h").is_file()
     assert plan.overrides["actor_rollout_ref.rollout.max_model_len"] == 32768
     assert plan.overrides["actor_rollout_ref.rollout.max_num_seqs"] == 8
     assert plan.overrides["data.max_prompt_length"] == 4096

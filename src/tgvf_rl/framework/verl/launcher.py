@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 from types import MappingProxyType
 
@@ -66,6 +67,17 @@ POLICY_CHECKPOINT_ENGINE_MANAGER_FQN = (
 )
 
 VERL_POLICY_SMOKE_LAUNCH_SCHEMA = "tgvf-verl-policy-smoke-launch-v1"
+
+_POLICY_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+_TRITON_CC = Path("/usr/bin/gcc")
+_TRITON_CXX = Path("/usr/bin/g++")
+_PYTHON312_DEV_INCLUDE_ROOT = (
+    _POLICY_REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
+)
+_PYTHON312_DEV_INCLUDE = _PYTHON312_DEV_INCLUDE_ROOT / "python3.12"
+_TRITON_CPATH = os.pathsep.join(
+    (str(_PYTHON312_DEV_INCLUDE_ROOT), str(_PYTHON312_DEV_INCLUDE))
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +181,22 @@ class UpstreamVerlLaunchPlan:
             raise ValueError("launch plan must explicitly disable vLLM batch invariance")
         if self.environment.get("VERL_FULL_DETERMINISM") != "0":
             raise ValueError("launch plan must isolate rollout from veRL full determinism")
+        if self.environment.get("CC") != str(_TRITON_CC):
+            raise ValueError("Policy rollout must bind the accepted Triton C compiler")
+        if self.environment.get("CXX") != str(_TRITON_CXX):
+            raise ValueError("Policy rollout must bind the accepted Triton C++ compiler")
+        if self.environment.get("CPATH") != _TRITON_CPATH:
+            raise ValueError("Policy rollout must bind the accepted Python 3.12 headers")
+        for required_path in (
+            _TRITON_CC,
+            _TRITON_CXX,
+            _PYTHON312_DEV_INCLUDE / "Python.h",
+            _PYTHON312_DEV_INCLUDE / "pyconfig.h",
+        ):
+            if not required_path.is_file():
+                raise ValueError(
+                    f"Policy rollout compile prerequisite is missing: {required_path}"
+                )
         state_dir = self.environment.get("TGVF_POLICY_STATE_DIR", "")
         if not state_dir.endswith("/runtime-policy-state"):
             raise ValueError("runtime Policy state directory is not explicitly bound")
@@ -654,6 +682,12 @@ def build_policy_e2e_smoke_verl_plan(
     environment["PYTHONHASHSEED"] = str(config.rollout_rng.master_seed)
     environment["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     environment["TOKENIZERS_PARALLELISM"] = "false"
+    # Triton compiles its CUDA launcher lazily on the first real LoRA forward.
+    # The host Python 3.12 sysconfig include is incomplete, so bind the pinned,
+    # repository-local development headers already accepted by the veRL spike.
+    environment["CC"] = str(_TRITON_CC)
+    environment["CXX"] = str(_TRITON_CXX)
+    environment["CPATH"] = _TRITON_CPATH
 
     blockers: tuple[str, ...] = ()
     inherited: tuple[str, ...] = ()
