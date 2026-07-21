@@ -7390,6 +7390,18 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   were 108.96/128.09GiB. W&B run `n1lc3ud5`; known exit-only vLLM/W&B teardown
   noise recurred after the valid checkpoint and status 0.
 
+### PRL-01-R33-QWEN3-GRPO-BS16-TGVF-80STEP-GPU0123
+
+- `PLANNED`; continuous 80-step TGVF-only run on physical GPUs 0--3, BS16,
+  `n=8`, GA4, checkpoints 0/10/20/45/80. Config SHA256
+  `a462a8798fd6a519e2ceb0ff5d41bda38785a377243d04fc162a01bda1991005`,
+  run identity `b1ebac0a983597c9211ee62d37e896706689ecf2d1463c8f693f81a26294883b`,
+  code `3db2444f674a9008f5cbabb57d1a34e70159f3a8`.
+- Config `configs/policy/runs/prl_01_r33_qwen3_grpo_bs16_tgvf_80step_gpu0123.toml`;
+  output `artifacts/policy/PRL-01-R33-qwen3-grpo-bs16-tgvf-80step-gpu0123`;
+  tmux `prl01_r33_gpu0123`. R32 proved the selected BS16 capacity; acceptance
+  requires the scheduled checkpoints, metrics and clean resumability.
+
 ## Required entry template
 
 ```text
