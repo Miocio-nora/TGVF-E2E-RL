@@ -18,14 +18,18 @@ from tgvf_rl.observations.schema import (
     VisualLayout,
 )
 from tgvf_rl.observations.store import ObservationStore
+from tgvf_rl.protocol.schema import (
+    NativeToolCall,
+    ParsedCropTGVFCall,
+    ParsedImageZoomInCall,
+)
 
 from .agent_loop import ToolExecutionContext
 from .crop_tool import CropReplayLayout, CropVisualTensorBundle
 from .focus_tool import ReplayLayoutTensors, SourceVisualTensorBundle
 from .native_appender import (
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
-    QWEN_NATIVE_RESPONSE_SUFFIX,
-    QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
+    render_qwen_native_success_environment_text,
 )
 
 
@@ -66,9 +70,12 @@ class BoundQwen3CropTGVFLayoutBuilder:
             raise IdentityMismatchError("bound atomic layout trajectory changed")
         if call_index != context.call_index:
             raise IdentityMismatchError("bound atomic layout call index changed")
+        if not isinstance(parsed_call, ParsedCropTGVFCall):
+            raise TypeError("bound atomic layout requires ParsedCropTGVFCall")
+        _validate_parsed_call_context(parsed_call, context)
         if trajectory_source_visual != context.trajectory_source_visual:
             raise IdentityMismatchError("bound atomic layout source visual changed")
-        return self.owner.build_crop_tgvf(context, crop_visual)
+        return self.owner.build_crop_tgvf(context, crop_visual, parsed_call)
 
 
 class Qwen3NativeToolLayoutBuilder:
@@ -121,16 +128,6 @@ class Qwen3NativeToolLayoutBuilder:
             self.vision_end_id,
         ):
             raise ValueError("Qwen3 native image placeholder is not three atomic IDs")
-        self.environment_success_token_ids = tuple(
-            tokenizer.encode(
-                QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
-                + QWEN_NATIVE_IMAGE_PLACEHOLDER
-                + QWEN_NATIVE_RESPONSE_SUFFIX,
-                add_special_tokens=False,
-            )
-        )
-        if not self.environment_success_token_ids:
-            raise ValueError("Qwen3 native success response encoded to no tokens")
 
     @classmethod
     def from_model(
@@ -165,13 +162,18 @@ class Qwen3NativeToolLayoutBuilder:
         self,
         context: ToolExecutionContext,
         crop_visual: SourceVisualTensorBundle,
+        parsed_call: ParsedCropTGVFCall,
     ) -> ReplayLayoutTensors:
         if not isinstance(crop_visual, SourceVisualTensorBundle):
             raise TypeError("atomic layout requires crop SourceVisualTensorBundle")
+        if not isinstance(parsed_call, ParsedCropTGVFCall):
+            raise TypeError("atomic layout requires ParsedCropTGVFCall")
+        _validate_parsed_call_context(parsed_call, context)
         expanded = self._expand(
             context,
             new_grid=crop_visual.image_grid_thw,
             new_merge_size=crop_visual.spatial_merge_size,
+            parsed_call=parsed_call,
         )
         branch_count = len(crop_visual.merged_deepstack)
         if branch_count != len(QWEN3_DEEPSTACK_BRANCH_LAYERS):
@@ -206,15 +208,20 @@ class Qwen3NativeToolLayoutBuilder:
         self,
         context: ToolExecutionContext,
         crop_visual: CropVisualTensorBundle,
+        parsed_call: ParsedImageZoomInCall,
     ) -> CropReplayLayout:
         if not isinstance(crop_visual, CropVisualTensorBundle):
             raise TypeError("plain crop layout requires CropVisualTensorBundle")
+        if not isinstance(parsed_call, ParsedImageZoomInCall):
+            raise TypeError("plain crop layout requires ParsedImageZoomInCall")
+        _validate_parsed_call_context(parsed_call, context)
         if crop_visual.deepstack_branch_layers != QWEN3_DEEPSTACK_BRANCH_LAYERS:
             raise ValueError("plain crop visual has incompatible DeepStack layers")
         expanded = self._expand(
             context,
             new_grid=crop_visual.image_grid_thw,
             new_merge_size=crop_visual.spatial_merge_size,
+            parsed_call=parsed_call,
         )
         positions = expanded.new_positions
         return CropReplayLayout(
@@ -232,8 +239,10 @@ class Qwen3NativeToolLayoutBuilder:
         *,
         new_grid: tuple[int, int, int],
         new_merge_size: int,
+        parsed_call: NativeToolCall,
     ) -> _ExpandedNativeVisualLayout:
         self._validate_context(context)
+        _validate_parsed_call_context(parsed_call, context)
         expected = [
             (
                 context.trajectory_source_visual.state.image_grid_thw,
@@ -249,10 +258,18 @@ class Qwen3NativeToolLayoutBuilder:
             expected.append((grid, merge_size, positions))
         expected.append((new_grid, new_merge_size, None))
 
+        environment_success_token_ids = tuple(
+            self.tokenizer.encode(
+                render_qwen_native_success_environment_text(parsed_call),
+                add_special_tokens=False,
+            )
+        )
+        if not environment_success_token_ids:
+            raise ValueError("Qwen3 native success response encoded to no tokens")
         canonical_ids = (
             context.prompt_token_ids_before_turn
             + context.sampled_turn.token_ids
-            + self.environment_success_token_ids
+            + environment_success_token_ids
         )
         blocks = _vision_blocks(
             canonical_ids,
@@ -324,6 +341,26 @@ class Qwen3NativeToolLayoutBuilder:
             raise IdentityMismatchError("native layout model identity changed")
         if len(context.prior_observation_handles) != context.call_index:
             raise ReplayMismatchError("native layout prior-call count changed")
+
+
+def _validate_parsed_call_context(
+    parsed_call: NativeToolCall,
+    context: ToolExecutionContext,
+) -> None:
+    if not isinstance(
+        parsed_call,
+        (ParsedImageZoomInCall, ParsedCropTGVFCall),
+    ):
+        raise TypeError("Qwen3 crop layout requires a parsed crop call")
+    sampled = context.sampled_turn
+    if (
+        parsed_call.sampled_text != sampled.text
+        or parsed_call.sampled_token_ids != sampled.token_ids
+        or parsed_call.sampled_token_byte_spans != sampled.token_byte_spans
+    ):
+        raise ReplayMismatchError(
+            "native layout parsed call differs from sampled assistant turn"
+        )
 
 
 def _record_visual_geometry(

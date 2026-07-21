@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 
 import pytest
 
@@ -9,10 +10,17 @@ from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, Token
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn
 from tgvf_rl.environment.native_appender import (
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
+    QWEN_NATIVE_RESPONSE_SUFFIX,
+    QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
+    render_qwen_native_success_payload,
 )
 from tgvf_rl.observations.store import ObservationHandle
-from tgvf_rl.protocol import NativeProtocolRenderer, TokenByteSpan
+from tgvf_rl.protocol import (
+    NativeProtocolRenderer,
+    StrictToolCallParser,
+    TokenByteSpan,
+)
 from tgvf_rl.protocol.schema import StandardToolError
 
 
@@ -30,7 +38,12 @@ class _Registrar:
         self.calls.append(kwargs)
 
 
-def _sampled(text: str, token_ids: tuple[int, ...]) -> SampledPolicyTurn:
+def _sampled(
+    text: str,
+    token_ids: tuple[int, ...],
+    *,
+    token_byte_spans: tuple[TokenByteSpan, ...] | None = None,
+) -> SampledPolicyTurn:
     policy = PolicyVersion("native-appender-test", 0, "1" * 64)
     sampling = SamplingIdentity(
         policy_version=policy,
@@ -47,8 +60,9 @@ def _sampled(text: str, token_ids: tuple[int, ...]) -> SampledPolicyTurn:
         measurement=LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
         asynchronous_staleness_steps=0,
     )
-    spans = tuple(
-        TokenByteSpan(index, token_id, 0, 0) for index, token_id in enumerate(token_ids)
+    spans = token_byte_spans or tuple(
+        TokenByteSpan(index, token_id, 0, 0)
+        for index, token_id in enumerate(token_ids)
     )
     return SampledPolicyTurn(
         text=text,
@@ -63,16 +77,55 @@ def _sampled(text: str, token_ids: tuple[int, ...]) -> SampledPolicyTurn:
     )
 
 
-def test_success_and_error_append_only_environment_owned_native_suffix() -> None:
+def _ascii_sampled_call(tool_name: str, arguments: dict[str, object]):
+    payload = json.dumps(
+        {"name": tool_name, "arguments": arguments},
+        separators=(",", ":"),
+    )
+    text = f"inspect\n</think>\n<tool_call>{payload}</tool_call>"
+    token_ids = tuple(ord(character) for character in text)
+    spans = tuple(
+        TokenByteSpan(index, token_id, index, index + 1)
+        for index, token_id in enumerate(token_ids)
+    )
+    sampled = _sampled(text, token_ids, token_byte_spans=spans)
+    return sampled, StrictToolCallParser().parse(sampled.parser_turn())
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "expected_text"),
+    (
+        (
+            "tgvf_focus_tool",
+            {"target": "the gauge needle position"},
+            'Focused visual observation for target:\n"the gauge needle position"',
+        ),
+        (
+            "image_zoom_in_tool",
+            {"bbox_2d": [1, 2, 30, 40], "label": "the small gauge"},
+            "Zoomed-in visual observation:",
+        ),
+        (
+            "tgvf_crop_tool",
+            {
+                "bbox_2d": [1, 2, 30, 40],
+                "target": "the gauge needle position",
+            },
+            'Target-conditioned crop for:\n"the gauge needle position"',
+        ),
+    ),
+)
+def test_success_appends_exact_profile_text_then_one_image_placeholder(
+    tool_name: str,
+    arguments: dict[str, object],
+    expected_text: str,
+) -> None:
     tokenizer = _CharacterTokenizer()
     registrar = _Registrar()
     appender = QwenNativeToolObservationAppender(
         tokenizer=tokenizer, registrar=registrar
     )
-    sampled_text = "inspect\n</think>\n<tool_call>{}</tool_call>"
-    sampled = _sampled(
-        sampled_text, tuple(tokenizer.encode(sampled_text, add_special_tokens=False))
-    )
+    sampled, parsed = _ascii_sampled_call(tool_name, arguments)
     prompt = (7, 8)
 
     updated, suffix = appender.append(
@@ -80,10 +133,32 @@ def test_success_and_error_append_only_environment_owned_native_suffix() -> None
         sampled,
         ObservationHandle("obs-0", "5" * 64),
         call_index=0,
+        parsed_call=parsed,
     )
     assert updated == prompt + sampled.token_ids + suffix
-    assert QWEN_NATIVE_IMAGE_PLACEHOLDER in "".join(map(chr, suffix))
+    assert "".join(map(chr, suffix)) == (
+        QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
+        + expected_text
+        + "\n"
+        + QWEN_NATIVE_IMAGE_PLACEHOLDER
+        + QWEN_NATIVE_RESPONSE_SUFFIX
+    )
+    assert render_qwen_native_success_payload(parsed) == (
+        expected_text + "\n" + QWEN_NATIVE_IMAGE_PLACEHOLDER
+    )
     assert registrar.calls[-1]["updated_prompt_token_ids"] == updated
+
+
+def test_error_append_uses_canonical_json_without_visual_placeholder() -> None:
+    tokenizer = _CharacterTokenizer()
+    registrar = _Registrar()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer, registrar=registrar
+    )
+    sampled, _parsed = _ascii_sampled_call(
+        "tgvf_focus_tool", {"target": "the red label text"}
+    )
+    prompt = (7, 8)
 
     error = StandardToolError(
         code="tool_execution_failed",
@@ -92,10 +167,25 @@ def test_success_and_error_append_only_environment_owned_native_suffix() -> None
         recoverable=True,
         maximum_tool_calls=4,
     )
-    _, error_suffix = appender.append(prompt, sampled, error, call_index=1)
+    _, error_suffix = appender.append(
+        prompt,
+        sampled,
+        error,
+        call_index=1,
+        parsed_call=None,
+    )
     rendered_error = "".join(map(chr, error_suffix))
     assert error.canonical_json in rendered_error
     assert QWEN_NATIVE_IMAGE_PLACEHOLDER not in rendered_error
+
+    with pytest.raises(ValueError, match="requires its parsed call"):
+        appender.append(
+            prompt,
+            sampled,
+            ObservationHandle("obs-0", "5" * 64),
+            call_index=0,
+            parsed_call=None,
+        )
 
 
 def test_qwen3_appended_tokens_equal_native_chat_template() -> None:
@@ -125,10 +215,6 @@ def test_qwen3_appended_tokens_equal_native_chat_template() -> None:
     }
     prompt = renderer.render([user], add_generation_prompt=True)
     completed_call = renderer.render([user, call], add_generation_prompt=False)
-    next_prompt = renderer.render(
-        [user, call, {"role": "tool", "content": [{"type": "image"}]}],
-        add_generation_prompt=True,
-    )
     close_ids = tuple(
         processor.tokenizer.encode("<|im_end|>\n", add_special_tokens=False)
     )
@@ -136,18 +222,69 @@ def test_qwen3_appended_tokens_equal_native_chat_template() -> None:
     assert completed_call.token_ids[-len(close_ids) :] == close_ids
     sampled_ids = completed_call.token_ids[len(prompt.token_ids) : -len(close_ids)]
     sampled_text = completed_call.text[len(prompt.text) : -len("<|im_end|>\n")]
-    sampled = _sampled(sampled_text, sampled_ids)
+    spans = _fast_token_spans(processor.tokenizer, sampled_text, sampled_ids)
+    sampled = _sampled(
+        sampled_text,
+        sampled_ids,
+        token_byte_spans=spans,
+    )
+    parsed = StrictToolCallParser().parse(sampled.parser_turn())
     registrar = _Registrar()
     appender = QwenNativeToolObservationAppender(
         tokenizer=processor.tokenizer, registrar=registrar
     )
 
+    response_text = 'Focused visual observation for target:\n"label"'
+    next_prompt = renderer.render(
+        [
+            user,
+            call,
+            {
+                "role": "tool",
+                "content": [
+                    {"type": "text", "text": response_text + "\n"},
+                    {"type": "image"},
+                ],
+            },
+        ],
+        add_generation_prompt=True,
+    )
     updated, _ = appender.append(
         prompt.token_ids,
         sampled,
         ObservationHandle("obs-0", sha256(b"obs").hexdigest()),
         call_index=0,
+        parsed_call=parsed,
     )
 
     assert updated == next_prompt.token_ids
     assert updated.count(processor.tokenizer.convert_tokens_to_ids("<think>")) == 2
+
+
+def _fast_token_spans(tokenizer, text: str, token_ids: tuple[int, ...]):
+    encoded = tokenizer(
+        text,
+        add_special_tokens=False,
+        return_offsets_mapping=True,
+        truncation=False,
+    )
+    assert tuple(encoded["input_ids"]) == token_ids
+    byte_boundaries = [0]
+    for character in text:
+        byte_boundaries.append(
+            byte_boundaries[-1] + len(character.encode("utf-8"))
+        )
+    spans = []
+    for index, (token_id, offsets) in enumerate(
+        zip(token_ids, encoded["offset_mapping"], strict=True)
+    ):
+        start, end = offsets
+        spans.append(
+            TokenByteSpan(
+                index,
+                token_id,
+                byte_boundaries[start],
+                byte_boundaries[end],
+            )
+        )
+    return tuple(spans)

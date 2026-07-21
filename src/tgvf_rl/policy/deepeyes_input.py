@@ -1,4 +1,4 @@
-"""Prompt-free DeepEyes inputs for the Policy Pilot runtime.
+"""DeepEyes inputs rendered with the accepted native Policy prompt bundle.
 
 This module stops before processor/tokenizer work.  It binds the formal
 materialized-dataset identity to one Pilot manifest, constructs the native
@@ -29,7 +29,12 @@ from tgvf_rl.protocol import (
     NativeToolCapabilityProfile,
     TGVF_FOCUS_TOOL_NAME,
     build_native_tool_schemas,
+    TGVF_VISUAL_TOOL_PROMPTS_VERSION,
+    VisualToolPromptIdentity,
+    build_visual_tool_prompt_messages,
+    native_policy_messages_sha256,
     native_tool_set_sha256,
+    visual_tool_prompt_identity,
 )
 from tgvf_rl.rewards import (
     AnswerTaskKind,
@@ -45,9 +50,7 @@ from .batch import POLICY_PILOT_V1_GROUP_SIZE
 from .manifest import PolicyPilotV1RunManifest
 
 
-POLICY_DEEPEYES_DATASET_BINDING_SCHEMA = (
-    "tgvf.policy-pilot.deepeyes47k-binding.v1"
-)
+POLICY_DEEPEYES_DATASET_BINDING_SCHEMA = "tgvf.policy-pilot.deepeyes47k-binding.v1"
 POLICY_NATIVE_PROMPT_INPUT_SCHEMA = "tgvf.policy-pilot.native-prompt-input.v1"
 POLICY_EXECUTION_GROUP_UID_SCHEMA = "tgvf.policy-pilot.execution-group.v1"
 POLICY_EXECUTION_GROUP_UID_PREFIX = "tgvf-pilot-execution-group:"
@@ -80,8 +83,10 @@ def _require_non_negative_integer(value: object, *, field_name: str) -> int:
 
 
 def _require_sha256(value: object, *, field_name: str) -> str:
-    if not isinstance(value, str) or len(value) != 64 or any(
-        character not in "0123456789abcdef" for character in value
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
     ):
         raise ValueError(f"{field_name} must be a lowercase SHA-256")
     return value
@@ -103,12 +108,8 @@ class BoundDeepEyesPolicyDataset:
 
     def __post_init__(self) -> None:
         _require_non_empty_text(self.run_id, field_name="run_id")
-        _require_sha256(
-            self.pilot_manifest_sha256, field_name="pilot_manifest_sha256"
-        )
-        _require_sha256(
-            self.manifest_file_sha256, field_name="manifest_file_sha256"
-        )
+        _require_sha256(self.pilot_manifest_sha256, field_name="pilot_manifest_sha256")
+        _require_sha256(self.manifest_file_sha256, field_name="manifest_file_sha256")
         _require_sha256(self.content_sha256, field_name="content_sha256")
         _require_non_negative_integer(self.shuffle_seed, field_name="shuffle_seed")
         expected = (
@@ -197,27 +198,20 @@ class NativePolicyPromptInput:
 
     def __post_init__(self) -> None:
         _require_non_empty_text(self.sample_id, field_name="sample_id")
-        _require_non_empty_text(
-            self.prompt_group_uid, field_name="prompt_group_uid"
-        )
+        _require_non_empty_text(self.prompt_group_uid, field_name="prompt_group_uid")
         object.__setattr__(self, "image_path", Path(self.image_path))
         if not self.image_path.is_absolute() or not self.image_path.is_file():
             raise ValueError("policy prompt image_path must be an absolute file")
         _require_sha256(self.image_sha256, field_name="image_sha256")
         _require_non_empty_text(self.question, field_name="question")
         object.__setattr__(self, "messages", tuple(self.messages))
-        expected_messages = (
-            {
-                "role": "user",
-                "content": (
-                    {"type": "image"},
-                    {"type": "text", "text": self.question},
-                ),
-            },
+        expected_messages = build_visual_tool_prompt_messages(
+            self.question,
+            tool_profile=self.tool_profile,
         )
         if self.messages != expected_messages:
             raise ValueError(
-                "policy native prompt must be exactly image plus source question"
+                "policy native prompt differs from TGVF Visual Tool Prompts v1"
             )
         object.__setattr__(self, "tool_names", tuple(self.tool_names))
         if not isinstance(self.tool_profile, NativeToolCapabilityProfile):
@@ -235,6 +229,38 @@ class NativePolicyPromptInput:
     def tool_schema_sha256(self) -> str:
         return native_tool_set_sha256(self.tool_names)
 
+    @property
+    def prompt_version(self) -> str:
+        return TGVF_VISUAL_TOOL_PROMPTS_VERSION
+
+    @property
+    def prompt_identity(self) -> VisualToolPromptIdentity:
+        return visual_tool_prompt_identity(self.tool_profile)
+
+    @property
+    def system_prompt_sha256(self) -> str:
+        return self.prompt_identity.system_prompt_sha256
+
+    @property
+    def response_version(self) -> str:
+        return self.prompt_identity.response_version
+
+    @property
+    def shared_user_prompt_template_sha256(self) -> str:
+        return self.prompt_identity.shared_user_prompt_template_sha256
+
+    @property
+    def prompt_bundle_sha256(self) -> str:
+        return self.prompt_identity.bundle_sha256
+
+    @property
+    def success_response_template_sha256(self) -> str:
+        return self.prompt_identity.success_response_template_sha256
+
+    @property
+    def messages_sha256(self) -> str:
+        return native_policy_messages_sha256(self.messages)
+
 
 def build_qwen_policy_user_prompt(
     sample: DeepEyes47KRuntimeSample,
@@ -247,14 +273,9 @@ def build_qwen_policy_user_prompt(
         raise TypeError("sample must be a DeepEyes47KRuntimeSample")
     if not isinstance(tool_profile, NativeToolCapabilityProfile):
         raise TypeError("tool_profile must be NativeToolCapabilityProfile")
-    messages: tuple[Mapping[str, Any], ...] = (
-        {
-            "role": "user",
-            "content": (
-                {"type": "image"},
-                {"type": "text", "text": sample.question},
-            ),
-        },
+    messages = build_visual_tool_prompt_messages(
+        sample.question,
+        tool_profile=tool_profile,
     )
     return NativePolicyPromptInput(
         sample_id=sample.sample_id,
@@ -285,12 +306,8 @@ class PolicyExecutionGroupIdentity:
     def __post_init__(self) -> None:
         _require_non_empty_text(self.run_id, field_name="run_id")
         _require_non_empty_text(self.sample_id, field_name="sample_id")
-        _require_non_empty_text(
-            self.prompt_group_uid, field_name="prompt_group_uid"
-        )
-        _require_non_negative_integer(
-            self.optimizer_step, field_name="optimizer_step"
-        )
+        _require_non_empty_text(self.prompt_group_uid, field_name="prompt_group_uid")
+        _require_non_negative_integer(self.optimizer_step, field_name="optimizer_step")
         _require_non_negative_integer(self.data_cursor, field_name="data_cursor")
         _require_non_empty_text(self.execution_nonce, field_name="execution_nonce")
         if not self.group_uid.startswith(POLICY_EXECUTION_GROUP_UID_PREFIX):
@@ -345,9 +362,8 @@ def derive_policy_execution_group(
         "data_cursor": data_cursor,
         "execution_nonce": execution_nonce,
     }
-    group_uid = (
-        POLICY_EXECUTION_GROUP_UID_PREFIX
-        + _sha256_bytes(_canonical_json_bytes(payload))
+    group_uid = POLICY_EXECUTION_GROUP_UID_PREFIX + _sha256_bytes(
+        _canonical_json_bytes(payload)
     )
     identities = tuple(
         TrajectoryIdentity(

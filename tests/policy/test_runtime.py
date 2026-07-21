@@ -225,6 +225,7 @@ class _FakeNativeAppender:
         observation,
         *,
         call_index,
+        parsed_call,
     ):
         if isinstance(observation, StandardToolError):
             appended = (910, 911, 912, 913)

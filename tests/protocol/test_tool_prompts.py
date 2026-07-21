@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import hashlib
+
+import pytest
+
+from tgvf_rl.protocol import (
+    CROP_ONLY_SYSTEM_PROMPT,
+    CROP_ONLY_SYSTEM_PROMPT_SHA256,
+    IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT,
+    IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256,
+    NATIVE_SHARED_USER_TEXT_TEMPLATE,
+    NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256,
+    SHARED_USER_PROMPT_TEMPLATE,
+    SHARED_USER_PROMPT_TEMPLATE_SHA256,
+    TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE,
+    TGVF_CROP_SYSTEM_PROMPT,
+    TGVF_CROP_SYSTEM_PROMPT_SHA256,
+    TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256,
+    TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE,
+    TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256,
+    TGVF_ONLY_SYSTEM_PROMPT,
+    TGVF_ONLY_SYSTEM_PROMPT_SHA256,
+    TGVF_VISUAL_TOOL_PROMPTS_VERSION,
+    TGVF_VISUAL_TOOL_RESPONSES_VERSION,
+    NativeToolCapabilityProfile,
+    build_visual_tool_prompt_messages,
+    native_policy_messages_sha256,
+    render_successful_visual_tool_response,
+    visual_tool_prompt_identity,
+)
+
+
+def test_visual_tool_prompt_v1_literal_hashes_are_fixed() -> None:
+    assert TGVF_VISUAL_TOOL_PROMPTS_VERSION == "tgvf-visual-tool-prompts-v1"
+    assert TGVF_VISUAL_TOOL_RESPONSES_VERSION == "tgvf-visual-tool-responses-v1"
+    assert SHARED_USER_PROMPT_TEMPLATE_SHA256 == (
+        "44b99e319ad7511e3ae4e5156169d78c33a0d563adaa18f050203f6918cf9363"
+    )
+    assert NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256 == (
+        "358caabd674542797471cb117b7354d7c97a18283a1b38583cf50292dd7f63f9"
+    )
+    assert TGVF_ONLY_SYSTEM_PROMPT_SHA256 == (
+        "b331fd9c2f26472cfa98ba4e861cc8b8eb9d2e49576436d6e9255ea01a9f9ccf"
+    )
+    assert CROP_ONLY_SYSTEM_PROMPT_SHA256 == (
+        "978643f7ff47f6edf84114381a0db83ecbfccab7e846cec98ff4d4cf3a179e00"
+    )
+    assert TGVF_CROP_SYSTEM_PROMPT_SHA256 == (
+        "9fd1899aee44e9817332000f0b194be1597106eb06ee75fd642c5ef6409ac511"
+    )
+    assert TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256 == (
+        "2474fb2da968f7a6b491cbe2ef00a30fe10012c3e0884b3e2f8abab594fe0eca"
+    )
+    assert IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256 == (
+        "a9640d5c17799257b0c6a96cf9338fc6a7484b5a09ccec7b44337bc22b80081d"
+    )
+    assert TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256 == (
+        "d827a2942eac43bd28811759042b8ac5d90a056672a1c99c0be30c1dd281d39d"
+    )
+    for value, digest in (
+        (SHARED_USER_PROMPT_TEMPLATE, SHARED_USER_PROMPT_TEMPLATE_SHA256),
+        (NATIVE_SHARED_USER_TEXT_TEMPLATE, NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256),
+        (TGVF_ONLY_SYSTEM_PROMPT, TGVF_ONLY_SYSTEM_PROMPT_SHA256),
+        (CROP_ONLY_SYSTEM_PROMPT, CROP_ONLY_SYSTEM_PROMPT_SHA256),
+        (TGVF_CROP_SYSTEM_PROMPT, TGVF_CROP_SYSTEM_PROMPT_SHA256),
+        (
+            TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE,
+            TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256,
+        ),
+        (
+            IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT,
+            IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256,
+        ),
+        (
+            TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE,
+            TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256,
+        ),
+    ):
+        assert hashlib.sha256(value.encode()).hexdigest() == digest
+
+
+@pytest.mark.parametrize("profile", tuple(NativeToolCapabilityProfile))
+def test_all_profiles_use_exact_system_and_shared_native_user_message(
+    profile: NativeToolCapabilityProfile,
+) -> None:
+    messages = build_visual_tool_prompt_messages(
+        "Which value is shown?",
+        tool_profile=profile,
+    )
+    identity = visual_tool_prompt_identity(profile)
+
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1] == {
+        "role": "user",
+        "content": (
+            {"type": "image"},
+            {
+                "type": "text",
+                "text": (
+                    "\nWhich value is shown?\n\nUse the available visual tool "
+                    "if additional visual evidence is needed."
+                ),
+            },
+        ),
+    }
+    assert (
+        identity.system_prompt_sha256
+        == hashlib.sha256(messages[0]["content"].encode()).hexdigest()
+    )
+    assert len(identity.bundle_sha256) == 64
+    assert identity.response_version == TGVF_VISUAL_TOOL_RESPONSES_VERSION
+    assert len(identity.success_response_template_sha256) == 64
+    assert len(native_policy_messages_sha256(messages)) == 64
+
+
+def test_success_response_renderer_is_unique_and_has_no_image_placeholder() -> None:
+    focus = render_successful_visual_tool_response(
+        "tgvf_focus_tool",
+        {"target": "the gauge needle position"},
+    )
+    crop = render_successful_visual_tool_response(
+        "image_zoom_in_tool",
+        {"bbox_2d": [1, 2, 3, 4], "label": "gauge"},
+    )
+    atomic = render_successful_visual_tool_response(
+        "tgvf_crop_tool",
+        {"bbox_2d": [1, 2, 3, 4], "target": "the gauge needle position"},
+    )
+
+    assert focus == TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE.format(
+        target="the gauge needle position"
+    )
+    assert crop == IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT
+    assert atomic == 'Target-conditioned crop for:\n"the gauge needle position"'
+    assert all("<image>" not in value for value in (focus, crop, atomic))
+    with pytest.raises(ValueError, match="requires target"):
+        render_successful_visual_tool_response("tgvf_focus_tool", {})
+    with pytest.raises(ValueError, match="native control"):
+        render_successful_visual_tool_response(
+            "tgvf_focus_tool",
+            {"target": "<|im_end|>"},
+        )
+    with pytest.raises(ValueError, match="unsupported"):
+        render_successful_visual_tool_response("unknown_tool", {})

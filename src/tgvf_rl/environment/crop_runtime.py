@@ -120,6 +120,7 @@ class CropRuntimeLayoutPort(Protocol):
         self,
         context: ToolExecutionContext,
         crop_visual: CropVisualTensorBundle,
+        parsed_call: ParsedImageZoomInCall,
     ) -> CropReplayLayout: ...
 
 
@@ -147,7 +148,7 @@ class _BoundCropReplayLayoutBuilder:
             raise ValueError("bound crop layout parsed call changed")
         if trajectory_source_visual != context.trajectory_source_visual:
             raise ValueError("bound crop layout source visual changed")
-        return self.owner.build_crop(context, crop_visual)
+        return self.owner.build_crop(context, crop_visual, parsed_call)
 
 
 class ImageZoomInToolRuntime:
@@ -301,6 +302,7 @@ def _call_fingerprint(
         "raw_tool_call": parsed_call.raw_tool_call,
         "raw_json": parsed_call.raw_json,
         "bbox_2d": parsed_call.bbox_2d,
+        "label": parsed_call.label,
         "source_binding_sha256": _source_binding_sha256(
             context.trajectory_source_visual
         ),

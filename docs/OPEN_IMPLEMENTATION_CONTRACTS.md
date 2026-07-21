@@ -214,14 +214,15 @@ remain fail-closed. No library or historical-project default may fill them:
   adaptations; omissions require an explicit decision. This requirement does
   not mark the still-open AD-13 inventory as complete.
 - [x] `FIXED` — Native function names are `tgvf_focus_tool`,
-  `image_zoom_in_tool`, and `crop_tgvf_tool`. Crop takes exactly one
-  `bbox_2d` integer array; the atomic crop/TGVF call takes exactly that array
-  plus one non-empty `target` string. Exact schemas, descriptions, canonical
-  JSON, hashes, and strict parser fixtures are owned by the protocol package
-  under `ATOMIC-CROP-TGVF-20260721`.
+  `image_zoom_in_tool`, and `tgvf_crop_tool`. Crop takes one required
+  `bbox_2d` integer array plus optional string `label`; the atomic crop/TGVF
+  call takes the array plus one non-empty `target` string. Exact schemas,
+  descriptions, canonical JSON, hashes, and strict parser fixtures are owned
+  by the protocol package under `ATOMIC-CROP-TGVF-20260721` and
+  `TGVF-VISUAL-TOOL-PROMPTS-V1-20260721`.
 - [x] `FIXED` — `crop_only`, `tgvf_only`, and `crop_tgvf` are distinct
   configuration profiles exposing only `image_zoom_in_tool`,
-  `tgvf_focus_tool`, and `crop_tgvf_tool`, respectively. Policy Pilot v1
+  `tgvf_focus_tool`, and `tgvf_crop_tool`, respectively. Policy Pilot v1
   remains explicitly fixed to `tgvf_only`.
 - [x] `FIXED` — A trajectory supports zero or more ordered TGVF/crop calls; one
   shared safety cap is configurable and greater than one in a later fusion
@@ -417,31 +418,34 @@ interfaces must be versioned and fail closed while unset.
 
 ### 5.1 Model, template, and protocol identity
 
-- [ ] `OPEN_BLOCKING RO-P01` — Record the accepted Qwen3 model name/path and pin
-  processor, tokenizer, chat template, family adapter, golden token fixtures,
-  and fixture hashes for the primary rollout. Full weight-shard hashes are not
-  required.
+- [x] `FIXED RO-P01` — The accepted local Qwen3 model path, tokenizer length,
+  chat-template identity, family adapter, and real-processor prompt/token
+  fixture are pinned by `qwen3_visual_tool_prompts_v1.json`. Full weight-shard
+  hashes are not required.
 - [x] `FIXED RO-P02A` — Exact native schemas, descriptions, versions, canonical
   JSON, and schema hashes are implemented for `tgvf_focus_tool(target)`,
-  `image_zoom_in_tool(bbox_2d)`, and the atomic
-  `crop_tgvf_tool(bbox_2d,target)` under decisions `CROP-FUSION-20260720` and
-  `ATOMIC-CROP-TGVF-20260721`.
-- [ ] `OPEN_BLOCKING RO-P02B` — Pin the real Qwen3 processor-rendered system
-  prompt/token golden and TGVF-only tool-set hash for Policy Pilot v1.
-  The crop-only and atomic crop/TGVF prompt/token goldens belong to separately
-  identified later experiments.
-  Representation-phase TGVF-only golden identity remains unchanged.
-- [ ] `OPEN_BLOCKING RO-P03` — Pin one initial prompt version and exact hash.
-  Prompt text: `[TBD]`
+  `image_zoom_in_tool(bbox_2d,label?)`, and the atomic
+  `tgvf_crop_tool(bbox_2d,target)` under decisions `CROP-FUSION-20260720`,
+  `ATOMIC-CROP-TGVF-20260721`, and
+  `TGVF-VISUAL-TOOL-PROMPTS-V1-20260721`.
+- [x] `FIXED RO-P02B` — The real Qwen3 processor-rendered prompt/token goldens
+  and tool-schema hashes for all three profiles are pinned in
+  `qwen3_visual_tool_prompts_v1.json`. The representation-phase TGVF-only
+  golden identity remains unchanged.
+- [x] `FIXED RO-P03` — The initial policy prompt is
+  `tgvf-visual-tool-prompts-v1`; exact source text and profile bundle hashes are
+  recorded in `TGVF_VISUAL_TOOL_PROMPTS_V1.md`.
 - [ ] `OPEN_BLOCKING RO-P04` — Golden token-ID fixtures for direct answer, one
   call, repeated calls, four admitted attempts, and the unexecuted fifth-attempt
   cap-error response.
-- [ ] `OPEN_BLOCKING RO-P05` — Prove tokenizer length unchanged and no added
-  embedding/lm-head rows.
+- [x] `FIXED RO-P05` — The real-processor fixture proves tokenizer length stays
+  `151669`; the implementation adds no tokens and performs no embedding or
+  lm-head resize.
 - [ ] `OPEN_BLOCKING RO-P06` — Freeze assistant prefill and stop semantics,
   including ownership of `</tool_call>`, `<|im_end|>`, think closure, and EOS.
-- [ ] `OPEN_BLOCKING RO-P07` — Prove exactly one template-owned `<think>` opener
-  per assistant turn and no duplicate policy-sampled opener.
+- [x] `FIXED RO-P07` — Real Qwen direct, one-call, and repeated-call goldens
+  prove exactly one template-owned `<think>` opener per assistant turn; the
+  sampled-turn contract rejects a policy-sampled duplicate opener.
 
 ### 5.2 Parser, target span, and multi-call state machine
 
@@ -455,7 +459,7 @@ interfaces must be versioned and fail closed while unset.
   no retokenization, fuzzy matching, target rewriting, or row filtering is
   permitted. Fixed by `RPI-20260720-TARGET-TOKEN-COVER-V1`.
 - [x] `FIXED RO-S02A` — The same exact target-span rule applies to the atomic
-  `crop_tgvf_tool` target. Its parser also requires exactly four JSON integers,
+  `tgvf_crop_tool` target. Its parser also requires exactly four JSON integers,
   positive requested width/height, no unknown argument, and retains the exact
   sampled call bytes/tokens. Source-bound clamping and empty-effective-box
   rejection remain environment responsibilities.
@@ -1077,11 +1081,14 @@ pilot is identified or launched.
 
 ### 9.3 Prompt and tool policy
 
-- [ ] `OPEN_CONFIGURABLE PM-01` — Exact system/tool prompt text and hash: `[TBD]`
+- [x] `FIXED PM-01` — Exact three-profile system prompts, shared user prompt,
+  successful response text, versions, and hashes are fixed by
+  `TGVF-VISUAL-TOOL-PROMPTS-V1-20260721` and recorded in
+  `TGVF_VISUAL_TOOL_PROMPTS_V1.md`.
 - [x] `FIXED PM-02` — Exact function descriptions, argument descriptions, and
   target wording for all three native tool schemas are versioned and hashed in
-  `tgvf_rl.protocol.schema`. Processor-rendered system-prompt bytes/token
-  goldens remain `RO-P02B`/`PM-01` work.
+  `tgvf_rl.protocol.schema`; processor-rendered bytes/token goldens are pinned
+  by `RO-P02B`.
 - [ ] `OPEN_BLOCKING PM-03` — Policy Pilot v1 enables only
   `tgvf_focus_tool`; crop/TGVF fusion is deferred. It admits four TGVF call
   attempts, counting both successful observation and standard tool error, and

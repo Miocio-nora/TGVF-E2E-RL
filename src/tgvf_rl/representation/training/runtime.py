@@ -36,6 +36,7 @@ from tgvf_rl.conditioning import (
 from tgvf_rl.conditioning.base import BoundTargetConditionProvider
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.protocol.native import NativeProtocolRenderer
+from tgvf_rl.protocol.schema import build_representation_tgvf_focus_tool_schema
 from tgvf_rl.qwen.base import resolve_language_model
 from tgvf_rl.representation.adapter import (
     TGVFAdapter,
@@ -681,7 +682,9 @@ def create_qwen3_representation_runtime(
         raise TypeError("component_paths must be Qwen3RepresentationComponentPaths")
 
     renderer = NativeProtocolRenderer(
-        processor, expected_tokenizer_length=model_identity.tokenizer_length
+        processor,
+        expected_tokenizer_length=model_identity.tokenizer_length,
+        tool_schemas=(build_representation_tgvf_focus_tool_schema(),),
     )
     if renderer.chat_template_sha256 != model_identity.chat_template_sha256:
         raise ValueError("processor chat template differs from ModelIdentity")

@@ -19,7 +19,14 @@ from tgvf_rl.policy import (
     build_qwen_policy_user_prompt,
     derive_policy_execution_group,
 )
-from tgvf_rl.protocol import NativeToolCapabilityProfile, TGVF_FOCUS_TOOL_NAME
+from tgvf_rl.protocol import (
+    NATIVE_SHARED_USER_TEXT_TEMPLATE,
+    TGVF_FOCUS_TOOL_NAME,
+    TGVF_ONLY_SYSTEM_PROMPT,
+    TGVF_VISUAL_TOOL_PROMPTS_VERSION,
+    NativeToolCapabilityProfile,
+    build_visual_tool_prompt_messages,
+)
 from tgvf_rl.rewards import AnswerTaskKind
 from tgvf_rl.trajectories.schema import TrajectoryRecord, TrajectoryStop
 
@@ -96,11 +103,17 @@ def test_prompt_group_and_reward_vertical_slice_is_prompt_free(tmp_path: Path) -
     prompt = build_qwen_policy_user_prompt(sample)
     serialized_messages = json.dumps(prompt.messages, ensure_ascii=False)
     assert prompt.messages == (
+        {"role": "system", "content": TGVF_ONLY_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 {"type": "image"},
-                {"type": "text", "text": sample.question},
+                {
+                    "type": "text",
+                    "text": NATIVE_SHARED_USER_TEXT_TEMPLATE.format(
+                        question=sample.question
+                    ),
+                },
             ),
         },
     )
@@ -109,16 +122,34 @@ def test_prompt_group_and_reward_vertical_slice_is_prompt_free(tmp_path: Path) -
     assert prompt.image_sha256 == sample.image_sha256
     assert prompt.tool_names == (TGVF_FOCUS_TOOL_NAME,)
     assert prompt.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
-    assert tuple(
-        schema["function"]["name"] for schema in prompt.tool_schemas
-    ) == (TGVF_FOCUS_TOOL_NAME,)
+    assert prompt.prompt_version == TGVF_VISUAL_TOOL_PROMPTS_VERSION
+    assert prompt.system_prompt_sha256 == prompt.prompt_identity.system_prompt_sha256
+    assert (
+        prompt.shared_user_prompt_template_sha256
+        == prompt.prompt_identity.shared_user_prompt_template_sha256
+    )
+    assert prompt.prompt_bundle_sha256 == prompt.prompt_identity.bundle_sha256
+    assert prompt.response_version == prompt.prompt_identity.response_version
+    assert (
+        prompt.success_response_template_sha256
+        == prompt.prompt_identity.success_response_template_sha256
+    )
+    assert len(prompt.messages_sha256) == 64
+    assert tuple(schema["function"]["name"] for schema in prompt.tool_schemas) == (
+        TGVF_FOCUS_TOOL_NAME,
+    )
     for profile in NativeToolCapabilityProfile:
         selected = build_qwen_policy_user_prompt(sample, tool_profile=profile)
+        assert selected.messages == build_visual_tool_prompt_messages(
+            sample.question,
+            tool_profile=profile,
+        )
         assert selected.tool_profile is profile
         assert selected.tool_names == profile.tool_names
-        assert tuple(
-            schema["function"]["name"] for schema in selected.tool_schemas
-        ) == profile.tool_names
+        assert (
+            tuple(schema["function"]["name"] for schema in selected.tool_schemas)
+            == profile.tool_names
+        )
         assert selected.tool_schema_sha256 == profile.tool_set_sha256
 
     group = derive_policy_execution_group(
@@ -133,21 +164,21 @@ def test_prompt_group_and_reward_vertical_slice_is_prompt_free(tmp_path: Path) -
     assert tuple(
         identity.rollout_index for identity in group.trajectory_identities
     ) == tuple(range(8))
-    assert len(
-        {identity.canonical_id for identity in group.trajectory_identities}
-    ) == 8
+    assert len({identity.canonical_id for identity in group.trajectory_identities}) == 8
     assert all(
-        identity.group_id == group.group_uid
-        for identity in group.trajectory_identities
+        identity.group_id == group.group_uid for identity in group.trajectory_identities
     )
     assert group.group_uid != sample.prompt_group_uid
-    assert derive_policy_execution_group(
-        sample,
-        run_id="pilot-run",
-        optimizer_step=3,
-        data_cursor=17,
-        execution_nonce="attempt-002",
-    ).group_uid != group.group_uid
+    assert (
+        derive_policy_execution_group(
+            sample,
+            run_id="pilot-run",
+            optimizer_step=3,
+            data_cursor=17,
+            execution_nonce="attempt-002",
+        ).group_uid
+        != group.group_uid
+    )
 
     provider = DeepEyesRewardContextProvider((sample,))
     identity = group.trajectory_identities[0]
@@ -175,24 +206,33 @@ def test_execution_group_identity_binds_step_cursor_and_nonce(tmp_path: Path) ->
         data_cursor=0,
         execution_nonce="nonce",
     )
-    assert derive_policy_execution_group(
-        sample,
-        run_id="pilot-run",
-        optimizer_step=1,
-        data_cursor=0,
-        execution_nonce="nonce",
-    ).group_uid != baseline.group_uid
-    assert derive_policy_execution_group(
-        sample,
-        run_id="pilot-run",
-        optimizer_step=0,
-        data_cursor=1,
-        execution_nonce="nonce",
-    ).group_uid != baseline.group_uid
-    assert derive_policy_execution_group(
-        sample,
-        run_id="other-run",
-        optimizer_step=0,
-        data_cursor=0,
-        execution_nonce="nonce",
-    ).group_uid != baseline.group_uid
+    assert (
+        derive_policy_execution_group(
+            sample,
+            run_id="pilot-run",
+            optimizer_step=1,
+            data_cursor=0,
+            execution_nonce="nonce",
+        ).group_uid
+        != baseline.group_uid
+    )
+    assert (
+        derive_policy_execution_group(
+            sample,
+            run_id="pilot-run",
+            optimizer_step=0,
+            data_cursor=1,
+            execution_nonce="nonce",
+        ).group_uid
+        != baseline.group_uid
+    )
+    assert (
+        derive_policy_execution_group(
+            sample,
+            run_id="other-run",
+            optimizer_step=0,
+            data_cursor=0,
+            execution_nonce="nonce",
+        ).group_uid
+        != baseline.group_uid
+    )

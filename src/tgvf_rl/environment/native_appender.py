@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Protocol
 
 from tgvf_rl.observations.store import ObservationHandle
-from tgvf_rl.protocol.schema import StandardToolError
+from tgvf_rl.protocol.schema import (
+    NativeToolCall,
+    ParsedCropTGVFCall,
+    ParsedImageZoomInCall,
+    ParsedToolCall,
+    StandardToolError,
+)
+from tgvf_rl.protocol.tool_prompts import render_successful_visual_tool_response
 
 from .agent_loop import SampledPolicyTurn
 
@@ -35,10 +42,10 @@ class QwenNativeToolObservationAppender:
     """Append environment-owned native bytes without rerendering prior turns.
 
     The sampled assistant continuation remains byte-for-byte policy owned.  A
-    successful TGVF response contributes one native image placeholder; the
-    registrar separately binds that placeholder to the rollout-recorded main
-    ``D`` and D-DeepStack tensors.  Errors contain the canonical deterministic
-    JSON payload and no visual placeholder.
+    successful visual response contributes one native image placeholder; the
+    registrar separately binds it to the rollout-recorded crop or main ``D``
+    plus D-DeepStack tensors. Errors contain canonical deterministic JSON and
+    no visual placeholder.
     """
 
     def __init__(
@@ -58,6 +65,7 @@ class QwenNativeToolObservationAppender:
         observation: ObservationHandle | StandardToolError,
         *,
         call_index: int,
+        parsed_call: NativeToolCall | None,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         prompt = tuple(prompt_token_ids)
         if not prompt:
@@ -74,14 +82,21 @@ class QwenNativeToolObservationAppender:
             raise ValueError(
                 "sampled assistant text does not round-trip to its exact token IDs"
             )
-        payload = (
-            QWEN_NATIVE_IMAGE_PLACEHOLDER
-            if isinstance(observation, ObservationHandle)
-            else observation.canonical_json
-        )
-        environment_text = (
-            QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX + payload + QWEN_NATIVE_RESPONSE_SUFFIX
-        )
+        if isinstance(observation, ObservationHandle):
+            if parsed_call is None:
+                raise ValueError("successful tool response requires its parsed call")
+            _validate_parsed_call_matches_turn(parsed_call, sampled_turn)
+            environment_text = render_qwen_native_success_environment_text(
+                parsed_call
+            )
+        else:
+            if parsed_call is not None:
+                raise ValueError("error tool response must not receive a parsed call")
+            environment_text = (
+                QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
+                + observation.canonical_json
+                + QWEN_NATIVE_RESPONSE_SUFFIX
+            )
         environment_ids = self._encode(environment_text)
         if not environment_ids:
             raise ValueError("native tool response encoded to no tokens")
@@ -104,10 +119,60 @@ class QwenNativeToolObservationAppender:
         return tuple(token_ids)
 
 
+def render_qwen_native_success_payload(parsed_call: NativeToolCall) -> str:
+    """Render exact accepted response text, newline, and visual placeholder."""
+
+    arguments: dict[str, object]
+    if isinstance(parsed_call, ParsedToolCall):
+        arguments = {"target": parsed_call.target}
+    elif isinstance(parsed_call, ParsedImageZoomInCall):
+        arguments = {"bbox_2d": list(parsed_call.bbox_2d)}
+        if parsed_call.label is not None:
+            arguments["label"] = parsed_call.label
+    elif isinstance(parsed_call, ParsedCropTGVFCall):
+        arguments = {
+            "bbox_2d": list(parsed_call.bbox_2d),
+            "target": parsed_call.target,
+        }
+    else:  # pragma: no cover - closed-union expansion guard
+        raise TypeError("successful response requires a parsed native tool call")
+    response_text = render_successful_visual_tool_response(
+        parsed_call.name,
+        arguments,
+    )
+    return response_text + "\n" + QWEN_NATIVE_IMAGE_PLACEHOLDER
+
+
+def render_qwen_native_success_environment_text(
+    parsed_call: NativeToolCall,
+) -> str:
+    """Wrap one exact successful visual response in Qwen native turn bytes."""
+
+    return (
+        QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
+        + render_qwen_native_success_payload(parsed_call)
+        + QWEN_NATIVE_RESPONSE_SUFFIX
+    )
+
+
+def _validate_parsed_call_matches_turn(
+    parsed_call: NativeToolCall,
+    sampled_turn: SampledPolicyTurn,
+) -> None:
+    if (
+        parsed_call.sampled_text != sampled_turn.text
+        or parsed_call.sampled_token_ids != sampled_turn.token_ids
+        or parsed_call.sampled_token_byte_spans != sampled_turn.token_byte_spans
+    ):
+        raise ValueError("parsed tool call differs from sampled assistant turn")
+
+
 __all__ = [
     "NativeToolTurnRegistrar",
     "QWEN_NATIVE_IMAGE_PLACEHOLDER",
     "QWEN_NATIVE_RESPONSE_SUFFIX",
     "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
     "QwenNativeToolObservationAppender",
+    "render_qwen_native_success_environment_text",
+    "render_qwen_native_success_payload",
 ]

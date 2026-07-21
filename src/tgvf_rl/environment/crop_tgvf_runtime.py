@@ -1,4 +1,4 @@
-"""ToolRuntimePort-compatible live runtime for atomic ``crop_tgvf_tool``."""
+"""ToolRuntimePort-compatible live runtime for atomic ``tgvf_crop_tool``."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol.schema import (
-    CROP_TGVF_TOOL_NAME,
+    TGVF_CROP_TOOL_NAME,
     TGVF_FOCUS_TOOL_NAME,
     ParsedCropTGVFCall,
     ParsedToolCall,
@@ -148,7 +148,7 @@ class AtomicCropTGVFToolRuntime:
             raise TypeError("atomic runtime requires ParsedCropTGVFCall")
         if not isinstance(context, ToolExecutionContext):
             raise TypeError("atomic runtime requires ToolExecutionContext")
-        if parsed_call.name != CROP_TGVF_TOOL_NAME:
+        if parsed_call.name != TGVF_CROP_TOOL_NAME:
             raise ValueError("atomic runtime received another tool")
         self._assert_representation_binding()
         _validate_sampled_turn(parsed_call, context)

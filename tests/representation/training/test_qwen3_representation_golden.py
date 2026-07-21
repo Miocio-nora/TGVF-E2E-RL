@@ -14,8 +14,9 @@ from torch import nn
 from tgvf_rl.protocol.native import NativeProtocolRenderer, RenderedTranscript
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import (
+    REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_SHA256,
     TGVF_FOCUS_TOOL_NAME,
-    TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+    build_representation_tgvf_focus_tool_schema,
 )
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.losses import EVIDENCE_IGNORE_INDEX
@@ -210,6 +211,7 @@ def _compute_golden() -> dict[str, Any]:
     renderer = NativeProtocolRenderer(
         processor,
         expected_tokenizer_length=_EXPECTED_TOKENIZER_LENGTH,
+        tool_schemas=(build_representation_tgvf_focus_tool_schema(),),
     )
     runtime = _runtime(processor, renderer)
     prompt = _prompt()
@@ -371,7 +373,7 @@ def _compute_golden() -> dict[str, Any]:
         },
         "protocol": {
             "tool_name": TGVF_FOCUS_TOOL_NAME,
-            "tool_schema_sha256": TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+            "tool_schema_sha256": REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_SHA256,
             "representation_prompt_schema": prompt.schema_version,
             "native_action_target_schema": NATIVE_ACTION_TARGET_SCHEMA_VERSION,
             "canonical_evidence_schema": canonical_evidence.schema_version,
@@ -471,6 +473,7 @@ def test_qwen3_target_span_accepts_inseparable_period_and_json_quote() -> None:
     renderer = NativeProtocolRenderer(
         processor,
         expected_tokenizer_length=_EXPECTED_TOKENIZER_LENGTH,
+        tool_schemas=(build_representation_tgvf_focus_tool_schema(),),
     )
     runtime = _runtime(processor, renderer)
     target = "large printed header text at the top left above Nashville, Tenn."
@@ -494,6 +497,7 @@ def test_qwen3_native_d_only_processor_golden() -> None:
     renderer = NativeProtocolRenderer(
         processor,
         expected_tokenizer_length=_EXPECTED_TOKENIZER_LENGTH,
+        tool_schemas=(build_representation_tgvf_focus_tool_schema(),),
     )
     geometry_carrier = _qwen3_geometry_carrier(processor, (1, 16, 16))
     prefix = materialize_qwen3_d_only_processor_prefix(

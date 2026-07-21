@@ -14,26 +14,50 @@ from hashlib import sha256
 from copy import deepcopy
 import json
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 TGVF_FOCUS_TOOL_NAME = "tgvf_focus_tool"
 IMAGE_ZOOM_IN_TOOL_NAME = "image_zoom_in_tool"
-CROP_TGVF_TOOL_NAME = "crop_tgvf_tool"
-TGVF_FOCUS_TOOL_SCHEMA_VERSION = "tgvf-focus-tool-v1"
+TGVF_CROP_TOOL_NAME = "tgvf_crop_tool"
+REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_VERSION = "tgvf-focus-tool-v1"
+TGVF_FOCUS_TOOL_SCHEMA_VERSION = "tgvf-focus-tool-policy-v1"
 IMAGE_ZOOM_IN_TOOL_SCHEMA_VERSION = "image-zoom-in-tool-v1"
-CROP_TGVF_TOOL_SCHEMA_VERSION = "crop-tgvf-tool-v1"
+TGVF_CROP_TOOL_SCHEMA_VERSION = "tgvf-crop-tool-v1"
 POLICY_RL_TOOL_NAMES = (
     TGVF_FOCUS_TOOL_NAME,
     IMAGE_ZOOM_IN_TOOL_NAME,
-    CROP_TGVF_TOOL_NAME,
+    TGVF_CROP_TOOL_NAME,
 )
 TOOL_CALL_OPEN = "<tool_call>"
 TOOL_CALL_CLOSE = "</tool_call>"
 TARGET_TOKEN_SPAN_RULE = "minimal_overlapping_sampled_token_cover_v1"
 STANDARD_TOOL_ERROR_SCHEMA_VERSION = "tgvf-native-tool-error-v1"
+NATIVE_TARGET_ECHO_FORBIDDEN_FRAGMENTS = (
+    "\r",
+    "\n",
+    "<|",
+    "<think>",
+    "</think>",
+    "<tool_call>",
+    "</tool_call>",
+    "<tool_response>",
+    "</tool_response>",
+)
 
-_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
+
+def validate_native_tool_target_for_echo(target: str) -> str:
+    """Reject content that could become a native control token when echoed."""
+
+    if not isinstance(target, str):
+        raise TypeError("tool target must be a string")
+    if not target.strip():
+        raise ValueError("tool target must be non-empty")
+    if any(fragment in target for fragment in NATIVE_TARGET_ECHO_FORBIDDEN_FRAGMENTS):
+        raise ValueError("tool target cannot contain newlines or native control tags")
+    return target
+
+_REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": TGVF_FOCUS_TOOL_NAME,
@@ -52,11 +76,38 @@ _TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     },
 }
 
+_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": TGVF_FOCUS_TOOL_NAME,
+        "description": (
+            "Generate a target-conditioned visual observation for a visual "
+            "inspection request."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "A concise, self-contained visual query specifying both "
+                        "what to inspect and what evidence or relation to extract, "
+                        "read, compare, count, or verify. Do not include a guessed "
+                        "final answer."
+                    ),
+                }
+            },
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 _IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": IMAGE_ZOOM_IN_TOOL_NAME,
-        "description": "Crop one rectangular region from the original image.",
+        "description": "Crop and enlarge a selected region of the original image.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -65,8 +116,18 @@ _IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
                     "items": {"type": "integer"},
                     "minItems": 4,
                     "maxItems": 4,
-                    "description": "[left, top, right, bottom] pixel coordinates.",
-                }
+                    "description": (
+                        "The crop bounding box [x1, y1, x2, y2], using the "
+                        "coordinate convention implemented by the crop runtime."
+                    ),
+                },
+                "label": {
+                    "type": "string",
+                    "description": (
+                        "A short description of the object or region inside the "
+                        "bounding box."
+                    ),
+                },
             },
             "required": ["bbox_2d"],
             "additionalProperties": False,
@@ -74,13 +135,13 @@ _IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     },
 }
 
-_CROP_TGVF_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
+_TGVF_CROP_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": CROP_TGVF_TOOL_NAME,
+        "name": TGVF_CROP_TOOL_NAME,
         "description": (
-            "Crop one rectangular region from the original image and produce a "
-            "target-conditioned foveated visual observation from that exact crop."
+            "Crop a selected region from the original image and return a "
+            "target-conditioned visual representation of that crop."
         ),
         "parameters": {
             "type": "object",
@@ -91,15 +152,17 @@ _CROP_TGVF_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
                     "minItems": 4,
                     "maxItems": 4,
                     "description": (
-                        "[left, top, right, bottom] source-pixel coordinates using "
-                        "a half-open box."
+                        "The crop bounding box [x1, y1, x2, y2], using the "
+                        "coordinate convention implemented by the crop runtime."
                     ),
                 },
                 "target": {
                     "type": "string",
                     "description": (
-                        "A neutral description of the visual evidence to inspect "
-                        "within the cropped region."
+                        "A concise, self-contained visual query specifying both "
+                        "what to inspect inside the crop and what evidence or "
+                        "relation to extract, read, compare, count, or verify. Do "
+                        "not include a guessed final answer."
                     ),
                 },
             },
@@ -120,6 +183,18 @@ def _freeze_json(value: Any) -> Any:
     return value
 
 
+REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA: Mapping[str, Any] = _freeze_json(
+    _REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE
+)
+REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
+    _REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE,
+    ensure_ascii=False,
+    separators=(",", ":"),
+    sort_keys=True,
+)
+REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_SHA256 = sha256(
+    REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
+).hexdigest()
 TGVF_FOCUS_TOOL_SCHEMA: Mapping[str, Any] = _freeze_json(
     _TGVF_FOCUS_TOOL_SCHEMA_MUTABLE
 )
@@ -144,17 +219,17 @@ IMAGE_ZOOM_IN_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
 IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256 = sha256(
     IMAGE_ZOOM_IN_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
 ).hexdigest()
-CROP_TGVF_TOOL_SCHEMA: Mapping[str, Any] = _freeze_json(
-    _CROP_TGVF_TOOL_SCHEMA_MUTABLE
+TGVF_CROP_TOOL_SCHEMA: Mapping[str, Any] = _freeze_json(
+    _TGVF_CROP_TOOL_SCHEMA_MUTABLE
 )
-CROP_TGVF_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
-    _CROP_TGVF_TOOL_SCHEMA_MUTABLE,
+TGVF_CROP_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
+    _TGVF_CROP_TOOL_SCHEMA_MUTABLE,
     ensure_ascii=False,
     separators=(",", ":"),
     sort_keys=True,
 )
-CROP_TGVF_TOOL_SCHEMA_SHA256 = sha256(
-    CROP_TGVF_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
+TGVF_CROP_TOOL_SCHEMA_SHA256 = sha256(
+    TGVF_CROP_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
 ).hexdigest()
 
 
@@ -170,7 +245,7 @@ class NativeToolCapabilityProfile(str, Enum):
         return {
             NativeToolCapabilityProfile.CROP_ONLY: (IMAGE_ZOOM_IN_TOOL_NAME,),
             NativeToolCapabilityProfile.TGVF_ONLY: (TGVF_FOCUS_TOOL_NAME,),
-            NativeToolCapabilityProfile.CROP_TGVF: (CROP_TGVF_TOOL_NAME,),
+            NativeToolCapabilityProfile.CROP_TGVF: (TGVF_CROP_TOOL_NAME,),
         }[self]
 
     @property
@@ -179,12 +254,18 @@ class NativeToolCapabilityProfile(str, Enum):
 
 
 def build_tgvf_focus_tool_schema() -> dict[str, Any]:
-    """Return a fresh JSON-compatible copy of the fixed native tool schema."""
+    """Return a fresh JSON-compatible copy of the policy-RL v1 schema."""
 
     # Preserve the declared schema field order because it is part of the Qwen
     # system-prompt token identity, while the separate canonical JSON remains
     # the order-independent schema digest.
     return deepcopy(_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE)
+
+
+def build_representation_tgvf_focus_tool_schema() -> dict[str, Any]:
+    """Return the frozen representation-phase schema as a fresh JSON object."""
+
+    return deepcopy(_REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE)
 
 
 def build_image_zoom_in_tool_schema() -> dict[str, Any]:
@@ -193,10 +274,10 @@ def build_image_zoom_in_tool_schema() -> dict[str, Any]:
     return deepcopy(_IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE)
 
 
-def build_crop_tgvf_tool_schema() -> dict[str, Any]:
+def build_tgvf_crop_tool_schema() -> dict[str, Any]:
     """Return a fresh copy of the atomic crop-then-foveate schema."""
 
-    return deepcopy(_CROP_TGVF_TOOL_SCHEMA_MUTABLE)
+    return deepcopy(_TGVF_CROP_TOOL_SCHEMA_MUTABLE)
 
 
 def build_native_tool_schemas(
@@ -210,7 +291,7 @@ def build_native_tool_schemas(
     builders = {
         TGVF_FOCUS_TOOL_NAME: build_tgvf_focus_tool_schema,
         IMAGE_ZOOM_IN_TOOL_NAME: build_image_zoom_in_tool_schema,
-        CROP_TGVF_TOOL_NAME: build_crop_tgvf_tool_schema,
+        TGVF_CROP_TOOL_NAME: build_tgvf_crop_tool_schema,
     }
     unknown = tuple(name for name in names if name not in builders)
     if unknown:
@@ -222,15 +303,36 @@ def native_tool_set_sha256(tool_names: tuple[str, ...]) -> str:
     """Hash the exact ordered tool set passed to the Qwen chat template."""
 
     names = tuple(tool_names)
-    if names == (TGVF_FOCUS_TOOL_NAME,):
-        return TGVF_FOCUS_TOOL_SCHEMA_SHA256
+    return native_tool_schemas_sha256(build_native_tool_schemas(names))
+
+
+def native_tool_schemas_sha256(
+    schemas: Sequence[Mapping[str, Any]],
+) -> str:
+    """Hash one canonical schema object or an ordered list of schema objects."""
+
+    schema_items = tuple(schemas)
+    if not schema_items:
+        raise ValueError("native tool schemas must be non-empty")
+    if any(not isinstance(schema, Mapping) for schema in schema_items):
+        raise TypeError("each native tool schema must be a mapping")
+    json_items = tuple(_thaw_json(schema) for schema in schema_items)
+    payload: Any = json_items[0] if len(json_items) == 1 else list(json_items)
     canonical = json.dumps(
-        build_native_tool_schemas(names),
+        payload,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     )
     return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw_json(item) for item in value]
+    return value
 
 
 class ParseErrorCode(str, Enum):
@@ -430,6 +532,7 @@ class ParsedToolCall:
         )
         if self.name != TGVF_FOCUS_TOOL_NAME:
             raise ValueError(f"unsupported tool name: {self.name!r}")
+        validate_native_tool_target_for_echo(self.target)
         if self.target != self.target_span.target_text:
             raise ValueError("parsed target and target span disagree")
 
@@ -447,6 +550,7 @@ class ParsedImageZoomInCall:
     raw_json: str
     call_offsets: TextOffsets
     json_offsets: TextOffsets
+    label: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bbox_2d", tuple(self.bbox_2d))
@@ -463,6 +567,8 @@ class ParsedImageZoomInCall:
         )
         if self.name != IMAGE_ZOOM_IN_TOOL_NAME:
             raise ValueError(f"unsupported crop tool name: {self.name!r}")
+        if self.label is not None and not isinstance(self.label, str):
+            raise ValueError("crop label must be a string when provided")
         if len(self.bbox_2d) != 4 or any(
             type(value) is not int for value in self.bbox_2d
         ):
@@ -501,8 +607,9 @@ class ParsedCropTGVFCall:
             self.sampled_token_ids,
             self.sampled_token_byte_spans,
         )
-        if self.name != CROP_TGVF_TOOL_NAME:
+        if self.name != TGVF_CROP_TOOL_NAME:
             raise ValueError(f"unsupported atomic crop/TGVF tool name: {self.name!r}")
+        validate_native_tool_target_for_echo(self.target)
         if len(self.bbox_2d) != 4 or any(
             type(value) is not int for value in self.bbox_2d
         ):

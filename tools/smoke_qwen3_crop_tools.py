@@ -44,7 +44,7 @@ from tgvf_rl.observations.schema import CropObservationRecord, CropTGVFObservati
 from tgvf_rl.observations.store import ObservationStore
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import (
-    CROP_TGVF_TOOL_NAME,
+    TGVF_CROP_TOOL_NAME,
     IMAGE_ZOOM_IN_TOOL_NAME,
     SampledAssistantTurn,
     TokenByteSpan,
@@ -374,14 +374,14 @@ def main() -> int:
     source_rgb = _synthetic_rgb()
     fused_text = (
         "inspect the fine print</think>\n<tool_call>"
-        '{"name":"crop_tgvf_tool","arguments":'
+        '{"name":"tgvf_crop_tool","arguments":'
         '{"bbox_2d":[32,48,224,208],"target":"small red digits"}}'
         "</tool_call>"
     )
     fused_sampled, fused_parsed = _sampled_policy_turn(
         processor.tokenizer, fused_text, policy
     )
-    if getattr(fused_parsed, "name", None) != CROP_TGVF_TOOL_NAME:
+    if getattr(fused_parsed, "name", None) != TGVF_CROP_TOOL_NAME:
         raise TypeError("fused parser returned another call type")
     source_visual = materializer.materialize_source_visual(
         source_rgb,

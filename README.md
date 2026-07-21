@@ -89,7 +89,7 @@ original image + question + native Qwen tool schema
         ↓
 selected Qwen-VL policy reasoning
         ↓
-direct answer OR tgvf_focus_tool(target) OR image_zoom_in_tool(bbox_2d)
+direct answer OR the enabled profile's visual-tool call
         ↓
 TGVF Adapter produces latent D, or crop returns exact RGB pixels
         ↓
@@ -102,12 +102,18 @@ zero or more additional tool calls
 final answer
 ```
 
-The policy RL visual tools are:
+The policy RL visual-tool profiles are:
 
 ```text
 tgvf_focus_tool(target: str)
-image_zoom_in_tool(bbox_2d: [left, top, right, bottom])
+image_zoom_in_tool(bbox_2d: [left, top, right, bottom], label?: str)
+tgvf_crop_tool(bbox_2d: [left, top, right, bottom], target: str)
 ```
+
+The third call is atomic: it crops first and then generates target-conditioned
+`D` from that exact crop. The three accepted v1 system prompts, shared user
+prompt, schemas, and successful response text are fixed in
+[TGVF Visual Tool Prompts v1](docs/TGVF_VISUAL_TOOL_PROMPTS_V1.md).
 
 The crop uses half-open integer pixel coordinates over the immutable original
 image, clamps to its bounds, and records the exact RGB8 pixels plus rollout-time

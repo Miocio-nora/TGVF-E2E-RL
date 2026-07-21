@@ -13,7 +13,12 @@ import torch
 from torch.utils.data import Dataset
 
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
-from tgvf_rl.protocol import NativeProtocolRenderer
+from tgvf_rl.protocol import (
+    NativeProtocolRenderer,
+    NativeToolCapabilityProfile,
+    build_native_tool_schemas,
+    build_visual_tool_prompt_messages,
+)
 
 
 VERL_SELECTED_SAMPLE_DATASET_SCHEMA = "tgvf-verl-selected-sample-v1"
@@ -35,6 +40,32 @@ _CONFIG_FIELDS = {
     "repeat_count",
     "agent_name",
 }
+
+
+def build_tgvf_only_smoke_messages(
+    question: str,
+    *,
+    image_path: Path | None = None,
+) -> tuple[Mapping[str, Any], ...]:
+    """Use the accepted TGVF-only v1 prompt in render and raw-row forms."""
+
+    messages = build_visual_tool_prompt_messages(
+        question,
+        tool_profile=NativeToolCapabilityProfile.TGVF_ONLY,
+    )
+    if image_path is None:
+        return messages
+    path = Path(image_path)
+    system, user = messages
+    user_content = tuple(user["content"])
+    image_item = {**user_content[0], "image": str(path)}
+    return (
+        dict(system),
+        {
+            "role": "user",
+            "content": (image_item, dict(user_content[1])),
+        },
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,9 +125,7 @@ class VerlSelectedSampleDatasetBinding:
             samples_sha256=config.dataset.samples_sha256,
             sample_id=sample.sample_id,
             cursor=config.dataset.cursor,
-            iteration_identity_sha256=(
-                config.dataset.iteration_identity_sha256
-            ),
+            iteration_identity_sha256=(config.dataset.iteration_identity_sha256),
             image_path=sample.image_path,
             image_sha256=sample.image_sha256,
             question=sample.question,
@@ -154,55 +183,59 @@ class TGVFSelectedSampleDataset(Dataset):
         if processor is None:
             raise TypeError("native Qwen selected-sample dataset requires a processor")
         if max_samples != -1:
-            raise ValueError("selected-sample dataset forbids secondary max-sample selection")
+            raise ValueError(
+                "selected-sample dataset forbids secondary max-sample selection"
+            )
         binding = VerlSelectedSampleDatasetBinding.from_config(
             _config_value(config, "tgvf_selected_sample")
         )
         paths = (
-            (data_files,)
-            if isinstance(data_files, (str, Path))
-            else tuple(data_files)
+            (data_files,) if isinstance(data_files, (str, Path)) else tuple(data_files)
         )
         if tuple(str(path) for path in paths) != (str(binding.samples_path),):
             raise ValueError("upstream data_files differ from the bound samples file")
         _verify_bound_files(binding)
 
+        tool_names = NativeToolCapabilityProfile.TGVF_ONLY.tool_names
+        tool_schemas = tuple(build_native_tool_schemas(tool_names))
         renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=binding.tokenizer_length,
+            tool_names=tool_names,
+            tool_schemas=tool_schemas,
         )
-        prompt_messages = (
-            {
-                "role": "user",
-                "content": (
-                    {"type": "image"},
-                    {"type": "text", "text": binding.question},
-                ),
-            },
+        if renderer.tool_schemas != tool_schemas:
+            raise RuntimeError("native renderer lost the selected policy tool schemas")
+        prompt_messages = build_tgvf_only_smoke_messages(binding.question)
+        raw_prompt = build_tgvf_only_smoke_messages(
+            binding.question,
+            image_path=binding.image_path,
         )
         rendered = renderer.render(prompt_messages, add_generation_prompt=True)
         renderer.assert_generation_prefill(rendered, renderer.tokenizer)
         if rendered.text_sha256 != binding.prompt_sha256:
-            raise ValueError("selected native prompt text SHA256 differs from run config")
+            raise ValueError(
+                "selected native prompt text SHA256 differs from run config"
+            )
 
         self.binding = binding
         self._row: Mapping[str, object] = {
             "raw_prompt": [
                 {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": str(binding.image_path)},
-                        {"type": "text", "text": binding.question},
-                    ],
+                    **message,
+                    "content": (
+                        [dict(item) for item in message["content"]]
+                        if not isinstance(message["content"], str)
+                        else message["content"]
+                    ),
                 }
+                for message in raw_prompt
             ],
             "initial_prompt_token_ids": rendered.token_ids,
             "initial_prompt_text_sha256": rendered.text_sha256,
             "initial_prompt_token_ids_sha256": rendered.token_ids_sha256,
             "sample_id": binding.sample_id,
-            "dataset_iteration_identity_sha256": (
-                binding.iteration_identity_sha256
-            ),
+            "dataset_iteration_identity_sha256": (binding.iteration_identity_sha256),
             "source_image_path": str(binding.image_path),
             "source_image_sha256": binding.image_sha256,
             "data_source": binding.data_source,
@@ -224,7 +257,14 @@ class TGVFSelectedSampleDataset(Dataset):
             raise IndexError(index)
         row = dict(self._row)
         row["raw_prompt"] = [
-            {**message, "content": [dict(item) for item in message["content"]]}
+            {
+                **message,
+                "content": (
+                    [dict(item) for item in message["content"]]
+                    if not isinstance(message["content"], str)
+                    else message["content"]
+                ),
+            }
             for message in self._row["raw_prompt"]
         ]
         row["reward_model"] = dict(self._row["reward_model"])
@@ -308,4 +348,5 @@ __all__ = [
     "VERL_SELECTED_SAMPLE_AGENT_NAME",
     "VERL_SELECTED_SAMPLE_DATASET_SCHEMA",
     "VerlSelectedSampleDatasetBinding",
+    "build_tgvf_only_smoke_messages",
 ]

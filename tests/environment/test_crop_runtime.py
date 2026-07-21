@@ -15,6 +15,11 @@ from tgvf_rl.environment.crop_runtime import (
 )
 from tgvf_rl.environment.crop_tool import CropReplayLayout, CropVisualTensorBundle
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
+from tgvf_rl.environment.native_appender import (
+    QWEN_NATIVE_IMAGE_PLACEHOLDER,
+    render_qwen_native_success_environment_text,
+)
+from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
@@ -55,10 +60,11 @@ class _LayoutBuilder:
         self.calls = 0
         self.visual: CropVisualTensorBundle | None = None
 
-    def build_crop(self, context, crop_visual):
+    def build_crop(self, context, crop_visual, parsed_call):
         self.trace.append("layout")
         self.calls += 1
         self.visual = crop_visual
+        assert parsed_call.sampled_text == context.sampled_turn.text
         return CropReplayLayout(
             sequence_length=16,
             original_image_positions=context.trajectory_source_visual.positions,
@@ -78,6 +84,33 @@ class _GradientMaterializer(_Materializer):
             visual,
             merged_main=torch.ones((1, 1, 8), requires_grad=True),
         )
+
+
+class _NativeTokenizer:
+    name_or_path = "/fixture"
+    _native = {
+        "<|vision_start|>": 1,
+        "<|image_pad|>": 2,
+        "<|vision_end|>": 3,
+    }
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        return self._native[token]
+
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+        assert add_special_tokens is False
+        result: list[int] = []
+        cursor = 0
+        while cursor < len(text):
+            for token, token_id in self._native.items():
+                if text.startswith(token, cursor):
+                    result.append(token_id)
+                    cursor += len(token)
+                    break
+            else:
+                result.append(10 + (ord(text[cursor]) % 200))
+                cursor += 1
+        return result
 
 
 def _model() -> ModelIdentity:
@@ -229,6 +262,62 @@ def test_plain_crop_runtime_materializes_once_then_late_binds_layout() -> None:
         rtol=0,
         atol=0,
     )
+
+
+def test_qwen3_plain_crop_layout_uses_exact_parsed_call_response_bytes() -> None:
+    model = _model()
+    store = ObservationStore()
+    source, _pixels = _source(store, "run/sample/0/group")
+    parsed = _parsed_call()
+    tokenizer = _NativeTokenizer()
+    prompt_ids = tuple(
+        tokenizer.encode(
+            QWEN_NATIVE_IMAGE_PLACEHOLDER + "Q",
+            add_special_tokens=False,
+        )
+    )
+    context = replace(
+        _context(parsed_call=parsed, source=source, model=model),
+        prompt_token_ids_before_turn=prompt_ids,
+    )
+    captured_input_ids: list[tuple[int, ...]] = []
+
+    def get_rope_index(*, input_ids, image_grid_thw, **_kwargs):
+        assert image_grid_thw.tolist() == [[1, 2, 2], [1, 2, 2]]
+        captured_input_ids.append(tuple(input_ids[0].tolist()))
+        sequence = input_ids.shape[-1]
+        positions = torch.arange(sequence).view(1, 1, sequence).expand(3, -1, -1)
+        return positions, torch.zeros(1, 1, dtype=torch.long)
+
+    builder = Qwen3NativeToolLayoutBuilder(
+        tokenizer=tokenizer,
+        model_identity=model,
+        observation_store=store,
+        get_rope_index=get_rope_index,
+    )
+    visual = CropVisualTensorBundle(
+        merged_main=torch.ones((1, 1, 8)),
+        merged_deepstack=tuple(torch.ones((1, 1, 8)) for _ in BRANCH_LAYERS),
+        image_grid_thw=(1, 2, 2),
+        spatial_merge_size=2,
+        deepstack_branch_layers=BRANCH_LAYERS,
+    )
+    layout = builder.build_crop(context, visual, parsed)
+
+    expected_environment_ids = tuple(
+        tokenizer.encode(
+            render_qwen_native_success_environment_text(parsed),
+            add_special_tokens=False,
+        )
+    )
+    expected_ids = (
+        (1, 2, 2, 2, 2, 3)
+        + prompt_ids[3:]
+        + context.sampled_turn.token_ids
+        + expected_environment_ids
+    )
+    assert captured_input_ids == [expected_ids]
+    assert layout.sequence_length == len(expected_ids)
 
 
 def test_plain_crop_runtime_call_key_rejects_changed_sampled_content() -> None:

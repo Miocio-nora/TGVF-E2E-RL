@@ -26,7 +26,10 @@ from tgvf_rl.environment.focus_runtime import (
     FocusExecutionLedger,
 )
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
-from tgvf_rl.environment.native_appender import QWEN_NATIVE_IMAGE_PLACEHOLDER
+from tgvf_rl.environment.native_appender import (
+    QWEN_NATIVE_IMAGE_PLACEHOLDER,
+    render_qwen_native_success_environment_text,
+)
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.observations.schema import CropTGVFObservationRecord
@@ -77,7 +80,7 @@ class _Materializer:
         self.received: list[torch.Tensor] = []
 
     def materialize_source_visual(self, crop_rgb, *, parsed_call, call_index):
-        assert parsed_call.name == "crop_tgvf_tool"
+        assert parsed_call.name == "tgvf_crop_tool"
         assert call_index == 0
         self.received.append(crop_rgb.clone())
         premerge = torch.arange(16, dtype=torch.float32).view(4, 4)
@@ -161,7 +164,7 @@ def _sampled(
     bbox_json = ",".join(str(value) for value in bbox)
     text = (
         "inspect</think>\n<tool_call>"
-        '{"name":"crop_tgvf_tool","arguments":'
+        '{"name":"tgvf_crop_tool","arguments":'
         f'{{"bbox_2d":[{bbox_json}],"target":"{target}"}}'
         "}</tool_call>"
     )
@@ -323,6 +326,18 @@ def test_embedding_runtime_executes_atomic_crop_and_tgvf_once(
     assert record.layout.original_image_positions == (1,)
     assert len(record.layout.d_positions) == 1
     assert record.layout.deepstack_branch_layers == BRANCH_LAYERS
+    tokenizer = runtime.layout_builder.tokenizer
+    expected_environment_ids = tuple(
+        tokenizer.encode(
+            render_qwen_native_success_environment_text(parsed),
+            add_special_tokens=False,
+        )
+    )
+    assert record.layout.sequence_length == len(
+        context.prompt_token_ids_before_turn
+        + context.sampled_turn.token_ids
+        + expected_environment_ids
+    )
     assert all(not parameter.requires_grad for parameter in embedding.parameters())
 
 

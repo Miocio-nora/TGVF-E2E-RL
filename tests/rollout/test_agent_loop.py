@@ -75,7 +75,20 @@ class Runtime:
 
 
 class Appender:
-    def append(self, prompt_token_ids, sampled_turn, observation, *, call_index):
+    def append(
+        self,
+        prompt_token_ids,
+        sampled_turn,
+        observation,
+        *,
+        call_index,
+        parsed_call,
+    ):
+        if isinstance(observation, StandardToolError):
+            assert parsed_call is None
+        else:
+            assert parsed_call is not None
+            assert parsed_call.sampled_text == sampled_turn.text
         environment = (151665, 151655, 151666, 151644, 151667)
         return prompt_token_ids + sampled_turn.token_ids + environment, environment
 
@@ -169,7 +182,8 @@ def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
     )
     crop = _sample(
         "reason\n</think>\n<tool_call>"
-        '{"name":"image_zoom_in_tool","arguments":{"bbox_2d":[1,2,9,10]}}'
+        '{"name":"image_zoom_in_tool","arguments":'
+        '{"bbox_2d":[1,2,9,10],"label":"serial-number plate"}}'
         "</tool_call>",
         sampling,
     )
@@ -202,6 +216,7 @@ def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
     assert isinstance(trajectory.tool_calls[0], CropToolCallRecord)
     assert isinstance(trajectory.tool_calls[1], ToolCallRecord)
     assert trajectory.tool_calls[0].bbox_2d == (1, 2, 9, 10)
+    assert trajectory.tool_calls[0].label == "serial-number plate"
     assert trajectory.tool_calls[1].target == "serial number"
     assert tuple(item.call_index for item in trajectory.observations) == (0, 1)
     assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
@@ -226,7 +241,7 @@ def test_framework_neutral_loop_records_atomic_crop_tgvf_call() -> None:
     )
     fused = _sample(
         "reason\n</think>\n<tool_call>"
-        '{"name":"crop_tgvf_tool","arguments":'
+        '{"name":"tgvf_crop_tool","arguments":'
         '{"bbox_2d":[3,4,19,23],"target":"small red digits"}}'
         "</tool_call>",
         sampling,
@@ -239,7 +254,7 @@ def test_framework_neutral_loop_records_atomic_crop_tgvf_call() -> None:
         parser=StrictToolCallParser(),
         behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
         max_tool_calls=4,
-        enabled_tool_names=("crop_tgvf_tool",),
+        enabled_tool_names=("tgvf_crop_tool",),
     )
     trajectory = loop.run(
         RolloutRequest(
@@ -295,10 +310,22 @@ def test_tool_error_returns_standard_observation_and_allows_recovery() -> None:
     appender_values = []
 
     class RecordingAppender(Appender):
-        def append(self, prompt_token_ids, sampled_turn, observation, *, call_index):
-            appender_values.append(observation)
+        def append(
+            self,
+            prompt_token_ids,
+            sampled_turn,
+            observation,
+            *,
+            call_index,
+            parsed_call,
+        ):
+            appender_values.append((observation, parsed_call))
             return super().append(
-                prompt_token_ids, sampled_turn, observation, call_index=call_index
+                prompt_token_ids,
+                sampled_turn,
+                observation,
+                call_index=call_index,
+                parsed_call=parsed_call,
             )
 
     loop = FrameworkNeutralAgentLoop(
@@ -326,7 +353,8 @@ def test_tool_error_returns_standard_observation_and_allows_recovery() -> None:
     assert len(trajectory.tool_errors) == 1
     assert trajectory.tool_errors[0].code == "tool_execution_failed"
     assert trajectory.tool_errors[0].attempt_index == 0
-    assert isinstance(appender_values[0], StandardToolError)
+    assert isinstance(appender_values[0][0], StandardToolError)
+    assert appender_values[0][1] is None
     assert trajectory.final_answer == "blue"
     assert behavior_store.resolve(trajectory.assistant_turns[0].behavior_trace)
 

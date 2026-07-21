@@ -167,12 +167,12 @@ This decision supersedes only the fusion semantics in
 `CROP-FUSION-20260720`. The repository must implement three distinct native
 tool capabilities and must not equate the third with two sequential calls:
 
-1. `image_zoom_in_tool(bbox_2d)` crops the immutable original image and returns
-   a native image observation;
+1. `image_zoom_in_tool(bbox_2d, label?)` crops the immutable original image and
+   returns a native image observation; `label` is optional descriptive metadata;
 2. `tgvf_focus_tool(target)` applies the frozen TGVF Adapter to the immutable
    original-image visual features and returns main `D` plus all supported
    D-DeepStack branches;
-3. `crop_tgvf_tool(bbox_2d, target)` is one atomic sampled tool call. The model
+3. `tgvf_crop_tool(bbox_2d, target)` is one atomic sampled tool call. The model
    emits the crop box and target together; the environment crops the immutable
    original image, processes that exact crop as the visual source, and applies
    the TGVF Adapter to the crop's pre-merge main/DeepStack features using the
@@ -204,6 +204,30 @@ and exact-replay fixtures. `crop_only`, `tgvf_only`, and `crop_tgvf` are
 configuration profiles, not aliases for one another. The existing Policy
 Pilot v1 remains `tgvf_only`; implementing the other two capabilities does not
 silently enable them in that pilot or alter its reward.
+
+### 0.4B Accepted policy visual-tool prompts v1
+
+Decision ID: **TGVF-VISUAL-TOOL-PROMPTS-V1-20260721**
+
+Accepted by: **user**, on **2026-07-21 JST**
+
+The exact three-profile policy prompt, schema, example-call and successful
+tool-response text contract is
+[`TGVF_VISUAL_TOOL_PROMPTS_V1.md`](TGVF_VISUAL_TOOL_PROMPTS_V1.md). It is the
+first accepted policy-RL visual-tool prompt identity and supersedes provisional
+policy prompt/schema wording. In particular:
+
+- the atomic public function is `tgvf_crop_tool`, not
+  `crop_tgvf_tool`;
+- crop-only accepts required `bbox_2d` plus optional string `label`;
+- every policy prompt contains the profile-specific system message and the
+  shared image/question/user instruction;
+- successful tool responses contain the profile-specific accepted text plus
+  the native visual observation;
+- schemas, prompt source text and response text are versioned and hashed;
+- this decision does not change representation-phase transcript/checkpoint
+  identity, tool execution mathematics, Adapter state, reward or benchmark
+  prompts.
 
 ### 0.5 Accepted evaluation architecture
 

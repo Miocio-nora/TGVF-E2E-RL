@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from .schema import (
-    CROP_TGVF_TOOL_NAME,
+    TGVF_CROP_TOOL_NAME,
     ParseErrorCode,
     ParsedCropTGVFCall,
     ParsedImageZoomInCall,
@@ -22,6 +22,7 @@ from .schema import (
     TargetSpan,
     TextOffsets,
     ToolCallParseError,
+    validate_native_tool_target_for_echo,
 )
 
 
@@ -320,7 +321,7 @@ class StrictToolCallParser:
                 json_start=json_start,
                 json_end=json_end,
             )
-        if tool_name == CROP_TGVF_TOOL_NAME:
+        if tool_name == TGVF_CROP_TOOL_NAME:
             return self._parse_crop_tgvf_call(
                 root=root,
                 decoded=decoded,
@@ -347,6 +348,7 @@ class StrictToolCallParser:
             raise ToolCallParseError(
                 ParseErrorCode.EMPTY_TARGET, "target must be non-empty"
             )
+        self._validate_target_echo_safety(target)
 
         if root.members is None or root.members["arguments"].members is None:
             raise ToolCallParseError(
@@ -398,10 +400,13 @@ class StrictToolCallParser:
         json_start: int,
         json_end: int,
     ) -> ParsedImageZoomInCall:
-        if type(arguments) is not dict or set(arguments) != {"bbox_2d"}:
+        if type(arguments) is not dict or set(arguments) not in (
+            {"bbox_2d"},
+            {"bbox_2d", "label"},
+        ):
             raise ToolCallParseError(
                 ParseErrorCode.INVALID_ARGUMENTS,
-                "crop arguments must contain exactly 'bbox_2d'",
+                "crop arguments must contain 'bbox_2d' and optional 'label'",
             )
         bbox = arguments["bbox_2d"]
         if (
@@ -419,6 +424,12 @@ class StrictToolCallParser:
                 ParseErrorCode.INVALID_BBOX,
                 "bbox_2d must have positive requested width and height",
             )
+        label = arguments.get("label")
+        if "label" in arguments and not isinstance(label, str):
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_ARGUMENTS,
+                "label must be a string when provided",
+            )
         return ParsedImageZoomInCall(
             name=decoded["name"],
             bbox_2d=(left, top, right, bottom),
@@ -429,6 +440,7 @@ class StrictToolCallParser:
             raw_json=raw_json,
             call_offsets=_text_offsets(text, call_start, call_end),
             json_offsets=_text_offsets(text, json_start, json_end),
+            label=label,
         )
 
     @staticmethod
@@ -476,6 +488,7 @@ class StrictToolCallParser:
             raise ToolCallParseError(
                 ParseErrorCode.EMPTY_TARGET, "target must be non-empty"
             )
+        StrictToolCallParser._validate_target_echo_safety(target)
         if root.members is None or root.members["arguments"].members is None:
             raise ToolCallParseError(
                 ParseErrorCode.INVALID_CALL_SHAPE, "arguments must be an object"
@@ -517,3 +530,13 @@ class StrictToolCallParser:
         if not stripped:
             return True
         return stripped in self.allowed_terminal_suffixes
+
+    @staticmethod
+    def _validate_target_echo_safety(target: str) -> None:
+        try:
+            validate_native_tool_target_for_echo(target)
+        except (TypeError, ValueError) as error:
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_ARGUMENTS,
+                str(error),
+            ) from error

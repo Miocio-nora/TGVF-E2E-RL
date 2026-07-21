@@ -10,7 +10,7 @@ import json
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import OwnedTokenSequence, TokenSpan
 from tgvf_rl.observations.store import ObservationHandle
-from tgvf_rl.protocol.schema import CROP_TGVF_TOOL_NAME
+from tgvf_rl.protocol.schema import TGVF_CROP_TOOL_NAME
 
 from .behavior import BehaviorTraceHandle
 
@@ -85,11 +85,14 @@ class CropToolCallRecord:
     function_name: str
     bbox_2d: tuple[int, int, int, int]
     raw_call_text: str
+    label: str | None = None
     attempt_index: int | None = None
 
     def __post_init__(self) -> None:
         if self.function_name != "image_zoom_in_tool":
             raise ValueError("unexpected crop tool function")
+        if self.label is not None and not isinstance(self.label, str):
+            raise ValueError("crop label must be a string when provided")
         if self.call_index < 0 or self.assistant_turn_index < 0:
             raise ValueError("crop call indices must be non-negative")
         if self.attempt_index is None:
@@ -120,7 +123,7 @@ class CropTGVFToolCallRecord:
     attempt_index: int | None = None
 
     def __post_init__(self) -> None:
-        if self.function_name != CROP_TGVF_TOOL_NAME:
+        if self.function_name != TGVF_CROP_TOOL_NAME:
             raise ValueError("unexpected atomic crop+TGVF tool function")
         if self.call_index < 0 or self.assistant_turn_index < 0:
             raise ValueError("atomic crop+TGVF call indices must be non-negative")

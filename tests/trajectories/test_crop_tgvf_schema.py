@@ -32,7 +32,7 @@ def _call() -> CropTGVFToolCallRecord:
     return CropTGVFToolCallRecord(
         call_index=0,
         assistant_turn_index=1,
-        function_name="crop_tgvf_tool",
+        function_name="tgvf_crop_tool",
         bbox_2d=(1, 2, 9, 10),
         target="serial number",
         target_token_span=TokenSpan(5, 7),
@@ -47,6 +47,20 @@ def test_atomic_crop_tgvf_call_is_not_a_sequential_tool_alias() -> None:
     assert not isinstance(call, (CropToolCallRecord, ToolCallRecord))
     assert call.bbox_2d == (1, 2, 9, 10)
     assert call.target == "serial number"
+
+
+def test_plain_crop_call_record_preserves_optional_label() -> None:
+    call = CropToolCallRecord(
+        call_index=0,
+        assistant_turn_index=1,
+        function_name="image_zoom_in_tool",
+        bbox_2d=(1, 2, 9, 10),
+        raw_call_text="raw",
+        label="serial-number plate",
+    )
+    assert call.label == "serial-number plate"
+    with pytest.raises(ValueError, match="label must be a string"):
+        replace(call, label=3)
 
 
 @pytest.mark.parametrize(
@@ -114,7 +128,7 @@ def test_trajectory_validator_binds_atomic_bbox_target_and_observation() -> None
     call = CropTGVFToolCallRecord(
         call_index=0,
         assistant_turn_index=0,
-        function_name="crop_tgvf_tool",
+        function_name="tgvf_crop_tool",
         bbox_2d=parsed.bbox_2d,
         target=parsed.target,
         target_token_span=TokenSpan(

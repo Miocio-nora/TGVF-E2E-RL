@@ -12,7 +12,7 @@ from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
 from .schema import (
     TGVF_FOCUS_TOOL_NAME,
     build_native_tool_schemas,
-    native_tool_set_sha256,
+    native_tool_schemas_sha256,
 )
 
 
@@ -36,6 +36,7 @@ class NativeProtocolRenderer:
         *,
         expected_tokenizer_length: int,
         tool_names: tuple[str, ...] = (TGVF_FOCUS_TOOL_NAME,),
+        tool_schemas: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         tokenizer = getattr(processor, "tokenizer", processor)
         if not hasattr(processor, "apply_chat_template"):
@@ -57,8 +58,29 @@ class NativeProtocolRenderer:
         self.tokenizer = tokenizer
         self.expected_tokenizer_length = expected_tokenizer_length
         self.tool_names = tuple(tool_names)
-        self.tool_schemas = tuple(build_native_tool_schemas(self.tool_names))
-        self.tool_schema_sha256 = native_tool_set_sha256(self.tool_names)
+        supplied_schemas = (
+            tuple(build_native_tool_schemas(self.tool_names))
+            if tool_schemas is None
+            else tuple(tool_schemas)
+        )
+        if not supplied_schemas:
+            raise ValueError("tool_schemas must be non-empty")
+        schemas = tuple(_copy_json_mapping(schema) for schema in supplied_schemas)
+        schema_names: list[str] = []
+        for schema in schemas:
+            if not isinstance(schema, Mapping):
+                raise TypeError("each tool schema must be a mapping")
+            function = schema.get("function")
+            if not isinstance(function, Mapping):
+                raise ValueError("each tool schema must contain a function mapping")
+            name = function.get("name")
+            if not isinstance(name, str) or not name:
+                raise ValueError("each tool schema must contain a function name")
+            schema_names.append(name)
+        if tuple(schema_names) != self.tool_names:
+            raise ValueError("tool schema names differ from ordered tool_names")
+        self.tool_schemas = schemas
+        self.tool_schema_sha256 = native_tool_schemas_sha256(schemas)
         self.chat_template_sha256 = hashlib.sha256(template.encode("utf-8")).hexdigest()
 
     def render(
@@ -69,19 +91,22 @@ class NativeProtocolRenderer:
     ) -> RenderedTranscript:
         self.assert_tokenizer_length()
         self.assert_chat_template_identity()
+        self.assert_tool_schema_identity()
         text = self.processor.apply_chat_template(
             list(messages),
-            tools=[dict(schema) for schema in self.tool_schemas],
+            tools=self._fresh_tool_schemas(),
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
         )
         self.assert_tokenizer_length()
         self.assert_chat_template_identity()
+        self.assert_tool_schema_identity()
         if not isinstance(text, str):
             raise TypeError("chat template did not return text")
         token_ids = tuple(self.tokenizer.encode(text, add_special_tokens=False))
         self.assert_tokenizer_length()
         self.assert_chat_template_identity()
+        self.assert_tool_schema_identity()
         return self._build_rendered_transcript(text, token_ids)
 
     def render_many(
@@ -101,19 +126,23 @@ class NativeProtocolRenderer:
         if not conversations:
             self.assert_tokenizer_length()
             self.assert_chat_template_identity()
+            self.assert_tool_schema_identity()
             return ()
 
         self.assert_tokenizer_length()
         self.assert_chat_template_identity()
+        self.assert_tool_schema_identity()
         texts = self._render_texts_many(
             conversations,
             add_generation_prompt=add_generation_prompt,
         )
         self.assert_tokenizer_length()
         self.assert_chat_template_identity()
+        self.assert_tool_schema_identity()
         token_ids_batch = self._encode_texts_many(texts)
         self.assert_tokenizer_length()
         self.assert_chat_template_identity()
+        self.assert_tool_schema_identity()
         return tuple(
             self._build_rendered_transcript(text, token_ids)
             for text, token_ids in zip(texts, token_ids_batch, strict=True)
@@ -128,16 +157,18 @@ class NativeProtocolRenderer:
         try:
             batch_result = self.processor.apply_chat_template(
                 [list(messages) for messages in conversations],
-                tools=[dict(schema) for schema in self.tool_schemas],
+                tools=self._fresh_tool_schemas(),
                 tokenize=False,
                 add_generation_prompt=add_generation_prompt,
             )
         except Exception:
             self.assert_tokenizer_length()
             self.assert_chat_template_identity()
+            self.assert_tool_schema_identity()
         else:
             self.assert_tokenizer_length()
             self.assert_chat_template_identity()
+            self.assert_tool_schema_identity()
             texts = self._coerce_text_batch(batch_result, len(conversations))
             if texts is not None:
                 return texts
@@ -146,12 +177,13 @@ class NativeProtocolRenderer:
         for messages in conversations:
             text = self.processor.apply_chat_template(
                 list(messages),
-                tools=[dict(schema) for schema in self.tool_schemas],
+                tools=self._fresh_tool_schemas(),
                 tokenize=False,
                 add_generation_prompt=add_generation_prompt,
             )
             self.assert_tokenizer_length()
             self.assert_chat_template_identity()
+            self.assert_tool_schema_identity()
             if not isinstance(text, str):
                 raise TypeError("chat template did not return text")
             texts.append(text)
@@ -256,6 +288,16 @@ class NativeProtocolRenderer:
                 "processor chat template changed after renderer construction"
             )
 
+    def assert_tool_schema_identity(self) -> None:
+        """Fail if the exact registered schemas changed after pinning."""
+
+        if native_tool_schemas_sha256(self.tool_schemas) != self.tool_schema_sha256:
+            raise ValueError("tool schemas changed after renderer construction")
+
+    def _fresh_tool_schemas(self) -> list[dict[str, Any]]:
+        self.assert_tool_schema_identity()
+        return [_copy_json_mapping(schema) for schema in self.tool_schemas]
+
     @staticmethod
     def assert_generation_prefill(
         transcript: RenderedTranscript, tokenizer: Any
@@ -277,3 +319,23 @@ class NativeProtocolRenderer:
             raise ValueError(
                 "native Qwen Thinking generation prefill differs from the accepted contract"
             )
+
+
+def _copy_json_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy one schema without sharing nested mutable values with a processor."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("each tool schema must be a mapping")
+
+    def copy_value(item: Any) -> Any:
+        if isinstance(item, Mapping):
+            if any(not isinstance(key, str) for key in item):
+                raise TypeError("tool schema object keys must be strings")
+            return {key: copy_value(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [copy_value(child) for child in item]
+        if item is None or type(item) in {str, int, float, bool}:
+            return item
+        raise TypeError("tool schemas must contain only JSON-compatible values")
+
+    return copy_value(value)

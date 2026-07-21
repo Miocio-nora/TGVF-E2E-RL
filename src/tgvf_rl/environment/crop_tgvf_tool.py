@@ -27,7 +27,7 @@ from tgvf_rl.observations.store import (
     ObservationStore,
     tensor_checksum,
 )
-from tgvf_rl.protocol.schema import CROP_TGVF_TOOL_NAME, ParsedCropTGVFCall
+from tgvf_rl.protocol.schema import TGVF_CROP_TOOL_NAME, ParsedCropTGVFCall
 from tgvf_rl.representation.adapter import (
     TGVFAdapter,
     TGVFAdapterInput,
@@ -93,7 +93,7 @@ class CropTGVFToolExecutionResult:
 class AtomicCropTGVFTool:
     """Execute crop and TGVF as one sampled call and one immutable record."""
 
-    name = CROP_TGVF_TOOL_NAME
+    name = TGVF_CROP_TOOL_NAME
 
     def __init__(
         self,
@@ -325,8 +325,8 @@ def _validate_request(request: CropTGVFToolExecutionRequest) -> None:
         raise TypeError("request must be CropTGVFToolExecutionRequest")
     if not request.trajectory_id or request.call_index < 0:
         raise ValueError("atomic crop+TGVF trajectory/call identity is invalid")
-    if request.parsed_call.name != CROP_TGVF_TOOL_NAME:
-        raise ValueError("parsed call is not crop_tgvf_tool")
+    if request.parsed_call.name != TGVF_CROP_TOOL_NAME:
+        raise ValueError("parsed call is not tgvf_crop_tool")
     provenance = request.condition.provenance
     if provenance.trajectory_ids != (request.trajectory_id,) or (
         provenance.call_indices != (request.call_index,)

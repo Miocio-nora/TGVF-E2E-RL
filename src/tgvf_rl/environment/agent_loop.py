@@ -18,6 +18,7 @@ from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy.config import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import (
+    NativeToolCall,
     POLICY_RL_TOOL_NAMES,
     SampledAssistantTurn,
     StandardToolError,
@@ -151,6 +152,7 @@ class ToolObservationAppender(Protocol):
         observation: ObservationHandle | StandardToolError,
         *,
         call_index: int,
+        parsed_call: NativeToolCall | None,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """Return updated prompt and exact environment-owned appended token IDs."""
 
@@ -326,6 +328,7 @@ class FrameworkNeutralAgentLoop:
                     sampled,
                     error,
                     call_index=transition.attempt_index,
+                    parsed_call=None,
                 )
                 errors.append(
                     self._error_record(
@@ -356,6 +359,7 @@ class FrameworkNeutralAgentLoop:
                     sampled,
                     error,
                     call_index=transition.attempt_index,
+                    parsed_call=None,
                 )
                 errors.append(
                     self._error_record(
@@ -385,7 +389,11 @@ class FrameworkNeutralAgentLoop:
                     recoverable=True,
                 )
                 prompt, environment_tokens = self._append_environment(
-                    prompt, sampled, error, call_index=attempt_index
+                    prompt,
+                    sampled,
+                    error,
+                    call_index=attempt_index,
+                    parsed_call=None,
                 )
                 errors.append(
                     self._error_record(
@@ -424,7 +432,11 @@ class FrameworkNeutralAgentLoop:
                     recoverable=True,
                 )
                 prompt, environment_tokens = self._append_environment(
-                    prompt, sampled, error, call_index=attempt_index
+                    prompt,
+                    sampled,
+                    error,
+                    call_index=attempt_index,
+                    parsed_call=None,
                 )
                 errors.append(
                     self._error_record(
@@ -437,7 +449,11 @@ class FrameworkNeutralAgentLoop:
                 state = self.machine.apply(state, AgentEvent.tool_error()).state
                 continue
             prompt, environment_tokens = self._append_environment(
-                prompt, sampled, handle, call_index=call_index
+                prompt,
+                sampled,
+                handle,
+                call_index=call_index,
+                parsed_call=parsed,
             )
             if isinstance(parsed, ParsedImageZoomInCall):
                 calls.append(
@@ -447,6 +463,7 @@ class FrameworkNeutralAgentLoop:
                         function_name=parsed.name,
                         bbox_2d=parsed.bbox_2d,
                         raw_call_text=parsed.raw_tool_call,
+                        label=parsed.label,
                         attempt_index=attempt_index,
                     )
                 )
@@ -522,10 +539,15 @@ class FrameworkNeutralAgentLoop:
         value: ObservationHandle | StandardToolError,
         *,
         call_index: int,
+        parsed_call: NativeToolCall | None,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         previous_prompt = prompt
         updated_prompt, environment_tokens = self.appender.append(
-            prompt, sampled, value, call_index=call_index
+            prompt,
+            sampled,
+            value,
+            call_index=call_index,
+            parsed_call=parsed_call,
         )
         environment_tokens = tuple(environment_tokens)
         expected_prompt = previous_prompt + sampled.token_ids + environment_tokens

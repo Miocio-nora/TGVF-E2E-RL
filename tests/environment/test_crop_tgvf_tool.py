@@ -52,7 +52,7 @@ class Merger(nn.Module):
 
 def _parsed_call():
     text = (
-        '<tool_call>{"name":"crop_tgvf_tool","arguments":'
+        '<tool_call>{"name":"tgvf_crop_tool","arguments":'
         '{"bbox_2d":[-1,1,4,8],"target":"red label"}}</tool_call>'
     )
     ids = tuple(ord(char) for char in text)
@@ -68,7 +68,7 @@ class Materializer:
         self.received: list[torch.Tensor] = []
 
     def materialize_source_visual(self, crop_rgb, *, parsed_call, call_index):
-        assert parsed_call.name == "crop_tgvf_tool"
+        assert parsed_call.name == "tgvf_crop_tool"
         assert call_index == 0
         self.received.append(crop_rgb.clone())
         return SourceVisualTensorBundle(
