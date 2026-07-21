@@ -698,7 +698,37 @@ def test_selected_sample_dataset_binding_is_exact_and_read_only(tmp_path: Path) 
     assert binding.ground_truth == "B"
     assert binding.repeat_count == 8
     assert binding.as_config()["samples_sha256"] == config.dataset.samples_sha256
+    assert "question" not in binding.as_config()
+    assert (
+        VerlSelectedSampleDatasetBinding.from_config(binding.as_config())
+        == binding
+    )
     assert not config.output.root.exists()
+
+
+def test_composed_selected_sample_binding_preserves_multiline_text(
+    tmp_path: Path,
+) -> None:
+    path, _, _ = _write_config(tmp_path)
+    config = load_policy_e2e_smoke_run_config(path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+    upstream_config_dir = (
+        Path(__file__).resolve().parents[2]
+        / ".deps"
+        / "verl"
+        / "verl"
+        / "trainer"
+        / "config"
+    )
+    composed = compose_upstream_verl_config(
+        plan, config_directory=upstream_config_dir
+    )
+
+    restored = VerlSelectedSampleDatasetBinding.from_config(
+        composed.data.tgvf_selected_sample
+    )
+    assert restored.question == config.dataset.selected_sample.question
+    assert restored.ground_truth == config.dataset.selected_sample.ground_truth
 
 
 def test_verl_actor_batch_mapping_preserves_nontrivial_gradient_accumulation(

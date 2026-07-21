@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
@@ -22,7 +24,7 @@ from tgvf_rl.protocol import (
 )
 
 
-VERL_SELECTED_SAMPLE_DATASET_SCHEMA = "tgvf-verl-selected-sample-v1"
+VERL_SELECTED_SAMPLE_DATASET_SCHEMA = "tgvf-verl-selected-sample-v2"
 VERL_SELECTED_SAMPLE_AGENT_NAME = "tgvf_native_policy"
 _CONFIG_FIELDS = {
     "schema_version",
@@ -33,8 +35,8 @@ _CONFIG_FIELDS = {
     "iteration_identity_sha256",
     "image_path",
     "image_sha256",
-    "question",
-    "ground_truth",
+    "question_utf8_base64",
+    "ground_truth_utf8_base64",
     "data_source",
     "prompt_sha256",
     "tokenizer_length",
@@ -152,8 +154,12 @@ class VerlSelectedSampleDatasetBinding:
             "iteration_identity_sha256": self.iteration_identity_sha256,
             "image_path": str(self.image_path),
             "image_sha256": self.image_sha256,
-            "question": self.question,
-            "ground_truth": self.ground_truth,
+            # Hydra's override grammar preserves ``\\n`` and backslashes
+            # literally instead of decoding JSON string escapes.  Carry the
+            # two free-form dataset strings as ASCII so the subprocess/Ray
+            # boundary is byte exact for multiline and LaTeX-rich examples.
+            "question_utf8_base64": _encode_utf8_base64(self.question),
+            "ground_truth_utf8_base64": _encode_utf8_base64(self.ground_truth),
             "data_source": self.data_source,
             "prompt_sha256": self.prompt_sha256,
             "tokenizer_length": self.tokenizer_length,
@@ -166,7 +172,14 @@ class VerlSelectedSampleDatasetBinding:
         mapping = _plain_mapping(value, "data.tgvf_selected_sample")
         if set(mapping) != _CONFIG_FIELDS:
             raise ValueError("data.tgvf_selected_sample fields differ")
-        return cls(**dict(mapping))
+        decoded = dict(mapping)
+        decoded["question"] = _decode_utf8_base64(
+            decoded.pop("question_utf8_base64"), "question_utf8_base64"
+        )
+        decoded["ground_truth"] = _decode_utf8_base64(
+            decoded.pop("ground_truth_utf8_base64"), "ground_truth_utf8_base64"
+        )
+        return cls(**decoded)
 
 
 class TGVFSelectedSampleDataset(Dataset):
@@ -326,6 +339,20 @@ def _plain_mapping(value: object, field_name: str) -> Mapping[str, Any]:
     if callable(items):
         return dict(items())
     raise TypeError(f"{field_name} must be a mapping")
+
+
+def _encode_utf8_base64(value: str) -> str:
+    return base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+
+def _decode_utf8_base64(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field_name} must be non-empty base64 text")
+    try:
+        raw = base64.b64decode(value, validate=True)
+        return raw.decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as error:
+        raise ValueError(f"{field_name} is not canonical UTF-8 base64") from error
 
 
 def _config_value(config: object, key: str) -> object:

@@ -5899,8 +5899,11 @@ instead of repeated bullets.
   `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
   `POLICY-PILOT-V1-FOUR-GPU-20260721` in `PROJECT_TASK.md` sections 0.8.2 and
   0.8.3.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`; the public package loader succeeded, but Hydra's CLI
+  serialization changed the selected question's three real LF characters into
+  three literal `\\n` pairs. The exact bound-content gate rejected the changed
+  text before model workers or CUDA allocation.
 - Question: after correcting only the veRL Dataset import route, can the exact
   PRL-01 native-tool trajectory complete rollout, exact-observation current and
   reference replay, one FSDP2 decoder-LoRA GRPO update, checkpoint, and
@@ -5988,20 +5991,28 @@ instead of repeated bullets.
   actor/reference logprob microbatch 8 per GPU; gradient accumulation 1.
 - GPUs: physical/logical IDs `0,1,2,3`, four B200 183359 MiB; availability must
   be rechecked immediately before launch.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  planned tmux sessions `prl01_r1_gpu0123` then
-  `prl01_r1_resume_gpu0123`.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T19:23:35+09:00` to `2026-07-21T19:24:17+09:00`, about 42
+  seconds; tmux `prl01_r1_gpu0123`, driver PID 201432, Ray task PID 215114.
+  The planned resume session was not started.
+- Actual GPU-hours and peak scratch use: zero GPU-hours; GPUs 0--3 remained at
+  zero allocation. No checkpoint/runtime-policy state was created.
 - Command: both processes use `PYTHONPATH=src .venv312/bin/python -m
   tgvf_rl.cli run-policy <absolute-R1-config> --python
   /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python`; resume
   starts only after the first exits and must load step 1 without a second
   update because total steps is one.
-- Outputs: pending.
+- Outputs: failure log `launch.log`, 115,979 bytes, SHA256
+  `f1ba74b7...1d6e`; no checkpoint, LoRA snapshot, metrics file or W&B run.
 - Scorer/parser identity: deterministic MCQ exact verifier SHA256
   `2a3d5fa4...2e1c`; strict native tool parser; no judge fallback.
-- Metrics: pending.
-- Conclusion: pending.
+- Metrics: zero optimizer steps, prompts, trajectories, generated tokens, tool
+  calls and observations; all training metrics N/A because exact content
+  binding failed before worker creation.
+- Conclusion: Hydra free-text transport failure, not a data, model or training
+  result. R2 carries question and ground truth as strict UTF-8 Base64 across
+  the Hydra/Ray boundary; it must pass a real multiline compose regression and
+  use a separately planned identity before launch.
 
 ## Compatibility-spike status
 
