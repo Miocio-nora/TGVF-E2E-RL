@@ -35,6 +35,9 @@ UPSTREAM_VERL_CONFIG_NAME = "ppo_trainer"
 UPSTREAM_VERL_V0_RUNNER_FQN = "verl.trainer.main_ppo_v0.TaskRunner"
 
 SELECTED_SAMPLE_DATASET_CLASS_NAME = "TGVFSelectedSampleDataset"
+SELECTED_SAMPLE_DATASET_MODULE_PATH = (
+    "pkg://tgvf_rl.framework.verl.smoke_dataset"
+)
 NATIVE_AGENT_LOOP_NAME = "tgvf_native_policy"
 NATIVE_AGENT_LOOP_FQN = (
     "tgvf_rl.framework.verl.native_agent_loop.VerlFrameworkNeutralAgentLoop"
@@ -295,7 +298,6 @@ def build_policy_e2e_smoke_verl_plan(
         training.checkpoint_steps,
         maximum_step=training.maximum_optimizer_steps,
     )
-    dataset_module = Path(__file__).with_name("smoke_dataset.py").resolve()
     precision = {
         "param_dtype": _precision_name(config.precision.parameter_dtype),
         "reduce_dtype": _precision_name(config.precision.reduce_dtype),
@@ -319,7 +321,11 @@ def build_policy_e2e_smoke_verl_plan(
             "data.val_files": [str(binding.samples_path)],
             "data.train_max_samples": -1,
             "data.val_max_samples": -1,
-            "data.custom_cls.path": str(dataset_module),
+            # veRL's file loader executes modules before registering them in
+            # ``sys.modules``; Python 3.12 dataclasses correctly reject that
+            # broken import state.  Its public ``pkg://`` route performs a
+            # normal package import and preserves the module identity.
+            "data.custom_cls.path": SELECTED_SAMPLE_DATASET_MODULE_PATH,
             "data.custom_cls.name": SELECTED_SAMPLE_DATASET_CLASS_NAME,
             "data.tgvf_selected_sample": binding.as_config(),
             "data.train_batch_size": accumulation.global_prompt_batch_size,

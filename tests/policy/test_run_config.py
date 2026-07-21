@@ -38,11 +38,13 @@ from tgvf_rl.policy.run_config import (
 from tgvf_rl.framework.verl.launcher import (
     NATIVE_INVOCATION_FACTORY_FQN,
     POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
+    SELECTED_SAMPLE_DATASET_MODULE_PATH,
     UPSTREAM_VERL_V0_RUNNER_FQN,
     build_policy_e2e_smoke_verl_plan,
     compose_upstream_verl_config,
 )
 from tgvf_rl.framework.verl.smoke_dataset import (
+    TGVFSelectedSampleDataset,
     VerlSelectedSampleDatasetBinding,
 )
 from tgvf_rl.policy.launch import policy_child_environment
@@ -547,6 +549,7 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
 
     assert plan.runner_fqn == UPSTREAM_VERL_V0_RUNNER_FQN
     assert plan.overrides["trainer.use_v1"] is False
+    assert plan.overrides["data.custom_cls.path"] == SELECTED_SAMPLE_DATASET_MODULE_PATH
     assert plan.overrides["actor_rollout_ref.rollout.n"] == 8
     assert plan.overrides["algorithm.adv_estimator"] == "grpo"
     assert plan.overrides["actor_rollout_ref.model.lora_rank"] == 64
@@ -601,6 +604,12 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.launch_ready is True
     assert plan.launch_blockers == ()
     plan.assert_launch_ready()
+    from verl.utils.import_utils import load_extern_object
+
+    assert load_extern_object(
+        plan.overrides["data.custom_cls.path"],
+        plan.overrides["data.custom_cls.name"],
+    ) is TGVFSelectedSampleDataset
     assert plan.overrides["actor_rollout_ref.rollout.custom"][
         "reference_diagnostic"
     ] == {
@@ -672,6 +681,7 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
         == 1
     )
     assert composed.data.custom_cls.name == "TGVFSelectedSampleDataset"
+    assert composed.data.custom_cls.path == SELECTED_SAMPLE_DATASET_MODULE_PATH
     assert composed.actor_rollout_ref.rollout.custom.sampling.stop_strings == [
         "</tool_call>"
     ]

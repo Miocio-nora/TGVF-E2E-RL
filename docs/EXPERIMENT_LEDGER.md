@@ -5765,8 +5765,11 @@ instead of repeated bullets.
   `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
   `POLICY-PILOT-V1-FOUR-GPU-20260721` in `PROJECT_TASK.md` sections 0.8.2 and
   0.8.3.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`; veRL validated the composed config, then its raw file-path
+  module loader executed `smoke_dataset.py` before registering the module in
+  `sys.modules`. Python 3.12 dataclass annotation resolution rejected that
+  invalid import state. No model worker or CUDA allocation started.
 - Question: can one real DeepEyes MCQ flow through native Qwen tool prompting,
   8-way vLLM rollout, optional repeated `tgvf_focus_tool` turns, exact
   rollout-owned D replay, frozen-reference replay, one FSDP2 decoder-LoRA GRPO
@@ -5864,23 +5867,27 @@ instead of repeated bullets.
   actor/ref logprob microbatch 8 trajectories per GPU; gradient accumulation 1.
 - GPUs: physical/logical GPU IDs `0,1,2,3`, four NVIDIA B200 183359 MiB; all
   were idle at planning time.
-- Start/end timestamps, elapsed time, and session/process identity: TBD at
-  launch; tmux sessions `prl01_gpu0123` then `prl01_resume_gpu0123`.
-- Actual GPU-hours and peak scratch use: PENDING.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T19:17:24+09:00` to `2026-07-21T19:18:06+09:00`, about 42 seconds;
+  tmux `prl01_gpu0123`, driver PID 182212, Ray task PID 195904. The planned
+  resume session was not started.
+- Actual GPU-hours and peak scratch use: zero GPU-hours; GPUs 0-3 remained at
+  zero allocation. No checkpoint/runtime-policy state was created.
 - Command: initial and clean-process resume both use
   `PYTHONPATH=src .venv312/bin/python -m tgvf_rl.cli run-policy <absolute-config> --python /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python`;
   the second invocation starts only after the first exits and must load step 1
   then terminate without another update because total steps equals one.
-- Outputs: paired upstream/project checkpoint at optimizer step 1, content-
-  addressed LoRA snapshots, `metrics.jsonl`, W&B project `tgvf-policy-rl`, and
-  both tmux logs under the exact root above.
+- Outputs: failure log `launch.log`, 117,769 bytes, SHA256
+  `596097a9...d048`; no checkpoint, LoRA snapshot, metrics file or W&B run.
 - Scorer/parser identity: deterministic multiple-choice exact verifier SHA256
   `2a3d5fa4...2e1c`, strict native tool parser, no judge fallback.
-- Metrics: PENDING; must report optimizer steps, prompts/trajectories/generated
-  tokens, successful observations, call rate/count, component rewards, format
-  errors, reasoning length, original/total visual tokens, step time, update
-  loss/grad norm, weight-sync version and resume result.
-- Conclusion: PENDING; no GPU command has run at planning time.
+- Metrics: zero optimizer steps, prompts, trajectories, generated tokens, tool
+  calls and observations; all training metrics N/A because dataset class loading
+  failed before worker creation.
+- Conclusion: file-loader compatibility failure, not a model/training result.
+  R1 replaces the absolute file loader with veRL's public normal-package
+  `pkg://` import route and requires a direct loader regression gate before its
+  separately planned launch.
 
 ## Compatibility-spike status
 
