@@ -7358,7 +7358,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-01-R32-QWEN3-GRPO-BS16-CROP-ONLY-THROUGHPUT-GPU0123
 
-- `PLANNED`; one-update Crop-only comparison arm on physical GPUs 0--3. This
+- `COMPLETE` / `PASS`; one-update Crop-only comparison arm on physical GPUs 0--3. This
   is a separately identified visual-tool experiment, not a change to the
   TGVF-only formal Pilot v1.
 - Config
@@ -7376,6 +7376,19 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   tmux `prl01_r32_gpu0123`. Acceptance is one complete update/checkpoint plus
   tool-call/result, replay, timing and memory evidence. Comparison baseline is
   the completed R30 BS16 TGVF-only cell.
+- Result: 128 trajectories, 846,558 policy tokens, 193 tool attempts and 177
+  successful Crop observations; repeated Crop, exact current/reference replay,
+  actor update and the paired step-1 checkpoint all completed. The legacy
+  metrics field calls these `successful_tgvf_observations`, but under this
+  immutable Crop-only profile every such count is an `image_zoom_in_tool`
+  observation.
+- Generation/reference/actor/sync/checkpoint times were
+  174.79/31.60/60.47/8.14/12.97s; end-to-end was 288.05s. Generation and
+  end-to-end policy-token throughput were 4,843.36 and 2,938.95 tokens/s,
+  1.079x and 1.108x R30. Step-window GPU utilization averaged 49.1--55.8%,
+  with 49.2--54.6% of samples at or above 80%. Actor allocated/reserved peaks
+  were 108.96/128.09GiB. W&B run `n1lc3ud5`; known exit-only vLLM/W&B teardown
+  noise recurred after the valid checkpoint and status 0.
 
 ## Required entry template
 
