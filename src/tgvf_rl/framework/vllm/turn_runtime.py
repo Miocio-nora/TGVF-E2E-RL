@@ -136,14 +136,42 @@ class ContentAddressedVLLMTurnRNG:
         )
 
 
+def _gpt2_byte_decoder() -> dict[str, int]:
+    """Return the inverse byte alphabet used by Qwen's ByteLevel tokenizer."""
+
+    byte_values = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
+    )
+    unicode_values = list(byte_values)
+    extra_index = 0
+    for byte_value in range(256):
+        if byte_value not in byte_values:
+            byte_values.append(byte_value)
+            unicode_values.append(256 + extra_index)
+            extra_index += 1
+    return {
+        chr(unicode_value): byte_value
+        for byte_value, unicode_value in zip(
+            byte_values, unicode_values, strict=True
+        )
+    }
+
+
+_GPT2_BYTE_DECODER = _gpt2_byte_decoder()
+
+
 class FastTokenizerTokenByteSpanDecoder:
-    """Re-encode final text and require exact contiguous UTF-8 token coverage."""
+    """Recover exact UTF-8 byte coverage for final Qwen ByteLevel tokens."""
 
     def __init__(self, tokenizer: object) -> None:
         if getattr(tokenizer, "is_fast", None) is not True:
             raise TypeError("exact byte spans require a fast tokenizer")
-        if not callable(tokenizer):
-            raise TypeError("fast tokenizer must be callable")
+        if not callable(getattr(tokenizer, "convert_ids_to_tokens", None)):
+            raise TypeError(
+                "exact byte spans require token-ID to ByteLevel-piece conversion"
+            )
         self.tokenizer = tokenizer
 
     def spans_for_output(
@@ -158,76 +186,98 @@ class FastTokenizerTokenByteSpanDecoder:
         expected_ids = _prompt_token_ids(token_ids, "sampled token_ids")
         if not isinstance(decoding, VLLMOutputDecodingContract):
             raise TypeError("decoding must be VLLMOutputDecodingContract")
-        if not decoding.detokenize or decoding.skip_special_tokens:
+        if (
+            not decoding.detokenize
+            or decoding.skip_special_tokens
+            or decoding.spaces_between_special_tokens
+        ):
             raise IdentityMismatchError(
-                "exact byte spans require detokenize=true and skip_special_tokens=false"
+                "exact byte spans require detokenize=true, skip_special_tokens=false, "
+                "and spaces_between_special_tokens=false"
             )
 
-        encoded = self.tokenizer(
-            text,
-            add_special_tokens=False,
-            return_offsets_mapping=True,
-            truncation=False,
-        )
-        if not isinstance(encoded, Mapping):
-            raise TypeError("fast tokenizer must return a mapping")
-        actual_ids = _prompt_token_ids(
-            encoded.get("input_ids"), "re-encoded sampled token IDs"
-        )
-        if actual_ids != expected_ids:
+        # Sampled token IDs are authoritative.  Re-encoding ``text`` is not a
+        # valid identity check: a model may sample a non-canonical segmentation
+        # such as ["a", "b"] even when the tokenizer would encode "ab" as one
+        # merged token.  Qwen's ByteLevel pieces retain the original bytes for
+        # every sampled token, including tokens that split one Unicode scalar.
+        result = self._byte_level_spans(text=text, token_ids=expected_ids)
+        SampledAssistantTurn(text, expected_ids, result)
+        return result
+
+    def _byte_level_spans(
+        self,
+        *,
+        text: str,
+        token_ids: tuple[int, ...],
+    ) -> tuple[TokenByteSpan, ...]:
+        converter = getattr(self.tokenizer, "convert_ids_to_tokens", None)
+        if not callable(converter):
             raise ReplayMismatchError(
-                "sampled text does not re-encode to the exact vLLM token IDs"
+                "overlapping tokenizer offsets require ByteLevel token pieces"
             )
-        raw_offsets = encoded.get("offset_mapping")
-        if not isinstance(raw_offsets, Sequence) or isinstance(
-            raw_offsets, (str, bytes)
+        raw_tokens = converter(list(token_ids), skip_special_tokens=False)
+        if not isinstance(raw_tokens, Sequence) or isinstance(
+            raw_tokens, (str, bytes)
         ):
-            raise TypeError("fast tokenizer offset_mapping must be a sequence")
-        if len(raw_offsets) != len(expected_ids):
-            raise ReplayMismatchError("re-encoded token and offset counts do not align")
+            raise TypeError("convert_ids_to_tokens must return a token sequence")
+        if len(raw_tokens) != len(token_ids):
+            raise ReplayMismatchError(
+                "ByteLevel token-piece count differs from sampled token IDs"
+            )
 
-        byte_boundaries = [0]
-        for character in text:
-            byte_boundaries.append(byte_boundaries[-1] + len(character.encode("utf-8")))
+        added_ids: set[int] = set(getattr(self.tokenizer, "all_special_ids", ()) or ())
+        get_added_vocab = getattr(self.tokenizer, "get_added_vocab", None)
+        if callable(get_added_vocab):
+            added_vocab = get_added_vocab()
+            if not isinstance(added_vocab, Mapping):
+                raise TypeError("get_added_vocab must return a mapping")
+            added_ids.update(
+                token_id
+                for token_id in added_vocab.values()
+                if type(token_id) is int
+            )
 
-        spans: list[TokenByteSpan] = []
-        char_cursor = 0
-        for token_index, (token_id, raw_offset) in enumerate(
-            zip(expected_ids, raw_offsets, strict=True)
-        ):
-            if (
-                not isinstance(raw_offset, Sequence)
-                or isinstance(raw_offset, (str, bytes))
-                or len(raw_offset) != 2
-            ):
-                raise TypeError("each tokenizer offset must be a start/end pair")
-            char_start, char_end = raw_offset
-            if type(char_start) is not int or type(char_end) is not int:
-                raise TypeError("tokenizer character offsets must be integers")
-            if (
-                char_start != char_cursor
-                or char_end <= char_start
-                or char_end > len(text)
-            ):
+        token_bytes: list[bytes] = []
+        for token_id, raw_token in zip(token_ids, raw_tokens, strict=True):
+            if not isinstance(raw_token, str):
+                raise TypeError("converted ByteLevel token must be str")
+            if token_id in added_ids:
+                piece = raw_token.encode("utf-8")
+            else:
+                try:
+                    piece = bytes(_GPT2_BYTE_DECODER[char] for char in raw_token)
+                except KeyError as error:
+                    raise ReplayMismatchError(
+                        "token pieces do not use the audited ByteLevel alphabet"
+                    ) from error
+            if not piece:
                 raise ReplayMismatchError(
-                    "fast-tokenizer offsets must cover sampled text exactly and contiguously"
+                    "sampled ByteLevel tokens must have non-empty byte pieces"
                 )
-            spans.append(
+            token_bytes.append(piece)
+
+        if b"".join(token_bytes) != text.encode("utf-8"):
+            raise ReplayMismatchError(
+                "ByteLevel token pieces do not reconstruct sampled text exactly"
+            )
+
+        byte_cursor = 0
+        result: list[TokenByteSpan] = []
+        for token_index, (token_id, piece) in enumerate(
+            zip(token_ids, token_bytes, strict=True)
+        ):
+            byte_end = byte_cursor + len(piece)
+            result.append(
                 TokenByteSpan(
                     token_index=token_index,
                     token_id=token_id,
-                    byte_start=byte_boundaries[char_start],
-                    byte_end=byte_boundaries[char_end],
+                    byte_start=byte_cursor,
+                    byte_end=byte_end,
                 )
             )
-            char_cursor = char_end
-        if char_cursor != len(text):
-            raise ReplayMismatchError(
-                "fast-tokenizer offsets do not cover the complete sampled text"
-            )
-        result = tuple(spans)
-        SampledAssistantTurn(text, expected_ids, result)
-        return result
+            byte_cursor = byte_end
+        return tuple(result)
 
 
 @dataclass(frozen=True, slots=True)

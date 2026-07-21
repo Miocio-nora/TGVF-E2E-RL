@@ -6754,7 +6754,7 @@ instead of repeated bullets.
 
 ### PRL-01-R10-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step plus
   clean no-extra-update resume.
 - Complete identity: config
   `configs/policy/runs/prl_01_r10_qwen3_grpo_1step_autoresume_gpu0123.toml`,
@@ -6782,8 +6782,16 @@ instead of repeated bullets.
   timeout 3600s .venv312/bin/python -m tgvf_rl.cli run-policy <absolute-R10-config>
   --python <absolute-.venv312-python>` with the accepted compiler/Python-header
   environment used by R9.
-- Start/end, process identity, GPU-hours, logs, metrics, checkpoint and resume
-  result: pending.
+- Result: `2026-07-21T21:26:29+09:00`--`21:31:33+09:00`, tmux
+  `prl01_r10_gpu0123`, exit 1, about 0.34 GPU-hours; all GPUs released. W&B
+  `o9st2sq4`; launch-log SHA256 `bdc84f11...ca42b4b`. First generation
+  completed, but the token-byte decoder rejected a legal Qwen ByteLevel
+  Unicode split because two sampled tokens shared one character offset. No
+  parsed tool call, replay, optimizer step, checkpoint, or resume resulted.
+- Conclusion: this was not a behavior/replay mismatch. R11 replaces the invalid
+  re-tokenization/one-token-per-character assumption with sampled-ID-authority
+  and exact per-token ByteLevel bytes, including non-canonical token
+  segmentation and Unicode splits.
 
 ## Compatibility-spike status
 

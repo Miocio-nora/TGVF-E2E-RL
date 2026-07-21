@@ -62,6 +62,7 @@ IMAGE_TOKEN = "<|image_pad|>"
 
 class _CharacterTokenizer:
     is_fast = True
+    all_special_ids = [IMAGE_TOKEN_ID]
 
     def encode(self, text, *, add_special_tokens):
         assert add_special_tokens is False
@@ -80,6 +81,21 @@ class _CharacterTokenizer:
     def convert_tokens_to_ids(token):
         assert token == IMAGE_TOKEN
         return IMAGE_TOKEN_ID
+
+    @staticmethod
+    def get_added_vocab():
+        return {
+            **{chr(token_id): token_id for token_id in range(128)},
+            IMAGE_TOKEN: IMAGE_TOKEN_ID,
+        }
+
+    @staticmethod
+    def convert_ids_to_tokens(token_ids, *, skip_special_tokens):
+        assert skip_special_tokens is False
+        return [
+            IMAGE_TOKEN if token_id == IMAGE_TOKEN_ID else chr(token_id)
+            for token_id in token_ids
+        ]
 
     def decode(
         self,

@@ -39,32 +39,19 @@ IMAGE_TOKEN_ID = 9000
 class _FastTokenizer:
     is_fast = True
 
-    def __init__(self, *, ids=None, offsets=None):
+    def __init__(self, *, ids=None, tokens=None):
         self.ids = ids
-        self.offsets = offsets
-        self.calls = []
+        self.tokens = tokens
+        self.all_special_ids = []
 
-    def __call__(
-        self,
-        text,
-        *,
-        add_special_tokens,
-        return_offsets_mapping,
-        truncation,
-    ):
-        self.calls.append(
-            (
-                text,
-                add_special_tokens,
-                return_offsets_mapping,
-                truncation,
-            )
-        )
-        ids = self.ids or [100 + index for index in range(len(text))]
-        offsets = self.offsets or [(index, index + 1) for index in range(len(text))]
-        return {"input_ids": ids, "offset_mapping": offsets}
+    @staticmethod
+    def get_added_vocab():
+        return {}
 
-
+    def convert_ids_to_tokens(self, token_ids, *, skip_special_tokens):
+        assert skip_special_tokens is False
+        assert token_ids == self.ids
+        return self.tokens
 def test_content_addressed_rng_is_stable_and_binds_every_identity() -> None:
     rng = ContentAddressedVLLMTurnRNG(
         master_seed=42, stream_identity="pilot/train/trajectory-0003"
@@ -104,7 +91,10 @@ def test_content_addressed_rng_is_stable_and_binds_every_identity() -> None:
 
 def test_fast_tokenizer_decoder_produces_exact_unicode_utf8_spans() -> None:
     text = "a赤🙂"
-    tokenizer = _FastTokenizer(ids=[11, 12, 13])
+    tokenizer = _FastTokenizer(
+        ids=[11, 12, 13],
+        tokens=["a", "èµ¤", "ðŁĻĤ"],
+    )
     decoder = FastTokenizerTokenByteSpanDecoder(tokenizer)
 
     spans = decoder.spans_for_output(
@@ -113,7 +103,6 @@ def test_fast_tokenizer_decoder_produces_exact_unicode_utf8_spans() -> None:
         decoding=DECODING,
     )
 
-    assert tokenizer.calls == [(text, False, True, False)]
     assert spans == (
         TokenByteSpan(0, 11, 0, 1),
         TokenByteSpan(1, 12, 1, 4),
@@ -121,26 +110,59 @@ def test_fast_tokenizer_decoder_produces_exact_unicode_utf8_spans() -> None:
     )
 
 
+def test_fast_tokenizer_decoder_handles_one_unicode_character_split_across_tokens(
+) -> None:
+    tokenizer = _FastTokenizer(
+        ids=[21, 22],
+        # The UTF-8 bytes E2 80 8D for ZERO WIDTH JOINER are split 2 + 1.
+        tokens=["âĢ", "į"],
+    )
+
+    spans = FastTokenizerTokenByteSpanDecoder(tokenizer).spans_for_output(
+        text="\u200d",
+        token_ids=(21, 22),
+        decoding=DECODING,
+    )
+
+    assert spans == (
+        TokenByteSpan(0, 21, 0, 2),
+        TokenByteSpan(1, 22, 2, 3),
+    )
+
+
+def test_fast_tokenizer_decoder_accepts_noncanonical_sampled_segmentation() -> None:
+    tokenizer = _FastTokenizer(ids=[1, 2], tokens=["a", "b"])
+
+    spans = FastTokenizerTokenByteSpanDecoder(tokenizer).spans_for_output(
+        text="ab",
+        token_ids=(1, 2),
+        decoding=DECODING,
+    )
+
+    assert spans == (
+        TokenByteSpan(0, 1, 0, 1),
+        TokenByteSpan(1, 2, 1, 2),
+    )
+
+
 @pytest.mark.parametrize(
-    ("ids", "offsets", "expected_ids", "message"),
+    ("tokens", "message"),
     [
-        ([1, 9], [(0, 1), (1, 2)], (1, 2), "re-encode"),
-        ([1, 2], [(0, 1)], (1, 2), "counts"),
-        ([1, 2], [(0, 1), (2, 2)], (1, 2), "exactly and contiguously"),
-        ([1, 2], [(0, 1), (1, 1)], (1, 2), "exactly and contiguously"),
+        (["a"], "count differs"),
+        (["a", "c"], "do not reconstruct"),
+        (["a", "中"], "audited ByteLevel alphabet"),
+        (["a", ""], "non-empty byte pieces"),
     ],
 )
-def test_fast_tokenizer_decoder_rejects_id_or_offset_mismatch(
-    ids,
-    offsets,
-    expected_ids,
+def test_fast_tokenizer_decoder_rejects_invalid_byte_level_pieces(
+    tokens,
     message,
 ) -> None:
     decoder = FastTokenizerTokenByteSpanDecoder(
-        _FastTokenizer(ids=ids, offsets=offsets)
+        _FastTokenizer(ids=[1, 2], tokens=tokens)
     )
     with pytest.raises(ReplayMismatchError, match=message):
-        decoder.spans_for_output(text="ab", token_ids=expected_ids, decoding=DECODING)
+        decoder.spans_for_output(text="ab", token_ids=(1, 2), decoding=DECODING)
 
 
 def test_span_decoder_requires_an_explicit_fast_tokenizer() -> None:
@@ -148,6 +170,16 @@ def test_span_decoder_requires_an_explicit_fast_tokenizer() -> None:
     tokenizer.is_fast = False
     with pytest.raises(TypeError, match="fast tokenizer"):
         FastTokenizerTokenByteSpanDecoder(tokenizer)
+
+
+def test_span_decoder_rejects_spaces_inserted_between_special_tokens() -> None:
+    decoder = FastTokenizerTokenByteSpanDecoder(
+        _FastTokenizer(ids=[1], tokens=["a"])
+    )
+    decoding = VLLMOutputDecodingContract(True, False, True, "final_only")
+
+    with pytest.raises(IdentityMismatchError, match="spaces_between_special_tokens"):
+        decoder.spans_for_output(text="a", token_ids=(1,), decoding=decoding)
 
 
 class _Resolver:
