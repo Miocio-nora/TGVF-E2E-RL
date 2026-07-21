@@ -7167,6 +7167,22 @@ instead of repeated bullets.
   did not recover `SourceVisualTensorBundle`; execution stopped before
   generation, optimizer update, or checkpoint, and GPUs 0--3 were released.
 
+### PRL-01-R27-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r27_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `23ced063...51eb`, identity `85c35f8f...9fcc`, implementation
+  `ff4ec3217bd02704320c2e36fd2bfe1c51b81686`, GPU 0--3, tmux
+  `prl01_r27_gpu0123`.
+- R26 mathematics, data, sampling, replay, capacity, topology, and lifecycle
+  are unchanged. Source and focus results now cross vLLM's secure utility
+  boundary through explicit primitive tensor wires, including BF16 main D and
+  all D-DeepStack branches. The consolidated data-to-checkpoint contract suite
+  passed 406 tests with insecure serialization disabled.
+- Question: can the audited two-model path now complete real generation,
+  bounded TGVF calls, reward, exact current/reference replay, one GRPO update,
+  LoRA synchronization, step-1 checkpoint, and clean-process resume?
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
