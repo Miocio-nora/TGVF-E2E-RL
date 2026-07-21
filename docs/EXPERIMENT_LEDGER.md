@@ -4955,6 +4955,45 @@ instead of repeated bullets.
   finite aggregate metrics, publish an immutable report, exit cleanly and
   release its GPU. Cross-cell conclusions are withheld until all five pass.
 
+### RP-61-QWEN3-NATIVE-D-CACHED-CONTINUATION-PARITY-GPU2
+
+- Cell/status/result: mandatory evaluator throughput gate / `PLANNED` /
+  `PENDING`.
+- Question: does one exact main-D plus all-three-D-DeepStack Qwen3 native
+  context produce token-identical greedy decoding with incremental KV cache,
+  with BF16 per-step full-vocabulary logit parity and a measured speedup over
+  the bounded full-prefix oracle?
+- Identity: accepted task `RPI-20260721-NATIVE-D-EVAL-THROUGHPUT`; code commit
+  `99b3ca6fb24d69f7c1ce5946186f4e91f15c238a`; config
+  `configs/representation/qwen3_cached_continuation_parity_smoke_gpu2.toml`
+  SHA256 `ff47e78a2ca0f4b465b2fd3c7f71570e9da6bc7f8c46ef7fab3e4fac20c1e40a`.
+- Model/artifact/data: local Qwen3-VL-8B-Thinking, BF16/SDPA, max-pixels
+  262144, tokenizer 151669/no resize; completed contextual Balanced/T=1
+  step-2000 artifact file/manifest/run hashes `50179c70...e75` /
+  `dfa992fc...e10` / `6c748851...5c0`; v4 clean-imend source SHA256
+  `de61c731...82d`; audited grounding manifest file SHA256
+  `a65aa6e...8c0`; pair `baseball-pants-not-locomotive`, positive target and
+  actual atomic D observation.
+- Forward/math contract: deterministic fresh no-source-image D-only transcript;
+  identical M-RoPE positions and attention prefix; one injected-D prefill then
+  single-token cached forwards with no visual reinjection. Compare against the
+  existing full-prefix oracle at every one of at most eight greedy tokens.
+  Require exact generated IDs/text/stop/extraction and BF16 full-vocabulary
+  logits at `atol=rtol=0.015625`. Record cached/no-cache wall time and speedup;
+  timing has no minimum PASS floor.
+- Runtime: one process on physical GPU 2 UUID
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`; seed 42; no sampling, optimizer,
+  policy/reference replay, GRPO, SDPO or judge. Command:
+  `CUDA_VISIBLE_DEVICES=2 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0
+  TOKENIZERS_PARALLELISM=false timeout 1800s .venv-torch211-cu129/bin/python
+  tools/smoke_qwen3_cached_continuation.py
+  configs/representation/qwen3_cached_continuation_parity_smoke_gpu2.toml
+  --pair-id baseball-pants-not-locomotive --atol 0.015625 --rtol 0.015625`.
+- Output: immutable
+  `artifacts/representation/RP-61-qwen3-native-d-cached-continuation-parity-gpu2/report.json`;
+  acceptance additionally requires tokenizer invariance, finite timing, clean
+  exit and GPU release.
+
 ### Representation-phase endpoint evidence summary
 
 - Provider: under the same Balanced/T=1.0 2000-step identity, contextual hidden
