@@ -6119,6 +6119,87 @@ instead of repeated bullets.
   Hydra-safe `[.]`/`[0-9]+` regex, with compose/scope regression gates, under a
   separate identity.
 
+### PRL-01-R3-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: mandatory 4-GPU executable
+  Policy Pilot vertical slice plus clean-process checkpoint resume.
+- Spike-plan git revision and approval references: accepted
+  `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
+  `POLICY-PILOT-V1-FOUR-GPU-20260721`, task sections 0.8.2--0.8.3.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: with exact Dataset text and decoder-only LoRA regex transport now
+  proven, can one step complete rollout, exact current/reference replay,
+  FSDP2 GRPO update, synchronized checkpoint and clean resume?
+- Baseline and exact output path: PRL-01/R1/R2 failed before rollout; new root
+  `artifacts/policy/PRL-01-R3-qwen3-grpo-1step-auto-resume-gpu0123`, confirmed
+  absent; logs `launch.log` and `resume.log`.
+- Model and processor identity: local Qwen3-VL-8B-Thinking, tokenizer 151669,
+  template `36e042fe...8956`, native DeepStack, max pixels 262144, no resize.
+- Representation checkpoint identity: RP-49 contextual layer `-1`, Balanced
+  Matrix CE T=0.1 step 2000; file/manifest `fcda0b96...fc14` /
+  `3ff14e66...f49e`, run identity `980e4136...e1bea`.
+- N/A fields and justification: bounded MCQ smoke; no judge, Qwen2.5-VL,
+  crop, SDPO, full tuning, nonzero KL or quality conclusion.
+- Policy/reference initialization: original base plus fresh decoder-only LoRA
+  rank/alpha/dropout `64/64/0`, LR `1e-5`; vision, merger, DeepStack, Adapter,
+  embeddings and head frozen; separate frozen base reference.
+- Rollout policy version and allowed asynchronous staleness: exact synchronized
+  step-0 snapshot, staleness zero, no update before replay.
+- Code commit and worktree state: executable commit
+  `4610afc343b3fde00ae4f37fea5495fd6f7a5ac7`; only config/ledger descendant
+  tracked changes allowed at launch.
+- Repository adapter/patch surface and hash: R3 config SHA256
+  `ca918b92...f64f43`, run identity `907b8340...d7cdf`; Dataset binding v2 and
+  Hydra-safe equivalent decoder regex
+  `^model[.]language_model[.]layers[.][0-9]+[.]...$`. Ruff plus focused real
+  compose/scope suites passed, 52 tests.
+- Dataset/manifest, hashes, sample rule, and n: DeepEyes 47K snapshot
+  `5546681e...6ded3`, 47,052 rows, seed 42; hashes
+  `3483c317...6f477` / `2ddb3635...791a` / `e3937c67...fb51e` /
+  `6ee358c9...3ad8c`; cursor 7, MCQ answer C, prompt batch 4, n=8.
+- Native prompt/tool schema hash: TGVF-only v1 `390b334e...99f5`, schema
+  `f33f61d4...6aba5`, four calls, fifth-call error `1f649e1d...ad200`.
+- Chat-template/token-fixture hash and token-ownership masks: 724 initial
+  tokens, 234 image pads, IDs `221b8952...d4d`; loss only on sampled assistant
+  tokens.
+- D/DeepStack/position/mask identity: recorded exact main D, branches
+  `(8,16,24)`, layout/positions/masks/source binding; no recomputation.
+- Observation materialization/artifact identity used by all replays: rollout
+  materializes once and both replay roles consume the same addressed bundle.
+- RL framework/version/environment lock: veRL e003163, Python 3.12.3, Torch
+  2.9.0+cu128, Transformers 4.57.6, vLLM 0.12.0, PEFT 0.19.1, Ray 2.56.1.
+- Objective equations and normalization: sample-std GRPO epsilon `1e-6`,
+  constant groups zero; reward `0.8/0.2/1.2`; recorded behavior ratio, clip
+  `[0.8,1.2]`, dual clip 3, global token mean, one epoch, KL/entropy zero,
+  gradient norm 1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic
+  eval replay, dropout zero, post-transform behavior logprobs, seed 42 and RNG
+  derivation `fe8d2da9...e867e`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM 0.12.0; `1/1/-1/0`, penalties
+  `1/0/0`, no processors, EOS 151645, `</tool_call>` stop, cap 8192.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/FP32 optimizer, no quantization;
+  HF SDPA, vLLM TRITON_ATTN/TORCH_SDPA; TP1, 4-rank FSDP2, no reshard,
+  activation checkpoint, remove padding or compile; colocated.
+- Logit/logprob/loss/gradient parity tolerances: exact identities, finite
+  numerics, pre-update clipfrac zero and absolute mean PPO KL <=0.015625.
+- World size, microbatch, accumulation, and global batch: world 4; prompt batch
+  4; prompt/rollout microbatch 1/rank; logprob microbatch 8/GPU; 32
+  trajectories; accumulation 1.
+- GPUs: physical/logical 0--3, B200 183359 MiB; recheck idle before launch.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  tmux `prl01_r3_gpu0123`, then `prl01_r3_resume_gpu0123`.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: standard absolute R3 `run-policy` command under `.venv312`; resume
+  only after step 1 and must perform no second update.
+- Outputs: pending.
+- Scorer/parser identity: exact MCQ verifier `2a3d5fa4...2e1c`, strict native
+  parser, no judge.
+- Metrics: pending.
+- Conclusion: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
