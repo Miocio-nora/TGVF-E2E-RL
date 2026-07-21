@@ -7068,6 +7068,15 @@ instead of repeated bullets.
   `prl01_r20_gpu0123`. R19 plus actor-local PPO rollout-correction values
   matching the already frozen algorithm values; all other fields unchanged.
 
+### PRL-01-R21-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r21_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `44d95e39...b287`, identity `be8b28fe...b59c`, code
+  `84edac101712d77b944b7b0e939153c66e7c13ed`, GPU 0--3, tmux
+  `prl01_r21_gpu0123`. R20 plus root FSDP2 reshard after the complete
+  forward/backward batch and before vLLM weight synchronization.
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
