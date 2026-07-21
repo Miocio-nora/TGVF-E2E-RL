@@ -6014,6 +6014,98 @@ instead of repeated bullets.
   the Hydra/Ray boundary; it must pass a real multiline compose regression and
   use a separately planned identity before launch.
 
+### PRL-01-R2-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: mandatory executable Policy
+  Pilot vertical-slice smoke plus clean-process latest-checkpoint resume.
+- Spike-plan git revision and approval references: accepted tasks
+  `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
+  `POLICY-PILOT-V1-FOUR-GPU-20260721`, `PROJECT_TASK.md` sections 0.8.2--0.8.3.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: after byte-exact free-text transport, can the accepted native-tool
+  trajectory complete 8-way rollout, exact-observation current/reference
+  replay, one FSDP2 decoder-LoRA GRPO update, checkpoint and clean resume?
+- Baseline and exact output path: PRL-01/R1 both failed before CUDA allocation;
+  new immutable root
+  `artifacts/policy/PRL-01-R2-qwen3-grpo-1step-auto-resume-gpu0123`, confirmed
+  absent; logs `launch.log` and `resume.log`.
+- Model and processor identity: local Qwen3-VL-8B-Thinking, tokenizer 151669,
+  chat-template SHA256 `36e042fe...8956`, native DeepStack on,
+  `max_pixels=262144`, no tokenizer resize.
+- Representation checkpoint identity: contextual hidden state layer `-1`;
+  RP-49 Balanced Matrix CE T=0.1 step 2000, Adapter file/manifest SHA256
+  `fcda0b96...fc14` / `3ff14e66...f49e`, run identity
+  `980e4136...e1bea`.
+- N/A fields and justification: bounded non-formal MCQ smoke; 72B judge,
+  Qwen2.5-VL, crop, SDPO, full tuning, nonzero KL and quality claims excluded.
+- Policy/reference initialization: original Qwen3 plus fresh decoder-only LoRA
+  `r=64`, alpha 64, dropout 0; vision, merger, native DeepStack, Adapter,
+  embeddings and lm_head frozen; distinct frozen base reference; LR `1e-5`.
+- Rollout policy version and allowed asynchronous staleness: exact step-0 LoRA
+  synchronized before generation; staleness zero; no intervening update.
+- Code commit and worktree state: executable commit
+  `9f5b29ac8b6b4b9be7cd9cfabd3a2c2ed5d1f75c`; only this exact config and
+  ledger descendant may be present as tracked launch changes.
+- Repository adapter/patch surface and hash: config
+  `configs/policy/runs/prl_01_r2_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `3c0a3fee...debae4`, run identity `0b2c087e...1c830`; Dataset binding
+  schema `tgvf-verl-selected-sample-v2` transports question and ground truth as
+  strict UTF-8 Base64. Ruff and the real Hydra compose suite passed, 22 tests.
+- Dataset/manifest, hashes, sample rule, and n: DeepEyes 47K snapshot
+  `5546681e...6ded3`, 47,052 rows, seed 42; manifest/content/sample/iteration
+  hashes `3483c317...6f477` / `2ddb3635...791a` /
+  `e3937c67...fb51e` / `6ee358c9...3ad8c`; audited cursor 7 MCQ answer C;
+  batch 4, eight trajectories per prompt.
+- Native prompt/tool schema hash: TGVF-only prompt `390b334e...99f5`, tool
+  schema `f33f61d4...6aba5`, four calls plus deterministic fifth-call error
+  `1f649e1d...ad200` and one recovery turn.
+- Chat-template/token-fixture hash and token-ownership masks: 724-token prompt,
+  234 image pads, token IDs `221b8952...d4d`; only sampled assistant tokens
+  have policy/loss mask one.
+- D/DeepStack/position/mask identity: exact main D, branches `(8,16,24)`,
+  positions/layout/masks/source binding per successful call; no dummy branches,
+  retokenization or recomputation.
+- Observation materialization/artifact identity used by all replays: rollout
+  materializes once; current and reference replay share the content-addressed
+  recorded bundle.
+- RL framework/version/environment lock: veRL `0.9.0.dev` commit
+  `e003163181731412595257a72ec173071efb125f`, Python 3.12.3, Torch
+  2.9.0+cu128, Transformers 4.57.6, vLLM 0.12.0, PEFT 0.19.1, Ray 2.56.1.
+- Objective equations and normalization: sample-std advantage with epsilon
+  `1e-6` and constant group zero; reward `0.8*answer + 0.2*format +
+  1.2*conditional_tool`; recorded behavior ratio, clip `[0.8,1.2]`, dual clip
+  3, global policy-token mean, one epoch, KL/entropy zero, max grad norm 1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic
+  eval replay, dropout zero, post-transform behavior logprobs, master seed 42,
+  content-addressed RNG derivation `fe8d2da9...e867e`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM 0.12.0, T/p `1/1`, top-k
+  `-1`, min-p 0, penalties `1/0/0`, no processors, post-transform logprobs,
+  EOS 151645, stop `</tool_call>`, aggregate response cap 8192.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 model/KV, FP32 reductions and
+  optimizer, no quantization; HF SDPA, vLLM TRITON_ATTN/TORCH_SDPA; TP1,
+  four-rank FSDP2, no reshard/checkpointing/remove-padding/compile, colocated.
+- Logit/logprob/loss/gradient parity tolerances: exact identities and finite
+  numerics; pre-update clip fraction zero and absolute mean PPO KL <= 0.015625.
+- World size, microbatch, accumulation, and global batch: world 4; prompt batch
+  4; prompt/rollout microbatch 1 per rank; actor/reference logprob microbatch 8
+  trajectories per GPU; 32 trajectories; accumulation 1.
+- GPUs: physical/logical IDs `0,1,2,3`, four B200 183359 MiB; recheck idle
+  immediately before launch.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  planned tmux `prl01_r2_gpu0123`, then `prl01_r2_resume_gpu0123`.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: `PYTHONPATH=src .venv312/bin/python -m tgvf_rl.cli run-policy
+  <absolute-R2-config> --python <absolute-.venv312-python>` for both processes;
+  resume starts only after successful step 1 and must not update again.
+- Outputs: pending.
+- Scorer/parser identity: deterministic MCQ exact verifier
+  `2a3d5fa4...2e1c`, strict native tool parser, no judge.
+- Metrics: pending.
+- Conclusion: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
