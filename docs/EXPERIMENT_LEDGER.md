@@ -5030,8 +5030,8 @@ instead of repeated bullets.
 
 ### RP-63-QWEN3-REP-AUDITED-GROUNDING-BALANCED-T01-CACHED-GPU2
 
-- Cell/status/result: replacement for interrupted RP-58 / `RUNNING` /
-  `PENDING_CUDA_RELEASE`.
+- Cell/status/result: replacement for interrupted RP-58 / `COMPLETE` /
+  `PASS`.
 - Identity: code `01678a6badbf2f92450ade0584868d0e10702ac1`; config
   `configs/representation/qwen3_balanced_t01_contextual_2000step_internal_evaluation_audited_grounding_cached_gpu2.toml`
   SHA256 `ee8a3bdc...76c3`; physical GPU 2. Artifact, data, prompt, 200/46
@@ -5046,7 +5046,7 @@ instead of repeated bullets.
   cross-image cases, 36 target-presence cases, finite aggregates, clean exit
   and GPU release. RP-61's logit-parity failure remains recorded and is not
   erased by this run.
-- Interim result: launched `2026-07-21T10:46:03+09:00`; immutable report SHA256
+- Result: launched `2026-07-21T10:46:03+09:00`; immutable report SHA256
   `02e299f3...baa` was published with tokenizer 151669, 200 rows/46 groups,
   nine cross-image and 36 target-presence pairs. Query top-1/MRR/mean gap is
   `0.855/0.91917/0.41913`; correct-D NLL is `1.25964`; wrong-same-image win
@@ -5055,8 +5055,9 @@ instead of repeated bullets.
   separation is `-1.60047`, positive-D contribution is `+1.78937`, and
   negative-D false-positive amplification is `+3.63569`. T=0.1 therefore
   retains strong same-distribution ranking but fails the accepted grounding
-  comparison against Balanced/T=1. The Python process remains in kernel
-  `uvm_gpu_release`; final clean-exit/GPU-release acceptance is pending.
+  comparison against Balanced/T=1. Run-log SHA256 is `471369c2...5b3`; the
+  process exited cleanly, tokenizer invariance passed, and GPU 2 was observed
+  released at `2026-07-21T10:57:37+09:00`.
 
 ### RP-64-QWEN3-CONTEXTUAL-VISION-REUSE-PARITY-GPU3
 
