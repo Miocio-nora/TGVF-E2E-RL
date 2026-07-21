@@ -5631,7 +5631,8 @@ instead of repeated bullets.
   with zero inference failure, judge failure, API/retry exhaustion, fallback,
   random choice or stale-run reuse. Materialization summary SHA256
   `4dbe5fa2...5db0`; final aggregate SHA256 `40d1b9bd...25bc`.
-  Primary results are VStarBench `53.93%`, HRBench4K `56.00%`, BLINK `62.38%`,
+  Primary results are VStarBench `53.93%`, HRBench4K Average/all `54.50%`
+  (the generic status reporter selects cycle-0/all `56.00%`), BLINK `62.38%`,
   OCRBench-v2 Chinese/English overall `39.38%`/`49.78%`, MMMU-Pro-10c
   `64.67%`, and MathVista-MINI `77.33%`. MathVerse-MINI reports Vision
   Dominant `68%`, Text Dominant `75%`, Text Lite `67%`, Vision Only `60%`, and
