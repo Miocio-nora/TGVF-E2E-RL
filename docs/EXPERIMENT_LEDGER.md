@@ -5287,7 +5287,7 @@ instead of repeated bullets.
 ### BE-01-R4-QWEN3-DIRECT-COREDEV2511-B200-SDPA-GPU0123
 
 - Cell/status/result: B200-safe independent original-policy inference plus
-  throughput/resume gate / `PLANNED` / `PENDING`.
+  throughput/resume gate / `COMPLETE` / `FAIL`.
 - Fixed identity: original local Qwen3-VL-8B-Thinking, tokenizer, native
   per-dataset prompts, max pixels `262144`, sampling fields, seven CoreDev-2511
   slice membership, and later official scorers remain BE-01. Code commit
@@ -5313,6 +5313,43 @@ instead of repeated bullets.
   tools/run_coredev_2511_vlmevalkit.py --config
   configs/evaluation/coredev_2511_qwen3_direct_v1.json --coredev-data
   <official_alias> --work-dir <R4_root>/<official_alias> --mode infer`.
+- Result: GPU0 VStarBench launched at `2026-07-21T13:10:10+09:00` and
+  validated the repair: `max_seq_len=65536`, decoder FlashInfer, vision
+  `TORCH_SDPA`, and 16.97-GiB weights loaded in 8.05 seconds. Initialization
+  then failed before prediction because TorchInductor's Triton launcher compile
+  required `Python.h`, absent from the host's Python 3.12 installation. It also
+  spent about 45 seconds profiling a maximum-size video although this suite is
+  image-only. GPU0 released cleanly. Launcher log SHA256
+  `80de60f6...88c1`.
+
+### BE-01-R5-QWEN3-DIRECT-COREDEV2511-IMAGEONLY-GPU0123
+
+- Cell/status/result: image-only B200-safe original-policy inference plus
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Fixed identity: all model, tokenizer, prompt, resolution, sampling, output
+  budget, CoreDev membership and scorer fields remain BE-01-R4. Code commit
+  `9204501`; direct config SHA256 `64740b07...daa1d`; launcher SHA256
+  `4ac6f60d...ab70`; output root
+  `artifacts/evaluation/BE-01-R5-qwen3-direct-coredev2511`.
+- Bounded runtime repair: vLLM retains the upstream `image=24` input limit and
+  adds `video=0`; accepted inputs are unchanged, while maximum-video profiling
+  is forbidden. Since passwordless system package installation is unavailable,
+  Ubuntu `python3.12-dev` and `libpython3.12-dev` version
+  `3.12.3-1ubuntu0.15` were downloaded and extracted without installation under
+  `.eval-runtime-python312-dev`; package SHA256 values are
+  `0301b3a8...f4e83` and `ab00830d...50d0`. `C_INCLUDE_PATH` exposes only
+  those matching Python 3.12 headers to the run. No model/runtime Python wheel
+  changed. Unit/contract result: 12 passed; Ruff passed.
+- Initial topology/gate: complete 191-row VStarBench on GPU0, independent TP1,
+  BF16, engine seed 0. Require real prediction progress, output-token rate,
+  utilization and peak memory before launching the other three GPUs. The
+  interruption/reuse gate and subsequent seven-slice scheduling remain R4.
+- Command template: `CUDA_VISIBLE_DEVICES=<gpu> VLLM_USE_V1=1
+  C_INCLUDE_PATH=<repo>/.eval-runtime-python312-dev/root/usr/include/python3.12:<repo>/.eval-runtime-python312-dev/root/usr/include
+  TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=42 .venv312/bin/python
+  tools/run_coredev_2511_vlmevalkit.py --config
+  configs/evaluation/coredev_2511_qwen3_direct_v1.json --coredev-data
+  <official_alias> --work-dir <R5_root>/<official_alias> --mode infer`.
 
 ## Compatibility-spike status
 
