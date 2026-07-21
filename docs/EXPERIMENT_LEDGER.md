@@ -7091,8 +7091,8 @@ instead of repeated bullets.
 
 - `PLANNED` / `PENDING`; config
   `configs/policy/runs/prl_01_r23_qwen3_grpo_1step_autoresume_gpu0123.toml`,
-  SHA256 `f02bc177...903f`, identity `0158286f...0e1d`, code
-  `df718146052ef78dcce50c3eb06f27519b5b8d35`, GPU 0--3, tmux
+  SHA256 `1e4244b5...d693`, identity `afe3f445...9e67a`, code
+  `e5624990ad13fb9c8c6d95dbc57e3e8b94029e22`, GPU 0--3, tmux
   `prl01_r23_gpu0123`. R22 with only vLLM reserved GPU memory reduced from
   `0.50` to `0.25`; model length, sampling, exact replay, objective, batches,
   resident-weight synchronization, and checkpoint/resume contract unchanged.
