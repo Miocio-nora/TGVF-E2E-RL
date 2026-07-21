@@ -693,6 +693,16 @@ Qwen-native KV-cache contract for incremental greedy decoding. Recomputing the
 full injected prefix for every generated token is forbidden in the accepted
 evaluator.
 
+For contextual-hidden-state diagnostics, a group builder may reuse the exact
+already-materialized source main/DeepStack visual features when obtaining the
+selected final language hidden state. It must not rerun the frozen vision tower
+once per target after that same group's vision state has already been
+materialized. This fast path is evaluation-only, opt-in, and restricted to the
+accepted final hidden layer (`-1`) until a separately proven all-layer interface
+exists. It must preserve native image-token positions, M-RoPE, attention masks,
+target span/Hq and resulting Adapter observation within the declared BF16
+parity tolerance. Representation training keeps its existing path.
+
 The optimized path must remain numerically and token-for-token equivalent to a
 bounded no-cache oracle. It must check prefill logits, incremental logits,
 generated token IDs, decoded text, stop reason and extracted expected value.

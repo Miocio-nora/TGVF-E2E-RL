@@ -5002,7 +5002,8 @@ instead of repeated bullets.
 
 ### RP-62-QWEN3-NATIVE-D-CACHED-CONTINUATION-DIAGNOSTIC-GPU2
 
-- Cell/status/result: diagnostic follow-up to RP-61 / `PLANNED` / `PENDING`.
+- Cell/status/result: diagnostic follow-up to RP-61 / `COMPLETE` /
+  `SIDE_RESULT`.
 - Identity: code `01678a6badbf2f92450ade0584868d0e10702ac1`; config
   `configs/representation/qwen3_cached_continuation_diagnostic_gpu2.toml`
   SHA256 `9b29f140aeb3e7fc3be200660303f0b4cb058d62952eb180aa098ddd739fdd43`;
@@ -5017,6 +5018,34 @@ instead of repeated bullets.
   `--allow-logit-mismatch-for-diagnostics`; acceptance requires exact greedy
   output identity, finite diagnostics/timing, tokenizer invariance, clean exit
   and GPU release.
+- Result: report/run-log SHA256 `8c354d12...9d3` / `86774f70...399`; exact
+  eight-token output identity passed, but strict logits did not. Max/mean
+  full-vocabulary drift was `0.5/0.04683`, selected-token drift was `0.375`,
+  and minimum cached/oracle top-1 margins were `0.25/0.0`. Cached/no-cache
+  timing was `0.35049/0.34967s`, only `0.9977x`; tokenizer remained 151669 and
+  GPU 2 was released. The cache implementation removes redundant prefix
+  computation but is not the observed end-to-end bottleneck for this short
+  lane. Optimization proceeds to repeated vision/context materialization and
+  serial scoring; RP-61 remains FAIL.
+
+### RP-63-QWEN3-REP-AUDITED-GROUNDING-BALANCED-T01-CACHED-GPU2
+
+- Cell/status/result: replacement for interrupted RP-58 / `PLANNED` /
+  `PENDING`.
+- Identity: code `01678a6badbf2f92450ade0584868d0e10702ac1`; config
+  `configs/representation/qwen3_balanced_t01_contextual_2000step_internal_evaluation_audited_grounding_cached_gpu2.toml`
+  SHA256 `ee8a3bdc...76c3`; physical GPU 2. Artifact, data, prompt, 200/46
+  population, nine cross-image pairs, 36 target-presence pairs, seed and
+  64-token/EOS generation contract are exactly RP-58. The only evaluator
+  change is native incremental KV-cache continuation; teacher-forced scores and
+  all metric definitions are unchanged.
+- Command/output: the standard deterministic single-GPU internal-evaluation
+  command for the RP-63 TOML under a 7200-second timeout; immutable report
+  `artifacts/representation/RP-63-qwen3-audited-grounding-balanced-t01-contextual-2000-cached-gpu2/report.json`.
+- Acceptance: exact identities, tokenizer 151669, 200 rows/46 groups, nine
+  cross-image cases, 36 target-presence cases, finite aggregates, clean exit
+  and GPU release. RP-61's logit-parity failure remains recorded and is not
+  erased by this run.
 
 ### Representation-phase endpoint evidence summary
 
