@@ -5325,7 +5325,7 @@ instead of repeated bullets.
 ### BE-01-R5-QWEN3-DIRECT-COREDEV2511-IMAGEONLY-GPU0123
 
 - Cell/status/result: image-only B200-safe original-policy inference plus
-  throughput/resume gate / `PLANNED` / `PENDING`.
+  throughput/resume gate / `COMPLETE` / `FAIL`.
 - Fixed identity: all model, tokenizer, prompt, resolution, sampling, output
   budget, CoreDev membership and scorer fields remain BE-01-R4. Code commit
   `9204501`; direct config SHA256 `64740b07...daa1d`; launcher SHA256
@@ -5350,6 +5350,35 @@ instead of repeated bullets.
   tools/run_coredev_2511_vlmevalkit.py --config
   configs/evaluation/coredev_2511_qwen3_direct_v1.json --coredev-data
   <official_alias> --work-dir <R5_root>/<official_alias> --mode infer`.
+- Result: GPU0 VStarBench launched at `2026-07-21T13:15:46+09:00`.
+  Python/TorchInductor compilation and image-only profiling both passed; the
+  encoder profile fell from about 45 seconds to about 10 seconds. FlashInfer's
+  first B200-specific JIT then failed because its NVCC invocation did not see
+  the already-installed venv CUDA development headers (`cublasLt.h` and
+  `nvrtc.h`). No prediction was generated and GPU0 released cleanly. Launcher
+  log SHA256 `c3852c3b...7cf7`.
+
+### BE-01-R6-QWEN3-DIRECT-COREDEV2511-FLASHINFER-JIT-GPU0123
+
+- Cell/status/result: complete B200 JIT environment and original-policy
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Fixed identity: model, tokenizer, prompt, pixels, sampling, output budget,
+  model/config/code, image-only modality restriction, CoreDev membership and
+  scorer are exactly BE-01-R5 (`9204501`, config `64740b07...daa1d`). New
+  output root is `artifacts/evaluation/BE-01-R6-qwen3-direct-coredev2511`.
+- Bounded runtime delta: extend `CPATH` with the R5 Python 3.12 headers plus the
+  headers already installed in this same venv by `nvidia-cublas-cu12=12.8.4.1`,
+  `nvidia-cuda-nvrtc-cu12=12.8.93`, and
+  `nvidia-cuda-runtime-cu12=12.8.90`. An NVCC preprocessing fixture including
+  `Python.h`, `cublasLt.h`, and `nvrtc.h` passed. No wheel, model, prompt,
+  kernel source, decoding field or scorer changes.
+- Initial topology/gate: complete VStarBench on GPU0. Require the FlashInfer
+  B200 JIT, engine startup, real prediction progress and throughput/GPU metrics
+  before launching independent GPUs 1--3. R5's interruption/reuse and full-suite
+  gates remain unchanged.
+- Command delta: R5 command with `C_INCLUDE_PATH` replaced by `CPATH` containing
+  the two extracted Python include roots and the venv cublas, cuda_nvrtc, and
+  cuda_runtime include roots; output root is R6.
 
 ## Compatibility-spike status
 
