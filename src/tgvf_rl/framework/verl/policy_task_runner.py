@@ -38,6 +38,7 @@ from tgvf_rl.policy.lifecycle import PolicyBatchLifecycleManager
 from tgvf_rl.policy.metrics import (
     PilotMetricsAccumulator,
     PilotOptimizerStepMetricsObservation,
+    PilotMetricsSummary,
     PilotTrajectoryMetricsObservation,
 )
 from tgvf_rl.policy.run_config import (
@@ -76,6 +77,122 @@ POLICY_PILOT_TASK_RUNNER_FQN = (
 )
 POLICY_PILOT_TRAINER_LIFECYCLE_SCHEMA = "tgvf-policy-trainer-lifecycle-v1"
 POLICY_REFERENCE_DIAGNOSTIC_ENABLED = True
+POLICY_PILOT_METRICS_EVENT_SCHEMA = "policy-pilot-v1-metrics-event-v1"
+
+
+def _zero_safe_mean(numerator: int, denominator: int) -> float:
+    return 0.0 if denominator == 0 else numerator / denominator
+
+
+def _pilot_metrics_event(
+    observation: PilotOptimizerStepMetricsObservation,
+    summary: PilotMetricsSummary,
+) -> dict[str, object]:
+    rows = observation.trajectories
+    trajectories = len(rows)
+    attempts = sum(row.tool_call_attempts for row in rows)
+    successful = sum(row.successful_tgvf_observations for row in rows)
+    errors: dict[str, int] = {}
+    for row in rows:
+        for code in row.tool_error_codes:
+            errors[code] = errors.get(code, 0) + 1
+    step = {
+        "prompts": observation.prompt_count,
+        "trajectories": trajectories,
+        "generated_policy_tokens": sum(row.generated_policy_tokens for row in rows),
+        "successful_tgvf_observations": successful,
+        "tool_call_attempts": attempts,
+        "tool_call_attempt_rate": _zero_safe_mean(
+            sum(row.tool_call_attempts > 0 for row in rows), trajectories
+        ),
+        "mean_tool_call_attempts": _zero_safe_mean(attempts, trajectories),
+        "mean_answer_reward": _zero_safe_mean(
+            sum(int(row.answer_reward) for row in rows), trajectories
+        ),
+        "format_error_rate": _zero_safe_mean(
+            sum(row.format_error for row in rows), trajectories
+        ),
+        "mean_conditional_tool_reward": _zero_safe_mean(
+            sum(int(row.conditional_tool_reward) for row in rows), trajectories
+        ),
+        "mean_reasoning_length": _zero_safe_mean(
+            sum(row.reasoning_tokens for row in rows), trajectories
+        ),
+        "mean_original_visual_tokens": _zero_safe_mean(
+            sum(row.original_visual_tokens for row in rows), trajectories
+        ),
+        "mean_total_visual_tokens": _zero_safe_mean(
+            sum(row.total_visual_tokens for row in rows), trajectories
+        ),
+        "pre_publication_elapsed_seconds": observation.step_time_seconds,
+        "tool_error_counts": dict(sorted(errors.items())),
+    }
+    cumulative = {
+        "optimizer_steps": summary.optimizer_steps,
+        "prompts": summary.prompts,
+        "trajectories": summary.trajectories,
+        "generated_policy_tokens": summary.generated_policy_tokens,
+        "successful_tgvf_observations": summary.successful_tgvf_observations,
+        "tool_call_attempt_rate": summary.tool_call_attempt_rate,
+        "mean_tool_call_attempts": summary.mean_tool_call_attempts,
+        "mean_answer_reward": summary.mean_answer_reward,
+        "format_error_rate": summary.format_error_rate,
+        "mean_conditional_tool_reward": summary.mean_conditional_tool_reward,
+        "mean_reasoning_length": summary.mean_reasoning_length,
+        "mean_original_visual_tokens": summary.mean_original_visual_tokens,
+        "mean_total_visual_tokens": summary.mean_total_visual_tokens,
+        "tool_error_counts": {
+            item.code: item.count for item in summary.tool_error_counts
+        },
+    }
+    return {
+        "schema_version": POLICY_PILOT_METRICS_EVENT_SCHEMA,
+        "optimizer_step": observation.optimizer_step,
+        "step": step,
+        "cumulative": cumulative,
+    }
+
+
+def _wandb_metrics_from_event(event: Mapping[str, object]) -> dict[str, float | int]:
+    step = event.get("step")
+    cumulative = event.get("cumulative")
+    if not isinstance(step, Mapping) or not isinstance(cumulative, Mapping):
+        raise TypeError("Policy metrics event is missing step/cumulative mappings")
+    result: dict[str, float | int] = {}
+    for prefix, values in (("policy_pilot", step), ("policy_pilot_total", cumulative)):
+        for name, value in values.items():
+            if name == "tool_error_counts":
+                if not isinstance(value, Mapping):
+                    raise TypeError("Policy tool error counts must be a mapping")
+                for code, count in value.items():
+                    result[f"{prefix}/tool_errors/{code}"] = int(count)
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                result[f"{prefix}/{name}"] = value
+    return result
+
+
+def _append_policy_metrics_event(path: Path, event: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalized = json.loads(json.dumps(event, sort_keys=True))
+    step = normalized.get("optimizer_step")
+    if type(step) is not int or step <= 0:
+        raise ValueError("Policy metrics event optimizer step must be positive")
+    if path.exists():
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+        if lines:
+            previous = json.loads(lines[-1])
+            previous_step = previous.get("optimizer_step")
+            if previous_step == step:
+                if previous != normalized:
+                    raise RuntimeError("Policy metrics replay changed an existing step")
+                return
+            if type(previous_step) is not int or previous_step + 1 != step:
+                raise RuntimeError("Policy metrics steps must be contiguous")
+    encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":")) + "\n"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _completed_resume_checkpoint_step(
@@ -259,7 +376,9 @@ class PolicyPilotTrainerCheckpointState:
         self._rng = self._rng_state(optimizer_step)
         self._prepared_policy = policy
 
-    def record_optimizer_step(self, data: object, *, elapsed_seconds: float) -> None:
+    def record_optimizer_step(
+        self, data: object, *, elapsed_seconds: float
+    ) -> tuple[PilotOptimizerStepMetricsObservation, PilotMetricsSummary]:
         step = getattr(self.trainer, "global_steps", None)
         if type(step) is not int or step <= 0:
             raise RuntimeError("veRL trainer global step is unavailable after update")
@@ -268,7 +387,8 @@ class PolicyPilotTrainerCheckpointState:
             optimizer_step=step,
             elapsed_seconds=elapsed_seconds,
         )
-        self.metrics_accumulator.record_optimizer_step(observation)
+        summary = self.metrics_accumulator.record_optimizer_step(observation)
+        return observation, summary
 
     def run_identity(self) -> PilotRunIdentityHashes:
         return self._run_identity
@@ -404,13 +524,24 @@ class CheckpointAfterWeightSyncManager:
         self.trainer = trainer
 
     def update_weights(self, global_steps: int | None = None) -> object:
+        sync_started = perf_counter()
         result = self.upstream.update_weights(global_steps)
+        sync_seconds = perf_counter() - sync_started
+        checkpoint_seconds = 0.0
         if getattr(self.trainer, "_policy_checkpoint_pending", False):
+            checkpoint_started = perf_counter()
             self.upstream.sleep_replicas()
             try:
                 self.trainer._commit_policy_checkpoint_after_weight_sync(global_steps)
             finally:
                 self.upstream.wake_up_replicas()
+            checkpoint_seconds = perf_counter() - checkpoint_started
+        complete = getattr(self.trainer, "_complete_policy_metric_publication", None)
+        if callable(complete):
+            complete(
+                weight_sync_seconds=sync_seconds,
+                checkpoint_seconds=checkpoint_seconds,
+            )
         return result
 
     def __getattr__(self, name: str) -> object:
@@ -465,6 +596,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self._policy_checkpoint_pending = False
             self._policy_step_started_at = None
             self._policy_runtime_shutdown = False
+            self._policy_metrics_pending = None
             return result
 
         def fit(self):
@@ -540,6 +672,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 self.ref_in_actor = True
 
         def _update_actor(self, batch, *args, **kwargs):
+            completed = False
             try:
                 # Reject transport/reward corruption before the upstream actor
                 # can mutate optimizer state.  Metric extraction repeats the
@@ -550,10 +683,22 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 output = super()._update_actor(batch, *args, **kwargs)
                 started = self._policy_step_started_at
                 elapsed = perf_counter() - started if started is not None else 0.0
-                self._policy_checkpoint_state.record_optimizer_step(
+                observation, summary = self._policy_checkpoint_state.record_optimizer_step(
                     batch,
                     elapsed_seconds=max(elapsed, 1.0e-12),
                 )
+                if getattr(self, "_policy_metrics_pending", None) is not None:
+                    raise RuntimeError("a Policy metrics publication is already pending")
+                event = _pilot_metrics_event(observation, summary)
+                metrics = getattr(output, "meta_info", {}).get("metrics")
+                if not isinstance(metrics, dict):
+                    raise TypeError("veRL actor output metrics must be a dictionary")
+                for name, value in _wandb_metrics_from_event(event).items():
+                    if name in metrics:
+                        raise RuntimeError(f"Policy metric already exists: {name}")
+                    metrics[name] = [value]
+                self._policy_metrics_pending = (output, event)
+                completed = True
                 return output
             finally:
                 # All current/reference/update consumers are synchronous in the
@@ -561,7 +706,49 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 # actor call has returned; every Ray-local copy has its own
                 # worker ``finally`` in the wrapped TrainingWorker.
                 release_verl_data_proto_sidecars(batch)
-                self._policy_step_started_at = None
+                if not completed:
+                    self._policy_step_started_at = None
+
+        def _complete_policy_metric_publication(
+            self,
+            *,
+            weight_sync_seconds: float,
+            checkpoint_seconds: float,
+        ) -> None:
+            pending = getattr(self, "_policy_metrics_pending", None)
+            if pending is None:
+                return
+            output, event = pending
+            started = self._policy_step_started_at
+            if started is None:
+                raise RuntimeError("Policy metric publication lost its step timer")
+            end_to_end_seconds = perf_counter() - started
+            if min(weight_sync_seconds, checkpoint_seconds, end_to_end_seconds) < 0:
+                raise RuntimeError("Policy timing metrics must be non-negative")
+            metrics = getattr(output, "meta_info", {}).get("metrics")
+            if not isinstance(metrics, dict):
+                raise TypeError("veRL actor output metrics must be a dictionary")
+            timings = {
+                "policy_timing/weight_sync_seconds": weight_sync_seconds,
+                "policy_timing/checkpoint_seconds": checkpoint_seconds,
+                "policy_timing/end_to_end_step_seconds": end_to_end_seconds,
+            }
+            for name, value in timings.items():
+                if name in metrics:
+                    raise RuntimeError(f"Policy timing metric already exists: {name}")
+                metrics[name] = [value]
+            persisted = dict(event)
+            persisted["timing"] = {
+                "weight_sync_seconds": weight_sync_seconds,
+                "checkpoint_seconds": checkpoint_seconds,
+                "end_to_end_step_seconds": end_to_end_seconds,
+            }
+            _append_policy_metrics_event(
+                self._policy_checkpoint_state.config.output.metrics_path,
+                persisted,
+            )
+            self._policy_metrics_pending = None
+            self._policy_step_started_at = None
 
         def _save_checkpoint(self):
             if self._policy_checkpoint_pending:

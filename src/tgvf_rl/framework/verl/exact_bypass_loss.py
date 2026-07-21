@@ -159,6 +159,9 @@ def compute_policy_pilot_v1_exact_bypass_loss(
     )
 
     selected_log_ratio = log_ratio[mask]
+    selected_log_ratio_fp32 = selected_log_ratio.to(torch.float32)
+    selected_log_ratio_abs = selected_log_ratio_fp32.abs()
+    selected_ratio = ratio[mask].to(torch.float32)
     raw_negative_surrogate = -advantages * ratio
     clipped_negative_surrogate = -advantages * clipped_ratio
     selected_negative_surrogate = torch.maximum(
@@ -173,6 +176,21 @@ def compute_policy_pilot_v1_exact_bypass_loss(
         "actor/pg_clipfrac": clipped[mask].to(torch.float32).mean().item(),
         "actor/ppo_kl": (-selected_log_ratio).mean().detach().item(),
         "actor/pg_clipfrac_lower": lower_clipped[mask]
+        .to(torch.float32)
+        .mean()
+        .item(),
+        "actor/behavior_current_log_ratio_abs_mean": selected_log_ratio_abs
+        .mean()
+        .item(),
+        "actor/behavior_current_log_ratio_abs_p99": torch.quantile(
+            selected_log_ratio_abs, 0.99
+        ).item(),
+        "actor/behavior_current_log_ratio_abs_max": selected_log_ratio_abs
+        .max()
+        .item(),
+        "actor/behavior_current_ratio_outside_clip_fraction": (
+            (selected_ratio < 0.8) | (selected_ratio > 1.2)
+        )
         .to(torch.float32)
         .mean()
         .item(),

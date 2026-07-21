@@ -14,9 +14,17 @@ from tgvf_rl.framework.verl.data_bridge import (
 from tgvf_rl.framework.verl.policy_task_runner import (
     CheckpointAfterWeightSyncManager,
     PairedActorWorkerGroup,
+    _append_policy_metrics_event,
     _completed_resume_checkpoint_step,
+    _pilot_metrics_event,
+    _wandb_metrics_from_event,
     add_policy_actor_rollout_worker,
     make_policy_pilot_ray_trainer_class,
+)
+from tgvf_rl.policy.metrics import (
+    PilotMetricsAccumulator,
+    PilotOptimizerStepMetricsObservation,
+    PilotTrajectoryMetricsObservation,
 )
 from tgvf_rl.framework.verl.rollout_bridge import (
     AGENT_LOOP_EXACT_SIDECAR_FIELDS,
@@ -157,11 +165,65 @@ def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None
             events.append(("checkpoint", step))
             self._policy_checkpoint_pending = False
 
+        def _complete_policy_metric_publication(self, **timings):
+            events.append(("metrics", timings))
+
     trainer = Trainer()
     manager = CheckpointAfterWeightSyncManager(UpstreamManager(), trainer)
 
     assert manager.update_weights(3) == {"synced": 3}
-    assert events == [("sync", 3), "sleep", ("checkpoint", 3), "wake"]
+    assert events[:4] == [("sync", 3), "sleep", ("checkpoint", 3), "wake"]
+    assert events[4][0] == "metrics"
+    assert events[4][1]["weight_sync_seconds"] >= 0.0
+    assert events[4][1]["checkpoint_seconds"] >= 0.0
+
+
+def test_policy_metrics_publish_step_and_cumulative_records_idempotently(
+    tmp_path,
+) -> None:
+    rows = tuple(
+        PilotTrajectoryMetricsObservation(
+            prompt_id="prompt-a",
+            trajectory_id=f"trajectory-{index}",
+            generated_policy_tokens=10 + index,
+            successful_tgvf_observations=1,
+            tool_call_attempts=1,
+            answer_reward=float(index % 2 == 0),
+            format_error=index == 0,
+            conditional_tool_reward=float(index % 2 == 0),
+            reasoning_tokens=5 + index,
+            original_visual_tokens=4,
+            total_visual_tokens=6,
+        )
+        for index in range(8)
+    )
+    observation = PilotOptimizerStepMetricsObservation(1, 2.5, rows)
+    accumulator = PilotMetricsAccumulator()
+    summary = accumulator.record_optimizer_step(observation)
+    event = _pilot_metrics_event(observation, summary)
+    event["timing"] = {
+        "weight_sync_seconds": 0.25,
+        "checkpoint_seconds": 0.5,
+        "end_to_end_step_seconds": 3.25,
+    }
+
+    flat = _wandb_metrics_from_event(event)
+    assert flat["policy_pilot/trajectories"] == 8
+    assert flat["policy_pilot/mean_tool_call_attempts"] == 1.0
+    assert flat["policy_pilot/mean_answer_reward"] == 0.5
+    assert flat["policy_pilot_total/generated_policy_tokens"] == 108
+
+    path = tmp_path / "metrics.jsonl"
+    _append_policy_metrics_event(path, event)
+    _append_policy_metrics_event(path, event)
+    lines = path.read_text().splitlines()
+    assert len(lines) == 1
+    assert '"optimizer_step":1' in lines[0]
+
+    changed = dict(event)
+    changed["timing"] = dict(event["timing"], checkpoint_seconds=0.75)
+    with pytest.raises(RuntimeError, match="changed an existing step"):
+        _append_policy_metrics_event(path, changed)
 
 
 def test_actor_worker_group_routes_save_and_clean_resume_through_pair() -> None:
