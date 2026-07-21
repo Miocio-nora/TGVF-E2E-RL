@@ -23,6 +23,7 @@ TGVF_VLLM_MM_ENCODER_ATTN_BACKEND = "TORCH_SDPA"
 VLLM_012_TRITON_VERSION = "3.5.0"
 VLLM_012_LORA_PDL_MODE = "vllm-0.12-triton-3.5-lora-pdl-disabled-v1"
 VLLM_UPSTREAM_LORA_PDL_MODE = "upstream"
+VERL_PREEXPANDED_PROMPT_MODE = "verl-preexpanded-qwen3-no-dedup-v1"
 _VLLM_LORA_PDL_MODULES = (
     "vllm.lora.ops.triton_ops.utils",
     "vllm.lora.ops.triton_ops.lora_expand_op",
@@ -65,6 +66,38 @@ class VLLMPluginRegistration:
 
 def _lora_pdl_disabled(_device: object | None = None) -> bool:
     return False
+
+
+def _preserve_preexpanded_prompt_ids(
+    prompt_ids: list[int], _processor: object
+) -> list[int]:
+    return prompt_ids
+
+
+def install_verl_preexpanded_prompt_compatibility(
+    *, importer: Callable[[str], Any] = import_module
+) -> str:
+    """Keep the already-expanded Qwen3 image-token coordinate unchanged.
+
+    Pinned veRL unconditionally applies its Qwen2.5-VL helper immediately
+    before vLLM submission.  That helper collapses each complete image-pad run
+    to one token, which contradicts this plugin's required pre-expanded prompt
+    contract.  Patch both the defining module and the alias imported by the
+    exact vLLM server; the plugin processor remains fail-closed on the per-turn
+    contract, so no unbound token prompt can reach model execution.
+    """
+
+    utils = importer("verl.workers.rollout.utils")
+    server = importer("verl.workers.rollout.vllm_rollout.vllm_async_server")
+    utility = getattr(utils, "qwen2_5_vl_dedup_image_tokens", None)
+    bound = getattr(server, "qwen2_5_vl_dedup_image_tokens", None)
+    if not callable(utility) or bound is not utility:
+        raise VLLMCompatibilityError(
+            "pinned veRL Qwen-VL prompt-dedup alias differs"
+        )
+    utils.qwen2_5_vl_dedup_image_tokens = _preserve_preexpanded_prompt_ids
+    server.qwen2_5_vl_dedup_image_tokens = _preserve_preexpanded_prompt_ids
+    return VERL_PREEXPANDED_PROMPT_MODE
 
 
 def install_vllm_lora_pdl_compatibility(
@@ -202,6 +235,7 @@ def register_tgvf_qwen3_vllm_plugin(
             vllm_version=public.version,
             triton_version=triton_version,
         )
+        install_verl_preexpanded_prompt_compatibility()
     else:
         # Injected APIs are registration fixtures and must not mutate an
         # unrelated installed vLLM process. The patch helper is tested
@@ -237,6 +271,7 @@ __all__ = [
     "VLLM_012_LORA_PDL_MODE",
     "VLLM_012_TRITON_VERSION",
     "VLLM_UPSTREAM_LORA_PDL_MODE",
+    "VERL_PREEXPANDED_PROMPT_MODE",
     "VLLMCompatibilityError",
     "VLLMPluginError",
     "VLLMPluginRegistration",
@@ -244,6 +279,7 @@ __all__ = [
     "VLLMUnavailableError",
     "load_vllm_public_plugin_api",
     "install_vllm_lora_pdl_compatibility",
+    "install_verl_preexpanded_prompt_compatibility",
     "register_tgvf_qwen3_vllm_plugin",
     "vllm_is_available",
 ]

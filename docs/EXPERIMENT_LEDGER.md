@@ -6675,8 +6675,10 @@ instead of repeated bullets.
 
 ### PRL-01-R8-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step and
-  clean-resume vertical slice.
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step and
+  clean-resume vertical slice. Exact BF16 LoRA installation passed and the
+  first real generation reached vLLM, where veRL collapsed the already-expanded
+  image-token run before the plugin's strict prompt check.
 - Complete identity: config
   `configs/policy/runs/prl_01_r8_qwen3_grpo_1step_autoresume_gpu0123.toml`,
   SHA256 `a3a2a7d3...bc275`, run identity `2b6fafa2...a52d9`; every model,
@@ -6691,7 +6693,11 @@ instead of repeated bullets.
 - GPUs/output/session: physical 0--3, idle B200s at planning;
   `artifacts/policy/PRL-01-R8-qwen3-grpo-1step-auto-resume-gpu0123` (absent);
   tmux `prl01_r8_gpu0123`, then resume only after successful step 1.
-- Start/end, outputs, metrics and conclusion: pending.
+- Start/end, outputs, metrics and conclusion: about
+  `2026-07-21T20:41:25+09:00`--`20:46:05+09:00`; tmux exit 1, GPUs released;
+  log SHA256 `a6c715fb...f9e02`. No generated/tool/replay/update result. R9
+  disables only veRL's incompatible Qwen2.5 dedup alias inside the exact
+  pre-expanded Qwen3 plugin; the plugin's per-request strict contract remains.
 
 ## Compatibility-spike status
 

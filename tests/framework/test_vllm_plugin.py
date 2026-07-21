@@ -21,6 +21,7 @@ from tgvf_rl.framework.vllm import (
     VLLMPublicPluginAPI,
     load_vllm_public_plugin_api,
     install_vllm_lora_pdl_compatibility,
+    install_verl_preexpanded_prompt_compatibility,
     pack_qwen3_vllm_replay,
     pack_qwen3_vllm_replay_bundle,
     register_tgvf_qwen3_vllm_plugin,
@@ -347,6 +348,25 @@ def test_public_registration_calls_both_general_vllm_registries(
         ("processor", Processor, Info, Dummy),
         ("model", TGVF_QWEN3_VLLM_ARCHITECTURE, Model),
     ]
+
+
+def test_verl_preexpanded_prompt_patch_preserves_the_complete_token_run() -> None:
+    def dedup(prompt_ids, processor):
+        del processor
+        return prompt_ids[:2]
+
+    utils = SimpleNamespace(qwen2_5_vl_dedup_image_tokens=dedup)
+    server = SimpleNamespace(qwen2_5_vl_dedup_image_tokens=dedup)
+    modules = {
+        "verl.workers.rollout.utils": utils,
+        "verl.workers.rollout.vllm_rollout.vllm_async_server": server,
+    }
+
+    install_verl_preexpanded_prompt_compatibility(importer=modules.__getitem__)
+
+    prompt = [1, 2, 2, 2, 3]
+    assert server.qwen2_5_vl_dedup_image_tokens(prompt, object()) is prompt
+    assert utils.qwen2_5_vl_dedup_image_tokens is server.qwen2_5_vl_dedup_image_tokens
 
 
 def test_public_registration_rejects_an_unaudited_neighbor_build() -> None:
