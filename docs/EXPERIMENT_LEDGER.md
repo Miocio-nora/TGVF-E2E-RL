@@ -6021,8 +6021,11 @@ instead of repeated bullets.
 - Spike-plan git revision and approval references: accepted tasks
   `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
   `POLICY-PILOT-V1-FOUR-GPU-20260721`, `PROJECT_TASK.md` sections 0.8.2--0.8.3.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`; exact Dataset binding and four-rank worker/model creation
+  passed, but Hydra doubled all seven backslashes in the decoder-only LoRA
+  regex. PEFT therefore matched zero modules and rejected adapter injection
+  before rollout.
 - Question: after byte-exact free-text transport, can the accepted native-tool
   trajectory complete 8-way rollout, exact-observation current/reference
   replay, one FSDP2 decoder-LoRA GRPO update, checkpoint and clean resume?
@@ -6094,17 +6097,27 @@ instead of repeated bullets.
   trajectories per GPU; 32 trajectories; accumulation 1.
 - GPUs: physical/logical IDs `0,1,2,3`, four B200 183359 MiB; recheck idle
   immediately before launch.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  planned tmux `prl01_r2_gpu0123`, then `prl01_r2_resume_gpu0123`.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T19:31:31+09:00` to `2026-07-21T19:33:01+09:00`, 90 seconds;
+  tmux `prl01_r2_gpu0123`, driver PID 223066, Ray task PID 236504. Resume was
+  not started.
+- Actual GPU-hours and peak scratch use: less than 0.1 GPU-hours; transient
+  model-init allocation was observed on all four GPUs, with rank-0 device use
+  3.24 GiB after FSDP. All GPUs returned to zero; no checkpoint state exists.
 - Command: `PYTHONPATH=src .venv312/bin/python -m tgvf_rl.cli run-policy
   <absolute-R2-config> --python <absolute-.venv312-python>` for both processes;
   resume starts only after successful step 1 and must not update again.
-- Outputs: pending.
+- Outputs: failure log `launch.log`, 146,296 bytes, SHA256
+  `d806f61f...f212f`; no checkpoint, LoRA snapshot, metrics or W&B run.
 - Scorer/parser identity: deterministic MCQ exact verifier
   `2a3d5fa4...2e1c`, strict native tool parser, no judge.
-- Metrics: pending.
-- Conclusion: pending.
+- Metrics: zero optimizer steps, rollouts, generated tokens and tool calls;
+  model construction stopped at PEFT adapter injection.
+- Conclusion: Hydra regex-transport failure, not a model topology or training
+  result. The native model exposes exactly 36x7 decoder targets and no
+  vision/embedding/lm-head targets. R3 uses a mathematically equivalent
+  Hydra-safe `[.]`/`[0-9]+` regex, with compose/scope regression gates, under a
+  separate identity.
 
 ## Compatibility-spike status
 

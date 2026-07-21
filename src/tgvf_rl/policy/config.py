@@ -51,9 +51,9 @@ QWEN3_DECODER_LORA_PROJECTIONS = (
     "mlp.down_proj",
 )
 QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN = (
-    r"^model\.language_model\.layers\.\d+\."
-    r"(?:self_attn\.(?:q_proj|k_proj|v_proj|o_proj)|"
-    r"mlp\.(?:gate_proj|up_proj|down_proj))$"
+    r"^model[.]language_model[.]layers[.][0-9]+[.]"
+    r"(?:self_attn[.](?:q_proj|k_proj|v_proj|o_proj)|"
+    r"mlp[.](?:gate_proj|up_proj|down_proj))$"
 )
 
 

@@ -74,6 +74,7 @@ from tgvf_rl.observations.store import (
 )
 from tgvf_rl.policy import (
     POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE,
+    QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN,
     PilotSamplingConfig,
     PolicyPilotV1Config,
 )
@@ -1020,8 +1021,9 @@ def test_policy_pilot_uses_real_e003_lora_and_optimizer_fields() -> None:
     assert overrides["data.mm_processor_kwargs.max_pixels"] == 262144
     assert overrides["actor_rollout_ref.model.lora_rank"] == 64
     assert overrides["actor_rollout_ref.model.lora_alpha"] == 64
-    assert overrides["actor_rollout_ref.model.target_modules"].startswith(
-        "^model\\.language_model"
+    assert (
+        overrides["actor_rollout_ref.model.target_modules"]
+        == QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN
     )
     assert overrides["actor_rollout_ref.model.exclude_modules"] is None
     assert (
