@@ -757,6 +757,44 @@ scores. The run must support durable partial predictions and exact reuse after
 an intentional bounded interruption before it is treated as the formal
 baseline.
 
+### 0.14 Accepted batched original-policy benchmark inference
+
+Decision ID: **EVAL-QWEN3-DIRECT-BATCHED-BASELINE-20260721**
+
+Accepted by: **user**, on **2026-07-21 JST**, through the instruction to
+optimize benchmark inference first when the scalar path is slow.
+
+The scalar throughput gate established that pinned VLMEvalKit submits exactly
+one request at a time. Although one active decode keeps the B200 busy, a small
+number of Qwen Thinking responses reach the accepted `40960`-token generation
+cap and block every following row for three to four minutes. The formal direct
+baseline therefore uses fixed inference batch size `8`, equal to the engine's
+accepted `max_num_seqs=8`, so independent long responses overlap.
+
+The project-owned runtime bridge must reuse the pinned Qwen3-VL wrapper's exact
+message validation, dataset prompt, image preparation, chat template, vision
+processing and `SamplingParams` construction. It may collect those prepared
+requests and submit them together to the same vLLM engine; it must not copy or
+replace the prompt/processor implementation. Output order maps directly back
+to canonical dataset indices, and the auxiliary inference dictionary is
+atomically dumped after every completed batch.
+
+Batch scheduling must not determine sampled content. Every row receives a
+stable request seed computed as the low 31 bits of SHA256 over canonical JSON
+`[seed_namespace, seed_base, dataset_name, str(canonical_index)]`, with
+namespace `coredev-2511-qwen3-direct-batched-v1` and base `0`. All other
+sampling fields, engine seed `0`, prompt, pixels, model, and generation cap are
+unchanged. Exact restart may lose only the currently unfinished batch; already
+materialized rows are reused, while every regenerated row keeps the same seed
+regardless of its new batch position.
+
+The partial scalar outputs are throughput evidence only and cannot be mixed
+into the batched baseline because they lacked request-level seeds. Acceptance
+requires CPU contracts for request preservation, output ordering, stable seeds,
+constructor restoration and batch-boundary-independent results, followed by a
+bounded GPU0 B8 throughput/resume smoke. Only then may the formal seven-slice
+batched inference replace the scalar run.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the
