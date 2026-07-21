@@ -1,0 +1,38 @@
+schema_version = "representation-internal-evaluation-run-v3"
+run_id = "RP-64-QWEN3-CONTEXTUAL-VISION-REUSE-PARITY-GPU3"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "6c6a5e5d26ecf6d1c9a22081913b781e895146fc"
+dirty = false
+
+[source]
+training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_matrix_ce_balanced_t01_contextual_2000step_gpu01.toml"
+training_config_sha256 = "16b02464586f5e9f8467727e0bfb1aa873c03e48483d0d3849cbd0fb49b09851"
+
+[artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-49-qwen3-matrix-ce-balanced-t01-contextual-2000-gpu01/adapter.pt"
+file_sha256 = "fcda0b9693ee05e807a4fa95af4e7387bf77854c914d27a2f1cca9d1c175fc14"
+manifest_sha256 = "3ff14e6633ff9c8cecfb2f4eb19088f0b779332f1445b51d1e9425e463a3f49e"
+expected_run_identity_sha256 = "980e4136bf5d7f1a24d20422f60c87ff719d62f3e42e4f5d3a2da9b5504e1bea"
+expected_global_step = 2000
+
+[execution]
+physical_gpu_id = 3
+
+[evaluation_data]
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl"
+source_sha256 = "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
+
+[evaluation]
+evaluation_id = "qwen3-contextual-vision-reuse-parity-v1"
+ordered_group_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json"
+ordered_group_manifest_sha256 = "55e2cde5e118de77e4bcc099a422844129cdff1caf328d349dae5c7f11a634d8"
+counterfactual_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_counterfactual_v1.json"
+counterfactual_manifest_sha256 = "4589d14f196ccde48c3439405700220bc0fb63487edae0e74bc6b3713d7f4cc4"
+grounding_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_audited_grounding_v1.json"
+grounding_manifest_sha256 = "a65aa6e6038ada1436302b60440136cc98b388552a7782b48ec95ed4324938c0"
+report_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-64-qwen3-contextual-vision-reuse-parity-gpu3/report.json"
+random_seed = 42
+max_new_tokens = 8
+eos_token_ids = [151645]

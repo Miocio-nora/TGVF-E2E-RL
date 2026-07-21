@@ -5047,6 +5047,48 @@ instead of repeated bullets.
   and GPU release. RP-61's logit-parity failure remains recorded and is not
   erased by this run.
 
+### RP-64-QWEN3-CONTEXTUAL-VISION-REUSE-PARITY-GPU3
+
+- Cell/status/result: bounded evaluator optimization gate / `PLANNED` /
+  `PENDING`.
+- Question: can contextual-hidden-state diagnostics reuse the exact source
+  main/DeepStack visual features already materialized for the same group,
+  remove redundant per-target frozen-vision forwards, preserve the complete
+  TGVF Adapter observation within BF16 tolerance, and provide a measurable
+  construction speedup?
+- Identity: accepted task `RPI-20260721-NATIVE-D-EVAL-THROUGHPUT`; code commit
+  `6c6a5e5d26ecf6d1c9a22081913b781e895146fc`; config
+  `configs/representation/qwen3_contextual_vision_reuse_parity_smoke_gpu3.toml`
+  SHA256 `47aa6ab88e05ce2069f70af9c28bf30ac667e60ca8b080d611d1b1bbe031dc84`.
+- Model/artifact/data: local Qwen3-VL-8B-Thinking, BF16/SDPA, max-pixels
+  262144, tokenizer 151669/no resize; immutable contextual Balanced/T=0.1
+  step-2000 artifact file/manifest/run hashes `fcda0b96...c14` /
+  `3ff14e66...f49e` / `980e4136...1bea`; v4 clean-imend source SHA256
+  `de61c731...82d`; audited grounding manifest SHA256 `a65aa6e...8c0`.
+- Bounded population/math: the first audited cross-image pair plus target-
+  presence pair `baseball-pants-not-locomotive`, producing six complete main-D
+  plus all-three-D-DeepStack observations. The baseline reruns native Qwen3
+  multimodal conditioning per target; the candidate injects the exact already-
+  materialized source tensors at the same image positions with identical
+  M-RoPE and attention mask and selects final hidden layer `-1`. No training,
+  objective, Adapter state, prompt, sample, reward or metric changes.
+- Parity/performance: require every main-D and D-DeepStack tensor to satisfy
+  `atol=rtol=0.015625`, exact tensor shapes and tokenizer length 151669. Record
+  synchronized baseline/candidate build seconds and speedup; retain the path
+  only if parity passes and the timing benefit is material.
+- Runtime: one deterministic process on physical GPU 3 UUID
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; seed 42; no sampling,
+  optimizer, policy/reference replay, GRPO, SDPO or judge. Command:
+  `CUDA_VISIBLE_DEVICES=3 CUBLAS_WORKSPACE_CONFIG=:4096:8 PYTHONHASHSEED=0
+  TOKENIZERS_PARALLELISM=false timeout 1800s .venv-torch211-cu129/bin/python
+  tools/smoke_qwen3_contextual_vision_reuse.py
+  configs/representation/qwen3_contextual_vision_reuse_parity_smoke_gpu3.toml
+  --pair-id baseball-pants-not-locomotive --atol 0.015625 --rtol 0.015625`.
+- Output: immutable
+  `artifacts/representation/RP-64-qwen3-contextual-vision-reuse-parity-gpu3/report.json`;
+  acceptance also requires clean exit and GPU release. A failure leaves the
+  existing evaluator and the concurrently running RP-63 unchanged.
+
 ### Representation-phase endpoint evidence summary
 
 - Provider: under the same Balanced/T=1.0 2000-step identity, contextual hidden
