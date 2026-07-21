@@ -7101,7 +7101,7 @@ instead of repeated bullets.
 
 ### PRL-01-R24-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- `PLANNED` / `PENDING`; config
+- `COMPLETE` / `FAIL`; config
   `configs/policy/runs/prl_01_r24_qwen3_grpo_1step_autoresume_gpu0123.toml`,
   SHA256 `e222526b...7243`, identity `6a3fd1f6...0642`, implementation
   `e7dea44a0e97c448c915d90157f9df856d2f839f`, GPU 0--3, tmux
@@ -7116,6 +7116,25 @@ instead of repeated bullets.
 - Question: can this two-model lifecycle complete a native multi-turn rollout,
   exact current/reference replay, one GRPO optimizer step, LoRA synchronization,
   step-1 paired checkpoint, and clean resume without OOM or observation drift?
+- Result: all four colocated actor/vLLM replicas initialized within roughly
+  48 GiB per GPU, then the first AgentLoop row failed before GPU generation
+  because the binding constructor rejected the runtime's async-only trajectory
+  component builder. No optimizer step or checkpoint was produced.
+
+### PRL-01-R25-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r25_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `a485eb8c...cc9f`, identity `ca4fec2f...f752`, implementation
+  `4eab66b3dc07a264a4e4f774c4cadca6dafc772c`, GPU 0--3, tmux
+  `prl01_r25_gpu0123`.
+- R24 mathematics, data, sampling, replay, capacity, two-model topology, and
+  lifecycle are unchanged. The only implementation delta accepts an async-only
+  trajectory component builder at the existing binding boundary; its focused
+  CPU regression suite passed 19 tests.
+- Question: after connecting the already-implemented async source-materialization
+  path, can the two-model lifecycle complete rollout, exact replay, one GRPO
+  update, LoRA synchronization, step-1 checkpoint, and clean resume?
 
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
