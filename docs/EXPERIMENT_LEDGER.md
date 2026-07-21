@@ -7077,6 +7077,16 @@ instead of repeated bullets.
   `prl01_r21_gpu0123`. R20 plus root FSDP2 reshard after the complete
   forward/backward batch and before vLLM weight synchronization.
 
+### PRL-01-R22-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r22_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `4db8ac1b...45cc`, identity `4c88d47a...e5e5`, code
+  `df718146052ef78dcce50c3eb06f27519b5b8d35`, GPU 0--3, tmux
+  `prl01_r22_gpu0123`. R21 plus resident colocated vLLM weights
+  (`free_cache_engine=false`, `enable_sleep_mode=false`) to remove wake-up
+  duplication during LoRA synchronization.
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
