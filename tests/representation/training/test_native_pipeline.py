@@ -438,9 +438,22 @@ class _TinyQwen3(nn.Module):
     ):
         assert output_hidden_states and not use_cache and return_dict
         assert pixel_values.shape[0] == int(image_grid_thw.prod().item())
-        hidden = resolve_language_model(self).get_input_embeddings()(input_ids)
-        prefix = hidden.cumsum(dim=1) * 0.01
-        return SimpleNamespace(hidden_states=(hidden, hidden + prefix))
+        main, deepstack = self.model.visual(
+            pixel_values,
+            grid_thw=image_grid_thw,
+        )
+        hidden = resolve_language_model(self).get_input_embeddings()(input_ids).clone()
+        visual_mask = input_ids == 7
+        hidden[visual_mask] = main
+        output = self.model.language_model(
+            inputs_embeds=hidden,
+            visual_pos_masks=visual_mask,
+            deepstack_visual_embeds=deepstack,
+            attention_mask=attention_mask,
+        )
+        return SimpleNamespace(
+            hidden_states=(hidden, output.last_hidden_state),
+        )
 
 
 def _sample(image: Path, index: int) -> RepresentationTrainingSample:
@@ -798,6 +811,67 @@ def test_real_group_builder_contract_supports_both_providers(
 
     scores = score_streaming_same_image_group(family, runtime.model, group)
     assert scores.score_matrix.shape == (2, 2)
+
+
+def test_contextual_builder_reuses_preencoded_vision_with_exact_output(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"immutable-image-fixture")
+    runtime = _runtime(TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE)
+    family = Qwen3VLAdapter()
+    samples = (_sample(image, 0), _sample(image, 1))
+    common = {
+        "runtime": runtime,
+        "family_adapter": family,
+        "prompt": _prompt(),
+        "image_loader": lambda path: Path(path).read_bytes(),
+    }
+    legacy = Qwen3NativeRepresentationGroupBuilder(**common)
+    preencoded = Qwen3NativeRepresentationGroupBuilder(
+        **common,
+        reuse_preencoded_vision_for_contextual_conditioning=True,
+    )
+
+    before = runtime.vision_tower.forward_calls
+    legacy_group = legacy(
+        samples,
+        runtime.adapter,
+        collective_candidate_count=len(samples),
+    )
+    legacy_calls = runtime.vision_tower.forward_calls - before
+    before = runtime.vision_tower.forward_calls
+    preencoded_group = preencoded(
+        samples,
+        runtime.adapter,
+        collective_candidate_count=len(samples),
+    )
+    preencoded_calls = runtime.vision_tower.forward_calls - before
+
+    assert legacy_calls == 3
+    assert preencoded_calls == 1
+    for legacy_candidate, preencoded_candidate in zip(
+        legacy_group.candidates,
+        preencoded_group.candidates,
+        strict=True,
+    ):
+        torch.testing.assert_close(
+            legacy_candidate.visual.main,
+            preencoded_candidate.visual.main,
+            rtol=0,
+            atol=0,
+        )
+        for legacy_branch, preencoded_branch in zip(
+            legacy_candidate.visual.deepstack,
+            preencoded_candidate.visual.deepstack,
+            strict=True,
+        ):
+            torch.testing.assert_close(
+                legacy_branch,
+                preencoded_branch,
+                rtol=0,
+                atol=0,
+            )
 
 
 def test_group_builder_checks_runtime_invariants_only_at_group_boundaries(

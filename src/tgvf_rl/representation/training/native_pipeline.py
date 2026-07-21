@@ -42,7 +42,12 @@ from tgvf_rl.protocol.schema import (
     TGVF_FOCUS_TOOL_NAME,
     TokenByteSpan,
 )
-from tgvf_rl.qwen.base import QwenVLMFamilyAdapter, resolve_language_model
+from tgvf_rl.qwen.base import (
+    InjectedForwardRequest,
+    InjectedVisualBlock,
+    QwenVLMFamilyAdapter,
+    resolve_language_model,
+)
 from tgvf_rl.representation.adapter import (
     TGVFAdapter,
     TGVFAdapterInput,
@@ -404,6 +409,7 @@ class Qwen3NativeRepresentationGroupBuilder:
         prompt: RepresentationPromptConfig,
         image_loader: Callable[[str], Any],
         image_max_pixels: int | None = None,
+        reuse_preencoded_vision_for_contextual_conditioning: bool = False,
     ) -> None:
         if not isinstance(runtime, Qwen3RepresentationRuntime):
             raise TypeError("runtime must be Qwen3RepresentationRuntime")
@@ -425,11 +431,28 @@ class Qwen3NativeRepresentationGroupBuilder:
             )
             if image_max_pixels <= 0:
                 raise ValueError("image_max_pixels must be positive")
+        if not isinstance(
+            reuse_preencoded_vision_for_contextual_conditioning, bool
+        ):
+            raise TypeError(
+                "reuse_preencoded_vision_for_contextual_conditioning must be bool"
+            )
+        if reuse_preencoded_vision_for_contextual_conditioning and (
+            runtime.conditioning_config.provider
+            is not TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
+            or runtime.conditioning_config.hidden_layer != -1
+        ):
+            raise ValueError(
+                "preencoded contextual conditioning requires the final hidden layer"
+            )
         self.runtime = runtime
         self.family_adapter = family_adapter
         self.prompt = prompt
         self.image_loader = image_loader
         self.image_max_pixels = image_max_pixels
+        self.reuse_preencoded_vision_for_contextual_conditioning = (
+            reuse_preencoded_vision_for_contextual_conditioning
+        )
 
     def __call__(
         self,
@@ -530,7 +553,7 @@ class Qwen3NativeRepresentationGroupBuilder:
         for sample, canonical_evidence, model_action in zip(
             samples, evidence_by_sample, model_actions, strict=True
         ):
-            condition = self._condition(sample, model_action)
+            condition = self._condition(sample, model_action, vision=vision)
             adapter_input = self.runtime.make_adapter_input(condition, vision)
             if padding_input is None:
                 padding_input = adapter_input
@@ -642,6 +665,8 @@ class Qwen3NativeRepresentationGroupBuilder:
         self,
         sample: RepresentationTrainingSample,
         action: ModelActionTarget,
+        *,
+        vision: Qwen3VisionFeatures,
     ):
         action.assert_bound_invariants()
         conditioning_input_ids = action.input_ids[0]
@@ -662,31 +687,96 @@ class Qwen3NativeRepresentationGroupBuilder:
             self.runtime.conditioning_config.provider
             is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
         ):
-            with torch.no_grad():
-                output = self.runtime.model(
-                    input_ids=action.input_ids,
-                    attention_mask=action.attention_mask,
-                    pixel_values=action.pixel_values,
-                    image_grid_thw=action.image_grid_thw,
-                    output_hidden_states=True,
-                    use_cache=False,
-                    return_dict=True,
+            if self.reuse_preencoded_vision_for_contextual_conditioning:
+                contextual = self._condition_from_preencoded_vision(action, vision)
+            else:
+                with torch.no_grad():
+                    output = self.runtime.model(
+                        input_ids=action.input_ids,
+                        attention_mask=action.attention_mask,
+                        pixel_values=action.pixel_values,
+                        image_grid_thw=action.image_grid_thw,
+                        output_hidden_states=True,
+                        use_cache=False,
+                        return_dict=True,
+                    )
+                raw_layers = getattr(output, "hidden_states", None)
+                if not isinstance(raw_layers, (tuple, list)) or not raw_layers:
+                    raise RuntimeError(
+                        "frozen Qwen did not return contextual hidden states"
+                    )
+                layers = tuple(layer.detach().clone() for layer in raw_layers)
+                if any(layer.shape[:2] != action.input_ids.shape for layer in layers):
+                    raise ValueError(
+                        "Qwen contextual states do not align with action IDs"
+                    )
+                contextual = Qwen3ContextualHiddenStateStack(
+                    tuple(layer[0] for layer in layers)
                 )
-            raw_layers = getattr(output, "hidden_states", None)
-            if not isinstance(raw_layers, (tuple, list)) or not raw_layers:
-                raise RuntimeError(
-                    "frozen Qwen did not return contextual hidden states"
-                )
-            layers = tuple(layer.detach().clone() for layer in raw_layers)
-            if any(layer.shape[:2] != action.input_ids.shape for layer in layers):
-                raise ValueError("Qwen contextual states do not align with action IDs")
-            contextual = Qwen3ContextualHiddenStateStack(
-                tuple(layer[0] for layer in layers)
-            )
         return self.runtime.build_target_condition(
             request,
             contextual_hidden_states=contextual,
         )
+
+    def _condition_from_preencoded_vision(
+        self,
+        action: ModelActionTarget,
+        vision: Qwen3VisionFeatures,
+    ) -> Qwen3ContextualHiddenStateStack:
+        if self.runtime.conditioning_config.hidden_layer != -1:
+            raise RuntimeError(
+                "preencoded contextual conditioning only exposes the final layer"
+            )
+        visual_token_id = self.runtime.tokenizer.convert_tokens_to_ids(
+            "<|image_pad|>"
+        )
+        if isinstance(visual_token_id, bool) or not isinstance(visual_token_id, int):
+            raise TypeError("Qwen image placeholder did not resolve to an integer ID")
+        positions = tuple(
+            index
+            for index, token_id in enumerate(action.model_token_ids)
+            if token_id == visual_token_id
+        )
+        expected_tokens = int(vision.merged_main.shape[-2])
+        if len(positions) != expected_tokens:
+            raise ValueError(
+                "action image positions differ from preencoded vision token count"
+            )
+        cpu_input_ids = torch.tensor((action.model_token_ids,), dtype=torch.long)
+        cpu_attention_mask = torch.ones_like(cpu_input_ids)
+        cpu_position_ids = _qwen3_position_ids(
+            self.runtime.model,
+            input_ids=cpu_input_ids,
+            attention_mask=cpu_attention_mask,
+            image_grid_thw=torch.tensor(
+                (vision.image_grid_thw,),
+                dtype=torch.long,
+            ),
+        )
+        request = InjectedForwardRequest(
+            input_ids=action.input_ids,
+            attention_mask=action.attention_mask,
+            position_ids=cpu_position_ids.to(device=action.input_ids.device),
+            visual_blocks=(
+                InjectedVisualBlock(
+                    kind="source_image",
+                    positions=positions,
+                    embeddings=_as_batched(vision.merged_main),
+                    deepstack=tuple(
+                        _as_batched(branch) for branch in vision.merged_deepstack
+                    ),
+                    deepstack_positions=tuple(
+                        positions for _ in vision.merged_deepstack
+                    ),
+                ),
+            ),
+        )
+        with torch.no_grad():
+            result = self.family_adapter.forward_injected(self.runtime.model, request)
+        hidden = result.hidden_states.detach().clone()
+        if hidden.shape[:2] != action.input_ids.shape:
+            raise ValueError("injected contextual state does not align with action IDs")
+        return Qwen3ContextualHiddenStateStack((hidden[0],))
 
     def _readout_row(
         self,
