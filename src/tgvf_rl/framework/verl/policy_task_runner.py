@@ -799,9 +799,15 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self._policy_step_started_at = None
 
         def _save_checkpoint(self):
+            configured_steps = (
+                self._policy_checkpoint_state.config.training.checkpoint_steps
+            )
+            if self.global_steps not in configured_steps:
+                return None
             if self._policy_checkpoint_pending:
                 raise RuntimeError("a Policy checkpoint request is already pending")
             self._policy_checkpoint_pending = True
+            return None
 
         def _commit_policy_checkpoint_after_weight_sync(self, global_steps):
             if not self._policy_checkpoint_pending:

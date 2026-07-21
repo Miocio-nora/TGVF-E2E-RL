@@ -750,13 +750,10 @@ def _checkpoint_frequency(steps: Sequence[int], *, maximum_step: int) -> int:
     positive = normalized[1:]
     if not positive:
         raise ValueError("checkpoint plan requires at least one positive step")
-    frequency = positive[0]
-    expected = tuple(range(frequency, maximum_step + 1, frequency))
-    if positive != expected:
-        raise ValueError(
-            "upstream save_freq cannot represent the configured checkpoint steps"
-        )
-    return frequency
+    # veRL exposes only a periodic ``save_freq``.  Route every step through
+    # the project trainer hook; that hook applies this exact, possibly
+    # non-uniform schedule before any checkpoint mutation occurs.
+    return 1
 
 
 def _actor_batch_contract(
