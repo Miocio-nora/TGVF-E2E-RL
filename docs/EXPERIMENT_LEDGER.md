@@ -6699,6 +6699,21 @@ instead of repeated bullets.
   disables only veRL's incompatible Qwen2.5 dedup alias inside the exact
   pre-expanded Qwen3 plugin; the plugin's per-request strict contract remains.
 
+### PRL-01-R9-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  clean resume.
+- Complete identity: R9 config SHA256 `57e419de...211dd`, run identity
+  `683f7d65...88775`; the config is authoritative for all model/data/GRPO/
+  replay/topology fields. Code `e5e268a611333b2ce148a19fe922ff3e9eb1d578`.
+- Delta/question: R8 plus repo-owned preservation of the full pre-expanded
+  Qwen3 prompt through pinned veRL; can rollout now proceed through generation,
+  tool/replay/update/checkpoint/resume? Actual veRL CPU gate preserved 5/5 IDs;
+  targeted tests 2 passed.
+- GPUs/output/session: idle B200 0--3;
+  `artifacts/policy/PRL-01-R9-qwen3-grpo-1step-auto-resume-gpu0123` (absent);
+  tmux `prl01_r9_gpu0123`; results pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
