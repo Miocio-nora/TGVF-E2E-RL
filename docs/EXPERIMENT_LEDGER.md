@@ -6861,6 +6861,34 @@ instead of repeated bullets.
   occurred. R13 removes that re-tokenization: exact sampled IDs remain
   authoritative and only environment-owned response text is encoded.
 
+### PRL-01-R13-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r13_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `b5d7077a...840cf`, run identity `1ccc6227...2025b`; the config is
+  authoritative for all model/data/protocol/objective/replay/topology fields.
+- Code/delta: `dc7129f130a2e341561bca85383355bfab6d1607`; R12 plus only
+  sampled-ID-preserving native tool append. Policy-owned token IDs are never
+  rebuilt from decoded text; environment-owned response text remains
+  canonically encoded. No model, sampling, reward, GRPO, or optimizer change.
+- Preflight: 503 relevant CPU tests passed (one optional `transfer_queue`
+  smoke skipped). Static audit covered parser, target spans, all three tool
+  runtimes, rollout bridge, trajectory validation, and exact replay; no other
+  policy-text re-encoding path was found. The decoder and appender regression
+  tests jointly cover legal non-canonical Qwen ByteLevel segmentation.
+- Question: can the composed run now complete native trajectories, batched
+  reward, exact current/reference replay, one optimizer step, step-1 paired
+  checkpoint, then cleanly load/sync it without step 2?
+- GPUs/output/session: physical/logical B200 0--3, world size 4; output
+  `artifacts/policy/PRL-01-R13-qwen3-grpo-1step-auto-resume-gpu0123` must be
+  absent at launch; tmux `prl01_r13_gpu0123`, followed by a distinct resume
+  session only after a successful step-1 checkpoint.
+- Exact launch: same accepted R12 environment and command, substituting the
+  absolute R13 config/output paths; timeout 3600 s.
+- Start/end, GPU-hours, W&B, metrics, checkpoint and resume result: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
