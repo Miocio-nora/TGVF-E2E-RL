@@ -6303,6 +6303,83 @@ instead of repeated bullets.
   3.12 development headers; a matching compiler preflight passed. No
   `LIBRARY_PATH` change is needed because the same command resolves `libcuda`.
 
+### PRL-01-R5-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: mandatory 4-GPU Policy Pilot
+  one-step vertical slice and clean-process resume.
+- Spike-plan git revision and approval references: accepted task sections
+  0.8.2--0.8.3, identities `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
+  `POLICY-PILOT-V1-FOUR-GPU-20260721`.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: with the accepted Python 3.12 development headers explicitly
+  inherited by every Ray/vLLM child, does the fixed R4 contract complete one
+  real rollout/replay/update and a clean-process no-extra-update resume?
+- Baseline and exact output path: R4 reached vLLM's first real LoRA forward;
+  fresh root `artifacts/policy/PRL-01-R5-qwen3-grpo-1step-auto-resume-gpu0123`,
+  absent at planning time; `launch.log`/`resume.log`.
+- Model and processor identity: Qwen3-VL-8B-Thinking local path, tokenizer
+  151669, template `36e042fe...8956`, DeepStack on, max pixels 262144.
+- Representation checkpoint identity: RP-49 contextual layer -1, Balanced CE
+  T=0.1 step 2000; file/manifest/run hashes `fcda0b96...fc14` /
+  `3ff14e66...f49e` / `980e4136...e1bea`.
+- N/A fields and justification: bounded exact-MCQ smoke; no judge, Qwen2.5,
+  crop, SDPO, full tuning, nonzero KL or quality inference.
+- Policy/reference initialization: base plus decoder-only LoRA `64/64/0`, LR
+  `1e-5`; all non-decoder scopes frozen; separate unadapted frozen reference.
+- Rollout policy version and allowed asynchronous staleness: synchronized
+  step-0 behavior snapshot, zero staleness, no update before replay.
+- Code commit and worktree state: executable commit
+  `08a0a6875838f29c4142203d90c99fdf8ac76cea`; clean descendant may add only
+  this exact config and ledger row.
+- Repository adapter/patch surface and hash: R5 config SHA256
+  `88b6d24f...d0c`, run identity `cff1864c...f9ea`; R4 inputs unchanged.
+  Operational delta is only fixed `CC=/usr/bin/gcc`, `CXX=/usr/bin/g++`, and
+  `CPATH=.deps/python312-dev/root/usr/include:{same}/python3.12`. Header and
+  Triton-shaped `-lcuda` compiler preflights passed; no `LIBRARY_PATH` delta.
+- Dataset/manifest, hashes, sample rule, and n: unchanged exact R4 DeepEyes
+  snapshot/hash tuple, seed 42, cursor 7 MCQ C; batch 4, n=8.
+- Native prompt/tool schema hash: `390b334e...99f5` / `f33f61d4...6aba5`, four
+  calls and fifth-call error `1f649e1d...ad200`.
+- Chat-template/token-fixture hash and token-ownership masks: 724 tokens, 234
+  image pads, IDs `221b8952...d4d`; sampled assistant tokens only.
+- D/DeepStack/position/mask identity: exact recorded main D plus `(8,16,24)`
+  branches/layout/positions/masks; no recomputation.
+- Observation materialization/artifact identity used by all replays: one
+  rollout-owned content-addressed bundle shared by current/reference replay.
+- RL framework/version/environment lock: veRL e003163, Python 3.12.3, Torch
+  2.9.0+cu128, Transformers 4.57.6, vLLM 0.12.0, PEFT 0.19.1, Ray 2.56.1.
+- Objective equations and normalization: sample-std GRPO; reward
+  `0.8/0.2/1.2`; behavior ratio, clip `[0.8,1.2]`, dual clip 3, global token
+  mean, one epoch, KL/entropy zero, grad norm 1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: rollout
+  `request_seeded_batch_sensitive_v1` with content-addressed per-turn seeds and
+  actual behavior logprobs; deterministic replay, dropout zero.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM 0.12, seed 42 derivation
+  `fe8d2da9...e867e`, `1/1/-1/0`, penalties `1/0/0`, none, post-transform,
+  EOS 151645, stop closer, cap 8192.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/no quantization; HF SDPA, vLLM
+  TRITON_ATTN/TORCH_SDPA; TP1, 4-rank FSDP2, no reshard/checkpointing/remove
+  padding/compile; colocated.
+- Logit/logprob/loss/gradient parity tolerances: exact identities, finite
+  values, pre-update clipfrac zero and absolute mean PPO KL <=0.015625.
+- World size, microbatch, accumulation, and global batch: world 4, prompt batch
+  4, prompt/rollout microbatch 1/rank, logprob microbatch 8/GPU, 32
+  trajectories, accumulation 1.
+- GPUs: physical/logical 0--3, B200 183359 MiB; observed idle immediately before
+  planning and must be rechecked before launch.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  tmux `prl01_r5_gpu0123`, then `prl01_r5_resume_gpu0123`.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: absolute R5 `run-policy` command under `.venv312`; clean resume only
+  after step 1 and must make no second update.
+- Outputs: pending.
+- Scorer/parser identity: exact MCQ `2a3d5fa4...2e1c`, strict native parser.
+- Metrics: pending.
+- Conclusion: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
