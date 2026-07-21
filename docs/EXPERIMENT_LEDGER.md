@@ -7356,6 +7356,27 @@ CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
+### PRL-01-R32-QWEN3-GRPO-BS16-CROP-ONLY-THROUGHPUT-GPU0123
+
+- `PLANNED`; one-update Crop-only comparison arm on physical GPUs 0--3. This
+  is a separately identified visual-tool experiment, not a change to the
+  TGVF-only formal Pilot v1.
+- Config
+  `configs/policy/runs/prl_01_r32_qwen3_grpo_bs16_crop_only_throughput_gpu0123.toml`,
+  file SHA256 `fcbfeda7b3701040ae43bc35935eb7a14207c29a60cf8a1f4e1019f0b57225dd`,
+  run identity `472cc02ed0d8eeab38e79efcca3363fd39ccdef3a33828c1e7d13d4a256fbf28`,
+  code `d8592da50c3a0c444ce56f60e51b09d863beff25`, clean tracked implementation.
+- Same model, selected DeepEyes sample, sampling (`n=8`), GRPO equation,
+  LoRA scope, BS16/GA4 topology and capacity as R30. The only method arm is
+  native `image_zoom_in_tool`; crop encoding reuses the colocated rollout
+  replica's frozen vision tower and records crop RGB/main/DeepStack features
+  for exact current/reference replay. No TGVF Adapter is loaded for this arm.
+- Output
+  `artifacts/policy/PRL-01-R32-qwen3-grpo-bs16-crop-only-throughput-gpu0123`;
+  tmux `prl01_r32_gpu0123`. Acceptance is one complete update/checkpoint plus
+  tool-call/result, replay, timing and memory evidence. Comparison baseline is
+  the completed R30 BS16 TGVF-only cell.
+
 ## Required entry template
 
 ```text
