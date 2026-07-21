@@ -7012,6 +7012,27 @@ instead of repeated bullets.
   `CUDA_VISIBLE_DEVICES=0,1,2,3`, vLLM 0.12.0 TP=1, BF16, SDPA
   actor/reference, Triton rollout attention, timeout 3600 s.
 
+### PRL-01-R18-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  immediate step-1 checkpoint and clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r18_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `4d06d63b...b495`, run identity `4bb41c06...4779`, implementation
+  commit `57c0772f78cbc89a63d816cc9b6e69080caad55b`.
+- Delta/preflight: R17 with only vLLM `max_model_len` and
+  `max_num_batched_tokens` reduced from 32,768 to 12,288, exactly covering the
+  configured 4,096 prompt plus 8,192 response capacity. No objective, replay,
+  model, or sampling changes.
+- Question: does the reduced rollout KV reservation, combined with bounded
+  actor autograd microbatches, leave enough headroom for the optimizer step?
+- GPUs/output/session: idle physical/logical B200 0--3, world size 4; output
+  `artifacts/policy/PRL-01-R18-qwen3-grpo-1step-auto-resume-gpu0123` must be
+  absent; tmux `prl01_r18_gpu0123`, followed by a distinct resume session only
+  after a successful checkpoint. Standard accepted `.venv312` launch,
+  `CUDA_VISIBLE_DEVICES=0,1,2,3`, vLLM 0.12.0 TP=1, BF16, SDPA
+  actor/reference, Triton rollout attention, timeout 3600 s.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
