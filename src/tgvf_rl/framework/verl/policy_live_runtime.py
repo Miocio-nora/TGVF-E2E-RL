@@ -1,54 +1,47 @@
-"""Concrete Qwen3 composition for the Policy E2E native agent loop.
+"""Model-free AgentLoop composition for the two-model Policy RL runtime.
 
-This is the production default behind :class:`PolicyE2ERuntimeInvocationFactory`.
-It owns one frozen local Qwen3 visual/readout model per AgentLoop worker, loads
-the selected representation export, installs the exact served decoder LoRA
-snapshot, materializes source/D tensors once, and exports one self-contained
-replay bundle before a trajectory crosses the veRL boundary.
-
-The current and reference actors consume the same exported replay tensors.
-This module never asks either role to regenerate a TGVF observation.
+The only full model roles are the upstream FSDP2 actor and its colocated vLLM
+rollout replica.  AgentLoop workers own CPU protocol/replay state only.  Source
+vision, sampled target Hq, and the frozen TGVF Adapter execute through the
+sticky vLLM client and the resulting D tensors are recorded exactly once.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import asyncio
 from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from threading import RLock
 from typing import Any
 
 import torch
 from PIL import Image
-from torch import nn
 
+from tgvf_rl.checkpoint.coordinator import state_digest
 from tgvf_rl.conditioning import (
-    TargetConditioningDependencies,
+    bind_preselected_target_conditioning,
     TargetConditioningProviderKind,
-    TargetTokenEmbeddingConditionProvider,
 )
+from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.environment import (
-    BehaviorHiddenStateMaterialization,
-    BranchMergerRuntimeBinding,
     FocusExecutionLedger,
     FrameworkNeutralAgentLoop,
-    Qwen3CropVisualMaterializer,
     Qwen3NativeToolLayoutBuilder,
     QwenNativeToolObservationAppender,
-    RepresentationArtifactRuntimeBinding,
-    build_policy_pilot_focus_runtime,
     record_trajectory_source_visual,
 )
-from tgvf_rl.environment.adapter_runtime import (
-    BehaviorHiddenStateDependency,
-    BoundSourceVisual,
+from tgvf_rl.environment.focus_runtime import _call_fingerprint
+from tgvf_rl.environment.focus_tool import (
+    SourceVisualTensorBundle,
+    TGVFFocusTool,
+    ToolExecutionRequest,
+    ToolExecutionResult,
 )
-from tgvf_rl.environment.focus_runtime import BehaviorHiddenStateCaptureRequest
-from tgvf_rl.environment.focus_tool import ReplayLayoutTensors
+from tgvf_rl.environment.qwen3_crop_materializer import preprocess_qwen3_rgb
 from tgvf_rl.protocol.state_machine import CapErrorBehavior
 from tgvf_rl.observations.finalizer import (
     MaterializedTrajectoryReplayTensors,
@@ -61,13 +54,11 @@ from tgvf_rl.observations.store import (
     ObservationStore,
     tensor_checksum,
 )
-from tgvf_rl.policy.qwen_replay import build_qwen3_decoder_lora_policy
 from tgvf_rl.protocol.parser import StrictToolCallParser
-from tgvf_rl.qwen import InjectedForwardRequest, InjectedVisualBlock, Qwen3VLAdapter
+from tgvf_rl.protocol.schema import ParsedToolCall
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
 )
-from tgvf_rl.representation.training.runtime import create_qwen3_representation_runtime
 from tgvf_rl.rewards import (
     AnswerTaskKind,
     PilotRewardPipeline,
@@ -91,7 +82,6 @@ from .objective_bridge import make_objective_sentinels
 from .reward_bridge import VerlRewardedAgentLoopOutputBuilder
 from .rollout_bridge import RolloutBridgeRecord
 from .policy_runtime import (
-    PeftPolicyLoRASnapshotConsumer,
     PolicyE2ERuntimeBuildContext,
     PolicyE2ERuntimeProduct,
 )
@@ -108,23 +98,19 @@ _BRANCH_LAYERS = (8, 16, 24)
 
 
 class Qwen3PolicyE2ELiveRuntimeBuilder:
-    """Build the real process-local Policy E2E runtime on the assigned GPU."""
+    """Build CPU AgentLoop state bound to the existing vLLM rollout client."""
 
     singleton_identity = QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA
 
     def __init__(
         self,
         *,
-        model_loader: Callable[[PolicyE2ERuntimeBuildContext], nn.Module] | None = None,
         agent_loop_output_cls: type[Any] | None = None,
         metrics_factory: Callable[[TrajectoryRecord, PilotVerlTrajectoryReward], object]
         | None = None,
     ) -> None:
-        if model_loader is not None and not callable(model_loader):
-            raise TypeError("model_loader must be callable")
         if metrics_factory is not None and not callable(metrics_factory):
             raise TypeError("metrics_factory must be callable")
-        self.model_loader = model_loader or _load_local_qwen3_model
         self.agent_loop_output_cls = agent_loop_output_cls
         self.metrics_factory = metrics_factory or _default_metrics_factory
 
@@ -134,17 +120,30 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
         config = context.config
         if config.model.family != "qwen3_vl":
             raise ValueError("Policy Pilot live runtime requires qwen3_vl")
-        device = context.placement.torch_device
-        model = self.model_loader(context)
-        if not isinstance(model, nn.Module):
-            raise TypeError("model_loader must return an nn.Module")
-        model.to(device=device, dtype=torch.bfloat16)
-        model.eval()
+        server_client = context.server_manager
+        for method in ("materialize_source", "materialize_focus", "generate"):
+            if not callable(getattr(server_client, method, None)):
+                raise TypeError(
+                    "Policy Pilot requires the TGVF two-model vLLM client; "
+                    f"missing {method}()"
+                )
 
         export = load_rank_zero_adapter_owned_state_export(
             config.representation.artifact_path
         )
         run_identity = export.manifest.run_identity
+        if state_digest(export.manifest) != config.representation.artifact.sha256:
+            raise IdentityMismatchError(
+                "representation export manifest identity differs"
+            )
+        if (
+            run_identity.run_id != config.representation.expected_run_id
+            or export.manifest.run_identity_sha256
+            != config.representation.expected_run_identity_sha256
+            or run_identity.identity_sha256
+            != config.representation.expected_run_identity_sha256
+        ):
+            raise IdentityMismatchError("representation export run identity differs")
         if run_identity.model != config.model:
             raise IdentityMismatchError(
                 "representation export and Policy model identities differ"
@@ -154,49 +153,23 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
                 "representation export and selected conditioning differ"
             )
 
-        # Construct the Adapter against the exact live Qwen modules before PEFT
-        # wraps decoder layers.  The representation loader later freezes and
-        # state-loads only Adapter-owned tensors.
-        representation_runtime = create_qwen3_representation_runtime(
-            model=model,
-            processor=context.processor,
-            model_identity=config.model,
-            conditioning_config=config.representation.conditioning,
-            adapter_dtype=torch.bfloat16,
-        )
-        lora_build = build_qwen3_decoder_lora_policy(
-            model,
-            config=config.policy.lora,
-        )
-        policy_model = lora_build.model
-        policy_model.eval()
-        forward_model = policy_model.get_base_model()
-        model_lock = RLock()
-        snapshot_consumer = PeftPolicyLoRASnapshotConsumer(
-            policy_model,
-            model_lock=model_lock,
-        )
-
         store = ObservationStore()
         behavior_store = BehaviorTraceStore()
         execution_ledger = FocusExecutionLedger()
-        layout_builder = Qwen3NativeToolLayoutBuilder.from_model(
-            model=forward_model,
+        layout_builder = Qwen3NativeToolLayoutBuilder.from_processor_config(
             processor=context.processor,
             model_identity=config.model,
             observation_store=store,
-        )
-        source_materializer = Qwen3CropVisualMaterializer.from_model(
-            model=forward_model,
-            processor=context.processor,
-            model_identity=config.model,
-            image_max_pixels=config.policy.image_max_pixels,
         )
         conditioning = config.representation.conditioning
         if (
             conditioning.provider
             is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
         ):
+            if conditioning.hidden_layer != -1:
+                raise ValueError(
+                    "colocated vLLM contextual conditioning requires hidden layer -1"
+                )
             contextual_forward_identity = _artifact_identity(
                 "policy-runtime",
                 "qwen3-contextual-behavior-forward",
@@ -210,52 +183,18 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
                     "policy_adapter_dropout": 0.0,
                 },
             )
-            hidden_dependency = _Qwen3BehaviorHiddenStateDependency(
-                model=forward_model,
-                family_adapter=Qwen3VLAdapter(),
-                layout_builder=layout_builder,
-                store=store,
-                device=device,
-                forward_identity=contextual_forward_identity,
-                model_lock=model_lock,
-            )
-            conditioning_dependencies = TargetConditioningDependencies()
         else:
-            provider = representation_runtime.conditioning_provider
-            if not isinstance(provider, TargetTokenEmbeddingConditionProvider):
-                raise TypeError(
-                    "representation runtime lost the target-token embedding provider"
-                )
             contextual_forward_identity = None
-            hidden_dependency = None
-            conditioning_dependencies = TargetConditioningDependencies(
-                base_embedding=provider.borrowed_embedding
-            )
-        layout_dependency = _Qwen3FocusReplayLayoutDependency(layout_builder)
-        artifact_binding = RepresentationArtifactRuntimeBinding(
-            artifact_path=config.representation.artifact_path,
-            artifact=config.representation.artifact,
-            expected_run_id=config.representation.expected_run_id,
-            expected_run_identity_sha256=(
-                config.representation.expected_run_identity_sha256
-            ),
-            model=config.model,
-            conditioning=config.representation.conditioning,
-            adapter_contract=run_identity.adapter_contract,
-        )
         branch_mergers = tuple(
-            BranchMergerRuntimeBinding(
-                projection_identity=projection_identity,
-                artifact=_artifact_identity(
-                    "qwen3-vl",
-                    f"deepstack-merger-{layer}",
-                    "frozen-base-model-v1",
-                    {
-                        "model": config.model.revision_or_path,
-                        "projection_identity": projection_identity,
-                        "layer": layer,
-                    },
-                ),
+            _artifact_identity(
+                "qwen3-vl",
+                f"deepstack-merger-{layer}",
+                "frozen-base-model-v1",
+                {
+                    "model": config.model.revision_or_path,
+                    "projection_identity": projection_identity,
+                    "layer": layer,
+                },
             )
             for layer, projection_identity in zip(
                 _BRANCH_LAYERS,
@@ -263,25 +202,12 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
                 strict=True,
             )
         )
-        focus_bridge = build_policy_pilot_focus_runtime(
-            artifact_binding=artifact_binding,
-            adapter=representation_runtime.adapter,
-            conditioning_dependencies=conditioning_dependencies,
-            contextual_hidden_state_dependency=hidden_dependency,
-            contextual_forward_identity=contextual_forward_identity,
-            replay_layout_dependency=layout_dependency,
-            branch_mergers=branch_mergers,
-            observation_store=store,
-            execution_ledger=execution_ledger,
-            runtime_device=device,
-        )
         components = _Qwen3PolicyTrajectoryComponents(
             context=context,
-            policy_model=policy_model,
-            forward_model=forward_model,
-            source_materializer=source_materializer,
             layout_builder=layout_builder,
-            tool_runtime=focus_bridge.runtime,
+            server_client=server_client,
+            contextual_forward_identity=contextual_forward_identity,
+            branch_merger_identities=branch_mergers,
             observation_store=store,
             behavior_store=behavior_store,
             execution_ledger=execution_ledger,
@@ -290,7 +216,7 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
         )
         return PolicyE2ERuntimeProduct(
             trajectory_components=components,
-            snapshot_consumer=snapshot_consumer,
+            snapshot_consumer=_IdentityOnlyLoRASnapshotConsumer(),
         )
 
 
@@ -301,11 +227,10 @@ class _Qwen3PolicyTrajectoryComponents:
         self,
         *,
         context: PolicyE2ERuntimeBuildContext,
-        policy_model: nn.Module,
-        forward_model: nn.Module,
-        source_materializer: Qwen3CropVisualMaterializer,
         layout_builder: Qwen3NativeToolLayoutBuilder,
-        tool_runtime: object,
+        server_client: object,
+        contextual_forward_identity: ArtifactIdentity | None,
+        branch_merger_identities: tuple[ArtifactIdentity, ...],
         observation_store: ObservationStore,
         behavior_store: BehaviorTraceStore,
         execution_ledger: FocusExecutionLedger,
@@ -314,11 +239,10 @@ class _Qwen3PolicyTrajectoryComponents:
     ) -> None:
         self.context = context
         self.config = context.config
-        self.policy_model = policy_model
-        self.forward_model = forward_model
-        self.source_materializer = source_materializer
         self.layout_builder = layout_builder
-        self.tool_runtime = tool_runtime
+        self.server_client = server_client
+        self.contextual_forward_identity = contextual_forward_identity
+        self.branch_merger_identities = branch_merger_identities
         self.store = observation_store
         self.behavior_store = behavior_store
         self.execution_ledger = execution_ledger
@@ -326,7 +250,7 @@ class _Qwen3PolicyTrajectoryComponents:
         self.agent_loop_output_cls = agent_loop_output_cls
         self.reward_pipeline = _build_reward_pipeline(self.config)
 
-    def build_trajectory_components(
+    async def build_trajectory_components_async(
         self,
         *,
         identity: object,
@@ -343,11 +267,20 @@ class _Qwen3PolicyTrajectoryComponents:
             raise IdentityMismatchError("trajectory model differs from live runtime")
         _validate_sample_fields(self.config, identity.sample_id, sample_fields)
         source_rgb = _load_bound_rgb(Path(_scalar(sample_fields["source_image_path"])))
-        source = self.source_materializer.materialize_source_visual(
-            source_rgb,
-            parsed_call=_SourceMaterializationRequest(identity.canonical_id),
-            call_index=0,
+        pixel_values, image_grid_thw = preprocess_qwen3_rgb(
+            processor=self.context.processor,
+            rgb=source_rgb,
+            image_max_pixels=self.config.policy.image_max_pixels,
         )
+        source = await self.server_client.materialize_source(
+            request_id=identity.canonical_id,
+            expected_step=behavior_policy.optimizer_step,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            image_sha256=tensor_checksum(source_rgb),
+        )
+        if not isinstance(source, SourceVisualTensorBundle):
+            raise TypeError("vLLM source RPC returned an invalid visual bundle")
         source_positions = _source_visual_positions(
             initial_prompt_token_ids,
             image_token_id=self.layout_builder.image_pad_id,
@@ -386,11 +319,22 @@ class _Qwen3PolicyTrajectoryComponents:
         parser = StrictToolCallParser(
             enabled_tool_names=self.config.protocol.enabled_tool_names
         )
+        tool_runtime = _RemoteTGVFFocusToolRuntime(
+            event_loop=asyncio.get_running_loop(),
+            server_client=self.server_client,
+            config=self.config,
+            source_visual=source,
+            layout_builder=self.layout_builder,
+            observation_store=self.store,
+            execution_ledger=self.execution_ledger,
+            contextual_forward_identity=self.contextual_forward_identity,
+            branch_merger_identities=self.branch_merger_identities,
+        )
 
         def native_loop_factory(sampler: object) -> FrameworkNeutralAgentLoop:
             return FrameworkNeutralAgentLoop(
                 sampler=sampler,  # type: ignore[arg-type]
-                tool_runtime=self.tool_runtime,  # type: ignore[arg-type]
+                tool_runtime=tool_runtime,
                 appender=appender,
                 parser=parser,
                 behavior_recorder=VLLMBehaviorRecorder(self.behavior_store),
@@ -434,96 +378,143 @@ class _Qwen3PolicyTrajectoryComponents:
         )
 
 
-class _Qwen3BehaviorHiddenStateDependency(BehaviorHiddenStateDependency):
-    """Run one deterministic behavior-policy forward over recorded visuals."""
+class _IdentityOnlyLoRASnapshotConsumer:
+    """Validate snapshot identity without constructing a local policy model."""
+
+    def apply_policy_lora_snapshot(self, snapshot: object, /) -> PolicyVersion:
+        from .policy_weight_sync import (
+            PolicyLoRASnapshot,
+            lora_parameter_mapping_sha256,
+        )
+
+        if not isinstance(snapshot, PolicyLoRASnapshot):
+            raise TypeError("Policy version consumer requires PolicyLoRASnapshot")
+        digest = lora_parameter_mapping_sha256(snapshot.tensors)
+        if digest != snapshot.policy_version.weights_sha256:
+            raise ReplayMismatchError("LoRA snapshot tensor identity differs")
+        return snapshot.policy_version
+
+
+class _RemoteTGVFFocusToolRuntime:
+    """Bridge a synchronous native tool call to the sticky vLLM worker."""
 
     def __init__(
         self,
         *,
-        model: nn.Module,
-        family_adapter: Qwen3VLAdapter,
+        event_loop: asyncio.AbstractEventLoop,
+        server_client: object,
+        config: object,
+        source_visual: SourceVisualTensorBundle,
         layout_builder: Qwen3NativeToolLayoutBuilder,
-        store: ObservationStore,
-        device: torch.device,
-        forward_identity: ArtifactIdentity,
-        model_lock: RLock,
+        observation_store: ObservationStore,
+        execution_ledger: FocusExecutionLedger,
+        contextual_forward_identity: ArtifactIdentity | None,
+        branch_merger_identities: tuple[ArtifactIdentity, ...],
     ) -> None:
-        self.model = model
-        self.family_adapter = family_adapter
+        self.event_loop = event_loop
+        self.server_client = server_client
+        self.config = config
+        self.source_visual = source_visual
         self.layout_builder = layout_builder
-        self.store = store
-        self.device = device
-        self.forward_identity = forward_identity
-        self.model_lock = model_lock
+        self.focus_tool = TGVFFocusTool(None, observation_store)
+        self.execution_ledger = execution_ledger
+        self.contextual_forward_identity = contextual_forward_identity
+        self.branch_merger_identities = tuple(branch_merger_identities)
 
-    def capture_hidden_states(
-        self, request: BehaviorHiddenStateCaptureRequest, /
-    ) -> BehaviorHiddenStateMaterialization:
-        if request.hidden_layer != -1:
-            raise ValueError("Qwen3 live contextual capture currently requires layer -1")
-        call = request.call
-        handles = call.identity.prior_observation_handles
-        expanded = self.layout_builder.expand_recorded_visual_sequence(
-            call.conditioning_input_ids,
-            trajectory_source_visual=call.trajectory_source_visual,
-            observation_handles=handles,
+    def execute(self, parsed_call: object, context: object) -> ObservationHandle:
+        from tgvf_rl.environment.agent_loop import ToolExecutionContext
+
+        if not isinstance(parsed_call, ParsedToolCall):
+            raise TypeError("remote focus runtime requires ParsedToolCall")
+        if not isinstance(context, ToolExecutionContext):
+            raise TypeError("remote focus runtime requires ToolExecutionContext")
+        if (
+            parsed_call.sampled_text != context.sampled_turn.text
+            or parsed_call.sampled_token_ids != context.sampled_turn.token_ids
+            or parsed_call.sampled_token_byte_spans
+            != context.sampled_turn.token_byte_spans
+        ):
+            raise ReplayMismatchError("parsed TGVF call differs from sampled turn")
+        conditioning = self.config.representation.conditioning
+        fingerprint = _call_fingerprint(
+            parsed_call=parsed_call,
+            context=context,
+            provider_name=conditioning.provider.value,
+            hidden_layer=conditioning.hidden_layer,
+            contextual_forward_identity=self.contextual_forward_identity,
+            representation=self.config.representation.artifact,
+            branch_mergers=self.branch_merger_identities,
         )
-        expanded_ids = tuple(int(value) for value in expanded.input_ids[0].tolist())
-        if expanded_ids != call.conditioning_input_ids:
-            raise ReplayMismatchError(
-                "contextual forward attempted to expand an already-expanded prefix"
-            )
-        blocks = _injected_visual_blocks(
-            store=self.store,
-            trajectory_id=call.identity.trajectory_id,
-            source=call.trajectory_source_visual,
-            observation_handles=handles,
-            device=self.device,
-        )
-        forward_request = InjectedForwardRequest(
-            input_ids=expanded.input_ids.to(self.device),
-            attention_mask=expanded.attention_mask.to(self.device),
-            position_ids=expanded.position_ids.to(self.device),
-            visual_blocks=blocks,
-            use_cache=False,
-        )
-        with self.model_lock, torch.no_grad():
-            self.model.eval()
-            result = self.family_adapter.forward_injected(self.model, forward_request)
-        hidden = result.hidden_states
-        if hidden.shape[0] != 1:
-            raise ValueError("contextual behavior forward must contain one sequence")
-        return BehaviorHiddenStateMaterialization(
-            policy_version=call.identity.behavior_policy,
-            forward_identity=self.forward_identity,
-            hidden_layer=-1,
-            hidden_states=hidden[0].detach(),
-            deterministic_forward=True,
-            policy_adapter_dropout=0.0,
+        return self.execution_ledger.execute_once(
+            key=(context.trajectory_identity.canonical_id, context.call_index),
+            fingerprint=fingerprint,
+            operation=lambda: self._execute_once(parsed_call, context),
         )
 
+    def _execute_once(self, parsed_call: ParsedToolCall, context: object) -> ObservationHandle:
+        from tgvf_rl.environment.agent_loop import ToolExecutionContext
 
-class _Qwen3FocusReplayLayoutDependency:
-    def __init__(self, layout_builder: Qwen3NativeToolLayoutBuilder) -> None:
-        self.layout_builder = layout_builder
-
-    def build_replay_layout(
-        self,
-        request: object,
-        source_visual: BoundSourceVisual,
-        /,
-    ) -> ReplayLayoutTensors:
-        from tgvf_rl.environment.focus_runtime import FocusRuntimeCallRequest
-
-        if not isinstance(request, FocusRuntimeCallRequest):
-            raise TypeError("focus layout request has the wrong type")
-        return self.layout_builder.build_focus_from_recorded_prefix(
-            conditioning_input_ids=request.conditioning_input_ids,
-            parsed_call=request.parsed_call,
-            trajectory_source_visual=request.trajectory_source_visual,
-            prior_observation_handles=request.identity.prior_observation_handles,
-            source_visual=source_visual.tensors,
+        assert isinstance(context, ToolExecutionContext)
+        trajectory_id = context.trajectory_identity.canonical_id
+        target = parsed_call.target_span
+        future = asyncio.run_coroutine_threadsafe(
+            self.server_client.materialize_focus(
+                request_id=trajectory_id,
+                expected_step=context.behavior_policy.optimizer_step,
+                sampled_output_ids=context.sampled_turn.token_ids,
+                target_start=target.token_start,
+                target_end=target.token_end,
+                expected_target_token_ids=target.token_ids,
+                provider=self.config.representation.conditioning.provider.value,
+            ),
+            self.event_loop,
         )
+        hq, adapter_output = future.result(timeout=300.0)
+        prefix_length = len(context.prompt_token_ids_before_turn)
+        global_span = TokenSpan(
+            prefix_length + target.token_start,
+            prefix_length + target.token_end,
+        )
+        input_ids = torch.tensor(context.conditioning_input_ids, dtype=torch.long)
+        conditioning = self.config.representation.conditioning
+        condition = bind_preselected_target_conditioning(
+            values=hq,
+            input_ids=input_ids,
+            target_span=global_span,
+            expected_target_token_ids=target.token_ids,
+            trajectory_id=trajectory_id,
+            call_index=context.call_index,
+            model_identity=context.model,
+            provider=conditioning.provider,
+            hidden_layer=conditioning.hidden_layer,
+            embedding_identity=conditioning.embedding_identity,
+        )
+        layout = self.layout_builder.build_focus_from_recorded_prefix(
+            conditioning_input_ids=context.conditioning_input_ids,
+            parsed_call=parsed_call,
+            trajectory_source_visual=context.trajectory_source_visual,
+            prior_observation_handles=context.prior_observation_handles,
+            source_visual=self.source_visual,
+        )
+        result = self.focus_tool.record_precomputed(
+            ToolExecutionRequest(
+                trajectory_id=trajectory_id,
+                call_index=context.call_index,
+                parsed_call=parsed_call,
+                condition=condition,
+                source_visual=self.source_visual,
+                layout=layout,
+                model=context.model,
+                policy_version=context.behavior_policy,
+                contextual_forward_identity=self.contextual_forward_identity,
+                representation=self.config.representation.artifact,
+                branch_merger_identities=self.branch_merger_identities,
+            ),
+            adapter_output,
+        )
+        if not isinstance(result, ToolExecutionResult):
+            raise TypeError("remote TGVF materialization returned an invalid result")
+        return result.handle
 
 
 class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
@@ -669,22 +660,6 @@ class _FocusedVisualTokenCountResolver:
         return len(record.layout.d_positions)
 
 
-def _load_local_qwen3_model(context: PolicyE2ERuntimeBuildContext) -> nn.Module:
-    try:
-        from transformers import AutoModelForImageTextToText
-    except ImportError as error:  # pragma: no cover - accepted live env owns HF
-        raise RuntimeError("Policy E2E live runtime requires transformers") from error
-    torch.cuda.set_device(context.placement.logical_gpu_id)
-    return AutoModelForImageTextToText.from_pretrained(
-        context.config.model.revision_or_path,
-        local_files_only=True,
-        trust_remote_code=False,
-        torch_dtype=torch.bfloat16,
-        attn_implementation="sdpa",
-        low_cpu_mem_usage=True,
-    )
-
-
 def _initial_vllm_inputs(
     *,
     initial_prompt_token_ids: tuple[int, ...],
@@ -732,89 +707,6 @@ def _initial_vllm_inputs(
         mm_processor_kwargs=mm_kwargs,
         multi_modal_uuids=None,
     )
-
-
-def _injected_visual_blocks(
-    *,
-    store: ObservationStore,
-    trajectory_id: str,
-    source: TrajectorySourceVisual,
-    observation_handles: tuple[ObservationHandle, ...],
-    device: torch.device,
-) -> tuple[InjectedVisualBlock, ...]:
-    def resolve(ref: object, *, count: int, name: str) -> torch.Tensor:
-        tensor = store.resolve_verified_for_trajectory(
-            ref, trajectory_id=trajectory_id
-        ).to(device=device)
-        return _single_sequence_visual_features(tensor, count=count, name=name)
-
-    blocks = [
-        InjectedVisualBlock(
-            kind="source_image",
-            positions=source.positions,
-            embeddings=resolve(
-                source.state.merged_main,
-                count=len(source.positions),
-                name="source visual embeddings",
-            ),
-            deepstack=tuple(
-                resolve(
-                    ref,
-                    count=len(positions),
-                    name=f"source DeepStack branch {index}",
-                )
-                for index, (ref, positions) in enumerate(
-                    zip(
-                        source.state.merged_deepstack,
-                        source.deepstack_injection_positions,
-                        strict=True,
-                    )
-                )
-            ),
-            deepstack_positions=source.deepstack_injection_positions,
-        )
-    ]
-    for expected_call, handle in enumerate(observation_handles):
-        record = store.resolve_record(handle)
-        if not isinstance(record, FocusedObservationRecord):
-            raise TypeError("contextual TGVF-only forward requires focused-D records")
-        if record.call_index != expected_call:
-            raise ReplayMismatchError("contextual observations are out of order")
-        blocks.append(
-            InjectedVisualBlock(
-                kind="focused_d",
-                positions=record.layout.d_positions,
-                embeddings=resolve(
-                    record.payload.main_d,
-                    count=len(record.layout.d_positions),
-                    name=f"call {record.call_index} main D",
-                ),
-                deepstack=tuple(
-                    resolve(
-                        branch.d_tensor,
-                        count=len(branch.injection_positions),
-                        name=(
-                            f"call {record.call_index} D-DeepStack branch {index}"
-                        ),
-                    )
-                    for index, branch in enumerate(record.branches)
-                ),
-                deepstack_positions=record.layout.deepstack_injection_positions,
-            )
-        )
-    return tuple(blocks)
-
-
-def _single_sequence_visual_features(
-    tensor: torch.Tensor, *, count: int, name: str
-) -> torch.Tensor:
-    if tensor.ndim == 2:
-        tensor = tensor.unsqueeze(0)
-    if tensor.ndim != 3 or tensor.shape[0] != 1 or tensor.shape[1] != count:
-        raise ValueError(
-            f"{name} must resolve to shape [1,{count},H], got {tuple(tensor.shape)}"
-        )
-    return tensor
 
 
 def _source_visual_positions(

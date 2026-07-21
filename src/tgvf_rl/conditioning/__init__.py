@@ -10,6 +10,7 @@ from .base import (
     TargetConditioningProviderKind,
     TargetConditioningProvenance,
     TargetConditioningRequest,
+    bind_preselected_target_conditioning,
 )
 from .factory import (
     TargetConditioningDependencies,
@@ -35,6 +36,7 @@ __all__ = [
     "TargetConditioningProviderKind",
     "TargetConditioningProvenance",
     "TargetConditioningRequest",
+    "bind_preselected_target_conditioning",
     "TargetTokenEmbeddingConditionProvider",
     "TargetTokenEmbeddingProvider",
     "create_target_condition_provider",

@@ -438,7 +438,20 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self.use_reference_policy = POLICY_REFERENCE_DIAGNOSTIC_ENABLED
 
         def init_workers(self):
-            result = super().init_workers()
+            # Pinned veRL constructs its LLM server manager from a module
+            # global.  Replace that construction boundary only while upstream
+            # creates workers so the normal trainer/lifecycle remains intact,
+            # while vLLM receives the TGVF worker extension and sticky client.
+            import verl.trainer.ppo.ray_trainer as ray_trainer_module
+
+            from .vllm_tool_runtime import tgvf_llm_server_manager_class
+
+            original_manager_class = ray_trainer_module.LLMServerManager
+            ray_trainer_module.LLMServerManager = tgvf_llm_server_manager_class()
+            try:
+                result = super().init_workers()
+            finally:
+                ray_trainer_module.LLMServerManager = original_manager_class
             state = PolicyPilotTrainerCheckpointState.from_environment(self)
             original_actor_wg = self.actor_rollout_wg
             self._policy_checkpoint_state = state

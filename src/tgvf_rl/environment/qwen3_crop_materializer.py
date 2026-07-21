@@ -225,38 +225,11 @@ class Qwen3CropVisualMaterializer:
         )
 
     def _preprocess(self, crop: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        image_processor = getattr(self.processor, "image_processor", None)
-        size = getattr(image_processor, "size", None)
-        if not isinstance(size, Mapping):
-            raise TypeError("Qwen3 image processor must expose a size mapping")
-        shortest_edge = size.get("shortest_edge")
-        if type(shortest_edge) is not int or shortest_edge <= 0:
-            raise ValueError("Qwen3 image processor shortest_edge must be positive")
-        if self.image_max_pixels < shortest_edge:
-            raise ValueError("image_max_pixels is below the processor minimum")
-        image = Image.fromarray(crop.numpy(), mode="RGB")
-        batch = self.processor(
-            text=["<|vision_start|><|image_pad|><|vision_end|>"],
-            images=[image],
-            padding=False,
-            return_tensors="pt",
-            images_kwargs={
-                "size": {
-                    "shortest_edge": shortest_edge,
-                    "longest_edge": self.image_max_pixels,
-                }
-            },
+        pixel_values, grid = preprocess_qwen3_rgb(
+            processor=self.processor,
+            rgb=crop,
+            image_max_pixels=self.image_max_pixels,
         )
-        if not isinstance(batch, Mapping):
-            raise TypeError("Qwen3 crop processor output must be a mapping")
-        pixel_values = batch.get("pixel_values")
-        grid = batch.get("image_grid_thw")
-        if not isinstance(pixel_values, torch.Tensor) or not isinstance(
-            grid, torch.Tensor
-        ):
-            raise ValueError("Qwen3 crop processor omitted pixel_values/image_grid_thw")
-        if pixel_values.ndim != 2 or grid.shape != (1, 3):
-            raise ValueError("Qwen3 crop processor returned invalid tensor geometry")
         owner = _first_module_tensor(self.vision_tower)
         if owner is None:
             raise ValueError("Qwen3 vision tower owns no parameter or buffer")
@@ -282,6 +255,60 @@ class Qwen3CropVisualMaterializer:
             merger_owner = _first_module_tensor(merger)
             if merger_owner is None or merger_owner.device != owner.device:
                 raise RuntimeError("Qwen crop mergers must share the vision device")
+
+
+def preprocess_qwen3_rgb(
+    *,
+    processor: Any,
+    rgb: torch.Tensor,
+    image_max_pixels: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run only Qwen's CPU image processor for an exact RGB tensor.
+
+    The colocated Policy runtime uses this boundary in its model-free
+    AgentLoop process, then sends the resulting processor tensors to the
+    already-resident vLLM vision tower.  It deliberately owns no model and
+    performs no visual forward.
+    """
+
+    crop = _validate_crop_rgb(rgb)
+    if type(image_max_pixels) is not int or image_max_pixels <= 0:
+        raise ValueError("image_max_pixels must be a positive integer")
+    image_processor = getattr(processor, "image_processor", None)
+    size = getattr(image_processor, "size", None)
+    if not isinstance(size, Mapping):
+        raise TypeError("Qwen3 image processor must expose a size mapping")
+    shortest_edge = size.get("shortest_edge")
+    if type(shortest_edge) is not int or shortest_edge <= 0:
+        raise ValueError("Qwen3 image processor shortest_edge must be positive")
+    if image_max_pixels < shortest_edge:
+        raise ValueError("image_max_pixels is below the processor minimum")
+    image = Image.fromarray(crop.numpy(), mode="RGB")
+    batch = processor(
+        text=["<|vision_start|><|image_pad|><|vision_end|>"],
+        images=[image],
+        padding=False,
+        return_tensors="pt",
+        images_kwargs={
+            "size": {
+                "shortest_edge": shortest_edge,
+                "longest_edge": image_max_pixels,
+            }
+        },
+    )
+    if not isinstance(batch, Mapping):
+        raise TypeError("Qwen3 crop processor output must be a mapping")
+    pixel_values = batch.get("pixel_values")
+    grid = batch.get("image_grid_thw")
+    if not isinstance(pixel_values, torch.Tensor) or not isinstance(
+        grid, torch.Tensor
+    ):
+        raise ValueError("Qwen3 crop processor omitted pixel_values/image_grid_thw")
+    if pixel_values.ndim != 2 or grid.shape != (1, 3):
+        raise ValueError("Qwen3 crop processor returned invalid tensor geometry")
+    return pixel_values.detach().cpu().contiguous(), grid.detach().to(
+        device="cpu", dtype=torch.long
+    ).contiguous()
 
 
 def _validate_crop_rgb(value: torch.Tensor) -> torch.Tensor:
@@ -378,4 +405,5 @@ def _resolve_module(root: nn.Module, path: str) -> nn.Module:
 __all__ = [
     "QWEN3_DEEPSTACK_BRANCH_LAYERS",
     "Qwen3CropVisualMaterializer",
+    "preprocess_qwen3_rgb",
 ]

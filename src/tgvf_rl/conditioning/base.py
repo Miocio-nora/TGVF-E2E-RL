@@ -234,6 +234,75 @@ class TargetConditioningOutput:
         return self.values
 
 
+def bind_preselected_target_conditioning(
+    *,
+    values: torch.Tensor,
+    input_ids: torch.Tensor,
+    target_span: TokenSpan,
+    expected_target_token_ids: Sequence[int],
+    trajectory_id: str,
+    call_index: int,
+    model_identity: ModelIdentity,
+    provider: TargetConditioningProviderKind,
+    hidden_layer: int | None = None,
+    embedding_identity: str | None = None,
+) -> TargetConditioningOutput:
+    """Bind remotely materialized Hq to the exact sampled target selection.
+
+    This is the model-free half of the two-model runtime. The vLLM worker
+    produces ``values`` from its own behavior forward or input embedding; this
+    boundary revalidates the canonical token span and constructs the same
+    immutable provenance used by local providers without allocating a fake
+    full-sequence hidden-state tensor.
+    """
+
+    if not isinstance(provider, TargetConditioningProviderKind):
+        raise TypeError("provider must be a TargetConditioningProviderKind")
+    selection = _validate_target_selection(
+        input_ids=input_ids,
+        target_span=target_span,
+        expected_target_token_ids=expected_target_token_ids,
+        trajectory_id=trajectory_id,
+        call_index=call_index,
+        tokenizer_length=model_identity.tokenizer_length,
+    )
+    if selection.batched:
+        raise ValueError("remote Policy conditioning currently requires one trajectory")
+    if not isinstance(values, torch.Tensor) or values.ndim != 2:
+        raise ValueError("preselected conditioning values must have shape [target,H]")
+    if not values.is_floating_point() or values.shape[-1] <= 0:
+        raise TypeError("preselected conditioning values must be floating point")
+    if values.shape[-2] != target_span.end - target_span.start:
+        raise ValueError("preselected Hq token count differs from target span")
+    if provider is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE:
+        if not isinstance(hidden_layer, int) or isinstance(hidden_layer, bool):
+            raise ValueError("contextual preselected Hq requires hidden_layer")
+        if embedding_identity is not None:
+            raise ValueError("contextual preselected Hq cannot name an embedding")
+    else:
+        if hidden_layer is not None:
+            raise ValueError("embedding preselected Hq cannot name a hidden layer")
+        if not isinstance(embedding_identity, str) or not embedding_identity:
+            raise ValueError("embedding preselected Hq requires embedding_identity")
+    return TargetConditioningOutput(
+        values=values,
+        provenance=TargetConditioningProvenance(
+            provider=provider.value,
+            model=model_identity,
+            target_span=target_span,
+            target_token_ids=selection.rows,
+            trajectory_ids=selection.trajectories,
+            call_indices=selection.call_indices,
+            source_sequence_length=selection.sequence_length,
+            source_batch_size=selection.batch_size,
+            source_input_ids_sha256=selection.digest,
+            batched=False,
+            hidden_layer=hidden_layer,
+            embedding_identity=embedding_identity,
+        ),
+    )
+
+
 @runtime_checkable
 class TargetConditionProvider(Protocol):
     """Strong common boundary for a configuration-selected provider."""
@@ -598,4 +667,5 @@ __all__ = [
     "TargetConditioningProviderKind",
     "TargetConditioningProvenance",
     "TargetConditioningRequest",
+    "bind_preselected_target_conditioning",
 ]

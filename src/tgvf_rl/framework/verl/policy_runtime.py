@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import hashlib
 import hmac
 import os
 from pathlib import Path
@@ -131,11 +132,15 @@ class PolicyE2ERuntimeProduct:
     snapshot_consumer: PolicyLoRASnapshotConsumer
 
     def __post_init__(self) -> None:
-        if not callable(
-            getattr(self.trajectory_components, "build_trajectory_components", None)
-        ):
+        sync_builder = getattr(
+            self.trajectory_components, "build_trajectory_components", None
+        )
+        async_builder = getattr(
+            self.trajectory_components, "build_trajectory_components_async", None
+        )
+        if not callable(sync_builder) and not callable(async_builder):
             raise TypeError(
-                "runtime product must provide build_trajectory_components()"
+                "runtime product must provide a sync or async trajectory builder"
             )
         if not callable(
             getattr(self.snapshot_consumer, "apply_policy_lora_snapshot", None)
@@ -256,9 +261,16 @@ class ExactLoRASnapshotPolicyVersionPort:
         self.snapshot_loader = snapshot_loader or _load_latest_snapshot
         self._lock = RLock()
         self._current = self._apply(initial_snapshot)
+        self._latest_pointer_signature = _latest_pointer_signature(state)
 
     def current_policy_version(self) -> PolicyVersion:
         with self._lock:
+            pointer_signature = _latest_pointer_signature(self.state)
+            if (
+                pointer_signature is not None
+                and pointer_signature == self._latest_pointer_signature
+            ):
+                return self._current
             snapshot = self.snapshot_loader(self.state)
             _require_policy_lora_snapshot(snapshot)
             candidate = snapshot.policy_version
@@ -274,6 +286,7 @@ class ExactLoRASnapshotPolicyVersionPort:
                         "one optimizer step was published with two weight identities"
                     )
                 self._current = self._apply(snapshot)
+            self._latest_pointer_signature = pointer_signature
             return self._current
 
     def _apply(self, snapshot: "PolicyLoRASnapshot") -> PolicyVersion:
@@ -468,6 +481,17 @@ class PolicyE2ERuntimeInvocationFactory:
             sample_fields=sample_fields,
         )
 
+    async def build_async(
+        self,
+        *,
+        sampling_params: Mapping[str, object],
+        sample_fields: Mapping[str, object],
+    ) -> VerlNativeAgentLoopInvocation:
+        return await self.bound_factory.build_async(
+            sampling_params=sampling_params,
+            sample_fields=sample_fields,
+        )
+
 
 def resolve_policy_agent_loop_worker_placement(
     config: PolicyE2ESmokeRunConfig,
@@ -600,6 +624,16 @@ def _load_latest_snapshot(state: "PolicyWeightSyncState") -> "PolicyLoRASnapshot
     from .policy_weight_sync import load_latest_lora_snapshot
 
     return load_latest_lora_snapshot(state)
+
+
+def _latest_pointer_signature(state: "PolicyWeightSyncState") -> str | None:
+    """Cheaply avoid reloading the same LoRA tensors for every n-way rollout."""
+
+    try:
+        payload = state.latest_path.read_bytes()
+    except FileNotFoundError:
+        return None
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _default_policy_e2e_live_runtime_builder() -> PolicyE2ERuntimeBuilder:

@@ -183,6 +183,7 @@ class VerlAsyncServerPolicyTurnClient:
             video_data=None,
             audio_data=None,
             mm_processor_kwargs=inputs.mm_processor_kwargs,
+            tgvf_expected_step=request.behavior_policy.optimizer_step,
         )
         if not inspect.isawaitable(awaitable):
             raise TypeError("veRL server_manager.generate() must return an awaitable")
@@ -430,6 +431,13 @@ class VerlNativeAgentLoopInvocationFactory(Protocol):
         sample_fields: Mapping[str, object],
     ) -> VerlNativeAgentLoopInvocation: ...
 
+    async def build_async(
+        self,
+        *,
+        sampling_params: Mapping[str, object],
+        sample_fields: Mapping[str, object],
+    ) -> VerlNativeAgentLoopInvocation: ...
+
 
 class CurrentPolicyVersionPort(Protocol):
     def current_policy_version(self) -> "PolicyVersion": ...
@@ -610,6 +618,91 @@ class BoundVerlNativeAgentLoopInvocationFactory:
             output_builder=components.output_builder,
         )
 
+    async def build_async(
+        self,
+        *,
+        sampling_params: Mapping[str, object],
+        sample_fields: Mapping[str, object],
+    ) -> VerlNativeAgentLoopInvocation:
+        """Build one invocation while allowing model-free remote source vision."""
+
+        async_builder = getattr(
+            self.trajectory_components, "build_trajectory_components_async", None
+        )
+        if not callable(async_builder):
+            return self.build(
+                sampling_params=sampling_params,
+                sample_fields=sample_fields,
+            )
+        from tgvf_rl.contracts.identity import PolicyVersion
+        from tgvf_rl.environment.agent_loop import RolloutRequest
+        from tgvf_rl.framework.vllm import ContentAddressedVLLMTurnRNG
+        from tgvf_rl.trajectories.schema import TrajectoryIdentity
+
+        if not isinstance(sampling_params, Mapping):
+            raise TypeError("upstream sampling_params must be a mapping")
+        if not isinstance(sample_fields, Mapping):
+            raise TypeError("upstream sample_fields must be a mapping")
+        self._validate_upstream_sampling(sampling_params)
+        sample_id = _required_sample_text(sample_fields, "sample_id")
+        group_nonce = _required_sample_text(sample_fields, "uid")
+        data_cursor = _required_sample_integer(sample_fields, "index")
+        prompt_ids = _required_prompt_ids(sample_fields.get("initial_prompt_token_ids"))
+        behavior_policy = self.policy_version.current_policy_version()
+        if not isinstance(behavior_policy, PolicyVersion):
+            raise TypeError("policy version port must return PolicyVersion")
+        if behavior_policy.run_id != self.run_id:
+            raise IdentityMismatchError("served behavior policy belongs to another run")
+        group_uid = _native_group_uid(
+            run_id=self.run_id,
+            sample_id=sample_id,
+            group_nonce=group_nonce,
+            data_cursor=data_cursor,
+            behavior_policy=behavior_policy,
+        )
+        identity = TrajectoryIdentity(
+            self.run_id,
+            sample_id,
+            self._claim_rollout_index(group_uid),
+            group_uid,
+        )
+        components = await async_builder(
+            identity=identity,
+            model=self.model,
+            behavior_policy=behavior_policy,
+            initial_prompt_token_ids=prompt_ids,
+            sample_fields=dict(sample_fields),
+        )
+        if not isinstance(components, VerlNativeTrajectoryComponents):
+            raise TypeError(
+                "async trajectory components port must return "
+                "VerlNativeTrajectoryComponents"
+            )
+        request = RolloutRequest(
+            "trajectory-v1",
+            identity,
+            self.model,
+            behavior_policy,
+            components.source_visual,
+            prompt_ids,
+            {},
+            self.sampling_contract,
+        )
+        return VerlNativeAgentLoopInvocation(
+            request=request,
+            native_loop_factory=components.native_loop_factory,
+            prompt_context=components.prompt_context,
+            rng=ContentAddressedVLLMTurnRNG(
+                master_seed=self.rollout_master_seed,
+                stream_identity=identity.canonical_id,
+            ),
+            decoding=self.decoding,
+            termination=self.termination,
+            sticky_request_id=identity.canonical_id,
+            max_model_len=self.max_model_len,
+            output_builder=components.output_builder,
+        )
+
     def _claim_rollout_index(self, group_uid: str) -> int:
         with self._lock:
             if group_uid in self._completed_group_uids:
@@ -759,10 +852,17 @@ class VerlFrameworkNeutralAgentLoop:
         **kwargs: object,
     ) -> object:
         event_loop = asyncio.get_running_loop()
-        invocation = self.invocation_factory.build(
-            sampling_params=dict(sampling_params),
-            sample_fields=dict(kwargs),
-        )
+        async_builder = getattr(self.invocation_factory, "build_async", None)
+        if callable(async_builder):
+            invocation = await async_builder(
+                sampling_params=dict(sampling_params),
+                sample_fields=dict(kwargs),
+            )
+        else:
+            invocation = self.invocation_factory.build(
+                sampling_params=dict(sampling_params),
+                sample_fields=dict(kwargs),
+            )
         if not isinstance(invocation, VerlNativeAgentLoopInvocation):
             raise TypeError(
                 "invocation_factory must return VerlNativeAgentLoopInvocation"
@@ -799,7 +899,12 @@ class VerlFrameworkNeutralAgentLoop:
             trajectory = native_loop.run(invocation.request)
             return trajectory, invocation.output_builder(trajectory)
 
-        trajectory, output = await asyncio.to_thread(execute_sync)
+        try:
+            trajectory, output = await asyncio.to_thread(execute_sync)
+        finally:
+            release = getattr(self.server_manager, "release_trajectory", None)
+            if callable(release):
+                await release(invocation.sticky_request_id)
         _validate_structural_agent_loop_output(
             output,
             expected_prompt_ids=invocation.request.initial_prompt_token_ids,

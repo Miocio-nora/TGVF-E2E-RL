@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 import torch
@@ -143,6 +144,38 @@ class Qwen3NativeToolLayoutBuilder:
         get_rope_index = getattr(core, "get_rope_index", None)
         if not callable(get_rope_index):
             raise TypeError("Qwen3 model core must expose get_rope_index()")
+        tokenizer = getattr(processor, "tokenizer", processor)
+        return cls(
+            tokenizer=tokenizer,
+            model_identity=model_identity,
+            observation_store=observation_store,
+            get_rope_index=get_rope_index,
+        )
+
+    @classmethod
+    def from_processor_config(
+        cls,
+        *,
+        processor: Any,
+        model_identity: ModelIdentity,
+        observation_store: ObservationStore,
+    ) -> "Qwen3NativeToolLayoutBuilder":
+        """Build the exact CPU M-RoPE layout helper without loading Qwen weights."""
+
+        try:
+            from transformers import AutoConfig
+            from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModel
+        except ImportError as error:  # pragma: no cover - live env owns transformers
+            raise RuntimeError("Qwen3 layout construction requires transformers") from error
+        config = AutoConfig.from_pretrained(
+            model_identity.revision_or_path,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
+        if getattr(config, "model_type", None) != "qwen3_vl":
+            raise ValueError("layout config is not Qwen3-VL")
+        owner = SimpleNamespace(config=config)
+        get_rope_index = MethodType(Qwen3VLModel.get_rope_index, owner)
         tokenizer = getattr(processor, "tokenizer", processor)
         return cls(
             tokenizer=tokenizer,

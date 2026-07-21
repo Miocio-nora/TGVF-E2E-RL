@@ -24,8 +24,10 @@ from tgvf_rl.protocol.schema import ParsedToolCall, TGVF_FOCUS_TOOL_NAME
 from tgvf_rl.representation.adapter import (
     TGVFAdapter,
     TGVFAdapterInput,
+    TGVFAdapterMetadata,
     TGVFAdapterOutput,
 )
+from tgvf_rl.representation.deepstack import DDeepStackPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,20 +74,51 @@ class ToolExecutionRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class PrecomputedTGVFObservationPayload:
+    """The minimal Adapter payload consumed by exact rollout/replay."""
+
+    main_d: torch.Tensor
+    d_deepstack: DDeepStackPayload
+    metadata: TGVFAdapterMetadata
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.main_d, torch.Tensor):
+            raise TypeError("precomputed main D must be a tensor")
+        if not isinstance(self.d_deepstack, DDeepStackPayload):
+            raise TypeError("precomputed D-DeepStack payload has the wrong type")
+        if not isinstance(self.metadata, TGVFAdapterMetadata):
+            raise TypeError("precomputed Adapter metadata has the wrong type")
+        if self.d_deepstack.branch_layers != self.metadata.branch_layers:
+            raise ValueError("precomputed branch layers differ from metadata")
+
+    @property
+    def deepstack_visual_embeds(self) -> tuple[torch.Tensor, ...]:
+        return self.d_deepstack.branches
+
+
+@dataclass(frozen=True, slots=True)
 class ToolExecutionResult:
     handle: ObservationHandle
     record: FocusedObservationRecord
-    adapter_output: TGVFAdapterOutput
+    adapter_output: TGVFAdapterOutput | PrecomputedTGVFObservationPayload
 
 
 class TGVFFocusTool:
     name = TGVF_FOCUS_TOOL_NAME
 
-    def __init__(self, adapter: TGVFAdapter, store: ObservationStore) -> None:
+    def __init__(
+        self, adapter: TGVFAdapter | None, store: ObservationStore
+    ) -> None:
+        if adapter is not None and not isinstance(adapter, TGVFAdapter):
+            raise TypeError("adapter must be a TGVFAdapter or None")
+        if not isinstance(store, ObservationStore):
+            raise TypeError("store must be an ObservationStore")
         self.adapter = adapter
         self.store = store
 
     def execute(self, request: ToolExecutionRequest) -> ToolExecutionResult:
+        if self.adapter is None:
+            raise RuntimeError("model-free focus recorder cannot execute an Adapter")
         if request.call_index < 0:
             raise ValueError("call_index must be non-negative")
         if request.parsed_call.name != self.name:
@@ -128,6 +161,68 @@ class TGVFFocusTool:
             != request.layout.visual_layout.deepstack_branch_layers
         ):
             raise ValueError("adapter and replay layout DeepStack layers differ")
+
+        return self.record_precomputed(request, adapter_output, _validated=True)
+
+    def record_precomputed(
+        self,
+        request: ToolExecutionRequest,
+        adapter_output: TGVFAdapterOutput | PrecomputedTGVFObservationPayload,
+        *,
+        _validated: bool = False,
+    ) -> ToolExecutionResult:
+        """Record D materialized by the colocated vLLM worker exactly once."""
+
+        if not isinstance(request, ToolExecutionRequest):
+            raise TypeError("precomputed focus recording requires ToolExecutionRequest")
+        if not isinstance(
+            adapter_output,
+            (TGVFAdapterOutput, PrecomputedTGVFObservationPayload),
+        ):
+            raise TypeError("precomputed focus recording requires a TGVF payload")
+        provenance = request.condition.provenance
+        source = request.source_visual
+        if not _validated:
+            if request.call_index < 0:
+                raise ValueError("call_index must be non-negative")
+            if request.parsed_call.name != self.name:
+                raise ValueError("parsed call is not tgvf_focus_tool")
+            if tuple(provenance.trajectory_ids) != (request.trajectory_id,):
+                raise ValueError("conditioning provenance differs from trajectory")
+            if tuple(provenance.call_indices) != (request.call_index,):
+                raise ValueError("conditioning provenance differs from call index")
+            if provenance.target_token_ids != (
+                request.parsed_call.target_span.token_ids,
+            ):
+                raise ValueError(
+                    "conditioning provenance differs from exact sampled target tokens"
+                )
+            if provenance.model != request.model:
+                raise ValueError("conditioning provenance differs from runtime model")
+            if provenance.provider == "contextual_hidden_state":
+                if not isinstance(
+                    request.contextual_forward_identity, ArtifactIdentity
+                ):
+                    raise ValueError(
+                        "contextual conditioning requires its exact forward identity"
+                    )
+            elif request.contextual_forward_identity is not None:
+                raise ValueError(
+                    "target embedding conditioning cannot name a contextual forward"
+                )
+            if len(source.premerge_deepstack) != len(
+                request.branch_merger_identities
+            ):
+                raise ValueError("source DeepStack and merger identities differ")
+            if len(source.merged_deepstack) != len(source.premerge_deepstack):
+                raise ValueError(
+                    "source merged/pre-merge DeepStack branches differ"
+                )
+            if (
+                adapter_output.metadata.branch_layers
+                != request.layout.visual_layout.deepstack_branch_layers
+            ):
+                raise ValueError("adapter and replay layout DeepStack layers differ")
 
         def put(name: str, tensor: torch.Tensor):
             return self.store.put_tensor(
@@ -266,7 +361,10 @@ class TGVFFocusTool:
         return ToolExecutionResult(self.store.put(record), record, adapter_output)
 
 
-def _observation_id(request: ToolExecutionRequest, output: TGVFAdapterOutput) -> str:
+def _observation_id(
+    request: ToolExecutionRequest,
+    output: TGVFAdapterOutput | PrecomputedTGVFObservationPayload,
+) -> str:
     digest = hashlib.sha256()
     digest.update(request.trajectory_id.encode())
     digest.update(str(request.call_index).encode())

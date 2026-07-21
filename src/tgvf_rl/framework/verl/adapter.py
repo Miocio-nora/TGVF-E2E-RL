@@ -139,8 +139,15 @@ class VerlAdapterConfig:
                 "architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]
             },
             "actor_rollout_ref.rollout.limit_images": 1 + self.max_tool_calls,
-            "actor_rollout_ref.rollout.free_cache_engine": False,
-            "actor_rollout_ref.rollout.enable_sleep_mode": False,
+            # The accepted e003 colocated path alternates rollout and actor
+            # residency.  Keep the separate Torch 2.11 spike on its pinned
+            # no-sleep contract until that stack is accepted independently.
+            "actor_rollout_ref.rollout.free_cache_engine": (
+                self.runtime.verl_commit != TORCH211_CANDIDATE_VERL_COMMIT
+            ),
+            "actor_rollout_ref.rollout.enable_sleep_mode": (
+                self.runtime.verl_commit != TORCH211_CANDIDATE_VERL_COMMIT
+            ),
             "actor_rollout_ref.rollout.agent.agent_loop_manager_class": self.agent_loop_manager_fqn,
             "actor_rollout_ref.actor.strategy": fsdp.actor_strategy,
             "actor_rollout_ref.ref.strategy": fsdp.reference_strategy,

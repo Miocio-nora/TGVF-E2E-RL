@@ -527,13 +527,16 @@ def validate_verl_config_mapping(
         raise VerlConfigurationError(
             "vLLM image limit must cover source image plus at least two tool calls"
         )
-    if expected_policy_pilot is not None and (
-        _path_value(config, "actor_rollout_ref.rollout.free_cache_engine") is not False
-        or _path_value(config, "actor_rollout_ref.rollout.enable_sleep_mode") is not False
-    ):
-        raise VerlConfigurationError(
-            "colocated Policy Pilot rollout weights must remain resident during sync"
-        )
+    if expected_policy_pilot is not None and not expected_use_v1:
+        if (
+            _path_value(config, "actor_rollout_ref.rollout.free_cache_engine")
+            is not True
+            or _path_value(config, "actor_rollout_ref.rollout.enable_sleep_mode")
+            is not True
+        ):
+            raise VerlConfigurationError(
+                "the accepted colocated Policy Pilot requires vLLM sleep/wake"
+            )
     if expected_policy_pilot is not None:
         _validate_policy_pilot_mapping(
             config,
