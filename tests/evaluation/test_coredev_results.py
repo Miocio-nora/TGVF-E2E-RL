@@ -37,6 +37,24 @@ class _Response:
         return json.dumps(self.payload).encode("utf-8")
 
 
+class _StaticJudge:
+    def __init__(self, response: str) -> None:
+        self.response = response
+
+    def generate(self, *_args: object, **_kwargs: object) -> str:
+        return self.response
+
+
+def _mathverse_score_prompt() -> str:
+    return """
+Below are two answers to a math question. Question is [Question], [Standard Answer] is the standard answer to the question, and [Model_answer] is the answer extracted from a model's output to this question.  Determine whether these two answers are consistent.
+
+[Question]: What is 1 + 1?
+[Standard Answer]: 2
+[Model_answer] : 2
+Judgement:"""
+
+
 def test_judge_health_requires_exact_model_and_deterministic_completion() -> None:
     urls: list[str] = []
 
@@ -100,6 +118,40 @@ def test_fail_closed_judge_is_multiprocessing_pickle_safe() -> None:
     delegate = SimpleNamespace(model="judge")
     restored = pickle.loads(pickle.dumps(FailClosedJudge(delegate)))
     assert restored.model == "judge"
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    (
+        ("1", "1"),
+        ("\n  0\nThe answers differ.", "0"),
+        ("10", "10"),
+        ("1. The answers match.", "1. The answers match."),
+        ("0/1", "0/1"),
+        ("Judgement: 1", "Judgement: 1"),
+    ),
+)
+def test_mathverse_score_response_only_accepts_a_leading_binary_token(
+    response: str,
+    expected: str,
+) -> None:
+    judge = FailClosedJudge(_StaticJudge(response))
+    assert judge.generate(_mathverse_score_prompt()) == expected
+
+
+def test_mathverse_response_adapter_does_not_change_extract_or_other_prompts() -> None:
+    response = "1\nThe extracted answer is one."
+    judge = FailClosedJudge(_StaticJudge(response))
+
+    assert judge.generate("Model response: 'one'\nExtracted Answer:") == response
+    assert judge.generate("Judge whether these answers match. Judgement:") == response
+
+
+def test_mathverse_response_adapter_remains_active_after_pickle_round_trip() -> None:
+    judge = FailClosedJudge(_StaticJudge("\n1\nThe answers are consistent."))
+    restored = pickle.loads(pickle.dumps(judge))
+
+    assert restored.generate(prompt=_mathverse_score_prompt()) == "1"
 
 
 def _write_health(path: Path) -> None:

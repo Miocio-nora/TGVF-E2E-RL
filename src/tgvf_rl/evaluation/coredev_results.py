@@ -9,6 +9,7 @@ from hashlib import sha256
 import csv
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Literal
 from urllib import request
@@ -28,6 +29,31 @@ JUDGE_FAILURE_MARKERS = (
     "Failed to predict, thus randomly generate one",
     "All 5 retries failed",
 )
+_MATHVERSE_SCORE_PROMPT_PREFIX = (
+    "Below are two answers to a math question. Question is [Question], "
+    "[Standard Answer] is the standard answer to the question, and [Model_answer] "
+    "is the answer extracted from a model's output to this question."
+)
+_MATHVERSE_SCORE_PROMPT_SUFFIX = "Judgement:"
+_MATHVERSE_LEADING_VERDICT = re.compile(r"\A\s*([01])(?=\s|\Z)")
+
+
+def _is_mathverse_score_prompt(prompt: object) -> bool:
+    return (
+        isinstance(prompt, str)
+        and prompt.lstrip().startswith(_MATHVERSE_SCORE_PROMPT_PREFIX)
+        and prompt.rstrip().endswith(_MATHVERSE_SCORE_PROMPT_SUFFIX)
+    )
+
+
+def _canonicalize_mathverse_score_response(
+    prompt: object,
+    response: str,
+) -> str:
+    if not _is_mathverse_score_prompt(prompt):
+        return response
+    match = _MATHVERSE_LEADING_VERDICT.match(response)
+    return response if match is None else match.group(1)
 
 
 def _json_request(
@@ -169,7 +195,8 @@ class FailClosedJudge:
             raise RuntimeError("CoreDev judge returned an empty response")
         if any(marker in result for marker in JUDGE_FAILURE_MARKERS):
             raise RuntimeError("CoreDev judge exhausted its API retries")
-        return result
+        prompt = args[0] if args else kwargs.get("prompt")
+        return _canonicalize_mathverse_score_response(prompt, result)
 
 
 def install_fail_closed_judge_builders(modules: Iterable[Any]) -> None:

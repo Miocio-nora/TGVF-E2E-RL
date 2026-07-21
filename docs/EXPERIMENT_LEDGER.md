@@ -5415,7 +5415,7 @@ instead of repeated bullets.
 ### BE-02-QWEN3-DIRECT-COREDEV2511-B8-GPU0123
 
 - Cell/status/result: deterministic batched original-policy inference and
-  throughput/resume gate / `PLANNED` / `PENDING`.
+  throughput/resume gate / `COMPLETE` / `PASS`.
 - Fixed identity: model, tokenizer, native prompts, max pixels `262144`, all
   decoding parameters including max generated tokens `40960`, image-only
   modality restriction, vLLM 0.12 V1, decoder FlashInfer, vision SDPA,
@@ -5445,11 +5445,15 @@ instead of repeated bullets.
   code/config above, `<official_alias>`, and per-slice work directory under the
   BE-02 root. No `--reuse` on first launch; exact restart adds
   `--reuse --reuse-aux infer` in the same directory.
+- Result: all seven immutable inference slices completed with 2,511/2,511
+  predictions and no missing or duplicate row: VStarBench 191, HRBench4K 200,
+  BLINK 420, OCRBench_v2 600, MMMU_Pro_10c 300, MathVista_MINI 300 and
+  MathVerse_MINI 500. Formal scoring is recorded separately as BE-03.
 
 ### BE-02-J1-QWEN25-72B-COREDEV2511-GPU01
 
-- Cell/status/result: fail-closed CoreDev-2511 scoring service / `PLANNED` /
-  `PENDING`; inference remains BE-02 and is not rerun or modified.
+- Cell/status/result: fail-closed CoreDev-2511 scoring service / `COMPLETE` /
+  `INVALID`; inference remains BE-02 and is not rerun or modified.
 - Identity: local `/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct`, served
   as `Qwen2.5-72B-Instruct`; vLLM 0.12 V1, Torch 2.9.0+cu128, BF16, TP2,
   `TRITON_ATTN`, max model length 32768, prefix caching, seed 42, port 8012.
@@ -5476,11 +5480,16 @@ instead of repeated bullets.
 - N/A: representation artifacts, D/DeepStack, rollout log probabilities,
   policy/reference, reward, GRPO/SDPO, optimizer, gradients and training batch
   fields are absent from benchmark scoring.
+- Result: the native 32,768-token J1 service passed health and remains the
+  accepted judge deployment, but this first scoring attempt passed the full
+  Thinking transcript rather than the required final answer and exceeded the
+  context limit on three requests. Its metrics are invalid; the same service
+  is used correctly on BE-03 final-answer views.
 
 ### BE-02-J2-QWEN25-72B-YARN131K-COREDEV2511-GPU23
 
 - Cell/status/result: uniform long-context fail-closed CoreDev-2511 scoring
-  service / `PLANNED` / `PENDING`; BE-02 inference is immutable and is not
+  service / `COMPLETE` / `INVALID`; BE-02 inference is immutable and was not
   rerun. J1 service and score artifacts remain immutable comparison evidence.
 - Reason for the new identity: J1 accepted every short request but rejected
   exactly three official scorer requests after six retries each because their
@@ -5538,6 +5547,97 @@ instead of repeated bullets.
 - N/A: representation artifacts, D/DeepStack, rollout log probabilities,
   policy/reference, reward, GRPO/SDPO, optimizer, gradients and training batch
   fields are absent from benchmark scoring.
+- Result: service health and a real 36,042-token request passed, proving that
+  the 131,072-token static-YaRN service removed J1's context rejection. The
+  uniform rerun nevertheless produced one official random-fallback marker in
+  HRBench4K, one in BLINK, and one exhausted-retry marker in MathVerse_MINI;
+  therefore its judge-backed results are rejected. Audit then showed that the
+  scorer was incorrectly receiving the full Thinking transcript instead of
+  the final answer required by `docs/PROJECT_TASK.md`: 2,492/2,511 responses
+  have a non-empty suffix after the last `</think>`, while 19 are truncated or
+  otherwise unclosed. J2 is retained only as long-context diagnostic evidence;
+  static YaRN scores are not the formal baseline.
+
+### BE-03-QWEN3-DIRECT-COREDEV2511-FINAL-ANSWER-J1-GPU01
+
+- Cell/status/result: formal final-answer-only CoreDev-2511 baseline scoring /
+  `COMPLETE` / `PASS`; no model inference was rerun and no BE-02 source TSV was
+  modified.
+- Inference identity: exactly the seven completed BE-02 B8 runs: VStarBench
+  `T20260721-135348`, HRBench4K `T20260721-135434`, BLINK
+  `T20260721-135433`, OCRBench_v2 `T20260721-135433`, MMMU_Pro_10c
+  `T20260721-143452`, MathVista_MINI `T20260721-140904`, and MathVerse_MINI
+  `T20260721-135749`. Their model, prompt, image resolution, decoding,
+  request-seed and membership identities remain exactly BE-02.
+- Scoring-view contract: for each immutable raw `prediction`, use the non-empty
+  suffix after its last native `</think>` closer. A missing closer or empty
+  suffix is an invalid trajectory and is scored deterministically wrong; it is
+  never sent to an LLM judge and never enters VLMEvalKit's random-choice
+  fallback. Invalid MCQ rows receive a row-unique sentinel under an otherwise
+  unused uppercase option label; invalid non-MCQ rows receive a row-unique
+  non-answer sentinel. Valid rows never receive content in the injected option
+  column. All indices, order and source fields other than `prediction` remain
+  byte-value identical, except the separately documented MathVerse metadata
+  provenance join below.
+- Implementation identity: repository HEAD `d9c356d`; materializer CLI SHA256
+  `4299cf5b...18ad`; final-answer module SHA256 `ab7807b3...3ced`; six focused
+  tests plus all 37 evaluation tests and Ruff pass before materialization. The
+  output root is
+  `artifacts/evaluation/BE-03-qwen3-direct-coredev2511-final-answer-j1`;
+  every derived TSV has an immutable SHA256/count/field manifest linking it to
+  its exact BE-02 source TSV.
+- MathVerse provenance: enrich only `metadata.problem_version` by exact
+  `source_row_index` lookup from the accepted local MathVerse `testmini.json`;
+  require 500/500 joins and record the source JSON SHA256 in the derived
+  manifest. No answer, question, index or prediction inference is changed by
+  this join.
+- Judge identity: the accepted native-context J1 service, local
+  `/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct`, vLLM `0.12.0`, Torch
+  `2.9.0+cu128`, BF16, TP2 on physical GPUs 0/1, native maximum 32,768 tokens,
+  seed 42, port 8012, exactly as BE-02-J1. Judge-backed auxiliaries are freshly
+  generated in BE-03; neither J1 nor J2 evaluation caches are reused. The
+  final-answer audit bounds the longest judge request below 2,100 tokens.
+- MathVerse judge-output contract: its pinned VLMEvalKit scorer requires the
+  judge result to be exactly `0` or `1`, while Qwen2.5-72B deterministically
+  starts with that verdict and may append an explanation. The fail-closed
+  wrapper (SHA256 `6657e93d...7878`) canonicalizes only the pinned MathVerse
+  score prompt, and only a response matching `\A\s*([01])(?=\s|\Z)`, to that
+  leading digit. Extraction prompts, every other dataset, embedded/non-leading
+  digits and ambiguous outputs remain unchanged and therefore retry/fail under
+  the official scorer. The rejected pre-fix run observed 255/500 format
+  failures; all 255 first responses met this strict contract. The formal
+  MathVerse result is rerun in a new eval run with no failed cache reuse.
+- OCR scoring: OCRBench_v2 uses its native deterministic rule scorer and no
+  answer judge. Its evaluation-local dependencies are pinned under the J1
+  evidence root. The optional exact speed path replaces only OCRBench-v2's
+  module-local `nltk.edit_distance` reference with `Levenshtein.distance`;
+  patch SHA256 `bc0bbc7a...1370`, pinned scorer-source guard, 342,225 exhaustive
+  mixed-Unicode pairs plus 39 real-row fixtures with zero distance or metric
+  mismatches, and mandatory `OCR_FAST_EDIT_ACTIVE` startup evidence.
+- Scorer/runtime: pinned VLMEvalKit commit
+  `7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f`, CoreDev identity
+  `coredev-2511-vlmevalkit-7055d301-v1`, manifest SHA256
+  `a461d9b4...0579`, runner SHA256 `17cb19d4...1d8`; scoring processes do not
+  reserve GPUs beyond the already running J1 service.
+- Acceptance: exactly 2,511 unique rows and seven native metric artifacts;
+  all 2,492 closed responses scored from their final answer, all 19 invalid
+  responses deterministically wrong, and zero API failure, retry exhaustion,
+  LLM fallback, random-choice fallback, missing/duplicate row or stale-run
+  reuse. Any violation fails closed and prevents suite aggregation.
+- N/A: representation artifacts, D/DeepStack, rollout log probabilities,
+  policy/reference, reward, GRPO/SDPO, optimizer, gradients and training batch
+  fields are absent from benchmark scoring.
+- Result: repository acceptance passed exactly 7 slices and 2,511 unique rows
+  with zero inference failure, judge failure, API/retry exhaustion, fallback,
+  random choice or stale-run reuse. Materialization summary SHA256
+  `4dbe5fa2...5db0`; final aggregate SHA256 `40d1b9bd...25bc`.
+  Primary results are VStarBench `53.93%`, HRBench4K `56.00%`, BLINK `62.38%`,
+  OCRBench-v2 Chinese/English overall `39.38%`/`49.78%`, MMMU-Pro-10c
+  `64.67%`, and MathVista-MINI `77.33%`. MathVerse-MINI reports Vision
+  Dominant `68%`, Text Dominant `75%`, Text Lite `67%`, Vision Only `60%`, and
+  Vision Intensive `67%` (five-version macro `67.4%`). The formal MathVerse
+  eval run is `T20260721-165003`; all other exact eval IDs and metric artifacts
+  are recorded in `coredev-2511-eval-summary.json`.
 
 ### TOOL-01-QWEN3-CROP-ATOMIC-LIVE-GPU2
 
