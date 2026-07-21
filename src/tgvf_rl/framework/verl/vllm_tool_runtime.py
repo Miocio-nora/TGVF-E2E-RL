@@ -8,6 +8,7 @@ loaded in an AgentLoop process.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MethodType
 from typing import Any
@@ -45,6 +46,44 @@ TGVF_VLLM_WORKER_EXTENSION_FQN = (
     "tgvf_rl.framework.verl.vllm_tool_runtime.TGVFVLLMWorkerExtension"
 )
 TGVF_TWO_MODEL_RUNTIME_SCHEMA = "tgvf-vllm-two-model-runtime-v1"
+
+
+def _tensor_to_utility_wire(value: torch.Tensor) -> dict[str, object]:
+    """Encode a CPU tensor without vLLM's untyped utility tensor extension."""
+
+    tensor = value.detach().cpu().contiguous()
+    return {
+        "data": tensor.view(torch.uint8).numpy().tobytes(),
+        "shape": tuple(int(size) for size in tensor.shape),
+        "dtype": str(tensor.dtype).removeprefix("torch."),
+    }
+
+
+def _tensor_from_utility_wire(value: Mapping[str, object]) -> torch.Tensor:
+    """Decode a tensor after the utility payload crosses both vLLM IPC hops."""
+
+    data = value.get("data")
+    shape = value.get("shape")
+    dtype_name = value.get("dtype")
+    if not isinstance(data, bytes):
+        raise TypeError("TGVF utility tensor data must be bytes")
+    if not isinstance(shape, Sequence) or isinstance(shape, (str, bytes)):
+        raise TypeError("TGVF utility tensor shape must be a sequence")
+    normalized_shape = tuple(int(size) for size in shape)
+    if any(size < 0 for size in normalized_shape):
+        raise ValueError("TGVF utility tensor shape must be non-negative")
+    if not isinstance(dtype_name, str):
+        raise TypeError("TGVF utility tensor dtype must be a string")
+    dtype = getattr(torch, dtype_name, None)
+    if not isinstance(dtype, torch.dtype):
+        raise ValueError("TGVF utility tensor dtype is unsupported")
+    tensor = torch.frombuffer(data, dtype=dtype).clone()
+    expected = 1
+    for size in normalized_shape:
+        expected *= size
+    if tensor.numel() != expected:
+        raise ValueError("TGVF utility tensor byte length differs from shape")
+    return tensor.reshape(normalized_shape)
 
 
 @dataclass(slots=True)
@@ -103,10 +142,12 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
     def tgvf_materialize_source(
         self,
         trajectory_id: str,
-        pixel_values: torch.Tensor,
-        image_grid_thw: torch.Tensor,
+        pixel_values_wire: Mapping[str, object],
+        image_grid_thw: Sequence[int],
         image_sha256: str,
     ) -> SourceVisualTensorBundle:
+        pixel_values = _tensor_from_utility_wire(pixel_values_wire)
+        image_grid_thw = torch.tensor((tuple(image_grid_thw),), dtype=torch.long)
         if not trajectory_id:
             raise ValueError("source trajectory_id must be non-empty")
         if not isinstance(pixel_values, torch.Tensor) or pixel_values.ndim != 2:
@@ -480,6 +521,19 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             self, *, expected_step: int, **kwargs: object
         ) -> object:
             self._require_step(expected_step)
+            pixel_values = kwargs.pop("pixel_values")
+            image_grid_thw = kwargs.pop("image_grid_thw")
+            if not isinstance(pixel_values, torch.Tensor):
+                raise TypeError("source pixel_values must be a tensor")
+            if not isinstance(image_grid_thw, torch.Tensor) or image_grid_thw.shape != (
+                1,
+                3,
+            ):
+                raise TypeError("source image_grid_thw must be a [1,3] tensor")
+            kwargs["pixel_values_wire"] = _tensor_to_utility_wire(pixel_values)
+            kwargs["image_grid_thw"] = tuple(
+                int(value) for value in image_grid_thw[0].tolist()
+            )
             result = await self.engine.collective_rpc(
                 method="tgvf_materialize_source", kwargs=dict(kwargs)
             )

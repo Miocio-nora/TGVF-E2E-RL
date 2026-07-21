@@ -7061,7 +7061,7 @@ instead of repeated bullets.
 
 ### PRL-01-R20-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- `PLANNED` / `PENDING`; config
+- `COMPLETE` / `FAIL`; config
   `configs/policy/runs/prl_01_r20_qwen3_grpo_1step_autoresume_gpu0123.toml`,
   SHA256 `4166e843...52b5`, identity `ac43521d...2930`, code
   `6dacd1613cce4ecf55352f1ea3ce866b509f5842`, GPU 0--3, tmux
@@ -7135,6 +7135,14 @@ instead of repeated bullets.
 - Question: after connecting the already-implemented async source-materialization
   path, can the two-model lifecycle complete rollout, exact replay, one GRPO
   update, LoRA synchronization, step-1 checkpoint, and clean resume?
+- Result: `2026-07-22T02:20:54+09:00`--`02:24:57+09:00`, W&B
+  `pq20pw0v`, launch-log SHA256 `35389c93...03c5b`. R25 passed the R24
+  async-builder boundary, initialized all four actor/vLLM replicas, entered
+  training, and invoked source-image materialization for the expanded rollout
+  rows. vLLM's untyped utility transport decoded each tensor argument as a
+  dtype/shape/`memoryview` structure; its following multiprocess queue could
+  not pickle that structure. No generation, optimizer step, or checkpoint
+  occurred; all four GPUs were released.
 
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently

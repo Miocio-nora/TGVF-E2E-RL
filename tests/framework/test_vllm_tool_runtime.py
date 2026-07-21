@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from types import SimpleNamespace
 
 import torch
@@ -7,7 +8,25 @@ import torch
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVFVLLMWorkerExtension,
     _BehaviorTraceBuffer,
+    _tensor_from_utility_wire,
+    _tensor_to_utility_wire,
 )
+
+
+def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
+    from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
+
+    source = torch.arange(24, dtype=torch.float32).reshape(3, 8)
+    arguments = {
+        "pixel_values_wire": _tensor_to_utility_wire(source),
+        "image_grid_thw": (1, 2, 4),
+    }
+
+    transported = MsgpackDecoder().decode(MsgpackEncoder().encode(arguments))
+
+    pickle.dumps(transported)
+    restored = _tensor_from_utility_wire(transported["pixel_values_wire"])
+    torch.testing.assert_close(restored, source)
 
 
 def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases() -> None:
