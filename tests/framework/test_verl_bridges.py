@@ -1256,6 +1256,12 @@ def test_policy_pilot_uses_real_e003_lora_and_optimizer_fields() -> None:
     assert overrides["actor_rollout_ref.actor.ppo_epochs"] == 1
     assert overrides["actor_rollout_ref.actor.clip_ratio_c"] == 3.0
     assert overrides["actor_rollout_ref.actor.policy_loss.loss_mode"] == "bypass_mode"
+    actor_correction = "actor_rollout_ref.actor.policy_loss.rollout_correction"
+    assert overrides[f"{actor_correction}.bypass_mode"] is True
+    assert overrides[f"{actor_correction}.loss_type"] == "ppo_clip"
+    assert overrides[f"{actor_correction}.rollout_is"] is None
+    assert overrides[f"{actor_correction}.rollout_rs"] is None
+    assert overrides[f"{actor_correction}.rollout_is_batch_normalize"] is False
     assert overrides["algorithm.rollout_correction.bypass_mode"] is True
     assert overrides["algorithm.rollout_correction.loss_type"] == "ppo_clip"
     assert overrides["algorithm.rollout_correction.rollout_is"] is None

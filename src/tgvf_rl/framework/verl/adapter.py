@@ -185,6 +185,21 @@ class VerlAdapterConfig:
                     "actor_rollout_ref.actor.policy_loss.loss_mode": (
                         grpo.verl_execution_loss_mode
                     ),
+                    "actor_rollout_ref.actor.policy_loss.rollout_correction.rollout_is": (
+                        grpo.rollout_importance_sampling
+                    ),
+                    "actor_rollout_ref.actor.policy_loss.rollout_correction.rollout_rs": (
+                        grpo.rollout_rejection_sampling
+                    ),
+                    "actor_rollout_ref.actor.policy_loss.rollout_correction.bypass_mode": (
+                        grpo.rollout_correction_bypass_mode
+                    ),
+                    "actor_rollout_ref.actor.policy_loss.rollout_correction.loss_type": (
+                        grpo.rollout_correction_loss_type
+                    ),
+                    "actor_rollout_ref.actor.policy_loss.rollout_correction.rollout_is_batch_normalize": (
+                        grpo.rollout_is_batch_normalize
+                    ),
                     "actor_rollout_ref.actor.entropy_coeff": (grpo.entropy_coefficient),
                     "actor_rollout_ref.actor.calculate_entropy": False,
                     "actor_rollout_ref.actor.use_kl_loss": False,
