@@ -6599,6 +6599,73 @@ instead of repeated bullets.
   correct runtime identity, but upstream passed it through its Hydra-protection
   wrapper. The next run may change only the bridge unwrap plus identity/config.
 
+### PRL-01-R7-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: mandatory 4-GPU policy RL
+  one-step vertical slice and clean-process resume.
+- Spike-plan git revision and approval references: accepted task sections
+  0.8.2--0.8.3; DIAG-02 PASS; R6 wrapper root cause reproduced.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: after matching veRL's `DictConfigWrap` constructor contract, can
+  the fixed stack complete one rollout/replay/update and clean resume?
+- Baseline and exact output path: R6 reached first rollout dispatch; fresh
+  `artifacts/policy/PRL-01-R7-qwen3-grpo-1step-auto-resume-gpu0123`.
+- Model and processor identity: local Qwen3-VL-8B-Thinking; tokenizer 151669;
+  chat template `36e042fe...8956`; native DeepStack; max pixels 262144.
+- Representation checkpoint identity: RP-49 contextual layer -1, Balanced CE
+  T=0.1 step 2000; artifact/manifest/run hashes `fcda0b96...fc14` /
+  `3ff14e66...f49e` / `980e4136...e1bea`.
+- N/A fields and justification: bounded exact-MCQ smoke; no judge, Qwen2.5,
+  crop, SDPO, full tuning, nonzero KL, or quality claim.
+- Policy/reference initialization: base plus decoder-only LoRA `64/64/0`, LR
+  `1e-5`; all specified frozen scopes retained; frozen unadapted reference.
+- Rollout policy version and allowed asynchronous staleness: synchronized
+  step-0 snapshot, zero staleness, no intervening update.
+- Code commit and worktree state: `997ca081ba67fd0a7ea0dbf7cdf291e02e25b7f7`;
+  clean descendant may add only this config and ledger row.
+- Repository adapter/patch surface and hash: R7 config
+  `051d858e...3638b`, identity `6eac8260...cfaf`; R6 PDL plugin unchanged;
+  bridge now unwraps veRL trainer/data `DictConfigWrap` before factory binding.
+- Dataset/manifest, hashes, sample rule, and n: fixed DeepEyes snapshot
+  `5546681e...ded3`, manifest `3483c317...f477`, seed 42, cursor 7 MCQ C;
+  prompt batch 4 and n=8.
+- Native prompt/tool schema hash: `390b334e...99f5` / `f33f61d4...6aba5`;
+  `tgvf_focus_tool`, four calls, standard fifth-call error.
+- Chat-template/token-fixture hash and token-ownership masks: 724 tokens, 234
+  image pads, fixture `221b8952...d4d`; sampled assistant tokens only.
+- D/DeepStack/position/mask identity: rollout-recorded main D plus branches
+  `(8,16,24)`, layouts, positions and masks; no recomputation.
+- Observation materialization/artifact identity used by all replays: one
+  rollout-owned content-addressed bundle for current/reference replay.
+- RL framework/version/environment lock: veRL e003163; Python 3.12.3; Torch
+  2.9.0+cu128; Transformers 4.57.6; vLLM 0.12.0; Triton 3.5.0; PEFT 0.19.1;
+  Ray 2.56.1; accepted compiler/Python-header bindings.
+- Objective equations and normalization: sample-std GRPO; reward
+  `0.8/0.2/1.2`; ratio clip `[0.8,1.2]`, dual clip 3, global token mean,
+  one epoch, KL/entropy 0, grad norm 1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: request-seeded
+  rollout with actual behavior logprobs; deterministic replay; dropout 0.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM 0.12; seed 42/content-addressed;
+  `1/1/-1/0`; penalties `1/0/0`; no processors; post-transform; cap 8192.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/no quantization; HF SDPA and vLLM
+  TRITON_ATTN/TORCH_SDPA; TP1; four-rank FSDP2; colocated; CUDA graphs on.
+- Logit/logprob/loss/gradient parity tolerances: exact identities, finite
+  values, pre-update clipfrac 0 and absolute mean PPO KL <=0.015625.
+- World size, microbatch, accumulation, and global batch: 4; prompt/rollout
+  microbatch 1/rank; logprob microbatch 8/GPU; 32 trajectories; accumulation 1.
+- GPUs: physical/logical 0--3, B200 183359 MiB; 0 MiB and 0% at planning.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  tmux `prl01_r7_gpu0123`, then `prl01_r7_resume_gpu0123` only after step 1.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: absolute R7 `run-policy` under `.venv312` with `CUDA_VISIBLE_DEVICES=0,1,2,3`.
+- Outputs: pending.
+- Scorer/parser identity: exact MCQ `2a3d5fa4...2e1c`; strict native parser.
+- Metrics: pending.
+- Conclusion: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
