@@ -21,6 +21,9 @@ from tgvf_rl.protocol import NativeToolCapabilityProfile
 
 
 POLICY_PILOT_V1_CONFIG_SCHEMA = "policy-pilot-v1-20260720"
+POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA = (
+    "policy-visual-tool-experiment-v1-20260722"
+)
 POLICY_PILOT_V1_MODEL_PATH = (
     "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
 )
@@ -509,8 +512,56 @@ class PolicyPilotV1Config:
         return hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
+    """Pilot-math envelope for a separately identified visual-tool arm.
+
+    This deliberately does not relax :class:`PolicyPilotV1Config`: the formal
+    Pilot remains TGVF-only.  Crop-only and atomic crop+TGVF experiments reuse
+    its accepted sampling/LoRA/GRPO mathematics under a different schema and
+    an explicit profile identity.
+    """
+
+    schema_version: str = POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        if not isinstance(self.tool_profile, NativeToolCapabilityProfile):
+            raise TypeError("tool_profile must be NativeToolCapabilityProfile")
+        if self.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
+            raise ValueError("TGVF-only runs must use PolicyPilotV1Config")
+        expected = {
+            "schema_version": (
+                self.schema_version,
+                POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA,
+            ),
+            "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
+            "model_path": (self.model_path, POLICY_PILOT_V1_MODEL_PATH),
+            "native_deepstack_enabled": (self.native_deepstack_enabled, True),
+            "enabled_tool_names": (
+                self.enabled_tool_names,
+                self.tool_profile.tool_names,
+            ),
+            "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 4),
+            "image_max_pixels": (self.image_max_pixels, 512 * 512),
+        }
+        for name, (actual, required) in expected.items():
+            if actual != required:
+                raise ValueError(
+                    "visual-tool experiment requires "
+                    f"{name}={required!r}, got {actual!r}"
+                )
+        if not isinstance(self.sampling, PilotSamplingConfig):
+            raise TypeError("sampling must be PilotSamplingConfig")
+        if not isinstance(self.lora, DecoderLoRAConfig):
+            raise TypeError("lora must be DecoderLoRAConfig")
+        if not isinstance(self.grpo, PilotGRPOConfig):
+            raise TypeError("grpo must be PilotGRPOConfig")
+
+
 __all__ = [
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
+    "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_MODEL_FAMILY",
     "POLICY_PILOT_V1_MODEL_NAME",
@@ -530,4 +581,5 @@ __all__ = [
     "PilotGRPOConfig",
     "PilotSamplingConfig",
     "PolicyPilotV1Config",
+    "PolicyVisualToolExperimentConfig",
 ]

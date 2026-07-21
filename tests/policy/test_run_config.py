@@ -23,6 +23,7 @@ from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_MODEL_PATH,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
     POLICY_PILOT_V1_VLLM_VERSION,
+    PolicyVisualToolExperimentConfig,
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
@@ -48,7 +49,11 @@ from tgvf_rl.framework.verl.smoke_dataset import (
     VerlSelectedSampleDatasetBinding,
 )
 from tgvf_rl.policy.launch import policy_child_environment
-from tgvf_rl.protocol import TGVF_FOCUS_TOOL_SCHEMA_SHA256
+from tgvf_rl.protocol import (
+    IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256,
+    TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+    NativeToolCapabilityProfile,
+)
 
 
 SHA_A = "a" * 64
@@ -363,6 +368,26 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
     assert not output_root.exists()
 
 
+def test_loads_separately_identified_crop_only_experiment(tmp_path: Path) -> None:
+    path, text, _ = _write_config(tmp_path)
+    text = text.replace('tool_profile = "tgvf_only"', 'tool_profile = "crop_only"')
+    text = text.replace(
+        f'tool_schema_sha256 = "{TGVF_FOCUS_TOOL_SCHEMA_SHA256}"',
+        f'tool_schema_sha256 = "{IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256}"',
+    )
+    text = text.replace(
+        'enabled_tool_names = ["tgvf_focus_tool"]',
+        'enabled_tool_names = ["image_zoom_in_tool"]',
+    )
+    path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert isinstance(config.policy, PolicyVisualToolExperimentConfig)
+    assert config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY
+    assert config.protocol.enabled_tool_names == ("image_zoom_in_tool",)
+
+
 def test_auto_resume_keeps_one_identity_before_and_after_output_exists(
     tmp_path: Path,
 ) -> None:
@@ -404,7 +429,11 @@ def test_auto_resume_rejects_explicit_resume_path(tmp_path: Path) -> None:
         ("min_p = 0.0\n", "", r"\[sampling\] fields differ"),
         ("formal_pilot = false", "formal_pilot = true", "formal_pilot=false"),
         ('judge_mode = "not_applicable"', 'judge_mode = "qwen72b"', "judge_mode"),
-        ('tool_profile = "tgvf_only"', 'tool_profile = "crop_tgvf"', "tool_profile"),
+        (
+            'tool_profile = "tgvf_only"',
+            'tool_profile = "crop_tgvf"',
+            "protocol.enabled_tool_names",
+        ),
         ('fsdp_strategy = "fsdp2"', 'fsdp_strategy = "fsdp1"', "fsdp_strategy"),
         (
             f'cap_error_sha256 = "{POLICY_E2E_SMOKE_CAP_ERROR_SHA256}"',

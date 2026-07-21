@@ -186,6 +186,7 @@ def test_selected_sample_materializes_real_source_visual_token_count(
         ground_truth="B",
         data_source="multiple_choice",
         prompt_sha256=canonical.text_sha256,
+        tool_profile=NativeToolCapabilityProfile.TGVF_ONLY,
         tokenizer_length=len(processor.tokenizer),
         repeat_count=1,
     )

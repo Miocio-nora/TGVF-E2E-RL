@@ -147,6 +147,44 @@ def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases
     assert extension._tgvf_traces() == {}
 
 
+def test_crop_rpc_reuses_the_rollout_worker_visual_path() -> None:
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    extension._tgvf_source_cache = {"trajectory-0": object()}
+    expected = SourceVisualTensorBundle(
+        image_sha256="c" * 64,
+        premerge_main=torch.ones((4, 2), dtype=torch.bfloat16),
+        premerge_deepstack=tuple(
+            torch.full((4, 2), float(i), dtype=torch.bfloat16) for i in range(3)
+        ),
+        merged_main=torch.ones((1, 8), dtype=torch.bfloat16),
+        merged_deepstack=tuple(
+            torch.full((1, 8), float(i), dtype=torch.bfloat16) for i in range(3)
+        ),
+        image_grid_thw=(1, 2, 2),
+        spatial_merge_size=2,
+        decoded_rgb_sha256="c" * 64,
+    )
+    calls = []
+
+    def materialize_visual(**kwargs):
+        calls.append(kwargs)
+        return expected
+
+    extension._tgvf_materialize_visual = materialize_visual
+    wire = extension.tgvf_materialize_crop(
+        "trajectory-0",
+        0,
+        _tensor_to_utility_wire(torch.ones((4, 6))),
+        (1, 2, 2),
+        "c" * 64,
+    )
+
+    restored = _source_from_utility_wire(wire)
+    assert restored.image_sha256 == expected.image_sha256
+    assert calls[0]["image_sha256"] == "c" * 64
+    assert tuple(calls[0]["image_grid_thw"].shape) == (1, 3)
+
+
 def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
     events: list[str] = []
 

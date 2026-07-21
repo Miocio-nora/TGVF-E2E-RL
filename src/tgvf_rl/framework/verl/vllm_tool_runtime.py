@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import gc
+import os
 from types import MethodType
 from typing import Any
 from uuid import uuid4
@@ -381,10 +382,6 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
             3,
         ):
             raise ValueError("source image_grid_thw must have shape [1,3]")
-        model = self._tgvf_model()
-        visual = model.visual
-        if visual is None:
-            raise RuntimeError("vLLM Qwen3 worker has no visual tower")
         cache = self._tgvf_sources()
         cached = cache.get(trajectory_id)
         if cached is not None:
@@ -392,6 +389,59 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
                 raise RuntimeError("trajectory source image identity changed")
             return _source_to_utility_wire(cached)
 
+        source = self._tgvf_materialize_visual(
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            image_sha256=image_sha256,
+        )
+        cache[trajectory_id] = source
+        return _source_to_utility_wire(source)
+
+    def tgvf_materialize_crop(
+        self,
+        trajectory_id: str,
+        call_index: int,
+        pixel_values_wire: Mapping[str, object],
+        image_grid_thw: Sequence[int],
+        crop_sha256: str,
+    ) -> dict[str, object]:
+        """Encode an exact crop with the rollout replica's frozen vision tower."""
+
+        pixel_values = _tensor_from_utility_wire(pixel_values_wire)
+        grid = torch.tensor((tuple(image_grid_thw),), dtype=torch.long)
+        if not trajectory_id:
+            raise ValueError("crop trajectory_id must be non-empty")
+        if type(call_index) is not int or call_index < 0:
+            raise ValueError("crop call_index must be non-negative")
+        source = self._tgvf_sources().get(trajectory_id)
+        if source is None:
+            raise RuntimeError("crop source was not materialized on this vLLM worker")
+        return _source_to_utility_wire(
+            self._tgvf_materialize_visual(
+                pixel_values=pixel_values,
+                image_grid_thw=grid,
+                image_sha256=crop_sha256,
+            )
+        )
+
+    def _tgvf_materialize_visual(
+        self,
+        *,
+        pixel_values: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        image_sha256: str,
+    ) -> SourceVisualTensorBundle:
+        if not isinstance(pixel_values, torch.Tensor) or pixel_values.ndim != 2:
+            raise ValueError("visual pixel_values must have shape [N,patch]")
+        if not isinstance(image_grid_thw, torch.Tensor) or image_grid_thw.shape != (
+            1,
+            3,
+        ):
+            raise ValueError("visual image_grid_thw must have shape [1,3]")
+        model = self._tgvf_model()
+        visual = model.visual
+        if visual is None:
+            raise RuntimeError("vLLM Qwen3 worker has no visual tower")
         mergers = (visual.merger, *tuple(visual.deepstack_merger_list))
         captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [
             [] for _ in mergers
@@ -433,8 +483,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
             decoded_rgb_sha256=image_sha256,
         )
         _validate_source_geometry(source)
-        cache[trajectory_id] = source
-        return _source_to_utility_wire(source)
+        return source
 
     def tgvf_materialize_focus(
         self,
@@ -833,6 +882,31 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
                 _wire_mapping(wire, owner="source materialization")
             )
 
+        async def tgvf_materialize_crop(
+            self, *, expected_step: int, **kwargs: object
+        ) -> object:
+            self._require_step(expected_step)
+            pixel_values = kwargs.pop("pixel_values")
+            image_grid_thw = kwargs.pop("image_grid_thw")
+            if not isinstance(pixel_values, torch.Tensor):
+                raise TypeError("crop pixel_values must be a tensor")
+            if not isinstance(image_grid_thw, torch.Tensor) or image_grid_thw.shape != (
+                1,
+                3,
+            ):
+                raise TypeError("crop image_grid_thw must be a [1,3] tensor")
+            kwargs["pixel_values_wire"] = _tensor_to_utility_wire(pixel_values)
+            kwargs["image_grid_thw"] = tuple(
+                int(value) for value in image_grid_thw[0].tolist()
+            )
+            result = await self.engine.collective_rpc(
+                method="tgvf_materialize_crop", kwargs=dict(kwargs)
+            )
+            wire = _single_collective_result(result, operation="crop materialization")
+            return _source_from_utility_wire(
+                _wire_mapping(wire, owner="crop materialization")
+            )
+
         async def tgvf_register_behavior_trace(
             self, *, expected_step: int, **kwargs: object
         ) -> object:
@@ -877,6 +951,14 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             self._tgvf_routes: dict[str, tuple[str, object]] = {}
             self._tgvf_turns: dict[str, _TurnRoute] = {}
             self._tgvf_backend_ids: dict[str, list[str]] = {}
+            config_path = os.environ.get("TGVF_POLICY_RUN_CONFIG_PATH")
+            if not config_path:
+                raise RuntimeError("TGVF_POLICY_RUN_CONFIG_PATH is required")
+            run_config = load_policy_e2e_smoke_run_config(config_path)
+            self._tgvf_capture_behavior_hidden = (
+                "tgvf_focus_tool" in run_config.protocol.enabled_tool_names
+                or "tgvf_crop_tool" in run_config.protocol.enabled_tool_names
+            )
 
         async def _route(self, request_id: str) -> tuple[str, object]:
             route = self._tgvf_routes.get(request_id)
@@ -903,6 +985,35 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
                 image_sha256=image_sha256,
             )
 
+        async def materialize_crop(
+            self,
+            *,
+            request_id: str,
+            expected_step: int,
+            sampled_output_ids: tuple[int, ...],
+            call_index: int,
+            pixel_values: torch.Tensor,
+            image_grid_thw: torch.Tensor,
+            crop_sha256: str,
+        ) -> SourceVisualTensorBundle:
+            turn = self._tgvf_turns.get(request_id)
+            if turn is None or turn.output_ids != tuple(sampled_output_ids):
+                raise RuntimeError("crop tool call differs from the last vLLM turn")
+            if turn.global_step != expected_step:
+                raise RuntimeError("crop tool call policy step changed")
+            _server_id, server = await self._route(request_id)
+            result = await server.tgvf_materialize_crop.remote(
+                expected_step=expected_step,
+                trajectory_id=request_id,
+                call_index=call_index,
+                pixel_values=pixel_values,
+                image_grid_thw=image_grid_thw,
+                crop_sha256=crop_sha256,
+            )
+            if not isinstance(result, SourceVisualTensorBundle):
+                raise TypeError("vLLM crop RPC returned an untyped result")
+            return result
+
         async def generate(
             self,
             request_id: str,
@@ -922,15 +1033,16 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             maximum = sampling_params.get("max_tokens")
             if type(maximum) is not int or maximum <= 0:
                 raise ValueError("TGVF vLLM generation requires positive max_tokens")
-            await server.tgvf_register_behavior_trace.remote(
-                expected_step=expected_step,
-                request_id=backend_request_id,
-                prompt_length=len(prompt_ids),
-                maximum_output_tokens=maximum,
-            )
-            self._tgvf_backend_ids.setdefault(request_id, []).append(
-                backend_request_id
-            )
+            if self._tgvf_capture_behavior_hidden:
+                await server.tgvf_register_behavior_trace.remote(
+                    expected_step=expected_step,
+                    request_id=backend_request_id,
+                    prompt_length=len(prompt_ids),
+                    maximum_output_tokens=maximum,
+                )
+                self._tgvf_backend_ids.setdefault(request_id, []).append(
+                    backend_request_id
+                )
             priority = kwargs.pop("priority", 0)
             output = await server.generate.remote(
                 request_id=backend_request_id,

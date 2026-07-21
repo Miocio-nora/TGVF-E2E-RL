@@ -28,8 +28,11 @@ from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.environment import (
+    CropExecutionLedger,
+    CropVisualTensorBundle,
     FocusExecutionLedger,
     FrameworkNeutralAgentLoop,
+    ImageZoomInToolRuntime,
     Qwen3NativeToolLayoutBuilder,
     QwenNativeToolObservationAppender,
     record_trajectory_source_visual,
@@ -49,13 +52,18 @@ from tgvf_rl.observations.finalizer import (
     finalize_trajectory_replay,
 )
 from tgvf_rl.observations.schema import FocusedObservationRecord, TrajectorySourceVisual
+from tgvf_rl.observations.schema import CropObservationRecord
 from tgvf_rl.observations.store import (
     ObservationHandle,
     ObservationStore,
     tensor_checksum,
 )
 from tgvf_rl.protocol.parser import StrictToolCallParser
-from tgvf_rl.protocol.schema import ParsedToolCall
+from tgvf_rl.protocol.schema import (
+    NativeToolCapabilityProfile,
+    ParsedImageZoomInCall,
+    ParsedToolCall,
+)
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
 )
@@ -121,48 +129,61 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
         if config.model.family != "qwen3_vl":
             raise ValueError("Policy Pilot live runtime requires qwen3_vl")
         server_client = context.server_manager
-        for method in ("materialize_source", "materialize_focus", "generate"):
+        required_methods = ["materialize_source", "generate"]
+        if config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
+            required_methods.append("materialize_focus")
+        elif config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
+            required_methods.append("materialize_crop")
+        else:
+            raise ValueError("atomic crop+TGVF is not wired into this live runtime")
+        for method in required_methods:
             if not callable(getattr(server_client, method, None)):
                 raise TypeError(
                     "Policy Pilot requires the TGVF two-model vLLM client; "
                     f"missing {method}()"
                 )
 
-        export = load_rank_zero_adapter_owned_state_export(
-            config.representation.artifact_path
-        )
-        run_identity = export.manifest.run_identity
-        if state_digest(export.manifest) != config.representation.artifact.sha256:
-            raise IdentityMismatchError(
-                "representation export manifest identity differs"
-            )
-        if (
-            run_identity.run_id != config.representation.expected_run_id
-            or export.manifest.run_identity_sha256
-            != config.representation.expected_run_identity_sha256
-            or run_identity.identity_sha256
-            != config.representation.expected_run_identity_sha256
-        ):
-            raise IdentityMismatchError("representation export run identity differs")
-        if run_identity.model != config.model:
-            raise IdentityMismatchError(
-                "representation export and Policy model identities differ"
-            )
-        if run_identity.provider != config.representation.conditioning:
-            raise IdentityMismatchError(
-                "representation export and selected conditioning differ"
-            )
-
         store = ObservationStore()
         behavior_store = BehaviorTraceStore()
-        execution_ledger = FocusExecutionLedger()
+        focus_execution_ledger = FocusExecutionLedger()
+        crop_execution_ledger = CropExecutionLedger()
         layout_builder = Qwen3NativeToolLayoutBuilder.from_processor_config(
             processor=context.processor,
             model_identity=config.model,
             observation_store=store,
         )
+        if config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
+            export = load_rank_zero_adapter_owned_state_export(
+                config.representation.artifact_path
+            )
+            run_identity = export.manifest.run_identity
+            if state_digest(export.manifest) != config.representation.artifact.sha256:
+                raise IdentityMismatchError(
+                    "representation export manifest identity differs"
+                )
+            if (
+                run_identity.run_id != config.representation.expected_run_id
+                or export.manifest.run_identity_sha256
+                != config.representation.expected_run_identity_sha256
+                or run_identity.identity_sha256
+                != config.representation.expected_run_identity_sha256
+            ):
+                raise IdentityMismatchError(
+                    "representation export run identity differs"
+                )
+            if run_identity.model != config.model:
+                raise IdentityMismatchError(
+                    "representation export and Policy model identities differ"
+                )
+            if run_identity.provider != config.representation.conditioning:
+                raise IdentityMismatchError(
+                    "representation export and selected conditioning differ"
+                )
+        else:
+            run_identity = None
+
         conditioning = config.representation.conditioning
-        if (
+        if run_identity is not None and (
             conditioning.provider
             is TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
         ):
@@ -201,7 +222,7 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
                 run_identity.adapter_contract.deepstack_projection_identities,
                 strict=True,
             )
-        )
+        ) if run_identity is not None else ()
         components = _Qwen3PolicyTrajectoryComponents(
             context=context,
             layout_builder=layout_builder,
@@ -210,7 +231,8 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             branch_merger_identities=branch_mergers,
             observation_store=store,
             behavior_store=behavior_store,
-            execution_ledger=execution_ledger,
+            focus_execution_ledger=focus_execution_ledger,
+            crop_execution_ledger=crop_execution_ledger,
             metrics_factory=self.metrics_factory,
             agent_loop_output_cls=self.agent_loop_output_cls,
         )
@@ -233,7 +255,8 @@ class _Qwen3PolicyTrajectoryComponents:
         branch_merger_identities: tuple[ArtifactIdentity, ...],
         observation_store: ObservationStore,
         behavior_store: BehaviorTraceStore,
-        execution_ledger: FocusExecutionLedger,
+        focus_execution_ledger: FocusExecutionLedger,
+        crop_execution_ledger: CropExecutionLedger,
         metrics_factory: Callable[[TrajectoryRecord, PilotVerlTrajectoryReward], object],
         agent_loop_output_cls: type[Any] | None,
     ) -> None:
@@ -245,7 +268,8 @@ class _Qwen3PolicyTrajectoryComponents:
         self.branch_merger_identities = branch_merger_identities
         self.store = observation_store
         self.behavior_store = behavior_store
-        self.execution_ledger = execution_ledger
+        self.focus_execution_ledger = focus_execution_ledger
+        self.crop_execution_ledger = crop_execution_ledger
         self.metrics_factory = metrics_factory
         self.agent_loop_output_cls = agent_loop_output_cls
         self.reward_pipeline = _build_reward_pipeline(self.config)
@@ -314,22 +338,65 @@ class _Qwen3PolicyTrajectoryComponents:
         appender = QwenNativeToolObservationAppender(
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
-            visual_token_count_resolver=_FocusedVisualTokenCountResolver(self.store),
+            visual_token_count_resolver=_VisualTokenCountResolver(self.store),
         )
         parser = StrictToolCallParser(
             enabled_tool_names=self.config.protocol.enabled_tool_names
         )
-        tool_runtime = _RemoteTGVFFocusToolRuntime(
-            event_loop=asyncio.get_running_loop(),
-            server_client=self.server_client,
-            config=self.config,
-            source_visual=source,
-            layout_builder=self.layout_builder,
-            observation_store=self.store,
-            execution_ledger=self.execution_ledger,
-            contextual_forward_identity=self.contextual_forward_identity,
-            branch_merger_identities=self.branch_merger_identities,
-        )
+        if (
+            self.config.protocol.tool_profile
+            is NativeToolCapabilityProfile.TGVF_ONLY
+        ):
+            tool_runtime = _RemoteTGVFFocusToolRuntime(
+                event_loop=asyncio.get_running_loop(),
+                server_client=self.server_client,
+                config=self.config,
+                source_visual=source,
+                layout_builder=self.layout_builder,
+                observation_store=self.store,
+                execution_ledger=self.focus_execution_ledger,
+                contextual_forward_identity=self.contextual_forward_identity,
+                branch_merger_identities=self.branch_merger_identities,
+            )
+        elif (
+            self.config.protocol.tool_profile
+            is NativeToolCapabilityProfile.CROP_ONLY
+        ):
+            crop_processor_identity = _artifact_identity(
+                "policy-runtime",
+                "qwen3-shared-vllm-crop-processor",
+                QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA,
+                {
+                    "model": self.config.model.revision_or_path,
+                    "max_pixels": self.config.policy.image_max_pixels,
+                },
+            )
+            crop_layout_identity = _artifact_identity(
+                "policy-runtime",
+                "qwen3-native-crop-layout",
+                QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA,
+                {"model": self.config.model.revision_or_path},
+            )
+            crop_materializer = _RemoteCropVisualMaterializer(
+                event_loop=asyncio.get_running_loop(),
+                server_client=self.server_client,
+                processor=self.context.processor,
+                model_identity=model,
+                image_max_pixels=self.config.policy.image_max_pixels,
+                trajectory_id=identity.canonical_id,
+                behavior_policy=behavior_policy,
+            )
+            tool_runtime = ImageZoomInToolRuntime(
+                model=model,
+                materializer=crop_materializer,
+                layout_builder=self.layout_builder,
+                observation_store=self.store,
+                crop_processor_identity=crop_processor_identity,
+                crop_layout_identity=crop_layout_identity,
+                execution_ledger=self.crop_execution_ledger,
+            )
+        else:  # guarded by the builder
+            raise RuntimeError("unsupported live visual-tool profile")
 
         def native_loop_factory(sampler: object) -> FrameworkNeutralAgentLoop:
             return FrameworkNeutralAgentLoop(
@@ -517,6 +584,66 @@ class _RemoteTGVFFocusToolRuntime:
         return result.handle
 
 
+class _RemoteCropVisualMaterializer:
+    """Run crop vision on the same sticky vLLM replica as rollout sampling."""
+
+    def __init__(
+        self,
+        *,
+        event_loop: asyncio.AbstractEventLoop,
+        server_client: object,
+        processor: object,
+        model_identity: ModelIdentity,
+        image_max_pixels: int,
+        trajectory_id: str,
+        behavior_policy: PolicyVersion,
+    ) -> None:
+        self.event_loop = event_loop
+        self.server_client = server_client
+        self.processor = processor
+        self.model_identity = model_identity
+        self.image_max_pixels = image_max_pixels
+        self.trajectory_id = trajectory_id
+        self.behavior_policy = behavior_policy
+
+    def materialize(
+        self,
+        crop_rgb: torch.Tensor,
+        *,
+        parsed_call: object,
+        call_index: int,
+    ) -> CropVisualTensorBundle:
+        if not isinstance(parsed_call, ParsedImageZoomInCall):
+            raise TypeError("remote crop materializer requires ParsedImageZoomInCall")
+        pixel_values, image_grid_thw = preprocess_qwen3_rgb(
+            processor=self.processor,
+            rgb=crop_rgb,
+            image_max_pixels=self.image_max_pixels,
+        )
+        future = asyncio.run_coroutine_threadsafe(
+            self.server_client.materialize_crop(
+                request_id=self.trajectory_id,
+                expected_step=self.behavior_policy.optimizer_step,
+                sampled_output_ids=parsed_call.sampled_token_ids,
+                call_index=call_index,
+                pixel_values=pixel_values,
+                image_grid_thw=image_grid_thw,
+                crop_sha256=tensor_checksum(crop_rgb),
+            ),
+            self.event_loop,
+        )
+        source = future.result(timeout=300.0)
+        if not isinstance(source, SourceVisualTensorBundle):
+            raise TypeError("remote crop RPC returned an invalid visual bundle")
+        return CropVisualTensorBundle(
+            merged_main=source.merged_main,
+            merged_deepstack=source.merged_deepstack,
+            image_grid_thw=source.image_grid_thw,
+            spatial_merge_size=source.spatial_merge_size,
+            deepstack_branch_layers=_BRANCH_LAYERS,
+        )
+
+
 class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
     """Freeze exact final IDs/layout and export one role-shared replay bundle."""
 
@@ -564,6 +691,12 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
             trajectory,
         )
         handles = tuple(item.handle for item in trajectory.observations)
+        records = tuple(self.store.resolve_record(handle) for handle in handles)
+        crop_vision_replay_mode = (
+            "shared_frozen_recorded_features"
+            if any(isinstance(record, CropObservationRecord) for record in records)
+            else "no_crop"
+        )
         expanded = self.layout_builder.expand_recorded_visual_sequence(
             final_ids,
             trajectory_source_visual=self.source_visual,
@@ -597,7 +730,7 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
             trajectory_id=trajectory.identity.canonical_id,
             model=self.model,
             behavior_policy=self.behavior_policy,
-            crop_vision_replay_mode="no_crop",
+            crop_vision_replay_mode=crop_vision_replay_mode,
             cache_mode="no_cache",
             cache_prefix_length=0,
             deterministic_forward=True,
@@ -649,15 +782,17 @@ class _BoundRewardContextProvider(PilotRewardContextProvider):
         )
 
 
-class _FocusedVisualTokenCountResolver:
+class _VisualTokenCountResolver:
     def __init__(self, store: ObservationStore) -> None:
         self.store = store
 
     def resolve_visual_token_count(self, observation: ObservationHandle) -> int:
         record = self.store.resolve_record(observation)
-        if not isinstance(record, FocusedObservationRecord):
-            raise TypeError("TGVF-only runtime requires a focused-D observation")
-        return len(record.layout.d_positions)
+        if isinstance(record, FocusedObservationRecord):
+            return len(record.layout.d_positions)
+        if isinstance(record, CropObservationRecord):
+            return len(record.crop_visual.positions)
+        raise TypeError("live runtime received an unsupported visual observation")
 
 
 def _initial_vllm_inputs(
@@ -771,9 +906,12 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
     )
     tool_identity = _artifact_identity(
         "policy-reward",
-        "conditional-tgvf-tool",
+        "conditional-visual-tool",
         "pilot-v1",
-        {"run": config.identity_sha256, "tool": "tgvf_focus_tool"},
+        {
+            "run": config.identity_sha256,
+            "tools": config.protocol.enabled_tool_names,
+        },
     )
     pipeline_identity = _artifact_identity(
         "policy-reward",

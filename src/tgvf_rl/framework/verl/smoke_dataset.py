@@ -24,7 +24,7 @@ from tgvf_rl.protocol import (
 )
 
 
-VERL_SELECTED_SAMPLE_DATASET_SCHEMA = "tgvf-verl-selected-sample-v2"
+VERL_SELECTED_SAMPLE_DATASET_SCHEMA = "tgvf-verl-selected-sample-v3"
 VERL_SELECTED_SAMPLE_AGENT_NAME = "tgvf_native_policy"
 _CONFIG_FIELDS = {
     "schema_version",
@@ -39,6 +39,7 @@ _CONFIG_FIELDS = {
     "ground_truth_utf8_base64",
     "data_source",
     "prompt_sha256",
+    "tool_profile",
     "tokenizer_length",
     "repeat_count",
     "agent_name",
@@ -52,10 +53,24 @@ def build_tgvf_only_smoke_messages(
 ) -> tuple[Mapping[str, Any], ...]:
     """Use the accepted TGVF-only v1 prompt in render and raw-row forms."""
 
-    messages = build_visual_tool_prompt_messages(
+    return build_visual_tool_smoke_messages(
         question,
         tool_profile=NativeToolCapabilityProfile.TGVF_ONLY,
+        image_path=image_path,
     )
+
+
+def build_visual_tool_smoke_messages(
+    question: str,
+    *,
+    tool_profile: NativeToolCapabilityProfile,
+    image_path: Path | None = None,
+) -> tuple[Mapping[str, Any], ...]:
+    """Build the accepted native prompt for one explicit visual-tool arm."""
+
+    if not isinstance(tool_profile, NativeToolCapabilityProfile):
+        raise TypeError("tool_profile must be NativeToolCapabilityProfile")
+    messages = build_visual_tool_prompt_messages(question, tool_profile=tool_profile)
     if image_path is None:
         return messages
     path = Path(image_path)
@@ -86,6 +101,7 @@ class VerlSelectedSampleDatasetBinding:
     ground_truth: str
     data_source: str
     prompt_sha256: str
+    tool_profile: NativeToolCapabilityProfile
     tokenizer_length: int
     repeat_count: int
     agent_name: str = VERL_SELECTED_SAMPLE_AGENT_NAME
@@ -105,6 +121,8 @@ class VerlSelectedSampleDatasetBinding:
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field_name} must be non-empty")
+        if not isinstance(self.tool_profile, NativeToolCapabilityProfile):
+            raise TypeError("tool_profile must be NativeToolCapabilityProfile")
         if type(self.cursor) is not int or self.cursor < 0:
             raise ValueError("cursor must be a non-negative integer")
         if type(self.tokenizer_length) is not int or self.tokenizer_length <= 0:
@@ -135,6 +153,7 @@ class VerlSelectedSampleDatasetBinding:
             ground_truth=sample.ground_truth,
             data_source=sample.data_source,
             prompt_sha256=config.protocol.prompt_sha256,
+            tool_profile=config.protocol.tool_profile,
             tokenizer_length=config.model.tokenizer_length,
             # The selected row is replayed deterministically; this gives the
             # upstream drop-last dataloader exactly the configured prompt count.
@@ -162,6 +181,7 @@ class VerlSelectedSampleDatasetBinding:
             "ground_truth_utf8_base64": _encode_utf8_base64(self.ground_truth),
             "data_source": self.data_source,
             "prompt_sha256": self.prompt_sha256,
+            "tool_profile": self.tool_profile.value,
             "tokenizer_length": self.tokenizer_length,
             "repeat_count": self.repeat_count,
             "agent_name": self.agent_name,
@@ -178,6 +198,9 @@ class VerlSelectedSampleDatasetBinding:
         )
         decoded["ground_truth"] = _decode_utf8_base64(
             decoded.pop("ground_truth_utf8_base64"), "ground_truth_utf8_base64"
+        )
+        decoded["tool_profile"] = NativeToolCapabilityProfile(
+            decoded["tool_profile"]
         )
         return cls(**decoded)
 
@@ -211,7 +234,7 @@ class TGVFSelectedSampleDataset(Dataset):
             raise ValueError("upstream data_files differ from the bound samples file")
         _verify_bound_files(binding)
 
-        tool_names = NativeToolCapabilityProfile.TGVF_ONLY.tool_names
+        tool_names = binding.tool_profile.tool_names
         tool_schemas = tuple(build_native_tool_schemas(tool_names))
         renderer = NativeProtocolRenderer(
             processor,
@@ -221,9 +244,13 @@ class TGVFSelectedSampleDataset(Dataset):
         )
         if renderer.tool_schemas != tool_schemas:
             raise RuntimeError("native renderer lost the selected policy tool schemas")
-        prompt_messages = build_tgvf_only_smoke_messages(binding.question)
-        raw_prompt = build_tgvf_only_smoke_messages(
+        prompt_messages = build_visual_tool_smoke_messages(
             binding.question,
+            tool_profile=binding.tool_profile,
+        )
+        raw_prompt = build_visual_tool_smoke_messages(
+            binding.question,
+            tool_profile=binding.tool_profile,
             image_path=binding.image_path,
         )
         rendered = renderer.render(prompt_messages, add_generation_prompt=True)

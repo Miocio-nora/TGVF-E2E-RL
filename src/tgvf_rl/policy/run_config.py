@@ -38,7 +38,6 @@ from tgvf_rl.data import (
 from tgvf_rl.protocol import (
     NativeToolCapabilityProfile,
     StandardToolError,
-    TGVF_FOCUS_TOOL_SCHEMA_SHA256,
     ToolErrorCode,
 )
 
@@ -54,6 +53,7 @@ from .config import (
     PilotGRPOConfig,
     PilotSamplingConfig,
     PolicyPilotV1Config,
+    PolicyVisualToolExperimentConfig,
 )
 
 
@@ -625,19 +625,13 @@ def load_policy_e2e_smoke_run_config(
     except (TypeError, ValueError) as error:
         raise ValueError("protocol.tool_profile is invalid") from error
     _require_exact(
-        tool_profile,
-        POLICY_PILOT_V1_TOOL_PROFILE,
-        "protocol.tool_profile",
-    )
-    _require_exact(
         enabled_tools,
         tool_profile.tool_names,
         "protocol.enabled_tool_names",
     )
-    _require_exact(enabled_tools, ("tgvf_focus_tool",), "protocol.enabled_tool_names")
     _require_exact(
         protocol_table["tool_schema_sha256"],
-        TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+        tool_profile.tool_set_sha256,
         "protocol.tool_schema_sha256",
     )
     _require_exact(
@@ -1218,7 +1212,12 @@ def load_policy_e2e_smoke_run_config(
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
-    policy = PolicyPilotV1Config(
+    policy_type = (
+        PolicyPilotV1Config
+        if protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE
+        else PolicyVisualToolExperimentConfig
+    )
+    policy = policy_type(
         model_family=model.family,
         model_path=model.revision_or_path,
         native_deepstack_enabled=model_table["native_deepstack_enabled"],

@@ -12,6 +12,7 @@ from tgvf_rl.policy import (
     PilotGRPOConfig,
     PilotSamplingConfig,
     PolicyPilotV1Config,
+    PolicyVisualToolExperimentConfig,
 )
 from tgvf_rl.protocol import NativeToolCapabilityProfile
 
@@ -134,3 +135,17 @@ def test_policy_pilot_v1_fixes_only_tgvf_and_exact_optimizer_envelope() -> None:
         DecoderLoRAConfig(dropout=0.1)
     with pytest.raises(ValueError, match="filter_groups"):
         PilotGRPOConfig(filter_groups=True)
+
+
+def test_visual_tool_experiment_accepts_crop_without_relaxing_formal_pilot() -> None:
+    crop = PolicyVisualToolExperimentConfig(
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        enabled_tool_names=("image_zoom_in_tool",),
+        sampling=_bound_sampling(),
+    )
+
+    assert crop.tool_profile is NativeToolCapabilityProfile.CROP_ONLY
+    assert crop.enabled_tool_names == ("image_zoom_in_tool",)
+    assert crop.image_max_pixels == 512 * 512
+    with pytest.raises(ValueError, match="TGVF-only"):
+        PolicyVisualToolExperimentConfig(sampling=_bound_sampling())
