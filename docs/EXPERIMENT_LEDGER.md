@@ -7099,6 +7099,24 @@ instead of repeated bullets.
   This tests whether releasing about 45 GiB of unused rollout KV reservation
   permits the already-reached actor update and subsequent LoRA sync.
 
+### PRL-01-R24-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- `PLANNED` / `PENDING`; config
+  `configs/policy/runs/prl_01_r24_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `e222526b...7243`, identity `6a3fd1f6...0642`, implementation
+  `e7dea44a0e97c448c915d90157f9df856d2f839f`, GPU 0--3, tmux
+  `prl01_r24_gpu0123`.
+- R23 mathematics, data, sampling, replay, update, and capacity are unchanged.
+  Runtime topology is corrected to the mature colocated lifecycle: one FSDP2
+  actor role plus one vLLM rollout role, vLLM sleep/wake between rollout and
+  update, a model-free AgentLoop, and the frozen TGVF Adapter mounted in the
+  existing vLLM worker. Source vision runs once there; sampled Hq and D are
+  materialized on the sticky rollout worker; exact main D/DeepStack tensors are
+  transported into replay. No third Qwen model is loaded.
+- Question: can this two-model lifecycle complete a native multi-turn rollout,
+  exact current/reference replay, one GRPO optimizer step, LoRA synchronization,
+  step-1 paired checkpoint, and clean resume without OOM or observation drift?
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
