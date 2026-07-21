@@ -4957,8 +4957,8 @@ instead of repeated bullets.
 
 ### RP-61-QWEN3-NATIVE-D-CACHED-CONTINUATION-PARITY-GPU2
 
-- Cell/status/result: mandatory evaluator throughput gate / `PLANNED` /
-  `PENDING`.
+- Cell/status/result: mandatory evaluator throughput gate / `COMPLETE` /
+  `FAIL`.
 - Question: does one exact main-D plus all-three-D-DeepStack Qwen3 native
   context produce token-identical greedy decoding with incremental KV cache,
   with BF16 per-step full-vocabulary logit parity and a measured speedup over
@@ -4993,6 +4993,30 @@ instead of repeated bullets.
   `artifacts/representation/RP-61-qwen3-native-d-cached-continuation-parity-gpu2/report.json`;
   acceptance additionally requires tokenizer invariance, finite timing, clean
   exit and GPU release.
+- Result: started `2026-07-21T10:30:47+09:00` and failed cleanly at
+  `2026-07-21T10:31:17+09:00`; run-log SHA256 `40360f3e...1337`. Cached and
+  no-cache paths produced the same eight greedy token IDs/text/stop state, but
+  step-one full-vocabulary BF16 maximum absolute logit difference was `0.5`,
+  exceeding the predeclared `0.015625` tolerance. No report was published and
+  GPU 2 was released. This is not a cache-parity PASS.
+
+### RP-62-QWEN3-NATIVE-D-CACHED-CONTINUATION-DIAGNOSTIC-GPU2
+
+- Cell/status/result: diagnostic follow-up to RP-61 / `PLANNED` / `PENDING`.
+- Identity: code `01678a6badbf2f92450ade0584868d0e10702ac1`; config
+  `configs/representation/qwen3_cached_continuation_diagnostic_gpu2.toml`
+  SHA256 `9b29f140aeb3e7fc3be200660303f0b4cb058d62952eb180aa098ddd739fdd43`;
+  all model/artifact/data/pair/GPU/generation fields are exactly RP-61.
+- Question/output: retain the strict `atol=rtol=0.015625` comparison but do not
+  abort on full-vocabulary mismatch; report per-trace max/mean drift, selected-
+  token drift, minimum cached/oracle top-1 margins, exact output identity and
+  cached/no-cache wall time. This is diagnostic evidence and cannot itself
+  convert RP-61 to PASS. Immutable report:
+  `artifacts/representation/RP-62-qwen3-native-d-cached-continuation-diagnostic-gpu2/report.json`.
+- Command: RP-61 command with the RP-62 config plus
+  `--allow-logit-mismatch-for-diagnostics`; acceptance requires exact greedy
+  output identity, finite diagnostics/timing, tokenizer invariance, clean exit
+  and GPU release.
 
 ### Representation-phase endpoint evidence summary
 

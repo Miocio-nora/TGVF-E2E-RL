@@ -1,0 +1,38 @@
+schema_version = "representation-internal-evaluation-run-v3"
+run_id = "RP-62-QWEN3-NATIVE-D-CACHED-CONTINUATION-DIAGNOSTIC-GPU2"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "01678a6badbf2f92450ade0584868d0e10702ac1"
+dirty = false
+
+[source]
+training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_v4_contextual_hidden_state_v4.toml"
+training_config_sha256 = "416bf6f4813407265f0eeaa00bfd75d65908a8db975b3c128cd9b49e07eb380b"
+
+[artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V4/adapter.pt"
+file_sha256 = "50179c709c5788d83ffc58d13dcde9e15ed448b2cf3233a5db67cb7501106e75"
+manifest_sha256 = "dfa992fcea0cee8a0fb48f19892ff10ac42a6cf040d32afcae748c7724e80e10"
+expected_run_identity_sha256 = "6c74885183eba8cfc6d7393a296b897b3caf939c88ffe016028c3a02b5f3d5c0"
+expected_global_step = 2000
+
+[execution]
+physical_gpu_id = 2
+
+[evaluation_data]
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl"
+source_sha256 = "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
+
+[evaluation]
+evaluation_id = "qwen3-native-d-cached-continuation-diagnostic-v1"
+ordered_group_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json"
+ordered_group_manifest_sha256 = "55e2cde5e118de77e4bcc099a422844129cdff1caf328d349dae5c7f11a634d8"
+counterfactual_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_counterfactual_v1.json"
+counterfactual_manifest_sha256 = "4589d14f196ccde48c3439405700220bc0fb63487edae0e74bc6b3713d7f4cc4"
+grounding_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_audited_grounding_v1.json"
+grounding_manifest_sha256 = "a65aa6e6038ada1436302b60440136cc98b388552a7782b48ec95ed4324938c0"
+report_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-62-qwen3-native-d-cached-continuation-diagnostic-gpu2/report.json"
+random_seed = 42
+max_new_tokens = 8
+eos_token_ids = [151645]
