@@ -57,6 +57,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--pair-id", required=True)
     parser.add_argument("--atol", type=float, default=0.015625)
     parser.add_argument("--rtol", type=float, default=0.015625)
+    parser.add_argument("--allow-logit-mismatch-for-diagnostics", action="store_true")
     return parser
 
 
@@ -202,6 +203,7 @@ def main() -> int:
         request,
         atol=args.atol,
         rtol=args.rtol,
+        require_logits_within_tolerance=(not args.allow_logit_mismatch_for_diagnostics),
     )
     cached, cached_seconds = _synchronized_seconds(
         lambda: evaluator.free_continuation(request)
@@ -226,6 +228,13 @@ def main() -> int:
         "max_new_tokens": evaluation.max_new_tokens,
         "compared_logit_steps": parity.compared_logit_steps,
         "max_abs_logit_difference": parity.max_abs_logit_difference,
+        "mean_abs_logit_difference": parity.mean_abs_logit_difference,
+        "max_selected_token_logit_difference": (
+            parity.max_selected_token_logit_difference
+        ),
+        "min_cached_top1_margin": parity.min_cached_top1_margin,
+        "min_oracle_top1_margin": parity.min_oracle_top1_margin,
+        "logits_within_tolerance": parity.logits_within_tolerance,
         "atol": parity.atol,
         "rtol": parity.rtol,
         "generated_token_ids": list(parity.output.generated_token_ids),

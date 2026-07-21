@@ -476,6 +476,11 @@ class NativeContinuationCacheParity:
     output: NativeFreeContinuationOutput
     compared_logit_steps: int
     max_abs_logit_difference: float
+    mean_abs_logit_difference: float
+    max_selected_token_logit_difference: float
+    min_cached_top1_margin: float
+    min_oracle_top1_margin: float
+    logits_within_tolerance: bool
     atol: float
     rtol: float
 
@@ -484,7 +489,17 @@ class NativeContinuationCacheParity:
             raise TypeError("cache parity output must be a continuation output")
         if self.compared_logit_steps != len(self.output.generated_token_ids):
             raise ValueError("cache parity logit count differs from generated tokens")
-        for name in ("max_abs_logit_difference", "atol", "rtol"):
+        if not isinstance(self.logits_within_tolerance, bool):
+            raise TypeError("logits_within_tolerance must be boolean")
+        for name in (
+            "max_abs_logit_difference",
+            "mean_abs_logit_difference",
+            "max_selected_token_logit_difference",
+            "min_cached_top1_margin",
+            "min_oracle_top1_margin",
+            "atol",
+            "rtol",
+        ):
             value = float(getattr(self, name))
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
@@ -825,6 +840,7 @@ class InjectedNativeCounterfactualEvaluator:
         *,
         atol: float,
         rtol: float,
+        require_logits_within_tolerance: bool = True,
     ) -> NativeContinuationCacheParity:
         """Compare every cached next-token logit with the full-prefix oracle."""
 
@@ -846,17 +862,37 @@ class InjectedNativeCounterfactualEvaluator:
         if len(cached_logits) != len(oracle_logits) or not cached_logits:
             raise RuntimeError("cached and no-cache logit traces differ in length")
         max_abs_difference = 0.0
+        sum_abs_difference = 0.0
+        logit_count = 0
+        max_selected_difference = 0.0
+        cached_margins: list[float] = []
+        oracle_margins: list[float] = []
+        logits_within_tolerance = True
         for index, (cached_step, oracle_step) in enumerate(
             zip(cached_logits, oracle_logits, strict=True)
         ):
-            difference = float((cached_step - oracle_step).abs().max().item())
+            absolute = (cached_step - oracle_step).abs()
+            difference = float(absolute.max().item())
             max_abs_difference = max(max_abs_difference, difference)
-            if not torch.allclose(
+            sum_abs_difference += float(absolute.sum().item())
+            logit_count += absolute.numel()
+            selected_token_id = cached.generated_token_ids[index]
+            max_selected_difference = max(
+                max_selected_difference,
+                float(absolute[selected_token_id].item()),
+            )
+            cached_top2 = torch.topk(cached_step, k=2).values
+            oracle_top2 = torch.topk(oracle_step, k=2).values
+            cached_margins.append(float((cached_top2[0] - cached_top2[1]).item()))
+            oracle_margins.append(float((oracle_top2[0] - oracle_top2[1]).item()))
+            step_within_tolerance = torch.allclose(
                 cached_step,
                 oracle_step,
                 atol=atol,
                 rtol=rtol,
-            ):
+            )
+            logits_within_tolerance = logits_within_tolerance and step_within_tolerance
+            if require_logits_within_tolerance and not step_within_tolerance:
                 raise RuntimeError(
                     "cached continuation logit parity failed at step "
                     f"{index}: max_abs_difference={difference}"
@@ -865,6 +901,11 @@ class InjectedNativeCounterfactualEvaluator:
             output=cached,
             compared_logit_steps=len(cached_logits),
             max_abs_logit_difference=max_abs_difference,
+            mean_abs_logit_difference=sum_abs_difference / logit_count,
+            max_selected_token_logit_difference=max_selected_difference,
+            min_cached_top1_margin=min(cached_margins),
+            min_oracle_top1_margin=min(oracle_margins),
+            logits_within_tolerance=logits_within_tolerance,
             atol=atol,
             rtol=rtol,
         )

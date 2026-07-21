@@ -897,6 +897,10 @@ def test_concrete_native_evaluator_executes_real_injected_qwen_forwards() -> Non
     assert parity.output == continuation
     assert parity.compared_logit_steps == len(continuation.generated_token_ids)
     assert parity.max_abs_logit_difference <= 1e-6
+    assert parity.logits_within_tolerance
+    assert parity.max_selected_token_logit_difference <= 1e-6
+    assert parity.min_cached_top1_margin >= 0
+    assert parity.min_oracle_top1_margin >= 0
     assert len(family.visual_block_contracts) >= 5
     assert all(
         contract == (("focused_d", 3),) for contract in family.visual_block_contracts
