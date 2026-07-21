@@ -318,6 +318,13 @@ class _HydraPartialFactory:
         raise AssertionError("constructor-only fixture must not build a rollout")
 
 
+class DictConfigWrap:
+    """Minimal fixture matching veRL's Hydra-protection wrapper."""
+
+    def __init__(self, config):
+        self.config = config
+
+
 def test_agent_loop_completes_hydra_runtime_factory_partial() -> None:
     trainer_config = object()
     server_manager = object()
@@ -353,6 +360,30 @@ def test_agent_loop_completes_hydra_runtime_factory_partial() -> None:
         "dataset_cls": dataset_cls,
         "data_config": data_config,
     }
+
+
+def test_agent_loop_unwraps_verl_dict_configs_before_runtime_factory() -> None:
+    trainer_config = object()
+    data_config = object()
+    factory = partial(
+        _HydraPartialFactory,
+        run_config_path="/fixture/policy.toml",
+        expected_run_identity_sha256=SHA0,
+    )
+
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=DictConfigWrap(trainer_config),
+        server_manager=object(),
+        tokenizer=_CharacterTokenizer(),
+        processor=object(),
+        dataset_cls=object,
+        data_config=DictConfigWrap(data_config),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+    )
+
+    assert bridge.invocation_factory.arguments["trainer_config"] is trainer_config
+    assert bridge.invocation_factory.arguments["data_config"] is data_config
 
 
 def _sampling_parameters(**updates):

@@ -6522,8 +6522,10 @@ instead of repeated bullets.
   one-step vertical slice and clean-process resume.
 - Spike-plan git revision and approval references: accepted task sections
   0.8.2--0.8.3 and DIAG-02 PASS.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`; startup, four-rank model construction, LoRA synchronization
+  and CUDA-graph capture passed, then the first rollout stopped before
+  generation because the bridge read veRL's `DictConfigWrap` as a bare config.
 - Question: does the fixed R5 contract complete one real rollout/replay/update
   and clean-process resume when only optional LoRA PDL/GDC is disabled on the
   exact failing vLLM/Triton stack?
@@ -6582,15 +6584,20 @@ instead of repeated bullets.
   4, prompt/rollout microbatch 1/rank, logprob microbatch 8/GPU, 32
   trajectories, accumulation 1.
 - GPUs: physical/logical 0--3, B200 183359 MiB; idle at planning and recheck.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  tmux `prl01_r6_gpu0123`, then `prl01_r6_resume_gpu0123`.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T20:17:42+09:00`--`2026-07-21T20:22:18+09:00`, 4m36s;
+  tmux `prl01_r6_gpu0123`; no resume was attempted because step 1 did not run.
+- Actual GPU-hours and peak scratch use: about 0.307 GPU-hours; 326 MiB output.
 - Command: absolute R6 `run-policy` under `.venv312`; clean resume only after
   successful step 1 and must make no second update.
-- Outputs: pending.
+- Outputs: `launch.log` SHA256
+  `ae38ebae3fe5b9ce38814e06f2df3aaad4bb2c772e44baa7e9990ac65d8df9b9`;
+  step-0 LoRA snapshot and weight-sync request; W&B run `h91gdvrn`.
 - Scorer/parser identity: exact MCQ `2a3d5fa4...2e1c`, strict native parser.
-- Metrics: pending.
-- Conclusion: pending.
+- Metrics: no trajectory, replay, optimizer step, or checkpoint was produced.
+- Conclusion: fail closed before sampling; the trainer config contained the
+  correct runtime identity, but upstream passed it through its Hydra-protection
+  wrapper. The next run may change only the bridge unwrap plus identity/config.
 
 ## Compatibility-spike status
 

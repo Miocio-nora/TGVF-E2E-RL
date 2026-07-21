@@ -726,6 +726,13 @@ class VerlFrameworkNeutralAgentLoop:
         **kwargs: object,
     ) -> None:
         del kwargs
+        # veRL deliberately wraps DictConfig before Hydra instantiation so
+        # Hydra does not recursively resolve it.  Match AgentLoopBase's
+        # constructor contract and hand the underlying configs to our runtime.
+        if type(trainer_config).__name__ == "DictConfigWrap":
+            trainer_config = trainer_config.config
+        if type(data_config).__name__ == "DictConfigWrap":
+            data_config = data_config.config
         if isinstance(invocation_factory, partial):
             invocation_factory = invocation_factory(
                 trainer_config=trainer_config,
