@@ -7392,7 +7392,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-01-R33-QWEN3-GRPO-BS16-TGVF-80STEP-GPU0123
 
-- `PLANNED`; continuous 80-step TGVF-only run on physical GPUs 0--3, BS16,
+- `RUNNING` from `2026-07-22T05:20:35+09:00`; continuous 80-step TGVF-only run on physical GPUs 0--3, BS16,
   `n=8`, GA4, checkpoints 0/10/20/45/80. Config SHA256
   `d6d502c4612a4ac5693700bd85a316bf9c31676dd22b2ce6f7ace1d736e99c7c`,
   run identity `f33ddf971d4f9cb833e5f921d968044a6e5ebc6b77a3713e67ef133661019e6c`,
@@ -7401,6 +7401,22 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   output `artifacts/policy/PRL-01-R33-qwen3-grpo-bs16-tgvf-80step-gpu0123`;
   tmux `prl01_r33_gpu0123`. R32 proved the selected BS16 capacity; acceptance
   requires the scheduled checkpoints, metrics and clean resumability.
+
+### PRL-01-R34-QWEN3-GRPO-BS16-CROP-ONLY-80STEP-GPU0123
+
+- `PLANNED`; bounded non-formal Crop-only 80-step comparison on physical GPUs
+  0--3, BS16, `n=8`, GA4, checkpoints 0/10/20/45/80. It retains R33's frozen
+  base/reference, decoder-LoRA GRPO mathematics, exact behavior log probabilities,
+  zero staleness, 512-square pixel cap, seed 42, FSDP2/TP1 colocated topology,
+  DeepEyes selected MCQ identity, and W&B metric surface; only the immutable tool
+  profile/prompt/schema and Crop observation replay path differ.
+- Config `configs/policy/runs/prl_01_r34_qwen3_grpo_bs16_crop_only_80step_gpu0123.toml`,
+  SHA256 `115e5c2b3dbadb48800ab29b0d960e946162d21d6ab12e4d11caeb241bbd2ccc`;
+  run identity `07174688aebc8761c2c7ffd76ae359b7c42dcd112b17dcaf01c5bd2b09f648df`;
+  code baseline `50424dd9b114b15ecaa54949966891491e962b0e`; output
+  `artifacts/policy/PRL-01-R34-qwen3-grpo-bs16-crop-only-80step-gpu0123`.
+  It launches sequentially on tmux `prl01_r34_after_r33` only after R33 exits 0;
+  a nonzero R33 status blocks launch rather than silently taking over the GPUs.
 
 ## Required entry template
 
