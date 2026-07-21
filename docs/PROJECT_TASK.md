@@ -678,6 +678,37 @@ zero-D scoring tests, aggregate-reduction tests, existing counterfactual
 regression tests, and one separately planned single-GPU evaluation of a
 completed immutable artifact.
 
+### 0.12 Accepted native-D evaluator throughput repair
+
+Decision ID: **RPI-20260721-NATIVE-D-EVAL-THROUGHPUT**
+
+Accepted by: **user**, on **2026-07-21 JST**.
+
+The audited native-D diagnostics must not perform avoidable serial full-prefix
+forwards. Teacher-forced value scoring may batch requests that have compatible
+tensor/layout contracts while preserving each exact transcript, observation,
+position, mask and mean- or summed-logprob reduction. Free continuation must
+prefill each exact injected main-D/D-DeepStack context once and then use the
+Qwen-native KV-cache contract for incremental greedy decoding. Recomputing the
+full injected prefix for every generated token is forbidden in the accepted
+evaluator.
+
+The optimized path must remain numerically and token-for-token equivalent to a
+bounded no-cache oracle. It must check prefill logits, incremental logits,
+generated token IDs, decoded text, stop reason and extracted expected value.
+Cache use is evaluator-local: cached states are never serialized as D, reused
+between observations, or treated as policy-RL rollout/replay state. The change
+does not alter any representation checkpoint, Adapter, training objective,
+manifest, metric definition, continuation limit or evaluation population.
+If exact Qwen3 M-RoPE/attention/cache parity cannot be established, the cache
+path must fail closed and the no-cache oracle remains available only for a
+small parity fixture, not as the production 36-pair evaluator.
+
+Acceptance requires CPU contract tests, a bounded single-GPU cached-versus-
+no-cache parity and throughput smoke on an already completed immutable
+artifact, and a new code/config/experiment identity for every interrupted
+formal evaluation that is rerun with the optimized evaluator.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

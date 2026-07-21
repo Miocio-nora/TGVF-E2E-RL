@@ -4874,8 +4874,9 @@ instead of repeated bullets.
 - Cells/status/result: RP-56 Balanced/T=1 contextual full-D, RP-57
   Balanced/T=1 target-token-embedding full-D, RP-58 Balanced/T=0.1
   contextual full-D, RP-59 legacy summed-NLL/T=1 contextual full-D, and
-  RP-60 Balanced/T=1 contextual main-D-only / RP-56--RP-59 `RUNNING`, RP-60
-  `PLANNED` / all `PENDING`.
+  RP-60 Balanced/T=1 contextual main-D-only / RP-56, RP-57 and RP-59
+  `RUNNING`; RP-58 `CANCELLED`; RP-60 `PLANNED` / RP-58 `INVALID`, all others
+  `PENDING`.
   This is a post-hoc, read-only comparison of five completed 2000-step
   representation artifacts; it performs no training, checkpoint mutation or
   model selection.
@@ -4942,6 +4943,12 @@ instead of repeated bullets.
   sessions `rp56-rp60-grounding`, `rp57-grounding`, `rp58-grounding`, and
   `rp59-grounding`; RP-60 is the second command in `rp56-rp60-grounding` and
   remains gated on RP-56's successful exit.
+- RP-58 interruption: stopped by user-authorized `SIGINT` at approximately
+  `2026-07-21T10:10+09:00` after the evaluator was found to perform serial
+  full-prefix decoding without KV cache. No report was published and GPU 2 was
+  released. This cell is not evidence and will be replaced by a newly
+  identified run only after `RPI-20260721-NATIVE-D-EVAL-THROUGHPUT` parity and
+  throughput gates pass.
 - Acceptance: each run must bind its exact config/artifact/data/prompt and
   manifest identities, preserve tokenizer length 151669, report exactly 200
   base rows/46 groups, nine cross-image cases and 36 target-presence cases with
