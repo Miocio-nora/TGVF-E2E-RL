@@ -5223,7 +5223,7 @@ instead of repeated bullets.
 ### BE-01-R2-QWEN3-DIRECT-COREDEV2511-INDEPENDENT-GPU0123
 
 - Cell/status/result: independent-process original-policy inference plus
-  throughput/resume gate / `PLANNED` / `PENDING`.
+  throughput/resume gate / `COMPLETE` / `FAIL`.
 - Fixed identity: model, tokenizer, max-pixels, prompt, sampling and all seven
   official slice/scorer contracts remain exactly BE-01. Code commit `7e61e54`;
   launcher SHA256 `e8dbbf51...7f66`; output root
@@ -5250,6 +5250,31 @@ instead of repeated bullets.
   PYTHONHASHSEED=42 .venv312/bin/python tools/run_coredev_2511_vlmevalkit.py
   --config configs/evaluation/coredev_2511_qwen3_direct_v1.json --coredev-data
   <official_alias> --work-dir <R2_root>/<official_alias> --mode infer`.
+- Result: the GPU0 VStarBench process launched at
+  `2026-07-21T13:00:54+09:00`; the independent-process topology reached model
+  construction normally, then failed closed before weight loading at
+  `13:01:33`. vLLM 0.12's Qwen3-VL vision implementation supports
+  `FLASH_ATTN`, `TORCH_SDPA`, or ROCm AITER FA and explicitly rejected the
+  inherited judge-only `TRITON_ATTN` override. No prediction was generated and
+  GPU0 released cleanly. Log SHA256 `0f3c9dff...7ecd`. The 72B judge retains
+  TRITON attention; that backend is not shared with the Qwen3-VL policy.
+
+### BE-01-R3-QWEN3-DIRECT-COREDEV2511-INDEPENDENT-GPU0123
+
+- Cell/status/result: corrected independent-process inference and
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Identity/delta: exactly BE-01-R2, code `7e61e54`, except the Qwen3-VL policy
+  process no longer sets the incompatible `VLLM_ATTENTION_BACKEND=TRITON_ATTN`.
+  The pinned vLLM 0.12 runtime selects its supported backend; the actual backend
+  must appear in the engine log and becomes part of this run identity. No new
+  package is installed and no prompt, pixels, sampling or output field changes.
+  New output root is
+  `artifacts/evaluation/BE-01-R3-qwen3-direct-coredev2511`.
+- Wave/acceptance: start VStarBench alone on GPU0 through real generation, then
+  start HRBench4K/BLINK/OCRBench_v2 independently on GPUs 1/2/3 and apply the
+  same early throughput plus durable VStar interruption/reuse gates from R2.
+  The R2 command template applies with the R3 root and without an attention
+  environment override.
 
 ## Compatibility-spike status
 
