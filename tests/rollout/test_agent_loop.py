@@ -19,6 +19,7 @@ from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import StandardToolError, TokenByteSpan
+from tgvf_rl.protocol.state_machine import CapErrorBehavior
 from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.schema import AnswerTaskKind
 from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
@@ -28,14 +29,13 @@ from tgvf_rl.trajectories.schema import (
     ToolCallRecord,
 )
 from tgvf_rl.trajectories import BehaviorTraceStore, VLLMBehaviorRecorder
+from tgvf_rl.trajectories.validation import TrajectoryValidator
 from tests.support import populated_observation_store, trajectory_source_visual
 
 
 SHA = "0" * 64
 _SOURCE_STORE, _SOURCE_HANDLE = populated_observation_store()
-SOURCE_VISUAL = trajectory_source_visual(
-    _SOURCE_STORE.resolve_record(_SOURCE_HANDLE)
-)
+SOURCE_VISUAL = trajectory_source_visual(_SOURCE_STORE.resolve_record(_SOURCE_HANDLE))
 
 
 def _sample(text: str, sampling: SamplingIdentity) -> SampledPolicyTurn:
@@ -249,6 +249,49 @@ def test_malformed_tool_think_format_returns_error_without_execution() -> None:
     )
     assert context.has_valid_final_answer is True
     assert context.protocol_valid is False
+
+
+def test_deeply_nested_tool_json_returns_error_and_allows_recovery() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = _pilot_fixture_sampling(version)
+    depth = 2_048
+    nested_target = "[" * depth + '"x"' + "]" * depth
+    malformed = _sample(
+        "reason</think><tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":'
+        f"{nested_target}}}}}</tool_call>",
+        sampling,
+    )
+    answer = _sample("recovered</think>B", replace(sampling, seed=8))
+    runtime = Runtime()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((malformed, answer)),
+        tool_runtime=runtime,
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "deep-json", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert runtime.contexts == []
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert trajectory.final_answer == "B"
+    assert len(trajectory.assistant_turns) == 2
+    assert len(trajectory.tool_errors) == 1
+    assert trajectory.tool_errors[0].code == "tool_parse.invalid_json"
+    assert trajectory.tool_errors[0].recoverable is True
 
 
 def test_framework_neutral_loop_preserves_two_calls_and_actual_logprobs() -> None:
@@ -628,6 +671,68 @@ def test_fifth_attempt_is_not_executed_and_receives_cap_error() -> None:
     assert len(trajectory.tool_errors) == 1
     assert trajectory.tool_errors[0].attempt_index == 4
     assert trajectory.tool_errors[0].code == "tool_call_limit_exceeded"
+
+
+@pytest.mark.parametrize(
+    "final_retry_text",
+    (
+        "retry\n</think>\n<tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"forbidden"}}'
+        "</tool_call>",
+        "retry\n</think>\n<tool_call>{invalid}</tool_call>",
+    ),
+)
+def test_cap_recovery_tool_retry_is_retained_without_execution(
+    final_retry_text: str,
+) -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = _pilot_fixture_sampling(version)
+
+    def malformed(index: int) -> SampledPolicyTurn:
+        return _sample(
+            "reason\n</think>\n<tool_call>"
+            f'{{"name":"tgvf_focus_tool","arguments":{{"target":{index}}}}}'
+            "</tool_call>",
+            sampling,
+        )
+
+    final_retry = _sample(final_retry_text, sampling)
+    runtime = Runtime()
+    behavior_store = BehaviorTraceStore()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((malformed(0), malformed(1), malformed(2), final_retry)),
+        tool_runtime=runtime,
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=2,
+        enabled_tool_names=("tgvf_focus_tool",),
+        cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "cap-retry", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1, 2, 3),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.CALL_CAP
+    assert runtime.contexts == []
+    assert trajectory.tool_calls == ()
+    assert trajectory.observations == ()
+    assert len(trajectory.tool_errors) == 3
+    assert trajectory.tool_errors[-1].code == "tool_call_limit_exceeded"
+    assert trajectory.tool_errors[-1].assistant_turn_index == 2
+    assert len(trajectory.assistant_turns) == 4
+    final_trace = behavior_store.resolve(trajectory.assistant_turns[-1].behavior_trace)
+    assert final_trace.behavior.sampled_token_ids == final_retry.token_ids
+    assert final_trace.behavior.logprobs == final_retry.behavior_logprobs
+    TrajectoryValidator(_SOURCE_STORE, behavior_store).validate(trajectory)
 
 
 def test_disabled_crop_returns_error_without_executing_runtime() -> None:

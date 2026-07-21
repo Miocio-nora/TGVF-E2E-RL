@@ -37,20 +37,15 @@ UPSTREAM_VERL_CONFIG_NAME = "ppo_trainer"
 UPSTREAM_VERL_V0_RUNNER_FQN = "verl.trainer.main_ppo_v0.TaskRunner"
 
 SELECTED_SAMPLE_DATASET_CLASS_NAME = "TGVFSelectedSampleDataset"
-SELECTED_SAMPLE_DATASET_MODULE_PATH = (
-    "pkg://tgvf_rl.framework.verl.smoke_dataset"
-)
+SELECTED_SAMPLE_DATASET_MODULE_PATH = "pkg://tgvf_rl.framework.verl.smoke_dataset"
 NATIVE_AGENT_LOOP_NAME = "tgvf_native_policy"
 NATIVE_AGENT_LOOP_FQN = (
     "tgvf_rl.framework.verl.native_agent_loop.VerlFrameworkNeutralAgentLoop"
 )
 NATIVE_INVOCATION_FACTORY_FQN = (
-    "tgvf_rl.framework.verl.native_agent_loop."
-    "BoundVerlNativeAgentLoopInvocationFactory"
+    "tgvf_rl.framework.verl.native_agent_loop.BoundVerlNativeAgentLoopInvocationFactory"
 )
-EXACT_REPLAY_EXTERNAL_MODULE = (
-    "tgvf_rl.framework.verl.exact_bypass_loss"
-)
+EXACT_REPLAY_EXTERNAL_MODULE = "tgvf_rl.framework.verl.exact_bypass_loss"
 EXACT_REPLAY_ENGINE_REGISTRAR_FQN = (
     "tgvf_rl.framework.verl.exact_replay_engine."
     "register_qwen3_exact_replay_fsdp2_engine"
@@ -63,8 +58,7 @@ EXACT_CURRENT_REFERENCE_REPLAY_FQN = (
 )
 POLICY_REWARD_PIPELINE_FQN = "tgvf_rl.rewards.pipeline.PilotRewardPipeline"
 POLICY_CHECKPOINT_ENGINE_MANAGER_FQN = (
-    "tgvf_rl.framework.verl.policy_weight_sync."
-    "TGVFPolicyCheckpointEngineManager"
+    "tgvf_rl.framework.verl.policy_weight_sync.TGVFPolicyCheckpointEngineManager"
 )
 
 VERL_POLICY_SMOKE_LAUNCH_SCHEMA = "tgvf-verl-policy-smoke-launch-v1"
@@ -138,18 +132,26 @@ class UpstreamVerlLaunchPlan:
         if self.overrides.get("trainer.n_gpus_per_node") != 4:
             raise ValueError("initial Policy Pilot launch must bind world size four")
         if (
-            self.overrides.get(
-                "actor_rollout_ref.rollout.tensor_model_parallel_size"
-            )
+            self.overrides.get("actor_rollout_ref.rollout.tensor_model_parallel_size")
             != 1
         ):
             raise ValueError("initial Policy Pilot launch must bind vLLM TP=1")
         if self.overrides.get("actor_rollout_ref.rollout.agent.num_workers") != 4:
-            raise ValueError("initial Policy Pilot launch requires four AgentLoop workers")
-        if self.overrides.get("actor_rollout_ref.actor.fsdp_config.forward_only") is not False:
+            raise ValueError(
+                "initial Policy Pilot launch requires four AgentLoop workers"
+            )
+        if (
+            self.overrides.get("actor_rollout_ref.actor.fsdp_config.forward_only")
+            is not False
+        ):
             raise ValueError("Policy actor exact-replay engine must be trainable")
-        if self.overrides.get("actor_rollout_ref.ref.fsdp_config.forward_only") is not True:
-            raise ValueError("Policy reference exact-replay engine must be forward-only")
+        if (
+            self.overrides.get("actor_rollout_ref.ref.fsdp_config.forward_only")
+            is not True
+        ):
+            raise ValueError(
+                "Policy reference exact-replay engine must be forward-only"
+            )
         if (
             self.overrides.get(
                 "actor_rollout_ref.model.override_config.attn_implementation"
@@ -169,25 +171,43 @@ class UpstreamVerlLaunchPlan:
         ):
             raise ValueError("launch plan lost the Policy checkpoint engine manager")
         if self.environment.get("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES") != "1":
-            raise ValueError("local AgentLoop workers must retain the physical GPU view")
+            raise ValueError(
+                "local AgentLoop workers must retain the physical GPU view"
+            )
         if self.environment.get("TGVF_POLICY_RUN_IDENTITY") != self.run_identity_sha256:
             raise ValueError("runtime Policy identity environment differs from plan")
-        if self.environment.get("TGVF_POLICY_RUN_IDENTITY_SHA256") != self.run_identity_sha256:
-            raise ValueError("runtime Policy SHA256 identity environment differs from plan")
-        if self.overrides.get("actor_rollout_ref.rollout.full_determinism") is not False:
+        if (
+            self.environment.get("TGVF_POLICY_RUN_IDENTITY_SHA256")
+            != self.run_identity_sha256
+        ):
+            raise ValueError(
+                "runtime Policy SHA256 identity environment differs from plan"
+            )
+        if (
+            self.overrides.get("actor_rollout_ref.rollout.full_determinism")
+            is not False
+        ):
             raise ValueError(
                 "TRITON_ATTN multi-turn rollout must disable vLLM batch invariance"
             )
         if self.environment.get("VLLM_BATCH_INVARIANT") != "0":
-            raise ValueError("launch plan must explicitly disable vLLM batch invariance")
+            raise ValueError(
+                "launch plan must explicitly disable vLLM batch invariance"
+            )
         if self.environment.get("VERL_FULL_DETERMINISM") != "0":
-            raise ValueError("launch plan must isolate rollout from veRL full determinism")
+            raise ValueError(
+                "launch plan must isolate rollout from veRL full determinism"
+            )
         if self.environment.get("CC") != str(_TRITON_CC):
             raise ValueError("Policy rollout must bind the accepted Triton C compiler")
         if self.environment.get("CXX") != str(_TRITON_CXX):
-            raise ValueError("Policy rollout must bind the accepted Triton C++ compiler")
+            raise ValueError(
+                "Policy rollout must bind the accepted Triton C++ compiler"
+            )
         if self.environment.get("CPATH") != _TRITON_CPATH:
-            raise ValueError("Policy rollout must bind the accepted Python 3.12 headers")
+            raise ValueError(
+                "Policy rollout must bind the accepted Python 3.12 headers"
+            )
         for required_path in (
             _TRITON_CC,
             _TRITON_CXX,
@@ -308,6 +328,13 @@ def build_policy_e2e_smoke_verl_plan(
         raise ValueError("native tool-call closer must remain policy-sampled")
 
     distributed = config.distributed
+    capacity = config.capacity
+    response_transport_length = capacity.response_transport_length
+    if response_transport_length <= config.policy.sampling.max_response_length:
+        raise ValueError(
+            "vLLM context capacity leaves no response transport reserve for "
+            "environment-owned tool tokens"
+        )
     fsdp = FSDP2BridgeConfig(
         world_size=distributed.world_size,
         fsdp_size=distributed.world_size,
@@ -317,6 +344,7 @@ def build_policy_e2e_smoke_verl_plan(
         runtime=runtime,
         max_tool_calls=config.protocol.maximum_tool_calls,
         policy_pilot=config.policy,
+        response_transport_length=response_transport_length,
     )
     values = dict(adapter.public_config_overrides())
     if values.get("trainer.use_v1") is not False:
@@ -324,7 +352,6 @@ def build_policy_e2e_smoke_verl_plan(
 
     sampling = config.policy.sampling
     accumulation = config.accumulation
-    capacity = config.capacity
     framework = config.framework
     optimizer = config.optimizer
     scheduler = config.scheduler
@@ -348,7 +375,9 @@ def build_policy_e2e_smoke_verl_plan(
         "embedding_identity": conditioning.embedding_identity,
     }
     if config.policy.grpo.verl_external_loss_module != EXACT_REPLAY_EXTERNAL_MODULE:
-        raise ValueError("Policy loss and exact replay external module identities differ")
+        raise ValueError(
+            "Policy loss and exact replay external module identities differ"
+        )
 
     values.update(
         {
@@ -372,7 +401,7 @@ def build_policy_e2e_smoke_verl_plan(
             "data.validation_shuffle": False,
             "data.return_raw_chat": True,
             "data.return_multi_modal_inputs": True,
-            "data.max_response_length": sampling.max_response_length,
+            "data.max_response_length": response_transport_length,
             "data.max_prompt_length": capacity.max_prompt_length,
             "data.mm_processor_kwargs.max_pixels": config.policy.image_max_pixels,
             # Model/engine identity.  Both actor and reference use the same
@@ -437,9 +466,7 @@ def build_policy_e2e_smoke_verl_plan(
             "actor_rollout_ref.actor.optim.clip_grad": (
                 optimizer.maximum_gradient_norm
             ),
-            "actor_rollout_ref.actor.optim.lr_warmup_steps": (
-                scheduler.warmup_steps
-            ),
+            "actor_rollout_ref.actor.optim.lr_warmup_steps": (scheduler.warmup_steps),
             "actor_rollout_ref.actor.optim.total_training_steps": (
                 scheduler.total_steps
             ),
@@ -462,9 +489,7 @@ def build_policy_e2e_smoke_verl_plan(
             "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu": (
                 capacity.reference_log_prob_max_token_len_per_gpu
             ),
-            "actor_rollout_ref.hybrid_engine": (
-                distributed.placement == "colocated"
-            ),
+            "actor_rollout_ref.hybrid_engine": (distributed.placement == "colocated"),
             "actor_rollout_ref.rollout.nnodes": 1,
             "actor_rollout_ref.rollout.n_gpus_per_node": distributed.world_size,
             "actor_rollout_ref.rollout.tensor_model_parallel_size": (
@@ -476,9 +501,7 @@ def build_policy_e2e_smoke_verl_plan(
             "actor_rollout_ref.rollout.max_num_batched_tokens": (
                 capacity.vllm_max_num_batched_tokens
             ),
-            "actor_rollout_ref.rollout.max_model_len": (
-                capacity.vllm_max_model_len
-            ),
+            "actor_rollout_ref.rollout.max_model_len": (capacity.vllm_max_model_len),
             "actor_rollout_ref.rollout.max_num_seqs": capacity.vllm_max_num_seqs,
             "actor_rollout_ref.rollout.enable_chunked_prefill": (
                 capacity.vllm_enable_chunked_prefill
@@ -511,17 +534,13 @@ def build_policy_e2e_smoke_verl_plan(
                     "frequency_penalty": sampling.frequency_penalty,
                     "stop_token_ids": list(sampling.stop_token_ids or ()),
                     "stop_strings": list(sampling.stop_strings or ()),
-                    "include_stop_str_in_output": (
-                        sampling.include_stop_str_in_output
-                    ),
+                    "include_stop_str_in_output": (sampling.include_stop_str_in_output),
                     "ignore_eos": sampling.ignore_eos,
                     "logit_processors": list(sampling.logit_processors),
                     "logprob_measurement": sampling.logprob_measurement.value,
                     "rollout_master_seed": config.rollout_rng.master_seed,
                     "seed_derivation_name": config.rollout_rng.derivation_name,
-                    "seed_derivation_sha256": (
-                        config.rollout_rng.derivation_sha256
-                    ),
+                    "seed_derivation_sha256": (config.rollout_rng.derivation_sha256),
                     "forward_state": "request_seeded_batch_sensitive_v1",
                     "vllm_batch_invariant": False,
                     "actual_behavior_logprobs_recorded": True,
@@ -537,9 +556,7 @@ def build_policy_e2e_smoke_verl_plan(
                     "artifact_file_sha256": (
                         config.representation.artifact_file_sha256
                     ),
-                    "artifact_manifest_sha256": (
-                        config.representation.artifact.sha256
-                    ),
+                    "artifact_manifest_sha256": (config.representation.artifact.sha256),
                     "expected_run_id": config.representation.expected_run_id,
                     "expected_run_identity_sha256": (
                         config.representation.expected_run_identity_sha256
@@ -589,15 +606,11 @@ def build_policy_e2e_smoke_verl_plan(
                     "pipeline_fqn": POLICY_REWARD_PIPELINE_FQN,
                     "task_kind": config.reward.task_kind,
                     "answer_verifier": config.reward.answer_verifier,
-                    "answer_verifier_sha256": (
-                        config.reward.answer_verifier_sha256
-                    ),
+                    "answer_verifier_sha256": (config.reward.answer_verifier_sha256),
                     "judge_mode": config.reward.judge_mode,
                     "answer_weight": config.reward.answer_weight,
                     "format_weight": config.reward.format_weight,
-                    "conditional_tool_weight": (
-                        config.reward.conditional_tool_weight
-                    ),
+                    "conditional_tool_weight": (config.reward.conditional_tool_weight),
                 },
                 "reference_diagnostic": {
                     "enabled": True,
@@ -644,8 +657,7 @@ def build_policy_e2e_smoke_verl_plan(
 
     external_components = {
         "dataset": (
-            "tgvf_rl.framework.verl.smoke_dataset."
-            + SELECTED_SAMPLE_DATASET_CLASS_NAME
+            "tgvf_rl.framework.verl.smoke_dataset." + SELECTED_SAMPLE_DATASET_CLASS_NAME
         ),
         "agent_loop_manager": LOSSLESS_AGENT_LOOP_MANAGER_FQN,
         "agent_loop": NATIVE_AGENT_LOOP_FQN,
@@ -677,8 +689,8 @@ def build_policy_e2e_smoke_verl_plan(
     environment["TGVF_POLICY_STATE_DIR"] = str(
         config.output.root / "runtime-policy-state"
     )
-    environment["TGVF_POLICY_SERVER_TIMEOUT_SECONDS"] = (
-        format(framework.server_timeout_seconds, ".17g")
+    environment["TGVF_POLICY_SERVER_TIMEOUT_SECONDS"] = format(
+        framework.server_timeout_seconds, ".17g"
     )
     environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
     environment["PYTHONHASHSEED"] = str(config.rollout_rng.master_seed)
@@ -838,8 +850,7 @@ def _hydra_literal(value: object) -> str:
         fields: list[str] = []
         for key in sorted(plain):
             if not key or any(
-                not (character.isalnum() or character in "_-")
-                for character in key
+                not (character.isalnum() or character in "_-") for character in key
             ):
                 raise ValueError(f"Hydra mapping key is not override-safe: {key!r}")
             fields.append(f"{key}:{_hydra_literal(plain[key])}")

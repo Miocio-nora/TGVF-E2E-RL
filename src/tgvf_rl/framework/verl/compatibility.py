@@ -178,9 +178,7 @@ def load_verl_public_api(
         register_policy_loss=_symbol(
             core_algos, "register_policy_loss", module_names[3]
         ),
-        get_policy_loss_fn=_symbol(
-            core_algos, "get_policy_loss_fn", module_names[3]
-        ),
+        get_policy_loss_fn=_symbol(core_algos, "get_policy_loss_fn", module_names[3]),
         compute_grpo_outcome_advantage=_symbol(
             core_algos, "compute_grpo_outcome_advantage", module_names[3]
         ),
@@ -581,19 +579,11 @@ def _validate_policy_pilot_mapping(
         "actor_rollout_ref.rollout.temperature": sampling.temperature,
         "actor_rollout_ref.rollout.top_p": sampling.top_p,
         "actor_rollout_ref.rollout.top_k": sampling.top_k,
-        "actor_rollout_ref.rollout.repetition_penalty": (
-            sampling.repetition_penalty
-        ),
+        "actor_rollout_ref.rollout.repetition_penalty": (sampling.repetition_penalty),
         "actor_rollout_ref.rollout.do_sample": sampling.do_sample,
-        "actor_rollout_ref.rollout.response_length": sampling.max_response_length,
-        "actor_rollout_ref.rollout.over_sample_rate": (
-            grpo.rollout_over_sample_rate
-        ),
+        "actor_rollout_ref.rollout.over_sample_rate": (grpo.rollout_over_sample_rate),
         "actor_rollout_ref.rollout.multi_turn.enable": True,
-        "actor_rollout_ref.rollout.limit_images": (
-            1 + pilot.max_tgvf_call_attempts
-        ),
-        "data.max_response_length": sampling.max_response_length,
+        "actor_rollout_ref.rollout.limit_images": (1 + pilot.max_tgvf_call_attempts),
         "data.mm_processor_kwargs.max_pixels": pilot.image_max_pixels,
         "data.filter_overlong_prompts": False,
         "data.truncation": "error",
@@ -602,18 +592,12 @@ def _validate_policy_pilot_mapping(
         "algorithm.use_kl_in_reward": False,
         "algorithm.kl_ctrl.kl_coef": grpo.kl_reward_coefficient,
         "algorithm.filter_groups.enable": False,
-        "algorithm.rollout_correction.rollout_is": (
-            grpo.rollout_importance_sampling
-        ),
-        "algorithm.rollout_correction.rollout_rs": (
-            grpo.rollout_rejection_sampling
-        ),
+        "algorithm.rollout_correction.rollout_is": (grpo.rollout_importance_sampling),
+        "algorithm.rollout_correction.rollout_rs": (grpo.rollout_rejection_sampling),
         "algorithm.rollout_correction.bypass_mode": (
             grpo.rollout_correction_bypass_mode
         ),
-        "algorithm.rollout_correction.loss_type": (
-            grpo.rollout_correction_loss_type
-        ),
+        "algorithm.rollout_correction.loss_type": (grpo.rollout_correction_loss_type),
         "algorithm.rollout_correction.rollout_is_batch_normalize": (
             grpo.rollout_is_batch_normalize
         ),
@@ -626,4 +610,18 @@ def _validate_policy_pilot_mapping(
     if mismatches:
         raise VerlConfigurationError(
             f"concrete veRL config differs from Policy Pilot v1: {mismatches!r}"
+        )
+    rollout_transport_length = _path_value(
+        config, "actor_rollout_ref.rollout.response_length"
+    )
+    data_transport_length = _path_value(config, "data.max_response_length")
+    if (
+        type(rollout_transport_length) is not int
+        or rollout_transport_length <= sampling.max_response_length
+        or type(data_transport_length) is not int
+        or data_transport_length != rollout_transport_length
+    ):
+        raise VerlConfigurationError(
+            "Policy Pilot requires equal upstream response transport widths that "
+            "exceed the cumulative policy-token budget"
         )

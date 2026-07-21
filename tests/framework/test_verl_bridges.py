@@ -45,6 +45,7 @@ from tgvf_rl.framework.verl import (
     build_agent_loop_output,
     build_data_proto_payload,
     build_padded_data_proto_payload,
+    compact_agent_loop_data_proto_response_width,
     load_verl_public_api,
     make_sidecar_releasing_actor_rollout_ref_worker_class,
     make_sidecar_releasing_training_worker_class,
@@ -222,9 +223,7 @@ def _record(
             AssistantTurnRecord(
                 turn_index=0,
                 raw_text=(
-                    "unfinished reasoning"
-                    if invalid_format
-                    else "reason</think>answer"
+                    "unfinished reasoning" if invalid_format else "reason</think>answer"
                 ),
                 tokens=tokens,
                 behavior_trace=behavior_handle,
@@ -289,9 +288,7 @@ def _record(
         tool_calls=tuple(tool_calls),
         observations=tuple(observations),
         final_answer=(
-            None
-            if invalid_format or tool_call_count != 0
-            else "fixture answer"
+            None if invalid_format or tool_call_count != 0 else "fixture answer"
         ),
         stop=(
             TrajectoryStop.INVALID_FORMAT
@@ -374,14 +371,69 @@ def _live_agent_loop_padded_data(*records: RolloutBridgeRecord) -> _FakeDataProt
         PROMPT_TOKEN_OWNERSHIP_FIELD,
         RESPONSE_TOKEN_OWNERSHIP_FIELD,
     }
+    tensors = dict(payload.tensor_batch)
+    prompts = tensors["prompts"]
+    responses = tensors["responses"]
+    prompt_attention = torch.zeros_like(prompts)
+    response_attention = torch.zeros_like(responses)
+    for index, record in enumerate(records):
+        prompt_attention[index, -len(record.prompt_ids) :] = 1
+        response_attention[index, : len(record.response_ids)] = 1
+    tensors["input_ids"] = torch.cat((prompts, responses), dim=1)
+    tensors["attention_mask"] = torch.cat((prompt_attention, response_attention), dim=1)
+    tensors["position_ids"] = torch.arange(
+        tensors["input_ids"].shape[1], dtype=torch.int64
+    ).repeat(len(records), 1)
     return _FakeDataProto(
-        dict(payload.tensor_batch),
+        tensors,
         {
             name: value
             for name, value in payload.non_tensor_batch.items()
             if name not in padding_fields
         },
         dict(payload.meta_info),
+    )
+
+
+def _expand_live_response_envelope(
+    data: _FakeDataProto, *, response_width: int
+) -> None:
+    current_width = int(data.batch["responses"].shape[1])
+    if response_width <= current_width:
+        raise ValueError("test response envelope must grow")
+    extra = response_width - current_width
+    batch_size = int(data.batch["responses"].shape[0])
+    prompt_width = int(data.batch["prompts"].shape[1])
+    for name, pad_value in (
+        ("responses", 99),
+        ("response_mask", 0),
+        ("rollout_log_probs", 0.0),
+    ):
+        value = data.batch[name]
+        padding = torch.full(
+            (batch_size, extra), dtype=value.dtype, fill_value=pad_value
+        )
+        data.batch[name] = torch.cat((value, padding), dim=1)
+    for name, pad_value in (("input_ids", 99), ("attention_mask", 0)):
+        value = data.batch[name]
+        padding = torch.full(
+            (batch_size, extra), dtype=value.dtype, fill_value=pad_value
+        )
+        data.batch[name] = torch.cat((value, padding), dim=1)
+    positions = data.batch["position_ids"]
+    data.batch["position_ids"] = torch.cat(
+        (positions, torch.zeros((batch_size, extra), dtype=positions.dtype)), dim=1
+    )
+    full_width = prompt_width + response_width
+    data.batch["rm_scores"] = torch.zeros((batch_size, response_width))
+    data.batch["routed_experts"] = torch.zeros(
+        (batch_size, full_width, 2, 1), dtype=torch.int64
+    )
+    data.batch["teacher_ids"] = torch.zeros(
+        (batch_size, full_width, 3), dtype=torch.int64
+    )
+    data.batch["teacher_logprobs"] = torch.zeros(
+        (batch_size, full_width, 3), dtype=torch.float32
     )
 
 
@@ -766,7 +818,7 @@ def test_training_worker_wrapper_releases_dispatched_tensordict_in_finally() -> 
 def test_policy_pilot_adapter_rejects_ownerless_dataproto_convenience() -> None:
     pilot = PolicyPilotV1Config(sampling=PilotSamplingConfig(min_p=0.0))
     adapter = VerlAdapter(
-        VerlAdapterConfig(policy_pilot=pilot),
+        VerlAdapterConfig(policy_pilot=pilot, response_transport_length=16384),
         public_api=SimpleNamespace(data_proto=_FakeDataProto),
     )
 
@@ -974,9 +1026,7 @@ def test_sdpo_teacher_is_a_separate_checkpoint_contributor() -> None:
 
 
 def test_custom_manager_uses_composition_and_validates_delegate_dataproto() -> None:
-    data = to_verl_data_proto(
-        build_data_proto_payload((_record(),)), data_proto_cls=_FakeDataProto
-    )
+    data = _live_agent_loop_padded_data(_record())
 
     class Delegate:
         def generate_sequences(self, prompts):
@@ -995,6 +1045,62 @@ def test_custom_manager_uses_composition_and_validates_delegate_dataproto() -> N
     manager = LosslessAgentLoopManager.create(_public_api=api)
     assert type(manager) is LosslessAgentLoopManager
     assert manager.generate_sequences("prompts") is data
+
+
+def test_live_manager_compacts_transport_envelope_from_exact_sidecars() -> None:
+    records = (
+        _record(suffix=30, tool_call_count=0, prompt_ids=(1,)),
+        _record(suffix=31, tool_call_count=2, prompt_ids=(1, 2, 3, 4)),
+    )
+    data = _live_agent_loop_padded_data(*records)
+    prompt_before = data.batch["prompts"].clone()
+    replay_before = tuple(data.non_tensor_batch[TRAJECTORY_REPLAY_BUNDLE_FIELD])
+    logprobs_before = tuple(data.non_tensor_batch[ACTUAL_RESPONSE_LOGPROBS_FIELD])
+    _expand_live_response_envelope(data, response_width=32)
+
+    class Delegate:
+        def generate_sequences(self, prompts):
+            assert prompts == "transport-envelope-prompts"
+            return data
+
+    api = SimpleNamespace(
+        agent_loop_manager=SimpleNamespace(),
+        agent_loop_transport=VERL_AGENT_LOOP_RETURN_TRANSPORT,
+    )
+    manager = LosslessAgentLoopManager(_delegate=Delegate(), _public_api=api)
+    assert manager.generate_sequences("transport-envelope-prompts") is data
+
+    exact_width = max(len(record.response_ids) for record in records)
+    prompt_width = int(prompt_before.shape[1])
+    assert torch.equal(data.batch["prompts"], prompt_before)
+    assert data.batch["responses"].shape == (2, exact_width)
+    assert data.batch["response_mask"].shape == (2, exact_width)
+    assert data.batch["rollout_log_probs"].shape == (2, exact_width)
+    assert data.batch["rm_scores"].shape == (2, exact_width)
+    assert data.batch["input_ids"].shape == (2, prompt_width + exact_width)
+    assert data.batch["attention_mask"].shape == (2, prompt_width + exact_width)
+    assert data.batch["position_ids"].shape == (2, prompt_width + exact_width)
+    assert data.batch["routed_experts"].shape[1] == prompt_width + exact_width
+    assert data.batch["teacher_ids"].shape[1] == prompt_width + exact_width
+    assert data.batch["teacher_logprobs"].shape[1] == prompt_width + exact_width
+
+    view = validate_data_proto_integrity(data)
+    assert view.actual_response_logprobs == logprobs_before
+    assert all(
+        current is expected
+        for current, expected in zip(view.replay_bundles, replay_before, strict=True)
+    )
+    assert view.response_token_ownership[0][len(records[0].response_ids) :] == (
+        TokenOwnership.PADDING,
+    ) * (exact_width - len(records[0].response_ids))
+
+
+def test_response_envelope_compaction_rejects_unknown_tensor_alignment() -> None:
+    data = _live_agent_loop_padded_data(_record())
+    data.batch["unknown_response_state"] = torch.zeros_like(data.batch["responses"])
+
+    with pytest.raises(ValueError, match="unknown tensors"):
+        compact_agent_loop_data_proto_response_width(data)
 
 
 def test_live_manager_binds_upstream_padding_before_exact_integrity_check() -> None:
@@ -1023,9 +1129,7 @@ def test_live_manager_binds_upstream_padding_before_exact_integrity_check() -> N
     assert manager.generate_sequences("padded-prompts") is data
     view = validate_data_proto_integrity(data)
     assert view.pad_token_id == 99
-    assert view.prompt_token_ownership[0][:-1] == (
-        TokenOwnership.PADDING,
-    ) * 3
+    assert view.prompt_token_ownership[0][:-1] == (TokenOwnership.PADDING,) * 3
     assert view.response_token_ownership[0][len(records[0].response_ids) :] == (
         TokenOwnership.PADDING,
     ) * (len(records[1].response_ids) - len(records[0].response_ids))
@@ -1122,15 +1226,18 @@ def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
 
 def test_policy_pilot_uses_real_e003_lora_and_optimizer_fields() -> None:
     pilot = PolicyPilotV1Config(sampling=PilotSamplingConfig(min_p=0.0))
-    config = VerlAdapterConfig(policy_pilot=pilot)
+    config = VerlAdapterConfig(
+        policy_pilot=pilot,
+        response_transport_length=16384,
+    )
     overrides = dict(config.public_config_overrides())
 
     assert config.max_tool_calls == 4
     assert overrides["actor_rollout_ref.rollout.limit_images"] == 5
     assert overrides["actor_rollout_ref.rollout.n"] == 8
     assert overrides["actor_rollout_ref.rollout.do_sample"] is True
-    assert overrides["actor_rollout_ref.rollout.response_length"] == 8192
-    assert overrides["data.max_response_length"] == 8192
+    assert overrides["actor_rollout_ref.rollout.response_length"] == 16384
+    assert overrides["data.max_response_length"] == 16384
     assert overrides["data.mm_processor_kwargs.max_pixels"] == 262144
     assert overrides["actor_rollout_ref.model.lora_rank"] == 64
     assert overrides["actor_rollout_ref.model.lora_alpha"] == 64
@@ -1168,6 +1275,22 @@ def test_policy_pilot_uses_real_e003_lora_and_optimizer_fields() -> None:
     validate_verl_config_mapping(concrete, expected_policy_pilot=pilot)
     concrete["actor_rollout_ref"]["model"]["lora_rank"] = 32
     with pytest.raises(VerlConfigurationError, match="Policy Pilot v1"):
+        validate_verl_config_mapping(concrete, expected_policy_pilot=pilot)
+
+
+def test_policy_pilot_requires_distinct_aligned_response_transport_width() -> None:
+    pilot = PolicyPilotV1Config(sampling=PilotSamplingConfig(min_p=0.0))
+
+    with pytest.raises(ValueError, match="response_transport_length must exceed"):
+        VerlAdapterConfig(policy_pilot=pilot, response_transport_length=8192)
+
+    overrides = VerlAdapterConfig(
+        policy_pilot=pilot,
+        response_transport_length=16384,
+    ).public_config_overrides()
+    concrete = _materialize_dotted_overrides(overrides)
+    concrete["data"]["max_response_length"] = 16383
+    with pytest.raises(VerlConfigurationError, match="response transport widths"):
         validate_verl_config_mapping(concrete, expected_policy_pilot=pilot)
 
 

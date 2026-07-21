@@ -434,6 +434,144 @@ def to_verl_data_proto(
     return payload._materialize_verl_data_proto(from_dict)
 
 
+def compact_agent_loop_data_proto_response_width(data: object) -> object:
+    """Trim the upstream transport envelope to this batch's exact width.
+
+    Pinned veRL must receive a finite response envelope large enough to avoid
+    truncating environment-owned tool tokens.  Its AgentLoop manager pads every
+    row to that envelope, however, so forwarding the result unchanged would
+    make actor/reference replay pay for the worst-case context on every batch.
+    Exact response sidecars let this boundary shrink all aligned tensors before
+    worker dispatch without guessing from token values or attention masks.
+    """
+
+    batch, non_tensors = _data_parts(data)
+    keys = set(batch.keys())
+    known = {
+        "prompts",
+        "responses",
+        "response_mask",
+        "rollout_log_probs",
+        "input_ids",
+        "attention_mask",
+        "position_ids",
+        "rm_scores",
+        "routed_experts",
+        "teacher_ids",
+        "teacher_logprobs",
+    }
+    unknown = sorted(str(name) for name in keys - known)
+    if unknown:
+        raise ValueError(
+            "live AgentLoop DataProto has unknown tensors whose response-axis "
+            f"alignment cannot be compacted safely: {unknown!r}"
+        )
+    required = {
+        "prompts",
+        "responses",
+        "response_mask",
+        "rollout_log_probs",
+        "input_ids",
+        "attention_mask",
+        "position_ids",
+    }
+    missing = sorted(required - keys)
+    if missing:
+        raise ValueError(
+            f"live AgentLoop DataProto lacks compaction tensors: {missing!r}"
+        )
+
+    prompts = batch["prompts"]
+    responses = batch["responses"]
+    if (
+        not isinstance(prompts, torch.Tensor)
+        or not isinstance(responses, torch.Tensor)
+        or prompts.ndim != 2
+        or responses.ndim != 2
+        or prompts.shape[0] != responses.shape[0]
+    ):
+        raise ValueError(
+            "live AgentLoop prompts/responses must be aligned rank-two tensors"
+        )
+    batch_size = int(responses.shape[0])
+    prompt_width = int(prompts.shape[1])
+    transport_width = int(responses.shape[1])
+    exact_rows = _row_values(
+        _required(non_tensors, EXACT_RESPONSE_IDS_FIELD, "DataProto.non_tensor_batch"),
+        batch_size,
+        EXACT_RESPONSE_IDS_FIELD,
+    )
+    exact_lengths = tuple(len(tuple(row)) for row in exact_rows)
+    if any(length <= 0 or length > transport_width for length in exact_lengths):
+        raise ValueError("live AgentLoop exact response lengths are invalid")
+    exact_width = max(exact_lengths)
+    full_transport_width = prompt_width + transport_width
+    full_exact_width = prompt_width + exact_width
+
+    response_fields = ("responses", "response_mask", "rollout_log_probs", "rm_scores")
+    full_fields = ("input_ids", "attention_mask")
+    replacements: dict[str, torch.Tensor] = {}
+    for name in response_fields:
+        if name not in batch:
+            continue
+        value = batch[name]
+        if (
+            not isinstance(value, torch.Tensor)
+            or value.ndim != 2
+            or tuple(value.shape) != (batch_size, transport_width)
+        ):
+            raise ValueError(f"live AgentLoop {name} is not response-width aligned")
+        replacements[name] = _clone_prefix(value, exact_width, axis=1)
+    for name in full_fields:
+        value = batch[name]
+        if (
+            not isinstance(value, torch.Tensor)
+            or value.ndim != 2
+            or tuple(value.shape) != (batch_size, full_transport_width)
+        ):
+            raise ValueError(f"live AgentLoop {name} is not full-sequence aligned")
+        replacements[name] = _clone_prefix(value, full_exact_width, axis=1)
+
+    position_ids = batch["position_ids"]
+    if (
+        not isinstance(position_ids, torch.Tensor)
+        or position_ids.ndim not in {2, 3}
+        or int(position_ids.shape[0]) != batch_size
+        or int(position_ids.shape[-1]) != full_transport_width
+    ):
+        raise ValueError(
+            "live AgentLoop position_ids must align on the full-sequence axis"
+        )
+    replacements["position_ids"] = _clone_prefix(
+        position_ids, full_exact_width, axis=position_ids.ndim - 1
+    )
+
+    for name in ("routed_experts", "teacher_ids", "teacher_logprobs"):
+        if name not in batch:
+            continue
+        value = batch[name]
+        if (
+            not isinstance(value, torch.Tensor)
+            or value.ndim < 2
+            or int(value.shape[0]) != batch_size
+            or int(value.shape[1]) != full_transport_width
+        ):
+            raise ValueError(f"live AgentLoop {name} is not full-sequence aligned")
+        replacements[name] = _clone_prefix(value, full_exact_width, axis=1)
+
+    for name, value in replacements.items():
+        batch[name] = value
+    return data
+
+
+def _clone_prefix(value: torch.Tensor, width: int, *, axis: int) -> torch.Tensor:
+    if int(value.shape[axis]) == width:
+        return value
+    slices = [slice(None)] * value.ndim
+    slices[axis] = slice(0, width)
+    return value[tuple(slices)].clone(memory_format=torch.contiguous_format)
+
+
 def bind_agent_loop_data_proto_sidecar_lease(data: object) -> object:
     """Attach the exact-sidecar lease to a live AgentLoop-manager DataProto.
 
@@ -446,7 +584,9 @@ def bind_agent_loop_data_proto_sidecar_lease(data: object) -> object:
     non_tensors = getattr(data, "non_tensor_batch", None)
     meta_info = getattr(data, "meta_info", None)
     if type(non_tensors) is not dict or type(meta_info) is not dict:
-        raise TypeError("live AgentLoop DataProto must expose mutable built-in mappings")
+        raise TypeError(
+            "live AgentLoop DataProto must expose mutable built-in mappings"
+        )
     missing = tuple(
         name for name in AGENT_LOOP_EXACT_SIDECAR_FIELDS if name not in non_tensors
     )
@@ -460,7 +600,9 @@ def bind_agent_loop_data_proto_sidecar_lease(data: object) -> object:
     if existing_release_fields is not None:
         existing = _sidecar_release_fields(data)
         if not set(leased_fields).issubset(existing):
-            raise RuntimeError("existing DataProto lease omits AgentLoop exact sidecars")
+            raise RuntimeError(
+                "existing DataProto lease omits AgentLoop exact sidecars"
+            )
         return data
     expected = {
         DATAPROTO_META_SCHEMA_FIELD: DATAPROTO_META_SCHEMA_VERSION,
@@ -545,8 +687,7 @@ def _bind_live_agent_loop_padding_contract(data: object) -> tuple[str, ...]:
             for value in prompts[row_index, : prompt_width - prompt_length].tolist()
         )
         padding_values.extend(
-            int(value)
-            for value in responses[row_index, response_length:].tolist()
+            int(value) for value in responses[row_index, response_length:].tolist()
         )
     if not padding_values or len(set(padding_values)) != 1:
         raise ValueError(
@@ -601,7 +742,9 @@ def _bind_live_agent_loop_padding_contract(data: object) -> tuple[str, ...]:
     }
     collisions = set(bound_fields) & set(non_tensors)
     if collisions:  # pragma: no cover - guarded by the complete/partial check above
-        raise RuntimeError(f"live AgentLoop padding fields collide: {sorted(collisions)}")
+        raise RuntimeError(
+            f"live AgentLoop padding fields collide: {sorted(collisions)}"
+        )
     non_tensors.update(bound_fields)
     return _PADDING_FIELD_ORDER
 
@@ -732,8 +875,7 @@ def release_verl_worker_tensordict_sidecars(data: object) -> int:
     if len(present) != len(fields):
         missing = tuple(name for name in fields if name not in data)
         raise RuntimeError(
-            "worker TensorDict sidecars were partially released: "
-            f"missing={missing!r}"
+            f"worker TensorDict sidecars were partially released: missing={missing!r}"
         )
     for name in fields:
         del data[name]
@@ -779,9 +921,7 @@ def make_sidecar_releasing_training_worker_class(
         raise TypeError("upstream TrainingWorker must be a class")
     for method_name in ("train_mini_batch", "infer_batch"):
         if not callable(getattr(upstream_worker_cls, method_name, None)):
-            raise TypeError(
-                f"upstream TrainingWorker is missing {method_name}()"
-            )
+            raise TypeError(f"upstream TrainingWorker is missing {method_name}()")
 
     class SidecarReleasingTrainingWorker(upstream_worker_cls):
         def train_mini_batch(self, data, *args, **kwargs):
@@ -857,9 +997,7 @@ def _worker_sidecar_fields(data: object) -> tuple[str, ...]:
         raise RuntimeError("worker TensorDict sidecar release lease is malformed")
     missing = tuple(name for name in fields if name not in data)
     if missing:
-        raise RuntimeError(
-            f"worker TensorDict is missing leased sidecars: {missing!r}"
-        )
+        raise RuntimeError(f"worker TensorDict is missing leased sidecars: {missing!r}")
     return fields
 
 

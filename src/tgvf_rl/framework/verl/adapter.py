@@ -63,6 +63,7 @@ class VerlAdapterConfig:
     agent_loop_manager_fqn: str | None = None
     max_tool_calls: int | None = None
     policy_pilot: PolicyPilotV1Config | None = None
+    response_transport_length: int | None = None
 
     def __post_init__(self) -> None:
         expected_manager = {
@@ -96,6 +97,20 @@ class VerlAdapterConfig:
                 raise ValueError(
                     "Policy Pilot v1 requires exactly four TGVF call attempts"
                 )
+            policy_length = self.policy_pilot.sampling.max_response_length
+            if (
+                type(self.response_transport_length) is not int
+                or self.response_transport_length <= policy_length
+            ):
+                raise ValueError(
+                    "Policy Pilot response_transport_length must exceed the "
+                    "cumulative policy-token budget so environment tokens cannot "
+                    "consume the upstream output width"
+                )
+        elif self.response_transport_length is not None:
+            raise ValueError(
+                "response_transport_length is defined only for Policy Pilot"
+            )
         validate_fsdp2_checkpoint_config(self.runtime.fsdp2)
 
     def public_config_overrides(self) -> Mapping[str, object]:
@@ -145,6 +160,7 @@ class VerlAdapterConfig:
             sampling = pilot.sampling
             lora = pilot.lora
             grpo = pilot.grpo
+            assert self.response_transport_length is not None
             values.update(
                 {
                     "actor_rollout_ref.model.path": pilot.model_path,
@@ -182,13 +198,13 @@ class VerlAdapterConfig:
                     ),
                     "actor_rollout_ref.rollout.do_sample": sampling.do_sample,
                     "actor_rollout_ref.rollout.response_length": (
-                        sampling.max_response_length
+                        self.response_transport_length
                     ),
                     "actor_rollout_ref.rollout.over_sample_rate": (
                         grpo.rollout_over_sample_rate
                     ),
                     "actor_rollout_ref.rollout.multi_turn.enable": True,
-                    "data.max_response_length": sampling.max_response_length,
+                    "data.max_response_length": self.response_transport_length,
                     "data.mm_processor_kwargs.max_pixels": pilot.image_max_pixels,
                     "data.filter_overlong_prompts": False,
                     "data.truncation": "error",
@@ -261,9 +277,7 @@ class VerlAdapterConfig:
                 "accepted multi-turn TRITON_ATTN path"
             )
         if values.get("VLLM_BATCH_INVARIANT") != "0":
-            raise ValueError(
-                "VLLM_BATCH_INVARIANT must be disabled with TRITON_ATTN"
-            )
+            raise ValueError("VLLM_BATCH_INVARIANT must be disabled with TRITON_ATTN")
 
 
 class VerlAdapter:

@@ -217,8 +217,7 @@ def _trajectory_response_materialization(
             response_mask.extend(0 for _ in error.template_token_ids)
             response_logprobs.extend(0.0 for _ in error.template_token_ids)
             ownership.extend(
-                TokenOwnership.TOOL_OBSERVATION.value
-                for _ in error.template_token_ids
+                TokenOwnership.TOOL_OBSERVATION.value for _ in error.template_token_ids
             )
 
     return (
@@ -746,13 +745,16 @@ class _LosslessAgentLoopManagerBase:
 
         from .data_bridge import (
             bind_agent_loop_data_proto_sidecar_lease,
+            compact_agent_loop_data_proto_response_width,
             validate_data_proto_integrity,
         )
 
         return _map_maybe_awaitable(
             generated,
             lambda output: _validate_and_return(
-                bind_agent_loop_data_proto_sidecar_lease(output),
+                bind_agent_loop_data_proto_sidecar_lease(
+                    compact_agent_loop_data_proto_response_width(output)
+                ),
                 validate_data_proto_integrity,
             ),
         )

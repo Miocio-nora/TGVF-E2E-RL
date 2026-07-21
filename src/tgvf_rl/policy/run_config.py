@@ -124,19 +124,14 @@ POLICY_E2E_AGENT_LOOP_CONFIG_PATH = (
     / "tgvf_native_policy_v1.yaml"
 )
 POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN = (
-    "tgvf_rl.framework.verl.policy_runtime."
-    "PolicyE2ERuntimeInvocationFactory"
+    "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
 )
 
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAFE_PROJECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_FQN = re.compile(
-    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$"
-)
+_FQN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 _GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
-_MCQ_OPTION_PATTERN = re.compile(
-    r"(?im)(?:^|\n)\s*(?:\(([A-H])\)|([A-H])[.):.])\s+\S"
-)
+_MCQ_OPTION_PATTERN = re.compile(r"(?im)(?:^|\n)\s*(?:\(([A-H])\)|([A-H])[.):.])\s+\S")
 _MCQ_LETTER_ANSWER = re.compile(r"^\(?[A-H]\)?(?:[.):])?$", re.IGNORECASE)
 _TOP_LEVEL_FIELDS = {
     "schema_version",
@@ -300,6 +295,12 @@ class SmokeCapacityBinding:
     vllm_max_num_seqs: int
     vllm_enable_chunked_prefill: bool
     vllm_enforce_eager: bool
+
+    @property
+    def response_transport_length(self) -> int:
+        """Maximum response-side width that still fits the bound context."""
+
+        return self.vllm_max_model_len - self.max_prompt_length
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,9 +492,13 @@ def load_policy_e2e_smoke_run_config(
             "cursor",
         },
     )
-    _require_exact(dataset_table["dataset_id"], DEEPEYES47K_DATASET_ID, "dataset.dataset_id")
+    _require_exact(
+        dataset_table["dataset_id"], DEEPEYES47K_DATASET_ID, "dataset.dataset_id"
+    )
     _require_exact(dataset_table["snapshot"], DEEPEYES47K_SNAPSHOT, "dataset.snapshot")
-    _require_exact(dataset_table["sample_count"], DEEPEYES47K_TOTAL_ROWS, "dataset.sample_count")
+    _require_exact(
+        dataset_table["sample_count"], DEEPEYES47K_TOTAL_ROWS, "dataset.sample_count"
+    )
     dataset_root = _existing_directory(dataset_table["root"], name="dataset.root")
     runtime_binding = DeepEyes47KRuntimeBinding.formal(
         manifest_file_sha256=_sha256(
@@ -635,7 +640,9 @@ def load_policy_e2e_smoke_run_config(
         TGVF_FOCUS_TOOL_SCHEMA_SHA256,
         "protocol.tool_schema_sha256",
     )
-    _require_exact(protocol_table["maximum_tool_calls"], 4, "protocol.maximum_tool_calls")
+    _require_exact(
+        protocol_table["maximum_tool_calls"], 4, "protocol.maximum_tool_calls"
+    )
     cap_error_sha256 = _sha256(
         protocol_table["cap_error_sha256"], name="protocol.cap_error_sha256"
     )
@@ -716,9 +723,7 @@ def load_policy_e2e_smoke_run_config(
         logit_processors=_text_tuple(
             sampling_table["logit_processors"], name="sampling.logit_processors"
         ),
-        logprob_measurement=_logprob_measurement(
-            sampling_table["logprob_measurement"]
-        ),
+        logprob_measurement=_logprob_measurement(sampling_table["logprob_measurement"]),
         stop_token_ids=_nonnegative_int_tuple(
             sampling_table["stop_token_ids"], name="sampling.stop_token_ids"
         ),
@@ -729,9 +734,7 @@ def load_policy_e2e_smoke_run_config(
             sampling_table["include_stop_str_in_output"],
             name="sampling.include_stop_str_in_output",
         ),
-        ignore_eos=_boolean(
-            sampling_table["ignore_eos"], name="sampling.ignore_eos"
-        ),
+        ignore_eos=_boolean(sampling_table["ignore_eos"], name="sampling.ignore_eos"),
     )
     if (
         "</tool_call>" in (sampling.stop_strings or ())
@@ -782,13 +785,17 @@ def load_policy_e2e_smoke_run_config(
             "conditional_tool_weight",
         },
     )
-    _require_exact(reward_table["task_kind"], POLICY_E2E_SMOKE_REWARD_TASK, "reward.task_kind")
+    _require_exact(
+        reward_table["task_kind"], POLICY_E2E_SMOKE_REWARD_TASK, "reward.task_kind"
+    )
     _require_exact(
         reward_table["answer_verifier"],
         POLICY_E2E_SMOKE_ANSWER_VERIFIER,
         "reward.answer_verifier",
     )
-    _require_exact(reward_table["judge_mode"], POLICY_E2E_SMOKE_JUDGE_MODE, "reward.judge_mode")
+    _require_exact(
+        reward_table["judge_mode"], POLICY_E2E_SMOKE_JUDGE_MODE, "reward.judge_mode"
+    )
     answer_verifier_sha256 = _sha256(
         reward_table["answer_verifier_sha256"],
         name="reward.answer_verifier_sha256",
@@ -804,17 +811,31 @@ def load_policy_e2e_smoke_run_config(
         answer_verifier_sha256=answer_verifier_sha256,
         judge_mode=reward_table["judge_mode"],
         judge_reason=_text(reward_table["judge_reason"], name="reward.judge_reason"),
-        answer_weight=_exact_real(reward_table["answer_weight"], 0.8, "reward.answer_weight"),
-        format_weight=_exact_real(reward_table["format_weight"], 0.2, "reward.format_weight"),
+        answer_weight=_exact_real(
+            reward_table["answer_weight"], 0.8, "reward.answer_weight"
+        ),
+        format_weight=_exact_real(
+            reward_table["format_weight"], 0.2, "reward.format_weight"
+        ),
         conditional_tool_weight=_exact_real(
-            reward_table["conditional_tool_weight"], 1.2, "reward.conditional_tool_weight"
+            reward_table["conditional_tool_weight"],
+            1.2,
+            "reward.conditional_tool_weight",
         ),
     )
 
     optimizer_table = _table(
         payload,
         "optimizer",
-        {"name", "learning_rate", "beta1", "beta2", "epsilon", "weight_decay", "maximum_gradient_norm"},
+        {
+            "name",
+            "learning_rate",
+            "beta1",
+            "beta2",
+            "epsilon",
+            "weight_decay",
+            "maximum_gradient_norm",
+        },
     )
     _require_exact(optimizer_table["name"], "adamw", "optimizer.name")
     optimizer = SmokeOptimizerBinding(
@@ -861,12 +882,31 @@ def load_policy_e2e_smoke_run_config(
     precision_table = _table(
         payload,
         "precision",
-        {"parameter_dtype", "reduce_dtype", "optimizer_state_dtype", "autocast_dtype", "gradient_scaler_enabled", "allow_tf32"},
+        {
+            "parameter_dtype",
+            "reduce_dtype",
+            "optimizer_state_dtype",
+            "autocast_dtype",
+            "gradient_scaler_enabled",
+            "allow_tf32",
+        },
     )
-    _require_exact(precision_table["parameter_dtype"], "bfloat16", "precision.parameter_dtype")
-    _require_exact(precision_table["optimizer_state_dtype"], "float32", "precision.optimizer_state_dtype")
-    _require_exact(precision_table["autocast_dtype"], "bfloat16", "precision.autocast_dtype")
-    _require_exact(precision_table["gradient_scaler_enabled"], False, "precision.gradient_scaler_enabled")
+    _require_exact(
+        precision_table["parameter_dtype"], "bfloat16", "precision.parameter_dtype"
+    )
+    _require_exact(
+        precision_table["optimizer_state_dtype"],
+        "float32",
+        "precision.optimizer_state_dtype",
+    )
+    _require_exact(
+        precision_table["autocast_dtype"], "bfloat16", "precision.autocast_dtype"
+    )
+    _require_exact(
+        precision_table["gradient_scaler_enabled"],
+        False,
+        "precision.gradient_scaler_enabled",
+    )
     reduce_dtype = _text(precision_table["reduce_dtype"], name="precision.reduce_dtype")
     if reduce_dtype not in {"bfloat16", "float32"}:
         raise ValueError("precision.reduce_dtype must be bfloat16 or float32")
@@ -882,7 +922,12 @@ def load_policy_e2e_smoke_run_config(
     accumulation_table = _table(
         payload,
         "accumulation",
-        {"global_prompt_batch_size", "prompt_micro_batch_size_per_rank", "rollout_prompt_micro_batch_size_per_engine", "gradient_accumulation_steps"},
+        {
+            "global_prompt_batch_size",
+            "prompt_micro_batch_size_per_rank",
+            "rollout_prompt_micro_batch_size_per_engine",
+            "gradient_accumulation_steps",
+        },
     )
     accumulation = SmokeAccumulationBinding(
         global_prompt_batch_size=_positive_int(
@@ -906,7 +951,20 @@ def load_policy_e2e_smoke_run_config(
     distributed_table = _table(
         payload,
         "distributed",
-        {"physical_gpu_ids", "logical_gpu_ids", "world_size", "actor_logical_gpu_ids", "rollout_logical_gpu_ids", "fsdp_strategy", "fsdp_reshard_after_forward", "rollout_backend", "vllm_tensor_parallel_size", "placement", "weight_sync_mode", "weight_sync_interval_optimizer_steps"},
+        {
+            "physical_gpu_ids",
+            "logical_gpu_ids",
+            "world_size",
+            "actor_logical_gpu_ids",
+            "rollout_logical_gpu_ids",
+            "fsdp_strategy",
+            "fsdp_reshard_after_forward",
+            "rollout_backend",
+            "vllm_tensor_parallel_size",
+            "placement",
+            "weight_sync_mode",
+            "weight_sync_interval_optimizer_steps",
+        },
     )
     distributed = _distributed(distributed_table)
     expected_global_batch = (
@@ -915,7 +973,9 @@ def load_policy_e2e_smoke_run_config(
         * accumulation.gradient_accumulation_steps
     )
     if accumulation.global_prompt_batch_size != expected_global_batch:
-        raise ValueError("accumulation global prompt batch is inconsistent with world size")
+        raise ValueError(
+            "accumulation global prompt batch is inconsistent with world size"
+        )
 
     capacity_table = _table(
         payload,
@@ -1091,17 +1151,13 @@ def load_policy_e2e_smoke_run_config(
         )
     resume_mode = _text(training_table["resume_mode"], name="training.resume_mode")
     if resume_mode not in {"auto", "disable", "resume_path"}:
-        raise ValueError(
-            "training.resume_mode must be auto, disable, or resume_path"
-        )
+        raise ValueError("training.resume_mode must be auto, disable, or resume_path")
     resume_from_path = _optional_absolute_path(
         training_table["resume_from_path"],
         name="training.resume_from_path",
     )
     if resume_mode in {"auto", "disable"} and resume_from_path is not None:
-        raise ValueError(
-            "training.resume_from_path must be empty in auto/disable mode"
-        )
+        raise ValueError("training.resume_from_path must be empty in auto/disable mode")
     if resume_mode == "resume_path":
         if resume_from_path is None or not resume_from_path.is_dir():
             raise ValueError(
@@ -1109,7 +1165,8 @@ def load_policy_e2e_smoke_run_config(
             )
     training = SmokeTrainingBinding(
         total_training_epochs=_positive_int(
-            training_table["total_training_epochs"], name="training.total_training_epochs"
+            training_table["total_training_epochs"],
+            name="training.total_training_epochs",
         ),
         maximum_optimizer_steps=_positive_int(
             training_table["maximum_optimizer_steps"],
@@ -1150,8 +1207,12 @@ def load_policy_e2e_smoke_run_config(
     checkpoint_directory = _absolute_path(
         output_table["checkpoint_directory"], name="output.checkpoint_directory"
     )
-    metrics_path = _absolute_path(output_table["metrics_path"], name="output.metrics_path")
-    _require_within(checkpoint_directory, output_root, name="output.checkpoint_directory")
+    metrics_path = _absolute_path(
+        output_table["metrics_path"], name="output.metrics_path"
+    )
+    _require_within(
+        checkpoint_directory, output_root, name="output.checkpoint_directory"
+    )
     _require_within(metrics_path, output_root, name="output.metrics_path")
     if resume_from_path is not None:
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
@@ -1228,9 +1289,14 @@ def _verify_deepeyes_files(
         raise ValueError("DeepEyes manifest fields differ")
     if manifest_bytes != _canonical_json_bytes(manifest) + b"\n":
         raise ValueError("DeepEyes manifest is not canonical JSON")
-    descriptor = {key: value for key, value in manifest.items() if key != "content_sha256"}
+    descriptor = {
+        key: value for key, value in manifest.items() if key != "content_sha256"
+    }
     computed_content = hashlib.sha256(_canonical_json_bytes(descriptor)).hexdigest()
-    if manifest["content_sha256"] != binding.content_sha256 or computed_content != binding.content_sha256:
+    if (
+        manifest["content_sha256"] != binding.content_sha256
+        or computed_content != binding.content_sha256
+    ):
         raise ValueError("DeepEyes manifest content SHA256 mismatch")
     required = {
         "schema_version": DEEPEYES47K_SCHEMA_VERSION,
@@ -1261,7 +1327,9 @@ def _verify_deepeyes_files(
                 try:
                     selected = json.loads(line)
                 except json.JSONDecodeError as error:
-                    raise ValueError("selected DeepEyes sample is invalid JSON") from error
+                    raise ValueError(
+                        "selected DeepEyes sample is invalid JSON"
+                    ) from error
                 break
     if not isinstance(selected, Mapping) or selected.get("sample_id") != sample_id:
         raise ValueError("DeepEyes sample_id differs from the selected cursor")
@@ -1354,11 +1422,24 @@ def _conditioning(value: object) -> TargetConditioningConfig:
 
 
 def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
-    physical = _nonnegative_int_tuple(table["physical_gpu_ids"], name="distributed.physical_gpu_ids")
-    logical = _nonnegative_int_tuple(table["logical_gpu_ids"], name="distributed.logical_gpu_ids")
-    actor = _nonnegative_int_tuple(table["actor_logical_gpu_ids"], name="distributed.actor_logical_gpu_ids")
-    rollout = _nonnegative_int_tuple(table["rollout_logical_gpu_ids"], name="distributed.rollout_logical_gpu_ids")
-    for name, values in (("physical_gpu_ids", physical), ("logical_gpu_ids", logical), ("actor_logical_gpu_ids", actor), ("rollout_logical_gpu_ids", rollout)):
+    physical = _nonnegative_int_tuple(
+        table["physical_gpu_ids"], name="distributed.physical_gpu_ids"
+    )
+    logical = _nonnegative_int_tuple(
+        table["logical_gpu_ids"], name="distributed.logical_gpu_ids"
+    )
+    actor = _nonnegative_int_tuple(
+        table["actor_logical_gpu_ids"], name="distributed.actor_logical_gpu_ids"
+    )
+    rollout = _nonnegative_int_tuple(
+        table["rollout_logical_gpu_ids"], name="distributed.rollout_logical_gpu_ids"
+    )
+    for name, values in (
+        ("physical_gpu_ids", physical),
+        ("logical_gpu_ids", logical),
+        ("actor_logical_gpu_ids", actor),
+        ("rollout_logical_gpu_ids", rollout),
+    ):
         if not values or len(set(values)) != len(values):
             raise ValueError(f"distributed.{name} must be non-empty and unique")
     world_size = _positive_int(table["world_size"], name="distributed.world_size")
@@ -1369,7 +1450,9 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
             "this Policy E2E smoke identity requires physical/logical GPUs 0-3"
         )
     if actor != logical or world_size != len(actor):
-        raise ValueError("this smoke requires every logical GPU in the FSDP2 actor world")
+        raise ValueError(
+            "this smoke requires every logical GPU in the FSDP2 actor world"
+        )
     if world_size != 4:
         raise ValueError("this Policy E2E smoke identity requires world_size=4")
     placement = _text(table["placement"], name="distributed.placement")
@@ -1377,7 +1460,9 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
         raise ValueError("this smoke requires colocated actor/rollout placement")
     _require_exact(table["fsdp_strategy"], "fsdp2", "distributed.fsdp_strategy")
     _require_exact(table["rollout_backend"], "vllm", "distributed.rollout_backend")
-    tp = _positive_int(table["vllm_tensor_parallel_size"], name="distributed.vllm_tensor_parallel_size")
+    tp = _positive_int(
+        table["vllm_tensor_parallel_size"], name="distributed.vllm_tensor_parallel_size"
+    )
     if tp != 1:
         raise ValueError("the initial 4-GPU Policy E2E smoke requires vLLM TP=1")
     if len(rollout) % tp != 0:
@@ -1389,11 +1474,16 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
         actor_logical_gpu_ids=actor,
         rollout_logical_gpu_ids=rollout,
         fsdp_strategy=table["fsdp_strategy"],
-        fsdp_reshard_after_forward=_boolean(table["fsdp_reshard_after_forward"], name="distributed.fsdp_reshard_after_forward"),
+        fsdp_reshard_after_forward=_boolean(
+            table["fsdp_reshard_after_forward"],
+            name="distributed.fsdp_reshard_after_forward",
+        ),
         rollout_backend=table["rollout_backend"],
         vllm_tensor_parallel_size=tp,
         placement=placement,
-        weight_sync_mode=_text(table["weight_sync_mode"], name="distributed.weight_sync_mode"),
+        weight_sync_mode=_text(
+            table["weight_sync_mode"], name="distributed.weight_sync_mode"
+        ),
         weight_sync_interval_optimizer_steps=_positive_int(
             table["weight_sync_interval_optimizer_steps"],
             name="distributed.weight_sync_interval_optimizer_steps",
@@ -1401,7 +1491,9 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
     )
 
 
-def _table(payload: Mapping[str, object], name: str, fields: set[str]) -> Mapping[str, object]:
+def _table(
+    payload: Mapping[str, object], name: str, fields: set[str]
+) -> Mapping[str, object]:
     value = payload.get(name)
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError(f"policy E2E smoke [{name}] fields differ")
@@ -1437,7 +1529,9 @@ def _text(value: object, *, name: str) -> str:
 
 def _sha256(value: object, *, name: str) -> str:
     text = _text(value, name=name)
-    if len(text) != 64 or any(character not in "0123456789abcdef" for character in text):
+    if len(text) != 64 or any(
+        character not in "0123456789abcdef" for character in text
+    ):
         raise ValueError(f"{name} must be a lowercase SHA-256")
     return text
 
@@ -1517,12 +1611,18 @@ def _text_tuple(value: object, *, name: str) -> tuple[str, ...]:
 
 
 def _nonnegative_int_tuple(value: object, *, name: str) -> tuple[int, ...]:
-    return tuple(_nonnegative_int(item, name=f"{name}[]") for item in _sequence(value, name=name))
+    return tuple(
+        _nonnegative_int(item, name=f"{name}[]") for item in _sequence(value, name=name)
+    )
 
 
 def _checkpoint_steps(value: object) -> tuple[int, ...]:
     steps = _nonnegative_int_tuple(value, name="training.checkpoint_steps")
-    if not steps or steps[0] != 0 or any(left >= right for left, right in zip(steps, steps[1:])):
+    if (
+        not steps
+        or steps[0] != 0
+        or any(left >= right for left, right in zip(steps, steps[1:]))
+    ):
         raise ValueError("training.checkpoint_steps must increase strictly from zero")
     return steps
 

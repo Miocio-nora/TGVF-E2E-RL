@@ -132,7 +132,9 @@ def test_atomic_crop_tgvf_schema_hash_and_capability_profiles_are_exact() -> Non
     assert TGVF_CROP_TOOL_SCHEMA["function"]["name"] == TGVF_CROP_TOOL_NAME
     assert first["function"]["parameters"]["required"] == ["bbox_2d", "target"]
     assert first["function"]["parameters"]["additionalProperties"] is False
-    assert "target-conditioned visual representation" in first["function"]["description"]
+    assert (
+        "target-conditioned visual representation" in first["function"]["description"]
+    )
     assert (
         hashlib.sha256(TGVF_CROP_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")).hexdigest()
         == TGVF_CROP_TOOL_SCHEMA_SHA256
@@ -143,12 +145,8 @@ def test_atomic_crop_tgvf_schema_hash_and_capability_profiles_are_exact() -> Non
     assert NativeToolCapabilityProfile.CROP_ONLY.tool_names == (
         IMAGE_ZOOM_IN_TOOL_NAME,
     )
-    assert NativeToolCapabilityProfile.TGVF_ONLY.tool_names == (
-        TGVF_FOCUS_TOOL_NAME,
-    )
-    assert NativeToolCapabilityProfile.CROP_TGVF.tool_names == (
-        TGVF_CROP_TOOL_NAME,
-    )
+    assert NativeToolCapabilityProfile.TGVF_ONLY.tool_names == (TGVF_FOCUS_TOOL_NAME,)
+    assert NativeToolCapabilityProfile.CROP_TGVF.tool_names == (TGVF_CROP_TOOL_NAME,)
     assert len(NativeToolCapabilityProfile.CROP_TGVF.tool_set_sha256) == 64
 
 
@@ -174,9 +172,10 @@ def test_parse_atomic_crop_tgvf_preserves_bbox_and_exact_target_span() -> None:
     assert parsed.raw_tool_call == text[text.index("<tool_call>") :]
     assert parsed.target_span.target_text == target
     assert parsed.target_span.raw_json_value != target
-    assert parsed.target_span.token_ids == turn.token_ids[
-        parsed.target_span.token_start : parsed.target_span.token_end
-    ]
+    assert (
+        parsed.target_span.token_ids
+        == turn.token_ids[parsed.target_span.token_start : parsed.target_span.token_end]
+    )
 
 
 @pytest.mark.parametrize(
@@ -406,6 +405,21 @@ def test_unpaired_unicode_surrogate_target_is_a_parse_error() -> None:
 
     assert error.value.code is ParseErrorCode.INVALID_ARGUMENTS
     assert "Unicode scalar" in str(error.value)
+
+
+def test_deeply_nested_json_is_a_recoverable_invalid_json_parse_error() -> None:
+    depth = 2_048
+    nested_target = "[" * depth + '"x"' + "]" * depth
+    text = (
+        '<tool_call>{"name":"tgvf_focus_tool","arguments":{"target":'
+        f"{nested_target}}}}}</tool_call>"
+    )
+
+    with pytest.raises(ToolCallParseError) as error:
+        StrictToolCallParser().parse(_character_token_turn(text))
+
+    assert error.value.code is ParseErrorCode.INVALID_JSON
+    assert isinstance(error.value.__cause__, RecursionError)
 
 
 def test_explicit_terminal_suffix_is_allowed_but_trailing_answer_is_not() -> None:

@@ -289,9 +289,10 @@ class StrictToolCallParser:
         try:
             decoded = _strict_json_loads(raw_json)
             root = _JsonSpanScanner(raw_json).parse()
-        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            scanner_matches_decoder = root.value == decoded
+        except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as error:
             raise ToolCallParseError(ParseErrorCode.INVALID_JSON, str(error)) from error
-        if root.value != decoded:
+        if not scanner_matches_decoder:
             raise ToolCallParseError(
                 ParseErrorCode.INVALID_JSON,
                 "JSON decoder and span scanner disagree",

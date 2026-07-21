@@ -12,6 +12,7 @@ from tgvf_rl.observations.schema import (
     CropTGVFObservationRecord,
     FocusedObservationRecord,
 )
+from tgvf_rl.protocol.schema import ToolErrorCode
 
 from .behavior import BehaviorTraceStore
 from .schema import (
@@ -199,23 +200,27 @@ class TrajectoryValidator:
                 raise ReplayMismatchError(
                     "tool call references a non-tool assistant turn"
                 )
-            if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
+            if isinstance(
+                record, (FocusedObservationRecord, CropTGVFObservationRecord)
+            ):
                 sampled_length = len(assistant_turn.tokens.token_ids)
                 if call.target_token_span.end > sampled_length:
                     raise ReplayMismatchError(
                         "sampled target span lies outside its assistant turn"
                     )
-                prefix_length = (
-                    record.condition.source_sequence_length - sampled_length
-                )
+                prefix_length = record.condition.source_sequence_length - sampled_length
                 expected_full_span = (
                     prefix_length + call.target_token_span.start,
                     prefix_length + call.target_token_span.end,
                 )
-                if prefix_length < 0 or (
-                    record.condition.conditioning_target_token_start,
-                    record.condition.conditioning_target_token_end,
-                ) != expected_full_span:
+                if (
+                    prefix_length < 0
+                    or (
+                        record.condition.conditioning_target_token_start,
+                        record.condition.conditioning_target_token_end,
+                    )
+                    != expected_full_span
+                ):
                     raise IdentityMismatchError(
                         "conditioning target span differs from sampled-turn offset"
                     )
@@ -287,7 +292,19 @@ class TrajectoryValidator:
                 raise ReplayMismatchError(
                     "tool-terminal trajectory must end in a tool-call assistant turn"
                 )
-            if not attempts or attempts[-1][1] != len(trajectory.assistant_turns) - 1:
+            final_turn_index = len(trajectory.assistant_turns) - 1
+            final_attempt_is_recorded = bool(
+                attempts and attempts[-1][1] == final_turn_index
+            )
+            cap_recovery_retry = (
+                trajectory.stop is TrajectoryStop.CALL_CAP
+                and _is_unadmitted_cap_recovery_retry(
+                    trajectory,
+                    attempts=attempts,
+                    final_turn_index=final_turn_index,
+                )
+            )
+            if not final_attempt_is_recorded and not cap_recovery_retry:
                 raise ReplayMismatchError(
                     "tool-terminal trajectory must record its final tool attempt"
                 )
@@ -313,6 +330,29 @@ class TrajectoryValidator:
                 raise IdentityMismatchError("duplicate trajectory batch identity")
             seen.add(key)
             self.validate(trajectory)
+
+
+def _is_unadmitted_cap_recovery_retry(
+    trajectory: TrajectoryRecord,
+    *,
+    attempts: tuple[tuple[int | None, int, str], ...],
+    final_turn_index: int,
+) -> bool:
+    """Recognize the one tool action forbidden after the emitted cap error."""
+
+    cap_errors = tuple(
+        error
+        for error in trajectory.tool_errors
+        if error.code == ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value
+    )
+    if len(cap_errors) != 1 or not attempts:
+        return False
+    cap_error = cap_errors[0]
+    return cap_error.assistant_turn_index == final_turn_index - 1 and attempts[-1] == (
+        cap_error.attempt_index,
+        cap_error.assistant_turn_index,
+        "error",
+    )
 
 
 class TrajectoryBatcher:

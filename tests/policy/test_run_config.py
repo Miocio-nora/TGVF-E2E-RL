@@ -82,9 +82,7 @@ def _prepare_external_inputs(root: Path) -> dict[str, object]:
             "path": f"images/{image_path.name}",
             "sha256": image_sha256,
         },
-        "extra_info": {
-            "question": "Which option is correct?\nA. first\nB. second"
-        },
+        "extra_info": {"question": "Which option is correct?\nA. first\nB. second"},
         "reward_model": {"ground_truth": "B"},
         "data_source": "multiple_choice",
         "task_kind": "mcq",
@@ -171,21 +169,21 @@ native_deepstack_enabled = true
 image_max_pixels = 262144
 
 [dataset]
-root = {_q(external['dataset_root'])}
+root = {_q(external["dataset_root"])}
 dataset_id = "{DEEPEYES47K_DATASET_ID}"
 snapshot = "{DEEPEYES47K_SNAPSHOT}"
 sample_count = {DEEPEYES47K_TOTAL_ROWS}
-manifest_file_sha256 = "{external['manifest_file_sha256']}"
-content_sha256 = "{external['content_sha256']}"
-samples_sha256 = "{external['samples_sha256']}"
-iteration_identity_sha256 = "{external['iteration_sha256']}"
+manifest_file_sha256 = "{external["manifest_file_sha256"]}"
+content_sha256 = "{external["content_sha256"]}"
+samples_sha256 = "{external["samples_sha256"]}"
+iteration_identity_sha256 = "{external["iteration_sha256"]}"
 shuffle_seed = 42
 sample_id = "{SAMPLE_ID}"
 cursor = 0
 
 [representation]
-artifact_path = {_q(external['artifact_path'])}
-artifact_file_sha256 = "{external['artifact_file_sha256']}"
+artifact_path = {_q(external["artifact_path"])}
+artifact_file_sha256 = "{external["artifact_file_sha256"]}"
 artifact_manifest_sha256 = "{SHA_A}"
 artifact_namespace = "tgvf-representation"
 artifact_name = "contextual-adapter"
@@ -314,8 +312,8 @@ maximum_actor_checkpoints_to_keep = 2
 
 [output]
 root = {_q(output_root)}
-checkpoint_directory = {_q(output_root / 'checkpoints')}
-metrics_path = {_q(output_root / 'metrics.jsonl')}
+checkpoint_directory = {_q(output_root / "checkpoints")}
+metrics_path = {_q(output_root / "metrics.jsonl")}
 '''
 
 
@@ -352,13 +350,15 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
     assert config.distributed.fsdp_strategy == "fsdp2"
     assert config.distributed.vllm_tensor_parallel_size == 1
     assert config.capacity.vllm_max_model_len == 32768
+    assert config.capacity.response_transport_length == 28672
     assert config.framework.agent_loop_config_path == POLICY_E2E_AGENT_LOOP_CONFIG_PATH
     assert config.training.checkpoint_steps == (0, 1, 2)
     assert config.as_record()["sampling"]["rollout_master_seed"] == 42
     assert config.identity_sha256 == repeated.identity_sha256
-    assert config.identity_sha256 == hashlib.sha256(
-        config.canonical_json.encode("utf-8")
-    ).hexdigest()
+    assert (
+        config.identity_sha256
+        == hashlib.sha256(config.canonical_json.encode("utf-8")).hexdigest()
+    )
     assert config.source_sha256 == hashlib.sha256(text.encode("utf-8")).hexdigest()
     assert not output_root.exists()
 
@@ -462,7 +462,9 @@ def test_rejects_unknown_fields_and_unsafe_run_id(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="top-level fields differ"):
         load_policy_e2e_smoke_run_config(path)
 
-    path.write_text(text.replace("policy-smoke-test-001", "../unsafe"), encoding="utf-8")
+    path.write_text(
+        text.replace("policy-smoke-test-001", "../unsafe"), encoding="utf-8"
+    )
     with pytest.raises(ValueError, match="safe path-independent"):
         load_policy_e2e_smoke_run_config(path)
 
@@ -512,7 +514,9 @@ def test_rejects_selected_row_that_does_not_match_mcq_reward_route(
     manifest_path = Path(external["dataset_root"]) / "manifest.json"
     manifest = json.loads(manifest_path.read_bytes())
     manifest["samples"]["sha256"] = drifted_samples_sha
-    descriptor = {key: value for key, value in manifest.items() if key != "content_sha256"}
+    descriptor = {
+        key: value for key, value in manifest.items() if key != "content_sha256"
+    }
     manifest["content_sha256"] = hashlib.sha256(_canonical(descriptor)).hexdigest()
     manifest_bytes = _canonical(manifest) + b"\n"
     manifest_path.write_bytes(manifest_bytes)
@@ -556,24 +560,26 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.overrides["actor_rollout_ref.actor.strategy"] == "fsdp2"
     assert plan.overrides["actor_rollout_ref.actor.fsdp_config.forward_only"] is False
     assert plan.overrides["actor_rollout_ref.ref.fsdp_config.forward_only"] is True
-    assert plan.overrides[
-        "actor_rollout_ref.model.override_config.attn_implementation"
-    ] == "sdpa"
-    assert plan.overrides["actor_rollout_ref.model.enable_gradient_checkpointing"] is False
+    assert (
+        plan.overrides["actor_rollout_ref.model.override_config.attn_implementation"]
+        == "sdpa"
+    )
+    assert (
+        plan.overrides["actor_rollout_ref.model.enable_gradient_checkpointing"] is False
+    )
     assert plan.overrides["actor_rollout_ref.model.use_remove_padding"] is False
     assert plan.overrides["actor_rollout_ref.actor.fsdp_config.model_dtype"] == "bf16"
     assert plan.overrides["actor_rollout_ref.ref.fsdp_config.model_dtype"] == "bf16"
-    assert plan.overrides["actor_rollout_ref.actor.fsdp_config.use_torch_compile"] is False
-    assert plan.overrides["actor_rollout_ref.ref.fsdp_config.use_torch_compile"] is False
+    assert (
+        plan.overrides["actor_rollout_ref.actor.fsdp_config.use_torch_compile"] is False
+    )
+    assert (
+        plan.overrides["actor_rollout_ref.ref.fsdp_config.use_torch_compile"] is False
+    )
     # e003 v0 multiplies ppo_mini_batch_size by n internally, while its FSDP
     # micro-batch field counts expanded trajectories.
     assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 4
-    assert (
-        plan.overrides[
-            "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
-        ]
-        == 8
-    )
+    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 8
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
     assert plan.environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
     assert plan.environment["TGVF_POLICY_RUN_CONFIG_PATH"] == str(path)
@@ -593,13 +599,17 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.overrides["actor_rollout_ref.rollout.max_model_len"] == 32768
     assert plan.overrides["actor_rollout_ref.rollout.max_num_seqs"] == 8
     assert plan.overrides["data.max_prompt_length"] == 4096
+    assert plan.overrides["actor_rollout_ref.rollout.response_length"] == 28672
+    assert plan.overrides["data.max_response_length"] == 28672
+    assert config.policy.sampling.max_response_length == 8192
     assert plan.overrides[
         "actor_rollout_ref.rollout.agent.agent_loop_config_path"
     ] == str(POLICY_E2E_AGENT_LOOP_CONFIG_PATH)
     assert plan.overrides["actor_rollout_ref.rollout.agent.num_workers"] == 4
-    assert plan.overrides[
-        "actor_rollout_ref.rollout.checkpoint_manager_class"
-    ] == POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
+    assert (
+        plan.overrides["actor_rollout_ref.rollout.checkpoint_manager_class"]
+        == POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
+    )
     assert plan.inherited_upstream_fields == ()
     assert plan.external_components["invocation_factory"] == (
         NATIVE_INVOCATION_FACTORY_FQN
@@ -614,10 +624,13 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     plan.assert_launch_ready()
     from verl.utils.import_utils import load_extern_object
 
-    assert load_extern_object(
-        plan.overrides["data.custom_cls.path"],
-        plan.overrides["data.custom_cls.name"],
-    ) is TGVFSelectedSampleDataset
+    assert (
+        load_extern_object(
+            plan.overrides["data.custom_cls.path"],
+            plan.overrides["data.custom_cls.name"],
+        )
+        is TGVFSelectedSampleDataset
+    )
     assert plan.overrides["actor_rollout_ref.rollout.custom"][
         "reference_diagnostic"
     ] == {
@@ -661,11 +674,11 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
         / "trainer"
         / "config"
     )
-    composed = compose_upstream_verl_config(
-        plan, config_directory=upstream_config_dir
-    )
+    composed = compose_upstream_verl_config(plan, config_directory=upstream_config_dir)
     assert composed.trainer.use_v1 is False
     assert composed.actor_rollout_ref.rollout.n == 8
+    assert composed.actor_rollout_ref.rollout.response_length == 28672
+    assert composed.data.max_response_length == 28672
     assert composed.actor_rollout_ref.rollout.agent.num_workers == 4
     assert (
         composed.actor_rollout_ref.rollout.checkpoint_manager_class
@@ -675,7 +688,9 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert composed.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu == 8
     assert composed.actor_rollout_ref.actor.fsdp_config.forward_only is False
     assert composed.actor_rollout_ref.ref.fsdp_config.forward_only is True
-    assert composed.actor_rollout_ref.model.override_config.attn_implementation == "sdpa"
+    assert (
+        composed.actor_rollout_ref.model.override_config.attn_implementation == "sdpa"
+    )
     assert composed.actor_rollout_ref.model.enable_gradient_checkpointing is False
     assert composed.actor_rollout_ref.model.use_remove_padding is False
     assert composed.actor_rollout_ref.actor.fsdp_config.model_dtype == "bf16"
@@ -693,7 +708,9 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
         composed.actor_rollout_ref.rollout.custom.sampling.forward_state
         == "request_seeded_batch_sensitive_v1"
     )
-    assert composed.actor_rollout_ref.rollout.custom.sampling.vllm_batch_invariant is False
+    assert (
+        composed.actor_rollout_ref.rollout.custom.sampling.vllm_batch_invariant is False
+    )
     assert (
         composed.actor_rollout_ref.rollout.custom.actor_batch_contract[
             "derived_gradient_accumulation_steps"
@@ -719,10 +736,7 @@ def test_selected_sample_dataset_binding_is_exact_and_read_only(tmp_path: Path) 
     assert binding.repeat_count == 8
     assert binding.as_config()["samples_sha256"] == config.dataset.samples_sha256
     assert "question" not in binding.as_config()
-    assert (
-        VerlSelectedSampleDatasetBinding.from_config(binding.as_config())
-        == binding
-    )
+    assert VerlSelectedSampleDatasetBinding.from_config(binding.as_config()) == binding
     assert not config.output.root.exists()
 
 
@@ -740,9 +754,7 @@ def test_composed_selected_sample_binding_preserves_multiline_text(
         / "trainer"
         / "config"
     )
-    composed = compose_upstream_verl_config(
-        plan, config_directory=upstream_config_dir
-    )
+    composed = compose_upstream_verl_config(plan, config_directory=upstream_config_dir)
 
     restored = VerlSelectedSampleDatasetBinding.from_config(
         composed.data.tgvf_selected_sample
@@ -756,7 +768,9 @@ def test_verl_actor_batch_mapping_preserves_nontrivial_gradient_accumulation(
 ) -> None:
     path, text, _ = _write_config(tmp_path)
     text = text.replace("global_prompt_batch_size = 4", "global_prompt_batch_size = 8")
-    text = text.replace("gradient_accumulation_steps = 1", "gradient_accumulation_steps = 2")
+    text = text.replace(
+        "gradient_accumulation_steps = 1", "gradient_accumulation_steps = 2"
+    )
     path.write_text(text, encoding="utf-8")
     config = load_policy_e2e_smoke_run_config(path)
     plan = build_policy_e2e_smoke_verl_plan(config)
@@ -765,12 +779,7 @@ def test_verl_actor_batch_mapping_preserves_nontrivial_gradient_accumulation(
     ]
 
     assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 8
-    assert (
-        plan.overrides[
-            "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
-        ]
-        == 8
-    )
+    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 8
     assert contract["upstream_internal_mini_batch_size_trajectories"] == 64
     assert contract["derived_gradient_accumulation_steps"] == 2
     assert contract["optimizer_steps_per_trainer_step"] == 1
