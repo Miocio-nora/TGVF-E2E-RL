@@ -7254,7 +7254,7 @@ instead of repeated bullets.
 
 ### PRL-01-R29-QWEN3-GRPO-1STEP-CLEAN-TEARDOWN-GPU0123
 
-- `PLANNED` / `PENDING`; bounded four-B200 revalidation of the R28 teardown
+- `COMPLETE` / `FAIL`; bounded four-B200 revalidation of the R28 teardown
   repair. Config
   `configs/policy/runs/prl_01_r29_qwen3_grpo_1step_clean_teardown_gpu0123.toml`,
   file SHA256 `ea7f4625...eee4`, run identity `2f021f4d...fce7`, code
@@ -7270,6 +7270,37 @@ instead of repeated bullets.
   tmux `prl01_r29_gpu0123`. Acceptance requires exit 0, complete checkpoint and
   metrics, explicit W&B finish, and no `pure virtual method called`, EngineCore
   death, DataLoader-killed, traceback, or atexit error text.
+- The real update and checkpoint completed: 32 trajectories, 196,302 generated
+  policy tokens, 54 successful TGVF observations and 162.25s end-to-end. W&B
+  run `xhp0jfj9` explicitly synchronized and printed its final run summary.
+  Teardown then reproduced four vLLM `pure virtual method called` aborts and a
+  W&B service atexit `BrokenPipeError`. GPU memory was fully released and the
+  checkpoint/metrics are intact, but the clean-teardown acceptance gate failed.
+
+### PRL-01-R30-QWEN3-GRPO-BS16-THROUGHPUT-GPU0123
+
+- `PLANNED` / `PENDING`; one-update four-B200 throughput cell for the Pilot
+  `global prompt batch=16`, selected to match the DeepEyes reference's four
+  prompts per GPU while retaining Pilot `n=8`.
+- Config
+  `configs/policy/runs/prl_01_r30_qwen3_grpo_bs16_throughput_gpu0123.toml`,
+  file SHA256 `938e6ba3265c36eed9a7b2d59e2dead3c56373132d5fedc907609657024ce2be`,
+  run identity `6ad4607b14b6125f5aeba18ad975118ce3580dbb9bbd6070d98ca98597e85ee9`,
+  code `6f4537c00bd6ca21fa910e1f7b632bf48f6b7340`, clean tracked implementation.
+- Physical GPUs 0--3; four-rank FSDP2 actor/reference and four colocated TP1
+  vLLM workers. Global prompt batch 16, `n=8` (128 trajectories), per-rank actor
+  prompt micro-batch 1, per-engine rollout prompt micro-batch 1, and gradient
+  accumulation 4. Actor/replay token caps remain 98,304 per micro-batch.
+- R29 model, TGVF Adapter/provider, fixed DeepEyes sample, native prompt/tool,
+  reward, sampling, exact-observation replay, LoRA scope and GRPO mathematics
+  are unchanged. vLLM capacity is 0.45 memory utilization, 16,384 batched
+  tokens and 32 sequences; this is the only runtime-capacity change.
+- Output
+  `artifacts/policy/PRL-01-R30-qwen3-grpo-bs16-throughput-gpu0123`; tmux
+  `prl01_r30_gpu0123`. Acceptance requires one complete update/checkpoint with
+  peak memory, generation/reference/actor/sync timing and trajectories/second.
+  Exit-only teardown noise is recorded separately and does not invalidate the
+  throughput measurement.
 
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
