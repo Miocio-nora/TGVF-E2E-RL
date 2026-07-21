@@ -620,6 +620,34 @@ slice still must pass live behavior-logprob capture, exact recorded main
 weight synchronization, and clean-process checkpoint/resume. Every GPU command
 requires a complete `PLANNED` entry in `EXPERIMENT_LEDGER.md` before launch.
 
+### 0.8.4 Accepted two-model Policy Pilot runtime correction
+
+Decision ID: **POLICY-PILOT-V1-TWO-MODEL-RUNTIME-20260722**
+
+Accepted by: **user**, on **2026-07-22 JST**, after the first executable cells
+proved that the AgentLoop-owned full Qwen copy made the runtime unusable.
+
+The production Policy Pilot runtime has exactly two Qwen model roles on GPU:
+the upstream-veRL FSDP2 actor/reference worker and the vLLM rollout worker.
+AgentLoop and tool code must not call `from_pretrained()` for a model or own a
+third Qwen copy. The frozen TGVF Adapter is mounted in the existing vLLM worker.
+That worker obtains contextual target state from the same behavior-policy
+weights that sampled the tool call, reuses its Qwen vision/merger modules, and
+materializes main `D` plus every D-DeepStack branch. The target-token-embedding
+provider uses the same rollout model embedding. Crop observations likewise use
+the existing rollout vision encoder.
+
+The worker returns an identity-complete immutable observation bundle; current
+policy, frozen reference, and optimizer replay continue to consume that exact
+bundle and never regenerate it. Rollout weights/cache may sleep during actor
+update and wake only after the actor root is resharded; LoRA publication must
+also update the TGVF worker's behavior-policy identity before the next rollout.
+Acceptance requires no full-model allocation in AgentLoop processes, bounded
+steady-state memory suitable for repeated four-B200 training steps, one exact
+GRPO update, post-update generation, paired checkpoint, and clean resume. The
+failed three-model layout and further KV-only squeezing are not admissible
+production paths.
+
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 
 Decision ID: **RPI-20260721-CONTEXTUAL-MATRIXCE-2000-PAIR**
