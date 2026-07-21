@@ -609,6 +609,75 @@ accepted single native counterfactual but reduced query top-1 from `0.83` to
 ablation task and supports retaining learned D-DeepStack branches in the
 production TGVF Adapter.
 
+### 0.11 Accepted audited native-D grounding diagnostics
+
+Decision ID: **RPI-20260721-AUDITED-D-GROUNDING-DIAGNOSTICS**
+
+Accepted by: **user**, on **2026-07-21 JST**.
+
+Representation internal evaluation has two distinct, regularly supported
+native-D diagnostic families. Both use fresh no-cache Qwen-native contexts
+which remove the original image, original-image DeepStack and all pre-D text
+KV state. Every observation is the atomic main `D` plus all enabled
+D-DeepStack branches; a main-D-only artifact remains explicit rather than
+silently fabricating branches.
+
+The **cross-image value-pair** family extends the existing causal readability
+test from one example to an ordered manifest of audited pairs. Each pair has
+two distinct images but an exactly identical question and target, two
+different image-supported values, and matched Qwen visual geometry. The
+manifest records the two retained sample identities, expected values and an
+audit identity. Per-pair teacher-forced value log odds, expected direction
+flip, separation and both free continuations are retained; aggregate pair
+count, direction-flip rate, continuation accuracy and termination rate are
+reported. This family tests whether `D` contains the image-specific value and
+whether frozen Qwen can read it. It is not named or interpreted as a target-
+hallucination test.
+
+The separate **supported/unsupported target-pair** family directly tests target
+hallucination. Each audited pair fixes one source image and one generic probe
+question, then declares one target whose referred content is visibly present
+and one target whose referred content is visibly absent. The audit manifest
+content-binds the source sample/image, both target strings, explicit audit
+rationales, and the fixed labels `PRESENT` and `NOT_PRESENT`; an unreviewed
+automatically mined negative is forbidden. The TGVF Adapter materializes
+`D(image,target_positive)` and `D(image,target_negative)` from the same source
+visual state and selected conditioning provider. Both are read in separately
+serialized native tool transcripts with the corresponding target text.
+
+For each target, frozen Qwen scores the difference between the teacher-forced
+**mean token log probabilities** of `PRESENT` and `NOT_PRESENT`. Mean reduction
+is mandatory because the fixed Qwen tokenizer encodes these labels with
+different token counts; summed sequence log probability would introduce a
+label-length bias. This does not change the historical cross-image value-flip
+contract, which remains summed teacher-forced token log probability. The same
+two target-presence contexts are also scored with an exact-shape,
+all-zero main `D` and all-zero enabled D-DeepStack branches. This zero-D lane
+retains the target text and every transcript/layout field, and is therefore the
+target-text baseline. Required per-pair outputs are actual-D positive and
+negative log odds, their separation, zero-D positive and negative log odds,
+positive D contribution, negative D false-positive amplification, actual
+direction correctness, negative false-positive status, plus actual-D greedy
+continuations for both targets. Aggregate metrics include direction accuracy,
+negative false-positive rate, mean separation, mean positive D contribution,
+mean negative false-positive amplification, continuation accuracy and healthy
+termination. A positive false-positive amplification means that the produced
+`D` increased belief in an audited-absent target beyond the same model's
+target-text/zero-D baseline; the base model's pre-existing target-copy bias is
+reported separately and must not be attributed to the TGVF Adapter.
+
+The two manifests may contain any positive number of audited pairs and are
+immutable/content-addressed. New standard internal-evaluation identities must
+enable both families; historical reports/configurations remain readable under
+their original schema and are not retroactively rewritten. The initial
+extension may use a bounded audited manifest from the fixed v4 clean-imend
+Golden population. It changes no representation training data, loss,
+TGVF Adapter parameter, checkpoint, prompt used for training, or norm
+objective. Acceptance requires strict manifest/schema tests, actual-D versus
+zero-D scoring tests, aggregate-reduction tests, existing counterfactual
+regression tests, and one separately planned single-GPU evaluation of a
+completed immutable artifact.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

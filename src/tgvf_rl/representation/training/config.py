@@ -559,6 +559,8 @@ class RepresentationPostTrainingInternalEvaluationConfig:
     ordered_group_manifest_sha256: str | None = None
     counterfactual_manifest_path: Path | None = None
     counterfactual_manifest_sha256: str | None = None
+    grounding_manifest_path: Path | None = None
+    grounding_manifest_sha256: str | None = None
     report_path: Path | None = None
     random_seed: int | None = None
     max_new_tokens: int | None = None
@@ -572,6 +574,8 @@ class RepresentationPostTrainingInternalEvaluationConfig:
             self.ordered_group_manifest_sha256,
             self.counterfactual_manifest_path,
             self.counterfactual_manifest_sha256,
+            self.grounding_manifest_path,
+            self.grounding_manifest_sha256,
             self.report_path,
             self.random_seed,
             self.max_new_tokens,
@@ -602,6 +606,25 @@ class RepresentationPostTrainingInternalEvaluationConfig:
             ("counterfactual_manifest_sha256", self.counterfactual_manifest_sha256),
         ):
             _sha256(digest, field_name=f"post_training_internal_evaluation.{name}")
+        if (self.grounding_manifest_path is None) != (
+            self.grounding_manifest_sha256 is None
+        ):
+            raise ValueError(
+                "grounding manifest path and SHA256 must be configured together"
+            )
+        if self.grounding_manifest_path is not None:
+            _absolute_path(
+                self.grounding_manifest_path,
+                field_name=(
+                    "post_training_internal_evaluation.grounding_manifest_path"
+                ),
+            )
+            _sha256(
+                self.grounding_manifest_sha256,
+                field_name=(
+                    "post_training_internal_evaluation.grounding_manifest_sha256"
+                ),
+            )
         if (
             isinstance(self.random_seed, bool)
             or not isinstance(self.random_seed, int)
@@ -1606,6 +1629,12 @@ def _parse_post_training_internal_evaluation(
         "max_new_tokens",
         "eos_token_ids",
     }
+    grounding_keys = {
+        "grounding_manifest_path",
+        "grounding_manifest_sha256",
+    }
+    if grounding_keys & set(value):
+        fields.update(grounding_keys)
     _exact_fields(value, fields, table="post_training_internal_evaluation")
     return RepresentationPostTrainingInternalEvaluationConfig(
         enabled=True,
@@ -1633,6 +1662,25 @@ def _parse_post_training_internal_evaluation(
             value,
             "counterfactual_manifest_sha256",
             table="post_training_internal_evaluation",
+        ),
+        grounding_manifest_path=(
+            _path(
+                value,
+                "grounding_manifest_path",
+                table="post_training_internal_evaluation",
+                allow_empty=False,
+            )
+            if "grounding_manifest_path" in value
+            else None
+        ),
+        grounding_manifest_sha256=(
+            _string(
+                value,
+                "grounding_manifest_sha256",
+                table="post_training_internal_evaluation",
+            )
+            if "grounding_manifest_sha256" in value
+            else None
         ),
         report_path=_path(
             value,
@@ -1779,6 +1827,17 @@ def _verify_external_files(config: RepresentationTrainingConfig) -> None:
                 "counterfactual_manifest_path",
                 evaluation.counterfactual_manifest_path,
                 evaluation.counterfactual_manifest_sha256,
+            ),
+            *(
+                (
+                    (
+                        "grounding_manifest_path",
+                        evaluation.grounding_manifest_path,
+                        evaluation.grounding_manifest_sha256,
+                    ),
+                )
+                if evaluation.grounding_manifest_path is not None
+                else ()
             ),
         ):
             assert path is not None and expected_sha256 is not None

@@ -29,6 +29,9 @@ from .runtime import create_qwen3_representation_runtime
 
 
 REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION = (
+    "representation-internal-evaluation-run-v3"
+)
+REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION_V2 = (
     "representation-internal-evaluation-run-v2"
 )
 REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_LEGACY_SCHEMA_VERSION = (
@@ -79,6 +82,7 @@ def load_representation_internal_evaluation_run_config(
     schema_version = payload.get("schema_version")
     if schema_version not in {
         REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION,
+        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION_V2,
         REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_LEGACY_SCHEMA_VERSION,
     }:
         raise ValueError("internal-evaluation run config schema mismatch")
@@ -91,7 +95,10 @@ def load_representation_internal_evaluation_run_config(
         "execution",
         "evaluation",
     }
-    if schema_version == REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION:
+    if schema_version in {
+        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION,
+        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION_V2,
+    }:
         expected_fields.add("evaluation_data")
     if set(payload) != expected_fields:
         raise ValueError("internal-evaluation run config fields differ")
@@ -119,7 +126,10 @@ def load_representation_internal_evaluation_run_config(
     execution = _table(payload, "execution", {"physical_gpu_id"})
     evaluation_data_path: Path | None = None
     evaluation_data_source_sha256: str | None = None
-    if schema_version == REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION:
+    if schema_version in {
+        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION,
+        REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION_V2,
+    }:
         evaluation_data = _table(
             payload,
             "evaluation_data",
@@ -132,20 +142,25 @@ def load_representation_internal_evaluation_run_config(
             evaluation_data["source_sha256"],
             name="evaluation_data.source_sha256",
         )
+    evaluation_fields = {
+        "evaluation_id",
+        "ordered_group_manifest_path",
+        "ordered_group_manifest_sha256",
+        "counterfactual_manifest_path",
+        "counterfactual_manifest_sha256",
+        "report_path",
+        "random_seed",
+        "max_new_tokens",
+        "eos_token_ids",
+    }
+    if schema_version == REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION:
+        evaluation_fields.update(
+            {"grounding_manifest_path", "grounding_manifest_sha256"}
+        )
     evaluation = _table(
         payload,
         "evaluation",
-        {
-            "evaluation_id",
-            "ordered_group_manifest_path",
-            "ordered_group_manifest_sha256",
-            "counterfactual_manifest_path",
-            "counterfactual_manifest_sha256",
-            "report_path",
-            "random_seed",
-            "max_new_tokens",
-            "eos_token_ids",
-        },
+        evaluation_fields,
     )
     training_config_path = _absolute_path(
         source["training_config_path"], name="source.training_config_path"
@@ -175,6 +190,24 @@ def load_representation_internal_evaluation_run_config(
         counterfactual_manifest_sha256=_sha256(
             evaluation["counterfactual_manifest_sha256"],
             name="evaluation.counterfactual_manifest_sha256",
+        ),
+        grounding_manifest_path=(
+            _absolute_path(
+                evaluation["grounding_manifest_path"],
+                name="evaluation.grounding_manifest_path",
+            )
+            if schema_version
+            == REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION
+            else None
+        ),
+        grounding_manifest_sha256=(
+            _sha256(
+                evaluation["grounding_manifest_sha256"],
+                name="evaluation.grounding_manifest_sha256",
+            )
+            if schema_version
+            == REPRESENTATION_INTERNAL_EVALUATION_RUN_CONFIG_SCHEMA_VERSION
+            else None
         ),
         report_path=_absolute_path(
             evaluation["report_path"], name="evaluation.report_path"
@@ -246,6 +279,17 @@ def run_representation_internal_evaluation_from_artifact(
             "counterfactual manifest",
             config.evaluation.counterfactual_manifest_path,
             config.evaluation.counterfactual_manifest_sha256,
+        ),
+        *(
+            (
+                (
+                    "grounding manifest",
+                    config.evaluation.grounding_manifest_path,
+                    config.evaluation.grounding_manifest_sha256,
+                ),
+            )
+            if config.evaluation.grounding_manifest_path is not None
+            else ()
         ),
     ):
         assert path is not None and digest is not None

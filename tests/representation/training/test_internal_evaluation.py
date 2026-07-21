@@ -15,6 +15,8 @@ from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter, TGVFAdapterVariant
 from tgvf_rl.representation.training.internal_evaluation import (
     DETERMINISTIC_RANDOM_D_ALGORITHM,
+    NativeBinaryLogOddsOutput,
+    NativeBinaryLogOddsRequest,
     NativeCausalValueFlipRequest,
     NativeCausalValueFlipOutput,
     NativeCounterfactualCase,
@@ -23,6 +25,7 @@ from tgvf_rl.representation.training.internal_evaluation import (
     NativeFreeContinuationRequest,
     NativeFreeContinuationOutput,
     NativeTeacherForcedForward,
+    NativeTargetPresenceCase,
     RepresentationInternalEvaluationIdentity,
     _deterministic_random_visual_bundle,
     _mean_nll_matrix,
@@ -366,6 +369,44 @@ def _native_case() -> NativeCounterfactualCase:
     )
 
 
+def _target_presence_case() -> NativeTargetPresenceCase:
+    base = _native_case().context
+    positive_context = NativeDOnlyContext(
+        context_id="target-presence-positive",
+        transcript_identity="target-presence-positive-transcript",
+        family=base.family,
+        input_ids=base.input_ids,
+        attention_mask=base.attention_mask,
+        position_ids=base.position_ids,
+        d_positions=base.d_positions,
+        image_grid_thw=base.image_grid_thw,
+    )
+    negative_context = NativeDOnlyContext(
+        context_id="target-presence-negative",
+        transcript_identity="target-presence-negative-transcript",
+        family=base.family,
+        input_ids=base.input_ids,
+        attention_mask=base.attention_mask,
+        position_ids=base.position_ids,
+        d_positions=base.d_positions,
+        image_grid_thw=base.image_grid_thw,
+    )
+    return NativeTargetPresenceCase(
+        case_id="target-presence-0",
+        pair_identity="audited-pair-identity",
+        source_sample_id="audited-source-sample",
+        source_image_sha256="a" * 64,
+        positive_target="visible red flag",
+        negative_target="absent locomotive",
+        positive_context=positive_context,
+        negative_context=negative_context,
+        positive_observation_identity="positive-observation",
+        negative_observation_identity="negative-observation",
+        positive_observation=_bundle(0.75),
+        negative_observation=_bundle(1.25),
+    )
+
+
 class _NativeEvaluators:
     def __init__(self) -> None:
         self.causal_calls = []
@@ -396,8 +437,50 @@ class _NativeEvaluators:
         )
 
 
+class _TargetPresenceEvaluators:
+    def __init__(self) -> None:
+        self.log_odds_calls: list[NativeBinaryLogOddsRequest] = []
+        self.continuation_calls: list[NativeFreeContinuationRequest] = []
+
+    def log_odds(self, request):
+        self.log_odds_calls.append(request)
+        is_zero = all(
+            not bool(torch.count_nonzero(tensor).item())
+            for tensor in (
+                request.observation.main,
+                *request.observation.deepstack,
+            )
+        )
+        positive_context = request.context.context_id.endswith("positive")
+        value = (
+            (0.5 if positive_context else 0.25)
+            if is_zero
+            else (3.0 if positive_context else -2.0)
+        )
+        return NativeBinaryLogOddsOutput(
+            case_id=request.case_id,
+            log_odds_positive_over_negative=value,
+        )
+
+    def continuation(self, request):
+        self.continuation_calls.append(request)
+        return NativeFreeContinuationOutput(
+            case_id=request.case_id,
+            variant=request.variant,
+            generated_token_ids=(40,),
+            generated_text=request.expected_value,
+            extracted_value=request.expected_value,
+            stop_reason="natural_stop",
+        )
+
+
 class _TinyNativeMaterializer:
-    _value_ids = {"OPEN": (30,), "CLOSED": (31,)}
+    _value_ids = {
+        "OPEN": (30,),
+        "CLOSED": (31,),
+        "PRESENT": (32,),
+        "NOT_PRESENT": (33, 34),
+    }
 
     def value_token_ids(
         self, context: NativeDOnlyContext, value: str
@@ -589,6 +672,8 @@ def test_internal_runner_executes_all_controls_health_and_native_callbacks(
 
     assert report.native_counterfactuals[0].expected_direction_flip
     assert report.native_counterfactuals[0].log_odds_separation == pytest.approx(4.25)
+    assert report.native_counterfactual_summary.pair_count == 1
+    assert report.native_counterfactual_summary.expected_direction_flip_rate == 1.0
     assert all(
         continuation.value_consistent and continuation.healthy_termination
         for continuation in report.native_counterfactuals[0].continuations
@@ -629,6 +714,54 @@ def test_internal_runner_executes_all_controls_health_and_native_callbacks(
     assert len(payload["groups"][0]["query"]["nll_matrix"]) == 2
     with pytest.raises(FileExistsError):
         save_representation_internal_evaluation_report_atomic(report, artifact_path)
+
+
+def test_target_presence_reports_actual_and_zero_d_hallucination_controls() -> None:
+    target = _TargetPresenceEvaluators()
+    report = run_representation_internal_evaluation(
+        identity=_identity(),
+        adapter=_adapter(),
+        qwen_model=_qwen(),
+        family_adapter=_RecordingFamilyAdapter(),
+        sample_groups=_sample_groups(),
+        group_builder=_GroupBuilder(),
+        native_counterfactual_cases=(_native_case(),),
+        causal_value_flip_evaluator=_NativeEvaluators().causal,
+        free_continuation_evaluator=_NativeEvaluators().continuation,
+        native_target_presence_cases=(_target_presence_case(),),
+        target_presence_log_odds_evaluator=target.log_odds,
+        target_presence_free_continuation_evaluator=target.continuation,
+    )
+
+    record = report.native_target_presence[0]
+    assert record.actual_positive_log_odds_present == pytest.approx(3.0)
+    assert record.actual_negative_log_odds_present == pytest.approx(-2.0)
+    assert record.zero_d_positive_log_odds_present == pytest.approx(0.5)
+    assert record.zero_d_negative_log_odds_present == pytest.approx(0.25)
+    assert record.actual_separation == pytest.approx(5.0)
+    assert record.positive_d_contribution == pytest.approx(2.5)
+    assert record.negative_d_false_positive_amplification == pytest.approx(-2.25)
+    assert record.actual_direction_correct
+    assert not record.negative_false_positive
+    assert [continuation.variant for continuation in record.continuations] == [
+        "positive_target",
+        "negative_target",
+    ]
+    assert len(target.log_odds_calls) == 4
+    assert all(
+        all(
+            not bool(torch.count_nonzero(tensor).item())
+            for tensor in (call.observation.main, *call.observation.deepstack)
+        )
+        for call in target.log_odds_calls[2:]
+    )
+    summary = report.native_target_presence_summary
+    assert summary is not None
+    assert summary.pair_count == 1
+    assert summary.actual_direction_accuracy == pytest.approx(1.0)
+    assert summary.negative_false_positive_rate == pytest.approx(0.0)
+    assert summary.continuation_accuracy == pytest.approx(1.0)
+    assert summary.healthy_termination_rate == pytest.approx(1.0)
 
 
 def test_random_d_is_deterministic_and_preserves_atomic_tensor_health() -> None:
@@ -672,6 +805,15 @@ def test_concrete_native_evaluator_executes_real_injected_qwen_forwards() -> Non
     case = _native_case()
 
     causal = evaluator.causal_value_flip(NativeCausalValueFlipRequest(case))
+    binary = evaluator.binary_log_odds(
+        NativeBinaryLogOddsRequest(
+            case_id="presence",
+            context=case.context,
+            observation=case.observation_a,
+            positive_value="PRESENT",
+            negative_value="NOT_PRESENT",
+        )
+    )
     continuation = evaluator.free_continuation(
         NativeFreeContinuationRequest(
             case_id=case.case_id,
@@ -685,6 +827,7 @@ def test_concrete_native_evaluator_executes_real_injected_qwen_forwards() -> Non
 
     assert math.isfinite(causal.observation_a_log_odds_a_over_b)
     assert math.isfinite(causal.observation_b_log_odds_a_over_b)
+    assert math.isfinite(binary.log_odds_positive_over_negative)
     assert 1 <= len(continuation.generated_token_ids) <= 2
     assert continuation.generated_text.startswith("tokens:")
     assert continuation.stop_reason in {"natural_stop", "length_cap"}
@@ -706,6 +849,33 @@ def test_concrete_native_evaluator_executes_real_injected_qwen_forwards() -> Non
     )
     assert len(report.native_counterfactuals) == 1
     assert len(report.native_counterfactuals[0].continuations) == 2
+
+
+def test_binary_log_odds_removes_fixed_label_token_length_bias(monkeypatch) -> None:
+    evaluator = create_injected_native_counterfactual_evaluator(
+        model=_qwen(),
+        family_adapter=_RecordingFamilyAdapter(),
+        materializer=_TinyNativeMaterializer(),
+        eos_token_ids=(63,),
+        max_new_tokens=2,
+    )
+    case = _native_case()
+
+    def equal_mean_logprob(*, token_ids, **_kwargs):
+        return -2.0 * len(token_ids)
+
+    monkeypatch.setattr(evaluator, "_value_logprob", equal_mean_logprob)
+    output = evaluator.binary_log_odds(
+        NativeBinaryLogOddsRequest(
+            case_id="equal-average-nll",
+            context=case.context,
+            observation=case.observation_a,
+            positive_value="PRESENT",
+            negative_value="NOT_PRESENT",
+        )
+    )
+
+    assert output.log_odds_positive_over_negative == pytest.approx(0.0)
 
 
 def test_internal_runner_fails_closed_without_attention_or_fresh_native_context() -> (

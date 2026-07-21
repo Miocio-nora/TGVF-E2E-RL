@@ -25,6 +25,10 @@ from .qwen3_counterfactual import (
     Qwen3CounterfactualCaseBuilder,
     load_qwen3_counterfactual_manifest,
 )
+from .qwen3_grounding import (
+    Qwen3GroundingDiagnosticBuilder,
+    load_qwen3_grounding_manifest,
+)
 from .native_pipeline import Qwen3NativeRepresentationGroupBuilder
 from .readout import RepresentationCandidateObservation
 from .runtime import Qwen3RepresentationRuntime
@@ -230,7 +234,7 @@ def run_post_training_internal_evaluation(
     assert config.eos_token_ids is not None
     assert config.ordered_group_manifest_sha256 is not None
     assert config.counterfactual_manifest_sha256 is not None
-    for name, path, expected_sha256 in (
+    manifest_inputs = [
         (
             "ordered-group",
             config.ordered_group_manifest_path,
@@ -241,7 +245,17 @@ def run_post_training_internal_evaluation(
             config.counterfactual_manifest_path,
             config.counterfactual_manifest_sha256,
         ),
-    ):
+    ]
+    if config.grounding_manifest_path is not None:
+        assert config.grounding_manifest_sha256 is not None
+        manifest_inputs.append(
+            (
+                "grounding",
+                config.grounding_manifest_path,
+                config.grounding_manifest_sha256,
+            )
+        )
+    for name, path, expected_sha256 in manifest_inputs:
         if file_sha256(path) != expected_sha256:
             raise ValueError(f"post-training {name} manifest changed during training")
     group_manifest = load_internal_evaluation_group_manifest(
@@ -279,6 +293,59 @@ def run_post_training_internal_evaluation(
         eos_token_ids=config.eos_token_ids,
         max_new_tokens=config.max_new_tokens,
     )
+    native_cases = counterfactual_build.cases
+    causal_value_flip_evaluator = evaluator.causal_value_flip
+    free_continuation_evaluator = evaluator.free_continuation
+    target_presence_cases = ()
+    target_presence_evaluator = None
+    if config.grounding_manifest_path is not None:
+        grounding_manifest = load_qwen3_grounding_manifest(
+            config.grounding_manifest_path
+        )
+        grounding = Qwen3GroundingDiagnosticBuilder(
+            runtime=runtime,
+            group_builder=group_builder,
+        ).build(
+            manifest=grounding_manifest,
+            data_manifest_sha256=validation_manifest_sha256,
+            samples=validation_samples,
+        )
+        grounding_cross_evaluator = create_injected_native_counterfactual_evaluator(
+            model=qwen_model,
+            family_adapter=family_adapter,
+            materializer=grounding.cross_image.materializer,
+            eos_token_ids=config.eos_token_ids,
+            max_new_tokens=config.max_new_tokens,
+        )
+        target_presence_evaluator = create_injected_native_counterfactual_evaluator(
+            model=qwen_model,
+            family_adapter=family_adapter,
+            materializer=grounding.target_presence_materializer,
+            eos_token_ids=config.eos_token_ids,
+            max_new_tokens=config.max_new_tokens,
+        )
+        grounding_cross_case_ids = {
+            case.case_id for case in grounding.cross_image.cases
+        }
+
+        def causal_value_flip_evaluator(request):
+            selected = (
+                grounding_cross_evaluator
+                if request.case.case_id in grounding_cross_case_ids
+                else evaluator
+            )
+            return selected.causal_value_flip(request)
+
+        def free_continuation_evaluator(request):
+            selected = (
+                grounding_cross_evaluator
+                if request.case_id in grounding_cross_case_ids
+                else evaluator
+            )
+            return selected.free_continuation(request)
+
+        native_cases = (*counterfactual_build.cases, *grounding.cross_image.cases)
+        target_presence_cases = grounding.target_presence_cases
     report = run_representation_internal_evaluation(
         identity=RepresentationInternalEvaluationIdentity(
             evaluation_id=config.evaluation_id,
@@ -294,9 +361,20 @@ def run_post_training_internal_evaluation(
         family_adapter=family_adapter,
         sample_groups=sample_groups,
         group_builder=group_builder,
-        native_counterfactual_cases=counterfactual_build.cases,
-        causal_value_flip_evaluator=evaluator.causal_value_flip,
-        free_continuation_evaluator=evaluator.free_continuation,
+        native_counterfactual_cases=native_cases,
+        causal_value_flip_evaluator=causal_value_flip_evaluator,
+        free_continuation_evaluator=free_continuation_evaluator,
+        native_target_presence_cases=target_presence_cases,
+        target_presence_log_odds_evaluator=(
+            target_presence_evaluator.binary_log_odds
+            if target_presence_evaluator is not None
+            else None
+        ),
+        target_presence_free_continuation_evaluator=(
+            target_presence_evaluator.free_continuation
+            if target_presence_evaluator is not None
+            else None
+        ),
     )
     artifact: RepresentationInternalEvaluationArtifact | None = None
     if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -345,9 +423,7 @@ def _validate_eos_ids(
         raise ValueError("internal-evaluation EOS token ID lies outside tokenizer")
     configured = runtime.tokenizer.eos_token_id
     configured_ids = (
-        tuple(configured)
-        if isinstance(configured, (list, tuple))
-        else (configured,)
+        tuple(configured) if isinstance(configured, (list, tuple)) else (configured,)
     )
     if any(not isinstance(token_id, int) for token_id in configured_ids):
         raise TypeError("Qwen tokenizer has no integer EOS token identity")

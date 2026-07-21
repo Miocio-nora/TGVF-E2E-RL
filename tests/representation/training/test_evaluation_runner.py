@@ -21,10 +21,18 @@ def _config_text(
     schema_version: str = "representation-internal-evaluation-run-v1",
 ) -> str:
     evaluation_data = ""
-    if schema_version == "representation-internal-evaluation-run-v2":
+    if schema_version in {
+        "representation-internal-evaluation-run-v2",
+        "representation-internal-evaluation-run-v3",
+    }:
         evaluation_data = f'''\n[evaluation_data]
-jsonl_path = "{root / 'v4-clean-imend-test.jsonl'}"
+jsonl_path = "{root / "v4-clean-imend-test.jsonl"}"
 source_sha256 = "{_SHA}"
+'''
+    grounding = ""
+    if schema_version == "representation-internal-evaluation-run-v3":
+        grounding = f'''grounding_manifest_path = "{root / "grounding.json"}"
+grounding_manifest_sha256 = "{_SHA}"
 '''
     return f'''schema_version = "{schema_version}"
 run_id = "RP-TEST-INTERNAL-EVAL"
@@ -35,11 +43,11 @@ commit = "{_COMMIT}"
 dirty = {dirty}
 
 [source]
-training_config_path = "{root / 'training.toml'}"
+training_config_path = "{root / "training.toml"}"
 training_config_sha256 = "{_SHA}"
 
 [artifact]
-path = "{root / 'adapter.pt'}"
+path = "{root / "adapter.pt"}"
 file_sha256 = "{_SHA}"
 manifest_sha256 = "{_SHA}"
 expected_run_identity_sha256 = "{_SHA}"
@@ -51,11 +59,11 @@ physical_gpu_id = 3
 
 [evaluation]
 evaluation_id = "qwen3-test-v1"
-ordered_group_manifest_path = "{root / 'groups.json'}"
+ordered_group_manifest_path = "{root / "groups.json"}"
 ordered_group_manifest_sha256 = "{_SHA}"
-counterfactual_manifest_path = "{root / 'counterfactual.json'}"
+counterfactual_manifest_path = "{root / "counterfactual.json"}"
 counterfactual_manifest_sha256 = "{_SHA}"
-report_path = "{root / 'report.json'}"
+{grounding}report_path = "{root / "report.json"}"
 random_seed = 42
 max_new_tokens = 64
 eos_token_ids = [151645]
@@ -90,6 +98,22 @@ def test_v2_binds_explicit_evaluation_dataset(tmp_path: Path) -> None:
 
     assert config.evaluation_data_path == tmp_path / "v4-clean-imend-test.jsonl"
     assert config.evaluation_data_source_sha256 == _SHA
+
+
+def test_v3_requires_audited_grounding_manifest(tmp_path: Path) -> None:
+    path = tmp_path / "evaluation-v3.toml"
+    path.write_text(
+        _config_text(
+            tmp_path,
+            schema_version="representation-internal-evaluation-run-v3",
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_representation_internal_evaluation_run_config(path)
+
+    assert config.evaluation.grounding_manifest_path == tmp_path / "grounding.json"
+    assert config.evaluation.grounding_manifest_sha256 == _SHA
 
 
 def test_rejects_dirty_formal_evaluation_code(tmp_path: Path) -> None:

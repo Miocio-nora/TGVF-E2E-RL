@@ -83,6 +83,7 @@ READOUT_MASK_MODE = "causal_post_evidence_original_image_key_block_v1"
 READOUT_POSITION_SOURCE = "family_native_group_builder_v1"
 READOUT_VISUAL_SWAP_UNIT = "atomic_main_and_all_deepstack_v1"
 CAUSAL_VALUE_FLIP_LOG_ODDS_CONTRACT = "summed_teacher_forced_token_logprob_v1"
+TARGET_PRESENCE_LOG_ODDS_CONTRACT = "mean_teacher_forced_token_logprob_v1"
 _UNSPECIFIED_GROUP_LABEL = "__unspecified__"
 _GROUPING_DIMENSIONS = (
     "evidence_type",
@@ -92,6 +93,7 @@ _GROUPING_DIMENSIONS = (
 )
 
 ContinuationVariant = Literal["value_a", "value_b"]
+TargetPresenceVariant = Literal["positive_target", "negative_target"]
 ContinuationStopReason = Literal[
     "natural_stop", "length_cap", "malformed", "runtime_error"
 ]
@@ -290,6 +292,48 @@ class NativeCausalValueFlipEvaluator(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class NativeBinaryLogOddsRequest:
+    """Score two declared continuations under one exact native-D context."""
+
+    case_id: str
+    context: NativeDOnlyContext
+    observation: RepresentationVisualTensorBundle
+    positive_value: str
+    negative_value: str
+
+    def __post_init__(self) -> None:
+        for name in ("case_id", "positive_value", "negative_value"):
+            _non_empty_text(getattr(self, name), name=name)
+        if self.positive_value == self.negative_value:
+            raise ValueError("binary log-odds values must be distinct")
+        if not isinstance(self.context, NativeDOnlyContext):
+            raise TypeError("binary log-odds context must be NativeDOnlyContext")
+        if not isinstance(self.observation, RepresentationVisualTensorBundle):
+            raise TypeError("binary log-odds observation must be a visual bundle")
+        if len(self.context.d_positions) != self.observation.main.shape[1]:
+            raise ValueError("binary log-odds D positions differ from D token count")
+
+
+@dataclass(frozen=True, slots=True)
+class NativeBinaryLogOddsOutput:
+    case_id: str
+    log_odds_positive_over_negative: float
+
+    def __post_init__(self) -> None:
+        _non_empty_text(self.case_id, name="case_id")
+        _finite_float(
+            self.log_odds_positive_over_negative,
+            name="log_odds_positive_over_negative",
+        )
+
+
+class NativeBinaryLogOddsEvaluator(Protocol):
+    def __call__(
+        self, request: NativeBinaryLogOddsRequest
+    ) -> NativeBinaryLogOddsOutput: ...
+
+
+@dataclass(frozen=True, slots=True)
 class NativeTeacherForcedForward:
     """One fully materialized family-native value-scoring request."""
 
@@ -432,6 +476,67 @@ class NativeFreeContinuationEvaluator(Protocol):
     ) -> NativeFreeContinuationOutput: ...
 
 
+@dataclass(frozen=True, slots=True)
+class NativeTargetPresenceCase:
+    """One audited same-image supported/unsupported target pair."""
+
+    case_id: str
+    pair_identity: str
+    source_sample_id: str
+    source_image_sha256: str
+    positive_target: str
+    negative_target: str
+    positive_context: NativeDOnlyContext
+    negative_context: NativeDOnlyContext
+    positive_observation_identity: str
+    negative_observation_identity: str
+    positive_observation: RepresentationVisualTensorBundle
+    negative_observation: RepresentationVisualTensorBundle
+    present_value: str = "PRESENT"
+    not_present_value: str = "NOT_PRESENT"
+
+    def __post_init__(self) -> None:
+        for name in (
+            "case_id",
+            "pair_identity",
+            "source_sample_id",
+            "positive_target",
+            "negative_target",
+            "positive_observation_identity",
+            "negative_observation_identity",
+        ):
+            _non_empty_text(getattr(self, name), name=name)
+        _lowercase_sha256(self.source_image_sha256, name="source_image_sha256")
+        if self.positive_target == self.negative_target:
+            raise ValueError("target-presence targets must be distinct")
+        if self.present_value != "PRESENT" or self.not_present_value != "NOT_PRESENT":
+            raise ValueError("target-presence labels are fixed")
+        for context in (self.positive_context, self.negative_context):
+            if not isinstance(context, NativeDOnlyContext):
+                raise TypeError("target-presence contexts must be NativeDOnlyContext")
+        for observation in (
+            self.positive_observation,
+            self.negative_observation,
+        ):
+            if not isinstance(observation, RepresentationVisualTensorBundle):
+                raise TypeError("target-presence observations must be visual bundles")
+        _assert_visual_bundle_contract(
+            self.negative_observation,
+            self.positive_observation,
+            name="negative-target observation",
+        )
+        if (
+            len(self.positive_context.d_positions)
+            != self.positive_observation.main.shape[1]
+        ):
+            raise ValueError("positive target context and D token count differ")
+        if (
+            len(self.negative_context.d_positions)
+            != self.negative_observation.main.shape[1]
+        ):
+            raise ValueError("negative target context and D token count differ")
+
+
 class InjectedNativeCounterfactualEvaluator:
     """Concrete no-cache value-flip and greedy-continuation evaluator.
 
@@ -523,6 +628,45 @@ class InjectedNativeCounterfactualEvaluator:
             case_id=case.case_id,
             observation_a_log_odds_a_over_b=observation_a_log_odds,
             observation_b_log_odds_a_over_b=observation_b_log_odds,
+        )
+
+    def binary_log_odds(
+        self, request: NativeBinaryLogOddsRequest
+    ) -> NativeBinaryLogOddsOutput:
+        if not isinstance(request, NativeBinaryLogOddsRequest):
+            raise TypeError("binary log-odds input must be a typed request")
+        if request.context.family != self.family_adapter.capabilities.family:
+            raise ValueError("binary log-odds context differs from Qwen family")
+        if len(request.observation.deepstack) != (
+            self.family_adapter.capabilities.deepstack_branch_count
+        ):
+            raise ValueError("binary log-odds branch count differs from Qwen family")
+        positive_ids = _validated_generated_ids(
+            self.materializer.value_token_ids(request.context, request.positive_value),
+            name="positive continuation token IDs",
+        )
+        negative_ids = _validated_generated_ids(
+            self.materializer.value_token_ids(request.context, request.negative_value),
+            name="negative continuation token IDs",
+        )
+        if positive_ids == negative_ids:
+            raise ValueError("binary continuation values cannot share token IDs")
+        return NativeBinaryLogOddsOutput(
+            case_id=request.case_id,
+            log_odds_positive_over_negative=(
+                self._value_logprob(
+                    context=request.context,
+                    observation=request.observation,
+                    token_ids=positive_ids,
+                )
+                / len(positive_ids)
+                - self._value_logprob(
+                    context=request.context,
+                    observation=request.observation,
+                    token_ids=negative_ids,
+                )
+                / len(negative_ids)
+            ),
         )
 
     def free_continuation(
@@ -803,6 +947,91 @@ class NativeCounterfactualEvaluationRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeCounterfactualSummary:
+    pair_count: int
+    expected_direction_flip_rate: float
+    continuation_accuracy: float
+    healthy_termination_rate: float
+
+    def __post_init__(self) -> None:
+        if isinstance(self.pair_count, bool) or self.pair_count <= 0:
+            raise ValueError("counterfactual summary requires positive pair_count")
+        for name in (
+            "expected_direction_flip_rate",
+            "continuation_accuracy",
+            "healthy_termination_rate",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0 or value > 1:
+                raise ValueError(f"{name} must lie in [0,1]")
+
+
+@dataclass(frozen=True, slots=True)
+class NativeTargetPresenceContinuationRecord:
+    variant: TargetPresenceVariant
+    expected_value: str
+    generated_token_ids: tuple[int, ...]
+    generated_text: str
+    extracted_value: str | None
+    stop_reason: ContinuationStopReason
+    value_consistent: bool
+    healthy_termination: bool
+
+
+@dataclass(frozen=True, slots=True)
+class NativeTargetPresenceEvaluationRecord:
+    case_id: str
+    pair_identity: str
+    source_sample_id: str
+    source_image_sha256: str
+    positive_target: str
+    negative_target: str
+    positive_context_id: str
+    negative_context_id: str
+    positive_observation_identity: str
+    negative_observation_identity: str
+    actual_positive_log_odds_present: float
+    actual_negative_log_odds_present: float
+    zero_d_positive_log_odds_present: float
+    zero_d_negative_log_odds_present: float
+    actual_separation: float
+    positive_d_contribution: float
+    negative_d_false_positive_amplification: float
+    actual_direction_correct: bool
+    negative_false_positive: bool
+    continuations: tuple[NativeTargetPresenceContinuationRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeTargetPresenceSummary:
+    pair_count: int
+    actual_direction_accuracy: float
+    negative_false_positive_rate: float
+    mean_actual_separation: float
+    mean_positive_d_contribution: float
+    mean_negative_d_false_positive_amplification: float
+    continuation_accuracy: float
+    healthy_termination_rate: float
+    score_contract: str = TARGET_PRESENCE_LOG_ODDS_CONTRACT
+
+    def __post_init__(self) -> None:
+        if isinstance(self.pair_count, bool) or self.pair_count <= 0:
+            raise ValueError("target-presence summary requires positive pair_count")
+        for name in (
+            "actual_direction_accuracy",
+            "negative_false_positive_rate",
+            "mean_actual_separation",
+            "mean_positive_d_contribution",
+            "mean_negative_d_false_positive_amplification",
+            "continuation_accuracy",
+            "healthy_termination_rate",
+        ):
+            _finite_float(getattr(self, name), name=name)
+        if self.score_contract != TARGET_PRESENCE_LOG_ODDS_CONTRACT:
+            raise ValueError("target-presence score contract drifted")
+
+
+@dataclass(frozen=True, slots=True)
 class RepresentationInternalEvaluationReport:
     identity: RepresentationInternalEvaluationIdentity
     execution: RepresentationReadoutExecutionContract
@@ -813,6 +1042,9 @@ class RepresentationInternalEvaluationReport:
     grouped_metrics: tuple[RepresentationGroupedInternalMetrics, ...]
     health: RepresentationInternalHealthSummary
     native_counterfactuals: tuple[NativeCounterfactualEvaluationRecord, ...]
+    native_counterfactual_summary: NativeCounterfactualSummary
+    native_target_presence: tuple[NativeTargetPresenceEvaluationRecord, ...] = ()
+    native_target_presence_summary: NativeTargetPresenceSummary | None = None
     random_d_algorithm: str = DETERMINISTIC_RANDOM_D_ALGORITHM
     attention_topk: int = ATTENTION_TOPK
 
@@ -831,6 +1063,19 @@ class RepresentationInternalEvaluationReport:
             raise ValueError("query summary count differs from group records")
         if not self.native_counterfactuals:
             raise ValueError("native counterfactual outputs are required")
+        if self.native_counterfactual_summary.pair_count != len(
+            self.native_counterfactuals
+        ):
+            raise ValueError("counterfactual summary count differs from records")
+        if bool(self.native_target_presence) != (
+            self.native_target_presence_summary is not None
+        ):
+            raise ValueError("target-presence records and summary must co-occur")
+        if self.native_target_presence_summary is not None and (
+            self.native_target_presence_summary.pair_count
+            != len(self.native_target_presence)
+        ):
+            raise ValueError("target-presence summary count differs from records")
         if self.random_d_algorithm != DETERMINISTIC_RANDOM_D_ALGORITHM:
             raise ValueError("internal-evaluation random-D algorithm drifted")
         if self.attention_topk != ATTENTION_TOPK:
@@ -856,6 +1101,11 @@ def run_representation_internal_evaluation(
     native_counterfactual_cases: Sequence[NativeCounterfactualCase],
     causal_value_flip_evaluator: NativeCausalValueFlipEvaluator,
     free_continuation_evaluator: NativeFreeContinuationEvaluator,
+    native_target_presence_cases: Sequence[NativeTargetPresenceCase] = (),
+    target_presence_log_odds_evaluator: NativeBinaryLogOddsEvaluator | None = None,
+    target_presence_free_continuation_evaluator: (
+        NativeFreeContinuationEvaluator | None
+    ) = None,
 ) -> RepresentationInternalEvaluationReport:
     """Run all accepted historical controls and native causal evaluations."""
 
@@ -875,6 +1125,19 @@ def run_representation_internal_evaluation(
         raise TypeError("native internal evaluators must be callable")
     groups_of_samples = _validated_sample_groups(sample_groups)
     native_cases = _validated_native_cases(native_counterfactual_cases)
+    target_presence_cases = _validated_target_presence_cases(
+        native_target_presence_cases
+    )
+    if target_presence_cases and (
+        target_presence_log_odds_evaluator is None
+        or target_presence_free_continuation_evaluator is None
+    ):
+        raise ValueError("target-presence cases require both native evaluators")
+    if not target_presence_cases and (
+        target_presence_log_odds_evaluator is not None
+        or target_presence_free_continuation_evaluator is not None
+    ):
+        raise ValueError("target-presence evaluators require target-presence cases")
     if family_adapter.capabilities.family != native_cases[0].context.family:
         raise ValueError("native counterfactual family differs from Qwen adapter")
     if any(
@@ -888,6 +1151,21 @@ def run_representation_internal_evaluation(
         for observation in (case.observation_a, case.observation_b)
     ):
         raise ValueError("native counterfactual branch count differs from Qwen family")
+    if any(
+        context.family != family_adapter.capabilities.family
+        for case in target_presence_cases
+        for context in (case.positive_context, case.negative_context)
+    ):
+        raise ValueError("target-presence cases differ from Qwen family")
+    if any(
+        len(observation.deepstack) != family_adapter.capabilities.deepstack_branch_count
+        for case in target_presence_cases
+        for observation in (
+            case.positive_observation,
+            case.negative_observation,
+        )
+    ):
+        raise ValueError("target-presence branch count differs from Qwen family")
 
     assert_frozen_deterministic_readout_model(qwen_model)
     adapter_modes = tuple((module, module.training) for module in adapter.modules())
@@ -1079,6 +1357,22 @@ def run_representation_internal_evaluation(
         )
         for case in native_cases
     )
+    target_presence_records: tuple[NativeTargetPresenceEvaluationRecord, ...] = ()
+    target_presence_summary: NativeTargetPresenceSummary | None = None
+    if target_presence_cases:
+        assert target_presence_log_odds_evaluator is not None
+        assert target_presence_free_continuation_evaluator is not None
+        target_presence_records = tuple(
+            _evaluate_target_presence_case(
+                case,
+                log_odds_evaluator=target_presence_log_odds_evaluator,
+                free_continuation_evaluator=(
+                    target_presence_free_continuation_evaluator
+                ),
+            )
+            for case in target_presence_cases
+        )
+        target_presence_summary = _summarize_target_presence(target_presence_records)
     return RepresentationInternalEvaluationReport(
         identity=identity,
         execution=RepresentationReadoutExecutionContract(
@@ -1091,6 +1385,9 @@ def run_representation_internal_evaluation(
         grouped_metrics=grouped_metrics,
         health=health,
         native_counterfactuals=native_records,
+        native_counterfactual_summary=_summarize_counterfactuals(native_records),
+        native_target_presence=target_presence_records,
+        native_target_presence_summary=target_presence_summary,
     )
 
 
@@ -1217,6 +1514,19 @@ def _validated_native_cases(
         raise TypeError("at least one typed native counterfactual case is required")
     if len({case.case_id for case in materialized}) != len(materialized):
         raise ValueError("native counterfactual case IDs must be unique")
+    return materialized
+
+
+def _validated_target_presence_cases(
+    cases: Sequence[NativeTargetPresenceCase],
+) -> tuple[NativeTargetPresenceCase, ...]:
+    if isinstance(cases, (str, bytes)) or not isinstance(cases, Sequence):
+        raise TypeError("native_target_presence_cases must be a sequence")
+    materialized = tuple(cases)
+    if any(not isinstance(case, NativeTargetPresenceCase) for case in materialized):
+        raise TypeError("target-presence cases must be typed")
+    if len({case.case_id for case in materialized}) != len(materialized):
+        raise ValueError("target-presence case IDs must be unique")
     return materialized
 
 
@@ -1644,6 +1954,205 @@ def _evaluate_native_case(
     )
 
 
+def _evaluate_target_presence_case(
+    case: NativeTargetPresenceCase,
+    *,
+    log_odds_evaluator: NativeBinaryLogOddsEvaluator,
+    free_continuation_evaluator: NativeFreeContinuationEvaluator,
+) -> NativeTargetPresenceEvaluationRecord:
+    zero_positive = _zero_visual_bundle(case.positive_observation)
+    zero_negative = _zero_visual_bundle(case.negative_observation)
+
+    def score(
+        *, context: NativeDOnlyContext, observation: RepresentationVisualTensorBundle
+    ) -> float:
+        output = log_odds_evaluator(
+            NativeBinaryLogOddsRequest(
+                case_id=case.case_id,
+                context=context,
+                observation=observation,
+                positive_value=case.present_value,
+                negative_value=case.not_present_value,
+            )
+        )
+        if not isinstance(output, NativeBinaryLogOddsOutput):
+            raise TypeError("target-presence log-odds callback returned another type")
+        if output.case_id != case.case_id:
+            raise ValueError("target-presence log-odds callback changed case identity")
+        return output.log_odds_positive_over_negative
+
+    actual_positive = score(
+        context=case.positive_context,
+        observation=case.positive_observation,
+    )
+    actual_negative = score(
+        context=case.negative_context,
+        observation=case.negative_observation,
+    )
+    zero_positive_score = score(
+        context=case.positive_context,
+        observation=zero_positive,
+    )
+    zero_negative_score = score(
+        context=case.negative_context,
+        observation=zero_negative,
+    )
+
+    continuation_records: list[NativeTargetPresenceContinuationRecord] = []
+    continuation_inputs = (
+        (
+            "positive_target",
+            case.present_value,
+            case.positive_context,
+            case.positive_observation_identity,
+            case.positive_observation,
+            "value_a",
+        ),
+        (
+            "negative_target",
+            case.not_present_value,
+            case.negative_context,
+            case.negative_observation_identity,
+            case.negative_observation,
+            "value_b",
+        ),
+    )
+    for (
+        variant,
+        expected,
+        context,
+        observation_identity,
+        observation,
+        callback_variant,
+    ) in continuation_inputs:
+        output = free_continuation_evaluator(
+            NativeFreeContinuationRequest(
+                case_id=case.case_id,
+                variant=callback_variant,
+                expected_value=expected,
+                context=context,
+                observation_identity=observation_identity,
+                observation=observation,
+            )
+        )
+        if not isinstance(output, NativeFreeContinuationOutput):
+            raise TypeError(
+                "target-presence continuation callback returned another type"
+            )
+        if output.case_id != case.case_id or output.variant != callback_variant:
+            raise ValueError("target-presence continuation callback changed identity")
+        continuation_records.append(
+            NativeTargetPresenceContinuationRecord(
+                variant=variant,
+                expected_value=expected,
+                generated_token_ids=output.generated_token_ids,
+                generated_text=output.generated_text,
+                extracted_value=output.extracted_value,
+                stop_reason=output.stop_reason,
+                value_consistent=output.extracted_value == expected,
+                healthy_termination=output.stop_reason == "natural_stop",
+            )
+        )
+
+    return NativeTargetPresenceEvaluationRecord(
+        case_id=case.case_id,
+        pair_identity=case.pair_identity,
+        source_sample_id=case.source_sample_id,
+        source_image_sha256=case.source_image_sha256,
+        positive_target=case.positive_target,
+        negative_target=case.negative_target,
+        positive_context_id=case.positive_context.context_id,
+        negative_context_id=case.negative_context.context_id,
+        positive_observation_identity=case.positive_observation_identity,
+        negative_observation_identity=case.negative_observation_identity,
+        actual_positive_log_odds_present=actual_positive,
+        actual_negative_log_odds_present=actual_negative,
+        zero_d_positive_log_odds_present=zero_positive_score,
+        zero_d_negative_log_odds_present=zero_negative_score,
+        actual_separation=actual_positive - actual_negative,
+        positive_d_contribution=actual_positive - zero_positive_score,
+        negative_d_false_positive_amplification=(actual_negative - zero_negative_score),
+        actual_direction_correct=(actual_positive > 0 and actual_negative < 0),
+        negative_false_positive=actual_negative > 0,
+        continuations=tuple(continuation_records),
+    )
+
+
+def _summarize_counterfactuals(
+    records: tuple[NativeCounterfactualEvaluationRecord, ...],
+) -> NativeCounterfactualSummary:
+    if not records:
+        raise ValueError("counterfactual summary requires records")
+    continuations = tuple(
+        continuation for record in records for continuation in record.continuations
+    )
+    return NativeCounterfactualSummary(
+        pair_count=len(records),
+        expected_direction_flip_rate=sum(
+            record.expected_direction_flip for record in records
+        )
+        / len(records),
+        continuation_accuracy=sum(
+            continuation.value_consistent for continuation in continuations
+        )
+        / len(continuations),
+        healthy_termination_rate=sum(
+            continuation.healthy_termination for continuation in continuations
+        )
+        / len(continuations),
+    )
+
+
+def _zero_visual_bundle(
+    observation: RepresentationVisualTensorBundle,
+) -> RepresentationVisualTensorBundle:
+    return RepresentationVisualTensorBundle(
+        main=torch.zeros_like(observation.main),
+        deepstack=tuple(torch.zeros_like(branch) for branch in observation.deepstack),
+        branch_layers=observation.branch_layers,
+        d_deepstack_active=observation.d_deepstack_active,
+    )
+
+
+def _summarize_target_presence(
+    records: tuple[NativeTargetPresenceEvaluationRecord, ...],
+) -> NativeTargetPresenceSummary:
+    if not records:
+        raise ValueError("target-presence summary requires records")
+    continuations = tuple(
+        continuation for record in records for continuation in record.continuations
+    )
+    return NativeTargetPresenceSummary(
+        pair_count=len(records),
+        actual_direction_accuracy=sum(
+            record.actual_direction_correct for record in records
+        )
+        / len(records),
+        negative_false_positive_rate=sum(
+            record.negative_false_positive for record in records
+        )
+        / len(records),
+        mean_actual_separation=sum(record.actual_separation for record in records)
+        / len(records),
+        mean_positive_d_contribution=sum(
+            record.positive_d_contribution for record in records
+        )
+        / len(records),
+        mean_negative_d_false_positive_amplification=sum(
+            record.negative_d_false_positive_amplification for record in records
+        )
+        / len(records),
+        continuation_accuracy=sum(
+            continuation.value_consistent for continuation in continuations
+        )
+        / len(continuations),
+        healthy_termination_rate=sum(
+            continuation.healthy_termination for continuation in continuations
+        )
+        / len(continuations),
+    )
+
+
 def _assert_visual_bundle_contract(
     actual: RepresentationVisualTensorBundle,
     expected: RepresentationVisualTensorBundle,
@@ -1757,13 +2266,18 @@ __all__ = [
     "READOUT_MASK_MODE",
     "READOUT_POSITION_SOURCE",
     "READOUT_VISUAL_SWAP_UNIT",
+    "TARGET_PRESENCE_LOG_ODDS_CONTRACT",
     "REPRESENTATION_INTERNAL_EVALUATION_ARTIFACT_SCHEMA_VERSION",
     "REPRESENTATION_INTERNAL_EVALUATION_SCHEMA_VERSION",
     "NativeCausalValueFlipEvaluator",
     "NativeCausalValueFlipOutput",
     "NativeCausalValueFlipRequest",
+    "NativeBinaryLogOddsEvaluator",
+    "NativeBinaryLogOddsOutput",
+    "NativeBinaryLogOddsRequest",
     "NativeCounterfactualCase",
     "NativeCounterfactualEvaluationRecord",
+    "NativeCounterfactualSummary",
     "NativeDOnlyContext",
     "NativeGenerationForward",
     "NativeInjectedRequestMaterializer",
@@ -1772,6 +2286,10 @@ __all__ = [
     "NativeFreeContinuationRecord",
     "NativeFreeContinuationRequest",
     "NativeTeacherForcedForward",
+    "NativeTargetPresenceCase",
+    "NativeTargetPresenceContinuationRecord",
+    "NativeTargetPresenceEvaluationRecord",
+    "NativeTargetPresenceSummary",
     "InjectedNativeCounterfactualEvaluator",
     "RepresentationBranchHealthRecord",
     "RepresentationBranchHealthSummary",
