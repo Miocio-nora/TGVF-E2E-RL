@@ -56,6 +56,10 @@ def main() -> int:
         isolate_torchrun_environment_for_spawned_factory,
         materialize_coredev_subset_config,
     )
+    from tgvf_rl.evaluation.vlmevalkit_batch import (  # noqa: PLC0415
+        attach_coredev_batch_options_from_factory_kwargs,
+        install_coredev_batched_inference,
+    )
 
     selected = _pop_option("--coredev-data")
     if selected is not None:
@@ -95,15 +99,19 @@ def main() -> int:
 
     import vlmeval.config as model_config_module  # noqa: PLC0415
     import vlmeval.dataset as dataset_module  # noqa: PLC0415
+    import vlmeval.inference as inference_module  # noqa: PLC0415
 
     register_coredev_vlmevalkit_slices(dataset_module, artifacts)
     model_name = "Qwen3-VL-8B-Thinking"
-    model_factory = inject_vllm_engine_options_from_factory_kwargs(
-        model_config_module.supported_VLM[model_name]
+    model_factory = attach_coredev_batch_options_from_factory_kwargs(
+        inject_vllm_engine_options_from_factory_kwargs(
+            model_config_module.supported_VLM[model_name]
+        )
     )
     if int(os.environ.get("LOCAL_WORLD_SIZE", "1")) > 1:
         model_factory = isolate_torchrun_environment_for_spawned_factory(model_factory)
     model_config_module.supported_VLM[model_name] = model_factory
+    install_coredev_batched_inference(inference_module)
 
     mode = sys.argv[sys.argv.index("--mode") + 1] if "--mode" in sys.argv else "all"
     if "--help" not in sys.argv and mode in {"all", "eval"}:

@@ -17,6 +17,9 @@
       "post_process": false,
       "system_prompt": null,
       "gpu_utils": 0.9,
+      "inference_batch_size": 8,
+      "request_seed_base": 0,
+      "request_seed_namespace": "coredev-2511-qwen3-direct-batched-v1",
       "limit_mm_per_prompt": {
         "image": 24,
         "video": 0
