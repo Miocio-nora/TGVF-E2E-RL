@@ -719,6 +719,36 @@ no-cache parity and throughput smoke on an already completed immutable
 artifact, and a new code/config/experiment identity for every interrupted
 formal evaluation that is rerun with the optimized evaluator.
 
+### 0.13 Accepted original-policy benchmark baseline
+
+Decision ID: **EVAL-QWEN3-DIRECT-BASELINE-20260721**
+
+Accepted by: **user**, on **2026-07-21 JST**.
+
+Before policy RL training, measure the original local
+`Qwen3-VL-8B-Thinking` policy on the immutable seven-slice CoreDev-2511 suite.
+This direct baseline loads no TGVF Adapter, exposes no crop or TGVF tool, and
+uses no agent loop. It uses each slice's inherited upstream VLMEvalKit prompt
+and scorer. The initial-image cap is `512 * 512` pixels, matching the accepted
+Pilot v1 input distribution.
+
+The baseline configuration must make the pinned VLMEvalKit Qwen3-Thinking
+decoding behavior explicit: vLLM, native dataset prompt, temperature `1.0`,
+top-p `0.95`, top-k `20`, maximum `40960` generated tokens, repetition penalty
+`1.0`, presence penalty `0.0`, sampling enabled, and engine seed `0`. The model
+and tokenizer are unchanged. Inference and scoring are separate durable
+phases: four independent single-B200 replicas on physical GPUs 0--3 generate
+predictions first; the separately identified Qwen2.5-72B service on GPUs 2--3
+then evaluates the exact saved predictions. GPT fallback remains forbidden.
+
+The first launch is also a throughput gate. Measure early VStarBench progress
+and GPU utilization before committing to the full 2,511-row wall time. If the
+upstream one-request-at-a-time vLLM path is materially underutilized, pause and
+optimize request batching/concurrency without changing prompts, sampling or
+scores. The run must support durable partial predictions and exact reuse after
+an intentional bounded interruption before it is treated as the formal
+baseline.
+
 ## 1. Objective
 
 Build a new TGVF system in which the original Qwen reasoning policy learns the

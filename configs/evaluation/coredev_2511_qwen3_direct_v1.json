@@ -1,7 +1,22 @@
 {
   "model": {
     "Qwen3-VL-8B-Thinking": {
-      "model_path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+      "model_path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking",
+      "use_custom_prompt": false,
+      "use_vllm": true,
+      "min_pixels": null,
+      "max_pixels": 262144,
+      "total_pixels": null,
+      "max_new_tokens": 40960,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "do_sample": true,
+      "post_process": false,
+      "system_prompt": null,
+      "gpu_utils": 0.9
     }
   },
   "data": {

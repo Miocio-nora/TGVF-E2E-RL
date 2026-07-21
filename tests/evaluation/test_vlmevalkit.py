@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -96,3 +97,31 @@ def test_policy_result_rejects_non_json_extra_records() -> None:
             final_answer="answer",
             extra_records={"bad": float("nan")},
         )
+
+
+def test_coredev_qwen3_direct_baseline_freezes_decoding_identity() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    config = json.loads(
+        (repository_root / "configs/evaluation/coredev_2511_qwen3_direct_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    model = config["model"]["Qwen3-VL-8B-Thinking"]
+    assert model == {
+        "model_path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking",
+        "use_custom_prompt": False,
+        "use_vllm": True,
+        "min_pixels": None,
+        "max_pixels": 512 * 512,
+        "total_pixels": None,
+        "max_new_tokens": 40960,
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "do_sample": True,
+        "post_process": False,
+        "system_prompt": None,
+        "gpu_utils": 0.9,
+    }
