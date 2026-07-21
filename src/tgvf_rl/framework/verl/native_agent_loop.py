@@ -509,11 +509,18 @@ class BoundVerlNativeAgentLoopInvocationFactory:
             raise ValueError("native invocation sampling contract is not run-bound")
         if not callable(getattr(policy_version, "current_policy_version", None)):
             raise TypeError("policy_version must implement current_policy_version()")
-        if not callable(
-            getattr(trajectory_components, "build_trajectory_components", None)
+        sync_components_builder = getattr(
+            trajectory_components, "build_trajectory_components", None
+        )
+        async_components_builder = getattr(
+            trajectory_components, "build_trajectory_components_async", None
+        )
+        if not callable(sync_components_builder) and not callable(
+            async_components_builder
         ):
             raise TypeError(
-                "trajectory_components must implement build_trajectory_components()"
+                "trajectory_components must implement a sync or async "
+                "trajectory components builder"
             )
         if not isinstance(decoding, VLLMOutputDecodingContract):
             raise TypeError("native invocation decoding contract is invalid")

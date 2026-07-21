@@ -692,6 +692,68 @@ class _TrajectoryComponents:
         )
 
 
+class _AsyncTrajectoryComponents:
+    def __init__(self) -> None:
+        self.registry = LiveVLLMTurnContextRegistry(
+            observation_resolver=_ObservationResolver()
+        )
+        self.calls: list[dict[str, object]] = []
+
+    async def build_trajectory_components_async(self, **kwargs):
+        self.calls.append(kwargs)
+        return VerlNativeTrajectoryComponents(
+            source_visual=SOURCE_VISUAL,
+            native_loop_factory=lambda sampler: None,
+            prompt_context=self.registry,
+            output_builder=lambda trajectory: trajectory,
+        )
+
+
+def test_bound_invocation_factory_accepts_async_only_trajectory_builder() -> None:
+    sampling = PilotSamplingConfig().bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(ord("!"),),
+        stop_strings=("</tool_call>",),
+        include_stop_str_in_output=True,
+        ignore_eos=False,
+    )
+    components = _AsyncTrajectoryComponents()
+    factory = BoundVerlNativeAgentLoopInvocationFactory(
+        run_id=POLICY.run_id,
+        model=ModelIdentity("qwen3_vl", "fixture", "/fixture", 151_669, SHA0),
+        sampling_contract=sampling,
+        policy_version=_CurrentPolicy(),
+        trajectory_components=components,
+        decoding=DECODING,
+        termination=TERMINATION,
+        rollout_master_seed=42,
+        max_model_len=16_384,
+    )
+
+    invocation = asyncio.run(
+        factory.build_async(
+            sampling_params={
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": -1,
+                "repetition_penalty": 1.0,
+                "logprobs": True,
+            },
+            sample_fields={
+                "sample_id": "sample-async",
+                "uid": "upstream-group-async",
+                "index": 0,
+                "initial_prompt_token_ids": (10, 20, 30),
+            },
+        )
+    )
+
+    assert invocation.request.trajectory_source_visual == SOURCE_VISUAL
+    assert invocation.request.behavior_policy == POLICY
+    assert invocation.request.identity.rollout_index == 0
+    assert len(components.calls) == 1
+
+
 def test_bound_invocation_factory_assigns_exactly_eight_group_indices() -> None:
     sampling = PilotSamplingConfig().bind_run_inputs(
         min_p=0.0,
