@@ -19,6 +19,10 @@ from tgvf_rl.framework.verl import (
     LOSSLESS_AGENT_LOOP_MANAGER_FQN,
     LOSSLESS_TRANSFER_QUEUE_AGENT_LOOP_MANAGER_FQN,
     OBJECTIVE_SENTINELS_FIELD,
+    PAD_TOKEN_ID_FIELD,
+    PADDING_SCHEMA_FIELD,
+    PROMPT_TOKEN_OWNERSHIP_FIELD,
+    RESPONSE_TOKEN_OWNERSHIP_FIELD,
     TRAJECTORY_PAYLOAD_FIELD,
     TRAJECTORY_REPLAY_BUNDLE_FIELD,
     TRAJECTORY_REPLAY_HANDLE_FIELD,
@@ -60,6 +64,10 @@ from tgvf_rl.framework.verl import (
     worker_data_proto_sidecar_scope,
     worker_tensordict_sidecar_scope,
 )
+from tgvf_rl.framework.verl.data_bridge import (
+    bind_agent_loop_data_proto_sidecar_lease,
+)
+from tgvf_rl.framework.verl.rollout_bridge import SIDECAR_RELEASE_FIELDS_FIELD
 from tgvf_rl.contracts.tokens import (
     LogProbMeasurement,
     OwnedTokenSequence,
@@ -341,6 +349,25 @@ class _FakeDataProto:
     @classmethod
     def from_dict(cls, *, tensors, non_tensors, meta_info):
         return cls(tensors, non_tensors, meta_info)
+
+
+def _live_agent_loop_padded_data(*records: RolloutBridgeRecord) -> _FakeDataProto:
+    payload = build_padded_data_proto_payload(records, pad_token_id=99)
+    padding_fields = {
+        PADDING_SCHEMA_FIELD,
+        PAD_TOKEN_ID_FIELD,
+        PROMPT_TOKEN_OWNERSHIP_FIELD,
+        RESPONSE_TOKEN_OWNERSHIP_FIELD,
+    }
+    return _FakeDataProto(
+        dict(payload.tensor_batch),
+        {
+            name: value
+            for name, value in payload.non_tensor_batch.items()
+            if name not in padding_fields
+        },
+        dict(payload.meta_info),
+    )
 
 
 def test_optional_import_and_public_symbol_resolution_without_installed_verl() -> None:
@@ -939,6 +966,59 @@ def test_custom_manager_uses_composition_and_validates_delegate_dataproto() -> N
     manager = LosslessAgentLoopManager.create(_public_api=api)
     assert type(manager) is LosslessAgentLoopManager
     assert manager.generate_sequences("prompts") is data
+
+
+def test_live_manager_binds_upstream_padding_before_exact_integrity_check() -> None:
+    records = (
+        _record(suffix=10, tool_call_count=0, prompt_ids=(1,)),
+        _record(suffix=11, tool_call_count=2, prompt_ids=(1, 2, 3, 4)),
+    )
+    data = _live_agent_loop_padded_data(*records)
+
+    class Delegate:
+        def generate_sequences(self, prompts):
+            assert prompts == "padded-prompts"
+            return data
+
+    class PublicManager:
+        @classmethod
+        def create(cls, *args, **kwargs):
+            return Delegate()
+
+    api = SimpleNamespace(
+        agent_loop_manager=PublicManager,
+        agent_loop_transport=VERL_AGENT_LOOP_RETURN_TRANSPORT,
+    )
+    manager = LosslessAgentLoopManager.create(_public_api=api)
+
+    assert manager.generate_sequences("padded-prompts") is data
+    view = validate_data_proto_integrity(data)
+    assert view.pad_token_id == 99
+    assert view.prompt_token_ownership[0][:-1] == (
+        TokenOwnership.PADDING,
+    ) * 3
+    assert view.response_token_ownership[0][len(records[0].response_ids) :] == (
+        TokenOwnership.PADDING,
+    ) * (len(records[1].response_ids) - len(records[0].response_ids))
+    leased = data.meta_info[SIDECAR_RELEASE_FIELDS_FIELD]
+    assert {
+        PADDING_SCHEMA_FIELD,
+        PAD_TOKEN_ID_FIELD,
+        PROMPT_TOKEN_OWNERSHIP_FIELD,
+        RESPONSE_TOKEN_OWNERSHIP_FIELD,
+    }.issubset(leased)
+
+
+def test_live_padding_binder_rejects_different_prompt_and_response_pad_ids() -> None:
+    records = (
+        _record(suffix=20, tool_call_count=0, prompt_ids=(1,)),
+        _record(suffix=21, tool_call_count=2, prompt_ids=(1, 2, 3, 4)),
+    )
+    data = _live_agent_loop_padded_data(*records)
+    data.batch["responses"][0, len(records[0].response_ids) :] = 98
+
+    with pytest.raises(ValueError, match="one explicit token ID"):
+        bind_agent_loop_data_proto_sidecar_lease(data)
 
 
 def test_candidate_manager_preserves_transfer_queue_dispatch_semantics() -> None:

@@ -59,14 +59,13 @@ PADDING_SCHEMA_FIELD = "tgvf_padding_schema_version"
 PAD_TOKEN_ID_FIELD = "tgvf_explicit_pad_token_id"
 PROMPT_TOKEN_OWNERSHIP_FIELD = "tgvf_batched_prompt_token_ownership"
 RESPONSE_TOKEN_OWNERSHIP_FIELD = "tgvf_batched_response_token_ownership"
-_PADDING_FIELDS = frozenset(
-    {
-        PADDING_SCHEMA_FIELD,
-        PAD_TOKEN_ID_FIELD,
-        PROMPT_TOKEN_OWNERSHIP_FIELD,
-        RESPONSE_TOKEN_OWNERSHIP_FIELD,
-    }
+_PADDING_FIELD_ORDER = (
+    PADDING_SCHEMA_FIELD,
+    PAD_TOKEN_ID_FIELD,
+    PROMPT_TOKEN_OWNERSHIP_FIELD,
+    RESPONSE_TOKEN_OWNERSHIP_FIELD,
 )
+_PADDING_FIELDS = frozenset(_PADDING_FIELD_ORDER)
 
 _SIDECAR_RELEASE_SCHEMA_VERSION = SIDECAR_RELEASE_SCHEMA_VERSION
 _SIDECAR_RELEASE_SCHEMA_FIELD = SIDECAR_RELEASE_SCHEMA_FIELD
@@ -455,16 +454,18 @@ def bind_agent_loop_data_proto_sidecar_lease(data: object) -> object:
         raise RuntimeError(
             f"live AgentLoop DataProto is missing exact sidecars: {missing!r}"
         )
+    padding_fields = _bind_live_agent_loop_padding_contract(data)
+    leased_fields = AGENT_LOOP_EXACT_SIDECAR_FIELDS + padding_fields
     existing_release_fields = meta_info.get(_SIDECAR_RELEASE_FIELDS_FIELD)
     if existing_release_fields is not None:
         existing = _sidecar_release_fields(data)
-        if not set(AGENT_LOOP_EXACT_SIDECAR_FIELDS).issubset(existing):
+        if not set(leased_fields).issubset(existing):
             raise RuntimeError("existing DataProto lease omits AgentLoop exact sidecars")
         return data
     expected = {
         DATAPROTO_META_SCHEMA_FIELD: DATAPROTO_META_SCHEMA_VERSION,
         _SIDECAR_RELEASE_SCHEMA_FIELD: _SIDECAR_RELEASE_SCHEMA_VERSION,
-        _SIDECAR_RELEASE_FIELDS_FIELD: AGENT_LOOP_EXACT_SIDECAR_FIELDS,
+        _SIDECAR_RELEASE_FIELDS_FIELD: leased_fields,
     }
     for name, value in expected.items():
         existing_value = meta_info.get(name)
@@ -473,6 +474,136 @@ def bind_agent_loop_data_proto_sidecar_lease(data: object) -> object:
         meta_info[name] = value
     _sidecar_release_fields(data)
     return data
+
+
+def _bind_live_agent_loop_padding_contract(data: object) -> tuple[str, ...]:
+    """Describe and verify padding already materialized by pinned veRL.
+
+    The live AgentLoop manager pads token tensors before it constructs its
+    ``DataProto``, while the project-owned exact sidecars deliberately retain
+    unpadded token rows.  Bind the existing tensor layout here; never repad or
+    mutate a token tensor at this boundary.
+    """
+
+    batch, non_tensors = _data_parts(data)
+    prompts = _required(batch, "prompts", "DataProto.batch")
+    responses = _required(batch, "responses", "DataProto.batch")
+    if (
+        not isinstance(prompts, torch.Tensor)
+        or not isinstance(responses, torch.Tensor)
+        or prompts.ndim != 2
+        or responses.ndim != 2
+        or prompts.shape[0] != responses.shape[0]
+    ):
+        raise ValueError(
+            "live AgentLoop prompts/responses must be aligned rank-two tensors"
+        )
+    batch_size = int(prompts.shape[0])
+    prompt_width = int(prompts.shape[1])
+    response_width = int(responses.shape[1])
+    exact_prompt_rows = _row_values(
+        _required(non_tensors, EXACT_PROMPT_IDS_FIELD, "DataProto.non_tensor_batch"),
+        batch_size,
+        EXACT_PROMPT_IDS_FIELD,
+    )
+    exact_response_rows = _row_values(
+        _required(non_tensors, EXACT_RESPONSE_IDS_FIELD, "DataProto.non_tensor_batch"),
+        batch_size,
+        EXACT_RESPONSE_IDS_FIELD,
+    )
+    prompt_lengths = tuple(len(tuple(row)) for row in exact_prompt_rows)
+    response_lengths = tuple(len(tuple(row)) for row in exact_response_rows)
+    if any(length <= 0 or length > prompt_width for length in prompt_lengths):
+        raise ValueError("live AgentLoop exact prompt lengths are invalid")
+    if any(length <= 0 or length > response_width for length in response_lengths):
+        raise ValueError("live AgentLoop exact response lengths are invalid")
+
+    present = _PADDING_FIELDS & set(non_tensors)
+    if present:
+        if present != _PADDING_FIELDS:
+            missing = sorted(_PADDING_FIELDS - present)
+            raise ValueError(
+                f"live AgentLoop variable-padding contract is incomplete: {missing}"
+            )
+        return _PADDING_FIELD_ORDER
+
+    padding_required = any(
+        prompt_length != prompt_width or response_length != response_width
+        for prompt_length, response_length in zip(
+            prompt_lengths, response_lengths, strict=True
+        )
+    )
+    if not padding_required:
+        return ()
+
+    padding_values: list[int] = []
+    for row_index, (prompt_length, response_length) in enumerate(
+        zip(prompt_lengths, response_lengths, strict=True)
+    ):
+        padding_values.extend(
+            int(value)
+            for value in prompts[row_index, : prompt_width - prompt_length].tolist()
+        )
+        padding_values.extend(
+            int(value)
+            for value in responses[row_index, response_length:].tolist()
+        )
+    if not padding_values or len(set(padding_values)) != 1:
+        raise ValueError(
+            "live AgentLoop prompt/response padding must use one explicit token ID"
+        )
+    pad_token_id = padding_values[0]
+    if pad_token_id < 0:
+        raise ValueError("live AgentLoop pad token ID must be non-negative")
+
+    trajectory_rows = _row_values(
+        _required(non_tensors, TRAJECTORY_PAYLOAD_FIELD, "DataProto.non_tensor_batch"),
+        batch_size,
+        TRAJECTORY_PAYLOAD_FIELD,
+    )
+    behavior_rows = _row_values(
+        _required(
+            non_tensors,
+            BEHAVIOR_TRACE_RECORDS_FIELD,
+            "DataProto.non_tensor_batch",
+        ),
+        batch_size,
+        BEHAVIOR_TRACE_RECORDS_FIELD,
+    )
+    prompt_ownership_rows: list[tuple[str, ...]] = []
+    response_ownership_rows: list[tuple[str, ...]] = []
+    for row_index, (prompt_length, response_length) in enumerate(
+        zip(prompt_lengths, response_lengths, strict=True)
+    ):
+        prompt_ownership_rows.append(
+            (TokenOwnership.PADDING.value,) * (prompt_width - prompt_length)
+            + (TokenOwnership.TEMPLATE.value,) * prompt_length
+        )
+        _, _, _, exact_response_ownership = _trajectory_response_materialization(
+            trajectory_rows[row_index], tuple(behavior_rows[row_index])
+        )
+        if len(exact_response_ownership) != response_length:
+            raise ValueError(
+                "live AgentLoop response ownership differs from exact response length"
+            )
+        response_ownership_rows.append(
+            exact_response_ownership
+            + (TokenOwnership.PADDING.value,) * (response_width - response_length)
+        )
+
+    bound_fields = {
+        PADDING_SCHEMA_FIELD: _object_array(
+            [VARIABLE_LENGTH_PADDING_SCHEMA_VERSION] * batch_size
+        ),
+        PAD_TOKEN_ID_FIELD: _object_array([pad_token_id] * batch_size),
+        PROMPT_TOKEN_OWNERSHIP_FIELD: _object_array(prompt_ownership_rows),
+        RESPONSE_TOKEN_OWNERSHIP_FIELD: _object_array(response_ownership_rows),
+    }
+    collisions = set(bound_fields) & set(non_tensors)
+    if collisions:  # pragma: no cover - guarded by the complete/partial check above
+        raise RuntimeError(f"live AgentLoop padding fields collide: {sorted(collisions)}")
+    non_tensors.update(bound_fields)
+    return _PADDING_FIELD_ORDER
 
 
 def _sidecar_release_fields(data: object) -> tuple[str, ...]:

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 
 import tgvf_rl.framework.verl.policy_task_runner as policy_task_runner
 from tgvf_rl.framework.verl.data_bridge import (
@@ -20,6 +21,8 @@ from tgvf_rl.framework.verl.rollout_bridge import (
     AGENT_LOOP_EXACT_SIDECAR_FIELDS,
     DATAPROTO_META_SCHEMA_FIELD,
     DATAPROTO_META_SCHEMA_VERSION,
+    EXACT_PROMPT_IDS_FIELD,
+    EXACT_RESPONSE_IDS_FIELD,
     SIDECAR_RELEASE_FIELDS_FIELD,
     SIDECAR_RELEASE_SCHEMA_FIELD,
     SIDECAR_RELEASE_SCHEMA_VERSION,
@@ -27,11 +30,22 @@ from tgvf_rl.framework.verl.rollout_bridge import (
 
 
 def test_live_agent_loop_dataproto_gets_driver_and_worker_release_lease() -> None:
+    non_tensor_batch = {
+        name: np.array([object(), object()], dtype=object)
+        for name in AGENT_LOOP_EXACT_SIDECAR_FIELDS
+    }
+    non_tensor_batch[EXACT_PROMPT_IDS_FIELD] = np.array(
+        [(1,), (2,)], dtype=object
+    )
+    non_tensor_batch[EXACT_RESPONSE_IDS_FIELD] = np.array(
+        [(3,), (4,)], dtype=object
+    )
     data = SimpleNamespace(
-        non_tensor_batch={
-            name: np.array([object(), object()], dtype=object)
-            for name in AGENT_LOOP_EXACT_SIDECAR_FIELDS
+        batch={
+            "prompts": torch.tensor([[1], [2]], dtype=torch.long),
+            "responses": torch.tensor([[3], [4]], dtype=torch.long),
         },
+        non_tensor_batch=non_tensor_batch,
         meta_info={"metrics": []},
     )
 

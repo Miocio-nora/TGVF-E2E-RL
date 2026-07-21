@@ -742,17 +742,35 @@ def _injected_visual_blocks(
     observation_handles: tuple[ObservationHandle, ...],
     device: torch.device,
 ) -> tuple[InjectedVisualBlock, ...]:
-    def resolve(ref: object) -> torch.Tensor:
-        return store.resolve_verified_for_trajectory(
+    def resolve(ref: object, *, count: int, name: str) -> torch.Tensor:
+        tensor = store.resolve_verified_for_trajectory(
             ref, trajectory_id=trajectory_id
         ).to(device=device)
+        return _single_sequence_visual_features(tensor, count=count, name=name)
 
     blocks = [
         InjectedVisualBlock(
             kind="source_image",
             positions=source.positions,
-            embeddings=resolve(source.state.merged_main),
-            deepstack=tuple(resolve(ref) for ref in source.state.merged_deepstack),
+            embeddings=resolve(
+                source.state.merged_main,
+                count=len(source.positions),
+                name="source visual embeddings",
+            ),
+            deepstack=tuple(
+                resolve(
+                    ref,
+                    count=len(positions),
+                    name=f"source DeepStack branch {index}",
+                )
+                for index, (ref, positions) in enumerate(
+                    zip(
+                        source.state.merged_deepstack,
+                        source.deepstack_injection_positions,
+                        strict=True,
+                    )
+                )
+            ),
             deepstack_positions=source.deepstack_injection_positions,
         )
     ]
@@ -766,12 +784,37 @@ def _injected_visual_blocks(
             InjectedVisualBlock(
                 kind="focused_d",
                 positions=record.layout.d_positions,
-                embeddings=resolve(record.payload.main_d),
-                deepstack=tuple(resolve(branch.d_tensor) for branch in record.branches),
+                embeddings=resolve(
+                    record.payload.main_d,
+                    count=len(record.layout.d_positions),
+                    name=f"call {record.call_index} main D",
+                ),
+                deepstack=tuple(
+                    resolve(
+                        branch.d_tensor,
+                        count=len(branch.injection_positions),
+                        name=(
+                            f"call {record.call_index} D-DeepStack branch {index}"
+                        ),
+                    )
+                    for index, branch in enumerate(record.branches)
+                ),
                 deepstack_positions=record.layout.deepstack_injection_positions,
             )
         )
     return tuple(blocks)
+
+
+def _single_sequence_visual_features(
+    tensor: torch.Tensor, *, count: int, name: str
+) -> torch.Tensor:
+    if tensor.ndim == 2:
+        tensor = tensor.unsqueeze(0)
+    if tensor.ndim != 3 or tensor.shape[0] != 1 or tensor.shape[1] != count:
+        raise ValueError(
+            f"{name} must resolve to shape [1,{count},H], got {tuple(tensor.shape)}"
+        )
+    return tensor
 
 
 def _source_visual_positions(
