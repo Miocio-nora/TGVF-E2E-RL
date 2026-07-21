@@ -6673,6 +6673,26 @@ instead of repeated bullets.
   rollout LoRA to FP32. All keys/shapes/values otherwise matched. R8 preserves
   the actor/base BF16 dtype and retains strict snapshot equality.
 
+### PRL-01-R8-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step and
+  clean-resume vertical slice.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r8_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `a3a2a7d3...bc275`, run identity `2b6fafa2...a52d9`; every model,
+  data, checkpoint, prompt, replay, GRPO, sampling and topology field is frozen
+  there rather than repeated here.
+- Code/delta: `0541178830859c411c599200d04f60c2c8d9b589`; R7 plus only
+  `autocast_adapter_dtype=False`, matching the BF16 actor snapshot while
+  retaining strict 504-tensor equality. Targeted CPU gate: 1 passed in 4.77s.
+- Question: can exact BF16 snapshot installation now proceed through one real
+  rollout, exact current/reference replay, optimizer step, checkpoint and a
+  clean no-extra-update resume?
+- GPUs/output/session: physical 0--3, idle B200s at planning;
+  `artifacts/policy/PRL-01-R8-qwen3-grpo-1step-auto-resume-gpu0123` (absent);
+  tmux `prl01_r8_gpu0123`, then resume only after successful step 1.
+- Start/end, outputs, metrics and conclusion: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
