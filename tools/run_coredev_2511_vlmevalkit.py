@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,9 @@ PINNED_ARTIFACTS = (
 )
 DIRECT_BASELINE_CONFIG = (
     REPOSITORY_ROOT / "configs/evaluation/coredev_2511_qwen3_direct_v1.json"
+)
+JUDGE_SERVICE_CONFIG = (
+    REPOSITORY_ROOT / "configs/evaluation/qwen25_72b_judge_service_v1.json"
 )
 
 
@@ -36,9 +40,22 @@ def _required_option(name: str) -> str:
     return sys.argv[sys.argv.index(name) + 1]
 
 
+def _option_values(name: str) -> tuple[str, ...]:
+    if name not in sys.argv:
+        return ()
+    start = sys.argv.index(name) + 1
+    values = []
+    for value in sys.argv[start:]:
+        if value.startswith("--"):
+            break
+        values.append(value)
+    return tuple(values)
+
+
 def main() -> int:
     deployment = json.loads(DEPLOYMENT.read_text(encoding="utf-8"))
     pinned = json.loads(PINNED_ARTIFACTS.read_text(encoding="utf-8"))
+    judge_service = json.loads(JUDGE_SERVICE_CONFIG.read_text(encoding="utf-8"))
     checkout = Path(deployment["checkout"])
     overlay = Path(deployment["overlay"])
     artifact_root = Path(pinned["artifact_root"])
@@ -56,17 +73,26 @@ def main() -> int:
         isolate_torchrun_environment_for_spawned_factory,
         materialize_coredev_subset_config,
     )
+    from tgvf_rl.evaluation.coredev_results import (  # noqa: PLC0415
+        check_qwen25_72b_judge,
+        install_fail_closed_judge_builders,
+        summarize_coredev_results,
+        write_json_atomic,
+    )
     from tgvf_rl.evaluation.vlmevalkit_batch import (  # noqa: PLC0415
         attach_coredev_batch_options_from_factory_kwargs,
         install_coredev_batched_inference,
     )
 
+    canonical_datasets = tuple(item["dataset"] for item in pinned["slices"])
     selected = _pop_option("--coredev-data")
+    selected_datasets: tuple[str, ...]
     if selected is not None:
         config_path = Path(_required_option("--config")).resolve()
         if config_path != DIRECT_BASELINE_CONFIG:
             raise RuntimeError("--coredev-data requires the pinned direct baseline config")
         datasets = tuple(item.strip() for item in selected.split(",") if item.strip())
+        selected_datasets = datasets
         work_dir = Path(_required_option("--work-dir")).resolve()
         resolved = materialize_coredev_subset_config(
             base_config_path=config_path,
@@ -74,6 +100,15 @@ def main() -> int:
             datasets=datasets,
         )
         sys.argv[sys.argv.index("--config") + 1] = str(resolved)
+    elif _option_values("--data"):
+        selected_datasets = _option_values("--data")
+    else:
+        selected_datasets = canonical_datasets
+
+    if any(name not in canonical_datasets for name in selected_datasets):
+        raise RuntimeError("CoreDev runner received an unknown dataset")
+    if tuple(name for name in canonical_datasets if name in selected_datasets) != selected_datasets:
+        raise RuntimeError("CoreDev datasets must follow canonical suite order")
 
     if pinned["llm_judge_model"] != COREDEV_LLM_JUDGE_MODEL:
         raise RuntimeError("CoreDev served judge identity mismatch")
@@ -114,6 +149,7 @@ def main() -> int:
     install_coredev_batched_inference(inference_module)
 
     mode = sys.argv[sys.argv.index("--mode") + 1] if "--mode" in sys.argv else "all"
+    judge_base_url = None
     if "--help" not in sys.argv and mode in {"all", "eval"}:
         if "--judge" not in sys.argv:
             raise RuntimeError(f"CoreDev evaluation requires --judge {COREDEV_LLM_JUDGE_MODEL}")
@@ -122,10 +158,38 @@ def main() -> int:
             raise RuntimeError(f"CoreDev LLM judge must be {COREDEV_LLM_JUDGE_MODEL}")
         if "--judge-base-url" not in sys.argv:
             raise RuntimeError("CoreDev Qwen2.5-72B judge requires --judge-base-url")
+        judge_base_url = _required_option("--judge-base-url").rstrip("/")
+        expected_base_url = judge_service["server"]["base_url"].rstrip("/")
+        if judge_base_url != expected_base_url:
+            raise RuntimeError(
+                f"CoreDev judge service must use the pinned endpoint {expected_base_url}"
+            )
+        if judge_service["model"]["served_name"] != COREDEV_LLM_JUDGE_MODEL:
+            raise RuntimeError("CoreDev judge service config model mismatch")
+        if not judge_service["scope"]["allows_vlmevalkit_benchmark_judging"]:
+            raise RuntimeError("CoreDev judge service is not authorized for benchmark scoring")
+
+        work_dir = Path(_required_option("--work-dir")).resolve()
+        preflight = check_qwen25_72b_judge(base_url=judge_base_url)
+        write_json_atomic(work_dir / "judge-health-pre.json", preflight)
+        image_mcq_module = importlib.import_module("vlmeval.dataset.image_mcq")
+        image_vqa_module = importlib.import_module("vlmeval.dataset.image_vqa")
+        install_fail_closed_judge_builders((image_mcq_module, image_vqa_module))
 
     run_path = checkout / "run.py"
     sys.argv[0] = str(run_path)
     runpy.run_path(str(run_path), run_name="__main__")
+    if "--help" not in sys.argv and mode in {"all", "eval"}:
+        assert judge_base_url is not None
+        postflight = check_qwen25_72b_judge(base_url=judge_base_url)
+        write_json_atomic(work_dir / "judge-health-post.json", postflight)
+        summarize_coredev_results(
+            work_dir=work_dir,
+            repository_root=REPOSITORY_ROOT,
+            phase="eval",
+            datasets=selected_datasets,
+            expected_judge_base_url=judge_base_url,
+        )
     return 0
 
 

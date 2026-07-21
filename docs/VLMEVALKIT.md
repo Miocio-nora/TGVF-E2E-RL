@@ -76,6 +76,32 @@ exact Qwen model and service URL are supplied:
   --judge-api-nproc 8
 ```
 
+The runner checks the pinned judge service before and after every scoring
+invocation. It also replaces VLMEvalKit's unavailable-judge exact-matching
+fallback with a hard failure and rejects exhausted API calls or random-choice
+fallback records. A `done` status alone is therefore not sufficient for
+acceptance.
+
+After all seven independent inference or evaluation directories are present,
+validate their status files, prediction row counts/hashes, judge evidence, and
+slice metrics into one project-owned summary:
+
+```bash
+.venv312/bin/python tools/summarize_coredev_2511.py \
+  --work-dir artifacts/evaluation/BE-02-qwen3-direct-coredev2511-b8 \
+  --phase infer \
+  --output artifacts/evaluation/BE-02-qwen3-direct-coredev2511-b8/infer-summary.json
+
+.venv312/bin/python tools/summarize_coredev_2511.py \
+  --work-dir artifacts/evaluation/BE-02-qwen3-direct-coredev2511-b8 \
+  --phase eval \
+  --judge-base-url http://127.0.0.1:8012/v1 \
+  --output artifacts/evaluation/BE-02-qwen3-direct-coredev2511-b8/eval-summary.json
+```
+
+The seven official slice metrics remain separate in the JSON; no mixed-TSV
+score or unweighted synthetic benchmark score is introduced.
+
 ## Qwen2.5-72B benchmark judge
 
 The service identity is
