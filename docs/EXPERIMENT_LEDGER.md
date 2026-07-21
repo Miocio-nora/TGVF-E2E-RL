@@ -5030,8 +5030,8 @@ instead of repeated bullets.
 
 ### RP-63-QWEN3-REP-AUDITED-GROUNDING-BALANCED-T01-CACHED-GPU2
 
-- Cell/status/result: replacement for interrupted RP-58 / `PLANNED` /
-  `PENDING`.
+- Cell/status/result: replacement for interrupted RP-58 / `RUNNING` /
+  `PENDING_CUDA_RELEASE`.
 - Identity: code `01678a6badbf2f92450ade0584868d0e10702ac1`; config
   `configs/representation/qwen3_balanced_t01_contextual_2000step_internal_evaluation_audited_grounding_cached_gpu2.toml`
   SHA256 `ee8a3bdc...76c3`; physical GPU 2. Artifact, data, prompt, 200/46
@@ -5046,11 +5046,22 @@ instead of repeated bullets.
   cross-image cases, 36 target-presence cases, finite aggregates, clean exit
   and GPU release. RP-61's logit-parity failure remains recorded and is not
   erased by this run.
+- Interim result: launched `2026-07-21T10:46:03+09:00`; immutable report SHA256
+  `02e299f3...baa` was published with tokenizer 151669, 200 rows/46 groups,
+  nine cross-image and 36 target-presence pairs. Query top-1/MRR/mean gap is
+  `0.855/0.91917/0.41913`; correct-D NLL is `1.25964`; wrong-same-image win
+  rate/advantage is `0.945/0.74844`. Audited cross-image direction/continuation
+  is `1/9` and `6/18`; target-presence continuation is `27/72`, mean actual
+  separation is `-1.60047`, positive-D contribution is `+1.78937`, and
+  negative-D false-positive amplification is `+3.63569`. T=0.1 therefore
+  retains strong same-distribution ranking but fails the accepted grounding
+  comparison against Balanced/T=1. The Python process remains in kernel
+  `uvm_gpu_release`; final clean-exit/GPU-release acceptance is pending.
 
 ### RP-64-QWEN3-CONTEXTUAL-VISION-REUSE-PARITY-GPU3
 
-- Cell/status/result: bounded evaluator optimization gate / `PLANNED` /
-  `PENDING`.
+- Cell/status/result: bounded evaluator optimization gate / `COMPLETE` /
+  `FAIL`.
 - Question: can contextual-hidden-state diagnostics reuse the exact source
   main/DeepStack visual features already materialized for the same group,
   remove redundant per-target frozen-vision forwards, preserve the complete
@@ -5088,6 +5099,11 @@ instead of repeated bullets.
   `artifacts/representation/RP-64-qwen3-contextual-vision-reuse-parity-gpu3/report.json`;
   acceptance also requires clean exit and GPU release. A failure leaves the
   existing evaluator and the concurrently running RP-63 unchanged.
+- Result: started `2026-07-21T10:54:24+09:00` and failed closed at
+  `2026-07-21T10:55:12+09:00`; run-log SHA256 `48ee93e...9d6`. At least one
+  complete Adapter observation exceeded the declared BF16 parity tolerance,
+  so no report was published, no speedup claim is made, the optimization is
+  not enabled in the formal evaluator, and GPU 3 was released.
 
 ### Representation-phase endpoint evidence summary
 
