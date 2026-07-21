@@ -6701,7 +6701,7 @@ instead of repeated bullets.
 
 ### PRL-01-R9-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step plus
   clean resume.
 - Complete identity: R9 config SHA256 `57e419de...211dd`, run identity
   `683f7d65...88775`; the config is authoritative for all model/data/GRPO/
@@ -6712,7 +6712,41 @@ instead of repeated bullets.
   targeted tests 2 passed.
 - GPUs/output/session: idle B200 0--3;
   `artifacts/policy/PRL-01-R9-qwen3-grpo-1step-auto-resume-gpu0123` (absent);
-  tmux `prl01_r9_gpu0123`; results pending.
+  tmux `prl01_r9_gpu0123`, exit 1. BF16 LoRA and pre-expanded vLLM generation
+  passed; one valid focus call reached the real tool runtime. Contextual
+  forward then rejected source visual `(234,4096)` where its single-sequence
+  consumer requires `(1,234,4096)`; no replay/update/checkpoint was produced.
+
+### PRL-DIAG-10-QWEN3-LIVE-TWO-CALL-CHAIN-GPU3
+
+- Lifecycle/result: `PLANNED` / `PENDING`; diagnostic single-GPU real-model
+  gate, not a training or quality experiment.
+- Question: can the real selected sample execute two contextual TGVF calls so
+  the second forward consumes the first recorded main D plus all three
+  D-DeepStack branches, then pack source + two observations for the third vLLM
+  turn without recomputation?
+- Code/config identity: `cac41286c554cfdda67822c0cf29b9f21950e1d0`;
+  `tools/smoke_policy_live_tool_chain.py` SHA256 `1c1bb633...6cac55`;
+  R9 config SHA256 `57e419de...211dd` and run identity
+  `683f7d65...88775` remain authoritative.
+- Model/processor/precision: local Qwen3-VL-8B-Thinking, native DeepStack,
+  BF16, SDPA, tokenizer 151669, chat template `36e042fe...8956`, max pixels
+  262144; no vLLM server, Ray, optimizer, checkpoint, or reward execution.
+- Data/representation: fixed R9 DeepEyes cursor-7 sample and RP-49 contextual
+  layer -1 Balanced-T0.1 step-2000 artifact (`fcda0b96...fc14`); exact source
+  image and native pre-expanded prompt from the selected-sample dataset.
+- Tool/replay scope: two deterministic scripted native `tgvf_focus_tool`
+  calls; maximum-call policy unchanged at four. Verify source/main-D/three
+  branches at `[N,H]` in the store, `[1,N,H]` only at injected forward, and
+  source + D1 + D2 as `[N,4H]` vLLM payloads with exact prompt-run binding.
+- Runtime/GPU/output: `.venv312`, Torch 2.9.0+cu128; physical GPU 3 exposed as
+  logical CUDA 0, presently idle; log
+  `artifacts/policy/diagnostics/PRL-DIAG-10-qwen3-live-two-call-gpu3.log`.
+- Command: `CUDA_VISIBLE_DEVICES=3 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=42 TOKENIZERS_PARALLELISM=false timeout 900s
+  .venv312/bin/python tools/smoke_policy_live_tool_chain.py --config
+  configs/policy/runs/prl_01_r9_qwen3_grpo_1step_autoresume_gpu0123.toml
+  --physical-gpu 3`.
 
 ## Compatibility-spike status
 
