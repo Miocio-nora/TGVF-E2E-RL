@@ -16,6 +16,7 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     PairedActorWorkerGroup,
     _append_policy_metrics_event,
     _completed_resume_checkpoint_step,
+    _finish_tracking_backends,
     _pilot_metrics_event,
     _wandb_metrics_from_event,
     add_policy_actor_rollout_worker,
@@ -400,3 +401,76 @@ def test_policy_fit_closes_dataloader_workers_and_runtime_after_failure() -> Non
 
     assert trainer.train_dataloader._iterator is None
     assert events == ["dataloader_shutdown", "runtime_shutdown"]
+
+
+def test_policy_tracking_backends_finish_once_before_ray_teardown() -> None:
+    events: list[object] = []
+
+    class Wandb:
+        def finish(self, *, exit_code):
+            events.append(("wandb", exit_code))
+
+    class File:
+        def finish(self):
+            events.append("file")
+
+    tracker = SimpleNamespace(
+        logger={"wandb": Wandb(), "file": File(), "console": object()}
+    )
+
+    _finish_tracking_backends(tracker)
+
+    assert events == [("wandb", 0), "file"]
+    assert tracker.logger == {}
+
+
+def test_policy_fit_captures_and_finishes_upstream_tracking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from verl.utils import tracking as tracking_module
+
+    events: list[object] = []
+
+    class Wandb:
+        def finish(self, *, exit_code):
+            events.append(("wandb", exit_code))
+
+    class Tracking:
+        def __init__(self):
+            self.logger = {"wandb": Wandb()}
+
+    monkeypatch.setattr(tracking_module, "Tracking", Tracking)
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            return None
+
+        def fit(self):
+            from verl.utils.tracking import Tracking as RuntimeTracking
+
+            RuntimeTracking()
+            events.append("upstream_fit")
+
+    class RuntimeManager:
+        def shutdown(self):
+            events.append("runtime_shutdown")
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.config = SimpleNamespace(
+        trainer=SimpleNamespace(resume_mode="disable", resume_from_path=None)
+    )
+    trainer.llm_server_manager = RuntimeManager()
+
+    assert trainer.fit() is None
+    assert events == ["upstream_fit", ("wandb", 0), "runtime_shutdown"]
+    assert tracking_module.Tracking is Tracking

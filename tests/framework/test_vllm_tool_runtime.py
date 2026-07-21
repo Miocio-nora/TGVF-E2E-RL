@@ -151,8 +151,12 @@ def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
     events: list[str] = []
 
     class Engine:
+        output_handler = None
+        engine_core = object()
+
         def shutdown(self):
             events.append("engine")
+            self.output_handler.cancel()
 
     class Socket:
         def __init__(self, name: str) -> None:
@@ -164,15 +168,26 @@ def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
     async def exercise() -> object:
         server_cls = _runtime_classes()[3]
         server = object.__new__(server_cls)
-        server.engine = Engine()
+        engine = Engine()
+
+        async def output_handler() -> None:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                events.append("handler")
+
+        engine.output_handler = asyncio.create_task(output_handler())
+        server.engine = engine
         server._server_task = asyncio.create_task(asyncio.Event().wait())
         server._master_sock = Socket("master")
         server._dp_rpc_sock = Socket("rpc")
         server._dp_master_sock = Socket("dp-master")
         await server.tgvf_shutdown()
-        return server
+        return server, engine
 
-    server = asyncio.run(exercise())
-    assert events == ["engine", "master", "rpc", "dp-master"]
+    server, engine = asyncio.run(exercise())
+    assert events == ["engine", "handler", "master", "rpc", "dp-master"]
     assert server.engine is None
+    assert engine.output_handler is None
+    assert engine.engine_core is None
     assert server._master_sock is None

@@ -80,6 +80,31 @@ POLICY_REFERENCE_DIAGNOSTIC_ENABLED = True
 POLICY_PILOT_METRICS_EVENT_SCHEMA = "policy-pilot-v1-metrics-event-v1"
 
 
+def _finish_tracking_backends(tracker: object) -> None:
+    """Finish veRL loggers before Ray tears down the TaskRunner process."""
+
+    backends = getattr(tracker, "logger", None)
+    if not isinstance(backends, dict):
+        raise TypeError("veRL Tracking.logger must be a dictionary")
+    errors: list[Exception] = []
+    for name, backend in tuple(backends.items()):
+        finish = getattr(backend, "finish", None)
+        if not callable(finish):
+            continue
+        try:
+            if name in {"wandb", "vemlp_wandb"}:
+                finish(exit_code=0)
+            else:
+                finish()
+        except Exception as error:  # pragma: no cover - external logger failure
+            errors.append(error)
+    # Tracking.__del__ otherwise retries W&B finish during interpreter/Ray
+    # teardown, after W&B's service socket may already have been closed.
+    backends.clear()
+    if errors:
+        raise ExceptionGroup("Policy tracking shutdown failed", errors)
+
+
 def _zero_safe_mean(numerator: int, denominator: int) -> float:
     return 0.0 if denominator == 0 else numerator / denominator
 
@@ -600,6 +625,17 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             return result
 
         def fit(self):
+            from verl.utils import tracking as tracking_module
+
+            original_tracking_class = tracking_module.Tracking
+            tracker_instances: list[object] = []
+
+            class CapturedPolicyTracking(original_tracking_class):
+                def __init__(captured_self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    tracker_instances.append(captured_self)
+
+            tracking_module.Tracking = CapturedPolicyTracking
             try:
                 completed_step = _completed_resume_checkpoint_step(self)
                 if completed_step is None:
@@ -620,7 +656,19 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 self._shutdown_dump_executor()
                 return None
             finally:
-                self._shutdown_policy_runtime()
+                tracking_module.Tracking = original_tracking_class
+                errors: list[Exception] = []
+                for tracker in tracker_instances:
+                    try:
+                        _finish_tracking_backends(tracker)
+                    except Exception as error:
+                        errors.append(error)
+                try:
+                    self._shutdown_policy_runtime()
+                except Exception as error:
+                    errors.append(error)
+                if errors:
+                    raise ExceptionGroup("Policy runner shutdown failed", errors)
 
         def _shutdown_policy_runtime(self) -> None:
             if getattr(self, "_policy_runtime_shutdown", False):

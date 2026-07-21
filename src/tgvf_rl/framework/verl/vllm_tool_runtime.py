@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import gc
 from types import MethodType
 from typing import Any
 from uuid import uuid4
@@ -763,12 +764,35 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             engine = getattr(self, "engine", None)
             shutdown = getattr(engine, "shutdown", None)
             if callable(shutdown):
+                output_handler = getattr(engine, "output_handler", None)
                 try:
                     shutdown()
                 except Exception as error:  # pragma: no cover - backend failure
                     errors.append(error)
                 finally:
                     self.engine = None
+                # vLLM 0.12 schedules cancellation of AsyncLLM's output task,
+                # but its synchronous shutdown() does not await that task.  A
+                # subsequent immediate ray.kill() can otherwise destroy ZMQ
+                # objects while the callback is still running, producing the
+                # C++ "pure virtual method called" abort seen after successful
+                # training.  Drain the scheduled cancellation before the RPC
+                # acknowledges shutdown and sever AsyncLLM's finalizer-owned
+                # references so __del__ cannot run the same teardown again.
+                if isinstance(output_handler, asyncio.Task):
+                    try:
+                        await output_handler
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as error:  # pragma: no cover - backend failure
+                        errors.append(error)
+                if hasattr(engine, "output_handler"):
+                    engine.output_handler = None
+                if hasattr(engine, "engine_core"):
+                    engine.engine_core = None
+                del engine
+                gc.collect()
+                await asyncio.sleep(0)
 
             for name in ("_master_sock", "_dp_rpc_sock", "_dp_master_sock"):
                 sock = getattr(self, name, None)

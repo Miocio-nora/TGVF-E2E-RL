@@ -7204,7 +7204,7 @@ instead of repeated bullets.
 
 ### PRL-01-R28-QWEN3-GRPO-2STEP-DIAGNOSTIC-GPU0123
 
-- `PLANNED` / `PENDING`; mandatory two-step continuation of the accepted
+- `COMPLETE` / `FAIL (teardown gate)`; mandatory two-step continuation of the accepted
   vertical slice on physical GPU 0--3. Config
   `configs/policy/runs/prl_01_r28_qwen3_grpo_2step_diagnostic_gpu0123.toml`,
   file SHA256 `8f077d26...7e71`, run identity `fa008dc3...7c9a`, code
@@ -7228,6 +7228,29 @@ instead of repeated bullets.
   real post-update rollout, publish the required diagnostics, finish with
   clean backend teardown, and expose steady-state step/GPU utilization without
   changing Pilot mathematics?
+- Result: both real optimizer steps and the post-step-1 rollout passed. Step
+  times were 158.18/141.84s; generation 102.65/89.34s, reference replay
+  11.10/8.39s, actor update 20.33/18.42s, weight sync 8.78/9.04s, and
+  checkpoint 15.31/16.62s. The run produced 64 trajectories, 394,689 policy
+  tokens, 98 successful TGVF observations, and complete step-1/step-2 paired
+  checkpoints. W&B run `c222x9a8` and the two-line `metrics.jsonl` contain the
+  new metrics.
+- Behavior/current diagnostics remained materially nonzero at both steps:
+  absolute mean log-ratio 0.04859/0.04883, P99 0.4643/0.4580, and outside-clip
+  fraction 0.06438/0.06418. This is a required parity investigation before a
+  formal Pilot, not evidence of post-update staleness. Published LoRA snapshots
+  contained exactly 504 decoder tensors and no visual/non-decoder tensors.
+- During the two-step training window, per-second GPU samples showed about
+  45.5--47.3% whole-window mean utilization including role transitions, with
+  47.9--49.7% of samples at or above 80%; peak device memory was
+  144.6--148.4GiB. Compute segments reached 86--100% utilization.
+- A clean-process invocation loaded model, optimizer, RNG and scheduler for all
+  four ranks from step 2, restored the epoch-boundary cursor, published the
+  exact step-2 LoRA, performed no extra update, and exited 0. Both the training
+  and resume invocations nevertheless reproduced vLLM C++ `pure virtual method
+  called` teardown noise; the training invocation also left W&B to a failing
+  atexit finish. Therefore the requested clean-teardown sub-gate failed and is
+  repaired/tested under a subsequent code identity.
 
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
