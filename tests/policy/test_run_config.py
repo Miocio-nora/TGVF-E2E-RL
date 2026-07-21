@@ -553,6 +553,15 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.overrides["actor_rollout_ref.actor.strategy"] == "fsdp2"
     assert plan.overrides["actor_rollout_ref.actor.fsdp_config.forward_only"] is False
     assert plan.overrides["actor_rollout_ref.ref.fsdp_config.forward_only"] is True
+    assert plan.overrides[
+        "actor_rollout_ref.model.override_config.attn_implementation"
+    ] == "sdpa"
+    assert plan.overrides["actor_rollout_ref.model.enable_gradient_checkpointing"] is False
+    assert plan.overrides["actor_rollout_ref.model.use_remove_padding"] is False
+    assert plan.overrides["actor_rollout_ref.actor.fsdp_config.model_dtype"] == "bf16"
+    assert plan.overrides["actor_rollout_ref.ref.fsdp_config.model_dtype"] == "bf16"
+    assert plan.overrides["actor_rollout_ref.actor.fsdp_config.use_torch_compile"] is False
+    assert plan.overrides["actor_rollout_ref.ref.fsdp_config.use_torch_compile"] is False
     # e003 v0 multiplies ppo_mini_batch_size by n internally, while its FSDP
     # micro-batch field counts expanded trajectories.
     assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 4
@@ -649,6 +658,13 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert composed.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu == 8
     assert composed.actor_rollout_ref.actor.fsdp_config.forward_only is False
     assert composed.actor_rollout_ref.ref.fsdp_config.forward_only is True
+    assert composed.actor_rollout_ref.model.override_config.attn_implementation == "sdpa"
+    assert composed.actor_rollout_ref.model.enable_gradient_checkpointing is False
+    assert composed.actor_rollout_ref.model.use_remove_padding is False
+    assert composed.actor_rollout_ref.actor.fsdp_config.model_dtype == "bf16"
+    assert composed.actor_rollout_ref.ref.fsdp_config.model_dtype == "bf16"
+    assert composed.actor_rollout_ref.actor.fsdp_config.use_torch_compile is False
+    assert composed.actor_rollout_ref.ref.fsdp_config.use_torch_compile is False
     assert (
         composed.actor_rollout_ref.rollout.custom.actor_batch_contract[
             "derived_gradient_accumulation_steps"

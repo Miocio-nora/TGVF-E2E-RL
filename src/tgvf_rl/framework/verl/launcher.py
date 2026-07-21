@@ -135,6 +135,19 @@ class UpstreamVerlLaunchPlan:
         if self.overrides.get("actor_rollout_ref.ref.fsdp_config.forward_only") is not True:
             raise ValueError("Policy reference exact-replay engine must be forward-only")
         if (
+            self.overrides.get(
+                "actor_rollout_ref.model.override_config.attn_implementation"
+            )
+            != "sdpa"
+        ):
+            raise ValueError("Policy actor/reference replay must use explicit SDPA")
+        for role in ("actor", "ref"):
+            prefix = f"actor_rollout_ref.{role}.fsdp_config"
+            if self.overrides.get(f"{prefix}.model_dtype") != "bf16":
+                raise ValueError(f"Policy {role} model load dtype must be BF16")
+            if self.overrides.get(f"{prefix}.use_torch_compile") is not False:
+                raise ValueError(f"Policy {role} smoke must disable torch.compile")
+        if (
             self.overrides.get("actor_rollout_ref.rollout.checkpoint_manager_class")
             != POLICY_CHECKPOINT_ENGINE_MANAGER_FQN
         ):
@@ -324,6 +337,16 @@ def build_policy_e2e_smoke_verl_plan(
             # current/reference role from forward_only.
             "actor_rollout_ref.model.external_lib": EXACT_REPLAY_EXTERNAL_MODULE,
             "actor_rollout_ref.model.model_type": TGVF_EXACT_REPLAY_MODEL_TYPE,
+            # Keep the first executable cell on the already accepted
+            # Torch-SDPA path.  Upstream otherwise silently selects
+            # flash_attention_2, which is neither installed nor accepted for
+            # this smoke identity.  B200 memory also makes activation
+            # checkpointing and remove-padding monkey patches unnecessary.
+            "actor_rollout_ref.model.override_config.attn_implementation": "sdpa",
+            "actor_rollout_ref.model.enable_gradient_checkpointing": False,
+            "actor_rollout_ref.model.use_remove_padding": False,
+            "actor_rollout_ref.model.use_liger": False,
+            "actor_rollout_ref.model.use_fused_kernels": False,
             "actor_rollout_ref.actor.ppo_mini_batch_size": (
                 actor_batch["upstream_ppo_mini_batch_size_prompts"]
             ),
@@ -345,6 +368,16 @@ def build_policy_e2e_smoke_verl_plan(
             # inputs, so never inherit them from veRL's YAML defaults.
             "actor_rollout_ref.actor.fsdp_config.forward_only": False,
             "actor_rollout_ref.ref.fsdp_config.forward_only": True,
+            "actor_rollout_ref.actor.fsdp_config.model_dtype": "bf16",
+            "actor_rollout_ref.ref.fsdp_config.model_dtype": "bf16",
+            "actor_rollout_ref.actor.fsdp_config.use_torch_compile": False,
+            "actor_rollout_ref.ref.fsdp_config.use_torch_compile": False,
+            "actor_rollout_ref.actor.fsdp_config.param_offload": False,
+            "actor_rollout_ref.actor.fsdp_config.optimizer_offload": False,
+            "actor_rollout_ref.actor.fsdp_config.offload_policy": False,
+            "actor_rollout_ref.ref.fsdp_config.param_offload": False,
+            "actor_rollout_ref.ref.fsdp_config.optimizer_offload": False,
+            "actor_rollout_ref.ref.fsdp_config.offload_policy": False,
             "actor_rollout_ref.actor.fsdp_config.mixed_precision": precision,
             "actor_rollout_ref.ref.fsdp_config.mixed_precision": precision,
             "actor_rollout_ref.actor.optim.optimizer": "AdamW",
