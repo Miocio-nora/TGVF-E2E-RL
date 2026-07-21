@@ -6310,8 +6310,8 @@ instead of repeated bullets.
 - Spike-plan git revision and approval references: accepted task sections
   0.8.2--0.8.3, identities `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
   `POLICY-PILOT-V1-FOUR-GPU-20260721`.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`.
 - Question: with the accepted Python 3.12 development headers explicitly
   inherited by every Ray/vLLM child, does the fixed R4 contract complete one
   real rollout/replay/update and a clean-process no-extra-update resume?
@@ -6370,13 +6370,83 @@ instead of repeated bullets.
   trajectories, accumulation 1.
 - GPUs: physical/logical 0--3, B200 183359 MiB; observed idle immediately before
   planning and must be rechecked before launch.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  tmux `prl01_r5_gpu0123`, then `prl01_r5_resume_gpu0123`.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T20:02:31+09:00` to `2026-07-21T20:07:52+09:00`, 321 seconds;
+  tmux `prl01_r5_gpu0123`, driver PID 307883, Ray task PID 321625, exit 1.
+  Resume was not started.
+- Actual GPU-hours and peak scratch use: less than 0.36 GPU-hours; observed
+  peak device allocation was about 94.7 GiB/GPU. All GPUs returned to zero.
 - Command: absolute R5 `run-policy` command under `.venv312`; clean resume only
   after step 1 and must make no second update.
-- Outputs: pending.
+- Outputs: failed `launch.log`, 279,793 bytes, SHA256
+  `45384ec5...d1ad`; no checkpoint, metrics file, resume log, or W&B run.
 - Scorer/parser identity: exact MCQ `2a3d5fa4...2e1c`, strict native parser.
+- Metrics: zero optimizer steps, completed rollouts, trajectories, rewards, or
+  tool observations. The Python-header compiler boundary passed.
+- Conclusion: R5 exposed the next independent upstream compatibility failure:
+  during vLLM LoRA CUDA-graph warmup on B200/sm100,
+  `torch.ops.vllm.lora_expand` reached Triton 3.5's automatic warp-specialized
+  pipeline with PDL/GDC enabled and aborted with
+  `tt.elementwise_inline_asm op pipeliner doesn't know how to predicate` and
+  `LLVM ERROR: Fatal pipeliner error`. This is a rollout-kernel compiler
+  failure, not an RL result.
+
+### PRL-DIAG-01-VLLM-LORA-NO-PDL-GPU0
+
+- Cell/matrix ID and mandatory/diagnostic class: diagnostic single-GPU
+  synthetic vLLM LoRA expand-kernel gate.
+- Spike-plan git revision and approval references: Policy Pilot vertical-slice
+  authorization and R5's sealed sm100 LoRA compiler failure.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: is disabling optional PDL/GDC sufficient for vLLM 0.12's BF16 LoRA
+  expand kernel to compile on B200 and match a Torch matmul oracle?
+- Baseline and exact output path: R5 fatal pipeline failure; fresh diagnostic
+  log `artifacts/policy/PRL-DIAG-01-vllm-lora-no-pdl-gpu0.log`.
+- Model and processor identity: no model or processor; synthetic one-token,
+  rank-64, hidden-4096 BF16 kernel fixture.
+- Representation checkpoint identity: N/A; no TGVF Adapter is loaded.
+- N/A fields and justification: no dataset, prompt, transcript, reward,
+  rollout, replay, optimizer, checkpoint, reference policy, or judge.
+- Policy/reference initialization: N/A; synthetic tensors only.
+- Rollout policy version and allowed asynchronous staleness: N/A.
+- Code commit and worktree state: commit
+  `519a0c4aeb8e7ed99cbf9b8e25024c701177d988`; only this ledger row may be a
+  tracked descendant at launch.
+- Repository adapter/patch surface and hash: no repo patch; installed vLLM
+  `lora_expand_op.py` SHA256 `d13f0c42...4a87f` and `utils.py` SHA256
+  `b02898c1...a073` remain unchanged. The process-local diagnostic replaces
+  only the imported `lora_expand_op.supports_pdl` callable with false.
+- Dataset/manifest, hashes, sample rule, and n: N/A.
+- Native prompt/tool schema hash: N/A.
+- Chat-template/token-fixture hash and token-ownership masks: N/A.
+- D/DeepStack/position/mask identity: N/A.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: Python 3.12.3, Torch 2.9.0+cu128,
+  vLLM 0.12.0, Triton 3.5.0; the accepted R5 `CC`/`CXX`/`CPATH` values.
+- Objective equations and normalization: numerical gate compares kernel output
+  against BF16-input/weight Torch matmul using FP32 absolute error reporting;
+  finite output and max absolute error <=0.25 are required.
+- Rollout/replay forward mode and adapter dropout/RNG contract: N/A; synthetic
+  tensors use seed 42 and no dropout.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: N/A.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 tensors; no cache, quantization,
+  attention, parallelism, or training mesh.
+- Logit/logprob/loss/gradient parity tolerances: N/A; output max absolute error
+  <=0.25 and finite values.
+- World size, microbatch, accumulation, and global batch: world 1, one token,
+  no batch accumulation.
+- GPUs: physical/logical GPU 0 only, B200 183359 MiB; recheck idle at launch.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  foreground bounded diagnostic process.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: `.venv312/bin/python` inline synthetic LoRA expand gate with
+  `CUDA_VISIBLE_DEVICES=0`, fixed compilers/headers, and PDL disabled only in
+  the process-local imported module.
+- Outputs: pending.
+- Scorer/parser identity: Torch matmul oracle in the same process.
 - Metrics: pending.
 - Conclusion: pending.
 
