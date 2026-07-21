@@ -4874,7 +4874,8 @@ instead of repeated bullets.
 - Cells/status/result: RP-56 Balanced/T=1 contextual full-D, RP-57
   Balanced/T=1 target-token-embedding full-D, RP-58 Balanced/T=0.1
   contextual full-D, RP-59 legacy summed-NLL/T=1 contextual full-D, and
-  RP-60 Balanced/T=1 contextual main-D-only / all `PLANNED` / all `PENDING`.
+  RP-60 Balanced/T=1 contextual main-D-only / RP-56--RP-59 `RUNNING`, RP-60
+  `PLANNED` / all `PENDING`.
   This is a post-hoc, read-only comparison of five completed 2000-step
   representation artifacts; it performs no training, checkpoint mutation or
   model selection.
@@ -4937,6 +4938,10 @@ instead of repeated bullets.
   observed free. Sampling backend, behavior/reference logprobs, policy/reference
   replay, KL, GRPO/SDPO, optimizer, gradient, world-size batching and judge are
   N/A because this is deterministic frozen representation evaluation.
+- Launch: RP-56--RP-59 started `2026-07-21T10:01:14+09:00` in detached tmux
+  sessions `rp56-rp60-grounding`, `rp57-grounding`, `rp58-grounding`, and
+  `rp59-grounding`; RP-60 is the second command in `rp56-rp60-grounding` and
+  remains gated on RP-56's successful exit.
 - Acceptance: each run must bind its exact config/artifact/data/prompt and
   manifest identities, preserve tokenizer length 151669, report exactly 200
   base rows/46 groups, nine cross-image cases and 36 target-presence cases with
