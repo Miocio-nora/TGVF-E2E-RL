@@ -4869,6 +4869,80 @@ instead of repeated bullets.
   values and the expected direction flip. The process exited cleanly and
   released GPU 0.
 
+### RP-56--RP-60 QWEN3 representation audited-grounding matrix
+
+- Cells/status/result: RP-56 Balanced/T=1 contextual full-D, RP-57
+  Balanced/T=1 target-token-embedding full-D, RP-58 Balanced/T=0.1
+  contextual full-D, RP-59 legacy summed-NLL/T=1 contextual full-D, and
+  RP-60 Balanced/T=1 contextual main-D-only / all `PLANNED` / all `PENDING`.
+  This is a post-hoc, read-only comparison of five completed 2000-step
+  representation artifacts; it performs no training, checkpoint mutation or
+  model selection.
+- Accepted task and code: `RPI-20260721-AUDITED-D-GROUNDING-DIAGNOSTICS`;
+  implementation commit `254f8b5a1a7b0e7575bb84492dc5a8f4daef321e`.
+  Evaluation code paths are clean at launch; unrelated retained untracked
+  runtime directories are outside the code-identity surface. The native
+  grounding manifest file SHA256 is
+  `a65aa6e6038ada1436302b60440136cc98b388552a7782b48ec95ed4324938c0`.
+- Shared model/prompt/data: local Qwen3-VL-8B-Thinking, BF16/SDPA, tokenizer
+  length 151669 with no resize, max-pixels 262144, native image-question prompt
+  `qwen3-representation-image-question-v1` with SHA256
+  `bf085a6e...23c9`; v4 clean-imend test JSONL SHA256
+  `de61c731...82d`; exact Golden first-200/46-group manifest SHA256
+  `55e2cde5...34d8`; historical native counterfactual manifest SHA256
+  `4589d14f...4cc4`; seed 42, greedy continuation, max-new-tokens 64 and EOS
+  151645.
+- Diagnostic population and mathematics: nine cross-image value pairs (the
+  original native pair plus eight audited/matched-geometry pairs) retain the
+  historical summed teacher-forced value-logprob direction contract. Thirty-six
+  audited same-image supported/unsupported target pairs score
+  `mean_token_logp(PRESENT) - mean_token_logp(NOT_PRESENT)` for actual D and an
+  exact-shape all-zero D baseline, plus actual-D free continuations. Every
+  observation is materialized fresh from the immutable artifact and contains
+  atomic main D plus every artifact-supported D-DeepStack branch; RP-60 remains
+  explicitly main-D-only. Frozen Qwen/Adapter eval mode, deterministic forward,
+  no cache inherited from the source image or pre-D transcript.
+- Cell identities:
+  - RP-56 / GPU 0 UUID `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` / config
+    `qwen3_balanced_contextual_2000step_internal_evaluation_audited_grounding_gpu0.toml`
+    SHA256 `c2f39a8a...0422` / artifact file, manifest and training-run hashes
+    `50179c70...e75`, `dfa992fc...e10`, `6c748851...5c0` / output
+    `artifacts/representation/RP-56-qwen3-audited-grounding-balanced-contextual-2000-gpu0/report.json`.
+  - RP-57 / GPU 1 UUID `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc` / config
+    `qwen3_balanced_target_embedding_2000step_internal_evaluation_audited_grounding_gpu1.toml`
+    SHA256 `389a1eef...566` / artifact hashes `646a1b60...e88`,
+    `3cccf99e...469`, `5d23fafd...245` / output
+    `artifacts/representation/RP-57-qwen3-audited-grounding-balanced-target-embedding-2000-gpu1/report.json`.
+  - RP-58 / GPU 2 UUID `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3` / config
+    `qwen3_balanced_t01_contextual_2000step_internal_evaluation_audited_grounding_gpu2.toml`
+    SHA256 `0814f277...73e0` / artifact hashes `fcda0b96...c14`,
+    `3ff14e66...49e`, `980e4136...bea` / output
+    `artifacts/representation/RP-58-qwen3-audited-grounding-balanced-t01-contextual-2000-gpu2/report.json`.
+  - RP-59 / GPU 3 UUID `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b` / config
+    `qwen3_legacy_contextual_2000step_internal_evaluation_audited_grounding_gpu3.toml`
+    SHA256 `3518f5a4...944` / artifact hashes `dfd9c8cc...3d2`,
+    `bc5b78c2...b7f`, `684bf3d6...846` / output
+    `artifacts/representation/RP-59-qwen3-audited-grounding-legacy-contextual-2000-gpu3/report.json`.
+  - RP-60 / GPU 0 after RP-56 releases it / config
+    `qwen3_main_d_only_balanced_t1_contextual_2000step_internal_evaluation_audited_grounding_gpu0.toml`
+    SHA256 `fe8bfc44...7cd6` / artifact hashes `ab971b83...d723`,
+    `c80c616c...fc8b`, `884e417b...54b` / output
+    `artifacts/representation/RP-60-qwen3-audited-grounding-main-d-only-balanced-t1-contextual-2000-gpu0/report.json`.
+- Runtime/commands: single-GPU `.venv-torch211-cu129` deterministic evaluation;
+  `CUDA_VISIBLE_DEVICES=<cell GPU> CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false timeout 7200s
+  .venv-torch211-cu129/bin/python -m tgvf_rl.cli
+  run-representation-internal-evaluation <cell TOML>`. RP-56--RP-59 launch in
+  detached tmux sessions; RP-60 launches only after RP-56 exits and GPU 0 is
+  observed free. Sampling backend, behavior/reference logprobs, policy/reference
+  replay, KL, GRPO/SDPO, optimizer, gradient, world-size batching and judge are
+  N/A because this is deterministic frozen representation evaluation.
+- Acceptance: each run must bind its exact config/artifact/data/prompt and
+  manifest identities, preserve tokenizer length 151669, report exactly 200
+  base rows/46 groups, nine cross-image cases and 36 target-presence cases with
+  finite aggregate metrics, publish an immutable report, exit cleanly and
+  release its GPU. Cross-cell conclusions are withheld until all five pass.
+
 ### Representation-phase endpoint evidence summary
 
 - Provider: under the same Balanced/T=1.0 2000-step identity, contextual hidden
