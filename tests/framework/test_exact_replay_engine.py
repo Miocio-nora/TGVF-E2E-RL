@@ -47,6 +47,10 @@ class _NoRawForwardModel(nn.Module):
     def __init__(self, weight: float) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.tensor(weight))
+        self.unshard_calls = 0
+
+    def unshard(self) -> None:
+        self.unshard_calls += 1
 
     def forward(self, *_: object, **__: object) -> torch.Tensor:
         raise AssertionError("exact replay must never call raw model.forward")
@@ -77,11 +81,11 @@ class _FakeResponsePort:
         sampling,
     ) -> _FakeRoleResult:
         del prompt_token_ids, sampling
+        assert self.model.unshard_calls == 1
         self.calls.append(bundle.bundle_sha256)
         mask = torch.tensor(
             tuple(
-                owner is TokenOwnership.POLICY_SAMPLED
-                for owner in response.ownership
+                owner is TokenOwnership.POLICY_SAMPLED for owner in response.ownership
             ),
             dtype=torch.bool,
         )
@@ -125,9 +129,7 @@ class _FakeUpstreamFSDPEngineWithLMHead:
         base_sync_done=False,
         **kwargs,
     ):
-        self.weight_sync_calls.append(
-            (layered_summon, base_sync_done, dict(kwargs))
-        )
+        self.weight_sync_calls.append((layered_summon, base_sync_done, dict(kwargs)))
         return self.parameter_stream, self.peft_config
 
     def get_data_parallel_group(self):
@@ -235,8 +237,7 @@ def test_actor_lora_weight_stream_publishes_snapshot_without_mutating_items(
     assert actual_config is peft_config
     assert engine.weight_sync_calls == [(True, True, {"transport": "naive"})]
     assert all(
-        actual is expected
-        for actual, expected in zip(observed, source, strict=True)
+        actual is expected for actual, expected in zip(observed, source, strict=True)
     )
     snapshot = load_latest_lora_snapshot(
         state,
@@ -377,7 +378,9 @@ def test_config_bound_factory_builds_existing_qwen_port_for_actor_and_ref() -> N
         actor_port.binding.base_weights_sha256
     )
     assert reference_port.binding.lora_state_sha256 is None
-    assert all(not parameter.requires_grad for parameter in reference_model.parameters())
+    assert all(
+        not parameter.requires_grad for parameter in reference_model.parameters()
+    )
     payload.release_sidecars()
 
 
@@ -398,9 +401,12 @@ def test_same_registered_engine_restores_actor_and_ref_full_sequence_layout() ->
         upstream_engine_cls=_FakeUpstreamFSDPEngineWithLMHead,
         devices=("cuda",),
     )
-    assert _FakeEngineRegistry.registrations[
-        (TGVF_EXACT_REPLAY_MODEL_TYPE, "fsdp2", ("cuda",))
-    ] is engine_cls
+    assert (
+        _FakeEngineRegistry.registrations[
+            (TGVF_EXACT_REPLAY_MODEL_TYPE, "fsdp2", ("cuda",))
+        ]
+        is engine_cls
+    )
 
     actor_model = _NoRawForwardModel(0.5)
     actor = engine_cls(
@@ -433,6 +439,7 @@ def test_same_registered_engine_restores_actor_and_ref_full_sequence_layout() ->
     assert actor_output["metrics"] == {"selected": 7}
     assert not actor_output["model_output"]["log_probs"].requires_grad
     assert actor.exact_replay_evidence.role is ComponentRole.CURRENT
+    assert actor_model.unshard_calls == 1
 
     reference_model = _NoRawForwardModel(0.5)
     reference = engine_cls(
@@ -442,7 +449,9 @@ def test_same_registered_engine_restores_actor_and_ref_full_sequence_layout() ->
     )
     reference.module = reference._build_module()
     reference.module.eval()
-    assert all(not parameter.requires_grad for parameter in reference.module.parameters())
+    assert all(
+        not parameter.requires_grad for parameter in reference.module.parameters()
+    )
     _, reference_output = reference.forward_step(micro_batch, None, True)
     reference_full = reference_output["model_output"]["log_probs"].unbind()[0]
     prompt, response = _exact_rows(micro_batch)
@@ -453,7 +462,31 @@ def test_same_registered_engine_restores_actor_and_ref_full_sequence_layout() ->
     assert reference_full[-1].item() == 0.0
     assert not reference_full.requires_grad
     assert reference.exact_replay_evidence.role is ComponentRole.REFERENCE
+    assert reference_model.unshard_calls == 1
     assert ports[0].binding.role is ComponentRole.CURRENT
     assert ports[1].binding.role is ComponentRole.REFERENCE
     assert ports[0].calls == ports[1].calls
+    payload.release_sidecars()
+
+
+def test_exact_replay_rejects_a_root_without_fsdp2_unshard() -> None:
+    _FakeEngineRegistry.registrations.clear()
+    payload, _, micro_batch = _live_tensordict()
+
+    engine_cls = register_exact_replay_fsdp2_engine(
+        port_factory=lambda **kwargs: _FakeResponsePort(
+            kwargs["model"], kwargs["role"]
+        ),
+        registry=_FakeEngineRegistry,
+        upstream_engine_cls=_FakeUpstreamFSDPEngineWithLMHead,
+        devices=("cuda",),
+    )
+    engine = engine_cls(
+        model_config=SimpleNamespace(model_type=TGVF_EXACT_REPLAY_MODEL_TYPE),
+        engine_config=SimpleNamespace(strategy="fsdp2", forward_only=True),
+        module=nn.Linear(1, 1),
+    )
+
+    with pytest.raises(RuntimeError, match="FSDP2 unshard"):
+        engine.forward_step(micro_batch, None, True)
     payload.release_sidecars()

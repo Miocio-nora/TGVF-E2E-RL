@@ -30,7 +30,11 @@ from torch import nn
 
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ComponentRole, ModelIdentity, PolicyVersion
-from tgvf_rl.contracts.tokens import OwnedTokenSequence, SamplingIdentity, TokenOwnership
+from tgvf_rl.contracts.tokens import (
+    OwnedTokenSequence,
+    SamplingIdentity,
+    TokenOwnership,
+)
 from tgvf_rl.observations.store import TrajectoryReplayBundle
 
 from .data_bridge import (
@@ -241,6 +245,7 @@ def exact_replay_forward_step(
         model_training=bool(module.training),
     )
     _validate_port_role(port, role)
+    _unshard_exact_replay_root(module)
 
     prompt_rows = _batched_sidecar(micro_batch, EXACT_PROMPT_IDS_FIELD)
     response_rows = _batched_sidecar(micro_batch, EXACT_RESPONSE_IDS_FIELD)
@@ -277,7 +282,9 @@ def exact_replay_forward_step(
     _validate_upstream_response_slice(
         full_logprobs,
         response_values=response_values,
-        prompt_lengths=tuple(len(_token_tuple(row, "exact prompt")) for row in prompt_rows),
+        prompt_lengths=tuple(
+            len(_token_tuple(row, "exact prompt")) for row in prompt_rows
+        ),
     )
     model_output = {"log_probs": full_logprobs}
 
@@ -303,7 +310,11 @@ def exact_replay_forward_step(
         if not isinstance(metrics, Mapping):
             raise TypeError("upstream loss metrics must be a mapping")
 
-    if role is ComponentRole.CURRENT and loss_function is not None and not loss.requires_grad:
+    if (
+        role is ComponentRole.CURRENT
+        and loss_function is not None
+        and not loss.requires_grad
+    ):
         raise ValueError("current exact-replay loss lost its autograd graph")
     if role is ComponentRole.REFERENCE and loss.requires_grad:
         raise ValueError("reference exact-replay placeholder loss carries gradients")
@@ -315,7 +326,9 @@ def exact_replay_forward_step(
     }
     engine.exact_replay_evidence = ExactReplayForwardEvidence(
         role=role,
-        bundle_sha256s=tuple(bundle.bundle_sha256 for bundle in integrity.replay_bundles),
+        bundle_sha256s=tuple(
+            bundle.bundle_sha256 for bundle in integrity.replay_bundles
+        ),
         response_lengths=tuple(len(values) for values in response_rows),
         full_sequence_lengths=tuple(int(row.numel()) for row in full_rows),
     )
@@ -324,6 +337,32 @@ def exact_replay_forward_step(
         "loss": loss.detach().item(),
         "metrics": dict(metrics),
     }
+
+
+def _unshard_exact_replay_root(module: nn.Module) -> None:
+    """Run the root FSDP2 pre-forward materialization bypassed by replay.
+
+    Exact replay intentionally invokes the injected inner language-model path
+    instead of the raw root forward. Child decoder, embedding, and lm-head
+    FSDP2 hooks still run normally, but root-owned parameters (notably the
+    Qwen final norm) would otherwise remain DTensors. ``FSDPModule.unshard``
+    is non-recursive, so this materializes only that root parameter group and
+    preserves the child modules' upstream-managed sharding behavior.
+
+    The root is deliberately not resharded here: pinned veRL/PyTorch FSDP2
+    likewise configures the root module with ``reshard_after_forward=False``.
+    This is also required for actor autograd to retain the exact forward state
+    through backward.
+    """
+
+    unshard = getattr(module, "unshard", None)
+    if not callable(unshard):
+        raise RuntimeError(
+            "exact replay requires the live root module to expose FSDP2 unshard()"
+        )
+    handle = unshard()
+    if handle is not None:
+        raise RuntimeError("synchronous FSDP2 root unshard returned an async handle")
 
 
 def make_exact_replay_fsdp2_engine_class(
@@ -337,7 +376,11 @@ def make_exact_replay_fsdp2_engine_class(
     _validate_upstream_engine_surface(upstream_engine_cls)
     if not callable(port_factory):
         raise TypeError("exact replay port_factory must be callable")
-    if not isinstance(model_type, str) or not model_type or model_type == "language_model":
+    if (
+        not isinstance(model_type, str)
+        or not model_type
+        or model_type == "language_model"
+    ):
         raise ValueError("exact replay requires a distinct non-empty model_type")
 
     class ExactReplayFSDPEngineWithLMHead(upstream_engine_cls):
@@ -421,9 +464,7 @@ def make_exact_replay_fsdp2_engine_class(
             )
 
     ExactReplayFSDPEngineWithLMHead.__name__ = "ExactReplayFSDPEngineWithLMHead"
-    ExactReplayFSDPEngineWithLMHead.__qualname__ = (
-        "ExactReplayFSDPEngineWithLMHead"
-    )
+    ExactReplayFSDPEngineWithLMHead.__qualname__ = "ExactReplayFSDPEngineWithLMHead"
     ExactReplayFSDPEngineWithLMHead.__module__ = __name__
     ExactReplayFSDPEngineWithLMHead.exact_replay_port_factory = port_factory
     ExactReplayFSDPEngineWithLMHead.exact_replay_model_type = model_type
@@ -449,8 +490,10 @@ def register_exact_replay_fsdp2_engine(
             ) from error
         registry = registry or EngineRegistry
         upstream_engine_cls = upstream_engine_cls or FSDPEngineWithLMHead
-    if not isinstance(devices, tuple) or not devices or any(
-        device not in {"cuda", "npu"} for device in devices
+    if (
+        not isinstance(devices, tuple)
+        or not devices
+        or any(device not in {"cuda", "npu"} for device in devices)
     ):
         raise ValueError("exact replay FSDP2 devices must be cuda/npu identities")
     register = getattr(registry, "register", None)
@@ -496,18 +539,24 @@ def _validate_qwen3_worker_config(
     if model_config is None or engine_config is None:
         raise TypeError("Qwen3 exact replay requires veRL model/engine config")
     if getattr(model_config, "model_type", None) != TGVF_EXACT_REPLAY_MODEL_TYPE:
-        raise IdentityMismatchError("Qwen3 worker did not select the exact replay model type")
+        raise IdentityMismatchError(
+            "Qwen3 worker did not select the exact replay model type"
+        )
     if getattr(engine_config, "strategy", None) != "fsdp2":
         raise ValueError("Qwen3 exact replay requires the FSDP2 strategy")
     if getattr(engine_config, "full_determinism", None) is not True:
         raise ValueError("Qwen3 exact replay requires full_determinism=true")
     expected_forward_only = role is ComponentRole.REFERENCE
     if bool(getattr(engine_config, "forward_only", False)) is not expected_forward_only:
-        raise IdentityMismatchError("Qwen3 replay role differs from engine forward_only")
+        raise IdentityMismatchError(
+            "Qwen3 replay role differs from engine forward_only"
+        )
 
     replay_model = bundle.replay_record.model
     if replay_model.family != "qwen3_vl":
-        raise IdentityMismatchError("config-bound replay factory supports Qwen3-VL only")
+        raise IdentityMismatchError(
+            "config-bound replay factory supports Qwen3-VL only"
+        )
     configured_path = getattr(model_config, "path", None)
     if configured_path != replay_model.revision_or_path:
         raise IdentityMismatchError("veRL model path differs from the replay bundle")
@@ -571,7 +620,10 @@ def _qwen3_forward_binding(
     compute_dtype = str(weight.dtype).removeprefix("torch.")
 
     autocast_dtype = getattr(engine, "_autocast_dtype", torch.float32)
-    if not isinstance(autocast_dtype, torch.dtype) or not autocast_dtype.is_floating_point:
+    if (
+        not isinstance(autocast_dtype, torch.dtype)
+        or not autocast_dtype.is_floating_point
+    ):
         raise TypeError("veRL FSDP2 autocast dtype must be floating")
     autocast_enabled = autocast_dtype != torch.float32
     autocast_name = (
@@ -730,7 +782,9 @@ def _single_sampling_identity(integrity: DataProtoIntegrityView) -> SamplingIden
                     "behavior sampling policy differs from the replay bundle"
                 )
             if sampling.asynchronous_staleness_steps != 0:
-                raise ReplayMismatchError("Policy Pilot exact replay requires staleness zero")
+                raise ReplayMismatchError(
+                    "Policy Pilot exact replay requires staleness zero"
+                )
             samplings.append(sampling)
     if not samplings:
         raise ValueError("exact replay requires behavior sampling evidence")
@@ -761,7 +815,9 @@ def _validate_port_role(port: ExactReplayResponsePort, role: ComponentRole) -> N
         raise TypeError("exact replay port must expose replay_response_logprobs()")
     binding_role = getattr(getattr(port, "binding", None), "role", None)
     if binding_role is not role:
-        raise IdentityMismatchError("exact replay port role differs from its TrainingWorker")
+        raise IdentityMismatchError(
+            "exact replay port role differs from its TrainingWorker"
+        )
 
 
 def _validate_response_result(
@@ -781,21 +837,33 @@ def _validate_response_result(
         raise ReplayMismatchError("exact replay result changed response ownership")
     values = getattr(result, "logprobs", None)
     mask = getattr(result, "policy_sampled_mask", None)
-    if not isinstance(values, torch.Tensor) or values.shape != (len(response.token_ids),):
+    if not isinstance(values, torch.Tensor) or values.shape != (
+        len(response.token_ids),
+    ):
         raise ValueError("exact replay result logprobs must be response-aligned")
     if not values.dtype.is_floating_point or not bool(
         torch.isfinite(values.detach()).all().item()
     ):
-        raise ValueError("exact replay response logprobs must be finite floating values")
-    if not isinstance(mask, torch.Tensor) or mask.dtype is not torch.bool or mask.shape != values.shape:
-        raise ValueError("exact replay result must carry a bool response ownership mask")
+        raise ValueError(
+            "exact replay response logprobs must be finite floating values"
+        )
+    if (
+        not isinstance(mask, torch.Tensor)
+        or mask.dtype is not torch.bool
+        or mask.shape != values.shape
+    ):
+        raise ValueError(
+            "exact replay result must carry a bool response ownership mask"
+        )
     expected_mask = torch.tensor(
         tuple(owner is TokenOwnership.POLICY_SAMPLED for owner in response.ownership),
         dtype=torch.bool,
         device=mask.device,
     )
     if not torch.equal(mask, expected_mask):
-        raise ReplayMismatchError("exact replay result changed the policy ownership mask")
+        raise ReplayMismatchError(
+            "exact replay result changed the policy ownership mask"
+        )
     if values.device != mask.device:
         raise ValueError("exact replay logprobs and ownership mask must share a device")
     if bool(torch.count_nonzero(values[~mask]).item()):
@@ -855,9 +923,7 @@ def _validate_upstream_engine_surface(upstream_engine_cls: type[Any]) -> None:
             raise TypeError(f"upstream FSDP engine is missing {name}()")
     parameters = tuple(inspect.signature(upstream_engine_cls.forward_step).parameters)
     if parameters != ("self", "micro_batch", "loss_function", "forward_only"):
-        raise RuntimeError(
-            "pinned FSDPEngineWithLMHead.forward_step signature changed"
-        )
+        raise RuntimeError("pinned FSDPEngineWithLMHead.forward_step signature changed")
     weight_parameters = tuple(
         inspect.signature(upstream_engine_cls.get_per_tensor_param).parameters
     )
@@ -894,7 +960,9 @@ def _token_tuple(value: Any, owner: str) -> tuple[int, ...]:
         result = tuple(value)
     except TypeError as error:
         raise TypeError(f"{owner} IDs must be an iterable") from error
-    if not result or any(type(token_id) is not int or token_id < 0 for token_id in result):
+    if not result or any(
+        type(token_id) is not int or token_id < 0 for token_id in result
+    ):
         raise ValueError(f"{owner} IDs must be non-empty non-negative integers")
     return result
 
@@ -904,8 +972,10 @@ def _as_bool(value: Any, owner: str) -> bool:
         return value
     if isinstance(value, torch.Tensor) and value.numel() == 1:
         return bool(value.item())
-    if isinstance(value, (tuple, list)) and value and all(
-        isinstance(item, bool) for item in value
+    if (
+        isinstance(value, (tuple, list))
+        and value
+        and all(isinstance(item, bool) for item in value)
     ):
         if len(set(value)) != 1:
             raise ValueError(f"one microbatch mixed {owner} values")
