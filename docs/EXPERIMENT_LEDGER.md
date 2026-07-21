@@ -5361,7 +5361,7 @@ instead of repeated bullets.
 ### BE-01-R6-QWEN3-DIRECT-COREDEV2511-FLASHINFER-JIT-GPU0123
 
 - Cell/status/result: complete B200 JIT environment and original-policy
-  throughput/resume gate / `PLANNED` / `PENDING`.
+  throughput/resume gate / `COMPLETE` / `FAIL`.
 - Fixed identity: model, tokenizer, prompt, pixels, sampling, output budget,
   model/config/code, image-only modality restriction, CoreDev membership and
   scorer are exactly BE-01-R5 (`9204501`, config `64740b07...daa1d`). New
@@ -5379,6 +5379,28 @@ instead of repeated bullets.
 - Command delta: R5 command with `C_INCLUDE_PATH` replaced by `CPATH` containing
   the two extracted Python include roots and the venv cublas, cuda_nvrtc, and
   cuda_runtime include roots; output root is R6.
+- Result: GPU0 VStarBench launched at `2026-07-21T13:19:30+09:00`. NVCC
+  compiled both FlashInfer B200 objects successfully; the final shared-library
+  link failed because the CUDA runtime wheel provides only versioned
+  `libcudart.so.12`, while FlashInfer requests the conventional development
+  name `libcudart.so`. No prediction was generated and GPU0 released cleanly.
+  Launcher log SHA256 `00f17203...1074`.
+
+### BE-01-R7-QWEN3-DIRECT-COREDEV2511-FLASHINFER-LINK-GPU0123
+
+- Cell/status/result: complete B200 FlashInfer link and original-policy
+  throughput/resume gate / `PLANNED` / `PENDING`.
+- Fixed identity: exactly BE-01-R6; code/config/model/data/decoding are
+  unchanged. Output root is
+  `artifacts/evaluation/BE-01-R7-qwen3-direct-coredev2511`.
+- Bounded runtime delta: a local unversioned linker alias under
+  `.eval-runtime-python312-dev/lib/libcudart.so` points to this venv's immutable
+  `nvidia-cuda-runtime-cu12=12.8.90` `libcudart.so.12`; `LIBRARY_PATH` exposes
+  that directory only during JIT. A `g++ -shared -lcudart -lcuda` link fixture
+  passed. No system package, wheel or CUDA binary changed.
+- Gate/command: R6's GPU0 VStar gate and command, adding the local runtime-lib
+  directory to `LIBRARY_PATH` and using the R7 output root. Launch GPUs 1--3
+  only after real rows and throughput evidence.
 
 ## Compatibility-spike status
 
