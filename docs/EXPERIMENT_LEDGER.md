@@ -6516,6 +6516,82 @@ instead of repeated bullets.
   failure without changing the LoRA expand computation. The production plugin
   may apply the same behavior only to the exact vLLM 0.12.0/Triton 3.5.0 stack.
 
+### PRL-01-R6-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: mandatory 4-GPU Policy Pilot
+  one-step vertical slice and clean-process resume.
+- Spike-plan git revision and approval references: accepted task sections
+  0.8.2--0.8.3 and DIAG-02 PASS.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: does the fixed R5 contract complete one real rollout/replay/update
+  and clean-process resume when only optional LoRA PDL/GDC is disabled on the
+  exact failing vLLM/Triton stack?
+- Baseline and exact output path: R5 reached LoRA CUDA-graph compilation;
+  fresh root `artifacts/policy/PRL-01-R6-qwen3-grpo-1step-auto-resume-gpu0123`,
+  absent at planning time; `launch.log`/`resume.log`.
+- Model and processor identity: Qwen3-VL-8B-Thinking local path, tokenizer
+  151669, template `36e042fe...8956`, DeepStack on, max pixels 262144.
+- Representation checkpoint identity: RP-49 contextual layer -1, Balanced CE
+  T=0.1 step 2000; file/manifest/run hashes `fcda0b96...fc14` /
+  `3ff14e66...f49e` / `980e4136...e1bea`.
+- N/A fields and justification: bounded exact-MCQ smoke; no judge, Qwen2.5,
+  crop, SDPO, full tuning, nonzero KL or quality inference.
+- Policy/reference initialization: base plus decoder-only LoRA `64/64/0`, LR
+  `1e-5`; all non-decoder scopes frozen; separate unadapted frozen reference.
+- Rollout policy version and allowed asynchronous staleness: synchronized
+  step-0 behavior snapshot, zero staleness, no update before replay.
+- Code commit and worktree state: executable commit
+  `a033146338971eb33b59a18a6509a0f940205544`; clean descendant may add only
+  this exact config and ledger row.
+- Repository adapter/patch surface and hash: R6 config SHA256
+  `a625466c...57e7`, run identity `9ccba1e6...b853`; R5 inputs unchanged.
+  Repo-owned general plugin binds all four vLLM 0.12 LoRA `supports_pdl`
+  aliases false only with Triton 3.5.0; mode
+  `vllm-0.12-triton-3.5-lora-pdl-disabled-v1`. DIAG-02 error `0.000686049`.
+- Dataset/manifest, hashes, sample rule, and n: unchanged DeepEyes snapshot,
+  manifest and sample hashes; seed 42, cursor 7 MCQ C; batch 4, n=8.
+- Native prompt/tool schema hash: `390b334e...99f5` / `f33f61d4...6aba5`, four
+  calls and fifth-call error `1f649e1d...ad200`.
+- Chat-template/token-fixture hash and token-ownership masks: 724 tokens, 234
+  image pads, IDs `221b8952...d4d`; sampled assistant tokens only.
+- D/DeepStack/position/mask identity: exact recorded main D plus `(8,16,24)`
+  branches/layout/positions/masks; no recomputation.
+- Observation materialization/artifact identity used by all replays: one
+  rollout-owned content-addressed bundle shared by current/reference replay.
+- RL framework/version/environment lock: veRL e003163, Python 3.12.3, Torch
+  2.9.0+cu128, Transformers 4.57.6, vLLM 0.12.0, Triton 3.5.0, PEFT 0.19.1,
+  Ray 2.56.1; accepted `CC`/`CXX`/`CPATH`.
+- Objective equations and normalization: sample-std GRPO; reward
+  `0.8/0.2/1.2`; behavior ratio, clip `[0.8,1.2]`, dual clip 3, global token
+  mean, one epoch, KL/entropy zero, grad norm 1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: rollout
+  `request_seeded_batch_sensitive_v1`, actual behavior logprobs; deterministic
+  replay, dropout zero.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM 0.12; seed 42 derivation
+  `fe8d2da9...e867e`; `1/1/-1/0`, penalties `1/0/0`, none, post-transform,
+  EOS 151645, stop closer, cap 8192.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16/no quantization; HF SDPA, vLLM
+  TRITON_ATTN/TORCH_SDPA; TP1, 4-rank FSDP2, no reshard/checkpointing/remove
+  padding/compile; colocated; CUDA graph remains enabled.
+- Logit/logprob/loss/gradient parity tolerances: exact identities, finite
+  values, pre-update clipfrac zero and absolute mean PPO KL <=0.015625.
+- World size, microbatch, accumulation, and global batch: world 4, prompt batch
+  4, prompt/rollout microbatch 1/rank, logprob microbatch 8/GPU, 32
+  trajectories, accumulation 1.
+- GPUs: physical/logical 0--3, B200 183359 MiB; idle at planning and recheck.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  tmux `prl01_r6_gpu0123`, then `prl01_r6_resume_gpu0123`.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: absolute R6 `run-policy` under `.venv312`; clean resume only after
+  successful step 1 and must make no second update.
+- Outputs: pending.
+- Scorer/parser identity: exact MCQ `2a3d5fa4...2e1c`, strict native parser.
+- Metrics: pending.
+- Conclusion: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
