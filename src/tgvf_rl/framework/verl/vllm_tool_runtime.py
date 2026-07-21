@@ -8,6 +8,7 @@ loaded in an AgentLoop process.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MethodType
@@ -730,6 +731,7 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
     """Create veRL-bound classes lazily so CPU contract imports remain light."""
 
     import ray
+    from verl.utils.ray_utils import auto_await
     from verl.workers.rollout.llm_server import LLMServerClient, LLMServerManager
     from verl.workers.rollout.vllm_rollout.vllm_async_server import (
         vLLMHttpServer,
@@ -743,6 +745,44 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
         def _require_step(self, expected_step: int) -> None:
             if type(expected_step) is not int or self.global_steps != expected_step:
                 raise RuntimeError("TGVF RPC behavior policy step differs from vLLM")
+
+        async def tgvf_shutdown(self) -> None:
+            """Stop HTTP and EngineCore before Ray tears down the server actor."""
+
+            errors: list[Exception] = []
+            server_task = getattr(self, "_server_task", None)
+            if isinstance(server_task, asyncio.Task) and not server_task.done():
+                server_task.cancel()
+                try:
+                    await server_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as error:  # pragma: no cover - backend failure
+                    errors.append(error)
+
+            engine = getattr(self, "engine", None)
+            shutdown = getattr(engine, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception as error:  # pragma: no cover - backend failure
+                    errors.append(error)
+                finally:
+                    self.engine = None
+
+            for name in ("_master_sock", "_dp_rpc_sock", "_dp_master_sock"):
+                sock = getattr(self, name, None)
+                close = getattr(sock, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception as error:  # pragma: no cover - OS failure
+                        errors.append(error)
+                    finally:
+                        setattr(self, name, None)
+
+            if errors:
+                raise ExceptionGroup("TGVF vLLM server shutdown failed", errors)
 
         async def tgvf_materialize_source(
             self, *, expected_step: int, **kwargs: object
@@ -948,6 +988,28 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
 
         def get_client(self, client_cls: type[Any] = TGVFLLMServerClient, **kwargs: Any):
             return super().get_client(client_cls=client_cls, **kwargs)
+
+        @auto_await
+        async def shutdown(self) -> None:
+            """Gracefully stop EngineCore, then remove the Ray server actors."""
+
+            servers = [
+                server
+                for replica in getattr(self, "rollout_replicas", ())
+                for server in getattr(replica, "servers", ())
+            ]
+            results = await asyncio.gather(
+                *(server.tgvf_shutdown.remote() for server in servers),
+                return_exceptions=True,
+            )
+            errors = [result for result in results if isinstance(result, Exception)]
+            for server in servers:
+                ray.kill(server, no_restart=True)
+            load_balancer = getattr(self, "global_load_balancer", None)
+            if load_balancer is not None:
+                ray.kill(load_balancer, no_restart=True)
+            if errors:
+                raise ExceptionGroup("TGVF vLLM manager shutdown failed", errors)
 
     return (
         TGVFLLMServerManager,

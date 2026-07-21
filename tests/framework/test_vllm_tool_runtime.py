@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import pickle
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ from tgvf_rl.framework.verl.vllm_tool_runtime import (
     _source_to_utility_wire,
     _tensor_from_utility_wire,
     _tensor_to_utility_wire,
+    _runtime_classes,
 )
 from tgvf_rl.representation.adapter import TGVFAdapterMetadata
 from tgvf_rl.representation.deepstack import DDeepStackPayload
@@ -143,3 +145,34 @@ def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases
     )
     assert extension._tgvf_sources() == {}
     assert extension._tgvf_traces() == {}
+
+
+def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
+    events: list[str] = []
+
+    class Engine:
+        def shutdown(self):
+            events.append("engine")
+
+    class Socket:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def close(self):
+            events.append(self.name)
+
+    async def exercise() -> object:
+        server_cls = _runtime_classes()[3]
+        server = object.__new__(server_cls)
+        server.engine = Engine()
+        server._server_task = asyncio.create_task(asyncio.Event().wait())
+        server._master_sock = Socket("master")
+        server._dp_rpc_sock = Socket("rpc")
+        server._dp_master_sock = Socket("dp-master")
+        await server.tgvf_shutdown()
+        return server
+
+    server = asyncio.run(exercise())
+    assert events == ["engine", "master", "rpc", "dp-master"]
+    assert server.engine is None
+    assert server._master_sock is None

@@ -464,27 +464,57 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             )
             self._policy_checkpoint_pending = False
             self._policy_step_started_at = None
+            self._policy_runtime_shutdown = False
             return result
 
         def fit(self):
-            completed_step = _completed_resume_checkpoint_step(self)
-            if completed_step is None:
-                return super().fit()
+            try:
+                completed_step = _completed_resume_checkpoint_step(self)
+                if completed_step is None:
+                    return super().fit()
 
-            # Pinned veRL increments ``global_steps`` before checking its loop
-            # bound, so resuming an already-complete one-step run would perform
-            # an unauthorized extra update.  Load and validate the complete
-            # paired checkpoint, publish exactly those weights, then exit.
-            self.global_steps = 0
-            self._load_checkpoint()
-            if self.global_steps != completed_step:
-                raise RuntimeError("loaded Policy resume step changed")
-            resumed = getattr(self._policy_checkpoint_state, "last_resume", None)
-            if getattr(resumed, "optimizer_step", None) != completed_step:
-                raise RuntimeError("paired Policy resume step differs from veRL")
-            self.checkpoint_manager.update_weights(self.global_steps)
-            self._shutdown_dump_executor()
-            return None
+                # Pinned veRL increments ``global_steps`` before checking its loop
+                # bound, so resuming an already-complete one-step run would perform
+                # an unauthorized extra update.  Load and validate the complete
+                # paired checkpoint, publish exactly those weights, then exit.
+                self.global_steps = 0
+                self._load_checkpoint()
+                if self.global_steps != completed_step:
+                    raise RuntimeError("loaded Policy resume step changed")
+                resumed = getattr(self._policy_checkpoint_state, "last_resume", None)
+                if getattr(resumed, "optimizer_step", None) != completed_step:
+                    raise RuntimeError("paired Policy resume step differs from veRL")
+                self.checkpoint_manager.update_weights(self.global_steps)
+                self._shutdown_dump_executor()
+                return None
+            finally:
+                self._shutdown_policy_runtime()
+
+        def _shutdown_policy_runtime(self) -> None:
+            if getattr(self, "_policy_runtime_shutdown", False):
+                return
+            errors: list[Exception] = []
+            for name in ("train_dataloader", "val_dataloader"):
+                loader = getattr(self, name, None)
+                iterator = getattr(loader, "_iterator", None)
+                shutdown = getattr(iterator, "_shutdown_workers", None)
+                if callable(shutdown):
+                    try:
+                        shutdown()
+                    except Exception as error:  # pragma: no cover - worker failure
+                        errors.append(error)
+                    else:
+                        loader._iterator = None
+            manager = getattr(self, "llm_server_manager", None)
+            shutdown = getattr(manager, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception as error:  # pragma: no cover - backend failure
+                    errors.append(error)
+            if errors:
+                raise ExceptionGroup("Policy runtime shutdown failed", errors)
+            self._policy_runtime_shutdown = True
 
         def _get_gen_batch(self, *args, **kwargs):
             self._policy_step_started_at = perf_counter()

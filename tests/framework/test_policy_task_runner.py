@@ -273,6 +273,10 @@ def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> 
         def update_weights(self, step):
             events.append(("sync", step))
 
+    class RuntimeManager:
+        def shutdown(self):
+            events.append("runtime_shutdown")
+
     trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
     trainer = object.__new__(trainer_cls)
     trainer.config = SimpleNamespace(
@@ -286,7 +290,51 @@ def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> 
     trainer.total_training_steps = 1
     trainer._policy_checkpoint_state = SimpleNamespace(last_resume=None)
     trainer.checkpoint_manager = CheckpointManager()
+    trainer.llm_server_manager = RuntimeManager()
 
     assert _completed_resume_checkpoint_step(trainer) == 1
     assert trainer.fit() is None
-    assert events == ["load", ("sync", 1), "shutdown"]
+    assert events == ["load", ("sync", 1), "shutdown", "runtime_shutdown"]
+
+
+def test_policy_fit_closes_dataloader_workers_and_runtime_after_failure() -> None:
+    events: list[str] = []
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            return None
+
+        def fit(self):
+            raise RuntimeError("training failed")
+
+    class Iterator:
+        def _shutdown_workers(self):
+            events.append("dataloader_shutdown")
+
+    class RuntimeManager:
+        def shutdown(self):
+            events.append("runtime_shutdown")
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.config = SimpleNamespace(
+        trainer=SimpleNamespace(resume_mode="disable", resume_from_path=None)
+    )
+    trainer.train_dataloader = SimpleNamespace(_iterator=Iterator())
+    trainer.val_dataloader = SimpleNamespace(_iterator=None)
+    trainer.llm_server_manager = RuntimeManager()
+
+    with pytest.raises(RuntimeError, match="training failed"):
+        trainer.fit()
+
+    assert trainer.train_dataloader._iterator is None
+    assert events == ["dataloader_shutdown", "runtime_shutdown"]

@@ -7169,19 +7169,38 @@ instead of repeated bullets.
 
 ### PRL-01-R27-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- `PLANNED` / `PENDING`; config
+- `COMPLETE` / `PASS`; config
   `configs/policy/runs/prl_01_r27_qwen3_grpo_1step_autoresume_gpu0123.toml`,
   SHA256 `23ced063...51eb`, identity `85c35f8f...9fcc`, implementation
-  `ff4ec3217bd02704320c2e36fd2bfe1c51b81686`, GPU 0--3, tmux
-  `prl01_r27_gpu0123`.
+  `ff4ec3217bd02704320c2e36fd2bfe1c51b81686`, GPU 0--3.
 - R26 mathematics, data, sampling, replay, capacity, topology, and lifecycle
   are unchanged. Source and focus results now cross vLLM's secure utility
   boundary through explicit primitive tensor wires, including BF16 main D and
   all D-DeepStack branches. The consolidated data-to-checkpoint contract suite
   passed 406 tests with insecure serialization disabled.
-- Question: can the audited two-model path now complete real generation,
-  bounded TGVF calls, reward, exact current/reference replay, one GRPO update,
-  LoRA synchronization, step-1 checkpoint, and clean-process resume?
+- Primary run: tmux `prl01_r27_gpu0123`, 2026-07-22 02:54:22--03:01:29 JST.
+  The real 32-trajectory batch completed generation, 48 successful TGVF
+  observations from 49 attempts, exact current/reference replay, one FSDP2
+  GRPO update, step-1 LoRA publication, and a complete four-shard paired
+  checkpoint. Step time was 159.403 s: generation 102.955 s, reference 11.677
+  s, actor update 19.694 s, and synchronized publication/checkpoint 25.050 s.
+  Peak actor allocation/reservation was 108.502/127.580 GiB per reported rank.
+- The batch recorded four prompts, 32 trajectories, 187,250 policy tokens,
+  172,776 reasoning tokens, 48 successful observations, one
+  `tool_parse.missing_think_closer`, five format errors, and no correct answer
+  on this bounded fixture. W&B run `n8r1174b` received the step metrics.
+- Clean resume: tmux `prl01_r27_resume_gpu0123`, 2026-07-22
+  03:02:47--03:07:11 JST. All four ranks loaded model, optimizer, RNG and LR
+  scheduler at global step 1; the paired project state restored and republished
+  the exact step-1 LoRA without another optimizer update.
+- Primary/resume log SHA256:
+  `a90481ce...7720` / `bc823c89...b90a`. Pair/project-state SHA256:
+  `b436de09...04a5` / `cf66266e...e1b2`.
+- Conclusion: the accepted two-model vertical slice and clean-process resume
+  pass end to end. Ray teardown emitted post-success DataLoader/vLLM process
+  cleanup noise; this did not corrupt the paired checkpoint. A subsequent
+  project cleanup patch adds explicit StatefulDataLoader and EngineCore/HTTP
+  shutdown and is covered by the CPU policy/framework regression suite.
 
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
