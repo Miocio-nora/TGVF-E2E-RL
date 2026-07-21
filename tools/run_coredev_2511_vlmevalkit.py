@@ -14,6 +14,26 @@ DEPLOYMENT = REPOSITORY_ROOT / "configs/evaluation/vlmevalkit_deployment_v1.json
 PINNED_ARTIFACTS = (
     REPOSITORY_ROOT / "configs/evaluation/coredev_2511_vlmevalkit_v1.json"
 )
+DIRECT_BASELINE_CONFIG = (
+    REPOSITORY_ROOT / "configs/evaluation/coredev_2511_qwen3_direct_v1.json"
+)
+
+
+def _pop_option(name: str) -> str | None:
+    if name not in sys.argv:
+        return None
+    index = sys.argv.index(name)
+    if index + 1 >= len(sys.argv) or sys.argv[index + 1].startswith("--"):
+        raise RuntimeError(f"{name} requires a value")
+    value = sys.argv[index + 1]
+    del sys.argv[index : index + 2]
+    return value
+
+
+def _required_option(name: str) -> str:
+    if name not in sys.argv or sys.argv.index(name) + 1 >= len(sys.argv):
+        raise RuntimeError(f"CoreDev runner requires {name}")
+    return sys.argv[sys.argv.index(name) + 1]
 
 
 def main() -> int:
@@ -33,7 +53,22 @@ def main() -> int:
     )
     from tgvf_rl.evaluation.vlmevalkit import (  # noqa: PLC0415
         isolate_torchrun_environment_for_spawned_factory,
+        materialize_coredev_subset_config,
     )
+
+    selected = _pop_option("--coredev-data")
+    if selected is not None:
+        config_path = Path(_required_option("--config")).resolve()
+        if config_path != DIRECT_BASELINE_CONFIG:
+            raise RuntimeError("--coredev-data requires the pinned direct baseline config")
+        datasets = tuple(item.strip() for item in selected.split(",") if item.strip())
+        work_dir = Path(_required_option("--work-dir")).resolve()
+        resolved = materialize_coredev_subset_config(
+            base_config_path=config_path,
+            output_dir=work_dir / "resolved-configs",
+            datasets=datasets,
+        )
+        sys.argv[sys.argv.index("--config") + 1] = str(resolved)
 
     if pinned["llm_judge_model"] != COREDEV_LLM_JUDGE_MODEL:
         raise RuntimeError("CoreDev served judge identity mismatch")

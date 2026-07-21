@@ -74,6 +74,45 @@ def isolate_torchrun_environment_for_spawned_factory(factory: Any) -> Any:
     return isolated_factory
 
 
+def materialize_coredev_subset_config(
+    *,
+    base_config_path: Path,
+    output_dir: Path,
+    datasets: tuple[str, ...],
+) -> Path:
+    """Write a content-addressed config for complete CoreDev dataset slices."""
+
+    if not datasets or len(set(datasets)) != len(datasets):
+        raise ValueError("CoreDev subset datasets must be non-empty and unique")
+    payload = json.loads(base_config_path.read_text(encoding="utf-8"))
+    if set(payload) != {"model", "data"} or not isinstance(payload["data"], dict):
+        raise ValueError("CoreDev base config schema drifted")
+    available = tuple(payload["data"])
+    unknown = tuple(name for name in datasets if name not in payload["data"])
+    if unknown:
+        raise ValueError(f"unknown CoreDev datasets: {', '.join(unknown)}")
+    canonical = tuple(name for name in available if name in datasets)
+    if datasets != canonical:
+        raise ValueError("CoreDev subset datasets must follow canonical suite order")
+
+    resolved = {
+        "model": payload["model"],
+        "data": {name: payload["data"][name] for name in datasets},
+    }
+    content = json.dumps(resolved, indent=2, ensure_ascii=False) + "\n"
+    digest = sha256(content.encode("utf-8")).hexdigest()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"coredev-subset-{digest[:16]}.json"
+    if output_path.exists():
+        if output_path.read_text(encoding="utf-8") != content:
+            raise RuntimeError("CoreDev resolved-config identity collision")
+    else:
+        temporary = output_path.with_suffix(".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(output_path)
+    return output_path
+
+
 def _sha256(value: object, *, name: str) -> None:
     if (
         not isinstance(value, str)

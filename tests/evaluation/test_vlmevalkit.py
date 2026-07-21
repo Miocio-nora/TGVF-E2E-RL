@@ -14,6 +14,7 @@ from tgvf_rl.evaluation.vlmevalkit import (
     TGVFPolicyEvaluationResult,
     VLMEvalKitLaunchPlan,
     isolate_torchrun_environment_for_spawned_factory,
+    materialize_coredev_subset_config,
 )
 
 
@@ -152,3 +153,49 @@ def test_nested_vllm_spawn_does_not_inherit_torchrun_rank_environment(
     assert value == 7
     assert inside == {key: None for key in expected}
     assert {key: os.environ.get(key) for key in expected} == expected
+
+
+def test_coredev_subset_config_preserves_model_and_complete_slice_identity(
+    tmp_path: Path,
+) -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    base_path = repository_root / "configs/evaluation/coredev_2511_qwen3_direct_v1.json"
+    base = json.loads(base_path.read_text(encoding="utf-8"))
+
+    resolved_path = materialize_coredev_subset_config(
+        base_config_path=base_path,
+        output_dir=tmp_path,
+        datasets=("VStarBench", "HRBench4K"),
+    )
+    resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
+
+    assert resolved["model"] == base["model"]
+    assert resolved["data"] == {
+        name: base["data"][name] for name in ("VStarBench", "HRBench4K")
+    }
+    assert materialize_coredev_subset_config(
+        base_config_path=base_path,
+        output_dir=tmp_path,
+        datasets=("VStarBench", "HRBench4K"),
+    ) == resolved_path
+
+
+def test_coredev_subset_config_rejects_unknown_or_reordered_slices(
+    tmp_path: Path,
+) -> None:
+    base_path = (
+        Path(__file__).resolve().parents[2]
+        / "configs/evaluation/coredev_2511_qwen3_direct_v1.json"
+    )
+    with pytest.raises(ValueError, match="unknown CoreDev"):
+        materialize_coredev_subset_config(
+            base_config_path=base_path,
+            output_dir=tmp_path,
+            datasets=("NotABenchmark",),
+        )
+    with pytest.raises(ValueError, match="canonical suite order"):
+        materialize_coredev_subset_config(
+            base_config_path=base_path,
+            output_dir=tmp_path,
+            datasets=("HRBench4K", "VStarBench"),
+        )
