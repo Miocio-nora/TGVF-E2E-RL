@@ -6827,6 +6827,33 @@ instead of repeated bullets.
 - Conclusion: R12 uses the pinned definition module and directly exercises the
   default live metrics factory; no algorithm, sampling, or trajectory change.
 
+### PRL-01-R12-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r12_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `a36df0c8...77ab89`, run identity `64233c8f...fd045`; the config remains
+  authoritative for all model/data/protocol/objective/replay/topology fields.
+- Code/delta: `b68e99deb6aeb834ee18d321a6b38f722f9c2dc8`; R11 plus the corrected
+  pinned `AgentLoopMetrics` import, PyTorch-equivalent veRL unpadding for the
+  accepted SDPA stack, and an already-complete resume guard. No model,
+  rollout, reward, GRPO, or optimizer setting changed.
+- Preflight: 136 related tests passed, including real pinned-veRL metrics,
+  padding/no-padding round trip without `flash_attn`, exact-sidecar/replay
+  contracts, and step-1 resume with zero extra optimizer mutation. Static
+  current/reference replay audit found no deterministic next blocker.
+- Question: can the composed run now finish native trajectories, batched
+  reward, exact current/reference replay, one optimizer step, step-1 paired
+  checkpoint, then cleanly load/sync it without step 2?
+- GPUs/output/session: idle physical/logical B200 0--3; output
+  `artifacts/policy/PRL-01-R12-qwen3-grpo-1step-auto-resume-gpu0123` must be
+  absent; tmux `prl01_r12_gpu0123`, followed by a distinct resume session only
+  after a successful step-1 checkpoint.
+- Exact launch: same accepted R11 environment and command, substituting the
+  absolute R12 config/output paths; timeout 3600 s.
+- Start/end, GPU-hours, W&B, metrics, checkpoint and resume result: pending.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
