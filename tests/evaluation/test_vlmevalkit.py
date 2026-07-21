@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from tgvf_rl.evaluation.vlmevalkit import (
     CoreDevSliceSpec,
     TGVFPolicyEvaluationResult,
     VLMEvalKitLaunchPlan,
+    isolate_torchrun_environment_for_spawned_factory,
 )
 
 
@@ -125,3 +127,28 @@ def test_coredev_qwen3_direct_baseline_freezes_decoding_identity() -> None:
         "system_prompt": None,
         "gpu_utils": 0.9,
     }
+
+
+def test_nested_vllm_spawn_does_not_inherit_torchrun_rank_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {
+        "RANK": "2",
+        "WORLD_SIZE": "4",
+        "LOCAL_RANK": "2",
+        "LOCAL_WORLD_SIZE": "4",
+        "MASTER_ADDR": "127.0.0.1",
+        "MASTER_PORT": "29500",
+    }
+    for key, value in expected.items():
+        monkeypatch.setenv(key, value)
+
+    def factory(value: int) -> tuple[int, dict[str, str | None]]:
+        return value, {key: os.environ.get(key) for key in expected}
+
+    wrapped = isolate_torchrun_environment_for_spawned_factory(factory)
+    value, inside = wrapped(7)
+
+    assert value == 7
+    assert inside == {key: None for key in expected}
+    assert {key: os.environ.get(key) for key in expected} == expected

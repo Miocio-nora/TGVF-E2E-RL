@@ -31,6 +31,9 @@ def main() -> int:
         register_coredev_vlmevalkit_slices,
         verify_coredev_2511_artifacts,
     )
+    from tgvf_rl.evaluation.vlmevalkit import (  # noqa: PLC0415
+        isolate_torchrun_environment_for_spawned_factory,
+    )
 
     if pinned["llm_judge_model"] != COREDEV_LLM_JUDGE_MODEL:
         raise RuntimeError("CoreDev served judge identity mismatch")
@@ -54,9 +57,17 @@ def main() -> int:
     os.environ.setdefault("PRED_FORMAT", "tsv")
     os.environ.setdefault("EVAL_FORMAT", "json")
 
+    import vlmeval.config as model_config_module  # noqa: PLC0415
     import vlmeval.dataset as dataset_module  # noqa: PLC0415
 
     register_coredev_vlmevalkit_slices(dataset_module, artifacts)
+    if int(os.environ.get("LOCAL_WORLD_SIZE", "1")) > 1:
+        model_name = "Qwen3-VL-8B-Thinking"
+        model_config_module.supported_VLM[model_name] = (
+            isolate_torchrun_environment_for_spawned_factory(
+                model_config_module.supported_VLM[model_name]
+            )
+        )
 
     mode = sys.argv[sys.argv.index("--mode") + 1] if "--mode" in sys.argv else "all"
     if "--help" not in sys.argv and mode in {"all", "eval"}:

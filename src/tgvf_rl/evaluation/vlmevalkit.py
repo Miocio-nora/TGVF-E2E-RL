@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import wraps
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,6 +29,49 @@ COREDEV_2511_MANIFEST_ID = "core_balanced_dev_2511_seed20260625"
 COREDEV_2511_SEED = 20260625
 COREDEV_2511_SAMPLE_COUNT = 2511
 _SHA256_CHARS = frozenset("0123456789abcdef")
+_TORCHRUN_PROCESS_ENV = (
+    "RANK",
+    "WORLD_SIZE",
+    "LOCAL_RANK",
+    "LOCAL_WORLD_SIZE",
+    "GROUP_RANK",
+    "GROUP_WORLD_SIZE",
+    "ROLE_RANK",
+    "ROLE_WORLD_SIZE",
+    "MASTER_ADDR",
+    "MASTER_PORT",
+    "TORCHELASTIC_RUN_ID",
+    "TORCHELASTIC_RESTART_COUNT",
+    "TORCHELASTIC_MAX_RESTARTS",
+    "TORCHELASTIC_ERROR_FILE",
+)
+
+
+def isolate_torchrun_environment_for_spawned_factory(factory: Any) -> Any:
+    """Hide evaluator-rank identity while a nested vLLM engine is spawned.
+
+    VLMEvalKit first restricts every evaluator rank to one physical GPU.  A
+    vLLM V1 engine then spawns its own process.  If that child inherits the
+    outer ``LOCAL_WORLD_SIZE``, importing VLMEvalKit's launcher incorrectly
+    requires all evaluator GPUs to remain visible inside the one-GPU child.
+    The outer environment is restored before dataset inference resumes.
+    """
+
+    @wraps(factory)
+    def isolated_factory(*args: Any, **kwargs: Any) -> Any:
+        saved = {key: os.environ.get(key) for key in _TORCHRUN_PROCESS_ENV}
+        for key in _TORCHRUN_PROCESS_ENV:
+            os.environ.pop(key, None)
+        try:
+            return factory(*args, **kwargs)
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    return isolated_factory
 
 
 def _sha256(value: object, *, name: str) -> None:
