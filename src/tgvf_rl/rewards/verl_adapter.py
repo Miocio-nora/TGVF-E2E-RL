@@ -151,12 +151,21 @@ class PilotVerlTrajectoryRewardScorer:
         )
         if context.task_kind is AnswerTaskKind.MULTIPLE_CHOICE:
             answer = result.components[0]
-            if "route=multiple_choice_rule;" not in answer.evidence:
+            expected_route = (
+                "multiple_choice_rule"
+                if context.has_valid_final_answer
+                else "missing_final_answer"
+            )
+            if not answer.evidence.startswith(f"route={expected_route};"):
                 raise ValueError(
-                    "MCQ Pilot reward must use the deterministic rule route"
+                    "MCQ Pilot reward used an unexpected deterministic rule route"
                 )
             if answer.verifier_identity != self.pipeline.spec.answer_verifier_identity:
                 raise ValueError("MCQ Pilot reward unexpectedly used a judge identity")
+            if not context.has_valid_final_answer and answer.raw_score != 0.0:
+                raise ValueError(
+                    "unanswered MCQ trajectory must receive zero answer reward"
+                )
         return reward
 
 

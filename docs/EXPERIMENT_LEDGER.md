@@ -6899,7 +6899,7 @@ instead of repeated bullets.
 
 ### PRL-01-R14-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step plus
   clean no-extra-update resume.
 - Identity: config
   `configs/policy/runs/prl_01_r14_qwen3_grpo_1step_autoresume_gpu0123.toml`,
@@ -6914,10 +6914,16 @@ instead of repeated bullets.
   replay, one optimizer step, step-1 checkpoint, and a clean resume with no
   second update?
 - GPUs/output/session: physical/logical B200 0--3, world size 4; output
-  `artifacts/policy/PRL-01-R14-qwen3-grpo-1step-auto-resume-gpu0123` confirmed
-  absent; tmux `prl01_r14_gpu0123`, then a distinct resume session only after a
-  successful step-1 checkpoint. Standard accepted `.venv312` four-GPU launch,
-  timeout 3600 s.
+  `artifacts/policy/PRL-01-R14-qwen3-grpo-1step-auto-resume-gpu0123`; tmux
+  `prl01_r14_gpu0123`, standard accepted `.venv312` launch, timeout 3600 s.
+- Result: `2026-07-21T23:05:37+09:00`--`23:11:22+09:00`, exit 1, about
+  0.38 GPU-hours; GPUs released. W&B `6xhgb5kd`; launch-log SHA256
+  `741e0d1a...aa3ec`. R13's invalid-output retention passed and generation
+  reached exact reward scoring. A missing-answer MCQ correctly produced the
+  deterministic `missing_final_answer` route, but the veRL scorer still
+  required `multiple_choice_rule` for every MCQ and aborted instead of
+  retaining the row with answer 0 and format -1. No replay, update, checkpoint,
+  or resume occurred.
 
 ## Compatibility-spike status
 
