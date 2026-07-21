@@ -6605,8 +6605,10 @@ instead of repeated bullets.
   one-step vertical slice and clean-process resume.
 - Spike-plan git revision and approval references: accepted task sections
   0.8.2--0.8.3; DIAG-02 PASS; R6 wrapper root cause reproduced.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`; the wrapper fix passed and rollout workers were constructed,
+  then exact step-0 LoRA installation rejected FP32 local tensors against the
+  actor's BF16 snapshot before generation.
 - Question: after matching veRL's `DictConfigWrap` constructor contract, can
   the fixed stack complete one rollout/replay/update and clean resume?
 - Baseline and exact output path: R6 reached first rollout dispatch; fresh
@@ -6657,14 +6659,19 @@ instead of repeated bullets.
 - World size, microbatch, accumulation, and global batch: 4; prompt/rollout
   microbatch 1/rank; logprob microbatch 8/GPU; 32 trajectories; accumulation 1.
 - GPUs: physical/logical 0--3, B200 183359 MiB; 0 MiB and 0% at planning.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  tmux `prl01_r7_gpu0123`, then `prl01_r7_resume_gpu0123` only after step 1.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T20:29:41+09:00`--`2026-07-21T20:34:36+09:00`, about 4m55s;
+  tmux `prl01_r7_gpu0123`, exit 1; no resume.
+- Actual GPU-hours and peak scratch use: about 0.33 GPU-hours; GPUs released.
 - Command: absolute R7 `run-policy` under `.venv312` with `CUDA_VISIBLE_DEVICES=0,1,2,3`.
-- Outputs: pending.
+- Outputs: `launch.log` SHA256
+  `c148667a9d925f9fb774b6695c915c667501187964ccae4de6b1f69b09c4cb4f`;
+  W&B `n9i4b5ig`; complete 504-tensor BF16 step-0 snapshot.
 - Scorer/parser identity: exact MCQ `2a3d5fa4...2e1c`; strict native parser.
-- Metrics: pending.
-- Conclusion: pending.
+- Metrics: no generation, tool call, replay, optimizer step, or checkpoint.
+- Conclusion: PEFT `autocast_adapter_dtype=True` promoted only the local
+  rollout LoRA to FP32. All keys/shapes/values otherwise matched. R8 preserves
+  the actor/base BF16 dtype and retains strict snapshot equality.
 
 ## Compatibility-spike status
 

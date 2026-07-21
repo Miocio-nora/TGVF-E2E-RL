@@ -238,6 +238,18 @@ def test_qwen3_lora_scope_and_exact_current_reference_replay() -> None:
     assert all(parameter.grad is None for parameter in reference.model.parameters())
 
 
+def test_qwen3_lora_preserves_bfloat16_snapshot_dtype() -> None:
+    from peft.utils.save_and_load import get_peft_model_state_dict
+
+    built = build_qwen3_decoder_lora_policy(
+        _TinyQwen3().to(dtype=torch.bfloat16)
+    )
+    state = get_peft_model_state_dict(built.model, adapter_name="default")
+
+    assert state
+    assert {tensor.dtype for tensor in state.values()} == {torch.bfloat16}
+
+
 def test_qwen3_replay_rejects_wrong_role_tokens_and_mutated_bundle() -> None:
     store, handle = _replay(branches=3, calls=0)
     bundle = store.export_replay_bundle(handle)

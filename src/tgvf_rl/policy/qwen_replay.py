@@ -121,7 +121,10 @@ def build_qwen3_decoder_lora_policy(
         model,
         peft_config,
         adapter_name="default",
-        autocast_adapter_dtype=True,
+        # The accepted veRL FSDP2 actor casts trainable LoRA tensors to the
+        # base dtype before publishing them to vLLM.  Preserve that dtype here
+        # so rollout workers can install and prove the exact BF16 snapshot.
+        autocast_adapter_dtype=False,
         low_cpu_mem_usage=False,
     )
     policy.train(original_training)
