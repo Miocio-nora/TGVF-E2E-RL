@@ -5756,6 +5756,132 @@ instead of repeated bullets.
   `bfe384c1...4f8a` and `db233884...3844`; tokenizer length remained 151669;
   GPU 0 returned to zero allocation.
 
+### PRL-01-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: mandatory executable Policy
+  Pilot vertical-slice smoke; one optimizer step followed by a clean-process
+  latest-checkpoint resume check.
+- Spike-plan git revision and approval references: accepted tasks
+  `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
+  `POLICY-PILOT-V1-FOUR-GPU-20260721` in `PROJECT_TASK.md` sections 0.8.2 and
+  0.8.3.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: can one real DeepEyes MCQ flow through native Qwen tool prompting,
+  8-way vLLM rollout, optional repeated `tgvf_focus_tool` turns, exact
+  rollout-owned D replay, frozen-reference replay, one FSDP2 decoder-LoRA GRPO
+  update, weight synchronization, checkpoint, and clean-process auto-resume?
+- Baseline and exact output path: no prior output; immutable root
+  `artifacts/policy/PRL-01-qwen3-grpo-1step-auto-resume-gpu0123`, absent at
+  planning time. Initial/resume logs are `launch.log` and `resume.log` there.
+- Model and processor identity: local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, tokenizer length 151669,
+  native chat-template SHA256 `36e042fe...8956`, native DeepStack enabled,
+  original-image `max_pixels=262144`; no tokenizer resize.
+- Representation checkpoint identity: contextual hidden state at layer `-1`;
+  RP-49 Balanced Matrix CE T=0.1 step-2000 Adapter, file/manifest SHA256
+  `fcda0b96...fc14` / `3ff14e66...f49e`, run ID
+  `RP-49-QWEN3-REP-MATRIXCE-BALANCED-T01-CONTEXTUAL-2000-GPU01`, run identity
+  `980e4136...e1bea`.
+- N/A fields and justification: non-formal MCQ smoke, so 72B judge is not
+  applicable; Qwen2.5-VL, crop tools, SDPO, full fine-tuning, nonzero KL and
+  formal-Pilot quality conclusions are out of scope.
+- Policy/reference initialization: current/behavior start from the original
+  Qwen3 base plus fresh decoder-only PEFT LoRA rank/alpha/dropout `64/64/0`;
+  vision, merger, native DeepStack, TGVF Adapter, input embedding and lm_head
+  are frozen. Reference is a distinct forward-only frozen base engine with no
+  LoRA. Initial LR is `1e-5`.
+- Rollout policy version and allowed asynchronous staleness: exact step-0 LoRA
+  snapshot is content-addressed and installed into each local tool runtime and
+  vLLM before generation; staleness exactly zero. Step-1 synchronization must
+  precede paired checkpoint commit.
+- Code commit and worktree state: executable code commit
+  `b45e3761884a35364992a03b18c9fbee3b46cf01`; launch is allowed only from its
+  clean descendant containing this exact config and this ledger entry.
+- Repository adapter/patch surface and hash: strict run config
+  `configs/policy/runs/prl_01_qwen3_grpo_1step_autoresume_gpu0123.toml`, source
+  SHA256 `c62120e8...02086`, run identity `c5b4db5a...3d201`; native AgentLoop
+  YAML SHA256 `388eba9b...351e`. CPU config composition and upstream
+  `validate_config(use_reference_policy=True)` passed.
+- Dataset/manifest, hashes, sample rule, and n: official DeepEyes 47K snapshot
+  `5546681e...6ded3`, 47,052 rows, shuffle seed 42; manifest file/content/sample
+  SHA256 `3483c317...6f477` / `2ddb3635...791a` / `e3937c67...fb51e`, iteration
+  SHA256 `6ee358c9...3ad8c`. Cursor 7 is audited MCQ sample
+  `deepeyes47k:2fabfc60...1acca7`, image SHA256 `2988a806...654e1`, answer C;
+  four prompt rows per step and exactly 8 trajectories per row.
+- Native prompt/tool schema hash: accepted TGVF-only v1 prompt text SHA256
+  `390b334e...99f5`; `tgvf_focus_tool` schema SHA256 `f33f61d4...6aba5`;
+  maximum four admitted attempts and fifth-attempt error SHA256
+  `1f649e1d...ad200` with one final recovery turn.
+- Chat-template/token-fixture hash and token-ownership masks: initial expanded
+  prompt is 724 tokens with 234 native image-pad positions; token-ID SHA256
+  `221b8952...d4d`. Only actually sampled assistant tokens have response/loss
+  mask one; template, source/D image positions, tool/error response and padding
+  have mask zero. The sampled `</tool_call>` closer remains in output.
+- D/DeepStack/position/mask identity: every successful call records main D and
+  exact D-DeepStack branches `(8,16,24)`, native positions/layout/masks and the
+  source-visual binding. Missing/dummy branches, retokenization and observation
+  recomputation fail closed.
+- Observation materialization/artifact identity used by all replays: source
+  visual and tool observations are materialized once in the rollout worker;
+  current and frozen reference consume the same content-addressed replay bundle
+  and release their worker-local sidecars only after synchronous consumers
+  unwind.
+- RL framework/version/environment lock: upstream veRL `0.9.0.dev` commit
+  `e003163181731412595257a72ec173071efb125f` (clean), Python 3.12.3, Torch
+  2.9.0+cu128, Transformers 4.57.6, vLLM 0.12.0, PEFT 0.19.1 and Ray 2.56.1.
+- Objective equations and normalization: per original prompt use sample std and
+  `A=(r-mean)/(std+1e-6)`, constant-reward groups map to zero. Reward is
+  `0.8*answer + 0.2*format + 1.2*conditional_tool`; no group filtering. For
+  policy tokens, `rho=exp(logp_current-logp_behavior)`, clip `[0.8,1.2]`,
+  dual clip `c=3`, one global policy-token mean, one update epoch, entropy/KL
+  coefficients zero and max grad norm 1.
+- Rollout/replay forward mode and adapter dropout/RNG contract: deterministic
+  eval forward, LoRA dropout zero, no update between behavior sampling and
+  replay, actual processed behavior logprobs retained. Content-addressed turn
+  RNG v1 has master seed 42 and derivation SHA256 `fe8d2da9...e867e`.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM 0.12.0; seed above;
+  temperature/top-p `1/1`, top-k `-1`, min-p `0`, repetition/presence/frequency
+  `1/0/0`, no logit processors, post-transform processed logprobs, EOS 151645,
+  stop string `</tool_call>`, hard aggregate response budget 8192.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 actor/reference/local tool model,
+  FP32 reductions/optimizer state, no quantization; HF replay and local tool
+  model use SDPA, vLLM uses `TRITON_ATTN` with `TORCH_SDPA` multimodal encoder;
+  prefix cache off, vLLM TP1, four-rank FSDP2 with
+  `reshard_after_forward=false`, no activation checkpointing/remove-padding,
+  no torch.compile, colocated placement.
+- Logit/logprob/loss/gradient parity tolerances: token IDs, ownership, bundle
+  hashes, current/reference observation identities and current/proximal-old
+  replay are exact; all behavior/current/reference selected logprobs, loss and
+  gradients must be finite. At the zero-staleness pre-update point,
+  `actor/pg_clipfrac` must be zero and absolute mean `actor/ppo_kl` must not
+  exceed the existing BF16 diagnostic scale `0.015625`; this is a smoke gate,
+  not the still-unfrozen formal reference-KL estimator.
+- World size, microbatch, accumulation, and global batch: world 4; global prompt
+  batch 4; prompt/rollout microbatch one per rank/engine; 32 trajectories total;
+  actor/ref logprob microbatch 8 trajectories per GPU; gradient accumulation 1.
+- GPUs: physical/logical GPU IDs `0,1,2,3`, four NVIDIA B200 183359 MiB; all
+  were idle at planning time.
+- Start/end timestamps, elapsed time, and session/process identity: TBD at
+  launch; tmux sessions `prl01_gpu0123` then `prl01_resume_gpu0123`.
+- Actual GPU-hours and peak scratch use: PENDING.
+- Command: initial and clean-process resume both use
+  `PYTHONPATH=src .venv312/bin/python -m tgvf_rl.cli run-policy <absolute-config> --python /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python`;
+  the second invocation starts only after the first exits and must load step 1
+  then terminate without another update because total steps equals one.
+- Outputs: paired upstream/project checkpoint at optimizer step 1, content-
+  addressed LoRA snapshots, `metrics.jsonl`, W&B project `tgvf-policy-rl`, and
+  both tmux logs under the exact root above.
+- Scorer/parser identity: deterministic multiple-choice exact verifier SHA256
+  `2a3d5fa4...2e1c`, strict native tool parser, no judge fallback.
+- Metrics: PENDING; must report optimizer steps, prompts/trajectories/generated
+  tokens, successful observations, call rate/count, component rewards, format
+  errors, reasoning length, original/total visual tokens, step time, update
+  loss/grad norm, weight-sync version and resume result.
+- Conclusion: PENDING; no GPU command has run at planning time.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows
