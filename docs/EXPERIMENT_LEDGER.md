@@ -7014,7 +7014,7 @@ instead of repeated bullets.
 
 ### PRL-01-R18-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `INVALID`; mandatory four-GPU one-step plus
   immediate step-1 checkpoint and clean no-extra-update resume.
 - Complete identity: config
   `configs/policy/runs/prl_01_r18_qwen3_grpo_1step_autoresume_gpu0123.toml`,
@@ -7029,6 +7029,30 @@ instead of repeated bullets.
 - GPUs/output/session: idle physical/logical B200 0--3, world size 4; output
   `artifacts/policy/PRL-01-R18-qwen3-grpo-1step-auto-resume-gpu0123` must be
   absent; tmux `prl01_r18_gpu0123`, followed by a distinct resume session only
+  after a successful checkpoint. Standard accepted `.venv312` launch,
+  `CUDA_VISIBLE_DEVICES=0,1,2,3`, vLLM 0.12.0 TP=1, BF16, SDPA
+  actor/reference, Triton rollout attention, timeout 3600 s.
+- Result: launcher rejected the config before Ray/model startup because
+  `vllm_max_model_len=12,288` leaves no environment-owned tool-token reserve
+  beyond the configured 8,192 policy response. No GPU work occurred.
+
+### PRL-01-R19-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  immediate step-1 checkpoint and clean no-extra-update resume.
+- Complete identity: config
+  `configs/policy/runs/prl_01_r19_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `60a6a975...4836`, run identity `f7c99c20...11bc`, implementation
+  commit `57c0772f78cbc89a63d816cc9b6e69080caad55b`.
+- Delta/preflight: R17 with only vLLM `max_model_len` and
+  `max_num_batched_tokens` reduced from 32,768 to 16,384. This preserves the
+  required 4,096 prompt + 8,192 response and leaves a 4,096 environment-token
+  reserve. No objective, replay, model, or sampling changes.
+- Question: does the reduced rollout KV reservation, combined with bounded
+  actor autograd microbatches, leave enough headroom for the optimizer step?
+- GPUs/output/session: idle physical/logical B200 0--3, world size 4; output
+  `artifacts/policy/PRL-01-R19-qwen3-grpo-1step-auto-resume-gpu0123` must be
+  absent; tmux `prl01_r19_gpu0123`, followed by a distinct resume session only
   after a successful checkpoint. Standard accepted `.venv312` launch,
   `CUDA_VISIBLE_DEVICES=0,1,2,3`, vLLM 0.12.0 TP=1, BF16, SDPA
   actor/reference, Triton rollout attention, timeout 3600 s.
