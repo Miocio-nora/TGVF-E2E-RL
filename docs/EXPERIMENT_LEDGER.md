@@ -6397,8 +6397,8 @@ instead of repeated bullets.
   synthetic vLLM LoRA expand-kernel gate.
 - Spike-plan git revision and approval references: Policy Pilot vertical-slice
   authorization and R5's sealed sm100 LoRA compiler failure.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `INVALID`.
 - Question: is disabling optional PDL/GDC sufficient for vLLM 0.12's BF16 LoRA
   expand kernel to compile on B200 and match a Torch matmul oracle?
 - Baseline and exact output path: R5 fatal pipeline failure; fresh diagnostic
@@ -6439,14 +6439,74 @@ instead of repeated bullets.
 - World size, microbatch, accumulation, and global batch: world 1, one token,
   no batch accumulation.
 - GPUs: physical/logical GPU 0 only, B200 183359 MiB; recheck idle at launch.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  foreground bounded diagnostic process.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T20:11:13+09:00` to `2026-07-21T20:11:21+09:00`, 8 seconds;
+  foreground bounded diagnostic, exit 2.
+- Actual GPU-hours and peak scratch use: less than 0.003 GPU-hours; GPU 0
+  returned to zero allocation.
 - Command: `.venv312/bin/python` inline synthetic LoRA expand gate with
   `CUDA_VISIBLE_DEVICES=0`, fixed compilers/headers, and PDL disabled only in
   the process-local imported module.
-- Outputs: pending.
+- Outputs: `artifacts/policy/PRL-DIAG-01-vllm-lora-no-pdl-gpu0.log`, 508
+  bytes, SHA256 `f2ff75ee...2e79`.
 - Scorer/parser identity: Torch matmul oracle in the same process.
+- Metrics: PDL-disabled Triton compilation completed and output was finite;
+  reported max absolute error 0.375288904 is invalid because the oracle used
+  `weights[0,0].T`, incorrectly collapsing the hidden dimension and then
+  broadcasting the scalar result across 4096 outputs.
+- Conclusion: invalid numerical fixture, not a kernel failure. DIAG-02 changes
+  only the oracle to `inputs[0].float() @ weights[0].float().T`.
+
+### PRL-DIAG-02-VLLM-LORA-NO-PDL-GPU0
+
+- Cell/matrix ID and mandatory/diagnostic class: diagnostic single-GPU
+  synthetic vLLM LoRA expand-kernel parity gate.
+- Spike-plan git revision and approval references: Policy Pilot vertical-slice
+  authorization plus sealed R5 and DIAG-01 records.
+- Lifecycle status: `PLANNED`.
+- Result: `PENDING`.
+- Question: with the corrected two-dimensional Torch oracle, does the
+  PDL-disabled vLLM LoRA expand kernel compile on B200 and pass BF16 parity?
+- Baseline and exact output path: DIAG-01 compiled successfully but had a
+  malformed oracle; fresh log
+  `artifacts/policy/PRL-DIAG-02-vllm-lora-no-pdl-gpu0.log`.
+- Model and processor identity: no model or processor; exact DIAG-01 synthetic
+  one-token, rank-64, hidden-4096 BF16 kernel fixture.
+- Representation checkpoint identity: N/A; no TGVF Adapter is loaded.
+- N/A fields and justification: no dataset, prompt, transcript, reward,
+  rollout, replay, optimizer, checkpoint, reference policy, or judge.
+- Policy/reference initialization: N/A; synthetic tensors only.
+- Rollout policy version and allowed asynchronous staleness: N/A.
+- Code commit and worktree state: executable code remains
+  `519a0c4aeb8e7ed99cbf9b8e25024c701177d988`; later commits may change only
+  experiment-ledger records.
+- Repository adapter/patch surface and hash: no repo patch; same installed
+  vLLM hashes as DIAG-01. Process-local `lora_expand_op.supports_pdl=false`.
+- Dataset/manifest, hashes, sample rule, and n: N/A.
+- Native prompt/tool schema hash: N/A.
+- Chat-template/token-fixture hash and token-ownership masks: N/A.
+- D/DeepStack/position/mask identity: N/A.
+- Observation materialization/artifact identity used by all replays: N/A.
+- RL framework/version/environment lock: exact DIAG-01 environment.
+- Objective equations and normalization: corrected oracle is
+  `inputs[0].float() @ weights[0].float().T`; finite output and max absolute
+  error <=0.25 are required.
+- Rollout/replay forward mode and adapter dropout/RNG contract: N/A; seed 42.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: N/A.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 tensors; all other fields N/A.
+- Logit/logprob/loss/gradient parity tolerances: N/A; output max absolute error
+  <=0.25 and finite values.
+- World size, microbatch, accumulation, and global batch: world 1, one token,
+  no accumulation.
+- GPUs: physical/logical GPU 0, B200 183359 MiB; recheck idle before launch.
+- Start/end timestamps, elapsed time, and session/process identity: pending;
+  foreground bounded diagnostic.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: exact DIAG-01 command with only the corrected oracle indexing.
+- Outputs: pending.
+- Scorer/parser identity: corrected Torch matmul oracle in the same process.
 - Metrics: pending.
 - Conclusion: pending.
 
