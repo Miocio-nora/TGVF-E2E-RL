@@ -108,7 +108,12 @@ class VerlAdapterConfig:
             "actor_rollout_ref.rollout.name": self.runtime.rollout_backend,
             "actor_rollout_ref.rollout.calculate_log_probs": True,
             "actor_rollout_ref.rollout.logprobs_mode": self.runtime.logprobs_mode,
-            "actor_rollout_ref.rollout.full_determinism": fsdp.full_determinism,
+            # vLLM 0.12 batch-invariant mode rejects the accepted TRITON_ATTN
+            # backend.  Multi-turn tool trajectories are not bitwise
+            # batch-invariant in upstream veRL in any case.  The project owns
+            # a content-addressed seed per turn and records actual behavior
+            # logprobs; actor/reference replay remains fully deterministic.
+            "actor_rollout_ref.rollout.full_determinism": False,
             "actor_rollout_ref.rollout.enable_prefix_caching": False,
             "actor_rollout_ref.rollout.engine_kwargs.vllm.enable_mm_embeds": True,
             "actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb": 0,
@@ -231,6 +236,8 @@ class VerlAdapterConfig:
             {
                 "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
                 "VLLM_ATTENTION_BACKEND": TGVF_VLLM_ATTENTION_BACKEND,
+                "VERL_FULL_DETERMINISM": "0",
+                "VLLM_BATCH_INVARIANT": "0",
             }
         )
 
@@ -247,6 +254,15 @@ class VerlAdapterConfig:
             raise ValueError(
                 "VLLM_ATTENTION_BACKEND must be TRITON_ATTN for the accepted "
                 "driver-portable path"
+            )
+        if values.get("VERL_FULL_DETERMINISM") != "0":
+            raise ValueError(
+                "rollout-level VERL_FULL_DETERMINISM must be disabled for the "
+                "accepted multi-turn TRITON_ATTN path"
+            )
+        if values.get("VLLM_BATCH_INVARIANT") != "0":
+            raise ValueError(
+                "VLLM_BATCH_INVARIANT must be disabled with TRITON_ATTN"
             )
 
 

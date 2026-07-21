@@ -161,6 +161,14 @@ class UpstreamVerlLaunchPlan:
             raise ValueError("runtime Policy identity environment differs from plan")
         if self.environment.get("TGVF_POLICY_RUN_IDENTITY_SHA256") != self.run_identity_sha256:
             raise ValueError("runtime Policy SHA256 identity environment differs from plan")
+        if self.overrides.get("actor_rollout_ref.rollout.full_determinism") is not False:
+            raise ValueError(
+                "TRITON_ATTN multi-turn rollout must disable vLLM batch invariance"
+            )
+        if self.environment.get("VLLM_BATCH_INVARIANT") != "0":
+            raise ValueError("launch plan must explicitly disable vLLM batch invariance")
+        if self.environment.get("VERL_FULL_DETERMINISM") != "0":
+            raise ValueError("launch plan must isolate rollout from veRL full determinism")
         state_dir = self.environment.get("TGVF_POLICY_STATE_DIR", "")
         if not state_dir.endswith("/runtime-policy-state"):
             raise ValueError("runtime Policy state directory is not explicitly bound")
@@ -485,6 +493,9 @@ def build_policy_e2e_smoke_verl_plan(
                     "seed_derivation_sha256": (
                         config.rollout_rng.derivation_sha256
                     ),
+                    "forward_state": "request_seeded_batch_sensitive_v1",
+                    "vllm_batch_invariant": False,
+                    "actual_behavior_logprobs_recorded": True,
                 },
                 "protocol": {
                     "prompt_sha256": config.protocol.prompt_sha256,

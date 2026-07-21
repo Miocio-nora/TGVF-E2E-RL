@@ -970,7 +970,7 @@ def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
     overrides = config.public_config_overrides()
     assert overrides["actor_rollout_ref.rollout.name"] == "vllm"
     assert overrides["actor_rollout_ref.rollout.calculate_log_probs"] is True
-    assert overrides["actor_rollout_ref.rollout.full_determinism"] is True
+    assert overrides["actor_rollout_ref.rollout.full_determinism"] is False
     assert overrides["actor_rollout_ref.actor.strategy"] == "fsdp2"
     assert "actor_rollout_ref.model.lora.dropout" not in overrides
     assert overrides["actor_rollout_ref.actor.checkpoint.async_save"] is False
@@ -987,11 +987,15 @@ def test_adapter_config_exposes_only_accepted_public_overrides() -> None:
     assert config.required_environment() == {
         "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
         "VLLM_ATTENTION_BACKEND": "TRITON_ATTN",
+        "VERL_FULL_DETERMINISM": "0",
+        "VLLM_BATCH_INVARIANT": "0",
     }
     config.validate_runtime_environment(
         {
             "VLLM_PLUGINS": TGVF_VLLM_PLUGIN_NAME,
             "VLLM_ATTENTION_BACKEND": "TRITON_ATTN",
+            "VERL_FULL_DETERMINISM": "0",
+            "VLLM_BATCH_INVARIANT": "0",
         }
     )
     with pytest.raises(ValueError, match="TRITON_ATTN"):

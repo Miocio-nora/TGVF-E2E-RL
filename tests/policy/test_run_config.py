@@ -674,10 +674,18 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert composed.actor_rollout_ref.ref.fsdp_config.model_dtype == "bf16"
     assert composed.actor_rollout_ref.actor.fsdp_config.use_torch_compile is False
     assert composed.actor_rollout_ref.ref.fsdp_config.use_torch_compile is False
+    assert composed.actor_rollout_ref.rollout.full_determinism is False
+    assert composed.actor_rollout_ref.actor.fsdp_config.full_determinism is True
+    assert composed.actor_rollout_ref.ref.fsdp_config.full_determinism is True
     assert (
         composed.actor_rollout_ref.model.target_modules
         == config.policy.lora.target_modules
     )
+    assert (
+        composed.actor_rollout_ref.rollout.custom.sampling.forward_state
+        == "request_seeded_batch_sensitive_v1"
+    )
+    assert composed.actor_rollout_ref.rollout.custom.sampling.vllm_batch_invariant is False
     assert (
         composed.actor_rollout_ref.rollout.custom.actor_batch_contract[
             "derived_gradient_accumulation_steps"

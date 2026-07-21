@@ -6126,8 +6126,11 @@ instead of repeated bullets.
 - Spike-plan git revision and approval references: accepted
   `POLICY-PILOT-V1-VERTICAL-SLICE-20260721` and
   `POLICY-PILOT-V1-FOUR-GPU-20260721`, task sections 0.8.2--0.8.3.
-- Lifecycle status: `PLANNED`.
-- Result: `PENDING`.
+- Lifecycle status: `COMPLETE`.
+- Result: `FAIL`; exact data, decoder LoRA and FSDP2 model construction passed.
+  vLLM then rejected upstream veRL's `VLLM_BATCH_INVARIANT=1` because the
+  accepted rollout backend is `TRITON_ATTN`, whereas vLLM 0.12 permits that
+  mode only with FlashAttention/FlashInfer backends.
 - Question: with exact Dataset text and decoder-only LoRA regex transport now
   proven, can one step complete rollout, exact current/reference replay,
   FSDP2 GRPO update, synchronized checkpoint and clean resume?
@@ -6189,16 +6192,27 @@ instead of repeated bullets.
   4; prompt/rollout microbatch 1/rank; logprob microbatch 8/GPU; 32
   trajectories; accumulation 1.
 - GPUs: physical/logical 0--3, B200 183359 MiB; recheck idle before launch.
-- Start/end timestamps, elapsed time, and session/process identity: pending;
-  tmux `prl01_r3_gpu0123`, then `prl01_r3_resume_gpu0123`.
-- Actual GPU-hours and peak scratch use: pending.
+- Start/end timestamps, elapsed time, and session/process identity:
+  `2026-07-21T19:40:18+09:00` to `2026-07-21T19:42:31+09:00`, 133 seconds;
+  tmux `prl01_r3_gpu0123`, driver PID 247482, Ray task PID 261025. Resume was
+  not started.
+- Actual GPU-hours and peak scratch use: less than 0.15 GPU-hours; observed
+  peak device allocation was about 6.1 GiB/GPU during FSDP/vLLM startup. All
+  GPUs returned to zero and no checkpoint state exists.
 - Command: standard absolute R3 `run-policy` command under `.venv312`; resume
   only after step 1 and must perform no second update.
-- Outputs: pending.
+- Outputs: failure log `launch.log`, 145,560 bytes, SHA256
+  `52246142...4cc19`; no checkpoint, metrics or W&B run.
 - Scorer/parser identity: exact MCQ verifier `2a3d5fa4...2e1c`, strict native
   parser, no judge.
-- Metrics: pending.
-- Conclusion: pending.
+- Metrics: zero optimizer steps, rollouts, generated tokens and tool calls;
+  vLLM core stopped during device initialization.
+- Conclusion: attention/determinism compatibility failure, not a training
+  result. R4 keeps TRITON_ATTN and actor/reference deterministic replay but
+  truthfully identifies multi-turn rollout as content-addressed request-seeded
+  and batch-sensitive: rollout full determinism false and explicit
+  `VERL_FULL_DETERMINISM=0`, `VLLM_BATCH_INVARIANT=0`. Actual sampled behavior
+  logprobs remain authoritative. Direct vLLM no-op and 75 focused tests passed.
 
 ## Compatibility-spike status
 
