@@ -19,6 +19,8 @@ from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import StandardToolError, TokenByteSpan
+from tgvf_rl.rewards.context import reward_context_from_trajectory
+from tgvf_rl.rewards.schema import AnswerTaskKind
 from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
 from tgvf_rl.trajectories.schema import (
     CropTGVFToolCallRecord,
@@ -41,14 +43,15 @@ def _sample(text: str, sampling: SamplingIdentity) -> SampledPolicyTurn:
     spans = tuple(
         TokenByteSpan(index, token, index, index + 1) for index, token in enumerate(ids)
     )
-    close_end = text.index("</think>") + len("</think>")
+    marker_layout_valid = "<think>" not in text and text.count("</think>") == 1
+    close_end = text.index("</think>") + len("</think>") if marker_layout_valid else 0
     return SampledPolicyTurn(
         text=text,
         token_ids=ids,
         token_byte_spans=spans,
         behavior_logprobs=tuple(-0.1 for _ in ids),
         sampling=sampling,
-        think_token_span=TokenSpan(0, close_end),
+        think_token_span=TokenSpan(0, close_end) if marker_layout_valid else None,
         stop_reason="stop",
         backend_request_sha256=SHA,
         backend_response_sha256=SHA,
@@ -91,6 +94,161 @@ class Appender:
             assert parsed_call.sampled_text == sampled_turn.text
         environment = (151665, 151655, 151666, 151644, 151667)
         return prompt_token_ids + sampled_turn.token_ids + environment, environment
+
+
+def _pilot_fixture_sampling(version: PolicyVersion) -> SamplingIdentity:
+    return SamplingIdentity(
+        version,
+        "vllm",
+        "fixture",
+        7,
+        SHA,
+        1.0,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_answer"),
+    (
+        ("unfinished reasoning", None),
+        ("reason</think>extra</think>B", "B"),
+        ("<think>duplicate</think>B", "B"),
+        ("reason</think>", None),
+    ),
+)
+def test_invalid_direct_format_retains_behavior_row(
+    text: str, expected_answer: str | None
+) -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampled = _sample(text, _pilot_fixture_sampling(version))
+    behavior_store = BehaviorTraceStore()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=4,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "invalid-format", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.INVALID_FORMAT
+    assert trajectory.final_answer == expected_answer
+    assert len(trajectory.assistant_turns) == 1
+    trace = behavior_store.resolve(trajectory.assistant_turns[0].behavior_trace)
+    assert trace.behavior.sampled_token_ids == sampled.token_ids
+    assert trace.behavior.logprobs == sampled.behavior_logprobs
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="choose",
+        expected_answer="B",
+        task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+    )
+    assert context.candidate_answer == (expected_answer or "")
+    assert context.has_valid_final_answer is (expected_answer is not None)
+    assert context.protocol_valid is False
+
+
+def test_length_termination_is_not_promoted_to_a_valid_final_answer() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampled = replace(
+        _sample("reason</think>B", _pilot_fixture_sampling(version)),
+        stop_reason='{"finish_reason":"length","stop_reason":null}',
+    )
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "length", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.MAX_TOKENS
+    assert trajectory.final_answer == "B"
+
+
+def test_malformed_tool_think_format_returns_error_without_execution() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = _pilot_fixture_sampling(version)
+    malformed = _sample(
+        "reason without closer\n<tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+        "</tool_call>",
+        sampling,
+    )
+    answer = _sample("recovered</think>B", replace(sampling, seed=8))
+    runtime = Runtime()
+    behavior_store = BehaviorTraceStore()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((malformed, answer)),
+        tool_runtime=runtime,
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=4,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "invalid-tool-think", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert runtime.contexts == []
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert trajectory.final_answer == "B"
+    assert trajectory.tool_errors[0].code == "tool_parse.missing_think_closer"
+    assert len(trajectory.assistant_turns) == 2
+    assert all(
+        behavior_store.resolve(turn.behavior_trace).behavior.sampled_token_ids
+        == turn.tokens.token_ids
+        for turn in trajectory.assistant_turns
+    )
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="choose",
+        expected_answer="B",
+        task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+    )
+    assert context.has_valid_final_answer is True
+    assert context.protocol_valid is False
 
 
 def test_framework_neutral_loop_preserves_two_calls_and_actual_logprobs() -> None:

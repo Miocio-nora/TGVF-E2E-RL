@@ -23,6 +23,7 @@ class TrajectoryStop(str, Enum):
     CALL_CAP = "call_cap"
     TIMEOUT = "timeout"
     MAX_TOKENS = "max_tokens"
+    INVALID_FORMAT = "invalid_format"
 
 
 @dataclass(frozen=True, slots=True)

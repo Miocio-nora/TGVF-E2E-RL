@@ -55,6 +55,10 @@ def validate_native_tool_target_for_echo(target: str) -> str:
         raise ValueError("tool target must be non-empty")
     if any(fragment in target for fragment in NATIVE_TARGET_ECHO_FORBIDDEN_FRAGMENTS):
         raise ValueError("tool target cannot contain newlines or native control tags")
+    try:
+        target.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("tool target must contain valid Unicode scalar values") from error
     return target
 
 _REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
@@ -336,6 +340,10 @@ def _thaw_json(value: Any) -> Any:
 
 
 class ParseErrorCode(str, Enum):
+    MISSING_THINK_CLOSER = "missing_think_closer"
+    MULTIPLE_THINK_CLOSERS = "multiple_think_closers"
+    DUPLICATE_THINK_OPENER = "duplicate_think_opener"
+    THINK_CLOSE_AFTER_TOOL_OPEN = "think_close_after_tool_open"
     MISSING_TOOL_CALL = "missing_tool_call"
     INCOMPLETE_TOOL_CALL = "incomplete_tool_call"
     MULTIPLE_TOOL_CALLS = "multiple_tool_calls"

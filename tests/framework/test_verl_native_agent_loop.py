@@ -35,7 +35,11 @@ from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy.config import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.trajectories.behavior import BehaviorTraceStore, VLLMBehaviorRecorder
-from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryRecord
+from tgvf_rl.trajectories.schema import (
+    TrajectoryIdentity,
+    TrajectoryRecord,
+    TrajectoryStop,
+)
 from tests.support import populated_observation_store, trajectory_source_visual
 
 
@@ -500,6 +504,73 @@ def test_upstream_agent_loop_bridge_preserves_multiturn_inputs_and_logprobs() ->
     )
 
 
+def test_upstream_length_truncation_is_retained_as_invalid_trajectory() -> None:
+    tokenizer = _CharacterTokenizer()
+    factory = _InvocationFactory(tokenizer)
+    server_manager = _FakeServerManager()
+    server_manager.outputs = ("x" * 1024,)
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=object(),
+        server_manager=server_manager,
+        tokenizer=tokenizer,
+        processor=None,
+        dataset_cls=object,
+        data_config=object(),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+        server_timeout_seconds=5.0,
+    )
+
+    output = asyncio.run(bridge.run({}, data_source="fixture"))
+
+    trajectory = factory.trajectory
+    assert trajectory is not None
+    assert trajectory.stop is TrajectoryStop.MAX_TOKENS
+    assert trajectory.final_answer is None
+    assert len(trajectory.assistant_turns) == 1
+    assert trajectory.assistant_turns[0].think_span is None
+    assert len(output.response_ids) == 1024
+    assert output.response_mask == [1] * 1024
+    assert output.response_logprobs == [-0.125] * 1024
+
+
+def test_upstream_malformed_tool_turn_recovers_without_executing_tool() -> None:
+    tokenizer = _CharacterTokenizer()
+    factory = _InvocationFactory(tokenizer)
+    server_manager = _FakeServerManager()
+    server_manager.outputs = (
+        '<tool_call>{"name":"tgvf_focus_tool","arguments":'
+        '{"target":"red label"}}</tool_call>',
+        "answer reasoning</think>blue!",
+    )
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=object(),
+        server_manager=server_manager,
+        tokenizer=tokenizer,
+        processor=None,
+        dataset_cls=object,
+        data_config=object(),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+        server_timeout_seconds=5.0,
+    )
+
+    output = asyncio.run(bridge.run({}, data_source="fixture"))
+
+    trajectory = factory.trajectory
+    assert trajectory is not None
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert trajectory.final_answer == "blue!"
+    assert len(trajectory.assistant_turns) == 2
+    assert trajectory.tool_calls == ()
+    assert trajectory.observations == ()
+    assert len(trajectory.tool_errors) == 1
+    assert trajectory.tool_errors[0].code == "tool_parse.missing_think_closer"
+    assert factory.runtime.contexts == []
+    assert len(output.response_ids) == len(output.response_mask)
+    assert all(mask == 1 for mask in output.response_mask[: len(server_manager.outputs[0])])
+
+
 def _turn_request(text: str, *, max_tokens: int) -> VLLMPolicyTurnRequest:
     del text
     return VLLMPolicyTurnRequest(
@@ -529,18 +600,17 @@ def _turn_request(text: str, *, max_tokens: int) -> VLLMPolicyTurnRequest:
     )
 
 
-def test_collapsed_upstream_stop_length_boundary_fails_closed_when_ambiguous() -> None:
+def test_collapsed_upstream_stop_takes_precedence_at_exact_length_boundary() -> None:
     text = "reason</think><tool_call>{}</tool_call>"
     token_ids = tuple(ord(character) for character in text)
     request = _turn_request(text, max_tokens=len(token_ids))
 
-    with pytest.raises(ReplayMismatchError, match="ambiguous length/stop"):
-        _recover_termination(
-            request=request,
-            token_ids=token_ids,
-            text=text,
-            upstream_stop_reason="completed",
-        )
+    assert _recover_termination(
+        request=request,
+        token_ids=token_ids,
+        text=text,
+        upstream_stop_reason="completed",
+    ) == ("stop", "</tool_call>")
 
     non_ambiguous = _turn_request(text, max_tokens=len(token_ids) + 1)
     assert _recover_termination(

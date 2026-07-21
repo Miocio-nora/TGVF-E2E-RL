@@ -864,12 +864,13 @@ def _selected_logprob(
     return selected[0].logprob
 
 
-def _think_token_span(response: VLLMPolicyTurnResponse) -> TokenSpan:
+def _think_token_span(response: VLLMPolicyTurnResponse) -> TokenSpan | None:
     marker = "</think>"
-    if response.text.count(marker) != 1:
-        raise ReplayMismatchError(
-            "sampled assistant turn must contain exactly one </think> marker"
-        )
+    # Missing/repeated closers and a policy-sampled duplicate opener are model
+    # format outcomes.  They must survive as invalid trajectories with their
+    # exact behavior logprobs; only a broken byte-span proof is replay damage.
+    if "<think>" in response.text or response.text.count(marker) != 1:
+        return None
     close_char_end = response.text.index(marker) + len(marker)
     close_byte_end = len(response.text[:close_char_end].encode("utf-8"))
     covering = tuple(

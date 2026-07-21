@@ -35,7 +35,7 @@ from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD,
     PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD,
 )
-from tgvf_rl.trajectories.schema import TrajectoryIdentity
+from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
 
 
 _PIPELINE_SHA256 = "a" * 64
@@ -81,6 +81,19 @@ def _real_data_proto(*, incomplete: bool = False):
                 group_id=exact_group,
             ),
         )
+        if reward == -0.2:
+            trajectory = replace(
+                trajectory,
+                assistant_turns=(
+                    replace(
+                        trajectory.assistant_turns[0],
+                        raw_text="unfinished reasoning",
+                        think_span=None,
+                    ),
+                ),
+                final_answer=None,
+                stop=TrajectoryStop.INVALID_FORMAT,
+            )
         trajectories.append(trajectory)
         exact_groups.append(exact_group)
         upstream_groups.append(upstream_group)
@@ -137,6 +150,10 @@ def test_real_dataproto_binds_repo_owned_exact_grpo_fields() -> None:
     )
 
     assert len(view.trajectory_ids) == 16
+    assert sum(
+        trajectory.stop is TrajectoryStop.INVALID_FORMAT
+        for trajectory in data.non_tensor_batch[TRAJECTORY_PAYLOAD_FIELD]
+    ) == 2
     assert view.group_uids[:8] == ("exact-group-0",) * 8
     assert view.group_uids[8:] == ("exact-group-1",) * 8
     assert torch.equal(data.batch["token_level_scores"], data.batch["rm_scores"])

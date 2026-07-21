@@ -291,6 +291,19 @@ class TrajectoryValidator:
                 raise ReplayMismatchError(
                     "tool-terminal trajectory must record its final tool attempt"
                 )
+        if trajectory.stop is TrajectoryStop.INVALID_FORMAT:
+            if not trajectory.assistant_turns:
+                raise ReplayMismatchError(
+                    "invalid-format trajectory must retain its assistant turn"
+                )
+            final_turn = trajectory.assistant_turns[-1]
+            if final_turn.is_tool_call or (
+                final_turn.think_span is not None
+                and trajectory.final_answer is not None
+            ):
+                raise ReplayMismatchError(
+                    "invalid-format terminal turn must be a malformed final response"
+                )
 
     def validate_batch(self, batch: TrajectoryBatch) -> None:
         seen: set[tuple[str, int]] = set()

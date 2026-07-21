@@ -445,7 +445,8 @@ interfaces must be versioned and fail closed while unset.
   including ownership of `</tool_call>`, `<|im_end|>`, think closure, and EOS.
 - [x] `FIXED RO-P07` — Real Qwen direct, one-call, and repeated-call goldens
   prove exactly one template-owned `<think>` opener per assistant turn; the
-  sampled-turn contract rejects a policy-sampled duplicate opener.
+  runtime records a policy-sampled duplicate opener as an invalid-format
+  trajectory without dropping its sampled tokens or behavior log probabilities.
 
 ### 5.2 Parser, target span, and multi-call state machine
 

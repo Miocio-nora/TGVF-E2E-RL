@@ -127,9 +127,12 @@ def _record(
     tool_call_count: int = 1,
     prompt_ids: tuple[int, ...] = (1, 2),
     reward_score: float | None = None,
+    invalid_format: bool = False,
 ) -> RolloutBridgeRecord:
     if tool_call_count not in {0, 1, 2}:
         raise ValueError("fixture supports zero, one or two tool calls")
+    if invalid_format and tool_call_count != 0:
+        raise ValueError("invalid-format fixture supports a final-only row")
     observation_store, observation_handle = populated_observation_store()
     version = policy_version()
     trajectory_id = TrajectoryIdentity("smoke", f"sample-{suffix}", suffix, "group")
@@ -218,10 +221,14 @@ def _record(
         assistant_turns.append(
             AssistantTurnRecord(
                 turn_index=0,
-                raw_text="reason</think>answer",
+                raw_text=(
+                    "unfinished reasoning"
+                    if invalid_format
+                    else "reason</think>answer"
+                ),
                 tokens=tokens,
                 behavior_trace=behavior_handle,
-                think_span=TokenSpan(0, 2),
+                think_span=None if invalid_format else TokenSpan(0, 2),
                 is_tool_call=False,
             )
         )
@@ -281,11 +288,19 @@ def _record(
         assistant_turns=tuple(assistant_turns),
         tool_calls=tuple(tool_calls),
         observations=tuple(observations),
-        final_answer="fixture answer" if tool_call_count == 0 else None,
+        final_answer=(
+            None
+            if invalid_format or tool_call_count != 0
+            else "fixture answer"
+        ),
         stop=(
-            TrajectoryStop.DIRECT_ANSWER
-            if tool_call_count == 0
-            else TrajectoryStop.MAX_TOKENS
+            TrajectoryStop.INVALID_FORMAT
+            if invalid_format
+            else (
+                TrajectoryStop.DIRECT_ANSWER
+                if tool_call_count == 0
+                else TrajectoryStop.MAX_TOKENS
+            )
         ),
     )
     final_ids = prompt_ids + response_ids
@@ -565,6 +580,20 @@ def test_agent_loop_output_preserves_actual_values_handles_and_extra_fields() ->
     output.response_logprobs[0] = -999.0
     with pytest.raises(ValueError, match="changed"):
         parse_agent_loop_output(output)
+
+
+def test_invalid_format_row_keeps_all_policy_tokens_and_behavior_logprobs() -> None:
+    record = _record(tool_call_count=0, invalid_format=True)
+    output = build_agent_loop_output(
+        record,
+        metrics=object(),
+        agent_loop_output_cls=_FakeAgentLoopOutput,
+    )
+
+    assert record.trajectory_payload.stop is TrajectoryStop.INVALID_FORMAT
+    assert record.response_mask == (1, 1, 1, 1)
+    assert record.response_logprobs == (-0.125, -0.5, -1.75, -0.25)
+    assert parse_agent_loop_output(output) == record
 
 
 def test_agent_loop_transport_rejects_unbound_replay_or_absent_trajectory() -> None:

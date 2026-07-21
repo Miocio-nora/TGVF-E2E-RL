@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Mapping, Protocol
 
 from tgvf_rl.contracts.errors import RecoverableToolExecutionError
@@ -24,6 +25,7 @@ from tgvf_rl.protocol.schema import (
     StandardToolError,
     ToolCallParseError,
     ToolErrorCode,
+    ParseErrorCode,
 )
 from tgvf_rl.protocol.schema import ParsedCropTGVFCall, ParsedImageZoomInCall
 from tgvf_rl.protocol.state_machine import (
@@ -54,7 +56,7 @@ class SampledPolicyTurn:
     token_byte_spans: tuple[object, ...]
     behavior_logprobs: tuple[float, ...]
     sampling: SamplingIdentity
-    think_token_span: TokenSpan
+    think_token_span: TokenSpan | None
     stop_reason: str
     backend_request_sha256: str
     backend_response_sha256: str
@@ -64,12 +66,18 @@ class SampledPolicyTurn:
             raise ValueError("sampled tokens and actual behavior logprobs must align")
         if len(self.token_byte_spans) != len(self.token_ids):
             raise ValueError("sampled tokens and byte spans must align")
-        if "<think>" in self.text:
-            raise ValueError("policy sampled a duplicate <think> opener")
-        if self.text.count("</think>") != 1:
-            raise ValueError("sampled assistant turn must close exactly one think span")
-        if self.think_token_span.end > len(self.token_ids):
-            raise ValueError("think token span lies outside sampled tokens")
+        marker_layout_valid = (
+            "<think>" not in self.text and self.text.count("</think>") == 1
+        )
+        if marker_layout_valid != (self.think_token_span is not None):
+            raise ValueError(
+                "think span presence must match the sampled native marker layout"
+            )
+        if self.think_token_span is not None:
+            if not isinstance(self.think_token_span, TokenSpan):
+                raise TypeError("think_token_span must be TokenSpan or None")
+            if self.think_token_span.end > len(self.token_ids):
+                raise ValueError("think token span lies outside sampled tokens")
         if not self.stop_reason:
             raise ValueError("sampler stop reason must be recorded")
 
@@ -288,17 +296,25 @@ class FrameworkNeutralAgentLoop:
                 )
             )
             if not has_tool_marker:
-                transition = self.machine.apply(state, AgentEvent.final_answer())
-                state = transition.state
-                final_answer = sampled.text.split("</think>", 1)[1].strip()
-                stop = (
-                    TrajectoryStop.DIRECT_ANSWER
-                    if state.tool_attempt_count == 0
-                    else TrajectoryStop.FINAL_ANSWER
-                )
+                final_answer = _extract_final_answer(sampled.text)
+                if _terminated_by_length(sampled):
+                    stop = TrajectoryStop.MAX_TOKENS
+                elif sampled.think_token_span is None or final_answer is None:
+                    stop = TrajectoryStop.INVALID_FORMAT
+                else:
+                    transition = self.machine.apply(state, AgentEvent.final_answer())
+                    state = transition.state
+                    stop = (
+                        TrajectoryStop.DIRECT_ANSWER
+                        if state.tool_attempt_count == 0
+                        else TrajectoryStop.FINAL_ANSWER
+                    )
                 break
 
             try:
+                think_error = _tool_think_format_error(sampled.text)
+                if think_error is not None:
+                    raise think_error
                 parsed = self.parser.parse(sampled.parser_turn())
             except ToolCallParseError as parse_error:
                 transition = self.machine.apply(state, AgentEvent.malformed_action())
@@ -599,3 +615,51 @@ class FrameworkNeutralAgentLoop:
             recoverable=error.recoverable,
             function_name=function_name,
         )
+
+
+def _extract_final_answer(text: str) -> str | None:
+    """Extract only a deterministic suffix after the last sampled closer."""
+
+    _prefix, separator, suffix = text.rpartition("</think>")
+    if not separator:
+        return None
+    answer = suffix.strip()
+    return answer or None
+
+
+def _terminated_by_length(sampled: SampledPolicyTurn) -> bool:
+    """Read the sampler-owned termination envelope without inferring from text."""
+
+    try:
+        payload = json.loads(sampled.stop_reason)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("finish_reason") == "length"
+
+
+def _tool_think_format_error(text: str) -> ToolCallParseError | None:
+    """Classify native think-format errors before any tool can execute."""
+
+    if "<think>" in text:
+        return ToolCallParseError(
+            ParseErrorCode.DUPLICATE_THINK_OPENER,
+            "the assistant sampled a template-owned <think> opener",
+        )
+    closer_count = text.count("</think>")
+    if closer_count == 0:
+        return ToolCallParseError(
+            ParseErrorCode.MISSING_THINK_CLOSER,
+            "the assistant tool turn did not close its think span",
+        )
+    if closer_count > 1:
+        return ToolCallParseError(
+            ParseErrorCode.MULTIPLE_THINK_CLOSERS,
+            "the assistant tool turn closed its think span more than once",
+        )
+    tool_open = text.find("<tool_call>")
+    if tool_open >= 0 and text.index("</think>") > tool_open:
+        return ToolCallParseError(
+            ParseErrorCode.THINK_CLOSE_AFTER_TOOL_OPEN,
+            "the assistant closed its think span after opening the tool call",
+        )
+    return None

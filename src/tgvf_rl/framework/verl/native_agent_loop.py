@@ -367,16 +367,16 @@ def _recover_termination(
         token_ids[-1] if token_ids[-1] in tuple(parameters["stop_token_ids"]) else None
     )
     terminal_evidence_count = len(matching_strings) + int(matching_token is not None)
-    if terminal_evidence_count > 1 or (reached_length and terminal_evidence_count):
+    if terminal_evidence_count > 1:
         raise ReplayMismatchError(
-            "veRL completed output has ambiguous length/stop termination evidence"
+            "veRL completed output has multiple stop termination signals"
         )
-    if reached_length:
-        return "length", None
     if len(matching_strings) == 1:
         return "stop", matching_strings[0]
     if matching_token is not None:
         return "stop", matching_token
+    if reached_length:
+        return "length", None
     raise ReplayMismatchError(
         "veRL completed output has no recoverable stop/length evidence"
     )

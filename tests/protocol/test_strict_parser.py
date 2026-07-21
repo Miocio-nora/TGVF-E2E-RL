@@ -395,6 +395,19 @@ def test_target_echo_controls_fail_closed_for_both_target_tools(target: str) -> 
         assert "native control" in str(error.value)
 
 
+def test_unpaired_unicode_surrogate_target_is_a_parse_error() -> None:
+    text = (
+        '<tool_call>{"name":"tgvf_focus_tool",'
+        '"arguments":{"target":"\\ud800"}}</tool_call>'
+    )
+
+    with pytest.raises(ToolCallParseError) as error:
+        StrictToolCallParser().parse(_character_token_turn(text))
+
+    assert error.value.code is ParseErrorCode.INVALID_ARGUMENTS
+    assert "Unicode scalar" in str(error.value)
+
+
 def test_explicit_terminal_suffix_is_allowed_but_trailing_answer_is_not() -> None:
     base = _call_text("left sign")
     text = f"{base}\n<|im_end|>\n"

@@ -275,6 +275,28 @@ def test_final_answer_may_terminate_on_explicit_eos_without_becoming_tool_call()
     assert '"stop_reason":151645' in sampled.stop_reason
 
 
+@pytest.mark.parametrize(
+    "text",
+    (
+        "unfinished reasoning without a closer",
+        "reason</think>extra</think>answer",
+        "<think>duplicate opener</think>answer",
+    ),
+)
+def test_model_think_format_errors_preserve_sampled_behavior(text: str) -> None:
+    client = _Client(text, finish_reason="length", stop_reason=None)
+
+    sampled = _sampler(client).sample((1,), _parameters(), turn_index=0)
+    response = client.responses[0]
+
+    assert sampled.think_token_span is None
+    assert sampled.text == text
+    assert sampled.token_ids == response.token_ids
+    assert sampled.behavior_logprobs == tuple(
+        -0.01 * (index + 1) for index in range(len(response.token_ids))
+    )
+
+
 @pytest.mark.parametrize("mode", ("raw_logprobs", "raw_logits", "processed_logits"))
 def test_sampler_rejects_non_behavior_logprob_modes(mode: str) -> None:
     client = _Client("reason</think>answer")

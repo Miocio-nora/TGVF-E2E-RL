@@ -6863,7 +6863,7 @@ instead of repeated bullets.
 
 ### PRL-01-R13-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+- Lifecycle/result: `COMPLETE` / `FAIL`; mandatory four-GPU one-step plus
   clean no-extra-update resume.
 - Complete identity: config
   `configs/policy/runs/prl_01_r13_qwen3_grpo_1step_autoresume_gpu0123.toml`,
@@ -6887,7 +6887,15 @@ instead of repeated bullets.
   session only after a successful step-1 checkpoint.
 - Exact launch: same accepted R12 environment and command, substituting the
   absolute R13 config/output paths; timeout 3600 s.
-- Start/end, GPU-hours, W&B, metrics, checkpoint and resume result: pending.
+- Result: `2026-07-21T22:18:26+09:00`--`22:23:55+09:00`, tmux
+  `prl01_r13_gpu0123`, exit 1, about 0.37 GPU-hours; GPUs released. W&B
+  `5wfe26o4`; launch-log SHA256 `6daf98c5...f9d5f`. R12's exact sampled-token
+  fix passed. One ordinary sampled completion then lacked the accepted balanced
+  think layout; the sampler incorrectly classified this model-format outcome
+  as replay corruption and aborted the complete group before reward/replay.
+  No optimizer step, checkpoint, or resume occurred. The next gate must retain
+  such rows with exact behavior data and `format_reward=-1` rather than drop or
+  abort them.
 
 ## Compatibility-spike status
 

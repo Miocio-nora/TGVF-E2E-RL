@@ -34,7 +34,12 @@ def reward_context_from_trajectory(
     if not isinstance(trajectory, TrajectoryRecord):
         raise TypeError("trajectory must be TrajectoryRecord")
     has_final_answer = (
-        trajectory.stop in {TrajectoryStop.DIRECT_ANSWER, TrajectoryStop.FINAL_ANSWER}
+        trajectory.stop
+        in {
+            TrajectoryStop.DIRECT_ANSWER,
+            TrajectoryStop.FINAL_ANSWER,
+            TrajectoryStop.INVALID_FORMAT,
+        }
         and trajectory.final_answer is not None
         and bool(trajectory.final_answer.strip())
     )
@@ -43,7 +48,13 @@ def reward_context_from_trajectory(
         or error.code.startswith(_PROTOCOL_INVALIDATING_ERROR_PREFIXES)
         for error in trajectory.tool_errors
     )
-    protocol_valid = has_final_answer and not invalidating_error
+    protocol_valid = (
+        trajectory.stop
+        in {TrajectoryStop.DIRECT_ANSWER, TrajectoryStop.FINAL_ANSWER}
+        and has_final_answer
+        and all(turn.think_span is not None for turn in trajectory.assistant_turns)
+        and not invalidating_error
+    )
     successful_tgvf = sum(
         isinstance(call, ToolCallRecord) for call in trajectory.tool_calls
     )
