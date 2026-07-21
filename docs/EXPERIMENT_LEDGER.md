@@ -7252,6 +7252,25 @@ instead of repeated bullets.
   atexit finish. Therefore the requested clean-teardown sub-gate failed and is
   repaired/tested under a subsequent code identity.
 
+### PRL-01-R29-QWEN3-GRPO-1STEP-CLEAN-TEARDOWN-GPU0123
+
+- `PLANNED` / `PENDING`; bounded four-B200 revalidation of the R28 teardown
+  repair. Config
+  `configs/policy/runs/prl_01_r29_qwen3_grpo_1step_clean_teardown_gpu0123.toml`,
+  file SHA256 `ea7f4625...eee4`, run identity `2f021f4d...fce7`, code
+  `b530228e87416f24f29e4ab985c3a9eb138c81e4`, clean tracked implementation.
+- Physical GPUs 0--3; four-rank FSDP2 actor/reference, four colocated TP1 vLLM
+  workers, global prompt batch 4, `n=8`, per-rank prompt micro-batch 1,
+  per-engine rollout prompt micro-batch 1, and gradient accumulation 1.
+- R28 model, Adapter/provider, DeepEyes sample, prompt/tool/reward identities,
+  sampling, exact-observation replay, LoRA scope, GRPO mathematics and capacity
+  are unchanged. This cell performs one update and a step-1 paired checkpoint.
+- Output:
+  `artifacts/policy/PRL-01-R29-qwen3-grpo-1step-clean-teardown-gpu0123`;
+  tmux `prl01_r29_gpu0123`. Acceptance requires exit 0, complete checkpoint and
+  metrics, explicit W&B finish, and no `pure virtual method called`, EngineCore
+  death, DataLoader-killed, traceback, or atexit error text.
+
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
 close broader Qwen replay, Qwen2.5, production-objective or training gates.
