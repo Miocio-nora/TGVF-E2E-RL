@@ -7146,7 +7146,7 @@ instead of repeated bullets.
 
 ### PRL-01-R26-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
 
-- `PLANNED` / `PENDING`; config
+- `COMPLETE` / `FAIL`; config
   `configs/policy/runs/prl_01_r26_qwen3_grpo_1step_autoresume_gpu0123.toml`,
   SHA256 `5668336f...d3fd1`, identity `d86a92dd...99c8d`, implementation
   `0926f146c7b10525d99684dcbb6f9bc81952c482`, GPU 0--3, tmux
@@ -7160,6 +7160,12 @@ instead of repeated bullets.
 - Question: does source vision now materialize inside all four sticky rollout
   workers and allow the first real vLLM generation, then exact replay, one GRPO
   update, LoRA synchronization, step-1 checkpoint, and clean resume?
+- Result: `2026-07-22T02:32:25+09:00`--`02:36:31+09:00`, W&B
+  `pmeoo3xr`, launch-log SHA256 `f15e166b...ee6`. The input wire passed and
+  source vision executed in every colocated vLLM worker. The return crossed
+  vLLM's secure utility transport as an ordinary mapping, so the HTTP boundary
+  did not recover `SourceVisualTensorBundle`; execution stopped before
+  generation, optimizer update, or checkpoint, and GPUs 0--3 were released.
 
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently

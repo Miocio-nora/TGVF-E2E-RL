@@ -24,7 +24,11 @@ from tgvf_rl.environment.focus_tool import (
 )
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 from tgvf_rl.representation import TGVFAdapter, TGVFAdapterInput
-from tgvf_rl.representation.adapter import TGVFAdapterOutput, TGVFAdapterVariant
+from tgvf_rl.representation.adapter import (
+    TGVFAdapterMetadata,
+    TGVFAdapterOutput,
+    TGVFAdapterVariant,
+)
 from tgvf_rl.representation.deepstack import (
     DDeepStackPayload,
     DDeepStackProjectionPorts,
@@ -46,6 +50,8 @@ TGVF_VLLM_WORKER_EXTENSION_FQN = (
     "tgvf_rl.framework.verl.vllm_tool_runtime.TGVFVLLMWorkerExtension"
 )
 TGVF_TWO_MODEL_RUNTIME_SCHEMA = "tgvf-vllm-two-model-runtime-v1"
+_SOURCE_WIRE_SCHEMA = "tgvf-source-visual-utility-wire-v1"
+_FOCUS_WIRE_SCHEMA = "tgvf-focus-utility-wire-v1"
 
 
 def _tensor_to_utility_wire(value: torch.Tensor) -> dict[str, object]:
@@ -77,13 +83,215 @@ def _tensor_from_utility_wire(value: Mapping[str, object]) -> torch.Tensor:
     dtype = getattr(torch, dtype_name, None)
     if not isinstance(dtype, torch.dtype):
         raise ValueError("TGVF utility tensor dtype is unsupported")
-    tensor = torch.frombuffer(data, dtype=dtype).clone()
+    tensor = torch.frombuffer(bytearray(data), dtype=dtype).clone()
     expected = 1
     for size in normalized_shape:
         expected *= size
     if tensor.numel() != expected:
         raise ValueError("TGVF utility tensor byte length differs from shape")
     return tensor.reshape(normalized_shape)
+
+
+def _source_to_utility_wire(value: SourceVisualTensorBundle) -> dict[str, object]:
+    source = _source_to_cpu(value)
+    return {
+        "schema": _SOURCE_WIRE_SCHEMA,
+        "image_sha256": source.image_sha256,
+        "premerge_main": _tensor_to_utility_wire(source.premerge_main),
+        "premerge_deepstack": [
+            _tensor_to_utility_wire(item) for item in source.premerge_deepstack
+        ],
+        "merged_main": _tensor_to_utility_wire(source.merged_main),
+        "merged_deepstack": [
+            _tensor_to_utility_wire(item) for item in source.merged_deepstack
+        ],
+        "image_grid_thw": list(source.image_grid_thw),
+        "spatial_merge_size": source.spatial_merge_size,
+        "decoded_rgb_sha256": source.decoded_rgb_sha256,
+    }
+
+
+def _source_from_utility_wire(value: Mapping[str, object]) -> SourceVisualTensorBundle:
+    if value.get("schema") != _SOURCE_WIRE_SCHEMA:
+        raise ValueError("vLLM source utility wire schema differs")
+    premerge = _wire_tensor_rows(value.get("premerge_deepstack"), owner="premerge")
+    merged = _wire_tensor_rows(value.get("merged_deepstack"), owner="merged")
+    grid = _wire_integer_tuple(value.get("image_grid_thw"), owner="image grid")
+    if len(grid) != 3:
+        raise ValueError("vLLM source image grid must contain three values")
+    source = SourceVisualTensorBundle(
+        image_sha256=_wire_string(value.get("image_sha256"), owner="image SHA256"),
+        premerge_main=_tensor_from_utility_wire(
+            _wire_mapping(value.get("premerge_main"), owner="premerge main")
+        ),
+        premerge_deepstack=premerge,
+        merged_main=_tensor_from_utility_wire(
+            _wire_mapping(value.get("merged_main"), owner="merged main")
+        ),
+        merged_deepstack=merged,
+        image_grid_thw=(grid[0], grid[1], grid[2]),
+        spatial_merge_size=_wire_integer(
+            value.get("spatial_merge_size"), owner="spatial merge size"
+        ),
+        decoded_rgb_sha256=_wire_optional_string(
+            value.get("decoded_rgb_sha256"), owner="decoded RGB SHA256"
+        ),
+    )
+    _validate_source_geometry(source)
+    return source
+
+
+def _focus_to_utility_wire(
+    value: TGVFFocusMaterializationResult,
+) -> dict[str, object]:
+    observation = value.observation
+    metadata = observation.metadata
+    if metadata.condition_provenance is not None:
+        raise RuntimeError("colocated TGVF utility metadata must omit provenance")
+    return {
+        "schema": _FOCUS_WIRE_SCHEMA,
+        "hq": _tensor_to_utility_wire(value.hq),
+        "main_d": _tensor_to_utility_wire(observation.main_d),
+        "d_deepstack": {
+            "branch_layers": list(observation.d_deepstack.branch_layers),
+            "branches": [
+                _tensor_to_utility_wire(item)
+                for item in observation.d_deepstack.branches
+            ],
+            "projection_identities": list(
+                observation.d_deepstack.projection_identities
+            ),
+            "schema_version": observation.d_deepstack.schema_version,
+        },
+        "metadata": {
+            "branch_layers": list(metadata.branch_layers),
+            "main_projection_identity": metadata.main_projection_identity,
+            "deepstack_projection_identities": list(
+                metadata.deepstack_projection_identities
+            ),
+            "batched": metadata.batched,
+            "batch_size": metadata.batch_size,
+            "target_token_count": metadata.target_token_count,
+            "pre_merge_visual_token_count": metadata.pre_merge_visual_token_count,
+            "d_token_count": metadata.d_token_count,
+            "variant": metadata.variant.value,
+            "schema_version": metadata.schema_version,
+        },
+    }
+
+
+def _focus_from_utility_wire(
+    value: Mapping[str, object],
+) -> TGVFFocusMaterializationResult:
+    if value.get("schema") != _FOCUS_WIRE_SCHEMA:
+        raise ValueError("vLLM focus utility wire schema differs")
+    deep = _wire_mapping(value.get("d_deepstack"), owner="D-DeepStack")
+    metadata_wire = _wire_mapping(value.get("metadata"), owner="Adapter metadata")
+    deepstack = DDeepStackPayload(
+        branch_layers=_wire_integer_tuple(
+            deep.get("branch_layers"), owner="D-DeepStack layers"
+        ),
+        branches=_wire_tensor_rows(deep.get("branches"), owner="D-DeepStack"),
+        projection_identities=_wire_string_tuple(
+            deep.get("projection_identities"), owner="D-DeepStack identities"
+        ),
+        schema_version=_wire_string(
+            deep.get("schema_version"), owner="D-DeepStack schema"
+        ),
+    )
+    metadata = TGVFAdapterMetadata(
+        branch_layers=_wire_integer_tuple(
+            metadata_wire.get("branch_layers"), owner="Adapter branch layers"
+        ),
+        main_projection_identity=_wire_string(
+            metadata_wire.get("main_projection_identity"),
+            owner="main projection identity",
+        ),
+        deepstack_projection_identities=_wire_string_tuple(
+            metadata_wire.get("deepstack_projection_identities"),
+            owner="Adapter DeepStack identities",
+        ),
+        batched=_wire_boolean(metadata_wire.get("batched"), owner="Adapter batched"),
+        batch_size=_wire_integer(
+            metadata_wire.get("batch_size"), owner="Adapter batch size"
+        ),
+        target_token_count=_wire_integer(
+            metadata_wire.get("target_token_count"), owner="target token count"
+        ),
+        pre_merge_visual_token_count=_wire_integer(
+            metadata_wire.get("pre_merge_visual_token_count"),
+            owner="premerge visual token count",
+        ),
+        d_token_count=_wire_integer(
+            metadata_wire.get("d_token_count"), owner="D token count"
+        ),
+        condition_provenance=None,
+        variant=TGVFAdapterVariant(
+            _wire_string(metadata_wire.get("variant"), owner="Adapter variant")
+        ),
+        schema_version=_wire_string(
+            metadata_wire.get("schema_version"), owner="Adapter schema"
+        ),
+    )
+    return TGVFFocusMaterializationResult(
+        hq=_tensor_from_utility_wire(_wire_mapping(value.get("hq"), owner="Hq")),
+        observation=PrecomputedTGVFObservationPayload(
+            main_d=_tensor_from_utility_wire(
+                _wire_mapping(value.get("main_d"), owner="main D")
+            ),
+            d_deepstack=deepstack,
+            metadata=metadata,
+        ),
+    )
+
+
+def _wire_mapping(value: object, *, owner: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{owner} utility wire value must be a mapping")
+    return value
+
+
+def _wire_tensor_rows(value: object, *, owner: str) -> tuple[torch.Tensor, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError(f"{owner} utility tensor rows must be a sequence")
+    return tuple(
+        _tensor_from_utility_wire(_wire_mapping(item, owner=f"{owner} row"))
+        for item in value
+    )
+
+
+def _wire_integer(value: object, *, owner: str) -> int:
+    if type(value) is not int:
+        raise TypeError(f"{owner} utility wire value must be an integer")
+    return value
+
+
+def _wire_integer_tuple(value: object, *, owner: str) -> tuple[int, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError(f"{owner} utility wire value must be a sequence")
+    return tuple(_wire_integer(item, owner=owner) for item in value)
+
+
+def _wire_string(value: object, *, owner: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise TypeError(f"{owner} utility wire value must be a non-empty string")
+    return value
+
+
+def _wire_optional_string(value: object, *, owner: str) -> str | None:
+    return None if value is None else _wire_string(value, owner=owner)
+
+
+def _wire_string_tuple(value: object, *, owner: str) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError(f"{owner} utility wire value must be a sequence")
+    return tuple(_wire_string(item, owner=owner) for item in value)
+
+
+def _wire_boolean(value: object, *, owner: str) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{owner} utility wire value must be a boolean")
+    return value
 
 
 @dataclass(slots=True)
@@ -100,6 +308,20 @@ class _TurnRoute:
     prompt_ids: tuple[int, ...]
     output_ids: tuple[int, ...]
     global_step: int
+
+
+@dataclass(frozen=True, slots=True)
+class TGVFFocusMaterializationResult:
+    """Typed HTTP-server result reconstructed from the primitive utility wire."""
+
+    hq: torch.Tensor
+    observation: PrecomputedTGVFObservationPayload
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.hq, torch.Tensor) or self.hq.ndim != 2:
+            raise ValueError("TGVF focus Hq must be a rank-two tensor")
+        if not isinstance(self.observation, PrecomputedTGVFObservationPayload):
+            raise TypeError("TGVF focus result requires a typed observation payload")
 
 
 class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
@@ -145,7 +367,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         pixel_values_wire: Mapping[str, object],
         image_grid_thw: Sequence[int],
         image_sha256: str,
-    ) -> SourceVisualTensorBundle:
+    ) -> dict[str, object]:
         pixel_values = _tensor_from_utility_wire(pixel_values_wire)
         image_grid_thw = torch.tensor((tuple(image_grid_thw),), dtype=torch.long)
         if not trajectory_id:
@@ -166,7 +388,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         if cached is not None:
             if cached.image_sha256 != image_sha256:
                 raise RuntimeError("trajectory source image identity changed")
-            return _source_to_cpu(cached)
+            return _source_to_utility_wire(cached)
 
         mergers = (visual.merger, *tuple(visual.deepstack_merger_list))
         captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [
@@ -210,7 +432,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         )
         _validate_source_geometry(source)
         cache[trajectory_id] = source
-        return _source_to_cpu(source)
+        return _source_to_utility_wire(source)
 
     def tgvf_materialize_focus(
         self,
@@ -220,7 +442,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         target_end: int,
         expected_target_token_ids: tuple[int, ...],
         provider: str,
-    ) -> tuple[torch.Tensor, PrecomputedTGVFObservationPayload]:
+    ) -> dict[str, object]:
         source = self._tgvf_sources().get(trajectory_id)
         if source is None:
             raise RuntimeError("TGVF source was not materialized on this vLLM worker")
@@ -264,7 +486,12 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         # per-token behavior buffer until trajectory end would multiply memory
         # across repeated calls without serving replay.
         self._tgvf_traces().pop(backend_request_id, None)
-        return hq.detach().cpu(), _adapter_payload_to_cpu(output)
+        return _focus_to_utility_wire(
+            TGVFFocusMaterializationResult(
+                hq=hq.detach().cpu(),
+                observation=_adapter_payload_to_cpu(output),
+            )
+        )
 
     def tgvf_release_trajectory(
         self,
@@ -537,7 +764,10 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             result = await self.engine.collective_rpc(
                 method="tgvf_materialize_source", kwargs=dict(kwargs)
             )
-            return _single_collective_result(result, operation="source materialization")
+            wire = _single_collective_result(result, operation="source materialization")
+            return _source_from_utility_wire(
+                _wire_mapping(wire, owner="source materialization")
+            )
 
         async def tgvf_register_behavior_trace(
             self, *, expected_step: int, **kwargs: object
@@ -555,7 +785,10 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             result = await self.engine.collective_rpc(
                 method="tgvf_materialize_focus", kwargs=dict(kwargs)
             )
-            return _single_collective_result(result, operation="focus materialization")
+            wire = _single_collective_result(result, operation="focus materialization")
+            return _focus_from_utility_wire(
+                _wire_mapping(wire, owner="focus materialization")
+            )
 
         async def tgvf_release_trajectory(
             self,
@@ -678,7 +911,7 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             ):
                 raise RuntimeError("TGVF target tokens differ from sampled output")
             _server_id, server = await self._route(request_id)
-            return await server.tgvf_materialize_focus.remote(
+            result = await server.tgvf_materialize_focus.remote(
                 expected_step=expected_step,
                 trajectory_id=request_id,
                 backend_request_id=turn.backend_request_id,
@@ -687,6 +920,9 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
                 expected_target_token_ids=tuple(expected_target_token_ids),
                 provider=provider,
             )
+            if not isinstance(result, TGVFFocusMaterializationResult):
+                raise TypeError("vLLM focus RPC returned an untyped result")
+            return result.hq, result.observation
 
         async def release_trajectory(self, request_id: str) -> None:
             route = self._tgvf_routes.pop(request_id, None)
@@ -727,6 +963,7 @@ def tgvf_llm_server_manager_class() -> type[Any]:
 
 __all__ = [
     "TGVF_TWO_MODEL_RUNTIME_SCHEMA",
+    "TGVFFocusMaterializationResult",
     "TGVF_VLLM_WORKER_EXTENSION_FQN",
     "TGVFVLLMWorkerExtension",
     "tgvf_llm_server_manager_class",
