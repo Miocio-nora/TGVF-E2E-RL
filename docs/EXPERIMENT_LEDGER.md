@@ -6897,6 +6897,28 @@ instead of repeated bullets.
   such rows with exact behavior data and `format_reward=-1` rather than drop or
   abort them.
 
+### PRL-01-R14-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory four-GPU one-step plus
+  clean no-extra-update resume.
+- Identity: config
+  `configs/policy/runs/prl_01_r14_qwen3_grpo_1step_autoresume_gpu0123.toml`,
+  SHA256 `220544d7...d89f`, run identity `588dba06...3663`, code
+  `1d610542de3bc7694ab4d3e64fe4556acd916bac`; all model/data/protocol,
+  objective, replay, and topology fields remain authoritative in that config.
+- Preflight: 523 relevant CPU tests passed (one optional `transfer_queue`
+  smoke skipped). Invalid/truncated model output, cap recovery, deep JSON,
+  exact behavior rows, complete n=8 reward groups, and lossless response-envelope
+  compaction are covered through the composed veRL bridge.
+- Question: can the run now complete rollout, reward, exact current/reference
+  replay, one optimizer step, step-1 checkpoint, and a clean resume with no
+  second update?
+- GPUs/output/session: physical/logical B200 0--3, world size 4; output
+  `artifacts/policy/PRL-01-R14-qwen3-grpo-1step-auto-resume-gpu0123` confirmed
+  absent; tmux `prl01_r14_gpu0123`, then a distinct resume session only after a
+  successful step-1 checkpoint. Standard accepted `.venv312` four-GPU launch,
+  timeout 3600 s.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

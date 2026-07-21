@@ -1,0 +1,164 @@
+schema_version = "policy-e2e-smoke-config-v3"
+formal_pilot = false
+run_id = "PRL-01-R14-QWEN3-GRPO-1STEP-AUTORESUME-GPU0123"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "1d610542de3bc7694ab4d3e64fe4556acd916bac"
+dirty = false
+
+[model]
+family = "qwen3_vl"
+name = "Qwen3-VL-8B-Thinking"
+path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+tokenizer_length = 151669
+chat_template_sha256 = "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956"
+native_deepstack_enabled = true
+image_max_pixels = 262144
+
+[dataset]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/deepeyes47k/materialized-seed42-v1"
+dataset_id = "ChenShawn/DeepEyes-Datasets-47k"
+snapshot = "5546681e28fa2eda9f60a9ea9dd0cf291216ded3"
+sample_count = 47052
+manifest_file_sha256 = "3483c31775441fa25c2f5dc392ef3b00c0c1680602538c6e74b34cc3fea6f477"
+content_sha256 = "2ddb36359af8ec5ac7a5be30edf872223c4bd7d6f2eeb121ec3f5d8b32e1791a"
+samples_sha256 = "e3937c6716f77786e73d13e8273d67bb17b3fd47376ffeb6dff23a1c891fb51e"
+iteration_identity_sha256 = "6ee358c911728f6db4b328ce1994779d2cd393696eac7c53953524e1ba33ad8c"
+shuffle_seed = 42
+sample_id = "deepeyes47k:2fabfc60669372c10a147d0e4d84377d6092c981dd3212e066814676eb1acca7"
+cursor = 7
+
+[representation]
+artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-49-qwen3-matrix-ce-balanced-t01-contextual-2000-gpu01/adapter.pt"
+artifact_file_sha256 = "fcda0b9693ee05e807a4fa95af4e7387bf77854c914d27a2f1cca9d1c175fc14"
+artifact_manifest_sha256 = "3ff14e6633ff9c8cecfb2f4eb19088f0b779332f1445b51d1e9425e463a3f49e"
+artifact_namespace = "tgvf-representation"
+artifact_name = "qwen3-balanced-t01-contextual"
+artifact_version = "rp49-step2000"
+expected_run_id = "RP-49-QWEN3-REP-MATRIXCE-BALANCED-T01-CONTEXTUAL-2000-GPU01"
+expected_run_identity_sha256 = "980e4136bf5d7f1a24d20422f60c87ff719d62f3e42e4f5d3a2da9b5504e1bea"
+
+[representation.conditioning]
+provider = "contextual_hidden_state"
+hidden_layer = -1
+
+[protocol]
+prompt_sha256 = "390b334e66235fdef5e065e3fcff596c5401261508b20ce18303f084aff199f5"
+cap_error_sha256 = "1f649e1d0e53237f9b5285865e972d6d6f243edd6c52ffd35431af75832ad200"
+tool_profile = "tgvf_only"
+tool_schema_sha256 = "f33f61d48bc4341f88077e90afca941819769b6209eb54893a9ed6b44856aba5"
+enabled_tool_names = ["tgvf_focus_tool"]
+maximum_tool_calls = 4
+
+[sampling]
+trajectories_per_prompt = 8
+temperature = 1.0
+top_p = 1.0
+top_k = -1
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_response_length = 8192
+asynchronous_staleness_steps = 0
+do_sample = true
+backend = "vllm"
+backend_version = "0.12.0"
+logit_processors = []
+logprob_measurement = "after_sampling_transforms"
+stop_token_ids = [151645]
+stop_strings = ["</tool_call>"]
+include_stop_str_in_output = true
+ignore_eos = false
+rollout_master_seed = 42
+seed_derivation_name = "content-addressed-vllm-turn-rng-v1"
+seed_derivation_sha256 = "fe8d2da92471dcf97ff195f9c1e085fe422673e3b0a4b863ad28ca528ace867e"
+
+[reward]
+task_kind = "multiple_choice"
+answer_verifier = "exact_match"
+answer_verifier_sha256 = "2a3d5fa4b7e594939aabb2d1b1192499deea86040d980374f7bc8af3e9082e1c"
+judge_mode = "not_applicable"
+judge_reason = "bounded non-formal MCQ smoke"
+answer_weight = 0.8
+format_weight = 0.2
+conditional_tool_weight = 1.2
+
+[optimizer]
+name = "adamw"
+learning_rate = 0.00001
+beta1 = 0.9
+beta2 = 0.999
+epsilon = 0.00000001
+weight_decay = 0.01
+maximum_gradient_norm = 1.0
+
+[scheduler]
+name = "cosine"
+warmup_steps = 0
+total_steps = 1
+minimum_learning_rate_ratio = 0.1
+
+[precision]
+parameter_dtype = "bfloat16"
+reduce_dtype = "float32"
+optimizer_state_dtype = "float32"
+autocast_dtype = "bfloat16"
+gradient_scaler_enabled = false
+allow_tf32 = true
+
+[accumulation]
+global_prompt_batch_size = 4
+prompt_micro_batch_size_per_rank = 1
+rollout_prompt_micro_batch_size_per_engine = 1
+gradient_accumulation_steps = 1
+
+[distributed]
+physical_gpu_ids = [0, 1, 2, 3]
+logical_gpu_ids = [0, 1, 2, 3]
+world_size = 4
+actor_logical_gpu_ids = [0, 1, 2, 3]
+rollout_logical_gpu_ids = [0, 1, 2, 3]
+fsdp_strategy = "fsdp2"
+fsdp_reshard_after_forward = false
+rollout_backend = "vllm"
+vllm_tensor_parallel_size = 1
+placement = "colocated"
+weight_sync_mode = "nccl_lora_state_v1"
+weight_sync_interval_optimizer_steps = 1
+
+[capacity]
+max_prompt_length = 4096
+actor_ppo_max_token_len_per_gpu = 98304
+rollout_log_prob_max_token_len_per_gpu = 98304
+reference_log_prob_max_token_len_per_gpu = 98304
+vllm_gpu_memory_utilization = 0.5
+vllm_max_num_batched_tokens = 32768
+vllm_max_model_len = 32768
+vllm_max_num_seqs = 8
+vllm_enable_chunked_prefill = true
+vllm_enforce_eager = false
+
+[framework]
+agent_loop_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/agent_loops/tgvf_native_policy_v1.yaml"
+agent_loop_config_sha256 = "388eba9b43687bc9bcde894697203cf2cdec265f07acc5606a7af0b3154c351e"
+runtime_invocation_factory_fqn = "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
+server_timeout_seconds = 600.0
+
+[training]
+total_training_epochs = 1
+maximum_optimizer_steps = 1
+checkpoint_steps = [0, 1]
+logger = ["console", "wandb"]
+project_name = "tgvf-policy-rl"
+validation_before_training = false
+validation_frequency = -1
+resume_mode = "auto"
+resume_from_path = ""
+maximum_actor_checkpoints_to_keep = 2
+
+[output]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-01-R14-qwen3-grpo-1step-auto-resume-gpu0123"
+checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-01-R14-qwen3-grpo-1step-auto-resume-gpu0123/checkpoints"
+metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-01-R14-qwen3-grpo-1step-auto-resume-gpu0123/metrics.jsonl"
