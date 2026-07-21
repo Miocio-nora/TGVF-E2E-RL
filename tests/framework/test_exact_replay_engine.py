@@ -48,9 +48,13 @@ class _NoRawForwardModel(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.tensor(weight))
         self.unshard_calls = 0
+        self.reshard_calls = 0
 
     def unshard(self) -> None:
         self.unshard_calls += 1
+
+    def reshard(self) -> None:
+        self.reshard_calls += 1
 
     def forward(self, *_: object, **__: object) -> torch.Tensor:
         raise AssertionError("exact replay must never call raw model.forward")
@@ -122,6 +126,18 @@ class _FakeUpstreamFSDPEngineWithLMHead:
 
     def forward_step(self, micro_batch, loss_function, forward_only):
         raise AssertionError((micro_batch, loss_function, forward_only))
+
+    def forward_backward_batch(
+        self, micro_batch, loss_function, forward_only
+    ):
+        loss, output = self.forward_step(
+            micro_batch,
+            loss_function,
+            forward_only,
+        )
+        if not forward_only:
+            loss.backward()
+        return [output]
 
     def get_per_tensor_param(
         self,
@@ -489,4 +505,34 @@ def test_exact_replay_rejects_a_root_without_fsdp2_unshard() -> None:
 
     with pytest.raises(RuntimeError, match="FSDP2 unshard"):
         engine.forward_step(micro_batch, None, True)
+    payload.release_sidecars()
+
+
+def test_exact_replay_reshards_root_after_forward_backward_batch() -> None:
+    _FakeEngineRegistry.registrations.clear()
+    payload, _, micro_batch = _live_tensordict()
+    engine_cls = register_exact_replay_fsdp2_engine(
+        port_factory=lambda **kwargs: _FakeResponsePort(
+            kwargs["model"], kwargs["role"]
+        ),
+        registry=_FakeEngineRegistry,
+        upstream_engine_cls=_FakeUpstreamFSDPEngineWithLMHead,
+        devices=("cuda",),
+    )
+    model = _NoRawForwardModel(0.5)
+    engine = engine_cls(
+        model_config=SimpleNamespace(model_type=TGVF_EXACT_REPLAY_MODEL_TYPE),
+        engine_config=SimpleNamespace(strategy="fsdp2", forward_only=False),
+        module=model,
+    )
+
+    def loss_fn(*, model_output, data, dp_group):
+        del data, dp_group
+        return -model_output["log_probs"].values().sum(), {}
+
+    engine.forward_backward_batch(micro_batch, loss_fn, False)
+
+    assert model.unshard_calls == 1
+    assert model.reshard_calls == 1
+    assert model.weight.grad is not None
     payload.release_sidecars()

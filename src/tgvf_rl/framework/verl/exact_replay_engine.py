@@ -349,10 +349,9 @@ def _unshard_exact_replay_root(module: nn.Module) -> None:
     is non-recursive, so this materializes only that root parameter group and
     preserves the child modules' upstream-managed sharding behavior.
 
-    The root is deliberately not resharded here: pinned veRL/PyTorch FSDP2
-    likewise configures the root module with ``reshard_after_forward=False``.
-    This is also required for actor autograd to retain the exact forward state
-    through backward.
+    The root is deliberately not resharded inside this forward step because
+    actor autograd must retain the exact forward state through backward. The
+    custom engine reshares it at the enclosing forward/backward batch boundary.
     """
 
     unshard = getattr(module, "unshard", None)
@@ -363,6 +362,17 @@ def _unshard_exact_replay_root(module: nn.Module) -> None:
     handle = unshard()
     if handle is not None:
         raise RuntimeError("synchronous FSDP2 root unshard returned an async handle")
+
+
+def _reshard_exact_replay_root(module: nn.Module) -> None:
+    """Release the manually materialized root after replay/backward completes."""
+
+    reshard = getattr(module, "reshard", None)
+    if not callable(reshard):
+        raise RuntimeError(
+            "exact replay requires the live root module to expose FSDP2 reshard()"
+        )
+    reshard()
 
 
 def make_exact_replay_fsdp2_engine_class(
@@ -462,6 +472,12 @@ def make_exact_replay_fsdp2_engine_class(
                 forward_only=forward_only,
                 port_factory=port_factory,
             )
+
+        def forward_backward_batch(self, *args, **kwargs):
+            try:
+                return super().forward_backward_batch(*args, **kwargs)
+            finally:
+                _reshard_exact_replay_root(self.module)
 
     ExactReplayFSDPEngineWithLMHead.__name__ = "ExactReplayFSDPEngineWithLMHead"
     ExactReplayFSDPEngineWithLMHead.__qualname__ = "ExactReplayFSDPEngineWithLMHead"
