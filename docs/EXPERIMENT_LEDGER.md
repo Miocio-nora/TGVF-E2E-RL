@@ -7279,7 +7279,7 @@ instead of repeated bullets.
 
 ### PRL-01-R30-QWEN3-GRPO-BS16-THROUGHPUT-GPU0123
 
-- `PLANNED` / `PENDING`; one-update four-B200 throughput cell for the Pilot
+- `COMPLETE` / `PASS`; one-update four-B200 throughput cell for the Pilot
   `global prompt batch=16`, selected to match the DeepEyes reference's four
   prompts per GPU while retaining Pilot `n=8`.
 - Config
@@ -7301,6 +7301,41 @@ instead of repeated bullets.
   peak memory, generation/reference/actor/sync timing and trajectories/second.
   Exit-only teardown noise is recorded separately and does not invalidate the
   throughput measurement.
+- The update completed in 301.33s with 128 trajectories and 799,469 generated
+  policy tokens. Generation/reference/actor/sync/checkpoint times were
+  178.14/34.62/64.53/8.73/15.23s. Aggregate generation throughput was
+  4,487.95 policy tokens/s and end-to-end trajectory throughput was 0.4248/s,
+  respectively 2.35x and 2.15x the R29 batch-4 measurement while processing
+  about four times the tokens/trajectories. Actor peak allocated/reserved
+  memory was 110.36/129.56GiB; sampled physical peak was about 137.4GiB.
+- Across the measured step window, per-GPU average utilization was
+  46.5--51.4%; 46.2--53.0% of samples were at or above 80%. Decode segments
+  held all four GPUs around 92--95%. W&B run `en4rnqjj`, checkpoint and metrics
+  completed; the already-known exit-only vLLM/W&B teardown noise recurred.
+
+### PRL-01-R31-QWEN3-GRPO-BS32-THROUGHPUT-GPU0123
+
+- `PLANNED` / `PENDING`; one-update four-B200 throughput cell for global prompt
+  batch 32 and Pilot `n=8` (256 trajectories), matching the DeepEyes reference
+  density of 64 trajectories per GPU without copying its 64-GPU global batch.
+- Config
+  `configs/policy/runs/prl_01_r31_qwen3_grpo_bs32_throughput_gpu0123.toml`,
+  file SHA256 `59c4aab922a921b8b49c4b6673850fb8876fbb06e6bfb5bcfdb68d7c5f74e132`,
+  run identity `7c39eeda78573e8c8785be9e60e022525fda388a7f0caa463828fe514bd6ddb0`,
+  code `d3e2e688611d349247b5f640c87b91e475704d8e`, clean tracked implementation.
+- Physical GPUs 0--3; four-rank FSDP2 actor/reference and four colocated TP1
+  vLLM workers. Per-rank actor prompt micro-batch remains 1, gradient
+  accumulation is 8, and actor/replay token caps remain 98,304. Thus actor
+  activation memory is not enlarged by the global batch change.
+- R30 model, TGVF Adapter/provider, selected DeepEyes sample, native protocol,
+  reward, sampling, exact replay, LoRA scope and GRPO mathematics are
+  unchanged. vLLM capacity is 0.65 memory utilization, 16,384 batched tokens
+  and 64 sequences to accommodate the doubled rollout concurrency.
+- Output
+  `artifacts/policy/PRL-01-R31-qwen3-grpo-bs32-throughput-gpu0123`; tmux
+  `prl01_r31_gpu0123`. Acceptance requires a complete update/checkpoint and the
+  same timing, memory and utilization evidence as R30. Exit-only teardown noise
+  remains a separately tracked failure.
 
 CPU public-API, transport, objective and oracle tests passed before these rows
 were entered. The completed cells are bounded evidence; they do not silently
