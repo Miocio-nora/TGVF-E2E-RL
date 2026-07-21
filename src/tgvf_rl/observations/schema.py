@@ -82,8 +82,12 @@ class SourceVisualState:
     merged_deepstack: tuple[TensorArtifactRef, ...]
     image_grid_thw: tuple[int, int, int]
     spatial_merge_size: int
+    decoded_rgb_sha256: str | None = None
 
     def __post_init__(self) -> None:
+        _validate_sha256(self.image_sha256)
+        if self.decoded_rgb_sha256 is not None:
+            _validate_sha256(self.decoded_rgb_sha256)
         if self.spatial_merge_size <= 0:
             raise ValueError("spatial_merge_size must be positive")
         if any(value <= 0 for value in self.image_grid_thw):
@@ -107,10 +111,25 @@ class TrajectorySourceVisual:
     positions: tuple[int, ...]
     deepstack_branch_layers: tuple[int, ...]
     deepstack_injection_positions: tuple[tuple[int, ...], ...]
+    source_pixels: TensorArtifactRef | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.state, SourceVisualState):
             raise TypeError("trajectory source visual state must be SourceVisualState")
+        if self.source_pixels is not None and (
+            self.source_pixels.descriptor.dtype != "uint8"
+            or len(self.source_pixels.descriptor.shape) != 3
+            or self.source_pixels.descriptor.shape[-1] != 3
+            or any(value <= 0 for value in self.source_pixels.descriptor.shape[:2])
+        ):
+            raise ValueError("trajectory source pixels must be RGB uint8 [H,W,3]")
+        if self.source_pixels is not None and (
+            self.state.decoded_rgb_sha256 is None
+            or self.state.decoded_rgb_sha256 != self.source_pixels.address.digest
+        ):
+            raise ValueError(
+                "trajectory source pixels differ from the decoded RGB bound to features"
+            )
         if not self.positions:
             raise ValueError("trajectory source visual positions must be non-empty")
         if any(
@@ -376,6 +395,8 @@ class CropObservationRecord:
     call_index: int
     model: ModelIdentity
     policy_version: PolicyVersion
+    processor_identity: ArtifactIdentity
+    layout_identity: ArtifactIdentity
     trajectory_id: str
     source_pixels_sha256: str
     source_width: int
@@ -392,7 +413,15 @@ class CropObservationRecord:
             raise ValueError("crop observation schema version and ID are required")
         if self.call_index < 0 or not self.trajectory_id:
             raise ValueError("crop observation call/trajectory identity is invalid")
+        if not isinstance(self.processor_identity, ArtifactIdentity) or not isinstance(
+            self.layout_identity, ArtifactIdentity
+        ):
+            raise TypeError("crop processor/layout identities must be explicit")
         _validate_sha256(self.source_pixels_sha256)
+        if self.source_visual.decoded_rgb_sha256 != self.source_pixels_sha256:
+            raise ValueError(
+                "crop source pixels differ from source visual decoded RGB identity"
+            )
         if self.source_width <= 0 or self.source_height <= 0:
             raise ValueError("crop source dimensions must be positive")
         for name, bbox in (
@@ -441,7 +470,154 @@ class CropObservationRecord:
             raise ValueError("source and crop DeepStack branch counts differ")
 
 
-ObservationRecord = FocusedObservationRecord | CropObservationRecord
+@dataclass(frozen=True, slots=True)
+class CropTGVFVisualState:
+    """Exact crop pixels and processor-owned visual state consumed by TGVF."""
+
+    crop_pixels: TensorArtifactRef
+    processor_identity: ArtifactIdentity
+    layout_identity: ArtifactIdentity
+    source: SourceVisualState
+
+    def __post_init__(self) -> None:
+        if self.crop_pixels.descriptor.dtype != "uint8" or (
+            len(self.crop_pixels.descriptor.shape) != 3
+            or self.crop_pixels.descriptor.shape[-1] != 3
+        ):
+            raise ValueError("atomic crop pixels must be RGB uint8 [H,W,3]")
+        if any(value <= 0 for value in self.crop_pixels.descriptor.shape[:2]):
+            raise ValueError("atomic crop pixels must have positive dimensions")
+        if not isinstance(self.processor_identity, ArtifactIdentity) or not isinstance(
+            self.layout_identity, ArtifactIdentity
+        ):
+            raise TypeError("atomic crop processor/layout identities must be explicit")
+        if self.source.decoded_rgb_sha256 != self.crop_pixels.address.digest:
+            raise ValueError("crop visual image identity differs from exact crop pixels")
+
+
+@dataclass(frozen=True, slots=True)
+class CropTGVFObservationRecord:
+    """One indivisible crop-and-focus observation recorded during rollout."""
+
+    schema_version: str
+    observation_id: str
+    call_index: int
+    model: ModelIdentity
+    representation: ArtifactIdentity
+    condition: ConditionProvenance
+    source_pixels_sha256: str
+    source_width: int
+    source_height: int
+    requested_bbox_2d: tuple[int, int, int, int]
+    effective_bbox_2d: tuple[int, int, int, int]
+    sampled_target_char_span: tuple[int, int]
+    source_visual: SourceVisualState
+    crop_visual: CropTGVFVisualState
+    payload: TensorPayloadSet
+    branches: tuple[DeepStackBranchRecord, ...]
+    layout: VisualLayout
+    masks: ObservationMasks
+    cache: CacheContract
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "crop-tgvf-observation-v1" or not self.observation_id:
+            raise ValueError("atomic crop+TGVF schema version and ID are required")
+        if self.call_index < 0:
+            raise ValueError("atomic crop+TGVF call index must be non-negative")
+        _validate_sha256(self.source_pixels_sha256)
+        if self.source_visual.decoded_rgb_sha256 != self.source_pixels_sha256:
+            raise ValueError(
+                "atomic source pixels differ from source visual decoded RGB identity"
+            )
+        if self.source_width <= 0 or self.source_height <= 0:
+            raise ValueError("atomic crop+TGVF source dimensions must be positive")
+        for name, bbox in (
+            ("requested", self.requested_bbox_2d),
+            ("effective", self.effective_bbox_2d),
+        ):
+            if len(bbox) != 4 or any(type(value) is not int for value in bbox):
+                raise ValueError(f"{name} bbox must contain exactly four integers")
+            left, top, right, bottom = bbox
+            if right <= left or bottom <= top:
+                raise ValueError(f"{name} bbox must be non-empty")
+        left, top, right, bottom = self.effective_bbox_2d
+        if (
+            left < 0
+            or top < 0
+            or right > self.source_width
+            or bottom > self.source_height
+        ):
+            raise ValueError("effective atomic crop lies outside the source image")
+        crop_height, crop_width, _ = self.crop_visual.crop_pixels.descriptor.shape
+        if (crop_width, crop_height) != (right - left, bottom - top):
+            raise ValueError("effective bbox dimensions differ from atomic crop pixels")
+        if self.condition.call_indices != (self.call_index,) or len(
+            self.condition.trajectory_ids
+        ) != 1:
+            raise ValueError("atomic conditioning must identify exactly this call")
+        if (
+            len(self.sampled_target_char_span) != 2
+            or self.sampled_target_char_span[0] < 0
+            or self.sampled_target_char_span[1] <= self.sampled_target_char_span[0]
+        ):
+            raise ValueError("atomic sampled target char span must be non-empty")
+
+        payload_digests = tuple(ref.address.digest for ref in self.payload.deepstack)
+        branch_digests = tuple(
+            branch.d_tensor.address.digest for branch in self.branches
+        )
+        if payload_digests != branch_digests:
+            raise ValueError("atomic payload and D-DeepStack branches differ")
+        if self.layout.deepstack_branch_layers != tuple(
+            branch.layer for branch in self.branches
+        ) or self.layout.deepstack_injection_positions != tuple(
+            branch.injection_positions for branch in self.branches
+        ):
+            raise ValueError("atomic D-DeepStack branches and layout differ")
+
+        sequence = self.layout.sequence_length
+        if self.payload.attention_mask.descriptor.shape != (1, sequence) or (
+            self.payload.attention_mask.descriptor.dtype != "bool"
+        ):
+            raise ValueError("atomic observation attention mask must be bool [1,S]")
+        position_shape = self.payload.position_ids.descriptor.shape
+        if position_shape != (1, sequence) and not (
+            len(position_shape) == 3 and position_shape[-2:] == (1, sequence)
+        ):
+            raise ValueError("atomic position IDs must have shape [1,S] or [R,1,S]")
+        for name, ref in (
+            ("policy", self.masks.policy_visible),
+            ("reference", self.masks.reference_visible),
+            ("teacher", self.masks.teacher_visible),
+        ):
+            if ref.descriptor.shape != (1, sequence) or ref.descriptor.dtype != "bool":
+                raise ValueError(f"atomic {name} visibility mask must be bool [1,S]")
+        if self.payload.token_type_ids is not None and (
+            self.payload.token_type_ids.descriptor.shape != (1, sequence)
+        ):
+            raise ValueError("atomic token type IDs must have shape [1,S]")
+
+        if _feature_count(self.source_visual.merged_main) != len(
+            self.layout.original_image_positions
+        ):
+            raise ValueError("atomic original source features and positions differ")
+        if _feature_count(self.payload.main_d) != len(self.layout.d_positions):
+            raise ValueError("atomic main D features and positions differ")
+        branch_count = len(self.branches)
+        if len(self.source_visual.merged_deepstack) != branch_count or len(
+            self.crop_visual.source.premerge_deepstack
+        ) != branch_count or len(self.crop_visual.source.merged_deepstack) != branch_count:
+            raise ValueError("atomic source/crop/D DeepStack branch counts differ")
+        for branch in self.branches:
+            if _feature_count(branch.d_tensor) != len(branch.injection_positions):
+                raise ValueError(
+                    f"atomic D-DeepStack branch {branch.layer} positions differ"
+                )
+
+
+ObservationRecord = (
+    FocusedObservationRecord | CropObservationRecord | CropTGVFObservationRecord
+)
 
 
 def _feature_count(ref: TensorArtifactRef) -> int:

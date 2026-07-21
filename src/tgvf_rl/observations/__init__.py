@@ -2,6 +2,8 @@
 
 from .schema import (
     CropObservationRecord,
+    CropTGVFObservationRecord,
+    CropTGVFVisualState,
     CropVisualState,
     FocusedObservationRecord,
     SourceVisualState,
@@ -28,6 +30,8 @@ __all__ = [
     "FocusedObservationRecord",
     "MaterializedTrajectoryReplayTensors",
     "CropObservationRecord",
+    "CropTGVFObservationRecord",
+    "CropTGVFVisualState",
     "CropVisualState",
     "SourceVisualState",
     "TrajectorySourceVisual",

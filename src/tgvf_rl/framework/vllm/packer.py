@@ -20,11 +20,13 @@ from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.tensors import TensorArtifactRef
 from tgvf_rl.observations.schema import (
     CropObservationRecord,
+    CropTGVFObservationRecord,
     FocusedObservationRecord,
     SourceVisualState,
     TrajectorySourceVisual,
 )
 from tgvf_rl.observations.store import (
+    ObservationHandle,
     ObservationStore,
     TrajectoryReplayBundle,
     TrajectoryReplayHandle,
@@ -40,7 +42,9 @@ QWEN3_DEEPSTACK_BRANCH_COUNT = len(QWEN3_DEEPSTACK_BRANCH_LAYERS)
 class PackedQwen3ImageItem:
     """One source-image or one call-specific D item accepted by vLLM."""
 
-    kind: Literal["source_image", "crop_image", "focused_d"]
+    kind: Literal[
+        "source_image", "crop_image", "focused_d", "crop_focused_d"
+    ]
     call_index: int | None
     positions: tuple[int, ...]
     image_embeds: torch.Tensor
@@ -52,7 +56,7 @@ class PackedQwen3ImageItem:
     def verify_integrity(self) -> None:
         if self.kind == "source_image" and self.call_index is not None:
             raise ReplayMismatchError("source image cannot have a tool call index")
-        if self.kind in {"focused_d", "crop_image"} and (
+        if self.kind in {"focused_d", "crop_image", "crop_focused_d"} and (
             self.call_index is None or self.call_index < 0
         ):
             raise ReplayMismatchError("focused D requires a non-negative call index")
@@ -222,14 +226,24 @@ def pack_qwen3_vllm_replay(
 
     for record in records:
         if isinstance(record, FocusedObservationRecord):
-            kind: Literal["focused_d", "crop_image"] = "focused_d"
+            kind: Literal[
+                "focused_d", "crop_image", "crop_focused_d"
+            ] = "focused_d"
             item_grid = grid
             item_merge_size = merge_size
             positions = record.layout.d_positions
             main_ref = record.payload.main_d
             branch_refs = tuple(branch.d_tensor for branch in record.branches)
             label = "main D"
-        else:
+        elif isinstance(record, CropTGVFObservationRecord):
+            kind = "crop_focused_d"
+            item_grid = record.crop_visual.source.image_grid_thw
+            item_merge_size = record.crop_visual.source.spatial_merge_size
+            positions = record.layout.d_positions
+            main_ref = record.payload.main_d
+            branch_refs = tuple(branch.d_tensor for branch in record.branches)
+            label = "crop-conditioned main D"
+        elif isinstance(record, CropObservationRecord):
             kind = "crop_image"
             item_grid = record.crop_visual.image_grid_thw
             item_merge_size = record.crop_visual.spatial_merge_size
@@ -237,6 +251,8 @@ def pack_qwen3_vllm_replay(
             main_ref = record.crop_visual.merged_main
             branch_refs = record.crop_visual.merged_deepstack
             label = "crop image"
+        else:  # pragma: no cover - ObservationStore owns the accepted union.
+            raise TypeError("unknown Qwen3 observation type")
         main = _resolve_features(store, main_ref, f"call {record.call_index} {label}")
         branches = tuple(
             _resolve_features(store, ref, f"call {record.call_index} branch {index}")
@@ -280,9 +296,85 @@ def pack_qwen3_vllm_replay_bundle(
     )
 
 
+def pack_qwen3_vllm_observation(
+    store: ObservationStore,
+    observation_handle: ObservationHandle,
+    *,
+    expected_branch_layers: tuple[int, ...] = QWEN3_DEEPSTACK_BRANCH_LAYERS,
+) -> PackedQwen3ImageItem:
+    """Pack one rollout-owned tool observation for the next live vLLM turn."""
+
+    if not isinstance(store, ObservationStore):
+        raise TypeError("vLLM observation packing requires an ObservationStore")
+    if not isinstance(observation_handle, ObservationHandle):
+        raise TypeError("vLLM observation packing requires an ObservationHandle")
+    expected_branch_layers = tuple(expected_branch_layers)
+    if expected_branch_layers != QWEN3_DEEPSTACK_BRANCH_LAYERS:
+        raise ReplayMismatchError(
+            "live Qwen3 observation packing requires DeepStack layers (8, 16, 24)"
+        )
+    record = store.resolve_record(observation_handle)
+    if record.model.family != "qwen3_vl":
+        raise ReplayMismatchError("Qwen3 observation packer received another family")
+    if isinstance(record, FocusedObservationRecord):
+        kind: Literal["crop_image", "focused_d", "crop_focused_d"] = "focused_d"
+        grid = record.source_visual.image_grid_thw
+        merge_size = record.source_visual.spatial_merge_size
+        positions = record.layout.d_positions
+        main_ref = record.payload.main_d
+        branch_refs = tuple(branch.d_tensor for branch in record.branches)
+        branch_layers = record.layout.deepstack_branch_layers
+        label = "main D"
+    elif isinstance(record, CropObservationRecord):
+        kind = "crop_image"
+        grid = record.crop_visual.image_grid_thw
+        merge_size = record.crop_visual.spatial_merge_size
+        positions = record.crop_visual.positions
+        main_ref = record.crop_visual.merged_main
+        branch_refs = record.crop_visual.merged_deepstack
+        branch_layers = record.crop_visual.deepstack_branch_layers
+        label = "crop image"
+    elif isinstance(record, CropTGVFObservationRecord):
+        kind = "crop_focused_d"
+        grid = record.crop_visual.source.image_grid_thw
+        merge_size = record.crop_visual.source.spatial_merge_size
+        positions = record.layout.d_positions
+        main_ref = record.payload.main_d
+        branch_refs = tuple(branch.d_tensor for branch in record.branches)
+        branch_layers = record.layout.deepstack_branch_layers
+        label = "crop-conditioned main D"
+    else:  # pragma: no cover - ObservationStore owns the accepted union.
+        raise TypeError("unknown Qwen3 observation type")
+    if branch_layers != expected_branch_layers:
+        raise ReplayMismatchError(
+            "live observation DeepStack branch order/layers differ from Qwen3"
+        )
+    main = _resolve_features(store, main_ref, f"call {record.call_index} {label}")
+    branches = tuple(
+        _resolve_features(store, ref, f"call {record.call_index} branch {index}")
+        for index, ref in enumerate(branch_refs)
+    )
+    _validate_grid(grid, merge_size, main.shape[0])
+    return _pack_item(
+        kind=kind,
+        call_index=record.call_index,
+        positions=positions,
+        grid=grid,
+        main=main,
+        branches=branches,
+        component_digests=(
+            main_ref.address.digest,
+            *(ref.address.digest for ref in branch_refs),
+        ),
+    )
+
+
 def _validate_record_sequence(
     source: TrajectorySourceVisual,
-    records: tuple[FocusedObservationRecord | CropObservationRecord, ...],
+    records: tuple[
+        FocusedObservationRecord | CropObservationRecord | CropTGVFObservationRecord,
+        ...,
+    ],
     expected_branch_layers: tuple[int, ...],
 ) -> None:
     if source.deepstack_branch_layers != expected_branch_layers:
@@ -310,7 +402,7 @@ def _validate_record_sequence(
             raise ReplayMismatchError(
                 "observation calls are not contiguous and ordered"
             )
-        if isinstance(record, FocusedObservationRecord):
+        if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
             if representation is None:
                 representation = record.representation
             elif record.representation != representation:
@@ -323,7 +415,7 @@ def _validate_record_sequence(
             raise ReplayMismatchError(
                 "recorded source visual state changed across calls"
             )
-        if isinstance(record, FocusedObservationRecord):
+        if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
             branch_layers = record.layout.deepstack_branch_layers
             branch_record_layers = tuple(branch.layer for branch in record.branches)
             positions = record.layout.d_positions
@@ -376,7 +468,9 @@ def _resolve_features(
 
 def _pack_item(
     *,
-    kind: Literal["source_image", "crop_image", "focused_d"],
+    kind: Literal[
+        "source_image", "crop_image", "focused_d", "crop_focused_d"
+    ],
     call_index: int | None,
     positions: tuple[int, ...],
     grid: tuple[int, int, int],
@@ -472,6 +566,7 @@ def _item_checksum(
 def _source_state_identity(source: SourceVisualState) -> tuple[object, ...]:
     return (
         source.image_sha256,
+        source.decoded_rgb_sha256,
         source.premerge_main.address.digest,
         tuple(ref.address.digest for ref in source.premerge_deepstack),
         source.merged_main.address.digest,
@@ -482,9 +577,9 @@ def _source_state_identity(source: SourceVisualState) -> tuple[object, ...]:
 
 
 def _original_image_positions(
-    record: FocusedObservationRecord | CropObservationRecord,
+    record: FocusedObservationRecord | CropObservationRecord | CropTGVFObservationRecord,
 ) -> tuple[int, ...]:
-    if isinstance(record, FocusedObservationRecord):
+    if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
         return record.layout.original_image_positions
     return record.original_image_positions
 
@@ -496,4 +591,5 @@ __all__ = [
     "PackedQwen3Replay",
     "pack_qwen3_vllm_replay",
     "pack_qwen3_vllm_replay_bundle",
+    "pack_qwen3_vllm_observation",
 ]

@@ -712,6 +712,8 @@ def _validate_source_visual_binding(
     state = binding.state
     if tensors.image_sha256 != state.image_sha256:
         raise ValueError("resolved source image differs from immutable binding")
+    if tensors.decoded_rgb_sha256 != state.decoded_rgb_sha256:
+        raise ValueError("resolved decoded RGB identity differs from immutable binding")
     tensor_rows = (
         (tensors.premerge_main, state.premerge_main),
         *zip(tensors.premerge_deepstack, state.premerge_deepstack, strict=False),

@@ -1,4 +1,4 @@
-"""Execute an original-image crop and materialize its exact replay state once."""
+"""Execute a plain crop from immutable trajectory pixels exactly once."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from typing import Protocol
 
 import torch
 
-from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
+from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.observations.schema import (
     CropObservationRecord,
     CropVisualState,
-    SourceVisualState,
+    TrajectorySourceVisual,
 )
 from tgvf_rl.observations.store import (
     ObservationHandle,
@@ -20,8 +20,6 @@ from tgvf_rl.observations.store import (
     tensor_checksum,
 )
 from tgvf_rl.protocol.schema import IMAGE_ZOOM_IN_TOOL_NAME, ParsedImageZoomInCall
-
-from .focus_tool import SourceVisualTensorBundle
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,16 +51,31 @@ class CropReplayLayout:
     deepstack_injection_positions: tuple[tuple[int, ...], ...]
 
 
+class CropReplayLayoutBuilder(Protocol):
+    """Late-bind crop positions after the exact crop token count is known."""
+
+    def build(
+        self,
+        *,
+        trajectory_id: str,
+        call_index: int,
+        parsed_call: ParsedImageZoomInCall,
+        trajectory_source_visual: TrajectorySourceVisual,
+        crop_visual: CropVisualTensorBundle,
+    ) -> CropReplayLayout: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CropToolExecutionRequest:
     trajectory_id: str
     call_index: int
     parsed_call: ParsedImageZoomInCall
-    source_rgb: torch.Tensor
-    source_visual: SourceVisualTensorBundle
-    layout: CropReplayLayout
+    trajectory_source_visual: TrajectorySourceVisual
+    layout_builder: CropReplayLayoutBuilder
     model: ModelIdentity
     policy_version: PolicyVersion
+    crop_processor_identity: ArtifactIdentity
+    crop_layout_identity: ArtifactIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,33 +96,52 @@ class ImageZoomInTool:
         materializer: CropVisualMaterializer,
         store: ObservationStore,
     ) -> None:
+        if not callable(getattr(materializer, "materialize", None)):
+            raise TypeError("plain crop requires a visual materializer")
+        if not isinstance(store, ObservationStore):
+            raise TypeError("plain crop requires an ObservationStore")
         self.materializer = materializer
         self.store = store
 
     def execute(self, request: CropToolExecutionRequest) -> CropToolExecutionResult:
-        if request.call_index < 0:
-            raise ValueError("call_index must be non-negative")
-        if request.parsed_call.name != self.name:
-            raise ValueError("parsed call is not image_zoom_in_tool")
-        source = _validate_source_rgb(request.source_rgb)
+        _validate_request(request)
+        source_ref = request.trajectory_source_visual.source_pixels
+        if source_ref is None:
+            raise RuntimeError(
+                "plain crop requires rollout-recorded immutable source RGB"
+            )
+        source = self.store.resolve_verified_for_trajectory(
+            source_ref,
+            trajectory_id=request.trajectory_id,
+        )
+        source = _validate_source_rgb(source)
+        if tensor_checksum(source) != source_ref.address.digest:
+            raise RuntimeError("resolved source pixels changed after rollout recording")
+        _verify_source_visual_ownership(
+            self.store,
+            request.trajectory_source_visual,
+            trajectory_id=request.trajectory_id,
+        )
         height, width, _ = source.shape
         requested = request.parsed_call.bbox_2d
         effective = clamp_bbox_to_image(requested, width=width, height=height)
         left, top, right, bottom = effective
         crop = source[top:bottom, left:right, :].contiguous().clone()
-        visual = self.materializer.materialize(
-            crop.clone(),
-            parsed_call=request.parsed_call,
-            call_index=request.call_index,
-        )
-        _validate_visual(visual, request.layout)
-
-        source_state = _store_source_visual(
-            self.store,
-            request.source_visual,
-            call_index=request.call_index,
+        with torch.no_grad():
+            visual = self.materializer.materialize(
+                crop.clone(),
+                parsed_call=request.parsed_call,
+                call_index=request.call_index,
+            )
+        _validate_materialized_visual(visual, request.trajectory_source_visual)
+        layout = request.layout_builder.build(
             trajectory_id=request.trajectory_id,
+            call_index=request.call_index,
+            parsed_call=request.parsed_call,
+            trajectory_source_visual=request.trajectory_source_visual,
+            crop_visual=visual,
         )
+        _validate_layout(layout, visual, request.trajectory_source_visual)
         crop_pixels = self.store.put_tensor(
             f"call.{request.call_index}.crop.rgb",
             crop,
@@ -132,33 +164,34 @@ class ImageZoomInTool:
                 strict=True,
             )
         )
-        source_digest = tensor_checksum(source)
         record = CropObservationRecord(
             schema_version="crop-observation-v1",
             observation_id=_observation_id(
-                request, source_digest, crop_pixels.address.digest
+                request, source_ref.address.digest, crop_pixels.address.digest
             ),
             call_index=request.call_index,
             model=request.model,
             policy_version=request.policy_version,
+            processor_identity=request.crop_processor_identity,
+            layout_identity=request.crop_layout_identity,
             trajectory_id=request.trajectory_id,
-            source_pixels_sha256=source_digest,
+            source_pixels_sha256=source_ref.address.digest,
             source_width=width,
             source_height=height,
             requested_bbox_2d=requested,
             effective_bbox_2d=effective,
-            source_visual=source_state,
-            sequence_length=request.layout.sequence_length,
-            original_image_positions=request.layout.original_image_positions,
+            source_visual=request.trajectory_source_visual.state,
+            sequence_length=layout.sequence_length,
+            original_image_positions=layout.original_image_positions,
             crop_visual=CropVisualState(
                 crop_pixels=crop_pixels,
                 merged_main=merged_main,
                 merged_deepstack=merged_deepstack,
                 image_grid_thw=visual.image_grid_thw,
                 spatial_merge_size=visual.spatial_merge_size,
-                positions=request.layout.crop_positions,
+                positions=layout.crop_positions,
                 deepstack_branch_layers=visual.deepstack_branch_layers,
-                deepstack_injection_positions=request.layout.deepstack_injection_positions,
+                deepstack_injection_positions=layout.deepstack_injection_positions,
             ),
         )
         return CropToolExecutionResult(
@@ -202,59 +235,99 @@ def _validate_source_rgb(source: torch.Tensor) -> torch.Tensor:
     return source.detach().to(device="cpu").contiguous()
 
 
-def _validate_visual(visual: CropVisualTensorBundle, layout: CropReplayLayout) -> None:
+def _validate_request(request: CropToolExecutionRequest) -> None:
+    if not isinstance(request, CropToolExecutionRequest):
+        raise TypeError("request must be CropToolExecutionRequest")
+    if not request.trajectory_id or request.call_index < 0:
+        raise ValueError("plain crop trajectory/call identity is invalid")
+    if not isinstance(request.parsed_call, ParsedImageZoomInCall) or (
+        request.parsed_call.name != IMAGE_ZOOM_IN_TOOL_NAME
+    ):
+        raise ValueError("parsed call is not image_zoom_in_tool")
+    if not isinstance(request.trajectory_source_visual, TrajectorySourceVisual):
+        raise TypeError("plain crop requires the immutable trajectory source")
+    if not callable(getattr(request.layout_builder, "build", None)):
+        raise TypeError("plain crop requires a late-bound layout builder")
+    if not isinstance(request.model, ModelIdentity) or not isinstance(
+        request.policy_version, PolicyVersion
+    ):
+        raise TypeError("plain crop model/policy identities must be explicit")
+    if not isinstance(
+        request.crop_processor_identity, ArtifactIdentity
+    ) or not isinstance(request.crop_layout_identity, ArtifactIdentity):
+        raise TypeError("plain crop processor/layout identities must be explicit")
+
+
+def _validate_materialized_visual(
+    visual: CropVisualTensorBundle,
+    source: TrajectorySourceVisual,
+) -> None:
+    if not isinstance(visual, CropVisualTensorBundle):
+        raise TypeError("crop materializer returned the wrong visual bundle type")
     if visual.spatial_merge_size <= 0:
         raise ValueError("crop spatial merge size must be positive")
+    if len(visual.image_grid_thw) != 3 or any(
+        type(value) is not int or value <= 0 for value in visual.image_grid_thw
+    ):
+        raise ValueError("crop image grid must contain three positive integers")
     if len(visual.merged_deepstack) != len(visual.deepstack_branch_layers):
         raise ValueError("crop DeepStack tensors and layer identities differ")
-    if len(visual.merged_deepstack) != len(layout.deepstack_injection_positions):
+    if visual.deepstack_branch_layers != source.deepstack_branch_layers:
+        raise ValueError("crop DeepStack layers differ from the trajectory model")
+    tensors = (visual.merged_main, *visual.merged_deepstack)
+    if any(
+        not isinstance(tensor, torch.Tensor)
+        or not tensor.is_floating_point()
+        or tensor.ndim not in {2, 3}
+        or tensor.requires_grad
+        or tensor.grad_fn is not None
+        for tensor in tensors
+    ):
+        raise ValueError("crop visual features must be detached floating tensors")
+
+
+def _validate_layout(
+    layout: CropReplayLayout,
+    visual: CropVisualTensorBundle,
+    source: TrajectorySourceVisual,
+) -> None:
+    if not isinstance(layout, CropReplayLayout):
+        raise TypeError("crop layout builder returned the wrong layout type")
+    if layout.sequence_length <= 0:
+        raise ValueError("crop replay sequence length must be positive")
+    if layout.original_image_positions != source.positions:
+        raise ValueError("crop replay changed original-image positions")
+    if len(layout.deepstack_injection_positions) != len(visual.merged_deepstack):
         raise ValueError("crop DeepStack tensors and layout positions differ")
-    main_count = (
-        visual.merged_main.shape[-2] if visual.merged_main.ndim in {2, 3} else -1
-    )
+    main_count = visual.merged_main.shape[-2]
     if main_count != len(layout.crop_positions):
         raise ValueError("crop merged feature count and positions differ")
+    if any(
+        tensor.shape[-2] != len(positions)
+        for tensor, positions in zip(
+            visual.merged_deepstack,
+            layout.deepstack_injection_positions,
+            strict=True,
+        )
+    ):
+        raise ValueError("crop DeepStack feature counts and positions differ")
 
 
-def _store_source_visual(
+def _verify_source_visual_ownership(
     store: ObservationStore,
-    source: SourceVisualTensorBundle,
+    source: TrajectorySourceVisual,
     *,
-    call_index: int,
     trajectory_id: str,
-) -> SourceVisualState:
-    prefix = f"call.{call_index}.source"
-    return SourceVisualState(
-        image_sha256=source.image_sha256,
-        premerge_main=store.put_tensor(
-            f"{prefix}.premerge.main",
-            source.premerge_main,
-            trajectory_id=trajectory_id,
-        ),
-        premerge_deepstack=tuple(
-            store.put_tensor(
-                f"{prefix}.premerge.deepstack.{index}",
-                tensor,
-                trajectory_id=trajectory_id,
-            )
-            for index, tensor in enumerate(source.premerge_deepstack)
-        ),
-        merged_main=store.put_tensor(
-            f"{prefix}.merged.main",
-            source.merged_main,
-            trajectory_id=trajectory_id,
-        ),
-        merged_deepstack=tuple(
-            store.put_tensor(
-                f"{prefix}.merged.deepstack.{index}",
-                tensor,
-                trajectory_id=trajectory_id,
-            )
-            for index, tensor in enumerate(source.merged_deepstack)
-        ),
-        image_grid_thw=source.image_grid_thw,
-        spatial_merge_size=source.spatial_merge_size,
+) -> None:
+    state = source.state
+    refs = (
+        state.premerge_main,
+        *state.premerge_deepstack,
+        state.merged_main,
+        *state.merged_deepstack,
     )
+    for ref in refs:
+        store.resolve_verified_for_trajectory(ref, trajectory_id=trajectory_id)
 
 
 def _observation_id(
@@ -268,4 +341,18 @@ def _observation_id(
     digest.update(request.parsed_call.raw_tool_call.encode())
     digest.update(source_digest.encode())
     digest.update(crop_digest.encode())
+    digest.update(request.crop_processor_identity.sha256.encode())
+    digest.update(request.crop_layout_identity.sha256.encode())
     return digest.hexdigest()
+
+
+__all__ = [
+    "CropReplayLayout",
+    "CropReplayLayoutBuilder",
+    "CropToolExecutionRequest",
+    "CropToolExecutionResult",
+    "CropVisualMaterializer",
+    "CropVisualTensorBundle",
+    "ImageZoomInTool",
+    "clamp_bbox_to_image",
+]

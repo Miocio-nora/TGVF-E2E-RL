@@ -143,14 +143,11 @@ pixels with its own model state; that trainable-vision path remains fail-closed
 until implemented. No replay may execute the crop again from an external path
 or substitute different pixels.
 
-`image_zoom_in_tool` and `tgvf_focus_tool` share one ordered multi-tool state
-machine and one configurable total call cap greater than one. Any ordering is
-valid, including crop then TGVF and TGVF then crop. A later policy turn can use
-the accumulated native observations, while every TGVF Adapter invocation
-continues to use the immutable original-image visual features as its visual
-source. This is the initial crop/TGVF fusion contract: fusion occurs through
-the shared policy trajectory and exact ordered replay, not by feeding crop
-pixels into the TGVF Adapter or turning `D` into pixels.
+`image_zoom_in_tool` and `tgvf_focus_tool` may share one ordered multi-tool
+state machine in a separately identified experiment. Such sequential use is
+an ordered mixture of independent tools and must not be named or reported as
+crop+TGVF fusion. Every independent `tgvf_focus_tool` invocation continues to
+use the immutable original-image visual features as its visual source.
 
 Crop response content is environment-owned and receives no behavior log
 probability or policy loss. Crop-specific reward coefficients, crop-call cost,
@@ -159,6 +156,54 @@ this does not reopen the TGVF-only Pilot v1 reward in §0.8. This extension does
 not modify the representation-phase transcript, loss, data, or checkpoint.
 Policy Pilot v1 explicitly defers this extension: its enabled tool set contains
 only `tgvf_focus_tool`. Crop/TGVF fusion requires a later experiment identity.
+
+### 0.4A Accepted atomic crop+TGVF capability
+
+Decision ID: **ATOMIC-CROP-TGVF-20260721**
+
+Accepted by: **user**, on **2026-07-21 JST**
+
+This decision supersedes only the fusion semantics in
+`CROP-FUSION-20260720`. The repository must implement three distinct native
+tool capabilities and must not equate the third with two sequential calls:
+
+1. `image_zoom_in_tool(bbox_2d)` crops the immutable original image and returns
+   a native image observation;
+2. `tgvf_focus_tool(target)` applies the frozen TGVF Adapter to the immutable
+   original-image visual features and returns main `D` plus all supported
+   D-DeepStack branches;
+3. `crop_tgvf_tool(bbox_2d, target)` is one atomic sampled tool call. The model
+   emits the crop box and target together; the environment crops the immutable
+   original image, processes that exact crop as the visual source, and applies
+   the TGVF Adapter to the crop's pre-merge main/DeepStack features using the
+   exact sampled target conditioning. Its model-visible observation is the
+   resulting main `D` and D-DeepStack branches, not an independently returned
+   crop followed by another tool call.
+
+All boxes use the source-pixel, PIL-compatible half-open convention already
+accepted for `image_zoom_in_tool`. The atomic fusion record must materialize
+the requested/effective box, exact RGB crop, crop processor/layout identity,
+crop pre-merge and merged visual state, sampled target span and conditioning
+provenance, main `D`, all D-DeepStack branches, positions, masks, and cache
+contract. Policy, behavior-policy, reference-policy, and future SDPO teacher
+replay consume this same rollout-owned record; recropping, re-encoding, or
+regenerating `D` during replay is forbidden.
+
+Dataset/file-byte image identity and decoded RGB tensor identity are separate
+fields. Any crop-capable trajectory must bind the source visual features to
+the exact decoded-RGB digest stored for that trajectory; pairing features from
+one image with pixels from another is rejected. Plain-crop and atomic records
+both retain their exact processor and native-layout artifact identities. The
+atomic runtime must consume a loaded representation artifact binding and
+reject a conditioning provider, Adapter architecture, or DeepStack projection
+identity that differs from that artifact's manifest.
+
+The three capabilities have separately versioned native schemas,
+descriptions, hashes, parser fixtures, runtime bindings, observation records,
+and exact-replay fixtures. `crop_only`, `tgvf_only`, and `crop_tgvf` are
+configuration profiles, not aliases for one another. The existing Policy
+Pilot v1 remains `tgvf_only`; implementing the other two capabilities does not
+silently enable them in that pilot or alter its reward.
 
 ### 0.5 Accepted evaluation architecture
 

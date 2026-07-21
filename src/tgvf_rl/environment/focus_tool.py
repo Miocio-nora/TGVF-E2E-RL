@@ -37,6 +37,7 @@ class SourceVisualTensorBundle:
     merged_deepstack: tuple[torch.Tensor, ...]
     image_grid_thw: tuple[int, int, int]
     spatial_merge_size: int
+    decoded_rgb_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +231,7 @@ class TGVFFocusTool:
                 merged_deepstack=source_merged_branches,
                 image_grid_thw=source.image_grid_thw,
                 spatial_merge_size=source.spatial_merge_size,
+                decoded_rgb_sha256=source.decoded_rgb_sha256,
             ),
             payload=TensorPayloadSet(
                 main_d=main_d,

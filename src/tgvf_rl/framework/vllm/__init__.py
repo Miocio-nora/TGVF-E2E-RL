@@ -13,9 +13,11 @@ from .packer import (
     QWEN3_DEEPSTACK_BRANCH_LAYERS,
     PackedQwen3ImageItem,
     PackedQwen3Replay,
+    pack_qwen3_vllm_observation,
     pack_qwen3_vllm_replay,
     pack_qwen3_vllm_replay_bundle,
 )
+from .observation_resolver import Qwen3VLLMObservationPayloadResolver
 from .registration import (
     SUPPORTED_VLLM_VERSION,
     SUPPORTED_VLLM_VERSIONS,
@@ -73,6 +75,7 @@ __all__ = [
     "TURN_RNG_SCHEMA",
     "PackedQwen3ImageItem",
     "PackedQwen3Replay",
+    "Qwen3VLLMObservationPayloadResolver",
     "SamplingParamsFactory",
     "VLLMCompatibilityError",
     "VLLMLivePolicyTurnClient",
@@ -100,6 +103,7 @@ __all__ = [
     "VLLM_POLICY_TURN_RESPONSE_SCHEMA",
     "VLLM_PROCESSED_LOGPROBS_MODE",
     "load_vllm_public_plugin_api",
+    "pack_qwen3_vllm_observation",
     "pack_qwen3_vllm_replay",
     "pack_qwen3_vllm_replay_bundle",
     "prompt_token_ids_sha256",

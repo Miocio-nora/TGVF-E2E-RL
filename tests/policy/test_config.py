@@ -13,6 +13,7 @@ from tgvf_rl.policy import (
     PilotSamplingConfig,
     PolicyPilotV1Config,
 )
+from tgvf_rl.protocol import NativeToolCapabilityProfile
 
 
 SHA0 = "0" * 64
@@ -111,6 +112,7 @@ def test_policy_pilot_v1_fixes_only_tgvf_and_exact_optimizer_envelope() -> None:
         sampling=_bound_sampling(),
     )
     assert pilot.enabled_tool_names == ("tgvf_focus_tool",)
+    assert pilot.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
     assert pilot.max_tgvf_call_attempts == 4
     assert pilot.image_max_pixels == 512 * 512
     assert pilot.sampling.trajectories_per_prompt == 8
@@ -126,6 +128,8 @@ def test_policy_pilot_v1_fixes_only_tgvf_and_exact_optimizer_envelope() -> None:
         PolicyPilotV1Config(
             enabled_tool_names=("tgvf_focus_tool", "image_zoom_in_tool")
         )
+    with pytest.raises(ValueError, match="tool_profile"):
+        PolicyPilotV1Config(tool_profile=NativeToolCapabilityProfile.CROP_ONLY)
     with pytest.raises(ValueError, match="dropout"):
         DecoderLoRAConfig(dropout=0.1)
     with pytest.raises(ValueError, match="filter_groups"):

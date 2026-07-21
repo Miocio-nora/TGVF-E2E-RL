@@ -166,7 +166,7 @@ remain fail-closed. No library or historical-project default may fill them:
   parallel topology;
 - `PPV1-O02` — the materialized/filtered manifest and hash for the already
   fixed DeepEyes snapshot, held-out leakage report, and numeric shuffle seed;
-- `PPV1-O03` — exact policy-RL prompt bytes/hash, tool-description bytes,
+- `PPV1-O03` — exact processor-rendered policy-RL prompt bytes/hash,
   stop/EOS ownership, min-p/stop settings, rollout RNG seed/derivation, exact
   cap-error bytes/hash, and post-cap-error recovery/termination semantics;
 - `PPV1-O04` — the native TGVF Adapter artifact/checkpoint and the active
@@ -213,8 +213,16 @@ remain fail-closed. No library or historical-project default may fill them:
   be reproduced as exact parity fixtures or documented native-protocol
   adaptations; omissions require an explicit decision. This requirement does
   not mark the still-open AD-13 inventory as complete.
-- [x] `FIXED` — Native function names are `tgvf_focus_tool` and
-  `image_zoom_in_tool`; crop takes exactly one `bbox_2d` integer array.
+- [x] `FIXED` — Native function names are `tgvf_focus_tool`,
+  `image_zoom_in_tool`, and `crop_tgvf_tool`. Crop takes exactly one
+  `bbox_2d` integer array; the atomic crop/TGVF call takes exactly that array
+  plus one non-empty `target` string. Exact schemas, descriptions, canonical
+  JSON, hashes, and strict parser fixtures are owned by the protocol package
+  under `ATOMIC-CROP-TGVF-20260721`.
+- [x] `FIXED` — `crop_only`, `tgvf_only`, and `crop_tgvf` are distinct
+  configuration profiles exposing only `image_zoom_in_tool`,
+  `tgvf_focus_tool`, and `crop_tgvf_tool`, respectively. Policy Pilot v1
+  remains explicitly fixed to `tgvf_only`.
 - [x] `FIXED` — A trajectory supports zero or more ordered TGVF/crop calls; one
   shared safety cap is configurable and greater than one in a later fusion
   experiment. Policy Pilot v1 enables only `tgvf_focus_tool`, admits four TGVF
@@ -236,10 +244,12 @@ remain fail-closed. No library or historical-project default may fill them:
   consume the same rollout-materialized observation: exact `D` state or exact
   crop pixels. Reuse of rollout-time crop visual features requires an explicit
   `shared_frozen_recorded_features` identity/freeze proof.
-- [ ] `OPEN_BLOCKING RO-CROP-01` — Decide whether policy RL freezes the Qwen
-  vision encoder. If it is trainable or differs across policy/reference/teacher,
-  implement exact-pixel per-consumer re-encoding and behavior-forward parity;
-  the recorded-feature fast path remains rejected.
+- [x] `FIXED RO-CROP-01` — Policy Pilot v1 freezes the Qwen vision encoder,
+  visual merger and native DeepStack modules, so rollout-recorded crop features
+  are the exact shared policy/reference replay state. A future full-fine-tuning
+  identity that makes any of these components trainable must instead implement
+  exact-pixel per-consumer re-encoding and behavior-forward parity; it may not
+  reuse this frozen-feature fast path.
 - [x] `FIXED` — SDPO compatibility is part of the initial skeleton. Its reference
   repository is `lasgroup/SDPO` at
   `7c457fc1b1f636ae794eb0362ba37d4743b06fbc`; its bundled veRL tree is not the
@@ -411,12 +421,15 @@ interfaces must be versioned and fail closed while unset.
   processor, tokenizer, chat template, family adapter, golden token fixtures,
   and fixture hashes for the primary rollout. Full weight-shard hashes are not
   required.
-- [x] `FIXED RO-P02A` — Exact native schemas and schema hashes are implemented
-  for `tgvf_focus_tool(target)` and `image_zoom_in_tool(bbox_2d)` under decision
-  `CROP-FUSION-20260720`.
+- [x] `FIXED RO-P02A` — Exact native schemas, descriptions, versions, canonical
+  JSON, and schema hashes are implemented for `tgvf_focus_tool(target)`,
+  `image_zoom_in_tool(bbox_2d)`, and the atomic
+  `crop_tgvf_tool(bbox_2d,target)` under decisions `CROP-FUSION-20260720` and
+  `ATOMIC-CROP-TGVF-20260721`.
 - [ ] `OPEN_BLOCKING RO-P02B` — Pin the real Qwen3 processor-rendered system
   prompt/token golden and TGVF-only tool-set hash for Policy Pilot v1.
-  The combined crop/TGVF prompt/hash belongs to the deferred fusion experiment.
+  The crop-only and atomic crop/TGVF prompt/token goldens belong to separately
+  identified later experiments.
   Representation-phase TGVF-only golden identity remains unchanged.
 - [ ] `OPEN_BLOCKING RO-P03` — Pin one initial prompt version and exact hash.
   Prompt text: `[TBD]`
@@ -441,6 +454,25 @@ interfaces must be versioned and fail closed while unset.
   escapes, non-ASCII text, repeated strings, and tokenizer boundary crossings;
   no retokenization, fuzzy matching, target rewriting, or row filtering is
   permitted. Fixed by `RPI-20260720-TARGET-TOKEN-COVER-V1`.
+- [x] `FIXED RO-S02A` — The same exact target-span rule applies to the atomic
+  `crop_tgvf_tool` target. Its parser also requires exactly four JSON integers,
+  positive requested width/height, no unknown argument, and retains the exact
+  sampled call bytes/tokens. Source-bound clamping and empty-effective-box
+  rejection remain environment responsibilities.
+- [x] `FIXED RO-S02B` — Crop-capable trajectories record dataset/file identity
+  separately from the decoded RGB tensor digest and require the source visual
+  binding to name that exact decoded digest. Both crop observation kinds retain
+  processor/layout identities, and atomic execution is bound to the loaded
+  representation manifest's provider, Adapter architecture, and branch
+  projections rather than a caller-supplied artifact label.
+- [ ] `OPEN_BLOCKING RO-S02C` — Live vLLM next-turn integration must freeze the
+  identity mapping from the canonical native-image placeholder sequence to
+  vLLM's processor-expanded prompt. The installed plugin consumes recorded
+  main/DeepStack embeddings, but the current live client compares the backend's
+  expanded echoed token IDs directly with the canonical request and therefore
+  fails closed. A concrete initial-trajectory source-payload builder and a real
+  `LLM.generate` gate are also still required; resolver/packer smoke is not
+  reported as live generation.
 - [ ] `OPEN_BLOCKING RO-S03` — `Hq` identity:
   - included/excluded syntax tokens: `[TBD]`
   - hidden layer: `[TBD]`
@@ -1046,8 +1078,10 @@ pilot is identified or launched.
 ### 9.3 Prompt and tool policy
 
 - [ ] `OPEN_CONFIGURABLE PM-01` — Exact system/tool prompt text and hash: `[TBD]`
-- [ ] `OPEN_CONFIGURABLE PM-02` — Exact tool description and target wording:
-  `[TBD]`
+- [x] `FIXED PM-02` — Exact function descriptions, argument descriptions, and
+  target wording for all three native tool schemas are versioned and hashed in
+  `tgvf_rl.protocol.schema`. Processor-rendered system-prompt bytes/token
+  goldens remain `RO-P02B`/`PM-01` work.
 - [ ] `OPEN_BLOCKING PM-03` — Policy Pilot v1 enables only
   `tgvf_focus_tool`; crop/TGVF fusion is deferred. It admits four TGVF call
   attempts, counting both successful observation and standard tool error, and

@@ -14,6 +14,7 @@ from tgvf_rl.contracts.tensors import TensorPayloadSet
 from tgvf_rl.framework.vllm import (
     SUPPORTED_VLLM_VERSIONS,
     TGVF_QWEN3_VLLM_ARCHITECTURE,
+    Qwen3VLLMObservationPayloadResolver,
     VLLMCompatibilityError,
     VLLMPublicPluginAPI,
     load_vllm_public_plugin_api,
@@ -216,6 +217,25 @@ def test_packer_emits_source_then_each_call_with_main_plus_three_branches() -> N
         dim=-1,
     )
     torch.testing.assert_close(packed.items[0].image_embeds, expected_source)
+
+
+def test_live_resolver_appends_one_exact_recorded_observation() -> None:
+    store, replay = _recorded_replay(calls=1)
+    observation = store.resolve_replay(replay).observation_handles[0]
+    resolver = Qwen3VLLMObservationPayloadResolver(
+        store=store,
+        include_multi_modal_uuid=True,
+    )
+
+    resolved = resolver.resolve(observation, call_index=0)
+
+    assert resolved.observation == observation
+    assert resolved.call_index == 0
+    assert resolved.modality == "image"
+    assert resolved.multi_modal_uuid == resolved.payload_sha256
+    item = resolved.multi_modal_data_item
+    assert item["image_embeds"].shape == (4, 8)
+    assert torch.equal(item["image_grid_thw"], torch.tensor(((1, 4, 4),)))
 
 
 def test_vllm_worker_packs_the_transported_replay_bundle_without_recompute() -> None:

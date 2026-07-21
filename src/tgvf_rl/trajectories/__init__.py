@@ -11,6 +11,7 @@ from .behavior import (
 )
 from .schema import (
     CropToolCallRecord,
+    CropTGVFToolCallRecord,
     NativeToolCallRecord,
     ToolCallRecord,
     ToolErrorRecord,
@@ -25,6 +26,7 @@ __all__ = [
     "BehaviorTraceRecord",
     "BehaviorTraceStore",
     "CropToolCallRecord",
+    "CropTGVFToolCallRecord",
     "NativeToolCallRecord",
     "ToolCallRecord",
     "ToolErrorRecord",

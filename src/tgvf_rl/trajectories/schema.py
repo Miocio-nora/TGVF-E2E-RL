@@ -10,6 +10,7 @@ import json
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import OwnedTokenSequence, TokenSpan
 from tgvf_rl.observations.store import ObservationHandle
+from tgvf_rl.protocol.schema import CROP_TGVF_TOOL_NAME
 
 from .behavior import BehaviorTraceHandle
 
@@ -104,7 +105,47 @@ class CropToolCallRecord:
             raise ValueError("crop bbox must be non-empty")
 
 
-NativeToolCallRecord = ToolCallRecord | CropToolCallRecord
+@dataclass(frozen=True, slots=True)
+class CropTGVFToolCallRecord:
+    """One atomic sampled call carrying both crop box and TGVF target."""
+
+    call_index: int
+    assistant_turn_index: int
+    function_name: str
+    bbox_2d: tuple[int, int, int, int]
+    target: str
+    target_token_span: TokenSpan
+    target_char_span: tuple[int, int]
+    raw_call_text: str
+    attempt_index: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.function_name != CROP_TGVF_TOOL_NAME:
+            raise ValueError("unexpected atomic crop+TGVF tool function")
+        if self.call_index < 0 or self.assistant_turn_index < 0:
+            raise ValueError("atomic crop+TGVF call indices must be non-negative")
+        if self.attempt_index is None:
+            object.__setattr__(self, "attempt_index", self.call_index)
+        elif self.attempt_index < 0:
+            raise ValueError("atomic crop+TGVF attempt index must be non-negative")
+        if len(self.bbox_2d) != 4 or any(
+            type(value) is not int for value in self.bbox_2d
+        ):
+            raise ValueError("atomic crop+TGVF bbox must contain four integers")
+        left, top, right, bottom = self.bbox_2d
+        if right <= left or bottom <= top:
+            raise ValueError("atomic crop+TGVF bbox must be non-empty")
+        if not self.target.strip():
+            raise ValueError("atomic crop+TGVF target must be non-empty")
+        if (
+            len(self.target_char_span) != 2
+            or self.target_char_span[0] < 0
+            or self.target_char_span[1] <= self.target_char_span[0]
+        ):
+            raise ValueError("atomic crop+TGVF target char span must be non-empty")
+
+
+NativeToolCallRecord = ToolCallRecord | CropToolCallRecord | CropTGVFToolCallRecord
 
 
 @dataclass(frozen=True, slots=True)

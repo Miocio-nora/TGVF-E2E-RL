@@ -24,7 +24,7 @@ from tgvf_rl.protocol.schema import (
     ToolCallParseError,
     ToolErrorCode,
 )
-from tgvf_rl.protocol.schema import ParsedImageZoomInCall
+from tgvf_rl.protocol.schema import ParsedCropTGVFCall, ParsedImageZoomInCall
 from tgvf_rl.protocol.state_machine import (
     AgentEvent,
     AgentPhase,
@@ -33,6 +33,7 @@ from tgvf_rl.protocol.state_machine import (
 )
 from tgvf_rl.trajectories.schema import (
     AssistantTurnRecord,
+    CropTGVFToolCallRecord,
     CropToolCallRecord,
     NativeToolCallRecord,
     ToolCallRecord,
@@ -445,6 +446,26 @@ class FrameworkNeutralAgentLoop:
                         assistant_turn_index=len(turns) - 1,
                         function_name=parsed.name,
                         bbox_2d=parsed.bbox_2d,
+                        raw_call_text=parsed.raw_tool_call,
+                        attempt_index=attempt_index,
+                    )
+                )
+            elif isinstance(parsed, ParsedCropTGVFCall):
+                calls.append(
+                    CropTGVFToolCallRecord(
+                        call_index=call_index,
+                        assistant_turn_index=len(turns) - 1,
+                        function_name=parsed.name,
+                        bbox_2d=parsed.bbox_2d,
+                        target=parsed.target,
+                        target_token_span=TokenSpan(
+                            parsed.target_span.token_start,
+                            parsed.target_span.token_end,
+                        ),
+                        target_char_span=(
+                            parsed.target_span.offsets.char_start,
+                            parsed.target_span.offsets.char_end,
+                        ),
                         raw_call_text=parsed.raw_tool_call,
                         attempt_index=attempt_index,
                     )

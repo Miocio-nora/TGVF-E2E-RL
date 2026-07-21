@@ -18,7 +18,11 @@ from tgvf_rl.observations.store import (
     TrajectoryReplayBundle,
     TrajectoryReplayHandle,
 )
-from tgvf_rl.observations.schema import CropObservationRecord, FocusedObservationRecord
+from tgvf_rl.observations.schema import (
+    CropObservationRecord,
+    CropTGVFObservationRecord,
+    FocusedObservationRecord,
+)
 from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
 
 
@@ -71,7 +75,12 @@ class RecordedVisualBlock:
     deepstack_positions: tuple[tuple[int, ...], ...]
 
     def __post_init__(self) -> None:
-        if self.kind not in {"source_image", "crop_image", "focused_d"}:
+        if self.kind not in {
+            "source_image",
+            "crop_image",
+            "focused_d",
+            "crop_focused_d",
+        }:
             raise ValueError("unknown recorded visual block kind")
         if self.kind == "source_image":
             if self.observation_handle is not None or self.call_index is not None:
@@ -99,7 +108,12 @@ class InjectedVisualBlock:
     deepstack_positions: tuple[tuple[int, ...], ...]
 
     def __post_init__(self) -> None:
-        if self.kind not in {"source_image", "crop_image", "focused_d"}:
+        if self.kind not in {
+            "source_image",
+            "crop_image",
+            "focused_d",
+            "crop_focused_d",
+        }:
             raise ValueError("unknown injected visual block kind")
         if len(self.deepstack) != len(self.deepstack_positions):
             raise ValueError("DeepStack tensors and injection positions must align")
@@ -401,14 +415,18 @@ def resolve_replay_request(
         )
     ]
     for handle, record in zip(replay.observation_handles, observations, strict=True):
-        if isinstance(record, FocusedObservationRecord):
+        if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
             embeddings_ref = record.payload.main_d
             positions = record.layout.d_positions
             branch_refs = tuple(branch.d_tensor for branch in record.branches)
             branch_positions = tuple(
                 branch.injection_positions for branch in record.branches
             )
-            kind = "focused_d"
+            kind = (
+                "crop_focused_d"
+                if isinstance(record, CropTGVFObservationRecord)
+                else "focused_d"
+            )
             label = "main D"
         elif isinstance(record, CropObservationRecord):
             embeddings_ref = record.crop_visual.merged_main

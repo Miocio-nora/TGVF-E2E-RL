@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
 
 from tgvf_rl.protocol import (
+    CROP_TGVF_TOOL_NAME,
+    CROP_TGVF_TOOL_SCHEMA,
+    CROP_TGVF_TOOL_SCHEMA_CANONICAL_JSON,
+    CROP_TGVF_TOOL_SCHEMA_SHA256,
     IMAGE_ZOOM_IN_TOOL_NAME,
     IMAGE_ZOOM_IN_TOOL_SCHEMA,
+    NativeToolCapabilityProfile,
     ParseErrorCode,
     SampledAssistantTurn,
     StrictToolCallParser,
@@ -14,6 +20,7 @@ from tgvf_rl.protocol import (
     TGVF_FOCUS_TOOL_SCHEMA,
     TokenByteSpan,
     ToolCallParseError,
+    build_crop_tgvf_tool_schema,
     build_tgvf_focus_tool_schema,
     build_image_zoom_in_tool_schema,
     build_native_tool_schemas,
@@ -77,7 +84,105 @@ def test_crop_schema_and_policy_tool_set_are_explicit() -> None:
     assert [item["function"]["name"] for item in build_native_tool_schemas()] == [
         TGVF_FOCUS_TOOL_NAME,
         IMAGE_ZOOM_IN_TOOL_NAME,
+        CROP_TGVF_TOOL_NAME,
     ]
+
+
+def test_atomic_crop_tgvf_schema_hash_and_capability_profiles_are_exact() -> None:
+    first = build_crop_tgvf_tool_schema()
+    second = build_crop_tgvf_tool_schema()
+    assert CROP_TGVF_TOOL_SCHEMA["function"]["name"] == CROP_TGVF_TOOL_NAME
+    assert first["function"]["parameters"]["required"] == ["bbox_2d", "target"]
+    assert first["function"]["parameters"]["additionalProperties"] is False
+    assert "exact crop" in first["function"]["description"]
+    assert (
+        hashlib.sha256(CROP_TGVF_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")).hexdigest()
+        == CROP_TGVF_TOOL_SCHEMA_SHA256
+        == "41f6f99f34b0d3e9fb5b7a4166af5c367cef78214285bc56f12c6ca45e02ceb9"
+    )
+    first["function"]["name"] = "mutated"
+    assert second["function"]["name"] == CROP_TGVF_TOOL_NAME
+    assert NativeToolCapabilityProfile.CROP_ONLY.tool_names == (
+        IMAGE_ZOOM_IN_TOOL_NAME,
+    )
+    assert NativeToolCapabilityProfile.TGVF_ONLY.tool_names == (
+        TGVF_FOCUS_TOOL_NAME,
+    )
+    assert NativeToolCapabilityProfile.CROP_TGVF.tool_names == (
+        CROP_TGVF_TOOL_NAME,
+    )
+    assert len(NativeToolCapabilityProfile.CROP_TGVF.tool_set_sha256) == 64
+
+
+def test_parse_atomic_crop_tgvf_preserves_bbox_and_exact_target_span() -> None:
+    target = '红色 "标签" \\ shelf'
+    payload = json.dumps(
+        {
+            "name": CROP_TGVF_TOOL_NAME,
+            "arguments": {"bbox_2d": [-3, 2, 40, 31], "target": target},
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    text = f"</think>\n<tool_call>{payload}</tool_call>"
+    turn = _character_token_turn(text)
+    parsed = StrictToolCallParser(
+        enabled_tool_names=NativeToolCapabilityProfile.CROP_TGVF.tool_names
+    ).parse(turn)
+
+    assert parsed.name == CROP_TGVF_TOOL_NAME
+    assert parsed.bbox_2d == (-3, 2, 40, 31)
+    assert parsed.target == target
+    assert parsed.raw_tool_call == text[text.index("<tool_call>") :]
+    assert parsed.target_span.target_text == target
+    assert parsed.target_span.raw_json_value != target
+    assert parsed.target_span.token_ids == turn.token_ids[
+        parsed.target_span.token_start : parsed.target_span.token_end
+    ]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "code"),
+    [
+        ({"bbox_2d": [0, 0, 2, 2]}, ParseErrorCode.INVALID_ARGUMENTS),
+        (
+            {"bbox_2d": [0, 0, 2, 2], "target": "x", "extra": 1},
+            ParseErrorCode.INVALID_ARGUMENTS,
+        ),
+        ({"bbox_2d": [0, 0, 0, 2], "target": "x"}, ParseErrorCode.INVALID_BBOX),
+        ({"bbox_2d": [0, 0, 2, True], "target": "x"}, ParseErrorCode.INVALID_BBOX),
+        ({"bbox_2d": [0, 0, 2, 2], "target": "  "}, ParseErrorCode.EMPTY_TARGET),
+    ],
+)
+def test_invalid_atomic_crop_tgvf_arguments_fail_closed(
+    arguments: dict[str, object], code: ParseErrorCode
+) -> None:
+    payload = json.dumps(
+        {"name": CROP_TGVF_TOOL_NAME, "arguments": arguments},
+        separators=(",", ":"),
+    )
+    parser = StrictToolCallParser(
+        enabled_tool_names=NativeToolCapabilityProfile.CROP_TGVF.tool_names
+    )
+    with pytest.raises(ToolCallParseError) as error:
+        parser.parse(_character_token_turn(f"<tool_call>{payload}</tool_call>"))
+    assert error.value.code is code
+
+
+def test_atomic_crop_tgvf_call_fails_closed_under_tgvf_only_profile() -> None:
+    payload = json.dumps(
+        {
+            "name": CROP_TGVF_TOOL_NAME,
+            "arguments": {"bbox_2d": [0, 0, 2, 2], "target": "label"},
+        },
+        separators=(",", ":"),
+    )
+    parser = StrictToolCallParser(
+        enabled_tool_names=NativeToolCapabilityProfile.TGVF_ONLY.tool_names
+    )
+    with pytest.raises(ToolCallParseError) as error:
+        parser.parse(_character_token_turn(f"<tool_call>{payload}</tool_call>"))
+    assert error.value.code is ParseErrorCode.INVALID_TOOL_NAME
 
 
 def test_parse_crop_preserves_exact_call_and_integer_bbox() -> None:

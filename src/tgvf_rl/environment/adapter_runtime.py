@@ -133,16 +133,44 @@ class LoadedFrozenTGVFAdapter:
             raise TypeError("loaded Adapter requires its runtime binding")
         if not isinstance(self.manifest, RankZeroAdapterOwnedStateManifest):
             raise TypeError("loaded Adapter requires a rank-zero export manifest")
-        _require_sha256(self.manifest_sha256, name="manifest_sha256")
-        if self.manifest_sha256 != self.binding.artifact.sha256:
-            raise IdentityMismatchError(
-                "loaded Adapter manifest differs from selected artifact identity"
-            )
-        _assert_frozen_eval_adapter(self.adapter)
+        self.assert_bound_invariants()
 
     @property
     def run_identity(self) -> RepresentationRunIdentity:
         return self.manifest.run_identity
+
+    def assert_bound_invariants(self) -> None:
+        """Recheck the loaded export's typed binding before live tool use."""
+
+        _require_sha256(self.manifest_sha256, name="manifest_sha256")
+        if state_digest(self.manifest) != self.manifest_sha256 or (
+            self.manifest_sha256 != self.binding.artifact.sha256
+        ):
+            raise IdentityMismatchError(
+                "loaded Adapter manifest differs from selected artifact identity"
+            )
+        run_identity = self.manifest.run_identity
+        if run_identity.run_id != self.binding.expected_run_id:
+            raise IdentityMismatchError("loaded Adapter run ID mismatch")
+        if (
+            self.manifest.run_identity_sha256
+            != self.binding.expected_run_identity_sha256
+            or run_identity.identity_sha256
+            != self.binding.expected_run_identity_sha256
+        ):
+            raise IdentityMismatchError("loaded Adapter run identity mismatch")
+        if run_identity.model != self.binding.model:
+            raise IdentityMismatchError("loaded Adapter model identity mismatch")
+        if run_identity.provider != self.binding.conditioning:
+            raise IdentityMismatchError(
+                "loaded Adapter target-conditioning provider mismatch"
+            )
+        if run_identity.adapter_contract != self.binding.adapter_contract:
+            raise IdentityMismatchError(
+                "loaded Adapter architecture identity mismatch"
+            )
+        self.binding.adapter_contract.assert_matches(self.adapter)
+        _assert_frozen_eval_adapter(self.adapter)
 
 
 def load_frozen_tgvf_adapter(
@@ -386,6 +414,7 @@ class StoredSourceVisualPort:
             ),
             image_grid_thw=state.image_grid_thw,
             spatial_merge_size=state.spatial_merge_size,
+            decoded_rgb_sha256=state.decoded_rgb_sha256,
         )
         _validate_source_visual_shape(tensors, contract)
         return BoundSourceVisual(request.identity, tensors)

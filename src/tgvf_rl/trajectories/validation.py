@@ -7,11 +7,16 @@ import hashlib
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.tokens import TokenOwnership
 from tgvf_rl.observations.store import ObservationStore
-from tgvf_rl.observations.schema import CropObservationRecord, FocusedObservationRecord
+from tgvf_rl.observations.schema import (
+    CropObservationRecord,
+    CropTGVFObservationRecord,
+    FocusedObservationRecord,
+)
 
 from .behavior import BehaviorTraceStore
 from .schema import (
     CropToolCallRecord,
+    CropTGVFToolCallRecord,
     TrajectoryBatch,
     TrajectoryRecord,
     TrajectoryStop,
@@ -103,6 +108,49 @@ class TrajectoryValidator:
                     raise IdentityMismatchError(
                         "crop observation bbox differs from sampled tool call"
                     )
+            elif isinstance(call, CropTGVFToolCallRecord):
+                if not isinstance(record, CropTGVFObservationRecord):
+                    raise IdentityMismatchError(
+                        "atomic crop+TGVF call received a different observation type"
+                    )
+                if record.condition.policy_version != trajectory.behavior_policy:
+                    raise IdentityMismatchError(
+                        "atomic crop+TGVF policy differs from behavior policy"
+                    )
+                if record.condition.trajectory_ids != (
+                    trajectory.identity.canonical_id,
+                ):
+                    raise IdentityMismatchError(
+                        "atomic crop+TGVF observation differs from trajectory"
+                    )
+                if record.requested_bbox_2d != call.bbox_2d:
+                    raise IdentityMismatchError(
+                        "atomic crop+TGVF bbox differs from sampled tool call"
+                    )
+                if record.sampled_target_char_span != call.target_char_span:
+                    raise IdentityMismatchError(
+                        "atomic crop+TGVF target char span differs from sampled tool call"
+                    )
+                expected_target_sha = hashlib.sha256(
+                    call.target.encode("utf-8")
+                ).hexdigest()
+                if record.condition.sampled_target_text_sha256 != expected_target_sha:
+                    raise IdentityMismatchError(
+                        "atomic crop+TGVF target differs from sampled tool call"
+                    )
+                if (
+                    record.condition.sampled_target_token_start,
+                    record.condition.sampled_target_token_end,
+                ) != (call.target_token_span.start, call.target_token_span.end):
+                    raise IdentityMismatchError(
+                        "atomic crop+TGVF target span differs from sampled tool call"
+                    )
+                if representation is None:
+                    representation = record.representation
+                elif record.representation != representation:
+                    raise IdentityMismatchError(
+                        "representation artifact changed within one trajectory"
+                    )
             else:
                 if not isinstance(record, FocusedObservationRecord):
                     raise IdentityMismatchError(
@@ -151,7 +199,7 @@ class TrajectoryValidator:
                 raise ReplayMismatchError(
                     "tool call references a non-tool assistant turn"
                 )
-            if isinstance(record, FocusedObservationRecord):
+            if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
                 sampled_length = len(assistant_turn.tokens.token_ids)
                 if call.target_token_span.end > sampled_length:
                     raise ReplayMismatchError(

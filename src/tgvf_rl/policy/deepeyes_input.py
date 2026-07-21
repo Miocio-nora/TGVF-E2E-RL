@@ -26,9 +26,10 @@ from tgvf_rl.data import (
     DeepEyesTaskKind,
 )
 from tgvf_rl.protocol import (
+    NativeToolCapabilityProfile,
     TGVF_FOCUS_TOOL_NAME,
-    TGVF_FOCUS_TOOL_SCHEMA_SHA256,
     build_native_tool_schemas,
+    native_tool_set_sha256,
 )
 from tgvf_rl.rewards import (
     AnswerTaskKind,
@@ -190,6 +191,7 @@ class NativePolicyPromptInput:
     image_sha256: str
     question: str
     messages: tuple[Mapping[str, Any], ...]
+    tool_profile: NativeToolCapabilityProfile = NativeToolCapabilityProfile.TGVF_ONLY
     tool_names: tuple[str, ...] = (TGVF_FOCUS_TOOL_NAME,)
     schema_version: str = POLICY_NATIVE_PROMPT_INPUT_SCHEMA
 
@@ -218,8 +220,10 @@ class NativePolicyPromptInput:
                 "policy native prompt must be exactly image plus source question"
             )
         object.__setattr__(self, "tool_names", tuple(self.tool_names))
-        if self.tool_names != (TGVF_FOCUS_TOOL_NAME,):
-            raise ValueError("Policy Pilot prompt exposes only tgvf_focus_tool")
+        if not isinstance(self.tool_profile, NativeToolCapabilityProfile):
+            raise TypeError("tool_profile must be NativeToolCapabilityProfile")
+        if self.tool_names != self.tool_profile.tool_names:
+            raise ValueError("tool_names differ from the selected tool_profile")
         if self.schema_version != POLICY_NATIVE_PROMPT_INPUT_SCHEMA:
             raise ValueError("policy native prompt schema mismatch")
 
@@ -229,16 +233,20 @@ class NativePolicyPromptInput:
 
     @property
     def tool_schema_sha256(self) -> str:
-        return TGVF_FOCUS_TOOL_SCHEMA_SHA256
+        return native_tool_set_sha256(self.tool_names)
 
 
 def build_qwen_policy_user_prompt(
     sample: DeepEyes47KRuntimeSample,
+    *,
+    tool_profile: NativeToolCapabilityProfile = NativeToolCapabilityProfile.TGVF_ONLY,
 ) -> NativePolicyPromptInput:
     """Build image-plus-question input without reading any historical prompt."""
 
     if not isinstance(sample, DeepEyes47KRuntimeSample):
         raise TypeError("sample must be a DeepEyes47KRuntimeSample")
+    if not isinstance(tool_profile, NativeToolCapabilityProfile):
+        raise TypeError("tool_profile must be NativeToolCapabilityProfile")
     messages: tuple[Mapping[str, Any], ...] = (
         {
             "role": "user",
@@ -255,6 +263,8 @@ def build_qwen_policy_user_prompt(
         image_sha256=sample.image_sha256,
         question=sample.question,
         messages=messages,
+        tool_profile=tool_profile,
+        tool_names=tool_profile.tool_names,
     )
 
 

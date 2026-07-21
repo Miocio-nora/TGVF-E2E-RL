@@ -187,6 +187,7 @@ hidden_layer = -1
 [protocol]
 prompt_sha256 = "{SHA_A}"
 cap_error_sha256 = "{SHA_B}"
+tool_profile = "tgvf_only"
 tool_schema_sha256 = "{TGVF_FOCUS_TOOL_SCHEMA_SHA256}"
 enabled_tool_names = ["tgvf_focus_tool"]
 maximum_tool_calls = 4
@@ -307,6 +308,7 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
         TargetConditioningProviderKind.CONTEXTUAL_HIDDEN_STATE
     )
     assert config.reward.judge_mode == "not_applicable"
+    assert config.protocol.tool_profile.value == "tgvf_only"
     assert config.distributed.physical_gpu_ids == (0, 3)
     assert config.distributed.logical_gpu_ids == (0, 1)
     assert config.distributed.fsdp_strategy == "fsdp2"
@@ -327,6 +329,7 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
         ("min_p = 0.0\n", "", r"\[sampling\] fields differ"),
         ("formal_pilot = false", "formal_pilot = true", "formal_pilot=false"),
         ('judge_mode = "not_applicable"', 'judge_mode = "qwen72b"', "judge_mode"),
+        ('tool_profile = "tgvf_only"', 'tool_profile = "crop_tgvf"', "tool_profile"),
         ('fsdp_strategy = "fsdp2"', 'fsdp_strategy = "fsdp1"', "fsdp_strategy"),
     ],
 )

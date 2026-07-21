@@ -21,6 +21,7 @@ from tgvf_rl.contracts.tensors import (
 
 from .schema import (
     CropObservationRecord,
+    CropTGVFObservationRecord,
     FocusedObservationRecord,
     ObservationRecord,
     SourceVisualState,
@@ -482,25 +483,38 @@ class ObservationStore:
                 raise ReplayMismatchError(
                     "tool observation source DeepStack layers differ from trajectory source"
                 )
-            if isinstance(record, FocusedObservationRecord):
+            if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
                 if representation is None:
                     representation = record.representation
                 elif record.representation != representation:
                     raise IdentityMismatchError(
                         "representation artifact changed within one replay"
                     )
-            elif source_pixels_sha256 is None:
+            if isinstance(record, (CropObservationRecord, CropTGVFObservationRecord)) and (
+                source_pixels_sha256 is None
+            ):
                 source_pixels_sha256 = record.source_pixels_sha256
-            elif record.source_pixels_sha256 != source_pixels_sha256:
+            elif isinstance(
+                record, (CropObservationRecord, CropTGVFObservationRecord)
+            ) and record.source_pixels_sha256 != source_pixels_sha256:
                 raise ReplayMismatchError(
                     "multi-crop replay changed the immutable source pixels"
                 )
+            if isinstance(record, (CropObservationRecord, CropTGVFObservationRecord)):
+                source_pixels = replay.source_visual.source_pixels
+                if source_pixels is None or (
+                    source_pixels.address.digest != record.source_pixels_sha256
+                ):
+                    raise ReplayMismatchError(
+                        "atomic crop+TGVF replay lacks its exact immutable source pixels"
+                    )
             positions = set(_tool_visual_positions(record))
             if occupied & positions:
                 raise ReplayMismatchError("multi-call replay visual positions overlap")
             occupied.update(positions)
         has_crop = any(
-            isinstance(record, CropObservationRecord) for record in observations
+            isinstance(record, (CropObservationRecord, CropTGVFObservationRecord))
+            for record in observations
         )
         if has_crop and replay.crop_vision_replay_mode != (
             "shared_frozen_recorded_features"
@@ -728,7 +742,12 @@ class ObservationStore:
             raise ReplayMismatchError("checkpoint contains non-tensor payload")
         for observation_id, record in store._records.items():
             if not isinstance(
-                record, (FocusedObservationRecord, CropObservationRecord)
+                record,
+                (
+                    FocusedObservationRecord,
+                    CropObservationRecord,
+                    CropTGVFObservationRecord,
+                ),
             ):
                 raise ReplayMismatchError(
                     "checkpoint contains invalid observation record"
@@ -829,7 +848,7 @@ def _trajectory_id_set(trajectory_ids: Iterable[str]) -> tuple[str, ...]:
 
 
 def _record_trajectory_id(record: ObservationRecord) -> str:
-    if isinstance(record, FocusedObservationRecord):
+    if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
         return record.condition.trajectory_ids[0]
     if isinstance(record, CropObservationRecord):
         return record.trajectory_id
@@ -848,7 +867,7 @@ def _walk_tensor_refs(value: object) -> Iterable[TensorArtifactRef]:
 
 
 def _record_policy_version(record: ObservationRecord) -> PolicyVersion:
-    if isinstance(record, FocusedObservationRecord):
+    if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
         return record.condition.policy_version
     return record.policy_version
 
@@ -856,6 +875,7 @@ def _record_policy_version(record: ObservationRecord) -> PolicyVersion:
 def _source_state_identity(source: SourceVisualState) -> tuple[object, ...]:
     return (
         source.image_sha256,
+        source.decoded_rgb_sha256,
         source.premerge_main.address.digest,
         tuple(ref.address.digest for ref in source.premerge_deepstack),
         source.merged_main.address.digest,
@@ -866,19 +886,19 @@ def _source_state_identity(source: SourceVisualState) -> tuple[object, ...]:
 
 
 def _original_image_positions(record: ObservationRecord) -> tuple[int, ...]:
-    if isinstance(record, FocusedObservationRecord):
+    if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
         return record.layout.original_image_positions
     return record.original_image_positions
 
 
 def _tool_visual_positions(record: ObservationRecord) -> tuple[int, ...]:
-    if isinstance(record, FocusedObservationRecord):
+    if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
         return record.layout.d_positions
     return record.crop_visual.positions
 
 
 def _record_branch_layers(record: ObservationRecord) -> tuple[int, ...]:
-    if isinstance(record, FocusedObservationRecord):
+    if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
         return record.layout.deepstack_branch_layers
     return record.crop_visual.deepstack_branch_layers
 

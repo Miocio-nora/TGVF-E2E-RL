@@ -19,7 +19,7 @@ from tgvf_rl.policy import (
     build_qwen_policy_user_prompt,
     derive_policy_execution_group,
 )
-from tgvf_rl.protocol import TGVF_FOCUS_TOOL_NAME
+from tgvf_rl.protocol import NativeToolCapabilityProfile, TGVF_FOCUS_TOOL_NAME
 from tgvf_rl.rewards import AnswerTaskKind
 from tgvf_rl.trajectories.schema import TrajectoryRecord, TrajectoryStop
 
@@ -108,9 +108,18 @@ def test_prompt_group_and_reward_vertical_slice_is_prompt_free(tmp_path: Path) -
     assert prompt.image_path == sample.image_path
     assert prompt.image_sha256 == sample.image_sha256
     assert prompt.tool_names == (TGVF_FOCUS_TOOL_NAME,)
+    assert prompt.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
     assert tuple(
         schema["function"]["name"] for schema in prompt.tool_schemas
     ) == (TGVF_FOCUS_TOOL_NAME,)
+    for profile in NativeToolCapabilityProfile:
+        selected = build_qwen_policy_user_prompt(sample, tool_profile=profile)
+        assert selected.tool_profile is profile
+        assert selected.tool_names == profile.tool_names
+        assert tuple(
+            schema["function"]["name"] for schema in selected.tool_schemas
+        ) == profile.tool_names
+        assert selected.tool_schema_sha256 == profile.tool_set_sha256
 
     group = derive_policy_execution_group(
         sample,

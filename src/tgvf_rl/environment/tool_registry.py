@@ -26,7 +26,7 @@ class ToolRuntimeBinding:
 
 
 class NativeToolRuntimeRegistry:
-    """Dispatch both tools while preserving one shared agent-loop call order."""
+    """Dispatch selected native visual tools in one shared call order."""
 
     def __init__(self, bindings: tuple[ToolRuntimeBinding, ...]) -> None:
         bindings = tuple(bindings)

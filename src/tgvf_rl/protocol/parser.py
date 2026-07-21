@@ -7,7 +7,9 @@ import json
 from typing import Any
 
 from .schema import (
+    CROP_TGVF_TOOL_NAME,
     ParseErrorCode,
+    ParsedCropTGVFCall,
     ParsedImageZoomInCall,
     ParsedToolCall,
     NativeToolCall,
@@ -318,6 +320,19 @@ class StrictToolCallParser:
                 json_start=json_start,
                 json_end=json_end,
             )
+        if tool_name == CROP_TGVF_TOOL_NAME:
+            return self._parse_crop_tgvf_call(
+                root=root,
+                decoded=decoded,
+                arguments=arguments,
+                turn=turn,
+                text=text,
+                raw_json=raw_json,
+                call_start=call_start,
+                call_end=call_end,
+                json_start=json_start,
+                json_end=json_end,
+            )
         if type(arguments) is not dict or set(arguments) != {"target"}:
             raise ToolCallParseError(
                 ParseErrorCode.INVALID_ARGUMENTS,
@@ -414,6 +429,87 @@ class StrictToolCallParser:
             raw_json=raw_json,
             call_offsets=_text_offsets(text, call_start, call_end),
             json_offsets=_text_offsets(text, json_start, json_end),
+        )
+
+    @staticmethod
+    def _parse_crop_tgvf_call(
+        *,
+        root: _JsonNode,
+        decoded: dict[str, Any],
+        arguments: Any,
+        turn: SampledAssistantTurn,
+        text: str,
+        raw_json: str,
+        call_start: int,
+        call_end: int,
+        json_start: int,
+        json_end: int,
+    ) -> ParsedCropTGVFCall:
+        if type(arguments) is not dict or set(arguments) != {"bbox_2d", "target"}:
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_ARGUMENTS,
+                "atomic crop/TGVF arguments must contain exactly 'bbox_2d' and "
+                "'target'",
+            )
+        bbox = arguments["bbox_2d"]
+        if (
+            type(bbox) is not list
+            or len(bbox) != 4
+            or any(type(value) is not int for value in bbox)
+        ):
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_BBOX,
+                "bbox_2d must be a JSON array of exactly four integers",
+            )
+        left, top, right, bottom = bbox
+        if right <= left or bottom <= top:
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_BBOX,
+                "bbox_2d must have positive requested width and height",
+            )
+        target = arguments["target"]
+        if not isinstance(target, str):
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_ARGUMENTS, "target must be a string"
+            )
+        if not target.strip():
+            raise ToolCallParseError(
+                ParseErrorCode.EMPTY_TARGET, "target must be non-empty"
+            )
+        if root.members is None or root.members["arguments"].members is None:
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_CALL_SHAPE, "arguments must be an object"
+            )
+        target_node = root.members["arguments"].members["target"]
+        if target_node.content_start is None or target_node.content_end is None:
+            raise ToolCallParseError(
+                ParseErrorCode.INVALID_ARGUMENTS, "target must be a JSON string"
+            )
+        target_char_start = json_start + target_node.content_start
+        target_char_end = json_start + target_node.content_end
+        target_offsets = _text_offsets(text, target_char_start, target_char_end)
+        token_start, token_end, target_token_ids = _map_target_tokens(
+            turn, target_offsets
+        )
+        return ParsedCropTGVFCall(
+            name=decoded["name"],
+            bbox_2d=(left, top, right, bottom),
+            target=target,
+            sampled_text=text,
+            sampled_token_ids=turn.token_ids,
+            sampled_token_byte_spans=turn.token_byte_spans,
+            raw_tool_call=text[call_start:call_end],
+            raw_json=raw_json,
+            call_offsets=_text_offsets(text, call_start, call_end),
+            json_offsets=_text_offsets(text, json_start, json_end),
+            target_span=TargetSpan(
+                target_text=target,
+                raw_json_value=text[target_char_start:target_char_end],
+                offsets=target_offsets,
+                token_start=token_start,
+                token_end=token_end,
+                token_ids=target_token_ids,
+            ),
         )
 
     def _terminal_suffix_is_allowed(self, suffix: str) -> bool:

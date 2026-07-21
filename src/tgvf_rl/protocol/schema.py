@@ -19,7 +19,15 @@ from typing import Any, Mapping
 
 TGVF_FOCUS_TOOL_NAME = "tgvf_focus_tool"
 IMAGE_ZOOM_IN_TOOL_NAME = "image_zoom_in_tool"
-POLICY_RL_TOOL_NAMES = (TGVF_FOCUS_TOOL_NAME, IMAGE_ZOOM_IN_TOOL_NAME)
+CROP_TGVF_TOOL_NAME = "crop_tgvf_tool"
+TGVF_FOCUS_TOOL_SCHEMA_VERSION = "tgvf-focus-tool-v1"
+IMAGE_ZOOM_IN_TOOL_SCHEMA_VERSION = "image-zoom-in-tool-v1"
+CROP_TGVF_TOOL_SCHEMA_VERSION = "crop-tgvf-tool-v1"
+POLICY_RL_TOOL_NAMES = (
+    TGVF_FOCUS_TOOL_NAME,
+    IMAGE_ZOOM_IN_TOOL_NAME,
+    CROP_TGVF_TOOL_NAME,
+)
 TOOL_CALL_OPEN = "<tool_call>"
 TOOL_CALL_CLOSE = "</tool_call>"
 TARGET_TOKEN_SPAN_RULE = "minimal_overlapping_sampled_token_cover_v1"
@@ -66,6 +74,41 @@ _IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
     },
 }
 
+_CROP_TGVF_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": CROP_TGVF_TOOL_NAME,
+        "description": (
+            "Crop one rectangular region from the original image and produce a "
+            "target-conditioned foveated visual observation from that exact crop."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "bbox_2d": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "description": (
+                        "[left, top, right, bottom] source-pixel coordinates using "
+                        "a half-open box."
+                    ),
+                },
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "A neutral description of the visual evidence to inspect "
+                        "within the cropped region."
+                    ),
+                },
+            },
+            "required": ["bbox_2d", "target"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 def _freeze_json(value: Any) -> Any:
     if isinstance(value, dict):
@@ -101,6 +144,38 @@ IMAGE_ZOOM_IN_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
 IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256 = sha256(
     IMAGE_ZOOM_IN_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
 ).hexdigest()
+CROP_TGVF_TOOL_SCHEMA: Mapping[str, Any] = _freeze_json(
+    _CROP_TGVF_TOOL_SCHEMA_MUTABLE
+)
+CROP_TGVF_TOOL_SCHEMA_CANONICAL_JSON = json.dumps(
+    _CROP_TGVF_TOOL_SCHEMA_MUTABLE,
+    ensure_ascii=False,
+    separators=(",", ":"),
+    sort_keys=True,
+)
+CROP_TGVF_TOOL_SCHEMA_SHA256 = sha256(
+    CROP_TGVF_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")
+).hexdigest()
+
+
+class NativeToolCapabilityProfile(str, Enum):
+    """One separately identified visual-tool capability surface."""
+
+    CROP_ONLY = "crop_only"
+    TGVF_ONLY = "tgvf_only"
+    CROP_TGVF = "crop_tgvf"
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return {
+            NativeToolCapabilityProfile.CROP_ONLY: (IMAGE_ZOOM_IN_TOOL_NAME,),
+            NativeToolCapabilityProfile.TGVF_ONLY: (TGVF_FOCUS_TOOL_NAME,),
+            NativeToolCapabilityProfile.CROP_TGVF: (CROP_TGVF_TOOL_NAME,),
+        }[self]
+
+    @property
+    def tool_set_sha256(self) -> str:
+        return native_tool_set_sha256(self.tool_names)
 
 
 def build_tgvf_focus_tool_schema() -> dict[str, Any]:
@@ -118,6 +193,12 @@ def build_image_zoom_in_tool_schema() -> dict[str, Any]:
     return deepcopy(_IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE)
 
 
+def build_crop_tgvf_tool_schema() -> dict[str, Any]:
+    """Return a fresh copy of the atomic crop-then-foveate schema."""
+
+    return deepcopy(_CROP_TGVF_TOOL_SCHEMA_MUTABLE)
+
+
 def build_native_tool_schemas(
     tool_names: tuple[str, ...] = POLICY_RL_TOOL_NAMES,
 ) -> list[dict[str, Any]]:
@@ -129,6 +210,7 @@ def build_native_tool_schemas(
     builders = {
         TGVF_FOCUS_TOOL_NAME: build_tgvf_focus_tool_schema,
         IMAGE_ZOOM_IN_TOOL_NAME: build_image_zoom_in_tool_schema,
+        CROP_TGVF_TOOL_NAME: build_crop_tgvf_tool_schema,
     }
     unknown = tuple(name for name in names if name not in builders)
     if unknown:
@@ -390,7 +472,49 @@ class ParsedImageZoomInCall:
             raise ValueError("bbox_2d must have positive requested width and height")
 
 
-NativeToolCall = ParsedToolCall | ParsedImageZoomInCall
+@dataclass(frozen=True, slots=True)
+class ParsedCropTGVFCall:
+    """One atomic crop-and-foveate call with exact target-token identity."""
+
+    name: str
+    bbox_2d: tuple[int, int, int, int]
+    target: str
+    sampled_text: str
+    sampled_token_ids: tuple[int, ...]
+    sampled_token_byte_spans: tuple[TokenByteSpan, ...]
+    raw_tool_call: str
+    raw_json: str
+    call_offsets: TextOffsets
+    json_offsets: TextOffsets
+    target_span: TargetSpan
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bbox_2d", tuple(self.bbox_2d))
+        object.__setattr__(self, "sampled_token_ids", tuple(self.sampled_token_ids))
+        object.__setattr__(
+            self,
+            "sampled_token_byte_spans",
+            tuple(self.sampled_token_byte_spans),
+        )
+        SampledAssistantTurn(
+            self.sampled_text,
+            self.sampled_token_ids,
+            self.sampled_token_byte_spans,
+        )
+        if self.name != CROP_TGVF_TOOL_NAME:
+            raise ValueError(f"unsupported atomic crop/TGVF tool name: {self.name!r}")
+        if len(self.bbox_2d) != 4 or any(
+            type(value) is not int for value in self.bbox_2d
+        ):
+            raise ValueError("bbox_2d must contain exactly four integers")
+        left, top, right, bottom = self.bbox_2d
+        if right <= left or bottom <= top:
+            raise ValueError("bbox_2d must have positive requested width and height")
+        if self.target != self.target_span.target_text:
+            raise ValueError("parsed target and target span disagree")
+
+
+NativeToolCall = ParsedToolCall | ParsedImageZoomInCall | ParsedCropTGVFCall
 
 
 class TerminationReason(str, Enum):

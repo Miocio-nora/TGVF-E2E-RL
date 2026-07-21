@@ -17,6 +17,7 @@ from typing import Mapping
 
 from tgvf_rl.contracts.errors import ContractUnsetError, IdentityMismatchError
 from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity
+from tgvf_rl.protocol import NativeToolCapabilityProfile
 
 
 POLICY_PILOT_V1_CONFIG_SCHEMA = "policy-pilot-v1-20260720"
@@ -36,7 +37,8 @@ POLICY_PILOT_V1_VERL_ROLLOUT_LOSS_TYPE = "ppo_clip"
 POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE = (
     "tgvf_rl.framework.verl.exact_bypass_loss"
 )
-POLICY_PILOT_V1_TOOL_NAMES = ("tgvf_focus_tool",)
+POLICY_PILOT_V1_TOOL_PROFILE = NativeToolCapabilityProfile.TGVF_ONLY
+POLICY_PILOT_V1_TOOL_NAMES = POLICY_PILOT_V1_TOOL_PROFILE.tool_names
 
 QWEN3_DECODER_LAYER_COUNT = 36
 QWEN3_DECODER_LORA_PROJECTIONS = (
@@ -450,6 +452,7 @@ class PolicyPilotV1Config:
     model_family: str = POLICY_PILOT_V1_MODEL_FAMILY
     model_path: str = POLICY_PILOT_V1_MODEL_PATH
     native_deepstack_enabled: bool = True
+    tool_profile: NativeToolCapabilityProfile = POLICY_PILOT_V1_TOOL_PROFILE
     enabled_tool_names: tuple[str, ...] = POLICY_PILOT_V1_TOOL_NAMES
     max_tgvf_call_attempts: int = 4
     image_max_pixels: int = 262144
@@ -459,11 +462,17 @@ class PolicyPilotV1Config:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        if not isinstance(self.tool_profile, NativeToolCapabilityProfile):
+            raise TypeError("tool_profile must be NativeToolCapabilityProfile")
         expected = {
             "schema_version": (self.schema_version, POLICY_PILOT_V1_CONFIG_SCHEMA),
             "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
             "model_path": (self.model_path, POLICY_PILOT_V1_MODEL_PATH),
             "native_deepstack_enabled": (self.native_deepstack_enabled, True),
+            "tool_profile": (
+                self.tool_profile,
+                POLICY_PILOT_V1_TOOL_PROFILE,
+            ),
             "enabled_tool_names": (
                 self.enabled_tool_names,
                 POLICY_PILOT_V1_TOOL_NAMES,
@@ -508,6 +517,7 @@ __all__ = [
     "POLICY_PILOT_V1_MODEL_PATH",
     "POLICY_PILOT_V1_POLICY_LOSS_NAME",
     "POLICY_PILOT_V1_TOOL_NAMES",
+    "POLICY_PILOT_V1_TOOL_PROFILE",
     "POLICY_PILOT_V1_TOKENIZER_LENGTH",
     "POLICY_PILOT_V1_VERL_EXECUTION_LOSS_MODE",
     "POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE",

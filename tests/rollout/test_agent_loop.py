@@ -20,7 +20,11 @@ from tgvf_rl.policy import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import StandardToolError, TokenByteSpan
 from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
-from tgvf_rl.trajectories.schema import CropToolCallRecord, ToolCallRecord
+from tgvf_rl.trajectories.schema import (
+    CropTGVFToolCallRecord,
+    CropToolCallRecord,
+    ToolCallRecord,
+)
 from tgvf_rl.trajectories import BehaviorTraceStore, VLLMBehaviorRecorder
 from tests.support import populated_observation_store, trajectory_source_visual
 
@@ -200,6 +204,61 @@ def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
     assert trajectory.tool_calls[0].bbox_2d == (1, 2, 9, 10)
     assert trajectory.tool_calls[1].target == "serial number"
     assert tuple(item.call_index for item in trajectory.observations) == (0, 1)
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+
+
+def test_framework_neutral_loop_records_atomic_crop_tgvf_call() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = SamplingIdentity(
+        version,
+        "vllm",
+        "fixture",
+        10,
+        SHA,
+        1.0,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+    )
+    fused = _sample(
+        "reason\n</think>\n<tool_call>"
+        '{"name":"crop_tgvf_tool","arguments":'
+        '{"bbox_2d":[3,4,19,23],"target":"small red digits"}}'
+        "</tool_call>",
+        sampling,
+    )
+    answer = _sample("reason\n</think>\n17", sampling)
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((fused, answer)),
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        enabled_tool_names=("crop_tgvf_tool",),
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "fused", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1, 2, 3),
+            {},
+        )
+    )
+    call = trajectory.tool_calls[0]
+    assert isinstance(call, CropTGVFToolCallRecord)
+    assert call.bbox_2d == (3, 4, 19, 23)
+    assert call.target == "small red digits"
+    assert call.target_token_span.end - call.target_token_span.start == len(
+        "small red digits"
+    )
     assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
 
 

@@ -35,7 +35,10 @@ from tgvf_rl.data import (
     DEEPEYES47K_TOTAL_ROWS,
     DeepEyes47KRuntimeBinding,
 )
-from tgvf_rl.protocol import TGVF_FOCUS_TOOL_SCHEMA_SHA256
+from tgvf_rl.protocol import (
+    NativeToolCapabilityProfile,
+    TGVF_FOCUS_TOOL_SCHEMA_SHA256,
+)
 
 from .config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
@@ -43,6 +46,7 @@ from .config import (
     POLICY_PILOT_V1_MODEL_NAME,
     POLICY_PILOT_V1_MODEL_PATH,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
+    POLICY_PILOT_V1_TOOL_PROFILE,
     POLICY_PILOT_V1_VLLM_VERSION,
     DecoderLoRAConfig,
     PilotGRPOConfig,
@@ -51,7 +55,7 @@ from .config import (
 )
 
 
-POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v1"
+POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v2"
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
@@ -133,6 +137,7 @@ class SmokeRepresentationBinding:
 class SmokeProtocolBinding:
     prompt_sha256: str
     cap_error_sha256: str
+    tool_profile: NativeToolCapabilityProfile
     tool_schema_sha256: str
     enabled_tool_names: tuple[str, ...]
     maximum_tool_calls: int
@@ -497,6 +502,7 @@ def load_policy_e2e_smoke_run_config(
         {
             "prompt_sha256",
             "cap_error_sha256",
+            "tool_profile",
             "tool_schema_sha256",
             "enabled_tool_names",
             "maximum_tool_calls",
@@ -504,6 +510,20 @@ def load_policy_e2e_smoke_run_config(
     )
     enabled_tools = _text_tuple(
         protocol_table["enabled_tool_names"], name="protocol.enabled_tool_names"
+    )
+    try:
+        tool_profile = NativeToolCapabilityProfile(protocol_table["tool_profile"])
+    except (TypeError, ValueError) as error:
+        raise ValueError("protocol.tool_profile is invalid") from error
+    _require_exact(
+        tool_profile,
+        POLICY_PILOT_V1_TOOL_PROFILE,
+        "protocol.tool_profile",
+    )
+    _require_exact(
+        enabled_tools,
+        tool_profile.tool_names,
+        "protocol.enabled_tool_names",
     )
     _require_exact(enabled_tools, ("tgvf_focus_tool",), "protocol.enabled_tool_names")
     _require_exact(
@@ -519,6 +539,7 @@ def load_policy_e2e_smoke_run_config(
         cap_error_sha256=_sha256(
             protocol_table["cap_error_sha256"], name="protocol.cap_error_sha256"
         ),
+        tool_profile=tool_profile,
         tool_schema_sha256=protocol_table["tool_schema_sha256"],
         enabled_tool_names=enabled_tools,
         maximum_tool_calls=protocol_table["maximum_tool_calls"],
@@ -808,6 +829,7 @@ def load_policy_e2e_smoke_run_config(
         model_family=model.family,
         model_path=model.revision_or_path,
         native_deepstack_enabled=model_table["native_deepstack_enabled"],
+        tool_profile=protocol.tool_profile,
         enabled_tool_names=protocol.enabled_tool_names,
         max_tgvf_call_attempts=protocol.maximum_tool_calls,
         image_max_pixels=model_table["image_max_pixels"],

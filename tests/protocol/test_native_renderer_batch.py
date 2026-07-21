@@ -188,5 +188,9 @@ def test_policy_rl_renderer_supplies_both_tools_in_declared_order() -> None:
         tool_names=POLICY_RL_TOOL_NAMES,
     )
     result = renderer.render(_messages()[0], add_generation_prompt=False)
-    assert processor.tool_names == ("tgvf_focus_tool", "image_zoom_in_tool")
+    assert processor.tool_names == (
+        "tgvf_focus_tool",
+        "image_zoom_in_tool",
+        "crop_tgvf_tool",
+    )
     assert result.tool_schema_sha256 == native_tool_set_sha256(POLICY_RL_TOOL_NAMES)

@@ -5446,6 +5446,215 @@ instead of repeated bullets.
   BE-02 root. No `--reuse` on first launch; exact restart adds
   `--reuse --reuse-aux infer` in the same directory.
 
+### BE-02-J1-QWEN25-72B-COREDEV2511-GPU01
+
+- Cell/status/result: fail-closed CoreDev-2511 scoring service / `PLANNED` /
+  `PENDING`; inference remains BE-02 and is not rerun or modified.
+- Identity: local `/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct`, served
+  as `Qwen2.5-72B-Instruct`; vLLM 0.12 V1, Torch 2.9.0+cu128, BF16, TP2,
+  `TRITON_ATTN`, max model length 32768, prefix caching, seed 42, port 8012.
+  This is the already qualified BJ-10-R3 deployment moved from physical GPUs
+  2/3 to the currently free physical GPUs 0/1; it is only an answer judge and
+  is never an RL reference or SDPO teacher.
+- Code/data/output: scorer commit `1866293`; pinned VLMEvalKit commit
+  `7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f`; CoreDev identity
+  `coredev-2511-vlmevalkit-7055d301-v1`, manifest SHA256
+  `a461d9b482b7165b42b9bbb0fbf0ea6aff31fde0a838c13d953f070e770b0579`;
+  BE-02 prediction root
+  `artifacts/evaluation/BE-02-qwen3-direct-coredev2511-b8`; service evidence
+  root `artifacts/evaluation/BE-02-J1-qwen25-72b-coredev2511-gpu01`.
+- Gate: service health/model-identity smoke must pass before scoring. The
+  repository-owned post-score acceptance rejects API failure, judge fallback,
+  random choice, missing/duplicate rows, missing metrics, and stale older-run
+  reuse. Score completed slices while BE-02 inference continues, then score
+  OCR/MMMU when their exact final TSVs exist and aggregate exactly 2511 rows.
+- Command: BJ-10-R3 command with `CUDA_VISIBLE_DEVICES=0,1` and the evidence
+  root above. Scoring uses `tools/run_coredev_2511_vlmevalkit.py --mode eval`
+  with explicit `--model`, `--data`, judge alias/base URL, `--judge-api-nproc
+  8`, `--judge-timeout 600`, and `--reuse-aux infer`; it never instantiates a
+  second Qwen3 inference model.
+- N/A: representation artifacts, D/DeepStack, rollout log probabilities,
+  policy/reference, reward, GRPO/SDPO, optimizer, gradients and training batch
+  fields are absent from benchmark scoring.
+
+### BE-02-J2-QWEN25-72B-YARN131K-COREDEV2511-GPU23
+
+- Cell/status/result: uniform long-context fail-closed CoreDev-2511 scoring
+  service / `PLANNED` / `PENDING`; BE-02 inference is immutable and is not
+  rerun. J1 service and score artifacts remain immutable comparison evidence.
+- Reason for the new identity: J1 accepted every short request but rejected
+  exactly three official scorer requests after six retries each because their
+  input lengths were 34,249, 41,228 and 41,483 tokens, above J1's native
+  32,768-token service limit. Prediction truncation and a mixed J1/J2 result
+  cache are forbidden because either would change the scoring contract.
+- Model/runtime: the same accepted local
+  `/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct` snapshot and served name
+  `Qwen2.5-72B-Instruct`; config/tokenizer-config SHA256
+  `14ca2173...1a29` / `5b5d4f65...9583`; vLLM `0.12.0`, Torch
+  `2.9.0+cu128`, Transformers `4.57.6`, Python `3.12.3`, BF16, TP2 and
+  `TRITON_ATTN` on physical GPUs 2/3. The judge remains benchmark-only and is
+  never an RL reference, reward model or SDPO teacher.
+- Long-context contract: static YaRN factor `4.0`, original maximum position
+  `32768`, effective maximum position and service `max_model_len=131072`, and
+  `rope_theta=1000000.0`. The local model README explicitly prescribes YaRN
+  for inputs above 32,768 and advertises 131,072-token context. Under vLLM
+  0.12 the effective HF override is
+  `{"max_position_embeddings":131072,"rope_parameters":{"factor":4.0,`
+  `"original_max_position_embeddings":32768,"rope_theta":1000000.0,`
+  `"rope_type":"yarn"}}`; a CPU construction check resolved
+  `YaRNScalingRotaryEmbedding` with 131,072 cache rows. Static YaRN can affect
+  short requests, so every judge-backed slice is rescored uniformly under J2.
+- Service identity: host `127.0.0.1`, port `8012`, prefix caching, vLLM
+  generation config, seed `42`, GPU memory utilization `0.85`, maximum 64
+  sequences, service evidence root
+  `artifacts/evaluation/BE-02-J2-qwen25-72b-yarn131k-coredev2511-gpu23`.
+  J1 is stopped only after its independent OCR rule-scorer gate has completed;
+  J2 then owns the same already-pinned endpoint so no fallback endpoint is
+  introduced.
+- Data/scorer: scorer commit `1866293`, runner SHA256
+  `17cb19d4...1d8`, pinned VLMEvalKit commit
+  `7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f`, CoreDev identity
+  `coredev-2511-vlmevalkit-7055d301-v1`, manifest SHA256
+  `a461d9b4...0579`. The isolated J2 scoring root receives byte-identical
+  copies of only the seven completed BE-02 inference runs; J1 evaluation
+  auxiliaries are never copied. VStarBench, HRBench4K, BLINK,
+  MMMU_Pro_10c, MathVista_MINI and MathVerse_MINI are rescored under J2;
+  OCRBench_v2 remains its native rule scorer and has no judge output.
+- Service command: `CUDA_VISIBLE_DEVICES=2,3` with the accepted compiler,
+  include, PATH and vLLM V1 environment; launch
+  `.venv312/bin/python -m vllm.entrypoints.openai.api_server --model`
+  `/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct --served-model-name`
+  `Qwen2.5-72B-Instruct --host 127.0.0.1 --port 8012`
+  `--tensor-parallel-size 2 --dtype bfloat16 --max-model-len 131072`
+  `--hf-overrides <the exact JSON above> --gpu-memory-utilization 0.85`
+  `--max-num-seqs 64 --seed 42 --generation-config vllm`
+  `--enable-prefix-caching`.
+- Acceptance: `/health`, `/v1/models`, the deterministic
+  `TGVF_JUDGE_READY` completion, and an input beyond 32,768 tokens must pass;
+  all six judge-backed slices must then have zero API/fallback/random-choice
+  failures and native metrics. MathVerse aggregation additionally requires
+  exact restoration of its source `problem_version` provenance before suite
+  aggregation. Final suite acceptance remains exactly 2,511 unique rows.
+- N/A: representation artifacts, D/DeepStack, rollout log probabilities,
+  policy/reference, reward, GRPO/SDPO, optimizer, gradients and training batch
+  fields are absent from benchmark scoring.
+
+### TOOL-01-QWEN3-CROP-ATOMIC-LIVE-GPU2
+
+- Cell/status/result: real-model visual-tool implementation smoke / `COMPLETE` /
+  `INVALID`; this is a bounded execution check, not training or benchmark
+  evidence.
+- Question: do both newly accepted capabilities execute against the real
+  Qwen3-VL processor/vision stack: (a) immutable-source plain crop returning
+  native crop visual tensors and (b) one atomic `bbox + target` call that crops
+  first and then produces main D plus all three D-DeepStack branches?
+- Model/processor: local
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, BF16/SDPA, tokenizer
+  length 151669/no resize, native chat-template SHA256
+  `36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956`,
+  `image_max_pixels=262144`, frozen/eval vision and merger modules.
+- Representation: completed contextual Balanced/T=0.1 RP-49 step-2000 Adapter
+  at
+  `artifacts/representation/RP-49-qwen3-matrix-ce-balanced-t01-contextual-2000-gpu01/adapter.pt`,
+  file/manifest SHA256 `fcda0b96...fc14` / `3ff14e66...f49e`. Any use of the
+  target-token-embedding provider in this lane is structural smoke only and is
+  not a scientific claim about that contextual artifact.
+- Protocol/data: atomic schema version `crop-tgvf-tool-v1`, schema SHA256
+  `41f6f99f34b0d3e9fb5b7a4166af5c367cef78214285bc56f12c6ca45e02ceb9`;
+  deterministic synthetic RGB source, fixed half-open source-pixel boxes, no
+  external dataset and no tokenizer growth.
+- Exact-state gate: source RGB, effective crop RGB, crop pre-merge/main and all
+  three DeepStack visual tensors, main D/all three D-DeepStack tensors, native
+  visual positions/masks and vLLM payload are materialized once and resolved
+  from the same observation store. Reprocessing during replay is forbidden.
+- Code/runtime: repository HEAD `1866293` plus the accepted uncommitted
+  `ATOMIC-CROP-TGVF-20260721` implementation patch; `.venv312`, Torch
+  2.9.0+cu128/Transformers local lock. Physical GPU 2, seed 42,
+  `CUBLAS_WORKSPACE_CONFIG=:4096:8`, `PYTHONHASHSEED=42`,
+  `TOKENIZERS_PARALLELISM=false`.
+- Acceptance: both paths finish once without autograd state; model/tokenizer
+  identities and exact tensor checks pass; fused record contains main D plus
+  exactly branches `(8,16,24)`; Qwen replay/vLLM packing resolves the stored
+  observation; clean exit and GPU release.
+- N/A: sampling/logprobs, policy/reference replay comparison, reward, GRPO,
+  SDPO, optimizer, gradients, update epochs, batches and benchmark scorer.
+- Command/output: repository-owned smoke command under a 900-second timeout;
+  immutable JSON/log output root
+  `artifacts/tools/TOOL-01-qwen3-crop-atomic-live-gpu2/`.
+- Result: Qwen and the Adapter loaded, then pre-execution contract construction
+  rejected the smoke-only `SamplingIdentity.backend="implementation_smoke"`;
+  the project correctly requires `vllm`. No tool call, observation, report or
+  mutation occurred, and GPU 2 released. The implementation smoke is replaced
+  by TOOL-01-R1 with the accepted backend identity.
+
+### TOOL-01-R1-QWEN3-CROP-ATOMIC-LIVE-GPU2
+
+- Cell/status/result: corrected real-model visual-tool implementation smoke /
+  `COMPLETE` / `INVALID`.
+- Fixed identity: model, processor, Adapter, synthetic RGB, boxes, target,
+  protocol, exact-state gates, physical GPU 2, determinism and all N/A fields
+  are exactly TOOL-01. The sole contract correction is the smoke trajectory's
+  recorded backend/version `vllm` / `0.12.0`; no generation is performed.
+- Command/output: TOOL-01 command with corrected repository script and a fresh
+  immutable output root
+  `artifacts/tools/TOOL-01-R1-qwen3-crop-atomic-live-gpu2/`.
+- Result: plain crop produced grid `(1,18,16)`, 72 merged visual tokens and all
+  three DeepStack branches; atomic crop+TGVF produced grid `(1,16,18)`, 72
+  main-D tokens and D-DeepStack layers `(8,16,24)`. Both observations resolved
+  through the exact stored-state vLLM payload path with SHA256 identities
+  `bfe384c1...04f8a` and `a184f524...c956`. The Adapter file SHA256 was
+  `fcda0b9...5fc14`; tokenizer length stayed 151669; the process exited cleanly
+  and GPU 2 released. Report/run-log SHA256 are
+  `22522a6bd56704ed63ff0af0c083f7de14a80090898fc96d8ff2fb18ec897b36` /
+  `bd8acbabddb1b194a2e6a36884a404a8d9750c25270cb8e96c2b085505130324`;
+  report path is
+  `artifacts/tools/TOOL-01-R1-qwen3-crop-atomic-live-gpu2/report.json`.
+- Invalidity discovered by post-run audit: the smoke loaded a contextual-hidden-
+  state RP-49 artifact while constructing a target-token-embedding provider.
+  The tensor execution remains diagnostic evidence only. The production
+  runtime now rejects this combination through the loaded representation
+  manifest; TOOL-01-R2 replaces it with the matching contextual provider.
+
+### TOOL-01-R2-QWEN3-CROP-ATOMIC-REALMODEL-GPU0
+
+- Cell/status/result: manifest-bound real-model visual-tool implementation
+  smoke / `COMPLETE` / `PASS`; this is not a live vLLM generation claim.
+- Question: after adding fail-closed decoded-RGB/source-feature binding,
+  processor/layout provenance, plain/atomic source-pixel replay checks, and
+  representation-manifest/provider/architecture binding, do plain crop and
+  atomic crop+TGVF still execute once against the real Qwen3 vision stack and
+  the exact contextual RP-49 Adapter?
+- Fixed identity: local Qwen3-VL-8B-Thinking model/processor and native template
+  identity from TOOL-01; contextual-hidden-state RP-49 step-2000 rank-zero
+  export and its manifest; BF16/SDPA; max pixels 262144; source/crop boxes,
+  target, seed 42 and deterministic no-grad/frozen state unchanged. The
+  contextual hidden layer/provider and Adapter/DeepStack architecture are read
+  from and checked against the export manifest rather than supplied as loose
+  labels.
+- Exact-state acceptance: dataset/file identity remains distinct from decoded
+  RGB identity; source features must name the stored decoded-RGB digest; plain
+  crop records processor/layout identities; both crop record kinds bind the
+  same immutable source pixels; main D and all three D-DeepStack branches,
+  native positions/masks, observation resolver and vLLM packing must pass; no
+  tokenizer growth; clean GPU release.
+- Scope boundary: no sampling, live vLLM engine ingestion, behavior logprobs,
+  policy/reference comparison, reward, GRPO/SDPO, optimizer or benchmark
+  scoring. A separate integration gate is required before claiming live
+  next-turn vLLM generation.
+- Runtime/GPU/output: current accepted implementation worktree, `.venv312`,
+  Torch 2.9.0+cu128, Transformers 4.57.6; physical GPU 0; immutable root
+  `artifacts/tools/TOOL-01-R2-qwen3-crop-atomic-realmodel-gpu0` (JSON file,
+  SHA256 `f3dda01af199584976a63012f1822805b49ca2babf91949e7e5c6d4c94d9f52a`).
+- Command: `CUDA_VISIBLE_DEVICES=0 PYTHONHASHSEED=42 CUBLAS_WORKSPACE_CONFIG=:4096:8 TOKENIZERS_PARALLELISM=false timeout 900 .venv312/bin/python tools/smoke_qwen3_crop_tools.py --adapter artifacts/representation/RP-49-qwen3-matrix-ce-balanced-t01-contextual-2000-gpu01/adapter.pt --output artifacts/tools/TOOL-01-R2-qwen3-crop-atomic-realmodel-gpu0 --image-max-pixels 262144`.
+- Result: the manifest selected `contextual_hidden_state`; exact contextual
+  source-prefix capture and both tool paths completed. Source grid was
+  `(1,16,16)`/64 merged tokens; plain crop was `(1,18,16)`/72 tokens with three
+  DeepStack branches; atomic crop+TGVF was `(1,16,18)`/72 main-D tokens with
+  branches `(8,16,24)`. Observation-record hashes were `6471b6a1...8ebc` and
+  `525a896b...d37b`; stored-state vLLM payload hashes were
+  `bfe384c1...4f8a` and `db233884...3844`; tokenizer length remained 151669;
+  GPU 0 returned to zero allocation.
+
 ## Compatibility-spike status
 
 CPU public-API, transport, objective and oracle tests passed before these rows

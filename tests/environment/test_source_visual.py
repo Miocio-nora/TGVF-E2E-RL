@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
 from tgvf_rl.environment import record_trajectory_source_visual
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.observations.schema import SourceVisualState
-from tgvf_rl.observations.store import ObservationStore
+from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 
 
-def _bundle() -> SourceVisualTensorBundle:
+def _bundle(*, decoded_rgb_sha256: str | None = None) -> SourceVisualTensorBundle:
     return SourceVisualTensorBundle(
         image_sha256="a" * 64,
         premerge_main=torch.arange(32, dtype=torch.float32).view(8, 4),
@@ -23,6 +24,7 @@ def _bundle() -> SourceVisualTensorBundle:
         ),
         image_grid_thw=(1, 2, 4),
         spatial_merge_size=2,
+        decoded_rgb_sha256=decoded_rgb_sha256,
     )
 
 
@@ -47,6 +49,7 @@ def _state_identity(state: SourceVisualState) -> tuple[object, ...]:
 
     return (
         state.image_sha256,
+        state.decoded_rgb_sha256,
         state.premerge_main.address.digest,
         tuple(ref.address.digest for ref in state.premerge_deepstack),
         state.merged_main.address.digest,
@@ -115,3 +118,46 @@ def test_recording_is_mutation_safe_and_content_deduplicated() -> None:
     # a replay source with FocusedObservationRecord.source_visual is identical.
     assert first.state.merged_main.name != second.state.merged_main.name
     assert _state_identity(first.state) == _state_identity(second.state)
+
+
+def test_records_exact_immutable_source_rgb_for_crop_capabilities() -> None:
+    store = ObservationStore()
+    pixels = torch.arange(5 * 7 * 3, dtype=torch.uint8).view(5, 7, 3)
+    expected = pixels.clone()
+    recorded = record_trajectory_source_visual(
+        trajectory_id="trajectory-rgb",
+        source_visual=_bundle(decoded_rgb_sha256=tensor_checksum(pixels)),
+        source_positions=(3, 4),
+        deepstack_branch_layers=(8, 16),
+        deepstack_injection_positions=((3, 4), (3, 4)),
+        observation_store=store,
+        source_rgb=pixels,
+    )
+    assert recorded.source_pixels is not None
+    pixels.zero_()
+    torch.testing.assert_close(
+        store.resolve_verified_for_trajectory(
+            recorded.source_pixels,
+            trajectory_id="trajectory-rgb",
+        ),
+        expected,
+        rtol=0,
+        atol=0,
+    )
+    assert recorded.state.image_sha256 == "a" * 64
+    assert recorded.state.decoded_rgb_sha256 == recorded.source_pixels.address.digest
+
+
+def test_rejects_source_features_bound_to_different_decoded_rgb() -> None:
+    store = ObservationStore()
+    pixels = torch.zeros((4, 5, 3), dtype=torch.uint8)
+    with pytest.raises(ValueError, match="features and immutable decoded RGB"):
+        record_trajectory_source_visual(
+            trajectory_id="trajectory-mismatch",
+            source_visual=_bundle(decoded_rgb_sha256="b" * 64),
+            source_positions=(3, 4),
+            deepstack_branch_layers=(8, 16),
+            deepstack_injection_positions=((3, 4), (3, 4)),
+            observation_store=store,
+            source_rgb=pixels,
+        )

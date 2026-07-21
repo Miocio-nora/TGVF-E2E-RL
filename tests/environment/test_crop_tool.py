@@ -19,6 +19,7 @@ from tgvf_rl.environment.crop_tool import (
     clamp_bbox_to_image,
 )
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
+from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.environment.tool_registry import (
     NativeToolRuntimeRegistry,
     ToolRuntimeBinding,
@@ -37,6 +38,7 @@ from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayRecord,
     TrajectoryReplayTensorRefs,
+    tensor_checksum,
 )
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
@@ -85,18 +87,37 @@ class FixtureCropMaterializer:
         )
 
 
+class FixtureCropLayoutBuilder:
+    def __init__(self, materializer: FixtureCropMaterializer) -> None:
+        self.materializer = materializer
+        self.received: CropVisualTensorBundle | None = None
+        self.calls = 0
+
+    def build(self, *, crop_visual, **kwargs):
+        assert self.materializer.received is not None
+        self.received = crop_visual
+        self.calls += 1
+        return CropReplayLayout(
+            sequence_length=16,
+            original_image_positions=(1, 2, 3, 4),
+            crop_positions=(6,),
+            deepstack_injection_positions=((6,), (6,), (6,)),
+        )
+
+
 def _source() -> tuple[torch.Tensor, SourceVisualTensorBundle]:
     pixels = torch.arange(4 * 5 * 3, dtype=torch.uint8).view(4, 5, 3)
     main = torch.arange(32, dtype=torch.float32).view(1, 4, 8)
     branches = tuple(torch.full((1, 4, 8), float(index + 1)) for index in range(3))
     return pixels, SourceVisualTensorBundle(
-        image_sha256=SHA2,
+        image_sha256=tensor_checksum(pixels),
         premerge_main=main,
         premerge_deepstack=branches,
         merged_main=main,
         merged_deepstack=branches,
         image_grid_thw=(1, 2, 2),
         spatial_merge_size=1,
+        decoded_rgb_sha256=tensor_checksum(pixels),
     )
 
 
@@ -105,34 +126,54 @@ def _execute_crop(store: ObservationStore):
     model = ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA1)
     policy = PolicyVersion("run", 0, SHA0)
     materializer = FixtureCropMaterializer()
+    layout_builder = FixtureCropLayoutBuilder(materializer)
+    trajectory_source = record_trajectory_source_visual(
+        trajectory_id="trajectory",
+        source_visual=source,
+        source_positions=(1, 2, 3, 4),
+        deepstack_branch_layers=BRANCH_LAYERS,
+        deepstack_injection_positions=((1, 2, 3, 4),) * 3,
+        observation_store=store,
+        source_rgb=pixels,
+    )
     result = ImageZoomInTool(materializer, store).execute(
         CropToolExecutionRequest(
             trajectory_id="trajectory",
             call_index=0,
             parsed_call=_crop_call(),
-            source_rgb=pixels,
-            source_visual=source,
-            layout=CropReplayLayout(
-                sequence_length=16,
-                original_image_positions=(1, 2, 3, 4),
-                crop_positions=(6,),
-                deepstack_injection_positions=((6,), (6,), (6,)),
-            ),
+            trajectory_source_visual=trajectory_source,
+            layout_builder=layout_builder,
             model=model,
             policy_version=policy,
+            crop_processor_identity=ArtifactIdentity(
+                "qwen", "crop-processor", "fixture", SHA1
+            ),
+            crop_layout_identity=ArtifactIdentity(
+                "qwen", "crop-layout", "fixture", SHA2
+            ),
         )
     )
-    return result, pixels, source, model, policy, materializer
+    return (
+        result,
+        pixels,
+        trajectory_source,
+        model,
+        policy,
+        materializer,
+        layout_builder,
+    )
 
 
 def test_crop_tool_clamps_original_image_bbox_and_records_exact_rgb() -> None:
     store = ObservationStore()
-    result, pixels, _, _, _, materializer = _execute_crop(store)
+    result, pixels, _, _, _, materializer, layout_builder = _execute_crop(store)
     expected = pixels[1:4, 0:4, :].contiguous()
     assert result.record.requested_bbox_2d == (-2, 1, 4, 8)
     assert result.record.effective_bbox_2d == (0, 1, 4, 4)
     torch.testing.assert_close(result.crop_rgb, expected, rtol=0, atol=0)
     torch.testing.assert_close(materializer.received, expected, rtol=0, atol=0)
+    assert layout_builder.received is result.visual
+    assert layout_builder.calls == 1
     torch.testing.assert_close(
         store.resolve_verified(result.record.crop_visual.crop_pixels),
         expected,
@@ -143,6 +184,8 @@ def test_crop_tool_clamps_original_image_bbox_and_records_exact_rgb() -> None:
         result.record.source_pixels_sha256
         == hashlib.sha256(pixels.numpy().tobytes()).hexdigest()
     )
+    assert result.record.processor_identity.sha256 == SHA1
+    assert result.record.layout_identity.sha256 == SHA2
 
     restored = ObservationStore.from_checkpoint_state(store.checkpoint_state())
     restored_record = restored.resolve_record(result.handle)
@@ -162,7 +205,7 @@ def test_crop_rejects_empty_box_after_source_bound_clamp() -> None:
 
 def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
     store = ObservationStore()
-    crop, _, _, model, policy, _ = _execute_crop(store)
+    crop, _, trajectory_source, model, policy, _, _ = _execute_crop(store)
     source = crop.record.source_visual
     sequence = 16
     common_mask = store.put_tensor(
@@ -234,7 +277,7 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
         trajectory_id="trajectory",
         model=model,
         behavior_policy=policy,
-        source_visual=trajectory_source_visual(crop.record),
+        source_visual=trajectory_source,
         observation_handles=(crop.handle, focus_handle),
         crop_vision_replay_mode="shared_frozen_recorded_features",
         tensors=TrajectoryReplayTensorRefs(
@@ -248,6 +291,13 @@ def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:
     )
     with pytest.raises(ReplayMismatchError, match="shared frozen-vision"):
         store.put_replay(replace(replay, crop_vision_replay_mode="no_crop"))
+    with pytest.raises(ReplayMismatchError, match="exact immutable source pixels"):
+        store.put_replay(
+            replace(
+                replay,
+                source_visual=replace(trajectory_source, source_pixels=None),
+            )
+        )
     replay_handle = store.put_replay(replay)
 
     policy_request = resolve_replay_request(store, replay_handle, ReplayConsumer.POLICY)

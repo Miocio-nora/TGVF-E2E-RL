@@ -43,6 +43,19 @@ from .crop_tool import (
     ImageZoomInTool,
     clamp_bbox_to_image,
 )
+from .crop_runtime import (
+    CropExecutionLedger,
+    CropRuntimeLayoutPort,
+    ImageZoomInToolRuntime,
+)
+from .crop_tgvf_tool import (
+    AtomicCropTGVFTool,
+    CropTGVFReplayLayoutBuilder,
+    CropTGVFToolExecutionRequest,
+    CropTGVFToolExecutionResult,
+    CropTGVFVisualMaterializer,
+)
+from .crop_tgvf_runtime import AtomicCropTGVFToolRuntime
 from .native_appender import (
     NativeToolTurnRegistrar,
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
@@ -52,6 +65,8 @@ from .native_appender import (
 )
 from .source_visual import record_trajectory_source_visual
 from .tool_registry import NativeToolRuntimeRegistry, ToolRuntimeBinding
+from .qwen3_crop_materializer import Qwen3CropVisualMaterializer
+from .qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 
 __all__ = [
     "BehaviorHiddenStateDependency",
@@ -64,10 +79,19 @@ __all__ = [
     "BoundReplayLayout",
     "BoundSourceVisual",
     "CropReplayLayout",
+    "CropExecutionLedger",
+    "CropRuntimeLayoutPort",
     "CropToolExecutionRequest",
     "CropToolExecutionResult",
     "CropVisualTensorBundle",
+    "AtomicCropTGVFTool",
+    "AtomicCropTGVFToolRuntime",
+    "CropTGVFReplayLayoutBuilder",
+    "CropTGVFToolExecutionRequest",
+    "CropTGVFToolExecutionResult",
+    "CropTGVFVisualMaterializer",
     "ImageZoomInTool",
+    "ImageZoomInToolRuntime",
     "FocusRuntimeCallIdentity",
     "FocusRuntimeCallRequest",
     "FocusExecutionLedger",
@@ -81,6 +105,8 @@ __all__ = [
     "QWEN_NATIVE_RESPONSE_SUFFIX",
     "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
     "QwenNativeToolObservationAppender",
+    "Qwen3CropVisualMaterializer",
+    "Qwen3NativeToolLayoutBuilder",
     "ReplayLayoutBuilderDependency",
     "RepresentationArtifactRuntimeBinding",
     "RolloutRequest",
