@@ -7773,6 +7773,16 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   The launch provenance gate now permits this committed recovery descendant
   only because the same observed commit records the recovery here; dirty
   recovery code remains forbidden.
+- Recovery at step 19: optimizer step 19 completed and its full checkpoint was
+  saved, but the following rollout sampled a one-pixel-wide `330x1` Crop. The
+  Qwen visual processor rejected its aspect ratio before an observation could
+  be materialized, and the plain Crop runtime propagated that sampled-geometry
+  error instead of returning the required standard recoverable tool error. The
+  runtime now maps only the processor's explicit aspect-ratio rejection (plus
+  the existing empty-after-clamp case) to `RecoverableToolExecutionError`;
+  unrelated tensor/layout `ValueError`s still fail closed. All eight focused
+  Crop runtime tests pass. Resume uses the complete step-19 boundary with all
+  scientific and training settings unchanged.
 
 ## Required entry template
 

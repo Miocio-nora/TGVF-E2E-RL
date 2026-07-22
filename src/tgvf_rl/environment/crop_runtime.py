@@ -250,12 +250,25 @@ class ImageZoomInToolRuntime:
                 )
             )
         except ValueError as error:
-            if "bbox is empty after clamping" in str(error):
+            if _is_recoverable_crop_geometry_error(error):
                 raise RecoverableToolExecutionError(str(error)) from error
             raise
         if not isinstance(result.handle, ObservationHandle):
             raise TypeError("plain crop tool returned an invalid observation handle")
         return result.handle
+
+
+def _is_recoverable_crop_geometry_error(error: ValueError) -> bool:
+    """Identify sampled crop geometries that the visual processor cannot use."""
+
+    message = str(error)
+    return any(
+        marker in message
+        for marker in (
+            "bbox is empty after clamping",
+            "absolute aspect ratio must be smaller than",
+        )
+    )
 
 
 def _validate_sampled_turn(

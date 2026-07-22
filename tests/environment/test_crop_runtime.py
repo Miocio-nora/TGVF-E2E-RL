@@ -86,6 +86,15 @@ class _GradientMaterializer(_Materializer):
         )
 
 
+class _AspectRatioRejectingMaterializer(_Materializer):
+    def materialize(self, crop_rgb, *, parsed_call, call_index):
+        self.trace.append("materialize")
+        self.calls += 1
+        raise ValueError(
+            "absolute aspect ratio must be smaller than 200, got 330.0"
+        )
+
+
 class _NativeTokenizer:
     name_or_path = "/fixture"
     _native = {
@@ -359,6 +368,36 @@ def test_plain_crop_runtime_maps_empty_clamped_box_to_recoverable_error() -> Non
         )
 
     assert materializer.calls == 0
+    assert ledger.entry_count() == 0
+
+
+def test_plain_crop_runtime_maps_processor_aspect_ratio_to_recoverable_error() -> None:
+    model = _model()
+    store = ObservationStore()
+    source, _ = _source(store, "run/sample/0/group")
+    trace: list[str] = []
+    materializer = _AspectRatioRejectingMaterializer(model, trace)
+    ledger = CropExecutionLedger()
+    runtime = ImageZoomInToolRuntime(
+        model=model,
+        materializer=materializer,
+        layout_builder=_LayoutBuilder(trace),
+        observation_store=store,
+        crop_processor_identity=ArtifactIdentity(
+            "qwen", "crop-processor", "fixture", SHA1
+        ),
+        crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
+        execution_ledger=ledger,
+    )
+    parsed = _parsed_call()
+
+    with pytest.raises(RecoverableToolExecutionError, match="absolute aspect ratio"):
+        runtime.execute(
+            parsed,
+            _context(parsed_call=parsed, source=source, model=model),
+        )
+
+    assert materializer.calls == 1
     assert ledger.entry_count() == 0
 
 
