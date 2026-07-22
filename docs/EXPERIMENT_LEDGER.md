@@ -7466,6 +7466,43 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 - Conclusion: real three-route calibration passed; admit the real mixed-task
   one-step optimizer/checkpoint gate.
 
+### PRL-02-QWEN3-GRPO-BS16-TGVF-MIXED-JUDGE-1STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory full-data mixed-task
+  one-step integration gate before the formal 80-step Pilot.
+- Complete identity: config
+  `configs/policy/runs/prl_02_qwen3_grpo_bs16_tgvf_mixed_judge_1step_gpu0123.toml`,
+  file SHA-256 `4393c7cb...d533f`, run identity `a79ea690...e36f4`, code
+  `ceef47f5fca783b7f30afa72c5050d5302c377c2`; the config is authoritative
+  for every model, data, protocol, objective, replay, topology, capacity,
+  optimizer, checkpoint, and output field.
+- Model/representation: frozen Qwen3-VL-8B-Thinking base/reference plus
+  decoder-only LoRA r64/alpha64/dropout0 current policy; RP-49 contextual
+  hidden-state TGVF Adapter SHA-256 `fcda0b96...fc14`, native DeepStack, and
+  max pixels 262,144.
+- Data/protocol/reward: full materialized DeepEyes-47K snapshot
+  `5546681e...ded3`, manifest `3483c317...f477`, seed 42, 16 prompts and eight
+  trajectories per prompt; TGVF-only native prompt/tool with four-call cap.
+  MCQ is rule-only and unresolved math/open VQA uses the calibrated OpenRouter
+  Qwen2.5-72B DeepInfra judge config SHA-256 `34e94de4...06a6`.
+- Mathematics/replay: sample-std GRPO advantage with identical-reward groups
+  set to zero, clip 0.2/0.2, dual clip 3, token mean, one update epoch, KL and
+  entropy coefficients zero, max grad norm 1.0. Actual behavior logprobs and
+  every policy-sampled assistant token are retained; current/reference replay
+  consumes the exact immutable rollout-recorded main D/DeepStack/layout/masks
+  with dropout zero, deterministic replay, and staleness zero.
+- Runtime: physical/logical B200 GPUs 0--3, world size 4, FSDP2 no-reshard,
+  colocated TP1 vLLM 0.12, BF16, BS16, per-rank prompt micro-batch 1, GA4,
+  `n=8`, temperature/top-p 1, max response 8,192. GPUs were idle at planning.
+- Output/session: `artifacts/policy/PRL-02-qwen3-grpo-bs16-tgvf-mixed-judge-1step-gpu0123`;
+  tmux `prl02_mixed1_gpu0123`; checkpoint steps 0/1, compact W&B metrics and
+  bounded local trajectory audits. Acceptance requires real mixed rewards,
+  exact replay, one optimizer update, LoRA publication, paired checkpoint and
+  a clean no-extra-update resume.
+- Command: accepted `.venv312` absolute `run-policy` launch with
+  `CUDA_VISIBLE_DEVICES=0,1,2,3`, deterministic environment, and
+  `OPENROUTER_API_KEY` inherited only from the tmux environment.
+
 ## Required entry template
 
 ```text
