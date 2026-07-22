@@ -7670,14 +7670,18 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   `REP-QWEN3-V4-CONTEXTUAL-V4`.
 - Config:
   `configs/policy/runs/prl_02_r5_qwen3_grpo_bs16_tgvf_t1_formal_pilot_80step_gpu0123.toml`,
-  pre-launch SHA-256 `9c78e69a...ec75`, run identity
-  `10da32ef...bed0`; code
-  `b8610091c0ae41bec5dd312044be2f23db914445`; planned output
+  pre-launch SHA-256 `f2d188f9...0d89`, run identity
+  `d3c2ded3...e8d8`; code
+  `7bc1c06999b60597f2853de0425a70d1bb74f2c7`; planned output
   `artifacts/policy/PRL-02-R5-qwen3-grpo-bs16-tgvf-t1-formal-pilot-80step-gpu0123`.
 - GPUs/session: physical GPUs 0--3; planned tmux
   `prl02_r5_t1_formal80_gpu0123`. Launch only after config load confirms the
   exact T=1.0 artifact identities, the R5 output root has no resumable state,
   and all four GPUs are free.
+- Operational note: the first launch attempt was rejected before worker/GPU
+  startup because its stale code-baseline pointer included later tracked
+  config/report commits. No training state was created; the pointer was moved
+  to the immediate pre-R5 code baseline above before retrying the same run.
 
 ## Required entry template
 

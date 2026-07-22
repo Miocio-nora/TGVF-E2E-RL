@@ -4,7 +4,7 @@ run_id = "PRL-02-R5-QWEN3-GRPO-BS16-TGVF-T1-FORMAL-PILOT-80STEP-GPU0123"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "b8610091c0ae41bec5dd312044be2f23db914445"
+commit = "7bc1c06999b60597f2853de0425a70d1bb74f2c7"
 dirty = false
 
 [model]
