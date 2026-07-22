@@ -7720,7 +7720,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   `artifacts/policy/PRL-03-R1-qwen3-grpo-bs16-crop-only-formal-comparison-80step-gpu0123`.
   Launch uses the repository `.venv312` `tgvf-rl run-policy` entry point with
   `CUDA_VISIBLE_DEVICES=0,1,2,3`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`,
-  `PYTHONHASHSEED=0` and `TOKENIZERS_PARALLELISM=false`. Acceptance requires
+  `PYTHONHASHSEED=42` and `TOKENIZERS_PARALLELISM=false`. Acceptance requires
   real repeated Crop observations, exact replay, all scheduled checkpoints,
   compact W&B metrics and bounded local trajectory audits.
 
