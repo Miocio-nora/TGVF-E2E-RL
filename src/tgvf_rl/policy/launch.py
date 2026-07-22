@@ -157,14 +157,14 @@ def _assert_code_commit_or_ledger_only_descendant(
     observed_commit: str,
     config_source_path: Path | None = None,
 ) -> None:
-    """Allow only the unavoidable post-code config/ledger commit.
+    """Require descendant implementation recovery to be committed with its ledger.
 
     A tracked run config cannot name the hash of the commit that contains its
     own bytes.  The executable code identity is therefore committed first; a
     descendant commit may add that exact run-config path and the experiment
-    ledger.  Any implementation change after the configured code commit still
-    fails.  ``config_source_path=None`` retains the ledger-only helper surface
-    used by focused tests.
+    ledger. A later committed bug fix is allowed only when the observed commit
+    also updates the experiment ledger, keeping recovery provenance explicit.
+    Uncommitted work remains forbidden by the surrounding launch validation.
     """
 
     if configured_commit == observed_commit:
@@ -207,11 +207,28 @@ def _assert_code_commit_or_ledger_only_descendant(
                 "policy run config must be inside the launch repository"
             ) from error
         allowed.add(config_relative.as_posix())
-    if _EXPERIMENT_LEDGER_PATH not in changed or not changed.issubset(allowed):
+    if _EXPERIMENT_LEDGER_PATH not in changed:
         raise RuntimeError(
-            "policy launch descendant contains changes beyond its exact run "
-            f"config and planned experiment ledger: {tuple(sorted(changed))!r}"
+            "policy launch descendant lacks its planned experiment ledger"
         )
+    unexpected = changed.difference(allowed)
+    if unexpected:
+        latest_changed = frozenset(
+            line
+            for line in _git_output(
+                root,
+                "diff",
+                "--name-only",
+                f"{observed_commit}^..{observed_commit}",
+                "--",
+            ).splitlines()
+            if line
+        )
+        if _EXPERIMENT_LEDGER_PATH not in latest_changed:
+            raise RuntimeError(
+                "policy launch recovery code must update the experiment ledger "
+                f"in the observed commit: {tuple(sorted(unexpected))!r}"
+            )
 
 
 def _sha256_file(path: Path) -> str:

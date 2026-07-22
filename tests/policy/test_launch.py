@@ -60,12 +60,22 @@ def test_launch_commit_allows_only_a_ledger_only_descendant(tmp_path: Path) -> N
 
     (tmp_path / "src" / "runtime.py").write_text("VERSION = 2\n", encoding="utf-8")
     changed_commit = _commit(tmp_path, "change runtime")
-    with pytest.raises(RuntimeError, match="beyond its exact run config"):
+    with pytest.raises(RuntimeError, match="must update the experiment ledger"):
         _assert_code_commit_or_ledger_only_descendant(
             tmp_path,
             configured_commit=code_commit,
             observed_commit=changed_commit,
         )
+
+    (tmp_path / "docs" / "EXPERIMENT_LEDGER.md").write_text(
+        "PLANNED\nRECOVERY: runtime fix\n", encoding="utf-8"
+    )
+    recovery_commit = _commit(tmp_path, "record runtime recovery")
+    _assert_code_commit_or_ledger_only_descendant(
+        tmp_path,
+        configured_commit=code_commit,
+        observed_commit=recovery_commit,
+    )
 
 
 def test_launch_commit_allows_the_tracked_config_and_ledger_descendant(

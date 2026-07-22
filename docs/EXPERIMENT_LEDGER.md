@@ -7770,6 +7770,9 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   public raw-byte SHA and exact-replay protocol. The complete step-11 FSDP2 and
   project checkpoint pair is the sole resume boundary; 58 focused observation,
   replay, lifecycle, checkpoint, and Crop tests passed before resumption.
+  The launch provenance gate now permits this committed recovery descendant
+  only because the same observed commit records the recovery here; dirty
+  recovery code remains forbidden.
 
 ## Required entry template
 
