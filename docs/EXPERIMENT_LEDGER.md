@@ -7548,8 +7548,10 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R1-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; clean restart of the failed formal
-  run, not a resume from its diagnostic-only step-6 LoRA snapshot.
+- Lifecycle/result: `RUNNING` / `PENDING`; clean restart of the failed formal
+  run, not a resume from its diagnostic-only step-6 LoRA snapshot. Launched
+  2026-07-22 15:14 JST in tmux `prl02_r1_formal80_gpu0123` (pane PID 2352345)
+  with `set -o pipefail` on physical GPUs 0--3.
 - The model, RP-49 representation artifact, full DeepEyes-47K snapshot,
   TGVF-only native protocol, BS16/n8/GA4 four-B200 topology, exact replay,
   GRPO equations, optimizer, scheduler, sampling, and reward composition are
