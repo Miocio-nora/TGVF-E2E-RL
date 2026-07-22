@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
+from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayRecord,
@@ -45,7 +45,7 @@ def test_unknown_observation_fails_closed() -> None:
         store.resolve_record(bad)
 
 
-def test_raw_digest_collision_never_overwrites_tensor_semantics() -> None:
+def test_store_disambiguates_equal_bytes_with_different_tensor_semantics() -> None:
     store = ObservationStore()
     int_ref = store.put_tensor("int32-zero", torch.tensor([0], dtype=torch.int32))
     assert (
@@ -55,12 +55,20 @@ def test_raw_digest_collision_never_overwrites_tensor_semantics() -> None:
         ).address.digest
     )
 
-    with pytest.raises(IdentityMismatchError, match="different dtype/shape/stride"):
-        store.put_tensor("float32-zero", torch.tensor([0.0], dtype=torch.float32))
+    float_ref = store.put_tensor(
+        "float32-zero", torch.tensor([0.0], dtype=torch.float32)
+    )
+    flat_ref = store.put_tensor("flat-zeros", torch.zeros(4, dtype=torch.uint8))
+    matrix_ref = store.put_tensor(
+        "matrix-zeros", torch.zeros((2, 2), dtype=torch.uint8)
+    )
 
-    retained = store.resolve_verified(int_ref)
-    assert retained.dtype is torch.int32
-    torch.testing.assert_close(retained, torch.tensor([0], dtype=torch.int32))
+    assert int_ref.address.digest == float_ref.address.digest
+    assert flat_ref.address.digest == matrix_ref.address.digest
+    assert store.resolve_verified(int_ref).dtype is torch.int32
+    assert store.resolve_verified(float_ref).dtype is torch.float32
+    assert store.resolve_verified(flat_ref).shape == (4,)
+    assert store.resolve_verified(matrix_ref).shape == (2, 2)
 
 
 def _put_replay(store: ObservationStore, observation_handle):

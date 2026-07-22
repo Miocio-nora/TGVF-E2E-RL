@@ -7764,6 +7764,12 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   trajectory audits, all 15 correct trajectories with a successful Crop
   observation received the conditional bonus and there were zero missing or
   spurious bonuses; every recorded call name was `image_zoom_in_tool`.
+- Recovery at step 11: the next rollout exposed equal raw tensor bytes with
+  different dtype/shape semantics in the observation store. The store now
+  disambiguates those tensors with a private semantic key while preserving the
+  public raw-byte SHA and exact-replay protocol. The complete step-11 FSDP2 and
+  project checkpoint pair is the sole resume boundary; 58 focused observation,
+  replay, lifecycle, checkpoint, and Crop tests passed before resumption.
 
 ## Required entry template
 

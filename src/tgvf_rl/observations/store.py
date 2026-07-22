@@ -97,15 +97,18 @@ class TrajectoryReplayBundle:
             raise ReplayMismatchError(
                 "bundle observation records differ from replay handles"
             )
-        payload_digests = tuple(payload.sha256 for payload in self.tensor_payloads)
-        if payload_digests != tuple(sorted(set(payload_digests))):
+        payload_identities = tuple(
+            _tensor_storage_key_from_tensor(payload.tensor)
+            for payload in self.tensor_payloads
+        )
+        if payload_identities != tuple(sorted(set(payload_identities))):
             raise ReplayMismatchError(
-                "bundle tensor payloads must be unique and digest-sorted"
+                "bundle tensor payloads must be unique and identity-sorted"
             )
-        expected_tensor_digests = tuple(
+        expected_tensor_identities = tuple(
             sorted(
                 {
-                    ref.address.digest
+                    _tensor_storage_key_from_ref(ref)
                     for value in (
                         self.replay_record.tensors,
                         self.replay_record.source_visual,
@@ -115,7 +118,7 @@ class TrajectoryReplayBundle:
                 }
             )
         )
-        if payload_digests != expected_tensor_digests:
+        if payload_identities != expected_tensor_identities:
             raise ReplayMismatchError(
                 "bundle tensors differ from replay/observation references"
             )
@@ -219,6 +222,46 @@ def _raw_tensor_bytes(tensor: torch.Tensor) -> bytes:
 
 def tensor_checksum(tensor: torch.Tensor) -> str:
     return hashlib.sha256(_raw_tensor_bytes(tensor)).hexdigest()
+
+
+def _tensor_storage_key(
+    *, checksum: str, shape: tuple[int, ...], dtype: str, stride: tuple[int, ...]
+) -> str:
+    """Return a store-private key without changing the public raw-byte digest."""
+
+    payload = json.dumps(
+        {
+            "schema": "tensor-storage-key-v1",
+            "checksum": checksum,
+            "shape": shape,
+            "dtype": dtype,
+            "layout": "strided",
+            "stride": stride,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _tensor_storage_key_from_ref(ref: TensorArtifactRef) -> str:
+    descriptor = ref.descriptor
+    return _tensor_storage_key(
+        checksum=ref.address.digest,
+        shape=descriptor.shape,
+        dtype=descriptor.dtype,
+        stride=descriptor.stride,
+    )
+
+
+def _tensor_storage_key_from_tensor(tensor: torch.Tensor) -> str:
+    stored = tensor.detach().to(device="cpu").contiguous()
+    return _tensor_storage_key(
+        checksum=tensor_checksum(stored),
+        shape=tuple(stored.shape),
+        dtype=str(stored.dtype).removeprefix("torch."),
+        stride=tuple(stored.stride()),
+    )
 
 
 def _canonical(value: object) -> object:
@@ -348,22 +391,21 @@ class ObservationStore:
             address=ContentAddress("sha256", checksum, len(raw)),
             descriptor=descriptor,
         )
+        storage_key = _tensor_storage_key_from_ref(ref)
         with self._lock:
             if trajectory_id in self._released_trajectory_ids:
                 raise ReplayMismatchError(
                     "cannot add a tensor for a released trajectory"
                 )
-            existing = self._tensors.get(checksum)
-            if existing is not None:
-                if not _same_stored_tensor_semantics(existing, stored):
-                    raise IdentityMismatchError(
-                        "raw tensor SHA256 was reused by a different dtype/shape/"
-                        "stride payload"
-                    )
-            else:
-                self._tensors[checksum] = stored
+            existing = self._tensors.get(storage_key)
+            if existing is None:
+                self._tensors[storage_key] = stored
+            elif not _same_stored_tensor_semantics(existing, stored):
+                raise IdentityMismatchError(
+                    "tensor storage identity collision changed stored semantics"
+                )
             if trajectory_id is not None:
-                self._tensor_owners.setdefault(checksum, set()).add(trajectory_id)
+                self._tensor_owners.setdefault(storage_key, set()).add(trajectory_id)
         return ref
 
     def put(self, record: ObservationRecord) -> ObservationHandle:
@@ -374,7 +416,7 @@ class ObservationStore:
             missing = [
                 ref.address.digest
                 for ref in refs
-                if ref.address.digest not in self._tensors
+                if _tensor_storage_key_from_ref(ref) not in self._tensors
             ]
             if missing:
                 raise ReplayMismatchError(
@@ -396,7 +438,7 @@ class ObservationStore:
     def resolve_verified(self, ref: TensorArtifactRef) -> torch.Tensor:
         with self._lock:
             self._verify_ref(ref)
-            return self._tensors[ref.address.digest].clone()
+            return self._tensors[_tensor_storage_key_from_ref(ref)].clone()
 
     def resolve_verified_for_trajectory(
         self, ref: TensorArtifactRef, *, trajectory_id: str
@@ -405,13 +447,14 @@ class ObservationStore:
 
         with self._lock:
             self._assert_trajectory_live(trajectory_id)
-            owners = self._tensor_owners.get(ref.address.digest, set())
+            storage_key = _tensor_storage_key_from_ref(ref)
+            owners = self._tensor_owners.get(storage_key, set())
             if trajectory_id not in owners:
                 raise ReplayMismatchError(
                     "tensor is not owned by the requested trajectory"
                 )
             self._verify_ref(ref)
-            return self._tensors[ref.address.digest].clone()
+            return self._tensors[storage_key].clone()
 
     def resolve_record(self, handle: ObservationHandle) -> ObservationRecord:
         with self._lock:
@@ -578,17 +621,22 @@ class ObservationStore:
                 self.resolve_record(observation)
                 for observation in replay.observation_handles
             )
-            digests = tuple(
+            refs = tuple(
                 sorted(
                     {
-                        ref.address.digest
+                        _tensor_storage_key_from_ref(ref): ref
                         for value in (replay.tensors, replay.source_visual, *records)
                         for ref in _walk_tensor_refs(value)
-                    }
+                    }.values(),
+                    key=_tensor_storage_key_from_ref,
                 )
             )
             payloads = tuple(
-                ReplayTensorPayload(digest, self._tensors[digest]) for digest in digests
+                ReplayTensorPayload(
+                    ref.address.digest,
+                    self._tensors[_tensor_storage_key_from_ref(ref)],
+                )
+                for ref in refs
             )
             bundle_sha256 = _replay_bundle_checksum(handle, records, payloads)
             return TrajectoryReplayBundle(
@@ -625,7 +673,13 @@ class ObservationStore:
             tensor = payload.tensor.detach().cpu().contiguous().clone()
             if tensor_checksum(tensor) != payload.sha256:
                 raise ReplayMismatchError("transport changed replay tensor payload")
-            store._tensors[payload.sha256] = tensor
+            storage_key = _tensor_storage_key_from_tensor(tensor)
+            old = store._tensors.get(storage_key)
+            if old is not None and not _same_stored_tensor_semantics(old, tensor):
+                raise IdentityMismatchError(
+                    "tensor storage identity collision changed transported semantics"
+                )
+            store._tensors[storage_key] = tensor
         handles = tuple(store.put(record) for record in verified.observation_records)
         if handles != verified.replay_record.observation_handles:
             raise ReplayMismatchError("imported observation handles changed")
@@ -669,22 +723,25 @@ class ObservationStore:
                 del self._records[observation_id]
                 del self._record_digests[observation_id]
 
-            candidate_digests: set[str] = set()
-            for digest, owners in tuple(self._tensor_owners.items()):
+            candidate_keys: set[str] = set()
+            for storage_key, owners in tuple(self._tensor_owners.items()):
                 if owners.intersection(identities):
-                    candidate_digests.add(digest)
+                    candidate_keys.add(storage_key)
                     owners.difference_update(identities)
                     if not owners:
-                        del self._tensor_owners[digest]
-            live_digests = {
-                ref.address.digest
+                        del self._tensor_owners[storage_key]
+            live_keys = {
+                _tensor_storage_key_from_ref(ref)
                 for value in (*self._records.values(), *self._replays.values())
                 for ref in _walk_tensor_refs(value)
             }
             removed_tensors = 0
-            for digest in candidate_digests:
-                if digest not in self._tensor_owners and digest not in live_digests:
-                    if self._tensors.pop(digest, None) is not None:
+            for storage_key in candidate_keys:
+                if (
+                    storage_key not in self._tensor_owners
+                    and storage_key not in live_keys
+                ):
+                    if self._tensors.pop(storage_key, None) is not None:
                         removed_tensors += 1
             self._released_trajectory_ids.update(identities)
             return ObservationReleaseCounts(
@@ -733,13 +790,20 @@ class ObservationStore:
         store._record_digests = dict(digests)
         store._replays = dict(replays)
         store._replay_digests = dict(replay_digests)
-        store._tensors = {
-            str(key): value.detach().cpu().contiguous().clone()
-            for key, value in tensors.items()
-            if isinstance(value, torch.Tensor)
-        }
-        if len(store._tensors) != len(tensors):
+        if any(not isinstance(value, torch.Tensor) for value in tensors.values()):
             raise ReplayMismatchError("checkpoint contains non-tensor payload")
+        store._tensors = {}
+        for key, value in tensors.items():
+            tensor = value.detach().cpu().contiguous().clone()
+            storage_key = _tensor_storage_key_from_tensor(tensor)
+            if str(key) not in {storage_key, tensor_checksum(tensor)}:
+                raise ReplayMismatchError("checkpoint tensor storage key mismatch")
+            old = store._tensors.get(storage_key)
+            if old is not None and not _same_stored_tensor_semantics(old, tensor):
+                raise IdentityMismatchError(
+                    "checkpoint tensor storage identity collision"
+                )
+            store._tensors[storage_key] = tensor
         for observation_id, record in store._records.items():
             if not isinstance(
                 record,
@@ -809,11 +873,12 @@ class ObservationStore:
         self, trajectory_id: str, refs: Iterable[TensorArtifactRef]
     ) -> None:
         for ref in refs:
-            self._tensor_owners.setdefault(ref.address.digest, set()).add(trajectory_id)
+            storage_key = _tensor_storage_key_from_ref(ref)
+            self._tensor_owners.setdefault(storage_key, set()).add(trajectory_id)
 
     def _verify_ref(self, ref: TensorArtifactRef) -> None:
         try:
-            tensor = self._tensors[ref.address.digest]
+            tensor = self._tensors[_tensor_storage_key_from_ref(ref)]
         except KeyError as exc:
             raise ReplayMismatchError(f"missing tensor {ref.name!r}") from exc
         actual = tensor_checksum(tensor)
