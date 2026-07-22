@@ -97,11 +97,20 @@ POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256 = _fixed_contract_sha256(
 )
 POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
     {
-        "schema": "policy-e2e-smoke-mcq-verifier-v1",
+        "schema": "policy-e2e-smoke-mcq-verifier-v2",
         "task": POLICY_E2E_SMOKE_REWARD_TASK,
         "route": "multiple_choice_rule",
-        "candidate": "first-leading-A-through-H-after-answer-or-boxed-wrapper",
-        "expected": "same-letter-parser",
+        "candidate": (
+            "canonical-A-through-H-or-last-explicit-answer-option-choice-range-marker"
+        ),
+        "wrappers": (
+            "answer-tag",
+            "latex-boxed",
+            "markdown-emphasis",
+            "qwen-im-end-suffix",
+        ),
+        "forbidden": "arbitrary-prose-leading-letter",
+        "expected": "same-deterministic-parser",
         "fallback_when_unparsed": "strip-casefold-collapse-whitespace-exact",
         "judge": "disabled",
     }

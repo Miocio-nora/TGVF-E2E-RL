@@ -21,10 +21,23 @@ from .schema import (
 )
 
 
-_MCQ_LETTER = re.compile(
-    r"^\s*(?:<answer>\s*)?(?:\\boxed\s*\{\s*)?[\(\[]?([A-Za-z])[\)\].:]?",
+_MCQ_CANONICAL_LETTER = re.compile(
+    r"^\s*(?:[\(\[]\s*([A-H])\s*[\)\]]|([A-H])\s*[.:]|([A-H])\s*$)",
     re.IGNORECASE,
 )
+_MCQ_ANSWER_MARKER = re.compile(
+    r"\b(?:final\s+answer|answer)\s*(?:is|:|=|-)\s*"
+    r"(?:(?:option|choice)\s*)?[\(\[]?\s*([A-H])\s*[\)\]]?"
+    r"(?=\s|[.,:;!?]|$)",
+    re.IGNORECASE,
+)
+_MCQ_NAMED_OPTION = re.compile(
+    r"\b(?:option|choice|range)\s*(?:is\s*)?[\(\[]?\s*([A-H])\s*[\)\]]?"
+    r"(?=\s|[.,:;!?]|$)",
+    re.IGNORECASE,
+)
+_MCQ_MARKDOWN = re.compile(r"[*_`]")
+_QWEN_TERMINAL_TEXT = re.compile(r"(?:<\|im_end\|>\s*)+$")
 _LATEX_FRACTION = re.compile(
     r"^\s*\\frac\s*\{\s*([-+]?\d+)\s*\}\s*\{\s*([-+]?\d+)\s*\}\s*$"
 )
@@ -151,8 +164,23 @@ class RuleFirstAnswerVerifier:
 
 
 def _multiple_choice_letter(text: str) -> str | None:
-    match = _MCQ_LETTER.match(_unwrap_answer(text))
-    return None if match is None else match.group(1).upper()
+    value = _QWEN_TERMINAL_TEXT.sub("", text.strip()).strip()
+    value = _unwrap_answer(value)
+    value = _QWEN_TERMINAL_TEXT.sub("", value).strip()
+    value = _MCQ_MARKDOWN.sub("", value)
+
+    canonical = _MCQ_CANONICAL_LETTER.match(value)
+    if canonical is not None:
+        return next(group.upper() for group in canonical.groups() if group is not None)
+
+    answer_markers = tuple(_MCQ_ANSWER_MARKER.finditer(value))
+    if answer_markers:
+        return answer_markers[-1].group(1).upper()
+
+    named_options = tuple(_MCQ_NAMED_OPTION.finditer(value))
+    if named_options:
+        return named_options[-1].group(1).upper()
+    return None
 
 
 def _normalize_answer(text: str, spec: NormalizationSpec) -> str:

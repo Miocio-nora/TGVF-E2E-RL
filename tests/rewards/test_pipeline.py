@@ -181,6 +181,44 @@ def test_answer_router_uses_rules_for_mcq_and_numeric_math_before_judge() -> Non
     assert judge.calls == 0
 
 
+@pytest.mark.parametrize(
+    ("candidate", "expected", "correct"),
+    (
+        ("C", "C", True),
+        ("(C). explanation", "C", True),
+        (r"\boxed{C}", "C", True),
+        ("<answer>C</answer>", "C", True),
+        ("The final answer is **C**.<|im_end|>", "C", True),
+        ("This corresponds to option **C**.<|im_end|>", "C", True),
+        ("Option A is sparse. Therefore the majority lies in range C.", "C", True),
+        ("The answer is option B.", "C", False),
+        ("The majority lies in an interval without an option label.", "T", False),
+        ("Clearly, option B is correct.", "C", False),
+        ("Based on the image, the answer is A.", "B", False),
+    ),
+)
+def test_mcq_parser_requires_a_canonical_or_explicit_decision(
+    candidate: str,
+    expected: str,
+    correct: bool,
+) -> None:
+    verifier, judge = _rule_first_verifier()
+    result = verifier.verify(
+        RewardContext(
+            "mcq",
+            "choose",
+            candidate,
+            expected,
+            0,
+            task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+        )
+    )
+
+    assert result.correct is correct
+    assert result.route == "multiple_choice_rule"
+    assert judge.calls == 0
+
+
 def test_open_vqa_and_undecidable_math_use_bound_72b_judge() -> None:
     verifier, judge = _rule_first_verifier(judge_score=1.0)
     result = verifier.verify(
