@@ -7468,7 +7468,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-QWEN3-GRPO-BS16-TGVF-MIXED-JUDGE-1STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory full-data mixed-task
+- Lifecycle/result: `COMPLETE` / `PASS`; mandatory full-data mixed-task
   one-step integration gate before the formal 80-step Pilot.
 - Complete identity: config
   `configs/policy/runs/prl_02_qwen3_grpo_bs16_tgvf_mixed_judge_1step_gpu0123.toml`,
@@ -7502,6 +7502,19 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 - Command: accepted `.venv312` absolute `run-policy` launch with
   `CUDA_VISIBLE_DEVICES=0,1,2,3`, deterministic environment, and
   `OPENROUTER_API_KEY` inherited only from the tmux environment.
+- Primary result: tmux `prl02_mixed1_gpu0123` exited 0 after 128 real
+  trajectories, 66 DeepInfra judge calls, exact current/reference replay, one
+  FSDP2 GRPO update, step-1 LoRA publication, and a complete paired checkpoint.
+  W&B run `y3zwfhu7`; step time 264.72 s including 17.37 s checkpoint and 7.71 s
+  weight sync; judge cost `$0.00692056`. Answer reward was 0.4375, conditional
+  tool reward 0.421875, tool-call-attempt rate 0.921875, and format-error rate
+  0.1015625. Post-success vLLM/W&B atexit noise did not change exit status or
+  checkpoint completeness.
+- Resume sub-run: `PLANNED` / `PENDING`, tmux `prl02_mixed1_resume_gpu0123` on
+  the same physical GPUs 0--3. It reuses the exact committed run/config identity
+  and checkpoint, changing only the upstream runtime `trainer.resume_mode`
+  launch override from `disable` to `auto`. Acceptance requires restoring step
+  1 and exiting without another rollout, judge call, or optimizer update.
 
 ## Required entry template
 
