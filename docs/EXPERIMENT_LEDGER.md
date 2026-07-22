@@ -7425,8 +7425,8 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-01-R35-QWEN3-GRPO-BS16-TGVF-80STEP-UTF8FIX-GPU0123
 
-- `RUNNING` from `2026-07-22T10:13:22+09:00`; clean 80-step rerun of R33 on
-  GPUs 0--3 after the tokenizer
+- `CANCELLED` before any optimizer step; clean 80-step rerun of R33 on GPUs
+  0--3 after the tokenizer
   replacement-character span correction. Every model, data, prompt, tool,
   sampling, GRPO, BS16/n8/GA4, FSDP2/TP1, reward and checkpoint field is held
   fixed; only code identity and output/run identity change. W&B receives the
@@ -7437,6 +7437,14 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   run identity `05d976dabe3403c5a88d6245a36eb5d9fde1730a427623f63f670fb5994adfd4`;
   code `36b2f0fc0ee67df47f78e2f336bdd045596bba00`; output
   `artifacts/policy/PRL-01-R35-qwen3-grpo-bs16-tgvf-80step-utf8fix-gpu0123`.
+- Result: the local audit retained 19 completed rollout samples before manual
+  cancellation. Fourteen semantically selected B and five selected A; none
+  selected the bound ground-truth C. Direct image audit supports B because the
+  -300 to -250 interval contains two red-box points while each other candidate
+  interval contains at most one. The selected repeated smoke fixture is
+  therefore unsuitable for reward training. The audit also exposed that the
+  MCQ parser treats the first prose letter in `The...`/`Based...` as an answer
+  option. W&B `1pqbs2yr`; no metric row or optimizer update was published.
 
 ## Required entry template
 
