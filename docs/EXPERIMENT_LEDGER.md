@@ -7695,7 +7695,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-03-R1-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; formal Crop-only comparison arm for
+- Lifecycle/result: `CANCELLED` / `INVALID`; formal Crop-only comparison arm for
   the completed PRL-02-R5 TGVF-only Pilot. It initializes a fresh decoder-only
   LoRA from the original Qwen3-VL-8B-Thinking base and does not load the R5
   policy checkpoint.
@@ -7723,6 +7723,13 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   `PYTHONHASHSEED=42` and `TOKENIZERS_PARALLELISM=false`. Acceptance requires
   real repeated Crop observations, exact replay, all scheduled checkpoints,
   compact W&B metrics and bounded local trajectory audits.
+- Invalidating result: the first optimizer step completed with 128 trajectories,
+  79 Crop-call attempts and 63 successfully materialized Crop observations, but
+  `conditional_tool_reward` was zero for the entire batch. The reward-context
+  adapter counted only `ToolCallRecord` (TGVF-only) instances instead of the
+  trajectory's materialized observations, so successful `CropToolCallRecord`
+  calls were invisible to the conditional reward. The run was stopped after
+  step 1 at 2026-07-22 23:43 JST; it is diagnostic only and must not be resumed.
 
 ## Required entry template
 

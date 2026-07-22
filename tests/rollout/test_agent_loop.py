@@ -421,6 +421,13 @@ def test_framework_neutral_loop_preserves_mixed_crop_then_tgvf_order() -> None:
     assert trajectory.tool_calls[1].target == "serial number"
     assert tuple(item.call_index for item in trajectory.observations) == (0, 1)
     assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="read the serial number",
+        expected_answer="42",
+        task_kind=AnswerTaskKind.OPEN_VQA,
+    )
+    assert context.successful_tgvf_observation_count == 2
 
 
 def test_framework_neutral_loop_records_atomic_crop_tgvf_call() -> None:

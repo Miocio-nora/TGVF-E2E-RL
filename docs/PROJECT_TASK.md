@@ -205,6 +205,14 @@ configuration profiles, not aliases for one another. The existing Policy
 Pilot v1 remains `tgvf_only`; implementing the other two capabilities does not
 silently enable them in that pilot or alter its reward.
 
+For a controlled Crop-only comparison using the fixed Pilot reward weights,
+the conditional-tool term is interpreted profile-locally: it is one only when
+the answer is correct and the active visual tool has successfully materialized
+at least one replayable observation. Thus `crop_only` requires a successful
+Crop observation, `tgvf_only` requires a successful TGVF observation, and the
+bonus remains capped at one per trajectory. A parsed call without a materialized
+observation, including a tool error, does not qualify.
+
 ### 0.4B Accepted policy visual-tool prompts v2
 
 Decision ID: **TGVF-VISUAL-TOOL-PROMPTS-V2-20260722**

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from tgvf_rl.protocol import ToolErrorCode
 from tgvf_rl.trajectories.schema import (
-    ToolCallRecord,
     TrajectoryRecord,
     TrajectoryStop,
 )
@@ -55,9 +54,10 @@ def reward_context_from_trajectory(
         and all(turn.think_span is not None for turn in trajectory.assistant_turns)
         and not invalidating_error
     )
-    successful_tgvf = sum(
-        isinstance(call, ToolCallRecord) for call in trajectory.tool_calls
-    )
+    # `successful_tgvf_observation_count` is the retained Pilot compatibility
+    # field name. Observations are the authoritative success records for every
+    # enabled visual-tool profile; parsed calls that ended in errors have none.
+    successful_tool_observations = len(trajectory.observations)
     return RewardContext(
         sample_id=trajectory.identity.sample_id,
         question=question,
@@ -67,7 +67,7 @@ def reward_context_from_trajectory(
         task_kind=task_kind,
         protocol_valid=protocol_valid,
         has_valid_final_answer=has_final_answer,
-        successful_tgvf_observation_count=successful_tgvf,
+        successful_tgvf_observation_count=successful_tool_observations,
         tool_error_codes=tuple(error.code for error in trajectory.tool_errors),
         data_source=data_source,
     )
