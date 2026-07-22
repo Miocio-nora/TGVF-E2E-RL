@@ -7600,6 +7600,21 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   optimizer, actor RNG, metrics and next-data cursor checkpoint at
   `checkpoints/global_step_2`; tracker value is 2. W&B `flc3g7gq`.
 
+### PRL-02-R3-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; clean restart from the original
+  Qwen policy because R2's exact run identity cannot adopt changed judge-client
+  code while claiming an exact checkpoint resume.
+- Scientific settings and the 10/20/45/80 checkpoint schedule are unchanged.
+  Operational code `a5a314772832a00fa7f0ad2be66d73f88ab2cb5a` retries but
+  never scores a completed response with a mismatched model identity; retry
+  exhaustion remains fail-closed and invokes the proven emergency checkpoint.
+- Config
+  `configs/policy/runs/prl_02_r3_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`,
+  SHA-256 `7e8962a1...6996c`, identity `eeb09336...31a11`; output
+  `artifacts/policy/PRL-02-R3-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
+  planned tmux `prl02_r3_formal80_gpu0123`, physical GPUs 0--3.
+
 ## Required entry template
 
 ```text
