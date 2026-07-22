@@ -176,6 +176,16 @@ class OpenAICompatibleJudgeProvider:
                     request_object, timeout=self.config.timeout_seconds
                 ) as response:
                     response_payload = json.loads(response.read().decode("utf-8"))
+                try:
+                    _validate_response_model(
+                        response_payload,
+                        expected=self.config.expected_response_model,
+                    )
+                except JudgeResponseModelMismatchError:
+                    if attempt + 1 < self.config.maximum_attempts:
+                        self._sleeper(_retry_backoff_seconds(attempt, self.config))
+                        continue
+                    raise
                 break
             except HTTPError as error:
                 if (
@@ -189,10 +199,6 @@ class OpenAICompatibleJudgeProvider:
                 ) from error
             except Exception as error:
                 raise RuntimeError("RL answer judge request failed") from error
-        _validate_response_model(
-            response_payload,
-            expected=self.config.expected_response_model,
-        )
         content = _completion_content(response_payload)
         verdict, rationale = _binary_verdict(content)
         usage = _response_usage(
@@ -375,11 +381,19 @@ def _completion_content(payload: object) -> str:
     return content
 
 
+class JudgeResponseModelMismatchError(RuntimeError):
+    """One completed response names a model other than the pinned request."""
+
+
 def _validate_response_model(payload: object, *, expected: str | None) -> None:
     if expected is None:
         return
-    if not isinstance(payload, Mapping) or payload.get("model") != expected:
-        raise RuntimeError("RL answer judge response model differs from binding")
+    actual = payload.get("model") if isinstance(payload, Mapping) else None
+    if actual != expected:
+        raise JudgeResponseModelMismatchError(
+            "RL answer judge response model differs from binding: "
+            f"expected={expected!r}, actual={actual!r}"
+        )
 
 
 def _response_usage(payload: object, *, required: bool) -> JudgeUsage | None:
@@ -462,6 +476,16 @@ def _retry_delay_seconds(
     exponential = config.retry_backoff_seconds * (2**attempt)
     delay = exponential if requested is None or requested < 0.0 else requested
     return min(delay, config.retry_maximum_seconds)
+
+
+def _retry_backoff_seconds(
+    attempt: int,
+    config: OpenAICompatibleJudgeConfig,
+) -> float:
+    return min(
+        config.retry_backoff_seconds * (2**attempt),
+        config.retry_maximum_seconds,
+    )
 
 
 def _binary_verdict(content: str) -> tuple[int, str]:

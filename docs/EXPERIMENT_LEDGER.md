@@ -7574,7 +7574,8 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R2-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; this supersedes cancelled R1 and
+- Lifecycle/result: `COMPLETE` / `FAIL (judge response identity)`; this
+  superseded cancelled R1 and
   restarts from the original Qwen policy. The first launch command at 15:24
   JST was rejected before Ray/GPU initialization by the exact-descendant
   preflight, so it produced no rollout, metric, checkpoint or optimizer step.
@@ -7590,6 +7591,14 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   output is isolated under
   `artifacts/policy/PRL-02-R2-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
   planned tmux `prl02_r2_formal80_gpu0123`, physical GPUs 0--3.
+- Result: steps 1--2 completed. Cumulative answer reward was 0.62109375 over
+  256 trajectories; the apparent step-2 jump was 97/128 versus 89/128 in the
+  earlier formal run and does not reflect a hyperparameter change. During the
+  next rollout one completed OpenRouter response named a model different from
+  the pinned response identity and was correctly rejected before scoring.
+  The new exception path then committed the full paired step-2 model,
+  optimizer, actor RNG, metrics and next-data cursor checkpoint at
+  `checkpoints/global_step_2`; tracker value is 2. W&B `flc3g7gq`.
 
 ## Required entry template
 

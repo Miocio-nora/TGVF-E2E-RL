@@ -145,6 +145,51 @@ def test_rl_judge_retries_transient_rate_limit_with_bound() -> None:
     assert delays == [0.0]
 
 
+def test_rl_judge_retries_response_model_mismatch_without_scoring_it() -> None:
+    initial, prompt = _provider('{"verdict":1,"rationale":"ok"}', [])
+    calls = 0
+    delays: list[float] = []
+
+    def opener(_request, *, timeout):
+        nonlocal calls
+        assert timeout == 120.0
+        calls += 1
+        model = "wrong/model" if calls == 1 else "Qwen2.5-72B-Instruct"
+        return _Response(
+            {
+                "model": model,
+                "choices": [
+                    {"message": {"content": '{"verdict":1,"rationale":"ok"}'}}
+                ],
+            }
+        )
+
+    provider = OpenAICompatibleJudgeProvider(
+        replace(
+            initial.config,
+            expected_response_model="Qwen2.5-72B-Instruct",
+            maximum_attempts=2,
+            retry_backoff_seconds=1.0,
+        ),
+        opener=opener,
+        sleeper=delays.append,
+    )
+    result = provider.judge(
+        JudgeRequest(
+            request_id="request-model-retry",
+            task_kind="open_vqa",
+            question="What is shown?",
+            candidate_answer="ship",
+            reference_answer="ship",
+            prompt_identity=prompt,
+        )
+    )
+
+    assert result.score == 1.0
+    assert calls == 2
+    assert delays == [1.0]
+
+
 def test_openrouter_binding_uses_env_auth_pinned_route_and_retains_usage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

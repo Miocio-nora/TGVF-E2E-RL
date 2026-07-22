@@ -703,6 +703,11 @@ boundary with its exact data cursor before propagating the original error.
 These operational changes do not alter trajectories, rewards, advantages or
 optimizer updates.
 
+One later DeepInfra response used a response-model identity that did not match
+the pinned request model. Such a response must never be scored, but is treated
+as a retryable gateway/provider response within the same bounded retry window;
+exhaustion remains fail-closed and triggers the recovery-checkpoint path.
+
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 
 Decision ID: **RPI-20260721-CONTEXTUAL-MATRIXCE-2000-PAIR**
