@@ -7516,6 +7516,25 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   launch override from `disable` to `auto`. Acceptance requires restoring step
   1 and exiting without another rollout, judge call, or optimizer update.
 
+### PRL-02-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; launch is contingent only on the
+  PRL-02 one-step clean-resume sub-run passing.
+- Config
+  `configs/policy/runs/prl_02_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`,
+  SHA-256 `62dda224...22f8`, identity `bd7c91df...9d21`, code
+  `fc8a1878a8ec2d45b14fdb4c9dc0ae179e99fb4d`; this is the formal Pilot schema,
+  not a smoke identity.
+- The accepted one-step model, full DeepEyes-47K data, RP-49 Adapter, native
+  TGVF tool, mixed reward, exact replay, BS16/n8/GA4, four-B200 FSDP2/TP1
+  topology, and sampling/GRPO mathematics are unchanged. The calibrated
+  DeepInfra judge has a separate formal scope identity.
+- Training has 80 optimizer steps, cosine LR from `1e-5` with no warmup,
+  checkpoints at 0/10/20/45/80, auto-resume, compact W&B metrics, and local
+  bounded trajectory audits. Output is
+  `artifacts/policy/PRL-02-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
+  planned tmux session `prl02_formal80_gpu0123`, physical GPUs 0--3.
+
 ## Required entry template
 
 ```text
