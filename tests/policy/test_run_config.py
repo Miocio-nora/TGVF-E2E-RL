@@ -27,6 +27,7 @@ from tgvf_rl.policy.config import (
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
+    POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
     POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_SMOKE_CAP_ERROR_SHA256,
@@ -413,6 +414,25 @@ def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -
     assert plan.overrides["actor_rollout_ref.rollout.custom"]["reward"][
         "judge_config_sha256"
     ] == judge_sha
+
+    formal_judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/openrouter_qwen25_72b_formal_pilot_judge_v1.json"
+    ).resolve()
+    formal_judge_sha = hashlib.sha256(formal_judge_path.read_bytes()).hexdigest()
+    formal_text = (
+        text.replace(
+            POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
+            POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
+        )
+        .replace("formal_pilot = false", "formal_pilot = true", 1)
+        .replace(str(judge_path), str(formal_judge_path), 1)
+        .replace(judge_sha, formal_judge_sha, 1)
+    )
+    path.write_text(formal_text, encoding="utf-8")
+    formal = load_policy_e2e_smoke_run_config(path)
+    assert formal.formal_pilot is True
+    assert formal.schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
 
 def test_loads_separately_identified_crop_only_experiment(tmp_path: Path) -> None:
     path, text, _ = _write_config(tmp_path)

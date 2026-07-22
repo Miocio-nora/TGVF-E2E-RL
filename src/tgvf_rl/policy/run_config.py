@@ -61,6 +61,7 @@ from .config import (
 
 POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v3"
 POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA = "policy-e2e-mixed-run-config-v4"
+POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA = "policy-e2e-formal-pilot-config-v1"
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
@@ -393,6 +394,7 @@ class PolicyE2ESmokeRunConfig:
         accepted = {
             POLICY_E2E_SMOKE_CONFIG_SCHEMA: False,
             POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA: True,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -458,11 +460,13 @@ def load_policy_e2e_smoke_run_config(
     if schema_version not in {
         POLICY_E2E_SMOKE_CONFIG_SCHEMA,
         POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
-    if payload["formal_pilot"] is not False:
-        raise ValueError("policy E2E integration config must set formal_pilot=false")
-    mixed_run = schema_version == POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA
+    formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
+    if payload["formal_pilot"] is not formal_pilot:
+        raise ValueError("policy E2E run formal_pilot mode differs from schema")
+    mixed_run = schema_version != POLICY_E2E_SMOKE_CONFIG_SCHEMA
     run_id = _safe_run_id(payload["run_id"])
 
     code_table = _table(payload, "code", {"repository", "commit", "dirty"})
@@ -884,10 +888,12 @@ def load_policy_e2e_smoke_run_config(
         )
         if _sha256_file(judge_config_path) != judge_config_sha256:
             raise ValueError("reward judge config SHA256 mismatch")
-        load_openai_compatible_judge(
+        bound_judge = load_openai_compatible_judge(
             judge_config_path,
             expected_file_sha256=judge_config_sha256,
         )
+        if formal_pilot and not bound_judge.formal_pilot_accepted:
+            raise ValueError("reward judge is not accepted for the formal Pilot")
     else:
         judge_config_path = None
         judge_config_sha256 = None
@@ -1822,6 +1828,7 @@ def _normalize_json(value: object) -> object:
 
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_MIXED_JUDGE_MODE",

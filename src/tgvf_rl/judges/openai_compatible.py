@@ -220,6 +220,7 @@ class BoundOpenAICompatibleJudge:
     calibration_identity: ArtifactIdentity
     failure_policy_identity: ArtifactIdentity
     config_file_sha256: str
+    formal_pilot_accepted: bool
 
 
 def load_openai_compatible_judge(
@@ -267,6 +268,9 @@ def load_openai_compatible_judge(
         or scope.get("allows_gpt_fallback") is not False
     ):
         raise ValueError("RL judge scope differs")
+    formal_pilot_accepted = scope.get("formal_pilot_accepted")
+    if type(formal_pilot_accepted) is not bool:
+        raise ValueError("RL judge formal Pilot scope must be bool")
     prompt = decoded["prompt"]
     prompt_sha = sha256(QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT.encode()).hexdigest()
     if (
@@ -353,6 +357,7 @@ def load_openai_compatible_judge(
         calibration_identity=calibration_identity,
         failure_policy_identity=failure_policy_identity,
         config_file_sha256=actual_file_sha256,
+        formal_pilot_accepted=formal_pilot_accepted,
     )
 
 
