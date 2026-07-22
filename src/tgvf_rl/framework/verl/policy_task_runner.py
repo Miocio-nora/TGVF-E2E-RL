@@ -793,6 +793,21 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                     self._shutdown_dump_executor()
                     return None
                 except Exception as training_error:
+                    # Ray can stop forwarding actor output while the failure
+                    # path quiesces rollout servers and writes a distributed
+                    # checkpoint.  Persist the original traceback in the
+                    # actor's own stderr before either operation so the root
+                    # exception is not lost during teardown.
+                    import sys
+                    import traceback
+
+                    print(
+                        "TGVF policy training failed; saving the last completed boundary",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    traceback.print_exception(training_error, file=sys.stderr)
+                    sys.stderr.flush()
                     try:
                         self._save_last_completed_checkpoint_after_failure()
                     except Exception as checkpoint_error:

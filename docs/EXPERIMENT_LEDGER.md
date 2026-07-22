@@ -7783,6 +7783,14 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   unrelated tensor/layout `ValueError`s still fail closed. All eight focused
   Crop runtime tests pass. Resume uses the complete step-19 boundary with all
   scientific and training settings unchanged.
+- Recovery at step 72: optimizer step 72 completed and the exception path
+  saved its complete FSDP2/project checkpoint pair, but Ray teardown did not
+  forward the attempted step-73 root traceback into `train.log`; this was not
+  OOM, data exhaustion, or the repaired aspect-ratio error. Before resuming the
+  exact step-72 boundary, the trainer now writes the original exception to the
+  TaskRunner's own stderr before quiescing services or saving recovery state.
+  This changes diagnostics only; data order, policy state, optimizer state and
+  all scientific settings remain unchanged.
 
 ## Required entry template
 
