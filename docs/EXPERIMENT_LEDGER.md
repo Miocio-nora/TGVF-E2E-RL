@@ -7602,9 +7602,10 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R3-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; clean restart from the original
+- Lifecycle/result: `RUNNING` / `PENDING`; clean restart from the original
   Qwen policy because R2's exact run identity cannot adopt changed judge-client
-  code while claiming an exact checkpoint resume.
+  code while claiming an exact checkpoint resume. Launched in tmux
+  `prl02_r3_formal80_gpu0123` (pane PID 2440870) with `set -o pipefail`.
 - Scientific settings and the 10/20/45/80 checkpoint schedule are unchanged.
   Operational code `a5a314772832a00fa7f0ad2be66d73f88ab2cb5a` retries but
   never scores a completed response with a mismatched model identity; retry
