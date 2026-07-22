@@ -7625,7 +7625,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R4-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; clean formal restart using accepted
+- Lifecycle/result: `CANCELLED` / `INVALID`; clean formal restart using accepted
   indefinite transient judge retry. R3 step 7 remains immutable provenance and
   is not relabeled as an exact R4 resume. Launched in tmux
   `prl02_r4_formal80_gpu0123` (pane PID 2552219) on 2026-07-22 JST.
@@ -7640,6 +7640,44 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   `b8610091c0ae41bec5dd312044be2f23db914445`; output
   `artifacts/policy/PRL-02-R4-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
   planned tmux `prl02_r4_formal80_gpu0123`, physical GPUs 0--3.
+- Cancellation: after optimizer step 12, the representation binding was audited
+  against the completed five-checkpoint endpoint decision and found to use
+  RP-49 Balanced/T=0.1 rather than the selected contextual full-D-DeepStack
+  Balanced/T=1.0 artifact. User authorized immediate stop. SIGINT at
+  `2026-07-22T17:31+09:00` cleanly released GPUs 0--3; the complete step-10
+  checkpoint plus step-1--12 metrics/trajectory audits remain immutable
+  diagnostics. They are not eligible for resume into another representation
+  identity or for the formal T=1.0 Pilot conclusion.
+
+### PRL-02-R5-QWEN3-GRPO-BS16-TGVF-T1-FORMAL-PILOT-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; mandatory clean replacement for the
+  invalid RP-49-bound R4 run. It starts from the original Qwen3 policy with a
+  fresh decoder-only LoRA and must not load any R3/R4 policy checkpoint.
+- Question: does the accepted contextual-hidden-state, full-D-DeepStack,
+  Balanced Matrix CE T=1.0 representation artifact support the fixed 80-step
+  BS16/n8 GRPO Pilot under the already accepted resilient judge/runtime stack?
+- Scientific settings: identical to R4 except the frozen representation
+  artifact and identities. Qwen3-VL-8B-Thinking, DeepEyes-47K snapshot, native
+  `tgvf_focus_tool` prompt/schema, max-pixels 262144, four calls, GRPO
+  mathematics, reward `0.8/0.2/1.2`, seed 42, LoRA r64/alpha64/dropout0,
+  BS16/n8/GA4, FSDP2 world-size 4, colocated vLLM TP1, and checkpoints
+  10/20/45/80 remain fixed.
+- Representation: `artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V4/adapter.pt`;
+  contextual layer -1, Balanced mean-NLL Matrix CE T=1.0, step 2000, complete
+  main D plus D-DeepStack layers 8/16/24. File/manifest/run SHA-256 are
+  `50179c70...e75` / `dfa992fc...0e10` / `6c748851...d5c0`; expected run ID is
+  `REP-QWEN3-V4-CONTEXTUAL-V4`.
+- Config:
+  `configs/policy/runs/prl_02_r5_qwen3_grpo_bs16_tgvf_t1_formal_pilot_80step_gpu0123.toml`,
+  pre-launch SHA-256 `9c78e69a...ec75`, run identity
+  `10da32ef...bed0`; code
+  `b8610091c0ae41bec5dd312044be2f23db914445`; planned output
+  `artifacts/policy/PRL-02-R5-qwen3-grpo-bs16-tgvf-t1-formal-pilot-80step-gpu0123`.
+- GPUs/session: physical GPUs 0--3; planned tmux
+  `prl02_r5_t1_formal80_gpu0123`. Launch only after config load confirms the
+  exact T=1.0 artifact identities, the R5 output root has no resumable state,
+  and all four GPUs are free.
 
 ## Required entry template
 
