@@ -7425,7 +7425,8 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-01-R35-QWEN3-GRPO-BS16-TGVF-80STEP-UTF8FIX-GPU0123
 
-- `PLANNED`; clean 80-step rerun of R33 on GPUs 0--3 after the tokenizer
+- `RUNNING` from `2026-07-22T10:13:22+09:00`; clean 80-step rerun of R33 on
+  GPUs 0--3 after the tokenizer
   replacement-character span correction. Every model, data, prompt, tool,
   sampling, GRPO, BS16/n8/GA4, FSDP2/TP1, reward and checkpoint field is held
   fixed; only code identity and output/run identity change. W&B receives the
