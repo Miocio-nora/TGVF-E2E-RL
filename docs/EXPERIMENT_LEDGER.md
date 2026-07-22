@@ -7733,7 +7733,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-03-R2-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; clean replacement for invalid R1.
+- Lifecycle/result: `RUNNING` / `PENDING`; clean replacement for invalid R1.
   It starts from the original Qwen3-VL-8B-Thinking base with a fresh
   decoder-only LoRA and must not load an R1 or R5 policy checkpoint.
 - Controlled comparison: all R5 model, DeepEyes-47K order, seed 42,
@@ -7757,6 +7757,13 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   Launch requires all four GPUs free, strict config validation, no resumable R2
   state and the real first-step conditional reward to agree with successful
   Crop observations before the run is allowed to continue unattended.
+- Actual launch: 2026-07-22 23:37 JST from manifest commit `ef25ad1`; tmux
+  `prl03_r2_crop_formal80_gpu0123`, W&B run `7468ybjm`. Step 1 completed in
+  184.69 seconds with 128 trajectories, 49 successful Crop observations,
+  answer reward 0.53125 and conditional-tool reward 0.1171875. Among 78 bounded
+  trajectory audits, all 15 correct trajectories with a successful Crop
+  observation received the conditional bonus and there were zero missing or
+  spurious bonuses; every recorded call name was `image_zoom_in_tool`.
 
 ## Required entry template
 
