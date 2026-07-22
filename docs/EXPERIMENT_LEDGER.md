@@ -7392,7 +7392,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-01-R33-QWEN3-GRPO-BS16-TGVF-80STEP-GPU0123
 
-- `RUNNING` from `2026-07-22T05:20:35+09:00`; continuous 80-step TGVF-only run on physical GPUs 0--3, BS16,
+- `FAILED` after optimizer step 27; continuous 80-step TGVF-only run on physical GPUs 0--3, BS16,
   `n=8`, GA4, checkpoints 0/10/20/45/80. Config SHA256
   `d6d502c4612a4ac5693700bd85a316bf9c31676dd22b2ce6f7ace1d736e99c7c`,
   run identity `f33ddf971d4f9cb833e5f921d968044a6e5ebc6b77a3713e67ef133661019e6c`,
@@ -7401,10 +7401,15 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   output `artifacts/policy/PRL-01-R33-qwen3-grpo-bs16-tgvf-80step-gpu0123`;
   tmux `prl01_r33_gpu0123`. R32 proved the selected BS16 capacity; acceptance
   requires the scheduled checkpoints, metrics and clean resumability.
+- Result: 27 complete metric rows and valid step-10/20 checkpoints; step 28
+  rollout failed closed because a legal truncated UTF-8 ByteLevel sequence was
+  decoded to U+FFFD but the old span decoder compared raw and decoded byte
+  lengths. W&B `zfqzrj0h`; R34 was not started.
 
 ### PRL-01-R34-QWEN3-GRPO-BS16-CROP-ONLY-80STEP-GPU0123
 
-- `PLANNED`; bounded non-formal Crop-only 80-step comparison on physical GPUs
+- `CANCELLED_NOT_RUN`; superseded because its code baseline predates the R33
+  UTF-8 span correction. Bounded non-formal Crop-only comparison on physical GPUs
   0--3, BS16, `n=8`, GA4, checkpoints 0/10/20/45/80. It retains R33's frozen
   base/reference, decoder-LoRA GRPO mathematics, exact behavior log probabilities,
   zero staleness, 512-square pixel cap, seed 42, FSDP2/TP1 colocated topology,
@@ -7417,6 +7422,20 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   `artifacts/policy/PRL-01-R34-qwen3-grpo-bs16-crop-only-80step-gpu0123`.
   It launches sequentially on tmux `prl01_r34_after_r33` only after R33 exits 0;
   a nonzero R33 status blocks launch rather than silently taking over the GPUs.
+
+### PRL-01-R35-QWEN3-GRPO-BS16-TGVF-80STEP-UTF8FIX-GPU0123
+
+- `PLANNED`; clean 80-step rerun of R33 on GPUs 0--3 after the tokenizer
+  replacement-character span correction. Every model, data, prompt, tool,
+  sampling, GRPO, BS16/n8/GA4, FSDP2/TP1, reward and checkpoint field is held
+  fixed; only code identity and output/run identity change. W&B receives the
+  compact operator metric set; bounded raw trajectory audit samples are local
+  artifacts and are not uploaded to W&B.
+- Config `configs/policy/runs/prl_01_r35_qwen3_grpo_bs16_tgvf_80step_utf8fix_gpu0123.toml`,
+  SHA256 `c1d6213cd321707f5fe31cb59e91777decb52978e3d4a4338223cc0e1f402499`;
+  run identity `05d976dabe3403c5a88d6245a36eb5d9fde1730a427623f63f670fb5994adfd4`;
+  code `36b2f0fc0ee67df47f78e2f336bdd045596bba00`; output
+  `artifacts/policy/PRL-01-R35-qwen3-grpo-bs16-tgvf-80step-utf8fix-gpu0123`.
 
 ## Required entry template
 
