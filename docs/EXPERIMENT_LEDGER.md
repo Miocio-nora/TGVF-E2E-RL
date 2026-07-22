@@ -7651,7 +7651,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R5-QWEN3-GRPO-BS16-TGVF-T1-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; mandatory clean replacement for the
+- Lifecycle/result: `COMPLETE` / `PASS`; mandatory clean replacement for the
   invalid RP-49-bound R4 run. It starts from the original Qwen3 policy with a
   fresh decoder-only LoRA and must not load any R3/R4 policy checkpoint.
 - Question: does the accepted contextual-hidden-state, full-D-DeepStack,
@@ -7686,6 +7686,43 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   `prl02_r5_t1_formal80_gpu0123`. Strict config validation passed, the runtime
   printed the exact T=1.0 artifact identity above, and four FSDP workers began
   loading on physical GPUs 0--3.
+- Final result: all 80 optimizer steps and paired checkpoints 0/10/20/45/80
+  completed. The run processed 1,280 prompts, 10,240 trajectories and
+  16,939,557 generated policy tokens. Cumulative answer reward was 0.608398,
+  conditional-tool reward 0.557129, tool-call-attempt rate 0.941895,
+  format-error rate 0.085449 and mean reasoning length 1,341.02 tokens. The
+  final checkpoint is `global_step_80`; W&B continuation run `f0zcm6tm`.
+
+### PRL-03-R1-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; formal Crop-only comparison arm for
+  the completed PRL-02-R5 TGVF-only Pilot. It initializes a fresh decoder-only
+  LoRA from the original Qwen3-VL-8B-Thinking base and does not load the R5
+  policy checkpoint.
+- Controlled comparison: the exact DeepEyes-47K snapshot/order, seed 42,
+  max-pixels 262144, BS16/n8/GA4, sampling, mixed verifier and Qwen2.5-72B
+  fallback judge, reward 0.8/0.2/1.2, GRPO mathematics, optimizer/scheduler,
+  FSDP2 world-size 4, colocated vLLM TP1, capacity and checkpoints
+  0/10/20/45/80 are held fixed from R5. The sole method change is the accepted
+  Crop-only v2 prompt/schema with `image_zoom_in_tool` and a four-call cap.
+- Observation/runtime: every crop is cut from the immutable original RGB image,
+  encoded by the colocated frozen Qwen vision tower and materialized for exact
+  current/reference replay. The TGVF Adapter is not invoked or loaded in this
+  profile; the representation table remains only a strict shared config-schema
+  binding and is not part of the Crop observation path.
+- Config:
+  `configs/policy/runs/prl_03_r1_qwen3_grpo_bs16_crop_only_formal_comparison_80step_gpu0123.toml`,
+  SHA-256 `ad1825776a0fcea61cc264b827427e869ae5dae6de4d3e4407b07ad41034e88f`,
+  run identity `cd1d7440dc117740e48ef2b702a6ccd751e1cf42504676236efdaf757589748c`,
+  code baseline `ab3a6243033fab29808af73ad78c4b31384ef3d9`.
+- GPUs/session/output: physical GPUs 0--3 were idle at planning on 2026-07-22
+  23:17 JST. Planned tmux session is `prl03_r1_crop_formal80_gpu0123`; output is
+  `artifacts/policy/PRL-03-R1-qwen3-grpo-bs16-crop-only-formal-comparison-80step-gpu0123`.
+  Launch uses the repository `.venv312` `tgvf-rl run-policy` entry point with
+  `CUDA_VISIBLE_DEVICES=0,1,2,3`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`,
+  `PYTHONHASHSEED=0` and `TOKENIZERS_PARALLELISM=false`. Acceptance requires
+  real repeated Crop observations, exact replay, all scheduled checkpoints,
+  compact W&B metrics and bounded local trajectory audits.
 
 ## Required entry template
 
