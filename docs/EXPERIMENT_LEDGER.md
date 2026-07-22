@@ -7651,7 +7651,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R5-QWEN3-GRPO-BS16-TGVF-T1-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; mandatory clean replacement for the
+- Lifecycle/result: `RUNNING` / `PENDING`; mandatory clean replacement for the
   invalid RP-49-bound R4 run. It starts from the original Qwen3 policy with a
   fresh decoder-only LoRA and must not load any R3/R4 policy checkpoint.
 - Question: does the accepted contextual-hidden-state, full-D-DeepStack,
@@ -7682,6 +7682,10 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   startup because its stale code-baseline pointer included later tracked
   config/report commits. No training state was created; the pointer was moved
   to the immediate pre-R5 code baseline above before retrying the same run.
+- Actual launch: 2026-07-22 17:40 JST from manifest commit `2f2cc70`; tmux
+  `prl02_r5_t1_formal80_gpu0123`. Strict config validation passed, the runtime
+  printed the exact T=1.0 artifact identity above, and four FSDP workers began
+  loading on physical GPUs 0--3.
 
 ## Required entry template
 
