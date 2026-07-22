@@ -6,13 +6,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from typing import Any
 from urllib import request as urllib_request
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
 
-from .base import JudgeRequest, JudgeResult
+from .base import JudgeRequest, JudgeResult, JudgeUsage
 
 
 QWEN25_72B_RL_JUDGE_PROMPT_VERSION = "qwen2.5-72b-rl-answer-judge-v1"
@@ -46,6 +47,12 @@ class OpenAICompatibleJudgeConfig:
     max_tokens: int = 256
     seed: int = 42
     timeout_seconds: float = 120.0
+    api_key_env: str | None = None
+    provider_routing: Mapping[str, object] | None = None
+    expected_response_model: str | None = None
+    require_usage: bool = False
+    http_referer: str | None = None
+    application_title: str | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url.startswith(("http://", "https://")):
@@ -58,6 +65,20 @@ class OpenAICompatibleJudgeConfig:
             raise ValueError("judge token/seed/timeout settings are invalid")
         if self.prompt_identity.version != QWEN25_72B_RL_JUDGE_PROMPT_VERSION:
             raise ValueError("judge prompt identity version differs")
+        if self.api_key_env is not None and (
+            not self.api_key_env.isidentifier() or self.api_key_env.upper() != self.api_key_env
+        ):
+            raise ValueError("judge API credential must name an uppercase environment variable")
+        if self.provider_routing is not None and not isinstance(
+            self.provider_routing, Mapping
+        ):
+            raise TypeError("judge provider routing must be a mapping or None")
+        for name in ("expected_response_model", "http_referer", "application_title"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"judge {name} must be non-empty text when present")
+        if type(self.require_usage) is not bool:
+            raise TypeError("judge require_usage must be bool")
 
 
 class OpenAICompatibleJudgeProvider:
@@ -73,6 +94,17 @@ class OpenAICompatibleJudgeProvider:
             raise TypeError("config must be OpenAICompatibleJudgeConfig")
         self.config = config
         self._opener = urllib_request.urlopen if opener is None else opener
+
+    def validate_credentials(self) -> None:
+        """Fail before rollout without ever returning or logging a credential."""
+
+        if self.config.api_key_env is None:
+            return
+        value = os.environ.get(self.config.api_key_env)
+        if value is None or not value.strip():
+            raise RuntimeError(
+                f"RL answer judge requires environment variable {self.config.api_key_env}"
+            )
 
     def judge(self, request: JudgeRequest) -> JudgeResult:
         if request.prompt_identity != self.config.prompt_identity:
@@ -102,12 +134,24 @@ class OpenAICompatibleJudgeProvider:
             "seed": self.config.seed,
             "response_format": {"type": "json_object"},
         }
+        if self.config.provider_routing is not None:
+            payload["provider"] = dict(self.config.provider_routing)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.config.api_key_env is not None:
+            self.validate_credentials()
+            headers["Authorization"] = (
+                "Bearer " + os.environ[self.config.api_key_env].strip()
+            )
+        if self.config.http_referer is not None:
+            headers["HTTP-Referer"] = self.config.http_referer
+        if self.config.application_title is not None:
+            headers["X-OpenRouter-Title"] = self.config.application_title
         request_object = urllib_request.Request(
             self.config.base_url.rstrip("/") + "/chat/completions",
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             with self._opener(
@@ -116,8 +160,16 @@ class OpenAICompatibleJudgeProvider:
                 response_payload = json.loads(response.read().decode("utf-8"))
         except Exception as error:
             raise RuntimeError("RL answer judge request failed") from error
+        _validate_response_model(
+            response_payload,
+            expected=self.config.expected_response_model,
+        )
         content = _completion_content(response_payload)
         verdict, rationale = _binary_verdict(content)
+        usage = _response_usage(
+            response_payload,
+            required=self.config.require_usage,
+        )
         return JudgeResult(
             score=float(verdict),
             rationale=rationale,
@@ -125,6 +177,7 @@ class OpenAICompatibleJudgeProvider:
             model_identity=self.config.model_identity,
             sampling_identity=self.config.sampling_identity,
             calibration_identity=self.config.calibration_identity,
+            usage=usage,
         )
 
 
@@ -166,7 +219,12 @@ def load_openai_compatible_judge(
         "failure_policy",
         "scope",
     }
-    if not isinstance(decoded, dict) or set(decoded) != required:
+    allowed = required | {"routing"}
+    if (
+        not isinstance(decoded, dict)
+        or not required.issubset(decoded)
+        or not set(decoded).issubset(allowed)
+    ):
         raise ValueError("RL judge config schema differs")
     if decoded["role"] != "policy_rl_answer_judge_only":
         raise ValueError("RL judge role differs")
@@ -193,6 +251,7 @@ def load_openai_compatible_judge(
     service = decoded["service"]
     calibration = decoded["calibration"]
     failure_policy = decoded["failure_policy"]
+    routing = decoded.get("routing")
     for name, value in (
         ("model", model),
         ("sampling", sampling),
@@ -202,6 +261,8 @@ def load_openai_compatible_judge(
     ):
         if not isinstance(value, Mapping):
             raise ValueError(f"RL judge {name} binding must be a mapping")
+    if routing is not None and not isinstance(routing, Mapping):
+        raise ValueError("RL judge routing binding must be a mapping")
     prompt_identity = ArtifactIdentity(
         "policy-rl-answer-judge",
         "prompt",
@@ -209,8 +270,11 @@ def load_openai_compatible_judge(
         prompt_sha,
     )
     model_identity = _artifact("model", str(model["revision"]), model)
+    service_payload: object = (
+        service if routing is None else {"service": service, "routing": routing}
+    )
     service_identity = _artifact(
-        "service", str(service["deployment"]), service
+        "service", str(service["deployment"]), service_payload
     )
     sampling_identity = _artifact("sampling", "v1", sampling)
     calibration_identity = _artifact(
@@ -230,6 +294,18 @@ def load_openai_compatible_judge(
         max_tokens=int(sampling["max_tokens"]),
         seed=int(sampling["seed"]),
         timeout_seconds=float(service["timeout_seconds"]),
+        api_key_env=_optional_text(service.get("api_key_env")),
+        provider_routing=routing,
+        expected_response_model=_optional_text(
+            service.get("expected_response_model")
+        ),
+        require_usage=_optional_bool(
+            service.get("require_usage"),
+            default=False,
+            name="service.require_usage",
+        ),
+        http_referer=_optional_text(service.get("http_referer")),
+        application_title=_optional_text(service.get("application_title")),
     )
     return BoundOpenAICompatibleJudge(
         provider=OpenAICompatibleJudgeProvider(provider_config, opener=opener),
@@ -255,6 +331,50 @@ def _completion_content(payload: object) -> str:
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("RL answer judge returned empty content")
     return content
+
+
+def _validate_response_model(payload: object, *, expected: str | None) -> None:
+    if expected is None:
+        return
+    if not isinstance(payload, Mapping) or payload.get("model") != expected:
+        raise RuntimeError("RL answer judge response model differs from binding")
+
+
+def _response_usage(payload: object, *, required: bool) -> JudgeUsage | None:
+    usage = payload.get("usage") if isinstance(payload, Mapping) else None
+    if usage is None and not required:
+        return None
+    if not isinstance(usage, Mapping):
+        raise RuntimeError("RL answer judge response lacks required usage")
+    try:
+        prompt_tokens = usage["prompt_tokens"]
+        completion_tokens = usage["completion_tokens"]
+        total_tokens = usage["total_tokens"]
+        cost = usage["cost"]
+        return JudgeUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=float(cost),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("RL answer judge usage payload is invalid") from error
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("optional RL judge config text must be non-empty")
+    return value
+
+
+def _optional_bool(value: object, *, default: bool, name: str) -> bool:
+    if value is None:
+        return default
+    if type(value) is not bool:
+        raise ValueError(f"RL judge {name} must be bool")
+    return value
 
 
 def _binary_verdict(content: str) -> tuple[int, str]:

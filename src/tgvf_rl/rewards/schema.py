@@ -8,6 +8,7 @@ import math
 from typing import Protocol
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
+from tgvf_rl.judges.base import JudgeUsage
 
 
 class AnswerTaskKind(str, Enum):
@@ -97,6 +98,7 @@ class RewardResult:
     total: float
     components: tuple[RewardComponentResult, ...]
     pipeline_identity: ArtifactIdentity
+    answer_verification: AnswerVerificationResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,10 +107,15 @@ class AnswerVerificationResult:
     route: str
     evidence: str
     verifier_identity: ArtifactIdentity
+    judge_usage: JudgeUsage | None = None
 
     def __post_init__(self) -> None:
         if not self.route or not self.evidence:
             raise ValueError("answer verification route/evidence must be non-empty")
+        if self.judge_usage is not None and not isinstance(
+            self.judge_usage, JudgeUsage
+        ):
+            raise TypeError("answer verification judge_usage has the wrong type")
 
 
 @dataclass(frozen=True, slots=True)

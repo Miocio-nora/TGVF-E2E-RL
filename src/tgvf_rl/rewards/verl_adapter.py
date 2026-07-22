@@ -17,6 +17,8 @@ PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD = "tgvf_reward_bridge_schema_version"
 PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD = "tgvf_reward_pipeline_sha256"
 PILOT_VERL_REWARD_COMPONENTS_FIELD = "tgvf_reward_components"
 PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD = "tgvf_reward_trajectory_id"
+PILOT_VERL_ANSWER_ROUTE_FIELD = "tgvf_answer_verification_route"
+PILOT_VERL_JUDGE_USAGE_FIELD = "tgvf_judge_usage"
 
 _COMPONENT_NAMES = (
     "answer_reward",
@@ -76,6 +78,8 @@ class PilotVerlTrajectoryReward:
     def reward_sidecars(self) -> dict[str, object]:
         """Return JSON/object-array-safe fields flattened by veRL AgentLoop."""
 
+        verification = self.result.answer_verification
+        usage = None if verification is None else verification.judge_usage
         return {
             PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD: (
                 PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION
@@ -83,18 +87,39 @@ class PilotVerlTrajectoryReward:
             PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD: self.pipeline_sha256,
             PILOT_VERL_REWARD_COMPONENTS_FIELD: self.raw_components,
             PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD: self.trajectory_id,
+            PILOT_VERL_ANSWER_ROUTE_FIELD: (
+                None if verification is None else verification.route
+            ),
+            PILOT_VERL_JUDGE_USAGE_FIELD: (
+                None
+                if usage is None
+                else (
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                    usage.cost_usd,
+                )
+            ),
         }
 
     def reward_extra_info(self) -> dict[str, object]:
         """Expose decomposed metrics without delegating scoring to veRL."""
 
         components = dict(self.raw_components)
+        verification = self.result.answer_verification
+        usage = None if verification is None else verification.judge_usage
         return {
             "tgvf_exact_trajectory_reward": self.total,
             "answer_reward": components["answer_reward"],
             "format_reward": components["format_reward"],
             "conditional_tool_reward": components["conditional_tool_reward"],
             "reward_pipeline_sha256": self.pipeline_sha256,
+            "judge_calls": int(usage is not None),
+            "judge_prompt_tokens": 0 if usage is None else usage.prompt_tokens,
+            "judge_completion_tokens": (
+                0 if usage is None else usage.completion_tokens
+            ),
+            "judge_cost_usd": 0.0 if usage is None else usage.cost_usd,
         }
 
 
@@ -212,6 +237,8 @@ def _validate_pilot_reward_result(
 
 
 __all__ = [
+    "PILOT_VERL_ANSWER_ROUTE_FIELD",
+    "PILOT_VERL_JUDGE_USAGE_FIELD",
     "PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD",
     "PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION",
     "PILOT_VERL_REWARD_COMPONENTS_FIELD",

@@ -235,6 +235,7 @@ def test_policy_tracking_keeps_only_compact_operator_metrics() -> None:
             "actor/pg_loss": 0.25,
             "actor/grad_norm": 0.5,
             "policy_pilot/mean_answer_reward": 0.75,
+            "policy_pilot/judge_cost_usd": 0.0123,
             "policy_timing/end_to_end_step_seconds": 12.0,
             "global_seqlen/min": 100,
             "policy_pilot_total/generated_policy_tokens": 1_000,
@@ -247,6 +248,7 @@ def test_policy_tracking_keeps_only_compact_operator_metrics() -> None:
         "actor/pg_loss": 0.25,
         "actor/grad_norm": 0.5,
         "policy_pilot/mean_answer_reward": 0.75,
+        "policy_pilot/judge_cost_usd": 0.0123,
         "policy_timing/end_to_end_step_seconds": 12.0,
     }
 

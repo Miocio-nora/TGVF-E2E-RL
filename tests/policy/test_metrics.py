@@ -51,6 +51,10 @@ def _rows(prompt_id: str) -> tuple[PilotTrajectoryMetricsObservation, ...]:
                 original_visual_tokens=original_visual,
                 total_visual_tokens=original_visual + 2 * successes[index],
                 tool_error_codes=errors[index],
+                judge_calls=int(index == 0),
+                judge_prompt_tokens=201 if index == 0 else 0,
+                judge_completion_tokens=17 if index == 0 else 0,
+                judge_cost_usd=0.00007916 if index == 0 else 0.0,
             )
         )
     return tuple(rows)
@@ -106,6 +110,10 @@ def test_pilot_metrics_use_declared_trajectory_and_step_denominators() -> None:
     assert summary.mean_reasoning_length == 5.5
     assert summary.mean_original_visual_tokens == 13.5
     assert summary.mean_total_visual_tokens == 16.5
+    assert summary.judge_calls == 1
+    assert summary.judge_prompt_tokens == 201
+    assert summary.judge_completion_tokens == 17
+    assert summary.judge_cost_usd == pytest.approx(0.00007916)
     assert summary.mean_step_time_seconds == 12.5
     assert summary.tool_error_counts == (
         ToolErrorCount(ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value, 1),

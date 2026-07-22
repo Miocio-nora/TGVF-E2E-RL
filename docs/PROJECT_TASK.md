@@ -2,7 +2,7 @@
 
 Status: **I8H-20260719 bounded framework implementation complete; production gates open**
 Recorded: **2026-07-18 JST**
-Updated: **2026-07-21 JST**
+Updated: **2026-07-22 JST**
 
 Unresolved implementation contracts and their promotion gates are tracked in
 [`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
@@ -650,6 +650,28 @@ steady-state memory suitable for repeated four-B200 training steps, one exact
 GRPO update, post-update generation, paired checkpoint, and clean resume. The
 failed three-model layout and further KV-only squeezing are not admissible
 production paths.
+
+### 0.8.5 Accepted OpenRouter Policy RL answer judge
+
+Decision ID: **POLICY-PILOT-V1-OPENROUTER-JUDGE-20260722**
+
+Accepted by: **user**, on **2026-07-22 JST**.
+
+The Policy RL answer judge is served through OpenRouter so all four local B200
+devices remain available to the actor and rollout workers. The model route is
+`qwen/qwen-2.5-72b-instruct`; MCQ remains rule-only, while unresolved math and
+open-VQA answers use the existing strict binary semantic-judge prompt. The API
+credential is read only from `OPENROUTER_API_KEY` and is never stored in a run
+config, artifact, log, checkpoint, W&B record, or Git.
+
+The request pins the Novita provider, disables provider fallbacks, requires all
+request parameters, and requests no-data-collection/ZDR routing. Model route,
+provider policy, prompt, sampling, response schema, and failure behavior are
+content-identified. Returned token usage and cost are retained as diagnostics.
+The hosted provider's exact weight revision and quantization are opaque; this
+is a recorded reproducibility limitation and must not be represented as local
+HF-revision parity. A three-route calibration and one real mixed-task optimizer
+step must pass before an 80-step run is admitted.
 
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 

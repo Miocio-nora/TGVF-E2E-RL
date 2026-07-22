@@ -1,6 +1,12 @@
 """Optional external judge boundary."""
 
-from .base import DisabledJudgeProvider, JudgeProvider, JudgeRequest, JudgeResult
+from .base import (
+    DisabledJudgeProvider,
+    JudgeProvider,
+    JudgeRequest,
+    JudgeResult,
+    JudgeUsage,
+)
 from .openai_compatible import (
     BoundOpenAICompatibleJudge,
     OpenAICompatibleJudgeConfig,
@@ -15,6 +21,7 @@ __all__ = [
     "JudgeProvider",
     "JudgeRequest",
     "JudgeResult",
+    "JudgeUsage",
     "BoundOpenAICompatibleJudge",
     "OpenAICompatibleJudgeConfig",
     "OpenAICompatibleJudgeProvider",

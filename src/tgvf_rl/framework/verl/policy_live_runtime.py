@@ -953,6 +953,7 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
             reward.judge_config_path,
             expected_file_sha256=reward.judge_config_sha256,
         )
+        bound_judge.provider.validate_credentials()
         judge = bound_judge.provider
         judge_prompt_identity = bound_judge.prompt_identity
         judge_model_identity = bound_judge.model_identity

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,7 @@ from tgvf_rl.judges import (
     OpenAICompatibleJudgeConfig,
     OpenAICompatibleJudgeProvider,
     QWEN25_72B_RL_JUDGE_PROMPT_VERSION,
+    load_openai_compatible_judge,
 )
 
 
@@ -92,3 +95,74 @@ def test_rl_judge_fails_closed_on_nonbinary_or_malformed_output() -> None:
                     prompt_identity=prompt,
                 )
             )
+
+
+def test_openrouter_binding_uses_env_auth_pinned_route_and_retains_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/openrouter_qwen25_72b_rl_answer_judge_v1.json"
+    )
+    captured = []
+
+    def opener(request, *, timeout):
+        assert timeout == 120.0
+        captured.append(request)
+        return _Response(
+            {
+                "id": "generation-1",
+                "model": "qwen/qwen-2.5-72b-instruct",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": '{"verdict":1,"rationale":"equivalent"}'
+                        },
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 201,
+                    "completion_tokens": 17,
+                    "total_tokens": 218,
+                    "cost": 0.00007916,
+                },
+            }
+        )
+
+    bound = load_openai_compatible_judge(
+        path,
+        expected_file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        opener=opener,
+    )
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        bound.provider.validate_credentials()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only-secret")
+
+    result = bound.provider.judge(
+        JudgeRequest(
+            request_id="openrouter-request-1",
+            task_kind="open_vqa",
+            question="What color is the engine?",
+            candidate_answer="yellow",
+            reference_answer="The engine is yellow.",
+            prompt_identity=bound.prompt_identity,
+        )
+    )
+
+    assert result.score == 1.0
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 201
+    assert result.usage.completion_tokens == 17
+    assert result.usage.cost_usd == pytest.approx(0.00007916)
+    request = captured[0]
+    assert request.get_header("Authorization") == "Bearer test-only-secret"
+    payload = json.loads(request.data)
+    assert payload["model"] == "qwen/qwen-2.5-72b-instruct"
+    assert payload["provider"] == {
+        "only": ["novita"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }

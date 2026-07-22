@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
-from tgvf_rl.judges import JudgeResult
+from tgvf_rl.judges import JudgeResult, JudgeUsage
 from tgvf_rl.rewards.pipeline import (
     ExactTextVerifier,
     PilotRewardPipeline,
@@ -124,7 +124,9 @@ class _Judge:
         return self.result
 
 
-def _rule_first_verifier(*, judge_score: float = 1.0):
+def _rule_first_verifier(
+    *, judge_score: float = 1.0, judge_usage: JudgeUsage | None = None
+):
     model = _identity("qwen2.5-72b", "5")
     service = _identity("judge-service", "6")
     sampling = _identity("judge-sampling", "7")
@@ -138,6 +140,7 @@ def _rule_first_verifier(*, judge_score: float = 1.0):
             model_identity=model,
             sampling_identity=sampling,
             calibration_identity=calibration,
+            usage=judge_usage,
         )
     )
     verifier = RuleFirstAnswerVerifier(
@@ -220,7 +223,11 @@ def test_mcq_parser_requires_a_canonical_or_explicit_decision(
 
 
 def test_open_vqa_and_undecidable_math_use_bound_72b_judge() -> None:
-    verifier, judge = _rule_first_verifier(judge_score=1.0)
+    usage = JudgeUsage(201, 17, 218, 0.00007916)
+    verifier, judge = _rule_first_verifier(
+        judge_score=1.0,
+        judge_usage=usage,
+    )
     result = verifier.verify(
         RewardContext(
             "open",
@@ -234,6 +241,7 @@ def test_open_vqa_and_undecidable_math_use_bound_72b_judge() -> None:
 
     assert result.correct
     assert result.route == "qwen2.5_72b_semantic_fallback"
+    assert result.judge_usage == usage
     assert judge.calls == 1
 
 

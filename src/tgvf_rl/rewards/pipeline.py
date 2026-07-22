@@ -139,4 +139,5 @@ class PilotRewardPipeline:
             total=sum(component.weighted_score for component in components),
             components=components,
             pipeline_identity=self.spec.pipeline_identity,
+            answer_verification=verification,
         )

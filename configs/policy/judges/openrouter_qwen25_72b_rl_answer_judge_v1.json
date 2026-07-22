@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "identity": "openrouter-qwen25-72b-policy-rl-answer-judge-v1",
+  "role": "policy_rl_answer_judge_only",
+  "model": {
+    "repository": "Qwen/Qwen2.5-72B-Instruct",
+    "revision": "openrouter-novita-hosted-revision-opaque-20260722",
+    "reference_hf_revision": "495f39366efef23836d0cfae4fbe635880d2be31",
+    "served_name": "qwen/qwen-2.5-72b-instruct",
+    "tokenizer_length": 151665,
+    "reference_chat_template_sha256": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f",
+    "hosted_weight_revision": "opaque",
+    "hosted_quantization": "opaque"
+  },
+  "prompt": {
+    "version": "qwen2.5-72b-rl-answer-judge-v1",
+    "sha256": "2fa039d7add954b9d6a457687e73c0b3141b17d711cbe5e24a99ae35d03e86d2",
+    "output_schema": {
+      "verdict": "integer 0 or 1",
+      "rationale": "non-empty string"
+    }
+  },
+  "sampling": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "max_tokens": 256,
+    "seed": 42,
+    "response_format": "json_object"
+  },
+  "service": {
+    "base_url": "https://openrouter.ai/api/v1",
+    "timeout_seconds": 120.0,
+    "deployment": "openrouter-novita-qwen25-72b-v1",
+    "api_key_env": "OPENROUTER_API_KEY",
+    "expected_response_model": "qwen/qwen-2.5-72b-instruct",
+    "require_usage": true,
+    "http_referer": "https://github.com/Miocio-nora/TGVF-E2E-RL",
+    "application_title": "TGVF-E2E-RL"
+  },
+  "routing": {
+    "only": ["novita"],
+    "allow_fallbacks": false,
+    "require_parameters": true,
+    "data_collection": "deny",
+    "zdr": true
+  },
+  "calibration": {
+    "version": "pending-real-openrouter-deepeyes-3route-v1",
+    "sample_ids": {
+      "mcq": "deepeyes47k:4b74dbfbd36b31129eb811b919526a30448b05d2c05bb11736c7bc75c02e718e",
+      "math": "deepeyes47k:bdd3c553a12609c6b7082687d6d153d14febf9c60d8ffa90c5b39087b3acd925",
+      "open": "deepeyes47k:9f878be9ea753995964ee6cd74f4949097dd044671e34facb00df3cd5d26ca2c"
+    }
+  },
+  "failure_policy": {
+    "request_error": "raise_and_abort_reward_batch",
+    "timeout": "raise_and_abort_reward_batch",
+    "malformed_output": "raise_and_abort_reward_batch",
+    "nonbinary_output": "raise_and_abort_reward_batch",
+    "provider_fallback": false,
+    "exact_match_fallback_after_judge_failure": false
+  },
+  "scope": {
+    "allows_policy_rl_reward": true,
+    "allows_mcq_judge_calls": false,
+    "allows_reference_policy": false,
+    "allows_sdpo_teacher": false,
+    "allows_gpt_fallback": false,
+    "formal_pilot_accepted": false
+  }
+}

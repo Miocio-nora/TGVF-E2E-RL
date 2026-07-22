@@ -161,6 +161,7 @@ class RuleFirstAnswerVerifier:
             "qwen2.5_72b_semantic_fallback",
             result.rationale,
             result.model_identity,
+            judge_usage=result.usage,
         )
 
 

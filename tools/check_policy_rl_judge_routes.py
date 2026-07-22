@@ -11,10 +11,10 @@ from typing import Any
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.judges import (
-    OpenAICompatibleJudgeConfig,
     OpenAICompatibleJudgeProvider,
     QWEN25_72B_RL_JUDGE_PROMPT_VERSION,
     QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT,
+    load_openai_compatible_judge,
 )
 from tgvf_rl.rewards import AnswerTaskKind, PilotRewardPipeline, RewardContext
 from tgvf_rl.rewards.schema import NormalizationSpec, PilotRewardSpec
@@ -44,10 +44,18 @@ class _CountingJudge:
     def __init__(self, delegate: OpenAICompatibleJudgeProvider) -> None:
         self.delegate = delegate
         self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.cost_usd = 0.0
 
     def judge(self, request):
         self.calls += 1
-        return self.delegate.judge(request)
+        result = self.delegate.judge(request)
+        if result.usage is not None:
+            self.prompt_tokens += result.usage.prompt_tokens
+            self.completion_tokens += result.usage.completion_tokens
+            self.cost_usd += result.usage.cost_usd
+        return result
 
 
 def _canonical_sha(value: object) -> str:
@@ -111,42 +119,21 @@ def main() -> int:
     ):
         raise RuntimeError("RL judge prompt identity differs")
 
-    prompt_identity = ArtifactIdentity(
-        "policy-rl-answer-judge",
-        "prompt",
-        prompt["version"],
-        prompt["sha256"],
+    bound = load_openai_compatible_judge(
+        args.config,
+        expected_file_sha256=sha256(args.config.read_bytes()).hexdigest(),
     )
-    model_identity = _artifact("model", config["model"]["revision"], config["model"])
-    service_identity = _artifact("service", config["service"]["deployment"], config["service"])
-    sampling_identity = _artifact("sampling", "v1", config["sampling"])
-    calibration_identity = _artifact("calibration", "real-deepeyes-3route-v1", _REAL_CASES)
-    provider = OpenAICompatibleJudgeProvider(
-        OpenAICompatibleJudgeConfig(
-            base_url=config["service"]["base_url"],
-            model_name=config["model"]["served_name"],
-            prompt_identity=prompt_identity,
-            service_identity=service_identity,
-            model_identity=model_identity,
-            sampling_identity=sampling_identity,
-            calibration_identity=calibration_identity,
-            **{
-                key: config["sampling"][key]
-                for key in ("temperature", "top_p", "max_tokens", "seed")
-            },
-            timeout_seconds=config["service"]["timeout_seconds"],
-        )
-    )
-    judge = _CountingJudge(provider)
+    bound.provider.validate_credentials()
+    judge = _CountingJudge(bound.provider)
     verifier = RuleFirstAnswerVerifier(
         rule_identity=_artifact("rule-first", "v1", {"routes": ["mcq", "math", "open"]}),
         normalization=NormalizationSpec(True, True, True),
         judge=judge,
-        judge_prompt_identity=prompt_identity,
-        judge_model_identity=model_identity,
-        judge_service_identity=service_identity,
-        judge_sampling_identity=sampling_identity,
-        judge_calibration_identity=calibration_identity,
+        judge_prompt_identity=bound.prompt_identity,
+        judge_model_identity=bound.model_identity,
+        judge_service_identity=bound.service_identity,
+        judge_sampling_identity=bound.sampling_identity,
+        judge_calibration_identity=bound.calibration_identity,
     )
     reward_spec = PilotRewardSpec(
         pipeline_identity=_artifact("reward-pipeline", "v1", {"weights": [0.8, 0.2, 1.2]}),
@@ -174,16 +161,16 @@ def main() -> int:
             data_source=row["data_source"],
         )
         before = judge.calls
-        correct = verifier.verify(base)
-        wrong = verifier.verify(
-            replace(base, candidate_answer=case["candidate_wrong"])
-        )
         correct_reward = reward_pipeline.score(base)
         wrong_reward = reward_pipeline.score(
             replace(base, candidate_answer=case["candidate_wrong"])
         )
+        correct = correct_reward.answer_verification
+        wrong = wrong_reward.answer_verification
+        if correct is None or wrong is None:
+            raise RuntimeError(f"{route} reward omitted answer verification")
         calls = judge.calls - before
-        expected_calls = 0 if route == "mcq" else 4
+        expected_calls = 0 if route == "mcq" else 2
         if (
             not correct.correct
             or wrong.correct
@@ -210,8 +197,11 @@ def main() -> int:
     output = {
         "status": "pass",
         "judge_calls": judge.calls,
+        "judge_prompt_tokens": judge.prompt_tokens,
+        "judge_completion_tokens": judge.completion_tokens,
+        "judge_cost_usd": judge.cost_usd,
         "cases": results,
-        "prompt_sha256": prompt_identity.sha256,
+        "prompt_sha256": bound.prompt_identity.sha256,
         "model_revision": config["model"]["revision"],
     }
     rendered = json.dumps(output, indent=2, ensure_ascii=False, sort_keys=True)

@@ -98,6 +98,10 @@ class PilotTrajectoryMetricsObservation:
     original_visual_tokens: int
     total_visual_tokens: int
     tool_error_codes: tuple[str, ...] = ()
+    judge_calls: int = 0
+    judge_prompt_tokens: int = 0
+    judge_completion_tokens: int = 0
+    judge_cost_usd: float = 0.0
 
     def __post_init__(self) -> None:
         if type(self.prompt_id) is not str or not self.prompt_id.strip():
@@ -111,8 +115,23 @@ class PilotTrajectoryMetricsObservation:
             "reasoning_tokens",
             "original_visual_tokens",
             "total_visual_tokens",
+            "judge_calls",
+            "judge_prompt_tokens",
+            "judge_completion_tokens",
         ):
             _nonnegative_int(getattr(self, name), name)
+        if self.judge_calls not in {0, 1}:
+            raise ValueError("one trajectory can invoke the answer judge at most once")
+        judge_cost = _finite_float(self.judge_cost_usd, "judge_cost_usd")
+        if judge_cost < 0.0:
+            raise ValueError("judge_cost_usd must be non-negative")
+        object.__setattr__(self, "judge_cost_usd", judge_cost)
+        if self.judge_calls == 0 and (
+            self.judge_prompt_tokens
+            or self.judge_completion_tokens
+            or self.judge_cost_usd
+        ):
+            raise ValueError("judge usage requires a judge call")
         if self.tool_call_attempts > POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS:
             raise ValueError("Pilot v1 records at most five tool-call attempts")
         if self.successful_tgvf_observations > POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS:
@@ -222,6 +241,10 @@ class PilotMetricsCheckpointState:
     reasoning_tokens: int = 0
     original_visual_tokens: int = 0
     total_visual_tokens: int = 0
+    judge_calls: int = 0
+    judge_prompt_tokens: int = 0
+    judge_completion_tokens: int = 0
+    judge_cost_usd: float = 0.0
     step_time_seconds_total: float = 0.0
     tool_error_counts: tuple[ToolErrorCount, ...] = ()
 
@@ -242,6 +265,9 @@ class PilotMetricsCheckpointState:
             "reasoning_tokens",
             "original_visual_tokens",
             "total_visual_tokens",
+            "judge_calls",
+            "judge_prompt_tokens",
+            "judge_completion_tokens",
         )
         for name in integer_fields:
             _nonnegative_int(getattr(self, name), name)
@@ -251,6 +277,10 @@ class PilotMetricsCheckpointState:
         if elapsed < 0.0:
             raise ValueError("step_time_seconds_total must be non-negative")
         object.__setattr__(self, "step_time_seconds_total", elapsed)
+        judge_cost = _finite_float(self.judge_cost_usd, "judge_cost_usd")
+        if judge_cost < 0.0:
+            raise ValueError("judge_cost_usd must be non-negative")
+        object.__setattr__(self, "judge_cost_usd", judge_cost)
         object.__setattr__(self, "tool_error_counts", tuple(self.tool_error_counts))
         if any(not isinstance(item, ToolErrorCount) for item in self.tool_error_counts):
             raise TypeError("tool_error_counts must contain ToolErrorCount values")
@@ -276,6 +306,7 @@ class PilotMetricsCheckpointState:
             "answer_reward_total": self.answer_reward_total,
             "format_errors": self.format_errors,
             "conditional_tool_reward_total": self.conditional_tool_reward_total,
+            "judge_calls": self.judge_calls,
         }
         if any(value > self.trajectories for value in bounded_by_trajectories.values()):
             raise ValueError("trajectory metric numerators cannot exceed trajectories")
@@ -299,6 +330,14 @@ class PilotMetricsCheckpointState:
             raise ValueError("reasoning tokens cannot exceed generated policy tokens")
         if self.original_visual_tokens > self.total_visual_tokens:
             raise ValueError("total visual tokens must include original visual tokens")
+        if self.judge_calls == 0 and (
+            self.judge_prompt_tokens
+            or self.judge_completion_tokens
+            or self.judge_cost_usd
+        ):
+            raise ValueError("judge usage totals require judge calls")
+        if self.judge_calls and self.judge_prompt_tokens < self.judge_calls:
+            raise ValueError("each judge call requires prompt tokens")
         if sum(item.count for item in self.tool_error_counts) + (
             self.successful_tgvf_observations
         ) != self.tool_call_attempts:
@@ -321,6 +360,10 @@ class PilotMetricsCheckpointState:
             "answer_reward_total": self.answer_reward_total,
             "format_errors": self.format_errors,
             "conditional_tool_reward_total": self.conditional_tool_reward_total,
+            "judge_calls": self.judge_calls,
+            "judge_prompt_tokens": self.judge_prompt_tokens,
+            "judge_completion_tokens": self.judge_completion_tokens,
+            "judge_cost_usd": self.judge_cost_usd,
             "reasoning_tokens": self.reasoning_tokens,
             "original_visual_tokens": self.original_visual_tokens,
             "total_visual_tokens": self.total_visual_tokens,
@@ -348,6 +391,10 @@ class PilotMetricsCheckpointState:
             "answer_reward_total",
             "format_errors",
             "conditional_tool_reward_total",
+            "judge_calls",
+            "judge_prompt_tokens",
+            "judge_completion_tokens",
+            "judge_cost_usd",
             "reasoning_tokens",
             "original_visual_tokens",
             "total_visual_tokens",
@@ -390,6 +437,10 @@ class PilotMetricsCheckpointState:
             conditional_tool_reward_total=payload[
                 "conditional_tool_reward_total"
             ],
+            judge_calls=payload["judge_calls"],
+            judge_prompt_tokens=payload["judge_prompt_tokens"],
+            judge_completion_tokens=payload["judge_completion_tokens"],
+            judge_cost_usd=payload["judge_cost_usd"],
             reasoning_tokens=payload["reasoning_tokens"],
             original_visual_tokens=payload["original_visual_tokens"],
             total_visual_tokens=payload["total_visual_tokens"],
@@ -416,6 +467,10 @@ class PilotMetricsSummary:
     mean_original_visual_tokens: float
     mean_total_visual_tokens: float
     mean_step_time_seconds: float
+    judge_calls: int
+    judge_prompt_tokens: int
+    judge_completion_tokens: int
+    judge_cost_usd: float
     tool_error_counts: tuple[ToolErrorCount, ...]
 
 
@@ -476,6 +531,20 @@ class PilotMetricsAccumulator:
                 self._state.conditional_tool_reward_total
                 + sum(int(row.conditional_tool_reward) for row in rows)
             ),
+            judge_calls=(
+                self._state.judge_calls + sum(row.judge_calls for row in rows)
+            ),
+            judge_prompt_tokens=(
+                self._state.judge_prompt_tokens
+                + sum(row.judge_prompt_tokens for row in rows)
+            ),
+            judge_completion_tokens=(
+                self._state.judge_completion_tokens
+                + sum(row.judge_completion_tokens for row in rows)
+            ),
+            judge_cost_usd=math.fsum(
+                (self._state.judge_cost_usd, *(row.judge_cost_usd for row in rows))
+            ),
             reasoning_tokens=(
                 self._state.reasoning_tokens
                 + sum(row.reasoning_tokens for row in rows)
@@ -534,6 +603,10 @@ class PilotMetricsAccumulator:
             mean_step_time_seconds=_zero_safe_mean(
                 state.step_time_seconds_total, state.optimizer_steps
             ),
+            judge_calls=state.judge_calls,
+            judge_prompt_tokens=state.judge_prompt_tokens,
+            judge_completion_tokens=state.judge_completion_tokens,
+            judge_cost_usd=state.judge_cost_usd,
             tool_error_counts=state.tool_error_counts,
         )
 

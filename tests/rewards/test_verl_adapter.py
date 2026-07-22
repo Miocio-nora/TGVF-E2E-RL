@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from tests.framework.test_verl_bridges import _record
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
+from tgvf_rl.judges import JudgeUsage
 from tgvf_rl.framework.verl.reward_bridge import (
     VerlRewardedAgentLoopOutputBuilder,
 )
@@ -19,6 +21,10 @@ from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.pipeline import PilotRewardPipeline
 from tgvf_rl.rewards.schema import NormalizationSpec
 from tgvf_rl.rewards.verifiers import RuleFirstAnswerVerifier
+from tgvf_rl.rewards.verl_adapter import (
+    PILOT_VERL_ANSWER_ROUTE_FIELD,
+    PILOT_VERL_JUDGE_USAGE_FIELD,
+)
 
 
 def _identity(name: str, digit: str) -> ArtifactIdentity:
@@ -93,6 +99,27 @@ def test_mcq_trajectory_reward_is_exact_and_never_calls_judge() -> None:
     )
     assert scored.reward_extra_info()["tgvf_exact_trajectory_reward"] == 0.8
     assert judge.calls == 0
+
+    usage = JudgeUsage(201, 17, 218, 0.00007916)
+    verification = replace(
+        scored.result.answer_verification,
+        route="qwen2.5_72b_semantic_fallback",
+        judge_usage=usage,
+    )
+    with_usage = replace(
+        scored,
+        result=replace(scored.result, answer_verification=verification),
+    )
+    sidecars = with_usage.reward_sidecars()
+    assert sidecars[PILOT_VERL_ANSWER_ROUTE_FIELD] == (
+        "qwen2.5_72b_semantic_fallback"
+    )
+    assert sidecars[PILOT_VERL_JUDGE_USAGE_FIELD] == (
+        201,
+        17,
+        218,
+        pytest.approx(0.00007916),
+    )
 
     with pytest.raises(ValueError, match="identities differ"):
         scorer.score(

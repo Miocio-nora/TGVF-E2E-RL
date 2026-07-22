@@ -65,7 +65,10 @@ from .policy_weight_sync import (
     load_latest_policy_version,
 )
 from .reward_bridge import validate_policy_pilot_reward_data_proto
-from tgvf_rl.rewards.verl_adapter import PILOT_VERL_REWARD_COMPONENTS_FIELD
+from tgvf_rl.rewards.verl_adapter import (
+    PILOT_VERL_JUDGE_USAGE_FIELD,
+    PILOT_VERL_REWARD_COMPONENTS_FIELD,
+)
 from .rollout_bridge import (
     TRAJECTORY_PAYLOAD_FIELD,
     TRAJECTORY_REPLAY_BUNDLE_FIELD,
@@ -98,6 +101,10 @@ POLICY_TRACKING_METRIC_NAMES = frozenset(
         "policy_pilot/mean_reasoning_length",
         "policy_pilot/mean_original_visual_tokens",
         "policy_pilot/mean_total_visual_tokens",
+        "policy_pilot/judge_calls",
+        "policy_pilot/judge_prompt_tokens",
+        "policy_pilot/judge_completion_tokens",
+        "policy_pilot/judge_cost_usd",
         "policy_timing/end_to_end_step_seconds",
         "perf/throughput",
         "response_length/mean",
@@ -175,6 +182,12 @@ def _pilot_metrics_event(
         "mean_total_visual_tokens": _zero_safe_mean(
             sum(row.total_visual_tokens for row in rows), trajectories
         ),
+        "judge_calls": sum(row.judge_calls for row in rows),
+        "judge_prompt_tokens": sum(row.judge_prompt_tokens for row in rows),
+        "judge_completion_tokens": sum(
+            row.judge_completion_tokens for row in rows
+        ),
+        "judge_cost_usd": sum(row.judge_cost_usd for row in rows),
         "pre_publication_elapsed_seconds": observation.step_time_seconds,
         "tool_error_counts": dict(sorted(errors.items())),
     }
@@ -192,6 +205,10 @@ def _pilot_metrics_event(
         "mean_reasoning_length": summary.mean_reasoning_length,
         "mean_original_visual_tokens": summary.mean_original_visual_tokens,
         "mean_total_visual_tokens": summary.mean_total_visual_tokens,
+        "judge_calls": summary.judge_calls,
+        "judge_prompt_tokens": summary.judge_prompt_tokens,
+        "judge_completion_tokens": summary.judge_completion_tokens,
+        "judge_cost_usd": summary.judge_cost_usd,
         "tool_error_counts": {
             item.code: item.count for item in summary.tool_error_counts
         },
@@ -884,6 +901,12 @@ def policy_metrics_observation_from_data_proto(
     trajectories = tuple(non_tensors[TRAJECTORY_PAYLOAD_FIELD])
     replay_bundles = tuple(non_tensors[TRAJECTORY_REPLAY_BUNDLE_FIELD])
     components = tuple(non_tensors[PILOT_VERL_REWARD_COMPONENTS_FIELD])
+    raw_judge_usages = non_tensors.get(PILOT_VERL_JUDGE_USAGE_FIELD)
+    judge_usages = (
+        (None,) * len(trajectories)
+        if raw_judge_usages is None
+        else tuple(raw_judge_usages)
+    )
     response_mask = batch["response_mask"]
     if not isinstance(response_mask, torch.Tensor):
         raise TypeError("Policy metric response_mask must be a tensor")
@@ -891,13 +914,14 @@ def policy_metrics_observation_from_data_proto(
         len(trajectories)
         == len(replay_bundles)
         == len(components)
+        == len(judge_usages)
         == response_mask.shape[0]
     ):
         raise RuntimeError("Policy metric rows differ from the update batch")
 
     rows: list[PilotTrajectoryMetricsObservation] = []
-    for index, (trajectory, bundle, raw_components) in enumerate(
-        zip(trajectories, replay_bundles, components, strict=True)
+    for index, (trajectory, bundle, raw_components, raw_judge_usage) in enumerate(
+        zip(trajectories, replay_bundles, components, judge_usages, strict=True)
     ):
         if not isinstance(trajectory, TrajectoryRecord):
             raise TypeError("Policy metric trajectory sidecar is invalid")
@@ -913,6 +937,28 @@ def policy_metrics_observation_from_data_proto(
             "conditional_tool_reward",
         }:
             raise ValueError("Policy metric reward components differ")
+        if raw_judge_usage is None:
+            judge_calls = 0
+            judge_prompt_tokens = 0
+            judge_completion_tokens = 0
+            judge_cost_usd = 0.0
+        else:
+            try:
+                (
+                    judge_prompt_tokens,
+                    judge_completion_tokens,
+                    judge_total_tokens,
+                    judge_cost_usd,
+                ) = raw_judge_usage
+                judge_prompt_tokens = int(judge_prompt_tokens)
+                judge_completion_tokens = int(judge_completion_tokens)
+                judge_total_tokens = int(judge_total_tokens)
+                judge_cost_usd = float(judge_cost_usd)
+            except (TypeError, ValueError) as error:
+                raise TypeError("Policy judge usage sidecar is malformed") from error
+            if judge_total_tokens != judge_prompt_tokens + judge_completion_tokens:
+                raise ValueError("Policy judge usage token total differs")
+            judge_calls = 1
         original_visual = len(bundle.replay_record.source_visual.positions)
         tool_visual = sum(_observation_visual_tokens(item) for item in bundle.observation_records)
         reasoning = sum(
@@ -935,6 +981,10 @@ def policy_metrics_observation_from_data_proto(
                 original_visual_tokens=original_visual,
                 total_visual_tokens=original_visual + tool_visual,
                 tool_error_codes=errors,
+                judge_calls=judge_calls,
+                judge_prompt_tokens=judge_prompt_tokens,
+                judge_completion_tokens=judge_completion_tokens,
+                judge_cost_usd=judge_cost_usd,
             )
         )
     return PilotOptimizerStepMetricsObservation(
