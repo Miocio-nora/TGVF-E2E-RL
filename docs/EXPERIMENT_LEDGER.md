@@ -7510,11 +7510,14 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   tool reward 0.421875, tool-call-attempt rate 0.921875, and format-error rate
   0.1015625. Post-success vLLM/W&B atexit noise did not change exit status or
   checkpoint completeness.
-- Resume sub-run: `PLANNED` / `PENDING`, tmux `prl02_mixed1_resume_gpu0123` on
+- Resume sub-run: `COMPLETE` / `PASS`, tmux `prl02_mixed1_resume_gpu0123` on
   the same physical GPUs 0--3. It reuses the exact committed run/config identity
   and checkpoint, changing only the upstream runtime `trainer.resume_mode`
-  launch override from `disable` to `auto`. Acceptance requires restoring step
-  1 and exiting without another rollout, judge call, or optimizer update.
+  launch override from `disable` to `auto`. It exited 0 after all four ranks
+  restored model, optimizer, RNG, and LR scheduler at step 1. The metrics file
+  remained one line and the committed checkpoint was not rewritten, proving no
+  additional rollout, judge call, or optimizer update; resume-log SHA-256
+  `6ea539bf...e8ec`.
 
 ### PRL-02-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
