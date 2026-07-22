@@ -31,6 +31,14 @@
     "deployment": "vllm-0.12-tp2-bf16",
     "integration_devices": [0, 1]
   },
+  "calibration": {
+    "version": "real-deepeyes-3route-v1",
+    "sample_ids": {
+      "mcq": "deepeyes47k:4b74dbfbd36b31129eb811b919526a30448b05d2c05bb11736c7bc75c02e718e",
+      "math": "deepeyes47k:bdd3c553a12609c6b7082687d6d153d14febf9c60d8ffa90c5b39087b3acd925",
+      "open": "deepeyes47k:9f878be9ea753995964ee6cd74f4949097dd044671e34facb00df3cd5d26ca2c"
+    }
+  },
   "failure_policy": {
     "request_error": "raise_and_abort_reward_batch",
     "timeout": "raise_and_abort_reward_batch",

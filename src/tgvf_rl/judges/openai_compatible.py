@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from hashlib import sha256
 import json
+from pathlib import Path
 from typing import Any
 from urllib import request as urllib_request
 
@@ -126,6 +128,121 @@ class OpenAICompatibleJudgeProvider:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class BoundOpenAICompatibleJudge:
+    provider: OpenAICompatibleJudgeProvider
+    prompt_identity: ArtifactIdentity
+    service_identity: ArtifactIdentity
+    model_identity: ArtifactIdentity
+    sampling_identity: ArtifactIdentity
+    calibration_identity: ArtifactIdentity
+    failure_policy_identity: ArtifactIdentity
+    config_file_sha256: str
+
+
+def load_openai_compatible_judge(
+    path: str | Path,
+    *,
+    expected_file_sha256: str,
+    opener: Callable[..., Any] | None = None,
+) -> BoundOpenAICompatibleJudge:
+    """Load the exact Policy RL judge binding used by runtime and checks."""
+
+    config_path = Path(path)
+    raw = config_path.read_bytes()
+    actual_file_sha256 = sha256(raw).hexdigest()
+    if actual_file_sha256 != expected_file_sha256:
+        raise ValueError("RL judge config file SHA256 differs")
+    decoded = json.loads(raw)
+    required = {
+        "schema_version",
+        "identity",
+        "role",
+        "model",
+        "prompt",
+        "sampling",
+        "service",
+        "calibration",
+        "failure_policy",
+        "scope",
+    }
+    if not isinstance(decoded, dict) or set(decoded) != required:
+        raise ValueError("RL judge config schema differs")
+    if decoded["role"] != "policy_rl_answer_judge_only":
+        raise ValueError("RL judge role differs")
+    scope = decoded["scope"]
+    if (
+        not isinstance(scope, Mapping)
+        or scope.get("allows_policy_rl_reward") is not True
+        or scope.get("allows_mcq_judge_calls") is not False
+        or scope.get("allows_reference_policy") is not False
+        or scope.get("allows_sdpo_teacher") is not False
+        or scope.get("allows_gpt_fallback") is not False
+    ):
+        raise ValueError("RL judge scope differs")
+    prompt = decoded["prompt"]
+    prompt_sha = sha256(QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT.encode()).hexdigest()
+    if (
+        not isinstance(prompt, Mapping)
+        or prompt.get("version") != QWEN25_72B_RL_JUDGE_PROMPT_VERSION
+        or prompt.get("sha256") != prompt_sha
+    ):
+        raise ValueError("RL judge prompt identity differs")
+    model = decoded["model"]
+    sampling = decoded["sampling"]
+    service = decoded["service"]
+    calibration = decoded["calibration"]
+    failure_policy = decoded["failure_policy"]
+    for name, value in (
+        ("model", model),
+        ("sampling", sampling),
+        ("service", service),
+        ("calibration", calibration),
+        ("failure_policy", failure_policy),
+    ):
+        if not isinstance(value, Mapping):
+            raise ValueError(f"RL judge {name} binding must be a mapping")
+    prompt_identity = ArtifactIdentity(
+        "policy-rl-answer-judge",
+        "prompt",
+        QWEN25_72B_RL_JUDGE_PROMPT_VERSION,
+        prompt_sha,
+    )
+    model_identity = _artifact("model", str(model["revision"]), model)
+    service_identity = _artifact(
+        "service", str(service["deployment"]), service
+    )
+    sampling_identity = _artifact("sampling", "v1", sampling)
+    calibration_identity = _artifact(
+        "calibration", str(calibration["version"]), calibration
+    )
+    failure_policy_identity = _artifact("failure-policy", "v1", failure_policy)
+    provider_config = OpenAICompatibleJudgeConfig(
+        base_url=str(service["base_url"]),
+        model_name=str(model["served_name"]),
+        prompt_identity=prompt_identity,
+        service_identity=service_identity,
+        model_identity=model_identity,
+        sampling_identity=sampling_identity,
+        calibration_identity=calibration_identity,
+        temperature=float(sampling["temperature"]),
+        top_p=float(sampling["top_p"]),
+        max_tokens=int(sampling["max_tokens"]),
+        seed=int(sampling["seed"]),
+        timeout_seconds=float(service["timeout_seconds"]),
+    )
+    return BoundOpenAICompatibleJudge(
+        provider=OpenAICompatibleJudgeProvider(provider_config, opener=opener),
+        prompt_identity=prompt_identity,
+        service_identity=service_identity,
+        model_identity=model_identity,
+        sampling_identity=sampling_identity,
+        calibration_identity=calibration_identity,
+        failure_policy_identity=failure_policy_identity,
+        config_file_sha256=actual_file_sha256,
+    )
+
+
 def _completion_content(payload: object) -> str:
     if not isinstance(payload, Mapping):
         raise RuntimeError("RL answer judge returned a non-object response")
@@ -156,9 +273,26 @@ def _binary_verdict(content: str) -> tuple[int, str]:
     return verdict, rationale.strip()
 
 
+def _artifact(name: str, version: str, payload: object) -> ArtifactIdentity:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return ArtifactIdentity(
+        "policy-rl-answer-judge",
+        name,
+        version,
+        sha256(canonical.encode()).hexdigest(),
+    )
+
+
 __all__ = [
     "OpenAICompatibleJudgeConfig",
     "OpenAICompatibleJudgeProvider",
+    "BoundOpenAICompatibleJudge",
     "QWEN25_72B_RL_JUDGE_PROMPT_VERSION",
     "QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT",
+    "load_openai_compatible_judge",
 ]

@@ -76,7 +76,7 @@ from tgvf_rl.rewards import (
     reward_context_from_trajectory,
 )
 from tgvf_rl.rewards.schema import NormalizationSpec
-from tgvf_rl.judges import DisabledJudgeProvider
+from tgvf_rl.judges import DisabledJudgeProvider, load_openai_compatible_judge
 from tgvf_rl.trajectories.behavior import BehaviorTraceStore, VLLMBehaviorRecorder
 from tgvf_rl.trajectories.schema import TrajectoryRecord, trajectory_checksum
 from tgvf_rl.framework.vllm import (
@@ -236,6 +236,7 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             crop_execution_ledger=crop_execution_ledger,
             metrics_factory=self.metrics_factory,
             agent_loop_output_cls=self.agent_loop_output_cls,
+            sample_index=_load_bound_sample_index(config),
         )
         return PolicyE2ERuntimeProduct(
             trajectory_components=components,
@@ -260,6 +261,7 @@ class _Qwen3PolicyTrajectoryComponents:
         crop_execution_ledger: CropExecutionLedger,
         metrics_factory: Callable[[TrajectoryRecord, PilotVerlTrajectoryReward], object],
         agent_loop_output_cls: type[Any] | None,
+        sample_index: Mapping[str, Mapping[str, object]],
     ) -> None:
         self.context = context
         self.config = context.config
@@ -273,6 +275,7 @@ class _Qwen3PolicyTrajectoryComponents:
         self.crop_execution_ledger = crop_execution_ledger
         self.metrics_factory = metrics_factory
         self.agent_loop_output_cls = agent_loop_output_cls
+        self.sample_index = sample_index
         self.reward_pipeline = _build_reward_pipeline(self.config)
 
     async def build_trajectory_components_async(
@@ -290,7 +293,12 @@ class _Qwen3PolicyTrajectoryComponents:
             raise TypeError("trajectory identity has the wrong type")
         if model != self.config.model:
             raise IdentityMismatchError("trajectory model differs from live runtime")
-        _validate_sample_fields(self.config, identity.sample_id, sample_fields)
+        _validate_sample_fields(
+            self.config,
+            identity.sample_id,
+            sample_fields,
+            sample_index=self.sample_index,
+        )
         source_rgb = _load_bound_rgb(Path(_scalar(sample_fields["source_image_path"])))
         pixel_values, image_grid_thw = preprocess_qwen3_rgb(
             processor=self.context.processor,
@@ -900,7 +908,7 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
     reward = config.reward
     answer_identity = ArtifactIdentity(
         "policy-reward",
-        "multiple-choice-rule",
+        reward.answer_verifier,
         "pilot-v1",
         reward.answer_verifier_sha256,
     )
@@ -925,20 +933,41 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
             "answer": answer_identity.sha256,
             "format": format_identity.sha256,
             "tool": tool_identity.sha256,
+            "judge_config": reward.judge_config_sha256,
         },
     )
-    disabled = _artifact_identity(
-        "judge", "disabled-qwen2.5-72b", "pilot-smoke", {"disabled": True}
-    )
+    if reward.judge_config_path is None:
+        disabled = _artifact_identity(
+            "judge", "disabled-qwen2.5-72b", "pilot-smoke", {"disabled": True}
+        )
+        judge = DisabledJudgeProvider()
+        judge_prompt_identity = disabled
+        judge_model_identity = disabled
+        judge_service_identity = disabled
+        judge_sampling_identity = disabled
+        judge_calibration_identity = disabled
+    else:
+        if reward.judge_config_sha256 is None:
+            raise ValueError("enabled RL judge lacks its config identity")
+        bound_judge = load_openai_compatible_judge(
+            reward.judge_config_path,
+            expected_file_sha256=reward.judge_config_sha256,
+        )
+        judge = bound_judge.provider
+        judge_prompt_identity = bound_judge.prompt_identity
+        judge_model_identity = bound_judge.model_identity
+        judge_service_identity = bound_judge.service_identity
+        judge_sampling_identity = bound_judge.sampling_identity
+        judge_calibration_identity = bound_judge.calibration_identity
     verifier = RuleFirstAnswerVerifier(
         rule_identity=answer_identity,
         normalization=NormalizationSpec(True, True, True),
-        judge=DisabledJudgeProvider(),
-        judge_prompt_identity=disabled,
-        judge_model_identity=disabled,
-        judge_service_identity=disabled,
-        judge_sampling_identity=disabled,
-        judge_calibration_identity=disabled,
+        judge=judge,
+        judge_prompt_identity=judge_prompt_identity,
+        judge_model_identity=judge_model_identity,
+        judge_service_identity=judge_service_identity,
+        judge_sampling_identity=judge_sampling_identity,
+        judge_calibration_identity=judge_calibration_identity,
     )
     return PilotRewardPipeline(
         PilotRewardSpec(
@@ -951,22 +980,90 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
     )
 
 
-def _validate_sample_fields(config: object, sample_id: str, fields: Mapping[str, object]) -> None:
+def _validate_sample_fields(
+    config: object,
+    sample_id: str,
+    fields: Mapping[str, object],
+    *,
+    sample_index: Mapping[str, Mapping[str, object]],
+) -> None:
     sample = config.dataset.selected_sample
-    expected = {
-        "sample_id": sample_id,
-        "source_image_path": str(sample.image_path),
-        "source_image_sha256": sample.image_sha256,
-        "question": sample.question,
-        "data_source": sample.data_source,
-        "task_kind": sample.task_kind,
-    }
+    if sample is None:
+        try:
+            record = sample_index[sample_id]
+        except KeyError as error:
+            raise IdentityMismatchError("upstream sample_id is absent from DeepEyes") from error
+        image = record.get("image")
+        extra_info = record.get("extra_info")
+        bound_reward = record.get("reward_model")
+        if (
+            not isinstance(image, Mapping)
+            or not isinstance(extra_info, Mapping)
+            or not isinstance(bound_reward, Mapping)
+        ):
+            raise IdentityMismatchError("bound DeepEyes sample schema differs")
+        relative_image = image.get("path")
+        if not isinstance(relative_image, str):
+            raise IdentityMismatchError("bound DeepEyes image path differs")
+        source_image_path = (config.dataset.root / relative_image).resolve()
+        expected = {
+            "sample_id": sample_id,
+            "dataset_iteration_identity_sha256": (
+                config.dataset.iteration_identity_sha256
+            ),
+            "prompt_bundle_sha256": config.protocol.prompt_sha256,
+            "source_image_path": str(source_image_path),
+            "source_image_sha256": image.get("sha256"),
+            "question": extra_info.get("question"),
+            "data_source": record.get("data_source"),
+            "task_kind": record.get("task_kind"),
+        }
+        expected_ground_truth = bound_reward.get("ground_truth")
+    else:
+        expected = {
+            "sample_id": sample_id,
+            "source_image_path": str(sample.image_path),
+            "source_image_sha256": sample.image_sha256,
+            "question": sample.question,
+            "data_source": sample.data_source,
+            "task_kind": sample.task_kind,
+        }
+        expected_ground_truth = sample.ground_truth
     for key, value in expected.items():
         if key not in fields or _scalar(fields[key]) != value:
             raise IdentityMismatchError(f"upstream sample field {key!r} changed")
     reward_model = _scalar(fields.get("reward_model"))
-    if not isinstance(reward_model, Mapping) or reward_model.get("ground_truth") != sample.ground_truth:
+    if (
+        not isinstance(reward_model, Mapping)
+        or reward_model.get("ground_truth") != expected_ground_truth
+    ):
         raise IdentityMismatchError("upstream ground truth changed")
+
+
+def _load_bound_sample_index(
+    config: object,
+) -> Mapping[str, Mapping[str, object]]:
+    if config.dataset.selected_sample is not None:
+        return {}
+    samples_path = config.dataset.root / "samples.jsonl"
+    if samples_path.is_symlink() or not samples_path.is_file():
+        raise ValueError("bound DeepEyes samples file is missing or unsafe")
+    if _sha256_file(samples_path) != config.dataset.samples_sha256:
+        raise IdentityMismatchError("bound DeepEyes samples file changed")
+    records: dict[str, Mapping[str, object]] = {}
+    with samples_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            record = json.loads(line)
+            if not isinstance(record, Mapping):
+                raise ValueError("bound DeepEyes row must be an object")
+            row_sample_id = record.get("sample_id")
+            if not isinstance(row_sample_id, str) or row_sample_id in records:
+                raise ValueError("bound DeepEyes sample identity differs")
+            records[row_sample_id] = record
+    expected_count = config.dataset.runtime_binding.expected_sample_count
+    if len(records) != expected_count:
+        raise IdentityMismatchError("bound DeepEyes sample count changed")
+    return records
 
 
 def _reward_source_from_sample_fields(
@@ -1039,6 +1136,14 @@ def _canonical_sha256(value: object) -> str:
             ensure_ascii=False,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _default_metrics_factory(

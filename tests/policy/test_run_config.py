@@ -33,10 +33,14 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_SMOKE_CONFIG_SCHEMA,
     POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
     POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256,
+    POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
+    POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
     formal_deepeyes47k_iteration_identity_sha256,
     load_policy_e2e_smoke_run_config,
 )
 from tgvf_rl.framework.verl.launcher import (
+    DEEPEYES47K_DATASET_CLASS_NAME,
+    DEEPEYES47K_DATASET_MODULE_PATH,
     NATIVE_INVOCATION_FACTORY_FQN,
     POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
     SELECTED_SAMPLE_DATASET_MODULE_PATH,
@@ -53,6 +57,7 @@ from tgvf_rl.protocol import (
     IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256,
     TGVF_FOCUS_TOOL_SCHEMA_SHA256,
     NativeToolCapabilityProfile,
+    visual_tool_prompt_identity,
 )
 
 
@@ -367,6 +372,47 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
     assert config.source_sha256 == hashlib.sha256(text.encode("utf-8")).hexdigest()
     assert not output_root.exists()
 
+
+def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -> None:
+    path, text, _ = _write_config(tmp_path)
+    judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    ).resolve()
+    judge_sha = hashlib.sha256(judge_path.read_bytes()).hexdigest()
+    prompt_sha = visual_tool_prompt_identity(
+        NativeToolCapabilityProfile.TGVF_ONLY
+    ).bundle_sha256
+    text = text.replace(POLICY_E2E_SMOKE_CONFIG_SCHEMA, POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA)
+    text = text.replace(f'sample_id = "{SAMPLE_ID}"\ncursor = 0\n', "")
+    text = text.replace(f'prompt_sha256 = "{SHA_A}"', f'prompt_sha256 = "{prompt_sha}"')
+    text = text.replace(
+        'task_kind = "multiple_choice"\n'
+        'answer_verifier = "exact_match"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "not_applicable"\n'
+        'judge_reason = "bounded non-formal MCQ smoke"',
+        'task_kind = "mixed"\n'
+        'answer_verifier = "rule_first_qwen25_72b"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "qwen25_72b_semantic_fallback"\n'
+        'judge_reason = "mixed integration"\n'
+        f'judge_config_path = {_q(judge_path)}\n'
+        f'judge_config_sha256 = "{judge_sha}"',
+    )
+    path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+
+    assert config.schema_version == POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA
+    assert config.dataset.selected_sample is None
+    assert config.reward.judge_config_sha256 == judge_sha
+    assert plan.overrides["data.custom_cls.path"] == DEEPEYES47K_DATASET_MODULE_PATH
+    assert plan.overrides["data.custom_cls.name"] == DEEPEYES47K_DATASET_CLASS_NAME
+    assert plan.overrides["actor_rollout_ref.rollout.custom"]["reward"][
+        "judge_config_sha256"
+    ] == judge_sha
 
 def test_loads_separately_identified_crop_only_experiment(tmp_path: Path) -> None:
     path, text, _ = _write_config(tmp_path)

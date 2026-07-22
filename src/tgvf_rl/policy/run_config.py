@@ -35,10 +35,12 @@ from tgvf_rl.data import (
     DEEPEYES47K_TOTAL_ROWS,
     DeepEyes47KRuntimeBinding,
 )
+from tgvf_rl.judges import load_openai_compatible_judge
 from tgvf_rl.protocol import (
     NativeToolCapabilityProfile,
     StandardToolError,
     ToolErrorCode,
+    visual_tool_prompt_identity,
 )
 
 from .config import (
@@ -58,11 +60,15 @@ from .config import (
 
 
 POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v3"
+POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA = "policy-e2e-mixed-run-config-v4"
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
 POLICY_E2E_SMOKE_ANSWER_VERIFIER = "exact_match"
 POLICY_E2E_SMOKE_SEED_DERIVATION_NAME = "content-addressed-vllm-turn-rng-v1"
+POLICY_E2E_MIXED_REWARD_TASK = "mixed"
+POLICY_E2E_MIXED_ANSWER_VERIFIER = "rule_first_qwen25_72b"
+POLICY_E2E_MIXED_JUDGE_MODE = "qwen25_72b_semantic_fallback"
 
 
 def _fixed_contract_sha256(value: object) -> str:
@@ -113,6 +119,18 @@ POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
         "expected": "same-deterministic-parser",
         "fallback_when_unparsed": "strip-casefold-collapse-whitespace-exact",
         "judge": "disabled",
+    }
+)
+POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
+    {
+        "schema": "policy-e2e-mixed-answer-verifier-v1",
+        "routes": {
+            "mcq": "deterministic_rule_only",
+            "math": "normalized_exact_then_numeric_then_qwen25_72b",
+            "open_vqa": "normalized_exact_then_qwen25_72b",
+        },
+        "judge_failure": "abort_reward_batch",
+        "mcq_judge_calls": "forbidden",
     }
 )
 POLICY_E2E_SMOKE_CAP_ERROR_SHA256 = StandardToolError(
@@ -195,9 +213,9 @@ class SmokeDatasetSelection:
     runtime_binding: DeepEyes47KRuntimeBinding
     samples_sha256: str
     iteration_identity_sha256: str
-    sample_id: str
-    cursor: int
-    selected_sample: SmokeSelectedMCQSample
+    sample_id: str | None
+    cursor: int | None
+    selected_sample: SmokeSelectedMCQSample | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +255,8 @@ class SmokeRewardBinding:
     answer_weight: float
     format_weight: float
     conditional_tool_weight: float
+    judge_config_path: Path | None = None
+    judge_config_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,10 +390,14 @@ class PolicyE2ESmokeRunConfig:
     schema_version: str = POLICY_E2E_SMOKE_CONFIG_SCHEMA
 
     def __post_init__(self) -> None:
-        if self.formal_pilot is not False:
-            raise ValueError("policy E2E smoke must never claim Formal Pilot status")
-        if self.schema_version != POLICY_E2E_SMOKE_CONFIG_SCHEMA:
-            raise ValueError("policy E2E smoke config schema mismatch")
+        accepted = {
+            POLICY_E2E_SMOKE_CONFIG_SCHEMA: False,
+            POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA: False,
+        }
+        if self.schema_version not in accepted:
+            raise ValueError("policy E2E run config schema mismatch")
+        if self.formal_pilot is not accepted[self.schema_version]:
+            raise ValueError("policy E2E run formal_pilot mode differs from schema")
 
     @property
     def identity_sha256(self) -> str:
@@ -430,10 +454,15 @@ def load_policy_e2e_smoke_run_config(
         raise ValueError("policy E2E smoke config is not strict UTF-8 TOML") from error
     if not isinstance(payload, Mapping) or set(payload) != _TOP_LEVEL_FIELDS:
         raise ValueError("policy E2E smoke top-level fields differ")
-    if payload["schema_version"] != POLICY_E2E_SMOKE_CONFIG_SCHEMA:
-        raise ValueError("policy E2E smoke config schema mismatch")
+    schema_version = payload["schema_version"]
+    if schema_version not in {
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA,
+        POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
+    }:
+        raise ValueError("policy E2E run config schema mismatch")
     if payload["formal_pilot"] is not False:
-        raise ValueError("policy E2E smoke must explicitly set formal_pilot=false")
+        raise ValueError("policy E2E integration config must set formal_pilot=false")
+    mixed_run = schema_version == POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA
     run_id = _safe_run_id(payload["run_id"])
 
     code_table = _table(payload, "code", {"repository", "commit", "dirty"})
@@ -484,22 +513,23 @@ def load_policy_e2e_smoke_run_config(
         chat_template_sha256=model_table["chat_template_sha256"],
     )
 
+    dataset_fields = {
+        "root",
+        "dataset_id",
+        "snapshot",
+        "sample_count",
+        "manifest_file_sha256",
+        "content_sha256",
+        "samples_sha256",
+        "iteration_identity_sha256",
+        "shuffle_seed",
+    }
+    if not mixed_run:
+        dataset_fields.update({"sample_id", "cursor"})
     dataset_table = _table(
         payload,
         "dataset",
-        {
-            "root",
-            "dataset_id",
-            "snapshot",
-            "sample_count",
-            "manifest_file_sha256",
-            "content_sha256",
-            "samples_sha256",
-            "iteration_identity_sha256",
-            "shuffle_seed",
-            "sample_id",
-            "cursor",
-        },
+        dataset_fields,
     )
     _require_exact(
         dataset_table["dataset_id"], DEEPEYES47K_DATASET_ID, "dataset.dataset_id"
@@ -533,17 +563,27 @@ def load_policy_e2e_smoke_run_config(
     )
     if iteration_sha256 != expected_iteration:
         raise ValueError("dataset iteration identity differs from its formal binding")
-    sample_id = _text(dataset_table["sample_id"], name="dataset.sample_id")
-    cursor = _nonnegative_int(dataset_table["cursor"], name="dataset.cursor")
-    if cursor >= DEEPEYES47K_TOTAL_ROWS:
-        raise ValueError("dataset.cursor lies outside DeepEyes-47K")
-    selected_sample = _verify_deepeyes_files(
-        dataset_root,
-        binding=runtime_binding,
-        samples_sha256=samples_sha256,
-        sample_id=sample_id,
-        cursor=cursor,
-    )
+    if mixed_run:
+        _verify_deepeyes_artifact(
+            dataset_root,
+            binding=runtime_binding,
+            samples_sha256=samples_sha256,
+        )
+        sample_id = None
+        cursor = None
+        selected_sample = None
+    else:
+        sample_id = _text(dataset_table["sample_id"], name="dataset.sample_id")
+        cursor = _nonnegative_int(dataset_table["cursor"], name="dataset.cursor")
+        if cursor >= DEEPEYES47K_TOTAL_ROWS:
+            raise ValueError("dataset.cursor lies outside DeepEyes-47K")
+        selected_sample = _verify_deepeyes_files(
+            dataset_root,
+            binding=runtime_binding,
+            samples_sha256=samples_sha256,
+            sample_id=sample_id,
+            cursor=cursor,
+        )
     dataset = SmokeDatasetSelection(
         root=dataset_root,
         runtime_binding=runtime_binding,
@@ -664,6 +704,12 @@ def load_policy_e2e_smoke_run_config(
         enabled_tool_names=enabled_tools,
         maximum_tool_calls=protocol_table["maximum_tool_calls"],
     )
+    if mixed_run:
+        _require_exact(
+            protocol.prompt_sha256,
+            visual_tool_prompt_identity(tool_profile).bundle_sha256,
+            "protocol.prompt_sha256",
+        )
 
     sampling_table = _table(
         payload,
@@ -774,30 +820,44 @@ def load_policy_e2e_smoke_run_config(
         derivation_sha256=derivation_sha256,
     )
 
+    reward_fields = {
+        "task_kind",
+        "answer_verifier",
+        "answer_verifier_sha256",
+        "judge_mode",
+        "judge_reason",
+        "answer_weight",
+        "format_weight",
+        "conditional_tool_weight",
+    }
+    if mixed_run:
+        reward_fields.update({"judge_config_path", "judge_config_sha256"})
     reward_table = _table(
         payload,
         "reward",
-        {
-            "task_kind",
-            "answer_verifier",
-            "answer_verifier_sha256",
-            "judge_mode",
-            "judge_reason",
-            "answer_weight",
-            "format_weight",
-            "conditional_tool_weight",
-        },
+        reward_fields,
+    )
+    expected_task = (
+        POLICY_E2E_MIXED_REWARD_TASK if mixed_run else POLICY_E2E_SMOKE_REWARD_TASK
+    )
+    expected_verifier = (
+        POLICY_E2E_MIXED_ANSWER_VERIFIER
+        if mixed_run
+        else POLICY_E2E_SMOKE_ANSWER_VERIFIER
+    )
+    expected_judge_mode = (
+        POLICY_E2E_MIXED_JUDGE_MODE if mixed_run else POLICY_E2E_SMOKE_JUDGE_MODE
     )
     _require_exact(
-        reward_table["task_kind"], POLICY_E2E_SMOKE_REWARD_TASK, "reward.task_kind"
+        reward_table["task_kind"], expected_task, "reward.task_kind"
     )
     _require_exact(
         reward_table["answer_verifier"],
-        POLICY_E2E_SMOKE_ANSWER_VERIFIER,
+        expected_verifier,
         "reward.answer_verifier",
     )
     _require_exact(
-        reward_table["judge_mode"], POLICY_E2E_SMOKE_JUDGE_MODE, "reward.judge_mode"
+        reward_table["judge_mode"], expected_judge_mode, "reward.judge_mode"
     )
     answer_verifier_sha256 = _sha256(
         reward_table["answer_verifier_sha256"],
@@ -805,9 +865,32 @@ def load_policy_e2e_smoke_run_config(
     )
     _require_exact(
         answer_verifier_sha256,
-        POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
+        (
+            POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
+            if mixed_run
+            else POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256
+        ),
         "reward.answer_verifier_sha256",
     )
+    if mixed_run:
+        judge_config_path = _existing_file(
+            reward_table["judge_config_path"], name="reward.judge_config_path"
+        )
+        if judge_config_path.is_symlink():
+            raise ValueError("reward judge config must not be a symlink")
+        judge_config_sha256 = _sha256(
+            reward_table["judge_config_sha256"],
+            name="reward.judge_config_sha256",
+        )
+        if _sha256_file(judge_config_path) != judge_config_sha256:
+            raise ValueError("reward judge config SHA256 mismatch")
+        load_openai_compatible_judge(
+            judge_config_path,
+            expected_file_sha256=judge_config_sha256,
+        )
+    else:
+        judge_config_path = None
+        judge_config_sha256 = None
     reward = SmokeRewardBinding(
         task_kind=reward_table["task_kind"],
         answer_verifier=reward_table["answer_verifier"],
@@ -825,6 +908,8 @@ def load_policy_e2e_smoke_run_config(
             1.2,
             "reward.conditional_tool_weight",
         ),
+        judge_config_path=judge_config_path,
+        judge_config_sha256=judge_config_sha256,
     )
 
     optimizer_table = _table(
@@ -1270,17 +1355,17 @@ def load_policy_e2e_smoke_run_config(
         source_path=source_path,
         source_sha256=hashlib.sha256(raw).hexdigest(),
         canonical_json=canonical_json,
+        formal_pilot=payload["formal_pilot"],
+        schema_version=schema_version,
     )
 
 
-def _verify_deepeyes_files(
+def _verify_deepeyes_artifact(
     root: Path,
     *,
     binding: DeepEyes47KRuntimeBinding,
     samples_sha256: str,
-    sample_id: str,
-    cursor: int,
-) -> SmokeSelectedMCQSample:
+) -> Path:
     manifest_path = root / DEEPEYES47K_MANIFEST_FILE
     samples_path = root / DEEPEYES47K_SAMPLES_FILE
     for path, name in ((manifest_path, "manifest"), (samples_path, "samples")):
@@ -1328,6 +1413,22 @@ def _verify_deepeyes_files(
         raise ValueError("DeepEyes manifest samples identity mismatch")
     if _sha256_file(samples_path) != samples_sha256:
         raise ValueError("DeepEyes samples file SHA256 mismatch")
+    return samples_path
+
+
+def _verify_deepeyes_files(
+    root: Path,
+    *,
+    binding: DeepEyes47KRuntimeBinding,
+    samples_sha256: str,
+    sample_id: str,
+    cursor: int,
+) -> SmokeSelectedMCQSample:
+    samples_path = _verify_deepeyes_artifact(
+        root,
+        binding=binding,
+        samples_sha256=samples_sha256,
+    )
     selected: object | None = None
     with samples_path.open(encoding="utf-8") as handle:
         for index, line in enumerate(handle):
@@ -1721,6 +1822,11 @@ def _normalize_json(value: object) -> object:
 
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_MIXED_ANSWER_VERIFIER",
+    "POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256",
+    "POLICY_E2E_MIXED_JUDGE_MODE",
+    "POLICY_E2E_MIXED_REWARD_TASK",
+    "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_SMOKE_CAP_ERROR_SHA256",
