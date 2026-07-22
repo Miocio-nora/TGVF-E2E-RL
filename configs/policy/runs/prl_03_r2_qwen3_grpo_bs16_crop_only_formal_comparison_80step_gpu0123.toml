@@ -1,0 +1,164 @@
+schema_version = "policy-e2e-formal-pilot-config-v1"
+formal_pilot = true
+run_id = "PRL-03-R2-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "e2288debec2a0cc63d9fded0d0c1a823c15c5bd2"
+dirty = false
+
+[model]
+family = "qwen3_vl"
+name = "Qwen3-VL-8B-Thinking"
+path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+tokenizer_length = 151669
+chat_template_sha256 = "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956"
+native_deepstack_enabled = true
+image_max_pixels = 262144
+
+[dataset]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/deepeyes47k/materialized-seed42-v1"
+dataset_id = "ChenShawn/DeepEyes-Datasets-47k"
+snapshot = "5546681e28fa2eda9f60a9ea9dd0cf291216ded3"
+sample_count = 47052
+manifest_file_sha256 = "3483c31775441fa25c2f5dc392ef3b00c0c1680602538c6e74b34cc3fea6f477"
+content_sha256 = "2ddb36359af8ec5ac7a5be30edf872223c4bd7d6f2eeb121ec3f5d8b32e1791a"
+samples_sha256 = "e3937c6716f77786e73d13e8273d67bb17b3fd47376ffeb6dff23a1c891fb51e"
+iteration_identity_sha256 = "6ee358c911728f6db4b328ce1994779d2cd393696eac7c53953524e1ba33ad8c"
+shuffle_seed = 42
+
+[representation]
+artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/REP-QWEN3-V4-CONTEXTUAL-V4/adapter.pt"
+artifact_file_sha256 = "50179c709c5788d83ffc58d13dcde9e15ed448b2cf3233a5db67cb7501106e75"
+artifact_manifest_sha256 = "dfa992fcea0cee8a0fb48f19892ff10ac42a6cf040d32afcae748c7724e80e10"
+artifact_namespace = "tgvf-representation"
+artifact_name = "qwen3-balanced-t1-contextual"
+artifact_version = "rep-qwen3-v4-contextual-v4-step2000"
+expected_run_id = "REP-QWEN3-V4-CONTEXTUAL-V4"
+expected_run_identity_sha256 = "6c74885183eba8cfc6d7393a296b897b3caf939c88ffe016028c3a02b5f3d5c0"
+
+[representation.conditioning]
+provider = "contextual_hidden_state"
+hidden_layer = -1
+
+[protocol]
+prompt_sha256 = "4bc9d8e2a0ec2772d608b18281e6afe5cf02662851e58826e0202a5ac342dab0"
+cap_error_sha256 = "1f649e1d0e53237f9b5285865e972d6d6f243edd6c52ffd35431af75832ad200"
+tool_profile = "crop_only"
+tool_schema_sha256 = "2977f4ef5ac966e80cb0036a1b9082a0cfc3bef86aa6fc70c0ebb3ad8e3e9c34"
+enabled_tool_names = ["image_zoom_in_tool"]
+maximum_tool_calls = 4
+
+[sampling]
+trajectories_per_prompt = 8
+temperature = 1.0
+top_p = 1.0
+top_k = -1
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_response_length = 8192
+asynchronous_staleness_steps = 0
+do_sample = true
+backend = "vllm"
+backend_version = "0.12.0"
+logit_processors = []
+logprob_measurement = "after_sampling_transforms"
+stop_token_ids = [151645]
+stop_strings = ["</tool_call>"]
+include_stop_str_in_output = true
+ignore_eos = false
+rollout_master_seed = 42
+seed_derivation_name = "content-addressed-vllm-turn-rng-v1"
+seed_derivation_sha256 = "fe8d2da92471dcf97ff195f9c1e085fe422673e3b0a4b863ad28ca528ace867e"
+
+[reward]
+task_kind = "mixed"
+answer_verifier = "rule_first_qwen25_72b"
+answer_verifier_sha256 = "661133336fc1db8b4a14a360efa84fc4180f040b7f1be4992f83b4d5cdda8e17"
+judge_mode = "qwen25_72b_semantic_fallback"
+judge_reason = "corrected formal 80-step DeepEyes Crop-only comparison against the completed TGVF-only R5 Pilot"
+judge_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/judges/openrouter_qwen25_72b_formal_pilot_judge_v3.json"
+judge_config_sha256 = "81943918f09a7f99ec96b5c79fbc830fdea8e8376350f8de32ed87619cd3ce39"
+answer_weight = 0.8
+format_weight = 0.2
+conditional_tool_weight = 1.2
+
+[optimizer]
+name = "adamw"
+learning_rate = 0.00001
+beta1 = 0.9
+beta2 = 0.999
+epsilon = 0.00000001
+weight_decay = 0.01
+maximum_gradient_norm = 1.0
+
+[scheduler]
+name = "cosine"
+warmup_steps = 0
+total_steps = 80
+minimum_learning_rate_ratio = 0.1
+
+[precision]
+parameter_dtype = "bfloat16"
+reduce_dtype = "float32"
+optimizer_state_dtype = "float32"
+autocast_dtype = "bfloat16"
+gradient_scaler_enabled = false
+allow_tf32 = true
+
+[accumulation]
+global_prompt_batch_size = 16
+prompt_micro_batch_size_per_rank = 1
+rollout_prompt_micro_batch_size_per_engine = 1
+gradient_accumulation_steps = 4
+
+[distributed]
+physical_gpu_ids = [0, 1, 2, 3]
+logical_gpu_ids = [0, 1, 2, 3]
+world_size = 4
+actor_logical_gpu_ids = [0, 1, 2, 3]
+rollout_logical_gpu_ids = [0, 1, 2, 3]
+fsdp_strategy = "fsdp2"
+fsdp_reshard_after_forward = false
+rollout_backend = "vllm"
+vllm_tensor_parallel_size = 1
+placement = "colocated"
+weight_sync_mode = "nccl_lora_state_v1"
+weight_sync_interval_optimizer_steps = 1
+
+[capacity]
+max_prompt_length = 4096
+actor_ppo_max_token_len_per_gpu = 98304
+rollout_log_prob_max_token_len_per_gpu = 98304
+reference_log_prob_max_token_len_per_gpu = 98304
+vllm_gpu_memory_utilization = 0.45
+vllm_max_num_batched_tokens = 16384
+vllm_max_model_len = 16384
+vllm_max_num_seqs = 32
+vllm_enable_chunked_prefill = true
+vllm_enforce_eager = false
+
+[framework]
+agent_loop_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/agent_loops/tgvf_native_policy_v1.yaml"
+agent_loop_config_sha256 = "388eba9b43687bc9bcde894697203cf2cdec265f07acc5606a7af0b3154c351e"
+runtime_invocation_factory_fqn = "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
+server_timeout_seconds = 2400.0
+
+[training]
+total_training_epochs = 1
+maximum_optimizer_steps = 80
+checkpoint_steps = [0, 10, 20, 45, 80]
+logger = ["console", "wandb"]
+project_name = "tgvf-policy-rl"
+validation_before_training = false
+validation_frequency = -1
+resume_mode = "auto"
+resume_from_path = ""
+maximum_actor_checkpoints_to_keep = 5
+
+[output]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-03-R2-qwen3-grpo-bs16-crop-only-formal-comparison-80step-gpu0123"
+checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-03-R2-qwen3-grpo-bs16-crop-only-formal-comparison-80step-gpu0123/checkpoints"
+metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-03-R2-qwen3-grpo-bs16-crop-only-formal-comparison-80step-gpu0123/metrics.jsonl"

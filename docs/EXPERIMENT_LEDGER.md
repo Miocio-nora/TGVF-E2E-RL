@@ -7731,6 +7731,33 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   calls were invisible to the conditional reward. The run was stopped after
   step 1 at 2026-07-22 23:43 JST; it is diagnostic only and must not be resumed.
 
+### PRL-03-R2-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; clean replacement for invalid R1.
+  It starts from the original Qwen3-VL-8B-Thinking base with a fresh
+  decoder-only LoRA and must not load an R1 or R5 policy checkpoint.
+- Controlled comparison: all R5 model, DeepEyes-47K order, seed 42,
+  max-pixels 262144, BS16/n8/GA4, sampling, mixed verifier/judge, GRPO,
+  optimizer, FSDP2/vLLM placement and checkpoint settings remain fixed. The
+  method arm uses only the accepted `image_zoom_in_tool` Crop profile and does
+  not load or invoke the TGVF Adapter.
+- Reward correction: a successful active-tool observation is now counted from
+  the immutable trajectory observation records, not from the TGVF-only call
+  subclass. Errors without a materialized observation remain ineligible; the
+  reward weights `0.8/0.2/1.2` and one-bonus-per-trajectory rule are unchanged.
+  Twenty-two focused rollout/reward tests passed before planning.
+- Config:
+  `configs/policy/runs/prl_03_r2_qwen3_grpo_bs16_crop_only_formal_comparison_80step_gpu0123.toml`,
+  SHA-256 `1e554cfa75f229ba9fc679124de6e1d596abf74c7c19be202d621a86b011b3fb`,
+  run identity `91251b9f74a30c40cfa34cd03ecdfe01d230f8789269236f63acc7d73cc426d8`,
+  code baseline `e2288debec2a0cc63d9fded0d0c1a823c15c5bd2`.
+- GPUs/session/output: physical GPUs 0--3; planned tmux
+  `prl03_r2_crop_formal80_gpu0123`; output
+  `artifacts/policy/PRL-03-R2-qwen3-grpo-bs16-crop-only-formal-comparison-80step-gpu0123`.
+  Launch requires all four GPUs free, strict config validation, no resumable R2
+  state and the real first-step conditional reward to agree with successful
+  Crop observations before the run is allowed to continue unattended.
+
 ## Required entry template
 
 ```text
