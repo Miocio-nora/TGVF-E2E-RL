@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -97,6 +100,51 @@ def test_rl_judge_fails_closed_on_nonbinary_or_malformed_output() -> None:
             )
 
 
+def test_rl_judge_retries_transient_rate_limit_with_bound() -> None:
+    initial, prompt = _provider('{"verdict":1,"rationale":"ok"}', [])
+    calls = 0
+    delays: list[float] = []
+
+    def opener(request, *, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {"Retry-After": "0"},
+                BytesIO(b'{"error":{"message":"temporary"}}'),
+            )
+        return _Response(
+            {"choices": [{"message": {"content": '{"verdict":1,"rationale":"ok"}'}}]}
+        )
+
+    provider = OpenAICompatibleJudgeProvider(
+        replace(
+            initial.config,
+            maximum_attempts=2,
+            retry_backoff_seconds=1.0,
+        ),
+        opener=opener,
+        sleeper=delays.append,
+    )
+    result = provider.judge(
+        JudgeRequest(
+            request_id="request-retry",
+            task_kind="math",
+            question="1+1?",
+            candidate_answer="2",
+            reference_answer="2",
+            prompt_identity=prompt,
+        )
+    )
+
+    assert result.score == 1.0
+    assert calls == 2
+    assert delays == [0.0]
+
+
 def test_openrouter_binding_uses_env_auth_pinned_route_and_retains_usage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,8 +207,9 @@ def test_openrouter_binding_uses_env_auth_pinned_route_and_retains_usage(
     assert request.get_header("Authorization") == "Bearer test-only-secret"
     payload = json.loads(request.data)
     assert payload["model"] == "qwen/qwen-2.5-72b-instruct"
+    assert "response_format" not in payload
     assert payload["provider"] == {
-        "only": ["novita"],
+        "only": ["deepinfra"],
         "allow_fallbacks": False,
         "require_parameters": True,
         "data_collection": "deny",

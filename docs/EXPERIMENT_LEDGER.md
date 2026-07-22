@@ -7446,6 +7446,26 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   MCQ parser treats the first prose letter in `The...`/`Based...` as an answer
   option. W&B `1pqbs2yr`; no metric row or optimizer update was published.
 
+### PRL-JG-02-OPENROUTER-QWEN25-72B-REAL-THREEROUTE
+
+- Lifecycle/result: `COMPLETE` / `PASS`.
+- Question: does the OpenRouter Qwen2.5-72B DeepInfra route provide the real
+  DeepEyes MCQ/math/open reward contract before the mixed optimizer-step gate?
+- Model/service: `qwen/qwen-2.5-72b-instruct`, DeepInfra FP8 hosted revision
+  opaque, no provider fallback, no-data-collection/ZDR, temperature 0, top-p 1,
+  seed 42, and bounded 429/503 retry. MCQ remains rule-only.
+- Data/prompt: exact three DeepEyes-47K calibration IDs already pinned by the
+  judge config; prompt SHA-256 `2fa039d7...86d2`.
+- Training/GPU/TGVF/GRPO fields: N/A; this was a paid API reward-route check
+  with no GPU allocation, rollout, observation, optimizer, or checkpoint.
+- Output: `artifacts/policy/PRL-JG-02-openrouter-qwen25-72b-real-threeroute/deepinfra-calibration.json`,
+  SHA-256 `cfe391c3...ec6c2`; judge config SHA-256 `34e94de4...06a6`.
+- Metrics: four judge calls, 1,106 prompt tokens, 186 completion tokens,
+  `$0.00047256`; every correct candidate scored `0.8`, every wrong candidate
+  `0.0`, and MCQ made zero judge calls.
+- Conclusion: real three-route calibration passed; admit the real mixed-task
+  one-step optimizer/checkpoint gate.
+
 ## Required entry template
 
 ```text

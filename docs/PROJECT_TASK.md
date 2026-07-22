@@ -673,6 +673,24 @@ is a recorded reproducibility limitation and must not be represented as local
 HF-revision parity. A three-route calibration and one real mixed-task optimizer
 step must pass before an 80-step run is admitted.
 
+### 0.8.6 Accepted OpenRouter provider correction
+
+Decision ID: **POLICY-PILOT-V1-OPENROUTER-DEEPINFRA-20260722**
+
+Accepted by: **user**, on **2026-07-22 JST**.
+
+The OpenRouter judge keeps `qwen/qwen-2.5-72b-instruct` but replaces the pinned
+Novita route with DeepInfra. Novita rejected the real Chat Completions request,
+first for `json_object` response formatting and then with an internal endpoint
+compatibility error. A minimal request with the same model and routing/privacy
+contract succeeded through DeepInfra. Provider fallbacks remain disabled;
+DeepInfra FP8 hosting is recorded while the hosted weight revision remains
+opaque. HTTP 429 and 503 responses use a bounded five-attempt retry that honors
+`Retry-After` up to 30 seconds and otherwise uses 2/4/8/16-second backoff; all
+other request failures and exhausted retries remain fail-closed. The three-route
+calibration and real mixed-task optimizer-step gate remain mandatory before the
+80-step run.
+
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 
 Decision ID: **RPI-20260721-CONTEXTUAL-MATRIXCE-2000-PAIR**

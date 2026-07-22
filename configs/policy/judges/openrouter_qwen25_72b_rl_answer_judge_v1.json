@@ -4,13 +4,13 @@
   "role": "policy_rl_answer_judge_only",
   "model": {
     "repository": "Qwen/Qwen2.5-72B-Instruct",
-    "revision": "openrouter-novita-hosted-revision-opaque-20260722",
+    "revision": "openrouter-deepinfra-hosted-revision-opaque-20260722",
     "reference_hf_revision": "495f39366efef23836d0cfae4fbe635880d2be31",
     "served_name": "qwen/qwen-2.5-72b-instruct",
     "tokenizer_length": 151665,
     "reference_chat_template_sha256": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f",
     "hosted_weight_revision": "opaque",
-    "hosted_quantization": "opaque"
+    "hosted_quantization": "fp8"
   },
   "prompt": {
     "version": "qwen2.5-72b-rl-answer-judge-v1",
@@ -30,22 +30,26 @@
   "service": {
     "base_url": "https://openrouter.ai/api/v1",
     "timeout_seconds": 120.0,
-    "deployment": "openrouter-novita-qwen25-72b-v1",
+    "deployment": "openrouter-deepinfra-qwen25-72b-v1",
     "api_key_env": "OPENROUTER_API_KEY",
     "expected_response_model": "qwen/qwen-2.5-72b-instruct",
     "require_usage": true,
+    "send_json_response_format": false,
+    "maximum_attempts": 5,
+    "retry_backoff_seconds": 2.0,
+    "retry_maximum_seconds": 30.0,
     "http_referer": "https://github.com/Miocio-nora/TGVF-E2E-RL",
     "application_title": "TGVF-E2E-RL"
   },
   "routing": {
-    "only": ["novita"],
+    "only": ["deepinfra"],
     "allow_fallbacks": false,
     "require_parameters": true,
     "data_collection": "deny",
     "zdr": true
   },
   "calibration": {
-    "version": "pending-real-openrouter-deepeyes-3route-v1",
+    "version": "real-openrouter-deepeyes-3route-deepinfra-v1",
     "sample_ids": {
       "mcq": "deepeyes47k:4b74dbfbd36b31129eb811b919526a30448b05d2c05bb11736c7bc75c02e718e",
       "math": "deepeyes47k:bdd3c553a12609c6b7082687d6d153d14febf9c60d8ffa90c5b39087b3acd925",
