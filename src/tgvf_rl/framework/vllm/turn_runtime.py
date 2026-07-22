@@ -162,6 +162,49 @@ def _gpt2_byte_decoder() -> dict[str, int]:
 _GPT2_BYTE_DECODER = _gpt2_byte_decoder()
 
 
+def _replacement_decoded_byte_boundaries(raw: bytes) -> tuple[int, ...]:
+    """Map raw ByteLevel boundaries through UTF-8 ``errors='replace'``.
+
+    A sampled sequence may legally end part-way through a UTF-8 scalar.  The
+    Qwen tokenizer then emits U+FFFD, so raw token bytes and the UTF-8 bytes of
+    decoded text have different lengths.  This map keeps every sampled token
+    while assigning the decoder-owned replacement bytes contiguously.
+    """
+
+    boundaries = [0] * (len(raw) + 1)
+    raw_cursor = 0
+    decoded_cursor = 0
+    replacement_width = len("\ufffd".encode("utf-8"))
+    while raw_cursor < len(raw):
+        suffix = raw[raw_cursor:]
+        try:
+            suffix.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            valid_end = raw_cursor + error.start
+            for boundary in range(raw_cursor, valid_end + 1):
+                boundaries[boundary] = decoded_cursor + boundary - raw_cursor
+            decoded_cursor += valid_end - raw_cursor
+
+            invalid_end = raw_cursor + error.end
+            invalid_width = invalid_end - valid_end
+            if invalid_width <= 0:
+                raise ReplayMismatchError("UTF-8 decoder reported an empty error span")
+            for offset in range(1, invalid_width + 1):
+                boundaries[valid_end + offset] = decoded_cursor + (
+                    replacement_width * offset // invalid_width
+                )
+            decoded_cursor += replacement_width
+            raw_cursor = invalid_end
+        else:
+            for boundary in range(raw_cursor, len(raw) + 1):
+                boundaries[boundary] = decoded_cursor + boundary - raw_cursor
+            decoded_cursor += len(raw) - raw_cursor
+            raw_cursor = len(raw)
+    if boundaries[-1] != decoded_cursor:
+        raise ReplayMismatchError("UTF-8 replacement boundary map is incomplete")
+    return tuple(boundaries)
+
+
 class FastTokenizerTokenByteSpanDecoder:
     """Recover exact UTF-8 byte coverage for final Qwen ByteLevel tokens."""
 
@@ -257,26 +300,37 @@ class FastTokenizerTokenByteSpanDecoder:
                 )
             token_bytes.append(piece)
 
-        if b"".join(token_bytes) != text.encode("utf-8"):
-            raise ReplayMismatchError(
-                "ByteLevel token pieces do not reconstruct sampled text exactly"
-            )
+        raw_bytes = b"".join(token_bytes)
+        text_bytes = text.encode("utf-8")
+        if raw_bytes == text_bytes:
+            decoded_boundaries = tuple(range(len(raw_bytes) + 1))
+        else:
+            decoded_text = raw_bytes.decode("utf-8", errors="replace")
+            if decoded_text != text:
+                raise ReplayMismatchError(
+                    "ByteLevel token pieces do not reconstruct sampled text exactly"
+                )
+            decoded_boundaries = _replacement_decoded_byte_boundaries(raw_bytes)
+            if decoded_boundaries[-1] != len(text_bytes):
+                raise ReplayMismatchError(
+                    "ByteLevel replacement spans do not cover sampled text exactly"
+                )
 
-        byte_cursor = 0
+        raw_cursor = 0
         result: list[TokenByteSpan] = []
         for token_index, (token_id, piece) in enumerate(
             zip(token_ids, token_bytes, strict=True)
         ):
-            byte_end = byte_cursor + len(piece)
+            raw_end = raw_cursor + len(piece)
             result.append(
                 TokenByteSpan(
                     token_index=token_index,
                     token_id=token_id,
-                    byte_start=byte_cursor,
-                    byte_end=byte_end,
+                    byte_start=decoded_boundaries[raw_cursor],
+                    byte_end=decoded_boundaries[raw_end],
                 )
             )
-            byte_cursor = byte_end
+            raw_cursor = raw_end
         return tuple(result)
 
 

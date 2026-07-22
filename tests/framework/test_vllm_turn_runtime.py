@@ -130,6 +130,41 @@ def test_fast_tokenizer_decoder_handles_one_unicode_character_split_across_token
     )
 
 
+def test_fast_tokenizer_decoder_handles_truncated_utf8_with_replacement() -> None:
+    tokenizer = _FastTokenizer(
+        ids=[21, 22],
+        # E2 80 is an incomplete three-byte scalar. Qwen's ByteLevel decoder
+        # emits one U+FFFD instead of preserving the two raw bytes.
+        tokens=["â", "Ģ"],
+    )
+
+    spans = FastTokenizerTokenByteSpanDecoder(tokenizer).spans_for_output(
+        text="\ufffd",
+        token_ids=(21, 22),
+        decoding=DECODING,
+    )
+
+    assert spans == (
+        TokenByteSpan(0, 21, 0, 1),
+        TokenByteSpan(1, 22, 1, 3),
+    )
+
+
+def test_fast_tokenizer_decoder_keeps_replacement_and_following_ascii_exact() -> None:
+    tokenizer = _FastTokenizer(ids=[21, 22], tokens=["â", "a"])
+
+    spans = FastTokenizerTokenByteSpanDecoder(tokenizer).spans_for_output(
+        text="\ufffda",
+        token_ids=(21, 22),
+        decoding=DECODING,
+    )
+
+    assert spans == (
+        TokenByteSpan(0, 21, 0, 3),
+        TokenByteSpan(1, 22, 3, 4),
+    )
+
+
 def test_fast_tokenizer_decoder_accepts_noncanonical_sampled_segmentation() -> None:
     tokenizer = _FastTokenizer(ids=[1, 2], tokens=["a", "b"])
 
