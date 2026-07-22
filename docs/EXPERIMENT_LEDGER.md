@@ -7490,3 +7490,27 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 Before any launch, every applicable field must be resolved from files rather
 than inferred from a script name or prior conversation.
+
+### PRL-JG-01-R1-QWEN25-72B-REAL-THREEROUTE-GPU01
+
+- Lifecycle/result: `PLANNED` / `PENDING`.
+- Question: do real DeepEyes MCQ/math/open reward routes produce correct binary
+  decisions, with zero MCQ judge calls and fail-closed 72B fallbacks?
+- Code: clean commit `64a7b1e3f865695110a8af7dbbd96a9305567322`;
+  judge config SHA-256 `bf1d4f84...e1e3bf`; checker SHA-256
+  `e717686e...e8866`.
+- Model/service: local Qwen2.5-72B-Instruct revision
+  `495f39366efef23836d0cfae4fbe635880d2be31`, BF16, vLLM 0.12,
+  TP2, physical GPUs 0/1, port 8013; temperature 0, top-p 1, seed 42,
+  max judge tokens 256, strict JSON binary verdict.
+- Data: materialized DeepEyes-47K seed-42 manifest
+  `3483c317...6f477`; exact real sample IDs are pinned in the checker: one each
+  from `chart`, `thinklite_eureka`, and `vstar`.
+- Prompt/verifier: RL-judge prompt SHA-256 `2fa039d7...86d2`; rule-first MCQ,
+  math/open semantic fallback; any request, timeout, JSON, or nonbinary error
+  aborts the check. No GPT fallback.
+- Training/replay/TGVF/GRPO fields: N/A; this is a reward-route integration
+  check with no policy rollout, optimizer, model update, or observation.
+- Command: serve the exact model on `127.0.0.1:8013`, then run
+  `tools/check_policy_rl_judge_routes.py` and stop the service.
+- Output: `artifacts/policy/PRL-JG-01-R1-qwen25-72b-real-threeroute-gpu01/`.
