@@ -7625,9 +7625,10 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R4-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; clean formal restart using accepted
+- Lifecycle/result: `RUNNING` / `PENDING`; clean formal restart using accepted
   indefinite transient judge retry. R3 step 7 remains immutable provenance and
-  is not relabeled as an exact R4 resume.
+  is not relabeled as an exact R4 resume. Launched in tmux
+  `prl02_r4_formal80_gpu0123` (pane PID 2552219) on 2026-07-22 JST.
 - Scientific model/data/tool/reward/GRPO/BS16-n8-GA4/FSDP2-TP1 settings and
   normal checkpoints at 10/20/45/80 are unchanged. Judge v3 SHA-256
   `81943918...ce39` retries HTTP 408/425/429/5xx, transport failures and response
