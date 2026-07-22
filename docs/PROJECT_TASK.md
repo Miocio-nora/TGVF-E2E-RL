@@ -205,17 +205,17 @@ configuration profiles, not aliases for one another. The existing Policy
 Pilot v1 remains `tgvf_only`; implementing the other two capabilities does not
 silently enable them in that pilot or alter its reward.
 
-### 0.4B Accepted policy visual-tool prompts v1
+### 0.4B Accepted policy visual-tool prompts v2
 
-Decision ID: **TGVF-VISUAL-TOOL-PROMPTS-V1-20260721**
+Decision ID: **TGVF-VISUAL-TOOL-PROMPTS-V2-20260722**
 
-Accepted by: **user**, on **2026-07-21 JST**
+Accepted by: **user**, on **2026-07-22 JST**
 
 The exact three-profile policy prompt, schema, example-call and successful
 tool-response text contract is
-[`TGVF_VISUAL_TOOL_PROMPTS_V1.md`](TGVF_VISUAL_TOOL_PROMPTS_V1.md). It is the
-first accepted policy-RL visual-tool prompt identity and supersedes provisional
-policy prompt/schema wording. In particular:
+[`TGVF_VISUAL_TOOL_PROMPTS_V2.md`](TGVF_VISUAL_TOOL_PROMPTS_V2.md). It supersedes
+v1 for new Policy RL runs while leaving v1 as historical provenance. In
+particular:
 
 - the atomic public function is `tgvf_crop_tool`, not
   `crop_tgvf_tool`;
@@ -224,6 +224,9 @@ policy prompt/schema wording. In particular:
   shared image/question/user instruction;
 - successful tool responses contain the profile-specific accepted text plus
   the native visual observation;
+- no `<answer>` tag is introduced: after native reasoning, MCQ returns only an
+  option letter, mathematics only its final value/expression, and other tasks
+  only a concise answer;
 - schemas, prompt source text and response text are versioned and hashed;
 - this decision does not change representation-phase transcript/checkpoint
   identity, tool execution mathematics, Adapter state, reward or benchmark

@@ -134,6 +134,7 @@ class RuleFirstAnswerVerifier:
         result = self.judge.judge(
             JudgeRequest(
                 request_id=request_id,
+                task_kind=context.task_kind.value,
                 question=context.question,
                 candidate_answer=context.candidate_answer,
                 reference_answer=context.expected_answer,

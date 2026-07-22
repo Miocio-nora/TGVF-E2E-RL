@@ -22,18 +22,28 @@ from .schema import (
 )
 
 
-TGVF_VISUAL_TOOL_PROMPTS_VERSION = "tgvf-visual-tool-prompts-v1"
+TGVF_VISUAL_TOOL_PROMPTS_VERSION = "tgvf-visual-tool-prompts-v2"
 TGVF_VISUAL_TOOL_RESPONSES_VERSION = "tgvf-visual-tool-responses-v1"
 
 SHARED_USER_PROMPT_TEMPLATE = """<image>
 {question}
 
-Use the available visual tool if additional visual evidence is needed."""
+Use the available visual tool if additional visual evidence is needed.
+
+After completing your reasoning, give only the final answer without explanation:
+- For multiple-choice questions, give only the option letter.
+- For mathematics questions, give only the final value or expression.
+- For other questions, give only a concise answer."""
 
 NATIVE_SHARED_USER_TEXT_TEMPLATE = """
 {question}
 
-Use the available visual tool if additional visual evidence is needed."""
+Use the available visual tool if additional visual evidence is needed.
+
+After completing your reasoning, give only the final answer without explanation:
+- For multiple-choice questions, give only the option letter.
+- For mathematics questions, give only the final value or expression.
+- For other questions, give only a concise answer."""
 
 TGVF_ONLY_SYSTEM_PROMPT = """You are a visual reasoning assistant.
 

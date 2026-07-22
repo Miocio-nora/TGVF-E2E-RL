@@ -292,7 +292,9 @@ class TGVFSelectedSampleDataset(Dataset):
             "dataset_iteration_identity_sha256": (binding.iteration_identity_sha256),
             "source_image_path": str(binding.image_path),
             "source_image_sha256": binding.image_sha256,
+            "question": binding.question,
             "data_source": binding.data_source,
+            "task_kind": "mcq",
             "reward_model": {"ground_truth": binding.ground_truth},
             "extra_info": {
                 "index": binding.cursor,

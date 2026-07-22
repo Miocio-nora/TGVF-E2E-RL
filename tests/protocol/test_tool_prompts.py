@@ -31,14 +31,14 @@ from tgvf_rl.protocol import (
 )
 
 
-def test_visual_tool_prompt_v1_literal_hashes_are_fixed() -> None:
-    assert TGVF_VISUAL_TOOL_PROMPTS_VERSION == "tgvf-visual-tool-prompts-v1"
+def test_visual_tool_prompt_v2_literal_hashes_are_fixed() -> None:
+    assert TGVF_VISUAL_TOOL_PROMPTS_VERSION == "tgvf-visual-tool-prompts-v2"
     assert TGVF_VISUAL_TOOL_RESPONSES_VERSION == "tgvf-visual-tool-responses-v1"
     assert SHARED_USER_PROMPT_TEMPLATE_SHA256 == (
-        "44b99e319ad7511e3ae4e5156169d78c33a0d563adaa18f050203f6918cf9363"
+        "e44a55bbf2f35a8b34cab1462af499ee4741f19e0561d27f130b8f2fd2316c60"
     )
     assert NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256 == (
-        "358caabd674542797471cb117b7354d7c97a18283a1b38583cf50292dd7f63f9"
+        "8ccbdaa73d2b470afa7cd087e87ed42e2556e6bb3cf6c51fd414d7ae9eaedb6e"
     )
     assert TGVF_ONLY_SYSTEM_PROMPT_SHA256 == (
         "b331fd9c2f26472cfa98ba4e861cc8b8eb9d2e49576436d6e9255ea01a9f9ccf"
@@ -100,7 +100,12 @@ def test_all_profiles_use_exact_system_and_shared_native_user_message(
                 "type": "text",
                 "text": (
                     "\nWhich value is shown?\n\nUse the available visual tool "
-                    "if additional visual evidence is needed."
+                    "if additional visual evidence is needed.\n\nAfter "
+                    "completing your reasoning, give only the final answer "
+                    "without explanation:\n- For multiple-choice questions, give "
+                    "only the option letter.\n- For mathematics questions, give only "
+                    "the final value or expression.\n- For other questions, give "
+                    "only a concise answer."
                 ),
             },
         ),

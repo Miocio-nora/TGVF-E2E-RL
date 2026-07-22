@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "identity": "qwen25-72b-policy-rl-answer-judge-v1",
+  "role": "policy_rl_answer_judge_only",
+  "model": {
+    "repository": "Qwen/Qwen2.5-72B-Instruct",
+    "revision": "495f39366efef23836d0cfae4fbe635880d2be31",
+    "local_path": "/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct",
+    "served_name": "Qwen2.5-72B-Instruct",
+    "tokenizer_length": 151665,
+    "chat_template_sha256": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f"
+  },
+  "prompt": {
+    "version": "qwen2.5-72b-rl-answer-judge-v1",
+    "sha256": "2fa039d7add954b9d6a457687e73c0b3141b17d711cbe5e24a99ae35d03e86d2",
+    "output_schema": {
+      "verdict": "integer 0 or 1",
+      "rationale": "non-empty string"
+    }
+  },
+  "sampling": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "max_tokens": 256,
+    "seed": 42,
+    "response_format": "json_object"
+  },
+  "service": {
+    "base_url": "http://127.0.0.1:8013/v1",
+    "timeout_seconds": 120.0,
+    "deployment": "vllm-0.12-tp2-bf16",
+    "integration_devices": [0, 1]
+  },
+  "failure_policy": {
+    "request_error": "raise_and_abort_reward_batch",
+    "timeout": "raise_and_abort_reward_batch",
+    "malformed_output": "raise_and_abort_reward_batch",
+    "nonbinary_output": "raise_and_abort_reward_batch",
+    "exact_match_fallback_after_judge_failure": false
+  },
+  "scope": {
+    "allows_policy_rl_reward": true,
+    "allows_mcq_judge_calls": false,
+    "allows_reference_policy": false,
+    "allows_sdpo_teacher": false,
+    "allows_gpt_fallback": false,
+    "formal_pilot_accepted": false
+  }
+}

@@ -35,7 +35,7 @@ from tgvf_rl.protocol.tool_prompts import (
 
 
 FIXTURE_PATH = (
-    Path(__file__).parents[1] / "fixtures" / "qwen3_visual_tool_prompts_v1.json"
+    Path(__file__).parents[1] / "fixtures" / "qwen3_visual_tool_prompts_v2.json"
 )
 
 _PROFILE_BY_FIXTURE_NAME = {
@@ -158,7 +158,7 @@ def _assert_decode_round_trip(processor: Any, rendered) -> None:
     assert decoded == rendered.text
 
 
-def test_qwen3_visual_tool_prompt_v1_initial_generation_goldens(
+def test_qwen3_visual_tool_prompt_v2_initial_generation_goldens(
     qwen3_processor_and_fixture,
 ) -> None:
     processor, fixture = qwen3_processor_and_fixture

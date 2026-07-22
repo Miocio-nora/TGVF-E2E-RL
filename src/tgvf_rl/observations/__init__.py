@@ -20,11 +20,23 @@ from .store import (
     TrajectoryReplayTensorRefs,
     validate_replay_bundle,
 )
-from .finalizer import (
-    MaterializedTrajectoryReplayTensors,
-    TrajectoryReplayFinalizationRequest,
-    finalize_trajectory_replay,
-)
+
+
+_FINALIZER_EXPORTS = {
+    "MaterializedTrajectoryReplayTensors",
+    "TrajectoryReplayFinalizationRequest",
+    "finalize_trajectory_replay",
+}
+
+
+def __getattr__(name: str):
+    """Load trajectory-dependent finalizers without a cold-import cycle."""
+
+    if name not in _FINALIZER_EXPORTS:
+        raise AttributeError(name)
+    from . import finalizer
+
+    return getattr(finalizer, name)
 
 __all__ = [
     "FocusedObservationRecord",

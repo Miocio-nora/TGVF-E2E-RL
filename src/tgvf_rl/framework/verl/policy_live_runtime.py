@@ -412,9 +412,7 @@ class _Qwen3PolicyTrajectoryComponents:
             )
 
         reward_context = _BoundRewardContextProvider(
-            question=self.config.dataset.selected_sample.question,
-            expected_answer=self.config.dataset.selected_sample.ground_truth,
-            data_source=self.config.dataset.selected_sample.data_source,
+            **_reward_source_from_sample_fields(sample_fields),
         )
         scorer = PilotVerlTrajectoryRewardScorer(
             pipeline=self.reward_pipeline,
@@ -772,6 +770,7 @@ class _SourceMaterializationRequest:
 class _BoundRewardContextProvider(PilotRewardContextProvider):
     question: str
     expected_answer: str
+    task_kind: AnswerTaskKind
     data_source: str
 
     def build(self, *, request: object, trajectory: TrajectoryRecord):
@@ -781,7 +780,7 @@ class _BoundRewardContextProvider(PilotRewardContextProvider):
             trajectory,
             question=self.question,
             expected_answer=self.expected_answer,
-            task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+            task_kind=self.task_kind,
             data_source=self.data_source,
         )
 
@@ -958,7 +957,9 @@ def _validate_sample_fields(config: object, sample_id: str, fields: Mapping[str,
         "sample_id": sample_id,
         "source_image_path": str(sample.image_path),
         "source_image_sha256": sample.image_sha256,
+        "question": sample.question,
         "data_source": sample.data_source,
+        "task_kind": sample.task_kind,
     }
     for key, value in expected.items():
         if key not in fields or _scalar(fields[key]) != value:
@@ -966,6 +967,39 @@ def _validate_sample_fields(config: object, sample_id: str, fields: Mapping[str,
     reward_model = _scalar(fields.get("reward_model"))
     if not isinstance(reward_model, Mapping) or reward_model.get("ground_truth") != sample.ground_truth:
         raise IdentityMismatchError("upstream ground truth changed")
+
+
+def _reward_source_from_sample_fields(
+    fields: Mapping[str, object],
+) -> dict[str, object]:
+    question = _scalar(fields.get("question"))
+    data_source = _scalar(fields.get("data_source"))
+    task_kind = _scalar(fields.get("task_kind"))
+    reward_model = _scalar(fields.get("reward_model"))
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("sample question must be non-empty")
+    if not isinstance(data_source, str) or not data_source.strip():
+        raise ValueError("sample data_source must be non-empty")
+    if not isinstance(reward_model, Mapping):
+        raise ValueError("sample reward_model must be a mapping")
+    expected_answer = reward_model.get("ground_truth")
+    if not isinstance(expected_answer, str) or not expected_answer.strip():
+        raise ValueError("sample ground truth must be non-empty text")
+    task_kinds = {
+        "mcq": AnswerTaskKind.MULTIPLE_CHOICE,
+        "math": AnswerTaskKind.MATH,
+        "open": AnswerTaskKind.OPEN_VQA,
+    }
+    try:
+        resolved_kind = task_kinds[task_kind]
+    except (KeyError, TypeError) as error:
+        raise ValueError("sample task_kind is not mcq, math, or open") from error
+    return {
+        "question": question,
+        "expected_answer": expected_answer,
+        "task_kind": resolved_kind,
+        "data_source": data_source,
+    }
 
 
 def _load_bound_rgb(path: Path) -> torch.Tensor:

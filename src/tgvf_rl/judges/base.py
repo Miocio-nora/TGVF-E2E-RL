@@ -13,6 +13,7 @@ from tgvf_rl.contracts.identity import ArtifactIdentity
 @dataclass(frozen=True, slots=True)
 class JudgeRequest:
     request_id: str
+    task_kind: str
     question: str
     candidate_answer: str
     reference_answer: str | None
@@ -21,6 +22,8 @@ class JudgeRequest:
     def __post_init__(self) -> None:
         if not self.request_id or not self.question or not self.candidate_answer:
             raise ValueError("judge request identity/question/answer must be non-empty")
+        if self.task_kind not in {"math", "open_vqa"}:
+            raise ValueError("judge task_kind must be math or open_vqa")
 
 
 @dataclass(frozen=True, slots=True)
