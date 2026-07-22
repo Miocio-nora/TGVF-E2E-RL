@@ -7574,16 +7574,17 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R2-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; this supersedes cancelled R1 and
-  restarts from the original Qwen policy. Launched 2026-07-22 15:24 JST in
-  tmux `prl02_r2_formal80_gpu0123` (pane PID 2385338) with `set -o pipefail`.
+- Lifecycle/result: `PLANNED` / `PENDING`; this supersedes cancelled R1 and
+  restarts from the original Qwen policy. The first launch command at 15:24
+  JST was rejected before Ray/GPU initialization by the exact-descendant
+  preflight, so it produced no rollout, metric, checkpoint or optimizer step.
 - All scientific settings and the DeepInfra v2 retry/2,400-second timeout are
   identical to R1. Normal checkpoints are restored to the accepted
   10/20/45/80 schedule. The exception path alone saves the last fully
   synchronized optimizer/data/RNG boundary before propagating the error.
 - Config
   `configs/policy/runs/prl_02_r2_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`;
-  SHA-256 `d758fa17...ecc5b`, run identity `905f56ae...78750`;
+  SHA-256 `aec8912f...e2e6d`, run identity `41619ee9...0fe7e`;
   output is isolated under
   `artifacts/policy/PRL-02-R2-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
   planned tmux `prl02_r2_formal80_gpu0123`, physical GPUs 0--3.
