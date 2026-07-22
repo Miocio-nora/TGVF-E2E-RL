@@ -7521,8 +7521,8 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `PLANNED` / `PENDING`; launch is contingent only on the
-  PRL-02 one-step clean-resume sub-run passing.
+- Lifecycle/result: `RUNNING` / `PENDING`; the PRL-02 one-step clean-resume
+  sub-run passed and tmux `prl02_formal80_gpu0123` launched on 2026-07-22 JST.
 - Config
   `configs/policy/runs/prl_02_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`,
   SHA-256 `62dda224...22f8`, identity `bd7c91df...9d21`, code
