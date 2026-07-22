@@ -7602,7 +7602,8 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R3-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; clean restart from the original
+- Lifecycle/result: `COMPLETE` / `FAIL (transient judge/runtime request)`;
+  clean restart from the original
   Qwen policy because R2's exact run identity cannot adopt changed judge-client
   code while claiming an exact checkpoint resume. Launched in tmux
   `prl02_r3_formal80_gpu0123` (pane PID 2440870) with `set -o pipefail`.
@@ -7615,6 +7616,29 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   SHA-256 `7e8962a1...6996c`, identity `eeb09336...31a11`; output
   `artifacts/policy/PRL-02-R3-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
   planned tmux `prl02_r3_formal80_gpu0123`, physical GPUs 0--3.
+- Result: optimizer steps 1--7 completed. The next rollout/reward batch stopped
+  after 22 trajectory audits. GPU memory, W&B and Ray shutdown evidence exclude
+  OOM and W&B failure, but the caught exception text was not persisted, so its
+  exact transient request subtype is unknown. The recovery path successfully
+  saved the full paired model, optimizer, project state, RNG and next-data
+  cursor checkpoint at `checkpoints/global_step_7`; W&B `fc3jt6ql`.
+
+### PRL-02-R4-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; clean formal restart using accepted
+  indefinite transient judge retry. R3 step 7 remains immutable provenance and
+  is not relabeled as an exact R4 resume.
+- Scientific model/data/tool/reward/GRPO/BS16-n8-GA4/FSDP2-TP1 settings and
+  normal checkpoints at 10/20/45/80 are unchanged. Judge v3 SHA-256
+  `81943918...ce39` retries HTTP 408/425/429/5xx, transport failures and response
+  model mismatch indefinitely with backoff capped at 120 seconds; permanent
+  failures remain fail-closed.
+- Config
+  `configs/policy/runs/prl_02_r4_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`,
+  SHA-256 `07971df1...1c97b`, run identity `443d8513...dc3b`, code
+  `b8610091c0ae41bec5dd312044be2f23db914445`; output
+  `artifacts/policy/PRL-02-R4-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
+  planned tmux `prl02_r4_formal80_gpu0123`, physical GPUs 0--3.
 
 ## Required entry template
 
