@@ -7546,6 +7546,30 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   so the published step-6 LoRA snapshot is diagnostic only and is not an exact
   optimizer/data/RNG resume point. W&B `rre1y7cy`; GPUs 0--3 were released.
 
+### PRL-02-R1-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; clean restart of the failed formal
+  run, not a resume from its diagnostic-only step-6 LoRA snapshot.
+- The model, RP-49 representation artifact, full DeepEyes-47K snapshot,
+  TGVF-only native protocol, BS16/n8/GA4 four-B200 topology, exact replay,
+  GRPO equations, optimizer, scheduler, sampling, and reward composition are
+  unchanged from PRL-02.
+- Operational correction: code `5f3ec8f0f0cd95b48182b65f17ef00a9fb20639a`;
+  DeepInfra judge v2 SHA-256 `1536a979...c74de`, ten 429/503 attempts with
+  5-second exponential backoff capped at 120 seconds, and 2,400-second outer
+  agent-loop timeout. Provider fallback remains disabled and reward remains
+  fail-closed.
+- Checkpoint correction: normal paired FSDP2/project checkpoints occur at step
+  1 and every five steps. Any later training exception saves the last fully
+  synchronized optimizer boundary after restoring its retained next-data
+  cursor; a partial/unknown optimizer commit remains deliberately unsavable.
+- Config
+  `configs/policy/runs/prl_02_r1_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`,
+  SHA-256 `01617dab...11cc8`, run identity `3ff04939...eb67ca`.
+  Output is isolated under
+  `artifacts/policy/PRL-02-R1-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
+  planned tmux `prl02_r1_formal80_gpu0123`, physical GPUs 0--3.
+
 ## Required entry template
 
 ```text
