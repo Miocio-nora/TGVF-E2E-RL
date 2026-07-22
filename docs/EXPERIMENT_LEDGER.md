@@ -7548,10 +7548,10 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-R1-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; clean restart of the failed formal
-  run, not a resume from its diagnostic-only step-6 LoRA snapshot. Launched
-  2026-07-22 15:14 JST in tmux `prl02_r1_formal80_gpu0123` (pane PID 2352345)
-  with `set -o pipefail` on physical GPUs 0--3.
+- Lifecycle/result: `CANCELLED` / `INVALID`; clean restart was launched at
+  2026-07-22 15:14 JST but stopped before its first completed optimizer step.
+  Its extra step-1/every-five-step checkpoint cadence was not user accepted;
+  no metric or checkpoint is reusable. W&B `9h9vcp6b`; GPUs 0--3 released.
 - The model, RP-49 representation artifact, full DeepEyes-47K snapshot,
   TGVF-only native protocol, BS16/n8/GA4 four-B200 topology, exact replay,
   GRPO equations, optimizer, scheduler, sampling, and reward composition are
@@ -7571,6 +7571,21 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   Output is isolated under
   `artifacts/policy/PRL-02-R1-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
   planned tmux `prl02_r1_formal80_gpu0123`, physical GPUs 0--3.
+
+### PRL-02-R2-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
+
+- Lifecycle/result: `PLANNED` / `PENDING`; this supersedes cancelled R1 and
+  restarts from the original Qwen policy.
+- All scientific settings and the DeepInfra v2 retry/2,400-second timeout are
+  identical to R1. Normal checkpoints are restored to the accepted
+  10/20/45/80 schedule. The exception path alone saves the last fully
+  synchronized optimizer/data/RNG boundary before propagating the error.
+- Config
+  `configs/policy/runs/prl_02_r2_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`;
+  SHA-256 `d758fa17...ecc5b`, run identity `905f56ae...78750`;
+  output is isolated under
+  `artifacts/policy/PRL-02-R2-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
+  planned tmux `prl02_r2_formal80_gpu0123`, physical GPUs 0--3.
 
 ## Required entry template
 

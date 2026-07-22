@@ -696,10 +696,12 @@ the five-attempt DeepInfra retry window on an upstream HTTP 429. The corrected
 service identity keeps the same model, provider, privacy policy, deterministic
 judge prompt and fail-closed reward behavior, but uses ten attempts with
 5-second exponential backoff capped at 120 seconds. Provider fallback remains
-disabled. To bound future loss from an external-service interruption, formal
-training retains the evaluation checkpoints at 10/20/45/80 and additionally
-saves a recovery checkpoint at step 1 and every five steps. These operational
-changes do not alter trajectories, rewards, advantages or optimizer updates.
+disabled. The accepted correction leaves the original evaluation checkpoint
+schedule at 10/20/45/80 unchanged. If training still terminates after all
+retries, the runner saves the most recent fully synchronized optimizer
+boundary with its exact data cursor before propagating the original error.
+These operational changes do not alter trajectories, rewards, advantages or
+optimizer updates.
 
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 
