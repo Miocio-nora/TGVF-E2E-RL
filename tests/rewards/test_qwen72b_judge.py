@@ -5,7 +5,7 @@ import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -188,6 +188,107 @@ def test_rl_judge_retries_response_model_mismatch_without_scoring_it() -> None:
     assert result.score == 1.0
     assert calls == 2
     assert delays == [1.0]
+
+
+def test_rl_judge_retries_transient_transport_errors_without_attempt_limit() -> None:
+    initial, prompt = _provider('{"verdict":1,"rationale":"ok"}', [])
+    calls = 0
+    delays: list[float] = []
+
+    def opener(request, *, timeout):
+        nonlocal calls
+        calls += 1
+        if calls <= 12:
+            raise URLError(TimeoutError("temporary timeout"))
+        return _Response(
+            {"choices": [{"message": {"content": '{"verdict":1,"rationale":"ok"}'}}]}
+        )
+
+    provider = OpenAICompatibleJudgeProvider(
+        replace(
+            initial.config,
+            maximum_attempts=None,
+            retry_backoff_seconds=1.0,
+            retry_maximum_seconds=4.0,
+            retry_transport_errors=True,
+        ),
+        opener=opener,
+        sleeper=delays.append,
+    )
+    result = provider.judge(
+        JudgeRequest(
+            request_id="request-transport-retry",
+            task_kind="math",
+            question="1+1?",
+            candidate_answer="2",
+            reference_answer="2",
+            prompt_identity=prompt,
+        )
+    )
+
+    assert result.score == 1.0
+    assert calls == 13
+    assert delays == [1.0, 2.0] + [4.0] * 10
+
+
+def test_rl_judge_does_not_retry_permanent_http_failure() -> None:
+    initial, prompt = _provider('{"verdict":1,"rationale":"ok"}', [])
+    calls = 0
+    delays: list[float] = []
+
+    def opener(request, *, timeout):
+        nonlocal calls
+        calls += 1
+        raise HTTPError(
+            request.full_url,
+            401,
+            "Unauthorized",
+            {},
+            BytesIO(b'{"error":{"message":"invalid credential"}}'),
+        )
+
+    provider = OpenAICompatibleJudgeProvider(
+        replace(
+            initial.config,
+            maximum_attempts=None,
+            retry_backoff_seconds=1.0,
+            retry_all_server_errors=True,
+            retry_transport_errors=True,
+        ),
+        opener=opener,
+        sleeper=delays.append,
+    )
+    with pytest.raises(RuntimeError, match="HTTP 401"):
+        provider.judge(
+            JudgeRequest(
+                request_id="request-permanent-failure",
+                task_kind="open_vqa",
+                question="What is shown?",
+                candidate_answer="ship",
+                reference_answer="ship",
+                prompt_identity=prompt,
+            )
+        )
+
+    assert calls == 1
+    assert delays == []
+
+
+def test_formal_v3_binding_declares_indefinite_transient_retry() -> None:
+    path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/openrouter_qwen25_72b_formal_pilot_judge_v3.json"
+    )
+    bound = load_openai_compatible_judge(
+        path,
+        expected_file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+    config = bound.provider.config
+    assert config.maximum_attempts is None
+    assert config.retryable_http_statuses == (408, 425, 429)
+    assert config.retry_all_server_errors is True
+    assert config.retry_transport_errors is True
 
 
 def test_openrouter_binding_uses_env_auth_pinned_route_and_retains_usage(

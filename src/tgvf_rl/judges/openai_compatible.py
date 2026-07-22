@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from http.client import RemoteDisconnected
 import json
 import os
 from pathlib import Path
+import ssl
 import time
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib import request as urllib_request
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
@@ -19,6 +21,13 @@ from .base import JudgeRequest, JudgeResult, JudgeUsage
 
 
 QWEN25_72B_RL_JUDGE_PROMPT_VERSION = "qwen2.5-72b-rl-answer-judge-v1"
+_TRANSIENT_TRANSPORT_ERRORS = (
+    URLError,
+    TimeoutError,
+    ConnectionError,
+    RemoteDisconnected,
+    ssl.SSLError,
+)
 QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT = """You are a strict answer-equivalence judge.
 
 Decide whether the candidate answer is correct for the question when compared
@@ -56,9 +65,12 @@ class OpenAICompatibleJudgeConfig:
     http_referer: str | None = None
     application_title: str | None = None
     send_json_response_format: bool = True
-    maximum_attempts: int = 1
+    maximum_attempts: int | None = 1
     retry_backoff_seconds: float = 0.0
     retry_maximum_seconds: float = 30.0
+    retryable_http_statuses: tuple[int, ...] = (429, 503)
+    retry_all_server_errors: bool = False
+    retry_transport_errors: bool = False
 
     def __post_init__(self) -> None:
         if not self.base_url.startswith(("http://", "https://")):
@@ -87,12 +99,28 @@ class OpenAICompatibleJudgeConfig:
             raise TypeError("judge require_usage must be bool")
         if type(self.send_json_response_format) is not bool:
             raise TypeError("judge send_json_response_format must be bool")
-        if type(self.maximum_attempts) is not int or not 1 <= self.maximum_attempts <= 10:
-            raise ValueError("judge maximum_attempts must be an integer in [1,10]")
+        if self.maximum_attempts is not None and (
+            type(self.maximum_attempts) is not int or self.maximum_attempts < 1
+        ):
+            raise ValueError("judge maximum_attempts must be a positive integer or null")
         if self.retry_backoff_seconds < 0.0 or self.retry_maximum_seconds <= 0.0:
             raise ValueError("judge retry delay settings are invalid")
-        if self.maximum_attempts > 1 and self.retry_backoff_seconds <= 0.0:
+        retries_enabled = self.maximum_attempts is None or self.maximum_attempts > 1
+        if retries_enabled and self.retry_backoff_seconds <= 0.0:
             raise ValueError("judge retries require a positive retry backoff")
+        if (
+            not isinstance(self.retryable_http_statuses, tuple)
+            or not self.retryable_http_statuses
+            or any(
+                type(status) is not int or not 400 <= status <= 599
+                for status in self.retryable_http_statuses
+            )
+        ):
+            raise ValueError("judge retryable HTTP statuses are invalid")
+        if type(self.retry_all_server_errors) is not bool:
+            raise TypeError("judge retry_all_server_errors must be bool")
+        if type(self.retry_transport_errors) is not bool:
+            raise TypeError("judge retry_transport_errors must be bool")
 
 
 class OpenAICompatibleJudgeProvider:
@@ -170,7 +198,8 @@ class OpenAICompatibleJudgeProvider:
             method="POST",
             headers=headers,
         )
-        for attempt in range(self.config.maximum_attempts):
+        attempt = 0
+        while True:
             try:
                 with self._opener(
                     request_object, timeout=self.config.timeout_seconds
@@ -182,20 +211,33 @@ class OpenAICompatibleJudgeProvider:
                         expected=self.config.expected_response_model,
                     )
                 except JudgeResponseModelMismatchError:
-                    if attempt + 1 < self.config.maximum_attempts:
+                    if _retry_is_available(attempt, self.config):
                         self._sleeper(_retry_backoff_seconds(attempt, self.config))
+                        attempt += 1
                         continue
                     raise
                 break
             except HTTPError as error:
                 if (
-                    error.code in {429, 503}
-                    and attempt + 1 < self.config.maximum_attempts
+                    _http_status_is_retryable(error.code, self.config)
+                    and _retry_is_available(attempt, self.config)
                 ):
                     self._sleeper(_retry_delay_seconds(error, attempt, self.config))
+                    attempt += 1
                     continue
                 raise RuntimeError(
                     "RL answer judge request failed: " + _http_error_message(error)
+                ) from error
+            except _TRANSIENT_TRANSPORT_ERRORS as error:
+                if self.config.retry_transport_errors and _retry_is_available(
+                    attempt, self.config
+                ):
+                    self._sleeper(_retry_backoff_seconds(attempt, self.config))
+                    attempt += 1
+                    continue
+                raise RuntimeError(
+                    "RL answer judge transport request failed: "
+                    + type(error).__name__
                 ) from error
             except Exception as error:
                 raise RuntimeError("RL answer judge request failed") from error
@@ -350,9 +392,22 @@ def load_openai_compatible_judge(
             default=True,
             name="service.send_json_response_format",
         ),
-        maximum_attempts=int(service.get("maximum_attempts", 1)),
+        maximum_attempts=_maximum_attempts(service.get("maximum_attempts", 1)),
         retry_backoff_seconds=float(service.get("retry_backoff_seconds", 0.0)),
         retry_maximum_seconds=float(service.get("retry_maximum_seconds", 30.0)),
+        retryable_http_statuses=_retryable_http_statuses(
+            service.get("retryable_http_statuses", [429, 503])
+        ),
+        retry_all_server_errors=_optional_bool(
+            service.get("retry_all_server_errors"),
+            default=False,
+            name="service.retry_all_server_errors",
+        ),
+        retry_transport_errors=_optional_bool(
+            service.get("retry_transport_errors"),
+            default=False,
+            name="service.retry_transport_errors",
+        ),
     )
     return BoundOpenAICompatibleJudge(
         provider=OpenAICompatibleJudgeProvider(provider_config, opener=opener),
@@ -433,6 +488,20 @@ def _optional_bool(value: object, *, default: bool, name: str) -> bool:
     return value
 
 
+def _maximum_attempts(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise ValueError("RL judge service.maximum_attempts must be integer or null")
+    return value
+
+
+def _retryable_http_statuses(value: object) -> tuple[int, ...]:
+    if not isinstance(value, list) or any(type(item) is not int for item in value):
+        raise ValueError("RL judge service.retryable_http_statuses must be integers")
+    return tuple(value)
+
+
 def _http_error_message(error: HTTPError) -> str:
     """Return only a provider error code/message, never request headers."""
 
@@ -473,7 +542,7 @@ def _retry_delay_seconds(
         requested = float(retry_after) if retry_after is not None else None
     except ValueError:
         requested = None
-    exponential = config.retry_backoff_seconds * (2**attempt)
+    exponential = _retry_backoff_seconds(attempt, config)
     delay = exponential if requested is None or requested < 0.0 else requested
     return min(delay, config.retry_maximum_seconds)
 
@@ -482,9 +551,27 @@ def _retry_backoff_seconds(
     attempt: int,
     config: OpenAICompatibleJudgeConfig,
 ) -> float:
-    return min(
-        config.retry_backoff_seconds * (2**attempt),
-        config.retry_maximum_seconds,
+    delay = config.retry_backoff_seconds
+    for _ in range(attempt):
+        if delay >= config.retry_maximum_seconds:
+            return config.retry_maximum_seconds
+        delay = min(delay * 2.0, config.retry_maximum_seconds)
+    return min(delay, config.retry_maximum_seconds)
+
+
+def _retry_is_available(
+    attempt: int,
+    config: OpenAICompatibleJudgeConfig,
+) -> bool:
+    return config.maximum_attempts is None or attempt + 1 < config.maximum_attempts
+
+
+def _http_status_is_retryable(
+    status: int,
+    config: OpenAICompatibleJudgeConfig,
+) -> bool:
+    return status in config.retryable_http_statuses or (
+        config.retry_all_server_errors and 500 <= status <= 599
     )
 
 

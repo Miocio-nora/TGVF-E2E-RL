@@ -708,6 +708,30 @@ the pinned request model. Such a response must never be scored, but is treated
 as a retryable gateway/provider response within the same bounded retry window;
 exhaustion remains fail-closed and triggers the recovery-checkpoint path.
 
+### 0.8.7 Accepted indefinite transient judge retry
+
+Decision ID: **POLICY-PILOT-V1-JUDGE-TRANSIENT-RETRY-20260722**
+
+Accepted by: **user**, on **2026-07-22 JST**.
+
+Formal Policy RL runs must not terminate merely because the remote answer
+judge has a transient availability failure. A separately identified judge-v3
+binding uses `maximum_attempts = null` to retry indefinitely with bounded
+exponential backoff for HTTP 408, 425, 429 and 5xx responses, transport
+timeouts, DNS/TLS/connectivity failures, and a completed response whose model
+identity differs from the pinned model. A failed response is never scored and
+the reward batch remains blocked until a valid response arrives.
+
+Permanent request failures such as HTTP 400, 401, 402, 403 and 404, invalid
+credentials or configuration, and malformed semantic judge output remain
+fail-closed because retrying them cannot restore service and could occupy the
+four training GPUs forever. Provider fallback remains disabled. Retry delay is
+exponential with a five-second base and a 120-second cap; the cap limits the
+delay between attempts, not the number of attempts. This is an operational
+availability change only and does not change accepted answers, reward values,
+advantages, trajectories, optimizer mathematics, or normal checkpoint
+cadence. Existing bounded judge-v1/v2 bindings remain immutable provenance.
+
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 
 Decision ID: **RPI-20260721-CONTEXTUAL-MATRIXCE-2000-PAIR**
