@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Protocol
+from typing import Callable, Protocol
 
 from tgvf_rl.trajectories.schema import TrajectoryRecord
 
@@ -106,6 +106,10 @@ class PilotVerlTrajectoryRewardScorer:
         *,
         pipeline: PilotRewardPipeline,
         context_provider: PilotRewardContextProvider,
+        audit_sink: Callable[
+            [TrajectoryRecord, PilotVerlTrajectoryReward], None
+        ]
+        | None = None,
     ) -> None:
         if not isinstance(pipeline, PilotRewardPipeline):
             raise TypeError("pipeline must be PilotRewardPipeline")
@@ -119,6 +123,7 @@ class PilotVerlTrajectoryRewardScorer:
             raise ValueError("veRL Pilot reward requires fixed weights 0.8/0.2/1.2")
         self.pipeline = pipeline
         self.context_provider = context_provider
+        self.audit_sink = audit_sink
 
     def score(
         self,
@@ -166,6 +171,8 @@ class PilotVerlTrajectoryRewardScorer:
                 raise ValueError(
                     "unanswered MCQ trajectory must receive zero answer reward"
                 )
+        if self.audit_sink is not None:
+            self.audit_sink(trajectory, reward)
         return reward
 
 

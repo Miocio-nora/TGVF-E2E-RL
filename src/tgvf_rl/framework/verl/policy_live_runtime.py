@@ -64,6 +64,7 @@ from tgvf_rl.protocol.schema import (
     ParsedImageZoomInCall,
     ParsedToolCall,
 )
+from tgvf_rl.policy.trajectory_audit import PolicyTrajectoryAuditWriter
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
 )
@@ -418,6 +419,9 @@ class _Qwen3PolicyTrajectoryComponents:
         scorer = PilotVerlTrajectoryRewardScorer(
             pipeline=self.reward_pipeline,
             context_provider=reward_context,
+            audit_sink=PolicyTrajectoryAuditWriter(
+                Path(self.config.output.root) / "trajectory_audit"
+            ).record,
         )
         finalizer = _ExactQwen3RewardedTrajectoryFinalizer(
             request_identity=identity,
