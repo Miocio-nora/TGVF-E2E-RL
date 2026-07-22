@@ -16,8 +16,8 @@ from tgvf_rl.judges import (
     QWEN25_72B_RL_JUDGE_PROMPT_VERSION,
     QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT,
 )
-from tgvf_rl.rewards import AnswerTaskKind, RewardContext
-from tgvf_rl.rewards.schema import NormalizationSpec
+from tgvf_rl.rewards import AnswerTaskKind, PilotRewardPipeline, RewardContext
+from tgvf_rl.rewards.schema import NormalizationSpec, PilotRewardSpec
 from tgvf_rl.rewards.verifiers import RuleFirstAnswerVerifier
 
 
@@ -148,6 +148,13 @@ def main() -> int:
         judge_sampling_identity=sampling_identity,
         judge_calibration_identity=calibration_identity,
     )
+    reward_spec = PilotRewardSpec(
+        pipeline_identity=_artifact("reward-pipeline", "v1", {"weights": [0.8, 0.2, 1.2]}),
+        answer_verifier_identity=verifier.rule_identity,
+        format_verifier_identity=_artifact("format", "v1", {"invalid": -1}),
+        tool_verifier_identity=_artifact("conditional-tool", "v1", {"once": True}),
+    )
+    reward_pipeline = PilotRewardPipeline(reward_spec, verifier)
     rows = _load_rows(args.samples)
     kinds = {
         "mcq": AnswerTaskKind.MULTIPLE_CHOICE,
@@ -171,12 +178,23 @@ def main() -> int:
         wrong = verifier.verify(
             replace(base, candidate_answer=case["candidate_wrong"])
         )
+        correct_reward = reward_pipeline.score(base)
+        wrong_reward = reward_pipeline.score(
+            replace(base, candidate_answer=case["candidate_wrong"])
+        )
         calls = judge.calls - before
-        expected_calls = 0 if route == "mcq" else 2
-        if not correct.correct or wrong.correct or calls != expected_calls:
+        expected_calls = 0 if route == "mcq" else 4
+        if (
+            not correct.correct
+            or wrong.correct
+            or correct_reward.total != 0.8
+            or wrong_reward.total != 0.0
+            or calls != expected_calls
+        ):
             raise RuntimeError(
                 f"{route} route failed: correct={correct.correct}, "
-                f"wrong={wrong.correct}, judge_calls={calls}"
+                f"wrong={wrong.correct}, correct_reward={correct_reward.total}, "
+                f"wrong_reward={wrong_reward.total}, judge_calls={calls}"
             )
         results.append(
             {
@@ -185,6 +203,8 @@ def main() -> int:
                 "correct_route": correct.route,
                 "wrong_route": wrong.route,
                 "judge_calls": calls,
+                "correct_reward": correct_reward.total,
+                "wrong_reward": wrong_reward.total,
             }
         )
     output = {

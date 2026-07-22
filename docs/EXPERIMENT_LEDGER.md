@@ -7493,7 +7493,7 @@ than inferred from a script name or prior conversation.
 
 ### PRL-JG-01-R1-QWEN25-72B-REAL-THREEROUTE-GPU01
 
-- Lifecycle/result: `PLANNED` / `PENDING`.
+- Lifecycle/result: `COMPLETE` / `PASS`.
 - Question: do real DeepEyes MCQ/math/open reward routes produce correct binary
   decisions, with zero MCQ judge calls and fail-closed 72B fallbacks?
 - Code: clean commit `64a7b1e3f865695110a8af7dbbd96a9305567322`;
@@ -7514,3 +7514,9 @@ than inferred from a script name or prior conversation.
 - Command: serve the exact model on `127.0.0.1:8013`, then run
   `tools/check_policy_rl_judge_routes.py` and stop the service.
 - Output: `artifacts/policy/PRL-JG-01-R1-qwen25-72b-real-threeroute-gpu01/`.
+- Result: full reward composition returned `0.8` for every correct candidate and
+  `0.0` for every wrong candidate. MCQ made zero judge calls; math and open VQA
+  each made four calls across direct-verifier and composed-reward checks, with
+  correct binary decisions throughout. Result SHA-256 `4a293359...b7504`;
+  server-log SHA-256 `8ca76ccc...0a89`. Service stopped and GPUs 0/1 returned
+  to 0 MiB.
