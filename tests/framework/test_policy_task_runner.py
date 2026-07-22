@@ -18,6 +18,7 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     _completed_resume_checkpoint_step,
     _finish_tracking_backends,
     _pilot_metrics_event,
+    _policy_tracking_metrics,
     _wandb_metrics_from_event,
     add_policy_actor_rollout_worker,
     make_policy_pilot_ray_trainer_class,
@@ -225,6 +226,29 @@ def test_policy_metrics_publish_step_and_cumulative_records_idempotently(
     changed["timing"] = dict(event["timing"], checkpoint_seconds=0.75)
     with pytest.raises(RuntimeError, match="changed an existing step"):
         _append_policy_metrics_event(path, changed)
+
+
+def test_policy_tracking_keeps_only_compact_operator_metrics() -> None:
+    compact = _policy_tracking_metrics(
+        {
+            "training/global_step": 3,
+            "actor/pg_loss": 0.25,
+            "actor/grad_norm": 0.5,
+            "policy_pilot/mean_answer_reward": 0.75,
+            "policy_timing/end_to_end_step_seconds": 12.0,
+            "global_seqlen/min": 100,
+            "policy_pilot_total/generated_policy_tokens": 1_000,
+            "timing_per_token_ms/adv": 0.001,
+        }
+    )
+
+    assert compact == {
+        "training/global_step": 3,
+        "actor/pg_loss": 0.25,
+        "actor/grad_norm": 0.5,
+        "policy_pilot/mean_answer_reward": 0.75,
+        "policy_timing/end_to_end_step_seconds": 12.0,
+    }
 
 
 def test_actor_worker_group_routes_save_and_clean_resume_through_pair() -> None:

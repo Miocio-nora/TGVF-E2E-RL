@@ -78,6 +78,32 @@ POLICY_PILOT_TASK_RUNNER_FQN = (
 POLICY_PILOT_TRAINER_LIFECYCLE_SCHEMA = "tgvf-policy-trainer-lifecycle-v1"
 POLICY_REFERENCE_DIAGNOSTIC_ENABLED = True
 POLICY_PILOT_METRICS_EVENT_SCHEMA = "policy-pilot-v1-metrics-event-v1"
+POLICY_TRACKING_METRIC_NAMES = frozenset(
+    {
+        "training/global_step",
+        "actor/pg_loss",
+        "actor/grad_norm",
+        "actor/lr",
+        "actor/pg_clipfrac",
+        "actor/behavior_current_log_ratio_abs_mean",
+        "actor/perf/max_memory_allocated_gb",
+        "critic/rewards/mean",
+        "policy_pilot/generated_policy_tokens",
+        "policy_pilot/successful_tgvf_observations",
+        "policy_pilot/tool_call_attempt_rate",
+        "policy_pilot/mean_tool_call_attempts",
+        "policy_pilot/mean_answer_reward",
+        "policy_pilot/format_error_rate",
+        "policy_pilot/mean_conditional_tool_reward",
+        "policy_pilot/mean_reasoning_length",
+        "policy_pilot/mean_original_visual_tokens",
+        "policy_pilot/mean_total_visual_tokens",
+        "policy_timing/end_to_end_step_seconds",
+        "perf/throughput",
+        "response_length/mean",
+        "num_turns/mean",
+    }
+)
 
 
 def _finish_tracking_backends(tracker: object) -> None:
@@ -194,6 +220,18 @@ def _wandb_metrics_from_event(event: Mapping[str, object]) -> dict[str, float | 
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 result[f"{prefix}/{name}"] = value
     return result
+
+
+def _policy_tracking_metrics(data: Mapping[str, object]) -> dict[str, object]:
+    """Keep the compact operator-facing metric surface for console and W&B."""
+
+    if not isinstance(data, Mapping):
+        raise TypeError("Policy tracking data must be a mapping")
+    return {
+        name: value
+        for name, value in data.items()
+        if name in POLICY_TRACKING_METRIC_NAMES
+    }
 
 
 def _append_policy_metrics_event(path: Path, event: Mapping[str, object]) -> None:
@@ -634,6 +672,13 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 def __init__(captured_self, *args, **kwargs):
                     super().__init__(*args, **kwargs)
                     tracker_instances.append(captured_self)
+
+                def log(captured_self, data, step, backend=None):
+                    return super(CapturedPolicyTracking, captured_self).log(
+                        data=_policy_tracking_metrics(data),
+                        step=step,
+                        backend=backend,
+                    )
 
             tracking_module.Tracking = CapturedPolicyTracking
             try:
