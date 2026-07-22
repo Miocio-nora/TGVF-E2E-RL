@@ -49,6 +49,8 @@ from tgvf_rl.trajectories.behavior import BehaviorTraceStore
 from tgvf_rl.trajectories.schema import TrajectoryRecord
 
 from .checkpoint_bridge import (
+    POLICY_PILOT_CHECKPOINT_PAIR_FILENAME,
+    POLICY_PILOT_PROJECT_STATE_FILENAME,
     PairedPolicyPilotVerlCheckpoint,
     PolicyPilotVerlResumeResult,
 )
@@ -425,6 +427,13 @@ class PolicyPilotTrainerCheckpointState:
         )
         self._sampler = self._sampler_state(0)
         self._rng = self._rng_state(0)
+        # Keep the next-data cursor at the most recent completed optimizer
+        # boundary.  The live StatefulDataLoader may already have yielded the
+        # next batch when rollout/reward raises, so recapturing it in an
+        # exception handler would silently skip that failed batch on resume.
+        self._recovery_progress = self._progress
+        self._recovery_sampler = self._sampler
+        self._recovery_rng = self._rng
         self._prepared_policy: PolicyVersion | None = None
         self.last_resume: PolicyPilotVerlResumeResult | None = None
 
@@ -468,7 +477,37 @@ class PolicyPilotTrainerCheckpointState:
             elapsed_seconds=elapsed_seconds,
         )
         summary = self.metrics_accumulator.record_optimizer_step(observation)
+        self._recovery_progress = PilotOptimizerDataCursor(
+            step,
+            _torch_state(DATA_CURSOR_OWNER, self._dataloader_state()),
+        )
+        self._recovery_sampler = self._sampler_state(step)
+        self._recovery_rng = self._rng_state(step)
         return observation, summary
+
+    def recovery_optimizer_step(self) -> int:
+        """Return the last boundary whose optimizer and data both completed."""
+
+        step = self._recovery_progress.optimizer_step
+        if self.metrics_accumulator.state.optimizer_steps != step:
+            raise RuntimeError("Policy recovery cursor and metrics steps differ")
+        return step
+
+    def restore_recovery_cursor_for_checkpoint(self, optimizer_step: int) -> None:
+        """Roll the driver data cursor back before an exception checkpoint."""
+
+        if optimizer_step != self.recovery_optimizer_step() or optimizer_step <= 0:
+            raise RuntimeError("Policy recovery checkpoint step is unavailable")
+        state = _load_torch_state(self._recovery_progress.data_cursor)
+        loader = getattr(self.trainer, "train_dataloader", None)
+        restore = getattr(loader, "load_state_dict", None)
+        if not callable(restore):
+            raise TypeError("veRL train_dataloader must implement load_state_dict()")
+        restore(state)
+        self._progress = self._recovery_progress
+        self._sampler = self._recovery_sampler
+        self._rng = self._recovery_rng
+        self._prepared_policy = None
 
     def run_identity(self) -> PilotRunIdentityHashes:
         return self._run_identity
@@ -505,15 +544,18 @@ class PolicyPilotTrainerCheckpointState:
             raise TypeError("veRL train_dataloader must implement load_state_dict()")
         restore(state)
         self._progress = value
+        self._recovery_progress = value
         self._prepared_policy = None
 
     def restore_rollout_sampler_state(self, value: OpaqueProjectState) -> None:
         self._validate_derived_state(value, owner=ROLLOUT_SAMPLER_OWNER)
         self._sampler = value
+        self._recovery_sampler = value
 
     def restore_rollout_rng_state(self, value: OpaqueProjectState) -> None:
         self._validate_derived_state(value, owner=ROLLOUT_RNG_OWNER)
         self._rng = value
+        self._recovery_rng = value
 
     def _dataloader_state(self) -> object:
         loader = getattr(self.trainer, "train_dataloader", None)
@@ -599,22 +641,50 @@ class PairedActorWorkerGroup:
 class CheckpointAfterWeightSyncManager:
     """Commit a pending checkpoint only after current-step LoRA publication."""
 
-    def __init__(self, upstream: object, trainer: object) -> None:
+    def __init__(
+        self,
+        upstream: object,
+        trainer: object,
+        *,
+        replicas_sleeping: bool = False,
+    ) -> None:
         self.upstream = upstream
         self.trainer = trainer
+        self._replicas_sleeping = replicas_sleeping
+
+    def sleep_replicas(self) -> object:
+        result = self.upstream.sleep_replicas()
+        self._replicas_sleeping = True
+        return result
+
+    def wake_up_replicas(self) -> object:
+        result = self.upstream.wake_up_replicas()
+        self._replicas_sleeping = False
+        return result
+
+    def quiesce_after_training_failure(self) -> None:
+        """Stop incomplete rollout work and free memory for FSDP2 checkpointing."""
+
+        if self._replicas_sleeping:
+            return
+        abort = getattr(self.upstream, "abort_replicas", None)
+        if callable(abort):
+            abort()
+        self.sleep_replicas()
 
     def update_weights(self, global_steps: int | None = None) -> object:
         sync_started = perf_counter()
         result = self.upstream.update_weights(global_steps)
+        self._replicas_sleeping = False
         sync_seconds = perf_counter() - sync_started
         checkpoint_seconds = 0.0
         if getattr(self.trainer, "_policy_checkpoint_pending", False):
             checkpoint_started = perf_counter()
-            self.upstream.sleep_replicas()
+            self.sleep_replicas()
             try:
                 self.trainer._commit_policy_checkpoint_after_weight_sync(global_steps)
             finally:
-                self.upstream.wake_up_replicas()
+                self.wake_up_replicas()
             checkpoint_seconds = perf_counter() - checkpoint_started
         complete = getattr(self.trainer, "_complete_policy_metric_publication", None)
         if callable(complete):
@@ -672,11 +742,15 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self.checkpoint_manager = CheckpointAfterWeightSyncManager(
                 self.checkpoint_manager,
                 self,
+                # Pinned veRL sleeps all rollout replicas at the end of
+                # init_workers() before this wrapper is installed.
+                replicas_sleeping=True,
             )
             self._policy_checkpoint_pending = False
             self._policy_step_started_at = None
             self._policy_runtime_shutdown = False
             self._policy_metrics_pending = None
+            self._policy_actor_update_inflight = False
             return result
 
         def fit(self):
@@ -699,24 +773,34 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
 
             tracking_module.Tracking = CapturedPolicyTracking
             try:
-                completed_step = _completed_resume_checkpoint_step(self)
-                if completed_step is None:
-                    return super().fit()
+                try:
+                    completed_step = _completed_resume_checkpoint_step(self)
+                    if completed_step is None:
+                        return super().fit()
 
-                # Pinned veRL increments ``global_steps`` before checking its loop
-                # bound, so resuming an already-complete one-step run would perform
-                # an unauthorized extra update.  Load and validate the complete
-                # paired checkpoint, publish exactly those weights, then exit.
-                self.global_steps = 0
-                self._load_checkpoint()
-                if self.global_steps != completed_step:
-                    raise RuntimeError("loaded Policy resume step changed")
-                resumed = getattr(self._policy_checkpoint_state, "last_resume", None)
-                if getattr(resumed, "optimizer_step", None) != completed_step:
-                    raise RuntimeError("paired Policy resume step differs from veRL")
-                self.checkpoint_manager.update_weights(self.global_steps)
-                self._shutdown_dump_executor()
-                return None
+                    # Pinned veRL increments ``global_steps`` before checking its loop
+                    # bound, so resuming an already-complete one-step run would perform
+                    # an unauthorized extra update.  Load and validate the complete
+                    # paired checkpoint, publish exactly those weights, then exit.
+                    self.global_steps = 0
+                    self._load_checkpoint()
+                    if self.global_steps != completed_step:
+                        raise RuntimeError("loaded Policy resume step changed")
+                    resumed = getattr(self._policy_checkpoint_state, "last_resume", None)
+                    if getattr(resumed, "optimizer_step", None) != completed_step:
+                        raise RuntimeError("paired Policy resume step differs from veRL")
+                    self.checkpoint_manager.update_weights(self.global_steps)
+                    self._shutdown_dump_executor()
+                    return None
+                except Exception as training_error:
+                    try:
+                        self._save_last_completed_checkpoint_after_failure()
+                    except Exception as checkpoint_error:
+                        raise ExceptionGroup(
+                            "Policy training and recovery checkpoint both failed",
+                            [training_error, checkpoint_error],
+                        ) from training_error
+                    raise
             finally:
                 tracking_module.Tracking = original_tracking_class
                 errors: list[Exception] = []
@@ -762,6 +846,61 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self._policy_step_started_at = perf_counter()
             return super()._get_gen_batch(*args, **kwargs)
 
+        def _save_last_completed_checkpoint_after_failure(self) -> int | None:
+            """Save the last exact boundary without relabeling a failed step."""
+
+            state = getattr(self, "_policy_checkpoint_state", None)
+            recovery_step = getattr(state, "recovery_optimizer_step", None)
+            if not callable(recovery_step):
+                return None
+            optimizer_step = recovery_step()
+            if optimizer_step == 0:
+                return None
+            if getattr(self, "_policy_actor_update_inflight", False):
+                raise RuntimeError(
+                    "cannot checkpoint after an optimizer exception with unknown commit"
+                )
+            if getattr(self, "_policy_metrics_pending", None) is not None:
+                raise RuntimeError(
+                    "cannot checkpoint before current-step weight synchronization completes"
+                )
+            if getattr(self, "_policy_checkpoint_pending", False):
+                raise RuntimeError("a Policy checkpoint request is already pending")
+
+            checkpoint_root_value = getattr(
+                getattr(self.config, "trainer", None),
+                "default_local_dir",
+                None,
+            )
+            if checkpoint_root_value is not None:
+                actor_checkpoint = (
+                    Path(checkpoint_root_value)
+                    / f"global_step_{optimizer_step}"
+                    / "actor"
+                )
+                committed_files = (
+                    actor_checkpoint / POLICY_PILOT_PROJECT_STATE_FILENAME,
+                    actor_checkpoint / POLICY_PILOT_CHECKPOINT_PAIR_FILENAME,
+                )
+                if all(path.is_file() for path in committed_files):
+                    return optimizer_step
+
+            state.restore_recovery_cursor_for_checkpoint(optimizer_step)
+            manager = self.checkpoint_manager
+            quiesce = getattr(manager, "quiesce_after_training_failure", None)
+            if not callable(quiesce):
+                raise TypeError("Policy checkpoint manager cannot quiesce failed rollout")
+            quiesce()
+
+            failed_global_step = getattr(self, "global_steps", None)
+            self.global_steps = optimizer_step
+            self._policy_checkpoint_pending = True
+            try:
+                self._commit_policy_checkpoint_after_weight_sync(optimizer_step)
+            finally:
+                self.global_steps = failed_global_step
+            return optimizer_step
+
         def _compute_ref_log_prob(self, batch):
             if not self.ref_in_actor:
                 raise RuntimeError(
@@ -790,6 +929,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 # check is deliberately not the mutation safety boundary.
                 validate_data_proto_integrity(batch)
                 validate_policy_pilot_reward_data_proto(batch)
+                self._policy_actor_update_inflight = True
                 output = super()._update_actor(batch, *args, **kwargs)
                 started = self._policy_step_started_at
                 elapsed = perf_counter() - started if started is not None else 0.0
@@ -808,6 +948,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                         raise RuntimeError(f"Policy metric already exists: {name}")
                     metrics[name] = [value]
                 self._policy_metrics_pending = (output, event)
+                self._policy_actor_update_inflight = False
                 completed = True
                 return output
             finally:

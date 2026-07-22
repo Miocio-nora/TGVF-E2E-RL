@@ -14,15 +14,18 @@ from tgvf_rl.framework.verl.data_bridge import (
 from tgvf_rl.framework.verl.policy_task_runner import (
     CheckpointAfterWeightSyncManager,
     PairedActorWorkerGroup,
+    PolicyPilotTrainerCheckpointState,
     _append_policy_metrics_event,
     _completed_resume_checkpoint_step,
     _finish_tracking_backends,
     _pilot_metrics_event,
     _policy_tracking_metrics,
+    _torch_state,
     _wandb_metrics_from_event,
     add_policy_actor_rollout_worker,
     make_policy_pilot_ray_trainer_class,
 )
+from tgvf_rl.policy.checkpoint import DATA_CURSOR_OWNER, PilotOptimizerDataCursor
 from tgvf_rl.policy.metrics import (
     PilotMetricsAccumulator,
     PilotOptimizerStepMetricsObservation,
@@ -323,6 +326,145 @@ def test_actor_update_rejects_invalid_batch_before_optimizer_mutation(
         trainer._update_actor(object())
 
     assert events == ["release"]
+
+
+def test_recovery_checkpoint_restores_last_completed_data_cursor() -> None:
+    class Loader:
+        def __init__(self) -> None:
+            self.value = {"next_batch": 7}
+
+        def load_state_dict(self, value):
+            self.value = value
+
+    loader = Loader()
+    state = object.__new__(PolicyPilotTrainerCheckpointState)
+    state.trainer = SimpleNamespace(train_dataloader=loader)
+    state.metrics_accumulator = SimpleNamespace(
+        state=SimpleNamespace(optimizer_steps=6)
+    )
+    state._recovery_progress = PilotOptimizerDataCursor(
+        6,
+        _torch_state(DATA_CURSOR_OWNER, {"next_batch": 6}),
+    )
+    state._recovery_sampler = "sampler-at-6"
+    state._recovery_rng = "rng-at-6"
+    state._prepared_policy = object()
+
+    state.restore_recovery_cursor_for_checkpoint(6)
+
+    assert loader.value == {"next_batch": 6}
+    assert state.progress().optimizer_step == 6
+    assert state.rollout_sampler_state() == "sampler-at-6"
+    assert state.rollout_rng_state() == "rng-at-6"
+    assert state._prepared_policy is None
+
+
+def test_policy_fit_saves_last_completed_boundary_before_reraising_failure() -> None:
+    events: list[object] = []
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            events.append(("save", self.global_steps))
+
+        def fit(self):
+            self.global_steps = 7
+            raise RuntimeError("judge exhausted retries")
+
+    class State:
+        def recovery_optimizer_step(self):
+            return 6
+
+        def restore_recovery_cursor_for_checkpoint(self, step):
+            events.append(("restore_cursor", step))
+
+    class CheckpointManager:
+        def quiesce_after_training_failure(self):
+            events.append("quiesce")
+
+    class RuntimeManager:
+        def shutdown(self):
+            events.append("runtime_shutdown")
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.config = SimpleNamespace(
+        trainer=SimpleNamespace(resume_mode="disable", resume_from_path=None)
+    )
+    trainer._policy_checkpoint_state = State()
+    trainer.checkpoint_manager = CheckpointManager()
+    trainer.llm_server_manager = RuntimeManager()
+    trainer._policy_checkpoint_pending = False
+    trainer._policy_metrics_pending = None
+    trainer._policy_actor_update_inflight = False
+
+    with pytest.raises(RuntimeError, match="judge exhausted retries"):
+        trainer.fit()
+
+    assert trainer.global_steps == 7
+    assert events == [
+        ("restore_cursor", 6),
+        "quiesce",
+        ("save", 6),
+        "runtime_shutdown",
+    ]
+
+
+def test_policy_fit_preserves_training_and_recovery_checkpoint_failures() -> None:
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            raise OSError("checkpoint disk failure")
+
+        def fit(self):
+            self.global_steps = 7
+            raise RuntimeError("judge exhausted retries")
+
+    class State:
+        def recovery_optimizer_step(self):
+            return 6
+
+        def restore_recovery_cursor_for_checkpoint(self, _step):
+            return None
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.config = SimpleNamespace(
+        trainer=SimpleNamespace(resume_mode="disable", resume_from_path=None)
+    )
+    trainer._policy_checkpoint_state = State()
+    trainer.checkpoint_manager = SimpleNamespace(
+        quiesce_after_training_failure=lambda: None
+    )
+    trainer.llm_server_manager = SimpleNamespace(shutdown=lambda: None)
+    trainer._policy_checkpoint_pending = False
+    trainer._policy_metrics_pending = None
+    trainer._policy_actor_update_inflight = False
+
+    with pytest.raises(ExceptionGroup) as captured:
+        trainer.fit()
+
+    messages = tuple(str(error) for error in captured.value.exceptions)
+    assert messages == (
+        "judge exhausted retries",
+        "checkpoint disk failure",
+    )
 
 
 def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> None:

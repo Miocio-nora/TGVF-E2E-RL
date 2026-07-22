@@ -7521,8 +7521,9 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-02-QWEN3-GRPO-BS16-TGVF-FORMAL-PILOT-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; the PRL-02 one-step clean-resume
-  sub-run passed and tmux `prl02_formal80_gpu0123` launched on 2026-07-22 JST.
+- Lifecycle/result: `COMPLETE` / `FAIL (external judge rate limit)`; the PRL-02
+  one-step clean-resume sub-run passed and tmux `prl02_formal80_gpu0123`
+  launched on 2026-07-22 JST.
 - Config
   `configs/policy/runs/prl_02_qwen3_grpo_bs16_tgvf_formal_pilot_80step_gpu0123.toml`,
   SHA-256 `62dda224...22f8`, identity `bd7c91df...9d21`, code
@@ -7537,6 +7538,13 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   bounded trajectory audits. Output is
   `artifacts/policy/PRL-02-qwen3-grpo-bs16-tgvf-formal-pilot-80step-gpu0123`;
   planned tmux session `prl02_formal80_gpu0123`, physical GPUs 0--3.
+- Result: steps 1--6 completed and synchronized successfully; 96 prompts, 768
+  trajectories, 1,540,578 policy tokens and 480 judge calls were retained.
+  During the next rollout DeepInfra returned HTTP 429 for one judge request and
+  all five retries exhausted. The fail-closed reward contract aborted before
+  step 7 mutated actor state. No checkpoint existed before the planned step 10,
+  so the published step-6 LoRA snapshot is diagnostic only and is not an exact
+  optimizer/data/RNG resume point. W&B `rre1y7cy`; GPUs 0--3 were released.
 
 ## Required entry template
 
