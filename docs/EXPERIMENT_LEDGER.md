@@ -7914,6 +7914,13 @@ than inferred from a script name or prior conversation.
 - Scorer: final-answer-only TSV materialization and the already accepted pinned
   VLMEvalKit/Qwen2.5-72B scorer follow only after inference is complete; GPT is
   forbidden. Metrics and elapsed/GPU-hours remain pending.
+- Resume note (`2026-07-23`): rank 0 stopped after 238 durable rows on an
+  unmapped padded LM-vocabulary row; rank 1 stopped after 108 rows because the
+  standalone bridge had collapsed vLLM's exact EOS finish evidence. Ranks 2/3
+  completed. Commit `aa5507791ea180ba9ed6fb1906fcd1efbb406a31`
+  preserves zero-width sampled-token identity and exact standalone vLLM
+  termination evidence; 29 focused CPU tests passed. Resume skips every
+  durable row and uses this commit for only the missing trajectories.
 
 ### BE-05-QWEN3-CROP-STEP80-COREDEV2511-GPU0123
 
@@ -7942,3 +7949,7 @@ than inferred from a script name or prior conversation.
 - Session/output: automatically starts rank-for-rank after BE-04 in tmux
   `be04_be05_coredev_step80_gpu0123`; output
   `artifacts/evaluation/BE-05-qwen3-crop-step80-coredev2511-gpu0123`.
+- Resume note (`2026-07-23`): rank 2 completed; rank 3 stopped after nine
+  durable rows on the same collapsed EOS boundary; ranks 0/1 never started
+  because their preceding BE-04 ranks stopped. Missing rows resume under the
+  same exact-evidence fix `aa5507791ea180ba9ed6fb1906fcd1efbb406a31`.
