@@ -578,7 +578,10 @@ async def build_standalone_manager(
         enable_mm_embeds=True,
         mm_processor_cache_gb=0,
         mm_encoder_attn_backend=TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
-        limit_mm_per_prompt={"image": 1 + run.protocol.maximum_tool_calls},
+        limit_mm_per_prompt={
+            "image": 1 + run.protocol.maximum_tool_calls,
+            "video": 0,
+        },
         hf_overrides={"architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]},
     )
     engine = AsyncLLM.from_engine_args(engine_args)
