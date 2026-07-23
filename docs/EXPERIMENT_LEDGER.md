@@ -7886,8 +7886,8 @@ than inferred from a script name or prior conversation.
   observation is materialized by the same single-GPU vLLM replica that samples
   the target and is retained in the local trajectory audit.
 - Code/config: clean implementation commit
-  `f0d357b18c09a3bfe850253ccf04aa981f532721`; evaluator/config SHA-256
-  `078c90d5...02bb` / `9b0b0cb7...0b2d`; bound policy config SHA-256
+  `6e73cbe941aca279d292a9d08c775469d3f688dd`; evaluator/config SHA-256
+  `3fe027a2...2862` / `9b0b0cb7...0b2d`; bound policy config SHA-256
   `f2d188f9...0d89`.
 - Data: immutable CoreDev-2511 identity
   `coredev-2511-vlmevalkit-7055d301-v1`, membership SHA-256
