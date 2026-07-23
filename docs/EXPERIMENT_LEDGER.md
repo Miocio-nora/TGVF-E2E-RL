@@ -7919,8 +7919,11 @@ than inferred from a script name or prior conversation.
   standalone bridge had collapsed vLLM's exact EOS finish evidence. Ranks 2/3
   completed. Commit `aa5507791ea180ba9ed6fb1906fcd1efbb406a31`
   preserves zero-width sampled-token identity and exact standalone vLLM
-  termination evidence; 29 focused CPU tests passed. Resume skips every
-  durable row and uses this commit for only the missing trajectories.
+  termination evidence. The first resume then exposed vLLM's native EOS pair
+  `stop/None`; commit `9981f2aaf6a58e045dbb6847109c1f2c76f4a1cd`
+  admits that exact vLLM representation without weakening length handling; 30
+  focused CPU tests passed. Resume skips every durable row and uses the latter
+  commit for only the missing trajectories.
 
 ### BE-05-QWEN3-CROP-STEP80-COREDEV2511-GPU0123
 
@@ -7952,4 +7955,5 @@ than inferred from a script name or prior conversation.
 - Resume note (`2026-07-23`): rank 2 completed; rank 3 stopped after nine
   durable rows on the same collapsed EOS boundary; ranks 0/1 never started
   because their preceding BE-04 ranks stopped. Missing rows resume under the
-  same exact-evidence fix `aa5507791ea180ba9ed6fb1906fcd1efbb406a31`.
+  same exact-evidence/EOS fixes through
+  `9981f2aaf6a58e045dbb6847109c1f2c76f4a1cd`.
