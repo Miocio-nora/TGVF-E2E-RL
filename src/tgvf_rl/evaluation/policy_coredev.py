@@ -623,7 +623,12 @@ def _termination_contract(run: PolicyE2ESmokeRunConfig) -> VLLMTurnTerminationCo
             VLLMTerminationOutcome("stop", token_id)
             for token_id in tuple(sampling.stop_token_ids or ())
         )
-        + (VLLMTerminationOutcome("length", None),),
+        + (
+            # vLLM 0.12 reports native EOS as finish_reason="stop" with no
+            # separate stop_reason; this remains distinct from a length stop.
+            VLLMTerminationOutcome("stop", None),
+            VLLMTerminationOutcome("length", None),
+        ),
     )
 
 

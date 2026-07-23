@@ -5,10 +5,13 @@ from pathlib import Path
 
 from tgvf_rl.evaluation.policy_coredev import (
     CoreDevTask,
+    _termination_contract,
     load_coredev_tasks,
     load_policy_coredev_config,
     policy_version_from_pointer,
 )
+from tgvf_rl.framework.vllm import VLLMTerminationOutcome
+from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +37,17 @@ def test_formal_policy_configs_bind_exact_step80_snapshots() -> None:
         assert version.run_id == run_id
         assert version.optimizer_step == 80
         assert version.weights_sha256 == weights_sha256
+
+
+def test_policy_evaluation_accepts_native_vllm_eos_identity() -> None:
+    run = load_policy_e2e_smoke_run_config(
+        REPOSITORY_ROOT
+        / "configs/policy/runs/prl_02_r5_qwen3_grpo_bs16_tgvf_t1_formal_pilot_80step_gpu0123.toml"
+    )
+
+    assert VLLMTerminationOutcome("stop", None) in _termination_contract(
+        run
+    ).final_turn_outcomes
 
 
 def test_coredev_task_loader_keeps_order_and_single_image_boundary(tmp_path: Path) -> None:
