@@ -1,0 +1,10 @@
+{
+  "schema_version": "tgvf-policy-coredev-evaluation-v1",
+  "evaluation_id": "BE-05-QWEN3-CROP-STEP80-COREDEV2511-GPU0123",
+  "policy_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/runs/prl_03_r2_qwen3_grpo_bs16_crop_only_formal_comparison_80step_gpu0123.toml",
+  "lora_pointer_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-03-R2-qwen3-grpo-bs16-crop-only-formal-comparison-80step-gpu0123/runtime-policy-state/latest-lora-snapshot.json",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/BE-05-qwen3-crop-step80-coredev2511-gpu0123",
+  "gpu_ids": [0, 1, 2, 3],
+  "max_model_len": 16384,
+  "gpu_memory_utilization": 0.9
+}
