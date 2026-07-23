@@ -7886,8 +7886,8 @@ than inferred from a script name or prior conversation.
   observation is materialized by the same single-GPU vLLM replica that samples
   the target and is retained in the local trajectory audit.
 - Code/config: clean implementation commit
-  `6e73cbe941aca279d292a9d08c775469d3f688dd`; evaluator/config SHA-256
-  `3fe027a2...2862` / `9b0b0cb7...0b2d`; bound policy config SHA-256
+  `b53ecac0807e164cb141d0715aa11027ab8608ee`; evaluator/config SHA-256
+  `b30ad3f7...7817` / `dc7cf50c...b273`; bound policy config SHA-256
   `f2d188f9...0d89`.
 - Data: immutable CoreDev-2511 identity
   `coredev-2511-vlmevalkit-7055d301-v1`, membership SHA-256
@@ -7896,7 +7896,8 @@ than inferred from a script name or prior conversation.
   explicitly pending because the accepted crop/TGVF schemas contain no
   `image_index`; taking only the first image or silently compositing images is
   forbidden. Task materialization SHA-256 `dc3ef2e2...6c4`.
-- Sampling/runtime: vLLM `0.12.0`, one single-B200 replica per rank, LoRA rank
+- Sampling/runtime: vLLM `0.12.0`, one single-B200 replica per rank with eight
+  concurrent request sequences, LoRA rank
   64, BF16, TRITON_ATTN language attention, TORCH_SDPA vision attention,
   max pixels `262144`, max model length `16384`; temperature `1`, top-p `1`,
   top-k disabled, all penalties disabled, cumulative max response length
@@ -7928,7 +7929,7 @@ than inferred from a script name or prior conversation.
 - Tool/config: native prompt bundle `4bc9d8e2...dab0`, tool
   `image_zoom_in_tool`, maximum four calls. Each accepted crop is re-encoded by
   the same vLLM replica's frozen Qwen vision tower and records main plus native
-  DeepStack tensors. Config SHA-256 `2be4c688...5990`; bound policy config
+  DeepStack tensors. Config SHA-256 `b961103f...a46`; bound policy config
   SHA-256 `1e554cfa...b3fb`; implementation commit and evaluator are identical
   to BE-04.
 - Data/sampling/runtime/GPU/scorer: exactly BE-04, including the 2,240-row
