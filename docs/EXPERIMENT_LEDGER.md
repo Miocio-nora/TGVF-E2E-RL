@@ -7866,3 +7866,76 @@ than inferred from a script name or prior conversation.
   correct binary decisions throughout. Result SHA-256 `4a293359...b7504`;
   server-log SHA-256 `8ca76ccc...0a89`. Service stopped and GPUs 0/1 returned
   to 0 MiB.
+
+### BE-04-QWEN3-TGVF-STEP80-COREDEV2511-GPU0123
+
+- Cell/status/result: post-training TGVF-only policy benchmark / `PLANNED` /
+  `PENDING`; no optimizer, reward, reference replay, or weight update occurs.
+- Question: how does the completed 80-step TGVF-only policy perform on the
+  same official CoreDev benchmark content used by the original-policy baseline?
+- Evaluated policy: base `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`
+  plus the exact step-80 LoRA mapping identity
+  `561132e49848fd43f8e7f352ef54782249aff59b2a5d331027a0e5e0f78be321`
+  from run `PRL-02-R5-QWEN3-GRPO-BS16-TGVF-T1-FORMAL-PILOT-80STEP-GPU0123`;
+  tensor-file SHA-256 `222fca29...9d54`, policy-run identity
+  `d3c2ded3...ce8d8`.
+- Representation/tool: immutable Adapter export
+  `REP-QWEN3-V4-CONTEXTUAL-V4`, Balanced Matrix CE T=1 contextual hidden
+  state, main D plus all three D-DeepStack branches; native prompt bundle
+  `b44d8a46...11c8a`, tool `tgvf_focus_tool`, maximum four calls. Every
+  observation is materialized by the same single-GPU vLLM replica that samples
+  the target and is retained in the local trajectory audit.
+- Code/config: clean implementation commit
+  `4f06cef8ac4b47321c6d28410e55f1a4c8e48f0e`; evaluator/config SHA-256
+  `5c51f0a4...326f` / `9b0b0cb7...0b2d`; bound policy config SHA-256
+  `f2d188f9...0d89`.
+- Data: immutable CoreDev-2511 identity
+  `coredev-2511-vlmevalkit-7055d301-v1`, membership SHA-256
+  `a461d9b4...0579`. The first executable tranche is all 2,240 single-image
+  rows in canonical seven-slice order. The remaining 271 multi-image rows are
+  explicitly pending because the accepted crop/TGVF schemas contain no
+  `image_index`; taking only the first image or silently compositing images is
+  forbidden. Task materialization SHA-256 `dc3ef2e2...6c4`.
+- Sampling/runtime: vLLM `0.12.0`, one single-B200 replica per rank, LoRA rank
+  64, BF16, TRITON_ATTN language attention, TORCH_SDPA vision attention,
+  max pixels `262144`, max model length `16384`; temperature `1`, top-p `1`,
+  top-k disabled, all penalties disabled, cumulative max response length
+  `8192`, content-addressed seed stream rooted at `42`, processed sampled-token
+  logprobs retained. No quantization or prefix caching.
+- GPUs/session/output: physical GPUs 0--3, DP4/TP1, one canonical-row shard per
+  GPU; tmux `be04_be05_coredev_step80_gpu0123`; output
+  `artifacts/evaluation/BE-04-qwen3-tgvf-step80-coredev2511-gpu0123`.
+- Command: first run each rank with `tools/run_policy_coredev_2511.py --mode
+  worker --rank <0..3> --world-size 4 --max-tasks 1`; after all four real rows
+  pass, resume the same durable rank JSONL files without `--max-tasks`. Crop
+  BE-05 follows automatically on the same GPU rank after BE-04 completes.
+- Scorer: final-answer-only TSV materialization and the already accepted pinned
+  VLMEvalKit/Qwen2.5-72B scorer follow only after inference is complete; GPT is
+  forbidden. Metrics and elapsed/GPU-hours remain pending.
+
+### BE-05-QWEN3-CROP-STEP80-COREDEV2511-GPU0123
+
+- Cell/status/result: post-training Crop-only policy comparison / `PLANNED` /
+  `PENDING`; no optimizer, reward, reference replay, or weight update occurs.
+- Question: how does the completed 80-step Crop-only comparison perform on the
+  identical CoreDev content and single-image tranche used by BE-04?
+- Evaluated policy: the same frozen Qwen3-VL-8B-Thinking base plus exact
+  step-80 LoRA mapping identity
+  `eed4ffeaf5b77277a41dafeba428a20d5f3c8bce73049c02e63f63292d78b0b0`
+  from run `PRL-03-R2-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123`;
+  tensor-file SHA-256 `a10b3e32...b596`, policy-run identity
+  `91251b9f...26d8`.
+- Tool/config: native prompt bundle `4bc9d8e2...dab0`, tool
+  `image_zoom_in_tool`, maximum four calls. Each accepted crop is re-encoded by
+  the same vLLM replica's frozen Qwen vision tower and records main plus native
+  DeepStack tensors. Config SHA-256 `2be4c688...5990`; bound policy config
+  SHA-256 `1e554cfa...b3fb`; implementation commit and evaluator are identical
+  to BE-04.
+- Data/sampling/runtime/GPU/scorer: exactly BE-04, including the 2,240-row
+  single-image tranche, explicit 271-row multi-image hold, temperature/seed/
+  8192-token contract, vLLM `0.12.0` BF16 DP4/TP1 runtime and final-answer-only
+  pinned scorer. This lane changes only the trained LoRA and selected native
+  visual tool/prompt.
+- Session/output: automatically starts rank-for-rank after BE-04 in tmux
+  `be04_be05_coredev_step80_gpu0123`; output
+  `artifacts/evaluation/BE-05-qwen3-crop-step80-coredev2511-gpu0123`.
