@@ -7869,8 +7869,9 @@ than inferred from a script name or prior conversation.
 
 ### BE-04-QWEN3-TGVF-STEP80-COREDEV2511-GPU0123
 
-- Cell/status/result: post-training TGVF-only policy benchmark / `PLANNED` /
-  `PENDING`; no optimizer, reward, reference replay, or weight update occurs.
+- Cell/status/result: post-training TGVF-only policy benchmark / `RUNNING` /
+  launched `2026-07-23 11:55 JST`; no optimizer, reward, reference replay, or
+  weight update occurs.
 - Question: how does the completed 80-step TGVF-only policy perform on the
   same official CoreDev benchmark content used by the original-policy baseline?
 - Evaluated policy: base `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`
@@ -7916,8 +7917,9 @@ than inferred from a script name or prior conversation.
 
 ### BE-05-QWEN3-CROP-STEP80-COREDEV2511-GPU0123
 
-- Cell/status/result: post-training Crop-only policy comparison / `PLANNED` /
-  `PENDING`; no optimizer, reward, reference replay, or weight update occurs.
+- Cell/status/result: post-training Crop-only policy comparison / `RUNNING` /
+  queued rank-for-rank after BE-04 in the durable tmux launch; no optimizer,
+  reward, reference replay, or weight update occurs.
 - Question: how does the completed 80-step Crop-only comparison perform on the
   identical CoreDev content and single-image tranche used by BE-04?
 - Evaluated policy: the same frozen Qwen3-VL-8B-Thinking base plus exact
