@@ -62,7 +62,6 @@ from tgvf_rl.framework.vllm import (
     VLLMPolicySampler,
     VLLMTerminationOutcome,
     VLLMTurnTerminationContract,
-    register_tgvf_qwen3_vllm_plugin,
 )
 from tgvf_rl.framework.vllm.registration import (
     TGVF_QWEN3_VLLM_ARCHITECTURE,
@@ -557,7 +556,6 @@ async def build_standalone_manager(
     from vllm.v1.engine.async_llm import AsyncLLM
 
     run = load_policy_e2e_smoke_run_config(config.policy_config_path)
-    register_tgvf_qwen3_vllm_plugin()
     adapter_root = materialize_vllm_lora_adapter(config)
     engine_args = AsyncEngineArgs(
         model=run.model.revision_or_path,
