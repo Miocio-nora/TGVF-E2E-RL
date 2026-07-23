@@ -636,6 +636,20 @@ def test_collapsed_upstream_stop_takes_precedence_at_exact_length_boundary() -> 
         )
 
 
+def test_exact_standalone_vllm_stop_survives_collapsed_verl_output() -> None:
+    text = "reason</think>answer"
+    token_ids = tuple(ord(character) for character in text)
+
+    assert _recover_termination(
+        request=_turn_request(text, max_tokens=len(token_ids) + 1),
+        token_ids=token_ids,
+        text=text,
+        upstream_stop_reason="completed",
+        exact_finish_reason="stop",
+        exact_stop_reason=151645,
+    ) == ("stop", 151645)
+
+
 def test_bridge_rejects_upstream_silent_max_token_clamp() -> None:
     tokenizer = _CharacterTokenizer()
     factory = _InvocationFactory(tokenizer)

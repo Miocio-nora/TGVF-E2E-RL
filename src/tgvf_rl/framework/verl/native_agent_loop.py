@@ -198,9 +198,8 @@ class VerlAsyncServerPolicyTurnClient:
         logprobs = _selected_processed_logprobs(
             getattr(output, "log_probs", None), token_ids=token_ids
         )
-        _validate_policy_step_evidence(
-            getattr(output, "extra_fields", None), request=request
-        )
+        extra_fields = getattr(output, "extra_fields", None)
+        _validate_policy_step_evidence(extra_fields, request=request)
         text = self.tokenizer.decode(
             list(token_ids),
             skip_special_tokens=request.decoding.skip_special_tokens,
@@ -221,6 +220,16 @@ class VerlAsyncServerPolicyTurnClient:
             token_ids=token_ids,
             text=text,
             upstream_stop_reason=getattr(output, "stop_reason", None),
+            exact_finish_reason=(
+                extra_fields.get("tgvf_vllm_finish_reason")
+                if isinstance(extra_fields, Mapping)
+                else None
+            ),
+            exact_stop_reason=(
+                extra_fields.get("tgvf_vllm_stop_reason")
+                if isinstance(extra_fields, Mapping)
+                else None
+            ),
         )
         return VLLMPolicyTurnResponse(
             request_id=request.request_id,
@@ -349,11 +358,28 @@ def _recover_termination(
     token_ids: tuple[int, ...],
     text: str,
     upstream_stop_reason: object,
+    exact_finish_reason: object = None,
+    exact_stop_reason: object = None,
 ) -> tuple[str, int | str | None]:
     if upstream_stop_reason != "completed":
         raise ReplayMismatchError(
             "veRL generation did not return one completed final TokenOutput"
         )
+    if exact_finish_reason is not None:
+        if exact_finish_reason not in ("stop", "length"):
+            raise ReplayMismatchError("exact vLLM finish reason is unsupported")
+        if isinstance(exact_stop_reason, bool) or (
+            exact_stop_reason is not None
+            and not isinstance(exact_stop_reason, (int, str))
+        ):
+            raise TypeError("exact vLLM stop reason must be int, str, or None")
+        if exact_finish_reason == "length":
+            if exact_stop_reason is not None:
+                raise ReplayMismatchError(
+                    "length termination cannot carry an exact stop reason"
+                )
+            return "length", None
+        return "stop", exact_stop_reason
     parameters = request.sampling_parameters
     max_tokens = int(parameters["max_tokens"])
     reached_length = len(token_ids) == max_tokens

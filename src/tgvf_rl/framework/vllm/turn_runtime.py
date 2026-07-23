@@ -283,6 +283,24 @@ class FastTokenizerTokenByteSpanDecoder:
 
         token_bytes: list[bytes] = []
         for token_id, raw_token in zip(token_ids, raw_tokens, strict=True):
+            if raw_token is None:
+                # Qwen's LM head is padded beyond the tokenizer vocabulary.
+                # Those sampled rows are real policy tokens (and therefore
+                # retain their logprob), but the tokenizer deterministically
+                # decodes them to zero bytes.  Preserve them as zero-width
+                # spans instead of losing the sampled-token identity.
+                decoded = self.tokenizer.decode(
+                    [token_id],
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                    spaces_between_special_tokens=False,
+                )
+                if decoded != "":
+                    raise ReplayMismatchError(
+                        "unmapped tokenizer row did not decode to an empty string"
+                    )
+                token_bytes.append(b"")
+                continue
             if not isinstance(raw_token, str):
                 raise TypeError("converted ByteLevel token must be str")
             if token_id in added_ids:

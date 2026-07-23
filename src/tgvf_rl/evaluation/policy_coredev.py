@@ -471,6 +471,8 @@ class StandaloneTGVFVLLMManager:
                 "min_global_steps": step,
                 "max_global_steps": step,
                 "logprobs_mode": "processed_logprobs",
+                "tgvf_vllm_finish_reason": completion.finish_reason,
+                "tgvf_vllm_stop_reason": completion.stop_reason,
             },
         )
 

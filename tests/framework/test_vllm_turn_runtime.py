@@ -180,6 +180,22 @@ def test_fast_tokenizer_decoder_accepts_noncanonical_sampled_segmentation() -> N
     )
 
 
+def test_fast_tokenizer_decoder_keeps_unmapped_model_vocab_row() -> None:
+    tokenizer = _FastTokenizer(ids=[1, 200], tokens=["a", None])
+    tokenizer.decode = lambda token_ids, **_: "" if token_ids == [200] else "a"
+
+    spans = FastTokenizerTokenByteSpanDecoder(tokenizer).spans_for_output(
+        text="a",
+        token_ids=(1, 200),
+        decoding=DECODING,
+    )
+
+    assert spans == (
+        TokenByteSpan(0, 1, 0, 1),
+        TokenByteSpan(1, 200, 1, 1),
+    )
+
+
 @pytest.mark.parametrize(
     ("tokens", "message"),
     [
