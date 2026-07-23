@@ -100,29 +100,50 @@ async def _worker(args: argparse.Namespace) -> int:
         config=config, run=run, manager=manager, processor=processor
     )
     started = time.time()
+    jobs: list[asyncio.Task[None]] = []
+
+    async def evaluate_one(local_index: int, task: object) -> None:
+        row_started = time.time()
+        trajectory = await evaluator.evaluate(task)
+        payload = trajectory_audit_payload(task, trajectory)
+        payload["wall_seconds"] = time.time() - row_started
+        _append_durable(result_path, payload)
+        print(
+            json.dumps(
+                {
+                    "rank": args.rank,
+                    "done": local_index,
+                    "selected": len(selected),
+                    "ordinal": task.ordinal,
+                    "dataset": task.dataset,
+                    "tool_calls": len(trajectory.tool_calls),
+                    "stop": trajectory.stop.value,
+                    "wall_seconds": payload["wall_seconds"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
     try:
-        for local_index, task in enumerate(selected, 1):
-            row_started = time.time()
-            trajectory = await evaluator.evaluate(task)
-            payload = trajectory_audit_payload(task, trajectory)
-            payload["wall_seconds"] = time.time() - row_started
-            _append_durable(result_path, payload)
-            print(
-                json.dumps(
-                    {
-                        "rank": args.rank,
-                        "done": local_index,
-                        "selected": len(selected),
-                        "ordinal": task.ordinal,
-                        "dataset": task.dataset,
-                        "tool_calls": len(trajectory.tool_calls),
-                        "stop": trajectory.stop.value,
-                        "wall_seconds": payload["wall_seconds"],
-                    },
-                    sort_keys=True,
-                ),
-                flush=True,
-            )
+        for batch_start in range(0, len(selected), config.inference_concurrency_per_gpu):
+            batch = selected[
+                batch_start : batch_start + config.inference_concurrency_per_gpu
+            ]
+            jobs = [
+                asyncio.create_task(evaluate_one(batch_start + offset + 1, task))
+                for offset, task in enumerate(batch)
+            ]
+            try:
+                await asyncio.gather(*jobs)
+            except BaseException:
+                for job in jobs:
+                    if not job.done():
+                        job.cancel()
+                await asyncio.gather(*jobs, return_exceptions=True)
+                raise
+            finally:
+                jobs = []
     finally:
         engine.shutdown()
         await asyncio.sleep(0)

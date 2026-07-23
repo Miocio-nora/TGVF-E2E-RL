@@ -29,6 +29,7 @@ def test_formal_policy_configs_bind_exact_step80_snapshots() -> None:
         config = load_policy_coredev_config(
             REPOSITORY_ROOT / "configs/evaluation" / name
         )
+        assert config.inference_concurrency_per_gpu == 8
         version = policy_version_from_pointer(config)
         assert version.run_id == run_id
         assert version.optimizer_step == 80

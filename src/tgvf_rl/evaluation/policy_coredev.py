@@ -104,6 +104,7 @@ class PolicyCoreDevConfig:
     lora_pointer_path: Path
     output_root: Path
     gpu_ids: tuple[int, ...]
+    inference_concurrency_per_gpu: int = 8
     max_model_len: int = 16384
     gpu_memory_utilization: float = 0.90
     schema_version: str = POLICY_COREDEV_SCHEMA
@@ -119,6 +120,8 @@ class PolicyCoreDevConfig:
             raise ValueError("evaluation_id must be non-empty")
         if self.gpu_ids != (0, 1, 2, 3):
             raise ValueError("formal policy CoreDev evaluation requires GPUs 0-3")
+        if not 1 <= self.inference_concurrency_per_gpu <= 8:
+            raise ValueError("inference_concurrency_per_gpu must be in [1,8]")
         if self.max_model_len != 16384:
             raise ValueError("policy CoreDev max_model_len must match training")
         if not 0.0 < self.gpu_memory_utilization <= 1.0:
@@ -134,6 +137,7 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "lora_pointer_path",
         "output_root",
         "gpu_ids",
+        "inference_concurrency_per_gpu",
         "max_model_len",
         "gpu_memory_utilization",
     }
@@ -564,7 +568,7 @@ async def build_standalone_manager(
         distributed_executor_backend="mp",
         worker_extension_cls=TGVF_VLLM_WORKER_EXTENSION_FQN,
         max_model_len=config.max_model_len,
-        max_num_seqs=8,
+        max_num_seqs=config.inference_concurrency_per_gpu,
         max_num_batched_tokens=16384,
         enable_chunked_prefill=True,
         enable_prefix_caching=False,
@@ -863,7 +867,14 @@ class PolicyCoreDevEvaluator:
         try:
             return await asyncio.to_thread(loop.run, request)
         finally:
-            await self.manager.release_trajectory(trajectory_id)
+            try:
+                await self.manager.release_trajectory(trajectory_id)
+            finally:
+                trajectory_ids = (trajectory_id,)
+                self.focus_ledger.release_trajectories(trajectory_ids)
+                self.crop_ledger.release_trajectories(trajectory_ids)
+                self.behavior_store.release_trajectories(trajectory_ids)
+                self.store.release_trajectories(trajectory_ids)
 
 
 def trajectory_audit_payload(task: CoreDevTask, trajectory: TrajectoryRecord) -> dict[str, object]:
