@@ -29,18 +29,43 @@ from .base import (
     resolve_language_model,
     resolve_lm_head,
 )
+from .crop_coordinates import (
+    QWEN3_CROP_CONVERSION_VERSION,
+    QWEN3_CROP_COORDINATE_SPACE,
+    CropCoordinateMapping,
+    map_qwen3_crop_bbox_to_source,
+)
 
 
 class Qwen3VLAdapter(QwenVLMFamilyAdapter):
+    crop_coordinate_space = QWEN3_CROP_COORDINATE_SPACE
+    crop_coordinate_conversion_version = QWEN3_CROP_CONVERSION_VERSION
     capabilities = FamilyCapabilities(
         family="qwen3_vl",
         support_level=SupportLevel.EXECUTABLE,
-        native_thinking_prefill=True,
+        # Assistant framing is checkpoint/template-bound: the Instruct primary
+        # has no template-owned think opener, while historical Thinking does.
+        native_thinking_prefill=False,
         deepstack_branch_count=3,
         recorded_d_forward=True,
         native_tool_template=True,
         native_injected_kv_cache=True,
     )
+
+    def map_crop_bbox_to_source(
+        self,
+        bbox_2d: tuple[int, int, int, int],
+        *,
+        source_width: int,
+        source_height: int,
+        processor_resized_size: tuple[int, int] | None = None,
+    ) -> CropCoordinateMapping:
+        return map_qwen3_crop_bbox_to_source(
+            bbox_2d,
+            source_width=source_width,
+            source_height=source_height,
+            processor_resized_size=processor_resized_size,
+        )
 
     def forward_recorded(
         self,

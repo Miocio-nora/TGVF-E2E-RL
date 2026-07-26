@@ -89,12 +89,13 @@ public API symbols.
 The primary operational model path is:
 
 ```text
-/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking
+/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct
 ```
 
-The user declared that directory stable; the project does not hash all weight
-shards. Native transcript, tokenizer length, processor behavior, and chat
-template remain fixture identities.
+The model is pinned to official revision
+`0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`; its downloaded shard identities
+are recorded in `docs/EXTERNAL_REFERENCES.md`. Native transcript, tokenizer
+length, processor behavior, and chat template remain fixture identities.
 
 No Qwen2.5-VL local/runtime path or family-specific representation artifact has
 been accepted. The current Qwen2.5-VL code is a fail-closed family boundary and

@@ -460,6 +460,7 @@ def main() -> int:
         crop_processor_identity=processor_identity,
         crop_layout_identity=layout_identity,
         execution_ledger=CropExecutionLedger(),
+        coordinate_mapper=Qwen3VLAdapter(),
     )
     plain_handle = plain_runtime.execute(
         plain_parsed,
@@ -504,6 +505,7 @@ def main() -> int:
             materializer=materializer,
             adapter=loaded_adapter.adapter,
             store=store,
+            coordinate_mapper=Qwen3VLAdapter(),
         ),
         layout_builder=layout_builder,
         loaded_adapter=loaded_adapter,

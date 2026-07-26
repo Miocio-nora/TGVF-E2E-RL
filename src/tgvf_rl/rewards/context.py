@@ -51,7 +51,6 @@ def reward_context_from_trajectory(
         trajectory.stop
         in {TrajectoryStop.DIRECT_ANSWER, TrajectoryStop.FINAL_ANSWER}
         and has_final_answer
-        and all(turn.think_span is not None for turn in trajectory.assistant_turns)
         and not invalidating_error
     )
     # `successful_tgvf_observation_count` is the retained Pilot compatibility

@@ -60,9 +60,11 @@ from .native_appender import (
     NativeObservationVisualTokenCountResolver,
     NativeToolTurnRegistrar,
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
+    QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX,
     QWEN_NATIVE_RESPONSE_SUFFIX,
     QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
+    qwen_native_response_suffix,
 )
 from .source_visual import record_trajectory_source_visual
 from .tool_registry import NativeToolRuntimeRegistry, ToolRuntimeBinding
@@ -104,9 +106,11 @@ __all__ = [
     "NativeToolTurnRegistrar",
     "PolicyPilotFocusRuntimeBridge",
     "QWEN_NATIVE_IMAGE_PLACEHOLDER",
+    "QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX",
     "QWEN_NATIVE_RESPONSE_SUFFIX",
     "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
     "QwenNativeToolObservationAppender",
+    "qwen_native_response_suffix",
     "Qwen3CropVisualMaterializer",
     "Qwen3NativeToolLayoutBuilder",
     "ReplayLayoutBuilderDependency",

@@ -22,8 +22,8 @@ IMAGE_ZOOM_IN_TOOL_NAME = "image_zoom_in_tool"
 TGVF_CROP_TOOL_NAME = "tgvf_crop_tool"
 REPRESENTATION_TGVF_FOCUS_TOOL_SCHEMA_VERSION = "tgvf-focus-tool-v1"
 TGVF_FOCUS_TOOL_SCHEMA_VERSION = "tgvf-focus-tool-policy-v1"
-IMAGE_ZOOM_IN_TOOL_SCHEMA_VERSION = "image-zoom-in-tool-v1"
-TGVF_CROP_TOOL_SCHEMA_VERSION = "tgvf-crop-tool-v1"
+IMAGE_ZOOM_IN_TOOL_SCHEMA_VERSION = "image-zoom-in-tool-v2"
+TGVF_CROP_TOOL_SCHEMA_VERSION = "tgvf-crop-tool-v2"
 POLICY_RL_TOOL_NAMES = (
     TGVF_FOCUS_TOOL_NAME,
     IMAGE_ZOOM_IN_TOOL_NAME,
@@ -117,12 +117,13 @@ _IMAGE_ZOOM_IN_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
             "properties": {
                 "bbox_2d": {
                     "type": "array",
-                    "items": {"type": "integer"},
+                    "items": {"type": "integer", "minimum": 0, "maximum": 1000},
                     "minItems": 4,
                     "maxItems": 4,
                     "description": (
-                        "The crop bounding box [x1, y1, x2, y2], using the "
-                        "coordinate convention implemented by the crop runtime."
+                        "The crop bounding box [x1, y1, x2, y2]. For Qwen3-VL, "
+                        "use integer coordinates on the original-image-relative "
+                        "0..1000 grid, with x2 > x1 and y2 > y1."
                     ),
                 },
                 "label": {
@@ -152,12 +153,13 @@ _TGVF_CROP_TOOL_SCHEMA_MUTABLE: dict[str, Any] = {
             "properties": {
                 "bbox_2d": {
                     "type": "array",
-                    "items": {"type": "integer"},
+                    "items": {"type": "integer", "minimum": 0, "maximum": 1000},
                     "minItems": 4,
                     "maxItems": 4,
                     "description": (
-                        "The crop bounding box [x1, y1, x2, y2], using the "
-                        "coordinate convention implemented by the crop runtime."
+                        "The crop bounding box [x1, y1, x2, y2]. For Qwen3-VL, "
+                        "use integer coordinates on the original-image-relative "
+                        "0..1000 grid, with x2 > x1 and y2 > y1."
                     ),
                 },
                 "target": {

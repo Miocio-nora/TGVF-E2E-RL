@@ -68,6 +68,7 @@ from tgvf_rl.framework.vllm.registration import (
     TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
 )
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
+from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
@@ -76,6 +77,7 @@ from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
 )
 from tgvf_rl.protocol import (
+    native_assistant_dialect_for_model,
     NativeProtocolRenderer,
     NativeToolCapabilityProfile,
     StrictToolCallParser,
@@ -656,11 +658,15 @@ class PolicyCoreDevEvaluator:
             observation_store=self.store,
         )
         schemas = tuple(build_native_tool_schemas(run.protocol.enabled_tool_names))
+        self.assistant_dialect = native_assistant_dialect_for_model(
+            run.model.model_name
+        )
         self.renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=run.model.tokenizer_length,
             tool_names=run.protocol.enabled_tool_names,
             tool_schemas=schemas,
+            assistant_dialect=self.assistant_dialect,
         )
         conditioning = run.representation.conditioning
         self.contextual_identity = (
@@ -705,7 +711,9 @@ class PolicyCoreDevEvaluator:
         if not task.single_image:
             raise ValueError("current visual-tool protocol has no multi-image selector")
         messages = build_visual_tool_prompt_messages(
-            task.question, tool_profile=self.run.protocol.tool_profile
+            task.question,
+            tool_profile=self.run.protocol.tool_profile,
+            assistant_dialect=self.assistant_dialect,
         )
         rendered = self.renderer.render(messages, add_generation_prompt=True)
         self.renderer.assert_generation_prefill(rendered, self.renderer.tokenizer)
@@ -775,6 +783,7 @@ class PolicyCoreDevEvaluator:
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
+            assistant_dialect=self.assistant_dialect,
         )
         if self.run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             tool_runtime = _RemoteTGVFFocusToolRuntime(
@@ -818,6 +827,7 @@ class PolicyCoreDevEvaluator:
                 crop_processor_identity=processor_identity,
                 crop_layout_identity=layout_identity,
                 execution_ledger=self.crop_ledger,
+                coordinate_mapper=Qwen3VLAdapter(),
             )
         else:
             raise RuntimeError("policy CoreDev supports the two trained atomic arms")
@@ -846,6 +856,7 @@ class PolicyCoreDevEvaluator:
             request_context=registry,
             decoding=decoding,
             termination=_termination_contract(self.run),
+            assistant_dialect=self.assistant_dialect,
         )
         loop = FrameworkNeutralAgentLoop(
             sampler=sampler,
@@ -858,6 +869,7 @@ class PolicyCoreDevEvaluator:
             max_tool_calls=self.run.protocol.maximum_tool_calls,
             enabled_tool_names=self.run.protocol.enabled_tool_names,
             cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
+            assistant_dialect=self.assistant_dialect,
         )
         from tgvf_rl.environment.agent_loop import RolloutRequest
 

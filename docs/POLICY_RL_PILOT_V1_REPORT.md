@@ -1,6 +1,6 @@
 # TGVF End-to-End Policy RL Pilot v1：设定、结果与分析
 
-状态：**已完成**
+状态：**已完成；Crop-only 方法结论因坐标契约错误作废**
 
 实验日期：2026-07-22 至 2026-07-23
 
@@ -10,19 +10,36 @@
 
 比较方法：TGVF-only、Crop-only，以及未进行 RL 的原始 Qwen3-VL baseline
 
+> **2026-07-24 追溯审计：**Qwen3-VL 默认输出 `0..1000` 相对坐标，但本次
+> Crop runtime 将其直接当作原图像素裁剪。Crop-only 的训练、checkpoint、
+> observation/replay 等工程路径确实完成，但其裁剪区域不可信；本文保留相关
+> 数字作为历史工程记录，不再把 Crop 分数解释为有效方法结果，也不再用它与
+> TGVF 判断方法优劣。
+>
+> **修复状态：**`CROP-COORDINATES-20260724` 已在 CPU 路径完成：Qwen3
+> `0..1000` 坐标会先转换为不可变原图的半开像素框，prompt/schema 升级为
+> v3，observation 同时记录 model/source/effective 三个框。该修复不追溯改变
+> 本报告的历史 artifact；恢复 Crop baseline 仍需重新筛数据并规划新实验。
+
 ## 1. 结论摘要
 
 这次 Pilot 的工程目标已经实现：两条 80-step GRPO 训练均完成，原生多轮工具轨迹、真实 behavior logprob、FSDP2 actor、vLLM rollout、LoRA 权重同步、checkpoint/resume、72B answer judge 和正式 VLMEvalKit 评测均实际运行。
 
-方法结果则暂时是否定的：**当前 TGVF-only 和 Crop-only policy 都没有在 CoreDev-2511 上取得普遍优于原始 Qwen3-VL 的结果。**
+方法结果只能对 TGVF-only 作暂时性判断：**当前 TGVF-only policy 没有在
+CoreDev-2511 上取得普遍优于原始 Qwen3-VL 的结果。Crop-only 由于坐标契约
+错误，不具备方法比较效力。**
 
 - TGVF 在正式评测中频繁使用工具：73.17% 的 trajectory 至少获得一次 TGVF observation，但七项主指标均未超过 baseline。
-- Crop 的工具使用率较低，为 32.86%。它在 VStar、HRBench、BLINK 和英文 OCR 上优于 TGVF，其中 HRBench 达到 58.00%，超过 baseline 2.00 个百分点。
-- Crop 在 MMMU-Pro、MathVista 和 MathVerse 上明显退化，因此不能视为整体更优的方法。
+- Crop 的历史评测工具使用率为 32.86%，但 observation 来自错误坐标映射，
+  所以 VStar、HRBench、BLINK、OCR、MMMU-Pro、MathVista 和 MathVerse 数字
+  均不能用于判断 Crop 能力。
 - 训练期间 TGVF 的累计派生平均 reward 为 1.138，而 Crop 为 0.726；但更高的 TGVF 训练 reward 没有转化为更高的 held-out benchmark 分数。这说明当前 reward 与外部分布上的最终能力之间存在明显错位。
 - 当前 conditional tool reward 使“正确且成功调用工具”的合法 trajectory 得到 2.0 reward，而“正确但直接回答”只得到 0.8 reward。这个 2.5 倍差距很可能是 TGVF 高调用率的重要驱动力，但本次 Pilot 尚不能单独证明因果关系。
 
-因此，这次 Pilot 最合理的定位是：**端到端训练框架验证成功，第一版 reward/tool-use formulation 尚未验证出研究收益。**
+因此，这次 Pilot 最合理的定位是：**TGVF 端到端训练框架得到验证；Crop 的
+通用执行/replay 机械路径得到验证，但模型坐标到原图坐标的关键接口失败，尚未
+建立有效 Crop baseline。第一版 reward/tool-use formulation 也尚未验证出研究
+收益。**
 
 ## 2. 实验身份
 
@@ -31,7 +48,7 @@
 | Arm | Run ID | 工具 | Step-80 LoRA SHA-256 |
 |---|---|---|---|
 | TGVF-only | `PRL-02-R5-QWEN3-GRPO-BS16-TGVF-T1-FORMAL-PILOT-80STEP-GPU0123` | `tgvf_focus_tool` | `561132e49848fd43f8e7f352ef54782249aff59b2a5d331027a0e5e0f78be321` |
-| Crop-only | `PRL-03-R2-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123` | `image_zoom_in_tool` | `eed4ffeaf5b77277a41dafeba428a20d5f3c8bce73049c02e63f63292d78b0b0` |
+| Crop-only（无效，仅工程记录） | `PRL-03-R2-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123` | `image_zoom_in_tool` | `eed4ffeaf5b77277a41dafeba428a20d5f3c8bce73049c02e63f63292d78b0b0` |
 
 两条 arm 均从原始 Qwen3-VL-8B-Thinking reasoning policy 初始化，不使用额外 policy SFT，也不从历史 policy checkpoint 初始化。
 
@@ -153,7 +170,7 @@ reward = 0.8 × answer_reward
 
 以下为 80 steps、10,240 条 on-policy trajectory 的累计指标。训练 answer reward 是训练分布上的 on-policy verifier 结果，不是 held-out benchmark accuracy。
 
-| 指标 | TGVF-only | Crop-only |
+| 指标 | TGVF-only | Crop-only（坐标无效） |
 |---|---:|---:|
 | 累计 mean answer reward | 0.6084 | **0.6235** |
 | 累计 mean conditional tool reward | **0.5571** | 0.1962 |
@@ -189,8 +206,8 @@ Active wall-time 是 80 条已完成 step metric 的总和，不包含人工 deb
 ### 6.2 训练期间的主要错误
 
 - TGVF 累计出现 1,369 次 `missing_think_closer`、219 次调用上限错误、132 次 invalid JSON，以及少量其他 protocol parse error。
-- Crop 累计出现 2,500 次 `tool_execution_failed`，另有 403 次 `missing_think_closer`、113 次 incomplete tool call 和 84 次调用上限错误。
-- Crop 的 57.04% observation/attempt 比率说明 crop 执行稳定性是这条 arm 的实质性问题，而不仅是日志噪声。
+- Crop 累计出现 2,500 次 `tool_execution_failed`，另有 403 次 `missing_think_closer`、113 次 incomplete tool call 和 84 次调用上限错误。追溯审计确认大量 failure 由 Qwen3 `0..1000` 坐标被错误当作原图像素、随后产生空 crop 导致。
+- Crop 的 57.04% observation/attempt 比率主要反映坐标契约错误，不能解释为模型本身的 Crop 策略质量。
 - 两条训练都实际验证了 checkpoint/resume。TGVF 在上游 judge 持续失败时额外保存过 step-76 恢复点，之后完成到 step 80。
 
 ## 7. 正式评测设定
@@ -223,22 +240,24 @@ TGVF/Crop 共完成 2,240 条单图 trajectory。BLINK 的 240 条和 MMMU 的 3
 
 ## 8. CoreDev benchmark 结果
 
-| Benchmark | 原始 Qwen3 baseline | TGVF-only | Crop-only | 最佳 Pilot arm 相对 baseline |
+| Benchmark | 原始 Qwen3 baseline | TGVF-only | Crop-only（无效，仅历史） | TGVF 相对 baseline |
 |---|---:|---:|---:|---:|
-| VStarBench | **53.93%** | 51.31% | 53.40% | -0.52 pp |
-| HRBench4K | 56.00% | 54.00% | **58.00%** | **+2.00 pp** |
-| BLINK 单图 180 题 | **64.44%** | 60.00% | 61.11% | -3.33 pp |
-| OCRBench English | **49.78%** | 41.61% | 47.53% | -2.25 pp |
+| VStarBench | **53.93%** | 51.31% | 53.40% | -2.62 pp |
+| HRBench4K | **56.00%** | 54.00% | 58.00% | -2.00 pp |
+| BLINK 单图 180 题 | **64.44%** | 60.00% | 61.11% | -4.44 pp |
+| OCRBench English | **49.78%** | 41.61% | 47.53% | -8.17 pp |
 | OCRBench Chinese | **39.38%** | 34.44% | 34.25% | -4.94 pp |
 | MMMU-Pro 单图 269 题 | **63.94%** | 48.33% | 43.87% | -15.61 pp |
-| MathVista MINI | **77.33%** | 69.67% | 68.67% | -7.67 pp |
+| MathVista MINI | **77.33%** | 69.67% | 68.67% | -7.66 pp |
 | MathVerse Text Dominant | **75.00%** | 66.00% | 53.00% | -9.00 pp |
 
-除 HRBench 外，原始 Qwen3 baseline 在所有报告指标上均为最佳。TGVF 没有在任一项主指标超过 baseline；Crop 仅在 HRBench 上超过 baseline。
+有效比较中，原始 Qwen3 baseline 在所有报告指标上均优于 TGVF。Crop 列只
+保留已发生评测的历史数值；由于坐标错误，即使 HRBench 数值更高，也不能视为
+Crop 超过 baseline。
 
 ### 8.1 正式评测中的工具行为
 
-| 指标（2,240 条单图） | TGVF-only | Crop-only |
+| 指标（2,240 条单图） | TGVF-only | Crop-only（坐标无效） |
 |---|---:|---:|
 | 至少一次成功 observation | **73.17%** | 32.86% |
 | 平均成功 observation/trajectory | **0.949** | 0.411 |
@@ -279,14 +298,12 @@ TGVF 的累计 answer reward 略低于 Crop，但派生 total reward 高出约 0
 
 ### 9.3 Crop 的局部优势与推理退化同时存在
 
-Crop 相对 TGVF 在 VStar、HRBench、BLINK 和英文 OCR 上分别提高 2.09、4.00、1.11 和 5.92 个百分点，符合 crop 对小目标、文字和局部属性任务可能更直接的预期。
-
-但 Crop 在 MMMU-Pro、MathVista 和 MathVerse 上分别比 TGVF 低 4.46、1.00 和 13.00 个百分点。它不是稳定更优的替代方案。可能原因包括：
-
-- crop policy 更少调用工具，因此局部任务接近原始 policy，而复杂任务上的 LoRA 改变仍损害 reasoning；
-- crop 会丢失全局上下文，且 relation/comparison 题对 bbox 选择更敏感；
-- 训练期间大量 crop execution failure 降低了有效 tool-positive trajectory 数；
-- 当前 reward 没有区分“需要全图推理”与“适合局部放大”的样本。
+本节原始比较已被 2026-07-24 坐标审计否定。历史上 Crop 相对 TGVF 在
+VStar、HRBench、BLINK 和英文 OCR 的数值分别高 2.09、4.00、1.11 和 5.92
+个百分点，在 MMMU-Pro、MathVista 和 MathVerse 分别低 4.46、1.00 和 13.00
+个百分点；但这些 trajectory 使用了错误区域，差异可能来自无关 crop、失败后
+退回原图、LoRA 改变或 reward 行为。它们不能证明 Crop 的局部优势、全局劣势
+或与 TGVF 的相对能力。
 
 ### 9.4 Reasoning 变短不能解释为更确定
 
@@ -304,18 +321,23 @@ Crop 的累计 answer reward 为 0.6235，TGVF 为 0.6084；但两者在多数 b
 4. Pilot 只训练 decoder LoRA，不代表 full fine-tuning 结论。
 5. 仅训练 GRPO；没有 SDPO、GRPO+SDPO、非零 KL 或 TGVF+Crop fusion。
 6. 没有对 target quality、observation causal contribution 或 reasoning retention 设置独立 reward。
-7. Crop 训练的工具执行失败率较高，需要在解释方法能力前先拆分 bbox policy error、runtime error 和图像处理 error。
+7. Crop 使用了错误的模型坐标契约：Qwen3 的 `0..1000` 相对 bbox 未转换为
+   immutable-original-image 像素 bbox。该问题使本报告中的 Crop 方法结论无效；
+   修复并通过 family-specific 坐标 fixture 后必须从原始 Qwen policy 重跑。
 8. 评测结果来自固定小型 CoreDev slice，适合快速方法筛选，不替代完整 benchmark evaluation。
 
 ## 11. 建议的下一步
 
 按优先级建议：
 
-1. **补受控 step-0 baseline**：相同 sampling、8,192 budget、相同 agent runtime，分别测 direct、TGVF 和 Crop，以拆分 prompt/runtime 与 RL 权重影响。
-2. **做 checkpoint curve**：至少评测 step 0/20/45/80 的代表性小切片，确认退化从何时开始，避免只比较最终点。
-3. **审计工具因果贡献**：对同一 trajectory 保存 direct、真实 observation、错配 observation 和屏蔽 observation 的可比 replay，测 answer/logprob 变化。
-4. **审计 target quality**：建立小规模人工审计集，分类 target 是否具体、是否含猜测答案、是否需要局部/全局证据，以及 observation 是否回答了 target。
-5. **修复并分类 Crop failures**：在扩大训练前先降低 `tool_execution_failed`，分别统计无效 bbox、越界、空 crop、processor/runtime failure。
+1. **先修复坐标契约**：Qwen3 使用明确的 `0..1000` model-space bbox，经 family
+   adapter 转成 immutable-source pixel bbox；Qwen2.5-VL 单独处理 resized-image
+   absolute 坐标。通过非方图、大小图、边界和 exact-RGB fixture 后，从原始
+   Qwen policy 重跑 Crop。
+2. **补受控 step-0 baseline**：相同 sampling、8,192 budget、相同 agent runtime，分别测 direct、TGVF 和修复后的 Crop，以拆分 prompt/runtime 与 RL 权重影响。
+3. **做 checkpoint curve**：至少评测 step 0/20/45/80 的代表性小切片，确认退化从何时开始，避免只比较最终点。
+4. **审计工具因果贡献**：对同一 trajectory 保存 direct、真实 observation、错配 observation 和屏蔽 observation 的可比 replay，测 answer/logprob 变化。
+5. **审计 target quality**：建立小规模人工审计集，分类 target 是否具体、是否含猜测答案、是否需要局部/全局证据，以及 observation 是否回答了 target。
 6. **重新校准 reward**：在上述审计数据上决定 conditional tool bonus 是否降权，以及是否加入经过验证的 target/causal observation reward。
 7. **最后再做 TGVF+Crop fusion**：只有单工具路由和 reward 能被解释后，再训练融合 arm，否则难以判断收益来源。
 

@@ -17,11 +17,13 @@ from torch.utils.data import Dataset
 
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
 from tgvf_rl.protocol import (
+    NativeAssistantDialect,
     NativeProtocolRenderer,
     NativeToolCapabilityProfile,
     build_native_tool_schemas,
     build_visual_tool_prompt_messages,
 )
+from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 
 
 VERL_SELECTED_SAMPLE_DATASET_SCHEMA = "tgvf-verl-selected-sample-v3"
@@ -41,6 +43,7 @@ _CONFIG_FIELDS = {
     "prompt_sha256",
     "tool_profile",
     "tokenizer_length",
+    "model_name",
     "repeat_count",
     "agent_name",
 }
@@ -50,6 +53,9 @@ def build_tgvf_only_smoke_messages(
     question: str,
     *,
     image_path: Path | None = None,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> tuple[Mapping[str, Any], ...]:
     """Use the accepted TGVF-only v1 prompt in render and raw-row forms."""
 
@@ -57,6 +63,7 @@ def build_tgvf_only_smoke_messages(
         question,
         tool_profile=NativeToolCapabilityProfile.TGVF_ONLY,
         image_path=image_path,
+        assistant_dialect=assistant_dialect,
     )
 
 
@@ -65,12 +72,19 @@ def build_visual_tool_smoke_messages(
     *,
     tool_profile: NativeToolCapabilityProfile,
     image_path: Path | None = None,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> tuple[Mapping[str, Any], ...]:
     """Build the accepted native prompt for one explicit visual-tool arm."""
 
     if not isinstance(tool_profile, NativeToolCapabilityProfile):
         raise TypeError("tool_profile must be NativeToolCapabilityProfile")
-    messages = build_visual_tool_prompt_messages(question, tool_profile=tool_profile)
+    messages = build_visual_tool_prompt_messages(
+        question,
+        tool_profile=tool_profile,
+        assistant_dialect=assistant_dialect,
+    )
     if image_path is None:
         return messages
     path = Path(image_path)
@@ -103,6 +117,7 @@ class VerlSelectedSampleDatasetBinding:
     prompt_sha256: str
     tool_profile: NativeToolCapabilityProfile
     tokenizer_length: int
+    model_name: str
     repeat_count: int
     agent_name: str = VERL_SELECTED_SAMPLE_AGENT_NAME
     schema_version: str = VERL_SELECTED_SAMPLE_DATASET_SCHEMA
@@ -127,6 +142,7 @@ class VerlSelectedSampleDatasetBinding:
             raise ValueError("cursor must be a non-negative integer")
         if type(self.tokenizer_length) is not int or self.tokenizer_length <= 0:
             raise ValueError("tokenizer_length must be positive")
+        native_assistant_dialect_for_model(self.model_name)
         if type(self.repeat_count) is not int or self.repeat_count <= 0:
             raise ValueError("repeat_count must be positive")
         if self.agent_name != VERL_SELECTED_SAMPLE_AGENT_NAME:
@@ -155,6 +171,7 @@ class VerlSelectedSampleDatasetBinding:
             prompt_sha256=config.protocol.prompt_sha256,
             tool_profile=config.protocol.tool_profile,
             tokenizer_length=config.model.tokenizer_length,
+            model_name=config.model.model_name,
             # The selected row is replayed deterministically; this gives the
             # upstream drop-last dataloader exactly the configured prompt count.
             repeat_count=(
@@ -183,6 +200,7 @@ class VerlSelectedSampleDatasetBinding:
             "prompt_sha256": self.prompt_sha256,
             "tool_profile": self.tool_profile.value,
             "tokenizer_length": self.tokenizer_length,
+            "model_name": self.model_name,
             "repeat_count": self.repeat_count,
             "agent_name": self.agent_name,
         }
@@ -236,22 +254,26 @@ class TGVFSelectedSampleDataset(Dataset):
 
         tool_names = binding.tool_profile.tool_names
         tool_schemas = tuple(build_native_tool_schemas(tool_names))
+        assistant_dialect = native_assistant_dialect_for_model(binding.model_name)
         renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=binding.tokenizer_length,
             tool_names=tool_names,
             tool_schemas=tool_schemas,
+            assistant_dialect=assistant_dialect,
         )
         if renderer.tool_schemas != tool_schemas:
             raise RuntimeError("native renderer lost the selected policy tool schemas")
         prompt_messages = build_visual_tool_smoke_messages(
             binding.question,
             tool_profile=binding.tool_profile,
+            assistant_dialect=assistant_dialect,
         )
         raw_prompt = build_visual_tool_smoke_messages(
             binding.question,
             tool_profile=binding.tool_profile,
             image_path=binding.image_path,
+            assistant_dialect=assistant_dialect,
         )
         rendered = renderer.render(prompt_messages, add_generation_prompt=True)
         renderer.assert_generation_prefill(rendered, renderer.tokenizer)

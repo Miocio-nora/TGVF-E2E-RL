@@ -166,6 +166,11 @@ class AtomicCropTGVFToolRuntime:
             branch_mergers=self.branch_merger_identities,
             crop_processor_identity=self.crop_processor_identity,
             crop_layout_identity=self.crop_layout_identity,
+            coordinate_space=self.atomic_tool.coordinate_mapper.crop_coordinate_space,
+            coordinate_conversion_version=(
+                self.atomic_tool.coordinate_mapper.crop_coordinate_conversion_version
+            ),
+            processor_resized_size=self.atomic_tool.processor_resized_size,
         )
         return self.execution_ledger.execute_once(
             key=(context.trajectory_identity.canonical_id, context.call_index),
@@ -249,7 +254,16 @@ class AtomicCropTGVFToolRuntime:
                 )
             )
         except ValueError as error:
-            if "bbox is empty after clamping" in str(error):
+            if any(
+                marker in str(error)
+                for marker in (
+                    "bbox is empty after clamping",
+                    "model bbox must be non-empty",
+                    "converted source bbox must be non-empty",
+                    "Qwen3 crop coordinates must lie within 0..1000",
+                    "Qwen2.5-VL crop coordinates lie outside",
+                )
+            ):
                 raise RecoverableToolExecutionError(str(error)) from error
             raise
         if not isinstance(result, CropTGVFToolExecutionResult):
@@ -408,9 +422,12 @@ def _call_fingerprint(
     branch_mergers: tuple[ArtifactIdentity, ...],
     crop_processor_identity: ArtifactIdentity,
     crop_layout_identity: ArtifactIdentity,
+    coordinate_space: str,
+    coordinate_conversion_version: str,
+    processor_resized_size: tuple[int, int] | None,
 ) -> str:
     payload = {
-        "schema": "atomic-crop-tgvf-runtime-call-v1",
+        "schema": "atomic-crop-tgvf-runtime-call-v2",
         "trajectory_id": context.trajectory_identity.canonical_id,
         "assistant_turn_index": context.assistant_turn_index,
         "attempt_index": context.attempt_index,
@@ -445,6 +462,9 @@ def _call_fingerprint(
         "branch_mergers": tuple(asdict(value) for value in branch_mergers),
         "crop_processor_identity": asdict(crop_processor_identity),
         "crop_layout_identity": asdict(crop_layout_identity),
+        "coordinate_space": coordinate_space,
+        "coordinate_conversion_version": coordinate_conversion_version,
+        "processor_resized_size": processor_resized_size,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()

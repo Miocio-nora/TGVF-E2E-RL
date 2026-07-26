@@ -26,10 +26,10 @@ from tgvf_rl.data import (
     DeepEyesTaskKind,
 )
 from tgvf_rl.protocol import (
+    NativeAssistantDialect,
     NativeToolCapabilityProfile,
     TGVF_FOCUS_TOOL_NAME,
     build_native_tool_schemas,
-    TGVF_VISUAL_TOOL_PROMPTS_VERSION,
     VisualToolPromptIdentity,
     build_visual_tool_prompt_messages,
     native_policy_messages_sha256,
@@ -192,6 +192,9 @@ class NativePolicyPromptInput:
     image_sha256: str
     question: str
     messages: tuple[Mapping[str, Any], ...]
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    )
     tool_profile: NativeToolCapabilityProfile = NativeToolCapabilityProfile.TGVF_ONLY
     tool_names: tuple[str, ...] = (TGVF_FOCUS_TOOL_NAME,)
     schema_version: str = POLICY_NATIVE_PROMPT_INPUT_SCHEMA
@@ -204,10 +207,13 @@ class NativePolicyPromptInput:
             raise ValueError("policy prompt image_path must be an absolute file")
         _require_sha256(self.image_sha256, field_name="image_sha256")
         _require_non_empty_text(self.question, field_name="question")
+        if not isinstance(self.assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
         object.__setattr__(self, "messages", tuple(self.messages))
         expected_messages = build_visual_tool_prompt_messages(
             self.question,
             tool_profile=self.tool_profile,
+            assistant_dialect=self.assistant_dialect,
         )
         if self.messages != expected_messages:
             raise ValueError(
@@ -231,11 +237,14 @@ class NativePolicyPromptInput:
 
     @property
     def prompt_version(self) -> str:
-        return TGVF_VISUAL_TOOL_PROMPTS_VERSION
+        return self.prompt_identity.version
 
     @property
     def prompt_identity(self) -> VisualToolPromptIdentity:
-        return visual_tool_prompt_identity(self.tool_profile)
+        return visual_tool_prompt_identity(
+            self.tool_profile,
+            assistant_dialect=self.assistant_dialect,
+        )
 
     @property
     def system_prompt_sha256(self) -> str:
@@ -266,6 +275,9 @@ def build_qwen_policy_user_prompt(
     sample: DeepEyes47KRuntimeSample,
     *,
     tool_profile: NativeToolCapabilityProfile = NativeToolCapabilityProfile.TGVF_ONLY,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> NativePolicyPromptInput:
     """Build image-plus-question input without reading any historical prompt."""
 
@@ -273,9 +285,12 @@ def build_qwen_policy_user_prompt(
         raise TypeError("sample must be a DeepEyes47KRuntimeSample")
     if not isinstance(tool_profile, NativeToolCapabilityProfile):
         raise TypeError("tool_profile must be NativeToolCapabilityProfile")
+    if not isinstance(assistant_dialect, NativeAssistantDialect):
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
     messages = build_visual_tool_prompt_messages(
         sample.question,
         tool_profile=tool_profile,
+        assistant_dialect=assistant_dialect,
     )
     return NativePolicyPromptInput(
         sample_id=sample.sample_id,
@@ -284,6 +299,7 @@ def build_qwen_policy_user_prompt(
         image_sha256=sample.image_sha256,
         question=sample.question,
         messages=messages,
+        assistant_dialect=assistant_dialect,
         tool_profile=tool_profile,
         tool_names=tool_profile.tool_names,
     )

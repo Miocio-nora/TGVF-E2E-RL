@@ -36,6 +36,9 @@ from tgvf_rl.observations.schema import CropTGVFObservationRecord
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import TokenByteSpan
+from tgvf_rl.qwen.crop_coordinates import (
+    CanonicalSourcePixelCropCoordinateMapper,
+)
 from tgvf_rl.trajectories.schema import TrajectoryIdentity
 
 from tests.environment.test_adapter_runtime import _branch_bindings, _write_artifact
@@ -282,6 +285,7 @@ def _fixture(
             materializer=materializer,
             adapter=loaded_adapter.adapter,
             store=store,
+            coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
         ),
         layout_builder=layout,
         loaded_adapter=loaded_adapter,
@@ -430,6 +434,7 @@ def test_runtime_rejects_provider_not_named_by_loaded_artifact(
                 materializer=materializer,
                 adapter=runtime.loaded_adapter.adapter,
                 store=store,
+                coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
             ),
             layout_builder=runtime.layout_builder,
             loaded_adapter=runtime.loaded_adapter,
@@ -468,6 +473,7 @@ def test_runtime_rejects_adapter_not_loaded_by_selected_binding(
                 materializer=materializer,
                 adapter=other_loaded.adapter,
                 store=store,
+                coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
             ),
             layout_builder=runtime.layout_builder,
             loaded_adapter=runtime.loaded_adapter,
@@ -502,6 +508,7 @@ def test_runtime_rejects_branch_bindings_outside_artifact_architecture(
                 materializer=materializer,
                 adapter=runtime.loaded_adapter.adapter,
                 store=store,
+                coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
             ),
             layout_builder=runtime.layout_builder,
             loaded_adapter=runtime.loaded_adapter,

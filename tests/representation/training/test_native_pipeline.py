@@ -372,12 +372,30 @@ class _LanguageModel(nn.Module):
         deepstack_visual_embeds,
         **kwargs,
     ):
+        if inputs_embeds is None:
+            input_ids = kwargs.get("input_ids")
+            if input_ids is None:
+                raise ValueError("input_ids are required when inputs_embeds is absent")
+            inputs_embeds = self.embed_tokens(input_ids)
         hidden = inputs_embeds.clone()
-        for branch in deepstack_visual_embeds:
-            hidden = hidden.clone()
-            hidden[visual_pos_masks] += branch
-        hidden = hidden + hidden.cumsum(dim=1) * 0.01
-        return SimpleNamespace(last_hidden_state=hidden, past_key_values=None)
+        if deepstack_visual_embeds is not None:
+            for branch in deepstack_visual_embeds:
+                hidden = hidden.clone()
+                hidden[visual_pos_masks] += branch
+        running_hidden = hidden.cumsum(dim=1)
+        past_key_values = kwargs.get("past_key_values")
+        if past_key_values is not None:
+            running_hidden = running_hidden + past_key_values[0]
+        output_hidden = hidden + running_hidden * 0.01
+        next_cache = (
+            (running_hidden[:, -1:].detach(),)
+            if kwargs.get("use_cache", False)
+            else None
+        )
+        return SimpleNamespace(
+            last_hidden_state=output_hidden,
+            past_key_values=next_cache,
+        )
 
 
 class _Core(nn.Module):

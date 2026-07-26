@@ -18,6 +18,7 @@ from tgvf_rl.environment.agent_loop import (
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy import PilotSamplingConfig
 from tgvf_rl.protocol.parser import StrictToolCallParser
+from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.schema import StandardToolError, TokenByteSpan
 from tgvf_rl.protocol.state_machine import CapErrorBehavior
 from tgvf_rl.rewards.context import reward_context_from_trajectory
@@ -38,12 +39,28 @@ _SOURCE_STORE, _SOURCE_HANDLE = populated_observation_store()
 SOURCE_VISUAL = trajectory_source_visual(_SOURCE_STORE.resolve_record(_SOURCE_HANDLE))
 
 
-def _sample(text: str, sampling: SamplingIdentity) -> SampledPolicyTurn:
+def _sample(
+    text: str,
+    sampling: SamplingIdentity,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
+) -> SampledPolicyTurn:
     ids = tuple(ord(char) for char in text)
     spans = tuple(
         TokenByteSpan(index, token, index, index + 1) for index, token in enumerate(ids)
     )
-    marker_layout_valid = "<think>" not in text and text.count("</think>") == 1
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        marker_layout_valid = "<think>" not in text and text.count("</think>") == 1
+        span_start = 0
+    else:
+        marker_layout_valid = (
+            text.count("<think>") == 1
+            and text.count("</think>") == 1
+            and text.index("<think>") < text.index("</think>")
+        )
+        span_start = text.index("<think>") if marker_layout_valid else 0
     close_end = text.index("</think>") + len("</think>") if marker_layout_valid else 0
     return SampledPolicyTurn(
         text=text,
@@ -51,10 +68,13 @@ def _sample(text: str, sampling: SamplingIdentity) -> SampledPolicyTurn:
         token_byte_spans=spans,
         behavior_logprobs=tuple(-0.1 for _ in ids),
         sampling=sampling,
-        think_token_span=TokenSpan(0, close_end) if marker_layout_valid else None,
+        think_token_span=(
+            TokenSpan(span_start, close_end) if marker_layout_valid else None
+        ),
         stop_reason="stop",
         backend_request_sha256=SHA,
         backend_response_sha256=SHA,
+        assistant_dialect=assistant_dialect,
     )
 
 
@@ -565,6 +585,105 @@ def test_tool_error_returns_standard_observation_and_allows_recovery() -> None:
     assert appender_values[0][1] is None
     assert trajectory.final_answer == "blue"
     assert behavior_store.resolve(trajectory.assistant_turns[0].behavior_trace)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_stop", "expected_answer"),
+    (
+        ("B", TrajectoryStop.DIRECT_ANSWER, "B"),
+        ("<think>brief check</think> B", TrajectoryStop.DIRECT_ANSWER, "B"),
+    ),
+)
+def test_instruct_direct_answer_records_optional_policy_sampled_think(
+    text: str,
+    expected_stop: TrajectoryStop,
+    expected_answer: str | None,
+) -> None:
+    version = PolicyVersion("instruct-smoke", 0, SHA)
+    dialect = NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    sampled = _sample(
+        text,
+        _pilot_fixture_sampling(version),
+        assistant_dialect=dialect,
+    )
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        assistant_dialect=dialect,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-instruct-v1",
+            TrajectoryIdentity("instruct-smoke", "direct", 0, "group"),
+            ModelIdentity("qwen3_vl", "Qwen3-VL-8B-Instruct", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is expected_stop
+    assert trajectory.final_answer == expected_answer
+    assert trajectory.assistant_turns[0].raw_text == text
+    reward = reward_context_from_trajectory(
+        trajectory,
+        question="question",
+        expected_answer="B",
+        task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+    )
+    assert reward.protocol_valid is (expected_stop is TrajectoryStop.DIRECT_ANSWER)
+
+
+def test_instruct_native_tool_call_without_think_remains_executable() -> None:
+    version = PolicyVersion("instruct-smoke", 0, SHA)
+    dialect = NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    sampling = _pilot_fixture_sampling(version)
+    tool = _sample(
+        '<tool_call>{"name":"tgvf_focus_tool","arguments":'
+        '{"target":"the small label text"}}</tool_call>',
+        sampling,
+        assistant_dialect=dialect,
+    )
+    answer = _sample(
+        "B",
+        replace(sampling, seed=8),
+        assistant_dialect=dialect,
+    )
+    runtime = Runtime()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((tool, answer)),
+        tool_runtime=runtime,
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        assistant_dialect=dialect,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-instruct-tool-v1",
+            TrajectoryIdentity("instruct-smoke", "tool", 0, "group"),
+            ModelIdentity("qwen3_vl", "Qwen3-VL-8B-Instruct", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert trajectory.final_answer == "B"
+    assert len(trajectory.tool_calls) == 1
+    assert len(runtime.contexts) == 1
+    assert trajectory.tool_errors == ()
+    assert all(turn.think_span is None for turn in trajectory.assistant_turns)
 
 
 def test_tool_contract_failure_propagates_instead_of_becoming_tool_error() -> None:

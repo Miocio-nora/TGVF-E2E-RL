@@ -109,9 +109,19 @@ def test_crop_schema_and_policy_tool_set_are_explicit() -> None:
         "bbox_2d",
         "label",
     }
+    assert first["function"]["parameters"]["properties"]["bbox_2d"]["items"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000,
+    }
     assert first["function"]["parameters"]["additionalProperties"] is False
+    assert first["function"]["parameters"]["properties"]["bbox_2d"]["items"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000,
+    }
     assert IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256 == (
-        "2977f4ef5ac966e80cb0036a1b9082a0cfc3bef86aa6fc70c0ebb3ad8e3e9c34"
+        "db46b434b97bea551038dd30990847eb605c40409c4220762229f692cd21a3c0"
     )
     first["function"]["name"] = "mutated"
     assert second["function"]["name"] == IMAGE_ZOOM_IN_TOOL_NAME
@@ -138,7 +148,7 @@ def test_atomic_crop_tgvf_schema_hash_and_capability_profiles_are_exact() -> Non
     assert (
         hashlib.sha256(TGVF_CROP_TOOL_SCHEMA_CANONICAL_JSON.encode("utf-8")).hexdigest()
         == TGVF_CROP_TOOL_SCHEMA_SHA256
-        == "91659fd1743af62c9788a9700d1008e6f5c36727131b1f9e221288bd7406e4fc"
+        == "0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39"
     )
     first["function"]["name"] = "mutated"
     assert second["function"]["name"] == TGVF_CROP_TOOL_NAME

@@ -20,9 +20,17 @@ from .base import (
     resolve_language_model,
     resolve_lm_head,
 )
+from .crop_coordinates import (
+    QWEN25_CROP_CONVERSION_VERSION,
+    QWEN25_CROP_COORDINATE_SPACE,
+    CropCoordinateMapping,
+    map_qwen25_crop_bbox_to_source,
+)
 
 
 class Qwen25VLAdapter(QwenVLMFamilyAdapter):
+    crop_coordinate_space = QWEN25_CROP_COORDINATE_SPACE
+    crop_coordinate_conversion_version = QWEN25_CROP_CONVERSION_VERSION
     capabilities = FamilyCapabilities(
         family="qwen2_5_vl",
         support_level=SupportLevel.SYNTHETIC,
@@ -31,6 +39,21 @@ class Qwen25VLAdapter(QwenVLMFamilyAdapter):
         recorded_d_forward=True,
         native_tool_template=True,
     )
+
+    def map_crop_bbox_to_source(
+        self,
+        bbox_2d: tuple[int, int, int, int],
+        *,
+        source_width: int,
+        source_height: int,
+        processor_resized_size: tuple[int, int] | None = None,
+    ) -> CropCoordinateMapping:
+        return map_qwen25_crop_bbox_to_source(
+            bbox_2d,
+            source_width=source_width,
+            source_height=source_height,
+            processor_resized_size=processor_resized_size,
+        )
 
     def forward_recorded(
         self,

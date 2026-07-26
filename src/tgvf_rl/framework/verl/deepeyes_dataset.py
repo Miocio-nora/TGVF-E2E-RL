@@ -21,6 +21,7 @@ from tgvf_rl.protocol import (
     build_visual_tool_prompt_messages,
     visual_tool_prompt_identity,
 )
+from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 
 from .smoke_dataset import (
     VERL_SELECTED_SAMPLE_AGENT_NAME,
@@ -48,6 +49,7 @@ _CONFIG_FIELDS = {
     "prompt_bundle_sha256",
     "tool_profile",
     "tokenizer_length",
+    "model_name",
     "agent_name",
 }
 
@@ -65,6 +67,7 @@ class VerlDeepEyes47KDatasetBinding:
     prompt_bundle_sha256: str
     tool_profile: NativeToolCapabilityProfile
     tokenizer_length: int
+    model_name: str
     agent_name: str = VERL_SELECTED_SAMPLE_AGENT_NAME
     schema_version: str = VERL_DEEPEYES47K_DATASET_SCHEMA
 
@@ -88,11 +91,15 @@ class VerlDeepEyes47KDatasetBinding:
             raise TypeError("tool_profile must be NativeToolCapabilityProfile")
         if type(self.tokenizer_length) is not int or self.tokenizer_length <= 0:
             raise ValueError("tokenizer_length must be positive")
+        assistant_dialect = native_assistant_dialect_for_model(self.model_name)
         if self.agent_name != VERL_SELECTED_SAMPLE_AGENT_NAME:
             raise ValueError("DeepEyes dataset agent_name differs")
         if self.schema_version != VERL_DEEPEYES47K_DATASET_SCHEMA:
             raise ValueError("DeepEyes dataset schema differs")
-        expected_prompt = visual_tool_prompt_identity(self.tool_profile).bundle_sha256
+        expected_prompt = visual_tool_prompt_identity(
+            self.tool_profile,
+            assistant_dialect=assistant_dialect,
+        ).bundle_sha256
         if self.prompt_bundle_sha256 != expected_prompt:
             raise ValueError("DeepEyes prompt bundle identity differs")
 
@@ -125,6 +132,7 @@ class VerlDeepEyes47KDatasetBinding:
             "prompt_bundle_sha256": self.prompt_bundle_sha256,
             "tool_profile": self.tool_profile.value,
             "tokenizer_length": self.tokenizer_length,
+            "model_name": self.model_name,
             "agent_name": self.agent_name,
         }
 
@@ -175,11 +183,13 @@ class TGVFDeepEyes47KDataset(Dataset):
 
         tool_names = binding.tool_profile.tool_names
         tool_schemas = tuple(build_native_tool_schemas(tool_names))
+        assistant_dialect = native_assistant_dialect_for_model(binding.model_name)
         renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=binding.tokenizer_length,
             tool_names=tool_names,
             tool_schemas=tool_schemas,
+            assistant_dialect=assistant_dialect,
         )
         renderer.assert_tokenizer_length()
         renderer.assert_chat_template_identity()
@@ -188,6 +198,7 @@ class TGVFDeepEyes47KDataset(Dataset):
         self.runtime = runtime
         self.processor = processor
         self.renderer = renderer
+        self.assistant_dialect = assistant_dialect
         self.image_max_pixels = _configured_image_max_pixels(config)
 
     def __len__(self) -> int:
@@ -200,11 +211,13 @@ class TGVFDeepEyes47KDataset(Dataset):
         prompt_messages = build_visual_tool_prompt_messages(
             sample.question,
             tool_profile=self.binding.tool_profile,
+            assistant_dialect=self.assistant_dialect,
         )
         raw_prompt = build_visual_tool_smoke_messages(
             sample.question,
             tool_profile=self.binding.tool_profile,
             image_path=sample.image_path,
+            assistant_dialect=self.assistant_dialect,
         )
         rendered = self.renderer.render(prompt_messages, add_generation_prompt=True)
         self.renderer.assert_generation_prefill(rendered, self.renderer.tokenizer)

@@ -43,6 +43,10 @@ from tgvf_rl.observations.store import (
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
 from tgvf_rl.qwen.base import ReplayConsumer, resolve_replay_request
+from tgvf_rl.qwen.crop_coordinates import (
+    CanonicalSourcePixelCropCoordinateMapper,
+)
+from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.trajectories.schema import TrajectoryIdentity
 from tests.support import populated_observation_store, trajectory_source_visual
 
@@ -121,7 +125,12 @@ def _source() -> tuple[torch.Tensor, SourceVisualTensorBundle]:
     )
 
 
-def _execute_crop(store: ObservationStore):
+def _execute_crop(
+    store: ObservationStore,
+    *,
+    bbox: str = "[-2,1,4,8]",
+    coordinate_mapper=None,
+):
     pixels, source = _source()
     model = ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA1)
     policy = PolicyVersion("run", 0, SHA0)
@@ -136,11 +145,17 @@ def _execute_crop(store: ObservationStore):
         observation_store=store,
         source_rgb=pixels,
     )
-    result = ImageZoomInTool(materializer, store).execute(
+    result = ImageZoomInTool(
+        materializer,
+        store,
+        coordinate_mapper=(
+            coordinate_mapper or CanonicalSourcePixelCropCoordinateMapper()
+        ),
+    ).execute(
         CropToolExecutionRequest(
             trajectory_id="trajectory",
             call_index=0,
-            parsed_call=_crop_call(),
+            parsed_call=_crop_call(bbox),
             trajectory_source_visual=trajectory_source,
             layout_builder=layout_builder,
             model=model,
@@ -169,6 +184,7 @@ def test_crop_tool_clamps_original_image_bbox_and_records_exact_rgb() -> None:
     result, pixels, _, _, _, materializer, layout_builder = _execute_crop(store)
     expected = pixels[1:4, 0:4, :].contiguous()
     assert result.record.requested_bbox_2d == (-2, 1, 4, 8)
+    assert result.record.source_bbox_2d == (-2, 1, 4, 8)
     assert result.record.effective_bbox_2d == (0, 1, 4, 4)
     torch.testing.assert_close(result.crop_rgb, expected, rtol=0, atol=0)
     torch.testing.assert_close(materializer.received, expected, rtol=0, atol=0)
@@ -201,6 +217,21 @@ def test_crop_rejects_empty_box_after_source_bound_clamp() -> None:
     assert clamp_bbox_to_image((-1, -1, 2, 2), width=4, height=3) == (0, 0, 2, 2)
     with pytest.raises(ValueError, match="empty after clamping"):
         clamp_bbox_to_image((8, 1, 10, 3), width=4, height=3)
+
+
+def test_qwen3_crop_converts_model_box_before_exact_source_rgb_slice() -> None:
+    store = ObservationStore()
+    result, pixels, *_ = _execute_crop(
+        store,
+        bbox="[0,250,800,1000]",
+        coordinate_mapper=Qwen3VLAdapter(),
+    )
+
+    assert result.record.model_coordinate_space == "qwen3_relative_0_1000"
+    assert result.record.requested_bbox_2d == (0, 250, 800, 1000)
+    assert result.record.source_bbox_2d == (0, 1, 4, 4)
+    assert result.record.effective_bbox_2d == (0, 1, 4, 4)
+    torch.testing.assert_close(result.crop_rgb, pixels[1:4, 0:4, :], rtol=0, atol=0)
 
 
 def test_crop_then_tgvf_share_exact_qwen_and_vllm_replay_order() -> None:

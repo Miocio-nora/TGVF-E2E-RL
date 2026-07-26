@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from tgvf_rl.observations.store import ObservationHandle
+from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.schema import (
     NativeToolCall,
     ParsedCropTGVFCall,
@@ -12,7 +13,10 @@ from tgvf_rl.protocol.schema import (
     ParsedToolCall,
     StandardToolError,
 )
-from tgvf_rl.protocol.tool_prompts import render_successful_visual_tool_response
+from tgvf_rl.protocol.tool_prompts import (
+    QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER,
+    render_successful_visual_tool_response,
+)
 
 from .agent_loop import SampledPolicyTurn
 
@@ -21,6 +25,9 @@ QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX = "<|im_end|>\n<|im_start|>user\n<tool_respo
 QWEN_NATIVE_IMAGE_PLACEHOLDER = "<|vision_start|><|image_pad|><|vision_end|>"
 QWEN_NATIVE_RESPONSE_SUFFIX = (
     "\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n"
+)
+QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX = (
+    "\n</tool_response><|im_end|>\n<|im_start|>assistant\n"
 )
 
 
@@ -61,6 +68,9 @@ class QwenNativeToolObservationAppender:
         registrar: NativeToolTurnRegistrar,
         visual_token_count_resolver: NativeObservationVisualTokenCountResolver
         | None = None,
+        assistant_dialect: NativeAssistantDialect = (
+            NativeAssistantDialect.QWEN3_VL_THINKING
+        ),
     ) -> None:
         if not callable(getattr(tokenizer, "encode", None)):
             raise TypeError("Qwen native appender requires tokenizer.encode()")
@@ -73,9 +83,12 @@ class QwenNativeToolObservationAppender:
                 "visual_token_count_resolver must implement "
                 "resolve_visual_token_count()"
             )
+        if not isinstance(assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
         self.tokenizer = tokenizer
         self.registrar = registrar
         self.visual_token_count_resolver = visual_token_count_resolver
+        self.assistant_dialect = assistant_dialect
 
     def append(
         self,
@@ -107,7 +120,8 @@ class QwenNativeToolObservationAppender:
                 raise ValueError("successful tool response requires its parsed call")
             _validate_parsed_call_matches_turn(parsed_call, sampled_turn)
             environment_text = render_qwen_native_success_environment_text(
-                parsed_call
+                parsed_call,
+                assistant_dialect=self.assistant_dialect,
             )
         else:
             if parsed_call is not None:
@@ -115,7 +129,7 @@ class QwenNativeToolObservationAppender:
             environment_text = (
                 QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
                 + observation.canonical_json
-                + QWEN_NATIVE_RESPONSE_SUFFIX
+                + qwen_native_response_suffix(self.assistant_dialect)
             )
         environment_ids = self._encode(environment_text)
         if (
@@ -184,7 +198,13 @@ class QwenNativeToolObservationAppender:
         )
 
 
-def render_qwen_native_success_payload(parsed_call: NativeToolCall) -> str:
+def render_qwen_native_success_payload(
+    parsed_call: NativeToolCall,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
+) -> str:
     """Render exact accepted response text, newline, and visual placeholder."""
 
     arguments: dict[str, object]
@@ -204,20 +224,43 @@ def render_qwen_native_success_payload(parsed_call: NativeToolCall) -> str:
     response_text = render_successful_visual_tool_response(
         parsed_call.name,
         arguments,
+        assistant_dialect=assistant_dialect,
     )
-    return response_text + "\n" + QWEN_NATIVE_IMAGE_PLACEHOLDER
+    payload = response_text + "\n" + QWEN_NATIVE_IMAGE_PLACEHOLDER
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        # Match DeepEyes' trigger placement: the fresh visual evidence comes
+        # first, then the instruction that starts the next policy-owned turn.
+        payload += "\n\n" + QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER
+    return payload
 
 
 def render_qwen_native_success_environment_text(
     parsed_call: NativeToolCall,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> str:
     """Wrap one exact successful visual response in Qwen native turn bytes."""
 
     return (
         QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
-        + render_qwen_native_success_payload(parsed_call)
-        + QWEN_NATIVE_RESPONSE_SUFFIX
+        + render_qwen_native_success_payload(
+            parsed_call,
+            assistant_dialect=assistant_dialect,
+        )
+        + qwen_native_response_suffix(assistant_dialect)
     )
+
+
+def qwen_native_response_suffix(
+    assistant_dialect: NativeAssistantDialect,
+) -> str:
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        return QWEN_NATIVE_RESPONSE_SUFFIX
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        return QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX
+    raise TypeError("assistant_dialect must be NativeAssistantDialect")
 
 
 def _validate_parsed_call_matches_turn(
@@ -236,9 +279,11 @@ __all__ = [
     "NativeObservationVisualTokenCountResolver",
     "NativeToolTurnRegistrar",
     "QWEN_NATIVE_IMAGE_PLACEHOLDER",
+    "QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX",
     "QWEN_NATIVE_RESPONSE_SUFFIX",
     "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
     "QwenNativeToolObservationAppender",
+    "qwen_native_response_suffix",
     "render_qwen_native_success_environment_text",
     "render_qwen_native_success_payload",
 ]

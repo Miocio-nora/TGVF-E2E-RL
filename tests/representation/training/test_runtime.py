@@ -368,7 +368,7 @@ def test_runtime_rejects_qwen25_and_tiny_model_outside_fixture_mode() -> None:
         )
 
     tiny = _identity()
-    with pytest.raises(ValueError, match="accepted local Qwen3 path"):
+    with pytest.raises(ValueError, match="production runtime requires a pinned Qwen3 edition"):
         create_qwen3_representation_runtime(
             model=_TinyQwen3(name_or_path=tiny.revision_or_path),
             processor=_processor(),

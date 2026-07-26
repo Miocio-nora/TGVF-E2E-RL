@@ -31,6 +31,10 @@ from tgvf_rl.observations.store import (
 )
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
+from tgvf_rl.qwen.crop_coordinates import (
+    CanonicalSourcePixelCropCoordinateMapper,
+)
+from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.adapter import TGVFAdapter
 from tgvf_rl.representation.deepstack import FrozenProjectionPort
 
@@ -50,10 +54,12 @@ class Merger(nn.Module):
         return self.proj(tokens.reshape(-1, 16))
 
 
-def _parsed_call():
+def _parsed_call(bbox: str = "[-1,1,4,8]"):
     text = (
         '<tool_call>{"name":"tgvf_crop_tool","arguments":'
-        '{"bbox_2d":[-1,1,4,8],"target":"red label"}}</tool_call>'
+        '{"bbox_2d":'
+        + bbox
+        + ',"target":"red label"}}</tool_call>'
     )
     ids = tuple(ord(char) for char in text)
     spans = tuple(
@@ -122,7 +128,7 @@ class LayoutBuilder:
         )
 
 
-def _fixture(*, record_pixels: bool = True):
+def _fixture(*, record_pixels: bool = True, bbox: str = "[-1,1,4,8]"):
     torch.manual_seed(3)
     store = ObservationStore()
     pixels = torch.arange(4 * 5 * 3, dtype=torch.uint8).view(4, 5, 3)
@@ -145,7 +151,7 @@ def _fixture(*, record_pixels: bool = True):
         observation_store=store,
         source_rgb=pixels if record_pixels else None,
     )
-    parsed = _parsed_call()
+    parsed = _parsed_call(bbox)
     model = ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA2)
     input_ids = torch.tensor(parsed.sampled_token_ids)
     condition = ContextualHiddenStateConditionProvider(
@@ -222,10 +228,12 @@ def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
         materializer=materializer,
         adapter=adapter,
         store=store,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
     ).execute(request)
 
     expected_crop = pixels[1:4, 0:4, :].contiguous()
     assert result.record.requested_bbox_2d == (-1, 1, 4, 8)
+    assert result.record.source_bbox_2d == (-1, 1, 4, 8)
     assert result.record.effective_bbox_2d == (0, 1, 4, 4)
     assert len(materializer.received) == 1
     assert layout_builder.crop_token_counts == [4]
@@ -292,6 +300,23 @@ def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
         store.put_replay(replace(replay, source_visual=replace(source, source_pixels=None)))
 
 
+def test_atomic_qwen3_crop_converts_before_tgvf_materialization() -> None:
+    store, pixels, _, materializer, _, adapter, request = _fixture(
+        bbox="[0,250,800,1000]"
+    )
+    result = AtomicCropTGVFTool(
+        materializer=materializer,
+        adapter=adapter,
+        store=store,
+        coordinate_mapper=Qwen3VLAdapter(),
+    ).execute(request)
+
+    assert result.record.model_coordinate_space == "qwen3_relative_0_1000"
+    assert result.record.requested_bbox_2d == (0, 250, 800, 1000)
+    assert result.record.source_bbox_2d == (0, 1, 4, 4)
+    torch.testing.assert_close(result.crop_rgb, pixels[1:4, 0:4, :], rtol=0, atol=0)
+
+
 def test_atomic_crop_tgvf_refuses_external_source_pixel_reconstruction() -> None:
     store, _, _, materializer, _, adapter, request = _fixture(record_pixels=False)
     with pytest.raises(RuntimeError, match="rollout-recorded immutable source RGB"):
@@ -299,5 +324,6 @@ def test_atomic_crop_tgvf_refuses_external_source_pixel_reconstruction() -> None
             materializer=materializer,
             adapter=adapter,
             store=store,
+            coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
         ).execute(request)
     assert materializer.received == []

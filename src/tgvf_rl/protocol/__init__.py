@@ -1,7 +1,12 @@
 """Native Qwen TGVF tool protocol."""
 
 from .parser import StrictToolCallParser
-from .native import NativeProtocolRenderer, RenderedTranscript
+from .native import (
+    NativeAssistantDialect,
+    NativeProtocolRenderer,
+    RenderedTranscript,
+    native_assistant_dialect_for_model,
+)
 from .schema import (
     TGVF_CROP_TOOL_NAME,
     TGVF_CROP_TOOL_SCHEMA,
@@ -87,6 +92,7 @@ from .tool_prompts import (
 
 __all__ = [
     "CROP_ONLY_SYSTEM_PROMPT",
+    "NativeAssistantDialect",
     "CROP_ONLY_SYSTEM_PROMPT_SHA256",
     "IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT",
     "IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256",
@@ -161,6 +167,7 @@ __all__ = [
     "build_tgvf_focus_tool_schema",
     "build_visual_tool_prompt_messages",
     "native_policy_messages_sha256",
+    "native_assistant_dialect_for_model",
     "native_tool_set_sha256",
     "native_tool_schemas_sha256",
     "render_successful_visual_tool_response",

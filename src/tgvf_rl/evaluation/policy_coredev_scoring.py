@@ -16,7 +16,7 @@ from .policy_coredev import load_coredev_tasks
 
 
 POLICY_SCORING_VIEW_SCHEMA = "tgvf-policy-coredev-scoring-view-v1"
-MODEL_NAME = "Qwen3-VL-8B-Thinking"
+MODEL_NAME = "Qwen3-VL-8B-Instruct"
 DATASETS = (
     "VStarBench",
     "HRBench4K",

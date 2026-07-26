@@ -37,14 +37,19 @@ from tgvf_rl.data import (
 )
 from tgvf_rl.judges import load_openai_compatible_judge
 from tgvf_rl.protocol import (
+    NativeAssistantDialect,
     NativeToolCapabilityProfile,
     StandardToolError,
     ToolErrorCode,
     visual_tool_prompt_identity,
 )
+from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 
 from .config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+    POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256,
+    POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME,
+    POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_PATH,
     POLICY_PILOT_V1_MODEL_FAMILY,
     POLICY_PILOT_V1_MODEL_NAME,
     POLICY_PILOT_V1_MODEL_PATH,
@@ -70,6 +75,35 @@ POLICY_E2E_SMOKE_SEED_DERIVATION_NAME = "content-addressed-vllm-turn-rng-v1"
 POLICY_E2E_MIXED_REWARD_TASK = "mixed"
 POLICY_E2E_MIXED_ANSWER_VERIFIER = "rule_first_qwen25_72b"
 POLICY_E2E_MIXED_JUDGE_MODE = "qwen25_72b_semantic_fallback"
+
+_SUPPORTED_POLICY_MODEL_IDENTITIES = frozenset(
+    {
+        (
+            POLICY_PILOT_V1_MODEL_NAME,
+            POLICY_PILOT_V1_MODEL_PATH,
+            POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+        ),
+        (
+            POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME,
+            POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_PATH,
+            POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256,
+        ),
+    }
+)
+
+# Read compatibility for immutable pre-Instruct run records.  New runs always
+# bind the dialect-specific identity returned by visual_tool_prompt_identity().
+_HISTORICAL_THINKING_PROMPT_BUNDLES = {
+    NativeToolCapabilityProfile.TGVF_ONLY: (
+        "b44d8a6ff67f3752d9debe6365b0cb9ce4e37a13f117c7fdd87519d57751283f"
+    ),
+    NativeToolCapabilityProfile.CROP_ONLY: (
+        "4bc9d8e814e0c6735d03a671ecff79cff6cffc74811e2693410fe3fe446cb31d"
+    ),
+    NativeToolCapabilityProfile.CROP_TGVF: (
+        "c860c0a348646fc9a06500217709ec62b9bc01c422024641f35db232748da57f"
+    ),
+}
 
 
 def _fixed_contract_sha256(value: object) -> str:
@@ -493,28 +527,35 @@ def load_policy_e2e_smoke_run_config(
         },
     )
     _require_exact(model_table["family"], POLICY_PILOT_V1_MODEL_FAMILY, "model.family")
-    _require_exact(model_table["name"], POLICY_PILOT_V1_MODEL_NAME, "model.name")
-    _require_exact(model_table["path"], POLICY_PILOT_V1_MODEL_PATH, "model.path")
+    model_name = _text(model_table["name"], name="model.name")
+    model_path = _text(model_table["path"], name="model.path")
     _require_exact(
         model_table["tokenizer_length"],
         POLICY_PILOT_V1_TOKENIZER_LENGTH,
         "model.tokenizer_length",
     )
-    _require_exact(
+    chat_template_sha256 = _sha256(
         model_table["chat_template_sha256"],
-        POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
-        "model.chat_template_sha256",
+        name="model.chat_template_sha256",
     )
+    if (model_name, model_path, chat_template_sha256) not in (
+        _SUPPORTED_POLICY_MODEL_IDENTITIES
+    ):
+        raise ValueError(
+            "model name/path/chat-template identity is not an exact supported "
+            "Qwen3-VL 8B edition"
+        )
+    assistant_dialect = native_assistant_dialect_for_model(model_name)
     _require_exact(
         model_table["native_deepstack_enabled"], True, "model.native_deepstack_enabled"
     )
     _require_exact(model_table["image_max_pixels"], 512 * 512, "model.image_max_pixels")
     model = ModelIdentity(
         family=model_table["family"],
-        model_name=model_table["name"],
-        revision_or_path=model_table["path"],
+        model_name=model_name,
+        revision_or_path=model_path,
         tokenizer_length=model_table["tokenizer_length"],
-        chat_template_sha256=model_table["chat_template_sha256"],
+        chat_template_sha256=chat_template_sha256,
     )
 
     dataset_fields = {
@@ -709,11 +750,18 @@ def load_policy_e2e_smoke_run_config(
         maximum_tool_calls=protocol_table["maximum_tool_calls"],
     )
     if mixed_run:
-        _require_exact(
-            protocol.prompt_sha256,
-            visual_tool_prompt_identity(tool_profile).bundle_sha256,
-            "protocol.prompt_sha256",
-        )
+        accepted_prompt_hashes = {
+            visual_tool_prompt_identity(
+                tool_profile,
+                assistant_dialect=assistant_dialect,
+            ).bundle_sha256
+        }
+        if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+            accepted_prompt_hashes.add(
+                _HISTORICAL_THINKING_PROMPT_BUNDLES[tool_profile]
+            )
+        if protocol.prompt_sha256 not in accepted_prompt_hashes:
+            raise ValueError("protocol.prompt_sha256 differs from model dialect")
 
     sampling_table = _table(
         payload,

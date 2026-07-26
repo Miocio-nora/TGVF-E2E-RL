@@ -31,8 +31,8 @@ from tgvf_rl.protocol import (
 )
 
 
-def test_visual_tool_prompt_v2_literal_hashes_are_fixed() -> None:
-    assert TGVF_VISUAL_TOOL_PROMPTS_VERSION == "tgvf-visual-tool-prompts-v2"
+def test_visual_tool_prompt_v3_literal_hashes_are_fixed() -> None:
+    assert TGVF_VISUAL_TOOL_PROMPTS_VERSION == "tgvf-visual-tool-prompts-v3"
     assert TGVF_VISUAL_TOOL_RESPONSES_VERSION == "tgvf-visual-tool-responses-v1"
     assert SHARED_USER_PROMPT_TEMPLATE_SHA256 == (
         "e44a55bbf2f35a8b34cab1462af499ee4741f19e0561d27f130b8f2fd2316c60"
@@ -44,10 +44,10 @@ def test_visual_tool_prompt_v2_literal_hashes_are_fixed() -> None:
         "b331fd9c2f26472cfa98ba4e861cc8b8eb9d2e49576436d6e9255ea01a9f9ccf"
     )
     assert CROP_ONLY_SYSTEM_PROMPT_SHA256 == (
-        "978643f7ff47f6edf84114381a0db83ecbfccab7e846cec98ff4d4cf3a179e00"
+        "b8599a3adddd4b0d2ebd7b797f475ece6c6a577b8d9d9c8a138bf08cbad7c41b"
     )
     assert TGVF_CROP_SYSTEM_PROMPT_SHA256 == (
-        "9fd1899aee44e9817332000f0b194be1597106eb06ee75fd642c5ef6409ac511"
+        "d48aab6361500afbf45a194ae0534b1680610e09d06edeb7708d74f251ceee05"
     )
     assert TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE_SHA256 == (
         "2474fb2da968f7a6b491cbe2ef00a30fe10012c3e0884b3e2f8abab594fe0eca"
@@ -149,3 +149,10 @@ def test_success_response_renderer_is_unique_and_has_no_image_placeholder() -> N
         )
     with pytest.raises(ValueError, match="unsupported"):
         render_successful_visual_tool_response("unknown_tool", {})
+
+
+def test_qwen3_crop_prompts_state_the_relative_coordinate_contract() -> None:
+    for prompt in (CROP_ONLY_SYSTEM_PROMPT, TGVF_CROP_SYSTEM_PROMPT):
+        assert "original-image-relative" in prompt
+        assert "0..1000" in prompt
+        assert "x2 greater than x1" in prompt

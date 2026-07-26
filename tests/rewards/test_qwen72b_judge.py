@@ -84,6 +84,56 @@ def test_rl_judge_sends_task_kind_and_accepts_only_binary_json() -> None:
     assert captured[0]["response_format"] == {"type": "json_object"}
 
 
+def test_local_judge_usage_without_provider_cost_is_retained_at_zero_cost() -> None:
+    captured: list[dict[str, object]] = []
+    prompt = _identity(
+        "prompt", "1", version=QWEN25_72B_RL_JUDGE_PROMPT_VERSION
+    )
+
+    def opener(request, *, timeout):
+        captured.append(json.loads(request.data))
+        return _Response(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": '{"verdict":1,"rationale":"same"}'
+                        },
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            }
+        )
+
+    config = OpenAICompatibleJudgeConfig(
+        base_url="http://127.0.0.1:8013/v1",
+        model_name="Qwen2.5-72B-Instruct",
+        prompt_identity=prompt,
+        service_identity=_identity("service", "2"),
+        model_identity=_identity("model", "3"),
+        sampling_identity=_identity("sampling", "4"),
+        calibration_identity=_identity("calibration", "5"),
+        require_usage=False,
+    )
+    result = OpenAICompatibleJudgeProvider(config, opener=opener).judge(
+        JudgeRequest(
+            request_id="local-usage",
+            task_kind="math",
+            question="1+1?",
+            candidate_answer="2",
+            reference_answer="2",
+            prompt_identity=prompt,
+        )
+    )
+    assert result.usage is not None
+    assert result.usage.cost_usd == 0.0
+
+
 def test_rl_judge_fails_closed_on_nonbinary_or_malformed_output() -> None:
     for content in ('{"verdict":0.5,"rationale":"uncertain"}', "yes"):
         provider, prompt = _provider(content, [])

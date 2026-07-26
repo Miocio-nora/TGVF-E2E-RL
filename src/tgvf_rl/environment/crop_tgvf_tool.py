@@ -28,6 +28,10 @@ from tgvf_rl.observations.store import (
     tensor_checksum,
 )
 from tgvf_rl.protocol.schema import TGVF_CROP_TOOL_NAME, ParsedCropTGVFCall
+from tgvf_rl.qwen.crop_coordinates import (
+    CropCoordinateMapper,
+    CropCoordinateMapping,
+)
 from tgvf_rl.representation.adapter import (
     TGVFAdapter,
     TGVFAdapterInput,
@@ -101,6 +105,8 @@ class AtomicCropTGVFTool:
         materializer: CropTGVFVisualMaterializer,
         adapter: TGVFAdapter,
         store: ObservationStore,
+        coordinate_mapper: CropCoordinateMapper,
+        processor_resized_size: tuple[int, int] | None = None,
     ) -> None:
         if not callable(getattr(materializer, "materialize_source_visual", None)):
             raise TypeError("atomic crop+TGVF requires a visual materializer")
@@ -108,9 +114,13 @@ class AtomicCropTGVFTool:
             raise TypeError("atomic crop+TGVF requires a torch Adapter module")
         if not isinstance(store, ObservationStore):
             raise TypeError("atomic crop+TGVF requires an ObservationStore")
+        if not callable(getattr(coordinate_mapper, "map_crop_bbox_to_source", None)):
+            raise TypeError("atomic crop+TGVF requires an explicit coordinate mapper")
         self.materializer = materializer
         self.adapter = adapter
         self.store = store
+        self.coordinate_mapper = coordinate_mapper
+        self.processor_resized_size = processor_resized_size
         _assert_frozen_adapter(adapter)
 
     def execute(
@@ -136,8 +146,17 @@ class AtomicCropTGVFTool:
             trajectory_id=request.trajectory_id,
         )
         height, width, _ = source.shape
-        requested = request.parsed_call.bbox_2d
-        effective = clamp_bbox_to_image(requested, width=width, height=height)
+        mapping = self.coordinate_mapper.map_crop_bbox_to_source(
+            request.parsed_call.bbox_2d,
+            source_width=width,
+            source_height=height,
+            processor_resized_size=self.processor_resized_size,
+        )
+        if not isinstance(mapping, CropCoordinateMapping):
+            raise TypeError("atomic crop coordinate mapper returned an invalid mapping")
+        requested = mapping.model_bbox_2d
+        source_bbox = mapping.source_bbox_2d
+        effective = clamp_bbox_to_image(source_bbox, width=width, height=height)
         left, top, right, bottom = effective
         crop = source[top:bottom, left:right, :].contiguous().clone()
 
@@ -246,8 +265,13 @@ class AtomicCropTGVFTool:
             embedding_identity=provenance.embedding_identity,
         )
         record = CropTGVFObservationRecord(
-            schema_version="crop-tgvf-observation-v1",
-            observation_id=_observation_id(request, source_ref.address.digest, crop_pixels.address.digest),
+            schema_version="crop-tgvf-observation-v2",
+            observation_id=_observation_id(
+                request,
+                mapping,
+                source_ref.address.digest,
+                crop_pixels.address.digest,
+            ),
             call_index=request.call_index,
             model=request.model,
             representation=request.representation,
@@ -255,7 +279,12 @@ class AtomicCropTGVFTool:
             source_pixels_sha256=source_ref.address.digest,
             source_width=width,
             source_height=height,
-            requested_bbox_2d=requested,
+            model_coordinate_space=mapping.coordinate_space,
+            coordinate_conversion_version=mapping.conversion_version,
+            coordinate_reference_width=mapping.coordinate_reference_width,
+            coordinate_reference_height=mapping.coordinate_reference_height,
+            model_bbox_2d=requested,
+            source_bbox_2d=source_bbox,
             effective_bbox_2d=effective,
             sampled_target_char_span=(
                 request.parsed_call.target_span.offsets.char_start,
@@ -504,6 +533,7 @@ def _assert_frozen_adapter(adapter: nn.Module) -> None:
 
 def _observation_id(
     request: CropTGVFToolExecutionRequest,
+    mapping: CropCoordinateMapping,
     source_digest: str,
     crop_digest: str,
 ) -> str:
@@ -511,6 +541,11 @@ def _observation_id(
     digest.update(request.trajectory_id.encode("utf-8"))
     digest.update(str(request.call_index).encode("ascii"))
     digest.update(request.parsed_call.sampled_text.encode("utf-8"))
+    digest.update(mapping.coordinate_space.encode("utf-8"))
+    digest.update(mapping.conversion_version.encode("utf-8"))
+    digest.update(str(mapping.coordinate_reference_width).encode("ascii"))
+    digest.update(str(mapping.coordinate_reference_height).encode("ascii"))
+    digest.update(str(mapping.source_bbox_2d).encode("ascii"))
     digest.update(source_digest.encode("ascii"))
     digest.update(crop_digest.encode("ascii"))
     digest.update(request.representation.sha256.encode("ascii"))

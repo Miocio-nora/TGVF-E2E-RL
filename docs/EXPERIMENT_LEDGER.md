@@ -9,7 +9,9 @@ authorization does not retroactively alter any earlier cell.
 Experiment namespaces are disjoint: `SC-*` is reserved for cells fixed by the
 veRL compatibility matrix, while `RP-*` identifies bounded representation-
 phase executions, `BE-*` identifies benchmark evaluation runs, and `BJ-*`
-identifies bounded benchmark-judge deployments. A
+identifies bounded benchmark-judge deployments. `T1-*` identifies inference-
+only full-image policy-data-selection difficulty runs; it never denotes policy
+training, a benchmark, or a TGVF/visual-tool experiment. A
 materialized run ID is never renamed after execution; an identity collision is
 retained as `INVALID` and rerun under a new planned ID.
 
@@ -7733,7 +7735,7 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
 
 ### PRL-03-R2-QWEN3-GRPO-BS16-CROP-ONLY-FORMAL-COMPARISON-80STEP-GPU0123
 
-- Lifecycle/result: `RUNNING` / `PENDING`; clean replacement for invalid R1.
+- Lifecycle/result: `COMPLETE` / `INVALID`; clean replacement for invalid R1.
   It starts from the original Qwen3-VL-8B-Thinking base with a fresh
   decoder-only LoRA and must not load an R1 or R5 policy checkpoint.
 - Controlled comparison: all R5 model, DeepEyes-47K order, seed 42,
@@ -7791,6 +7793,21 @@ close broader Qwen replay, Qwen2.5, production-objective or training gates.
   TaskRunner's own stderr before quiescing services or saving recovery state.
   This changes diagnostics only; data order, policy state, optimizer state and
   all scientific settings remain unchanged.
+- Completion: all 80 optimizer steps and the step-80 checkpoint completed.
+  The run processed 1,280 prompts and 10,240 trajectories, with 7,305 Crop-call
+  attempts, 4,167 materialized observations and 2,500 recorded
+  `tool_execution_failed` events. W&B run `7468ybjm` and the local artifacts
+  are retained as engineering evidence.
+- Post-hoc invalidation, 2026-07-24: the Qwen3 model-facing coordinate contract
+  was wrong. Qwen3-VL natively emits relative `0..1000` coordinates, but this
+  run's runtime treated those values as immutable-original-image pixels. In
+  4,504 parseable sampled Crop calls retained by the trajectory audits, 4,492
+  boxes lay wholly in `0..1000`, 3,177 (70.5%) were changed by direct source
+  clamping, and 1,760 (39.1%) became empty. The model-to-source coordinate
+  conversion was absent even for boxes that happened to remain in bounds.
+  Therefore the optimizer/checkpoint/replay mechanics completed, but all Crop
+  localization, Crop-vs-TGVF, reward, and benchmark method conclusions from
+  this run are invalid. The run must not be resumed or promoted.
 
 ## Required entry template
 
@@ -7927,9 +7944,8 @@ than inferred from a script name or prior conversation.
 
 ### BE-05-QWEN3-CROP-STEP80-COREDEV2511-GPU0123
 
-- Cell/status/result: post-training Crop-only policy comparison / `RUNNING` /
-  queued rank-for-rank after BE-04 in the durable tmux launch; no optimizer,
-  reward, reference replay, or weight update occurs.
+- Cell/status/result: post-training Crop-only policy comparison / `COMPLETE` /
+  `INVALID`; no optimizer, reward, reference replay, or weight update occurred.
 - Question: how does the completed 80-step Crop-only comparison perform on the
   identical CoreDev content and single-image tranche used by BE-04?
 - Evaluated policy: the same frozen Qwen3-VL-8B-Thinking base plus exact
@@ -7957,3 +7973,950 @@ than inferred from a script name or prior conversation.
   because their preceding BE-04 ranks stopped. Missing rows resume under the
   same exact-evidence/EOS fixes through
   `9981f2aaf6a58e045dbb6847109c1f2c76f4a1cd`.
+- Completion/invalidation: all 2,240 supported single-image trajectories and
+  the pinned scorer completed, but the 2026-07-24 audit established that this
+  evaluator shared the training runtime's missing Qwen3 `0..1000`-to-source
+  coordinate conversion. Its generated/scored artifacts are retained, but no
+  Crop localization, benchmark, or comparison claim may use this cell. It must
+  be rerun from a newly trained, coordinate-correct Crop policy rather than by
+  reinterpreting the already sampled observations.
+- CPU repair note (`2026-07-24`): decision `CROP-COORDINATES-20260724` adds the
+  Qwen3 `0..1000` family conversion, Crop observation v2 provenance, prompt/tool
+  schema v3 identities, and plain/atomic exact-RGB fixtures. This is an
+  engineering repair only, not a new experiment or a revalidation of BE-05;
+  no GPU work was launched.
+
+### T1-01-QWEN3-512-FULLIMAGE-CANARY-GPU0123
+
+- Cell/matrix ID and mandatory/diagnostic class: `T1-01`; mandatory inference-
+  only policy-data-selection canary and promotion gate for later full T1
+  scoring. It is not policy training, a benchmark, T2, or a visual-tool run.
+- Spike-plan git revision and VA0/VA1/VA2 approval references: user decision
+  `QWEN3-RL-DATA-T1-20260725`, accepted in `PROJECT_TASK.md` §0.8.9; GPU
+  authorization is physical devices 0--3 and inference only.
+- Lifecycle status: `RUNNING`; four-rank vertical smoke launched
+  `2026-07-25 23:19 JST` and passed before full-canary resume. Revision 0
+  completed `2026-07-25 23:37 JST` with all 50 immutable manifests and all
+  1,536 logical attempts validated. The sole length-finish replay completed on
+  physical GPU 2 at response-budget revision 1 on `2026-07-26 00:08 JST`; no
+  revision-2 request remains eligible. Qwen3 generation is complete and all
+  generation GPUs are released. Deterministic verification completed at
+  `2026-07-26 00:33 JST`; the authorized local semantic judge is separately
+  planned below, after which reduction and the promotion report remain.
+- Result: `PENDING`.
+- Question: under the original Qwen3-VL-8B-Thinking policy, its native
+  processor with `max_pixels=262144`, and eight independently seeded responses,
+  does the stratified 192-row canary produce complete and auditable full-image
+  `0/8`, `8/8`, and `1--7/8` difficulty decisions without response length,
+  image conversion, or verifier failure being counted as an incorrect answer?
+- Baseline and exact output path: DeepEyes is the methodological reference; no
+  competing model cell is part of this canary. Fresh output root
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/t1/T1-01-QWEN3-512-FULLIMAGE-CANARY-GPU0123`;
+  the vertical smoke is a resumable prefix of this same identity.
+- Model and processor identity: frozen original
+  `Qwen/Qwen3-VL-8B-Thinking` at
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`, BF16, no quantization,
+  tokenizer length `151669`; model config/generation config/tokenizer config/
+  tokenizer JSON/preprocessor SHA-256 respectively `5cd45286...f3661`,
+  `fe72e865...e656`, `7b501e63...a7d5`, `a5d85b6d...73c7`, and
+  `27225450...e516`. Model, processor, and runtime identity SHA-256 are
+  `56d26e9f...b659`, `12c1fdfb...044b`, and `86a9d7fc...a9e9`.
+- Representation checkpoint identity: N/A; TGVF Adapter, main D, and
+  D-DeepStack are not instantiated by full-image T1 scoring.
+- N/A fields and justification: reference policy, LoRA, optimizer, gradient,
+  checkpoint/resume of weights, behavior log probabilities, KL, GRPO/SDPO,
+  reward composition, target conditioning, TGVF/crop tools, and policy/reference
+  replay are N/A because this run samples a frozen base model and changes no
+  weights. Chunk resume applies only to immutable inference evidence.
+- Policy/reference initialization: one immutable original Qwen3 policy per
+  worker; no reference-policy or judge model is colocated during generation.
+- Rollout policy version and allowed asynchronous staleness: stable local base
+  path above, no adapter and no updates; staleness `0`.
+- Code commit and worktree state: repository `main` HEAD
+  `45481498fbbedcd139112339956d87d533355ac4` with a dirty worktree containing
+  pre-existing unrelated work plus the explicitly hashed T1 files below; no
+  claim of a clean commit is made.
+- Repository adapter/patch surface and hash: CPU evidence/runtime
+  `src/tgvf_rl/data/policy_selection_runtime.py@38814960d2cb652c77ec726048e4e9ba5755fe421ae80745d9139724344fa07a`;
+  vLLM boundary
+  `src/tgvf_rl/data/policy_selection_vllm.py@6d96d3911d94e3f77b39a940190409353a29ed6017028499ad400dac9648672e`;
+  CLI
+  `tools/run_policy_data_selection_t1.py@cc5323b3531caaaa3ed0475e850685c0500cc8644a4e894a39d132179c15c827`;
+  run config file
+  `configs/policy/data_selection/qwen3_t1_512_canary_v1.json@a20e1e7a31532b6480ef29803277f8d95af1d62e3e029b7f386ee0494f8d5f90`.
+  The canonical run-manifest SHA-256 is separately
+  `077a271e1e3048222507ff402085f44455f7f937e1b60a65e04cb6a271e9db16`.
+  No site-package patch is used.
+- Post-revision-0 length-retry boundary: the hashes immediately above remain
+  the exact revision-0 generation identities. Before any higher-budget launch,
+  the primary worker was fail-closed against `budget_revision > 0`; its current
+  boundary/CLI hashes are
+  `src/tgvf_rl/data/policy_selection_vllm.py@68b5b522c0059cd0523046ff49c828fb8ee52f157b776b54d9f67a4c88f7d23e`
+  and
+  `tools/run_policy_data_selection_t1.py@7b99ddbfbf0fcf3aef52e2316d8a985cbb8c9ca084d0d8e3f11825b6bd858736`.
+  The first dedicated length-only scheduler boundary was
+  `src/tgvf_rl/data/policy_selection_vllm_retry.py@84bcff4ddc9fb1ff268159c46a438479638f714e4b56e3c317a982618bac1849`;
+  it launched revision 1 on GPU 2 at `2026-07-26 00:01 JST`, observed a normal
+  completion shorter than the revision-0 length prefix, failed closed under
+  its extra exact-prefix gate, wrote no evidence/manifest, and released the GPU
+  at `00:03 JST`. Exact-prefix equality across a changed vLLM max-context
+  engine was not part of decision `QWEN3-RL-DATA-T1-20260725`; the corrected
+  scheduler records common-prefix length and first divergence as immutable
+  audit evidence while retaining strict logical-request, seed, prompt, image,
+  backend, consecutive-budget, and larger-budget identity checks. Its hash is
+  `src/tgvf_rl/data/policy_selection_vllm_retry.py@0bb929af80056d4f1c875253f3da1f1e178e2b0e1ced2f4bba76f93db7751390`.
+  The dedicated CLI is
+  `tools/run_policy_data_selection_t1_retry.py@40ecc4d74003ef127640043181b936b0422dda35e960dd2a4ca74ace490adcf1`.
+  They reuse the unchanged `_generate_one` path, require an explicitly
+  acknowledged logical-request set, and preserve the seed. CPU selection/
+  runtime tests: `32 passed`.
+- Revision-0 completion audit: `1,535 stop`, `1 length`, `0 generation error`;
+  192 candidates have exactly eight unique attempts each, with 1,536 unique
+  logical keys and request IDs. The single replay source is ArxivQA candidate
+  `6a5acc05...ce76`, attempt `5`, seed `1951992457`, request
+  `qwen3-selection:e6a8fff...b5b93d`, source-evidence SHA-256
+  `b5ddd7cb...68c82`, rank `2`, local chunk `4`. Revision 1 must therefore
+  publish at most one record in chunk namespace `1000004`.
+- Revision-1 completion audit: the one-record immutable manifest is
+  `rank-02-chunk-1000004.json@4b2f7a1b2e8d25696e21638d8fdfd3c648df339320504d71525957212b626dc4`;
+  its evidence finished normally after `3,313` sampled tokens, so the effective
+  1,536 logical attempts now all have a normal completion. The changed-context
+  replay shared 71 initial tokens with revision 0 and first diverged at index
+  71. Immutable audit sidecar
+  `runtime/length-retry-audits/bb7e251ac240e229a824d385ba246841dcb24576a9b76800933b8e154099b65c.json`
+  has the matching SHA-256
+  `bb7e251ac240e229a824d385ba246841dcb24576a9b76800933b8e154099b65c`;
+  the successful worker log SHA-256 is
+  `09c09634bfeef4dc6f036c0beebc67204e219624b67a8e7831a32328e66e8c23`.
+- Dataset/manifest, hashes, sample rule, and n: authoritative full-source
+  catalog `catalog-v2.json@428e782a...bd9`, with screened V*/ArxivQA-v2/
+  ThinkLite JSONL identities `5a0b974c...a322` (191,975),
+  `cda47ff2...742` (99,893), and `438588d7...c4ba` (69,842). The outcome-
+  independent canary is 64 rows per source, 192 rows and 1,536 revision-0
+  logical attempts; candidates JSONL `1898129e...3fa`, manifest file
+  `39a271a0...a67`, manifest content `34dc4f6d...77e`, and ordered selected-
+  record identity `2aecc596...a8c9`. All referenced image bytes/dimensions were
+  preflighted; 187 unique images and four legitimate reuse groups remain.
+- Native prompt/tool schema hash: schema
+  `qwen-native-user-image-question-v1`; exactly one user message containing the
+  original image then canonical question, no system message and no tools,
+  `add_generation_prompt=true`. Ground truth, GT regions, rationale, and
+  provenance never enter the prompt. Candidate-specific semantic prompt and
+  exact vLLM-expanded prompt-token hashes are retained per attempt.
+- Chat-template/token-fixture hash and token-ownership masks: native template
+  content SHA-256 `36e042fe...956`; template file SHA-256
+  `7dc0b863...c1e5`; the prompt must end exactly with template-owned
+  `<|im_start|>assistant\n<think>\n`. No policy loss mask applies; every
+  completion token ID and raw text is retained as inference evidence.
+- D/DeepStack/position/mask identity: N/A; original full-image Qwen visual
+  tokens only. V* GT regions are preserved in the candidate record but never
+  crop, mask, or condition T1 generation.
+- Observation materialization/artifact identity used by all replays: encoded
+  image SHA/dimensions are verified, decoded PIL source mode is recorded, then
+  `Image.convert("RGB")` discards alpha before the original RGB pixels enter
+  Qwen's fast processor. The runner does not pre-resize. Qwen owns its sole
+  torch/torchvision Bicubic smart resize with factor `32`, minimum area `65536`,
+  maximum area `262144`, and preserved aspect ratio. Source-RGB pixel hash,
+  processed dimensions, processor identity, prompt tokens, and MM cache UUID
+  are recorded; any replay must reproduce them exactly.
+- RL framework/version/environment lock: no veRL. `.venv312`: Python `3.12.3`,
+  vLLM `0.12.0`, Torch `2.9.0+cu128`, Transformers `4.57.6`, Pillow `12.3.0`,
+  FlashInfer Python `0.5.3`, CUDA runtime `12.8`, driver `570.195.03`.
+- Objective equations and normalization: no optimization objective. Once all
+  valid attempts are verified, the fixed T1 reduction retains `1--7/8`, drops
+  `0/8` and `8/8`, and leaves any incomplete attempt group unresolved.
+- Rollout/replay forward mode and adapter dropout/RNG contract: inference mode,
+  immutable base weights, no adapter/dropout, one deterministic request seed;
+  no policy update can intervene. Audited replay uses the same recorded image,
+  expanded prompt, seed, sampling configuration, and budget revision.
+- Sampling backend/version, seed, temperature, top-p/top-k/min-p, penalties,
+  logit processors, and logprob convention: vLLM `0.12.0`; temperature `1`,
+  top-p `1`, top-k `-1` (disabled), min-p `0`, repetition penalty `1`, presence
+  and frequency penalties `0`, no logit processor, no logprobs requested. Eight
+  low-31-bit seeds derive from canonical run identity, candidate identity,
+  attempt index, root `42`, and namespace
+  `qwen3-policy-selection-t1-canary-v1`. Request stop ID is `151645`; with
+  `generation_config=auto`, the recorded effective native EOS set is
+  `[151645,151643]`; both terminal texts are parser-supported. EOS is enabled,
+  stop strings are empty, and special tokens are retained in detokenization.
+- Weight/KV-cache dtype, quantization, attention implementation, rollout tensor
+  parallelism, and training device mesh: BF16 weights, KV dtype `auto` (must
+  resolve compatibly at startup), no quantization; automatic FlashInfer decoder
+  is required and must be confirmed in the worker log, while vision attention
+  is explicitly `TORCH_SDPA`. Do not set global `VLLM_ATTENTION_BACKEND`.
+  Independent DP4/TP1 replicas; no training mesh.
+- Logit/logprob/loss/gradient parity tolerances: logit/logprob/loss/gradient are
+  N/A. Exact equality is required for candidate/run identities, source RGB,
+  expanded prompt-token IDs, attempt seed, response budget, sampled-token hash,
+  finish/stop reason, and resumed chunk contents.
+- World size, microbatch, accumulation, and global batch: four independent
+  workers, one per physical GPU; `max_num_seqs=32`,
+  `max_num_batched_tokens=65536`, four candidates/evidence chunk and eight
+  attempts/candidate (up to 32 active requests per chunk). Training microbatch,
+  accumulation, and global batch are N/A.
+- GPUs: physical 0 `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2`; 1
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc`; 2
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`; 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`.
+- Start/end timestamps, elapsed time, and session/process identity: started
+  `2026-07-25 23:19 JST`; end/total elapsed pending; tmux session
+  `t1_01_qwen3_512_canary_gpu0123`, windows `gpu0`--`gpu3`.
+- Actual GPU-hours and peak scratch use: pending.
+- Command: first run `.venv312/bin/python tools/run_policy_data_selection_t1.py
+  prepare --config configs/policy/data_selection/qwen3_t1_512_canary_v1.json`.
+  Each rank then runs with `CUDA_DEVICE_ORDER=PCI_BUS_ID`,
+  `CUDA_VISIBLE_DEVICES=<rank>`, `VLLM_USE_V1=1`,
+  `VLLM_WORKER_MULTIPROC_METHOD=spawn`, `TOKENIZERS_PARALLELISM=false`,
+  `PYTHONHASHSEED=42`, the recorded Python/CUDA include `CPATH` and
+  `.eval-runtime-python312-dev/lib` `LIBRARY_PATH`, plus rank-local Triton and
+  TorchInductor caches: `.venv312/bin/python
+  tools/run_policy_data_selection_t1.py worker --config
+  configs/policy/data_selection/qwen3_t1_512_canary_v1.json --rank <rank>
+  --budget-revision 0 --max-chunks 1`. After all four smoke chunks validate,
+  rerun the identical command without `--max-chunks 1` to resume the rest.
+- Outputs: immutable `run-identity.json`, canonical config, content-addressed
+  raw JSONL under `chunks/`, logical rank/chunk manifests under `manifests/`,
+  rank logs and caches under `logs/` and `runtime/cache/`. The vertical smoke
+  committed four rank-0 local chunks: 16 V* candidates, 128 unique logical
+  attempts, 128 normal EOS completions, zero length/error, sampled-token range
+  `49..5807` and total `115705`; exact chunk validation and per-candidate prompt/
+  source-RGB consistency passed, and all four logs confirmed FlashInfer.
+- Scorer/parser identity: last non-empty suffix after the final `</think>`;
+  ArxivQA canonical row-bounded A--Z rule and zero judge calls; ThinkLite
+  normalized exact/numeric-symbolic rule; V* normalized exact rule. Only
+  unresolved ThinkLite/V* semantics may later use the separately frozen local
+  Qwen2.5-72B judge config `37375048...573` and prompt `2fa039d7...86d2`, after
+  Qwen3 releases GPUs. Length/error/verifier failures are never incorrect.
+- Metrics: pending. Required: all 1,536 logical attempts accounted for and
+  unique; token quantiles, length/error counts, per-source `0/8`, `8/8`, and
+  `1--7/8`, verifier-route/judge-call rates, exact replay subset, four-GPU
+  throughput, projected full-run GPU-hours, and zero ArxivQA judge calls.
+- Conclusion: pending smoke, complete canary, verifier audit, and promotion
+  decision. The full 361,710-row run is not authorized under this identity.
+
+### T1-01-J1-QWEN25-72B-SEMANTIC-JUDGE-GPU01
+
+- Cell/class and lifecycle/result: `T1-01-J1`; mandatory inference-only local
+  semantic-verifier continuation of `T1-01`; `COMPLETE` / `PASS`. It performs
+  no training, no Qwen3 generation, no crop/TGVF execution, and no paid or
+  remote request.
+- Authorization and source-quality boundary: user instruction on
+  `2026-07-26 JST` to proceed without wasting GPU; accepted amendment
+  `PROJECT_TASK.md` §0.8.9.1. The exact corrupt V* row
+  `bd8222dad80f...334e1b4` and its eight consumers are verifier failures and are
+  not dispatched. No replacement label is synthesized and no other completed
+  canary evidence is rerun.
+- Parent/run inputs: Qwen3 run manifest
+  `077a271e1e3048222507ff402085f44455f7f937e1b60a65e04cb6a271e9db16`;
+  deterministic scoring manifest
+  `dfdade6bff679fa074225148c7fb3151bdf4fb3b1234a9cffe4496a7dbd94542`;
+  effective attempts `1,536`; deterministic attempt artifact
+  `49dff5414481544a75cdc985df89e04753283a1e4cb0b899151c328097e0fa39`.
+  The content-deduplicated judge queue contains `939` requests serving `999`
+  attempt consumers, SHA-256
+  `f0f3f647c49ad2c3084c073c9fce63f6ea34d728128a7138b6573989eba49c79`.
+  ArxivQA judge calls are exactly zero.
+- Quality-exclusion identity: config
+  `configs/policy/data_selection/t1_canary_quality_exclusions_v1.json@3ef0b0bb5f646eee0d1cb0a95e282486ac5e85782c47c0698029c1c04a9602a1`;
+  the eight bad-row attempts remain `source_ground_truth_invalid` and
+  unscored.
+- Judge/model identity: local `Qwen/Qwen2.5-72B-Instruct` revision
+  `495f39366efef23836d0cfae4fbe635880d2be31`, stable path
+  `/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct`, served model
+  `Qwen2.5-72B-Instruct`, BF16, no quantization. Judge config
+  `configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json@3737504858912a6392679d2c9720597cde58dd7d3218aa6f75b67ad00a769573`;
+  prompt `2fa039d7...86d2`; temperature `0`, top-p `1`, max tokens `256`, seed
+  `42`, strict JSON-object binary verdict.
+- Runtime/topology: `.venv312` Python `3.12.3`, vLLM `0.12.0`, Torch
+  `2.9.0+cu128`; physical GPUs 0/1 with the UUIDs recorded in parent `T1-01`,
+  TP2, BF16, `max_model_len=32768`, memory utilization `.85`,
+  `max_num_seqs=64`, prefix caching, `TRITON_ATTN`, host `127.0.0.1`, port
+  `8013`. Client concurrency is `32`; every request retries only transport,
+  timeout, HTTP, or strict-response failure and aborts after five attempts.
+- Code boundary: semantic writer/finalizer
+  `src/tgvf_rl/data/policy_selection_t1_judge.py@485fc27cae4829cbaa870b42e12ae0f98fc42a942f5396fd8d6b11af70c3297d`;
+  CLI `tools/judge_policy_data_selection_t1.py@6fe994536612db1a4527a3909671d24fd8fa5bdc47944bd137117ced45902fc6`;
+  deterministic scorer
+  `src/tgvf_rl/data/policy_selection_t1_scoring.py@ba4a159a88503a5a24ad80292e277c1ec2394ffd637c461255eac59d46bc438e`;
+  generic provider
+  `src/tgvf_rl/judges/openai_compatible.py@36e6755bd74ca0bf6a4a9f998d9be67754228103771baa9ee6c51f79e57fa66a`.
+  Targeted verification: `33 passed`; Ruff passed.
+- Evidence/output contract: exact response model, one choice,
+  `finish_reason=stop`, strict binary JSON, and token usage are mandatory.
+  Canonical request, raw response hash, response JSON, all judge identities,
+  verdict, rationale and content hash are persisted before an atomic per-request
+  resume index. Output roots are parent-run `scoring/judge-v1` and
+  `scoring/final-v1`; logs are `logs/local-judge-server-gpu01.log` and
+  `logs/local-judge-client.log`; tmux session `t1_01_judge_gpu01`.
+- Planned server command: environment binds physical `CUDA_VISIBLE_DEVICES=0,1`,
+  `VLLM_USE_V1=1`, spawn workers, `VLLM_ATTENTION_BACKEND=TRITON_ATTN`, the
+  repository Python-3.12 headers and `.venv312/bin`; run
+  `python -m vllm.entrypoints.openai.api_server --model <stable-local-path>
+  --served-model-name Qwen2.5-72B-Instruct --host 127.0.0.1 --port 8013
+  --tensor-parallel-size 2 --dtype bfloat16 --max-model-len 32768
+  --gpu-memory-utilization .85 --max-num-seqs 64 --seed 42
+  --generation-config vllm --enable-prefix-caching`. The client runs
+  `tools/judge_policy_data_selection_t1.py run` with the pinned T1 and judge
+  configs and concurrency `32`, then `finalize` after all 939 indices validate.
+- Runtime/result: server launched in the planned tmux session at
+  `2026-07-26 00:41:24 JST`, became healthy with the exact served-model identity
+  at `00:42:54`, and the client launched at `00:43:29`. All `939/939` unique
+  requests committed by `00:44:22`; the service shut down cleanly by `00:44:35`
+  and physical GPUs 0/1 returned to `20/1 MiB`. A no-service resume validation
+  then loaded all `939` indices and wrote zero new records.
+- Judge outcome/evidence: `760` unique verdict-1 and `179` unique verdict-0;
+  `436,683` prompt, `42,731` completion, and `479,414` total judge tokens.
+  Judge manifest identity
+  `e90efe29591ba5fd1d3ffed29978611d5bddaa35322aac672754393ae89e4b05`;
+  manifest file SHA-256 `efb0079c...c685`; server/client log SHA-256 values
+  `1f3ef5fa...0d7` and `859bdca5...893`.
+- Final reduction: all `1,528` valid attempts scored (`1,052` correct, `476`
+  incorrect); the eight pinned corrupt-GT attempts are `verifier_error`, never
+  incorrect. Across 191 valid candidates, `59` retain, `105` too easy, and
+  `27` too hard; the corrupt candidate is the sole unresolved row. Per source:
+  ArxivQA `34/13/17` retain/easy/hard, ThinkLite `12/48/4`, and valid V*
+  `13/44/6`, plus one unresolved corrupt V* row. Final manifest identity
+  `3f5f8e5b94456831f6578f4381f97ce4a819e83d6b6810ac8f6ae3e196cbaef3`;
+  attempts/decisions/report SHA-256 values `ab8944bc...5a64`,
+  `d2b4c443...599f`, and `3c6e5b90...4c02`.
+
+### T1-02-QWEN3-INSTRUCT-512-FULLIMAGE-CANARY-GPU0123
+
+- Cell/class and lifecycle/result: `T1-02`; diagnostic inference-only paired
+  token-length and throughput canary; `COMPLETE` / `PASS`. It is not policy
+  training, a difficulty-selection promotion, T2, a tool run, or an answer-
+  judge deployment.
+- Authorization and question: decision
+  `QWEN3-INSTRUCT-TOKEN-CANARY-20260726`, accepted in `PROJECT_TASK.md`
+  §0.8.9.2, authorizes physical GPUs 0--3. On the exact T1-01 192-candidate
+  population and generation contract, how much shorter is the native
+  Qwen3-VL-8B-Instruct completion than Qwen3-VL-8B-Thinking?
+- Paired baseline: `T1-01-QWEN3-512-FULLIMAGE-CANARY-GPU0123`, whose effective
+  1,536 generations contain `3,026,449` sampled tokens, mean `1,970.344401`;
+  ArxivQA/ThinkLite/V* means are `3,092.218750`, `2,239.726563`, and
+  `579.087891`.
+- Model identity: official `Qwen/Qwen3-VL-8B-Instruct` revision
+  `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, stable local path
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`, architecture
+  `Qwen3VLForConditionalGeneration`, BF16, no quantization. All four exact
+  shard sizes and SHA-256 identities plus the index identity are pinned in
+  `EXTERNAL_REFERENCES.md` under “Qwen3-VL Instruct paired diagnostic model”.
+- Model-facing files: config `5cd45286...f3661`, generation config
+  `8469742d...c4d44`, tokenizer config `c2da7718...e2399`, tokenizer JSON
+  `a5d85b6d...73c7`, preprocessor config `27225450...e516`, chat-template file
+  `5c72a170...0acce`, and effective template content
+  `3636d0f0...89e4`; tokenizer length `151669`, tokenizer EOS `151645`, native
+  generation EOS `[151645,151643]`.
+- Native prompt contract: exactly one user message containing original image
+  then canonical question, no system message and no tools,
+  `add_generation_prompt=true`. The Instruct template must end exactly with
+  `<|im_start|>assistant\n` and contains no template-owned `<think>` opener.
+  Raw sampled token IDs/text are retained. Correctness parsing and scoring are
+  N/A; the config's direct-completion parser identity is reserved but is not
+  invoked by this cell.
+- Data identity: exact T1-01 outcome-independent canary, 64 rows per source,
+  192 candidates and 1,536 attempts; candidates
+  `1898129ed01060f0b21ddeff9f081661902efbd87c8c31221c633cb64753e3fa`,
+  manifest file `39a271a02b9d8eee3bda272427e0e341d6662e161d45b4a299fd1e2530c92a67`.
+  The fixed corrupt V* label is irrelevant to token length and remains one
+  diagnostic prompt; no correctness claim is allowed.
+- Observation/image identity: immutable source bytes are verified and decoded
+  to RGB; Qwen owns the sole Bicubic resize with factor `32`, minimum area
+  `65,536`, maximum area `262,144`, aspect ratio preserved, and one image per
+  prompt. Source-RGB hash, processed dimensions, visual layout, expanded prompt
+  token hash and multimodal cache UUID are recorded per attempt.
+- Sampling/response budget: eight independently seeded attempts; temperature
+  `1`, top-p `1`, top-k disabled, min-p `0`, repetition penalty `1`, presence
+  and frequency penalties `0`, no logit processor, EOS enabled, no stop string,
+  special tokens retained. Seed root `42`, namespace
+  `qwen3-instruct-policy-selection-t1-canary-v1`; seeds include the new run
+  manifest. Revision 0 is `40,960` new tokens / `65,536` context; only a length
+  finish may enter separately authorized immutable retries at `98,304/131,072`
+  then `196,608/262,144`.
+- Runtime/topology: `.venv312`, Python `3.12.3`, vLLM `0.12.0`, Torch
+  `2.9.0+cu128`, Transformers `4.57.6`, Pillow `12.3.0`, FlashInfer `0.5.3`,
+  driver `570.195.03`; four independent DP4/TP1 workers, BF16, no quantization,
+  FlashInfer decoder and `TORCH_SDPA` vision attention, `max_num_seqs=32`,
+  `max_num_batched_tokens=65536`, prefix caching and chunked prefill enabled,
+  four candidates/evidence chunk.
+- GPUs: physical 0 `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2`; 1
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc`; 2
+  `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`; 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`.
+- Code/config identity: repository HEAD
+  `45481498fbbedcd139112339956d87d533355ac4` with a pre-existing dirty
+  worktree; accepted runtime
+  `src/tgvf_rl/data/policy_selection_runtime.py@1c1326caecde39547ca6cf4215b3f3fc9b3b25e1bb6e4f534163662fef0e6804`,
+  vLLM boundary
+  `src/tgvf_rl/data/policy_selection_vllm.py@c1962244b90a553b678ae3c66db8eacadef14ce68c3fc82401db90f25ad0e5ad`,
+  CLI
+  `tools/run_policy_data_selection_t1.py@7b99ddbfbf0fcf3aef52e2316d8a985cbb8c9ca084d0d8e3f11825b6bd858736`,
+  config
+  `configs/policy/data_selection/qwen3_instruct_t1_512_canary_v1.json@e86ac1adecda4c91cf33cf622379cca7b7ca2b70256f72577bb20778e96615b4`.
+  Focused CPU tests: `36 passed`; Ruff: pass.
+- Run identity/output: run manifest
+  `c67969a3fded1d07ac077711a6bccf5cb8b124a2a2e7d5e459835ff901b57f6a`,
+  model/processor/runtime identities `527c2873...0f73f`,
+  `357445bf...2a793`, and `86a9d7fc...ea9e9`; output root
+  `artifacts/data/policy_selection/t1/T1-02-QWEN3-INSTRUCT-512-FULLIMAGE-CANARY-GPU0123`.
+- Planned command: prepare with `.venv312/bin/python
+  tools/run_policy_data_selection_t1.py prepare --config
+  configs/policy/data_selection/qwen3_instruct_t1_512_canary_v1.json`; launch
+  one rank per physical GPU with the same CLI `worker`, rank `0..3`, budget
+  revision `0`, rank-local caches, `VLLM_USE_V1=1`, spawn workers, and the
+  recorded Python-3.12 header/library environment. A one-chunk-per-rank smoke
+  must validate before resumable full-canary continuation.
+- Required result: all 1,536 unique logical attempts accounted for; finish-
+  reason counts; overall and per-source mean/P50/P90/P95/P99/max sampled tokens;
+  attempts/s, sampled tokens/s, elapsed time and GPU-hours; exact comparison
+  with T1-01.
+- Runtime/result: four-rank smoke ran from the first logged model-resolution at
+  `2026-07-26 01:35:01 JST` through the last smoke log update at `01:37:19.903`.
+  Its 128 V* attempts all stopped normally. The resumable continuation started
+  at the first logged model-resolution at `01:38:37` and completed at
+  `01:44:12.070`; all GPUs 0--3 then returned to zero MiB. The full-continuation
+  window was `335.070` seconds for 1,408 new attempts and 926,368 sampled tokens,
+  or `4.2021` attempts/s and `2,764.70` sampled tokens/s including startup.
+  Logged per-rank occupancy sums to about `0.317` B200-GPU-hours for the
+  continuation and `0.452` B200-GPU-hours including the required smoke.
+- Integrity/result artifact: all `1,536/1,536` candidate-attempt keys and
+  request IDs are unique; every finish reason is `stop`, with zero length
+  finish, generation error, or output containing `<think>`/`</think>`. Report
+  `token-length-report.json@1aa9cc9a6165542e5c13b869adf6e760a8c982234305ef383cb58f7bcbee4a4f`;
+  ordered manifest-set and chunk-set audit digests are respectively
+  `329455b7e634d4f4d68c7fae0b9fa6ae0372cb2bd6f3b8efaa6338eef55a1354`
+  and `b0f6b7b38ed866bfd8ec1dba81a3f0538aee5023893db9873fb095194fa34855`.
+  Smoke log SHA-256 values by rank 0--3 are `deef84d2...399b`,
+  `0c685469...4924`, `9099f061...b220`, `777b632d...e71e`; continuation log
+  identities are `d47a9e59...e012`, `7fe24f6f...c478`,
+  `6ffa653a...ac63`, and `0887c4bc...6614`.
+- Token metrics: total `950,835`, mean `619.033`, P50/P90/P95/P99/max
+  `259/1,439/2,989/6,292/12,675`. ArxivQA mean and
+  P50/P90/P95/P99/max are `806.160` and
+  `404/1,988/3,390/4,963/6,371`; ThinkLite `911.361` and
+  `294/2,703/4,678/9,297/12,675`; V* `139.578` and
+  `108/287/357/583/3,160`.
+- Paired conclusion: T1-01 Thinking produced `3,026,449` tokens at mean
+  `1,970.344`; Instruct uses `31.42%` as many sampled tokens, a `3.183x`
+  reduction. Thinking/Instruct mean ratios are `3.836x` ArxivQA, `2.458x`
+  ThinkLite, and `4.149x` V*. For the proposed 170k V* + 32k ArxivQA + 69,842
+  ThinkLite population, the source-weighted projection is about `905.4M`
+  sampled tokens at mean `416.33`, versus `2.831B` for Thinking (`3.126x`
+  fewer). Because 2.175M image/prompt prefills do not shrink with output length,
+  the measured four-B200 T1 projection is `3.5--4.5` days, central estimate
+  about four days; this supersedes the preliminary token-only 1--2 day guess.
+  This cell proves length/throughput only and does not yet prove Instruct tool-
+  trajectory quality or authorize Instruct-filtered difficulty as a substitute
+  for the Thinking primary.
+
+### RP-65-QWEN3-INSTRUCT-REPRESENTATION-PERIODIC-BOUNDARY-FORMALDATA-CONTEXTUAL-GPU01
+
+- Cell/class and authorization: `RP-65`; diagnostic Instruct-primary
+  representation-phase FSDP2 optimizer/checkpoint/resume smoke authorized by
+  `QWEN3-INSTRUCT-CLOSURE-SMOKES-20260726` in `PROJECT_TASK.md` §0.8.9.4.
+- Lifecycle/result: `COMPLETE` / `PASS`; ran `2026-07-26
+  03:11:06--03:13:27 JST`.
+- Question: can a fresh, non-Thinking-initialized Qwen3-VL-8B-Instruct TGVF
+  Adapter complete optimizer step 1, validation, distributed checkpoint and
+  clean teardown on GPUs 0--1, then strictly restore and complete step 2?
+- Baseline/output: no promoted baseline artifact is consumed. Exact root is
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-65-qwen3-instruct-periodic-boundary-formaldata-contextual-gpu01`;
+  it did not exist at planning time.
+- Model/processor identity: official `Qwen/Qwen3-VL-8B-Instruct` revision
+  `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, stable local path
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`, tokenizer length
+  `151669`, effective chat-template SHA-256
+  `3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4`,
+  BF16, SDPA, no quantization, no tokenizer resize, and image maximum area
+  `262144` pixels.
+- Representation initialization/checkpoint identity: TGVF Adapter is fresh
+  random initialization at seed `42`; Thinking Adapter and historical TGVF
+  checkpoints are forbidden. Resume consumes only the step-1 DCP written by
+  this exact cell at `checkpoints/representation-qwen3-instruct-rp65-periodic-boundary-step-00000001`.
+- Policy/reference/rollout fields: policy RL, frozen reference, rollout,
+  behavior log probabilities, KL, reward, GRPO, SDPO, tool execution and answer
+  judge are N/A because this is supervised representation training only.
+- Code identity: repository HEAD
+  `45481498fbbedcd139112339956d87d533355ac4`, dirty worktree bound by the
+  runner's complete live-code digest
+  `94f604e49d8ec1b25b0871759c8424ba786ae0124b571d32e6dd98042c1c0f5e`.
+  Fresh config file/source SHA-256 is
+  `4819df716789025a3256963cc5d5fbd3bbde276630a80dc3e4a2ce8f232425ff`
+  and canonical SHA-256 is
+  `2aa6c89f37bd7c4395225d9560309554af2d9206b01e2acee8e6829e4bd2b645`;
+  resume values are
+  `5e3ff858f79b2bc9ba8a1c8c1bbe6d0eb1adb51ad98df3e8250fbda252500627`
+  and `53e8a48ab34439834921e543ce7fdd214a87e355fcca696ddc78aea253911ff4`.
+- Dataset identity: clean-imend v4 train/test JSONL SHA-256 values
+  `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c`
+  and `de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d`;
+  accepted overlap report
+  `3cad19a9d0e359ea368071082092f431349859a7520bc03a39cce6e90dffdc27`.
+- Prompt/transcript identity: native representation image-question prompt
+  `{question}` at
+  `bf085a6e12c9d0e23a9dd157df084f933b2ef021caba82def1494bfb84a723c9`.
+  The Instruct evidence answer is serialized in assistant `content`; no
+  DeepEyes policy-RL think trigger or template-owned think opener is added.
+- D/DeepStack/conditioning: contextual hidden state provider, layer `-1`;
+  preserved full main `D` plus all three D-DeepStack branches. Every branch is
+  trained and validated under the native visual layout and masks.
+- Objective: `L = 1.0 * balanced_mean_NLL_MatrixCE(T=1.0) + 1.0 * L_gen
+  + 0.1 * L_norm`; manifold loss is disabled. AdamW uses LR `1e-4`, betas
+  `(0.9,0.999)`, epsilon `1e-8`, weight decay `.01`; historical cosine horizon
+  `2000`, warmup `100`, minimum LR ratio `.1`; gradient clipping norm `1.0`.
+- Forward/checkpoint determinism: seed `42`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`,
+  adapter dropout exactly zero, optimizer-boundary-only DCP, no policy update
+  between the sampled training batch and its backward pass. Strict restore
+  covers Adapter/model-owned state, optimizer, scheduler, sampler/RNG,
+  metrics history and validation cursor.
+- Runtime/topology: `.venv312` Python `3.12.3`, Torch `2.9.0+cu128`,
+  Transformers `4.57.6`; native `torchrun` FSDP2 mesh `[2]`, no offload,
+  `reshard_after_forward=false`, BF16 parameter/output and FP32 reduction.
+  Per-rank batch `4`, one group/rank, gradient accumulation `4`, world size
+  `2`, exact global batch `32`.
+- GPUs: physical 0 `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` and physical 1
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc`.
+- Start/end/session, elapsed, GPU-hours and scratch: `2026-07-26
+  03:11:06--03:13:27 JST`, about `141s` wall and below `0.08` B200-GPU-hours;
+  tmux `rp65_instruct_repr_gpu01` exited cleanly. Peak allocated/reserved bytes
+  were `62.665/77.915 GB` at step 1 and `62.841/79.608 GB` at step 2; artifact
+  root uses `806 MiB`.
+- Commands: fresh uses `CUDA_VISIBLE_DEVICES=0,1`, the determinism environment
+  above, `PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false PYTHONPATH=src`, and
+  `.venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/smoke/representation_qwen3_instruct_rp65_periodic_boundary_formaldata_contextual_gpu01.toml
+  --stop-after-global-step 1`. After strict resume-config validation, the same
+  command uses the `_resume.toml` config and `--stop-after-global-step 2`.
+- Outputs/acceptance: `fresh.log`, `resume.log`, metrics and DCP shards under
+  the exact root. PASS requires events `start, train1, validation1, train2,
+  validation2`, finite component/total losses and gradient norm, two rank
+  shards in each step-1/step-2 DCP, exact strict restore, unchanged tokenizer,
+  clean exits and released GPUs. This smoke does not promote an Adapter.
+- Result evidence: exact events are `start`, train/validation step 1, then
+  train/validation step 2 after strict restore. Step-1 train losses are Matrix
+  CE `1.383356`, L-gen `4.202366`, weighted norm `.049564`, total `5.635286`,
+  gradient norm `2.509434`; validation total `5.784420`. Step-2 train values are
+  `1.385070`, `4.408077`, `.049477`, total `5.842623`, gradient norm `2.191001`;
+  validation total `6.340272`. All are finite. Tokenizer remained `151669`.
+  Each checkpoint contains two rank `.distcp` shards plus metadata. Run identity
+  is `f954ea9a82fdd74068e04dcc41f80862401e5b7a379c499d076c5072af3d38dc`;
+  metrics SHA-256 `8b9e08c8...1d07`, fresh/resume logs `ea5d850f...3c29` /
+  `3974434a...f007`. GPUs 0--1 returned to idle. Conclusion: code-level Instruct
+  representation support is now physically closed through optimizer and exact
+  checkpoint/resume, but no 2000-step Adapter is promoted.
+
+### PRL-DIAG-11-QWEN3-INSTRUCT-CROP-PROMPT-V4-GPU2
+
+- Cell/class and authorization: `PRL-DIAG-11`; diagnostic inference-only
+  policy-RL prompt-trigger canary authorized by
+  `QWEN3-INSTRUCT-CLOSURE-SMOKES-20260726` in `PROJECT_TASK.md` §0.8.9.4.
+- Lifecycle/result: `COMPLETE` / `FAIL`; ran `2026-07-26
+  03:11:04--03:12:39 JST`.
+- Question: with no template/environment think prefill, does the real Instruct
+  model generate its own single `<think>...</think>` block on the initial
+  native crop-tool prompt and again after a successful real crop observation?
+- Baseline/output: DeepEyes' observable initial/post-tool instruction trigger is
+  the method reference; no DeepEyes weights or outputs are consumed. Exact
+  fresh output root is
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/canaries/qwen3-instruct-crop-prompt-v4-gpu2-20260726`.
+- Model/processor identity: official `Qwen/Qwen3-VL-8B-Instruct` revision
+  `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, stable local path, tokenizer
+  length `151669`, chat-template SHA-256
+  `3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4`,
+  BF16, SDPA, no quantization, maximum image area `262144`.
+- Representation/policy/reference identity: no TGVF Adapter, LoRA, optimizer,
+  reference policy, teacher, reward, KL, GRPO/SDPO or weight update. This is a
+  frozen original-model crop-only prompt diagnostic, not a policy rollout used
+  for loss; behavior log probabilities are therefore not requested.
+- Code/config identity: HEAD
+  `45481498fbbedcd139112339956d87d533355ac4` with dirty worktree. Prompt,
+  appender and agent-loop SHA-256 values are respectively
+  `a08a93e9285a2cc66cd6edf2d399d834628205ba95a8eeced42440bf58e4a83f`,
+  `cc27c23096acea73951a66b1c8587be21304594ad2a3bde7345ca00c79c5493a`
+  and `387797072691d5b8502c154803c124a9ed8b7929d849de84c0ea33d2bbd36bfa`.
+  Driver `tools/canary_qwen3_instruct_crop_prompt.py` SHA-256 is
+  `ce00c1d8e0bb3d10cc5bc23cc956eae427c5d0f755bee3290af6ce009f3fb193`;
+  config SHA-256 is
+  `be1052c624f5a13f7e03325b0f3ad8f2844d904e9028556a23bc1ff2c636ed57`.
+- Dataset/sample identity: one pinned DeepEyes47K-derived local record
+  `deepeyes47k:2fabfc60669372c10a147d0e4d84377d6092c981dd3212e066814676eb1acca7`;
+  source-image byte SHA-256
+  `2988a806a98f49472a37594afb332b7a37d901a35dba6975568a5423668654e1`,
+  size `1480x2016`, with the exact question and answer `C` stored in config.
+- Prompt/tool schema identity: crop-only Qwen native schema,
+  `tgvf-visual-tool-prompts-v4-instruct` /
+  `tgvf-visual-tool-responses-v2-instruct`, bundle
+  `f42ddae1911714452e9a0fbf775f695c55f3796a76080c0c72d1c282319df0c4`.
+  Initial prompt text/token hashes are `47af668b...ed19` / `f7d93bf4...4b1c`;
+  post-crop values are `e7a9a1df...b467` / `806b0af5...521e`.
+- Transcript/token ownership: both prompts end exactly with template-owned
+  `<|im_start|>assistant\n` and no think opener. Initial user text says think
+  first; the successful tool turn is exact observation text, image placeholder,
+  repeated instruction, then assistant header. Every emitted token, including
+  think/tool tags, is model sampled; raw text, exact token IDs and their hashes
+  are retained. Environment repair is forbidden.
+- Observation/crop identity: controlled native call uses original-relative
+  Qwen coordinates `[0,0,1000,580]`, mapped to source box
+  `[0,0,1480,1169]`; the real RGB crop is saved and byte-hashed. Initial arm
+  receives the source image; follow-up receives source plus this crop.
+- Runtime/sampling: `.venv312` Python `3.12.3`, Torch `2.9.0+cu128`,
+  Transformers `4.57.6`; frozen eval/inference mode on one B200. Four seeds
+  `2026072601..2026072604` per arm, temperature `1`, top-p `1`, top-k `0`,
+  no logit processors, maximum `4096` new tokens/turn and stop string
+  `</tool_call>`. There is no asynchronous staleness or KV/replay claim.
+- Topology/tolerances: physical GPU 2, DP1/TP1, eight sequential generations.
+  Numerical logit/loss/gradient parity is N/A; exact prompt hashes, crop bytes,
+  raw completion/token IDs and configured seeds are required.
+- GPU: physical 2 `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`.
+- Start/end/session, elapsed, GPU-hours and scratch: `2026-07-26
+  03:11:04--03:12:39 JST`, about `95s` wall / below `0.03` B200-GPU-hours;
+  tmux `prl_instruct_prompt_v4_gpu2` exited cleanly, GPU 2 returned idle, and
+  the output root uses `450 KiB`.
+- Command: `CUDA_VISIBLE_DEVICES=2 PYTHONDONTWRITEBYTECODE=1
+  .venv312/bin/python tools/canary_qwen3_instruct_crop_prompt.py --config
+  configs/smoke/qwen3_instruct_crop_prompt_v4_gpu2_canary.json --physical-gpu 2`.
+- Outputs/parser/metrics: immutable fresh `controlled_crop.png` and
+  `result.json`; strict native parser validates the controlled call. Required
+  per-arm metrics are opener/closer totals, starts-with-think and valid-single-
+  think counts, native-tool envelope/action counts, termination reasons,
+  max-token count and sampled-token total/mean/min/max. Missing or malformed
+  think remains recorded evidence and fails compliance; it is never repaired.
+- Result/conclusion: all four initial responses and all four post-crop responses
+  emitted a syntactically enclosed native crop tool call, but opener/closer
+  totals were `0/0` in both arms; starts-with-think and valid-single-think are
+  `0/4` and no response hit the 4096-token budget. Initial sampled-token
+  total/mean/range is `231/57.75/54--68`; post-crop is
+  `205/51.25/47--59`. Thus the V4 wording reliably triggers tool use (`8/8`)
+  but does not trigger policy-sampled think tags (`0/8`). Result JSON SHA-256 is
+  `7e9a2fbf2527d714b61be87ee32de60c6b839f06c5943468546a7f9f81d4a1ed`;
+  crop SHA-256 is `4f273b1f...809f`. A strict missing-think gate would reject
+  every otherwise valid tool action, so V4 is not accepted for RL promotion.
+- Post-canary CPU closure: the agent loop now follows DeepEyes' observable
+  `0/0` envelope semantics. No-tag native calls/direct answers remain executable
+  while think compliance remains zero and fully visible; any one-sided,
+  duplicated, reversed or misplaced envelope still fails before tool execution.
+  No tag is inserted. Current agent-loop SHA-256 is
+  `9224870c73fe31c35cdebe7f6ad412ff68bdb8e9177b56ec1b76f69d53c8fb25`;
+  a real-shape fixture proves no-tag Instruct tool call -> observation -> no-tag
+  final answer retains both sampled turns and executes once. Combined Instruct
+  run-config/prompt/appender/agent-loop/filter/representation tests: `71 passed`;
+  Ruff passed. This repairs trajectory availability but does not change the
+  measured conclusion that V4 itself triggers zero think tags.
+
+### T1-03-QWEN3-INSTRUCT-512-FILTER-RESUME-SMOKE-GPU3
+
+- Cell/class and authorization: `T1-03`; diagnostic inference-only T1 filter
+  interruption/resume equivalence smoke authorized by
+  `QWEN3-INSTRUCT-CLOSURE-SMOKES-20260726` in `PROJECT_TASK.md` §0.8.9.4.
+- Lifecycle/result: `COMPLETE` / `FAIL`; launched `2026-07-26 03:11 JST` and
+  failed closed during vLLM startup at `03:12:09`, before any request sampled.
+- Question: can the Instruct T1 generation/filter input be stopped after one
+  immutable chunk, resumed without duplicate attempts, and finish byte-
+  identically to its declared uninterrupted logical request set?
+- Baseline/output roots: active root
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/t1/T1-03-QWEN3-INSTRUCT-512-FILTER-RESUME-SMOKE-GPU3`,
+  continuous control suffix `-continuous-baseline`, audit suffix
+  `-resume-audit`; all three were absent at planning time.
+- Model/processor identity: official `Qwen/Qwen3-VL-8B-Instruct` revision
+  `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, stable local path, BF16, no
+  quantization, tokenizer length `151669`, config/generation/tokenizer-config/
+  tokenizer-JSON/preprocessor/chat-template SHA-256 values
+  `5cd45286...f3661`, `8469742d...c4d44`, `c2da7718...e2399`,
+  `a5d85b6d...73c7`, `27225450...e516`, `3636d0f0...89e4`.
+- Representation/policy/reference fields: TGVF Adapter, D/DeepStack, LoRA,
+  optimizer, reference policy, behavior log probabilities, KL, GRPO/SDPO,
+  reward and tools are N/A. Frozen full-image inference changes no weights.
+- Code/config identity: HEAD
+  `45481498fbbedcd139112339956d87d533355ac4` with dirty worktree. Config
+  `55686caaa4fc4ce503a23400acb909df8784777125d87528404b098d03bde221`;
+  run manifest `d0c67a1be34772de2fe47e8119ad55524f16896efbab08a47d0fa84df489c34f`;
+  resume plan `bfdd83e72417952e32fed3da8d97e79a43c801ed45c1582c63e6d19860c3571f`.
+  Runtime/vLLM/smoke-driver SHA-256 values are
+  `af09040a...0bbb`, `c1962244...e5ad`, `b3d9ad5c...c8bf`, and
+  `e5b805a8...e5c3`; underlying worker CLI is `7b99ddb...58736`.
+- Dataset/request identity: exact rank-3 first two chunks from the accepted
+  192-row canary: eight V* candidates with identity hashes
+  `af88d7d6...a4ef`, `410eecde...80f3`, `dbcba9cd...c88f`,
+  `f9ff0b47...cc2f`, `1c865339...2747`, `70be874e...7647`,
+  `8e46e9e...829f`, `fcfca043...3f3f`; eight attempts each, exactly 64
+  unique logical requests. Parent candidates/manifest SHA-256 values are
+  `1898129e...3fa` and `39a271a0...a67`.
+- Prompt/transcript identity: exactly one user message, source image then
+  canonical question, no system, no tools, `add_generation_prompt=true`; no
+  policy-RL think trigger. Instruct template supplies only the assistant header.
+  Ground truth, regions and provenance never enter generation.
+- Observation identity: source image bytes/RGB pixels are verified; no
+  pre-resize. Qwen fast Bicubic smart resize owns factor `32`, minimum area
+  `65536`, maximum area `262144`, aspect ratio preservation and RGB conversion.
+- Runtime/sampling: `.venv312` Python `3.12.3`, vLLM `0.12.0`, Torch
+  `2.9.0+cu128`, Transformers `4.57.6`, Pillow `12.3.0`, FlashInfer `0.5.3`;
+  DP1/TP1, BF16, FlashInfer decoder, `TORCH_SDPA` vision attention,
+  `max_num_seqs=32`, chunked prefill and prefix cache. Attempt seeds derive
+  from root `42`, exact run manifest, candidate and attempt. Temperature `1`,
+  top-p `1`, top-k disabled, min-p `0`, all penalties neutral, no logit
+  processor, EOS enabled, revision-0 budget `40960/65536`; exact sampled token
+  IDs/text are immutable evidence. No model update or asynchronous staleness.
+- Objective/parser/tolerances: no optimization objective. Direct-completion-v1
+  is reserved for later scoring but not used to alter this smoke's generation.
+  Exact equality is required for run/config identities, seeds, request IDs,
+  prompts, image hashes, two manifests and two evidence chunks.
+- Topology/GPU: logical worker rank `3` of the fixed DP4 partition, executed
+  alone on physical GPU 3 `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`;
+  four candidates/chunk and 32 attempts/chunk. Training batch fields are N/A.
+- Start/end/session, elapsed, GPU-hours and scratch: `2026-07-26 03:11--03:12
+  JST`; tmux session `t1_03_instruct_resume_gpu3` exited nonzero. The worker
+  reached model/profile loading only; peak model load was `18.0933 GiB` and
+  usage was below `0.02` B200-GPU-hours.
+- Commands: run, in order, `.venv312/bin/python
+  tools/smoke_policy_data_selection_t1_resume.py {plan,baseline,interrupt,resume}
+  --config configs/policy/data_selection/qwen3_instruct_t1_512_filter_resume_smoke_gpu3_v1.json`.
+  The driver pins every worker subprocess to `CUDA_VISIBLE_DEVICES=3`, vLLM V1
+  and spawn mode.
+- Outputs/acceptance: continuous run must write `2` chunks/`64` records;
+  SIGINT run must leave exact prefix `1` chunk/`32` records; resume must report
+  `32` resumed plus `32` written; an immediate idempotent rerun must report
+  `64` resumed, zero written and unchanged core digest. Run identity, canonical
+  config, two manifests and two evidence chunks must be byte-identical between
+  continuous and resumed roots; any drift, duplicate, extra/incomplete chunk or
+  lingering process fails closed.
+- Failure evidence/conclusion: Triton's startup compiler found the pinned
+  Python `Python.h` but not its architecture-qualified
+  `x86_64-linux-gnu/python3.12/pyconfig.h`; vLLM exited before KV-cache startup.
+  The active root contains only the immutable run identity and canonical
+  config, with zero manifests/chunks/attempts. The audit root contains only the
+  startup log. No stop/resume conclusion is permitted from this attempt.
+
+### T1-03-R1-QWEN3-INSTRUCT-512-FILTER-RESUME-SMOKE-GPU3
+
+- Cell/class and authorization: `T1-03-R1`; infrastructure-only retry of the
+  diagnostic T1 filter interruption/resume smoke, under the same accepted
+  `QWEN3-INSTRUCT-CLOSURE-SMOKES-20260726` scope.
+- Lifecycle/result: `COMPLETE` / `FAIL`; launched `2026-07-26 03:14:18 JST`;
+  worker completed both baseline chunks at `03:15:51`, then the orchestration
+  process failed while decoding the mixed vLLM log/JSON stream.
+- Question/output: identical to `T1-03`. The zero-attempt parent roots will be
+  preserved with suffix `-failed-attempt0`; R1 recreates the exact configured
+  active, continuous-baseline and resume-audit roots from fresh paths.
+- Immutable experiment identity: model, processor, dataset, 64 logical request
+  identities, prompt, image preprocessing, sampling, vLLM version/topology,
+  parser boundary, config SHA-256
+  `55686caaa4fc4ce503a23400acb909df8784777125d87528404b098d03bde221`,
+  run manifest `d0c67a1be34772de2fe47e8119ad55524f16896efbab08a47d0fa84df489c34f`,
+  plan `bfdd83e72417952e32fed3da8d97e79a43c801ed45c1582c63e6d19860c3571f`,
+  code hashes, GPU UUID, N/A fields and byte-equality acceptance are exactly the
+  complete values recorded in parent `T1-03`; no algorithmic field changes.
+- Sole runtime correction: `CPATH` is
+  `.eval-runtime-python312-dev/root/usr/include:.eval-runtime-python312-dev/root/usr/include/python3.12`
+  instead of only the second directory. A pre-launch GCC syntax check including
+  `Python.h` passed and resolved the architecture-qualified `pyconfig.h`.
+  `LIBRARY_PATH`, rank-local Triton/TorchInductor caches, CUDA visibility and
+  all driver/worker commands remain otherwise identical.
+- Policy/reference/objective/replay fields: unchanged N/A as frozen inference;
+  no behavior log probabilities, rewards, optimizer or model update.
+- GPU/session/timing/usage: physical GPU 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; planned tmux session
+  `t1_03_r1_instruct_resume_gpu3`; `2026-07-26 03:14:18--03:15:51 JST`, under
+  `0.03` B200-GPU-hours. Model load was `18.0933 GiB`; vLLM allocated a
+  `134.24 GiB` KV-cache budget during the bounded worker.
+- Command: the same ordered `{plan,baseline,interrupt,resume}` driver commands
+  recorded in `T1-03`, under the corrected compile environment above.
+- Output/result: the worker validly committed chunk 0
+  `82a8c2d6...c158` and chunk 1 `f0dcb611...44a8`, exactly `64` records with
+  no duplicate key. The driver then treated INFO/progress bytes preceding JSON
+  as a JSON document and stopped before archiving the baseline. Therefore this
+  attempt proves only uninterrupted two-chunk generation, not stop/resume.
+
+### T1-03-R2-QWEN3-INSTRUCT-512-FILTER-RESUME-SMOKE-GPU3
+
+- Cell/class and authorization: `T1-03-R2`; fail-closed orchestration repair and
+  continuation of the accepted diagnostic T1 interruption/resume smoke.
+- Lifecycle/result: `COMPLETE` / `PASS`; CPU baseline recovery/archive passed,
+  then GPU interrupt/resume ran `2026-07-26 03:18:41--03:21:51 JST`.
+- Question and immutable identity: same stop/resume byte-equivalence question,
+  model/processor, prompt, image path, 64 logical requests, seeds, sampling,
+  worker/vLLM code, config `55686caa...21`, run manifest `d0c67a1b...34f`, plan
+  `bfdd83e7...571f`, GPU and all N/A objective/reference/replay fields recorded
+  completely in `T1-03`. No sampled evidence is reinterpreted or altered.
+- Input/baseline boundary: R1's two validated immutable chunks are the exact
+  declared continuous baseline. The repaired CPU-only baseline phase validates
+  its two manifests and final worker result, writes the baseline snapshot, then
+  atomically archives the unchanged active directory. It does not regenerate
+  or rewrite any attempt.
+- Sole code repair: `tools/smoke_policy_data_selection_t1_resume.py` SHA-256
+  `9af70934dfd6afbea9d3fac8a5e409f97282c78006fc6ede133632290385b00a`.
+  Its JSON extractor now scans complete JSON objects inside mixed vLLM logs,
+  and baseline recovery accepts only an already validated exact two-chunk set.
+  Against the real R1 log it extracted four objects and the exact final
+  `{chunks_written:2, records_written:64, records_resumed:0}` result. All
+  worker/runtime/source/config hashes remain unchanged.
+- Runtime correction/topology: the R1 corrected Python include path is retained;
+  DP1/TP1, one physical B200, rank 3, FlashInfer/TORCH_SDPA and response budget
+  remain exact. No model update, asynchronous staleness or behavior-logprob
+  claim applies.
+- GPU/session/timing/usage: physical GPU 3
+  `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`; planned tmux session
+  `t1_03_r2_instruct_resume_gpu3`; about `190s` wall and below `0.06`
+  B200-GPU-hours for the two bounded model startups/workers. Observed peak GPU
+  allocation was `158838 MiB`; all GPUs were released by `03:21:51`.
+- Commands: first rerun the `baseline` driver command CPU-only to recover/archive
+  R1. Then run the unchanged `interrupt` and `resume` driver commands; `resume`
+  includes the final no-service idempotent worker invocation after completion.
+- Outputs/acceptance: exact continuous `2/64`, deliberate SIGINT prefix `1/32`,
+  resumed `32+32`, idempotent `64+0`, stable core digest and byte-identical run
+  identity/config/two manifests/two chunks. Any drift or extra/incomplete chunk
+  fails closed. Difficulty quality, T2 and training remain out of scope.
+- Result evidence: the interrupted worker exited nonzero immediately after
+  chunk 0 and left exactly `1` manifest / `32` records, snapshot
+  `919450b96011d6322eb997520b8034b34f38721ecc37f27fc35aa439239e6eac`.
+  Resume reported `records_resumed=32`, `records_written=32`; the immediate
+  idempotent invocation reported `64/0`. Continuous and resumed snapshot hashes
+  are both `8fd48126024899417e9eb403d48982954bce071fc177e3cc1789c213fba74268`;
+  both core digests, including before/after idempotent rerun, are
+  `f6930bd51c309393e1a53914a0ec1a1463bc19de8225b2536243d3aebcb3d012`.
+  All six compared files are byte-identical. Canonical report identity is
+  `863d8b924ccd80916b152dd52f708603b9efc3c87bdf119b99295648b124903d`
+  and report-file SHA-256 is `892894ff...5d70`; interrupt/resume driver logs are
+  `a62fd099...c02d` / `82bfda79...8cc2`. Conclusion: the T1 generation boundary
+  now has a proven deliberate-stop, exact-resume and idempotent-restart path.
+
+### RP-66-QWEN3-INSTRUCT-REP-BALANCED-T1-CONTEXTUAL-2000-GPU01
+
+- Cell/class and authorization: `RP-66`; formal fresh Instruct representation-
+  phase training authorized by `QWEN3-INSTRUCT-RP-T1-FORMAL-20260726` in
+  `PROJECT_TASK.md` §0.8.9.5.
+- Lifecycle/result: `RUNNING`; launched `2026-07-26 04:06:58 JST` after every
+  identity below validated and physical GPUs 0--1 had no foreign compute
+  process.
+- Question/output: produce the first complete Qwen3-VL-8B-Instruct TGVF Adapter
+  for the current line at
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-66-qwen3-instruct-balanced-t1-contextual-2000-gpu01/adapter.pt`.
+- Model/processor identity: official `Qwen/Qwen3-VL-8B-Instruct` revision
+  `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, stable local path
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`, tokenizer length
+  `151669`, chat-template SHA-256
+  `3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4`,
+  BF16, SDPA, native fast image processing with maximum area `262144`, no
+  tokenizer resize and no Thinking checkpoint reuse.
+- TGVF/conditioning identity: fresh full main `D` plus D-DeepStack branches at
+  Qwen visual layers `(8,16,24)`; contextual hidden state at layer `-1`;
+  initialization seed `42`. RP-65 fixes the expected initial Adapter-state
+  SHA-256 `fe4a55bb1ca8170aa9fbb881c917685002217e816b597d837ed2fde2ff08b7cb`.
+- Data/prompt identity: v4 clean-imend train/test source SHA-256 values
+  `c94a38b824b6603e555eed5ef3584c19cc903b76995d49c67ace36b18268443c` /
+  `de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d`;
+  retained manifests `a089d13d...5a8c` / `534f5b1e...06b0`; two exact image-
+  path overlaps bound by report `3cad19a9...27`; validation-data identity
+  `83c13af1379aeb9fc11f157e59ad5f78a834ebc4b4ec9a4fd5f4350449463760`.
+  Prompt is native representation image + question only, SHA-256
+  `bf085a6e12c9d0e23a9dd157df084f933b2ef021caba82def1494bfb84a723c9`;
+  no policy-RL think/tool trigger is present.
+- Objective/mathematics: Balanced mean-NLL Matrix CE at temperature `1.0`,
+  L-gen mean per-sample NLL and Adapter norm, weights `1/1/.1`; global CE
+  numerator over valid rows and global sum of per-sample mean NLL over sample
+  count. AdamW LR `1e-4`, betas `.9/.999`, epsilon `1e-8`, weight decay `.01`;
+  historical cosine 2,000 steps, 100 warmup, minimum LR ratio `.1`; gradient
+  norm cap `1.0`. Policy/reference log probabilities, KL, GRPO/SDPO, reward,
+  behavior replay, LoRA and a policy optimizer are N/A.
+- Batch/topology: same-image K4, local group batch 4, one group/rank/microstep,
+  gradient accumulation 4, FSDP2 world 2, global sample batch 32. Physical GPUs
+  0--1 UUIDs `GPU-853e7816-9a2d-954e-ea14-8b62373bdfb2` and
+  `GPU-32a298d3-ea53-7f70-7894-171fca21dcdc`; no-reshard, Adapter parameters
+  sharded, frozen Qwen replicated.
+- Schedule/checkpoint: 2,000 optimizer steps; metric every 10; full validation
+  and synchronous optimizer-boundary DCP v2 at 500/1000/1500/2000; final
+  rank-zero Adapter export. Ordinary checkpoints are retained, but no power-
+  failure supervisor or automatic restart is part of this cell; nonzero exit
+  is not PASS.
+- Code/config identity: HEAD
+  `45481498fbbedcd139112339956d87d533355ac4`, dirty-state SHA-256
+  `67095b316963376cb1ee533ce5f7a898d1ab9728bb397f11662951785cd8f222`;
+  config `configs/representation/qwen3_instruct_balanced_t1_contextual_2000step_gpu01.toml`,
+  source TOML SHA-256 `37c06f4a7f2b538e668582471d4105f9c7dd93a86459d2e23d1f36e289c9d549`,
+  canonical config SHA-256
+  `bc73fb247bfd66f9578eea4a7c1fc48ad5767593fa97bf7a5bb7402bc25a7255`,
+  expected run identity
+  `97ccfd849e1d66cdd57be805c27524fa97ca60973e5be45d6d060acd5bc54e53`.
+- Runtime/session/estimate: `.venv312` Python `3.12.3`, Torch `2.9.0+cu128`,
+  Transformers `4.57.6`; planned tmux `rp66_instruct_2000_gpu01`, eight-hour
+  process timeout, expected wall time 3--4 hours and 6--8 B200-GPU-hours.
+- Launch confirmation: both ranks loaded the four model shards; the emitted
+  run/config/data identities equal the planned values. Step 10 is finite:
+  Matrix CE `1.386156`, L-gen `5.035878`, weighted norm `.046074`, total
+  `6.468107`, pre-clip gradient norm `2.671467`; measured steady train-step
+  ceiling was `4.655s`. GPUs 0--1 are active and GPUs 2--3 remain unused.
+- Command: `CUDA_VISIBLE_DEVICES=0,1 CUBLAS_WORKSPACE_CONFIG=:4096:8
+  PYTHONHASHSEED=0 TOKENIZERS_PARALLELISM=false PYTHONPATH=src timeout 28800s
+  .venv312/bin/torchrun --standalone --nproc-per-node=2 -m tgvf_rl.cli
+  run-representation configs/representation/qwen3_instruct_balanced_t1_contextual_2000step_gpu01.toml`.
+- PASS gate: clean exit, exact expected run identity, finite train/validation
+  components and gradient norms, terminal step 2000, four complete two-rank
+  DCPs, tokenizer invariant, strictly loadable full-D/three-DeepStack final
+  Adapter and manifest, no incomplete staging, and complete GPU teardown.
+
+### T1-04-QWEN3-INSTRUCT-512-FULLIMAGE-271842-GPU0123
+
+- Cell/class and authorization: `T1-04`; formal inference-only `T1` generation
+  authorized by `QWEN3-INSTRUCT-RP-T1-FORMAL-20260726` in `PROJECT_TASK.md`
+  §0.8.9.5. It may launch only after RP-66 reaches its complete PASS gate and
+  releases GPUs 0--1; RP-66 weights are not consumed by this tool-free filter.
+- Lifecycle/result: `PLANNED`; CPU preparation complete, GPU generation not
+  launched. Output root
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/t1/T1-04-QWEN3-INSTRUCT-512-FULLIMAGE-271842-GPU0123`
+  contains only exact run identity/config records and zero chunk manifests.
+- Model/prompt/image: same frozen local Qwen3-VL-8B-Instruct revision as RP-66,
+  BF16/no quantization, tokenizer `151669`, template SHA-256 `3636d0f0...89e4`.
+  Exactly one native user message contains source image then canonical question,
+  no system, no tools, and `add_generation_prompt=true`; answer parser is
+  `direct-completion-v1`. Qwen fast Bicubic smart resize preserves aspect ratio
+  with factor 32, minimum area `65536`, maximum area `262144`, no pre-resize.
+- Candidate identity: outcome-independent namespace
+  `qwen3-instruct-t1-recommended-20260726-v1` selects candidate-identity hash
+  bottom-k V* `170000` and ArxivQA `32000`, plus all ThinkLite `69842`:
+  `271842` candidates and `2174736` logical attempts. Candidate JSONL SHA-256
+  `51f4cfeeaa8278c2938f938a2992b30cf91ad9219d5c98d796c8137c60e8b3ec`;
+  manifest SHA-256
+  `4b99c90a02b031d871b560b2f9de1c1beba5e52730d3f29b83e74e268979326d`.
+  Screened source counts/SHA-256 values are V* `191974` /
+  `a8a2789c...9be4`, ArxivQA `99893` / `cda47ff2...1742`, and ThinkLite
+  `69842` / `438588d7...2cba`.
+- Sampling/budgets: eight independent stable candidate-attempt seeds under root
+  42; temperature `1`, top-p `1`, top-k disabled, min-p `0`, all penalties
+  neutral, no logit processor, EOS enabled. Primary revision is 40,960 new
+  tokens in context 65,536; only length-finished attempts later replay at
+  `98304/131072`, then `196608/262144`. Raw token IDs/text, prompt/image hashes,
+  finish reason and seed are retained. No TGVF Adapter, crop tool, LoRA,
+  optimizer, reward, policy/reference replay, behavior log probabilities,
+  KL, GRPO or SDPO applies.
+- Runtime/topology: `.venv312` Python `3.12.3`, vLLM `0.12.0`, Torch
+  `2.9.0+cu128`, Transformers `4.57.6`, Pillow `12.3.0`, FlashInfer `0.5.3`;
+  four independent DP workers, TP1, `max_num_seqs=32`, FlashInfer decoder,
+  TORCH_SDPA vision, chunked prefill and prefix cache. Physical GPUs 0--3 are
+  the four UUIDs recorded in RP-66 plus `GPU-11d59daa-e835-5f46-faaf-356bfebcabe3`
+  and `GPU-a634a9e0-4e88-6f1f-764e-9a6c31581f2b`.
+- Sharding/resume: stable rank candidate/chunk counts are r0 `68182/17046`, r1
+  `67669/16918`, r2 `68177/17045`, r3 `67814/16954`; four candidates and 32
+  attempts per full chunk. Evidence and manifests publish atomically. Restart
+  strictly validates and skips a complete content-addressed chunk; an in-flight
+  uncommitted chunk is recomputed. User stop sends SIGINT only to the four
+  recorded worker process groups. Corrupt or identity-drifted chunks fail
+  closed. `T2`, judge reduction and balancing remain out of scope.
+- Code/config identity: config SHA-256
+  `cd8c9a848ea8725beb74a03d762784323989f1a4e935e1f672f88832f2ca9182`,
+  run manifest `bdc49eba27ff16aec58ac1116b7eda2a9148f62c334a6fbdd6385502fdf2141f`,
+  model/processor/runtime identities `527c2873...73f` / `357445bf...793` /
+  `86a9d7fc...9e9`. Recommended materializer/runtime/vLLM/worker SHA-256 values
+  are `17b8133e...9f6`, `6c4320ed...f8e`, `c1962244...5ad`, and
+  `7b99ddbf...736`. CPU preparation validation passed `42` focused tests plus
+  Ruff; the earlier real T1-03-R2 smoke proves stop/resume byte equivalence.
+- Estimate/commands: 4 B200s for 3.5--4.5 days, central estimate 4.0 days. Each
+  rank starts in its own `setsid` process group with rank-matched
+  `CUDA_VISIBLE_DEVICES`, `VLLM_USE_V1=1`, spawn workers, disabled tokenizer
+  parallelism, the verified Python include/library paths and independent
+  Triton/TorchInductor caches, invoking `tools/run_policy_data_selection_t1.py
+  worker --config configs/policy/data_selection/qwen3_instruct_t1_512_vstar170k_arxiv32k_thinklite69842_v1.json
+  --rank <0..3> --budget-revision 0`.
+- PASS gate: all four workers exit zero; exact expected revision-0 chunk set has
+  no missing/extra/duplicate logical request; all `2174736` attempts are unique
+  and accounted for; every manifest/evidence pair validates; no length/error is
+  converted to incorrect; full image/prompt/seed/token provenance remains
+  bound. Generation completion alone does not claim selected-dataset quality.

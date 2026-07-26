@@ -401,7 +401,12 @@ class CropObservationRecord:
     source_pixels_sha256: str
     source_width: int
     source_height: int
-    requested_bbox_2d: tuple[int, int, int, int]
+    model_coordinate_space: str
+    coordinate_conversion_version: str
+    coordinate_reference_width: int
+    coordinate_reference_height: int
+    model_bbox_2d: tuple[int, int, int, int]
+    source_bbox_2d: tuple[int, int, int, int]
     effective_bbox_2d: tuple[int, int, int, int]
     source_visual: SourceVisualState
     sequence_length: int
@@ -409,7 +414,7 @@ class CropObservationRecord:
     crop_visual: CropVisualState
 
     def __post_init__(self) -> None:
-        if self.schema_version != "crop-observation-v1" or not self.observation_id:
+        if self.schema_version != "crop-observation-v2" or not self.observation_id:
             raise ValueError("crop observation schema version and ID are required")
         if self.call_index < 0 or not self.trajectory_id:
             raise ValueError("crop observation call/trajectory identity is invalid")
@@ -424,8 +429,13 @@ class CropObservationRecord:
             )
         if self.source_width <= 0 or self.source_height <= 0:
             raise ValueError("crop source dimensions must be positive")
+        if not self.model_coordinate_space or not self.coordinate_conversion_version:
+            raise ValueError("crop coordinate identities must be explicit")
+        if self.coordinate_reference_width <= 0 or self.coordinate_reference_height <= 0:
+            raise ValueError("crop coordinate reference dimensions must be positive")
         for name, bbox in (
-            ("requested", self.requested_bbox_2d),
+            ("model", self.model_bbox_2d),
+            ("source", self.source_bbox_2d),
             ("effective", self.effective_bbox_2d),
         ):
             if len(bbox) != 4 or any(type(value) is not int for value in bbox):
@@ -469,6 +479,12 @@ class CropObservationRecord:
         ):
             raise ValueError("source and crop DeepStack branch counts differ")
 
+    @property
+    def requested_bbox_2d(self) -> tuple[int, int, int, int]:
+        """Compatibility alias for the exact sampled model-space box."""
+
+        return self.model_bbox_2d
+
 
 @dataclass(frozen=True, slots=True)
 class CropTGVFVisualState:
@@ -508,7 +524,12 @@ class CropTGVFObservationRecord:
     source_pixels_sha256: str
     source_width: int
     source_height: int
-    requested_bbox_2d: tuple[int, int, int, int]
+    model_coordinate_space: str
+    coordinate_conversion_version: str
+    coordinate_reference_width: int
+    coordinate_reference_height: int
+    model_bbox_2d: tuple[int, int, int, int]
+    source_bbox_2d: tuple[int, int, int, int]
     effective_bbox_2d: tuple[int, int, int, int]
     sampled_target_char_span: tuple[int, int]
     source_visual: SourceVisualState
@@ -520,7 +541,7 @@ class CropTGVFObservationRecord:
     cache: CacheContract
 
     def __post_init__(self) -> None:
-        if self.schema_version != "crop-tgvf-observation-v1" or not self.observation_id:
+        if self.schema_version != "crop-tgvf-observation-v2" or not self.observation_id:
             raise ValueError("atomic crop+TGVF schema version and ID are required")
         if self.call_index < 0:
             raise ValueError("atomic crop+TGVF call index must be non-negative")
@@ -531,8 +552,15 @@ class CropTGVFObservationRecord:
             )
         if self.source_width <= 0 or self.source_height <= 0:
             raise ValueError("atomic crop+TGVF source dimensions must be positive")
+        if not self.model_coordinate_space or not self.coordinate_conversion_version:
+            raise ValueError("atomic crop+TGVF coordinate identities must be explicit")
+        if self.coordinate_reference_width <= 0 or self.coordinate_reference_height <= 0:
+            raise ValueError(
+                "atomic crop+TGVF coordinate reference dimensions must be positive"
+            )
         for name, bbox in (
-            ("requested", self.requested_bbox_2d),
+            ("model", self.model_bbox_2d),
+            ("source", self.source_bbox_2d),
             ("effective", self.effective_bbox_2d),
         ):
             if len(bbox) != 4 or any(type(value) is not int for value in bbox):
@@ -613,6 +641,12 @@ class CropTGVFObservationRecord:
                 raise ValueError(
                     f"atomic D-DeepStack branch {branch.layer} positions differ"
                 )
+
+    @property
+    def requested_bbox_2d(self) -> tuple[int, int, int, int]:
+        """Compatibility alias for the exact sampled model-space box."""
+
+        return self.model_bbox_2d
 
 
 ObservationRecord = (

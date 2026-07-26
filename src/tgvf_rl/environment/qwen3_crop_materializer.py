@@ -19,7 +19,10 @@ from torch import nn
 
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.observations.store import tensor_checksum
-from tgvf_rl.protocol.native import NativeProtocolRenderer
+from tgvf_rl.protocol.native import (
+    NativeProtocolRenderer,
+    native_assistant_dialect_for_model,
+)
 
 from .crop_tool import CropVisualTensorBundle
 from .focus_tool import SourceVisualTensorBundle
@@ -78,7 +81,11 @@ class Qwen3CropVisualMaterializer:
             raise ValueError("Qwen3 crop merger modules must be distinct")
 
         renderer = NativeProtocolRenderer(
-            processor, expected_tokenizer_length=model_identity.tokenizer_length
+            processor,
+            expected_tokenizer_length=model_identity.tokenizer_length,
+            assistant_dialect=native_assistant_dialect_for_model(
+                model_identity.model_name
+            ),
         )
         if renderer.chat_template_sha256 != model_identity.chat_template_sha256:
             raise ValueError("crop processor chat template differs from model identity")

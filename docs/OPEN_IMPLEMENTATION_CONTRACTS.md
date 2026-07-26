@@ -189,8 +189,10 @@ remain fail-closed. No library or historical-project default may fill them:
   `e003163181731412595257a72ec173071efb125f` with vLLM `0.12.0`; this is not a
   production parallel-topology decision.
 - [x] `FIXED` — FSDP2 support is required. Exact topology is evidence-based.
-- [x] `FIXED` — Qwen3-VL-8B-Thinking at the accepted stable local path is the
-  primary policy/reference target; `Qwen/Qwen2.5-VL-7B-Instruct` is the required
+- [x] `FIXED QWEN3-INSTRUCT-PRIMARY-20260726` — Qwen3-VL-8B-Instruct at the
+  pinned official revision and stable local path is the primary
+  representation/policy/reference/data-selection target;
+  `Qwen/Qwen2.5-VL-7B-Instruct` is the required
   secondary compatibility model.
 - [x] `FIXED` — Contextual-hidden-state and target-token-embedding conditioning
   providers are both required capabilities. A run selects one as part of its
@@ -398,8 +400,9 @@ interfaces must be versioned and fail closed while unset.
 - [x] `FIXED SK-10` — A versioned Qwen VLM family-adapter
   interface covering processor/template, vision taps, DeepStack, M-RoPE,
   multimodal state, and deterministic forward.
-  - Primary implementation fixture: Qwen3-VL-8B-Thinking, including the real
-    `SC-20-R6` vLLM latent-transport smoke.
+  - Primary implementation fixture: Qwen3-VL-8B-Instruct. The Thinking
+    `SC-20-R6` vLLM latent-transport smoke remains historical evidence and does
+    not close the Instruct transcript/tool/replay gate.
   - Secondary boundary: `Qwen/Qwen2.5-VL-7B-Instruct` main-`D` synthetic family
     contract only. This closes the interface shape, not the full end-to-end
     compatibility gate in `PR-02C`/`SD-11`.
@@ -418,7 +421,8 @@ interfaces must be versioned and fail closed while unset.
 
 ### 5.1 Model, template, and protocol identity
 
-- [x] `FIXED RO-P01` — The accepted local Qwen3 model path, tokenizer length,
+- [x] `FIXED RO-P01` — The accepted local Qwen3-VL-8B-Instruct model path,
+  tokenizer length,
   chat-template identity, family adapter, and real-processor prompt/token
   fixture are pinned by `qwen3_visual_tool_prompts_v1.json`. Full weight-shard
   hashes are not required.
@@ -443,10 +447,14 @@ interfaces must be versioned and fail closed while unset.
   lm-head resize.
 - [ ] `OPEN_BLOCKING RO-P06` — Freeze assistant prefill and stop semantics,
   including ownership of `</tool_call>`, `<|im_end|>`, think closure, and EOS.
-- [x] `FIXED RO-P07` — Real Qwen direct, one-call, and repeated-call goldens
+- [x] `HISTORICAL RO-P07` — Real Qwen Thinking direct, one-call, and repeated-call goldens
   prove exactly one template-owned `<think>` opener per assistant turn; the
   runtime records a policy-sampled duplicate opener as an invalid-format
   trajectory without dropping its sampled tokens or behavior log probabilities.
+- [ ] `OPEN_BLOCKING RO-P07-I` — Pin Instruct direct, one-call, repeated-call,
+  error-recovery and call-cap goldens. The native assistant prefill has no
+  template-owned `<think>`; direct output is valid, and any optional sampled
+  think envelope is entirely policy-owned.
 
 ### 5.2 Parser, target span, and multi-call state machine
 
@@ -974,7 +982,7 @@ This gate applies even to a one-step smoke test.
   positions, and padding are excluded; there is no sequence-mean or two-level
   reduction in Pilot v1.
 - [ ] `OPEN_BLOCKING GR-07` — Reference identity is fixed to the original frozen
-  Qwen3-VL-8B-Thinking base without policy LoRA. Freeze the still-open estimator,
+  Qwen3-VL-8B-Instruct base without policy LoRA. Freeze the still-open estimator,
   mask, and normalization for diagnostic current/reference KL: `[TBD equation]`.
   Policy Pilot v1 does not select a KL reward/loss contribution; adding one
   requires a separate accepted objective contract.
@@ -995,11 +1003,11 @@ This gate applies even to a one-step smoke test.
 
 ### 8.2 Policy/reference parameter contract
 
-- [x] `FIXED PR-01` — Policy initializes from the exact original Qwen reasoning
+- [x] `FIXED PR-01` — Policy initializes from the exact base Qwen Instruct
   checkpoint; no policy SFT adapter.
-- [x] `FIXED PR-02` — The first policy model is Qwen3-VL-8B-Thinking at
-  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`; no full weight hash is
-  required.
+- [x] `FIXED PR-02` — The primary policy model is Qwen3-VL-8B-Instruct at
+  `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`, revision
+  `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`.
 - [ ] `OPEN_BLOCKING PR-02A` — Pin the primary processor/tokenizer/chat-template
   behavior through exact transcript fixtures and hashes: `[TBD artifact]`
 - [x] `FIXED PR-02B` — The secondary model ID is
@@ -1008,7 +1016,7 @@ This gate applies even to a one-step smoke test.
   support, configure its local/runtime identity and pass its full family-specific
   Adapter/representation fixture: `[TBD path/artifact]`
 - [ ] `OPEN_BLOCKING PR-03` — Reference model is the original frozen
-  Qwen3-VL-8B-Thinking base with no policy LoRA. Bind the still-open exact
+  Qwen3-VL-8B-Instruct base with no policy LoRA. Bind the still-open exact
   Pilot prompt/schema golden and verify the reference consumes the same
   rollout-recorded observation as policy replay.
 - [ ] `OPEN_BLOCKING PR-04` — Implement and record the fixed Pilot whitelist:

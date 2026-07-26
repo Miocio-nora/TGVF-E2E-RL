@@ -20,6 +20,10 @@ from tgvf_rl.observations.store import (
     tensor_checksum,
 )
 from tgvf_rl.protocol.schema import IMAGE_ZOOM_IN_TOOL_NAME, ParsedImageZoomInCall
+from tgvf_rl.qwen.crop_coordinates import (
+    CropCoordinateMapper,
+    CropCoordinateMapping,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,13 +99,20 @@ class ImageZoomInTool:
         self,
         materializer: CropVisualMaterializer,
         store: ObservationStore,
+        *,
+        coordinate_mapper: CropCoordinateMapper,
+        processor_resized_size: tuple[int, int] | None = None,
     ) -> None:
         if not callable(getattr(materializer, "materialize", None)):
             raise TypeError("plain crop requires a visual materializer")
         if not isinstance(store, ObservationStore):
             raise TypeError("plain crop requires an ObservationStore")
+        if not callable(getattr(coordinate_mapper, "map_crop_bbox_to_source", None)):
+            raise TypeError("plain crop requires an explicit coordinate mapper")
         self.materializer = materializer
         self.store = store
+        self.coordinate_mapper = coordinate_mapper
+        self.processor_resized_size = processor_resized_size
 
     def execute(self, request: CropToolExecutionRequest) -> CropToolExecutionResult:
         _validate_request(request)
@@ -123,8 +134,17 @@ class ImageZoomInTool:
             trajectory_id=request.trajectory_id,
         )
         height, width, _ = source.shape
-        requested = request.parsed_call.bbox_2d
-        effective = clamp_bbox_to_image(requested, width=width, height=height)
+        mapping = self.coordinate_mapper.map_crop_bbox_to_source(
+            request.parsed_call.bbox_2d,
+            source_width=width,
+            source_height=height,
+            processor_resized_size=self.processor_resized_size,
+        )
+        if not isinstance(mapping, CropCoordinateMapping):
+            raise TypeError("crop coordinate mapper returned an invalid mapping")
+        requested = mapping.model_bbox_2d
+        source_bbox = mapping.source_bbox_2d
+        effective = clamp_bbox_to_image(source_bbox, width=width, height=height)
         left, top, right, bottom = effective
         crop = source[top:bottom, left:right, :].contiguous().clone()
         with torch.no_grad():
@@ -165,9 +185,12 @@ class ImageZoomInTool:
             )
         )
         record = CropObservationRecord(
-            schema_version="crop-observation-v1",
+            schema_version="crop-observation-v2",
             observation_id=_observation_id(
-                request, source_ref.address.digest, crop_pixels.address.digest
+                request,
+                mapping,
+                source_ref.address.digest,
+                crop_pixels.address.digest,
             ),
             call_index=request.call_index,
             model=request.model,
@@ -178,7 +201,12 @@ class ImageZoomInTool:
             source_pixels_sha256=source_ref.address.digest,
             source_width=width,
             source_height=height,
-            requested_bbox_2d=requested,
+            model_coordinate_space=mapping.coordinate_space,
+            coordinate_conversion_version=mapping.conversion_version,
+            coordinate_reference_width=mapping.coordinate_reference_width,
+            coordinate_reference_height=mapping.coordinate_reference_height,
+            model_bbox_2d=requested,
+            source_bbox_2d=source_bbox,
             effective_bbox_2d=effective,
             source_visual=request.trajectory_source_visual.state,
             sequence_length=layout.sequence_length,
@@ -332,6 +360,7 @@ def _verify_source_visual_ownership(
 
 def _observation_id(
     request: CropToolExecutionRequest,
+    mapping: CropCoordinateMapping,
     source_digest: str,
     crop_digest: str,
 ) -> str:
@@ -339,6 +368,11 @@ def _observation_id(
     digest.update(request.trajectory_id.encode())
     digest.update(str(request.call_index).encode())
     digest.update(request.parsed_call.raw_tool_call.encode())
+    digest.update(mapping.coordinate_space.encode())
+    digest.update(mapping.conversion_version.encode())
+    digest.update(str(mapping.coordinate_reference_width).encode())
+    digest.update(str(mapping.coordinate_reference_height).encode())
+    digest.update(str(mapping.source_bbox_2d).encode())
     digest.update(source_digest.encode())
     digest.update(crop_digest.encode())
     digest.update(request.crop_processor_identity.sha256.encode())

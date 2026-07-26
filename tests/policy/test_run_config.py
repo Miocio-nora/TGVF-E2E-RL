@@ -58,6 +58,7 @@ from tgvf_rl.protocol import (
     IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256,
     TGVF_FOCUS_TOOL_SCHEMA_SHA256,
     NativeToolCapabilityProfile,
+    native_assistant_dialect_for_model,
     visual_tool_prompt_identity,
 )
 
@@ -382,9 +383,14 @@ def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -
     ).resolve()
     judge_sha = hashlib.sha256(judge_path.read_bytes()).hexdigest()
     prompt_sha = visual_tool_prompt_identity(
-        NativeToolCapabilityProfile.TGVF_ONLY
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        assistant_dialect=native_assistant_dialect_for_model(
+            POLICY_PILOT_V1_MODEL_NAME
+        ),
     ).bundle_sha256
-    text = text.replace(POLICY_E2E_SMOKE_CONFIG_SCHEMA, POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA)
+    text = text.replace(
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA, POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA
+    )
     text = text.replace(f'sample_id = "{SAMPLE_ID}"\ncursor = 0\n', "")
     text = text.replace(f'prompt_sha256 = "{SHA_A}"', f'prompt_sha256 = "{prompt_sha}"')
     text = text.replace(
@@ -398,7 +404,7 @@ def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -
         f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"\n'
         'judge_mode = "qwen25_72b_semantic_fallback"\n'
         'judge_reason = "mixed integration"\n'
-        f'judge_config_path = {_q(judge_path)}\n'
+        f"judge_config_path = {_q(judge_path)}\n"
         f'judge_config_sha256 = "{judge_sha}"',
     )
     path.write_text(text, encoding="utf-8")
@@ -411,9 +417,12 @@ def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -
     assert config.reward.judge_config_sha256 == judge_sha
     assert plan.overrides["data.custom_cls.path"] == DEEPEYES47K_DATASET_MODULE_PATH
     assert plan.overrides["data.custom_cls.name"] == DEEPEYES47K_DATASET_CLASS_NAME
-    assert plan.overrides["actor_rollout_ref.rollout.custom"]["reward"][
-        "judge_config_sha256"
-    ] == judge_sha
+    assert (
+        plan.overrides["actor_rollout_ref.rollout.custom"]["reward"][
+            "judge_config_sha256"
+        ]
+        == judge_sha
+    )
 
     formal_judge_path = (
         Path(__file__).parents[2]
@@ -433,6 +442,7 @@ def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -
     formal = load_policy_e2e_smoke_run_config(path)
     assert formal.formal_pilot is True
     assert formal.schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
+
 
 def test_loads_separately_identified_crop_only_experiment(tmp_path: Path) -> None:
     path, text, _ = _write_config(tmp_path)
@@ -493,7 +503,11 @@ def test_auto_resume_rejects_explicit_resume_path(tmp_path: Path) -> None:
     "old, new, error",
     [
         ("min_p = 0.0\n", "", r"\[sampling\] fields differ"),
-        ("formal_pilot = false", "formal_pilot = true", "formal_pilot=false"),
+        (
+            "formal_pilot = false",
+            "formal_pilot = true",
+            "formal_pilot mode differs",
+        ),
         ('judge_mode = "not_applicable"', 'judge_mode = "qwen72b"', "judge_mode"),
         (
             'tool_profile = "tgvf_only"',
@@ -882,7 +896,9 @@ def test_verl_actor_batch_mapping_preserves_nontrivial_gradient_accumulation(
 
     assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 8
     assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 1
-    assert plan.overrides["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] == 8
+    assert (
+        plan.overrides["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] == 8
+    )
     assert contract["upstream_internal_mini_batch_size_trajectories"] == 64
     assert contract["derived_gradient_accumulation_steps"] == 2
     assert contract["derived_actor_forward_backward_microbatches"] == 16

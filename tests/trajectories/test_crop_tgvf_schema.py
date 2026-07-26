@@ -25,6 +25,9 @@ from tgvf_rl.trajectories.schema import (
 )
 from tgvf_rl.trajectories import BehaviorTraceStore, VLLMBehaviorRecorder
 from tgvf_rl.trajectories.validation import TrajectoryValidator
+from tgvf_rl.qwen.crop_coordinates import (
+    CanonicalSourcePixelCropCoordinateMapper,
+)
 from tests.environment.test_crop_tgvf_tool import SHA0, TRAJECTORY_ID, _fixture
 
 
@@ -83,6 +86,7 @@ def test_trajectory_validator_binds_atomic_bbox_target_and_observation() -> None
         materializer=materializer,
         adapter=adapter,
         store=store,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
     ).execute(request)
     parsed = request.parsed_call
     tokens = OwnedTokenSequence(

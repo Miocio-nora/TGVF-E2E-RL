@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from types import MethodType
+from types import MappingProxyType, MethodType
 from typing import Any
 
 import torch
@@ -35,7 +35,10 @@ from tgvf_rl.conditioning import (
 )
 from tgvf_rl.conditioning.base import BoundTargetConditionProvider
 from tgvf_rl.contracts.identity import ModelIdentity
-from tgvf_rl.protocol.native import NativeProtocolRenderer
+from tgvf_rl.protocol.native import (
+    NativeProtocolRenderer,
+    native_assistant_dialect_for_model,
+)
 from tgvf_rl.protocol.schema import build_representation_tgvf_focus_tool_schema
 from tgvf_rl.qwen.base import resolve_language_model
 from tgvf_rl.representation.adapter import (
@@ -49,10 +52,30 @@ from tgvf_rl.representation.deepstack import (
 )
 
 
-ACCEPTED_QWEN3_MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+ACCEPTED_QWEN3_MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
 ACCEPTED_QWEN3_TOKENIZER_LENGTH = 151669
 ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256 = (
-    "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956"
+    "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4"
+)
+ACCEPTED_QWEN3_MODEL_FIXTURES = MappingProxyType(
+    {
+        "Qwen3-VL-8B-Instruct": MappingProxyType(
+            {
+                "path": ACCEPTED_QWEN3_MODEL_PATH,
+                "tokenizer_length": ACCEPTED_QWEN3_TOKENIZER_LENGTH,
+                "chat_template_sha256": ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256,
+            }
+        ),
+        "Qwen3-VL-8B-Thinking": MappingProxyType(
+            {
+                "path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking",
+                "tokenizer_length": 151669,
+                "chat_template_sha256": (
+                    "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956"
+                ),
+            }
+        ),
+    }
 )
 QWEN3_REPRESENTATION_BRANCH_LAYERS = (8, 16, 24)
 QWEN3_REPRESENTATION_SPATIAL_MERGE_SIZE = 2
@@ -652,8 +675,9 @@ def create_qwen3_representation_runtime(
     """Bind one frozen Qwen3 model to a new trainable TGVF Adapter.
 
     ``fixture_mode`` exists only for tiny CPU contract fixtures.  Without it,
-    the accepted local Qwen3-VL-8B-Thinking identity and exact architecture are
-    mandatory. ``adapter_dtype`` is deliberately explicit because representation
+    one pinned Qwen3 edition identity and the exact architecture are mandatory.
+    The Instruct edition is the active primary; Thinking remains readable for
+    historical artifact verification. ``adapter_dtype`` is deliberately explicit because representation
     training precision has no accepted hidden default.
     """
 
@@ -685,6 +709,9 @@ def create_qwen3_representation_runtime(
         processor,
         expected_tokenizer_length=model_identity.tokenizer_length,
         tool_schemas=(build_representation_tgvf_focus_tool_schema(),),
+        assistant_dialect=native_assistant_dialect_for_model(
+            model_identity.model_name
+        ),
     )
     if renderer.chat_template_sha256 != model_identity.chat_template_sha256:
         raise ValueError("processor chat template differs from ModelIdentity")
@@ -877,13 +904,15 @@ def _read_architecture(model: nn.Module) -> Qwen3RepresentationArchitecture:
 def _assert_accepted_production_identity(
     identity: ModelIdentity, architecture: Qwen3RepresentationArchitecture
 ) -> None:
-    if identity.revision_or_path != ACCEPTED_QWEN3_MODEL_PATH:
-        raise ValueError("production runtime requires the accepted local Qwen3 path")
-    if Path(identity.model_name).name != "Qwen3-VL-8B-Thinking":
-        raise ValueError("production runtime requires Qwen3-VL-8B-Thinking")
-    if identity.tokenizer_length != ACCEPTED_QWEN3_TOKENIZER_LENGTH:
+    model_name = Path(identity.model_name).name
+    fixture = ACCEPTED_QWEN3_MODEL_FIXTURES.get(model_name)
+    if fixture is None:
+        raise ValueError("production runtime requires a pinned Qwen3 edition")
+    if identity.revision_or_path != fixture["path"]:
+        raise ValueError("production runtime requires the edition's pinned local path")
+    if identity.tokenizer_length != fixture["tokenizer_length"]:
         raise ValueError("production runtime tokenizer identity differs from golden")
-    if identity.chat_template_sha256 != ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256:
+    if identity.chat_template_sha256 != fixture["chat_template_sha256"]:
         raise ValueError(
             "production runtime chat-template identity differs from golden"
         )
@@ -1042,6 +1071,7 @@ def _validate_feature_family(tensors: tuple[torch.Tensor, ...], *, name: str) ->
 
 __all__ = [
     "ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256",
+    "ACCEPTED_QWEN3_MODEL_FIXTURES",
     "ACCEPTED_QWEN3_MODEL_PATH",
     "ACCEPTED_QWEN3_TOKENIZER_LENGTH",
     "QWEN3_REPRESENTATION_BRANCH_LAYERS",

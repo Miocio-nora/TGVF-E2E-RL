@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import struct
 from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
@@ -27,6 +29,39 @@ class RenderedTranscript:
     tokenizer_length: int
 
 
+class NativeAssistantDialect(str, Enum):
+    """Checkpoint-bound assistant serialization owned by Qwen's template."""
+
+    QWEN3_VL_THINKING = "qwen3-vl-thinking-v1"
+    QWEN3_VL_INSTRUCT = "qwen3-vl-instruct-v1"
+
+    @property
+    def generation_prefill_text(self) -> str:
+        if self is NativeAssistantDialect.QWEN3_VL_THINKING:
+            return "<|im_start|>assistant\n<think>\n"
+        return "<|im_start|>assistant\n"
+
+    @property
+    def template_owns_think_opener(self) -> bool:
+        return self is NativeAssistantDialect.QWEN3_VL_THINKING
+
+
+def native_assistant_dialect_for_model(model_name: str) -> NativeAssistantDialect:
+    """Resolve an exact supported Qwen3 edition without text-based inference."""
+
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError("model_name must be non-empty")
+    basename = Path(model_name).name
+    if basename == "Qwen3-VL-8B-Thinking":
+        return NativeAssistantDialect.QWEN3_VL_THINKING
+    if basename == "Qwen3-VL-8B-Instruct":
+        return NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    if basename == "fixture" or basename.startswith("tiny-"):
+        # Existing synthetic fixtures encode the historical Thinking template.
+        return NativeAssistantDialect.QWEN3_VL_THINKING
+    raise ValueError(f"unsupported native assistant model edition: {model_name!r}")
+
+
 class NativeProtocolRenderer:
     """Uses the model's own template and forbids tokenizer growth."""
 
@@ -37,6 +72,9 @@ class NativeProtocolRenderer:
         expected_tokenizer_length: int,
         tool_names: tuple[str, ...] = (TGVF_FOCUS_TOOL_NAME,),
         tool_schemas: Sequence[Mapping[str, Any]] | None = None,
+        assistant_dialect: NativeAssistantDialect = (
+            NativeAssistantDialect.QWEN3_VL_THINKING
+        ),
     ) -> None:
         tokenizer = getattr(processor, "tokenizer", processor)
         if not hasattr(processor, "apply_chat_template"):
@@ -49,6 +87,8 @@ class NativeProtocolRenderer:
                 "tokenizer length mismatch: "
                 f"expected={expected_tokenizer_length} actual={actual_tokenizer_length}"
             )
+        if not isinstance(assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
         template = getattr(processor, "chat_template", None) or getattr(
             tokenizer, "chat_template", None
         )
@@ -57,6 +97,7 @@ class NativeProtocolRenderer:
         self.processor = processor
         self.tokenizer = tokenizer
         self.expected_tokenizer_length = expected_tokenizer_length
+        self.assistant_dialect = assistant_dialect
         self.tool_names = tuple(tool_names)
         supplied_schemas = (
             tuple(build_native_tool_schemas(self.tool_names))
@@ -298,26 +339,31 @@ class NativeProtocolRenderer:
         self.assert_tool_schema_identity()
         return [_copy_json_mapping(schema) for schema in self.tool_schemas]
 
-    @staticmethod
     def assert_generation_prefill(
-        transcript: RenderedTranscript, tokenizer: Any
+        self, transcript: RenderedTranscript, tokenizer: Any
     ) -> None:
-        expected_text = "<|im_start|>assistant\n<think>\n"
+        expected_text = self.assistant_dialect.generation_prefill_text
         if not transcript.text.endswith(expected_text):
             raise ValueError(
-                "native Qwen Thinking generation prefill text differs from the accepted contract"
+                "native Qwen generation prefill text differs from the selected "
+                "assistant-dialect contract"
             )
         final_assistant = transcript.text.rsplit("<|im_start|>assistant\n", maxsplit=1)[
             -1
         ]
-        if final_assistant != "<think>\n":
+        expected_assistant_body = (
+            "<think>\n"
+            if self.assistant_dialect.template_owns_think_opener
+            else ""
+        )
+        if final_assistant != expected_assistant_body:
             raise ValueError(
-                "native Qwen Thinking prefill has a duplicate or extra assistant opener"
+                "native Qwen prefill has a duplicate or extra assistant opener"
             )
         expected = tuple(tokenizer.encode(expected_text, add_special_tokens=False))
         if not expected or transcript.token_ids[-len(expected) :] != expected:
             raise ValueError(
-                "native Qwen Thinking generation prefill differs from the accepted contract"
+                "native Qwen generation prefill differs from the selected contract"
             )
 
 

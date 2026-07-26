@@ -1,0 +1,141 @@
+{
+    "schema_version": "tgvf.policy-selection.t1-run.v1",
+    "run_id": "T1-02-QWEN3-INSTRUCT-512-FULLIMAGE-CANARY-GPU0123",
+    "model": {
+        "repository": "Qwen/Qwen3-VL-8B-Instruct",
+        "path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct",
+        "dtype": "bfloat16",
+        "config_sha256": "5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661",
+        "generation_config_sha256": "8469742d1fce0de951c8909b26a2c0c0d8490837ce476efb114da9e0cefc4d44",
+        "tokenizer_config_sha256": "c2da771801886ad9ae98181793ffd3dfb7f1af30f6f7c6a4e15d7dbba52e2399",
+        "tokenizer_json_sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+        "preprocessor_config_sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+        "chat_template_sha256": "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4",
+        "tokenizer_length": 151669,
+        "eos_token_id": 151645,
+        "generation_eos_token_ids": [151645, 151643],
+        "trust_remote_code": true,
+        "quantization": null
+    },
+    "prompt": {
+        "schema": "qwen-native-user-image-question-v1",
+        "user_content_order": ["image", "question"],
+        "no_system": true,
+        "no_tools": true,
+        "add_generation_prompt": true
+    },
+    "image": {
+        "min_pixels": 65536,
+        "max_pixels": 262144,
+        "resize_factor": 32,
+        "resample": "transformers-fast-bicubic",
+        "pre_resize": false,
+        "processor_do_resize": true,
+        "preserve_aspect_ratio": true,
+        "limit_image_per_prompt": 1,
+        "color_mode": "RGB",
+        "alpha_handling": "pil-convert-rgb-discard-alpha-v1",
+        "source_pixel_hash_schema": "tgvf.policy-selection.source-rgb-pixels.v1"
+    },
+    "sampling": {
+        "attempts": 8,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "min_p": 0.0,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "logit_processors": [],
+        "seed_root": 42,
+        "seed_namespace": "qwen3-instruct-policy-selection-t1-canary-v1",
+        "do_sample": true,
+        "ignore_eos": false,
+        "stop_token_ids": [151645],
+        "effective_stop_token_ids": [151645, 151643],
+        "stop_strings": [],
+        "include_stop_str_in_output": false,
+        "detokenize": true,
+        "skip_special_tokens": false,
+        "spaces_between_special_tokens": false
+    },
+    "response_budgets": [
+        {"revision": 0, "max_model_len": 65536, "max_new_tokens": 40960},
+        {"revision": 1, "max_model_len": 131072, "max_new_tokens": 98304},
+        {"revision": 2, "max_model_len": 262144, "max_new_tokens": 196608}
+    ],
+    "runtime": {
+        "backend": "vllm",
+        "version": "0.12.0",
+        "python": "3.12.3",
+        "torch": "2.9.0+cu128",
+        "transformers": "4.57.6",
+        "pillow": "12.3.0",
+        "flashinfer": "0.5.3",
+        "world_size": 4,
+        "tensor_parallel_size": 1,
+        "max_num_seqs": 32,
+        "gpu_memory_utilization": 0.9,
+        "mm_encoder_attn_backend": "TORCH_SDPA",
+        "decoder_attn_backend": "FLASHINFER",
+        "max_num_batched_tokens": 65536,
+        "enable_prefix_caching": true,
+        "enable_chunked_prefill": true,
+        "mm_processor_cache_gb": 4.0,
+        "engine_seed": 42,
+        "chunk_candidates": 4,
+        "max_inflight": 64,
+        "retain_token_ids": true,
+        "generation_config_mode": "auto"
+    },
+    "data": {
+        "sources": [
+            {
+                "source": "vstar",
+                "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/screened/vstar-seal-72f07263-coredev2511-exact-v1/candidates.jsonl",
+                "sha256": "5a0b974c5dba0309e6e9f0dc8a3180337498ee129fe95c35f9f60d705289a322",
+                "rows": 191975
+            },
+            {
+                "source": "arxivqa",
+                "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/screened/arxivqa-85a6dca0-coredev2511-exact-v2/candidates.jsonl",
+                "sha256": "cda47ff2d9218f63e871598c898f18862c994ee0affb76294d0fe2a1dd991742",
+                "rows": 99893
+            },
+            {
+                "source": "thinklite",
+                "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/screened/thinklite70k-5c86ea41-coredev2511-exact-v1/candidates.jsonl",
+                "sha256": "438588d730bc8799222eef5a755c3aeb657f6135bcc53b4c4bfe91629257c4ba",
+                "rows": 69842
+            }
+        ]
+    },
+    "selection": {
+        "kind": "stratified_canary",
+        "algorithm_version": "t1-canary-content-hash-v1",
+        "candidates_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/canary/qwen3-t1-192-v1/candidates.jsonl",
+        "candidates_sha256": "1898129ed01060f0b21ddeff9f081661902efbd87c8c31221c633cb64753e3fa",
+        "rows": 192,
+        "manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/canary/qwen3-t1-192-v1/manifest.json",
+        "manifest_sha256": "39a271a02b9d8eee3bda272427e0e341d6662e161d45b4a299fd1e2530c92a67"
+    },
+    "verifier": {
+        "schema": "tgvf.policy-selection.t1-source-verifier.v1",
+        "answer_parser": "direct-completion-v1",
+        "arxivqa_rule": "canonical-row-bounded-a-z-v1",
+        "thinklite_rule": "normalized-exact-numeric-symbolic-v1",
+        "vstar_rule": "normalized-exact-then-local-semantic-v1",
+        "semantic_judge": {
+            "provider": "local-openai-compatible",
+            "repository": "Qwen/Qwen2.5-72B-Instruct",
+            "path": "/nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct",
+            "served_name": "Qwen2.5-72B-Instruct",
+            "prompt_sha256": "2fa039d7add954b9d6a457687e73c0b3141b17d711cbe5e24a99ae35d03e86d2",
+            "config_sha256": "3737504858912a6392679d2c9720597cde58dd7d3218aa6f75b67ad00a769573",
+            "temperature": 0.0,
+            "max_tokens": 256,
+            "remote": false
+        }
+    },
+    "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/t1/T1-02-QWEN3-INSTRUCT-512-FULLIMAGE-CANARY-GPU0123"
+}

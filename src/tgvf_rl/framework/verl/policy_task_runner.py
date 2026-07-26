@@ -530,8 +530,9 @@ class PolicyPilotTrainerCheckpointState:
         return load_latest_policy_version(self._weight_state)
 
     def reference_policy_version(self) -> PolicyVersion:
+        model_slug = Path(self.config.model.model_name).name.casefold()
         return PolicyVersion(
-            "qwen3-vl-8b-thinking-frozen-reference",
+            f"{model_slug}-frozen-reference",
             0,
             _reference_weights_sha256(self.config),
         )

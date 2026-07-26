@@ -188,6 +188,7 @@ def test_selected_sample_materializes_real_source_visual_token_count(
         prompt_sha256=canonical.text_sha256,
         tool_profile=NativeToolCapabilityProfile.TGVF_ONLY,
         tokenizer_length=len(processor.tokenizer),
+        model_name="tiny-fixture",
         repeat_count=1,
     )
     dataset = TGVFSelectedSampleDataset(

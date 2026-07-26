@@ -25,13 +25,24 @@ POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA = (
     "policy-visual-tool-experiment-v1-20260722"
 )
 POLICY_PILOT_V1_MODEL_PATH = (
-    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
 )
 POLICY_PILOT_V1_MODEL_FAMILY = "qwen3_vl"
-POLICY_PILOT_V1_MODEL_NAME = "Qwen3-VL-8B-Thinking"
+POLICY_PILOT_V1_MODEL_NAME = "Qwen3-VL-8B-Instruct"
 POLICY_PILOT_V1_TOKENIZER_LENGTH = 151_669
 POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256 = (
+    "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4"
+)
+POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_PATH = (
+    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking"
+)
+POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME = "Qwen3-VL-8B-Thinking"
+POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256 = (
     "36e042fe45641f067b1f2381fcc8955d10d956a3ed333ecdf7f7eb0916f68956"
+)
+POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS = (
+    POLICY_PILOT_V1_MODEL_PATH,
+    POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_PATH,
 )
 POLICY_PILOT_V1_VLLM_VERSION = "0.12.0"
 POLICY_PILOT_V1_POLICY_LOSS_NAME = "tgvf_policy_pilot_v1_grpo"
@@ -470,7 +481,6 @@ class PolicyPilotV1Config:
         expected = {
             "schema_version": (self.schema_version, POLICY_PILOT_V1_CONFIG_SCHEMA),
             "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
-            "model_path": (self.model_path, POLICY_PILOT_V1_MODEL_PATH),
             "native_deepstack_enabled": (self.native_deepstack_enabled, True),
             "tool_profile": (
                 self.tool_profile,
@@ -488,6 +498,11 @@ class PolicyPilotV1Config:
                 raise ValueError(
                     f"Policy Pilot v1 requires {name}={required!r}, got {actual!r}"
                 )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError(
+                "Policy Pilot v1 model_path is not an exact supported Qwen3-VL "
+                "8B edition"
+            )
         if not isinstance(self.sampling, PilotSamplingConfig):
             raise TypeError("sampling must be PilotSamplingConfig")
         if not isinstance(self.lora, DecoderLoRAConfig):
@@ -536,7 +551,6 @@ class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
                 POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA,
             ),
             "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
-            "model_path": (self.model_path, POLICY_PILOT_V1_MODEL_PATH),
             "native_deepstack_enabled": (self.native_deepstack_enabled, True),
             "enabled_tool_names": (
                 self.enabled_tool_names,
@@ -551,6 +565,11 @@ class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
                     "visual-tool experiment requires "
                     f"{name}={required!r}, got {actual!r}"
                 )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError(
+                "visual-tool experiment model_path is not an exact supported "
+                "Qwen3-VL 8B edition"
+            )
         if not isinstance(self.sampling, PilotSamplingConfig):
             raise TypeError("sampling must be PilotSamplingConfig")
         if not isinstance(self.lora, DecoderLoRAConfig):
@@ -563,9 +582,13 @@ __all__ = [
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
     "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256",
+    "POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256",
+    "POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME",
+    "POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_PATH",
     "POLICY_PILOT_V1_MODEL_FAMILY",
     "POLICY_PILOT_V1_MODEL_NAME",
     "POLICY_PILOT_V1_MODEL_PATH",
+    "POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS",
     "POLICY_PILOT_V1_POLICY_LOSS_NAME",
     "POLICY_PILOT_V1_TOOL_NAMES",
     "POLICY_PILOT_V1_TOOL_PROFILE",

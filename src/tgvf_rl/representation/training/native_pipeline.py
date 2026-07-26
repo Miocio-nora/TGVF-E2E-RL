@@ -35,7 +35,7 @@ from tgvf_rl.conditioning.base import (
     _validate_canonical_input_ids_proof,
 )
 from tgvf_rl.contracts.tokens import TokenSpan
-from tgvf_rl.protocol.native import RenderedTranscript
+from tgvf_rl.protocol.native import NativeAssistantDialect, RenderedTranscript
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import (
     SampledAssistantTurn,
@@ -233,6 +233,10 @@ class ModelActionTarget:
 def build_native_representation_messages(
     sample: RepresentationTrainingSample,
     prompt: RepresentationPromptConfig,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> tuple[dict[str, Any], ...]:
     """Construct the fixed four-turn representation transcript structure."""
 
@@ -240,6 +244,8 @@ def build_native_representation_messages(
         raise TypeError("sample must be RepresentationTrainingSample")
     if not isinstance(prompt, RepresentationPromptConfig):
         raise TypeError("prompt must be RepresentationPromptConfig")
+    if not isinstance(assistant_dialect, NativeAssistantDialect):
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
     user_text = prompt.render(sample)
     if user_text != sample.question:
         raise ValueError(
@@ -250,6 +256,31 @@ def build_native_representation_messages(
         field_name="native representation short_answer",
     )
 
+    tool_turn: dict[str, Any] = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": (
+            {
+                "type": "function",
+                "function": {
+                    "name": TGVF_FOCUS_TOOL_NAME,
+                    "arguments": {"target": sample.target},
+                },
+            },
+        ),
+    }
+    evidence_turn: dict[str, Any] = {"role": "assistant"}
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        tool_turn["reasoning_content"] = NATIVE_REPRESENTATION_PRE_REASONING
+        evidence_turn.update(
+            reasoning_content=sample.evidence_description,
+            content=sample.short_answer,
+        )
+    else:
+        evidence_turn["content"] = (
+            sample.evidence_description + "\n\n" + sample.short_answer
+        )
+
     return (
         {
             "role": "user",
@@ -258,26 +289,9 @@ def build_native_representation_messages(
                 {"type": "text", "text": user_text},
             ),
         },
-        {
-            "role": "assistant",
-            "reasoning_content": NATIVE_REPRESENTATION_PRE_REASONING,
-            "content": "",
-            "tool_calls": (
-                {
-                    "type": "function",
-                    "function": {
-                        "name": TGVF_FOCUS_TOOL_NAME,
-                        "arguments": {"target": sample.target},
-                    },
-                },
-            ),
-        },
+        tool_turn,
         {"role": "tool", "content": ({"type": "image"},)},
-        {
-            "role": "assistant",
-            "reasoning_content": sample.evidence_description,
-            "content": sample.short_answer,
-        },
+        evidence_turn,
     )
 
 
@@ -502,7 +516,11 @@ class Qwen3NativeRepresentationGroupBuilder:
             raise ValueError("image_loader returned None")
 
         messages_by_sample = tuple(
-            build_native_representation_messages(sample, self.prompt)
+            build_native_representation_messages(
+                sample,
+                self.prompt,
+                assistant_dialect=self.runtime.renderer.assistant_dialect,
+            )
             for sample in samples
         )
         action_by_sample = _render_native_action_targets_batch(

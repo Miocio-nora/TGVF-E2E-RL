@@ -378,6 +378,7 @@ def build_policy_e2e_smoke_verl_plan(
             prompt_bundle_sha256=config.protocol.prompt_sha256,
             tool_profile=config.protocol.tool_profile,
             tokenizer_length=config.model.tokenizer_length,
+            model_name=config.model.model_name,
         )
     else:
         selected_binding = VerlSelectedSampleDatasetBinding.from_run_config(config)

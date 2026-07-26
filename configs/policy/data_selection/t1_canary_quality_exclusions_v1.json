@@ -1,0 +1,15 @@
+{
+  "schema_version": "tgvf.policy-selection.t1-quality-exclusions.v1",
+  "exclusions": [
+    {
+      "candidate_sha256": "bd8222dad80f0a6e576b1f6f48dc37bab2717cc2f65e9c2bd6722bc6d334e1b4",
+      "sample_id": "policy-candidate:067f32d28171933f7c638d955b7e8f8d6532add52602630d8fe7f0c9c950bb9e",
+      "source": "vstar",
+      "reason": "source_ground_truth_truncated",
+      "question": "How many bears are in the image?",
+      "ground_truth": "There are",
+      "source_file": "llava_focus_data.json",
+      "source_row_index": 18042
+    }
+  ]
+}

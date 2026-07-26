@@ -23,7 +23,6 @@ from tgvf_rl.protocol import (
     NATIVE_SHARED_USER_TEXT_TEMPLATE,
     TGVF_FOCUS_TOOL_NAME,
     TGVF_ONLY_SYSTEM_PROMPT,
-    TGVF_VISUAL_TOOL_PROMPTS_VERSION,
     NativeToolCapabilityProfile,
     build_visual_tool_prompt_messages,
 )
@@ -122,7 +121,7 @@ def test_prompt_group_and_reward_vertical_slice_is_prompt_free(tmp_path: Path) -
     assert prompt.image_sha256 == sample.image_sha256
     assert prompt.tool_names == (TGVF_FOCUS_TOOL_NAME,)
     assert prompt.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
-    assert prompt.prompt_version == TGVF_VISUAL_TOOL_PROMPTS_VERSION
+    assert prompt.prompt_version == prompt.prompt_identity.version
     assert prompt.system_prompt_sha256 == prompt.prompt_identity.system_prompt_sha256
     assert (
         prompt.shared_user_prompt_template_sha256

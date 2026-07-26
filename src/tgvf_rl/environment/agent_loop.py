@@ -17,6 +17,7 @@ from tgvf_rl.contracts.tokens import (
 from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.policy.config import PilotSamplingConfig
+from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import (
     NativeToolCall,
@@ -60,15 +61,25 @@ class SampledPolicyTurn:
     stop_reason: str
     backend_request_sha256: str
     backend_response_sha256: str
+    assistant_dialect: NativeAssistantDialect = NativeAssistantDialect.QWEN3_VL_THINKING
 
     def __post_init__(self) -> None:
         if not self.token_ids or len(self.token_ids) != len(self.behavior_logprobs):
             raise ValueError("sampled tokens and actual behavior logprobs must align")
         if len(self.token_byte_spans) != len(self.token_ids):
             raise ValueError("sampled tokens and byte spans must align")
-        marker_layout_valid = (
-            "<think>" not in self.text and self.text.count("</think>") == 1
-        )
+        if not isinstance(self.assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
+        if self.assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+            marker_layout_valid = (
+                "<think>" not in self.text and self.text.count("</think>") == 1
+            )
+        else:
+            marker_layout_valid = (
+                self.text.count("<think>") == 1
+                and self.text.count("</think>") == 1
+                and self.text.index("<think>") < self.text.index("</think>")
+            )
         if marker_layout_valid != (self.think_token_span is not None):
             raise ValueError(
                 "think span presence must match the sampled native marker layout"
@@ -122,7 +133,9 @@ class ToolExecutionContext:
             self, "prior_observation_handles", tuple(self.prior_observation_handles)
         )
         if not self.prompt_token_ids_before_turn:
-            raise ValueError("tool execution requires the exact non-empty prompt prefix")
+            raise ValueError(
+                "tool execution requires the exact non-empty prompt prefix"
+            )
         if self.sampled_turn.sampling.policy_version != self.behavior_policy:
             raise ValueError("tool execution context changed behavior policy")
         if self.assistant_turn_index < 0 or self.attempt_index < 0:
@@ -202,12 +215,18 @@ class FrameworkNeutralAgentLoop:
         max_tool_calls: int,
         enabled_tool_names: tuple[str, ...] = POLICY_RL_TOOL_NAMES,
         cap_error_behavior: CapErrorBehavior = CapErrorBehavior.TERMINATE_AFTER_ERROR,
+        assistant_dialect: NativeAssistantDialect = (
+            NativeAssistantDialect.QWEN3_VL_THINKING
+        ),
     ) -> None:
         self.sampler = sampler
         self.tool_runtime = tool_runtime
         self.appender = appender
         self.parser = parser
         self.behavior_recorder = behavior_recorder
+        if not isinstance(assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
+        self.assistant_dialect = assistant_dialect
         names = tuple(enabled_tool_names)
         if not names or len(names) != len(set(names)):
             raise ValueError("enabled tool names must be non-empty and unique")
@@ -251,6 +270,8 @@ class FrameworkNeutralAgentLoop:
             sampled = self.sampler.sample(
                 prompt, sampling_parameters, turn_index=len(turns)
             )
+            if sampled.assistant_dialect is not self.assistant_dialect:
+                raise ValueError("sampler assistant dialect differs from agent loop")
             if sampled.sampling.policy_version != request.behavior_policy:
                 raise ValueError("sampler policy version differs from rollout request")
             if request.sampling_contract is not None:
@@ -296,10 +317,19 @@ class FrameworkNeutralAgentLoop:
                 )
             )
             if not has_tool_marker:
-                final_answer = _extract_final_answer(sampled.text)
+                final_answer = _extract_final_answer(
+                    sampled.text,
+                    assistant_dialect=self.assistant_dialect,
+                )
                 if _terminated_by_length(sampled):
                     stop = TrajectoryStop.MAX_TOKENS
-                elif sampled.think_token_span is None or final_answer is None:
+                elif (
+                    not _final_format_valid(
+                        sampled,
+                        assistant_dialect=self.assistant_dialect,
+                    )
+                    or final_answer is None
+                ):
                     stop = TrajectoryStop.INVALID_FORMAT
                 else:
                     transition = self.machine.apply(state, AgentEvent.final_answer())
@@ -312,7 +342,10 @@ class FrameworkNeutralAgentLoop:
                 break
 
             try:
-                think_error = _tool_think_format_error(sampled.text)
+                think_error = _tool_think_format_error(
+                    sampled.text,
+                    assistant_dialect=self.assistant_dialect,
+                )
                 if think_error is not None:
                     raise think_error
                 parsed = self.parser.parse(sampled.parser_turn())
@@ -617,14 +650,46 @@ class FrameworkNeutralAgentLoop:
         )
 
 
-def _extract_final_answer(text: str) -> str | None:
-    """Extract only a deterministic suffix after the last sampled closer."""
+def _extract_final_answer(
+    text: str,
+    *,
+    assistant_dialect: NativeAssistantDialect,
+) -> str | None:
+    """Extract an answer under the exact checkpoint-bound assistant dialect."""
 
-    _prefix, separator, suffix = text.rpartition("</think>")
-    if not separator:
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        _prefix, separator, suffix = text.rpartition("</think>")
+        return suffix.strip() or None if separator else None
+    if assistant_dialect is not NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
+    opener_count = text.count("<think>")
+    closer_count = text.count("</think>")
+    if opener_count == closer_count == 0:
+        return text.strip() or None
+    if opener_count != 1 or closer_count != 1:
         return None
-    answer = suffix.strip()
-    return answer or None
+    opener = text.index("<think>")
+    closer = text.index("</think>")
+    if opener > closer or text[:opener].strip():
+        return None
+    return text[closer + len("</think>") :].strip() or None
+
+
+def _final_format_valid(
+    sampled: SampledPolicyTurn,
+    *,
+    assistant_dialect: NativeAssistantDialect,
+) -> bool:
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        return sampled.think_token_span is not None
+    if assistant_dialect is not NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
+    if "<think>" not in sampled.text and "</think>" not in sampled.text:
+        return sampled.think_token_span is None
+    if sampled.think_token_span is None:
+        return False
+    opener = sampled.text.find("<think>")
+    return opener >= 0 and not sampled.text[:opener].strip()
 
 
 def _terminated_by_length(sampled: SampledPolicyTurn) -> bool:
@@ -637,16 +702,54 @@ def _terminated_by_length(sampled: SampledPolicyTurn) -> bool:
     return isinstance(payload, dict) and payload.get("finish_reason") == "length"
 
 
-def _tool_think_format_error(text: str) -> ToolCallParseError | None:
+def _tool_think_format_error(
+    text: str,
+    *,
+    assistant_dialect: NativeAssistantDialect,
+) -> ToolCallParseError | None:
     """Classify native think-format errors before any tool can execute."""
 
-    if "<think>" in text:
+    if (
+        assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING
+        and "<think>" in text
+    ):
         return ToolCallParseError(
             ParseErrorCode.DUPLICATE_THINK_OPENER,
             "the assistant sampled a template-owned <think> opener",
         )
+    opener_count = text.count("<think>")
     closer_count = text.count("</think>")
-    if closer_count == 0:
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        if opener_count == closer_count == 0:
+            pass
+        elif opener_count == 0 or closer_count == 0:
+            return ToolCallParseError(
+                ParseErrorCode.MISSING_THINK_CLOSER,
+                "the required Instruct think envelope is missing or incomplete",
+            )
+        elif opener_count > 1:
+            return ToolCallParseError(
+                ParseErrorCode.DUPLICATE_THINK_OPENER,
+                "the Instruct assistant sampled more than one <think> opener",
+            )
+        elif closer_count > 1:
+            return ToolCallParseError(
+                ParseErrorCode.MULTIPLE_THINK_CLOSERS,
+                "the Instruct assistant closed its think span more than once",
+            )
+        elif text.index("<think>") > text.index("</think>"):
+            return ToolCallParseError(
+                ParseErrorCode.THINK_CLOSE_AFTER_TOOL_OPEN,
+                "the required Instruct think envelope is reversed",
+            )
+        elif text[: text.index("<think>")].strip():
+            return ToolCallParseError(
+                ParseErrorCode.DUPLICATE_THINK_OPENER,
+                "the Instruct think opener must begin the assistant turn",
+            )
+    elif assistant_dialect is not NativeAssistantDialect.QWEN3_VL_THINKING:
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
+    elif closer_count == 0:
         return ToolCallParseError(
             ParseErrorCode.MISSING_THINK_CLOSER,
             "the assistant tool turn did not close its think span",
@@ -657,7 +760,7 @@ def _tool_think_format_error(text: str) -> ToolCallParseError | None:
             "the assistant tool turn closed its think span more than once",
         )
     tool_open = text.find("<tool_call>")
-    if tool_open >= 0 and text.index("</think>") > tool_open:
+    if tool_open >= 0 and closer_count and text.index("</think>") > tool_open:
         return ToolCallParseError(
             ParseErrorCode.THINK_CLOSE_AFTER_TOOL_OPEN,
             "the assistant closed its think span after opening the tool call",

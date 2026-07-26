@@ -6,7 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from tgvf_rl.protocol.native import NativeProtocolRenderer, RenderedTranscript
+from tgvf_rl.protocol.native import (
+    NativeAssistantDialect,
+    NativeProtocolRenderer,
+    RenderedTranscript,
+)
 from tgvf_rl.protocol.schema import TGVF_FOCUS_TOOL_NAME
 
 from .losses import EVIDENCE_IGNORE_INDEX
@@ -19,6 +23,7 @@ _EXECUTABLE_REPRESENTATION_FAMILY = "qwen3_vl"
 
 NATIVE_REPRESENTATION_PRE_REASONING = "I need visual focus before answering."
 _QWEN_THINKING_COMPLETION_MIDDLE = "\n</think>\n\n"
+_QWEN_INSTRUCT_COMPLETION_MIDDLE = "\n\n"
 _QWEN_ASSISTANT_TURN_SUFFIX = "<|im_end|>\n"
 _NATIVE_CONTROL_FRAGMENTS = (
     "<|im_",
@@ -55,11 +60,16 @@ class CanonicalEvidenceSupervision:
     evidence_byte_end: int
     evidence_token_positions: tuple[int, ...]
     token_offsets: tuple[tuple[int, int], ...]
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    )
     schema_version: str = CANONICAL_EVIDENCE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         if self.schema_version != CANONICAL_EVIDENCE_SCHEMA_VERSION:
             raise ValueError("canonical evidence-supervision schema mismatch")
+        if not isinstance(self.assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
         _require_non_empty_text(self.answer_text, field_name="canonical answer_text")
         if len(self.canonical_labels) != len(self.transcript.token_ids):
             raise ValueError("canonical labels must align with transcript token ids")
@@ -102,7 +112,7 @@ class CanonicalEvidenceSupervision:
             self.transcript.text
             != self.generation_prefill.text
             + self.evidence_text
-            + _QWEN_THINKING_COMPLETION_MIDDLE
+            + _completion_middle(self.assistant_dialect)
             + self.answer_text
             + _QWEN_ASSISTANT_TURN_SUFFIX
         ):
@@ -300,7 +310,11 @@ def render_native_evidence_labels(
 
     if not isinstance(renderer, NativeProtocolRenderer):
         raise TypeError("renderer must be a NativeProtocolRenderer")
-    answer_text = _validate_native_evidence_request(messages, evidence_description)
+    answer_text = _validate_native_evidence_request(
+        messages,
+        evidence_description,
+        assistant_dialect=renderer.assistant_dialect,
+    )
 
     history = messages[:-1]
     generation_prefill = renderer.render(history, add_generation_prompt=True)
@@ -312,6 +326,7 @@ def render_native_evidence_labels(
         answer_text=answer_text,
         generation_prefill=generation_prefill,
         transcript=transcript,
+        assistant_dialect=renderer.assistant_dialect,
     )
 
 
@@ -338,7 +353,11 @@ def _render_native_evidence_labels_batch(
     if len(messages_batch) != len(evidence_descriptions):
         raise ValueError("native evidence messages and descriptions must align")
     answer_texts = tuple(
-        _validate_native_evidence_request(messages, evidence_description)
+        _validate_native_evidence_request(
+            messages,
+            evidence_description,
+            assistant_dialect=renderer.assistant_dialect,
+        )
         for messages, evidence_description in zip(
             messages_batch, evidence_descriptions, strict=True
         )
@@ -365,6 +384,7 @@ def _render_native_evidence_labels_batch(
             answer_text=answer_text,
             generation_prefill=generation_prefill,
             transcript=transcript,
+            assistant_dialect=renderer.assistant_dialect,
         )
         for evidence_description, answer_text, generation_prefill, transcript in zip(
             evidence_descriptions,
@@ -379,6 +399,8 @@ def _render_native_evidence_labels_batch(
 def _validate_native_evidence_request(
     messages: Sequence[Mapping[str, Any]],
     evidence_description: str,
+    *,
+    assistant_dialect: NativeAssistantDialect,
 ) -> str:
     if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
         raise TypeError("messages must be a sequence of mappings")
@@ -388,7 +410,11 @@ def _validate_native_evidence_request(
         raise ValueError("evidence_description cannot have leading/trailing newlines")
     if any(fragment in evidence_description for fragment in _NATIVE_CONTROL_FRAGMENTS):
         raise ValueError("evidence_description cannot contain native control tags")
-    return _validate_post_tool_evidence_messages(messages, evidence_description)
+    return _validate_post_tool_evidence_messages(
+        messages,
+        evidence_description,
+        assistant_dialect=assistant_dialect,
+    )
 
 
 def _native_evidence_supervision_from_rendered(
@@ -398,11 +424,12 @@ def _native_evidence_supervision_from_rendered(
     answer_text: str,
     generation_prefill: RenderedTranscript,
     transcript: RenderedTranscript,
+    assistant_dialect: NativeAssistantDialect,
 ) -> CanonicalEvidenceSupervision:
     expected_text = (
         generation_prefill.text
         + evidence_description
-        + _QWEN_THINKING_COMPLETION_MIDDLE
+        + _completion_middle(assistant_dialect)
         + answer_text
         + _QWEN_ASSISTANT_TURN_SUFFIX
     )
@@ -440,6 +467,7 @@ def _native_evidence_supervision_from_rendered(
         evidence_byte_end=evidence_byte_end,
         evidence_token_positions=positions,
         token_offsets=offsets,
+        assistant_dialect=assistant_dialect,
     )
 
 
@@ -560,7 +588,10 @@ def _materialize_model_evidence_supervision(
 
 
 def _validate_post_tool_evidence_messages(
-    messages: Sequence[Mapping[str, Any]], evidence_description: str
+    messages: Sequence[Mapping[str, Any]],
+    evidence_description: str,
+    *,
+    assistant_dialect: NativeAssistantDialect,
 ) -> str:
     if len(messages) != 4 or not all(
         isinstance(message, Mapping) for message in messages
@@ -586,13 +617,26 @@ def _validate_post_tool_evidence_messages(
     evidence_turn = messages[-1]
     if evidence_turn.get("role") != "assistant":
         raise ValueError("evidence_description must be in the final assistant turn")
-    if evidence_turn.get("reasoning_content") != evidence_description:
-        raise ValueError(
-            "final assistant reasoning_content must equal evidence_description exactly"
-        )
-    answer_text = evidence_turn.get("content")
-    if not isinstance(answer_text, str):
-        raise ValueError("the representation answer content must be a string")
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        if evidence_turn.get("reasoning_content") != evidence_description:
+            raise ValueError(
+                "final assistant reasoning_content must equal evidence_description exactly"
+            )
+        answer_text = evidence_turn.get("content")
+        if not isinstance(answer_text, str):
+            raise ValueError("the representation answer content must be a string")
+    elif assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        if evidence_turn.get("reasoning_content") is not None:
+            raise ValueError("Instruct evidence must not use reasoning_content")
+        final_content = evidence_turn.get("content")
+        prefix = evidence_description + _QWEN_INSTRUCT_COMPLETION_MIDDLE
+        if not isinstance(final_content, str) or not final_content.startswith(prefix):
+            raise ValueError(
+                "Instruct assistant content must start with exact evidence and separator"
+            )
+        answer_text = final_content[len(prefix) :]
+    else:  # pragma: no cover - enum exhaustiveness guard
+        raise ValueError("unsupported assistant dialect")
     if evidence_turn.get("tool_calls"):
         raise ValueError("the evidence readout turn cannot contain another tool call")
     if messages[-2].get("role") != "tool":
@@ -616,11 +660,14 @@ def _validate_post_tool_evidence_messages(
         raise ValueError("the tool result must follow an assistant tool-call turn")
     if call_turn.get("content") != "":
         raise ValueError("the representation tool-call turn cannot contain answer text")
-    if call_turn.get("reasoning_content") != NATIVE_REPRESENTATION_PRE_REASONING:
-        raise ValueError(
-            "the representation tool-call reasoning must equal the fixed "
-            "native pre-reasoning"
-        )
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        if call_turn.get("reasoning_content") != NATIVE_REPRESENTATION_PRE_REASONING:
+            raise ValueError(
+                "the representation tool-call reasoning must equal the fixed "
+                "native pre-reasoning"
+            )
+    elif call_turn.get("reasoning_content") is not None:
+        raise ValueError("Instruct tool action must not use reasoning_content")
     if not answer_text.strip():
         raise ValueError(
             "native representation requires non-empty short answer content"
@@ -651,6 +698,14 @@ def _validate_post_tool_evidence_messages(
     ):
         raise ValueError("the representation tool call requires one non-empty target")
     return answer_text
+
+
+def _completion_middle(assistant_dialect: NativeAssistantDialect) -> str:
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        return _QWEN_THINKING_COMPLETION_MIDDLE
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        return _QWEN_INSTRUCT_COMPLETION_MIDDLE
+    raise TypeError("assistant_dialect must be NativeAssistantDialect")
 
 
 def _tokenize_with_exact_offsets(

@@ -59,11 +59,13 @@ from tgvf_rl.observations.store import (
     tensor_checksum,
 )
 from tgvf_rl.protocol.parser import StrictToolCallParser
+from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 from tgvf_rl.protocol.schema import (
     NativeToolCapabilityProfile,
     ParsedImageZoomInCall,
     ParsedToolCall,
 )
+from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.trajectory_audit import PolicyTrajectoryAuditWriter
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
@@ -344,10 +346,14 @@ class _Qwen3PolicyTrajectoryComponents:
             image_max_pixels=self.config.policy.image_max_pixels,
         )
         registry.register_initial_prompt(initial_prompt_token_ids, initial_inputs)
+        assistant_dialect = native_assistant_dialect_for_model(
+            self.config.model.model_name
+        )
         appender = QwenNativeToolObservationAppender(
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
+            assistant_dialect=assistant_dialect,
         )
         parser = StrictToolCallParser(
             enabled_tool_names=self.config.protocol.enabled_tool_names
@@ -403,6 +409,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 crop_processor_identity=crop_processor_identity,
                 crop_layout_identity=crop_layout_identity,
                 execution_ledger=self.crop_execution_ledger,
+                coordinate_mapper=Qwen3VLAdapter(),
             )
         else:  # guarded by the builder
             raise RuntimeError("unsupported live visual-tool profile")
@@ -417,6 +424,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 max_tool_calls=self.config.protocol.maximum_tool_calls,
                 enabled_tool_names=self.config.protocol.enabled_tool_names,
                 cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
+                assistant_dialect=assistant_dialect,
             )
 
         reward_context = _BoundRewardContextProvider(

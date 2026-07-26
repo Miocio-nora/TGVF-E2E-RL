@@ -47,6 +47,7 @@ from tgvf_rl.framework.vllm import (
     VLLMTurnRNGPort,
     VLLMTurnTerminationContract,
 )
+from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 from tgvf_rl.framework.vllm.live_client import VLLMLivePromptInputsPort
 from tgvf_rl.framework.vllm.preexpanded_prompt import (
     require_preexpanded_prompt_contract,
@@ -919,6 +920,9 @@ class VerlFrameworkNeutralAgentLoop:
             request_context=invocation.prompt_context,
             decoding=invocation.decoding,
             termination=invocation.termination,
+            assistant_dialect=native_assistant_dialect_for_model(
+                invocation.request.model.model_name
+            ),
         )
 
         def execute_sync() -> tuple[TrajectoryRecord, object]:

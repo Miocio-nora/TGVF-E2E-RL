@@ -25,6 +25,10 @@ from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
+from tgvf_rl.qwen.crop_coordinates import (
+    CanonicalSourcePixelCropCoordinateMapper,
+)
+from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.trajectories.schema import TrajectoryIdentity
 
 
@@ -244,6 +248,7 @@ def _runtime():
         ),
         crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
         execution_ledger=ledger,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
     )
     return runtime, store, source, pixels, materializer, layout, ledger, trace
 
@@ -371,6 +376,34 @@ def test_plain_crop_runtime_maps_empty_clamped_box_to_recoverable_error() -> Non
     assert ledger.entry_count() == 0
 
 
+def test_plain_crop_runtime_maps_invalid_qwen3_grid_to_recoverable_error() -> None:
+    model = _model()
+    store = ObservationStore()
+    source, _ = _source(store, "run/sample/0/group")
+    trace: list[str] = []
+    runtime = ImageZoomInToolRuntime(
+        model=model,
+        materializer=_Materializer(model, trace),
+        layout_builder=_LayoutBuilder(trace),
+        observation_store=store,
+        crop_processor_identity=ArtifactIdentity(
+            "qwen", "crop-processor", "fixture", SHA1
+        ),
+        crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
+        execution_ledger=CropExecutionLedger(),
+        coordinate_mapper=Qwen3VLAdapter(),
+    )
+    parsed = _parsed_call("[0,0,1001,1000]")
+
+    with pytest.raises(RecoverableToolExecutionError, match="within 0..1000"):
+        runtime.execute(
+            parsed,
+            _context(parsed_call=parsed, source=source, model=model),
+        )
+
+    assert trace == []
+
+
 def test_plain_crop_runtime_maps_processor_aspect_ratio_to_recoverable_error() -> None:
     model = _model()
     store = ObservationStore()
@@ -388,6 +421,7 @@ def test_plain_crop_runtime_maps_processor_aspect_ratio_to_recoverable_error() -
         ),
         crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
         execution_ledger=ledger,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
     )
     parsed = _parsed_call()
 
@@ -418,6 +452,7 @@ def test_plain_crop_runtime_rejects_gradient_carrying_recorded_features() -> Non
         ),
         crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
         execution_ledger=ledger,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
     )
     parsed = _parsed_call()
 
@@ -448,4 +483,5 @@ def test_plain_crop_runtime_rejects_materializer_bound_to_another_model() -> Non
                 "qwen", "crop-layout", "fixture", SHA2
             ),
             execution_ledger=CropExecutionLedger(),
+            coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
         )

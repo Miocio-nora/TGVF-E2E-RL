@@ -55,9 +55,7 @@ from .objective import (
     resolve_matrix_ce_score_config,
 )
 from .runtime import (
-    ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256,
-    ACCEPTED_QWEN3_MODEL_PATH,
-    ACCEPTED_QWEN3_TOKENIZER_LENGTH,
+    ACCEPTED_QWEN3_MODEL_FIXTURES,
     qwen3_input_embedding_identity,
 )
 from .trainer import (
@@ -75,7 +73,7 @@ REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V3 = "representation-training-conf
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4 = "representation-training-config-v4"
 REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5 = "representation-training-config-v5"
 REPRESENTATION_TRAINING_SCOPE = "qwen3_native_representation_phase_training"
-ACCEPTED_QWEN3_MODEL_NAME = "Qwen3-VL-8B-Thinking"
+ACCEPTED_QWEN3_MODEL_NAME = "Qwen3-VL-8B-Instruct"
 ACCEPTED_QWEN3_MODEL_DTYPE = "bfloat16"
 ACCEPTED_QWEN3_ATTENTION_BACKEND = "sdpa"
 NO_INITIALIZATION_SOURCE = "none"
@@ -151,13 +149,14 @@ class RepresentationModelConfig:
     def __post_init__(self) -> None:
         if self.family != "qwen3_vl":
             raise ValueError("model.family must be 'qwen3_vl'")
-        if self.model_name != ACCEPTED_QWEN3_MODEL_NAME:
-            raise ValueError(f"model.model_name must be {ACCEPTED_QWEN3_MODEL_NAME!r}")
-        if str(self.local_path) != ACCEPTED_QWEN3_MODEL_PATH:
-            raise ValueError("model.local_path must be the accepted stable Qwen3 path")
-        if self.tokenizer_length != ACCEPTED_QWEN3_TOKENIZER_LENGTH:
+        fixture = ACCEPTED_QWEN3_MODEL_FIXTURES.get(self.model_name)
+        if fixture is None:
+            raise ValueError("model.model_name must identify a pinned Qwen3 edition")
+        if str(self.local_path) != fixture["path"]:
+            raise ValueError("model.local_path must match the selected Qwen3 edition")
+        if self.tokenizer_length != fixture["tokenizer_length"]:
             raise ValueError("model.tokenizer_length differs from the accepted fixture")
-        if self.chat_template_sha256 != ACCEPTED_QWEN3_CHAT_TEMPLATE_SHA256:
+        if self.chat_template_sha256 != fixture["chat_template_sha256"]:
             raise ValueError(
                 "model.chat_template_sha256 differs from the accepted fixture"
             )

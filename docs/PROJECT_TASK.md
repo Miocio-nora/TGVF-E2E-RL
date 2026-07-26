@@ -2,7 +2,7 @@
 
 Status: **I8H-20260719 bounded framework implementation complete; production gates open**
 Recorded: **2026-07-18 JST**
-Updated: **2026-07-22 JST**
+Updated: **2026-07-26 JST**
 
 Unresolved implementation contracts and their promotion gates are tracked in
 [`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
@@ -30,7 +30,7 @@ stack is:
 - upstream veRL as the distributed RL framework;
 - vLLM as the only rollout backend; SGLang is out of scope;
 - FSDP2 as a required executable path;
-- Qwen3-VL-8B-Thinking as the primary executable model and
+- Qwen3-VL-8B-Instruct as the primary executable model and
   `Qwen/Qwen2.5-VL-7B-Instruct` as the required family-adapter compatibility
   target. The bounded build supplies only its fail-closed main-`D`/family
   boundary; full DeepStack end-to-end compatibility remains a separate gate;
@@ -239,6 +239,78 @@ particular:
 - this decision does not change representation-phase transcript/checkpoint
   identity, tool execution mathematics, Adapter state, reward or benchmark
   prompts.
+
+For new Crop-capable runs, the coordinate repair in §0.4C supersedes the Crop
+parts of v2 with
+[`TGVF_VISUAL_TOOL_PROMPTS_V3.md`](TGVF_VISUAL_TOOL_PROMPTS_V3.md). The TGVF-only
+system prompt and all successful response text remain unchanged; the overall
+bundle version changes so every new run has an unambiguous identity.
+
+### 0.4C Accepted Crop-coordinate conversion contract
+
+Decision ID: **CROP-COORDINATES-20260724**
+
+Accepted by: **user**, on **2026-07-24 JST**
+
+The accepted canonical executor box in §0.4 is an immutable-source, half-open
+pixel box. It is not the coordinate space natively emitted by every Qwen-VL
+family. The pinned Qwen3-VL 2D-grounding cookbook states that Qwen3-VL emits
+relative `0..1000` coordinates, whereas Qwen2.5-VL uses absolute coordinates on
+its processor-resized image. The current v2 prompt merely says `bbox_2d`, the
+schema delegates its meaning to the runtime, and the runtime passes those four
+integers directly to original-image clamping. No Qwen3 de-normalization or
+Qwen2.5 resized-image inverse transform exists.
+
+This is a real observed failure, not only a theoretical compression concern.
+In the completed `PRL-03-R2` bounded trajectory audits, 4,504 Qwen3 Crop calls
+could be parsed from sampled assistant turns. Of those, 4,492 were entirely in
+`0..1000`, 3,177 (70.5%) changed under direct original-image clamping, and 1,760
+(39.1%) became empty after that direct clamp. The run-level metrics independently
+record 2,500 `tool_execution_failed` events among 7,305 attempts. One concrete
+500x333 source produced `[75,306,435,710]`: current execution yields
+`[75,306,435,333]`, while Qwen3 relative-grid decoding yields
+`[37,101,217,236]` under the accepted floor rule, which covers the requested
+black-bag/laptop region.
+
+The accepted repair separates the sampled model-space box from the canonical
+immutable-source box. For every new Crop observation it must:
+
+1. preserve both the sampled model-space box and canonical source-pixel box;
+2. bind the coordinate-space identity, source size, coordinate-reference size,
+   conversion version, and model/source/effective boxes into the observation;
+   when processor-resized geometry defines the model space, as for Qwen2.5-VL,
+   that exact geometry is the coordinate-reference size and is mandatory;
+3. decode Qwen3's inclusive `0..1000` relative grid to the half-open source
+   image by applying `floor(coordinate * source_extent / 1000)` independently
+   to all four edges; `[0,0,1000,1000]` therefore maps exactly to the whole
+   source image;
+4. reject Qwen3 coordinates outside `0..1000`, reversed model boxes, and boxes
+   that become empty after conversion instead of silently guessing or changing
+   coordinate systems;
+5. handle Qwen2.5-VL separately as absolute coordinates over the actual
+   processor-resized image, using the same per-edge floor inverse scale; that
+   path must fail closed when the exact resized width and height are absent;
+6. pass non-square, sub-1000, greater-than-1000, max-pixel-resized, boundary,
+   and exact-RGB crop fixtures.
+
+The model-space box remains the box attached to the sampled tool call and is
+never rewritten in the native transcript. The observation schema additionally
+records its coordinate-space identity, conversion version, coordinate-reference
+size, converted source-pixel box, effective clamped box, and immutable source
+size. New Qwen3 policy and evaluation runtimes must inject the Qwen3 family
+adapter explicitly. Direct executor unit fixtures may use an explicitly named
+canonical-source-pixel mapper; there is no implicit source-pixel default.
+
+This acceptance authorizes the CPU implementation and fixtures for the plain
+and atomic Crop paths. It does not authorize a GPU run, change rewards or data
+selection, or claim Qwen2.5-VL end-to-end compatibility.
+
+The existing Crop executor and exact replay tests still establish that a box
+already expressed in canonical source pixels is applied deterministically to
+immutable RGB. They do not establish that a Qwen model prediction was converted
+to that canonical box correctly. `PRL-03-R2` and earlier Qwen3 Crop artifacts
+are therefore engineering diagnostics only and cannot establish a recovered
+DeepEyes Crop baseline.
 
 ### 0.5 Accepted evaluation architecture
 
@@ -740,6 +812,469 @@ availability change only and does not change accepted answers, reward values,
 advantages, trajectories, optimizer mathematics, or normal checkpoint
 cadence. Existing bounded judge-v1/v2 bindings remain immutable provenance.
 
+### 0.8.8 Accepted CPU-only Qwen3 RL data-selection preparation
+
+Decision ID: **QWEN3-RL-DATA-SELECTION-PREP-20260725**
+
+Accepted by: **user**, on **2026-07-25 JST**.
+
+While GPU execution is unavailable, the project may complete the CPU-only
+preparation required to construct a Qwen3-native RL population with quality,
+selection properties, and source distribution comparable to the published
+DeepEyes RL data. DeepEyes is the hard methodological reference; exact released
+row membership and byte-level reproduction of its unpublished filtering
+implementation are not objectives. This authorization covers the
+selection protocol, typed candidate/attempt/decision records, deterministic
+request identities, source and GT-region provenance, fail-closed reducers,
+fixtures, and documentation. It does not authorize model loading, CUDA use,
+rollout generation, answer judging through a paid service, dataset membership
+claims, or a policy/representation optimizer step.
+
+The current `ChenShawn/DeepEyes-Datasets-47k` snapshot is an already selected
+quality and distribution reference, not the pre-filter candidate pool. Its
+released mixture is the reporting baseline: V* fine-grained perception
+`22,362/47,052` (47.5%), ArxivQA chart/reasoning `13,659/47,052` (29.0%), and
+ThinkLite-VL general reasoning `11,031/47,052` (23.4%). The Qwen3 population
+need not contain the same rows, but every deviation from these source shares
+must be reported before a balancing rule is accepted. Selection for Qwen3 must
+begin from separately identified source candidates. Every candidate
+must bind its stable source identity, question, ground truth, immutable image
+identity and source family. A V* candidate intended for an oracle-perception
+branch must additionally bind original-image dimensions and one or more
+ground-truth regions in canonical source-pixel coordinates. Reverse matching
+to the released 47K rows is useful coverage/provenance evidence but is not a
+membership requirement and must not replace source identity.
+
+The accepted `T1` decision semantics adopt the published difficulty gate as a
+hard reference:
+collect exactly eight independently identified, scoreable full-image responses
+from the selected Qwen3 policy and retain a sample iff its correct count is in
+`[1, 7]`. A `0/8` sample is excluded as too hard and an `8/8` sample as too
+easy. Any missing, duplicate, truncated, generation-failed, or verifier-failed
+attempt makes the sample unresolved; such an attempt is never silently counted
+as incorrect. Model/processor, exact native prompt, image processing, sampling,
+response budget, stop handling, verifier, seeds and attempt ordering remain
+content-addressed GPU-run inputs rather than CPU defaults.
+
+The published perception-utility stage applies only to V* fine-grained
+perception data and evaluates answerability with ground-truth regions. The CPU
+preparation reserves paired `full_image` and `gt_region` attempts and preserves
+all raw counts. The paper and pinned public repository do not specify enough
+implementation detail to infer the number of oracle attempts, seed pairing, GT
+region composition, or the exact improvement threshold. Therefore `T2`
+membership remains fail-closed until those choices are accepted; chart and
+general-reasoning rows must not be discarded under a V*-only utility rule.
+`T3` and `T4` remain deferred exactly as recorded in
+`DEFERRED_DECISIONS.md`.
+
+CPU acceptance requires deterministic request IDs and canonical records,
+strict source/box validation, exact `T1` truth-table fixtures, duplicate and
+incomplete-attempt rejection or unresolved outcomes, and a dry-run that imports
+neither Torch nor a model runtime. Selection outputs must retain every decision
+reason and source count so that filtering is auditable and reversible.
+
+CPU materialization completed on 2026-07-25 JST without loading Torch, a model,
+or CUDA. Catalog SHA-256
+`8764e1cfb747c9c65250b2d757aa71e613b38185019dff23f9149cf8d4b1a6a7`
+binds 361,980 source rows, 107 explicit source-quality rejections, 361,873
+materialized candidates, 160 exact-image held-out exclusions against the pinned
+CoreDev-2511 task population, and 361,713 rows eligible for later Qwen3 `T1`
+scoring. This is candidate readiness, not a selected RL dataset or an
+authorization to run GPU scoring. Perceptual near-duplicate handling, `T2`, and
+post-selection balancing remain open.
+
+### 0.8.9 Accepted Qwen3 T1 GPU scoring and canary gate
+
+Decision ID: **QWEN3-RL-DATA-T1-20260725**
+
+Accepted by: **user**, on **2026-07-25 JST**.
+
+The project may now implement and execute `T1` full-image difficulty scoring on
+physical GPUs **0--3** with the stable local
+`/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking` identity.  The image policy
+is Qwen-native aspect-ratio-preserving processing with `max_pixels = 262144`
+(`512 * 512` pixel area), not a forced `512x512` resize.  This authorization is
+inference-only: it does not enable a policy or representation optimizer step,
+TGVF Adapter execution, a visual tool, `T2`, source balancing, or a paid answer
+judge.
+
+Before any model process starts, the following launch blockers must be closed:
+
+- ArxivQA options are reconstructed from the pinned source by removing only
+  explicit separator/next-figure artifacts, stripping only unambiguous existing
+  option-label prefixes, and assigning canonical positional labels `A` through
+  `Z`.  The source answer is mapped through the retained source-option index and
+  must remain inside the cleaned option range.  Raw options, raw label, removed
+  entries and the transform version remain in provenance.  The candidates,
+  exact held-out screen and catalog are rematerialized under new identities;
+  the earlier unnormalized ArxivQA artifact is not a `T1` input.
+- A run manifest binds candidate hashes, model and processor files, native chat
+  template, exact tool-free prompt, image policy, sampling, per-attempt seed,
+  stop handling, response-budget revisions, parser, verifier and runtime.  The
+  run identity is present in every raw generation and scored attempt so that
+  evidence from different runs cannot be mixed.
+- Generation is resumable at content-addressed chunks.  Each candidate and all
+  eight independently seeded attempts have a stable GPU shard independent of
+  process order, physical batch, retry or resume.  Raw response text, sampled
+  token identity, finish/stop reason, token count and seed are retained before
+  verification.  A normal EOS response with an unparseable or wrong answer is
+  scoreable and incorrect; a length finish, generation failure or verifier
+  failure is unscored and can never be converted to an incorrect answer.
+
+The exact prompt is one native Qwen chat containing no system message and no
+tools: the sole user content is the original image followed by the candidate's
+canonical question, then `add_generation_prompt = true`.  The Qwen template
+therefore owns the assistant `<think>` opener.  The candidate answer is the
+non-empty suffix after the last sampled `</think>`; absence of a closer or an
+empty suffix is an invalid answer, not a truncation unless the backend itself
+reports a length finish.
+
+DeepEyes fixes eight responses and the `0/8`, `8/8`, and `1--7/8` decision but
+does not publish enough detail to recover its exact sampling settings.  This
+Qwen3 project therefore fixes the `T1` sampling distribution to the existing
+Policy RL rollout distribution: temperature `1.0`, top-p `1.0`, top-k disabled,
+min-p `0`, repetition penalty `1.0`, presence and frequency penalties `0`, no
+additional logit processor, EOS enabled, and one independently derived low-
+31-bit seed for every candidate/attempt pair.  The seed derivation includes the
+run-manifest identity, candidate identity and attempt index and is invariant to
+rank and batching.
+
+Response length must not silently define difficulty.  The primary generation
+budget is 40,960 new tokens in a 65,536-token engine.  Only backend length
+finishes are replayed with the identical logical request and seed at 98,304 new
+tokens in a 131,072-token engine and, if still necessary, 196,608 new tokens in
+the model's 262,144-token context.  Every revision is retained; only the first
+normal non-length completion becomes the scoreable response.  Exhausting all
+three budgets leaves the attempt `truncated` and the sample unresolved.
+
+Answer verification is source-specific.  ArxivQA is deterministic multiple
+choice over that row's canonical `A`--`Z` option range and never calls a judge.
+ThinkLite first uses normalized exact and numeric/symbolic rules, and V* first
+uses normalized exact rules; unresolved semantic equivalence may use only the
+separately identified local `Qwen/Qwen2.5-72B-Instruct` judge after the Qwen3
+generation workers release GPUs 0--3.  The local judge, prompt, deterministic
+sampling and every request/response identity must be recorded.  No OpenRouter,
+DeepInfra, GPT or other paid/remote service is authorized for this selection.
+
+The first experiment is a separately identified stratified canary of exactly
+192 candidates (64 per source) and eight attempts per candidate.  V* is
+stratified across its four source annotation files; ArxivQA covers option
+counts and cleaned-option cases, including the ten-option/J row; ThinkLite
+covers the principal answer-form families.  Selection inside each stratum is
+by content hash, not by model outcome.  A short vertical smoke is a resumable
+prefix of this same canary, not a different scientific result.
+
+Canary promotion requires all 1,536 logical attempts to be unique and accounted
+for, zero silent truncation/error-to-incorrect conversions, exact prompt/image/
+seed provenance, deterministic replay on an audited subset, zero ArxivQA judge
+calls, and a report of generated-token quantiles, length finishes, per-source
+`0/8`, `8/8`, and `1--7/8` rates, verifier-route/judge-call rates, four-GPU
+throughput and projected full-run GPU-hours.  Verifier ambiguity is audited on
+fixed canary outputs before promotion.  The full 361,710-candidate run receives
+a new `PLANNED` ledger identity after the canary passes; canary attempts never
+count as full-run attempts.
+
+The ArxivQA launch blocker was closed by canonical rematerialization on the
+same date.  The v2 source contains 99,893 accepted rows and 107 fail-closed
+rejections, removes 18,812 explicit garbage-option entries without losing raw
+provenance, and preserves the valid ten-option/J case.  Its screened JSONL and
+manifest SHA-256 values are respectively
+`cda47ff2d9218f63e871598c898f18862c994ee0affb76294d0fe2a1dd991742`
+and `a809b2eaa0a840dba1d5bc327df2845c325ba8ce0b74af6375a3642aa63f807b`.
+The authoritative combined CPU catalog is `catalog-v2.json`, SHA-256
+`428e782a250414ad25dad2cc6333086739391d0c3a1b6d6ff898e78476da5bd9`,
+with 361,710 T1-eligible candidates and 2,893,680 required full-run attempts.
+
+#### 0.8.9.1 Accepted fail-closed source-quality amendment
+
+Accepted by: **user**, on **2026-07-26 JST**, with the explicit instruction to
+continue immediately and avoid wasting GPU work.
+
+The completed canary exposed one pinned corrupt V* annotation:
+`llava_focus_data.json` row `18042`, candidate
+`bd8222dad80f0a6e576b1f6f48dc37bab2717cc2f65e9c2bd6722bc6d334e1b4`,
+whose stored ground truth is the truncated phrase `There are`.  This is a
+source-verifier failure, not an incorrect model answer.  The row is quarantined
+by exact source identity and answer hash; no generic short-answer heuristic and
+no model-majority label repair are allowed.
+
+The eight already generated attempts for that row remain immutable but are
+unresolved and are excluded from semantic-judge dispatch.  To avoid discarding
+the other 1,528 valid and complete canary generations, the promotion audit may
+evaluate the engineering and difficulty gates over the remaining 191 valid
+candidates, while reporting the corrupt row separately and never treating the
+191-row result as a newly sampled 192-row canary.  This is an explicit quality
+amendment to the canary denominator, not evidence mixing: no generated attempt
+is reassigned to another candidate and the original run identity is unchanged.
+
+Before a full `T1` launch, source materialization and the full catalog must use
+a new identity that excludes exactly this row.  The resulting full population
+is expected to contain 361,709 candidates and 2,893,672 attempts.  The full run
+still requires its own `PLANNED` ledger identity and fresh attempt seeds; no
+canary attempt may count toward it.
+
+#### 0.8.9.2 Accepted Qwen3-VL-8B-Instruct paired token-length canary
+
+Decision ID: **QWEN3-INSTRUCT-TOKEN-CANARY-20260726**
+
+Accepted by: **user**, on **2026-07-26 JST**, with the instruction to download
+the official `Qwen/Qwen3-VL-8B-Instruct` weights and measure its average output
+length.
+
+This decision authorizes one inference-only diagnostic on physical GPUs 0--3.
+It does not change the accepted Qwen3-VL-8B-Thinking primary policy, authorize
+training, T2, a tool trajectory, an answer-judge deployment, or a full-data
+screen.  The diagnostic reuses the exact outcome-independent 192-candidate
+T1-01 population (64 per source), original full image, eight attempts per
+candidate, 512-squared maximum pixel area, BF16 DP4/TP1 vLLM runtime, response-
+budget ladder, and sampling distribution.  This isolates the model-edition
+difference rather than conflating it with a shorter cap or a different sample.
+
+The Instruct checkpoint must use its own pinned Hugging Face revision, local
+weight path, processor/tokenizer/template hashes, native assistant generation
+prompt, model identity, seed namespace, run ID, configuration, and output root.
+It must not inherit the Thinking checkpoint's template-owned `<think>` opener
+or its final-answer parser.  Because this cell measures generation length and
+throughput only, the corrupt V* ground-truth row may remain in the fixed
+outcome-independent population; no correctness or difficulty claim is allowed
+from this cell.
+
+The accepted implementation surface is limited to the exact-model whitelist
+and model-specific native prompt-suffix validation in
+`src/tgvf_rl/data/policy_selection_runtime.py` and
+`src/tgvf_rl/data/policy_selection_vllm.py`, their focused CPU tests, one new
+configuration under `configs/policy/data_selection/`, and immutable diagnostic
+artifacts.  No family checkpoint reuse, tokenizer growth, custom protocol token,
+or silent fallback from the model's native template is allowed.
+
+Before GPU launch, `docs/EXTERNAL_REFERENCES.md` must pin the downloaded model
+revision and local identity and `docs/EXPERIMENT_LEDGER.md` must contain a
+complete `PLANNED` cell.  Acceptance requires all 1,536 logical generations to
+be unique and accounted for, exact image/prompt/seed provenance, no generation
+failure silently counted as a short response, and reporting overall plus per-
+source mean, median, P90, P95, P99 and maximum sampled tokens, finish reasons,
+attempts/second, sampled tokens/second, elapsed time and GPU-hours.  The paired
+report must compare these measurements with T1-01 while keeping the scientific
+conclusion diagnostic rather than promoting Instruct-filtered difficulty as
+Qwen3-VL-8B-Thinking difficulty.
+
+#### 0.8.9.3 Accepted Instruct-primary migration
+
+Decision ID: **QWEN3-INSTRUCT-PRIMARY-20260726**
+
+Accepted by: **user**, on **2026-07-26 JST**, after the paired canary completed
+all 1,536 generations without a sampled `<think>` tag and measured a 3.183x
+reduction in sampled tokens relative to the paired Thinking cell.
+
+This decision supersedes the model-edition choices in §0.8 item 1 and item 7,
+§0.8.9.2's diagnostic-only restriction, and later consolidated statements that
+name Qwen3-VL-8B-Thinking as the current primary. It does not rewrite completed
+Thinking experiments or their immutable identities. The representation phase,
+policy RL phase, and policy-RL data selection now use
+**`Qwen/Qwen3-VL-8B-Instruct`** as their primary backbone, initialized from the
+official revision `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` at
+`/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`. The frozen RL reference is
+the same unadapted Instruct checkpoint. Qwen3-VL-8B-Thinking is retained only
+as historical evidence or a separately identified comparison model;
+`Qwen/Qwen2.5-VL-7B-Instruct` remains the required cross-family compatibility
+model.
+
+The architecture, native DeepStack path, TGVF Adapter structure, both target-
+conditioning providers, no-tokenizer-growth rule, 512-squared image-area
+setting, eight trajectories per prompt, response-budget ladder, exact-
+observation replay, behavior-log-probability preservation, and accepted GRPO
+mathematics do not change. A representation artifact trained against Thinking
+embeddings or hidden states is checkpoint-specific and must not initialize the
+Instruct line; the Instruct representation phase receives a fresh artifact and
+new experiment identity.
+
+The Instruct chat template owns only the native assistant prefill
+`<|im_start|>assistant\n`. The project must not inject a `<think>` opener. A
+policy-sampled `<think>...</think>` span is optional policy output and all of
+its tokens remain policy-owned; a direct answer or direct native tool call with
+no think markers is valid. After a tool response, the environment appends the
+native next-assistant prefill without a think marker. Transcript validation,
+tool parsing, final-answer extraction, token ownership masks, rollout/replay,
+and fixtures must dispatch on an exact model-edition/protocol identity rather
+than infer the edition from generated text.
+
+Policy-RL data selection uses the Instruct native prompt and
+`direct-completion-v1` answer parser. The parser must remove only terminal Qwen
+control tokens and must preserve the sampled completion otherwise; it must not
+search for or require `</think>`. The completed T1-02 raw generations may be
+scored only after parser fixtures and a small correctness canary pass. Any
+full-data generation, representation training, or policy RL run still requires
+its own complete `PLANNED` ledger cell and accepted experiment identity; this
+decision alone authorizes no GPU launch.
+
+#### 0.8.9.4 Accepted Instruct prompt trigger and parallel closure smokes
+
+Decision ID: **QWEN3-INSTRUCT-CLOSURE-SMOKES-20260726**
+
+Accepted by: **user**, on **2026-07-26 JST**.
+
+The Qwen3-VL-8B-Instruct policy-RL prompt follows the observable DeepEyes
+trigger mechanism without copying its custom answer protocol. The initial user
+message explicitly tells the model to think first and to generate its own
+`<think>...</think>` block before either a native tool call or the concise
+final answer. Every successful tool response repeats that instruction before
+the next native assistant header. The Instruct chat template and environment
+continue to own only `<|im_start|>assistant\n`; neither may inject a think
+opener. Every generated think tag and interior token is policy sampled and must
+retain its behavior log probability and policy-loss ownership. This paragraph
+supersedes only the policy-RL prompt behavior described as optional in
+§0.8.9.3; malformed or missing generated tags remain observable sampled output
+and may not be repaired by the environment.
+
+DeepEyes-compatible handling means an absent pair (`0` openers, `0` closers)
+is recorded as zero think compliance but does not invalidate an otherwise
+valid native tool call or direct answer. An unbalanced, duplicated, reversed,
+or misplaced generated envelope remains a format error. This distinction is
+required so the Instruct base policy can collect executable crop trajectories
+while the prompt-trigger metric is measured; no tag is synthesized and every
+actual sampled token keeps normal policy ownership.
+
+This is a policy-RL-only prompt change. The representation-phase user prompt,
+teacher trajectory, and evidence objective do not acquire a DeepEyes-style
+think instruction. Policy-RL `T1` data selection also retains its accepted
+tool-free image-plus-question prompt with no system message and no RL trigger
+text. Both paths still require their distinct Instruct processor/transcript
+fixtures and experiment identities.
+
+Three bounded closure smokes may be prepared in parallel and launched only
+after each has a complete `PLANNED` entry in `docs/EXPERIMENT_LEDGER.md`:
+
+1. physical GPUs 0--1: a fresh Instruct representation-phase FSDP2 optimizer-
+   step smoke, with no Thinking Adapter initialization;
+2. physical GPU 2: a real Instruct policy prompt canary measuring initial-turn
+   and post-tool-response think opener/closer, native action, termination, and
+   sampled-token statistics; and
+3. physical GPU 3: a tool-free Instruct `T1` filter smoke that is deliberately
+   interrupted and resumed, proving stable request identity, content-addressed
+   chunk reuse, no duplicate attempts, and equality with its declared
+   uninterrupted logical request set.
+
+These smokes authorize no policy optimizer step, no full representation run,
+no full-data filter, and no reuse of their diagnostic outputs as promoted
+training artifacts.
+
+#### 0.8.9.5 Accepted Instruct representation run and bounded T1 population
+
+Decision ID: **QWEN3-INSTRUCT-RP-T1-FORMAL-20260726**
+
+Accepted by: **user**, on **2026-07-26 JST**.
+
+The next executable sequence is one fresh, complete Instruct representation-
+phase run followed, only after that run completes successfully and releases its
+GPUs, by Instruct `T1` full-image difficulty generation.  The representation
+run uses the accepted contextual-hidden-state provider at layer `-1`, the full
+main `D` plus all three D-DeepStack branches, fresh seed-42 initialization,
+Balanced mean-NLL Matrix CE at temperature `1.0`, L-gen/Matrix-CE/Norm weights
+`1/1/.1`, the v4 clean-imend teacher train/test splits, global batch 32,
+2,000 optimizer steps, BF16/SDPA FSDP2 on physical GPUs 0--1, and the
+Instruct-native representation transcript already closed by RP-65.  Maximum
+image area remains `262144`; the tokenizer is not resized and no Thinking
+Adapter may initialize this run.  Validation and ordinary optimizer-boundary
+checkpoints occur every 500 steps.  Power-loss recovery or an automatic
+restart supervisor is not part of this task; a nonzero exit is not a PASS.
+
+The subsequent `T1` candidate population is fixed before observing any model
+outcome: 170,000 V* candidates, 32,000 ArxivQA candidates, and all 69,842
+eligible ThinkLite candidates, for 271,842 candidates and 2,174,736 independently
+seeded full-image attempts.  The V* and ArxivQA subsets are chosen by a pinned,
+deterministic content-hash order from their screened populations.  This is a
+compute-bounded candidate pool, not a claim of matching released row
+membership; source counts and the final selected distribution must remain in
+the manifest.  Model, native tool-free prompt, 512-squared maximum image area,
+eight attempts, sampling, response-budget ladder, direct-completion parser and
+source-specific verifier remain those accepted for the Instruct `T1` line.
+
+Generation runs as four independent rank workers on physical GPUs 0--3.
+Completed chunks are immutable and content-addressed; a restart validates and
+skips only fully committed chunks and recomputes an incomplete chunk.  A user
+stop must target only the recorded worker process groups and preserve all
+committed evidence.  `T2`, semantic-judge reduction, post-`T1` balancing and
+policy optimization remain outside this launch.
+
+#### 0.8.9.6 Accepted Instruct policy-RL configuration baseline and closure state
+
+Decision ID: **QWEN3-INSTRUCT-POLICY-RL-BASELINE-20260726**
+
+Accepted by: **user**, on **2026-07-26 JST**.
+
+The next policy-RL line is an Instruct-native experiment, not a continuation,
+resume, or relabeling of any completed Thinking run.  Existing
+`configs/policy/runs/*.toml` files that bind Qwen3-VL-8B-Thinking, RP-49, or
+`REP-QWEN3-V4-CONTEXTUAL-V4` remain immutable historical records and must not be
+used to launch the new line.  A new formal run requires a new TOML, experiment
+identity, output root, and pre-launch audit.  Until that TOML exists, the
+Instruct migration is implemented at the shared model/protocol layer but is not
+a closed executable policy-RL run configuration.
+
+The fixed baseline for that new TOML is:
+
+1. **Policy and reference.** Both use the official
+   `Qwen/Qwen3-VL-8B-Instruct` revision
+   `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` at
+   `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`.  The policy starts from
+   that base plus the accepted decoder-only LoRA scope; the frozen reference is
+   the same unadapted Instruct checkpoint.  Neither may load a Thinking policy,
+   reference, policy checkpoint, or representation artifact.
+2. **Representation binding.** A TGVF-enabled Instruct run binds the completed
+   RP-66 full main-`D` plus D-DeepStack `(8,16,24)` artifact at
+   `artifacts/representation/RP-66-qwen3-instruct-balanced-t1-contextual-2000-gpu01/adapter.pt`,
+   file SHA-256
+   `3429dc83880d48d623f3dcdbea48eb5219be6031b206e53c8286c4b1c65ce5c9`
+   and manifest SHA-256
+   `425d57108b60b2a2bc65144eaded0b1d25f763f3d347aa16396394dccae2b89c`.
+   A Crop-only comparison has no TGVF observation and therefore must use its
+   own separately identified configuration rather than carry a nominal Adapter
+   binding.
+3. **Native Instruct protocol.** The template owns only
+   `<|im_start|>assistant\n` and never inserts `<think>`.  The policy-RL user
+   prompt asks the model to generate its own `<think>...</think>` block before
+   a tool call or final answer, and each successful tool response repeats the
+   reminder.  Every emitted think/tool/answer token remains policy sampled.
+   A completely absent think pair is recorded as zero compliance but does not
+   invalidate an otherwise legal native call or answer; malformed partial or
+   misplaced envelopes remain format errors.  Representation training and
+   tool-free `T1` selection do not inherit this RL-only trigger text.
+4. **Image and rollout group.** Original images use Qwen-native
+   aspect-ratio-preserving processing with maximum pixel area `262144`.  GRPO
+   group size remains exactly eight trajectories per prompt.  The selected
+   update population is **128 prompts x 8 trajectories = 1,024 trajectories per
+   optimizer update**, favoring prompt diversity while retaining the accepted
+   `n=8` reward-normalization group.  World size, prompt micro-batch, rollout
+   scheduling, and gradient accumulation must resolve to that exact global
+   prompt batch without changing the GRPO group boundary.
+5. **Data.** The formal run uses the newly Instruct-screened and subsequently
+   accepted approximately 50K policy-RL population.  The completed DeepEyes-47K
+   snapshot remains a distribution/quality reference and historical-run input,
+   not an implicit fallback dataset.  The new run cannot be finalized before
+   `T1`, applicable V*-only `T2`, balancing, held-out screening, and the final
+   dataset hashes/counts are closed.
+6. **Response capacity.** Response length must not become a difficulty filter
+   or a training-failure mechanism.  The historical Policy Pilot hard pin
+   `max_response_length=8192` is not automatically inherited by the new formal
+   run.  Before launch, one explicit cumulative multi-turn response budget,
+   matching actor/replay/vLLM context capacities and stop ownership, must be
+   accepted from Instruct length and throughput evidence.  Truncation rates and
+   consumed policy-token quantiles are mandatory telemetry; no length finish
+   may be silently scored as an incorrect answer.
+7. **Unchanged mathematics and operations.** Exact sampled behavior log
+   probabilities, zero rollout/update staleness, exact recorded-observation
+   policy/reference replay, the accepted GRPO equations, maximum four tool-call
+   attempts, FSDP2, checkpoint/resume, and decoder-LoRA dropout zero remain in
+   force.  Physical GPUs 0--3 are the intended four-GPU topology, and every
+   formal run must enable both console and W&B logging unless a later explicit
+   decision changes that requirement.
+
+The remaining launch blockers are therefore the final selected-data identity,
+the explicit non-obstructive response/capacity values, a throughput-valid
+world-size/micro-batch/accumulation realization of the 128-prompt update, and a
+new audited Instruct run TOML bound to the intended tool arm.  None of those
+fields may be inferred from the old Thinking R5 configuration.
+
 ### 0.9 Accepted contextual Matrix-CE 2000-step comparison
 
 Decision ID: **RPI-20260721-CONTEXTUAL-MATRIXCE-2000-PAIR**
@@ -1009,7 +1544,7 @@ batched inference replace the scalar run.
 
 ## 1. Objective
 
-Build a new TGVF system in which the original Qwen reasoning policy learns the
+Build a new TGVF system in which the selected Qwen Instruct policy learns the
 complete visual-tool behavior through end-to-end reinforcement learning:
 
 ```text
@@ -1432,10 +1967,11 @@ measure these gaps explicitly rather than inherit the fork.
 
 ### 2.5 Required Qwen families and target-conditioning providers
 
-The primary policy/reference target is **Qwen3-VL-8B-Thinking**, using the
+The primary policy/reference target is **Qwen3-VL-8B-Instruct**, using the
 stable local path
-`/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking`. Per the user decision, the
-project does not scan or hash every weight shard in that directory. The model
+`/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`. Its official immutable
+revision and downloaded shard hashes are recorded in
+`docs/EXTERNAL_REFERENCES.md`. The model
 name and path are the accepted operational identity. Processor/tokenizer/chat
 template behavior is still frozen through exact native transcript fixtures and
 fixture hashes because it directly affects policy tokens.
@@ -1708,12 +2244,12 @@ response or regenerate `D`.
 
 ## 5. Initial parameter policy
 
-The initial policy is the unmodified original Qwen reasoning model plus a
+The initial policy is the unmodified selected Qwen Instruct model plus a
 newly defined policy adapter scope. The following are fixed or unresolved:
 
-- Frozen reference: exact original Qwen model and prompt/tool schema.
-- Policy initialization: exact original Qwen model; no Stage2 LoRA.
-- Primary family: Qwen3-VL-8B-Thinking. Secondary compatibility family:
+- Frozen reference: exact base Instruct model and prompt/tool schema.
+- Policy initialization: exact base Instruct model; no intermediate SFT adapter.
+- Primary family: Qwen3-VL-8B-Instruct. Secondary compatibility family:
   `Qwen/Qwen2.5-VL-7B-Instruct`.
 - TGVF Adapter: a newly trained native-format TGVF Adapter checkpoint, initially
   frozen during the first RL proof. The legacy checkpoint is not a direct
@@ -1815,7 +2351,7 @@ task used upstream veRL and answered the following questions to the extent
 recorded by its framework tests and smoke cells:
 
 - Does the selected veRL commit support Qwen VLM policy/reference models?
-- Does the family adapter run the primary Qwen3-VL-8B-Thinking fixture and a
+- Does the family adapter run the primary Qwen3-VL-8B-Instruct fixture and a
   `Qwen/Qwen2.5-VL-7B-Instruct` compatibility fixture without leaking
   family-specific tensor assumptions across the boundary?
 - Can it run multi-turn dynamic tools without converting `D` to a PIL image?
@@ -2077,7 +2613,7 @@ and production objective/topology gates remain open.
 
 - In the accepted isolated environment, test and then pin one upstream veRL
   commit with vLLM; do not adopt the SDPO or DeepEyes veRL trees.
-- Validate Qwen3-VL-8B-Thinking policy/reference forward and the
+- Validate Qwen3-VL-8B-Instruct policy/reference forward and the
   `Qwen/Qwen2.5-VL-7B-Instruct` family-adapter fixture.
 - Validate a deterministic native `tgvf_focus_tool` synthetic-latent fixture
   with at least two calls, exact behavior logprobs, immutable observation
@@ -2121,7 +2657,7 @@ Protocol-C serialization.
 
 - Implement native tool schema, strict parser, target-span mapping, and native
   tool-response `D` injection.
-- Establish a Qwen VLM family-adapter contract: Qwen3-VL-8B-Thinking is the
+- Establish a Qwen VLM family-adapter contract: Qwen3-VL-8B-Instruct is the
   primary executable path and `Qwen/Qwen2.5-VL-7B-Instruct` is the required
   compatibility fixture.
 - Support repeated `tgvf_focus_tool` calls with a configurable safety cap

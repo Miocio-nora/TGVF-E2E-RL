@@ -18,7 +18,11 @@ from typing import Any
 
 import torch
 
-from tgvf_rl.protocol.native import NativeProtocolRenderer, RenderedTranscript
+from tgvf_rl.protocol.native import (
+    NativeAssistantDialect,
+    NativeProtocolRenderer,
+    RenderedTranscript,
+)
 from tgvf_rl.qwen.base import (
     InjectedForwardRequest,
     InjectedVisualBlock,
@@ -261,10 +265,18 @@ class Qwen3CounterfactualBuild:
 def build_qwen3_d_only_messages(
     sample: RepresentationTrainingSample,
     prompt: RepresentationPromptConfig,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> tuple[dict[str, Any], ...]:
     """Render user text, native call, and one D-backed tool response only."""
 
-    messages = build_native_representation_messages(sample, prompt)
+    messages = build_native_representation_messages(
+        sample,
+        prompt,
+        assistant_dialect=assistant_dialect,
+    )
     user_content = messages[0]["content"]
     text_items = tuple(
         dict(item)
@@ -294,7 +306,11 @@ def materialize_qwen3_d_only_processor_prefix(
 
     if not isinstance(renderer, NativeProtocolRenderer):
         raise TypeError("renderer must be NativeProtocolRenderer")
-    messages = build_qwen3_d_only_messages(sample, prompt)
+    messages = build_qwen3_d_only_messages(
+        sample,
+        prompt,
+        assistant_dialect=renderer.assistant_dialect,
+    )
     transcript = renderer.render(messages, add_generation_prompt=True)
     renderer.assert_generation_prefill(transcript, renderer.tokenizer)
     visual_token_id = renderer.tokenizer.convert_tokens_to_ids("<|image_pad|>")

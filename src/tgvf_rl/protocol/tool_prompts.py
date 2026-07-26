@@ -13,6 +13,7 @@ import hashlib
 import json
 from typing import Any
 
+from .native import NativeAssistantDialect
 from .schema import (
     IMAGE_ZOOM_IN_TOOL_NAME,
     TGVF_CROP_TOOL_NAME,
@@ -22,8 +23,26 @@ from .schema import (
 )
 
 
-TGVF_VISUAL_TOOL_PROMPTS_VERSION = "tgvf-visual-tool-prompts-v2"
+TGVF_VISUAL_TOOL_PROMPTS_VERSION = "tgvf-visual-tool-prompts-v3"
+TGVF_VISUAL_TOOL_PROMPTS_V2_VERSION = "tgvf-visual-tool-prompts-v2"
 TGVF_VISUAL_TOOL_RESPONSES_VERSION = "tgvf-visual-tool-responses-v1"
+TGVF_VISUAL_TOOL_INSTRUCT_PROMPTS_VERSION = (
+    "tgvf-visual-tool-prompts-v4-instruct"
+)
+TGVF_VISUAL_TOOL_INSTRUCT_RESPONSES_VERSION = (
+    "tgvf-visual-tool-responses-v2-instruct"
+)
+
+QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION = """Think first, call an available visual tool if needed, then answer.
+
+Begin every assistant turn by generating one <think>...</think> block
+yourself; the chat template does not add it. After </think>, either make
+one native tool call if more visual evidence is needed or give only the
+final answer."""
+
+QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER = (
+    QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION
+)
 
 SHARED_USER_PROMPT_TEMPLATE = """<image>
 {question}
@@ -39,6 +58,36 @@ NATIVE_SHARED_USER_TEXT_TEMPLATE = """
 {question}
 
 Use the available visual tool if additional visual evidence is needed.
+
+After completing your reasoning, give only the final answer without explanation:
+- For multiple-choice questions, give only the option letter.
+- For mathematics questions, give only the final value or expression.
+- For other questions, give only a concise answer."""
+
+QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE = """<image>
+{question}
+
+Think first, call an available visual tool if needed, then answer.
+
+Begin every assistant turn by generating one <think>...</think> block
+yourself; the chat template does not add it. After </think>, either make
+one native tool call if more visual evidence is needed or give only the
+final answer.
+
+After completing your reasoning, give only the final answer without explanation:
+- For multiple-choice questions, give only the option letter.
+- For mathematics questions, give only the final value or expression.
+- For other questions, give only a concise answer."""
+
+QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE = """
+{question}
+
+Think first, call an available visual tool if needed, then answer.
+
+Begin every assistant turn by generating one <think>...</think> block
+yourself; the chat template does not add it. After </think>, either make
+one native tool call if more visual evidence is needed or give only the
+final answer.
 
 After completing your reasoning, give only the final answer without explanation:
 - For multiple-choice questions, give only the option letter.
@@ -77,6 +126,10 @@ Select a bounding box that is focused enough to enlarge the relevant
 content, but large enough to preserve the context needed to answer the
 question.
 
+Express bbox_2d as [x1,y1,x2,y2] on Qwen3-VL's original-image-relative
+0..1000 coordinate grid. Keep every coordinate within 0..1000, with
+x2 greater than x1 and y2 greater than y1.
+
 After receiving the zoomed-in image, continue reasoning. You may call
 the tool again if more visual evidence is needed, up to four times.
 When sufficient evidence is available, provide a concise final answer.
@@ -96,7 +149,10 @@ The tool first crops a selected region from the original image and then
 adapts the crop's visual representation according to the specified
 target.
 
-The bbox_2d argument specifies where to look.
+The bbox_2d argument specifies where to look. Express it as
+[x1,y1,x2,y2] on Qwen3-VL's original-image-relative 0..1000 coordinate
+grid. Keep every coordinate within 0..1000, with x2 greater than x1
+and y2 greater than y1.
 
 The target argument specifies both what to inspect inside the crop and
 what visual evidence or relation to obtain. It may request an attribute,
@@ -125,6 +181,7 @@ TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE = (
 )
 IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT = "Zoomed-in visual observation:"
 TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE = 'Target-conditioned crop for:\n"{target}"'
+NATIVE_SUCCESS_RESPONSE_IMAGE_MARKER = "<image>"
 
 
 def _sha256_text(value: str) -> str:
@@ -133,6 +190,12 @@ def _sha256_text(value: str) -> str:
 
 SHARED_USER_PROMPT_TEMPLATE_SHA256 = _sha256_text(SHARED_USER_PROMPT_TEMPLATE)
 NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256 = _sha256_text(NATIVE_SHARED_USER_TEXT_TEMPLATE)
+QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE_SHA256 = _sha256_text(
+    QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE
+)
+QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256 = _sha256_text(
+    QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE
+)
 TGVF_ONLY_SYSTEM_PROMPT_SHA256 = _sha256_text(TGVF_ONLY_SYSTEM_PROMPT)
 CROP_ONLY_SYSTEM_PROMPT_SHA256 = _sha256_text(CROP_ONLY_SYSTEM_PROMPT)
 TGVF_CROP_SYSTEM_PROMPT_SHA256 = _sha256_text(TGVF_CROP_SYSTEM_PROMPT)
@@ -145,20 +208,34 @@ IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256 = _sha256_text(
 TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE_SHA256 = _sha256_text(
     TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE
 )
+QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION_SHA256 = _sha256_text(
+    QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION
+)
+QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER_SHA256 = _sha256_text(
+    QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER
+)
 
 
-def _system_prompt(profile: NativeToolCapabilityProfile) -> str:
+def _system_prompt(
+    profile: NativeToolCapabilityProfile,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
+) -> str:
     if not isinstance(profile, NativeToolCapabilityProfile):
         raise TypeError("tool_profile must be NativeToolCapabilityProfile")
+    if not isinstance(assistant_dialect, NativeAssistantDialect):
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
     prompts = {
         NativeToolCapabilityProfile.TGVF_ONLY: TGVF_ONLY_SYSTEM_PROMPT,
         NativeToolCapabilityProfile.CROP_ONLY: CROP_ONLY_SYSTEM_PROMPT,
         NativeToolCapabilityProfile.CROP_TGVF: TGVF_CROP_SYSTEM_PROMPT,
     }
     try:
-        return prompts[profile]
+        base_prompt = prompts[profile]
     except KeyError as error:  # pragma: no cover - enum expansion guard
         raise ValueError(f"no accepted visual-tool prompt for {profile!r}") from error
+    return base_prompt
 
 
 def _success_response_template(profile: NativeToolCapabilityProfile) -> str:
@@ -187,24 +264,60 @@ class VisualToolPromptIdentity:
     bundle_sha256: str
     version: str = TGVF_VISUAL_TOOL_PROMPTS_VERSION
     response_version: str = TGVF_VISUAL_TOOL_RESPONSES_VERSION
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    )
 
 
 def visual_tool_prompt_identity(
     profile: NativeToolCapabilityProfile,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> VisualToolPromptIdentity:
     """Return hashes for the exact accepted prompt bundle of one tool profile."""
 
-    system_prompt = _system_prompt(profile)
+    if not isinstance(assistant_dialect, NativeAssistantDialect):
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
+    system_prompt = _system_prompt(profile, assistant_dialect)
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        shared_user_prompt_template = QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE
+        native_shared_user_text_template = (
+            QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE
+        )
+    else:
+        shared_user_prompt_template = SHARED_USER_PROMPT_TEMPLATE
+        native_shared_user_text_template = NATIVE_SHARED_USER_TEXT_TEMPLATE
     success_response_template = _success_response_template(profile)
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        version = TGVF_VISUAL_TOOL_INSTRUCT_PROMPTS_VERSION
+        response_version = TGVF_VISUAL_TOOL_INSTRUCT_RESPONSES_VERSION
+        success_response_template = (
+            success_response_template
+            + "\n"
+            + NATIVE_SUCCESS_RESPONSE_IMAGE_MARKER
+            + "\n\n"
+            + QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER
+        )
+    else:
+        version = (
+            TGVF_VISUAL_TOOL_PROMPTS_V2_VERSION
+            if profile is NativeToolCapabilityProfile.TGVF_ONLY
+            else TGVF_VISUAL_TOOL_PROMPTS_VERSION
+        )
+        response_version = TGVF_VISUAL_TOOL_RESPONSES_VERSION
     payload = {
-        "version": TGVF_VISUAL_TOOL_PROMPTS_VERSION,
-        "response_version": TGVF_VISUAL_TOOL_RESPONSES_VERSION,
+        "version": version,
+        "response_version": response_version,
         "tool_profile": profile.value,
         "system_prompt": system_prompt,
-        "shared_user_prompt_template": SHARED_USER_PROMPT_TEMPLATE,
-        "native_shared_user_text_template": NATIVE_SHARED_USER_TEXT_TEMPLATE,
+        "shared_user_prompt_template": shared_user_prompt_template,
+        "native_shared_user_text_template": native_shared_user_text_template,
         "success_response_template": success_response_template,
     }
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        payload["assistant_dialect"] = assistant_dialect.value
     canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -214,10 +327,17 @@ def visual_tool_prompt_identity(
     return VisualToolPromptIdentity(
         tool_profile=profile,
         system_prompt_sha256=_sha256_text(system_prompt),
-        shared_user_prompt_template_sha256=(SHARED_USER_PROMPT_TEMPLATE_SHA256),
-        native_user_text_template_sha256=(NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256),
+        shared_user_prompt_template_sha256=_sha256_text(
+            shared_user_prompt_template
+        ),
+        native_user_text_template_sha256=_sha256_text(
+            native_shared_user_text_template
+        ),
         success_response_template_sha256=_sha256_text(success_response_template),
         bundle_sha256=_sha256_text(canonical),
+        version=version,
+        response_version=response_version,
+        assistant_dialect=assistant_dialect,
     )
 
 
@@ -225,20 +345,33 @@ def build_visual_tool_prompt_messages(
     question: str,
     *,
     tool_profile: NativeToolCapabilityProfile,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> tuple[Mapping[str, Any], ...]:
     """Build the exact native system/user messages for one policy prompt."""
 
     if not isinstance(question, str) or not question.strip():
         raise ValueError("question must be a non-empty string")
+    if not isinstance(assistant_dialect, NativeAssistantDialect):
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
+    native_user_template = (
+        QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE
+        if assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT
+        else NATIVE_SHARED_USER_TEXT_TEMPLATE
+    )
     return (
-        {"role": "system", "content": _system_prompt(tool_profile)},
+        {
+            "role": "system",
+            "content": _system_prompt(tool_profile, assistant_dialect),
+        },
         {
             "role": "user",
             "content": (
                 {"type": "image"},
                 {
                     "type": "text",
-                    "text": NATIVE_SHARED_USER_TEXT_TEMPLATE.format(question=question),
+                    "text": native_user_template.format(question=question),
                 },
             ),
         },
@@ -263,6 +396,10 @@ def native_policy_messages_sha256(
 def render_successful_visual_tool_response(
     tool_name: str,
     arguments: Mapping[str, Any],
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> str:
     """Render the sole accepted text attached to a successful observation.
 
@@ -274,21 +411,29 @@ def render_successful_visual_tool_response(
         raise ValueError("tool_name must be non-empty")
     if not isinstance(arguments, Mapping):
         raise TypeError("tool arguments must be a mapping")
+    if not isinstance(assistant_dialect, NativeAssistantDialect):
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
     if tool_name == IMAGE_ZOOM_IN_TOOL_NAME:
-        return IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT
-    templates = {
-        TGVF_FOCUS_TOOL_NAME: TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE,
-        TGVF_CROP_TOOL_NAME: TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE,
-    }
-    try:
-        template = templates[tool_name]
-    except KeyError as error:
-        raise ValueError(f"unsupported visual tool name: {tool_name!r}") from error
-    target = arguments.get("target")
-    if not isinstance(target, str) or not target.strip():
-        raise ValueError("successful target-conditioned response requires target")
-    validate_native_tool_target_for_echo(target)
-    return template.format(target=target)
+        response = IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT
+    else:
+        templates = {
+            TGVF_FOCUS_TOOL_NAME: TGVF_FOCUS_SUCCESS_RESPONSE_TEMPLATE,
+            TGVF_CROP_TOOL_NAME: TGVF_CROP_SUCCESS_RESPONSE_TEMPLATE,
+        }
+        try:
+            template = templates[tool_name]
+        except KeyError as error:
+            raise ValueError(f"unsupported visual tool name: {tool_name!r}") from error
+        target = arguments.get("target")
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError("successful target-conditioned response requires target")
+        validate_native_tool_target_for_echo(target)
+        response = template.format(target=target)
+    # The native appender owns the visual placeholder and, for Instruct, the
+    # repeated trigger that follows that placeholder.  Keeping this renderer
+    # image-free makes the actual order unambiguous:
+    # observation text -> image -> repeated trigger -> next assistant header.
+    return response
 
 
 __all__ = [
@@ -298,6 +443,15 @@ __all__ = [
     "IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT_SHA256",
     "NATIVE_SHARED_USER_TEXT_TEMPLATE",
     "NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256",
+    "NATIVE_SUCCESS_RESPONSE_IMAGE_MARKER",
+    "QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE",
+    "QWEN3_INSTRUCT_NATIVE_SHARED_USER_TEXT_TEMPLATE_SHA256",
+    "QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION",
+    "QWEN3_INSTRUCT_POLICY_TRIGGER_INSTRUCTION_SHA256",
+    "QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE",
+    "QWEN3_INSTRUCT_SHARED_USER_PROMPT_TEMPLATE_SHA256",
+    "QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER",
+    "QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER_SHA256",
     "SHARED_USER_PROMPT_TEMPLATE",
     "SHARED_USER_PROMPT_TEMPLATE_SHA256",
     "TGVF_CROP_SYSTEM_PROMPT",
@@ -309,6 +463,8 @@ __all__ = [
     "TGVF_ONLY_SYSTEM_PROMPT",
     "TGVF_ONLY_SYSTEM_PROMPT_SHA256",
     "TGVF_VISUAL_TOOL_PROMPTS_VERSION",
+    "TGVF_VISUAL_TOOL_INSTRUCT_PROMPTS_VERSION",
+    "TGVF_VISUAL_TOOL_INSTRUCT_RESPONSES_VERSION",
     "TGVF_VISUAL_TOOL_RESPONSES_VERSION",
     "VisualToolPromptIdentity",
     "build_visual_tool_prompt_messages",

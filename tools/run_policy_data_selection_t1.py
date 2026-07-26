@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Prepare, execute, and inspect the accepted Qwen3 T1 canary."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+from pathlib import Path
+
+from tgvf_rl.data.policy_selection_vllm import (
+    prepare_output_root,
+    run_t1_worker,
+    t1_status,
+)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for name in ("prepare", "status"):
+        command = subparsers.add_parser(name)
+        command.add_argument("--config", type=Path, required=True)
+    worker = subparsers.add_parser("worker")
+    worker.add_argument("--config", type=Path, required=True)
+    worker.add_argument("--rank", type=int, required=True)
+    worker.add_argument("--budget-revision", type=int, choices=(0,), default=0)
+    worker.add_argument("--max-chunks", type=int)
+    return parser
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    if args.command == "prepare":
+        result = prepare_output_root(args.config)
+    elif args.command == "status":
+        result = t1_status(args.config)
+    else:
+        result = asyncio.run(
+            run_t1_worker(
+                args.config,
+                rank=args.rank,
+                budget_revision=args.budget_revision,
+                max_chunks=args.max_chunks,
+            )
+        )
+    print(json.dumps(result, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

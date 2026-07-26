@@ -25,6 +25,8 @@ from tgvf_rl.observations.schema import (
 )
 from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
 
+from .crop_coordinates import CropCoordinateMapping
+
 
 @dataclass(frozen=True, slots=True)
 class FamilyCapabilities:
@@ -217,6 +219,20 @@ class RecordedReplayResult:
 
 class QwenVLMFamilyAdapter(ABC):
     capabilities: FamilyCapabilities
+
+    def map_crop_bbox_to_source(
+        self,
+        bbox_2d: tuple[int, int, int, int],
+        *,
+        source_width: int,
+        source_height: int,
+        processor_resized_size: tuple[int, int] | None = None,
+    ) -> CropCoordinateMapping:
+        """Convert a family-native crop box to immutable source pixels."""
+
+        raise NotImplementedError(
+            f"{self.capabilities.family} has no accepted crop-coordinate mapping"
+        )
 
     @abstractmethod
     def forward_recorded(

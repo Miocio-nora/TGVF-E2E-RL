@@ -461,7 +461,11 @@ def _response_usage(payload: object, *, required: bool) -> JudgeUsage | None:
         prompt_tokens = usage["prompt_tokens"]
         completion_tokens = usage["completion_tokens"]
         total_tokens = usage["total_tokens"]
-        cost = usage["cost"]
+        cost = usage.get("cost")
+        if cost is None:
+            if required:
+                raise KeyError("cost")
+            cost = 0.0
         return JudgeUsage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

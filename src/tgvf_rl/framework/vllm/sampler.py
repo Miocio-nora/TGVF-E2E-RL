@@ -35,6 +35,7 @@ from tgvf_rl.contracts.tokens import (
     SamplingIdentity,
     TokenSpan,
 )
+from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.schema import (
     SampledAssistantTurn,
     TOOL_CALL_CLOSE,
@@ -496,6 +497,9 @@ class VLLMPolicySampler:
         request_context: VLLMRequestContextIdentityPort,
         decoding: VLLMOutputDecodingContract,
         termination: VLLMTurnTerminationContract,
+        assistant_dialect: NativeAssistantDialect = (
+            NativeAssistantDialect.QWEN3_VL_THINKING
+        ),
     ) -> None:
         if not callable(getattr(client, "generate", None)):
             raise TypeError("client must implement generate()")
@@ -509,12 +513,15 @@ class VLLMPolicySampler:
             raise TypeError("decoding must be VLLMOutputDecodingContract")
         if not isinstance(termination, VLLMTurnTerminationContract):
             raise TypeError("termination must be VLLMTurnTerminationContract")
+        if not isinstance(assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
         self.client = client
         self.behavior_policy = behavior_policy
         self.rng = rng
         self.request_context = request_context
         self.decoding = decoding
         self.termination = termination
+        self.assistant_dialect = assistant_dialect
         self._validate_backend_identity()
 
     def sample(
@@ -599,10 +606,14 @@ class VLLMPolicySampler:
             token_byte_spans=response.token_byte_spans,
             behavior_logprobs=selected_logprobs,
             sampling=sampling,
-            think_token_span=_think_token_span(response),
+            think_token_span=_think_token_span(
+                response,
+                assistant_dialect=self.assistant_dialect,
+            ),
             stop_reason=_stop_reason_text(response),
             backend_request_sha256=request.backend_request_sha256,
             backend_response_sha256=response.backend_response_sha256,
+            assistant_dialect=self.assistant_dialect,
         )
 
     def _validate_backend_identity(self) -> None:
@@ -864,23 +875,40 @@ def _selected_logprob(
     return selected[0].logprob
 
 
-def _think_token_span(response: VLLMPolicyTurnResponse) -> TokenSpan | None:
+def _think_token_span(
+    response: VLLMPolicyTurnResponse,
+    *,
+    assistant_dialect: NativeAssistantDialect,
+) -> TokenSpan | None:
     marker = "</think>"
     # Missing/repeated closers and a policy-sampled duplicate opener are model
     # format outcomes.  They must survive as invalid trajectories with their
     # exact behavior logprobs; only a broken byte-span proof is replay damage.
-    if "<think>" in response.text or response.text.count(marker) != 1:
-        return None
+    if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
+        if "<think>" in response.text or response.text.count(marker) != 1:
+            return None
+        open_byte_start = 0
+    elif assistant_dialect is NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        if (
+            response.text.count("<think>") != 1
+            or response.text.count(marker) != 1
+            or response.text.index("<think>") > response.text.index(marker)
+        ):
+            return None
+        open_char_start = response.text.index("<think>")
+        open_byte_start = len(response.text[:open_char_start].encode("utf-8"))
+    else:  # pragma: no cover - enum exhaustiveness guard
+        raise TypeError("assistant_dialect must be NativeAssistantDialect")
     close_char_end = response.text.index(marker) + len(marker)
     close_byte_end = len(response.text[:close_char_end].encode("utf-8"))
     covering = tuple(
         span
         for span in response.token_byte_spans
-        if span.byte_end > 0 and span.byte_start < close_byte_end
+        if span.byte_end > open_byte_start and span.byte_start < close_byte_end
     )
     if not covering or covering[-1].byte_end < close_byte_end:
         raise ReplayMismatchError("sampled token spans do not cover </think>")
-    return TokenSpan(0, covering[-1].token_index + 1)
+    return TokenSpan(covering[0].token_index, covering[-1].token_index + 1)
 
 
 def _stop_reason_text(response: VLLMPolicyTurnResponse) -> str:

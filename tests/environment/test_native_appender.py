@@ -10,6 +10,7 @@ from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, Token
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn
 from tgvf_rl.environment.native_appender import (
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
+    QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX,
     QWEN_NATIVE_RESPONSE_SUFFIX,
     QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
@@ -17,6 +18,7 @@ from tgvf_rl.environment.native_appender import (
 )
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol import (
+    NativeAssistantDialect,
     NativeProtocolRenderer,
     StrictToolCallParser,
     TokenByteSpan,
@@ -193,6 +195,34 @@ def test_success_appends_exact_profile_text_then_one_image_placeholder(
         expected_text + "\n" + QWEN_NATIVE_IMAGE_PLACEHOLDER
     )
     assert registrar.calls[-1]["updated_prompt_token_ids"] == updated
+
+
+def test_instruct_tool_response_starts_next_assistant_without_think() -> None:
+    tokenizer = _CharacterTokenizer()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=_Registrar(),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    sampled, parsed = _ascii_sampled_call(
+        "tgvf_focus_tool", {"target": "the gauge"}
+    )
+
+    _updated, suffix = appender.append(
+        (7, 8),
+        sampled,
+        ObservationHandle("obs-instruct", "5" * 64),
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    suffix_text = "".join(map(chr, suffix))
+    assert suffix_text.endswith(QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX)
+    assert suffix_text.index(QWEN_NATIVE_IMAGE_PLACEHOLDER) < suffix_text.index(
+        "Think first"
+    )
+    next_assistant = suffix_text.rsplit("<|im_start|>assistant\n", 1)[1]
+    assert "<think>" not in next_assistant
 
 
 def test_error_append_uses_canonical_json_without_visual_placeholder() -> None:

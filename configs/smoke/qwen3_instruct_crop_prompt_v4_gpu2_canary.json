@@ -1,0 +1,47 @@
+{
+  "schema_version": "qwen3-instruct-crop-prompt-canary-v1",
+  "canary_id": "qwen3-instruct-crop-prompt-v4-gpu2-20260726",
+  "model": {
+    "name": "Qwen3-VL-8B-Instruct",
+    "path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct",
+    "tokenizer_length": 151669,
+    "chat_template_sha256": "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4",
+    "dtype": "bfloat16",
+    "attention": "sdpa",
+    "image_max_pixels": 262144
+  },
+  "prompt": {
+    "tool_profile": "crop_only",
+    "assistant_dialect": "qwen3-vl-instruct-v1",
+    "version": "tgvf-visual-tool-prompts-v4-instruct",
+    "response_version": "tgvf-visual-tool-responses-v2-instruct",
+    "bundle_sha256": "f42ddae1911714452e9a0fbf775f695c55f3796a76080c0c72d1c282319df0c4"
+  },
+  "sample": {
+    "sample_id": "deepeyes47k:2fabfc60669372c10a147d0e4d84377d6092c981dd3212e066814676eb1acca7",
+    "image_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/deepeyes47k/materialized-seed42-v1/images/2988a806a98f49472a37594afb332b7a37d901a35dba6975568a5423668654e1.jpg",
+    "image_sha256": "2988a806a98f49472a37594afb332b7a37d901a35dba6975568a5423668654e1",
+    "question": "Based on the top panel of the figure, which velocity range contains the majority of data points with a probability ratio P(Halo)/P(Thick) greater than 50%?A. -150 to -100 km s^-1\nB. -300 to -250 km s^-1\nC. -100 to -50 km s^-1\nD. -50 to 0 km s^-1",
+    "ground_truth": "C"
+  },
+  "controlled_tool_turn": {
+    "bbox_2d": [0, 0, 1000, 580],
+    "label": "the top panel of the velocity probability-ratio figure",
+    "reasoning": "The question explicitly asks about the top panel, so I should enlarge that panel before answering."
+  },
+  "sampling": {
+    "seeds": [2026072601, 2026072602, 2026072603, 2026072604],
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "do_sample": true,
+    "max_new_tokens_per_turn": 4096,
+    "stop_strings": ["</tool_call>"]
+  },
+  "execution": {
+    "physical_gpu": 2,
+    "visible_cuda_device_count": 1,
+    "arms": ["initial_prompt", "post_successful_crop"],
+    "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/canaries/qwen3-instruct-crop-prompt-v4-gpu2-20260726"
+  }
+}

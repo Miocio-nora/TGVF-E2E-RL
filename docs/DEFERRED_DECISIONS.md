@@ -1,7 +1,7 @@
 # Deferred Decisions After the Framework Build
 
 Status: **intentionally unset; implementation must fail closed**
-Updated: **2026-07-20 JST**
+Updated: **2026-07-25 JST**
 
 This is the short operational checklist requested for decisions that are not
 needed to build and smoke-test the framework. These values must not be inferred
@@ -14,6 +14,40 @@ from veRL, DeepEyes, SDPO, a legacy run, or a synthetic test fixture.
 - policy-RL prompt population, sampling rule, group construction, and held-out
   evaluation manifest;
 - final policy-RL system/user prompt wording and native tool-call safety cap;
+
+The CPU preparation and exact difficulty truth table for `T1` are accepted in
+Project Task §0.8.8. `T1` is not yet an experiment identity because its Qwen3
+generation, prompt, processor, response-budget, verifier and seed bindings have
+not run. `T2` (difficulty plus perception-utility) has an accepted paired-score
+interface but no accepted oracle-attempt composition or membership threshold.
+`T3` (adding a TGVF-specific filter) and `T4` (TGVF-specific filter without
+requiring Crop utility) are intentionally deferred: the current representation
+and policy artifacts do not provide an accepted estimator of `U_TGVF`, so
+membership, thresholds, and claims for those arms cannot yet be defined. No
+dataset row may be discarded under a guessed `T2`/`T3`/`T4` rule.
+
+## Crop coordinate compatibility
+
+The 2026-07-24 audit confirmed a blocking mismatch between the primary model's
+native coordinate space and the historical Crop executor:
+
+- Qwen3-VL emits relative coordinates on a `0..1000` grid by default;
+- the v2 prompt/schema did not state that grid, while the executor treated
+  the four emitted integers as immutable-original-image pixels and clamps them
+  directly to the source dimensions;
+- the processor's aspect-ratio-preserving `max_pixels=262144` transform has no
+  inverse coordinate step in this path.
+
+Decision `CROP-COORDINATES-20260724` now resolves the Qwen3 implementation
+blocker: prompt/schema v3 states the grid, the Qwen3 family adapter applies the
+accepted floor conversion, and Crop observation v2 records model/source/effective
+boxes plus conversion identity. Qwen2.5-VL's mapper is implemented fail-closed
+and remains an end-to-end compatibility blocker until its exact processor-resized
+geometry, family prompt/schema, representation artifact, and required fixtures
+exist. Existing pre-repair Crop artifacts remain useful for framework/replay
+mechanics only; they must not be used as evidence of localization quality or
+scientific utility. A new Crop quality experiment still requires a separate
+`PLANNED` ledger entry and full new experiment identity.
 
 The representation user-message wording is not deferred: decision
 `RPI-20260720-REPRESENTATION-NATIVE-TRAJECTORY` fixes it to the original image

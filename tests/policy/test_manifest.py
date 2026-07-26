@@ -230,7 +230,7 @@ def test_manifest_fails_closed_on_unbound_or_incompatible_inputs() -> None:
     "field, value, error",
     [
         ("family", "qwen3-vl", "base-model family"),
-        ("model_name", "Qwen3-VL-8B-Instruct", "base-model name"),
+        ("model_name", "Qwen3-VL-8B-Thinking", "base-model name"),
         ("tokenizer_length", 151_936, "base-model tokenizer length"),
         ("chat_template_sha256", SHA1, "base-model chat-template SHA256"),
     ],

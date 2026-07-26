@@ -13,6 +13,7 @@ from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity
 from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationHandle, ObservationStore
 from tgvf_rl.protocol.schema import IMAGE_ZOOM_IN_TOOL_NAME, ParsedImageZoomInCall
+from tgvf_rl.qwen.crop_coordinates import CropCoordinateMapper
 
 from .agent_loop import ToolExecutionContext
 from .crop_tool import (
@@ -170,6 +171,8 @@ class ImageZoomInToolRuntime:
         crop_processor_identity: ArtifactIdentity,
         crop_layout_identity: ArtifactIdentity,
         execution_ledger: CropExecutionLedger,
+        coordinate_mapper: CropCoordinateMapper,
+        processor_resized_size: tuple[int, int] | None = None,
     ) -> None:
         if not isinstance(model, ModelIdentity):
             raise TypeError("plain crop runtime requires a ModelIdentity")
@@ -185,6 +188,8 @@ class ImageZoomInToolRuntime:
             raise TypeError("plain crop runtime identities must be explicit")
         if not isinstance(execution_ledger, CropExecutionLedger):
             raise TypeError("plain crop runtime requires a CropExecutionLedger")
+        if not callable(getattr(coordinate_mapper, "map_crop_bbox_to_source", None)):
+            raise TypeError("plain crop runtime requires an explicit coordinate mapper")
         bound_model = getattr(materializer, "model_identity", None)
         if bound_model is not None and bound_model != model:
             raise ValueError("crop materializer model differs from runtime model")
@@ -199,7 +204,14 @@ class ImageZoomInToolRuntime:
         self.crop_processor_identity = crop_processor_identity
         self.crop_layout_identity = crop_layout_identity
         self.execution_ledger = execution_ledger
-        self.crop_tool = ImageZoomInTool(materializer, observation_store)
+        self.coordinate_mapper = coordinate_mapper
+        self.processor_resized_size = processor_resized_size
+        self.crop_tool = ImageZoomInTool(
+            materializer,
+            observation_store,
+            coordinate_mapper=coordinate_mapper,
+            processor_resized_size=processor_resized_size,
+        )
 
     def execute(
         self, parsed_call: object, context: ToolExecutionContext
@@ -219,6 +231,11 @@ class ImageZoomInToolRuntime:
             context=context,
             crop_processor_identity=self.crop_processor_identity,
             crop_layout_identity=self.crop_layout_identity,
+            coordinate_space=self.coordinate_mapper.crop_coordinate_space,
+            coordinate_conversion_version=(
+                self.coordinate_mapper.crop_coordinate_conversion_version
+            ),
+            processor_resized_size=self.processor_resized_size,
         )
         return self.execution_ledger.execute_once(
             key=(context.trajectory_identity.canonical_id, context.call_index),
@@ -266,6 +283,10 @@ def _is_recoverable_crop_geometry_error(error: ValueError) -> bool:
         marker in message
         for marker in (
             "bbox is empty after clamping",
+            "model bbox must be non-empty",
+            "converted source bbox must be non-empty",
+            "Qwen3 crop coordinates must lie within 0..1000",
+            "Qwen2.5-VL crop coordinates lie outside",
             "absolute aspect ratio must be smaller than",
         )
     )
@@ -297,6 +318,9 @@ def _call_fingerprint(
     context: ToolExecutionContext,
     crop_processor_identity: ArtifactIdentity,
     crop_layout_identity: ArtifactIdentity,
+    coordinate_space: str,
+    coordinate_conversion_version: str,
+    processor_resized_size: tuple[int, int] | None,
 ) -> str:
     payload = {
         "trajectory_id": context.trajectory_identity.canonical_id,
@@ -324,6 +348,9 @@ def _call_fingerprint(
         ),
         "crop_processor_identity": asdict(crop_processor_identity),
         "crop_layout_identity": asdict(crop_layout_identity),
+        "coordinate_space": coordinate_space,
+        "coordinate_conversion_version": coordinate_conversion_version,
+        "processor_resized_size": processor_resized_size,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

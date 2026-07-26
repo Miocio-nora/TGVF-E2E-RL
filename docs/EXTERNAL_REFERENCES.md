@@ -239,7 +239,8 @@ that the merger, native DeepStack, embeddings, head, and TGVF Adapter are frozen
 repository: https://github.com/Visual-Agent/DeepEyes
 review commit: 11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1
 observed: 2026-07-19 JST
-role: crop-call behavior, small configuration, and family-adapter design reference
+role: published data-selection method, crop-call behavior, small configuration,
+  and family-adapter design reference
 dependency status: reference only; do not install or vendor
 ```
 
@@ -252,6 +253,105 @@ clamping to source-image bounds, and cropping from the immutable original
 image. Those small observable behaviors may be re-expressed behind this
 project's schemas. DeepEyes-specific size/aspect heuristics, parser, prompt,
 retry behavior, and rotation tool are not adopted.
+
+The hard data-selection reference is the accepted ICLR 2026 paper revision,
+[`arXiv:2505.14362v3`](https://arxiv.org/abs/2505.14362v3), observed on
+2026-07-25 JST. It specifies an eight-response difficulty gate that removes
+zero- and perfect-accuracy samples, answer-format standardization and label
+verification, followed by a V*-only perception-utility gate using ground-truth
+regions. A recursive tree inspection of the pinned public repository commit
+found no released DeepEyes-specific data-selection script. The project target
+is therefore equivalent quality, properties, and source distribution under the
+published method, not exact row or byte parity with an unpublished filter.
+Project-specific operational choices must remain explicit and may not be
+misrepresented as DeepEyes implementation details.
+
+### Candidate source pools for Qwen3 RL selection
+
+These are source-pinned **candidates**, not yet accepted materialized training
+inputs. Download, image resolution, license completion, source-schema adapters,
+and held-out leakage checks remain separate gates.
+
+```text
+V* method repository: https://github.com/penghao-wu/vstar
+review commit: 4ede6647959cfb59eeabd09286adf6a5f9478da0
+fine-grained candidate annotations: https://huggingface.co/datasets/craigwu/seal_vqa_data
+dataset revision: 72f07263e9dd1dc5812a9ed4d8595f42cce7cf44
+role: V*-style question/answer/target-instance/bbox candidate pool
+license status: conditional; see inherited-source record below
+```
+
+The candidate annotation schema includes image paths, questions, answers, and
+`target_instances` with `[x,y,width,height]` boxes. Images are separately
+provided by COCO/GQA sources. The pinned Hugging Face annotation repository has
+no dataset-card license declaration; the MIT declaration in the V* code
+repository is recorded but is not treated as automatically relicensing the
+separate annotation and image payloads.
+
+Inherited image terms were checked on 2026-07-25 JST. The official V* training
+instructions require COCO-2014, COCO-2017, and GQA images. The official GQA
+site states that GQA images come from COCO and Flickr and that its scene graphs
+derive from Visual Genome; it does not state a single replacement image
+license. The COCO Consortium's terms page, pinned through website commit
+`5e1c4da72464b1c6f068df0c02c91e3000ea62c4`, licenses COCO annotations under
+CC-BY-4.0 but explicitly says that the Consortium does not own image copyright
+and that image use must follow the applicable Flickr terms. Therefore local
+research materialization is recorded with source provenance, but redistribution
+or broader production promotion remains a separate legal review rather than an
+implied project permission.
+
+License/source evidence:
+
+- [V* training-image requirements](https://github.com/penghao-wu/vstar/tree/4ede6647959cfb59eeabd09286adf6a5f9478da0#training-dataset);
+- [official GQA source attribution](https://cs.stanford.edu/people/dorarad/gqa/);
+- [pinned COCO terms page](https://github.com/cocodataset/cocodataset.github.io/blob/5e1c4da72464b1c6f068df0c02c91e3000ea62c4/dataset/termsofuse.htm).
+
+The operational GQA image materialization additionally uses a pinned partial
+mirror solely to avoid the official monolithic archive's transfer bottleneck:
+
+```text
+mirror dataset: https://huggingface.co/datasets/zihuwang/ReGuLaR
+dataset revision: b8215201a5fd854c30135f2f0d432f032e364bfa
+file: image_archives/images_gqa.tar.zst
+file SHA-256: f0b15a85bb66c98cea0c7543e86706e7c92c6129660ad3f5a06879d80543caec
+file bytes: 8,679,513,198
+role: byte-preserving partial transport mirror for GQA images only
+```
+
+It supplies 34,847 of the 43,892 GQA images required by the pinned V*
+annotations. The remaining 9,045 are fetched from the official Visual Genome
+`VG_100K`/`VG_100K_2` image roots. The materialization manifest pins the mirror,
+official fallback roots, per-fallback-image aggregate binding, and every final
+candidate image SHA. No ReGuLaR annotation is used and the mirror does not
+replace the inherited GQA/Visual Genome/Flickr terms above.
+
+The 191-row `craigwu/vstar_bench` is evaluation data and is not the 22K-scale
+pre-filter training pool.
+
+```text
+ArxivQA: https://huggingface.co/datasets/MMInstruction/ArxivQA
+dataset revision: 85a6dca0e2bdc6f0268ae519be8913f83a83cafd
+role: chart/scientific-figure candidate pool
+license: CC-BY-SA-4.0
+```
+
+The pinned JSONL binds `id`, image path, options, question, label and rationale;
+the image archive is a separate pinned payload requirement.
+
+```text
+ThinkLite-VL raw candidate: https://huggingface.co/datasets/russwang/ThinkLite-VL-70k
+dataset revision: 5c86ea41d624e27e53002af47b8cf4538aa2c88f
+role: general visual-reasoning candidate pool before Qwen3 difficulty selection
+license: MIT as declared by the dataset card
+
+ThinkLite-VL hard reference: https://huggingface.co/datasets/russwang/ThinkLite-VL-hard-11k
+dataset revision: 541f7f463815467f80866e887e82c6e398837a08
+role: downstream 11K-scale difficulty-selected reference, not the raw candidate pool
+```
+
+The raw viewer exposes image, problem, answer/ground-truth, ID and optional
+choice fields. Exact file hashes and row counts must be recorded during local
+materialization rather than inferred from the moving dataset name.
 
 Other permitted topics are limited to small configuration-composition,
 family-adapter dispatch, launcher layout, and test-organization ideas that can
@@ -341,23 +441,101 @@ this dependency identity and must not be reused.
 
 ## Model roles and current identities
 
-### Primary policy/reference family
+### Qwen3-VL coordinate convention
+
+```text
+repository: https://github.com/QwenLM/Qwen3-VL
+review commit: 96588727e44c78b25ba03ea03b8e12f7e64fd0da
+reviewed file: cookbooks/2d_grounding.ipynb
+observed: 2026-07-24 JST
+role: primary-family 2D grounding coordinate convention
+dependency status: reference only; do not install or vendor
+```
+
+The pinned official cookbook states that Qwen3-VL changed from Qwen2.5-VL's
+resized-image absolute coordinates to relative coordinates in the range
+`0..1000`. Its visualization code maps a returned Qwen3 box to original pixels
+with `x * original_width / 1000` and `y * original_height / 1000`; it explicitly
+says the caller need not calculate the processor-resized width. This is the
+model-facing convention that a Qwen3 family adapter must reconcile with the
+project's canonical immutable-source, half-open pixel box. The pin does not yet
+select edge rounding or authorize an implementation change.
+
+Pinned source:
+
+- [Qwen3-VL 2D grounding cookbook](https://github.com/QwenLM/Qwen3-VL/blob/96588727e44c78b25ba03ea03b8e12f7e64fd0da/cookbooks/2d_grounding.ipynb).
+
+### Historical Qwen3-VL Thinking comparison
 
 ```text
 family: Qwen3-VL
-initial size/variant: 8B Thinking
+historical size/variant: 8B Thinking
 accepted stable local path:
   /nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking
 path presence checked: 2026-07-19 JST
 full weight-directory hash: intentionally not required
 ```
 
-The local path came from the pinned legacy README inspection recorded in
-`docs/LEGACY_REFERENCE.md`. The user confirmed that this directory is stable and
-that full model-directory or weight-shard hashing is unnecessary. Experiments
-record the exact model name and absolute path. Processor, tokenizer, chat
-template, and native token serialization still require exact golden fixtures
-and fixture hashes because they define the protocol.
+This checkpoint was the former primary and remains the immutable identity for
+completed Thinking experiments and separately identified comparisons. Decision
+`QWEN3-INSTRUCT-PRIMARY-20260726` supersedes it for new representation,
+policy-RL, and policy-data-selection work. Historical records retain their
+exact model name, path, processor, tokenizer, template, and serialization
+identities.
+
+### Primary policy/reference and data-selection model
+
+```text
+model ID: Qwen/Qwen3-VL-8B-Instruct
+official model card: https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct
+Hugging Face revision: 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b
+downloaded and checked: 2026-07-26 JST
+stable local path: /nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct
+architecture: Qwen3VLForConditionalGeneration, BF16, no quantization
+role: primary representation, policy/reference, and policy-data-selection model
+```
+
+The model was downloaded from the immutable official revision under decision
+`QWEN3-INSTRUCT-TOKEN-CANARY-20260726` and promoted under decision
+`QWEN3-INSTRUCT-PRIMARY-20260726`. It is a separate checkpoint from the
+historical Thinking model even though the architecture and visual processor are shared.
+The native Instruct template ends its generation prompt with
+`<|im_start|>assistant\n`; it must not be serialized with the Thinking
+checkpoint's template-owned `<think>` opener.
+
+Downloaded weight identities are:
+
+```text
+model-00001-of-00004.safetensors
+  bytes: 4902275944
+  sha256: d5d0aef0eb170fc7453a296c43c0849a56f510555d3588e4fd662bb35490aefa
+model-00002-of-00004.safetensors
+  bytes: 4915962496
+  sha256: 8be88fb5501e4d5719a6d4cc212e6a13480330e74f3e8c77daa1a68f199106b5
+model-00003-of-00004.safetensors
+  bytes: 4999831048
+  sha256: 83de00eafe6e0d57ccd009dbcf71c9974d74df2f016c27afb7e95aafd16b2192
+model-00004-of-00004.safetensors
+  bytes: 2716270024
+  sha256: 0a88b98e9f96270973f567e6a2c103ede6ccdf915ca3075e21c755604d0377a5
+model.safetensors.index.json
+  sha256: 520b2e05079402e9468a8701d03d1154d14b2599593afb6effa7fb60c1bff070
+```
+
+Model-facing identities for the paired canary are config
+`5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661`,
+generation config
+`8469742d1fce0de951c8909b26a2c0c0d8490837ce476efb114da9e0cefc4d44`,
+tokenizer config
+`c2da771801886ad9ae98181793ffd3dfb7f1af30f6f7c6a4e15d7dbba52e2399`,
+tokenizer JSON
+`a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7`,
+preprocessor config
+`27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516`,
+chat-template file
+`5c72a170d2a4a1a3bc5adad2e689ae28138a9700e5b8c96c0266331e86c0acce`,
+and effective chat-template content
+`3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4`.
 
 ### Secondary policy compatibility family
 
