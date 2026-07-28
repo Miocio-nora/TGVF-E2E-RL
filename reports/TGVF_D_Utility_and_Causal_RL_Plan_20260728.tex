@@ -1,0 +1,410 @@
+\documentclass[UTF8,twocolumn,10pt,a4paper]{ctexart}
+
+\usepackage[a4paper,left=1.55cm,right=1.55cm,top=1.45cm,bottom=1.60cm,columnsep=0.66cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\IfFontExistsTF{Noto Serif CJK SC}{\setCJKmainfont{Noto Serif CJK SC}}{}
+\IfFontExistsTF{Noto Sans CJK SC}{\setCJKsansfont{Noto Sans CJK SC}}{}
+\IfFontExistsTF{Noto Sans Mono CJK SC}{\setCJKmonofont{Noto Sans Mono CJK SC}}{}
+
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,tabularx,array,multirow}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\hypersetup{
+  pdftitle={TGVF Stage1: From Readable D to Useful D},
+  pdfauthor={TGVF Project},
+  pdfsubject={Answer utility, causal constraints, data selection and RL promotion gates},
+  pdfkeywords={TGVF, Stage1, answer utility, counterfactual, Qwen3-VL-Instruct, reinforcement learning}
+}
+
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0.12em}
+\renewcommand{\baselinestretch}{1.015}
+\setlength{\abovedisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\belowdisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\abovedisplayshortskip}{2.4pt plus 1pt}
+\setlength{\belowdisplayshortskip}{2.4pt plus 1pt minus 1pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\setlength{\emergencystretch}{1.5em}
+\ctexset{
+  section={beforeskip=0.72ex plus .2ex,afterskip=0.34ex plus .1ex,format=\large\bfseries},
+  subsection={beforeskip=0.58ex plus .2ex,afterskip=0.26ex plus .1ex,format=\normalsize\bfseries},
+  paragraph={beforeskip=0.45ex plus .15ex,afterskip=0.55em,runin=true,format=\normalsize\bfseries}
+}
+\setlist{nosep,leftmargin=1.45em}
+\allowdisplaybreaks
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+\newcommand{\TGVF}{\textsf{TGVF}}
+\newcommand{\Dpos}{D^{+}}
+\newcommand{\Dzero}{D^{0}}
+\newcommand{\Dwrong}{D^{-}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\softplus}{\operatorname{softplus}}
+
+\title{\vspace{-1.0em}\textbf{TGVF Stage1：从“可读 $D$”到“有用 $D$”\newline
+答案效用、因果约束与 RL 准入门槛}}
+\author{TGVF Project}
+\date{设计决策与实施报告，2026 年 7 月 28 日}
+
+\begin{document}
+\maketitle
+\vspace{-1.55em}
+
+\begin{abstract}
+本文审计迁移到 Qwen3-VL-8B-Instruct 后的 TGVF representation phase（Stage1），并回答一个先于 RL 的核心问题：工具 observation $D$ 是否真的提高最终答题能力。当前最终 Instruct artifact RP66 已在 200-row internal evaluation 中取得 correct-$D$ evidence mean NLL 1.235；correct-$D$ 对 target-only、random-$D$、wrong-same-image-$D$ 与 wrong-different-image-$D$ 的胜率分别为 100\%、100\%、95.5\% 与 88.6\%。这些结果证明 $D$ 可被 frozen reader 读取并具有 target specificity，但不证明自由答题增益。相反，36-pair native target-presence 诊断的 actual-direction accuracy 为 0，历史 RP46/Thinking 的 18-row replacement smoke 中 correct-$D$ 也明显低于 image-only 与 matched-wrong-$D$，表明 evidence readability 与 answer utility 可以断裂。
+
+根因是目标失配。现行 Stage1 仅优化 evidence-token $L_{\rm gen}$、同图 $K\!\times\!K$ Matrix CE 与 Norm；short answer、EOS 和 free generation 均无梯度。训练集中 23,694/39,998（59.24\%）的 \code{evidence\_description} 直接包含 \code{short\_answer} 子串，因此不能简单打开当前 transcript 尾部的 answer labels：答案会看到 gold evidence，且当前 original-image key block 只覆盖 evidence query。
+
+本文据此提出冻结 Instruct reader 的 answer-utility Stage1：用不含 gold evidence 的 fresh $D$-only 与 native image+$D$ 两种 context，直接优化正确答案 likelihood，并要求 correct $D$ 严格优于 zero/sham 与 matched-wrong $D$。T1 继续负责筛除全错/全对的直接难度样本，但新增 T1U utility gate；只有 real-$D$ 同时优于 image-only 与 sham/wrong-$D$ 的样本才作为 TGVF-RL tool-positive 数据。Crop 复现保持为第一条独立实验线，同时充当 TGVF 的 oracle positive control。只有 held-out paired generation gate 通过后，才启动 real-$D$/sham-$D$/no-tool 的低学习率 RL 对照。
+\end{abstract}
+
+\noindent\textbf{关键词：} TGVF；Stage1；answer utility；counterfactual；Instruct；data selection；policy RL
+
+\section{问题定义与固定方向}
+
+项目已从 Thinking policy 转向 Qwen3-VL-8B-Instruct，并把数据筛选作为 RL 方法的一部分。实验保持两条线及其顺序：
+\begin{enumerate}
+  \item \textbf{复现 Crop RL：}在 coordinate/crop bug 修复后建立有效 Crop baseline；此前损坏的 run 不能用于判断 RL。
+  \item \textbf{改进 TGVF reward：}只有 Instruct 数据、$D$ utility 与优化门槛明确后才进入该线。
+\end{enumerate}
+
+真正需要证明的不是“能否从 $D$ 复述 teacher evidence”，而是两个因果量。替代效用移除答案阶段的原图及所有 image-seen cache：
+\begin{equation}
+ \Delta_{\rm rep}=\mathrm{Acc}(Q,z,\Dpos)-
+ \mathrm{Acc}(Q,z,D_{\rm ctl}).
+ \label{eq:replace}
+\end{equation}
+增量效用固定原图、prompt 与 decoding，只交换工具 observation：
+\begin{equation}
+ \Delta_{\rm add}=\mathrm{Acc}(I,Q,z,\Dpos)-
+ \mathrm{Acc}(I,Q,z,D_{\rm ctl}).
+ \label{eq:additive}
+\end{equation}
+若 RL 使用 image+$D$，式~\eqref{eq:additive} 是主指标；式~\eqref{eq:replace} 则证明 $D$ 自身承载答案相关视觉信息。控制项包括 zero/sham $D$、同图不同 target 的 real $D$、同 target 不同图的 real $D$ 与 shuffled-source $D$。
+
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.965\textwidth}{\small
+\textbf{Stage1 utility contract.}
+$[I,Q]\rightarrow$ oracle/native tool target $z\rightarrow \TGVF(I,z)\rightarrow
+(D^{(0)},D^{(8)},D^{(16)},D^{(24)})\rightarrow$ answer $a+$EOS.
+新 answer branch 不含 gold \code{evidence\_description}。$D$-only 路径创建 fresh context，移除原图 token、原图 DeepStack 与所有已读取原图的 pre-$D$ KV；native image+$D$ 路径保持部署协议，只原子交换 main $D$ 与全部 DeepStack branches。训练首轮冻结完整 Instruct reader，只更新 TGVF Adapter。}}
+\caption{从 evidence reconstruction 转向 answer utility 后的监督边界与信息路径。}
+\label{fig:utility-contract}
+\end{figure*}
+
+\section{RP66：已知证据与结论边界}
+
+\subsection{Artifact 与固定配置}
+
+当前最终 Instruct artifact 为
+\begin{center}
+\small\ttfamily
+RP-66-qwen3-instruct-balanced-t1-\\
+contextual-2000-gpu01
+\end{center}
+\noindent 状态 \code{complete}。表~\ref{tab:rp66-config} 给出关键配置。
+
+\begin{table}[t]
+\centering
+\caption{RP66 的固定训练配置。}
+\label{tab:rp66-config}
+\small
+\begin{tabular}{ll}
+\toprule
+项目 & 设置 \\
+\midrule
+Base reader & Qwen3-VL-8B-Instruct \\
+Trainable & TGVF Adapter only \\
+Target provider & contextual hidden, layer $-1$ \\
+Observation & main $D$ + layers 8/16/24 \\
+Same-image group & $K=4$ \\
+World / global rows & 2 GPU / 32 per update \\
+Max pixels & $262{,}144$ ($512\times512$) \\
+Optimizer & AdamW, initial $10^{-4}$ \\
+Schedule / steps & cosine, warmup 100 / 2,000 \\
+Objective weights & Matrix 1, Gen 1, Norm 0.1 \\
+Manifold & disabled, weight 0 \\
+Leakage warning & false \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Evidence readout 与 semantic diagnostic}
+
+表~\ref{tab:rp66-evidence} 汇总同一份 200-row/46-group internal evaluation。correct-$D$ evidence readout 很强，query retrieval Top-1/Top-2 为 87.0\%/97.0\%，MRR 0.929，mean diagonal gap 2.434。它证明代理任务已学会，但不是 answer accuracy。
+
+\begin{table*}[t]
+\centering
+\caption{RP66 的 evidence readout、representation health 与语义方向诊断。前六项是代理任务成功证据；后两项暴露“可读但未必有用”的风险。}
+\label{tab:rp66-evidence}
+\small
+\begin{tabularx}{0.97\textwidth}{l c Y Y}
+\toprule
+证据 & 数值 & 能说明什么 & 不能说明什么 \\
+\midrule
+Correct-$D$ evidence mean NLL & 1.235 & Gold evidence 在 correct $D$ 下可读 & 不是 answer NLL/accuracy \\
+Target-only / random-$D$ NLL & 4.114 / 4.033 & $D$ 不只是空条件 & 仍可能编码 teacher evidence \\
+Correct 胜 target-only / random & 100\% / 100\% & readout 明显依赖 $D$ & 不证明 free generation 采用 $D$ \\
+Correct 胜 wrong-same / different & 95.5\% / 88.6\% & target-specific readout 较强 & 不证明正确语义方向 \\
+Query Top-1 / Top-2 / MRR & 87.0\% / 97.0\% / 0.929 & 同图 target 区分较强 & 可能利用 identity code \\
+$D$/source norm ratio & 1.284 / 2.858 / 2.303 / 2.223 & main 与 8/16/24 均 finite、无 collapse & Norm 不约束视觉语义 \\
+Target-presence direction & 0/36 & 语义方向存在明确断裂信号 & 小审计集不是 QA benchmark \\
+Target-presence continuation & 5/36 (13.9\%) & autonomous continuation 很弱 & 仍需更大专门测试 \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\subsection{历史 replacement 反例}
+
+历史 18-row direct replacement 使用 RP46/Thinking，不是 RP66/Instruct；它不能外推为当前正式结果，却给出了“代理目标成功但 QA utility 失败”的直接反例（表~\ref{tab:rp46-smoke}）。correct-$D$ 对 image-only 为 1 win/9 losses/7 ties/1 unclear；对 wrong-$D$ 为 0/6/11/1。
+
+\begin{table}[t]
+\centering
+\caption{RP46/Thinking direct-$D$ replacement smoke。}
+\label{tab:rp46-smoke}
+\small
+\begin{tabular}{lcc}
+\toprule
+Arm & C/I/U & Accuracy \\
+\midrule
+Image-only & 14/3/1 & 77.8--83.3\% \\
+Zero-$D$ & 0/18/0 & 0\% \\
+Correct-$D$ & 6/11/1 & 33.3--38.9\% \\
+Matched-wrong-$D$ & 12/5/1 & 66.7--72.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+因此当前准确结论是：\textbf{RP66 的 $D$ utility 尚未被证明}，而不是“RP66 已被证明无效”。第一项新实验必须是 RP66/Instruct 的 paired utility evaluation，不能直接开始 TGVF-RL。
+
+\section{现行 Stage1 的目标失配}
+
+\subsection{答案从未进入训练目标}
+
+现行目标严格为
+\begin{equation}
+ \mathcal L_{\rm old}=\mathcal L_{\rm matrix}
+ +\mathcal L_{\rm evidence}+0.1\mathcal L_{\rm norm}.
+ \label{eq:old-loss}
+\end{equation}
+completed transcript 虽含 evidence 与 short answer，但 label mapping 只覆盖 evidence span；answer、separator、EOS、prompt 与 wrapper 均为 $-100$。冻结 Qwen 本身不是错误；错误在于经 frozen Qwen 传回 Adapter 的梯度只来自 teacher evidence。
+
+\begin{table}[t]
+\centering
+\caption{现行 objective 的实际约束与缺口。}
+\label{tab:old-objective}
+\small
+\begin{tabularx}{\columnwidth}{lYY}
+\toprule
+项 & 实际约束 & 缺口 \\
+\midrule
+$L_{\rm evidence}$ & 复述 teacher evidence & 无 answer/EOS/free generation \\
+$L_{\rm matrix}$ & 同图 target 检索 & 可用 identity/text code 取巧 \\
+$L_{\rm norm}$ & 表示数值尺度 & 不约束语义与 utility \\
+Answer loss & 无 & short answer 无梯度 \\
+Causal contrast & 无 & 不要求 correct 胜 zero/wrong \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{不能只打开当前 answer labels}
+
+对 39,998-row train split 做 casefold exact-substring 审计，23,694 rows（59.24\%）的 \code{evidence\_description} 包含 \code{short\_answer}；target 包含 short answer 的比例虽只有 195/39,998（0.49\%），仍需 hard-fail。若直接解除当前 answer mask，答案会读取 gold evidence；同时 original-image key block 只覆盖 evidence query，答案仍可能从原图或 image-conditioned KV 取信息。因此必须建立独立、无 gold evidence 的 answer transcript，并为 replacement 创建 fresh context。
+
+\subsection{Target-valued soft-prompt 风险}
+
+当前 bidirectional Adapter 先令 target attend visual，再令 visual attend enriched target；后一步 value 来自 target side：
+\begin{align}
+ C_T&=\operatorname{Attn}(T,V,V),\\
+ \widetilde T&=\operatorname{LN}(T+C_T),\\
+ C_V&=\operatorname{Attn}(V,\widetilde T,\widetilde T),\\
+ \widehat V&=V+G\odot W_\Delta C_V.
+ \label{eq:adapter-risk}
+\end{align}
+这允许 target 不只选择区域，还向视觉 token 写入语言/身份码。Matrix CE 会奖励 target 可分性，却不要求 value 来自图像。强 counterfactual 应固定 $Q,z$，只改变局部视觉值；若 loss-only 仍取巧，再将 target 限制为 salience/gating，约束 $D$ value 主要来自 source visual token，并限制 residual ratio。
+
+\section{Answer-Utility Stage1}
+
+\subsection{冻结 reader 的答案分数}
+
+令 $D_i=A_\theta(V(I_i),H(Q_i,z_i))$，冻结 Instruct reader $\phi$。在不含 gold evidence 的部署同构 context $C_i(D)$ 中，定义含真实 EOS 的长度归一化答案分数：
+\begin{equation}
+ s_i(D)=\frac{1}{|a_i\oplus\mathrm{EOS}|}
+ \log p_\phi(a_i\oplus\mathrm{EOS}\mid C_i(D)).
+ \label{eq:answer-score}
+\end{equation}
+MCQ 使用正确选项相对其它选项的 log-odds；开放答案使用规范化 alias 与 matched wrong values，而不只使用裸 NLL。
+
+\subsection{主目标与反事实}
+
+\begin{align}
+ \mathcal L_{\rm ans}&=-\frac1B\sum_i s_i(\Dpos_i),\\
+ \mathcal L_{\rm gain}&=\frac1B\sum_i\softplus
+ \bigl(m-[s_i(\Dpos_i)-s_i(\Dzero_i)]\bigr),\\
+ \mathcal L_{\rm cf}&=\frac1{|\mathcal N|}\sum_{i,c}\softplus
+ \bigl(m-[s_i(\Dpos_i)-s_i(\Dwrong_{i,c})]\bigr).
+ \label{eq:utility-losses}
+\end{align}
+建议 smoke 起点为
+\begin{equation}
+\begin{aligned}
+ \mathcal L_{\rm new}
+ &=L_{\rm ans}+L_{\rm gain}+L_{\rm cf}\\
+ &\quad+0.25L_{\rm evidence}+0.25L_{\rm matrix}
+ +0.1L_{\rm norm}.
+\end{aligned}
+ \label{eq:new-loss}
+\end{equation}
+权重不是最终默认值；实现后必须比较各项 value、valid-row count 与 Adapter gradient norm。evidence/Matrix 降为可解释性与 target specificity 的辅助目标，不再决定 promotion。
+
+主要 real negatives 包括：同图不同 target；同 target 不同图且答案不同；同一 $Q,z$ 只改变局部 value 的 edit pair；shuffled source；target-only/no-image。zero $D$ 仅作 OOD health control。每次必须原子交换 main $D$ 与 layers 8/16/24，保持 shape、grid、M-RoPE、mask、dtype、token count 与 prompt 一致；negative 在其对应 row 中也应是 positive，避免模型学习“坏 lane marker”。
+
+\subsection{训练范围与条件升级}
+
+第一阶段只训练 TGVF main/DeepStack Adapter，冻结 vision tower、merger、decoder、embedding 与 LM head。冻结 reader 是识别 drop-in utility 的实验控制，避免 LM 与 $D$ 共同形成私有编码。
+
+只有 $D$-only 通过而 image+$D$ 失败时，才进入 Stage1.5：冻结 TGVF，训练 very narrow reader-LoRA，并使用 real/sham pair loss、direct replay、KL retention 及 matched direct-only LoRA control。$D$-only 未通过时不启用 reader-LoRA，不 full-tune vision tower，也不让 RL 更新 TGVF。
+
+\section{T1U 数据筛选与 Crop 对照}
+
+\subsection{T1 只测难度}
+
+当前 T1 对每个 candidate 做 8 次 Instruct full-image direct rollout：0/8 排除过难，8/8 排除过易，1--7/8 保留。它只测直接答题难度与 headroom，不测工具 utility，不能自动等价于 \code{tool\_needed}。
+
+\subsection{二次 utility gate}
+
+对 T1 candidate 使用完全配对的六臂评估（表~\ref{tab:t1u}）。tool-positive 必须满足 real-$D$ arm B 同时优于 direct A 和 sham/wrong C/D。无增益或有害 rows 应作为 no-tool negatives，而不是静态 teacher tool hint。
+
+\begin{table}[t]
+\centering
+\caption{T1 后的 T1U paired arms。}
+\label{tab:t1u}
+\small
+\begin{tabularx}{\columnwidth}{cYY}
+\toprule
+Arm & 条件 & 用途 \\
+\midrule
+A & Image-only direct & 原始基线 \\
+B & Image + real correct $D$ & 实际增量效用 \\
+C & Image + zero/sham $D$ & 协议与 token 对照 \\
+D & Image + matched-wrong $D$ & 语义因果对照 \\
+E & Image + oracle crop & 工具上界/positive control \\
+F & $D$-only correct/zero/wrong & $D$ 自身充分性 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+低成本筛选分数可定义为
+\begin{equation}
+ u_i=\min\{s_i(\Dpos)-s_i(\Dzero),
+ s_i(\Dpos)-s_i(\Dwrong)\}.
+ \label{eq:utility-filter}
+\end{equation}
+先以 teacher-forced answer score 筛选，再用 free generation 复核；最终 test split 不参与选择。
+
+Crop 线保持独立复现，同时承担四个角色：oracle positive control；工具增益上界；在 crop$>$direct rows 上蒸馏 answer logits/hidden states；必要时作为 visual-manifold teacher。若 crop 有益而 $D$ 无益，定位为 Stage1/TGVF；若二者均无益，先修数据/模型工具接口，而不是调 RL reward。
+
+\section{实验矩阵与 Promotion Gate}
+
+\subsection{最小 ablation}
+
+已有 \code{oracle\_d\_utility.py} 定义 image-only、zero/correct/wrong replacement、$D$-only 与 image+$D$ arms。第一步是解除 Thinking-only guard，支持 RP66 Instruct，并在 256--500 个 held-out rows 上补齐 paired baseline。
+
+\begin{table}[t]
+\centering
+\caption{统一初始化、数据、seed 与预算的 objective ablation。}
+\label{tab:ablation}
+\small
+\begin{tabularx}{\columnwidth}{cYY}
+\toprule
+Cell & Objective & 用途 \\
+\midrule
+E0 & 现有 Matrix/evidence/norm & 代理目标 baseline \\
+E1 & E0 + answer NLL & 测直接答案梯度 \\
+E2 & E1 + zero/wrong margins + value CF & 主因果方案 \\
+E3 & E2 + narrow reader-LoRA & 仅在 additive 失败时 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+可先用 RP66 warm-start 做 64-row、100--300-step implementation smoke；正式 E0/E1/E2 各跑 500 steps，胜者再跑 2,000。按 RP66 4.4--4.8 s/step 与新目标约 2.25 倍 train core 粗估，E2 500-step 为 1.2--1.5 h，2,000-step 为 5--6 h，另加 free generation；前 20--50 steps 后必须重新校准。
+
+\subsection{不可绕过的准入门槛}
+
+\begin{table*}[t]
+\centering
+\caption{Stage1 promotion gate。正式 generation gate 建议至少 500 held-out rows，使用 paired bootstrap CI 与 McNemar correct-only/reverse-only。}
+\label{tab:promotion}
+\small
+\begin{tabularx}{0.97\textwidth}{cYYl}
+\toprule
+Gate & 必须满足 & 统计合同 & 未通过时 \\
+\midrule
+G0 完整性 & 无 answer/evidence leakage；matched geometry；DeepStack 原子交换；部署同构 & manifest 与 layout proof & 修实现 \\
+G1 likelihood & correct 相对 zero 与 wrong 的 $\Delta$ 均为正 & bootstrap 95\% CI lower $>0$ & 不长训 \\
+G2 $D$-only & $\operatorname{Acc}(D^+)>\operatorname{Acc}(D^0),\operatorname{Acc}(D^-)$ & win rate $>60\%$；CI lower $>50\%$ & $D$ 本体失败 \\
+G3 additive & image+$D^+$ 高于 image-only 与 sham/wrong & 至少 $+2$ pp；paired CI 不跨 0 & 不进入 TGVF-RL \\
+G4 no-harm & direct-correct 子集退化不超过 1 pp；切片与 seeds 同方向 & OCR/chart/counting/spatial 报告 & 重筛数据/改接口 \\
+G5 readout & 若保留解释性，evidence readout 下降不超过约 5\% & 与 RP66 同 evaluator & 调辅助权重 \\
+G6 RL 准入 & G1--G5 全过，且 real-vs-wrong win/loss $\gtrsim1.5$ & 预注册阈值 & Crop 线继续，TGVF-RL 暂停 \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+诊断顺序固定为：oracle crop/text evidence 是否提升；若提升，correct $D$ 是否优于 zero/wrong；若仍提升，image+$D$ 是否优于 image-only。三步分别定位数据/模型上界、Adapter grounding 与 reader/protocol integration。不能让 RL 承担前两步的修复。
+
+\section{RL：只奖励可测工具增益}
+
+当前 reward 在最终答对且 observation 成功时给 conditional tool bonus，奖励的是调用与答对的相关性，而非 $D$ 导致的增益。旧 Stage3 虽改善 Stage2 Free accuracy，但 vision/TGVF 冻结、只更新语言侧 LoRA，且 tool subset 未显示稳定增益；它不能证明 $D$ utility。
+
+第一版使用离线实测 $u_i$ 与 call cost：
+\begin{equation}
+ R=R_{\rm answer}+\beta\,\mathbb I(\mathrm{tool})u_i-c_{\rm call}.
+ \label{eq:rl-cheap}
+\end{equation}
+预算允许时，在部分 rollout 做 real/sham paired replay：
+\begin{equation}
+ R_{\rm tool}=\beta[r(\mathrm{real}\ D)-r(\mathrm{sham}\ D)]-c_{\rm call}.
+ \label{eq:rl-paired}
+\end{equation}
+real 与 sham 都答对时不提供因果工具 bonus。RL 至少比较 R0 no-tool/direct、R1 real TGVF 与 R2 sham/zero/wrong tool；$\mathrm{R1}-\mathrm{R2}$ 才是 tool-specific gain。
+
+首轮沿用适于验证的 BS16$\times$n8$\times$80-step geometry，只训练 decoder LoRA，TGVF 冻结；学习率从无可靠参照的 $10^{-5}$ 降到历史成功 Stage3 的保守量级，优先 $10^{-6}$ 再做小网格。不要同时改变 full/LoRA、分辨率、reward 和数据。
+
+\section{实施顺序与结论}
+
+现有 streaming scorer 已能通过 frozen 8B reader 对 $D$ 做 VJP 并回传 Adapter；counterfactual 与 atomic main/DeepStack swap 也已有实现基础。需要新增独立 answer-only schema、fresh/native 两类 row builder、answer/counterfactual VJP、objective-v4 配置、Instruct oracle evaluator、T1U selector 与 RL real-vs-sham reward。
+
+执行顺序冻结为：
+\begin{enumerate}
+  \item port RP66/Instruct utility evaluator，$N=256$--500；
+  \item 实现 answer-only fresh $D$-only 与 native image+$D$；
+  \item E0/E1/E2 同预算 500-step ablation；
+  \item 仅通过 G0--G5 的 E2 跑 2,000 steps；
+  \item T1U 区分 tool-positive 与 no-tool/harmful rows；
+  \item Crop reproduction/positive control 独立继续；
+  \item 低 LR 比较 R0 no-tool、R1 real-$D$、R2 sham-$D$；
+  \item 只有 $D$-only 通过、additive 失败时做 reader-LoRA；只有干净 loss/data 仍失败时做 Adapter v2。
+\end{enumerate}
+
+最终交付标准不再是 evidence reconstruction。Stage1 必须在完全配对、无 gold evidence、部署同构的条件下，使 correct $D$ 对答案的增益显著高于 zero/wrong $D$，并在 image+$D$ 下超过 image-only。只有这一因果效用门槛成立，TGVF reward 的 RL 改进才有明确优化对象；否则 RL 更可能放大调用偏好、协议长度或幻觉。
+
+\paragraph{结论边界。}
+RP66 readout 是 Instruct 结果，18-row replacement 是 RP46/Thinking 结果；36-pair target-presence 只是 failure detector。本文的 loss 权重、margin 与 gate 数值是预注册起点，必须以统一预算 ablation 验证。尚未完成 RP66 正式 image-only/real-$D$/sham-$D$ generation，因此不得写成“RP66 已无效”。
+
+\paragraph{证据索引。}
+RP66 配置见 \nolinkurl{configs/representation/qwen3_instruct_balanced_t1_contextual_2000step_gpu01.toml}；训练与 internal evaluation 见 artifact 目录中的 \nolinkurl{metrics.jsonl} 与 \nolinkurl{internal_evaluation_v4_golden_audited_grounding_report.json}。Evidence labels 位于 \nolinkurl{src/tgvf_rl/representation/training/transcript.py}；image-key block 位于 \nolinkurl{streaming.py}；Adapter target-valued delta 位于 \nolinkurl{src/tgvf_rl/representation/adapter.py}；T1 与 RL 审计见 \nolinkurl{docs/POLICY_RL_DATA_SELECTION.md} 和 \nolinkurl{docs/POLICY_RL_FUTURE_DIRECTION_20260728.md}。
+
+\end{document}
