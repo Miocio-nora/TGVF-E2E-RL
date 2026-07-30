@@ -205,6 +205,78 @@ def test_cpu_stop_resume_outputs_match_continuous_byte_for_byte(
         "records_resumed": 64,
     }
 
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    mapped_result = asyncio.run(
+        run_t1_worker(
+            config,
+            rank=3,
+            cuda_visible_device=0,
+            max_chunks=2,
+        )
+    )
+    assert mapped_result == result
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4")
+    subshard_zero = asyncio.run(
+        run_t1_worker(
+            config,
+            rank=3,
+            cuda_visible_device=4,
+            max_chunks=2,
+            chunk_subshard_count=2,
+            chunk_subshard_index=0,
+        )
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    subshard_one = asyncio.run(
+        run_t1_worker(
+            config,
+            rank=3,
+            cuda_visible_device=5,
+            max_chunks=2,
+            chunk_subshard_count=2,
+            chunk_subshard_index=1,
+        )
+    )
+    expected_subshard_result = {
+        "run_id": plan.run.run_id,
+        "rank": 3,
+        "budget_revision": 0,
+        "chunks_written": 0,
+        "records_written": 0,
+        "records_resumed": 32,
+    }
+    assert subshard_zero == expected_subshard_result
+    assert subshard_one == expected_subshard_result
+
+
+@pytest.mark.parametrize(
+    ("count", "index"),
+    ((0, 0), (2, -1), (2, 2), (True, 0), (2, False)),
+)
+def test_worker_rejects_invalid_chunk_subshard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    count: int,
+    index: int,
+) -> None:
+    config = _fixture_config(tmp_path, monkeypatch)
+    prepare_output_root(config)
+    monkeypatch.setattr(
+        policy_selection_vllm, "_validate_runtime_versions", lambda _: None
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3")
+    with pytest.raises(ValueError, match="chunk_subshard"):
+        asyncio.run(
+            run_t1_worker(
+                config,
+                rank=3,
+                max_chunks=2,
+                chunk_subshard_count=count,
+                chunk_subshard_index=index,
+            )
+        )
+
 
 def test_plan_cli_is_cpu_only_and_reports_no_tools() -> None:
     script = f"""

@@ -24,8 +24,18 @@ def _parser() -> argparse.ArgumentParser:
     worker = subparsers.add_parser("worker")
     worker.add_argument("--config", type=Path, required=True)
     worker.add_argument("--rank", type=int, required=True)
+    worker.add_argument(
+        "--cuda-visible-device",
+        type=int,
+        help=(
+            "physical CUDA device selected in CUDA_VISIBLE_DEVICES; defaults "
+            "to the logical rank"
+        ),
+    )
     worker.add_argument("--budget-revision", type=int, choices=(0,), default=0)
     worker.add_argument("--max-chunks", type=int)
+    worker.add_argument("--chunk-subshard-count", type=int, default=1)
+    worker.add_argument("--chunk-subshard-index", type=int, default=0)
     return parser
 
 
@@ -40,8 +50,11 @@ def main() -> None:
             run_t1_worker(
                 args.config,
                 rank=args.rank,
+                cuda_visible_device=args.cuda_visible_device,
                 budget_revision=args.budget_revision,
                 max_chunks=args.max_chunks,
+                chunk_subshard_count=args.chunk_subshard_count,
+                chunk_subshard_index=args.chunk_subshard_index,
             )
         )
     print(json.dumps(result, indent=2, sort_keys=True))

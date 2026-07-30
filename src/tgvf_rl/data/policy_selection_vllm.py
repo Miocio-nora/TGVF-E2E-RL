@@ -192,6 +192,23 @@ def budget_chunk_index(*, budget_revision: int, local_chunk_index: int) -> int:
     return budget_revision * T1_BUDGET_CHUNK_STRIDE + local_chunk_index
 
 
+def chunk_subshard_owns(
+    local_chunk_index: int, *, subshard_count: int, subshard_index: int
+) -> bool:
+    """Return whether one physical worker owns an original logical chunk."""
+
+    if type(local_chunk_index) is not int or local_chunk_index < 0:
+        raise ValueError("local_chunk_index must be non-negative")
+    if type(subshard_count) is not int or subshard_count <= 0:
+        raise ValueError("subshard_count must be a positive integer")
+    if (
+        type(subshard_index) is not int
+        or not 0 <= subshard_index < subshard_count
+    ):
+        raise ValueError("subshard_index must be inside subshard_count")
+    return local_chunk_index % subshard_count == subshard_index
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedT1Image:
     rgb: Any
@@ -570,8 +587,11 @@ async def run_t1_worker(
     config_path: str | Path,
     *,
     rank: int,
+    cuda_visible_device: int | None = None,
     budget_revision: int = 0,
     max_chunks: int | None = None,
+    chunk_subshard_count: int = 1,
+    chunk_subshard_index: int = 0,
 ) -> dict[str, object]:
     """Run one stable single-GPU shard and publish immutable chunks."""
 
@@ -586,13 +606,30 @@ async def run_t1_worker(
     world_size = int(run.runtime["world_size"])
     if type(rank) is not int or not 0 <= rank < world_size:
         raise ValueError("rank must be inside the configured world size")
+    if cuda_visible_device is not None and (
+        type(cuda_visible_device) is not int or cuda_visible_device < 0
+    ):
+        raise ValueError("cuda_visible_device must be a non-negative integer")
+    expected_visible_device = (
+        rank if cuda_visible_device is None else cuda_visible_device
+    )
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if visible != str(rank):
+    if visible != str(expected_visible_device):
         raise ValueError(
-            f"worker rank {rank} requires CUDA_VISIBLE_DEVICES={rank}, got {visible!r}"
+            f"worker rank {rank} requires "
+            f"CUDA_VISIBLE_DEVICES={expected_visible_device}, got {visible!r}"
         )
     if max_chunks is not None and (type(max_chunks) is not int or max_chunks <= 0):
         raise ValueError("max_chunks must be positive when provided")
+    if type(chunk_subshard_count) is not int or chunk_subshard_count <= 0:
+        raise ValueError("chunk_subshard_count must be a positive integer")
+    if (
+        type(chunk_subshard_index) is not int
+        or not 0 <= chunk_subshard_index < chunk_subshard_count
+    ):
+        raise ValueError(
+            "chunk_subshard_index must be inside chunk_subshard_count"
+        )
 
     candidates = load_t1_candidates(run)
     chunks = rank_candidate_chunks(
@@ -601,11 +638,23 @@ async def run_t1_worker(
         world_size=world_size,
         chunk_candidates=int(run.runtime["chunk_candidates"]),
     )
+    indexed_chunks = tuple(enumerate(chunks))
     if max_chunks is not None:
-        chunks = chunks[:max_chunks]
+        # Keep the historical meaning of max_chunks: it bounds the original
+        # logical-rank prefix before any physical-worker subdivision.
+        indexed_chunks = indexed_chunks[:max_chunks]
     pending: list[tuple[int, tuple[SelectionCandidate, ...]]] = []
     resumed_records = 0
-    for local_index, chunk in enumerate(chunks):
+    for local_index, chunk in indexed_chunks:
+        # Physical workers may subdivide one logical rank, but the original
+        # local index remains the immutable manifest chunk index.  Filtering
+        # before re-enumeration is essential for byte-identical resume/audit.
+        if not chunk_subshard_owns(
+            local_index,
+            subshard_count=chunk_subshard_count,
+            subshard_index=chunk_subshard_index,
+        ):
+            continue
         chunk_index = budget_chunk_index(
             budget_revision=budget_revision, local_chunk_index=local_index
         )
@@ -791,6 +840,7 @@ __all__ = [
     "T1_BUDGET_CHUNK_STRIDE",
     "T1_OUTPUT_IDENTITY_SCHEMA",
     "budget_chunk_index",
+    "chunk_subshard_owns",
     "load_candidate_rgb",
     "load_t1_candidates",
     "prepare_candidate_prompt",

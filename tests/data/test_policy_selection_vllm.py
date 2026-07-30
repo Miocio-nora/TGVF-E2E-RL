@@ -13,6 +13,7 @@ from tgvf_rl.data.policy_selection_vllm import (
     _EXPECTED_PROMPT_SUFFIX_BY_REPOSITORY,
     T1_BUDGET_CHUNK_STRIDE,
     budget_chunk_index,
+    chunk_subshard_owns,
     qwen_smart_resize_dimensions,
     rank_candidate_chunks,
 )
@@ -120,6 +121,30 @@ def test_budget_chunk_namespaces_do_not_collide() -> None:
         budget_chunk_index(budget_revision=2, local_chunk_index=7)
         == 2 * T1_BUDGET_CHUNK_STRIDE + 7
     )
+
+
+@pytest.mark.parametrize("subshard_count", (1, 2, 3, 7))
+def test_chunk_subshards_are_disjoint_and_cover_original_indices(
+    subshard_count: int,
+) -> None:
+    original = set(range(101))
+    owned = [
+        {
+            index
+            for index in original
+            if chunk_subshard_owns(
+                index,
+                subshard_count=subshard_count,
+                subshard_index=subshard_index,
+            )
+        }
+        for subshard_index in range(subshard_count)
+    ]
+    assert set().union(*owned) == original
+    assert sum(len(indices) for indices in owned) == len(original)
+    for left, left_indices in enumerate(owned):
+        for right_indices in owned[left + 1 :]:
+            assert left_indices.isdisjoint(right_indices)
 
 
 def test_runner_module_and_cli_help_do_not_import_gpu_libraries() -> None:

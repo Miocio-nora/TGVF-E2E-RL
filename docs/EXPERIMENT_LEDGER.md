@@ -8859,10 +8859,13 @@ than inferred from a script name or prior conversation.
   authorized by `QWEN3-INSTRUCT-RP-T1-FORMAL-20260726` in `PROJECT_TASK.md`
   §0.8.9.5. It may launch only after RP-66 reaches its complete PASS gate and
   releases GPUs 0--1; RP-66 weights are not consumed by this tool-free filter.
-- Lifecycle/result: `PLANNED`; CPU preparation complete, GPU generation not
-  launched. Output root
+- Lifecycle/result: `RUNNING_HYBRID_SUBSHARDED_REV0`; CPU preparation completed and the four
+  revision-0 rank workers launched at `2026-07-26 10:29:32 JST`, then stopped
+  at the user-requested resumable checkpoint on `2026-07-26 13:19:44 JST`.
+  Output root
   `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/t1/T1-04-QWEN3-INSTRUCT-512-FULLIMAGE-271842-GPU0123`
-  contains only exact run identity/config records and zero chunk manifests.
+  retains the exact run identity/config records and all atomically committed
+  chunk evidence.
 - Model/prompt/image: same frozen local Qwen3-VL-8B-Instruct revision as RP-66,
   BF16/no quantization, tokenizer `151669`, template SHA-256 `3636d0f0...89e4`.
   Exactly one native user message contains source image then canonical question,
@@ -8915,6 +8918,98 @@ than inferred from a script name or prior conversation.
   Triton/TorchInductor caches, invoking `tools/run_policy_data_selection_t1.py
   worker --config configs/policy/data_selection/qwen3_instruct_t1_512_vstar170k_arxiv32k_thinklite69842_v1.json
   --rank <0..3> --budget-revision 0`.
+- Actual launch/progress: launched from committed HEAD
+  `a2c925de76611848b033508b4dcb31bfa46fad93`. Rank 0--3 process-group leaders
+  are recorded under `runtime/rank-<rank>.pgid`; launch logs are
+  `logs/revision0-rank-<rank>.log`. A first tmux/`setsid` orchestration attempt
+  left rank 2 running alone long enough to commit chunks 0--5. It was stopped
+  with `SIGINT` while the launcher was corrected; those six immutable chunks
+  were retained and the formal rank-2 worker strictly resumed from chunk 6.
+  By `2026-07-26 10:32 JST`, all four workers had loaded the exact Instruct
+  model with context 65,536, FlashInfer decoder and TORCH_SDPA vision path,
+  occupied physical GPUs 0--3 at approximately 159 GiB each, and had committed
+  120 manifests / 3,840 unique attempt records in total. The active PGIDs at
+  launch were rank 0 `1313609`, rank 1 `1313611`, rank 2 `1313614`, and rank 3
+  `1313616`. GPU 0 also had 0.3--0.5 GiB of non-compute G/EGL context owned by
+  another user's jobs whose compute ran on GPUs 4--5; it did not block the
+  rank-0 vLLM allocation or first committed chunks.
+- Pause checkpoint: `SIGINT` was sent only after validating the four recorded
+  process-group leaders at `13:19:29 JST`; all groups exited by `13:19:44` and
+  physical GPUs 0--3 returned to zero compute memory. The immutable checkpoint
+  contains rank 0--3 manifest counts `4342/4457/4574/4364`, respectively:
+  `17737` complete chunks, `567584` revision-0 attempt records and `70948`
+  complete candidates, or `26.098984%` of `2174736` logical attempts. Each
+  rank's chunk indices are contiguous from zero through its last manifest, all
+  four terminal evidence SHA-256 values match their manifests, and there are
+  no empty manifest/chunk or temporary files. vLLM reports `EngineDeadError`
+  in the four worker tails after the process-group interrupt; this is the
+  expected in-flight shutdown path, and no uncommitted chunk is part of the
+  checkpoint. Resume uses the identical command/config/rank/revision contract;
+  committed chunks validate and skip, while at most one interrupted in-flight
+  chunk per rank is recomputed.
+- Remote continuation: at `2026-07-27 00:35:31 JST`, revision 0 resumed on
+  host `s54` using its idle `NVIDIA RTX 6000 Ada Generation` 48 GiB device,
+  UUID `GPU-869e331a-0afe-c618-7138-1efa17f3697e`, driver `560.35.03`.
+  The logical four-rank/config identity remains unchanged; a single physical
+  CUDA device runs logical ranks 0--3 sequentially. The mapping-only worker,
+  CLI and launcher SHA-256 values are respectively
+  `352b29996616b79d607b83ae5fed415ee7c7116e99977a8fe3e35a544c3cadad`,
+  `5f210d24891c823f61e4c0af18aa9f0867f525c7105aaff4e9b43f9cb1f566a2`,
+  and `66fc9990136f5d8bf7e8bc7a54be9baf62d07ab15fa90bc2a6067dc2341c9fec`;
+  focused resume tests passed `3` tests and Ruff. The exact primary runtime
+  versions above and the local veRL source at commit
+  `e003163181731412595257a72ec173071efb125f` are installed remotely.
+  A bounded rank-0 canary strictly resumed 138,944 records and atomically
+  committed chunk 4342: 32 records, evidence SHA-256
+  `e806cc9242ff5da1ed8b9277da1c1ddd0d29fd0b3fe18f145a590b5dd6f2a6ca`,
+  manifest SHA-256
+  `853972e62b2d3a2a99696436ea6fd79a4b9e4745145b665779412a61406ba38b`.
+  Model weights occupy 18.0933 GiB and vLLM provisions 16.50 GiB / 120,144
+  tokens of KV cache, sufficient for the 65,536-token revision-0 contract.
+  The detached continuation process-group leader is `3280713`, recorded in
+  `runtime/single-gpu.pgid`; its log is
+  `logs/revision0-rtx6000ada-continuation.log`. Local B200 writers must remain
+  stopped until remote output is stopped, incrementally synchronized back, and
+  manifest/evidence hashes are validated. Cross-architecture sampled-token
+  byte identity with the original B200 workers is not assumed; the GPU model
+  boundary and canary provenance are therefore explicit here. The detached
+  worker subsequently committed rank-0 chunks 4343 onward under approximately
+  38.4 GiB device memory and 98% observed GPU utilization. A live four-chunk
+  incremental backup to the paused local root took 5.56 seconds for manifests
+  plus 5.52 seconds for evidence (786,428 new evidence bytes); all four copied
+  manifest/evidence hashes validated. This read-only backup does not authorize
+  a concurrent local writer.
+- Local subshard acceleration: at `2026-07-30 23:15:11 JST`, the local broad
+  rank-1/rank-3 process groups `3819902`/`3819905` were sent `SIGINT` after
+  committed chunks 6599/5748 and fully exited within 15 seconds; rank 2 PGID
+  `3819897` and the remote rank-0 writer were not interrupted.  This user-
+  authorized disjoint-rank schedule supersedes the earlier blanket local-
+  writer pause; the remote sequential launcher must stop after rank 0 before it
+  can advance to a logical rank now owned locally.  The physical
+  worker subdivision preserves the original logical rank and original
+  `local_chunk_index`: ownership is
+  `local_chunk_index % subshard_count == subshard_index`, so it changes neither
+  run/config identity nor manifest names.  Rank 1 uses count 2 on GPUs 2/5;
+  rank 3 uses count 3 on GPUs 4/6/7.  The broad and subshard launchers share a
+  rank-scoped `flock`, reject live opposite topology, reject mixed counts or
+  duplicate indices, fail closed on malformed PGID records, bind their output
+  root to the canonical configured root, and close the lock FD in the child.
+  The runtime/CLI/subshard-launcher/broad-launcher SHA-256 values are
+  `5350022e...04f2`, `2fb381a8...cc9c`, `8feaba57...27cd`, and
+  `b671a797...7a84`; focused resume/subshard/runtime/replay coverage passed 55
+  tests plus Ruff and both launcher syntax/guard checks.  An independent
+  read-only review returned GO before the switch.
+- Subshard launch result: the first five cold-cache PGIDs failed before any
+  chunk commit because this host lacks `/usr/include/python3.12`, causing a
+  Triton `cuda_utils` helper rebuild to fail.  No manifest or evidence was
+  published by those attempts.  Each isolated cache was then seeded byte-for-
+  byte from its same-logical-rank cache that had already run this exact
+  environment.  The successful PGIDs are rank-1 index 0/1
+  `4041611`/`4041618` and rank-3 index 0/1/2
+  `4041846`/`4041855`/`4041867`.  By `23:22:24 JST`, all five occupied their
+  assigned B200 at approximately 159 GiB and had committed respectively chunks
+  6604, 6613, 5772, 5785 and 5807; their residues are exactly 0/1 modulo 2 and
+  0/1/2 modulo 3.  Concurrent rank-2 generation remained healthy.
 - PASS gate: all four workers exit zero; exact expected revision-0 chunk set has
   no missing/extra/duplicate logical request; all `2174736` attempts are unique
   and accounted for; every manifest/evidence pair validates; no length/error is
