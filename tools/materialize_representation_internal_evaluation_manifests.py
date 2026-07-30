@@ -25,8 +25,12 @@ RETAINED_MANIFEST_SHA256 = (
 GOLDEN_ROW_COUNT = 200
 GOLDEN_GROUP_COUNT = 46
 GOLDEN_K_COUNTS = {3: 6, 4: 19, 5: 20, 6: 1}
+FULL_ROW_COUNT = 867
+FULL_GROUP_COUNT = 203
+FULL_K_COUNTS = {3: 26, 4: 98, 5: 77, 6: 2}
 FIRST_SAMPLE_ID = "tgvf_v4_teacher_50k:visual_genome:2410492:0::focus1"
 LAST_SAMPLE_ID = "tgvf_v4_teacher_50k:textocr:e08ccd92443c5924:3::focus1"
+FULL_LAST_SAMPLE_ID = "tgvf_v4_teacher_50k:textocr:b10c2a9cf285fde5:3::focus1"
 PAIR_A = "tgvf_v4_teacher_50k:chartqa:train_017485:0::focus1"
 PAIR_B = "tgvf_v4_teacher_50k:chartqa:train_015867:0::focus1"
 OUTPUT_DIRECTORY = Path(
@@ -63,6 +67,29 @@ def main() -> None:
             f"groups={len(groups)}, K-counts={dict(observed_k_counts)}"
         )
 
+    full_selected = dataset.samples
+    if (
+        len(full_selected) != FULL_ROW_COUNT
+        or full_selected[0].sample_id != FIRST_SAMPLE_ID
+        or full_selected[-1].sample_id != FULL_LAST_SAMPLE_ID
+    ):
+        raise RuntimeError("full-867 row population changed")
+    full_groups: list[tuple[str, list[object]]] = []
+    for sample in full_selected:
+        if not full_groups or full_groups[-1][0] != sample.image_group_key:
+            full_groups.append((sample.image_group_key, []))
+        full_groups[-1][1].append(sample)
+    observed_full_k_counts = Counter(len(samples) for _, samples in full_groups)
+    if (
+        len(full_groups) != FULL_GROUP_COUNT
+        or dict(observed_full_k_counts) != FULL_K_COUNTS
+        or len({key for key, _samples in full_groups}) != FULL_GROUP_COUNT
+    ):
+        raise RuntimeError(
+            "full-867 group population changed: "
+            f"groups={len(full_groups)}, K-counts={dict(observed_full_k_counts)}"
+        )
+
     selected_by_id = {sample.sample_id: sample for sample in selected}
     if not {PAIR_A, PAIR_B}.issubset(selected_by_id):
         raise RuntimeError("fixed v4 counterfactual pair is absent")
@@ -89,6 +116,24 @@ def main() -> None:
             for key, samples in groups
         ],
     }
+    full_ordered_payload = {
+        "schema_version": "representation_internal_evaluation_group_manifest_v2",
+        "identity": "qwen3-v4-clean-imend-test-full867-variable-k-v1",
+        "source_data_manifest_sha256": RETAINED_MANIFEST_SHA256,
+        "groups": [
+            {
+                "image_group_key": key,
+                "samples": [
+                    {
+                        "sample_id": sample.sample_id,
+                        "content_sha256": sample.content_sha256,
+                    }
+                    for sample in samples
+                ],
+            }
+            for key, samples in full_groups
+        ],
+    }
     counterfactual_payload = {
         "schema_version": "qwen3_counterfactual_manifest_v1",
         "identity": "qwen3-v4-clean-imend-test-golden-value-pair-v1",
@@ -113,6 +158,10 @@ def main() -> None:
         OUTPUT_DIRECTORY
         / "qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json": (
             ordered_payload
+        ),
+        OUTPUT_DIRECTORY
+        / "qwen3_v4_clean_imend_test_full867_variable_k_v1.json": (
+            full_ordered_payload
         ),
         OUTPUT_DIRECTORY
         / "qwen3_v4_clean_imend_test_golden_counterfactual_v1.json": (

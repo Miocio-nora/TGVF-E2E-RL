@@ -1,0 +1,33 @@
+schema_version = "answer-utility-run-config-v1"
+scope = "isolated_representation_answer_utility_single_gpu"
+run_id = "RPI-AU-E2-RP66-INSTRUCT-CLEAN-ANSWER-80"
+
+[experiment]
+config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/experiments/answer_utility/rp66_e2_clean_answer.toml"
+config_sha256 = "1a4a0f5394f8bf5b3241df979bacd2c58adde01178c41dc44c6a52c81c6b8d89"
+
+[source_artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-66-qwen3-instruct-balanced-t1-contextual-2000-gpu01/adapter.pt"
+file_sha256 = "3429dc83880d48d623f3dcdbea48eb5219be6031b206e53c8286c4b1c65ce5c9"
+manifest_sha256 = "425d57108b60b2a2bc65144eaded0b1d25f763f3d347aa16396394dccae2b89c"
+expected_run_identity_sha256 = "97ccfd849e1d66cdd57be805c27524fa97ca60973e5be45d6d060acd5bc54e53"
+expected_global_step = 2000
+
+[execution]
+physical_gpu_id = 0
+seed = 42
+
+[optimizer]
+learning_rate = 0.000001
+
+[training]
+target_optimizer_steps = 80
+checkpoint_every_optimizer_steps = 5
+log_every_optimizer_steps = 1
+
+[output]
+directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation_experiments/answer_utility/RPI-AU-E2-RP66-INSTRUCT-CLEAN-ANSWER-80"
+
+[resume]
+enabled = false
+checkpoint_path = "none"

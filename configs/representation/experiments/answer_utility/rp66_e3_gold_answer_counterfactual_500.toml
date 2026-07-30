@@ -1,0 +1,17 @@
+schema_version = "answer-utility-experiment-config-v1"
+scope = "isolated_representation_answer_utility"
+run_id = "RPI-AU-E3-RP66-INSTRUCT-GOLD-CF-500"
+variant = "e3"
+base_training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_instruct_balanced_t1_contextual_2000step_gpu01.toml"
+base_training_config_sha256 = "37c06f4a7f2b538e668582471d4105f9c7dd93a86459d2e23d1f36e289c9d549"
+
+[objective]
+schema_version = "answer-utility-objective-v1"
+answer_weight = 1.0
+correct_vs_zero_weight = 1.0
+correct_vs_wrong_weight = 1.0
+existing_evidence_weight = 0.25
+existing_matrix_weight = 0.25
+norm_weight = 0.1
+comparison_margin = 0.5
+comparison_temperature = 1.0
