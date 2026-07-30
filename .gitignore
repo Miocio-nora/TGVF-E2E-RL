@@ -15,3 +15,11 @@ wandb/
 artifacts/
 outputs/
 checkpoints/
+
+# Local experiment/evaluation runtimes and transfer bundles.
+.eval-runtime-*/
+.main-d-only-dev/
+.mask-runtime-*/
+.t1-03-runtime/
+.vlmeval/
+results.zip
