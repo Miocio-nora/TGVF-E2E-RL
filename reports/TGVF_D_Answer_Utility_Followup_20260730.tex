@@ -1,0 +1,303 @@
+\documentclass[UTF8,twocolumn,10pt,a4paper]{ctexart}
+
+\usepackage[a4paper,left=1.55cm,right=1.55cm,top=1.45cm,bottom=1.60cm,columnsep=0.66cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\IfFontExistsTF{Noto Serif CJK SC}{\setCJKmainfont{Noto Serif CJK SC}}{}
+\IfFontExistsTF{Noto Sans CJK SC}{\setCJKsansfont{Noto Sans CJK SC}}{}
+\IfFontExistsTF{Noto Sans Mono CJK SC}{\setCJKmonofont{Noto Sans Mono CJK SC}}{}
+
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,tabularx,array,multirow}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{balance}
+\usepackage[hidelinks]{hyperref}
+
+\hypersetup{
+  pdftitle={TGVF Stage1 Answer Utility: Empirical Follow-up},
+  pdfauthor={TGVF Project},
+  pdfsubject={Paired answer-utility evaluation of RP66 and 500-step Stage1 objective ablations},
+  pdfkeywords={TGVF, Stage1, answer utility, counterfactual, Qwen3-VL-Instruct, reinforcement learning}
+}
+
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0.12em}
+\renewcommand{\baselinestretch}{1.015}
+\setlength{\abovedisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\belowdisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\abovedisplayshortskip}{2.4pt plus 1pt}
+\setlength{\belowdisplayshortskip}{2.4pt plus 1pt minus 1pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\setlength{\emergencystretch}{1.5em}
+\ctexset{
+  section={beforeskip=0.72ex plus .2ex,afterskip=0.34ex plus .1ex,format=\large\bfseries},
+  subsection={beforeskip=0.58ex plus .2ex,afterskip=0.26ex plus .1ex,format=\normalsize\bfseries},
+  paragraph={beforeskip=0.45ex plus .15ex,afterskip=0.55em,runin=true,format=\normalsize\bfseries}
+}
+\setlist{nosep,leftmargin=1.45em}
+\allowdisplaybreaks
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+\newcommand{\TGVF}{\textsf{TGVF}}
+\newcommand{\Dpos}{D^{+}}
+\newcommand{\Dzero}{D^{0}}
+\newcommand{\Dwrong}{D^{-}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\pp}{\,\mathrm{pp}}
+
+\title{\vspace{-1.0em}\textbf{TGVF Stage1：从“可读 $D$”到“有用 $D$”（续）\newline
+RP66 答案效用实证与新目标消融结论}}
+\author{TGVF Project}
+\date{实证结果与 RL 决策更新，2026 年 7 月 30 日}
+
+\begin{document}
+\maketitle
+\vspace{-1.55em}
+
+\begin{abstract}
+本文是 2026 年 7 月 28 日《TGVF Stage1：从“可读 $D$”到“有用 $D$”》的实证续篇。前文的准确结论是“RP66 的 evidence readout 很强，但答案效用尚未被证明”，并预注册了 image-only、correct/zero/wrong-$D$、$D$-only 与 direct replacement 的配对验证。本次在固定的 V4 test first-200（46 个 image groups）上完成该验证：五个 Qwen3-VL-8B-Instruct Stage1 候选各生成 10 个 arms，共 10,000 条记录。
+
+原始 RP66（E0）在 image-only 下为 72.5\%，image+$\Dpos$ 为 83.5\%，原始增益 $+11.0\pp$；控制相同协议后，image+$\Dpos$ 相对 image+$\Dzero$ 与 image+$\Dwrong$ 仍分别提升 $+7.5\pp$ 与 $+6.5\pp$，配对 exact $p$ 分别为 0.0081 与 0.0241。$D$-only 的 correct/zero/wrong 为 65.5\%/35.0\%/55.0\%，说明 $D$ 自身携带答案相关信息；但 direct-$D$ replacement 仅 49.0\%，比原图低 $23.5\pp$，且只比 matched-wrong $D$ 高 $3.0\pp$（$p=0.461$）。因此 $D$ 已被证明是有效的目标聚焦补充表示，而不是完整原图的替代品。
+
+四个 matched-budget 500-step 候选 E0C/E2/E3/E4 的 image+$\Dpos$ 分别为 83.0\%/83.5\%/82.0\%/83.0\%，均未超过 E0。训练 loss 确实下降、生成 token 也发生变化，但 held-out correctness 几乎不变，说明新增 clean-answer 与 counterfactual branch 没有创造额外效用；它们主要帮助我们以正确评测发现 RP66 已有能力。当前证据仍是 oracle-target-conditioned $D$ utility，并使用诊断性盲评 overlay，不能直接等价为 policy 会选择工具、生成正确 $D$ 或获得端到端 RL 增益。
+\end{abstract}
+
+\noindent\textbf{关键词：} TGVF；Stage1；answer utility；paired counterfactual；RP66；Instruct；RL data selection
+
+\section{相对前文的结论更新}
+
+前文区分了 evidence readability、答案充分性与答案增量效用，并明确禁止把 18-row RP46/Thinking replacement smoke 外推到 RP66/Instruct。此次实验补齐了当时缺失的正式 paired generation。结论更新不是“旧判断被推翻”，而是把“尚未证明”推进为以下三层结果：
+\begin{enumerate}
+  \item \textbf{增量效用成立：}在原图存在时，正确 $D$ 提供稳定且显著的额外答题信息；
+  \item \textbf{替代效用不成立：}移除原图后，$D$ 不足以恢复完整视觉能力；
+  \item \textbf{新目标无额外收益：}500-step answer/counterfactual 训练没有超过原始 RP66。
+\end{enumerate}
+
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.965\textwidth}{\small
+\textbf{Updated empirical contract.}
+同一批 200 个 held-out samples 上，
+$\operatorname{Acc}(I,Q)=72.5\%$；
+$\operatorname{Acc}(I,Q,\Dpos)=83.5\%$；
+$\operatorname{Acc}(I,Q,\Dzero)=76.0\%$；
+$\operatorname{Acc}(I,Q,\Dwrong)=77.0\%$。
+因此正确内容的受控增益为 $+7.5\pp$（vs. zero）与 $+6.5\pp$（vs. wrong）。另一方面，fresh $D$-only 为 65.5\%，direct replacement 为 49.0\%。最符合数据的机制不是“$D$ 重建整幅图”，而是“$D$ 在原图全局上下文上增加 target-focused residual evidence”。}}
+\caption{本次实证对 Stage1 utility contract 的更新。}
+\label{fig:updated-contract}
+\end{figure*}
+
+\section{实验合同与可复现身份}
+
+\subsection{固定模型、样本与十臂评测}
+
+E0 是 production RP66 step-2000，而非虚构的 private baseline；其 Adapter SHA-256 为 \code{3429dc83880d\ldots{}65ce5c9}。E0C/E2/E3/E4 均从该 exact artifact warm-start。五个候选使用完全相同的 ordered first-200 manifest（46 groups；VG/TextVQA/DocVQA/TextOCR/ChartQA 分别为 84/38/31/25/22 rows；SHA-256 \code{55e2cde5e118\ldots{}34d8}），greedy decoding、64-token cap 与 EOS 151645/151643 均固定。E0C 的 8 个互斥 shards 按同一 candidate 合并为 200 rows，无重复或遗漏。
+
+每个 sample 的 $D$ materialization 始终读取原始未修改问题；短答案 instruction 只加在无梯度的 answer reader 评测端，不改变 Stage1 权重或 reasoning 能力。所有 $D$ arm 原子交换 main $D$ 与 DeepStack 8/16/24。matched-wrong $D$ 来自同图不同 target，且规范化答案必须不同，避免“wrong $D$ 实际支持同一答案”。
+
+\begin{table}[t]
+\centering
+\caption{十臂评测及其识别问题。}
+\label{tab:arms}
+\small
+\begin{tabularx}{\columnwidth}{lYY}
+\toprule
+Context & Arms & 识别量 \\
+\midrule
+Image & image-only & 原始能力 \\
+$D$-only & zero, correct, wrong & $D$ 自身信息与 specificity \\
+Image+$D$ & zero, correct, wrong & 部署相关的增量效用 \\
+Direct replace & zero, correct, wrong & $D$ 是否可替代原图 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{评分与边界}
+
+保守 scorer v3 只自动接受完整、可规范化的答案；自然语言中无法安全 exact-match 的结果交给 blind Qwen2.5-72B-Instruct judge。10,000 条记录中 2,851 条由 deterministic scorer 判定，7,149 条 unresolved 去重为 1,986 个 blind requests。judge payload 只含 question、candidate、reference 与 task kind，不含 checkpoint、arm 或 $D$ 身份。
+
+overlay 的固定 claim scope 是 \nolinkurl{diagnostic_semantic_overlay_not_formal_pilot}。因此本文的 $p$ 值是给定该盲评标签后的 paired exact 统计，不应写成已完成独立人工复核。generation 本身则逐记录原子提交、可恢复，并绑定实现、配置、样本和 artifact hashes。
+
+\section{RP66 E0：$D$ 的真实答案效用}
+
+\subsection{十臂准确率}
+
+表~\ref{tab:e0-arms} 给出 E0 的全部结果。三个现象同时成立：correct $D$ 在每种 context 下都明显优于 zero；只有 image+$D$ 达到并超过原图；direct replacement 的 correct/wrong 差距很小。
+
+\begin{table}[t]
+\centering
+\caption{E0 在 first-200 上的 semantic accuracy。}
+\label{tab:e0-arms}
+\small
+\begin{tabular}{lccc}
+\toprule
+Context & Zero & Correct & Wrong \\
+\midrule
+$D$-only & 35.0\% & \textbf{65.5\%} & 55.0\% \\
+Image+$D$ & 76.0\% & \textbf{83.5\%} & 77.0\% \\
+Direct replace & 22.0\% & \textbf{49.0\%} & 46.0\% \\
+\midrule
+Image-only & \multicolumn{3}{c}{72.5\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+为避免把“增加 token/工具协议”误认为 $D$ 内容增益，定义三个量：
+\begin{align}
+ \Delta_{\rm raw}&=\operatorname{Acc}(I,\Dpos)-\operatorname{Acc}(I),\\
+ \Delta_{\rm content}&=\operatorname{Acc}(I,\Dpos)-\operatorname{Acc}(I,\Dzero),\\
+ \Delta_{\rm spec}&=\operatorname{Acc}(I,\Dpos)-\operatorname{Acc}(I,\Dwrong).
+\end{align}
+E0 的三者分别为 $+11.0\pp$、$+7.5\pp$ 与 $+6.5\pp$。zero/wrong 本身相对 image-only 的 $+3.5/+4.5\pp$ 提醒我们：原始 $+11\pp$ 不能全部归因于正确语义；但两个控制后的增益仍为正且达到配对显著。
+
+\begin{table}[t]
+\centering
+\caption{E0 的配对效应。W/L/T 为 treatment-only correct、control-only correct 与 ties；$p$ 为双侧 exact 检验。}
+\label{tab:e0-paired}
+\scriptsize
+\begin{tabularx}{\columnwidth}{Y c c c}
+\toprule
+Treatment vs. control & $\Delta$ & W/L/T & $p$ \\
+\midrule
+Image+$\Dpos$ vs. image-only & $+11.0\pp$ & 34/12/154 & 0.0016 \\
+Image+$\Dpos$ vs. image+$\Dzero$ & $+7.5\pp$ & 22/7/171 & 0.0081 \\
+Image+$\Dpos$ vs. image+$\Dwrong$ & $+6.5\pp$ & 21/8/171 & 0.0241 \\
+$D$-only $\Dpos$ vs. $\Dzero$ & $+30.5\pp$ & 67/6/127 & $<10^{-13}$ \\
+$D$-only $\Dpos$ vs. $\Dwrong$ & $+10.5\pp$ & 32/11/157 & 0.0019 \\
+Direct $\Dpos$ vs. image-only & $-23.5\pp$ & 12/59/129 & $<10^{-7}$ \\
+Direct $\Dpos$ vs. $\Dwrong$ & $+3.0\pp$ & 26/20/154 & 0.461 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+表~\ref{tab:e0-paired} 的统计由 immutable overlay records 中的 final scores post-hoc 计算，报告 row-level、双侧、未作多重校正的 exact 检验；同一 image group 内的 rows 可能相关。以 46 个 image groups 为 cluster 做 sign-flip sensitivity 后，前三个主比较的 $p$ 分别为 0.0050、0.0155 与 0.0232，方向不变。统计证据因此足以支持诊断结论，但仍不替代更大样本与正式 judge/human adjudication。
+
+\subsection{机制解释：互补而非替代}
+
+$D$-only 的 65.5\% 低于 image-only 的 72.5\%，但远高于 zero 与 wrong，说明它压缩了大量答案相关的 target evidence，同时丢失了部分全局布局、背景关系、文本邻域或 reader 熟悉的原图分布。image+$D$ 同时保留全局 context 与聚焦 residual，因而达到 83.5\%。direct replacement 既移除全局视觉，又迫使 reader 把 target-focused representation 当作完整图像，属于更强的分布外干预；它失败并不否定 additive utility。
+
+这也解释了旧 replacement smoke 与新结果为何可以同时为真：旧实验测试“充分性”，本次主实验测试“在部署 context 下的边际贡献”。对 RL 而言，只要实际协议是 image+$D$，主指标应是 additive controlled gain，而不是要求 $D$ 独立重建原图能力。
+
+\section{500-step 新目标：没有额外增益}
+
+\subsection{Matched-budget 训练网格}
+
+四个 private candidates 均只更新 TGVF Adapter；Qwen、vision tower、merger 与 decoder 冻结。训练使用相同的 500 optimizer steps、16 rows/update、constant $10^{-6}$、同一 accepted sample sequence 和 fresh AdamW。E0C 是 unchanged legacy objective 的 matched-budget continuation；E2 是无 gold evidence 的 fresh $D$-only clean-answer loss；E3 是含 gold evidence 的 leakage-diagnostic answer+counterfactual；E4 是 clean answer+zero/wrong counterfactual 的主候选。
+
+\begin{table}[t]
+\centering
+\caption{实际完成的 500-step cells。}
+\label{tab:cells}
+\small
+\begin{tabularx}{\columnwidth}{lYcc}
+\toprule
+Cell & Answer context & Answer & CF \\
+\midrule
+E0C & none, legacy continuation & no & no \\
+E2 & fresh $D$-only, clean & yes & no \\
+E3 & gold-evidence answer context & yes & zero/wrong \\
+E4 & fresh $D$-only, clean & yes & zero/wrong \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+训练目标确实被优化：first-25 到 last-25 的 mean answer NLL 在 E2/E3/E4 分别由 11.396/5.627/11.392 降至 10.772/5.095/10.816；E3/E4 的 zero comparison loss 分别下降 0.261/0.281。四个最终 Adapter SHA-256 均不同，因此下游持平不是复用了同一个文件。
+
+\subsection{候选级结果与 paired flips}
+
+\begin{table}[t]
+\centering
+\caption{五个候选的 held-out utility。Image-only 固定为 72.5\%；W/L/T 是 image+$\Dpos$ 相对 E0。}
+\label{tab:candidates}
+\scriptsize
+\begin{tabular}{lccccc}
+\toprule
+Cell & $D$-only & Image+$D$ & Direct & Raw $\Delta$ & W/L/T \\
+\midrule
+E0 & 65.5\% & \textbf{83.5\%} & 49.0\% & $+11.0\pp$ & --- \\
+E0C & 64.5\% & 83.0\% & 49.0\% & $+10.5\pp$ & 0/1/199 \\
+E2 & 65.5\% & \textbf{83.5\%} & 49.0\% & $+11.0\pp$ & 1/1/198 \\
+E3 & 65.5\% & 82.0\% & 49.5\% & $+9.5\pp$ & 0/3/197 \\
+E4 & 65.5\% & 83.0\% & 49.5\% & $+10.5\pp$ & 1/2/197 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+E2 与 E0 在主指标上完全持平；E0C/E4 低 $0.5\pp$，E3 低 $1.5\pp$。所有候选相对 E0 的 discordant pairs 极少且 exact $p\ge0.25$，不能声称真实退化，但也没有任何正向 promotion signal。另一方面，image+$\Dpos$ 的生成 token 序列相对 E0 只在 153--164/200 rows 完全一致，说明训练确实改变了自由生成行为；变化主要没有跨越 correctness boundary。
+
+因此“新目标没有增益”不是 checkpoint 未加载、样本不一致或 evaluator 固定输出造成的假象。更合理的解释是：RP66 在 oracle-target、image+$D$ 条件下已经有较强效用，而 uniformly applied 的 500-step answer losses 主要改变了 NLL/措辞，没有提高 held-out 0--1 utility。当前不应把 E2/E3/E4 任一 cell promotion 为新的 production Stage1。
+
+\section{为何训练前没有判定 RP66 已有效}
+
+\begin{table}[t]
+\centering
+\caption{旧证据与本次证据回答的是不同问题。}
+\label{tab:why-missed}
+\scriptsize
+\begin{tabularx}{\columnwidth}{lY}
+\toprule
+缺口 & 旧证据 $\rightarrow$ 本次修正 \\
+\midrule
+干预问题 & direct replacement（充分性）$\rightarrow$ image+$D$（边际贡献） \\
+控制臂 & 无完整 additive controls $\rightarrow$ correct/zero/matched-wrong \\
+样本量 & RP46 smoke 18 rows $\rightarrow$ RP66 paired first-200 \\
+模型域 & Thinking/RP46 $\rightarrow$ production RP66/Instruct \\
+评分 & 自然输出易漏判 $\rightarrow$ conservative v3 + blind judge \\
+视觉协议 & 未固定完整合同 $\rightarrow$ main 与 8/16/24 原子交换 \\
+证据类型 & evidence readout $\rightarrow$ free-generation answer utility \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+最关键的概念错误是把“$D$ 单独不够”误写成“$D$ 没有用”。target-focused residual 的合理目标本来就是补充原图，而不是复制原图。其次，18-row 下 $6.5$--$7.5\pp$ 的真实效应只对应约一个样本，correct/wrong 排名很容易被方差翻转。前文因此谨慎写成“RP66 utility 尚未被证明”，而不是“RP66 无效”；本次实验正是完成该未决项。
+
+\section{对 Stage1、数据筛选与 RL 的更新}
+
+\subsection{Stage1 决策}
+
+当前应保留 production RP66 E0 作为 Instruct Stage1 默认值，暂不长训 E2/E3/E4。若继续改 Stage1，目标不应再是对所有样本统一增加 answer NLL，而应先识别确有 marginal utility 的 rows，再优化 sample-level correct-vs-zero/wrong advantage。更大 held-out set、task slices 与多次 judge/人工复核应先于 2,000-step 扩展。
+
+前文 G2/G3 的方向与幅度在本次 diagnostic first-200 上均通过：$D$-only correct 显著胜 zero/wrong，image+$D$ 的受控增益也超过 $+2\pp$。但前文建议的 formal gate 是至少 500 rows，且当前 judge config 尚未被接受为 formal Pilot judge，所以只能标记为\textbf{强诊断性通过}，不能悄然改写为最终 production certification。
+
+\subsection{T1U 与 RL 的真正剩余问题}
+
+本次消除了“即使 $D$ 正确也完全无用”的主要风险，却没有消除以下风险：policy 是否调用工具、target/trajectory 是否正确、实际生成的 $D$ 是否达到 oracle condition，以及错误调用的成本。换言之，已经验证的是
+\begin{center}
+\small
+正确 target 与正确 $D$ 条件下，image+$D$ 比 image 更准；
+\end{center}
+尚未验证的是自由 rollout 中端到端 $P(\text{correct answer})$ 是否上升。
+
+下一阶段应固定为：
+\begin{enumerate}
+  \item 用 E0 构建 T1U paired selector，保留 image+$\Dpos$ 相对 zero/wrong 真正获益的 rows；
+  \item 报告 self-selected target、tool success、$D$ validity 与 conditional answer gain 的分解；
+  \item Crop reproduction 继续作为 oracle visual positive control；
+  \item 低学习率 RL 比较 R0 no-tool、R1 real-$D$ 与 R2 sham/wrong-$D$；
+  \item tool bonus 依赖 real-vs-sham answer advantage，而不是仅依赖 tool call 或最终答对。
+\end{enumerate}
+
+首轮 RL 仍适合 BS16$\times$n8$\times$80-step、decoder LoRA、frozen TGVF 与 $10^{-6}$ 起点。当前结果支持进入\textbf{小预算、强对照的 RL 可行性验证}，不支持直接扩大训练或把 oracle $+11\pp$ 当作可实现的端到端收益。
+
+\balance
+\section{结论与证据索引}
+
+本次最重要的新结论是：\textbf{RP66 原本已经产生有答案效用的 $D$，但该效用主要表现为与原图互补，而非替代原图。}image+$\Dpos$ 的 raw gain 为 $+11.0\pp$；控制协议与错误内容后仍保留 $+6.5$--$7.5\pp$ 的 target-specific gain。旧 replacement failure 继续成立，却不再能支持“$D$ 无效”的判断。
+
+E0C/E2/E3/E4 没有带来可检测的额外增益。新训练帮助建立了更严格的因果问题和 evaluator，但没有提供更好的 checkpoint。未来工作的中心应从“再造一个可读 $D$”转为“筛选什么时候 $D$ 有边际效用，并验证 policy 能否可靠取得这项效用”。
+
+\paragraph{范围边界。}
+本文只报告 RP66 Qwen3-VL-8B-Instruct 线，不是历史 REP-QWEN3-V4-CONTEXTUAL-V4 Thinking Stage1 的新正式评测。正确 $D$ 使用 oracle target/trajectory；answer instruction 只用于无梯度评测；semantic overlay 是 diagnostic blind judge，而非人工 gold adjudication。
+
+\paragraph{证据身份。}
+Generation roots 位于 \nolinkurl{artifacts/representation_experiments/answer_utility/evaluation/formal_first200_short_reader_v2_score_v3_10arm_20260730/}。Semantic summary 位于其 sibling \nolinkurl{semantic_rescore/formal_first200_5candidate_10arm_shortreader_v2_scorev3_qwen25_72b_20260730/summary.json}。Overlay run identity 为 \code{ea4a094f076e\ldots{}971f}，manifest SHA-256 为 \code{76fe4f86230c\ldots{}ba9e}；summary/records SHA-256 分别为 \code{1f3e30577838\ldots{}ccd1e} 与 \code{8c7b0c8818e4\ldots{}6367f}。配置与 isolated implementation 位于 \nolinkurl{configs/representation/experiments/answer_utility/} 与 \nolinkurl{src/tgvf_rl/representation/experiments/answer_utility/}。
+
+\end{document}
