@@ -1,0 +1,163 @@
+{
+  "schema_version": "tgvf-overnight-pipeline-v1",
+  "pipeline_id": "PRL04-R2-CROP-RL-FAIL-CLOSED-20260802",
+  "runtime_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/overnight/PRL04-R2-CROP-RL-FAIL-CLOSED-20260802",
+  "stages": [
+    {
+      "id": "crop_rl_smoke_1step",
+      "command": {
+        "argv": [
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python",
+          "-m",
+          "tgvf_rl.cli",
+          "run-policy",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/runs/prl_04_r2_smoke_qwen3_instruct_grpo_bs16_crop_t1full_1step_gpu0123.toml"
+        ],
+        "cwd": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl",
+        "env": {},
+        "timeout_seconds": 3600,
+        "terminate_grace_seconds": 120
+      },
+      "acceptance": [
+        {
+          "type": "jsonl_last_step",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/metrics.jsonl",
+          "field": "optimizer_step",
+          "equals": 1
+        },
+        {
+          "type": "exists",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/checkpoints/global_step_1",
+          "kind": "directory",
+          "nonempty": true
+        }
+      ]
+    },
+    {
+      "id": "crop_rl_mcq_terminal_reward_gate",
+      "command": {
+        "argv": [
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/tools/check_policy_mcq_terminal_reward.py",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123",
+          "--output",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/mcq-terminal-reward-gate.json",
+          "--expected-representative-records",
+          "16",
+          "--expected-optimizer-step",
+          "0",
+          "--minimum-terminal-matches-gold",
+          "1"
+        ],
+        "cwd": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl",
+        "env": {},
+        "timeout_seconds": 300,
+        "terminate_grace_seconds": 30
+      },
+      "acceptance": [
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/mcq-terminal-reward-gate.json",
+          "field": "status",
+          "equals": "passed"
+        },
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/mcq-terminal-reward-gate.json",
+          "field": "counts.representative_records",
+          "equals": 16
+        },
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/mcq-terminal-reward-gate.json",
+          "field": "counts.clear_false_negative_records",
+          "equals": 0
+        },
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/mcq-terminal-reward-gate.json",
+          "field": "observed_optimizer_steps",
+          "equals": [
+            0
+          ]
+        },
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/mcq-terminal-reward-gate.json",
+          "field": "expectations.minimum_terminal_matches_gold",
+          "equals": 1
+        }
+      ]
+    },
+    {
+      "id": "crop_rl_auto_resume_proof",
+      "command": {
+        "argv": [
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/tools/prove_policy_auto_resume.py",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/runs/prl_04_r2_smoke_qwen3_instruct_grpo_bs16_crop_t1full_1step_gpu0123.toml",
+          "--proof",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/auto-resume-proof.json"
+        ],
+        "cwd": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl",
+        "env": {},
+        "timeout_seconds": 3600,
+        "terminate_grace_seconds": 120
+      },
+      "acceptance": [
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/auto-resume-proof.json",
+          "field": "resume.proven",
+          "equals": true
+        },
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/auto-resume-proof.json",
+          "field": "resume.expected_optimizer_step",
+          "equals": 1
+        },
+        {
+          "type": "json_field",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-SMOKE-qwen3-instruct-grpo-bs16-crop-t1full-1step-gpu0123/auto-resume-proof.json",
+          "field": "resume.extra_optimizer_step_absent",
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "crop_rl_80step",
+      "command": {
+        "argv": [
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python",
+          "-m",
+          "tgvf_rl.cli",
+          "run-policy",
+          "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/runs/prl_04_r2_qwen3_instruct_grpo_bs16_crop_t1full_80step_gpu0123.toml"
+        ],
+        "cwd": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl",
+        "env": {},
+        "timeout_seconds": 43200,
+        "terminate_grace_seconds": 120
+      },
+      "acceptance": [
+        {
+          "type": "jsonl_last_step",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-qwen3-instruct-grpo-bs16-crop-t1full-80step-gpu0123/metrics.jsonl",
+          "field": "optimizer_step",
+          "equals": 80
+        },
+        {
+          "type": "exists",
+          "path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-04-R2-qwen3-instruct-grpo-bs16-crop-t1full-80step-gpu0123/checkpoints/global_step_80",
+          "kind": "directory",
+          "nonempty": true
+        }
+      ],
+      "retry": {
+        "max_retries": 1,
+        "delay_seconds": 60
+      }
+    }
+  ]
+}

@@ -9192,12 +9192,13 @@ than inferred from a script name or prior conversation.
 
 ### PRL-04-R1-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1FULL-80STEP-GPU0123
 
-- Cell/class and lifecycle: formal Crop RL pilot; `PREFLIGHT_VALIDATED` at
-  `2026-08-02 03:02 JST`, then `RUNNING` from `04:21 JST` after RP-68,
-  INT-DIAG and ACC-VAL passed their artifact gates. The clean-worktree launch
-  plan returned `launch_ready=true` with no blocker. It promotes the passed
-  one-step smoke without changing model, Crop protocol, reward weights,
-  optimizer, batch topology or capacity.
+- Cell/class and lifecycle: formal Crop RL pilot;
+  `INVALID_REWARD_FAIL_CLOSED_STEP5` at `2026-08-02 05:01 JST`. It was
+  preflighted at `03:02 JST` and ran from `04:21 JST` after RP-68, INT-DIAG and
+  ACC-VAL passed their artifact gates. The controller was intentionally sent
+  SIGINT after optimizer step 5 when an Instruct-output MCQ reward false
+  negative was proven. This was not an OOM, timeout, Crop execution failure or
+  identity failure. No R1 optimizer state may be reused.
 - Identity: Qwen3-VL-8B-Instruct, Crop-only, T1-04 retained 25,393-row ArxivQA
   dataset, BS16, eight trajectories per prompt, world size 4 on GPUs 0--3,
   gradient accumulation 4, AdamW LR `1e-6`, cosine 80-step schedule.
@@ -9211,16 +9212,84 @@ than inferred from a script name or prior conversation.
   Run identity SHA-256 is
   `5832d3323ddb0decf95f071d9f75db0ea1da5ee4de4803c9bb746399acceb30e`;
   W&B run ID is `s98vkf1k`.
-- Live proof: optimizer step 1 completed end to end in `353.670 s` with 16
-  prompts, 128 trajectories and 31,880 policy tokens; Crop execution, reward,
-  exact replay/reference diagnostics, actor backward/update, LoRA publication
-  and rollout weight synchronization all completed. Step 2 completed in
-  `332.387 s` with the same 16/128 batch contract and 29,933 policy tokens.
-  No validation ran before training, and no traceback, OOM or identity failure
-  was observed through step 2.
+- Runtime proof: optimizer steps 1--5 completed in respectively
+  `353.670/332.387/362.234/337.996/351.263 s` (mean `347.510 s`) under the
+  exact BS16/n8 contract. Across the first four complete rollout batches,
+  1,337 of 1,339 executable Crop calls succeeded (`99.85%`); all 828 audited
+  executed boxes were legal after the corrected coordinate mapping. The two
+  failures were recoverable model-generated out-of-range boxes, while the 97
+  call-cap errors were expected fifth-call attempts. Thus the historical Crop
+  coordinate bug is not the cause of this stop.
+- Reward failure: Qwen3-VL-Instruct frequently emitted an explanation followed
+  by a standalone option letter on the final non-empty line. The v1 mixed MCQ
+  parser examined the start of the whole response, so those correct decisions
+  became `letter_parse_failed`; this zeroed both the `.8` answer component and
+  the `1.2` conditional-tool component even though format already has its own
+  `.2` term. A bounded representative sample showed 16/80 (`20%`) clear false
+  negatives. The independent retained-audit gate over all material available
+  at stop found 69 answer false negatives and 68 conditional-tool false
+  negatives among 446 records; report SHA-256 is
+  `11b6d8236aeeb3cacaef5d5be4abbeb33994bf8c0d6dc405034c234ef9392bae`.
 - Recovery note: the per-step LoRA snapshots are rollout weight-publication
   artifacts, not paired training checkpoints. Since upstream invokes the save
   hook only after positive optimizer steps, configured step 0 does not publish
   a full checkpoint; scheduled `global_step_10` is the first durable recovery
-  boundary carrying actor/optimizer/scheduler/data/RNG/project state. Before
-  that boundary, a hard process or host interruption would restart from zero.
+  boundary carrying actor/optimizer/scheduler/data/RNG/project state. R1 was
+  stopped before that boundary and has no reusable full checkpoint. Its output,
+  metrics, trajectory audits and W&B run `s98vkf1k` are retained for debugging
+  but are scientifically invalid as a Crop pilot result.
+
+### PRL-04-R2-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1FULL-MCQ-REWARD-FIX
+
+- Cell/class and lifecycle: isolated reward-recovery smoke plus formal Crop RL
+  pilot; `READY_TO_LAUNCH` at `2026-08-02 05:28 JST`. Both outputs and the
+  controller runtime root are fresh. R2 starts from the initial policy state;
+  it neither resumes nor copies R1 optimizer state.
+- Controlled variables: Qwen3-VL-8B-Instruct, native DeepStack, Crop-only
+  protocol, complete T1-04 retained ArxivQA selection (25,393 rows), RP-66
+  representation binding, BS16, n8, world4 on GPUs 0--3, GA4, decoder LoRA
+  rank/alpha 64, AdamW LR `1e-6`, and reward weights `.8/.2/1.2` are unchanged
+  from R1. The only scientific change is deterministic MCQ decision parsing:
+  a canonical A--H decision at the start of the final non-empty line takes
+  precedence over earlier explicit markers. Arbitrary prose remains rejected;
+  MCQ judge fallback remains disabled.
+- Implementation identity: commit
+  `d835dd33fc4ec41db3be879195a62c2b4bb049d9`; mixed answer-verifier contract
+  SHA-256
+  `2d7b4da3add10fd6ca8f45aa146731634163a1b39bb4e7952a74b8e649248b97`.
+  Focused controller/reward/config/audit coverage passed. Offline replay of R1
+  recovers the known terminal-letter false negatives, while an independent
+  parser gate still rejects the original R1 artifacts.
+- Exact fail-closed chain: `crop_rl_smoke_1step ->
+  crop_rl_mcq_terminal_reward_gate -> crop_rl_auto_resume_proof ->
+  crop_rl_80step`. The controller accepts only this four-stage tuple or the
+  original exact seven-stage tuple; it cannot silently insert or reorder a
+  stage. Smoke uses T1-04 full data and the same BS16/n8 batch contract as the
+  formal run. Promotion requires terminal metric step 1, a durable step-1
+  checkpoint, exactly 16 retained representative rollout-zero records from
+  behavior step 0, at least one terminal-letter match to gold, zero clear
+  answer/tool reward false negatives, and an immutable auto-resume proof that
+  no step 2 was produced.
+- Smoke config:
+  `configs/policy/runs/prl_04_r2_smoke_qwen3_instruct_grpo_bs16_crop_t1full_1step_gpu0123.toml`;
+  config-file SHA-256
+  `f26a32046f96859304dddf350c62b01d5dd469f45fe91ee5dc900fa708ca0af5`;
+  run identity
+  `eb66520679a5f2c9f7154bb3c1a83c78ee8c0a9fcb44083c41263cdc4589ac3a`.
+- Formal config:
+  `configs/policy/runs/prl_04_r2_qwen3_instruct_grpo_bs16_crop_t1full_80step_gpu0123.toml`;
+  config-file SHA-256
+  `e6133d6294f4df5f93a32107c1cbeb0c7ff5a018876e7a69206e9841857441b3`;
+  run identity
+  `cfea4582fcb66abbf446d70d13c1870b7091decb5703806cb1a954007a317ddf`.
+  It has no pre-training validation, logs to console and W&B, checkpoints at
+  `1/5/10/20/30/40/50/60/70/80` (maximum five retained), and permits one
+  bounded 60-second-delayed controller retry after the separately proven
+  `resume_mode=auto` path.
+- Controller config:
+  `configs/overnight/prl04_r2_crop_rl_fail_closed_20260802.json`; SHA-256
+  `90bf15cf20db72982f6d033687da3e5448960436b4da513c06514909123297f0`;
+  runtime root
+  `artifacts/overnight/PRL04-R2-CROP-RL-FAIL-CLOSED-20260802`. Static validation
+  passed, and both policy plans report `launch_ready=true`, no blockers and no
+  GPU work launched during planning.
