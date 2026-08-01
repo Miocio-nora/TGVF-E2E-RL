@@ -14,7 +14,9 @@ _TOOL_PATH = (
     / "tools"
     / "run_rp68_post_training_evaluations.py"
 )
-_SPEC = importlib.util.spec_from_file_location("rp68_post_training_evaluations", _TOOL_PATH)
+_SPEC = importlib.util.spec_from_file_location(
+    "rp68_post_training_evaluations", _TOOL_PATH
+)
 assert _SPEC is not None and _SPEC.loader is not None
 evaluation = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = evaluation
@@ -71,6 +73,7 @@ def test_rendered_configs_bind_dynamic_completed_artifact(tmp_path: Path) -> Non
     receipt = _receipt(tmp_path)
     payload = evaluation._render_evaluation_config(
         receipt=receipt,
+        evaluation_code_commit="4" * 40,
         run_id="RP68-EVAL",
         evaluation_id="rp68-eval-v1",
         manifest_path=tmp_path / "groups.json",
@@ -84,6 +87,36 @@ def test_rendered_configs_bind_dynamic_completed_artifact(tmp_path: Path) -> Non
     assert f'expected_run_identity_sha256 = "{"a" * 64}"' in payload
     assert "expected_global_step = 2000" in payload
     assert "physical_gpu_id = 4" in payload
+    assert f'commit = "{"4" * 40}"' in payload
+    assert f'commit = "{"e" * 40}"' not in payload
+
+
+def test_live_evaluation_commit_is_stable_across_non_code_commits(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_git_output(*arguments: str) -> str:
+        calls.append(arguments)
+        if arguments[0] in {"diff", "ls-files"}:
+            return ""
+        assert arguments[:4] == ("log", "-1", "--format=%H", "HEAD")
+        return "a" * 40
+
+    monkeypatch.setattr(evaluation, "_git_output", fake_git_output)
+
+    assert evaluation._live_evaluation_code_commit() == "a" * 40
+    assert [call[0] for call in calls] == ["diff", "ls-files", "log"]
+
+
+def test_live_evaluation_commit_rejects_dirty_code_paths(monkeypatch) -> None:
+    def fake_git_output(*arguments: str) -> str:
+        return "src/tgvf_rl/changed.py" if arguments[0] == "diff" else ""
+
+    monkeypatch.setattr(evaluation, "_git_output", fake_git_output)
+
+    with pytest.raises(
+        evaluation.EvaluationBlockedError, match="requires clean live code paths"
+    ):
+        evaluation._live_evaluation_code_commit()
 
 
 def test_int_report_and_marker_are_bound_and_tamper_evident(tmp_path: Path) -> None:
@@ -102,7 +135,7 @@ def test_int_report_and_marker_are_bound_and_tamper_evident(tmp_path: Path) -> N
                     "target_conditioning_provider": receipt["conditioning_provider"],
                     "random_seed": 42,
                     "prompt_identity": (
-                        f'{receipt["prompt_identity"]}:{receipt["prompt_sha256"]}'
+                        f"{receipt['prompt_identity']}:{receipt['prompt_sha256']}"
                     ),
                 }
             }

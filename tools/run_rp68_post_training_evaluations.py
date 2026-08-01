@@ -38,9 +38,7 @@ DEFAULT_TRAINING_CONFIG = REPOSITORY_ROOT / (
     "configs/representation/"
     "qwen3_instruct_balanced_t1_vision_routing_2000step_gpu0123_resume_step10.toml"
 )
-EXPECTED_RUN_ID = (
-    "RP-68-QWEN3-INSTRUCT-REP-BALANCED-T1-VISION-ROUTING-2000-GPU0123"
-)
+EXPECTED_RUN_ID = "RP-68-QWEN3-INSTRUCT-REP-BALANCED-T1-VISION-ROUTING-2000-GPU0123"
 EXPECTED_MODEL_NAME = "Qwen3-VL-8B-Instruct"
 EXPECTED_ADAPTER_VARIANT = "full_d_deepstack_vision_routing"
 EXPECTED_GLOBAL_STEP = 2000
@@ -48,6 +46,13 @@ EXPECTED_WORLD_SIZE = 4
 EXPECTED_PHYSICAL_GPU_IDS = (0, 1, 2, 3)
 EXPECTED_GRADIENT_ACCUMULATION_STEPS = 2
 EXPECTED_TENSOR_COUNT = 104
+EVALUATION_CODE_IDENTITY_PATHS = (
+    "src/tgvf_rl",
+    "pyproject.toml",
+    "requirements/compatibility.lock",
+    "requirements/compatibility-torch211-cu129.lock",
+    "uv.lock",
+)
 
 FIRST_MANIFEST = REPOSITORY_ROOT / (
     "configs/representation/internal_evaluation/"
@@ -80,9 +85,7 @@ GROUNDING_MANIFEST_SHA256 = (
 JUDGE_CONFIG = (
     REPOSITORY_ROOT / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
 )
-JUDGE_CONFIG_SHA256 = (
-    "3737504858912a6392679d2c9720597cde58dd7d3218aa6f75b67ad00a769573"
-)
+JUDGE_CONFIG_SHA256 = "3737504858912a6392679d2c9720597cde58dd7d3218aa6f75b67ad00a769573"
 PYTHON_HEADER_ROOT = REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
 
 PIPELINE_SCHEMA = "rp68-post-training-evaluations-v1"
@@ -142,7 +145,9 @@ def _atomic_bytes(path: Path, payload: bytes) -> None:
 def _atomic_json(path: Path, value: object) -> None:
     _atomic_bytes(
         path,
-        (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+        (
+            json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode(),
     )
 
 
@@ -178,6 +183,57 @@ def _append_event(path: Path, event: str, **fields: object) -> None:
 def _regular_file(path: Path, *, label: str) -> None:
     if path.is_symlink() or not path.is_file():
         raise EvaluationBlockedError(f"{label} is not one regular file: {path}")
+
+
+def _git_output(*arguments: str) -> str:
+    try:
+        completed = subprocess.run(
+            ("git", *arguments),
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise EvaluationBlockedError(
+            "could not resolve the live evaluation code identity"
+        ) from error
+    return completed.stdout.strip()
+
+
+def _live_evaluation_code_commit() -> str:
+    """Bind generated configs to the latest commit touching evaluator code.
+
+    The training commit remains part of the checkpoint receipt.  Evaluation is
+    a later, separately executed program, so its config must instead name the
+    code actually eligible to run now.  Using the latest commit that touched
+    the evaluator's identity paths keeps this value stable across ledger-only
+    commits between INT-DIAG and ACC-VAL.
+    """
+
+    local_patch = _git_output(
+        "diff", "--name-only", "HEAD", "--", *EVALUATION_CODE_IDENTITY_PATHS
+    )
+    untracked = _git_output(
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "--",
+        *EVALUATION_CODE_IDENTITY_PATHS,
+    )
+    if local_patch or untracked:
+        raise EvaluationBlockedError(
+            "RP68 post-training evaluation requires clean live code paths"
+        )
+    commit = _git_output(
+        "log", "-1", "--format=%H", "HEAD", "--", *EVALUATION_CODE_IDENTITY_PATHS
+    )
+    if len(commit) != 40 or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
+        raise EvaluationBlockedError("live evaluation code commit is invalid")
+    return commit
 
 
 def _assert_pinned_inputs() -> None:
@@ -279,14 +335,18 @@ def _load_training_completion(training_config_path: Path) -> dict[str, Any]:
         "physical_gpu_ids": list(EXPECTED_PHYSICAL_GPU_IDS),
     }
     bad_terminal = sorted(
-        key for key, expected in expected_terminal.items() if terminal.get(key) != expected
+        key
+        for key, expected in expected_terminal.items()
+        if terminal.get(key) != expected
     )
     if bad_terminal:
         raise EvaluationBlockedError(
             "RP68 terminal metrics identity differs: " + ", ".join(bad_terminal)
         )
     if terminal.get("post_training_internal_evaluation") != {"status": "disabled"}:
-        raise EvaluationBlockedError("RP68 terminal metrics unexpectedly embeds INT-DIAG")
+        raise EvaluationBlockedError(
+            "RP68 terminal metrics unexpectedly embeds INT-DIAG"
+        )
 
     adapter_path = training.output.final_artifact_path
     _regular_file(adapter_path, label="RP68 Adapter export")
@@ -337,6 +397,7 @@ def _toml_string(value: object) -> str:
 def _render_evaluation_config(
     *,
     receipt: Mapping[str, Any],
+    evaluation_code_commit: str,
     run_id: str,
     evaluation_id: str,
     manifest_path: Path,
@@ -344,12 +405,12 @@ def _render_evaluation_config(
     report_path: Path,
     physical_gpu_id: int,
 ) -> bytes:
-    return f'''schema_version = "representation-internal-evaluation-run-v3"
+    return f"""schema_version = "representation-internal-evaluation-run-v3"
 run_id = {_toml_string(run_id)}
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = {_toml_string(receipt["code_commit"])}
+commit = {_toml_string(evaluation_code_commit)}
 dirty = false
 
 [source]
@@ -382,7 +443,7 @@ report_path = {_toml_string(report_path)}
 random_seed = 42
 max_new_tokens = 64
 eos_token_ids = [151645]
-'''.encode("utf-8")
+""".encode("utf-8")
 
 
 def _paths(training_config_path: Path) -> dict[str, Path]:
@@ -425,16 +486,20 @@ def _materialize_configs(
 ) -> tuple[dict[str, Any], dict[str, Path]]:
     _assert_pinned_inputs()
     receipt = _load_training_completion(training_config_path)
+    evaluation_code_commit = _live_evaluation_code_commit()
     paths = _paths(training_config_path)
     paths["root"].mkdir(parents=True, exist_ok=True)
     _write_identical_or_new(
         paths["receipt"],
-        (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+        (
+            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode(),
     )
     _write_identical_or_new(
         paths["int_config"],
         _render_evaluation_config(
             receipt=receipt,
+            evaluation_code_commit=evaluation_code_commit,
             run_id="RP-68-STEP2000-INT-DIAG-FIRST200-GPU0",
             evaluation_id="rp68-step2000-int-diag-v1",
             manifest_path=FIRST_MANIFEST,
@@ -447,6 +512,7 @@ def _materialize_configs(
         paths["first_config"],
         _render_evaluation_config(
             receipt=receipt,
+            evaluation_code_commit=evaluation_code_commit,
             run_id="RP-68-STEP2000-ACC-VAL-FIRST200-GPU01",
             evaluation_id="rp68-step2000-acc-val-first200-v1",
             manifest_path=FIRST_MANIFEST,
@@ -459,6 +525,7 @@ def _materialize_configs(
         paths["full_config"],
         _render_evaluation_config(
             receipt=receipt,
+            evaluation_code_commit=evaluation_code_commit,
             run_id="RP-68-STEP2000-ACC-VAL-FULL867-GPU01",
             evaluation_id="rp68-step2000-acc-val-full867-v1",
             manifest_path=FULL_MANIFEST,
@@ -508,13 +575,10 @@ def _int_report_is_current(path: Path, receipt: Mapping[str, Any]) -> bool:
         "checkpoint_identity": receipt["adapter_manifest_sha256"],
         "target_conditioning_provider": receipt["conditioning_provider"],
         "random_seed": 42,
-        "prompt_identity": (
-            f'{receipt["prompt_identity"]}:{receipt["prompt_sha256"]}'
-        ),
+        "prompt_identity": (f"{receipt['prompt_identity']}:{receipt['prompt_sha256']}"),
     }
     if not isinstance(identity, dict) or any(
-        identity.get(key) != expected_value
-        for key, expected_value in expected.items()
+        identity.get(key) != expected_value for key, expected_value in expected.items()
     ):
         raise EvaluationBlockedError("INT-DIAG report identity differs")
     return True
@@ -536,8 +600,7 @@ def _int_marker_is_current(
         or value.get("status") != "complete"
         or value.get("run_id") != EXPECTED_RUN_ID
         or value.get("run_identity_sha256") != receipt["run_identity_sha256"]
-        or value.get("adapter_manifest_sha256")
-        != receipt["adapter_manifest_sha256"]
+        or value.get("adapter_manifest_sha256") != receipt["adapter_manifest_sha256"]
         or value.get("evaluation_config_sha256") != _file_sha256(config_path)
         or not _artifact_record_is_current(value.get("report"), report_path)
     ):
@@ -602,9 +665,7 @@ def _run_int_diag(
         if completed.returncode != 0 or not _int_report_is_current(
             paths["int_report"], receipt
         ):
-            raise EvaluationBlockedError(
-                f"INT-DIAG failed; inspect {paths['int_log']}"
-            )
+            raise EvaluationBlockedError(f"INT-DIAG failed; inspect {paths['int_log']}")
         _append_event(paths["events"], "int_diag_finished")
     marker = {
         "schema_version": INT_MARKER_SCHEMA,
@@ -619,9 +680,7 @@ def _run_int_diag(
     _atomic_json(paths["int_marker"], marker)
 
 
-def _load_complete_generation(
-    root: Path, *, samples: int
-) -> dict[str, Any] | None:
+def _load_complete_generation(root: Path, *, samples: int) -> dict[str, Any] | None:
     summary_path = root / "launch-summary.json"
     if not summary_path.exists():
         return None
@@ -660,7 +719,9 @@ def _launch_generation(
         return existing
     command = [
         str(PYTHON),
-        str(REPOSITORY_ROOT / "tools/launch_representation_answer_utility_evaluation.py"),
+        str(
+            REPOSITORY_ROOT / "tools/launch_representation_answer_utility_evaluation.py"
+        ),
         "--production-source",
         "--source-evaluation-config",
         str(source_config),
@@ -732,15 +793,13 @@ def _semantic_complete(root: Path, *, samples: int) -> bool:
         or set(by_arm) != set(MAIN_ARMS)
         or summary.get("overall", {}).get("total") != samples * len(MAIN_ARMS)
         or any(
-            not isinstance(by_arm.get(arm), dict)
-            or by_arm[arm].get("total") != samples
+            not isinstance(by_arm.get(arm), dict) or by_arm[arm].get("total") != samples
             for arm in MAIN_ARMS
         )
         or not isinstance(files, dict)
         or files.get("summary", {}).get("path") != "summary.json"
         or files.get("summary", {}).get("sha256") != _file_sha256(summary_path)
-        or files.get("overlay_records", {}).get("rows")
-        != samples * len(MAIN_ARMS)
+        or files.get("overlay_records", {}).get("rows") != samples * len(MAIN_ARMS)
     ):
         raise EvaluationBlockedError(f"ACC semantic publication differs: {root}")
     return True
@@ -761,9 +820,7 @@ def _semantic_record(root: Path, *, samples: int) -> dict[str, object]:
     }
 
 
-def _semantic_record_is_current(
-    record: object, *, root: Path, samples: int
-) -> bool:
+def _semantic_record_is_current(record: object, *, root: Path, samples: int) -> bool:
     if not isinstance(record, dict) or record.get("status") != "complete":
         return False
     if (
@@ -796,8 +853,7 @@ def _acc_marker_is_current(
         or value.get("status") != "complete"
         or value.get("run_id") != EXPECTED_RUN_ID
         or value.get("run_identity_sha256") != receipt["run_identity_sha256"]
-        or value.get("adapter_manifest_sha256")
-        != receipt["adapter_manifest_sha256"]
+        or value.get("adapter_manifest_sha256") != receipt["adapter_manifest_sha256"]
         or value.get("first200_evaluation_config_sha256")
         != _file_sha256(paths["first_config"])
         or value.get("full867_evaluation_config_sha256")
@@ -1027,7 +1083,9 @@ def _run_acc_val(
             paths["full_semantic_log"],
         ),
     )
-    pending = any(not _semantic_complete(root, samples=samples) for _, _, root, samples, _ in jobs)
+    pending = any(
+        not _semantic_complete(root, samples=samples) for _, _, root, samples, _ in jobs
+    )
     if pending and _judge_endpoint_is_open():
         raise EvaluationBlockedError("port 8013 is occupied by an unowned endpoint")
     judge: subprocess.Popen[bytes] | None = None
@@ -1102,17 +1160,19 @@ def _parse_gpu_ids(value: str) -> tuple[int, int]:
     try:
         values = tuple(int(item) for item in value.split(","))
     except ValueError as error:
-        raise argparse.ArgumentTypeError("GPU IDs must be two comma-separated integers") from error
+        raise argparse.ArgumentTypeError(
+            "GPU IDs must be two comma-separated integers"
+        ) from error
     if len(values) != 2 or len(set(values)) != 2 or any(item < 0 for item in values):
-        raise argparse.ArgumentTypeError("GPU IDs must be two distinct non-negative integers")
+        raise argparse.ArgumentTypeError(
+            "GPU IDs must be two distinct non-negative integers"
+        )
     return values
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--training-config", type=Path, default=DEFAULT_TRAINING_CONFIG
-    )
+    parser.add_argument("--training-config", type=Path, default=DEFAULT_TRAINING_CONFIG)
     parser.add_argument(
         "--gpu-ids",
         type=_parse_gpu_ids,

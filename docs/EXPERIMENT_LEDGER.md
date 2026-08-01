@@ -9056,6 +9056,12 @@ than inferred from a script name or prior conversation.
   `06c8c47a8338921a17991551e40f71563da2002c`; fresh and strict-resume configs
   are `configs/representation/qwen3_instruct_balanced_t1_vision_routing_2000step_gpu0123.toml`
   and `configs/representation/qwen3_instruct_balanced_t1_vision_routing_2000step_gpu0123_resume_step10.toml`.
+- Evaluation identity correction: the checkpoint receipt continues to bind the
+  training commit above, while generated INT-DIAG/ACC-VAL configs bind the
+  latest committed evaluator identity paths actually executed. This prevents
+  unrelated post-training repository updates from falsely assigning the old
+  training commit to a later evaluation program; dirty evaluator paths remain
+  fail-closed.
 - Output: `artifacts/representation/RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123`.
 
 ### PRL-04-R0-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU4567
