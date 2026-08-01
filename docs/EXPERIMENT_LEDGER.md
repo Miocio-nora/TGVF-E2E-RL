@@ -9019,10 +9019,10 @@ than inferred from a script name or prior conversation.
 ### RP-68-QWEN3-INSTRUCT-REP-BALANCED-T1-VISION-ROUTING-2000-GPU0123
 
 - Cell/class and lifecycle: isolated representation-structure experiment;
-  `RUNNING_STRICT_RESUME` as of `2026-08-02 02:51 JST`. The step-10 smoke and
-  four-rank DCP passed, and the strict resume continued from step 10 rather
-  than step 0; the live run had reached step 1460/2000 with finite metrics. It
-  changes only the Adapter
+  `COMPLETED_PASS` at `2026-08-02 03:34 JST`. The step-10 smoke and four-rank
+  DCP passed, the strict resume continued from step 10 rather than step 0, and
+  the run reached exactly step 2000 with finite metrics and a complete
+  four-rank terminal DCP. It changes only the Adapter
   information route relative to RP-66 and does not change data, objective,
   optimizer, schedule, initialization, parameter shapes, or total Adapter
   capacity.
@@ -9072,6 +9072,28 @@ than inferred from a script name or prior conversation.
   and Adapter tree. Control logs, generated source configs, and completion
   markers remain in the hash-bound post-training control directory.
 - Output: `artifacts/representation/RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123`.
+- Terminal identity: run identity SHA-256
+  `27ad99c4dcc9f81ba0eaf8f60aa9180627ea047eafee6b9d2542904aa71378ab`;
+  final `adapter.pt` SHA-256
+  `051d8210ab62a5a6ac657f4df252d60c52dbd2efb37759e5e540705d04b67eee`;
+  Adapter manifest SHA-256
+  `5033200460ca521f375bdd184f98108d254e44f3dbaa8a96f1f1f0a13b723593`.
+- Post-training gates: `INT-DIAG` completed at `03:51 JST` with report SHA-256
+  `27ab7bf5d7b25be08404f63e9b9a2552b30c0fee7008840e615699c2b416d5f4`;
+  `ACC-VAL` completed and was accepted at `04:21 JST`. On first-200,
+  `image_only` was `141/200 = 70.5%` and `image_correct_D` was
+  `170/200 = 85.0%`, a `+14.5 pp` gain. On full-867, `image_only` was
+  `644/867 = 74.2791%` and `image_correct_D` was
+  `748/867 = 86.2745%`, a `+11.9954 pp` gain.
+- RP-66 comparison: the full-867 RP-68 correct-D score is nominally `+1.73 pp`
+  over RP-66 step 2000, but the paired McNemar result is only `p ~= 0.096`, and
+  identical RP-66/RP-68 image-only texts received approximately 2 pp different
+  semantic-judge scores. The cleaner same-data INT-DIAG comparison regressed:
+  query retrieval top-1 `87.0% -> 28.5%`, correct D beating same-image wrong D
+  `95.5% -> 40.5%`, and correct D beating all controls `84.8% -> 25.0%`.
+  Therefore RP-68 proves that vision-only value routing preserves strong
+  answer utility, but it is not established as an improvement over RP-66 and
+  its target specificity is substantially worse.
 
 ### PRL-04-R0-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU4567
 
@@ -9170,10 +9192,12 @@ than inferred from a script name or prior conversation.
 
 ### PRL-04-R1-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1FULL-80STEP-GPU0123
 
-- Cell/class and lifecycle: formal Crop RL pilot; `PREFLIGHT_VALIDATED` as of
-  `2026-08-02 03:02 JST`. The clean-worktree launch plan returned
-  `launch_ready=true` with no blocker. It promotes the passed one-step smoke without changing
-  model, Crop protocol, reward weights, optimizer, batch topology or capacity.
+- Cell/class and lifecycle: formal Crop RL pilot; `PREFLIGHT_VALIDATED` at
+  `2026-08-02 03:02 JST`, then `RUNNING` from `04:21 JST` after RP-68,
+  INT-DIAG and ACC-VAL passed their artifact gates. The clean-worktree launch
+  plan returned `launch_ready=true` with no blocker. It promotes the passed
+  one-step smoke without changing model, Crop protocol, reward weights,
+  optimizer, batch topology or capacity.
 - Identity: Qwen3-VL-8B-Instruct, Crop-only, T1-04 retained 25,393-row ArxivQA
   dataset, BS16, eight trajectories per prompt, world size 4 on GPUs 0--3,
   gradient accumulation 4, AdamW LR `1e-6`, cosine 80-step schedule.
@@ -9184,4 +9208,19 @@ than inferred from a script name or prior conversation.
   `81943918f09a7f99ec96b5c79fbc830fdea8e8376350f8de32ed87619cd3ce39`.
 - Config:
   `configs/policy/runs/prl_04_r1_qwen3_instruct_grpo_bs16_crop_t1full_80step_gpu0123.toml`.
-  Launch remains gated on RP-68 step 2000 plus completed INT-DIAG and ACC-VAL.
+  Run identity SHA-256 is
+  `5832d3323ddb0decf95f071d9f75db0ea1da5ee4de4803c9bb746399acceb30e`;
+  W&B run ID is `s98vkf1k`.
+- Live proof: optimizer step 1 completed end to end in `353.670 s` with 16
+  prompts, 128 trajectories and 31,880 policy tokens; Crop execution, reward,
+  exact replay/reference diagnostics, actor backward/update, LoRA publication
+  and rollout weight synchronization all completed. Step 2 completed in
+  `332.387 s` with the same 16/128 batch contract and 29,933 policy tokens.
+  No validation ran before training, and no traceback, OOM or identity failure
+  was observed through step 2.
+- Recovery note: the per-step LoRA snapshots are rollout weight-publication
+  artifacts, not paired training checkpoints. Since upstream invokes the save
+  hook only after positive optimizer steps, configured step 0 does not publish
+  a full checkpoint; scheduled `global_step_10` is the first durable recovery
+  boundary carrying actor/optimizer/scheduler/data/RNG/project state. Before
+  that boundary, a hard process or host interruption would restart from zero.
