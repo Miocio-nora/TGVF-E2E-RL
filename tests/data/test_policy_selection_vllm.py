@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from tgvf_rl.data.policy_selection_vllm import (
 )
 from tgvf_rl.data.policy_selection_vllm_retry import (
     length_retry_prefix_audit,
+    run_t1_length_retry_worker,
     select_length_retry_evidence,
 )
 
@@ -211,6 +213,130 @@ for name in ('torch', 'vllm', 'transformers', 'PIL'):
     )
     assert "plan" in retry_help.stdout
     assert "worker" in retry_help.stdout
+
+    retry_worker_help = subprocess.run(
+        [
+            sys.executable,
+            str(
+                repository_root
+                / "tools"
+                / "run_policy_data_selection_t1_retry.py"
+            ),
+            "worker",
+            "--help",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "--physical-gpu" in retry_worker_help.stdout
+
+
+def _candidate_sha_for_rank(rank: int, *, world_size: int) -> str:
+    for value in range(256):
+        candidate_sha256 = f"{value:064x}"
+        if candidate_rank(candidate_sha256, world_size=world_size) == rank:
+            return candidate_sha256
+    raise AssertionError("fixture could not find a candidate for rank")
+
+
+def test_length_retry_worker_scopes_plan_and_maps_physical_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int | None]] = []
+    completed = SimpleNamespace(
+        request_id="request",
+        candidate_sha256=_candidate_sha_for_rank(2, world_size=4),
+    )
+
+    def fake_plan(
+        _config_path: Path, *, budget_revision: int, rank: int | None
+    ) -> tuple[SimpleNamespace, tuple[()], tuple[SimpleNamespace, ...]]:
+        calls.append((budget_revision, rank))
+        run = SimpleNamespace(run_id="run", runtime={"world_size": 4})
+        return run, (), (completed,)
+
+    monkeypatch.setattr(
+        "tgvf_rl.data.policy_selection_vllm_retry.plan_t1_length_retries",
+        fake_plan,
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "6")
+    result = asyncio.run(
+        run_t1_length_retry_worker(
+            "config.json",
+            rank=2,
+            physical_gpu=6,
+            budget_revision=1,
+            expected_request_ids=("request",),
+        )
+    )
+    assert calls == [(1, 2)]
+    assert result["rank"] == 2
+    assert result["records_resumed"] == 1
+    assert result["records_written"] == 0
+
+
+@pytest.mark.parametrize("physical_gpu", (-1, True))
+def test_length_retry_worker_rejects_invalid_physical_gpu(
+    monkeypatch: pytest.MonkeyPatch, physical_gpu: int
+) -> None:
+    completed = SimpleNamespace(
+        request_id="request",
+        candidate_sha256=_candidate_sha_for_rank(1, world_size=4),
+    )
+
+    def fake_plan(
+        _config_path: Path, *, budget_revision: int, rank: int | None
+    ) -> tuple[SimpleNamespace, tuple[()], tuple[SimpleNamespace, ...]]:
+        run = SimpleNamespace(run_id="run", runtime={"world_size": 4})
+        return run, (), (completed,)
+
+    monkeypatch.setattr(
+        "tgvf_rl.data.policy_selection_vllm_retry.plan_t1_length_retries",
+        fake_plan,
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "5")
+    with pytest.raises(ValueError, match="physical_gpu"):
+        asyncio.run(
+            run_t1_length_retry_worker(
+                "config.json",
+                rank=1,
+                physical_gpu=physical_gpu,
+                budget_revision=1,
+                expected_request_ids=("request",),
+            )
+        )
+
+
+def test_length_retry_worker_rejects_visible_gpu_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = SimpleNamespace(
+        request_id="request",
+        candidate_sha256=_candidate_sha_for_rank(0, world_size=4),
+    )
+
+    def fake_plan(
+        _config_path: Path, *, budget_revision: int, rank: int | None
+    ) -> tuple[SimpleNamespace, tuple[()], tuple[SimpleNamespace, ...]]:
+        run = SimpleNamespace(run_id="run", runtime={"world_size": 4})
+        return run, (), (completed,)
+
+    monkeypatch.setattr(
+        "tgvf_rl.data.policy_selection_vllm_retry.plan_t1_length_retries",
+        fake_plan,
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "7")
+    with pytest.raises(ValueError, match="physical GPU 4"):
+        asyncio.run(
+            run_t1_length_retry_worker(
+                "config.json",
+                rank=0,
+                physical_gpu=4,
+                budget_revision=1,
+                expected_request_ids=("request",),
+            )
+        )
 
 
 def _retry_evidence(

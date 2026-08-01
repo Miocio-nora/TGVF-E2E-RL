@@ -25,6 +25,7 @@ def _parser() -> argparse.ArgumentParser:
     worker.add_argument("--config", type=Path, required=True)
     worker.add_argument("--budget-revision", type=int, required=True)
     worker.add_argument("--rank", type=int, required=True)
+    worker.add_argument("--physical-gpu", type=int, required=True)
     worker.add_argument("--expected-request-id", action="append", required=True)
     return parser
 
@@ -40,6 +41,7 @@ def main() -> None:
             run_t1_length_retry_worker(
                 args.config,
                 rank=args.rank,
+                physical_gpu=args.physical_gpu,
                 budget_revision=args.budget_revision,
                 expected_request_ids=args.expected_request_id,
             )

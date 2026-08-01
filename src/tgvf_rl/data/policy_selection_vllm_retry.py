@@ -381,6 +381,7 @@ async def run_t1_length_retry_worker(
     config_path: str | Path,
     *,
     rank: int,
+    physical_gpu: int,
     budget_revision: int,
     expected_request_ids: Sequence[str],
 ) -> dict[str, object]:
@@ -388,7 +389,7 @@ async def run_t1_length_retry_worker(
 
     path = Path(config_path).resolve()
     run, retries, completed = plan_t1_length_retries(
-        path, budget_revision=budget_revision, rank=None
+        path, budget_revision=budget_revision, rank=rank
     )
     expected = tuple(sorted(expected_request_ids))
     planned = tuple(sorted(retry.request_id for retry in retries))
@@ -410,6 +411,14 @@ async def run_t1_length_retry_worker(
         for evidence in completed
     ):
         raise ValueError("acknowledged retry request belongs to another rank")
+    if type(physical_gpu) is not int or physical_gpu < 0:
+        raise ValueError("physical_gpu must be a non-negative integer")
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible != str(physical_gpu):
+        raise ValueError(
+            f"worker logical rank {rank} requires physical GPU {physical_gpu} "
+            f"via CUDA_VISIBLE_DEVICES={physical_gpu}, got {visible!r}"
+        )
     if not retries:
         return {
             "run_id": run.run_id,
@@ -419,11 +428,6 @@ async def run_t1_length_retry_worker(
             "records_resumed": len(completed),
             "manifests": [],
         }
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if visible != str(rank):
-        raise ValueError(
-            f"worker rank {rank} requires CUDA_VISIBLE_DEVICES={rank}, got {visible!r}"
-        )
     _validate_runtime_versions(run)
 
     grouped: dict[int, list[T1LengthRetry]] = {}
