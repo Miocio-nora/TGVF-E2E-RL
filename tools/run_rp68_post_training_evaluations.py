@@ -454,6 +454,10 @@ def _paths(training_config_path: Path) -> dict[str, Path]:
         "RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123"
     )
     root = training_root / "post-training-evaluation"
+    answer_utility_root = REPOSITORY_ROOT / (
+        "artifacts/evaluation/"
+        "RP-68-qwen3-instruct-vision-routing-step2000-answer-utility"
+    )
     configs = root / "generated-configs"
     return {
         "root": root,
@@ -465,10 +469,10 @@ def _paths(training_config_path: Path) -> dict[str, Path]:
         "full_config": configs / "rp68-step2000-acc-full867.toml",
         "int_report": root / "INT-DIAG-first200-step2000.json",
         "int_marker": root / "INT-DIAG-complete.json",
-        "first_generation": root / "ACC-VAL-first200-generation",
-        "full_generation": root / "ACC-VAL-full867-generation",
-        "first_semantic": root / "ACC-VAL-first200-semantic",
-        "full_semantic": root / "ACC-VAL-full867-semantic",
+        "first_generation": answer_utility_root / "ACC-VAL-first200-generation",
+        "full_generation": answer_utility_root / "ACC-VAL-full867-generation",
+        "first_semantic": answer_utility_root / "ACC-VAL-first200-semantic",
+        "full_semantic": answer_utility_root / "ACC-VAL-full867-semantic",
         "acc_marker": root / "ACC-VAL-complete.json",
         "int_log": root / "INT-DIAG.log",
         "first_generation_log": root / "ACC-VAL-first200-generation.log",

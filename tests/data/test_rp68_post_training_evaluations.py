@@ -91,6 +91,26 @@ def test_rendered_configs_bind_dynamic_completed_artifact(tmp_path: Path) -> Non
     assert f'commit = "{"e" * 40}"' not in payload
 
 
+def test_answer_utility_outputs_are_isolated_from_training_artifacts() -> None:
+    paths = evaluation._paths(evaluation.DEFAULT_TRAINING_CONFIG)
+    training_root = evaluation.REPOSITORY_ROOT / (
+        "artifacts/representation/"
+        "RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123"
+    )
+
+    for key in (
+        "first_generation",
+        "full_generation",
+        "first_semantic",
+        "full_semantic",
+    ):
+        output = paths[key]
+        assert not output.is_relative_to(training_root)
+        assert output.is_relative_to(
+            evaluation.REPOSITORY_ROOT / "artifacts/evaluation"
+        )
+
+
 def test_live_evaluation_commit_is_stable_across_non_code_commits(monkeypatch) -> None:
     calls: list[tuple[str, ...]] = []
 

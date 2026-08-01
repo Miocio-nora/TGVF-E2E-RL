@@ -9067,6 +9067,10 @@ than inferred from a script name or prior conversation.
   prefix and its terminal record, permits only later appends, and still rejects
   shrinkage or any mutation within that prefix. This removes the false
   step-2000 transition refusal without weakening artifact identity checks.
+- ACC output isolation correction: generation and semantic-rescore artifacts
+  publish under `artifacts/evaluation`, outside the protected RP-68 training
+  and Adapter tree. Control logs, generated source configs, and completion
+  markers remain in the hash-bound post-training control directory.
 - Output: `artifacts/representation/RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123`.
 
 ### PRL-04-R0-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU4567
