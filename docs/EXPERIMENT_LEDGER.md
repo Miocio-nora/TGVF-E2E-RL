@@ -9155,8 +9155,9 @@ than inferred from a script name or prior conversation.
 
 ### PRL-04-R1-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1FULL-80STEP-GPU0123
 
-- Cell/class and lifecycle: formal Crop RL pilot; `PREFLIGHT_PENDING` as of
-  `2026-08-02 02:51 JST`. It promotes the passed one-step smoke without changing
+- Cell/class and lifecycle: formal Crop RL pilot; `PREFLIGHT_VALIDATED` as of
+  `2026-08-02 03:02 JST`. The clean-worktree launch plan returned
+  `launch_ready=true` with no blocker. It promotes the passed one-step smoke without changing
   model, Crop protocol, reward weights, optimizer, batch topology or capacity.
 - Identity: Qwen3-VL-8B-Instruct, Crop-only, T1-04 retained 25,393-row ArxivQA
   dataset, BS16, eight trajectories per prompt, world size 4 on GPUs 0--3,
