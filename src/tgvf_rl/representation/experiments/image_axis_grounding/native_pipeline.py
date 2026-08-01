@@ -125,18 +125,16 @@ class ImageAxisGroundedNativeGroupBuilder:
         image_paths = {sample.image for sample in samples}
         if len(image_group_keys) != 1 or len(image_paths) != 1:
             raise ValueError("image-axis anchors must share one exact image")
-        assignment = self.donor_manifest.assignment_for(samples[0].image_group_key)
-        _validate_assignment_for_samples(assignment, samples)
-        row_mask = self.image_axis_row_mask(samples)
-
         base = self.base_builder(
             samples,
             adapter,
             collective_candidate_count=collective_candidate_count,
         )
+        assignment = self._assignment_for_samples(samples)
+        row_mask = (assignment is not None and assignment.matched,) * len(samples)
         donor_samples = (
             _materialize_donor_samples(samples, assignment)
-            if assignment.matched
+            if assignment is not None and assignment.matched
             else samples
         )
         donor = self.base_builder(
@@ -144,12 +142,12 @@ class ImageAxisGroundedNativeGroupBuilder:
             adapter,
             collective_candidate_count=collective_candidate_count,
         )
-        if assignment.matched and any(
+        if assignment is not None and assignment.matched and any(
             candidate.image_grid_thw != assignment.image_grid_thw
             for candidate in donor.candidates
         ):
             raise ValueError("materialized donor grid differs from bound manifest")
-        if any(
+        if assignment is not None and any(
             candidate.image_grid_thw != assignment.image_grid_thw
             for candidate in base.candidates
         ):
@@ -172,9 +170,30 @@ class ImageAxisGroundedNativeGroupBuilder:
             raise ValueError("image-axis mask requires typed anchor samples")
         if len({sample.image_group_key for sample in samples}) != 1:
             raise ValueError("image-axis mask samples must share one image group")
-        assignment = self.donor_manifest.assignment_for(samples[0].image_group_key)
+        assignment = self._assignment_for_samples(samples)
+        return (assignment is not None and assignment.matched,) * len(samples)
+
+    def _assignment_for_samples(
+        self,
+        samples: tuple[RepresentationTrainingSample, ...],
+    ) -> ImageAxisDonorAssignment | None:
+        """Resolve a train donor; mask groups outside the train-only manifest.
+
+        The experiment preflight proves that the manifest exactly covers the
+        complete distributed training sampler closure.  Validation is a
+        disjoint population by construction, so its groups are intentionally
+        absent.  They retain the full legacy objective while the experimental
+        image-axis term is disabled through an all-false row mask.
+        """
+
+        try:
+            assignment = self.donor_manifest.assignment_for(
+                samples[0].image_group_key
+            )
+        except KeyError:
+            return None
         _validate_assignment_for_samples(assignment, samples)
-        return (assignment.matched,) * len(samples)
+        return assignment
 
 
 def _validate_assignment_for_samples(

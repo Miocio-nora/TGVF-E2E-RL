@@ -78,6 +78,10 @@ ACCEPTED_QWEN3_MODEL_DTYPE = "bfloat16"
 ACCEPTED_QWEN3_ATTENTION_BACKEND = "sdpa"
 NO_INITIALIZATION_SOURCE = "none"
 NO_RESUME_CHECKPOINT = "none"
+NO_RESUME_CODE_COMPATIBILITY = "none"
+VALIDATED_NON_TRAINING_CODE_TRANSITION = (
+    "validated_non_training_code_transition_v1"
+)
 _SHA256_CHARACTERS = frozenset("0123456789abcdef")
 _TOP_LEVEL_FIELDS = frozenset(
     {
@@ -441,8 +445,8 @@ class RepresentationFSDP2TopologyConfig:
     def __post_init__(self) -> None:
         if self.strategy != "fsdp2":
             raise ValueError("fsdp2.strategy must be 'fsdp2'")
-        if self.world_size != 2:
-            raise ValueError("representation FSDP2 world_size must be 2")
+        if self.world_size not in (2, 4):
+            raise ValueError("representation FSDP2 world_size must be 2 or 4")
         if (
             len(self.physical_gpu_ids) != self.world_size
             or any(
@@ -452,16 +456,24 @@ class RepresentationFSDP2TopologyConfig:
             or len(set(self.physical_gpu_ids)) != self.world_size
         ):
             raise ValueError(
-                "fsdp2.physical_gpu_ids must contain two distinct non-negative "
-                "physical GPU IDs"
+                "fsdp2.physical_gpu_ids must contain world_size distinct "
+                "non-negative physical GPU IDs"
             )
-        if self.logical_gpu_ids != (0, 1):
-            raise ValueError("CUDA-visible logical GPU IDs must be [0, 1]")
+        expected_logical_gpu_ids = tuple(range(self.world_size))
+        if self.logical_gpu_ids != expected_logical_gpu_ids:
+            raise ValueError(
+                "CUDA-visible logical GPU IDs must be contiguous from zero "
+                "through world_size - 1"
+            )
         if self.device_type != "cuda":
             raise ValueError("representation FSDP2 device_type must be 'cuda'")
-        if self.mesh_dim_name != "fsdp" or self.mesh_shape != (2,):
+        if (
+            self.mesh_dim_name != "fsdp"
+            or self.mesh_shape != (self.world_size,)
+        ):
             raise ValueError(
-                "representation FSDP2 requires one mesh dimension fsdp=[2]"
+                "representation FSDP2 requires one mesh dimension whose size "
+                "equals world_size"
             )
         _bool(
             self.reshard_after_forward,
@@ -674,6 +686,8 @@ class RepresentationResumeConfig:
     enabled: bool
     checkpoint_path: Path | None
     strict_identity: bool
+    code_compatibility: str = NO_RESUME_CODE_COMPATIBILITY
+    compatible_live_dirty_state_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _bool(self.enabled, field_name="resume.enabled")
@@ -685,6 +699,20 @@ class RepresentationResumeConfig:
             raise ValueError("disabled resume checkpoint_path must be 'none'")
         if self.strict_identity is not True:
             raise ValueError("resume.strict_identity must be true")
+        if self.code_compatibility == NO_RESUME_CODE_COMPATIBILITY:
+            if self.compatible_live_dirty_state_sha256 is not None:
+                raise ValueError(
+                    "resume compatible live-code SHA requires explicit compatibility"
+                )
+        elif self.code_compatibility == VALIDATED_NON_TRAINING_CODE_TRANSITION:
+            if not self.enabled:
+                raise ValueError("resume code compatibility requires enabled resume")
+            _sha256(
+                self.compatible_live_dirty_state_sha256,
+                field_name="resume.compatible_live_dirty_state_sha256",
+            )
+        else:
+            raise ValueError("unsupported resume.code_compatibility")
 
 
 @dataclass(frozen=True, slots=True)
@@ -811,7 +839,9 @@ class RepresentationTrainingConfig:
             raise TypeError("representation Adapter variant must be explicit")
         if self.schema_version != REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5:
             if self.adapter_variant is not TGVFAdapterVariant.FULL_D_DEEPSTACK:
-                raise ValueError("main-D-only requires training config schema v5")
+                raise ValueError(
+                    "non-historical Adapter variants require training config schema v5"
+                )
         if self.schema_version in {
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V4,
             REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5,
@@ -863,6 +893,15 @@ class RepresentationTrainingConfig:
                 "training.target_optimizer_steps must be divisible by "
                 "training.log_every_optimizer_steps so the final checkpoint has "
                 "a durable train metric"
+            )
+        if (
+            self.training.validation_every_optimizer_steps
+            % self.checkpoint.save_every_optimizer_steps
+        ):
+            raise ValueError(
+                "training.validation_every_optimizer_steps must be divisible by "
+                "checkpoint.save_every_optimizer_steps so validation always runs "
+                "after a durable checkpoint"
             )
 
     @property
@@ -944,6 +983,7 @@ def load_representation_training_config(
     path: str | Path,
     *,
     verify_external_files: bool = True,
+    allow_existing_post_training_report: bool = False,
 ) -> RepresentationTrainingConfig:
     """Parse and validate one complete representation-training TOML identity.
 
@@ -955,6 +995,12 @@ def load_representation_training_config(
 
     if not isinstance(verify_external_files, bool):
         raise TypeError("verify_external_files must be a bool")
+    if not isinstance(allow_existing_post_training_report, bool):
+        raise TypeError("allow_existing_post_training_report must be a bool")
+    if allow_existing_post_training_report and not verify_external_files:
+        raise ValueError(
+            "allow_existing_post_training_report requires external-file verification"
+        )
     source_path = _configuration_source_path(path)
     raw = source_path.read_bytes()
     source_toml_sha256 = sha256(raw).hexdigest()
@@ -1053,7 +1099,12 @@ def load_representation_training_config(
         canonical_config_sha256=canonical_config_sha256,
     )
     if verify_external_files:
-        _verify_external_files(config)
+        _verify_external_files(
+            config,
+            allow_existing_post_training_report=(
+                allow_existing_post_training_report
+            ),
+        )
     return config
 
 
@@ -1717,9 +1768,17 @@ def _parse_output(value: Mapping[str, Any]) -> RepresentationOutputConfig:
 
 
 def _parse_resume(value: Mapping[str, Any]) -> RepresentationResumeConfig:
+    compatibility_fields = {
+        "code_compatibility",
+        "compatible_live_dirty_state_sha256",
+    }
+    present_compatibility_fields = set(value) & compatibility_fields
+    expected_fields = {"enabled", "checkpoint_path", "strict_identity"}
+    if present_compatibility_fields:
+        expected_fields |= compatibility_fields
     _exact_fields(
         value,
-        {"enabled", "checkpoint_path", "strict_identity"},
+        expected_fields,
         table="resume",
     )
     enabled = _boolean(value, "enabled", table="resume")
@@ -1733,6 +1792,26 @@ def _parse_resume(value: Mapping[str, Any]) -> RepresentationResumeConfig:
         enabled=enabled,
         checkpoint_path=checkpoint_path,
         strict_identity=_boolean(value, "strict_identity", table="resume"),
+        code_compatibility=(
+            _string(value, "code_compatibility", table="resume")
+            if present_compatibility_fields
+            else NO_RESUME_CODE_COMPATIBILITY
+        ),
+        compatible_live_dirty_state_sha256=(
+            None
+            if not present_compatibility_fields
+            or _string(
+                value,
+                "compatible_live_dirty_state_sha256",
+                table="resume",
+            )
+            == NO_RESUME_CODE_COMPATIBILITY
+            else _string(
+                value,
+                "compatible_live_dirty_state_sha256",
+                table="resume",
+            )
+        ),
     )
 
 
@@ -1767,7 +1846,11 @@ def _parse_checkpoint(value: Mapping[str, Any]) -> RepresentationCheckpointConfi
     )
 
 
-def _verify_external_files(config: RepresentationTrainingConfig) -> None:
+def _verify_external_files(
+    config: RepresentationTrainingConfig,
+    *,
+    allow_existing_post_training_report: bool = False,
+) -> None:
     if not config.model.local_path.is_dir():
         raise ValueError(
             f"accepted Qwen3 model directory is unavailable: {config.model.local_path}"
@@ -1856,7 +1939,10 @@ def _verify_external_files(config: RepresentationTrainingConfig) -> None:
             raise ValueError(
                 "post_training_internal_evaluation.report_path has no usable parent"
             )
-        if evaluation.report_path.exists():
+        if (
+            evaluation.report_path.exists()
+            and not allow_existing_post_training_report
+        ):
             raise ValueError(
                 "post_training_internal_evaluation.report_path already exists"
             )

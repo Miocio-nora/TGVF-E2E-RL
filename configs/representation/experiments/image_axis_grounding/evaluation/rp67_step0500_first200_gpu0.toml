@@ -1,0 +1,38 @@
+schema_version = "representation-internal-evaluation-run-v3"
+run_id = "RP-67-STEP0500-FIRST200-IMAGE-AXIS-UTILITY-EVAL-GPU0"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "d46715ff916f60a5fac1410a0b013d665f8a1f99"
+dirty = false
+
+[source]
+training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/experiments/image_axis_grounding/rp67_qwen3_instruct_image_axis_grounded_500_gpu01_resume_step10.toml"
+training_config_sha256 = "ebfdfd3e24d316bb95283034bd45c0f9763e49692730acd9db9090b8c9c33860"
+
+[artifact]
+path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-67-qwen3-instruct-balanced-t1-image-axis-grounded-500-gpu01/adapter.pt"
+file_sha256 = "cd8894fac1c8e66eb2719f7bd574884f8bb5d28538f4c5d883b2185605eb94ce"
+manifest_sha256 = "10de5a891326fd5cc8fa79b3ea3dbf4dac2d646cb07c1cfb391eb62d437b8a3b"
+expected_run_identity_sha256 = "38431471aa3d317850150842027a322dcfe1569457b11f014b8fca51e9346ca6"
+expected_global_step = 500
+
+[execution]
+physical_gpu_id = 0
+
+[evaluation_data]
+jsonl_path = "/nvmesv/dredvpn009/projects/r-vlm/revisit_vlm/data/tgvf_teacher/generated/runs/tgvf_v4_teacher_50k_clean_imend/splits/tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl"
+source_sha256 = "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
+
+[evaluation]
+evaluation_id = "rp67-step0500-first200-image-axis-utility-v1"
+ordered_group_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json"
+ordered_group_manifest_sha256 = "55e2cde5e118de77e4bcc099a422844129cdff1caf328d349dae5c7f11a634d8"
+counterfactual_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_test_golden_counterfactual_v1.json"
+counterfactual_manifest_sha256 = "4589d14f196ccde48c3439405700220bc0fb63487edae0e74bc6b3713d7f4cc4"
+grounding_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/internal_evaluation/qwen3_v4_clean_imend_audited_grounding_v1.json"
+grounding_manifest_sha256 = "a65aa6e6038ada1436302b60440136cc98b388552a7782b48ec95ed4324938c0"
+report_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation_experiments/image_axis_grounding/evaluation/rp67_step0500_first200/internal_evaluation_unused.json"
+random_seed = 42
+max_new_tokens = 64
+eos_token_ids = [151645]

@@ -7,8 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from torch import nn
 
 from tgvf_rl.protocol.native import NativeAssistantDialect
+from tgvf_rl.qwen.base import InjectedForwardRequest, InjectedVisualBlock
+from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.training.oracle_d_utility import (
     DEFAULT_THINKING_EOS_TOKEN_IDS,
     ORACLE_D_UTILITY_RECORD_SCHEMA_VERSION,
@@ -20,6 +23,7 @@ from tgvf_rl.representation.training.oracle_d_utility import (
     build_image_only_messages,
     build_oracle_target_messages,
     greedy_oracle_answer,
+    greedy_oracle_answers_batched,
     prepare_oracle_arm_context,
     score_oracle_generated_answer,
     split_oracle_d_utility_sample,
@@ -259,7 +263,9 @@ def test_matched_wrong_arm_contract_keeps_current_target_visible() -> None:
     assert OracleDUtilityArm.MATCHED_WRONG_D.value == "matched_wrong_D"
 
 
-def _visual_bundle(fill: float, *, active: bool = True) -> RepresentationVisualTensorBundle:
+def _visual_bundle(
+    fill: float, *, active: bool = True
+) -> RepresentationVisualTensorBundle:
     return RepresentationVisualTensorBundle(
         main=torch.full((1, 2, 4), fill),
         deepstack=tuple(torch.full((1, 2, 4), fill + index + 1) for index in range(3)),
@@ -349,3 +355,233 @@ def test_direct_D_replacement_fails_closed_without_active_deepstack() -> None:
             correct_d=_visual_bundle(10.0, active=False),
             image_grid_thw=(1, 2, 2),
         )
+
+
+@dataclass
+class _BatchContext:
+    visual_value: float
+    prefix_token_ids: tuple[int, ...] = (1, 2, 3, 4)
+    forbidden_multimodal_token_ids: frozenset[int] = frozenset()
+
+    def materialize(self, suffix: tuple[int, ...], runtime: object) -> object:
+        token_ids = (*self.prefix_token_ids, *suffix)
+        sequence = len(token_ids)
+        visual = torch.full((1, 2, 6), self.visual_value)
+        return InjectedForwardRequest(
+            input_ids=torch.tensor((token_ids,), dtype=torch.long),
+            attention_mask=torch.ones((1, sequence), dtype=torch.long),
+            position_ids=torch.arange(sequence).view(1, 1, sequence).expand(3, -1, -1),
+            visual_blocks=(
+                InjectedVisualBlock(
+                    kind="focused_d",
+                    positions=(1, 2),
+                    embeddings=visual,
+                    deepstack=tuple(
+                        visual * float(index + 1) / 10 for index in range(3)
+                    ),
+                    deepstack_positions=((1, 2), (1, 2), (1, 2)),
+                ),
+            ),
+        )
+
+
+class _BatchTokenizer:
+    def decode(self, token_ids: list[int], **_kwargs: object) -> str:
+        return ",".join(str(token_id) for token_id in token_ids)
+
+
+class _ScriptedBatchFamily:
+    capabilities = SimpleNamespace(native_injected_kv_cache=True)
+
+    def __init__(
+        self,
+        initial_tokens: tuple[int, ...],
+        cached_tokens: tuple[tuple[int, ...], ...],
+    ) -> None:
+        self.initial_tokens = initial_tokens
+        self.cached_tokens = list(cached_tokens)
+        self.prefill_batch_sizes: list[int] = []
+        self.cached_batch_sizes: list[int] = []
+
+    @staticmethod
+    def _result(token_ids: tuple[int, ...]) -> object:
+        logits = torch.zeros((len(token_ids), 1, 8))
+        for lane, token_id in enumerate(token_ids):
+            logits[lane, 0, token_id] = 10
+        return SimpleNamespace(logits=logits, past_key_values=object())
+
+    def prefill_injected_cache(self, model: object, request: object) -> object:
+        self.prefill_batch_sizes.append(int(request.input_ids.shape[0]))
+        return self._result(self.initial_tokens)
+
+    def forward_cached_token(self, model: object, request: object) -> object:
+        self.cached_batch_sizes.append(int(request.input_ids.shape[0]))
+        return self._result(self.cached_tokens.pop(0))
+
+
+def test_batched_cached_greedy_tracks_lane_eos_and_uses_one_decode_wave() -> None:
+    runtime = SimpleNamespace(
+        model=object(), tokenizer=_BatchTokenizer(), renderer=_FakeRenderer()
+    )
+    family = _ScriptedBatchFamily(
+        initial_tokens=(5, 3),
+        cached_tokens=((4, 5),),
+    )
+
+    outputs = greedy_oracle_answers_batched(
+        contexts=(_BatchContext(1.0), _BatchContext(2.0)),  # type: ignore[arg-type]
+        runtime=runtime,  # type: ignore[arg-type]
+        family_adapter=family,  # type: ignore[arg-type]
+        eos_token_ids=(5,),
+        max_new_tokens=4,
+    )
+
+    assert tuple(output.token_ids for output in outputs) == ((5,), (3, 5))
+    assert tuple(output.stop_reason for output in outputs) == (
+        "natural_stop",
+        "natural_stop",
+    )
+    assert family.prefill_batch_sizes == [2]
+    assert family.cached_batch_sizes == [2]
+
+
+def test_batched_cached_greedy_rejects_nonfinite_next_token_logits() -> None:
+    runtime = SimpleNamespace(
+        model=object(), tokenizer=_BatchTokenizer(), renderer=_FakeRenderer()
+    )
+    family = _ScriptedBatchFamily(initial_tokens=(1, 2), cached_tokens=())
+
+    def nonfinite_result(_model: object, request: object) -> object:
+        family.prefill_batch_sizes.append(int(request.input_ids.shape[0]))
+        return SimpleNamespace(
+            logits=torch.full((2, 1, 8), float("nan")),
+            past_key_values=object(),
+        )
+
+    family.prefill_injected_cache = nonfinite_result  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="invalid logits"):
+        greedy_oracle_answers_batched(
+            contexts=(_BatchContext(1.0), _BatchContext(2.0)),  # type: ignore[arg-type]
+            runtime=runtime,  # type: ignore[arg-type]
+            family_adapter=family,  # type: ignore[arg-type]
+            eos_token_ids=(5,),
+            max_new_tokens=4,
+        )
+
+
+class _TinyCache:
+    def __init__(self, cumulative: torch.Tensor, sequence_length: int) -> None:
+        self.cumulative = cumulative
+        self.sequence_length = sequence_length
+
+    def get_seq_length(self) -> int:
+        return self.sequence_length
+
+
+class _TinyCachedLanguageModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed_tokens = nn.Embedding(64, 6)
+
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.embed_tokens
+
+    def forward(
+        self,
+        *,
+        input_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        visual_pos_masks: torch.Tensor | None = None,
+        deepstack_visual_embeds: list[torch.Tensor] | None = None,
+        past_key_values: _TinyCache | None = None,
+        use_cache: bool = False,
+        **_kwargs: object,
+    ) -> object:
+        if inputs_embeds is None:
+            assert input_ids is not None
+            inputs_embeds = self.embed_tokens(input_ids)
+        hidden = inputs_embeds.clone()
+        if deepstack_visual_embeds is not None:
+            assert visual_pos_masks is not None
+            for branch in deepstack_visual_embeds:
+                hidden = hidden.clone()
+                hidden[visual_pos_masks] += branch
+        cumulative = hidden.cumsum(dim=1)
+        previous_length = 0
+        if past_key_values is not None:
+            cumulative = cumulative + past_key_values.cumulative
+            previous_length = past_key_values.get_seq_length()
+        output = hidden + cumulative * 0.03
+        cache = (
+            _TinyCache(
+                cumulative[:, -1:].clone(),
+                previous_length + hidden.shape[1],
+            )
+            if use_cache
+            else None
+        )
+        return SimpleNamespace(last_hidden_state=output, past_key_values=cache)
+
+
+class _TinyCachedQwen(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = SimpleNamespace(language_model=_TinyCachedLanguageModel())
+        self.lm_head = nn.Linear(6, 64, bias=False)
+
+
+class _RecordingQwen3Adapter(Qwen3VLAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prefill_batch_sizes: list[int] = []
+        self.cached_batch_sizes: list[int] = []
+
+    def prefill_injected_cache(self, model: object, request: object) -> object:
+        self.prefill_batch_sizes.append(int(request.input_ids.shape[0]))
+        return super().prefill_injected_cache(model, request)  # type: ignore[arg-type]
+
+    def forward_cached_token(self, model: object, request: object) -> object:
+        self.cached_batch_sizes.append(int(request.input_ids.shape[0]))
+        return super().forward_cached_token(model, request)  # type: ignore[arg-type]
+
+
+def test_tiny_qwen3_cached_batch_matches_scalar_greedy_tokens() -> None:
+    torch.manual_seed(501)
+    model = _TinyCachedQwen().eval()
+    model.requires_grad_(False)
+    runtime = SimpleNamespace(
+        model=model, tokenizer=_BatchTokenizer(), renderer=_FakeRenderer()
+    )
+    contexts = (_BatchContext(0.2), _BatchContext(0.7))
+    scalar_adapter = _RecordingQwen3Adapter()
+    scalar = tuple(
+        greedy_oracle_answer(
+            context=context,  # type: ignore[arg-type]
+            runtime=runtime,  # type: ignore[arg-type]
+            family_adapter=scalar_adapter,
+            eos_token_ids=(63,),
+            max_new_tokens=3,
+            decode_mode="cached",
+        )
+        for context in contexts
+    )
+    batched_adapter = _RecordingQwen3Adapter()
+
+    batched = greedy_oracle_answers_batched(
+        contexts=contexts,  # type: ignore[arg-type]
+        runtime=runtime,  # type: ignore[arg-type]
+        family_adapter=batched_adapter,
+        eos_token_ids=(63,),
+        max_new_tokens=3,
+    )
+
+    assert tuple(output.token_ids for output in batched) == tuple(
+        output.token_ids for output in scalar
+    )
+    assert tuple(output.stop_reason for output in batched) == tuple(
+        output.stop_reason for output in scalar
+    )
+    assert scalar_adapter.prefill_batch_sizes == [1, 1]
+    assert batched_adapter.prefill_batch_sizes == [2]
+    assert all(size == 2 for size in batched_adapter.cached_batch_sizes)

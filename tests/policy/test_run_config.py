@@ -15,6 +15,12 @@ from tgvf_rl.data import (
     DEEPEYES47K_SNAPSHOT,
     DEEPEYES47K_TOTAL_ROWS,
     DeepEyes47KRuntimeBinding,
+    POLICY_T1_ARXIVQA_DATASET_KIND,
+    PolicyT1DecisionStage,
+    PolicyT1RLRuntimeBinding,
+    SelectionCandidate,
+    canonical_json_line,
+    materialize_policy_t1_arxivqa_rl_dataset,
 )
 from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
@@ -42,6 +48,8 @@ from tgvf_rl.policy.run_config import (
 from tgvf_rl.framework.verl.launcher import (
     DEEPEYES47K_DATASET_CLASS_NAME,
     DEEPEYES47K_DATASET_MODULE_PATH,
+    POLICY_T1_ARXIVQA_DATASET_CLASS_NAME,
+    POLICY_T1_ARXIVQA_DATASET_MODULE_PATH,
     NATIVE_INVOCATION_FACTORY_FQN,
     POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
     SELECTED_SAMPLE_DATASET_MODULE_PATH,
@@ -444,6 +452,139 @@ def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -
     assert formal.schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
 
 
+def test_mixed_run_routes_typed_t1_arxivqa_artifact_to_verl(tmp_path: Path) -> None:
+    external = _prepare_external_inputs(tmp_path)
+    source_row = json.loads(
+        (Path(external["dataset_root"]) / DEEPEYES47K_SAMPLES_FILE)
+        .read_text(encoding="utf-8")
+        .splitlines()[0]
+    )
+    image_path = (
+        Path(external["dataset_root"]) / source_row["image"]["path"]
+    ).resolve()
+    candidate = {
+        "schema_version": "tgvf.policy-selection.candidate.v1",
+        "sample_id": "policy-candidate:arxivqa-fixture",
+        "source": "arxivqa",
+        "question": "Which option is correct?\nA. first\nB. second",
+        "ground_truth": "B",
+        "image": {
+            "path": str(image_path),
+            "sha256": source_row["image"]["sha256"],
+            "width": 8,
+            "height": 8,
+        },
+        "gt_regions": [],
+        "provenance": {"fixture": True},
+        "selection_metadata": {"option_count": 2},
+    }
+    candidate_identity = SelectionCandidate.from_record(candidate).identity_sha256
+    decision = {
+        "schema_version": "tgvf.policy-selection.decision.v1",
+        "sample_id": candidate["sample_id"],
+        "candidate_sha256": candidate_identity,
+        "source": "arxivqa",
+        "t1": {
+            "decision": "retain",
+            "full_image": {
+                "accuracy": 0.5,
+                "complete": True,
+                "correct_count": 4,
+                "expected_attempts": 8,
+                "missing_indices": [],
+                "observed_attempts": 8,
+                "scoreable_attempts": 8,
+                "status_counts": {"scored": 8},
+            },
+            "reason": "fixture",
+        },
+        "t2": {
+            "decision": "not_applicable_preserve_t1",
+            "gt_region": None,
+            "reason": "fixture",
+        },
+    }
+    candidates_path = tmp_path / "t1-candidates.jsonl"
+    decisions_path = tmp_path / "t1-decisions.jsonl"
+    candidates_path.write_bytes(canonical_json_line(candidate))
+    decisions_path.write_bytes(canonical_json_line(decision))
+    artifact = materialize_policy_t1_arxivqa_rl_dataset(
+        candidates_path,
+        decisions_path,
+        tmp_path / "t1-artifact",
+        decision_stage=PolicyT1DecisionStage.PROVISIONAL,
+    )
+
+    text = _config_text(tmp_path, external).replace(
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA, POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA
+    )
+    dataset_start = text.index("[dataset]")
+    representation_start = text.index("[representation]")
+    dataset_text = f'''[dataset]
+kind = "{POLICY_T1_ARXIVQA_DATASET_KIND}"
+root = {_q(artifact.output_root)}
+decision_stage = "provisional"
+sample_count = {artifact.sample_count}
+manifest_file_sha256 = "{artifact.manifest_file_sha256}"
+content_sha256 = "{artifact.content_sha256}"
+samples_sha256 = "{artifact.samples_sha256}"
+iteration_identity_sha256 = "{artifact.iteration_identity_sha256}"
+shuffle_seed = 42
+
+'''
+    text = text[:dataset_start] + dataset_text + text[representation_start:]
+    prompt_sha = visual_tool_prompt_identity(
+        NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=native_assistant_dialect_for_model(
+            POLICY_PILOT_V1_MODEL_NAME
+        ),
+    ).bundle_sha256
+    text = text.replace(f'prompt_sha256 = "{SHA_A}"', f'prompt_sha256 = "{prompt_sha}"')
+    text = text.replace('tool_profile = "tgvf_only"', 'tool_profile = "crop_only"')
+    text = text.replace(
+        f'tool_schema_sha256 = "{TGVF_FOCUS_TOOL_SCHEMA_SHA256}"',
+        f'tool_schema_sha256 = "{IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256}"',
+    ).replace(
+        'enabled_tool_names = ["tgvf_focus_tool"]',
+        'enabled_tool_names = ["image_zoom_in_tool"]',
+    )
+    judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    ).resolve()
+    judge_sha = hashlib.sha256(judge_path.read_bytes()).hexdigest()
+    text = text.replace(
+        'task_kind = "multiple_choice"\n'
+        'answer_verifier = "exact_match"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "not_applicable"\n'
+        'judge_reason = "bounded non-formal MCQ smoke"',
+        'task_kind = "mixed"\n'
+        'answer_verifier = "rule_first_qwen25_72b"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "qwen25_72b_semantic_fallback"\n'
+        'judge_reason = "T1 ArxivQA crop pilot"\n'
+        f"judge_config_path = {_q(judge_path)}\n"
+        f'judge_config_sha256 = "{judge_sha}"',
+    )
+    config_path = tmp_path / "t1-policy.toml"
+    config_path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(config_path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+    assert isinstance(config.dataset.runtime_binding, PolicyT1RLRuntimeBinding)
+    assert config.dataset.kind == POLICY_T1_ARXIVQA_DATASET_KIND
+    assert (
+        plan.overrides["data.custom_cls.path"] == POLICY_T1_ARXIVQA_DATASET_MODULE_PATH
+    )
+    assert (
+        plan.overrides["data.custom_cls.name"] == POLICY_T1_ARXIVQA_DATASET_CLASS_NAME
+    )
+    assert (
+        plan.overrides["data.tgvf_policy_t1_arxivqa"]["decision_stage"] == "provisional"
+    )
+
+
 def test_loads_separately_identified_crop_only_experiment(tmp_path: Path) -> None:
     path, text, _ = _write_config(tmp_path)
     text = text.replace('tool_profile = "tgvf_only"', 'tool_profile = "crop_only"')
@@ -839,6 +980,53 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
         "</tool_call>"
     ]
     assert not config.output.root.exists()
+
+
+def test_policy_plan_accepts_an_alternate_four_gpu_physical_binding(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace(
+            "physical_gpu_ids = [0, 1, 2, 3]",
+            "physical_gpu_ids = [4, 5, 6, 7]",
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_policy_e2e_smoke_run_config(path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+
+    assert config.distributed.physical_gpu_ids == (4, 5, 6, 7)
+    assert config.distributed.logical_gpu_ids == (0, 1, 2, 3)
+    assert plan.environment["CUDA_VISIBLE_DEVICES"] == "4,5,6,7"
+    plan.assert_launch_ready()
+
+
+@pytest.mark.parametrize("learning_rate", (1.0e-6, 3.0e-6, 1.0e-5))
+def test_accepts_the_bounded_policy_learning_rate_gate(
+    tmp_path: Path, learning_rate: float
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    text = text.replace(
+        "learning_rate = 0.00001", f"learning_rate = {learning_rate:.10f}"
+    )
+    path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.optimizer.learning_rate == learning_rate
+
+
+def test_rejects_an_unplanned_policy_learning_rate(tmp_path: Path) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace("learning_rate = 0.00001", "learning_rate = 0.000002"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="optimizer.learning_rate must be one of"):
+        load_policy_e2e_smoke_run_config(path)
 
 
 def test_selected_sample_dataset_binding_is_exact_and_read_only(tmp_path: Path) -> None:

@@ -46,6 +46,7 @@ from tgvf_rl.qwen.base import (
     InjectedForwardRequest,
     InjectedVisualBlock,
     QwenVLMFamilyAdapter,
+    batch_identical_injected_requests,
 )
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.adapter import TGVFAdapterOutput
@@ -118,6 +119,10 @@ class OracleDUtilityArm(str, Enum):
     IMAGE_TARGET_ZERO_D = "image_target_zero_D"
     IMAGE_CORRECT_D = "image_correct_D"
     MATCHED_WRONG_D = "matched_wrong_D"
+
+
+class OracleBatchCompatibilityError(ValueError):
+    """Raised when oracle arms cannot share one exact cached decode batch."""
 
 
 DEFAULT_ORACLE_D_UTILITY_ARMS = (
@@ -759,6 +764,164 @@ def greedy_oracle_answer(
         text=text,
         stop_reason=stop_reason,
     )
+
+
+def greedy_oracle_answers_batched(
+    *,
+    contexts: Sequence[OracleArmContext],
+    runtime: Qwen3RepresentationRuntime,
+    family_adapter: QwenVLMFamilyAdapter,
+    eos_token_ids: tuple[int, ...],
+    max_new_tokens: int,
+) -> tuple[OracleGeneratedAnswer, ...]:
+    """Greedily decode compatible oracle arms through one shared KV-cache batch."""
+
+    lanes = tuple(contexts)
+    if len(lanes) < 2:
+        raise OracleBatchCompatibilityError(
+            "batched oracle generation requires at least two arms"
+        )
+    if not eos_token_ids or len(set(eos_token_ids)) != len(eos_token_ids):
+        raise ValueError("eos_token_ids must be non-empty and unique")
+    if any(
+        isinstance(token_id, bool) or not isinstance(token_id, int) or token_id < 0
+        for token_id in eos_token_ids
+    ):
+        raise ValueError("eos_token_ids must be non-negative integers")
+    if isinstance(max_new_tokens, bool) or max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be positive")
+    if not family_adapter.capabilities.native_injected_kv_cache:
+        raise ValueError("family adapter has no injected KV-cache path")
+
+    prefixes = tuple(context.materialize((), runtime) for context in lanes)
+    try:
+        batched_prefix = batch_identical_injected_requests(prefixes)
+    except ValueError as error:
+        raise OracleBatchCompatibilityError(
+            "oracle arms do not share one exact native generation prefix"
+        ) from error
+    with torch.no_grad():
+        result = family_adapter.prefill_injected_cache(
+            runtime.model,
+            batched_prefix,
+        )
+    past_key_values = result.past_key_values
+    next_logits = _batched_next_logits(result.logits, lane_count=len(lanes))
+    generated: list[list[int]] = [[] for _context in lanes]
+    cache_suffixes: list[list[int]] = [[] for _context in lanes]
+    finished = [False for _context in lanes]
+    stop_reasons: list[Literal["natural_stop", "length_cap"]] = [
+        "length_cap" for _context in lanes
+    ]
+    finished_fill_token_id = eos_token_ids[0]
+
+    for token_index in range(max_new_tokens):
+        predicted = tuple(
+            int(token_id)
+            for token_id in torch.argmax(next_logits, dim=-1).detach().cpu().tolist()
+        )
+        if len(predicted) != len(lanes):
+            raise RuntimeError("batched oracle logits lost a decode lane")
+        for lane_index, token_id in enumerate(predicted):
+            if finished[lane_index]:
+                cache_suffixes[lane_index].append(finished_fill_token_id)
+                continue
+            generated[lane_index].append(token_id)
+            cache_suffixes[lane_index].append(token_id)
+            if token_id in eos_token_ids:
+                finished[lane_index] = True
+                stop_reasons[lane_index] = "natural_stop"
+        if all(finished) or token_index + 1 == max_new_tokens:
+            break
+
+        full_requests = tuple(
+            context.materialize(tuple(cache_suffixes[lane_index]), runtime)
+            for lane_index, context in enumerate(lanes)
+        )
+        sequence_lengths = {
+            int(request.input_ids.shape[1]) for request in full_requests
+        }
+        if len(sequence_lengths) != 1:
+            raise OracleBatchCompatibilityError(
+                "batched oracle arms produced different cached sequence lengths"
+            )
+        first_request = full_requests[0]
+        position_batch_dimension = 0 if first_request.position_ids.ndim == 2 else 1
+        cache_position = torch.tensor(
+            (first_request.input_ids.shape[1] - 1,),
+            dtype=torch.long,
+            device=first_request.input_ids.device,
+        )
+        with torch.no_grad():
+            result = family_adapter.forward_cached_token(
+                runtime.model,
+                CachedTokenForwardRequest(
+                    input_ids=torch.cat(
+                        tuple(request.input_ids[:, -1:] for request in full_requests),
+                        dim=0,
+                    ),
+                    attention_mask=torch.cat(
+                        tuple(request.attention_mask for request in full_requests),
+                        dim=0,
+                    ),
+                    position_ids=torch.cat(
+                        tuple(
+                            request.position_ids[..., -1:] for request in full_requests
+                        ),
+                        dim=position_batch_dimension,
+                    ),
+                    past_key_values=past_key_values,
+                    cache_position=cache_position,
+                ),
+            )
+        past_key_values = result.past_key_values
+        next_logits = _batched_next_logits(result.logits, lane_count=len(lanes))
+
+    answers: list[OracleGeneratedAnswer] = []
+    for context, token_values, stop_reason in zip(
+        lanes,
+        generated,
+        stop_reasons,
+        strict=True,
+    ):
+        token_ids = tuple(token_values)
+        if not token_ids:
+            raise RuntimeError("batched oracle greedy generation produced no token")
+        if any(
+            token_id in context.forbidden_multimodal_token_ids for token_id in token_ids
+        ):
+            raise RuntimeError("oracle greedy generation emitted a multimodal token")
+        text = runtime.tokenizer.decode(
+            list(token_ids),
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+        runtime.renderer.assert_tokenizer_length()
+        if not isinstance(text, str) or not text:
+            raise RuntimeError("oracle greedy token IDs decoded to empty text")
+        answers.append(
+            OracleGeneratedAnswer(
+                token_ids=token_ids,
+                text=text,
+                stop_reason=stop_reason,
+            )
+        )
+    return tuple(answers)
+
+
+def _batched_next_logits(logits: torch.Tensor, *, lane_count: int) -> torch.Tensor:
+    if (
+        not isinstance(logits, torch.Tensor)
+        or logits.ndim != 3
+        or logits.shape[0] != lane_count
+        or logits.shape[1] == 0
+        or logits.shape[2] == 0
+    ):
+        raise RuntimeError("batched oracle generation returned invalid logits")
+    next_logits = logits[:, -1].float()
+    if not bool(torch.isfinite(next_logits).all()):
+        raise RuntimeError("batched oracle generation returned invalid logits")
+    return next_logits
 
 
 def verify_image_only_injected_native_parity(
@@ -1973,6 +2136,7 @@ __all__ = [
     "DEFAULT_THINKING_EOS_TOKEN_IDS",
     "ORACLE_D_UTILITY_SCHEMA_VERSION",
     "OracleAnswerScore",
+    "OracleBatchCompatibilityError",
     "OracleDUtilityArm",
     "OracleDUtilityGroundTruth",
     "OracleDUtilityModelInput",
@@ -1981,6 +2145,7 @@ __all__ = [
     "build_image_only_messages",
     "build_oracle_target_messages",
     "greedy_oracle_answer",
+    "greedy_oracle_answers_batched",
     "materialize_oracle_group_visuals",
     "prepare_oracle_arm_context",
     "run_oracle_d_utility_evaluation",

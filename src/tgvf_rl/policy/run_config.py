@@ -34,6 +34,11 @@ from tgvf_rl.data import (
     DEEPEYES47K_SNAPSHOT,
     DEEPEYES47K_TOTAL_ROWS,
     DeepEyes47KRuntimeBinding,
+    POLICY_T1_ARXIVQA_DATASET_KIND,
+    PolicyT1DecisionStage,
+    PolicyT1RLRuntimeBinding,
+    policy_t1_rl_iteration_identity_sha256,
+    verify_policy_t1_rl_artifact_binding,
 )
 from tgvf_rl.judges import load_openai_compatible_judge
 from tgvf_rl.protocol import (
@@ -46,6 +51,7 @@ from tgvf_rl.protocol import (
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 
 from .config import (
+    POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES,
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME,
@@ -244,8 +250,9 @@ class SmokeSelectedMCQSample:
 
 @dataclass(frozen=True, slots=True)
 class SmokeDatasetSelection:
+    kind: str
     root: Path
-    runtime_binding: DeepEyes47KRuntimeBinding
+    runtime_binding: DeepEyes47KRuntimeBinding | PolicyT1RLRuntimeBinding
     samples_sha256: str
     iteration_identity_sha256: str
     sample_id: str | None
@@ -558,58 +565,65 @@ def load_policy_e2e_smoke_run_config(
         chat_template_sha256=chat_template_sha256,
     )
 
-    dataset_fields = {
-        "root",
-        "dataset_id",
-        "snapshot",
-        "sample_count",
-        "manifest_file_sha256",
-        "content_sha256",
-        "samples_sha256",
-        "iteration_identity_sha256",
-        "shuffle_seed",
-    }
-    if not mixed_run:
-        dataset_fields.update({"sample_id", "cursor"})
-    dataset_table = _table(
-        payload,
-        "dataset",
-        dataset_fields,
+    raw_dataset = payload.get("dataset")
+    policy_t1_dataset = (
+        isinstance(raw_dataset, Mapping)
+        and raw_dataset.get("kind") == POLICY_T1_ARXIVQA_DATASET_KIND
     )
-    _require_exact(
-        dataset_table["dataset_id"], DEEPEYES47K_DATASET_ID, "dataset.dataset_id"
-    )
-    _require_exact(dataset_table["snapshot"], DEEPEYES47K_SNAPSHOT, "dataset.snapshot")
-    _require_exact(
-        dataset_table["sample_count"], DEEPEYES47K_TOTAL_ROWS, "dataset.sample_count"
-    )
-    dataset_root = _existing_directory(dataset_table["root"], name="dataset.root")
-    runtime_binding = DeepEyes47KRuntimeBinding.formal(
-        manifest_file_sha256=_sha256(
-            dataset_table["manifest_file_sha256"],
-            name="dataset.manifest_file_sha256",
-        ),
-        content_sha256=_sha256(
-            dataset_table["content_sha256"], name="dataset.content_sha256"
-        ),
-        shuffle_seed=_nonnegative_int(
-            dataset_table["shuffle_seed"], name="dataset.shuffle_seed"
-        ),
-    )
-    samples_sha256 = _sha256(
-        dataset_table["samples_sha256"], name="dataset.samples_sha256"
-    )
-    iteration_sha256 = _sha256(
-        dataset_table["iteration_identity_sha256"],
-        name="dataset.iteration_identity_sha256",
-    )
-    expected_iteration = formal_deepeyes47k_iteration_identity_sha256(
-        runtime_binding, samples_sha256=samples_sha256
-    )
-    if iteration_sha256 != expected_iteration:
-        raise ValueError("dataset iteration identity differs from its formal binding")
-    if mixed_run:
-        _verify_deepeyes_artifact(
+    if policy_t1_dataset:
+        if not mixed_run:
+            raise ValueError("Policy T1 retained data requires a mixed/formal run")
+        dataset_table = _table(
+            payload,
+            "dataset",
+            {
+                "kind",
+                "root",
+                "decision_stage",
+                "sample_count",
+                "manifest_file_sha256",
+                "content_sha256",
+                "samples_sha256",
+                "iteration_identity_sha256",
+                "shuffle_seed",
+            },
+        )
+        dataset_kind = POLICY_T1_ARXIVQA_DATASET_KIND
+        dataset_root = _existing_directory(dataset_table["root"], name="dataset.root")
+        try:
+            decision_stage = PolicyT1DecisionStage(dataset_table["decision_stage"])
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "dataset.decision_stage must be provisional or final"
+            ) from error
+        runtime_binding = PolicyT1RLRuntimeBinding(
+            manifest_file_sha256=_sha256(
+                dataset_table["manifest_file_sha256"],
+                name="dataset.manifest_file_sha256",
+            ),
+            content_sha256=_sha256(
+                dataset_table["content_sha256"], name="dataset.content_sha256"
+            ),
+            shuffle_seed=_nonnegative_int(
+                dataset_table["shuffle_seed"], name="dataset.shuffle_seed"
+            ),
+            decision_stage=decision_stage,
+            expected_sample_count=_positive_int(
+                dataset_table["sample_count"], name="dataset.sample_count"
+            ),
+        )
+        samples_sha256 = _sha256(
+            dataset_table["samples_sha256"], name="dataset.samples_sha256"
+        )
+        iteration_sha256 = _sha256(
+            dataset_table["iteration_identity_sha256"],
+            name="dataset.iteration_identity_sha256",
+        )
+        if iteration_sha256 != policy_t1_rl_iteration_identity_sha256(
+            runtime_binding, samples_sha256=samples_sha256
+        ):
+            raise ValueError("dataset iteration identity differs from its T1 binding")
+        verify_policy_t1_rl_artifact_binding(
             dataset_root,
             binding=runtime_binding,
             samples_sha256=samples_sha256,
@@ -618,18 +632,84 @@ def load_policy_e2e_smoke_run_config(
         cursor = None
         selected_sample = None
     else:
-        sample_id = _text(dataset_table["sample_id"], name="dataset.sample_id")
-        cursor = _nonnegative_int(dataset_table["cursor"], name="dataset.cursor")
-        if cursor >= DEEPEYES47K_TOTAL_ROWS:
-            raise ValueError("dataset.cursor lies outside DeepEyes-47K")
-        selected_sample = _verify_deepeyes_files(
-            dataset_root,
-            binding=runtime_binding,
-            samples_sha256=samples_sha256,
-            sample_id=sample_id,
-            cursor=cursor,
+        if isinstance(raw_dataset, Mapping) and "kind" in raw_dataset:
+            raise ValueError("dataset.kind is unsupported")
+        dataset_fields = {
+            "root",
+            "dataset_id",
+            "snapshot",
+            "sample_count",
+            "manifest_file_sha256",
+            "content_sha256",
+            "samples_sha256",
+            "iteration_identity_sha256",
+            "shuffle_seed",
+        }
+        if not mixed_run:
+            dataset_fields.update({"sample_id", "cursor"})
+        dataset_table = _table(payload, "dataset", dataset_fields)
+        dataset_kind = "deepeyes47k"
+        _require_exact(
+            dataset_table["dataset_id"], DEEPEYES47K_DATASET_ID, "dataset.dataset_id"
         )
+        _require_exact(
+            dataset_table["snapshot"], DEEPEYES47K_SNAPSHOT, "dataset.snapshot"
+        )
+        _require_exact(
+            dataset_table["sample_count"],
+            DEEPEYES47K_TOTAL_ROWS,
+            "dataset.sample_count",
+        )
+        dataset_root = _existing_directory(dataset_table["root"], name="dataset.root")
+        runtime_binding = DeepEyes47KRuntimeBinding.formal(
+            manifest_file_sha256=_sha256(
+                dataset_table["manifest_file_sha256"],
+                name="dataset.manifest_file_sha256",
+            ),
+            content_sha256=_sha256(
+                dataset_table["content_sha256"], name="dataset.content_sha256"
+            ),
+            shuffle_seed=_nonnegative_int(
+                dataset_table["shuffle_seed"], name="dataset.shuffle_seed"
+            ),
+        )
+        samples_sha256 = _sha256(
+            dataset_table["samples_sha256"], name="dataset.samples_sha256"
+        )
+        iteration_sha256 = _sha256(
+            dataset_table["iteration_identity_sha256"],
+            name="dataset.iteration_identity_sha256",
+        )
+        expected_iteration = formal_deepeyes47k_iteration_identity_sha256(
+            runtime_binding, samples_sha256=samples_sha256
+        )
+        if iteration_sha256 != expected_iteration:
+            raise ValueError(
+                "dataset iteration identity differs from its formal binding"
+            )
+        if mixed_run:
+            _verify_deepeyes_artifact(
+                dataset_root,
+                binding=runtime_binding,
+                samples_sha256=samples_sha256,
+            )
+            sample_id = None
+            cursor = None
+            selected_sample = None
+        else:
+            sample_id = _text(dataset_table["sample_id"], name="dataset.sample_id")
+            cursor = _nonnegative_int(dataset_table["cursor"], name="dataset.cursor")
+            if cursor >= DEEPEYES47K_TOTAL_ROWS:
+                raise ValueError("dataset.cursor lies outside DeepEyes-47K")
+            selected_sample = _verify_deepeyes_files(
+                dataset_root,
+                binding=runtime_binding,
+                samples_sha256=samples_sha256,
+                sample_id=sample_id,
+                cursor=cursor,
+            )
     dataset = SmokeDatasetSelection(
+        kind=dataset_kind,
         root=dataset_root,
         runtime_binding=runtime_binding,
         samples_sha256=samples_sha256,
@@ -900,17 +980,13 @@ def load_policy_e2e_smoke_run_config(
     expected_judge_mode = (
         POLICY_E2E_MIXED_JUDGE_MODE if mixed_run else POLICY_E2E_SMOKE_JUDGE_MODE
     )
-    _require_exact(
-        reward_table["task_kind"], expected_task, "reward.task_kind"
-    )
+    _require_exact(reward_table["task_kind"], expected_task, "reward.task_kind")
     _require_exact(
         reward_table["answer_verifier"],
         expected_verifier,
         "reward.answer_verifier",
     )
-    _require_exact(
-        reward_table["judge_mode"], expected_judge_mode, "reward.judge_mode"
-    )
+    _require_exact(reward_table["judge_mode"], expected_judge_mode, "reward.judge_mode")
     answer_verifier_sha256 = _sha256(
         reward_table["answer_verifier_sha256"],
         name="reward.answer_verifier_sha256",
@@ -980,11 +1056,17 @@ def load_policy_e2e_smoke_run_config(
         },
     )
     _require_exact(optimizer_table["name"], "adamw", "optimizer.name")
+    learning_rate = _positive_real(
+        optimizer_table["learning_rate"], name="optimizer.learning_rate"
+    )
+    if learning_rate not in POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES:
+        raise ValueError(
+            "optimizer.learning_rate must be one of "
+            f"{POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES!r}"
+        )
     optimizer = SmokeOptimizerBinding(
         name=optimizer_table["name"],
-        learning_rate=_exact_real(
-            optimizer_table["learning_rate"], 1.0e-5, "optimizer.learning_rate"
-        ),
+        learning_rate=learning_rate,
         beta1=_unit_interval(optimizer_table["beta1"], name="optimizer.beta1"),
         beta2=_unit_interval(optimizer_table["beta2"], name="optimizer.beta2"),
         epsilon=_positive_real(optimizer_table["epsilon"], name="optimizer.epsilon"),
@@ -1608,9 +1690,9 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
     world_size = _positive_int(table["world_size"], name="distributed.world_size")
     if logical != tuple(range(len(logical))) or len(physical) != len(logical):
         raise ValueError("distributed physical/logical GPU mapping is invalid")
-    if physical != (0, 1, 2, 3) or logical != (0, 1, 2, 3):
+    if logical != (0, 1, 2, 3):
         raise ValueError(
-            "this Policy E2E smoke identity requires physical/logical GPUs 0-3"
+            "this Policy E2E smoke identity requires logical GPUs 0-3"
         )
     if actor != logical or world_size != len(actor):
         raise ValueError(

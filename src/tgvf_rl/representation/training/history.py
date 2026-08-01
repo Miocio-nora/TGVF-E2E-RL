@@ -13,7 +13,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
+import tempfile
 
 
 REPRESENTATION_METRICS_HISTORY_SCHEMA_VERSION = "representation-metrics-history-v1"
@@ -81,6 +83,56 @@ class ParsedRepresentationMetricsHistory:
             raise ValueError("history records must be a non-empty tuple")
 
 
+@dataclass(frozen=True, slots=True)
+class RepresentationMetricsHistoryRecoveryResult:
+    """Auditable outcome of reconciling a live ledger with a checkpoint.
+
+    ``committed_history`` is the exact byte prefix bound into the checkpoint.
+    When ``archive_path`` is present, that path contains the complete live
+    ledger observed before rollback, including its uncommitted suffix.
+    """
+
+    active_path: Path
+    committed_history: ParsedRepresentationMetricsHistory
+    observed_raw_bytes_sha256: str
+    observed_byte_count: int
+    suffix_byte_count: int
+    suffix_raw_bytes_sha256: str | None
+    archive_path: Path | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.active_path, Path):
+            raise TypeError("metrics-history recovery active_path must be a Path")
+        if not isinstance(
+            self.committed_history, ParsedRepresentationMetricsHistory
+        ):
+            raise TypeError("metrics-history recovery must carry parsed history")
+        _digest(
+            self.observed_raw_bytes_sha256,
+            field_name="observed_raw_bytes_sha256",
+        )
+        _positive_int(self.observed_byte_count, field_name="observed_byte_count")
+        _non_negative_int(self.suffix_byte_count, field_name="suffix_byte_count")
+        committed_bytes = self.committed_history.identity.byte_count
+        if self.observed_byte_count != committed_bytes + self.suffix_byte_count:
+            raise ValueError("metrics-history recovery byte counts do not align")
+        if (self.suffix_raw_bytes_sha256 is None) != (self.suffix_byte_count == 0):
+            raise ValueError("metrics-history recovery suffix digest does not align")
+        if self.suffix_raw_bytes_sha256 is not None:
+            _digest(
+                self.suffix_raw_bytes_sha256,
+                field_name="suffix_raw_bytes_sha256",
+            )
+        if (self.archive_path is None) != (self.suffix_byte_count == 0):
+            raise ValueError("metrics-history recovery archive does not align")
+        if self.archive_path is not None and not isinstance(self.archive_path, Path):
+            raise TypeError("metrics-history recovery archive_path must be a Path")
+
+    @property
+    def rolled_back(self) -> bool:
+        return self.archive_path is not None
+
+
 def load_representation_metrics_history(
     path: str | Path,
     *,
@@ -99,6 +151,125 @@ def load_representation_metrics_history(
     )
     _non_empty(runner_schema_version, field_name="runner_schema_version")
     raw = Path(path).read_bytes()
+    return _parse_representation_metrics_history(
+        raw,
+        run_id=run_id,
+        run_identity_sha256=run_identity_sha256,
+        checkpoint_global_step=checkpoint_global_step,
+        runner_schema_version=runner_schema_version,
+    )
+
+
+def recover_representation_metrics_history_prefix(
+    path: str | Path,
+    *,
+    checkpoint_identity: RepresentationMetricsHistoryIdentity,
+    runner_schema_version: str,
+) -> RepresentationMetricsHistoryRecoveryResult:
+    """Restore a live JSONL ledger to its checkpoint-bound WAL prefix.
+
+    A checkpoint commits the first ``byte_count`` bytes and their SHA256.  Any
+    later bytes are an uncommitted write-ahead-log suffix.  The committed
+    prefix is verified semantically and byte-for-byte before any mutation.  A
+    suffix is preserved through a deterministic, no-overwrite hard-link in the
+    same directory before the active path is atomically replaced with the
+    committed prefix.
+
+    The caller must have exclusive ownership of the metrics path while this
+    recovery operation runs.
+    """
+
+    if not isinstance(checkpoint_identity, RepresentationMetricsHistoryIdentity):
+        raise TypeError("checkpoint_identity must be a metrics-history identity")
+    checkpoint_identity.__post_init__()
+    _non_empty(runner_schema_version, field_name="runner_schema_version")
+
+    active_path = Path(path)
+    if active_path.is_symlink():
+        raise ValueError("metrics-history recovery refuses a symlink active path")
+    if not active_path.is_file():
+        raise FileNotFoundError(f"metrics-history file does not exist: {active_path}")
+    observed = active_path.read_bytes()
+    committed_byte_count = checkpoint_identity.byte_count
+    if len(observed) < committed_byte_count:
+        raise ValueError(
+            "live metrics JSONL is shorter than the checkpoint-bound prefix"
+        )
+    committed = observed[:committed_byte_count]
+    if sha256(committed).hexdigest() != checkpoint_identity.raw_bytes_sha256:
+        raise ValueError("checkpoint-bound metrics prefix SHA256 mismatch")
+
+    parsed = _parse_representation_metrics_history(
+        committed,
+        run_id=checkpoint_identity.run_id,
+        run_identity_sha256=checkpoint_identity.run_identity_sha256,
+        checkpoint_global_step=checkpoint_identity.checkpoint_global_step,
+        runner_schema_version=runner_schema_version,
+    )
+    if parsed.identity != checkpoint_identity:
+        raise ValueError("checkpoint-bound metrics prefix identity mismatch")
+
+    suffix = observed[committed_byte_count:]
+    observed_digest = sha256(observed).hexdigest()
+    if not suffix:
+        return RepresentationMetricsHistoryRecoveryResult(
+            active_path=active_path,
+            committed_history=parsed,
+            observed_raw_bytes_sha256=observed_digest,
+            observed_byte_count=len(observed),
+            suffix_byte_count=0,
+            suffix_raw_bytes_sha256=None,
+            archive_path=None,
+        )
+
+    archive_path = _metrics_history_archive_path(active_path, checkpoint_identity)
+    mode = active_path.stat(follow_symlinks=False).st_mode & 0o777
+    temporary_path = _write_temporary_file(
+        active_path.parent,
+        name_prefix=f".{active_path.name}.rollback-",
+        raw=committed,
+        mode=mode,
+    )
+    archive_published = False
+    try:
+        # A same-directory hard link is atomic and refuses to overwrite an
+        # existing audit archive.  Once the active name is replaced below, the
+        # hard link remains the complete pre-rollback ledger.
+        os.link(active_path, archive_path, follow_symlinks=False)
+        archive_published = True
+        _fsync_directory(active_path.parent)
+        os.replace(temporary_path, active_path)
+        _fsync_directory(active_path.parent)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+    if not archive_published:  # pragma: no cover - os.link either returns or raises
+        raise RuntimeError("metrics-history archive was not published")
+    archived = archive_path.read_bytes()
+    if archived != observed:
+        raise RuntimeError("metrics-history archive changed during exclusive recovery")
+    if active_path.read_bytes() != committed:
+        raise RuntimeError("metrics-history active prefix rollback verification failed")
+    return RepresentationMetricsHistoryRecoveryResult(
+        active_path=active_path,
+        committed_history=parsed,
+        observed_raw_bytes_sha256=observed_digest,
+        observed_byte_count=len(observed),
+        suffix_byte_count=len(suffix),
+        suffix_raw_bytes_sha256=sha256(suffix).hexdigest(),
+        archive_path=archive_path,
+    )
+
+
+def _parse_representation_metrics_history(
+    raw: bytes,
+    *,
+    run_id: str,
+    run_identity_sha256: str,
+    checkpoint_global_step: int,
+    runner_schema_version: str,
+) -> ParsedRepresentationMetricsHistory:
     if not raw or not raw.endswith(b"\n"):
         raise ValueError("metrics JSONL must be non-empty and end with a newline")
     try:
@@ -198,6 +369,50 @@ def load_representation_metrics_history(
     return ParsedRepresentationMetricsHistory(identity, tuple(records))
 
 
+def _metrics_history_archive_path(
+    active_path: Path,
+    checkpoint_identity: RepresentationMetricsHistoryIdentity,
+) -> Path:
+    return active_path.with_name(
+        f"{active_path.name}.uncommitted-after-step-"
+        f"{checkpoint_identity.checkpoint_global_step:08d}."
+        f"{checkpoint_identity.identity_sha256}.jsonl"
+    )
+
+
+def _write_temporary_file(
+    directory: Path,
+    *,
+    name_prefix: str,
+    raw: bytes,
+    mode: int,
+) -> Path:
+    descriptor, raw_path = tempfile.mkstemp(prefix=name_prefix, dir=directory)
+    path = Path(raw_path)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _validate_record_identity(
     record: Mapping[str, object],
     *,
@@ -246,5 +461,7 @@ __all__ = [
     "ParsedRepresentationMetricsHistory",
     "REPRESENTATION_METRICS_HISTORY_SCHEMA_VERSION",
     "RepresentationMetricsHistoryIdentity",
+    "RepresentationMetricsHistoryRecoveryResult",
     "load_representation_metrics_history",
+    "recover_representation_metrics_history_prefix",
 ]

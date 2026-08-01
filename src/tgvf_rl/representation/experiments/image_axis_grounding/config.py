@@ -312,11 +312,15 @@ def _validate_treatment_parity(config: ImageAxisGroundingExperimentConfig) -> No
     ):
         if getattr(tt, field) != getattr(bt, field):
             raise ValueError(f"treatment changes RP66 training geometry: {field}")
-    if tt.target_optimizer_steps != 500:
-        raise ValueError("formal image-axis treatment must target exactly 500 steps")
+    accepted_targets = {500, bt.target_optimizer_steps}
+    if tt.target_optimizer_steps not in accepted_targets:
+        raise ValueError(
+            "formal image-axis treatment must target either the 500-step probe "
+            "or the control's full optimizer horizon"
+        )
     if tt.validation_every_optimizer_steps != base.scheduler.total_steps:
         raise ValueError(
-            "isolated treatment must defer legacy validation beyond its 500-step run"
+            "isolated treatment must retain the control validation boundary"
         )
     if treatment.checkpoint.save_every_optimizer_steps != 500:
         raise ValueError("formal image-axis treatment must checkpoint at step 500")
@@ -327,10 +331,16 @@ def _validate_treatment_parity(config: ImageAxisGroundingExperimentConfig) -> No
             *checkpoint_path.parents,
         ):
             raise ValueError("resume checkpoint must belong to the treatment output")
-    if treatment.post_training_internal_evaluation is None or (
-        treatment.post_training_internal_evaluation.enabled
-    ):
-        raise ValueError("isolated treatment must disable post-training evaluation")
+    internal_evaluation = treatment.post_training_internal_evaluation
+    if tt.target_optimizer_steps == 500:
+        if internal_evaluation is None or internal_evaluation.enabled:
+            raise ValueError(
+                "the 500-step image-axis probe must disable post-training evaluation"
+            )
+    elif internal_evaluation is None or not internal_evaluation.enabled:
+        raise ValueError(
+            "the full-horizon image-axis treatment must run internal diagnostics"
+        )
     if treatment.output == base.output or treatment.checkpoint.directory == (
         base.checkpoint.directory
     ):

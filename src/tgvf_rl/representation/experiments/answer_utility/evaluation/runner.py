@@ -48,7 +48,9 @@ from tgvf_rl.representation.training.native_pipeline import (
 from tgvf_rl.representation.training.oracle_d_utility import (
     ORACLE_D_UTILITY_RECORD_SCHEMA_VERSION,
     OracleArmContext,
+    OracleBatchCompatibilityError,
     OracleDUtilityArm,
+    OracleGeneratedAnswer,
     _OracleRunLedger,
     _arm_contract,
     _atomic_write_json,
@@ -59,6 +61,7 @@ from tgvf_rl.representation.training.oracle_d_utility import (
     _require_single_gpu_environment,
     _validate_selection,
     greedy_oracle_answer,
+    greedy_oracle_answers_batched,
     materialize_oracle_group_visuals,
     prepare_oracle_arm_context,
     split_oracle_d_utility_sample,
@@ -266,6 +269,7 @@ class AnswerUtilityEvaluationInputs:
     max_new_tokens: int
     eos_token_ids: tuple[int, ...]
     decode_mode: Literal["cached", "no_cache"]
+    arm_batch_size: int
     group_start: int
     group_limit: int | None
     shard_index: int
@@ -408,6 +412,7 @@ def validate_answer_utility_evaluation(
     max_new_tokens: int | None = None,
     eos_token_ids: Sequence[int] | None = None,
     decode_mode: Literal["cached", "no_cache"] = "cached",
+    arm_batch_size: int = 1,
     group_start: int = 0,
     group_limit: int | None = None,
     shard_index: int = 0,
@@ -422,6 +427,7 @@ def validate_answer_utility_evaluation(
         max_new_tokens=max_new_tokens,
         eos_token_ids=eos_token_ids,
         decode_mode=decode_mode,
+        arm_batch_size=arm_batch_size,
         group_start=group_start,
         group_limit=group_limit,
         shard_index=shard_index,
@@ -439,6 +445,7 @@ def validate_production_source_answer_utility_evaluation(
     max_new_tokens: int | None = None,
     eos_token_ids: Sequence[int] | None = None,
     decode_mode: Literal["cached", "no_cache"] = "cached",
+    arm_batch_size: int = 1,
     group_start: int = 0,
     group_limit: int | None = None,
     shard_index: int = 0,
@@ -452,6 +459,7 @@ def validate_production_source_answer_utility_evaluation(
         max_new_tokens=max_new_tokens,
         eos_token_ids=eos_token_ids,
         decode_mode=decode_mode,
+        arm_batch_size=arm_batch_size,
         group_start=group_start,
         group_limit=group_limit,
         shard_index=shard_index,
@@ -501,6 +509,8 @@ def _validated_payload(inputs: AnswerUtilityEvaluationInputs) -> dict[str, objec
         "max_new_tokens": inputs.max_new_tokens,
         "eos_token_ids": list(inputs.eos_token_ids),
         "decode_mode": inputs.decode_mode,
+        "arm_batch_size": inputs.arm_batch_size,
+        "decoder_implementation": _decoder_implementation(inputs),
         "shard_index": inputs.shard_index,
         "shard_count": inputs.shard_count,
     }
@@ -537,6 +547,7 @@ def run_answer_utility_evaluation(
     max_new_tokens: int | None = None,
     eos_token_ids: Sequence[int] | None = None,
     decode_mode: Literal["cached", "no_cache"] = "cached",
+    arm_batch_size: int = 1,
     group_start: int = 0,
     group_limit: int | None = None,
     shard_index: int = 0,
@@ -551,6 +562,7 @@ def run_answer_utility_evaluation(
         max_new_tokens=max_new_tokens,
         eos_token_ids=eos_token_ids,
         decode_mode=decode_mode,
+        arm_batch_size=arm_batch_size,
         group_start=group_start,
         group_limit=group_limit,
         shard_index=shard_index,
@@ -569,6 +581,7 @@ def run_production_source_answer_utility_evaluation(
     max_new_tokens: int | None = None,
     eos_token_ids: Sequence[int] | None = None,
     decode_mode: Literal["cached", "no_cache"] = "cached",
+    arm_batch_size: int = 1,
     group_start: int = 0,
     group_limit: int | None = None,
     shard_index: int = 0,
@@ -582,6 +595,7 @@ def run_production_source_answer_utility_evaluation(
         max_new_tokens=max_new_tokens,
         eos_token_ids=eos_token_ids,
         decode_mode=decode_mode,
+        arm_batch_size=arm_batch_size,
         group_start=group_start,
         group_limit=group_limit,
         shard_index=shard_index,
@@ -764,6 +778,7 @@ def _run_loaded_inputs(
                     if wrong_image_visuals is None
                     else wrong_image_visuals.correct_d_by_sample_id[row.sample_id]
                 )
+                pending: list[tuple[AnswerUtilityEvaluationArm, OracleArmContext]] = []
                 for arm in inputs.arms:
                     if ledger.has(row.sample_id, arm.value):
                         continue
@@ -777,14 +792,21 @@ def _run_loaded_inputs(
                         same_target_wrong_image_d=same_target_wrong_image_d,
                         image_grid_thw=visuals.image_grid_thw,
                     )
-                    generated = greedy_oracle_answer(
-                        context=context,
-                        runtime=runtime,
-                        family_adapter=family_adapter,
-                        eos_token_ids=inputs.eos_token_ids,
-                        max_new_tokens=inputs.max_new_tokens,
-                        decode_mode=inputs.decode_mode,
-                    )
+                    pending.append((arm, context))
+                generated_answers = _generate_pending_answers(
+                    contexts=tuple(context for _arm, context in pending),
+                    runtime=runtime,
+                    family_adapter=family_adapter,
+                    eos_token_ids=inputs.eos_token_ids,
+                    max_new_tokens=inputs.max_new_tokens,
+                    decode_mode=inputs.decode_mode,
+                    arm_batch_size=inputs.arm_batch_size,
+                )
+                for (arm, context), generated in zip(
+                    pending,
+                    generated_answers,
+                    strict=True,
+                ):
                     score = score_instruct_generated_answer(
                         generated.text,
                         truth_by_id[row.sample_id],
@@ -1221,6 +1243,7 @@ def _load_private_inputs(
     max_new_tokens: int | None,
     eos_token_ids: Sequence[int] | None,
     decode_mode: Literal["cached", "no_cache"],
+    arm_batch_size: int = 1,
     group_start: int,
     group_limit: int | None,
     shard_index: int,
@@ -1285,6 +1308,7 @@ def _load_private_inputs(
         max_new_tokens=max_new_tokens,
         eos_token_ids=eos_token_ids,
         decode_mode=decode_mode,
+        arm_batch_size=arm_batch_size,
         group_start=group_start,
         group_limit=group_limit,
         shard_index=shard_index,
@@ -1299,6 +1323,7 @@ def _load_production_source_inputs(
     max_new_tokens: int | None,
     eos_token_ids: Sequence[int] | None,
     decode_mode: Literal["cached", "no_cache"],
+    arm_batch_size: int = 1,
     group_start: int,
     group_limit: int | None,
     shard_index: int,
@@ -1309,7 +1334,8 @@ def _load_production_source_inputs(
         source_evaluation_config_path
     )
     training = load_representation_training_config(
-        source_evaluation.training_config_path
+        source_evaluation.training_config_path,
+        allow_existing_post_training_report=True,
     )
     _require_instruct_training(training)
     export = _load_validated_production_export(training, source_evaluation)
@@ -1345,6 +1371,7 @@ def _load_production_source_inputs(
         max_new_tokens=max_new_tokens,
         eos_token_ids=eos_token_ids,
         decode_mode=decode_mode,
+        arm_batch_size=arm_batch_size,
         group_start=group_start,
         group_limit=group_limit,
         shard_index=shard_index,
@@ -1361,6 +1388,7 @@ def _materialize_common_inputs(
     max_new_tokens: int | None,
     eos_token_ids: Sequence[int] | None,
     decode_mode: Literal["cached", "no_cache"],
+    arm_batch_size: int,
     group_start: int,
     group_limit: int | None,
     shard_index: int,
@@ -1383,6 +1411,7 @@ def _materialize_common_inputs(
         shard_index=shard_index,
         shard_count=shard_count,
     )
+    selected_arm_batch_size = _normalize_arm_batch_size(arm_batch_size)
     data = load_retained_representation_jsonl(
         source_evaluation.evaluation_data_path,
         expected_source_sha256=source_evaluation.evaluation_data_source_sha256,
@@ -1439,6 +1468,7 @@ def _materialize_common_inputs(
         max_new_tokens=selected_max_new_tokens,
         eos_token_ids=selected_eos,
         decode_mode=decode_mode,
+        arm_batch_size=selected_arm_batch_size,
         group_start=group_start,
         group_limit=group_limit,
         shard_index=shard_index,
@@ -1636,6 +1666,51 @@ def _audit_completed_training_metrics(
         raise ValueError("private artifact and formal metrics run identities differ")
 
 
+def _generate_pending_answers(
+    *,
+    contexts: Sequence[OracleArmContext],
+    runtime: Any,
+    family_adapter: Any,
+    eos_token_ids: tuple[int, ...],
+    max_new_tokens: int,
+    decode_mode: Literal["cached", "no_cache"],
+    arm_batch_size: int,
+) -> tuple[OracleGeneratedAnswer, ...]:
+    """Decode same-row arms in bounded compatible batches with exact fallback."""
+
+    pending = tuple(contexts)
+    selected_batch_size = _normalize_arm_batch_size(arm_batch_size)
+    generated: list[OracleGeneratedAnswer] = []
+    for start in range(0, len(pending), selected_batch_size):
+        batch = pending[start : start + selected_batch_size]
+        if decode_mode == "cached" and len(batch) > 1:
+            try:
+                generated.extend(
+                    greedy_oracle_answers_batched(
+                        contexts=batch,
+                        runtime=runtime,
+                        family_adapter=family_adapter,
+                        eos_token_ids=eos_token_ids,
+                        max_new_tokens=max_new_tokens,
+                    )
+                )
+                continue
+            except OracleBatchCompatibilityError:
+                pass
+        generated.extend(
+            greedy_oracle_answer(
+                context=context,
+                runtime=runtime,
+                family_adapter=family_adapter,
+                eos_token_ids=eos_token_ids,
+                max_new_tokens=max_new_tokens,
+                decode_mode=decode_mode,
+            )
+            for context in batch
+        )
+    return tuple(generated)
+
+
 def _prepare_context(
     *,
     arm: AnswerUtilityEvaluationArm,
@@ -1698,6 +1773,7 @@ def _evaluation_identity_payload(
 ) -> dict[str, Any]:
     implementation_files = _implementation_file_manifest()
     candidate = inputs.candidate
+    arm_batch_size = _normalize_arm_batch_size(getattr(inputs, "arm_batch_size", 1))
     payload: dict[str, Any] = {
         "schema_version": ANSWER_UTILITY_EVALUATION_SCHEMA_VERSION,
         "claim_scope": "oracle_target_conditioned_D_utility_not_end_to_end_tool_selection",
@@ -1751,6 +1827,8 @@ def _evaluation_identity_payload(
         "max_new_tokens": inputs.max_new_tokens,
         "eos_token_ids": list(inputs.eos_token_ids),
         "decode_mode": inputs.decode_mode,
+        "arm_batch_size": arm_batch_size,
+        "decoder_implementation": _decoder_implementation(inputs),
         "greedy": True,
         "random_seed": inputs.source_evaluation.evaluation.random_seed,
         "group_start": inputs.group_start,
@@ -1955,6 +2033,11 @@ def _extended_summary(ledger: _OracleRunLedger) -> dict[str, object]:
             paired[name] = _paired_summary(records, treatment, control)
     summary["paired_effects"] = paired
     summary["evaluation_schema_version"] = ANSWER_UTILITY_EVALUATION_SCHEMA_VERSION
+    summary["arm_batch_size"] = ledger.identity_payload.get("arm_batch_size", 1)
+    summary["decoder_implementation"] = ledger.identity_payload.get(
+        "decoder_implementation",
+        "scalar_greedy_v1",
+    )
     interpretation = (
         "Correct-vs-zero measures D content utility; correct-vs-answer-safe-wrong "
         "measures target specificity. All D arms condition on an oracle target and do "
@@ -1987,6 +2070,19 @@ def _normalize_evaluation_arms(
     if not selected or len(set(selected)) != len(selected):
         raise ValueError("evaluation arms must be non-empty and unique")
     return selected
+
+
+def _normalize_arm_batch_size(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("arm_batch_size must be a positive integer")
+    return value
+
+
+def _decoder_implementation(inputs: AnswerUtilityEvaluationInputs) -> str:
+    arm_batch_size = _normalize_arm_batch_size(getattr(inputs, "arm_batch_size", 1))
+    if inputs.decode_mode == "cached" and arm_batch_size > 1:
+        return "same_sample_compatible_arm_batched_cached_greedy_v1"
+    return "scalar_greedy_v1"
 
 
 def _uses_wrong_d(arm: AnswerUtilityEvaluationArm) -> bool:

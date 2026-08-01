@@ -155,9 +155,15 @@ def test_production_source_loader_never_uses_private_metrics_or_run_config(
         "load_representation_internal_evaluation_run_config",
         lambda _path: source,
     )
-    monkeypatch.setattr(
-        runner, "load_representation_training_config", lambda _path: training
-    )
+    training_loads: list[tuple[Path, bool]] = []
+
+    def load_training(
+        path: Path, *, allow_existing_post_training_report: bool = False
+    ) -> object:
+        training_loads.append((path, allow_existing_post_training_report))
+        return training
+
+    monkeypatch.setattr(runner, "load_representation_training_config", load_training)
     monkeypatch.setattr(runner, "_require_instruct_training", lambda _config: None)
     monkeypatch.setattr(
         runner, "_load_validated_production_export", lambda *_args: export
@@ -194,6 +200,7 @@ def test_production_source_loader_never_uses_private_metrics_or_run_config(
     assert candidate.private_run_id is None
     assert candidate.adapter_path == source.artifact_path
     assert candidate.training_run_identity_sha256 == _SHA_A
+    assert training_loads == [(source.training_config_path, True)]
 
 
 def test_candidate_identity_distinguishes_source_and_private_and_binds_scorer_flag(

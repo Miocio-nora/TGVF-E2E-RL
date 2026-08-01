@@ -7,9 +7,17 @@ from types import SimpleNamespace
 import pytest
 
 from tgvf_rl.representation.experiments.image_axis_grounding import runner
+from tgvf_rl.representation.experiments.image_axis_grounding.native_pipeline import (
+    ImageAxisGroundedNativeGroupBuilder,
+)
 
 
-def _preflight_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def _preflight_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    world_size: int = 2,
+):
     preprocessor = tmp_path / "model" / "preprocessor_config.json"
     preprocessor.parent.mkdir()
     preprocessor.write_bytes(b"processor-v1")
@@ -44,7 +52,7 @@ def _preflight_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             local_path=preprocessor.parent,
             image_max_pixels=262_144,
         ),
-        fsdp2=SimpleNamespace(world_size=2),
+        fsdp2=SimpleNamespace(world_size=world_size),
     )
     config = SimpleNamespace(
         donor_manifest_path=tmp_path / "donors.json",
@@ -68,9 +76,14 @@ def _preflight_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
 
     class FakeSampler:
-        def __init__(self, *args, rank: int, **kwargs) -> None:
-            midpoint = len(keys) // 2
-            self.owned_group_keys = keys[:midpoint] if rank == 0 else keys[midpoint:]
+        def __init__(
+            self,
+            *args: object,
+            rank: int,
+            world_size: int,
+            **kwargs: object,
+        ) -> None:
+            self.owned_group_keys = keys[rank::world_size]
 
     monkeypatch.setattr(runner, "SameImageBatchSampler", FakeSampler)
     return config, manifest, source, keys
@@ -81,6 +94,17 @@ def test_manifest_preflight_rebuilds_all_source_bindings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config, manifest, _, _ = _preflight_fixture(tmp_path, monkeypatch)
+
+    assert runner._load_and_validate_manifest(config) is manifest
+
+
+def test_manifest_preflight_accepts_world4_sampler_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, manifest, _, _ = _preflight_fixture(
+        tmp_path, monkeypatch, world_size=4
+    )
 
     assert runner._load_and_validate_manifest(config) is manifest
 
@@ -116,7 +140,7 @@ def test_manifest_preflight_rejects_non_sampler_assignment_key(
         for key in (*keys[:-1], "wrong-group")
     )
 
-    with pytest.raises(ValueError, match="exact world2/K4 sampler closure"):
+    with pytest.raises(ValueError, match="exact distributed K4 sampler closure"):
         runner._load_and_validate_manifest(config)
 
 
@@ -133,3 +157,35 @@ def test_manifest_preflight_rejects_changed_usable_group_population(
     monkeypatch.setattr(runner, "SameImageBatchSampler", ShortSampler)
     with pytest.raises(ValueError, match="expected 8209, got 2"):
         runner._load_and_validate_manifest(config)
+
+
+def test_injection_wraps_only_the_training_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_builder = runner.core_runner.Qwen3NativeRepresentationGroupBuilder
+    original_trainer = runner.core_runner.RepresentationTrainer
+    base_builder = object.__new__(original_builder)
+    captured: dict[str, object] = {}
+
+    class FakeImageAxisTrainer:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(runner, "ImageAxisGroundingTrainer", FakeImageAxisTrainer)
+    config = SimpleNamespace(objective=object())
+    manifest = object.__new__(runner.ImageAxisDonorManifest)
+
+    with runner._inject_image_axis_components(config, manifest):
+        assert runner.core_runner.Qwen3NativeRepresentationGroupBuilder is original_builder
+        created = runner.core_runner.RepresentationTrainer(
+            group_builder=base_builder,
+            sentinel="kept",
+        )
+        assert isinstance(created, FakeImageAxisTrainer)
+        wrapped = captured["group_builder"]
+        assert isinstance(wrapped, ImageAxisGroundedNativeGroupBuilder)
+        assert wrapped.base_builder is base_builder
+        assert captured["sentinel"] == "kept"
+
+    assert runner.core_runner.Qwen3NativeRepresentationGroupBuilder is original_builder
+    assert runner.core_runner.RepresentationTrainer is original_trainer

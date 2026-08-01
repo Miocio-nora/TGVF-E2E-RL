@@ -9,6 +9,7 @@ from .base import (
     RecordedReplayResult,
     RecordedVisualBlock,
     ReplayConsumer,
+    batch_identical_injected_requests,
     resolve_replay_request,
 )
 from .qwen25_vl import Qwen25VLAdapter
@@ -33,5 +34,6 @@ __all__ = [
     "RecordedReplayResult",
     "RecordedVisualBlock",
     "ReplayConsumer",
+    "batch_identical_injected_requests",
     "resolve_replay_request",
 ]

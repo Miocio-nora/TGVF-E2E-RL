@@ -274,6 +274,23 @@ def test_answer_arm_batching_preserves_one_exact_context_and_all_visual_paths() 
             (requests[0], changed_context)
         )
 
+    changed_branch_count = replace(
+        requests[1],
+        visual_blocks=(
+            replace(
+                requests[1].visual_blocks[0],
+                deepstack=requests[1].visual_blocks[0].deepstack[:2],
+                deepstack_positions=requests[1]
+                .visual_blocks[0]
+                .deepstack_positions[:2],
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="may differ only in visual tensors"):
+        streaming_module._batch_identical_answer_requests(
+            (requests[0], changed_branch_count)
+        )
+
 
 def test_answer_and_eos_nll_with_margins_push_correct_and_wrong_in_opposite_directions() -> (
     None

@@ -33,10 +33,27 @@ _BORROWED_PROJECTION_STATE_PREFIXES = (
 
 
 class TGVFAdapterVariant(str, Enum):
-    """Explicit full-observation versus main-D-only ablation identity."""
+    """Content-bound Adapter structure and information-flow identity.
+
+    ``FULL_D_DEEPSTACK`` is the historical RP66 bidirectional target-value
+    architecture.  ``FULL_D_DEEPSTACK_VISION_ROUTING`` retains the same main-D,
+    D-DeepStack, parameter, and compute surfaces while restricting target state
+    to attention routing: the second attention's values come from the first
+    attention's visual context rather than enriched target state.
+    ``MAIN_D_ONLY`` remains the historical output ablation.
+    """
 
     FULL_D_DEEPSTACK = "full_d_deepstack"
+    FULL_D_DEEPSTACK_VISION_ROUTING = "full_d_deepstack_vision_routing"
     MAIN_D_ONLY = "main_d_only"
+
+    @property
+    def has_learned_deepstack(self) -> bool:
+        return self is not TGVFAdapterVariant.MAIN_D_ONLY
+
+    @property
+    def uses_vision_routing_only(self) -> bool:
+        return self is TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,9 +135,22 @@ class BidirectionalAttentionOutput:
 
 
 class TGVFBidirectionalAttention(nn.Module):
-    """Two-way target/vision attention followed by a gated visual residual."""
+    """Target/vision conditioning followed by a gated visual residual.
 
-    def __init__(self, *, d_lm: int, d_v: int, attn_dim: int | None = None) -> None:
+    The default path is the pinned historical bidirectional target-value
+    implementation.  The opt-in routing-only path lets target state affect
+    attention weights while sourcing every second-stage value from visual
+    context.  Both variants deliberately own the exact same parameter set.
+    """
+
+    def __init__(
+        self,
+        *,
+        d_lm: int,
+        d_v: int,
+        attn_dim: int | None = None,
+        vision_routing_only: bool = False,
+    ) -> None:
         super().__init__()
         if d_lm <= 0 or d_v <= 0:
             raise ValueError("TGVF dimensions must be positive")
@@ -129,6 +159,9 @@ class TGVFBidirectionalAttention(nn.Module):
         self.d_lm = int(d_lm)
         self.d_v = int(d_v)
         self.attn_dim = self.d_v if attn_dim is None else int(attn_dim)
+        if not isinstance(vision_routing_only, bool):
+            raise TypeError("vision_routing_only must be a bool")
+        self.vision_routing_only = vision_routing_only
 
         self.target_norm = nn.LayerNorm(self.d_lm)
         self.target_proj = nn.Linear(self.d_lm, self.attn_dim)
@@ -143,6 +176,27 @@ class TGVFBidirectionalAttention(nn.Module):
         self.target_v_proj = nn.Linear(self.attn_dim, self.attn_dim)
         self.context_to_delta = nn.Linear(self.attn_dim, self.d_v)
         self.gate_proj = nn.Linear(self.d_v + self.attn_dim, self.d_v)
+
+    @property
+    def owned_leaf_names(self) -> tuple[str, ...]:
+        common = (
+            "target_norm",
+            "target_proj",
+            "visual_norm",
+            "visual_proj",
+            "target_q_proj",
+            "visual_k_proj",
+            "visual_v_proj",
+        )
+        return (
+            *common,
+            "enriched_target_norm",
+            "visual_q_proj",
+            "target_k_proj",
+            "target_v_proj",
+            "context_to_delta",
+            "gate_proj",
+        )
 
     def forward(
         self,
@@ -181,10 +235,16 @@ class TGVFBidirectionalAttention(nn.Module):
             self.visual_v_proj(visual_projected),
         )
         enriched_target = self.enriched_target_norm(target_tokens + target_context)
+        # Routing-only preserves target-derived keys but removes target state
+        # from the value/payload edge. ``target_context`` is a weighted sum of
+        # projected visual values; target state can change only those weights.
+        second_stage_value_source = (
+            target_context if self.vision_routing_only else enriched_target
+        )
         visual_context, visual_to_target = _cross_attention(
             self.visual_q_proj(visual_projected),
             self.target_k_proj(enriched_target),
-            self.target_v_proj(enriched_target),
+            self.target_v_proj(second_stage_value_source),
         )
         delta = self.context_to_delta(visual_context)
         gate = torch.sigmoid(
@@ -236,7 +296,7 @@ class TGVFAdapterMetadata:
             raise ValueError("TGVF Adapter token counts must be positive")
         if not isinstance(self.variant, TGVFAdapterVariant):
             raise TypeError("TGVF Adapter variant must be explicit")
-        if self.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+        if self.variant.has_learned_deepstack:
             if len(self.branch_layers) != len(self.deepstack_projection_identities):
                 raise ValueError("branch layers and projection identities must align")
         elif self.deepstack_projection_identities:
@@ -255,7 +315,7 @@ class TGVFAdapterOutput:
 
     def __post_init__(self) -> None:
         _validate_token_tensor(self.main_d, name="main D")
-        if self.metadata.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+        if self.metadata.variant.has_learned_deepstack:
             if len(self.conditioned_deepstack_pre_merge_visual_tokens) != len(
                 self.d_deepstack.branches
             ):
@@ -299,9 +359,14 @@ class TGVFAdapter(TGVFBidirectionalAttention):
         attn_dim: int | None = None,
         variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
     ) -> None:
-        super().__init__(d_lm=d_lm, d_v=d_v, attn_dim=attn_dim)
         if not isinstance(variant, TGVFAdapterVariant):
             raise TypeError("variant must be a TGVFAdapterVariant")
+        super().__init__(
+            d_lm=d_lm,
+            d_v=d_v,
+            attn_dim=attn_dim,
+            vision_routing_only=variant.uses_vision_routing_only,
+        )
         if not isinstance(main_projection, FrozenProjectionPort):
             raise TypeError("main_projection must be a FrozenProjectionPort")
         if isinstance(deepstack_projections, DDeepStackProjectionPorts):
@@ -348,11 +413,14 @@ class TGVFAdapter(TGVFBidirectionalAttention):
         self.d_deepstack_branch_adapters = nn.ModuleDict(
             {
                 str(layer): TGVFBidirectionalAttention(
-                    d_lm=self.d_lm, d_v=self.d_v, attn_dim=self.attn_dim
+                    d_lm=self.d_lm,
+                    d_v=self.d_v,
+                    attn_dim=self.attn_dim,
+                    vision_routing_only=variant.uses_vision_routing_only,
                 )
                 for layer in (
                     self.d_deepstack_branch_layers
-                    if variant is TGVFAdapterVariant.FULL_D_DEEPSTACK
+                    if variant.has_learned_deepstack
                     else ()
                 )
             }
@@ -487,14 +555,14 @@ class TGVFAdapter(TGVFBidirectionalAttention):
                     strict=True,
                 )
             )
-            if self.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK
+            if self.variant.has_learned_deepstack
             else ()
         )
         conditioned_branches = tuple(
             output.conditioned_visual_tokens for output in branch_attention
         )
         main_d = self.main_projection(main_attention.conditioned_visual_tokens)
-        if self.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+        if self.variant.has_learned_deepstack:
             d_deepstack = self.d_deepstack_projections(conditioned_branches)
             metadata_projection_identities = d_deepstack.projection_identities
         else:

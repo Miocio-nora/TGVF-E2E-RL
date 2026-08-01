@@ -17,8 +17,8 @@ from torch.nn import functional as F
 
 from tgvf_rl.qwen.base import (
     InjectedForwardRequest,
-    InjectedVisualBlock,
     QwenVLMFamilyAdapter,
+    batch_identical_injected_requests,
 )
 from tgvf_rl.representation.training.losses import causal_evidence_losses
 from tgvf_rl.representation.training.objective import (
@@ -313,63 +313,7 @@ def _score_answer_rows(
 def _batch_identical_answer_requests(
     requests: tuple[InjectedForwardRequest, ...],
 ) -> InjectedForwardRequest:
-    if not requests:
-        raise ValueError("answer request batch cannot be empty")
-    first = requests[0]
-    for request in requests[1:]:
-        if (
-            not torch.equal(request.input_ids, first.input_ids)
-            or not torch.equal(request.attention_mask, first.attention_mask)
-            or not torch.equal(request.position_ids, first.position_ids)
-            or len(request.visual_blocks) != len(first.visual_blocks)
-        ):
-            raise ValueError("answer arms must share one exact native context")
-        for actual, expected in zip(
-            request.visual_blocks,
-            first.visual_blocks,
-            strict=True,
-        ):
-            if (
-                actual.kind != expected.kind
-                or actual.positions != expected.positions
-                or actual.deepstack_positions != expected.deepstack_positions
-            ):
-                raise ValueError("answer arms may differ only in visual tensors")
-    blocks = tuple(
-        InjectedVisualBlock(
-            kind=first.visual_blocks[index].kind,
-            positions=first.visual_blocks[index].positions,
-            embeddings=torch.cat(
-                tuple(request.visual_blocks[index].embeddings for request in requests),
-                dim=0,
-            ),
-            deepstack=tuple(
-                torch.cat(
-                    tuple(
-                        request.visual_blocks[index].deepstack[branch]
-                        for request in requests
-                    ),
-                    dim=0,
-                )
-                for branch in range(len(first.visual_blocks[index].deepstack))
-            ),
-            deepstack_positions=first.visual_blocks[index].deepstack_positions,
-        )
-        for index in range(len(first.visual_blocks))
-    )
-    position_batch_dimension = 0 if first.position_ids.ndim == 2 else 1
-    return InjectedForwardRequest(
-        input_ids=torch.cat(tuple(request.input_ids for request in requests), dim=0),
-        attention_mask=torch.cat(
-            tuple(request.attention_mask for request in requests), dim=0
-        ),
-        position_ids=torch.cat(
-            tuple(request.position_ids for request in requests),
-            dim=position_batch_dimension,
-        ),
-        visual_blocks=blocks,
-        use_cache=False,
-    )
+    return batch_identical_injected_requests(requests)
 
 
 def _unique_live_control_tensors(

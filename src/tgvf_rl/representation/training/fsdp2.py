@@ -26,7 +26,7 @@ import torch
 from torch import nn
 
 from tgvf_rl.compatibility_stack import AUDITED_COMPATIBILITY_STACKS
-from tgvf_rl.representation.adapter import TGVFAdapter, TGVFAdapterVariant
+from tgvf_rl.representation.adapter import TGVFAdapter
 
 
 _BORROWED_PROJECTION_PREFIXES = (
@@ -67,21 +67,6 @@ _EXPECTED_SET_RESHARD_AFTER_BACKWARD_PARAMETERS = (
 )
 _EXPECTED_SET_IS_LAST_BACKWARD_PARAMETERS = ("self", "is_last_backward")
 _EXPECTED_RESHARD_PARAMETERS = ("self",)
-_OWNED_ATTENTION_LEAF_NAMES = (
-    "target_norm",
-    "target_proj",
-    "visual_norm",
-    "visual_proj",
-    "target_q_proj",
-    "visual_k_proj",
-    "visual_v_proj",
-    "enriched_target_norm",
-    "visual_q_proj",
-    "target_k_proj",
-    "target_v_proj",
-    "context_to_delta",
-    "gate_proj",
-)
 
 
 def _require_supported_torch_identity(*, api_name: str) -> tuple[str, str]:
@@ -582,13 +567,19 @@ def _owned_group_modules(
     partition: _ParameterPartition,
 ) -> tuple[tuple[str, ...], tuple[nn.Module, ...]]:
     prefixes = ("",)
-    if adapter.variant is TGVFAdapterVariant.FULL_D_DEEPSTACK:
+    if adapter.variant.has_learned_deepstack:
         prefixes += tuple(
             f"d_deepstack_branch_adapters.{layer}."
             for layer in adapter.d_deepstack_branch_layers
         )
+    leaf_names = adapter.owned_leaf_names
+    if any(
+        branch.owned_leaf_names != leaf_names
+        for branch in adapter.d_deepstack_branch_adapters.values()
+    ):
+        raise RuntimeError("main and D-DeepStack attention structures differ")
     expected_names = tuple(
-        f"{prefix}{leaf}" for prefix in prefixes for leaf in _OWNED_ATTENTION_LEAF_NAMES
+        f"{prefix}{leaf}" for prefix in prefixes for leaf in leaf_names
     )
     named_modules = dict(adapter.named_modules())
     if any(name not in named_modules for name in expected_names):

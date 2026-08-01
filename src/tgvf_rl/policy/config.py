@@ -53,6 +53,7 @@ POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE = (
 )
 POLICY_PILOT_V1_TOOL_PROFILE = NativeToolCapabilityProfile.TGVF_ONLY
 POLICY_PILOT_V1_TOOL_NAMES = POLICY_PILOT_V1_TOOL_PROFILE.tool_names
+POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES = (1.0e-6, 3.0e-6, 1.0e-5)
 
 QWEN3_DECODER_LAYER_COUNT = 36
 QWEN3_DECODER_LORA_PROJECTIONS = (
@@ -309,18 +310,23 @@ class DecoderLoRAConfig:
     rank: int = 64
     alpha: int = 64
     dropout: float = 0.0
-    initial_learning_rate: float = 1.0e-5
+    initial_learning_rate: float = 1.0e-6
     target_modules: str = QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN
     exclude_modules: None = None
     expected_decoder_layers: int = QWEN3_DECODER_LAYER_COUNT
     reference_lora_enabled: bool = False
 
     def __post_init__(self) -> None:
+        if self.initial_learning_rate not in POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES:
+            raise ValueError(
+                "Policy Pilot v1 requires LoRA initial_learning_rate to be one of "
+                f"{POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES!r}, got "
+                f"{self.initial_learning_rate!r}"
+            )
         expected = {
             "rank": (self.rank, 64),
             "alpha": (self.alpha, 64),
             "dropout": (self.dropout, 0.0),
-            "initial_learning_rate": (self.initial_learning_rate, 1.0e-5),
             "target_modules": (
                 self.target_modules,
                 QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN,

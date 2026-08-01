@@ -1,0 +1,14 @@
+schema_version = "image-axis-grounding-config-v1"
+scope = "isolated_representation_image_axis_grounding"
+run_id = "RP-67R1-QWEN3-INSTRUCT-REP-BALANCED-T1-IMAGE-AXIS-GROUNDED-2000-GPU01"
+base_training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/qwen3_instruct_balanced_t1_contextual_2000step_gpu01.toml"
+base_training_config_sha256 = "37c06f4a7f2b538e668582471d4105f9c7dd93a86459d2e23d1f36e289c9d549"
+treatment_training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/representation/experiments/image_axis_grounding/rp67r1_qwen3_instruct_image_axis_grounded_2000_gpu01.toml"
+treatment_training_config_sha256 = "a56a93b3e7c2033e45abdcf99c66d248b6de32816634867fd12f30353407925c"
+donor_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/experiments/image_axis_grounding/rp66_train_seed42_donor_manifest_v1.json"
+donor_manifest_sha256 = "9d04f60e2d60cf9e769ac22a857133c00a417603db3126f891cc1b891abb2080"
+
+[objective]
+image_axis_matrix_weight = 1.0
+image_axis_temperature = 1.0
+negative_count = 1

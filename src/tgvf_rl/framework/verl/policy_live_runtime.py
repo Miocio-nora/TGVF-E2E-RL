@@ -18,6 +18,7 @@ from typing import Any
 
 import torch
 from PIL import Image
+from tgvf_rl.data import PolicyT1RLRuntimeBinding
 
 from tgvf_rl.checkpoint.coordinator import state_digest
 from tgvf_rl.conditioning import (
@@ -125,9 +126,13 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
         self.agent_loop_output_cls = agent_loop_output_cls
         self.metrics_factory = metrics_factory or _default_metrics_factory
 
-    def build(self, context: PolicyE2ERuntimeBuildContext, /) -> PolicyE2ERuntimeProduct:
+    def build(
+        self, context: PolicyE2ERuntimeBuildContext, /
+    ) -> PolicyE2ERuntimeProduct:
         if not isinstance(context, PolicyE2ERuntimeBuildContext):
-            raise TypeError("live runtime builder requires PolicyE2ERuntimeBuildContext")
+            raise TypeError(
+                "live runtime builder requires PolicyE2ERuntimeBuildContext"
+            )
         config = context.config
         if config.model.family != "qwen3_vl":
             raise ValueError("Policy Pilot live runtime requires qwen3_vl")
@@ -209,23 +214,27 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             )
         else:
             contextual_forward_identity = None
-        branch_mergers = tuple(
-            _artifact_identity(
-                "qwen3-vl",
-                f"deepstack-merger-{layer}",
-                "frozen-base-model-v1",
-                {
-                    "model": config.model.revision_or_path,
-                    "projection_identity": projection_identity,
-                    "layer": layer,
-                },
+        branch_mergers = (
+            tuple(
+                _artifact_identity(
+                    "qwen3-vl",
+                    f"deepstack-merger-{layer}",
+                    "frozen-base-model-v1",
+                    {
+                        "model": config.model.revision_or_path,
+                        "projection_identity": projection_identity,
+                        "layer": layer,
+                    },
+                )
+                for layer, projection_identity in zip(
+                    _BRANCH_LAYERS,
+                    run_identity.adapter_contract.deepstack_projection_identities,
+                    strict=True,
+                )
             )
-            for layer, projection_identity in zip(
-                _BRANCH_LAYERS,
-                run_identity.adapter_contract.deepstack_projection_identities,
-                strict=True,
-            )
-        ) if run_identity is not None else ()
+            if run_identity is not None
+            else ()
+        )
         components = _Qwen3PolicyTrajectoryComponents(
             context=context,
             layout_builder=layout_builder,
@@ -261,7 +270,9 @@ class _Qwen3PolicyTrajectoryComponents:
         behavior_store: BehaviorTraceStore,
         focus_execution_ledger: FocusExecutionLedger,
         crop_execution_ledger: CropExecutionLedger,
-        metrics_factory: Callable[[TrajectoryRecord, PilotVerlTrajectoryReward], object],
+        metrics_factory: Callable[
+            [TrajectoryRecord, PilotVerlTrajectoryReward], object
+        ],
         agent_loop_output_cls: type[Any] | None,
         sample_index: Mapping[str, Mapping[str, object]],
     ) -> None:
@@ -358,10 +369,7 @@ class _Qwen3PolicyTrajectoryComponents:
         parser = StrictToolCallParser(
             enabled_tool_names=self.config.protocol.enabled_tool_names
         )
-        if (
-            self.config.protocol.tool_profile
-            is NativeToolCapabilityProfile.TGVF_ONLY
-        ):
+        if self.config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             tool_runtime = _RemoteTGVFFocusToolRuntime(
                 event_loop=asyncio.get_running_loop(),
                 server_client=self.server_client,
@@ -373,10 +381,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 contextual_forward_identity=self.contextual_forward_identity,
                 branch_merger_identities=self.branch_merger_identities,
             )
-        elif (
-            self.config.protocol.tool_profile
-            is NativeToolCapabilityProfile.CROP_ONLY
-        ):
+        elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
             crop_processor_identity = _artifact_identity(
                 "policy-runtime",
                 "qwen3-shared-vllm-crop-processor",
@@ -536,7 +541,9 @@ class _RemoteTGVFFocusToolRuntime:
             operation=lambda: self._execute_once(parsed_call, context),
         )
 
-    def _execute_once(self, parsed_call: ParsedToolCall, context: object) -> ObservationHandle:
+    def _execute_once(
+        self, parsed_call: ParsedToolCall, context: object
+    ) -> ObservationHandle:
         from tgvf_rl.environment.agent_loop import ToolExecutionContext
 
         assert isinstance(context, ToolExecutionContext)
@@ -700,8 +707,13 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
         if not isinstance(reward, RewardResult):
             raise TypeError("reward finalizer requires RewardResult")
         if trajectory.identity != self.request_identity:
-            raise IdentityMismatchError("trajectory identity changed before finalization")
-        if trajectory.model != self.model or trajectory.behavior_policy != self.behavior_policy:
+            raise IdentityMismatchError(
+                "trajectory identity changed before finalization"
+            )
+        if (
+            trajectory.model != self.model
+            or trajectory.behavior_policy != self.behavior_policy
+        ):
             raise IdentityMismatchError("trajectory model/policy changed before replay")
 
         final_ids, native_rows = _final_token_materialization(
@@ -757,7 +769,8 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
             initial_prompt_token_ids=self.initial_prompt_token_ids,
             native_tool_appended_token_ids=native_rows,
             sentinel_fields=make_objective_sentinels(
-                prefix="policy-e2e:" + _canonical_sha256(trajectory.identity.canonical_id)[:16]
+                prefix="policy-e2e:"
+                + _canonical_sha256(trajectory.identity.canonical_id)[:16]
             ),
             extra_fields={
                 "tgvf_exact_replay_roles": ("current", "reference"),
@@ -1001,7 +1014,9 @@ def _validate_sample_fields(
         try:
             record = sample_index[sample_id]
         except KeyError as error:
-            raise IdentityMismatchError("upstream sample_id is absent from DeepEyes") from error
+            raise IdentityMismatchError(
+                "upstream sample_id is absent from the bound dataset"
+            ) from error
         image = record.get("image")
         extra_info = record.get("extra_info")
         bound_reward = record.get("reward_model")
@@ -1010,11 +1025,14 @@ def _validate_sample_fields(
             or not isinstance(extra_info, Mapping)
             or not isinstance(bound_reward, Mapping)
         ):
-            raise IdentityMismatchError("bound DeepEyes sample schema differs")
-        relative_image = image.get("path")
-        if not isinstance(relative_image, str):
-            raise IdentityMismatchError("bound DeepEyes image path differs")
-        source_image_path = (config.dataset.root / relative_image).resolve()
+            raise IdentityMismatchError("bound Policy sample schema differs")
+        bound_image_path = image.get("path")
+        if not isinstance(bound_image_path, str):
+            raise IdentityMismatchError("bound Policy image path differs")
+        if isinstance(config.dataset.runtime_binding, PolicyT1RLRuntimeBinding):
+            source_image_path = Path(bound_image_path).resolve()
+        else:
+            source_image_path = (config.dataset.root / bound_image_path).resolve()
         expected = {
             "sample_id": sample_id,
             "dataset_iteration_identity_sha256": (
@@ -1056,22 +1074,22 @@ def _load_bound_sample_index(
         return {}
     samples_path = config.dataset.root / "samples.jsonl"
     if samples_path.is_symlink() or not samples_path.is_file():
-        raise ValueError("bound DeepEyes samples file is missing or unsafe")
+        raise ValueError("bound Policy samples file is missing or unsafe")
     if _sha256_file(samples_path) != config.dataset.samples_sha256:
-        raise IdentityMismatchError("bound DeepEyes samples file changed")
+        raise IdentityMismatchError("bound Policy samples file changed")
     records: dict[str, Mapping[str, object]] = {}
     with samples_path.open(encoding="utf-8") as handle:
         for line in handle:
             record = json.loads(line)
             if not isinstance(record, Mapping):
-                raise ValueError("bound DeepEyes row must be an object")
+                raise ValueError("bound Policy row must be an object")
             row_sample_id = record.get("sample_id")
             if not isinstance(row_sample_id, str) or row_sample_id in records:
-                raise ValueError("bound DeepEyes sample identity differs")
+                raise ValueError("bound Policy sample identity differs")
             records[row_sample_id] = record
     expected_count = config.dataset.runtime_binding.expected_sample_count
     if len(records) != expected_count:
-        raise IdentityMismatchError("bound DeepEyes sample count changed")
+        raise IdentityMismatchError("bound Policy sample count changed")
     return records
 
 

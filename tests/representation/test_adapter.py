@@ -264,3 +264,130 @@ def test_main_d_only_has_no_learned_branch_parameters_or_branch_objective() -> N
     assert target.grad is not None
     assert main_visual.grad is not None
     assert all(branch.grad is None for branch in branch_visual)
+
+
+def test_vision_routing_variant_retains_full_outputs_without_target_value_path() -> (
+    None
+):
+    adapter = _adapter(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING)
+    historical = _adapter()
+    target = torch.randn(3, 6, requires_grad=True)
+    main_visual = torch.randn(8, 4, requires_grad=True)
+    branch_visual = tuple(torch.randn(8, 4, requires_grad=True) for _ in range(3))
+
+    output = adapter(
+        target_hidden_states=target,
+        pre_merge_visual_tokens=main_visual,
+        deepstack_pre_merge_visual_tokens=branch_visual,
+    )
+
+    assert output.metadata.variant is (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
+    )
+    assert output.main_d.shape == (2, 6)
+    assert len(output.deepstack_visual_embeds) == 3
+    assert all(branch.shape == (2, 6) for branch in output.deepstack_visual_embeds)
+    assert adapter.vision_routing_only
+    assert all(
+        branch.vision_routing_only
+        for branch in adapter.d_deepstack_branch_adapters.values()
+    )
+    assert len(adapter.artifact_state_dict()) == 104
+    assert (
+        adapter.artifact_state_dict().keys() == historical.artifact_state_dict().keys()
+    )
+    assert all(
+        torch.equal(value, historical.artifact_state_dict()[name])
+        for name, value in adapter.artifact_state_dict().items()
+    )
+
+    output.main_d.sum().backward()
+    assert target.grad is not None
+    assert main_visual.grad is not None
+
+
+def test_vision_routing_target_affects_only_scalar_visual_routing() -> None:
+    adapter = _adapter(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING).eval()
+    visual = torch.randn(8, 4)
+    branches = tuple(torch.randn(8, 4) for _ in range(3))
+    target_a = torch.randn(3, 6)
+    target_b = torch.randn(3, 6)
+    second_stage_value_inputs: list[torch.Tensor] = []
+
+    value_hook = adapter.target_v_proj.register_forward_pre_hook(
+        lambda _module, values: second_stage_value_inputs.append(
+            values[0].detach().clone()
+        )
+    )
+    try:
+        first = adapter(
+            target_hidden_states=target_a,
+            pre_merge_visual_tokens=visual,
+            deepstack_pre_merge_visual_tokens=branches,
+        )
+        second = adapter(
+            target_hidden_states=target_b,
+            pre_merge_visual_tokens=visual,
+            deepstack_pre_merge_visual_tokens=branches,
+        )
+    finally:
+        value_hook.remove()
+
+    # The second attention receives exactly the first attention's weighted
+    # visual values. Target state determines the scalar weights but is never
+    # added to the value/payload stream.
+    normalized_visual = adapter.visual_norm(visual)
+    visual_projected = adapter.visual_proj(normalized_visual)
+    visual_values = adapter.visual_v_proj(visual_projected)
+    assert len(second_stage_value_inputs) == 2
+    for captured, result in zip(
+        second_stage_value_inputs,
+        (first, second),
+        strict=True,
+    ):
+        expected = torch.matmul(
+            result.main_attention.target_to_visual_attention,
+            visual_values,
+        )
+        torch.testing.assert_close(captured, expected)
+    assert not torch.equal(
+        first.main_attention.target_to_visual_attention,
+        second.main_attention.target_to_visual_attention,
+    )
+    assert not torch.equal(first.main_attention.gate, second.main_attention.gate)
+    assert torch.all(first.main_attention.gate >= 0)
+    assert torch.all(first.main_attention.gate <= 1)
+    assert torch.allclose(
+        first.main_attention.visual_salience.sum(dim=-1), torch.ones(1)
+    )
+
+
+def test_vision_routing_cannot_encode_target_when_visual_tokens_are_indistinguishable() -> (
+    None
+):
+    adapter = _adapter(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING).eval()
+    repeated_main = torch.randn(1, 4).expand(8, -1).clone()
+    repeated_branches = tuple(torch.randn(1, 4).expand(8, -1).clone() for _ in range(3))
+
+    first = adapter(
+        target_hidden_states=torch.randn(3, 6),
+        pre_merge_visual_tokens=repeated_main,
+        deepstack_pre_merge_visual_tokens=repeated_branches,
+    )
+    second = adapter(
+        target_hidden_states=torch.randn(3, 6),
+        pre_merge_visual_tokens=repeated_main,
+        deepstack_pre_merge_visual_tokens=repeated_branches,
+    )
+
+    torch.testing.assert_close(
+        first.conditioned_pre_merge_visual_tokens,
+        second.conditioned_pre_merge_visual_tokens,
+    )
+    torch.testing.assert_close(first.main_d, second.main_d)
+    for first_branch, second_branch in zip(
+        first.deepstack_visual_embeds,
+        second.deepstack_visual_embeds,
+        strict=True,
+    ):
+        torch.testing.assert_close(first_branch, second_branch)

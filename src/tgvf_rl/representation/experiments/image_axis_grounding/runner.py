@@ -1,4 +1,4 @@
-"""Two-rank launcher that injects the isolated image-axis builder and trainer."""
+"""Distributed launcher that injects the isolated image-axis builder and trainer."""
 
 from __future__ import annotations
 
@@ -99,7 +99,8 @@ def _load_and_validate_manifest(
     it does not by itself prove that the manifest still describes the bytes
     consumed by the treatment.  Re-reading the retained JSONL, hashing every
     retained image, binding the local processor config, and reconstructing the
-    exact two-rank K=4 sampler closure makes that relationship fail closed.
+    exact supported-world-size K=4 sampler closure makes that relationship fail
+    closed.
     """
 
     manifest = load_image_axis_donor_manifest(config.donor_manifest_path)
@@ -135,8 +136,10 @@ def _load_and_validate_manifest(
     if observed_grid_contract != manifest.grid_contract:
         raise ValueError("donor manifest Qwen image-grid contract mismatch")
 
-    if training.fsdp2.world_size != 2 or training.data.train.batch_size != 4:
-        raise ValueError("RP66 image-axis preflight requires world_size=2 and K=4")
+    if training.fsdp2.world_size not in (2, 4) or training.data.train.batch_size != 4:
+        raise ValueError(
+            "RP66 image-axis preflight requires world_size in {2, 4} and K=4"
+        )
     samplers = tuple(
         SameImageBatchSampler(
             train_data.samples,
@@ -167,7 +170,7 @@ def _load_and_validate_manifest(
         missing = sorted(set(usable_group_keys) - set(assignment_keys))
         extra = sorted(set(assignment_keys) - set(usable_group_keys))
         raise ValueError(
-            "donor assignments differ from the exact world2/K4 sampler closure: "
+            "donor assignments differ from the exact distributed K4 sampler closure: "
             f"missing={missing[:5]} extra={extra[:5]}"
         )
     return manifest
@@ -187,26 +190,24 @@ def _inject_image_axis_components(
     if original_trainer is not RepresentationTrainer:
         raise RuntimeError("core trainer seam was already patched")
 
-    def group_builder_factory(**kwargs: Any) -> ImageAxisGroundedNativeGroupBuilder:
-        base = original_builder(**kwargs)
-        return ImageAxisGroundedNativeGroupBuilder(
-            base_builder=base,
-            donor_manifest=manifest,
-        )
-
     def trainer_factory(**kwargs: Any) -> ImageAxisGroundingTrainer:
+        base_builder = kwargs.pop("group_builder")
+        if not isinstance(base_builder, Qwen3NativeRepresentationGroupBuilder):
+            raise TypeError("image-axis trainer requires the native base group builder")
         return ImageAxisGroundingTrainer(
             **kwargs,
+            group_builder=ImageAxisGroundedNativeGroupBuilder(
+                base_builder=base_builder,
+                donor_manifest=manifest,
+            ),
             image_axis_objective=config.objective,
         )
 
-    core_runner.Qwen3NativeRepresentationGroupBuilder = group_builder_factory  # type: ignore[assignment]
     core_runner.RepresentationTrainer = trainer_factory  # type: ignore[assignment]
     try:
         yield
     finally:
         core_runner.RepresentationTrainer = original_trainer
-        core_runner.Qwen3NativeRepresentationGroupBuilder = original_builder
 
 
 __all__ = [

@@ -1,10 +1,11 @@
-"""Executable two-rank Qwen3 representation-phase training entry point.
+"""Executable distributed Qwen3 representation-phase training entry point.
 
 This runner is intentionally narrower than the reusable training primitives:
 it accepts only the strict Qwen3/FSDP2 TOML identity, requires a ``torchrun``
-world of two processes mapped from physical GPUs 2 and 3, and performs only
-optimizer-boundary checkpointing.  It does not choose a prompt, dataset,
-objective weight, provider, or optimizer value on the caller's behalf.
+world of two or four processes mapped from the exact configured physical GPU
+list, and performs only optimizer-boundary checkpointing.  It does not choose a
+prompt, dataset, objective weight, provider, or optimizer value on the caller's
+behalf.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from .checkpoint import (
 from .config import (
     RepresentationDataConfigV2,
     RepresentationTrainingConfig,
+    VALIDATED_NON_TRAINING_CODE_TRANSITION,
     load_representation_training_config,
 )
 from .data import (
@@ -338,6 +340,22 @@ def _run_initialized(
         initial_global_step=initial_global_step,
         stop_after_global_step=stop_after_global_step,
     )
+    closeout_from_terminal_checkpoint = (
+        config.resume.enabled
+        and stop_after_global_step is None
+        and initial_global_step == invocation_target_step
+    )
+    pending_terminal_validation_count = (
+        _pending_terminal_validation_count(
+            global_step=initial_global_step,
+            validation_every_optimizer_steps=(
+                config.training.validation_every_optimizer_steps
+            ),
+            next_validation_event_index=next_validation_event_index,
+        )
+        if closeout_from_terminal_checkpoint
+        else 0
+    )
     trainer = RepresentationTrainer(
         adapter=runtime.adapter,
         qwen_model=model,
@@ -433,6 +451,23 @@ def _run_initialized(
             )
         elif performance is not None:
             raise RuntimeError("non-log train step unexpectedly collected telemetry")
+        # Persist the exact optimizer/scheduler/sampler/RNG boundary before any
+        # downstream validation work.  Validation must never be able to destroy
+        # the only durable copy of a completed training step.
+        if metrics.global_step % config.checkpoint.save_every_optimizer_steps == 0:
+            latest_checkpoint = _save_checkpoint(
+                config=config,
+                binding=binding,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                sampler=train_sampler,
+                run_identity=run_identity,
+                accumulation=accumulation,
+                trainer_execution=trainer_execution,
+                global_step=metrics.global_step,
+                created_checkpoint_paths=created_checkpoint_paths,
+            )
+            latest_checkpoint_global_step = metrics.global_step
         if metrics.global_step % config.training.validation_every_optimizer_steps == 0:
             validation = _evaluate_validation_at_sharded_optimizer_boundary(
                 binding=binding,
@@ -442,7 +477,9 @@ def _run_initialized(
                 family_adapter=family_adapter,
                 samples=validation_data.samples,
                 group_builder=group_builder,
-                validation_manifest_sha256=(validation_data.manifest.manifest_sha256),
+                validation_manifest_sha256=(
+                    validation_data.manifest.manifest_sha256
+                ),
                 validation_event_index=validation_event_index,
             )
             binding.assert_optimizer_ownership(optimizer)
@@ -472,20 +509,6 @@ def _run_initialized(
                 config.output.metrics_jsonl_path,
                 payload,
             )
-        if metrics.global_step % config.checkpoint.save_every_optimizer_steps == 0:
-            latest_checkpoint = _save_checkpoint(
-                config=config,
-                binding=binding,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                sampler=train_sampler,
-                run_identity=run_identity,
-                accumulation=accumulation,
-                trainer_execution=trainer_execution,
-                global_step=metrics.global_step,
-                created_checkpoint_paths=created_checkpoint_paths,
-            )
-            latest_checkpoint_global_step = metrics.global_step
 
     invocation_complete = trainer.global_step == config.training.target_optimizer_steps
     if (config.checkpoint.save_final or not invocation_complete) and (
@@ -555,6 +578,45 @@ def _run_initialized(
     )
     if latest_checkpoint is None:
         raise RuntimeError("rank zero did not commit the final representation outputs")
+    if pending_terminal_validation_count:
+        validation = _evaluate_validation_at_sharded_optimizer_boundary(
+            binding=binding,
+            config=config,
+            runtime=runtime,
+            model=model,
+            family_adapter=family_adapter,
+            samples=validation_data.samples,
+            group_builder=group_builder,
+            validation_manifest_sha256=(validation_data.manifest.manifest_sha256),
+            validation_event_index=validation_event_index,
+        )
+        binding.assert_optimizer_ownership(optimizer)
+        validation_sample_ids = _gather_string_tuples(validation.local_sample_ids)
+        validation_group_keys = _gather_string_tuples(
+            (validation.local_image_group_key,)
+        )
+        payload = asdict(validation)
+        payload.pop("local_rank")
+        payload.pop("local_image_group_key")
+        payload.pop("local_sample_ids")
+        payload.update(
+            {
+                "event": "validation",
+                "global_step": trainer.global_step,
+                "run_identity_sha256": run_identity.identity_sha256,
+                "image_group_keys_by_rank": [
+                    values[0] for values in validation_group_keys
+                ],
+                "sample_ids_by_rank": [
+                    list(values) for values in validation_sample_ids
+                ],
+            }
+        )
+        _append_metric_rank_zero_collective(
+            config.output.metrics_jsonl_path,
+            payload,
+        )
+        validation_event_index += 1
     final_artifact_manifest_sha256 = state_digest(export.manifest)
     post_training_internal_evaluation: dict[str, object] = {"status": "disabled"}
     evaluation_config = config.post_training_internal_evaluation
@@ -672,11 +734,34 @@ def _invocation_target_step(
         if stop_after_global_step is None
         else stop_after_global_step
     )
-    if target <= initial_global_step:
+    if target < initial_global_step:
+        raise ValueError(
+            "invocation target step must be beyond the restored global step"
+        )
+    if target == initial_global_step and not (
+        stop_after_global_step is None
+        and bool(getattr(getattr(config, "resume", None), "enabled", False))
+        and target == config.training.target_optimizer_steps
+    ):
         raise ValueError(
             "invocation target step must be beyond the restored global step"
         )
     return target
+
+
+def _pending_terminal_validation_count(
+    *,
+    global_step: int,
+    validation_every_optimizer_steps: int,
+    next_validation_event_index: int,
+) -> int:
+    expected = global_step // validation_every_optimizer_steps
+    pending = expected - next_validation_event_index
+    if pending not in (0, 1):
+        raise ValueError(
+            "terminal checkpoint validation cursor is not a recoverable boundary"
+        )
+    return pending
 
 
 def _load_datasets(
@@ -1397,8 +1482,19 @@ def _verify_live_code_identity(config: RepresentationTrainingConfig) -> None:
             digest.update(b"\0")
             digest.update(file_path.read_bytes())
             digest.update(b"\0")
-        if digest.hexdigest() != config.code.dirty_state_sha256:
-            raise ValueError("live dirty code digest differs from the TOML identity")
+        live_digest = digest.hexdigest()
+        if live_digest != config.code.dirty_state_sha256:
+            compatible_resume = (
+                config.resume.enabled
+                and config.resume.code_compatibility
+                == VALIDATED_NON_TRAINING_CODE_TRANSITION
+                and live_digest
+                == config.resume.compatible_live_dirty_state_sha256
+            )
+            if not compatible_resume:
+                raise ValueError(
+                    "live dirty code digest differs from the TOML identity"
+                )
 
 
 def _run_git(root: Path, *arguments: str) -> str:

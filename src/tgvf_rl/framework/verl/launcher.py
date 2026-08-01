@@ -17,6 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.data import PolicyT1RLRuntimeBinding
 from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
 
 from .adapter import LOSSLESS_AGENT_LOOP_MANAGER_FQN, VerlAdapterConfig
@@ -28,6 +29,7 @@ from .compatibility import (
 from .exact_replay_engine import TGVF_EXACT_REPLAY_MODEL_TYPE
 from .smoke_dataset import VerlSelectedSampleDatasetBinding
 from .deepeyes_dataset import VerlDeepEyes47KDatasetBinding
+from .policy_t1_dataset import VerlPolicyT1DatasetBinding
 
 
 # Pinned e003's upstream main hard-codes its own TaskRunner.  The repo-owned
@@ -41,6 +43,8 @@ SELECTED_SAMPLE_DATASET_CLASS_NAME = "TGVFSelectedSampleDataset"
 SELECTED_SAMPLE_DATASET_MODULE_PATH = "pkg://tgvf_rl.framework.verl.smoke_dataset"
 DEEPEYES47K_DATASET_CLASS_NAME = "TGVFDeepEyes47KDataset"
 DEEPEYES47K_DATASET_MODULE_PATH = "pkg://tgvf_rl.framework.verl.deepeyes_dataset"
+POLICY_T1_ARXIVQA_DATASET_CLASS_NAME = "TGVFPolicyT1ArxivQADataset"
+POLICY_T1_ARXIVQA_DATASET_MODULE_PATH = "pkg://tgvf_rl.framework.verl.policy_t1_dataset"
 NATIVE_AGENT_LOOP_NAME = "tgvf_native_policy"
 NATIVE_AGENT_LOOP_FQN = (
     "tgvf_rl.framework.verl.native_agent_loop.VerlFrameworkNeutralAgentLoop"
@@ -130,8 +134,15 @@ class UpstreamVerlLaunchPlan:
             != LOSSLESS_AGENT_LOOP_MANAGER_FQN
         ):
             raise ValueError("launch plan lost the accepted lossless v0 manager")
-        if self.environment.get("CUDA_VISIBLE_DEVICES") != "0,1,2,3":
-            raise ValueError("initial Policy Pilot launch must bind physical GPUs 0-3")
+        visible_devices = self.environment.get("CUDA_VISIBLE_DEVICES", "").split(",")
+        if (
+            len(visible_devices) != 4
+            or len(set(visible_devices)) != 4
+            or any(not device.isdigit() for device in visible_devices)
+        ):
+            raise ValueError(
+                "initial Policy Pilot launch must bind four unique physical GPUs"
+            )
         if self.overrides.get("trainer.n_gpus_per_node") != 4:
             raise ValueError("initial Policy Pilot launch must bind world size four")
         if (
@@ -361,27 +372,63 @@ def build_policy_e2e_smoke_verl_plan(
     training = config.training
     selected_binding = None
     full_binding = None
+    t1_binding = None
     if config.dataset.selected_sample is None:
-        full_binding = VerlDeepEyes47KDatasetBinding(
-            root=config.dataset.root,
-            manifest_file_sha256=(
-                config.dataset.runtime_binding.manifest_file_sha256
-            ),
-            content_sha256=config.dataset.runtime_binding.content_sha256,
-            samples_sha256=config.dataset.samples_sha256,
-            iteration_identity_sha256=(config.dataset.iteration_identity_sha256),
-            shuffle_seed=config.dataset.runtime_binding.shuffle_seed,
-            fixture=False,
-            expected_sample_count=(
-                config.dataset.runtime_binding.expected_sample_count
-            ),
-            prompt_bundle_sha256=config.protocol.prompt_sha256,
-            tool_profile=config.protocol.tool_profile,
-            tokenizer_length=config.model.tokenizer_length,
-            model_name=config.model.model_name,
-        )
+        if isinstance(config.dataset.runtime_binding, PolicyT1RLRuntimeBinding):
+            t1_typed_binding = config.dataset.runtime_binding
+            t1_binding = VerlPolicyT1DatasetBinding(
+                root=config.dataset.root,
+                manifest_file_sha256=t1_typed_binding.manifest_file_sha256,
+                content_sha256=t1_typed_binding.content_sha256,
+                samples_sha256=config.dataset.samples_sha256,
+                iteration_identity_sha256=config.dataset.iteration_identity_sha256,
+                shuffle_seed=t1_typed_binding.shuffle_seed,
+                decision_stage=t1_typed_binding.decision_stage,
+                expected_sample_count=t1_typed_binding.expected_sample_count,
+                prompt_bundle_sha256=config.protocol.prompt_sha256,
+                tool_profile=config.protocol.tool_profile,
+                tokenizer_length=config.model.tokenizer_length,
+                model_name=config.model.model_name,
+            )
+        else:
+            full_binding = VerlDeepEyes47KDatasetBinding(
+                root=config.dataset.root,
+                manifest_file_sha256=(
+                    config.dataset.runtime_binding.manifest_file_sha256
+                ),
+                content_sha256=config.dataset.runtime_binding.content_sha256,
+                samples_sha256=config.dataset.samples_sha256,
+                iteration_identity_sha256=(config.dataset.iteration_identity_sha256),
+                shuffle_seed=config.dataset.runtime_binding.shuffle_seed,
+                fixture=False,
+                expected_sample_count=(
+                    config.dataset.runtime_binding.expected_sample_count
+                ),
+                prompt_bundle_sha256=config.protocol.prompt_sha256,
+                tool_profile=config.protocol.tool_profile,
+                tokenizer_length=config.model.tokenizer_length,
+                model_name=config.model.model_name,
+            )
     else:
         selected_binding = VerlSelectedSampleDatasetBinding.from_run_config(config)
+    dataset_binding = selected_binding or t1_binding or full_binding
+    if dataset_binding is None:  # pragma: no cover - binding construction invariant
+        raise RuntimeError("Policy dataset binding was not constructed")
+    if selected_binding is not None:
+        dataset_module_path = SELECTED_SAMPLE_DATASET_MODULE_PATH
+        dataset_class_name = SELECTED_SAMPLE_DATASET_CLASS_NAME
+        dataset_config = {"data.tgvf_selected_sample": selected_binding.as_config()}
+        dataset_samples_path = selected_binding.samples_path
+    elif t1_binding is not None:
+        dataset_module_path = POLICY_T1_ARXIVQA_DATASET_MODULE_PATH
+        dataset_class_name = POLICY_T1_ARXIVQA_DATASET_CLASS_NAME
+        dataset_config = {"data.tgvf_policy_t1_arxivqa": t1_binding.as_config()}
+        dataset_samples_path = t1_binding.root / "samples.jsonl"
+    else:
+        dataset_module_path = DEEPEYES47K_DATASET_MODULE_PATH
+        dataset_class_name = DEEPEYES47K_DATASET_CLASS_NAME
+        dataset_config = {"data.tgvf_deepeyes47k": full_binding.as_config()}
+        dataset_samples_path = full_binding.root / "samples.jsonl"
     actor_batch = _actor_batch_contract(config)
     save_frequency = _checkpoint_frequency(
         training.checkpoint_steps,
@@ -408,41 +455,17 @@ def build_policy_e2e_smoke_verl_plan(
         {
             # The custom Dataset consumes the selected materialized DeepEyes
             # row directly; it performs no upstream parquet conversion.
-            "data.train_files": [
-                str(
-                    selected_binding.samples_path
-                    if selected_binding is not None
-                    else full_binding.root / "samples.jsonl"
-                )
-            ],
-            "data.val_files": [
-                str(
-                    selected_binding.samples_path
-                    if selected_binding is not None
-                    else full_binding.root / "samples.jsonl"
-                )
-            ],
+            "data.train_files": [str(dataset_samples_path)],
+            "data.val_files": [str(dataset_samples_path)],
             "data.train_max_samples": -1,
             "data.val_max_samples": -1,
             # veRL's file loader executes modules before registering them in
             # ``sys.modules``; Python 3.12 dataclasses correctly reject that
             # broken import state.  Its public ``pkg://`` route performs a
             # normal package import and preserves the module identity.
-            "data.custom_cls.path": (
-                SELECTED_SAMPLE_DATASET_MODULE_PATH
-                if selected_binding is not None
-                else DEEPEYES47K_DATASET_MODULE_PATH
-            ),
-            "data.custom_cls.name": (
-                SELECTED_SAMPLE_DATASET_CLASS_NAME
-                if selected_binding is not None
-                else DEEPEYES47K_DATASET_CLASS_NAME
-            ),
-            **(
-                {"data.tgvf_selected_sample": selected_binding.as_config()}
-                if selected_binding is not None
-                else {"data.tgvf_deepeyes47k": full_binding.as_config()}
-            ),
+            "data.custom_cls.path": dataset_module_path,
+            "data.custom_cls.name": dataset_class_name,
+            **dataset_config,
             "data.train_batch_size": accumulation.global_prompt_batch_size,
             "data.gen_batch_size": accumulation.global_prompt_batch_size,
             "data.shuffle": False,
@@ -533,9 +556,7 @@ def build_policy_e2e_smoke_verl_plan(
             ),
             "actor_rollout_ref.ref.log_prob_micro_batch_size": None,
             "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": (
-                actor_batch[
-                    "upstream_inference_micro_batch_size_per_gpu_trajectories"
-                ]
+                actor_batch["upstream_inference_micro_batch_size_per_gpu_trajectories"]
             ),
             "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu": (
                 capacity.reference_log_prob_max_token_len_per_gpu
@@ -713,13 +734,9 @@ def build_policy_e2e_smoke_verl_plan(
     )
 
     external_components = {
-        "dataset": (
-            "tgvf_rl.framework.verl.smoke_dataset."
-            + SELECTED_SAMPLE_DATASET_CLASS_NAME
-            if selected_binding is not None
-            else "tgvf_rl.framework.verl.deepeyes_dataset."
-            + DEEPEYES47K_DATASET_CLASS_NAME
-        ),
+        "dataset": dataset_module_path.removeprefix("pkg://")
+        + "."
+        + dataset_class_name,
         "agent_loop_manager": LOSSLESS_AGENT_LOOP_MANAGER_FQN,
         "agent_loop": NATIVE_AGENT_LOOP_FQN,
         "invocation_factory": NATIVE_INVOCATION_FACTORY_FQN,

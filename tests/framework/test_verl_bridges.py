@@ -1253,7 +1253,7 @@ def test_policy_pilot_uses_real_e003_lora_and_optimizer_fields() -> None:
         == POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE
     )
     assert "actor_rollout_ref.model.lora.dropout" not in overrides
-    assert overrides["actor_rollout_ref.actor.optim.lr"] == 1.0e-5
+    assert overrides["actor_rollout_ref.actor.optim.lr"] == 1.0e-6
     assert overrides["actor_rollout_ref.actor.optim.clip_grad"] == 1.0
     assert overrides["actor_rollout_ref.actor.ppo_epochs"] == 1
     assert overrides["actor_rollout_ref.actor.clip_ratio_c"] == 3.0

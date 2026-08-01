@@ -103,6 +103,23 @@ def test_main_d_only_plan_owns_only_main_attention_leaves() -> None:
     assert len(plan.borrowed_buffer_names) == 4
 
 
+def test_vision_routing_plan_covers_only_routing_and_visual_value_leaves() -> None:
+    qwen, adapter = _owned_pair(
+        variant=TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
+    )
+
+    plan = build_representation_fsdp2_plan(adapter, qwen)
+    historical_qwen, historical = _owned_pair()
+    historical_plan = build_representation_fsdp2_plan(historical, historical_qwen)
+
+    assert len(plan.owned_group_module_names) == 52
+    assert any("target_v_proj" in name for name in plan.owned_parameter_names)
+    assert any("target_k_proj" in name for name in plan.owned_parameter_names)
+    assert any("visual_v_proj" in name for name in plan.owned_parameter_names)
+    assert plan.owned_parameter_numel == historical_plan.owned_parameter_numel
+    assert len(plan.borrowed_buffer_names) == 4
+
+
 def test_plan_rejects_wrong_qwen_owner_and_parameter_freeze_drift() -> None:
     qwen, adapter = _owned_pair()
     other_qwen, _ = _owned_pair()

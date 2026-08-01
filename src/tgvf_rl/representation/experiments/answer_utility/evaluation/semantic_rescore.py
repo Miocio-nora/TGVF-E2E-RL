@@ -45,11 +45,34 @@ from .scoring import (
 )
 
 
-SEMANTIC_RESCORE_SCHEMA_VERSION = "answer-utility-semantic-rescore-v1"
+SEMANTIC_RESCORE_SCHEMA_VERSION = "answer-utility-semantic-rescore-v2"
 SEMANTIC_RESCORE_RECORD_SCHEMA_VERSION = "answer-utility-semantic-rescore-record-v1"
 SEMANTIC_REQUEST_SCHEMA_VERSION = "answer-utility-blind-semantic-request-v1"
-SEMANTIC_EVIDENCE_SCHEMA_VERSION = "answer-utility-semantic-evidence-v1"
+SEMANTIC_EVIDENCE_SCHEMA_VERSION = "answer-utility-semantic-evidence-v2"
 _REQUEST_PREFIX = "answer-utility-semantic:"
+_LENGTH_RETRY_MAXIMUM_ATTEMPTS = 2
+_LENGTH_RETRY_TOKEN_MULTIPLIER = 2
+_QWEN_CONTROL_TOKEN_SANITIZER_VERSION = "qwen25-special-token-literals-v1"
+# Exact special=true entries in the pinned Qwen2.5-72B tokenizer binding.  Each
+# replacement is literal JSON escape text (backslash-u, not a Python Unicode
+# escape).  It round-trips to the original payload through a JSON parser while
+# ensuring the chat tokenizer never sees a raw ``<|...|>`` control substring.
+_QWEN_CONTROL_TOKEN_REPLACEMENTS = (
+    ("<|endoftext|>", r"\u003c|endoftext|\u003e"),
+    ("<|im_start|>", r"\u003c|im_start|\u003e"),
+    ("<|im_end|>", r"\u003c|im_end|\u003e"),
+    ("<|object_ref_start|>", r"\u003c|object_ref_start|\u003e"),
+    ("<|object_ref_end|>", r"\u003c|object_ref_end|\u003e"),
+    ("<|box_start|>", r"\u003c|box_start|\u003e"),
+    ("<|box_end|>", r"\u003c|box_end|\u003e"),
+    ("<|quad_start|>", r"\u003c|quad_start|\u003e"),
+    ("<|quad_end|>", r"\u003c|quad_end|\u003e"),
+    ("<|vision_start|>", r"\u003c|vision_start|\u003e"),
+    ("<|vision_end|>", r"\u003c|vision_end|\u003e"),
+    ("<|vision_pad|>", r"\u003c|vision_pad|\u003e"),
+    ("<|image_pad|>", r"\u003c|image_pad|\u003e"),
+    ("<|video_pad|>", r"\u003c|video_pad|\u003e"),
+)
 _RECORD_SCHEMAS = {
     "answer-utility-instruct-evaluation-record-v1",
     "answer-utility-instruct-evaluation-record-v2",
@@ -80,6 +103,23 @@ class _EvaluatedRecord:
     consumer_id: str
     request_payload: Mapping[str, str] | None
     request_payload_sha256: str | None
+
+
+class _SemanticJudgeNonStopError(RuntimeError):
+    """One otherwise valid judge envelope ended for a non-stop reason."""
+
+    def __init__(
+        self,
+        finish_reason: object,
+        *,
+        usage: Mapping[str, int | float],
+    ) -> None:
+        self.finish_reason = finish_reason
+        self.usage = dict(usage)
+        super().__init__(
+            "semantic judge choice did not finish with stop: "
+            f"finish_reason={finish_reason!r}"
+        )
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -389,20 +429,29 @@ def _blind_queue(evaluated: Sequence[_EvaluatedRecord]) -> tuple[dict[str, Any],
     return tuple(result)
 
 
-def _judge_request_body(request: Mapping[str, Any], bound: Any) -> dict[str, Any]:
+def _judge_request_body(
+    request: Mapping[str, Any],
+    bound: Any,
+    *,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
     config = bound.provider.config
+    requested_max_tokens = config.max_tokens if max_tokens is None else max_tokens
+    if type(requested_max_tokens) is not int or requested_max_tokens <= 0:
+        raise ValueError("semantic judge max_tokens must be a positive integer")
+    user_content, _ = _sanitized_judge_user_message(request)
     payload: dict[str, Any] = {
         "model": config.model_name,
         "messages": [
             {"role": "system", "content": QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": _canonical_json_bytes(request["payload"]).decode("utf-8"),
+                "content": user_content,
             },
         ],
         "temperature": config.temperature,
         "top_p": config.top_p,
-        "max_tokens": config.max_tokens,
+        "max_tokens": requested_max_tokens,
         "seed": config.seed,
     }
     if config.send_json_response_format:
@@ -412,23 +461,55 @@ def _judge_request_body(request: Mapping[str, Any], bound: Any) -> dict[str, Any
     return payload
 
 
-def _strict_response(
-    response: object, *, expected_model: str
-) -> tuple[int, str, dict[str, int | float]]:
-    value = _require_mapping(response, name="semantic judge response")
-    if value.get("model") != expected_model:
-        raise RuntimeError("semantic judge response model differs")
-    choices = value.get("choices")
-    if not isinstance(choices, list) or len(choices) != 1:
-        raise RuntimeError("semantic judge must return exactly one choice")
-    choice = _require_mapping(choices[0], name="semantic judge choice")
-    if choice.get("index") != 0 or choice.get("finish_reason") != "stop":
-        raise RuntimeError("semantic judge choice did not finish with stop")
-    message = _require_mapping(choice.get("message"), name="semantic judge message")
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("semantic judge returned empty content")
-    verdict, rationale = _binary_verdict(content)
+def _sanitizer_policy() -> dict[str, Any]:
+    return {
+        "version": _QWEN_CONTROL_TOKEN_SANITIZER_VERSION,
+        "scope": "canonical_json_serialized_blind_user_message",
+        "matching": "case_sensitive_exact_substring_global",
+        "replacements": [
+            {"source": source, "replacement": replacement}
+            for source, replacement in _QWEN_CONTROL_TOKEN_REPLACEMENTS
+        ],
+        "blind_payload_and_sha256_preserved": True,
+        "truncated_or_sanitized_text_used_as_blind_payload": False,
+    }
+
+
+def _sanitized_judge_user_message(
+    request: Mapping[str, Any],
+) -> tuple[str, dict[str, int]]:
+    payload = _require_mapping(request.get("payload"), name="semantic judge payload")
+    original = _canonical_json_bytes(payload)
+    expected_sha = request.get("payload_sha256")
+    actual_sha = _sha256_bytes(original)
+    if expected_sha != actual_sha:
+        raise ValueError("semantic judge payload SHA256 differs before sanitization")
+    sanitized = original.decode("utf-8")
+    replacement_counts: dict[str, int] = {}
+    for source, replacement in _QWEN_CONTROL_TOKEN_REPLACEMENTS:
+        count = sanitized.count(source)
+        if count:
+            replacement_counts[source] = count
+            sanitized = sanitized.replace(source, replacement)
+    if any(source in sanitized for source, _ in _QWEN_CONTROL_TOKEN_REPLACEMENTS):
+        raise AssertionError("Qwen control-token sanitizer left a raw token literal")
+    return sanitized, replacement_counts
+
+
+def _sanitizer_audit(request: Mapping[str, Any]) -> dict[str, Any]:
+    original = _canonical_json_bytes(request["payload"])
+    sanitized, replacement_counts = _sanitized_judge_user_message(request)
+    return {
+        "policy_version": _QWEN_CONTROL_TOKEN_SANITIZER_VERSION,
+        "blind_payload_sha256": request["payload_sha256"],
+        "original_user_message_sha256": _sha256_bytes(original),
+        "sanitized_user_message_sha256": _sha256_bytes(sanitized.encode("utf-8")),
+        "replacement_counts": replacement_counts,
+        "sanitized_user_message": sanitized,
+    }
+
+
+def _strict_usage(value: Mapping[str, Any]) -> dict[str, int | float]:
     usage = _require_mapping(value.get("usage"), name="semantic judge usage")
     prompt = usage.get("prompt_tokens")
     completion = usage.get("completion_tokens")
@@ -441,16 +522,77 @@ def _strict_response(
         or total != prompt + completion
     ):
         raise RuntimeError("semantic judge usage fields are invalid")
-    return (
-        verdict,
-        rationale,
-        {
-            "prompt_tokens": prompt,
-            "completion_tokens": completion,
-            "total_tokens": total,
-            "cost_usd": 0.0,
-        },
-    )
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+        "cost_usd": 0.0,
+    }
+
+
+def _strict_response(
+    response: object, *, expected_model: str
+) -> tuple[int, str, dict[str, int | float]]:
+    value = _require_mapping(response, name="semantic judge response")
+    if value.get("model") != expected_model:
+        raise RuntimeError("semantic judge response model differs")
+    choices = value.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        raise RuntimeError("semantic judge must return exactly one choice")
+    choice = _require_mapping(choices[0], name="semantic judge choice")
+    if choice.get("index") != 0:
+        raise RuntimeError("semantic judge choice index differs")
+    usage = _strict_usage(value)
+    finish_reason = choice.get("finish_reason")
+    if finish_reason != "stop":
+        raise _SemanticJudgeNonStopError(finish_reason, usage=usage)
+    message = _require_mapping(choice.get("message"), name="semantic judge message")
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("semantic judge returned empty content")
+    verdict, rationale = _binary_verdict(content)
+    return verdict, rationale, usage
+
+
+def _length_retry_policy(bound: Any) -> dict[str, Any]:
+    initial_max_tokens = int(bound.provider.config.max_tokens)
+    return {
+        "maximum_attempts": _LENGTH_RETRY_MAXIMUM_ATTEMPTS,
+        "retryable_finish_reasons": ["length"],
+        "max_tokens_by_attempt": [
+            initial_max_tokens,
+            initial_max_tokens * _LENGTH_RETRY_TOKEN_MULTIPLIER,
+        ],
+        "acceptance_finish_reason": "stop",
+        "truncated_content_used_for_verdict": False,
+    }
+
+
+def _attempt_record(
+    decoded: Mapping[str, Any],
+    *,
+    attempt_index: int,
+    max_tokens: int,
+    body_bytes: bytes,
+    raw: bytes,
+    usage: Mapping[str, int | float],
+    outcome: str,
+) -> dict[str, Any]:
+    choices = decoded["choices"]
+    choice = choices[0]
+    return {
+        "attempt_index": attempt_index,
+        "max_tokens": max_tokens,
+        "outcome": outcome,
+        "request_body_sha256": _sha256_bytes(body_bytes),
+        "raw_response_sha256": _sha256_bytes(raw),
+        "response_json_sha256": _sha256_bytes(_canonical_json_bytes(decoded)),
+        "response_id": decoded.get("id"),
+        "response_model": decoded.get("model"),
+        "choice_index": choice.get("index"),
+        "finish_reason": choice.get("finish_reason"),
+        "usage": dict(usage),
+    }
 
 
 async def _judge_all(
@@ -478,53 +620,107 @@ async def _judge_all(
     expected_model = config.expected_response_model or config.model_name
     timeout = aiohttp.ClientTimeout(total=config.timeout_seconds)
     semaphore = asyncio.Semaphore(concurrency)
+    retry_policy = _length_retry_policy(bound)
+    max_tokens_by_attempt = retry_policy["max_tokens_by_attempt"]
 
     async def execute(session: Any, request: Mapping[str, Any]) -> dict[str, Any]:
         async with semaphore:
-            body = _judge_request_body(request, bound)
-            body_bytes = _canonical_json_bytes(body)
-            try:
-                async with session.post(
-                    endpoint, data=body_bytes, headers=headers
-                ) as response:
-                    raw = await response.read()
-                    if response.status != 200:
-                        raise RuntimeError(
-                            f"semantic judge HTTP status {response.status}"
-                        )
-            except (aiohttp.ClientError, asyncio.TimeoutError) as error:
-                raise RuntimeError(
-                    f"semantic judge request failed: {request['judge_request_id']}"
-                ) from error
-            try:
-                decoded = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise RuntimeError(
-                    "semantic judge returned invalid response JSON"
-                ) from error
-            verdict, rationale, usage = _strict_response(
-                decoded, expected_model=expected_model
-            )
-            evidence_identity = {
-                "schema_version": SEMANTIC_EVIDENCE_SCHEMA_VERSION,
-                "judge_request_id": request["judge_request_id"],
-                "payload_sha256": request["payload_sha256"],
-                "request_body_sha256": _sha256_bytes(body_bytes),
-                "raw_response_sha256": _sha256_bytes(raw),
-                "response_json_sha256": _sha256_bytes(_canonical_json_bytes(decoded)),
-                "response_id": decoded.get("id"),
-                "response_model": decoded.get("model"),
-                "finish_reason": decoded["choices"][0]["finish_reason"],
-                "usage": usage,
-                "verdict": verdict,
-                "rationale": rationale,
-            }
-            return {
-                **evidence_identity,
-                "evidence_sha256": _sha256_bytes(
-                    _canonical_json_bytes(evidence_identity)
-                ),
-            }
+            attempts: list[dict[str, Any]] = []
+            sanitizer_audit = _sanitizer_audit(request)
+            for attempt_index, max_tokens in enumerate(max_tokens_by_attempt, start=1):
+                body = _judge_request_body(request, bound, max_tokens=max_tokens)
+                body_bytes = _canonical_json_bytes(body)
+                try:
+                    async with session.post(
+                        endpoint, data=body_bytes, headers=headers
+                    ) as response:
+                        raw = await response.read()
+                        if response.status != 200:
+                            raise RuntimeError(
+                                f"semantic judge HTTP status {response.status}"
+                            )
+                except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                    raise RuntimeError(
+                        f"semantic judge request failed: {request['judge_request_id']}"
+                    ) from error
+                try:
+                    decoded = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise RuntimeError(
+                        "semantic judge returned invalid response JSON: "
+                        f"{request['judge_request_id']}"
+                    ) from error
+                try:
+                    verdict, rationale, usage = _strict_response(
+                        decoded, expected_model=expected_model
+                    )
+                except _SemanticJudgeNonStopError as error:
+                    decoded_mapping = _require_mapping(
+                        decoded, name="semantic judge response"
+                    )
+                    attempt = _attempt_record(
+                        decoded_mapping,
+                        attempt_index=attempt_index,
+                        max_tokens=max_tokens,
+                        body_bytes=body_bytes,
+                        raw=raw,
+                        usage=error.usage,
+                        outcome="retryable_length"
+                        if error.finish_reason == "length"
+                        else "rejected_non_stop",
+                    )
+                    attempts.append(attempt)
+                    retry_available = attempt_index < len(max_tokens_by_attempt)
+                    if error.finish_reason == "length" and retry_available:
+                        continue
+                    raise RuntimeError(
+                        "semantic judge non-stop response rejected: "
+                        f"judge_request_id={request['judge_request_id']}; "
+                        f"payload_sha256={request['payload_sha256']}; "
+                        f"attempt_index={attempt_index}; "
+                        f"finish_reason={error.finish_reason!r}; "
+                        f"request_body_sha256={attempt['request_body_sha256']}; "
+                        f"raw_response_sha256={attempt['raw_response_sha256']}"
+                    ) from error
+                decoded_mapping = _require_mapping(
+                    decoded, name="semantic judge response"
+                )
+                accepted_attempt = _attempt_record(
+                    decoded_mapping,
+                    attempt_index=attempt_index,
+                    max_tokens=max_tokens,
+                    body_bytes=body_bytes,
+                    raw=raw,
+                    usage=usage,
+                    outcome="accepted_stop",
+                )
+                attempts.append(accepted_attempt)
+                evidence_identity = {
+                    "schema_version": SEMANTIC_EVIDENCE_SCHEMA_VERSION,
+                    "judge_request_id": request["judge_request_id"],
+                    "payload_sha256": request["payload_sha256"],
+                    "request_body_sha256": accepted_attempt["request_body_sha256"],
+                    "raw_response_sha256": accepted_attempt["raw_response_sha256"],
+                    "response_json_sha256": accepted_attempt["response_json_sha256"],
+                    "response_id": decoded_mapping.get("id"),
+                    "response_model": decoded_mapping.get("model"),
+                    "finish_reason": "stop",
+                    "usage": usage,
+                    "verdict": verdict,
+                    "rationale": rationale,
+                    "retry_policy": retry_policy,
+                    "untrusted_text_sanitizer": sanitizer_audit,
+                    "attempt_count": len(attempts),
+                    "accepted_attempt_index": attempt_index,
+                    "attempts": attempts,
+                }
+                return {
+                    **evidence_identity,
+                    "evidence_sha256": _sha256_bytes(
+                        _canonical_json_bytes(evidence_identity)
+                    ),
+                }
+            raise AssertionError("semantic judge attempt loop exhausted")
 
     connector = aiohttp.TCPConnector(limit=concurrency)
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
@@ -766,6 +962,13 @@ def _summary(
         key: sum(int(item["usage"][key]) for item in evidence.values())
         for key in ("prompt_tokens", "completion_tokens", "total_tokens")
     }
+    attempts = tuple(
+        attempt for item in evidence.values() for attempt in item["attempts"]
+    )
+    attempt_usage = {
+        key: sum(int(attempt["usage"][key]) for attempt in attempts)
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+    }
     return {
         "schema_version": SEMANTIC_RESCORE_SCHEMA_VERSION,
         "status": "complete",
@@ -795,6 +998,16 @@ def _summary(
         "unique_judge_requests": len(evidence),
         "judge_verdict_counts": dict(sorted(verdicts.items())),
         "judge_usage": usage,
+        "judge_attempt_audit": {
+            "total_attempts": len(attempts),
+            "retried_requests": sum(
+                int(item["attempt_count"]) > 1 for item in evidence.values()
+            ),
+            "length_truncated_attempts": sum(
+                attempt["finish_reason"] == "length" for attempt in attempts
+            ),
+            "all_attempt_usage": attempt_usage,
+        },
     }
 
 
@@ -888,6 +1101,8 @@ async def run_semantic_rescore(
         ],
         "blind_task_kind": "open_vqa",
         "selection_rule": "latest_deterministic_score_correct_is_none",
+        "semantic_judge_retry_policy": _length_retry_policy(bound),
+        "semantic_judge_untrusted_text_sanitizer": _sanitizer_policy(),
         "choices_model_visible": False,
         "checkpoint_arm_and_D_hidden_from_judge": True,
     }

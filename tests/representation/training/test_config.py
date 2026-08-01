@@ -337,6 +337,58 @@ def test_complete_config_maps_to_runtime_contracts_and_binds_both_hashes(
     assert len(config.canonical_config_sha256) == 64
 
 
+def test_world4_ga2_config_preserves_eight_global_matrices(
+    tmp_path: Path,
+) -> None:
+    path = _write_config(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("world_size = 2", "world_size = 4", 1)
+    text = text.replace(
+        "physical_gpu_ids = [2, 3]",
+        "physical_gpu_ids = [0, 1, 2, 3]",
+        1,
+    )
+    text = text.replace(
+        "logical_gpu_ids = [0, 1]",
+        "logical_gpu_ids = [0, 1, 2, 3]",
+        1,
+    )
+    text = text.replace("mesh_shape = [2]", "mesh_shape = [4]", 1)
+    path.write_text(text, encoding="utf-8")
+
+    config = load_representation_training_config(path)
+
+    assert config.fsdp2.world_size == 4
+    assert config.fsdp2.physical_gpu_ids == (0, 1, 2, 3)
+    assert config.fsdp2.logical_gpu_ids == (0, 1, 2, 3)
+    assert config.fsdp2.mesh_shape == (4,)
+    assert config.training.gradient_accumulation_steps == 2
+    assert config.accumulation_identity.data_parallel_world_size == 4
+    assert (
+        config.training.gradient_accumulation_steps * config.fsdp2.world_size
+        == 8
+    )
+
+
+def test_representation_topology_rejects_unsupported_world3(
+    tmp_path: Path,
+) -> None:
+    path = _write_config(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("world_size = 2", "world_size = 3", 1)
+    text = text.replace(
+        "physical_gpu_ids = [2, 3]", "physical_gpu_ids = [0, 1, 2]", 1
+    )
+    text = text.replace(
+        "logical_gpu_ids = [0, 1]", "logical_gpu_ids = [0, 1, 2]", 1
+    )
+    text = text.replace("mesh_shape = [2]", "mesh_shape = [3]", 1)
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="world_size must be 2 or 4"):
+        load_representation_training_config(path, verify_external_files=False)
+
+
 def test_model_image_max_pixels_is_optional_and_exposed_by_validation(
     tmp_path: Path,
 ) -> None:
@@ -592,6 +644,24 @@ def test_v5_content_binds_main_d_only_adapter_variant(tmp_path: Path) -> None:
     assert config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5
     assert config.adapter_variant is TGVFAdapterVariant.MAIN_D_ONLY
     assert config.validation_payload()["adapter_variant"] == "main_d_only"
+
+
+def test_v5_content_binds_vision_routing_adapter_variant(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v5(
+        _write_config(tmp_path),
+        variant="full_d_deepstack_vision_routing",
+    )
+
+    config = load_representation_training_config(path, verify_external_files=False)
+
+    assert config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V5
+    assert config.adapter_variant is (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
+    )
+    assert (
+        config.validation_payload()["adapter_variant"]
+        == "full_d_deepstack_vision_routing"
+    )
 
 
 def test_v4_enabled_post_training_evaluation_requires_every_identity(

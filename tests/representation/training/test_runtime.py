@@ -14,6 +14,7 @@ from tgvf_rl.conditioning import (
 )
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.contracts.tokens import TokenSpan
+from tgvf_rl.representation import TGVFAdapterVariant
 from tgvf_rl.representation.training.runtime import (
     QWEN3_PATCH_EMBED_LINEAR_FAST_PATH,
     QWEN3_REPRESENTATION_BRANCH_LAYERS,
@@ -248,6 +249,28 @@ def test_factory_freezes_qwen_and_borrows_exact_four_mergers() -> None:
     assert owned
     assert all(tensor.requires_grad for tensor in owned.values())
     assert runtime.patch_embed_fast_path is None
+
+
+def test_factory_builds_isolated_full_vision_routing_variant() -> None:
+    identity = _identity()
+    model = _TinyQwen3(name_or_path=identity.revision_or_path)
+
+    runtime = create_qwen3_representation_runtime(
+        model=model,
+        processor=_processor(),
+        model_identity=identity,
+        conditioning_config=_context_config(),
+        adapter_dtype=torch.float32,
+        adapter_variant=(TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING),
+        fixture_mode=True,
+    )
+
+    assert runtime.adapter.variant is (
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
+    )
+    assert runtime.adapter.vision_routing_only
+    assert len(runtime.adapter.d_deepstack_branch_adapters) == 3
+    assert len(runtime.adapter.artifact_state_dict()) == 104
 
 
 def test_patch_embed_linear_fast_path_preserves_state_and_parameter_identity() -> None:

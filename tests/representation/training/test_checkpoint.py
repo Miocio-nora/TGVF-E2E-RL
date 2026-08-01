@@ -114,6 +114,18 @@ def test_main_d_only_contract_content_binds_structural_variant() -> None:
         contract.assert_matches(_adapter(3))
 
 
+def test_vision_routing_contract_is_isolated_from_historical_rp66() -> None:
+    routing = _adapter(3, TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING)
+
+    contract = representation_adapter_contract_identity(routing)
+
+    assert isinstance(contract, RepresentationAdapterContractIdentityV2)
+    assert contract.variant == "full_d_deepstack_vision_routing"
+    contract.assert_matches(routing)
+    with pytest.raises(IdentityMismatchError, match="variant"):
+        contract.assert_matches(_adapter(3))
+
+
 def _run_identity(
     adapter: TGVFAdapter,
     *,

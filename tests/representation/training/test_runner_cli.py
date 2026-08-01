@@ -35,11 +35,11 @@ def _forbid_real_accelerator_or_process_group(
 
 
 def _launch_config(
-    physical_gpu_ids: tuple[int, int] = (2, 3),
+    physical_gpu_ids: tuple[int, ...] = (2, 3),
 ) -> SimpleNamespace:
     return SimpleNamespace(
         fsdp2=SimpleNamespace(
-            world_size=2,
+            world_size=len(physical_gpu_ids),
             physical_gpu_ids=physical_gpu_ids,
         )
     )
@@ -95,6 +95,21 @@ def test_launch_environment_is_bound_to_configured_physical_gpu_pair(
         runner_module._require_launch_environment(config)
 
 
+def test_launch_environment_accepts_exact_world4_gpu_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _launch_config((0, 1, 2, 3))
+    _set_valid_launch_environment(monkeypatch)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
+    monkeypatch.setenv("WORLD_SIZE", "4")
+
+    runner_module._require_launch_environment(config)
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,3,2")
+    with pytest.raises(ValueError, match="launch environment mismatch"):
+        runner_module._require_launch_environment(config)
+
+
 def test_public_runner_checks_launch_contract_before_distributed_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -127,10 +142,11 @@ def test_candidate_runtime_lock_is_part_of_representation_code_identity() -> Non
 
 
 @pytest.mark.parametrize(
-    ("accumulation_steps", "direct_groups", "expected"),
-    ((4, 1, 8), (1, 4, 8), (2, 4, 8)),
+    ("world_size", "accumulation_steps", "direct_groups", "expected"),
+    ((2, 4, 1, 8), (2, 1, 4, 8), (2, 2, 4, 8), (4, 2, 1, 8)),
 )
 def test_global_matrix_count_uses_optimizer_step_group_identity(
+    world_size: int,
     accumulation_steps: int,
     direct_groups: int,
     expected: int,
@@ -143,7 +159,9 @@ def test_global_matrix_count_uses_optimizer_step_group_identity(
     )
 
     assert (
-        runner_module._optimizer_step_global_matrix_count(config, world_size=2)
+        runner_module._optimizer_step_global_matrix_count(
+            config, world_size=world_size
+        )
         == expected
     )
 
@@ -354,6 +372,50 @@ def test_invocation_target_must_advance_restored_state() -> None:
             config,
             initial_global_step=1,
             stop_after_global_step=1,
+        )
+
+
+def test_terminal_checkpoint_can_run_zero_step_closeout() -> None:
+    config = SimpleNamespace(
+        training=SimpleNamespace(
+            target_optimizer_steps=2000,
+            log_every_optimizer_steps=10,
+        ),
+        resume=SimpleNamespace(enabled=True),
+    )
+
+    assert (
+        runner_module._invocation_target_step(
+            config,
+            initial_global_step=2000,
+            stop_after_global_step=None,
+        )
+        == 2000
+    )
+
+
+def test_terminal_checkpoint_cursor_requires_exactly_one_pending_validation() -> None:
+    assert (
+        runner_module._pending_terminal_validation_count(
+            global_step=2000,
+            validation_every_optimizer_steps=2000,
+            next_validation_event_index=0,
+        )
+        == 1
+    )
+    assert (
+        runner_module._pending_terminal_validation_count(
+            global_step=2000,
+            validation_every_optimizer_steps=2000,
+            next_validation_event_index=1,
+        )
+        == 0
+    )
+    with pytest.raises(ValueError, match="validation cursor"):
+        runner_module._pending_terminal_validation_count(
+            global_step=2000,
+            validation_every_optimizer_steps=500,
+            next_validation_event_index=0,
         )
 
 

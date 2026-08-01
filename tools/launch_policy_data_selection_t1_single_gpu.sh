@@ -11,6 +11,13 @@ config=$2
 output_root=$3
 cuda_visible_device=$4
 python_env="$repo/.venv312"
+python_header_root="$repo/.deps/python312-dev/root/usr/include"
+
+if [[ ! -f "$python_header_root/python3.12/Python.h" ]] || \
+   [[ ! -f "$python_header_root/python3.12/pyconfig.h" ]]; then
+  echo "extracted Python 3.12 development headers are missing" >&2
+  exit 1
+fi
 
 mkdir -p \
   "$output_root/logs" \
@@ -30,7 +37,7 @@ for rank in 0 1 2 3; do
     TORCH_DEVICE_BACKEND_AUTOLOAD=0 \
     CC=/usr/bin/gcc \
     CXX=/usr/bin/g++ \
-    CPATH="$python_env/include/python3.12" \
+    CPATH="$python_header_root:$python_header_root/python3.12" \
     LIBRARY_PATH="$python_env/lib" \
     TRITON_CACHE_DIR="$output_root/runtime/cache/single-gpu/triton" \
     TORCHINDUCTOR_CACHE_DIR="$output_root/runtime/cache/single-gpu/torchinductor" \

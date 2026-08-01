@@ -120,6 +120,11 @@ def metric_payload(record: dict[str, Any]) -> dict[str, float | int]:
         "global_l_gen_loss": "l_gen_loss",
         "global_norm_loss": "norm_loss",
         "global_weighted_norm_loss": "weighted_norm_loss",
+        "global_image_axis_loss": "image_axis_loss",
+        "global_weighted_image_axis_loss": "weighted_image_axis_loss",
+        "global_image_axis_correct_top1": "image_axis_correct_top1",
+        "global_image_axis_score_gap": "image_axis_score_gap",
+        "global_image_axis_row_count": "image_axis_row_count",
         "global_total_loss": "total_loss",
         "global_row_count": "row_count",
         "global_sample_count": "sample_count",
@@ -226,6 +231,16 @@ def main() -> int:
     adapter_variant_tag = str(
         config.get("adapter", {}).get("variant", "full_d_deepstack")
     ).replace("_", "-")
+    model_tag = (
+        str(config["model"]["model_name"])
+        .strip()
+        .lower()
+        .replace("_", "-")
+        .replace("/", "-")
+    )
+    method_tags: tuple[str, ...] = ()
+    if "image-axis" in str(config["objective"]["identity"]).lower():
+        method_tags = ("image-axis-grounded",)
     run = wandb.init(
         entity=args.entity,
         project=args.project,
@@ -236,11 +251,12 @@ def main() -> int:
         job_type="training-telemetry",
         tags=(
             "representation-phase",
-            "qwen3-vl-8b-thinking",
+            model_tag,
             provider_tag,
             f"adapter-{adapter_variant_tag}",
             f"matrix-ce-{matrix_ce_mode_tag}",
             matrix_ce_temperature_tag,
+            *method_tags,
         ),
         config=_wandb_config(config),
         dir=str(args.wandb_dir),

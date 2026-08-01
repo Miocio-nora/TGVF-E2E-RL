@@ -1,4 +1,4 @@
-"""Two-rank train-step timing and CUDA-memory evidence.
+"""Distributed train-step timing and CUDA-memory evidence.
 
 Measurements cover only one synchronous ``trainer.train_step`` call.  Model
 loading, validation, checkpoint I/O, and artifact export are intentionally

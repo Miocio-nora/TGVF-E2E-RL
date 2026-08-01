@@ -236,3 +236,34 @@ def test_unmatched_wrapper_keeps_baseline_and_materializes_masked_duplicate() ->
         group.base.source_visual_identity == group.donor.source_visual_identity
         == "source::anchor"
     )
+
+
+def test_validation_group_outside_train_manifest_is_explicitly_masked() -> None:
+    train_assignment = ImageAxisDonorAssignment(
+        anchor_image_group_key="anchor",
+        anchor_image="/fixture/anchor.png",
+        anchor_image_sha256=_sha("anchor"),
+        image_grid_thw=(1, 2, 2),
+        unmatched_reason="no_exact_grid_answer_disjoint_distinct_image",
+    )
+    validation_samples = (
+        _sample(0, image="/fixture/validation.png", image_id="validation"),
+        _sample(1, image="/fixture/validation.png", image_id="validation"),
+    )
+    base_builder = _RecordingBaseBuilder()
+    builder = ImageAxisGroundedNativeGroupBuilder(
+        base_builder=base_builder,  # type: ignore[arg-type]
+        donor_manifest=_manifest(train_assignment),
+    )
+
+    assert builder.image_axis_row_mask(validation_samples) == (False, False)
+    group = builder(
+        validation_samples,
+        object(),  # type: ignore[arg-type]
+        collective_candidate_count=2,
+    )
+
+    assert not group.eligible
+    assert group.base.image_group_key == group.donor.image_group_key == "validation"
+    assert len(base_builder.calls) == 2
+    assert base_builder.calls == [validation_samples, validation_samples]

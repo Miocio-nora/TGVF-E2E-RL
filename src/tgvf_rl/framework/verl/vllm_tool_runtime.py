@@ -621,6 +621,13 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
             )
             for merger, identity in zip(mergers, identities, strict=True)
         )
+        contract_variant = TGVFAdapterVariant(
+            getattr(
+                contract,
+                "variant",
+                TGVFAdapterVariant.FULL_D_DEEPSTACK.value,
+            )
+        )
         adapter = TGVFAdapter(
             d_lm=contract.d_lm,
             d_v=contract.d_v,
@@ -631,7 +638,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
                 projections=ports[1:],
             ),
             branch_layers=contract.deepstack_branch_layers,
-            variant=TGVFAdapterVariant.FULL_D_DEEPSTACK,
+            variant=contract_variant,
         )
         owner = next(model.language_model.parameters())
         adapter.to(device=owner.device, dtype=owner.dtype)

@@ -42,6 +42,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--decode-mode", choices=("cached", "no_cache"), default="cached"
     )
+    parser.add_argument(
+        "--arm-batch-size",
+        type=int,
+        default=1,
+        help=(
+            "Maximum compatible same-sample arms per cached decode batch; "
+            "the default 1 preserves scalar generation"
+        ),
+    )
     parser.add_argument("--arm", action="append")
     parser.add_argument("--include-direct-replacement", action="store_true")
     parser.add_argument("--physical-gpu-id", type=int)
@@ -126,6 +135,7 @@ def main() -> None:
         "max_new_tokens": args.max_new_tokens,
         "eos_token_ids": args.eos_token_id,
         "decode_mode": args.decode_mode,
+        "arm_batch_size": args.arm_batch_size,
         "group_start": args.group_start,
         "group_limit": args.group_limit,
         "shard_index": args.shard_index,

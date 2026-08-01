@@ -14,11 +14,13 @@ import pytest
 import torch
 from PIL import Image
 
+import tgvf_rl.representation.experiments.answer_utility.evaluation.runner as evaluation_runner_module
 from tgvf_rl.representation.experiments.answer_utility.evaluation.runner import (
     DEFAULT_ANSWER_UTILITY_EVALUATION_ARMS,
     AnswerUtilityEvaluationArm,
     _QwenImageGridContract,
     _evaluation_arm_contract,
+    _generate_pending_answers,
     _implementation_file_manifest,
     _qwen_image_grid_thw,
     _reader_model_input,
@@ -37,7 +39,9 @@ from tgvf_rl.representation.experiments.answer_utility.runner import (
     _answer_utility_state_digest,
 )
 from tgvf_rl.representation.training.oracle_d_utility import (
+    OracleBatchCompatibilityError,
     OracleDUtilityGroundTruth,
+    OracleGeneratedAnswer,
     split_oracle_d_utility_sample,
 )
 from tgvf_rl.representation.training.schema import (
@@ -432,3 +436,134 @@ def test_instruct_scorer_defers_unstructured_wrong_choice_text() -> None:
     assert score.correct is None
     assert score.route == "semantic_unresolved"
     assert score.candidate_choice_label is None
+
+
+def _generated(token_id: int) -> OracleGeneratedAnswer:
+    return OracleGeneratedAnswer(
+        token_ids=(token_id,),
+        text=str(token_id),
+        stop_reason="natural_stop",
+    )
+
+
+def test_pending_compatible_arms_use_one_batched_decoder_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contexts = (object(), object())
+    batched_calls: list[tuple[object, ...]] = []
+    scalar_calls: list[object] = []
+
+    def fake_batched(**kwargs: object) -> tuple[OracleGeneratedAnswer, ...]:
+        observed = tuple(kwargs["contexts"])  # type: ignore[arg-type]
+        batched_calls.append(observed)
+        return (_generated(1), _generated(2))
+
+    def fake_scalar(**kwargs: object) -> OracleGeneratedAnswer:
+        scalar_calls.append(kwargs["context"])
+        return _generated(9)
+
+    monkeypatch.setattr(
+        evaluation_runner_module,
+        "greedy_oracle_answers_batched",
+        fake_batched,
+    )
+    monkeypatch.setattr(
+        evaluation_runner_module,
+        "greedy_oracle_answer",
+        fake_scalar,
+    )
+
+    outputs = _generate_pending_answers(
+        contexts=contexts,  # type: ignore[arg-type]
+        runtime=object(),
+        family_adapter=object(),
+        eos_token_ids=(5,),
+        max_new_tokens=4,
+        decode_mode="cached",
+        arm_batch_size=2,
+    )
+
+    assert tuple(output.token_ids for output in outputs) == ((1,), (2,))
+    assert batched_calls == [contexts]
+    assert scalar_calls == []
+
+
+def test_pending_single_resume_arm_falls_back_to_scalar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = object()
+    batched_calls: list[tuple[object, ...]] = []
+    scalar_calls: list[object] = []
+    monkeypatch.setattr(
+        evaluation_runner_module,
+        "greedy_oracle_answers_batched",
+        lambda **kwargs: batched_calls.append(tuple(kwargs["contexts"])),
+    )
+
+    def fake_scalar(**kwargs: object) -> OracleGeneratedAnswer:
+        scalar_calls.append(kwargs["context"])
+        return _generated(3)
+
+    monkeypatch.setattr(
+        evaluation_runner_module,
+        "greedy_oracle_answer",
+        fake_scalar,
+    )
+
+    outputs = _generate_pending_answers(
+        contexts=(context,),  # type: ignore[arg-type]
+        runtime=object(),
+        family_adapter=object(),
+        eos_token_ids=(5,),
+        max_new_tokens=4,
+        decode_mode="cached",
+        arm_batch_size=2,
+    )
+
+    assert tuple(output.token_ids for output in outputs) == ((3,),)
+    assert batched_calls == []
+    assert scalar_calls == [context]
+
+
+@pytest.mark.parametrize("decode_mode", ("cached", "no_cache"))
+def test_pending_arm_batch_falls_back_for_incompatibility_or_no_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    decode_mode: str,
+) -> None:
+    contexts = (object(), object())
+    batched_call_count = 0
+    scalar_calls: list[object] = []
+
+    def fake_batched(**_kwargs: object) -> tuple[OracleGeneratedAnswer, ...]:
+        nonlocal batched_call_count
+        batched_call_count += 1
+        raise OracleBatchCompatibilityError("fixture incompatibility")
+
+    def fake_scalar(**kwargs: object) -> OracleGeneratedAnswer:
+        scalar_calls.append(kwargs["context"])
+        return _generated(4)
+
+    monkeypatch.setattr(
+        evaluation_runner_module,
+        "greedy_oracle_answers_batched",
+        fake_batched,
+    )
+    monkeypatch.setattr(
+        evaluation_runner_module,
+        "greedy_oracle_answer",
+        fake_scalar,
+    )
+
+    outputs = _generate_pending_answers(
+        contexts=contexts,  # type: ignore[arg-type]
+        runtime=object(),
+        family_adapter=object(),
+        eos_token_ids=(5,),
+        max_new_tokens=4,
+        decode_mode=decode_mode,  # type: ignore[arg-type]
+        arm_batch_size=2,
+    )
+
+    assert tuple(output.token_ids for output in outputs) == ((4,), (4,))
+    assert batched_call_count == (1 if decode_mode == "cached" else 0)
+    assert scalar_calls == list(contexts)

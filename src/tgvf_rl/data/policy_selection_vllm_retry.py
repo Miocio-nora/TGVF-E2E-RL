@@ -225,8 +225,21 @@ def _load_validated_evidence(
             manifest_record, output_root=run.output_root, run=run
         )
         evidence_path = run.output_root / manifest.evidence_file
-        for line in evidence_path.read_text(encoding="utf-8").splitlines():
-            evidence = T1RawGenerationEvidence.from_record(json.loads(line))
+        payload = evidence_path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != manifest.evidence_sha256:
+            raise ValueError(
+                "chunk evidence changed after manifest validation: "
+                f"{evidence_path}"
+            )
+        for line_number, line in enumerate(payload.splitlines(), start=1):
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise ValueError(
+                    "invalid evidence JSON after manifest validation at "
+                    f"{evidence_path}:{line_number}"
+                ) from error
+            evidence = T1RawGenerationEvidence.from_record(record)
             evidence.validate_against_run(run)
             located.append((manifest, evidence))
     return tuple(located)

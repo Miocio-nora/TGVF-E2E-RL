@@ -133,6 +133,11 @@ def test_policy_pilot_v1_fixes_only_tgvf_and_exact_optimizer_envelope() -> None:
         PolicyPilotV1Config(tool_profile=NativeToolCapabilityProfile.CROP_ONLY)
     with pytest.raises(ValueError, match="dropout"):
         DecoderLoRAConfig(dropout=0.1)
+    assert DecoderLoRAConfig(initial_learning_rate=1.0e-6).initial_learning_rate == 1.0e-6
+    assert DecoderLoRAConfig(initial_learning_rate=3.0e-6).initial_learning_rate == 3.0e-6
+    assert DecoderLoRAConfig(initial_learning_rate=1.0e-5).initial_learning_rate == 1.0e-5
+    with pytest.raises(ValueError, match="initial_learning_rate"):
+        DecoderLoRAConfig(initial_learning_rate=2.0e-6)
     with pytest.raises(ValueError, match="filter_groups"):
         PilotGRPOConfig(filter_groups=True)
 
