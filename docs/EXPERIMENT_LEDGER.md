@@ -9062,6 +9062,11 @@ than inferred from a script name or prior conversation.
   unrelated post-training repository updates from falsely assigning the old
   training commit to a later evaluation program; dirty evaluator paths remain
   fail-closed.
+- Controller recovery correction: the step-10 smoke and step-2000 resume append
+  to the same metrics JSONL. Revalidation now binds the exact accepted byte
+  prefix and its terminal record, permits only later appends, and still rejects
+  shrinkage or any mutation within that prefix. This removes the false
+  step-2000 transition refusal without weakening artifact identity checks.
 - Output: `artifacts/representation/RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123`.
 
 ### PRL-04-R0-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU4567

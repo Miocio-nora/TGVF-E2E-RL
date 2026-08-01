@@ -99,6 +99,30 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _sha256_file_prefix(path: Path, size: int) -> str:
+    """Hash exactly ``size`` leading bytes, refusing a truncated artifact."""
+
+    stat = _regular_file(path, label="JSONL artifact")
+    if stat.st_size < size:
+        raise PredicateFailed(
+            f"JSONL artifact {path} shrank below its accepted prefix size "
+            f"{size}: current size is {stat.st_size}"
+        )
+    digest = sha256()
+    remaining = size
+    with path.open("rb") as handle:
+        while remaining:
+            block = handle.read(min(1024 * 1024, remaining))
+            if not block:
+                raise PredicateFailed(
+                    f"JSONL artifact {path} was truncated while reading its "
+                    f"accepted {size}-byte prefix"
+                )
+            digest.update(block)
+            remaining -= len(block)
+    return digest.hexdigest()
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
@@ -403,9 +427,14 @@ def _regular_file(path: Path, *, label: str) -> os.stat_result:
     return path.stat()
 
 
-def _last_nonempty_line(path: Path) -> bytes:
-    _regular_file(path, label="JSONL artifact")
-    size = path.stat().st_size
+def _last_nonempty_line(path: Path, *, prefix_size: int | None = None) -> bytes:
+    stat = _regular_file(path, label="JSONL artifact")
+    size = stat.st_size if prefix_size is None else prefix_size
+    if size > stat.st_size:
+        raise PredicateFailed(
+            f"JSONL artifact {path} shrank below its accepted prefix size "
+            f"{size}: current size is {stat.st_size}"
+        )
     if size == 0:
         raise PredicateFailed(f"JSONL artifact is empty: {path}")
     with path.open("rb") as handle:
@@ -424,7 +453,9 @@ def _last_nonempty_line(path: Path) -> bytes:
         raise PredicateFailed(f"JSONL artifact has no non-empty records: {path}")
 
 
-def evaluate_predicate(predicate: Mapping[str, Any]) -> dict[str, Any]:
+def evaluate_predicate(
+    predicate: Mapping[str, Any], *, jsonl_prefix_size: int | None = None
+) -> dict[str, Any]:
     """Evaluate one normalized artifact predicate and return its observation."""
 
     kind = str(predicate["type"])
@@ -480,7 +511,8 @@ def evaluate_predicate(predicate: Mapping[str, Any]) -> dict[str, Any]:
         }
     if kind != "jsonl_last_step":
         raise ConfigError(f"unknown normalized predicate type: {kind}")
-    line = _last_nonempty_line(path)
+    observed_size = stat.st_size if jsonl_prefix_size is None else jsonl_prefix_size
+    line = _last_nonempty_line(path, prefix_size=observed_size)
     try:
         record = json.loads(line)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -500,14 +532,43 @@ def evaluate_predicate(predicate: Mapping[str, Any]) -> dict[str, Any]:
         "path": str(path),
         "field": predicate["field"],
         "actual": actual,
-        "size": stat.st_size,
-        "sha256": _sha256_file(path),
+        "size": observed_size,
+        "sha256": (
+            _sha256_file(path)
+            if jsonl_prefix_size is None
+            else _sha256_file_prefix(path, observed_size)
+        ),
         "last_record_sha256": _sha256_bytes(line),
     }
 
 
 def evaluate_acceptance(predicates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [evaluate_predicate(predicate) for predicate in predicates]
+
+
+def revalidate_accepted_artifacts(
+    predicates: Sequence[Mapping[str, Any]], accepted: Sequence[object]
+) -> list[dict[str, Any]]:
+    """Re-observe accepted JSONL byte prefixes while permitting later appends."""
+
+    if len(predicates) != len(accepted):
+        raise PredicateFailed("accepted artifact count changed")
+    observations: list[dict[str, Any]] = []
+    for index, (predicate, recorded) in enumerate(zip(predicates, accepted, strict=True)):
+        if predicate["type"] != "jsonl_last_step":
+            observations.append(evaluate_predicate(predicate))
+            continue
+        if not isinstance(recorded, Mapping):
+            raise PredicateFailed(f"accepted JSONL artifact {index} metadata is invalid")
+        prefix_size = recorded.get("size")
+        if isinstance(prefix_size, bool) or not isinstance(prefix_size, int) or prefix_size < 0:
+            raise PredicateFailed(
+                f"accepted JSONL artifact {index} prefix size is invalid: {prefix_size!r}"
+            )
+        observations.append(
+            evaluate_predicate(predicate, jsonl_prefix_size=prefix_size)
+        )
+    return observations
 
 
 def _boot_id() -> str:
@@ -733,14 +794,20 @@ class PipelineRunner:
             if stage_state["status"] == "accepted":
                 if seen_unaccepted:
                     raise PipelineBlockedError("state contains a non-prefix accepted stage")
+                recorded = stage_state.get("accepted_artifacts")
+                if not isinstance(recorded, list):
+                    raise PipelineBlockedError(
+                        f"accepted stage {stage_id} artifact identity changed since acceptance"
+                    )
                 try:
-                    observations = evaluate_acceptance(stage["acceptance"])
+                    observations = revalidate_accepted_artifacts(
+                        stage["acceptance"], recorded
+                    )
                 except PredicateFailed as error:
                     raise PipelineBlockedError(
                         f"accepted stage {stage_id} no longer satisfies acceptance: {error}"
                     ) from error
-                recorded = stage_state.get("accepted_artifacts")
-                if not isinstance(recorded, list) or not _json_equal(recorded, observations):
+                if not _json_equal(recorded, observations):
                     raise PipelineBlockedError(
                         f"accepted stage {stage_id} artifact identity changed since acceptance"
                     )
@@ -1005,15 +1072,18 @@ class PipelineRunner:
             if self.state["stages"][stage_id]["status"] != "accepted":
                 accepted_valid[stage_id] = False
                 continue
+            recorded = self.state["stages"][stage_id].get("accepted_artifacts")
+            if not isinstance(recorded, list):
+                accepted_valid[stage_id] = False
+                continue
             try:
-                observations = evaluate_acceptance(stage["acceptance"])
+                observations = revalidate_accepted_artifacts(
+                    stage["acceptance"], recorded
+                )
             except PredicateFailed:
                 accepted_valid[stage_id] = False
             else:
-                accepted_valid[stage_id] = _json_equal(
-                    observations,
-                    self.state["stages"][stage_id].get("accepted_artifacts"),
-                )
+                accepted_valid[stage_id] = _json_equal(observations, recorded)
         return {
             "pipeline_id": self.config["pipeline_id"],
             "state_path": str(self.state_path),

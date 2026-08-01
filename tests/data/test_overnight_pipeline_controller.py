@@ -69,6 +69,13 @@ elif mode == "jsonl_2000":
 elif mode == "jsonl_1":
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(json.dumps({"global_step": 1}) + "\n")
+elif mode == "jsonl_0_1":
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(json.dumps({"global_step": 0}) + "\n" + json.dumps({"global_step": 1}) + "\n")
+elif mode == "jsonl_append_2000":
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    with artifact_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"event": "complete", "global_step": 2000}) + "\n")
 elif mode == "jsonl_80":
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(json.dumps({"global_step": 40}) + "\n" + json.dumps({"global_step": 80}) + "\n")
@@ -204,6 +211,35 @@ def _loaded(root: Path) -> tuple[dict[str, object], Path, list[dict[str, object]
     return config, config_path, stages
 
 
+def _share_append_only_stage1_metrics(
+    root: Path, stages: list[dict[str, object]], *, smoke_mode: str = "jsonl_1"
+) -> Path:
+    metrics = root / "artifacts" / "shared-stage1-metrics.jsonl"
+    smoke = stages[2]
+    smoke["command"]["argv"][3] = smoke_mode  # type: ignore[index]
+    smoke["command"]["argv"][4] = str(metrics)  # type: ignore[index]
+    smoke["acceptance"] = [
+        {
+            "type": "jsonl_last_step",
+            "path": str(metrics),
+            "field": "global_step",
+            "equals": 1,
+        }
+    ]
+    resume = stages[3]
+    resume["command"]["argv"][3] = "jsonl_append_2000"  # type: ignore[index]
+    resume["command"]["argv"][4] = str(metrics)  # type: ignore[index]
+    resume["acceptance"] = [
+        {
+            "type": "jsonl_last_step",
+            "path": str(metrics),
+            "field": "global_step",
+            "equals": 2000,
+        }
+    ]
+    return metrics
+
+
 def test_success_records_all_predicate_types_and_repeat_only_revalidates(tmp_path: Path) -> None:
     config, config_path, _stages = _loaded(tmp_path)
     result = pipeline.PipelineRunner(config).run()
@@ -233,6 +269,48 @@ def test_success_records_all_predicate_types_and_repeat_only_revalidates(tmp_pat
     assert (tmp_path / "trace.txt").read_text().splitlines() == list(
         pipeline.REQUIRED_STAGE_IDS
     )
+
+
+def test_accepted_jsonl_prefix_survives_downstream_append(tmp_path: Path) -> None:
+    _config, _path, stages = _loaded(tmp_path)
+    metrics = _share_append_only_stage1_metrics(tmp_path, stages)
+    config_path = _write_config(tmp_path, stages)
+    config, _ = pipeline.load_config(config_path)
+
+    result = pipeline.PipelineRunner(config).run()
+
+    assert result["status"] == "complete"
+    smoke_artifact = result["stages"]["stage1_smoke"]["accepted_artifacts"][0]
+    assert smoke_artifact["size"] < metrics.stat().st_size
+    status = pipeline.PipelineRunner(config).status()
+    assert status["accepted_artifacts_valid"]["stage1_smoke"] is True
+    second = pipeline.PipelineRunner(config).run()
+    assert second["status"] == "complete"
+    assert (tmp_path / "trace.txt").read_text().splitlines() == list(
+        pipeline.REQUIRED_STAGE_IDS
+    )
+
+
+def test_accepted_jsonl_prefix_tamper_is_rejected_after_append(tmp_path: Path) -> None:
+    _config, _path, stages = _loaded(tmp_path)
+    metrics = _share_append_only_stage1_metrics(
+        tmp_path, stages, smoke_mode="jsonl_0_1"
+    )
+    config_path = _write_config(tmp_path, stages)
+    config, _ = pipeline.load_config(config_path)
+    pipeline.PipelineRunner(config).run()
+    trace_before = (tmp_path / "trace.txt").read_text()
+
+    original = metrics.read_bytes()
+    tampered = original.replace(b'{"global_step": 0}', b'{"global_step":0 }', 1)
+    assert len(tampered) == len(original)
+    metrics.write_bytes(tampered)
+
+    status = pipeline.PipelineRunner(config).status()
+    assert status["accepted_artifacts_valid"]["stage1_smoke"] is False
+    with pytest.raises(pipeline.PipelineBlockedError, match="identity changed"):
+        pipeline.PipelineRunner(config).run()
+    assert (tmp_path / "trace.txt").read_text() == trace_before
 
 
 def test_stage_order_is_fixed_so_validation_cannot_precede_training(tmp_path: Path) -> None:
