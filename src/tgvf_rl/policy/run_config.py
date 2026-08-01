@@ -1690,9 +1690,9 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
     world_size = _positive_int(table["world_size"], name="distributed.world_size")
     if logical != tuple(range(len(logical))) or len(physical) != len(logical):
         raise ValueError("distributed physical/logical GPU mapping is invalid")
-    if logical != (0, 1, 2, 3):
+    if physical != (0, 1, 2, 3) or logical != (0, 1, 2, 3):
         raise ValueError(
-            "this Policy E2E smoke identity requires logical GPUs 0-3"
+            "this Policy E2E smoke identity requires physical/logical GPUs 0-3"
         )
     if actor != logical or world_size != len(actor):
         raise ValueError(

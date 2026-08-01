@@ -982,27 +982,6 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert not config.output.root.exists()
 
 
-def test_policy_plan_accepts_an_alternate_four_gpu_physical_binding(
-    tmp_path: Path,
-) -> None:
-    path, text, _ = _write_config(tmp_path)
-    path.write_text(
-        text.replace(
-            "physical_gpu_ids = [0, 1, 2, 3]",
-            "physical_gpu_ids = [4, 5, 6, 7]",
-        ),
-        encoding="utf-8",
-    )
-
-    config = load_policy_e2e_smoke_run_config(path)
-    plan = build_policy_e2e_smoke_verl_plan(config)
-
-    assert config.distributed.physical_gpu_ids == (4, 5, 6, 7)
-    assert config.distributed.logical_gpu_ids == (0, 1, 2, 3)
-    assert plan.environment["CUDA_VISIBLE_DEVICES"] == "4,5,6,7"
-    plan.assert_launch_ready()
-
-
 @pytest.mark.parametrize("learning_rate", (1.0e-6, 3.0e-6, 1.0e-5))
 def test_accepts_the_bounded_policy_learning_rate_gate(
     tmp_path: Path, learning_rate: float
