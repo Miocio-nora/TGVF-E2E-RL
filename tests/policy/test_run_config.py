@@ -87,6 +87,15 @@ def _canonical(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def test_answer_verifier_contracts_bind_terminal_mcq_decision_v2() -> None:
+    assert POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256 == (
+        "cbe766241c737b8f0e5edc83ac9fc867aa51c2590205a46d6ffae2c5e512ceb5"
+    )
+    assert POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256 == (
+        "2d7b4da3add10fd6ca8f45aa146731634163a1b39bb4e7952a74b8e649248b97"
+    )
+
+
 def _prepare_external_inputs(root: Path) -> dict[str, object]:
     dataset_root = root / "deepeyes"
     dataset_root.mkdir()

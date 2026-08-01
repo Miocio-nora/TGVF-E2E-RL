@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the fixed Stage1/validation/Crop overnight chain fail-closed.
+"""Run an exact accepted overnight pipeline sequence fail-closed.
 
 The controller is deliberately ignorant of training implementation details.  A
 JSON plan declares one argv-only command and one or more durable artifact
@@ -7,8 +7,8 @@ predicates for each required stage.  A stage is accepted only after its command
 returns zero *and* every predicate passes.  The next command is never started
 until the complete accepted prefix has been revalidated.
 
-The required order first proves the Crop runtime, then trains and evaluates the
-new Stage1 structure, and only then promotes the Crop pilot::
+The original sequence first proves the Crop runtime, then trains and evaluates
+the new Stage1 structure, and only then promotes the Crop pilot::
 
     crop_rl_smoke_1step
     crop_rl_auto_resume_proof
@@ -16,6 +16,14 @@ new Stage1 structure, and only then promotes the Crop pilot::
     stage1_resume_2000
     int_diag
     acc_val
+    crop_rl_80step
+
+After Stage1 and its evaluations are complete, a reward-fix recovery may use
+the shorter exact sequence without pretending to rerun those completed stages::
+
+    crop_rl_smoke_1step
+    crop_rl_mcq_terminal_reward_gate
+    crop_rl_auto_resume_proof
     crop_rl_80step
 
 State is bound to the exact config bytes and atomically replaced.  Re-running
@@ -53,6 +61,13 @@ REQUIRED_STAGE_IDS = (
     "acc_val",
     "crop_rl_80step",
 )
+CROP_REWARD_FIX_STAGE_IDS = (
+    "crop_rl_smoke_1step",
+    "crop_rl_mcq_terminal_reward_gate",
+    "crop_rl_auto_resume_proof",
+    "crop_rl_80step",
+)
+ALLOWED_STAGE_ID_SEQUENCES = (REQUIRED_STAGE_IDS, CROP_REWARD_FIX_STAGE_IDS)
 PREDICATE_TYPES = frozenset({"exists", "json_field", "jsonl_last_step"})
 MAX_EXPLICIT_RETRIES = 5
 
@@ -380,10 +395,14 @@ def load_config(path: Path) -> tuple[dict[str, Any], bytes]:
                 "retry": _validate_retry(stage.get("retry"), stage_location=location),
             }
         )
-    if tuple(observed_ids) != REQUIRED_STAGE_IDS:
+    observed_sequence = tuple(observed_ids)
+    if observed_sequence not in ALLOWED_STAGE_ID_SEQUENCES:
+        choices = " or ".join(
+            "[" + ", ".join(sequence) + "]"
+            for sequence in ALLOWED_STAGE_ID_SEQUENCES
+        )
         raise ConfigError(
-            "config.stages must contain the exact fail-closed order: "
-            + ", ".join(REQUIRED_STAGE_IDS)
+            "config.stages must contain one exact fail-closed order: " + choices
         )
     return (
         {
@@ -392,6 +411,7 @@ def load_config(path: Path) -> tuple[dict[str, Any], bytes]:
             "runtime_root": str(runtime_root),
             "config_path": str(config_path),
             "config_sha256": _sha256_bytes(payload),
+            "stage_ids": observed_sequence,
             "stages": stages,
         },
         payload,
@@ -643,10 +663,11 @@ def _load_state(path: Path, config: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("pipeline_id", "config_path", "config_sha256"):
         if state.get(key) != config.get(key):
             raise PipelineBlockedError(f"state {key} does not match the exact config")
+    expected_stage_ids = tuple(config["stage_ids"])
     stages = state.get("stages")
-    if not isinstance(stages, dict) or set(stages) != set(REQUIRED_STAGE_IDS):
+    if not isinstance(stages, dict) or set(stages) != set(expected_stage_ids):
         raise PipelineBlockedError("state stage set/order is incompatible")
-    for stage_id in REQUIRED_STAGE_IDS:
+    for stage_id in expected_stage_ids:
         stage_state = stages.get(stage_id)
         if not isinstance(stage_state, dict) or stage_state.get("status") not in {
             "pending",
@@ -786,7 +807,7 @@ class PipelineRunner:
         self._event("stale_running_stage_recovered", stage_id=stage_id)
 
     def _revalidate_accepted_prefix(self) -> int:
-        first_unaccepted = len(REQUIRED_STAGE_IDS)
+        first_unaccepted = len(self.config["stage_ids"])
         seen_unaccepted = False
         for index, stage in enumerate(self.config["stages"]):
             stage_id = stage["id"]
@@ -832,7 +853,10 @@ class PipelineRunner:
         stage_state = self.state["stages"][stage_id]
         ordinal = len(stage_state["attempts"]) + 1
         command = stage["command"]
-        log_path = self.logs_root / f"{REQUIRED_STAGE_IDS.index(stage_id) + 1:02d}-{stage_id}.attempt-{ordinal}.log"
+        stage_ids = tuple(self.config["stage_ids"])
+        log_path = self.logs_root / (
+            f"{stage_ids.index(stage_id) + 1:02d}-{stage_id}.attempt-{ordinal}.log"
+        )
         log_path.parent.mkdir(parents=True, exist_ok=True)
         started_at = _utc_now()
         attempt: dict[str, Any] = {
@@ -1000,7 +1024,7 @@ class PipelineRunner:
             try:
                 self._recover_stale_running_record()
                 start_index = self._revalidate_accepted_prefix()
-                if start_index == len(REQUIRED_STAGE_IDS):
+                if start_index == len(self.config["stage_ids"]):
                     self.state["status"] = "complete"
                     self.state["completed_at"] = self.state.get("completed_at", _utc_now())
                     self._save()

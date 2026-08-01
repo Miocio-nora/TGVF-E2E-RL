@@ -222,6 +222,68 @@ def test_mcq_parser_requires_a_canonical_or_explicit_decision(
     assert judge.calls == 0
 
 
+@pytest.mark.parametrize(
+    "candidate",
+    (
+        "A long visual analysis precedes the decision.\n\nB<|im_end|>",
+        "A long visual analysis precedes the decision.\n\nB.\n<|im_end|>",
+        "A long visual analysis precedes the decision.\n\nB. option text<|im_end|>",
+        "A long visual analysis precedes the decision.\n\n**B**<|im_end|>",
+        "A long visual analysis precedes the decision.\n\n`B.` option text<|endoftext|>",
+        "The answer is A in the initial hypothesis.\nThat hypothesis is contradicted.\nB.",
+    ),
+)
+def test_mcq_parser_accepts_decision_at_start_of_final_nonempty_line(
+    candidate: str,
+) -> None:
+    verifier, judge = _rule_first_verifier()
+
+    result = verifier.verify(
+        RewardContext(
+            "mcq",
+            "choose",
+            candidate,
+            "B",
+            0,
+            task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+        )
+    )
+
+    assert result.correct
+    assert result.evidence == "candidate=B; expected=B"
+    assert judge.calls == 0
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    (
+        "B. is an intermediate branch.\nThe evidence remains inconclusive.",
+        "The diagram labels one branch B.\nNo final choice was made.",
+        "The reasoning compares A and B.\nBased on the evidence, it is inconclusive.",
+        "The reasoning is incomplete.\nA possible interpretation remains.",
+    ),
+)
+def test_mcq_parser_does_not_take_arbitrary_reasoning_letters_as_decisions(
+    candidate: str,
+) -> None:
+    verifier, judge = _rule_first_verifier()
+
+    result = verifier.verify(
+        RewardContext(
+            "mcq",
+            "choose",
+            candidate,
+            "B",
+            0,
+            task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+        )
+    )
+
+    assert not result.correct
+    assert result.evidence == "letter_parse_failed; normalized_exact=False"
+    assert judge.calls == 0
+
+
 def test_open_vqa_and_undecidable_math_use_bound_72b_judge() -> None:
     usage = JudgeUsage(201, 17, 218, 0.00007916)
     verifier, judge = _rule_first_verifier(

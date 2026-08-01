@@ -271,6 +271,73 @@ def test_success_records_all_predicate_types_and_repeat_only_revalidates(tmp_pat
     )
 
 
+def _reward_fix_stage_specs(root: Path, worker: Path) -> list[dict[str, object]]:
+    original = _stage_specs(root, worker)
+    stages = [original[index] for index in (0, 1, 4, 6)]
+    for stage, stage_id in zip(
+        stages, pipeline.CROP_REWARD_FIX_STAGE_IDS, strict=True
+    ):
+        stage["id"] = stage_id
+        stage["command"]["argv"][2] = stage_id  # type: ignore[index]
+    return stages
+
+
+def test_reward_fix_sequence_runs_without_completed_stage1_placeholders(
+    tmp_path: Path,
+) -> None:
+    worker = _write_worker(tmp_path)
+    stages = _reward_fix_stage_specs(tmp_path, worker)
+    config_path = _write_config(tmp_path, stages)
+    config, _ = pipeline.load_config(config_path)
+
+    result = pipeline.PipelineRunner(config).run()
+
+    assert result["status"] == "complete"
+    assert (tmp_path / "trace.txt").read_text().splitlines() == list(
+        pipeline.CROP_REWARD_FIX_STAGE_IDS
+    )
+    assert set(result["stages"]) == set(pipeline.CROP_REWARD_FIX_STAGE_IDS)
+    logs = sorted((tmp_path / "runtime" / "logs").glob("*.log"))
+    assert len(logs) == len(pipeline.CROP_REWARD_FIX_STAGE_IDS)
+    assert logs[1].name.startswith("02-crop_rl_mcq_terminal_reward_gate")
+
+    second = pipeline.PipelineRunner(config).run()
+    assert second["status"] == "complete"
+    assert (tmp_path / "trace.txt").read_text().splitlines() == list(
+        pipeline.CROP_REWARD_FIX_STAGE_IDS
+    )
+
+
+def test_reward_fix_gate_failure_never_starts_resume_or_formal(
+    tmp_path: Path,
+) -> None:
+    worker = _write_worker(tmp_path)
+    stages = _reward_fix_stage_specs(tmp_path, worker)
+    stages[1]["command"]["argv"][3] = "fail"  # type: ignore[index]
+    config_path = _write_config(tmp_path, stages)
+    config, _ = pipeline.load_config(config_path)
+
+    with pytest.raises(pipeline.StageFailed, match="mcq_terminal_reward_gate"):
+        pipeline.PipelineRunner(config).run()
+
+    assert (tmp_path / "trace.txt").read_text().splitlines() == list(
+        pipeline.CROP_REWARD_FIX_STAGE_IDS[:2]
+    )
+    state = json.loads((tmp_path / "runtime" / "state.json").read_text())
+    assert state["stages"]["crop_rl_auto_resume_proof"]["status"] == "pending"
+    assert state["stages"]["crop_rl_80step"]["status"] == "pending"
+
+
+def test_reward_fix_gate_and_resume_order_is_exact(tmp_path: Path) -> None:
+    worker = _write_worker(tmp_path)
+    stages = _reward_fix_stage_specs(tmp_path, worker)
+    stages[1], stages[2] = stages[2], stages[1]
+    config_path = _write_config(tmp_path, stages)
+
+    with pytest.raises(pipeline.ConfigError, match="exact fail-closed order"):
+        pipeline.load_config(config_path)
+
+
 def test_accepted_jsonl_prefix_survives_downstream_append(tmp_path: Path) -> None:
     _config, _path, stages = _loaded(tmp_path)
     metrics = _share_append_only_stage1_metrics(tmp_path, stages)

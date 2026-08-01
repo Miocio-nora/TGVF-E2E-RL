@@ -142,31 +142,46 @@ POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256 = _fixed_contract_sha256(
         "seed_projection": "first-8-big-endian-mod-(2**31-1)",
     }
 )
+
+_POLICY_E2E_MCQ_CANDIDATE_CONTRACT_V2 = {
+    "schema": "terminal-mcq-decision-v2",
+    "decision_order": (
+        "final-nonempty-line-canonical-A-through-H",
+        "last-explicit-answer-option-choice-range-marker",
+    ),
+    "candidate_preprocessing": (
+        "strip-qwen-im-end-or-endoftext-suffix",
+        "unwrap-whole-answer-tag-or-latex-boxed",
+        "strip-qwen-im-end-or-endoftext-suffix",
+        "strip-markdown-emphasis",
+    ),
+    "canonical_final_line": (
+        "parenthesized-or-bracketed-A-through-H",
+        "A-through-H-followed-by-period-or-colon-and-optional-text",
+        "bare-A-through-H-only",
+    ),
+    "explicit_marker_scope": "entire-candidate",
+    "arbitrary_prose": (
+        "unresolved-without-final-line-canonical-letter-or-explicit-marker"
+    ),
+    "expected": "same-deterministic-parser",
+    "fallback_when_unparsed": "strip-casefold-collapse-whitespace-exact",
+    "judge": "disabled",
+}
+
 POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
     {
-        "schema": "policy-e2e-smoke-mcq-verifier-v2",
+        "schema": "policy-e2e-smoke-mcq-verifier-v3",
         "task": POLICY_E2E_SMOKE_REWARD_TASK,
         "route": "multiple_choice_rule",
-        "candidate": (
-            "canonical-A-through-H-or-last-explicit-answer-option-choice-range-marker"
-        ),
-        "wrappers": (
-            "answer-tag",
-            "latex-boxed",
-            "markdown-emphasis",
-            "qwen-im-end-suffix",
-        ),
-        "forbidden": "arbitrary-prose-leading-letter",
-        "expected": "same-deterministic-parser",
-        "fallback_when_unparsed": "strip-casefold-collapse-whitespace-exact",
-        "judge": "disabled",
+        "mcq": _POLICY_E2E_MCQ_CANDIDATE_CONTRACT_V2,
     }
 )
 POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
     {
-        "schema": "policy-e2e-mixed-answer-verifier-v1",
+        "schema": "policy-e2e-mixed-answer-verifier-v2",
         "routes": {
-            "mcq": "deterministic_rule_only",
+            "mcq": _POLICY_E2E_MCQ_CANDIDATE_CONTRACT_V2,
             "math": "normalized_exact_then_numeric_then_qwen25_72b",
             "open_vqa": "normalized_exact_then_qwen25_72b",
         },

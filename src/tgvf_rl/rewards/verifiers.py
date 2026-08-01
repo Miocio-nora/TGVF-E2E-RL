@@ -37,7 +37,7 @@ _MCQ_NAMED_OPTION = re.compile(
     re.IGNORECASE,
 )
 _MCQ_MARKDOWN = re.compile(r"[*_`]")
-_QWEN_TERMINAL_TEXT = re.compile(r"(?:<\|im_end\|>\s*)+$")
+_QWEN_TERMINAL_TEXT = re.compile(r"(?:(?:<\|im_end\|>|<\|endoftext\|>)\s*)+$")
 _LATEX_FRACTION = re.compile(
     r"^\s*\\frac\s*\{\s*([-+]?\d+)\s*\}\s*\{\s*([-+]?\d+)\s*\}\s*$"
 )
@@ -171,7 +171,14 @@ def _multiple_choice_letter(text: str) -> str | None:
     value = _QWEN_TERMINAL_TEXT.sub("", value).strip()
     value = _MCQ_MARKDOWN.sub("", value)
 
-    canonical = _MCQ_CANONICAL_LETTER.match(value)
+    # A bare choice is decisive only when it starts the final non-empty line.
+    # Looking at the entire response would mistake an option-like line in the
+    # reasoning prefix for the model's final decision.
+    decision_line = next(
+        (line.strip() for line in reversed(value.splitlines()) if line.strip()),
+        "",
+    )
+    canonical = _MCQ_CANONICAL_LETTER.match(decision_line)
     if canonical is not None:
         return next(group.upper() for group in canonical.groups() if group is not None)
 
