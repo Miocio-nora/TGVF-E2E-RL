@@ -38,13 +38,14 @@ from .policy_selection_vllm_retry import (
 
 
 T1_EFFECTIVE_GENERATION_SCHEMA = "tgvf.policy-selection.t1-effective-generation.v1"
-T1_SEMANTIC_JUDGE_REQUEST_SCHEMA = (
-    "tgvf.policy-selection.t1-semantic-judge-request.v1"
-)
+T1_SEMANTIC_JUDGE_REQUEST_SCHEMA = "tgvf.policy-selection.t1-semantic-judge-request.v1"
 T1_DETERMINISTIC_SCORING_MANIFEST_SCHEMA = (
     "tgvf.policy-selection.t1-deterministic-scoring-manifest.v2"
 )
 T1_SCORING_DIRECTORY = Path("scoring") / "deterministic-v2"
+T1_UNRETRIED_LENGTH_WAIVER_RUN_IDS = frozenset(
+    {"T1-04-QWEN3-INSTRUCT-512-FULLIMAGE-271842-GPU0123"}
+)
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -141,8 +142,16 @@ def _effective_generations(
         terminal_revision = revisions[-1]
         manifest, evidence = history[terminal_revision]
         if evidence.finish_reason == "length":
-            if terminal_revision < maximum_revision:
-                raise ValueError("a length finish still requires a response-budget retry")
+            if (
+                terminal_revision < maximum_revision
+                and run.run_id not in T1_UNRETRIED_LENGTH_WAIVER_RUN_IDS
+            ):
+                raise ValueError(
+                    "a length finish still requires a response-budget retry"
+                )
+            # T1-04 explicitly waives its 194 revision-0 length retries.  They
+            # remain truncated/unscoreable, so the reducer rejects only the 161
+            # affected candidates rather than blocking all 271,842 candidates.
             budget_exhausted = True
         else:
             budget_exhausted = False
@@ -205,9 +214,7 @@ def _judge_queue(
         if not isinstance(candidate.ground_truth, str):
             raise ValueError("semantic judge reference answer must be a string")
         task_kind = (
-            "math"
-            if candidate.source is SelectionSource.THINKLITE
-            else "open_vqa"
+            "math" if candidate.source is SelectionSource.THINKLITE else "open_vqa"
         )
         payload = {
             "task_kind": task_kind,
@@ -328,7 +335,9 @@ def materialize_t1_deterministic_scoring(
             answer_parser=str(run.verifier["answer_parser"]),
         )
         if attempt is None:
-            raise ValueError("effective T1 evidence unexpectedly requests another retry")
+            raise ValueError(
+                "effective T1 evidence unexpectedly requests another retry"
+            )
         exclusion = quality_exclusions.get(candidate.identity_sha256)
         if exclusion is not None:
             attempt = {

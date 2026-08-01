@@ -9019,7 +9019,10 @@ than inferred from a script name or prior conversation.
 ### RP-68-QWEN3-INSTRUCT-REP-BALANCED-T1-VISION-ROUTING-2000-GPU0123
 
 - Cell/class and lifecycle: isolated representation-structure experiment;
-  `PLANNED_SMOKE_PENDING` as of `2026-08-02`. It changes only the Adapter
+  `RUNNING_STRICT_RESUME` as of `2026-08-02 02:51 JST`. The step-10 smoke and
+  four-rank DCP passed, and the strict resume continued from step 10 rather
+  than step 0; the live run had reached step 1460/2000 with finite metrics. It
+  changes only the Adapter
   information route relative to RP-66 and does not change data, objective,
   optimizer, schedule, initialization, parameter shapes, or total Adapter
   capacity.
@@ -9089,7 +9092,8 @@ than inferred from a script name or prior conversation.
 ### PRL-04-R0R1-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU0123
 
 - Cell/class and lifecycle: corrected non-formal engineering smoke;
-  `PLANNED_SMOKE_PENDING`. It preserves every R0 scientific field and changes
+  `COMPLETED_PASS` at `2026-08-02 00:46 JST`. It preserves every R0 scientific
+  field and changes
   only the physical device binding to the already validated veRL ordinal
   contract 0--3 plus a fresh run/output identity.
 - Model/tool/data and RL identity: Qwen3-VL-8B-Instruct; Crop-only
@@ -9107,23 +9111,61 @@ than inferred from a script name or prior conversation.
 - Fail-closed controller: `RP68-CROP-RL-FAIL-CLOSED-R1-20260802`, config
   SHA-256 `7e0e128a2bda7fdef7b52e327d04f1ce05b3995263c7a73090a67aad930ad712`;
   it has zero automatic retries and cannot promote past a failed artifact gate.
+- Result: one real end-to-end optimizer step completed in 272.258 seconds with
+  16 prompts, 128 trajectories and 36,909 generated policy tokens. The
+  `global_step_1` checkpoint is durable. A second identical invocation loaded
+  model, optimizer, RNG and scheduler state from that checkpoint and proved no
+  step 2 was created; the checkpoint-tree SHA-256 is
+  `7e14c9491f20b6cdb6526fb3d9f726a4c2b14d8811848409b6ec7452bb95f424`.
 
-### T1-04-LENGTH-RETRY-R1-GPU4567
+### T1-04-REV0-LENGTH-WAIVER-AND-ARXIVQA-MATERIALIZATION
 
-- Cell/class and lifecycle: deterministic completion repair;
-  `PLANNED_PENDING_CROP_SMOKE`. The first strict scorer correctly refused to
-  publish because 194 logical attempts ended at revision 0 with
-  `finish_reason=length` and therefore require response-budget revision 1.
-- Exact pending set: rank counts `55/47/31/61`; source counts ArxivQA `32`,
-  ThinkLite `113`, V* `49`; 160 original immutable chunks; no revision-1
-  evidence exists. Revision-0 evidence is retained unchanged.
-- Execution: logical ranks 0--3 map explicitly to physical GPUs 4--7. Each
-  worker receives the exact pre-audited request-ID list for its rank and may
-  publish only its content-addressed revision-1 manifests plus prefix-audit
-  sidecars. Planning is rank-scoped, and a physical/logical mapping mismatch
-  fails before engine construction.
-- Code identity: rank-scoping and explicit physical mapping are implemented by
-  `06c8c47a8338921a17991551e40f71563da2002c`; focused retry tests pass 20/20.
-- PASS gate: all 194 request histories contain a strictly prefix-audited
-  revision 1; the deterministic scorer then publishes atomically, and only a
-  hash-verified retained ArxivQA materialization may bind PRL-04-R1.
+- Cell/class and lifecycle: deterministic scoring policy adjustment;
+  `COMPLETED_PASS` at `2026-08-02 02:51 JST`. The planned revision-1 GPU retry
+  was cancelled before any GPU worker or revision-1 manifest launched. The 194
+  revision-0 `finish_reason=length` attempts are 0.0089206% of 2,174,736
+  logical attempts, so this exact T1-04 run treats them as terminal truncated,
+  unscoreable evidence rather than regenerating them.
+- Scope and effect: the waiver is bound only to run
+  `T1-04-QWEN3-INSTRUCT-512-FULLIMAGE-271842-GPU0123`; unrelated future T1
+  runs remain strict. The 194 attempts cover 161 candidates (0.0592256%): 31
+  ArxivQA, 84 ThinkLite and 46 V*. Truncated attempts remain `correct=null`,
+  never enter the semantic judge, and make only their affected candidate
+  unresolved. Existing later-budget evidence, if present, still supersedes the
+  revision-0 length result.
+- Deterministic result: all 2,174,736 effective generations and attempts were
+  validated and published. Status counts are scored `360569`, truncated `194`,
+  and verifier-error/semantic-required `1813973`. Decision counts are retain
+  `25393`, exclude-too-easy `5177`, exclude-too-hard `4367`, unresolved
+  `236905`. ArxivQA requires zero semantic-judge calls; its 25,393 retained
+  candidates are sufficient for the Crop pilot. The deterministic scoring
+  manifest SHA-256 is
+  `f307838c26e67fb5a162baf56d4e102f38c7e47856913c9dd414386e8917f309`.
+- Materialized dataset: output
+  `artifacts/data/policy_rl/T1-04-INSTRUCT-FULL-ARXIVQA-RETAINED-PROVISIONAL-PILOT-v1`
+  contains exactly 25,393 rows with samples SHA-256
+  `93b9886830903114df5bfadc8cc8911be627868a3a1b408bf5b7a77f1f4fd2e0`,
+  content SHA-256
+  `957a3de6e9f3e8e7bba39711e8c1fd0dcd08e9985390ffc7bbc46a6d0ab51147`,
+  and manifest-file SHA-256
+  `c8c217f16b8ddad58f06a7f71c3b97a2a1536a898b4237e983ffd746fea9e4e0`.
+- Verification: focused scoring/reducer/runtime coverage passes 40 tests plus
+  Ruff/format/diff checks. The full scorer and materializer chain exited zero;
+  no revision-1/revision-2 writer remains live.
+
+### PRL-04-R1-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1FULL-80STEP-GPU0123
+
+- Cell/class and lifecycle: formal Crop RL pilot; `PREFLIGHT_PENDING` as of
+  `2026-08-02 02:51 JST`. It promotes the passed one-step smoke without changing
+  model, Crop protocol, reward weights, optimizer, batch topology or capacity.
+- Identity: Qwen3-VL-8B-Instruct, Crop-only, T1-04 retained 25,393-row ArxivQA
+  dataset, BS16, eight trajectories per prompt, world size 4 on GPUs 0--3,
+  gradient accumulation 4, AdamW LR `1e-6`, cosine 80-step schedule.
+- Cadence: no validation before training; checkpoints at steps
+  `0/10/20/45/80`, five retained actor checkpoints, console + W&B logging,
+  `resume_mode=auto`. The OpenRouter Qwen2.5-72B formal-pilot judge config is
+  hash-bound to
+  `81943918f09a7f99ec96b5c79fbc830fdea8e8376350f8de32ed87619cd3ce39`.
+- Config:
+  `configs/policy/runs/prl_04_r1_qwen3_instruct_grpo_bs16_crop_t1full_80step_gpu0123.toml`.
+  Launch remains gated on RP-68 step 2000 plus completed INT-DIAG and ACC-VAL.
