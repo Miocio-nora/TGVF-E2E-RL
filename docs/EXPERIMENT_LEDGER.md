@@ -9050,7 +9050,7 @@ than inferred from a script name or prior conversation.
   with the pinned semantic rescore. Crop RL promotion is forbidden unless both
   hash-bound completion markers report `status=complete`.
 - Code/config identity: implementation commit
-  `8e51818428585691635a5e415979e323f53dbd16`; fresh and strict-resume configs
+  `06c8c47a8338921a17991551e40f71563da2002c`; fresh and strict-resume configs
   are `configs/representation/qwen3_instruct_balanced_t1_vision_routing_2000step_gpu0123.toml`
   and `configs/representation/qwen3_instruct_balanced_t1_vision_routing_2000step_gpu0123_resume_step10.toml`.
 - Output: `artifacts/representation/RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123`.
@@ -9058,8 +9058,9 @@ than inferred from a script name or prior conversation.
 ### PRL-04-R0-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU4567
 
 - Cell/class and lifecycle: non-formal engineering smoke;
-  `PLANNED_SMOKE_PENDING` as of `2026-08-02`. It proves the complete Crop
-  rollout/reward/actor/checkpoint path before any overnight 80-step promotion.
+  `FAILED_PREFLIGHT_NO_GPU_ALLOCATION` at `2026-08-02 00:28:49 JST`. The
+  fail-closed controller stopped this cell and did not start RP-68 or any
+  downstream validation/RL stage.
 - Model/tool/data: Qwen3-VL-8B-Instruct, native DeepStack enabled, fixed
   `image_zoom_in_tool` Crop-only protocol, and the verified 51-row retained
   ArxivQA subset from T1-02 Instruct canary. The data is explicitly
@@ -9078,3 +9079,48 @@ than inferred from a script name or prior conversation.
   `8e51818428585691635a5e415979e323f53dbd16`; config
   `configs/policy/runs/prl_04_r0_qwen3_instruct_grpo_bs16_crop_t1canary_1step_gpu4567.toml`.
 - Output: `artifacts/policy/PRL-04-R0-qwen3-instruct-grpo-bs16-crop-t1canary-1step-gpu4567`.
+- Failure evidence: veRL's Ray WorkerDict used physical resource indices as
+  local CUDA ordinals while the parent process exposed only devices 4--7;
+  workers 1/2 failed in `torch.cuda.set_device` with `invalid device ordinal`
+  before model allocation, rollout, optimizer state, metrics, checkpoint, or
+  output-root publication. The durable controller attempt/log is under
+  `artifacts/overnight/RP68-CROP-RL-FAIL-CLOSED-20260802`.
+
+### PRL-04-R0R1-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU0123
+
+- Cell/class and lifecycle: corrected non-formal engineering smoke;
+  `PLANNED_SMOKE_PENDING`. It preserves every R0 scientific field and changes
+  only the physical device binding to the already validated veRL ordinal
+  contract 0--3 plus a fresh run/output identity.
+- Model/tool/data and RL identity: Qwen3-VL-8B-Instruct; Crop-only
+  `image_zoom_in_tool`; verified 51-row provisional T1-02 ArxivQA canary;
+  GRPO decoder LoRA rank/alpha 64; LR `1e-6`; BS16, n8, world4, GA4; exactly
+  one optimizer step; answer/format/conditional-tool weights `.8/.2/1.2`.
+- Acceptance remains unchanged: metrics terminal `optimizer_step=1`, 16
+  prompts, 128 trajectories, durable `global_step_1`, followed by an exact
+  auto-resume invocation proving unchanged metrics/checkpoint SHA-256 and no
+  `global_step_2`.
+- Code/config identity: implementation commit
+  `06c8c47a8338921a17991551e40f71563da2002c`; config
+  `configs/policy/runs/prl_04_r0r1_qwen3_instruct_grpo_bs16_crop_t1canary_1step_gpu0123.toml`.
+- Output: `artifacts/policy/PRL-04-R0R1-qwen3-instruct-grpo-bs16-crop-t1canary-1step-gpu0123`.
+
+### T1-04-LENGTH-RETRY-R1-GPU4567
+
+- Cell/class and lifecycle: deterministic completion repair;
+  `PLANNED_PENDING_CROP_SMOKE`. The first strict scorer correctly refused to
+  publish because 194 logical attempts ended at revision 0 with
+  `finish_reason=length` and therefore require response-budget revision 1.
+- Exact pending set: rank counts `55/47/31/61`; source counts ArxivQA `32`,
+  ThinkLite `113`, V* `49`; 160 original immutable chunks; no revision-1
+  evidence exists. Revision-0 evidence is retained unchanged.
+- Execution: logical ranks 0--3 map explicitly to physical GPUs 4--7. Each
+  worker receives the exact pre-audited request-ID list for its rank and may
+  publish only its content-addressed revision-1 manifests plus prefix-audit
+  sidecars. Planning is rank-scoped, and a physical/logical mapping mismatch
+  fails before engine construction.
+- Code identity: rank-scoping and explicit physical mapping are implemented by
+  `06c8c47a8338921a17991551e40f71563da2002c`; focused retry tests pass 20/20.
+- PASS gate: all 194 request histories contain a strictly prefix-audited
+  revision 1; the deterministic scorer then publishes atomically, and only a
+  hash-verified retained ArxivQA materialization may bind PRL-04-R1.

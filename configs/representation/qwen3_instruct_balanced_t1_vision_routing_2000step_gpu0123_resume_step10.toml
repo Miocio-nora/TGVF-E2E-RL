@@ -4,7 +4,7 @@ run_id = "RP-68-QWEN3-INSTRUCT-REP-BALANCED-T1-VISION-ROUTING-2000-GPU0123"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "8e51818428585691635a5e415979e323f53dbd16"
+commit = "06c8c47a8338921a17991551e40f71563da2002c"
 dirty = false
 dirty_state_sha256 = "none"
 
