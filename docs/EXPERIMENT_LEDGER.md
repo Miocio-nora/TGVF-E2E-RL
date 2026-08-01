@@ -9242,9 +9242,10 @@ than inferred from a script name or prior conversation.
 ### PRL-04-R2-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1FULL-MCQ-REWARD-FIX
 
 - Cell/class and lifecycle: isolated reward-recovery smoke plus formal Crop RL
-  pilot; `READY_TO_LAUNCH` at `2026-08-02 05:28 JST`. Both outputs and the
-  controller runtime root are fresh. R2 starts from the initial policy state;
-  it neither resumes nor copies R1 optimizer state.
+  pilot; `RUNNING_FORMAL_STEP1_DURABLE` at `2026-08-02 06:15 JST`, after
+  `READY_TO_LAUNCH` at `05:28 JST`. Both outputs and the controller runtime
+  root are fresh. R2 starts from the initial policy state; it neither resumes
+  nor copies R1 optimizer state.
 - Controlled variables: Qwen3-VL-8B-Instruct, native DeepStack, Crop-only
   protocol, complete T1-04 retained ArxivQA selection (25,393 rows), RP-66
   representation binding, BS16, n8, world4 on GPUs 0--3, GA4, decoder LoRA
@@ -9293,3 +9294,30 @@ than inferred from a script name or prior conversation.
   `artifacts/overnight/PRL04-R2-CROP-RL-FAIL-CLOSED-20260802`. Static validation
   passed, and both policy plans report `launch_ready=true`, no blockers and no
   GPU work launched during planning.
+- Promotion evidence: the one-step smoke completed at `05:47 JST` with one
+  metric record (SHA-256
+  `4ad6eb5f7a9b48761929e06f11500e9b8490b392d34a23b12d6fb1f5d541806b`)
+  and a durable step-1 checkpoint. The independent MCQ gate passed on 99
+  retained audit records: all 16 representative records were parseable, 85 of
+  88 parseable terminal decisions matched gold, and both answer and
+  conditional-tool clear-false-negative counts were zero. The gate report
+  SHA-256 is
+  `a3fdb84b569ac193959b8285d1ead233696d7007fb5fa000c1044c11ae930e2f`.
+  The subsequent no-extra-step auto-resume proof records metric SHA-256
+  `4ad6eb5f...410806b`, checkpoint-tree SHA-256
+  `9fe6e0a49b131e2e885b8cb8e5a4fd465fa7e5b5c8382321b3d1f59962fdfd29`,
+  and `proven=true`.
+- Formal runtime: the controller accepted all three prerequisite stages and
+  launched the 80-step run at `05:59:07 JST`; W&B run ID is `wh7t9wv9`. It
+  completed optimizer step 1 in `381.334 s` (`338.934 s` before publication,
+  `27.655 s` checkpoint, `14.727 s` weight sync) and continued into step 2.
+  The first step used 16 prompts and 128 trajectories, produced 31,882 policy
+  tokens and 326 successful observations from 344 Crop attempts, and reported
+  mean answer reward `.7500`, mean conditional-tool reward `.7265625`, format
+  error rate `.140625`, and zero judge calls. All 18 tool errors were expected
+  call-limit events. `global_step_1` is a complete 28-file, 18,603,763,356-byte
+  recovery boundary with four model, optimizer and extra-state rank shards and
+  tracker value `1`. No traceback, OOM or NCCL error was present through this
+  gate. The step-1 metrics-file SHA-256 is
+  `bd44c2bd78e44a5fddae719adae9d093bc6391e323343e2397ce96954d7da9c9`;
+  measured completion ETA is approximately `14:00--14:40 JST`.
