@@ -9015,3 +9015,66 @@ than inferred from a script name or prior conversation.
   and accounted for; every manifest/evidence pair validates; no length/error is
   converted to incorrect; full image/prompt/seed/token provenance remains
   bound. Generation completion alone does not claim selected-dataset quality.
+
+### RP-68-QWEN3-INSTRUCT-REP-BALANCED-T1-VISION-ROUTING-2000-GPU0123
+
+- Cell/class and lifecycle: isolated representation-structure experiment;
+  `PLANNED_SMOKE_PENDING` as of `2026-08-02`. It changes only the Adapter
+  information route relative to RP-66 and does not change data, objective,
+  optimizer, schedule, initialization, parameter shapes, or total Adapter
+  capacity.
+- Structural intervention: Adapter variant
+  `full_d_deepstack_vision_routing`. The target hidden state may determine the
+  second-stage attention query/key and therefore routing weights, but the value
+  payload is the first-stage visual context rather than `target + visual`.
+  This removes the direct target-to-D value path while preserving RP-66's main
+  D, three DeepStack branches, 104 tensors, and approximately 72M parameters.
+- Model/data/objective: Qwen3-VL-8B-Instruct; the exact RP-66 clean-imend train
+  and test sources, image/question prompt, balanced Matrix CE + L-gen + norm
+  objective with weights `1/1/.1`, AdamW LR `1e-4`, and 2,000-step historical
+  cosine schedule are unchanged.
+- Batch/topology: physical GPUs 0--3, FSDP2 world size 4, same-image K4,
+  per-rank group batch 4, one group per rank per microstep, gradient
+  accumulation 2. Thus each optimizer update still consumes eight image-axis
+  matrices, matching RP-66 world2/GA4; the topology change does not change the
+  scientific global-update batch.
+- Fail-closed launch sequence: the full 2,000-step identity first runs with
+  `--stop-after-global-step 10`; step 10 must emit finite metrics and a complete
+  four-rank DCP. A distinct strict-resume config must load that exact DCP before
+  the run may continue to step 2,000. Checkpoint publication precedes scheduled
+  validation, so a validation failure cannot erase a completed optimizer
+  boundary.
+- Post-training gates: terminal Adapter/metrics identity is independently
+  verified, then `INT-DIAG` runs the established first-200 internal diagnostic;
+  `ACC-VAL` runs `image_only` and `image_correct_D` on first-200 and full-867
+  with the pinned semantic rescore. Crop RL promotion is forbidden unless both
+  hash-bound completion markers report `status=complete`.
+- Code/config identity: implementation commit
+  `8e51818428585691635a5e415979e323f53dbd16`; fresh and strict-resume configs
+  are `configs/representation/qwen3_instruct_balanced_t1_vision_routing_2000step_gpu0123.toml`
+  and `configs/representation/qwen3_instruct_balanced_t1_vision_routing_2000step_gpu0123_resume_step10.toml`.
+- Output: `artifacts/representation/RP-68-qwen3-instruct-balanced-t1-vision-routing-2000-gpu0123`.
+
+### PRL-04-R0-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1CANARY-1STEP-GPU4567
+
+- Cell/class and lifecycle: non-formal engineering smoke;
+  `PLANNED_SMOKE_PENDING` as of `2026-08-02`. It proves the complete Crop
+  rollout/reward/actor/checkpoint path before any overnight 80-step promotion.
+- Model/tool/data: Qwen3-VL-8B-Instruct, native DeepStack enabled, fixed
+  `image_zoom_in_tool` Crop-only protocol, and the verified 51-row retained
+  ArxivQA subset from T1-02 Instruct canary. The data is explicitly
+  `provisional/pilot`; it cannot be reported as the completed T1-04 selection.
+- RL identity: GRPO, decoder LoRA rank/alpha 64, AdamW LR `1e-6`, global prompt
+  batch 16, eight trajectories per prompt, physical GPUs 4--7, world size 4,
+  gradient accumulation 4, and exactly one optimizer step. Reward retains the
+  historical Crop pilot weights: answer `.8`, format `.2`, conditional tool
+  use `1.2`.
+- Acceptance: terminal metrics must show `optimizer_step=1`, 16 prompts and 128
+  trajectories; `global_step_1` must be durable. The identical config is then
+  launched with `resume_mode=auto`; a proof binds unchanged metrics and
+  checkpoint-tree SHA-256 and rejects any `global_step_2`. No RP-68 training or
+  formal Crop run may start if either check fails.
+- Code/config identity: implementation commit
+  `8e51818428585691635a5e415979e323f53dbd16`; config
+  `configs/policy/runs/prl_04_r0_qwen3_instruct_grpo_bs16_crop_t1canary_1step_gpu4567.toml`.
+- Output: `artifacts/policy/PRL-04-R0-qwen3-instruct-grpo-bs16-crop-t1canary-1step-gpu4567`.
