@@ -9105,7 +9105,7 @@ than inferred from a script name or prior conversation.
   `configs/policy/runs/prl_04_r0r1_qwen3_instruct_grpo_bs16_crop_t1canary_1step_gpu0123.toml`.
 - Output: `artifacts/policy/PRL-04-R0R1-qwen3-instruct-grpo-bs16-crop-t1canary-1step-gpu0123`.
 - Fail-closed controller: `RP68-CROP-RL-FAIL-CLOSED-R1-20260802`, config
-  SHA-256 `a3dc5a613ce49b7357dbbc9484da3c7f015e5f6ec81b34f186a8237c50c3b8dc`;
+  SHA-256 `7e0e128a2bda7fdef7b52e327d04f1ce05b3995263c7a73090a67aad930ad712`;
   it has zero automatic retries and cannot promote past a failed artifact gate.
 
 ### T1-04-LENGTH-RETRY-R1-GPU4567
