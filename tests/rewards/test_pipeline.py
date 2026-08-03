@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 
@@ -86,6 +86,54 @@ def test_policy_pilot_reward_equation_and_one_time_tool_bonus() -> None:
         0.0,
         1.2,
     )
+
+
+def test_answer_primary_reward_profile_lowers_only_the_tool_bonus() -> None:
+    spec = replace(_pilot_spec(), conditional_tool_weight=0.2)
+    pipeline = PilotRewardPipeline(
+        spec, _FixedVerifier(True, spec.answer_verifier_identity)
+    )
+
+    result = pipeline.score(
+        RewardContext(
+            "sample",
+            "question",
+            "answer",
+            "answer",
+            tool_call_count=1,
+            successful_tgvf_observation_count=1,
+        )
+    )
+
+    assert spec.weight_profile_name == "answer-primary"
+    assert result.total == pytest.approx(1.0)
+    assert tuple(component.weighted_score for component in result.components) == (
+        0.8,
+        0.0,
+        0.2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("answer_weight", "format_weight", "tool_weight"),
+    (
+        (0.8, 0.2, 0.4),
+        (0.9, 0.2, 0.2),
+        (0.8, 0.1, 0.2),
+    ),
+)
+def test_policy_reward_spec_rejects_unnamed_weight_tuples(
+    answer_weight: float,
+    format_weight: float,
+    tool_weight: float,
+) -> None:
+    with pytest.raises(ValueError, match="accepted profile"):
+        replace(
+            _pilot_spec(),
+            answer_weight=answer_weight,
+            format_weight=format_weight,
+            conditional_tool_weight=tool_weight,
+        )
 
 
 def test_policy_pilot_format_penalty_and_no_invented_tool_error_penalty() -> None:

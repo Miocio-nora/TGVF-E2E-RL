@@ -9,7 +9,13 @@ from typing import Callable, Protocol
 from tgvf_rl.trajectories.schema import TrajectoryRecord
 
 from .pipeline import PilotRewardPipeline
-from .schema import AnswerTaskKind, RewardContext, RewardResult
+from .schema import (
+    AnswerTaskKind,
+    PILOT_REWARD_WEIGHT_PROFILES,
+    RewardContext,
+    RewardResult,
+    pilot_reward_weight_profile_name,
+)
 
 
 PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION = "tgvf-pilot-verl-reward-bridge-v1"
@@ -25,7 +31,6 @@ _COMPONENT_NAMES = (
     "format_reward",
     "conditional_tool_reward",
 )
-_COMPONENT_WEIGHTS = (0.8, 0.2, 1.2)
 
 
 class PilotRewardContextProvider(Protocol):
@@ -131,21 +136,15 @@ class PilotVerlTrajectoryRewardScorer:
         *,
         pipeline: PilotRewardPipeline,
         context_provider: PilotRewardContextProvider,
-        audit_sink: Callable[
-            [TrajectoryRecord, PilotVerlTrajectoryReward], None
-        ]
+        audit_sink: Callable[[TrajectoryRecord, PilotVerlTrajectoryReward], None]
         | None = None,
     ) -> None:
         if not isinstance(pipeline, PilotRewardPipeline):
             raise TypeError("pipeline must be PilotRewardPipeline")
         if not callable(getattr(context_provider, "build", None)):
             raise TypeError("context_provider must implement build()")
-        if (
-            pipeline.spec.answer_weight,
-            pipeline.spec.format_weight,
-            pipeline.spec.conditional_tool_weight,
-        ) != _COMPONENT_WEIGHTS:
-            raise ValueError("veRL Pilot reward requires fixed weights 0.8/0.2/1.2")
+        self.component_weights = pipeline.spec.weights
+        pilot_reward_weight_profile_name(self.component_weights)
         self.pipeline = pipeline
         self.context_provider = context_provider
         self.audit_sink = audit_sink
@@ -172,6 +171,11 @@ class PilotVerlTrajectoryRewardScorer:
         result = self.pipeline.score(context)
         if result.pipeline_identity != self.pipeline.spec.pipeline_identity:
             raise ValueError("reward pipeline identity changed while scoring")
+        _validate_pilot_reward_result(
+            context,
+            result,
+            expected_weights=self.component_weights,
+        )
         reward = PilotVerlTrajectoryReward(
             trajectory_id=trajectory.identity.canonical_id,
             group_uid=trajectory.identity.group_id,
@@ -204,6 +208,8 @@ class PilotVerlTrajectoryRewardScorer:
 def _validate_pilot_reward_result(
     context: RewardContext,
     result: RewardResult,
+    *,
+    expected_weights: tuple[float, float, float] | None = None,
 ) -> None:
     if not math.isfinite(result.total):
         raise ValueError("Pilot trajectory reward must be finite")
@@ -222,14 +228,34 @@ def _validate_pilot_reward_result(
         raise ValueError("conditional tool reward requires a correct answer")
     if raw[2] and context.successful_tgvf_observation_count < 1:
         raise ValueError("conditional tool reward requires a successful observation")
-    expected_weighted = tuple(
-        score * weight for score, weight in zip(raw, _COMPONENT_WEIGHTS, strict=True)
-    )
     actual_weighted = tuple(float(component.weighted_score) for component in components)
-    for actual, expected in zip(actual_weighted, expected_weighted, strict=True):
-        if not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-12):
-            raise ValueError("Pilot reward component weight differs from 0.8/0.2/1.2")
-    expected_total = sum(expected_weighted)
+    if expected_weights is None:
+        candidate_weights = tuple(PILOT_REWARD_WEIGHT_PROFILES.values())
+    else:
+        pilot_reward_weight_profile_name(expected_weights)
+        candidate_weights = (expected_weights,)
+    matches_profile = any(
+        all(
+            math.isclose(
+                actual,
+                score * weight,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+            for actual, score, weight in zip(
+                actual_weighted,
+                raw,
+                weights,
+                strict=True,
+            )
+        )
+        for weights in candidate_weights
+    )
+    if not matches_profile:
+        raise ValueError(
+            "Pilot reward component weights differ from the bound reward profile"
+        )
+    expected_total = sum(actual_weighted)
     if not math.isclose(
         float(result.total), expected_total, rel_tol=0.0, abs_tol=1.0e-12
     ):

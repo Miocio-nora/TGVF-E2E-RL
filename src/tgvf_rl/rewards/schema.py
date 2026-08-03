@@ -5,10 +5,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import math
+from types import MappingProxyType
 from typing import Protocol
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.judges.base import JudgeUsage
+
+
+PILOT_REWARD_LEGACY_WEIGHTS = (0.8, 0.2, 1.2)
+PILOT_REWARD_ANSWER_PRIMARY_WEIGHTS = (0.8, 0.2, 0.2)
+PILOT_REWARD_WEIGHT_PROFILES = MappingProxyType(
+    {
+        "legacy": PILOT_REWARD_LEGACY_WEIGHTS,
+        "answer-primary": PILOT_REWARD_ANSWER_PRIMARY_WEIGHTS,
+    }
+)
+
+
+def pilot_reward_weight_profile_name(weights: tuple[float, float, float], /) -> str:
+    """Return the exact accepted Pilot reward profile for ``weights``."""
+
+    for name, accepted in PILOT_REWARD_WEIGHT_PROFILES.items():
+        if weights == accepted:
+            return name
+    raise ValueError(
+        "Policy Pilot reward weights must match an accepted profile: "
+        "legacy=0.8/0.2/1.2 or answer-primary=0.8/0.2/0.2"
+    )
 
 
 class AnswerTaskKind(str, Enum):
@@ -120,7 +143,7 @@ class AnswerVerificationResult:
 
 @dataclass(frozen=True, slots=True)
 class PilotRewardSpec:
-    """Accepted Policy Pilot v1 scalar reward contract."""
+    """Accepted Policy Pilot scalar reward contract."""
 
     pipeline_identity: ArtifactIdentity
     answer_verifier_identity: ArtifactIdentity
@@ -131,12 +154,25 @@ class PilotRewardSpec:
     conditional_tool_weight: float = 1.2
 
     def __post_init__(self) -> None:
-        if (
+        pilot_reward_weight_profile_name(
+            (
+                self.answer_weight,
+                self.format_weight,
+                self.conditional_tool_weight,
+            )
+        )
+
+    @property
+    def weights(self) -> tuple[float, float, float]:
+        return (
             self.answer_weight,
             self.format_weight,
             self.conditional_tool_weight,
-        ) != (0.8, 0.2, 1.2):
-            raise ValueError("Policy Pilot v1 reward weights must be 0.8/0.2/1.2")
+        )
+
+    @property
+    def weight_profile_name(self) -> str:
+        return pilot_reward_weight_profile_name(self.weights)
 
 
 class RewardComponent(Protocol):

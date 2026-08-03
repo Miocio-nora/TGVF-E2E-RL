@@ -78,7 +78,11 @@ from tgvf_rl.rewards import (
     RuleFirstAnswerVerifier,
     reward_context_from_trajectory,
 )
-from tgvf_rl.rewards.schema import NormalizationSpec
+from tgvf_rl.rewards.schema import (
+    NormalizationSpec,
+    PILOT_REWARD_LEGACY_WEIGHTS,
+    pilot_reward_weight_profile_name,
+)
 from tgvf_rl.judges import DisabledJudgeProvider, load_openai_compatible_judge
 from tgvf_rl.trajectories.behavior import BehaviorTraceStore, VLLMBehaviorRecorder
 from tgvf_rl.trajectories.schema import TrajectoryRecord, trajectory_checksum
@@ -927,6 +931,12 @@ def _final_token_materialization(
 
 def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
     reward = config.reward
+    reward_weights = (
+        reward.answer_weight,
+        reward.format_weight,
+        reward.conditional_tool_weight,
+    )
+    pilot_reward_weight_profile_name(reward_weights)
     answer_identity = ArtifactIdentity(
         "policy-reward",
         reward.answer_verifier,
@@ -945,17 +955,22 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
             "tools": config.protocol.enabled_tool_names,
         },
     )
+    pipeline_identity_payload: dict[str, object] = {
+        "run": config.identity_sha256,
+        "answer": answer_identity.sha256,
+        "format": format_identity.sha256,
+        "tool": tool_identity.sha256,
+        "judge_config": reward.judge_config_sha256,
+    }
+    # Preserve the exact legacy digest while explicitly separating every new
+    # experimental equation in the identity carried through the reward bridge.
+    if reward_weights != PILOT_REWARD_LEGACY_WEIGHTS:
+        pipeline_identity_payload["weights"] = reward_weights
     pipeline_identity = _artifact_identity(
         "policy-reward",
         "pilot-reward-equation",
-        "0.8-0.2-1.2",
-        {
-            "run": config.identity_sha256,
-            "answer": answer_identity.sha256,
-            "format": format_identity.sha256,
-            "tool": tool_identity.sha256,
-            "judge_config": reward.judge_config_sha256,
-        },
+        "-".join(format(weight, "g") for weight in reward_weights),
+        pipeline_identity_payload,
     )
     if reward.judge_config_path is None:
         disabled = _artifact_identity(
@@ -997,6 +1012,9 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
             answer_verifier_identity=answer_identity,
             format_verifier_identity=format_identity,
             tool_verifier_identity=tool_identity,
+            answer_weight=reward_weights[0],
+            format_weight=reward_weights[1],
+            conditional_tool_weight=reward_weights[2],
         ),
         verifier,
     )

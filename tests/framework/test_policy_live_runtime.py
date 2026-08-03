@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 
 import torch
 
@@ -10,6 +11,7 @@ from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
     Qwen3PolicyE2ELiveRuntimeBuilder,
+    _build_reward_pipeline,
     _default_metrics_factory,
 )
 from tgvf_rl.observations.store import ObservationStore
@@ -31,6 +33,35 @@ def test_live_builder_has_no_agent_loop_model_loader_surface() -> None:
     signature = inspect.signature(Qwen3PolicyE2ELiveRuntimeBuilder.__init__)
 
     assert "model_loader" not in signature.parameters
+
+
+def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
+    def config(tool_weight: float) -> SimpleNamespace:
+        return SimpleNamespace(
+            identity_sha256=SHA,
+            reward=SimpleNamespace(
+                answer_verifier="exact_match",
+                answer_verifier_sha256="8" * 64,
+                answer_weight=0.8,
+                format_weight=0.2,
+                conditional_tool_weight=tool_weight,
+                judge_config_path=None,
+                judge_config_sha256=None,
+            ),
+            protocol=SimpleNamespace(enabled_tool_names=("tgvf_focus_tool",)),
+        )
+
+    legacy = _build_reward_pipeline(config(1.2))
+    answer_primary = _build_reward_pipeline(config(0.2))
+
+    assert legacy.spec.weights == (0.8, 0.2, 1.2)
+    assert legacy.spec.pipeline_identity.version == "0.8-0.2-1.2"
+    assert answer_primary.spec.weights == (0.8, 0.2, 0.2)
+    assert answer_primary.spec.pipeline_identity.version == "0.8-0.2-0.2"
+    assert (
+        answer_primary.spec.pipeline_identity.sha256
+        != legacy.spec.pipeline_identity.sha256
+    )
 
 
 class _NativeTokenizer:
@@ -76,7 +107,9 @@ def _parsed_focus_call():
     )
 
 
-def test_policy_layout_focus_and_final_expansion_share_one_idempotent_coordinate() -> None:
+def test_policy_layout_focus_and_final_expansion_share_one_idempotent_coordinate() -> (
+    None
+):
     tokenizer = _NativeTokenizer()
     model = ModelIdentity("qwen3_vl", "fixture", "/fixture", 256, SHA)
     store = ObservationStore()

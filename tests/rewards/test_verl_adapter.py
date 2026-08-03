@@ -25,6 +25,7 @@ from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_ANSWER_ROUTE_FIELD,
     PILOT_VERL_JUDGE_USAGE_FIELD,
 )
+from tgvf_rl.trajectories.schema import TrajectoryStop
 
 
 def _identity(name: str, digit: str) -> ArtifactIdentity:
@@ -51,12 +52,15 @@ class _ContextProvider:
         )
 
 
-def _scorer() -> tuple[PilotVerlTrajectoryRewardScorer, _ExplodingJudge]:
+def _scorer(
+    *, conditional_tool_weight: float = 1.2
+) -> tuple[PilotVerlTrajectoryRewardScorer, _ExplodingJudge]:
     spec = PilotRewardSpec(
         pipeline_identity=_identity("pipeline", "1"),
         answer_verifier_identity=_identity("answer", "2"),
         format_verifier_identity=_identity("format", "3"),
         tool_verifier_identity=_identity("tool", "4"),
+        conditional_tool_weight=conditional_tool_weight,
     )
     judge = _ExplodingJudge()
     verifier = RuleFirstAnswerVerifier(
@@ -111,9 +115,7 @@ def test_mcq_trajectory_reward_is_exact_and_never_calls_judge() -> None:
         result=replace(scored.result, answer_verification=verification),
     )
     sidecars = with_usage.reward_sidecars()
-    assert sidecars[PILOT_VERL_ANSWER_ROUTE_FIELD] == (
-        "qwen2.5_72b_semantic_fallback"
-    )
+    assert sidecars[PILOT_VERL_ANSWER_ROUTE_FIELD] == ("qwen2.5_72b_semantic_fallback")
     assert sidecars[PILOT_VERL_JUDGE_USAGE_FIELD] == (
         201,
         17,
@@ -126,6 +128,24 @@ def test_mcq_trajectory_reward_is_exact_and_never_calls_judge() -> None:
             request=SimpleNamespace(identity=object()),
             trajectory=trajectory,
         )
+
+
+def test_answer_primary_profile_crosses_verl_reward_scorer() -> None:
+    trajectory = replace(
+        _record(tool_call_count=1).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    request = SimpleNamespace(identity=trajectory.identity)
+    scorer, judge = _scorer(conditional_tool_weight=0.2)
+
+    scored = scorer.score(request=request, trajectory=trajectory)
+
+    assert scored.total == pytest.approx(1.0)
+    assert tuple(
+        component.weighted_score for component in scored.result.components
+    ) == pytest.approx((0.8, 0.0, 0.2))
+    assert judge.calls == 0
 
 
 @pytest.mark.parametrize(

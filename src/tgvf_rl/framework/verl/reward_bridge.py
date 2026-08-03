@@ -15,7 +15,7 @@ from tgvf_rl.objectives import (
     compute_group_advantages,
     policy_pilot_v1_grpo_spec,
 )
-from tgvf_rl.rewards.schema import RewardResult
+from tgvf_rl.rewards.schema import PILOT_REWARD_WEIGHT_PROFILES, RewardResult
 from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD,
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
@@ -452,8 +452,14 @@ def _validate_component_sidecar(value: object, *, expected_total: float) -> None
         }
     ):
         raise ValueError("reward component sidecar has invalid raw values")
-    total = 0.8 * raw[0] + 0.2 * raw[1] + 1.2 * raw[2]
-    if not math.isclose(total, expected_total, rel_tol=0.0, abs_tol=1.0e-12):
+    accepted_totals = tuple(
+        sum(score * weight for score, weight in zip(raw, weights, strict=True))
+        for weights in PILOT_REWARD_WEIGHT_PROFILES.values()
+    )
+    if not any(
+        math.isclose(total, expected_total, rel_tol=0.0, abs_tol=1.0e-12)
+        for total in accepted_totals
+    ):
         raise ValueError("reward component sidecar differs from exact total")
 
 

@@ -49,6 +49,7 @@ from tgvf_rl.protocol import (
     visual_tool_prompt_identity,
 )
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
+from tgvf_rl.rewards.schema import pilot_reward_weight_profile_name
 
 from .config import (
     POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES,
@@ -1036,23 +1037,24 @@ def load_policy_e2e_smoke_run_config(
     else:
         judge_config_path = None
         judge_config_sha256 = None
+    reward_weights = (
+        _real(reward_table["answer_weight"], name="reward.answer_weight"),
+        _real(reward_table["format_weight"], name="reward.format_weight"),
+        _real(
+            reward_table["conditional_tool_weight"],
+            name="reward.conditional_tool_weight",
+        ),
+    )
+    pilot_reward_weight_profile_name(reward_weights)
     reward = SmokeRewardBinding(
         task_kind=reward_table["task_kind"],
         answer_verifier=reward_table["answer_verifier"],
         answer_verifier_sha256=answer_verifier_sha256,
         judge_mode=reward_table["judge_mode"],
         judge_reason=_text(reward_table["judge_reason"], name="reward.judge_reason"),
-        answer_weight=_exact_real(
-            reward_table["answer_weight"], 0.8, "reward.answer_weight"
-        ),
-        format_weight=_exact_real(
-            reward_table["format_weight"], 0.2, "reward.format_weight"
-        ),
-        conditional_tool_weight=_exact_real(
-            reward_table["conditional_tool_weight"],
-            1.2,
-            "reward.conditional_tool_weight",
-        ),
+        answer_weight=reward_weights[0],
+        format_weight=reward_weights[1],
+        conditional_tool_weight=reward_weights[2],
         judge_config_path=judge_config_path,
         judge_config_sha256=judge_config_sha256,
     )
@@ -1432,8 +1434,10 @@ def load_policy_e2e_smoke_run_config(
         )
     if training.checkpoint_steps[-1] > training.maximum_optimizer_steps:
         raise ValueError("training checkpoint step exceeds maximum_optimizer_steps")
-    if scheduler.total_steps != training.maximum_optimizer_steps:
-        raise ValueError("scheduler total_steps differs from maximum_optimizer_steps")
+    if scheduler.total_steps < training.maximum_optimizer_steps:
+        raise ValueError(
+            "scheduler total_steps is smaller than maximum_optimizer_steps"
+        )
     if scheduler.warmup_steps >= scheduler.total_steps:
         raise ValueError("scheduler warmup_steps must be smaller than total_steps")
 

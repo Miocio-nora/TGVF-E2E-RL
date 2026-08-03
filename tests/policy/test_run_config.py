@@ -392,6 +392,64 @@ def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) ->
     assert not output_root.exists()
 
 
+def test_loads_answer_primary_reward_as_a_distinct_run_identity(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    legacy = load_policy_e2e_smoke_run_config(path)
+    path.write_text(
+        text.replace("conditional_tool_weight = 1.2", "conditional_tool_weight = 0.2"),
+        encoding="utf-8",
+    )
+
+    answer_primary = load_policy_e2e_smoke_run_config(path)
+
+    assert answer_primary.reward.answer_weight == 0.8
+    assert answer_primary.reward.format_weight == 0.2
+    assert answer_primary.reward.conditional_tool_weight == 0.2
+    assert answer_primary.identity_sha256 != legacy.identity_sha256
+    assert answer_primary.as_record()["reward"]["conditional_tool_weight"] == 0.2
+
+
+def test_rejects_unnamed_reward_weight_profile(tmp_path: Path) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace("conditional_tool_weight = 1.2", "conditional_tool_weight = 0.4"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="accepted profile"):
+        load_policy_e2e_smoke_run_config(path)
+
+
+def test_bounded_run_can_stop_before_the_bound_scheduler_horizon(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace("maximum_optimizer_steps = 2", "maximum_optimizer_steps = 20")
+        .replace("total_steps = 2", "total_steps = 80")
+        .replace("checkpoint_steps = [0, 1, 2]", "checkpoint_steps = [0, 20]"),
+        encoding="utf-8",
+    )
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.training.maximum_optimizer_steps == 20
+    assert config.scheduler.total_steps == 80
+
+
+def test_rejects_run_longer_than_bound_scheduler_horizon(tmp_path: Path) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace("maximum_optimizer_steps = 2", "maximum_optimizer_steps = 3"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="smaller than maximum_optimizer_steps"):
+        load_policy_e2e_smoke_run_config(path)
+
+
 def test_mixed_run_selects_full_dataset_and_real_judge_binding(tmp_path: Path) -> None:
     path, text, _ = _write_config(tmp_path)
     judge_path = (

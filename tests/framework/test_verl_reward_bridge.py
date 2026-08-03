@@ -46,6 +46,7 @@ def _components(total: float) -> tuple[tuple[str, float], ...]:
         -0.2: (0.0, -1.0, 0.0),
         0.0: (0.0, 0.0, 0.0),
         0.8: (1.0, 0.0, 0.0),
+        1.0: (1.0, 0.0, 1.0),
         2.0: (1.0, 0.0, 1.0),
     }
     answer, format_score, tool = raw_by_total[total]
@@ -56,11 +57,21 @@ def _components(total: float) -> tuple[tuple[str, float], ...]:
     )
 
 
-def _real_data_proto(*, incomplete: bool = False):
+def _real_data_proto(*, incomplete: bool = False, tool_weight: float = 1.2):
     pytest.importorskip("verl")
     from verl.protocol import DataProto
 
-    rewards = [0.8, 0.0, -0.2, 2.0, 0.8, 0.0, -0.2, 2.0]
+    correct_with_tool = 0.8 + tool_weight
+    rewards = [
+        0.8,
+        0.0,
+        -0.2,
+        correct_with_tool,
+        0.8,
+        0.0,
+        -0.2,
+        correct_with_tool,
+    ]
     rewards.extend([0.8] * (7 if incomplete else 8))
     trajectories = []
     exact_groups = []
@@ -150,10 +161,13 @@ def test_real_dataproto_binds_repo_owned_exact_grpo_fields() -> None:
     )
 
     assert len(view.trajectory_ids) == 16
-    assert sum(
-        trajectory.stop is TrajectoryStop.INVALID_FORMAT
-        for trajectory in data.non_tensor_batch[TRAJECTORY_PAYLOAD_FIELD]
-    ) == 2
+    assert (
+        sum(
+            trajectory.stop is TrajectoryStop.INVALID_FORMAT
+            for trajectory in data.non_tensor_batch[TRAJECTORY_PAYLOAD_FIELD]
+        )
+        == 2
+    )
     assert view.group_uids[:8] == ("exact-group-0",) * 8
     assert view.group_uids[8:] == ("exact-group-1",) * 8
     assert torch.equal(data.batch["token_level_scores"], data.batch["rm_scores"])
@@ -178,6 +192,24 @@ def test_real_dataproto_binds_repo_owned_exact_grpo_fields() -> None:
     )
     expected = expected_sequences[:, None] * data.batch["response_mask"].bool()
     assert torch.equal(data.batch["advantages"], expected)
+
+
+def test_answer_primary_reward_crosses_dataproto_sidecar_gate() -> None:
+    data = _real_data_proto(tool_weight=0.2)
+
+    view = validate_policy_pilot_reward_data_proto(data)
+
+    assert view.rewards[3] == pytest.approx(1.0)
+    assert view.rewards[7] == pytest.approx(1.0)
+
+
+def test_dataproto_sidecar_rejects_unnamed_reward_total() -> None:
+    data = _real_data_proto()
+    data.non_tensor_batch[PILOT_EXACT_REWARD_FIELD][3] = 1.4
+    data.batch["rm_scores"][3, -1] = 1.4
+
+    with pytest.raises(ValueError, match="component sidecar differs from exact total"):
+        validate_policy_pilot_reward_data_proto(data)
 
 
 def test_reward_dataproto_fails_closed_without_exact_upstream_reward() -> None:
