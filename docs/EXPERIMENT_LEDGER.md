@@ -9376,3 +9376,34 @@ than inferred from a script name or prior conversation.
   GPU allocation because this recovery had not yet been recorded in the
   observed ledger commit; it likewise produced no scientific artifact. The
   next launch must be accepted only after rank 0 prints `Total steps: 80`.
+
+### PRL-06-R0-QWEN3-INSTRUCT-CROP-BS32-TOOLW0P2-20STEP
+
+- Cell/class and lifecycle: isolated non-formal batch-size stability ablation;
+  `READY_TO_LAUNCH` at `2026-08-04 01:35 JST`. It starts fresh from the same
+  Qwen3-VL-8B-Instruct policy, T1-04 retained data, RP-66 adapter and Crop
+  protocol as PRL-05.
+- Single training variable: global prompt batch changes from 16 to 32 and the
+  mechanically corresponding accumulation changes from GA4 to GA8. Rollout
+  multiplicity remains n8, world size remains four, per-rank prompt and actor
+  micro-batches remain one, PPO epochs remain one, and LR remains `1e-6`.
+  Reward weights `.8/.2/.2`, seed, data order, LoRA, maximum response length,
+  maximum tool calls, zero-KL setting and the 80-step cosine horizon are
+  unchanged.
+- Interpretation: step 10 consumes 320 prompts / 2,560 trajectories and is the
+  sample-budget-matched comparison to PRL-05 step 20. Step 20 consumes 640 /
+  5,120 and is the update-count-matched comparison; any difference there mixes
+  batch size with twice the sample exposure. Both checkpoints must receive the
+  same seven-slice CoreDev-2511 Crop ACC-VAL before promotion or rejection.
+- Motivation and prior: PRL-05 held-out macro fell from the common step-0
+  baseline `51.264974%` to `49.840874%` while tool use stayed near 87%. Its
+  batches also contained many zero-advantage groups and sparse direct/tool
+  contrasts, so BS32 may reduce gradient-sampling variance. This is a bounded
+  stability test, not evidence that BS16 was inherently small: the successful
+  legacy Stage3 used only eight prompt groups / 64 rollouts per update, versus
+  PRL-05's 16 / 128.
+- Config:
+  `configs/policy/runs/prl_06_r0_qwen3_instruct_grpo_bs32_crop_t1full_toolw0p2_20step_gpu0123.toml`.
+  It runs on GPU0-3, checkpoints at `1/5/10/20`, enables W&B, disables all
+  in-training validation, and launches external evaluation only after the
+  requested checkpoint is durably saved.
