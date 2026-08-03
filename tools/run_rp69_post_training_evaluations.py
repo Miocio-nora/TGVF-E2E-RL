@@ -58,15 +58,15 @@ PYTHON_HEADER_ROOT = REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
 
 DEFAULT_TRAINING_CONFIG = REPOSITORY_ROOT / (
     "configs/representation/experiments/visual_barycentric/"
-    "rp69_qwen3_instruct_visual_barycentric_500_gpu4567.toml"
+    "rp69_qwen3_instruct_visual_barycentric_500_gpu0123.toml"
 )
-EXPECTED_RUN_ID = "RP-69-QWEN3-INSTRUCT-REP-BALANCED-T1-VISUAL-BARYCENTRIC-500-GPU4567"
+EXPECTED_RUN_ID = "RP-69-QWEN3-INSTRUCT-REP-BALANCED-T1-VISUAL-BARYCENTRIC-500-GPU0123"
 EXPECTED_MODEL = "Qwen3-VL-8B-Instruct"
 EXPECTED_VARIANT = "full_d_deepstack_visual_barycentric"
 EXPECTED_OBJECTIVE = "balanced-matrix-ce-l-gen-norm-v1"
 EXPECTED_STEP = 500
 EXPECTED_WORLD_SIZE = 4
-EXPECTED_TRAIN_GPUS = (4, 5, 6, 7)
+EXPECTED_TRAIN_GPUS = (0, 1, 2, 3)
 EXPECTED_GA = 2
 EXPECTED_TENSOR_COUNT = 104
 EXPECTED_TRAIN_SHA256 = (
@@ -75,9 +75,12 @@ EXPECTED_TRAIN_SHA256 = (
 EXPECTED_VALIDATION_SHA256 = (
     "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
 )
+EXPECTED_TRAINING_CONFIG_SHA256 = (
+    "5f444fa49346f395954da2b38b4261099599990238ccc3a1ccc5af7e13d86ee4"
+)
 EXPECTED_ARTIFACT_ROOT = REPOSITORY_ROOT / (
     "artifacts/representation/"
-    "RP-69-qwen3-instruct-balanced-t1-visual-barycentric-500-gpu4567"
+    "RP-69-qwen3-instruct-balanced-t1-visual-barycentric-500-gpu0123"
 )
 
 FIRST_MANIFEST = REPOSITORY_ROOT / (
@@ -331,6 +334,10 @@ def _static_training_layout(path: Path) -> dict[str, Any]:
 
 def _assert_static_inputs(training_config_path: Path) -> dict[str, Any]:
     layout = _static_training_layout(training_config_path)
+    if _file_sha256(training_config_path) != EXPECTED_TRAINING_CONFIG_SHA256:
+        raise ControllerError(
+            "RP69 training TOML differs from the exact configuration already launched"
+        )
     for path, expected, label in (
         (FIRST_MANIFEST, FIRST_MANIFEST_SHA256, "first-200 manifest"),
         (FULL_MANIFEST, FULL_MANIFEST_SHA256, "full-867 manifest"),
@@ -664,16 +671,31 @@ def _int_report_current(receipt: Mapping[str, Any], paths: Mapping[str, Path]) -
 
 
 def _generation_current(
-    root: Path, *, samples: int, shard_count: int
+    root: Path,
+    *,
+    samples: int,
+    gpu_ids: tuple[int, ...],
+    receipt: Mapping[str, Any],
+    source_config: Path,
 ) -> dict[str, Any] | None:
+    shard_count = len(gpu_ids)
     summary_path = root / "launch-summary.json"
     if not summary_path.exists():
         return None
     _regular_file(summary_path, label="ACC generation summary")
+    plan_path = root / "launch-plan.json"
+    _regular_file(plan_path, label="ACC generation launch plan")
     try:
         value = json.loads(summary_path.read_text(encoding="utf-8"))
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        raise ControllerError("ACC generation summary is malformed") from error
+        raise ControllerError("ACC generation publication is malformed") from error
+    if not isinstance(plan, dict):
+        raise ControllerError("ACC generation launch plan is not an object")
+    declared_plan_sha256 = plan.get("plan_sha256")
+    plan_without_digest = dict(plan)
+    plan_without_digest.pop("plan_sha256", None)
+    computed_plan_sha256 = sha256(_canonical_bytes(plan_without_digest)).hexdigest()
     if (
         value.get("schema_version") != GENERATION_SCHEMA
         or value.get("status") != "complete"
@@ -681,13 +703,48 @@ def _generation_current(
         or value.get("sample_count") != samples
         or value.get("record_count") != samples * len(ARMS)
         or value.get("shard_count") != shard_count
+        or value.get("plan_sha256") != declared_plan_sha256
+        or declared_plan_sha256 != computed_plan_sha256
+        or plan.get("schema_version") != "answer_utility_multi_worker_launch_plan_v1"
+        or Path(str(plan.get("output_root", ""))).resolve() != root.resolve()
+        or tuple(plan.get("physical_gpu_ids", ())) != gpu_ids
+        or plan.get("workers_per_gpu") != 1
     ):
-        raise ControllerError(f"ACC generation summary differs: {summary_path}")
+        raise ControllerError(f"ACC generation plan/summary differs: {root}")
+    whole = plan.get("whole_preflight")
+    expected_manifest_sha256 = (
+        FIRST_MANIFEST_SHA256 if samples == 200 else FULL_MANIFEST_SHA256
+    )
+    expected_binding = {
+        "candidate_artifact_file_sha256": receipt["adapter_file_sha256"],
+        "candidate_global_step": EXPECTED_STEP,
+        "candidate_training_run_identity_sha256": receipt["run_identity_sha256"],
+        "production_source_artifact_sha256": receipt["adapter_file_sha256"],
+        "production_source_global_step": EXPECTED_STEP,
+        "production_source_manifest_sha256": receipt["adapter_manifest_sha256"],
+        "production_source_run_identity_sha256": receipt["run_identity_sha256"],
+    }
+    if (
+        not isinstance(whole, dict)
+        or tuple(whole.get("arms", ())) != ARMS
+        or whole.get("selected_sample_count") != samples
+        or any(whole.get(key) != expected for key, expected in expected_binding.items())
+    ):
+        raise ControllerError("ACC generation whole preflight names another source")
     shards = value.get("shards")
-    if not isinstance(shards, list) or len(shards) != shard_count:
+    assignments = plan.get("assignments")
+    if (
+        not isinstance(shards, list)
+        or len(shards) != shard_count
+        or not isinstance(assignments, list)
+        or len(assignments) != shard_count
+    ):
         raise ControllerError("ACC generation shard receipt count differs")
-    for shard in shards:
-        if not isinstance(shard, dict):
+    source_config = source_config.resolve()
+    selected_samples = 0
+    evaluation_manifest_sha256: str | None = None
+    for shard_index, (shard, assignment) in enumerate(zip(shards, assignments)):
+        if not isinstance(shard, dict) or not isinstance(assignment, dict):
             raise ControllerError("ACC generation shard receipt is malformed")
         shard_root = Path(str(shard.get("output_root", "")))
         records = shard_root / "records.jsonl"
@@ -697,10 +754,87 @@ def _generation_current(
             _regular_file(path, label="ACC generation shard artifact")
         if shard.get("records_jsonl_sha256") != _file_sha256(records):
             raise ControllerError("ACC generation shard records SHA256 differs")
+        try:
+            identity_value = json.loads(identity.read_text(encoding="utf-8"))
+            shard_summary = json.loads(summary.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ControllerError("ACC generation shard JSON is malformed") from error
+        shard_identity = (
+            identity_value.get("identity") if isinstance(identity_value, dict) else None
+        )
+        preflight = assignment.get("preflight")
+        command = assignment.get("command")
+        if (
+            not isinstance(shard_identity, dict)
+            or not isinstance(preflight, dict)
+            or not isinstance(command, list)
+            or not all(isinstance(item, str) for item in command)
+        ):
+            raise ControllerError("ACC generation shard identity is malformed")
+        try:
+            config_position = command.index("--source-evaluation-config") + 1
+            command_source_config = Path(command[config_position]).resolve()
+        except (ValueError, IndexError) as error:
+            raise ControllerError("ACC worker command has no source config") from error
+        expected_shard = {
+            "shard_index": shard_index,
+            "shard_count": shard_count,
+            "physical_gpu_id": gpu_ids[shard_index],
+        }
+        expected_shard_receipt = {
+            "shard_index": shard_index,
+            "physical_gpu_id": gpu_ids[shard_index],
+        }
+        expected_shard_root = root / f"shard-{shard_index:04d}-of-{shard_count:04d}"
+        if (
+            command_source_config != source_config
+            or any(
+                assignment.get(key) != expected
+                for key, expected in expected_shard.items()
+            )
+            or any(
+                shard.get(key) != expected
+                for key, expected in expected_shard_receipt.items()
+            )
+            or shard_root.resolve() != expected_shard_root.resolve()
+            or Path(str(assignment.get("output_root", ""))).resolve()
+            != expected_shard_root.resolve()
+            or any(
+                preflight.get(key) != expected
+                for key, expected in expected_binding.items()
+            )
+            or any(
+                shard_identity.get(key) != expected
+                for key, expected in expected_binding.items()
+            )
+            or shard_identity.get("ordered_group_manifest_sha256")
+            != expected_manifest_sha256
+            or shard_summary.get("run_identity_sha256")
+            != shard.get("run_identity_sha256")
+            or identity_value.get("identity_sha256") != shard.get("run_identity_sha256")
+            or shard_summary.get("records_jsonl_sha256") != _file_sha256(records)
+        ):
+            raise ControllerError("ACC generation shard names another RP69 source")
+        shard_data_manifest = shard_identity.get("data_manifest_sha256")
+        if not isinstance(shard_data_manifest, str) or len(shard_data_manifest) != 64:
+            raise ControllerError("ACC shard data manifest identity is invalid")
+        if evaluation_manifest_sha256 is None:
+            evaluation_manifest_sha256 = shard_data_manifest
+        elif shard_data_manifest != evaluation_manifest_sha256:
+            raise ControllerError("ACC shards name different evaluation data")
+        selected_samples += int(shard.get("sample_count", -1))
+    if selected_samples != samples:
+        raise ControllerError("ACC shard sample counts do not cover the split")
     return value
 
 
-def _semantic_current(root: Path, *, samples: int) -> bool:
+def _semantic_current(
+    root: Path,
+    *,
+    samples: int,
+    generation: Mapping[str, Any] | None,
+    source_config: Path,
+) -> bool:
     summary_path = root / "summary.json"
     manifest_path = root / "manifest.json"
     if not summary_path.exists() and not manifest_path.exists():
@@ -714,7 +848,11 @@ def _semantic_current(root: Path, *, samples: int) -> bool:
         raise ControllerError("semantic publication is malformed") from error
     by_arm = summary.get("by_arm")
     files = manifest.get("files")
+    semantic_identity = manifest.get("identity")
     run_identity = summary.get("run_identity_sha256")
+    if generation is None:
+        raise ControllerError("semantic publication exists without current generation")
+    generation_shards = generation.get("shards")
     if (
         summary.get("schema_version") != SEMANTIC_SCHEMA
         or manifest.get("schema_version") != SEMANTIC_SCHEMA
@@ -733,8 +871,68 @@ def _semantic_current(root: Path, *, samples: int) -> bool:
         or not isinstance(files, dict)
         or files.get("summary", {}).get("sha256") != _file_sha256(summary_path)
         or files.get("overlay_records", {}).get("rows") != samples * len(ARMS)
+        or not isinstance(semantic_identity, dict)
+        or not isinstance(generation_shards, list)
+        or semantic_identity.get("source_evaluation_config_path")
+        != str(source_config.resolve())
+        or semantic_identity.get("source_evaluation_config_sha256")
+        != _file_sha256(source_config)
+        or semantic_identity.get("judge", {}).get("config_file_sha256")
+        != JUDGE_CONFIG_SHA256
     ):
         raise ControllerError(f"semantic publication differs: {root}")
+    generation_sources = semantic_identity.get("generation_sources")
+    if not isinstance(generation_sources, list) or len(generation_sources) != len(
+        generation_shards
+    ):
+        raise ControllerError("semantic generation-source count differs")
+    sources_by_root = {
+        str(source.get("root")): source
+        for source in generation_sources
+        if isinstance(source, dict)
+    }
+    data_manifest_sha256: str | None = None
+    for shard in generation_shards:
+        if not isinstance(shard, dict):
+            raise ControllerError("semantic source generation shard is malformed")
+        shard_root = Path(str(shard.get("output_root", ""))).resolve()
+        source = sources_by_root.get(str(shard_root))
+        if not isinstance(source, dict):
+            raise ControllerError("semantic publication omits one generation shard")
+        identity_path = shard_root / "identity.json"
+        records_path = shard_root / "records.jsonl"
+        shard_summary_path = shard_root / "summary.json"
+        for path in (identity_path, records_path, shard_summary_path):
+            _regular_file(path, label="semantic generation source")
+        identity_value = json.loads(identity_path.read_text(encoding="utf-8"))
+        shard_identity = (
+            identity_value.get("identity") if isinstance(identity_value, dict) else None
+        )
+        if not isinstance(shard_identity, dict):
+            raise ControllerError("semantic generation identity is malformed")
+        observed_data_manifest = shard_identity.get("data_manifest_sha256")
+        if data_manifest_sha256 is None:
+            data_manifest_sha256 = observed_data_manifest
+        elif observed_data_manifest != data_manifest_sha256:
+            raise ControllerError("semantic generation sources use different data")
+        if (
+            source.get("generation_identity_sha256") != shard.get("run_identity_sha256")
+            or source.get("record_count") != shard.get("record_count")
+            or source.get("records_file_sha256") != _file_sha256(records_path)
+            or source.get("identity_file_sha256") != _file_sha256(identity_path)
+            or source.get("summary_file_sha256") != _file_sha256(shard_summary_path)
+        ):
+            raise ControllerError("semantic publication names another generation")
+    if semantic_identity.get("evaluation_data_manifest_sha256") != data_manifest_sha256:
+        raise ControllerError("semantic publication names another evaluation dataset")
+    for name in ("overlay_records", "blind_requests", "judge_evidence"):
+        record = files.get(name)
+        if not isinstance(record, dict):
+            raise ControllerError(f"semantic manifest omits {name}")
+        artifact = root / str(record.get("path", ""))
+        _regular_file(artifact, label=f"semantic {name}")
+        if record.get("sha256") != _file_sha256(artifact):
+            raise ControllerError(f"semantic {name} SHA256 differs")
     return True
 
 
@@ -926,7 +1124,7 @@ def _owned_worker_pids_from_plan(plan_path: Path) -> tuple[int, ...]:
 
 
 def _stop_owned_worker_session(worker_pid: int) -> None:
-    if worker_pid not in _owned_session_pids(worker_pid):
+    if not _owned_session_pids(worker_pid):
         return
     try:
         os.killpg(worker_pid, signal.SIGTERM)
@@ -988,10 +1186,18 @@ def _run_parallel_generation(
     timeout_seconds: float,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     first = _generation_current(
-        paths["first_generation"], samples=200, shard_count=len(first_gpus)
+        paths["first_generation"],
+        samples=200,
+        gpu_ids=first_gpus,
+        receipt=receipt,
+        source_config=paths["first_config"],
     )
     full = _generation_current(
-        paths["full_generation"], samples=867, shard_count=len(full_gpus)
+        paths["full_generation"],
+        samples=867,
+        gpu_ids=full_gpus,
+        receipt=receipt,
+        source_config=paths["full_config"],
     )
     specifications = (
         (
@@ -1041,31 +1247,38 @@ def _run_parallel_generation(
                         "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
                     }
                 )
-            process = subprocess.Popen(
-                command,
-                cwd=CLEAN_RUNTIME,
-                env=environment,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            jobs.append(
-                {
-                    "name": name,
-                    "process": process,
-                    "log": log,
-                    "log_path": log_path,
-                    "worker_plan": (
-                        paths["first_generation"] / "launch-plan.json"
-                        if name == "first200_generation"
-                        else (
-                            paths["full_generation"] / "launch-plan.json"
-                            if name == "full867_generation"
-                            else None
-                        )
-                    ),
-                }
-            )
+            process: subprocess.Popen[bytes] | None = None
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=CLEAN_RUNTIME,
+                    env=environment,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                jobs.append(
+                    {
+                        "name": name,
+                        "process": process,
+                        "log": log,
+                        "log_path": log_path,
+                        "worker_plan": (
+                            paths["first_generation"] / "launch-plan.json"
+                            if name == "first200_generation"
+                            else (
+                                paths["full_generation"] / "launch-plan.json"
+                                if name == "full867_generation"
+                                else None
+                            )
+                        ),
+                    }
+                )
+            except BaseException:
+                if process is not None:
+                    _stop_process_group(process)
+                log.close()
+                raise
             _append_event(
                 paths["events"],
                 "stage_started",
@@ -1110,10 +1323,18 @@ def _run_parallel_generation(
     if not _int_report_current(receipt, paths):
         raise ControllerError("INT-DIAG exited without a complete report")
     first = _generation_current(
-        paths["first_generation"], samples=200, shard_count=len(first_gpus)
+        paths["first_generation"],
+        samples=200,
+        gpu_ids=first_gpus,
+        receipt=receipt,
+        source_config=paths["first_config"],
     )
     full = _generation_current(
-        paths["full_generation"], samples=867, shard_count=len(full_gpus)
+        paths["full_generation"],
+        samples=867,
+        gpu_ids=full_gpus,
+        receipt=receipt,
+        source_config=paths["full_config"],
     )
     if first is None or full is None:
         raise ControllerError("ACC generation exited without complete summaries")
@@ -1281,7 +1502,12 @@ def _run_semantic_one(
     log_path: Path,
     paths: Mapping[str, Path],
 ) -> None:
-    if _semantic_current(output_root, samples=samples):
+    if _semantic_current(
+        output_root,
+        samples=samples,
+        generation=generation,
+        source_config=config,
+    ):
         return
     command = _semantic_command(
         generation=generation, source_config=config, output_root=output_root
@@ -1301,7 +1527,12 @@ def _run_semantic_one(
         except BaseException:
             _stop_process_group(process)
             raise
-    if return_code != 0 or not _semantic_current(output_root, samples=samples):
+    if return_code != 0 or not _semantic_current(
+        output_root,
+        samples=samples,
+        generation=generation,
+        source_config=config,
+    ):
         raise ControllerError(f"{split} semantic rescore failed; inspect {log_path}")
     _append_event(paths["events"], "semantic_complete", split=split)
 
@@ -1314,8 +1545,16 @@ def _run_semantic_pair(
     judge_gpus: tuple[int, int],
     gpu_wait_timeout: float,
 ) -> None:
-    if _semantic_current(paths["first_semantic"], samples=200) and _semantic_current(
-        paths["full_semantic"], samples=867
+    if _semantic_current(
+        paths["first_semantic"],
+        samples=200,
+        generation=first,
+        source_config=paths["first_config"],
+    ) and _semantic_current(
+        paths["full_semantic"],
+        samples=867,
+        generation=full,
+        source_config=paths["full_config"],
     ):
         return
     settings = _judge_settings()
@@ -1323,27 +1562,29 @@ def _run_semantic_pair(
         raise ControllerError("semantic judge port is occupied by an unowned endpoint")
     _wait_gpus_empty(judge_gpus, timeout_seconds=gpu_wait_timeout, paths=paths)
     log = paths["judge_log"].open("ab", buffering=0)
-    judge = subprocess.Popen(
-        _judge_command(settings),
-        cwd=CLEAN_RUNTIME,
-        env=_judge_environment(judge_gpus=judge_gpus, paths=paths),
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    ownership = {
-        "schema_version": "rp69-owned-semantic-judge-v1",
-        "status": "starting",
-        "started_at": _utc_now(),
-        "pid": judge.pid,
-        "pgid": judge.pid,
-        "gpu_ids": list(judge_gpus),
-        "port": settings["port"],
-        "runtime_commit": CLEAN_RUNTIME_COMMIT,
-        "judge_config_sha256": JUDGE_CONFIG_SHA256,
-    }
-    _atomic_json(paths["judge_ownership"], ownership)
+    judge: subprocess.Popen[bytes] | None = None
+    ownership: dict[str, Any] | None = None
     try:
+        judge = subprocess.Popen(
+            _judge_command(settings),
+            cwd=CLEAN_RUNTIME,
+            env=_judge_environment(judge_gpus=judge_gpus, paths=paths),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        ownership = {
+            "schema_version": "rp69-owned-semantic-judge-v1",
+            "status": "starting",
+            "started_at": _utc_now(),
+            "pid": judge.pid,
+            "pgid": judge.pid,
+            "gpu_ids": list(judge_gpus),
+            "port": settings["port"],
+            "runtime_commit": CLEAN_RUNTIME_COMMIT,
+            "judge_config_sha256": JUDGE_CONFIG_SHA256,
+        }
+        _atomic_json(paths["judge_ownership"], ownership)
         _wait_judge_ready(judge, settings=settings, timeout=600)
         ownership["status"] = "ready"
         ownership["ready_at"] = _utc_now()
@@ -1367,12 +1608,14 @@ def _run_semantic_pair(
             paths=paths,
         )
     finally:
-        _stop_process_group(judge)
+        if judge is not None:
+            _stop_process_group(judge)
         log.close()
-        ownership["status"] = "stopped"
-        ownership["stopped_at"] = _utc_now()
-        ownership["returncode"] = judge.returncode
-        _atomic_json(paths["judge_ownership"], ownership)
+        if ownership is not None and judge is not None:
+            ownership["status"] = "stopped"
+            ownership["stopped_at"] = _utc_now()
+            ownership["returncode"] = judge.returncode
+            _atomic_json(paths["judge_ownership"], ownership)
     _wait_gpus_empty(judge_gpus, timeout_seconds=300, paths=paths)
 
 
@@ -1563,23 +1806,33 @@ def _status(
         result["training_complete"] = True
         result["training_run_identity_sha256"] = receipt["run_identity_sha256"]
         result["int_diag_complete"] = _int_report_current(receipt, paths)
-        result["first200_generation_complete"] = (
-            _generation_current(
-                paths["first_generation"], samples=200, shard_count=len(first_gpus)
-            )
-            is not None
+        first_generation = _generation_current(
+            paths["first_generation"],
+            samples=200,
+            gpu_ids=first_gpus,
+            receipt=receipt,
+            source_config=paths["first_config"],
         )
-        result["full867_generation_complete"] = (
-            _generation_current(
-                paths["full_generation"], samples=867, shard_count=len(full_gpus)
-            )
-            is not None
+        full_generation = _generation_current(
+            paths["full_generation"],
+            samples=867,
+            gpu_ids=full_gpus,
+            receipt=receipt,
+            source_config=paths["full_config"],
         )
+        result["first200_generation_complete"] = first_generation is not None
+        result["full867_generation_complete"] = full_generation is not None
         result["first200_semantic_complete"] = _semantic_current(
-            paths["first_semantic"], samples=200
+            paths["first_semantic"],
+            samples=200,
+            generation=first_generation,
+            source_config=paths["first_config"],
         )
         result["full867_semantic_complete"] = _semantic_current(
-            paths["full_semantic"], samples=867
+            paths["full_semantic"],
+            samples=867,
+            generation=full_generation,
+            source_config=paths["full_config"],
         )
         result["pipeline_complete"] = _complete_marker_current(
             paths["complete"], receipt=receipt, paths=paths
@@ -1618,9 +1871,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-wait-timeout-seconds", type=float, default=6 * 60 * 60)
     parser.add_argument("--evaluation-timeout-seconds", type=float, default=6 * 60 * 60)
     parser.add_argument("--int-gpu", type=int, default=0)
-    parser.add_argument("--first-gpus", type=_parse_gpu_list, default=(1, 2))
-    parser.add_argument("--full-gpus", type=_parse_gpu_list, default=(3, 4, 5, 6, 7))
-    parser.add_argument("--judge-gpus", type=_parse_gpu_list, default=(6, 7))
+    parser.add_argument("--first-gpus", type=_parse_gpu_list, default=(1,))
+    parser.add_argument("--full-gpus", type=_parse_gpu_list, default=(2, 3))
+    parser.add_argument("--judge-gpus", type=_parse_gpu_list, default=(2, 3))
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("dry-run")
     subparsers.add_parser("status")
@@ -1765,7 +2018,9 @@ def _run(
                 _generation_current(
                     paths["first_generation"],
                     samples=200,
-                    shard_count=len(args.first_gpus),
+                    gpu_ids=args.first_gpus,
+                    receipt=receipt,
+                    source_config=paths["first_config"],
                 )
                 is None
             ):
@@ -1774,7 +2029,9 @@ def _run(
                 _generation_current(
                     paths["full_generation"],
                     samples=867,
-                    shard_count=len(args.full_gpus),
+                    gpu_ids=args.full_gpus,
+                    receipt=receipt,
+                    source_config=paths["full_config"],
                 )
                 is None
             ):
