@@ -149,6 +149,46 @@ def test_reference_diagnostic_routes_explicit_ref_engine_and_restores_flag() -> 
     assert trainer.ref_in_actor is True
 
 
+def test_trainer_gate_preserves_the_run_bound_actor_scheduler_horizon() -> None:
+    from omegaconf import OmegaConf
+
+    config = OmegaConf.create(
+        {
+            "trainer": {"total_training_steps": 20},
+            "actor_rollout_ref": {"actor": {"optim": {"total_training_steps": 80}}},
+        }
+    )
+    OmegaConf.set_struct(config, True)
+
+    class UpstreamTrainer:
+        def __init__(self, *, config):
+            self.config = config
+            self.total_training_steps = config.trainer.total_training_steps
+            # This is the pinned veRL v0 behavior that previously collapsed
+            # the optimizer schedule horizon to the bounded trainer gate.
+            config.actor_rollout_ref.actor.optim.total_training_steps = (
+                self.total_training_steps
+            )
+
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            return None
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = trainer_cls(config=config)
+
+    assert trainer.total_training_steps == 20
+    assert trainer.config.actor_rollout_ref.actor.optim.total_training_steps == 80
+
+
 def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None:
     events: list[object] = []
 

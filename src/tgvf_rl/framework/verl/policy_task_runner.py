@@ -710,7 +710,13 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
 
     class PolicyPilotRayPPOTrainer(upstream_trainer_cls):
         def __init__(self, *args, **kwargs):
+            config = kwargs.get("config", args[0] if args else None)
+            actor_scheduler_horizon = _actor_scheduler_horizon(config)
             super().__init__(*args, **kwargs)
+            _restore_actor_scheduler_horizon(
+                self.config,
+                actor_scheduler_horizon,
+            )
             # The Pilot keeps both mathematical KL coefficients at zero, so
             # upstream's ``need_reference_policy`` is intentionally false.
             # We nevertheless execute a frozen-base reference forward as a
@@ -1042,6 +1048,32 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
     PolicyPilotRayPPOTrainer.__qualname__ = "PolicyPilotRayPPOTrainer"
     PolicyPilotRayPPOTrainer.__module__ = __name__
     return PolicyPilotRayPPOTrainer
+
+
+def _actor_scheduler_horizon(config: object) -> int:
+    """Read the run-bound actor horizon before pinned veRL overwrites it."""
+
+    try:
+        horizon = config.actor_rollout_ref.actor.optim.total_training_steps  # type: ignore[union-attr]
+    except AttributeError as error:
+        raise TypeError(
+            "Policy actor optimizer scheduler horizon is missing"
+        ) from error
+    if type(horizon) is not int or horizon <= 0:
+        raise TypeError("Policy actor optimizer scheduler horizon must be positive")
+    return horizon
+
+
+def _restore_actor_scheduler_horizon(config: object, horizon: int) -> None:
+    """Undo pinned veRL's trainer-step overwrite before workers are created."""
+
+    from omegaconf import DictConfig, open_dict
+
+    if isinstance(config, DictConfig):
+        with open_dict(config):
+            config.actor_rollout_ref.actor.optim.total_training_steps = horizon
+        return
+    config.actor_rollout_ref.actor.optim.total_training_steps = horizon  # type: ignore[union-attr]
 
 
 def policy_metrics_observation_from_data_proto(
