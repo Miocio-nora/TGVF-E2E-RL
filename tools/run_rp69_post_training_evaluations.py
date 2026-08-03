@@ -82,6 +82,10 @@ EXPECTED_ARTIFACT_ROOT = REPOSITORY_ROOT / (
     "artifacts/representation/"
     "RP-69-qwen3-instruct-balanced-t1-visual-barycentric-500-gpu0123"
 )
+DEFAULT_OUTPUT_ROOT = REPOSITORY_ROOT / (
+    "artifacts/representation_experiments/visual_barycentric/evaluation/"
+    "rp69_step0500_gpu0123"
+)
 
 FIRST_MANIFEST = REPOSITORY_ROOT / (
     "configs/representation/internal_evaluation/"
@@ -272,6 +276,7 @@ def _static_training_layout(path: Path) -> dict[str, Any]:
     value = _load_toml(path)
     try:
         output = value["output"]
+        checkpoint = value["checkpoint"]
         training = value["training"]
         fsdp2 = value["fsdp2"]
         resume = value["resume"]
@@ -310,6 +315,7 @@ def _static_training_layout(path: Path) -> dict[str, Any]:
         }
         metrics_path = Path(output["metrics_jsonl_path"])
         adapter_path = Path(output["final_artifact_path"])
+        checkpoint_directory = Path(checkpoint["directory"])
     except (KeyError, TypeError) as error:
         raise ControllerError("RP69 training config lacks required fields") from error
     mismatches = [
@@ -319,6 +325,8 @@ def _static_training_layout(path: Path) -> dict[str, Any]:
         mismatches.append("output.final_artifact_path")
     if metrics_path != EXPECTED_ARTIFACT_ROOT / "metrics.jsonl":
         mismatches.append("output.metrics_jsonl_path")
+    if checkpoint_directory != EXPECTED_ARTIFACT_ROOT / "checkpoints":
+        mismatches.append("checkpoint.directory")
     if mismatches:
         raise ControllerError(
             "training config is not the isolated RP69 treatment: "
@@ -328,6 +336,7 @@ def _static_training_layout(path: Path) -> dict[str, Any]:
         "run_id": EXPECTED_RUN_ID,
         "adapter_path": adapter_path,
         "metrics_path": metrics_path,
+        "checkpoint_directory": checkpoint_directory,
         "target_optimizer_steps": EXPECTED_STEP,
     }
 
@@ -498,7 +507,42 @@ def _load_training_completion(
 
 
 def _default_output_root() -> Path:
-    return EXPECTED_ARTIFACT_ROOT / "post-training-evaluation"
+    return DEFAULT_OUTPUT_ROOT
+
+
+def _training_protected_paths(
+    training_layout: Mapping[str, Any],
+) -> tuple[Path, ...]:
+    return tuple(
+        dict.fromkeys(
+            (
+                Path(training_layout["adapter_path"]).resolve().parent,
+                Path(training_layout["metrics_path"]).resolve().parent,
+                Path(training_layout["checkpoint_directory"]).resolve(),
+            )
+        )
+    )
+
+
+def _assert_output_root_isolated(
+    output_root: Path, training_layout: Mapping[str, Any]
+) -> None:
+    """Reject evaluation roots that overlap any RP69 training artifact tree."""
+
+    output = output_root.expanduser().resolve()
+    protected = _training_protected_paths(training_layout)
+    conflicts = tuple(
+        directory
+        for directory in protected
+        if output == directory
+        or directory in output.parents
+        or output in directory.parents
+    )
+    if conflicts:
+        raise ControllerError(
+            "evaluation output root overlaps RP69 training/artifact paths: "
+            f"output={output}; protected=" + ",".join(str(path) for path in conflicts)
+        )
 
 
 def _paths(root: Path) -> dict[str, Path]:
@@ -1911,6 +1955,7 @@ def _dry_run(
     judge_gpus: tuple[int, int],
 ) -> dict[str, Any]:
     layout = _assert_static_inputs(training_config_path)
+    _assert_output_root_isolated(output_root, layout)
     paths = _paths(output_root)
     placeholder = {
         "training_config_path": str(training_config_path),
@@ -1937,6 +1982,12 @@ def _dry_run(
         "adapter_variant": EXPECTED_VARIANT,
         "arms": list(ARMS),
         "output_root": str(output_root),
+        "output_isolation_preflight": {
+            "status": "passed",
+            "protected_paths": [
+                str(path) for path in _training_protected_paths(layout)
+            ],
+        },
         "gpu_plan": {
             "int_diag_first200": [int_gpu],
             "acc_first200": list(first_gpus),
@@ -1976,6 +2027,9 @@ def _dry_run(
 def _run(
     args: argparse.Namespace, training_config_path: Path, paths: Mapping[str, Path]
 ) -> dict[str, Any]:
+    _assert_output_root_isolated(
+        paths["root"], _static_training_layout(training_config_path)
+    )
     expected_config_sha256 = _file_sha256(training_config_path)
     paths["root"].mkdir(parents=True, exist_ok=True)
     with _exclusive_lock(paths["lock"]):
@@ -2118,12 +2172,13 @@ def main() -> int:
     args = _parser().parse_args()
     _validate_arguments(args)
     training_config_path = args.training_config.expanduser().resolve()
-    _assert_static_inputs(training_config_path)
+    training_layout = _assert_static_inputs(training_config_path)
     output_root = (
         _default_output_root()
         if args.output_root is None
         else args.output_root.expanduser().resolve()
     )
+    _assert_output_root_isolated(output_root, training_layout)
     paths = _paths(output_root)
     if args.command == "dry-run":
         result = _dry_run(
