@@ -9321,3 +9321,45 @@ than inferred from a script name or prior conversation.
   gate. The step-1 metrics-file SHA-256 is
   `bd44c2bd78e44a5fddae719adae9d093bc6391e323343e2397ce96954d7da9c9`;
   measured completion ETA is approximately `14:00--14:40 JST`.
+
+### PRL-05-R0-QWEN3-INSTRUCT-CROP-ANSWER-PRIMARY-TOOLW0P2-20STEP
+
+- Cell/class and lifecycle: isolated non-formal reward-weight ablation;
+  `READY_TO_LAUNCH` at `2026-08-03 21:17 JST`. It starts fresh from the same
+  Qwen3-VL-8B-Instruct policy state as PRL-04-R2 and does not reuse an R2
+  optimizer checkpoint.
+- Single scientific variable: `conditional_tool_weight` changes from `1.2` to
+  `0.2`. Answer/format weights remain `.8/.2`; data, seed, Crop protocol,
+  BS16, n8, world4/GA4, decoder LoRA r64, AdamW LR `1e-6`, zero KL, prompts,
+  response budget and maximum four tool calls remain unchanged. The optimizer
+  stops at step 20 while retaining the original 80-step cosine scheduler
+  horizon, so the first 20 learning-rate values remain matched to R2.
+- Motivation: R2 completed 80 steps with cumulative answer reward `.759473`,
+  conditional-tool reward `.748828`, training tool-attempt rate `98.525%` and
+  mean `2.684` calls per trajectory. Held-out Crop tool use was effectively
+  flat at step 0/30/80 (`86.21/86.03/86.61%`), while the seven-slice CoreDev
+  macro was approximately `51.27/50.15/51.18`; R2 did not improve over step 0.
+  The old successful Stage3 made answer correctness nominally dominant and its
+  positive tool-decision scale was approximately one quarter of answer, rather
+  than the current 1.5x answer bonus.
+- Offline counterfactual caveat: replaying all 10,240 R2 trajectories under
+  `.8/.2/.2` changes more than `1e-3` advantage on only 316/1,280 groups;
+  old/new advantage cosine is `.989832`. Correct-tool and correct-direct
+  coexist in only 73 groups. This run is therefore a low-cost mechanism test,
+  not an expectation of a large accuracy gain.
+- Implementation: commit `14f987fde23f92688d48d9b71556142b5b8501fe`
+  adds an exact named answer-primary profile, binds configured weights into the
+  live reward pipeline identity, and validates the same equation through the
+  trajectory and DataProto bridges. The legacy `.8/.2/1.2` digest and behavior
+  remain accepted unchanged. Focused coverage passes 81 tests plus Ruff.
+- Config:
+  `configs/policy/runs/prl_05_r0_qwen3_instruct_grpo_bs16_crop_t1full_toolw0p2_20step_gpu0123.toml`.
+  Checkpoints are planned at `1/5/10/20`, W&B remains enabled, and the output
+  root is
+  `artifacts/policy/PRL-05-R0-qwen3-instruct-grpo-bs16-crop-t1full-toolw0p2-20step-gpu0123`.
+- Gate: step 20 is sufficient to compare answer reward, tool attempts,
+  repeated calls, format health, update/KL diagnostics and a matched held-out
+  checkpoint evaluation. A flat result is not a definitive long-horizon
+  accuracy failure, but no change in tool behavior or answer trajectory is a
+  stop signal; only a healthy result is eligible for a separately bound
+  continuation to step 40 and the RP-66 TGVF arm.
