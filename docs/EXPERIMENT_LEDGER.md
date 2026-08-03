@@ -9363,3 +9363,16 @@ than inferred from a script name or prior conversation.
   accuracy failure, but no change in tool behavior or answer trajectory is a
   stop signal; only a healthy result is eligible for a separately bound
   continuation to step 40 and the RP-66 TGVF arm.
+- Pre-launch scheduler recovery: the first initialization attempt exposed
+  pinned veRL v0 overwriting the configured actor optimizer horizon (`80`)
+  with the bounded trainer gate (`20`) inside `RayPPOTrainer.__init__`. It was
+  stopped before rollout step 0, metrics, checkpoint or W&B creation. Commit
+  `f22a0688ee5b741413eaed3f9ea585d71215150d` now captures the configured
+  actor horizon before the upstream constructor and restores it before worker
+  initialization; the trainer still performs exactly 20 optimizer steps while
+  workers construct the matched 80-step cosine schedule. The focused trainer
+  suite passed 16 tests, and the combined policy runtime/config/reward suite
+  passed 96 tests plus Ruff. A second launch attempt then failed closed before
+  GPU allocation because this recovery had not yet been recorded in the
+  observed ledger commit; it likewise produced no scientific artifact. The
+  next launch must be accepted only after rank 0 prints `Total steps: 80`.
