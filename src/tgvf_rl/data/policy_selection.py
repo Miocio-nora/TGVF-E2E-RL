@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import json
+import re
 from typing import Any
+
+from .deepeyes47k import DeepEyesTaskKind, classify_deepeyes_task_kind
 
 
 POLICY_SELECTION_CANDIDATE_SCHEMA = "tgvf.policy-selection.candidate.v1"
@@ -22,6 +25,29 @@ POLICY_SELECTION_REQUEST_SCHEMA = "tgvf.policy-selection.request.v1"
 POLICY_SELECTION_ATTEMPT_SCHEMA = "tgvf.policy-selection.attempt.v1"
 POLICY_SELECTION_DECISION_SCHEMA = "tgvf.policy-selection.decision.v1"
 DEEPEYES_DIFFICULTY_ATTEMPTS = 8
+POLICY_SELECTION_TASK_KIND_POLICY = (
+    "source-contract-plus-thinklite-answer-form-classifier-v2"
+)
+
+_THINKLITE_NUMERIC_ATOM = r"(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
+_THINKLITE_NUMERIC_ANSWER = re.compile(
+    rf"""(?ix)
+    \s*(?:about\s+)?(?:[$€£¥]\s*)?[+-]?
+    (?:
+        {_THINKLITE_NUMERIC_ATOM}
+        (?:\s*(?:/|:)\s*[+-]?{_THINKLITE_NUMERIC_ATOM})?
+        |
+        \\(?:d|t)?frac\s*\{{\s*[+-]?{_THINKLITE_NUMERIC_ATOM}\s*\}}
+        \s*\{{\s*[+-]?{_THINKLITE_NUMERIC_ATOM}\s*\}}
+    )
+    (?:\s*(?:%|\\%|[^\d\s]+(?:\s+[^\d\s]+)?))?
+    \s*
+    """
+)
+_THINKLITE_MATH_EXPRESSION = re.compile(
+    r"\\(?:d|t)?frac\b|\\(?:sqrt|boxed|begin|sin|cos|tan|log|pi|times|div|pm|"
+    r"leq|geq|neq|cdot)\b|[=\u00d7÷^<>\u221a±]"
+)
 
 DEEPEYES_REFERENCE_COUNTS = {
     "vstar": 22_362,
@@ -66,6 +92,70 @@ class T2Decision(str, Enum):
     UNRESOLVED = "unresolved"
 
 
+def classify_policy_selection_task_kind(
+    *,
+    source: SelectionSource | str,
+    question: str,
+    ground_truth: Any,
+) -> DeepEyesTaskKind:
+    """Choose the answer-verifier route without treating a source as all-math.
+
+    VStar and ArxivQA have dataset-level contracts. ThinkLite is heterogeneous
+    and stringifies every answer, so it needs a sample-level answer-form rule
+    in addition to the existing deterministic DeepEyes classifier.
+    """
+
+    try:
+        normalized_source = SelectionSource(source)
+    except (TypeError, ValueError) as error:
+        raise ValueError("source must be vstar, arxivqa, or thinklite") from error
+    if normalized_source is SelectionSource.VSTAR:
+        return DeepEyesTaskKind.OPEN
+    if normalized_source is SelectionSource.ARXIVQA:
+        return DeepEyesTaskKind.MCQ
+    baseline = classify_deepeyes_task_kind(
+        question=question,
+        ground_truth=ground_truth,
+        data_source=normalized_source.value,
+    )
+    if baseline is not DeepEyesTaskKind.OPEN:
+        return baseline
+
+    # ThinkLite's pinned parquet stores every answer as text and provides no
+    # ability/style metadata.  The generic DeepEyes classifier deliberately
+    # treats only native JSON numbers as numeric; applying it directly would
+    # therefore route obvious answers such as ``"36"`` and ``"36/89"`` as
+    # open VQA.  Use answer syntax here because it is exactly the distinction
+    # that enables the deterministic numeric verifier.  Full-match keeps
+    # ordinary open answers containing incidental digits on the open route.
+    if isinstance(ground_truth, str):
+        answer = ground_truth.strip()
+        if _THINKLITE_NUMERIC_ANSWER.fullmatch(answer) is not None:
+            return DeepEyesTaskKind.MATH
+        if _THINKLITE_MATH_EXPRESSION.search(answer) is not None:
+            return DeepEyesTaskKind.MATH
+    return DeepEyesTaskKind.OPEN
+
+
+def policy_selection_semantic_judge_task_kind(
+    *,
+    source: SelectionSource | str,
+    question: str,
+    ground_truth: Any,
+) -> str:
+    """Translate the sample route to the two-route semantic-judge contract."""
+
+    task_kind = classify_policy_selection_task_kind(
+        source=source,
+        question=question,
+        ground_truth=ground_truth,
+    )
+    # The semantic judge accepts math/open_vqa.  A rare ThinkLite MCQ reaches
+    # this fallback only after its source verifier was inconclusive, so open
+    # semantic equivalence is safer than pretending it is mathematics.
+    return "math" if task_kind is DeepEyesTaskKind.MATH else "open_vqa"
+
+
 def _canonical_json_bytes(value: object) -> bytes:
     try:
         encoded = json.dumps(
@@ -98,7 +188,9 @@ def _required_positive_int(value: Any, *, field_name: str) -> int:
 
 def _required_sha256(value: Any, *, field_name: str) -> str:
     value = _required_string(value, field_name=field_name)
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+    if len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
         raise ValueError(f"{field_name} must be a lowercase SHA-256")
     return value
 
@@ -139,7 +231,9 @@ class SelectionCandidate:
         question = _required_string(record.get("question"), field_name="question")
         if "ground_truth" not in record:
             raise ValueError("ground_truth is required")
-        ground_truth = _normalized_json(record["ground_truth"], field_name="ground_truth")
+        ground_truth = _normalized_json(
+            record["ground_truth"], field_name="ground_truth"
+        )
         if ground_truth is None or (
             isinstance(ground_truth, str) and not ground_truth.strip()
         ):
@@ -162,9 +256,11 @@ class SelectionCandidate:
             raise ValueError("gt_regions must be a sequence")
         regions: list[tuple[int, int, int, int]] = []
         for index, region_value in enumerate(regions_value):
-            if not isinstance(region_value, Sequence) or isinstance(
-                region_value, (str, bytes, bytearray)
-            ) or len(region_value) != 4:
+            if (
+                not isinstance(region_value, Sequence)
+                or isinstance(region_value, (str, bytes, bytearray))
+                or len(region_value) != 4
+            ):
                 raise ValueError(f"gt_regions[{index}] must contain four integers")
             if any(type(coordinate) is not int for coordinate in region_value):
                 raise ValueError(f"gt_regions[{index}] must contain four integers")
@@ -243,7 +339,9 @@ def build_selection_requests(
                     "question": candidate.question,
                 }
                 if branch is SelectionBranch.GT_REGION:
-                    model_input["gt_regions"] = [list(box) for box in candidate.gt_regions]
+                    model_input["gt_regions"] = [
+                        list(box) for box in candidate.gt_regions
+                    ]
                 requests.append(
                     {
                         "schema_version": POLICY_SELECTION_REQUEST_SCHEMA,
@@ -348,12 +446,18 @@ def reduce_selection_attempts(
 
     if type(expected_oracle_attempts) is not int or expected_oracle_attempts < 0:
         raise ValueError("expected_oracle_attempts must be a non-negative integer")
-    parsed_candidates = [SelectionCandidate.from_record(record) for record in candidates]
-    candidates_by_id = {candidate.sample_id: candidate for candidate in parsed_candidates}
+    parsed_candidates = [
+        SelectionCandidate.from_record(record) for record in candidates
+    ]
+    candidates_by_id = {
+        candidate.sample_id: candidate for candidate in parsed_candidates
+    }
     if len(candidates_by_id) != len(parsed_candidates):
         raise ValueError("candidate sample_id values must be unique")
 
-    grouped: dict[tuple[str, SelectionBranch], list[SelectionAttempt]] = defaultdict(list)
+    grouped: dict[tuple[str, SelectionBranch], list[SelectionAttempt]] = defaultdict(
+        list
+    )
     request_ids: set[str] = set()
     for record in attempts:
         attempt = SelectionAttempt.from_record(record)

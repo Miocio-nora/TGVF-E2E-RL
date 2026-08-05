@@ -21,6 +21,11 @@ from .base import JudgeRequest, JudgeResult, JudgeUsage
 
 
 QWEN25_72B_RL_JUDGE_PROMPT_VERSION = "qwen2.5-72b-rl-answer-judge-v1"
+JUDGE_SAMPLE_FAILURE_ABORT = "raise_and_abort_reward_batch"
+JUDGE_SAMPLE_FAILURE_ZERO = "zero_current_sample_after_audit"
+_JUDGE_SAMPLE_FAILURE_ACTIONS = frozenset(
+    {JUDGE_SAMPLE_FAILURE_ABORT, JUDGE_SAMPLE_FAILURE_ZERO}
+)
 _TRANSIENT_TRANSPORT_ERRORS = (
     URLError,
     TimeoutError,
@@ -42,6 +47,22 @@ claim, or does not answer the question.
 
 Return exactly one JSON object with this schema and no other text:
 {"verdict": 0 or 1, "rationale": "brief reason"}"""
+
+
+class JudgeSampleFailureError(RuntimeError):
+    """One completed judge response is unusable for only its current sample."""
+
+    def __init__(
+        self,
+        failure_kind: str,
+        *,
+        usage: JudgeUsage | None,
+    ) -> None:
+        if failure_kind not in {"malformed_output", "nonbinary_output"}:
+            raise ValueError("judge sample failure kind is invalid")
+        super().__init__(f"RL answer judge completed response {failure_kind}")
+        self.failure_kind = failure_kind
+        self.usage = usage
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,7 +225,14 @@ class OpenAICompatibleJudgeProvider:
                 with self._opener(
                     request_object, timeout=self.config.timeout_seconds
                 ) as response:
-                    response_payload = json.loads(response.read().decode("utf-8"))
+                    try:
+                        response_payload = json.loads(
+                            response.read().decode("utf-8")
+                        )
+                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                        raise JudgeSampleFailureError(
+                            "malformed_output", usage=None
+                        ) from error
                 try:
                     _validate_response_model(
                         response_payload,
@@ -217,6 +245,8 @@ class OpenAICompatibleJudgeProvider:
                         continue
                     raise
                 break
+            except JudgeSampleFailureError:
+                raise
             except HTTPError as error:
                 if (
                     _http_status_is_retryable(error.code, self.config)
@@ -241,8 +271,14 @@ class OpenAICompatibleJudgeProvider:
                 ) from error
             except Exception as error:
                 raise RuntimeError("RL answer judge request failed") from error
-        content = _completion_content(response_payload)
-        verdict, rationale = _binary_verdict(content)
+        try:
+            content = _completion_content(response_payload)
+            verdict, rationale = _binary_verdict(content)
+        except _CompletedResponseOutputError as error:
+            raise JudgeSampleFailureError(
+                error.failure_kind,
+                usage=_best_effort_response_usage(response_payload),
+            ) from error
         usage = _response_usage(
             response_payload,
             required=self.config.require_usage,
@@ -269,6 +305,7 @@ class BoundOpenAICompatibleJudge:
     failure_policy_identity: ArtifactIdentity
     config_file_sha256: str
     formal_pilot_accepted: bool
+    sample_failure_mode: str
 
 
 def load_openai_compatible_judge(
@@ -344,6 +381,7 @@ def load_openai_compatible_judge(
             raise ValueError(f"RL judge {name} binding must be a mapping")
     if routing is not None and not isinstance(routing, Mapping):
         raise ValueError("RL judge routing binding must be a mapping")
+    sample_failure_mode = _sample_failure_mode(failure_policy)
     prompt_identity = ArtifactIdentity(
         "policy-rl-answer-judge",
         "prompt",
@@ -419,21 +457,34 @@ def load_openai_compatible_judge(
         failure_policy_identity=failure_policy_identity,
         config_file_sha256=actual_file_sha256,
         formal_pilot_accepted=formal_pilot_accepted,
+        sample_failure_mode=sample_failure_mode,
     )
 
 
 def _completion_content(payload: object) -> str:
     if not isinstance(payload, Mapping):
-        raise RuntimeError("RL answer judge returned a non-object response")
+        raise _CompletedResponseOutputError(
+            "malformed_output", "RL answer judge returned a non-object response"
+        )
     choices = payload.get("choices")
     if not isinstance(choices, list) or len(choices) != 1:
-        raise RuntimeError("RL answer judge must return exactly one choice")
+        raise _CompletedResponseOutputError(
+            "malformed_output", "RL answer judge must return exactly one choice"
+        )
     choice = choices[0]
     message = choice.get("message") if isinstance(choice, Mapping) else None
     content = message.get("content") if isinstance(message, Mapping) else None
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("RL answer judge returned empty content")
+        raise _CompletedResponseOutputError(
+            "malformed_output", "RL answer judge returned empty content"
+        )
     return content
+
+
+class _CompletedResponseOutputError(RuntimeError):
+    def __init__(self, failure_kind: str, message: str) -> None:
+        super().__init__(message)
+        self.failure_kind = failure_kind
 
 
 class JudgeResponseModelMismatchError(RuntimeError):
@@ -474,6 +525,25 @@ def _response_usage(payload: object, *, required: bool) -> JudgeUsage | None:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError("RL answer judge usage payload is invalid") from error
+
+
+def _best_effort_response_usage(payload: object) -> JudgeUsage | None:
+    try:
+        return _response_usage(payload, required=False)
+    except RuntimeError:
+        return None
+
+
+def _sample_failure_mode(failure_policy: Mapping[str, object]) -> str:
+    malformed = failure_policy.get("malformed_output")
+    nonbinary = failure_policy.get("nonbinary_output")
+    if malformed not in _JUDGE_SAMPLE_FAILURE_ACTIONS:
+        raise ValueError("RL judge malformed-output failure policy differs")
+    if nonbinary not in _JUDGE_SAMPLE_FAILURE_ACTIONS:
+        raise ValueError("RL judge nonbinary-output failure policy differs")
+    if malformed != nonbinary:
+        raise ValueError("RL judge completed-output failure policies must match")
+    return str(malformed)
 
 
 def _optional_text(value: object) -> str | None:
@@ -583,15 +653,24 @@ def _binary_verdict(content: str) -> tuple[int, str]:
     try:
         decoded = json.loads(content)
     except json.JSONDecodeError as error:
-        raise RuntimeError("RL answer judge returned invalid JSON") from error
+        raise _CompletedResponseOutputError(
+            "malformed_output", "RL answer judge returned invalid JSON"
+        ) from error
     if not isinstance(decoded, dict) or set(decoded) != {"verdict", "rationale"}:
-        raise RuntimeError("RL answer judge JSON schema differs")
+        raise _CompletedResponseOutputError(
+            "malformed_output", "RL answer judge JSON schema differs"
+        )
     verdict = decoded["verdict"]
     rationale = decoded["rationale"]
     if type(verdict) is not int or verdict not in {0, 1}:
-        raise RuntimeError("RL answer judge verdict must be integer 0 or 1")
+        raise _CompletedResponseOutputError(
+            "nonbinary_output",
+            "RL answer judge verdict must be integer 0 or 1",
+        )
     if not isinstance(rationale, str) or not rationale.strip():
-        raise RuntimeError("RL answer judge rationale must be non-empty")
+        raise _CompletedResponseOutputError(
+            "malformed_output", "RL answer judge rationale must be non-empty"
+        )
     return verdict, rationale.strip()
 
 
@@ -611,6 +690,9 @@ def _artifact(name: str, version: str, payload: object) -> ArtifactIdentity:
 
 
 __all__ = [
+    "JUDGE_SAMPLE_FAILURE_ABORT",
+    "JUDGE_SAMPLE_FAILURE_ZERO",
+    "JudgeSampleFailureError",
     "OpenAICompatibleJudgeConfig",
     "OpenAICompatibleJudgeProvider",
     "BoundOpenAICompatibleJudge",

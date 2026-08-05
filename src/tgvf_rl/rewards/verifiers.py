@@ -11,7 +11,13 @@ import re
 
 from tgvf_rl.contracts.errors import ContractUnsetError, IdentityMismatchError
 from tgvf_rl.contracts.identity import ArtifactIdentity
-from tgvf_rl.judges import JudgeProvider, JudgeRequest
+from tgvf_rl.judges import (
+    JUDGE_SAMPLE_FAILURE_ABORT,
+    JUDGE_SAMPLE_FAILURE_ZERO,
+    JudgeProvider,
+    JudgeRequest,
+    JudgeSampleFailureError,
+)
 
 from .schema import (
     AnswerTaskKind,
@@ -55,6 +61,14 @@ class RuleFirstAnswerVerifier:
     judge_service_identity: ArtifactIdentity
     judge_sampling_identity: ArtifactIdentity
     judge_calibration_identity: ArtifactIdentity
+    judge_sample_failure_mode: str = JUDGE_SAMPLE_FAILURE_ABORT
+
+    def __post_init__(self) -> None:
+        if self.judge_sample_failure_mode not in {
+            JUDGE_SAMPLE_FAILURE_ABORT,
+            JUDGE_SAMPLE_FAILURE_ZERO,
+        }:
+            raise ValueError("answer judge sample failure mode differs")
 
     def verify(self, context: RewardContext) -> AnswerVerificationResult:
         if context.expected_answer is None:
@@ -131,16 +145,29 @@ class RuleFirstAnswerVerifier:
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
-        result = self.judge.judge(
-            JudgeRequest(
-                request_id=request_id,
-                task_kind=context.task_kind.value,
-                question=context.question,
-                candidate_answer=context.candidate_answer,
-                reference_answer=context.expected_answer,
-                prompt_identity=self.judge_prompt_identity,
+        try:
+            result = self.judge.judge(
+                JudgeRequest(
+                    request_id=request_id,
+                    task_kind=context.task_kind.value,
+                    question=context.question,
+                    candidate_answer=context.candidate_answer,
+                    reference_answer=context.expected_answer,
+                    prompt_identity=self.judge_prompt_identity,
+                )
             )
-        )
+        except JudgeSampleFailureError as error:
+            if self.judge_sample_failure_mode != JUDGE_SAMPLE_FAILURE_ZERO:
+                raise
+            return AnswerVerificationResult(
+                False,
+                "qwen2.5_72b_semantic_fallback_"
+                + error.failure_kind
+                + "_zero",
+                "completed_judge_response_failure=" + error.failure_kind,
+                self.judge_model_identity,
+                judge_usage=error.usage,
+            )
         expected_identities = (
             ("model", result.model_identity, self.judge_model_identity),
             ("service", result.service_identity, self.judge_service_identity),

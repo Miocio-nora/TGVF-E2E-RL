@@ -982,6 +982,7 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         judge_service_identity = disabled
         judge_sampling_identity = disabled
         judge_calibration_identity = disabled
+        judge_sample_failure_mode = "raise_and_abort_reward_batch"
     else:
         if reward.judge_config_sha256 is None:
             raise ValueError("enabled RL judge lacks its config identity")
@@ -996,6 +997,7 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         judge_service_identity = bound_judge.service_identity
         judge_sampling_identity = bound_judge.sampling_identity
         judge_calibration_identity = bound_judge.calibration_identity
+        judge_sample_failure_mode = bound_judge.sample_failure_mode
     verifier = RuleFirstAnswerVerifier(
         rule_identity=answer_identity,
         normalization=NormalizationSpec(True, True, True),
@@ -1005,6 +1007,7 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         judge_service_identity=judge_service_identity,
         judge_sampling_identity=judge_sampling_identity,
         judge_calibration_identity=judge_calibration_identity,
+        judge_sample_failure_mode=judge_sample_failure_mode,
     )
     return PilotRewardPipeline(
         PilotRewardSpec(

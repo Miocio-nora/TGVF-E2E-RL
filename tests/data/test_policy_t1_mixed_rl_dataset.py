@@ -44,9 +44,9 @@ def _candidate(tmp_path: Path, source: str, index: int) -> dict[str, object]:
     questions = {
         "vstar": "What color is the marked object?",
         "arxivqa": "Which answer is correct?\nChoices:\nA. no\nB. yes",
-        "thinklite": "What is 6 times 7?",
+        "thinklite": "What establishment is serving this food?",
     }
-    answers = {"vstar": "blue", "arxivqa": "B", "thinklite": "42"}
+    answers = {"vstar": "blue", "arxivqa": "B", "thinklite": "food truck"}
     return {
         "schema_version": "tgvf.policy-selection.candidate.v1",
         "sample_id": f"candidate:{source}:{index}",
@@ -117,7 +117,7 @@ def _write_final_bundle(
     decisions_path = root / "decisions.jsonl"
     _write_jsonl(decisions_path, decisions)
     identity = {
-        "schema_version": "tgvf.policy-selection.t1-final-scoring-manifest.v1",
+        "schema_version": "tgvf.policy-selection.t1-final-scoring-manifest.v2",
         "run_id": "T1-fixture",
         "run_manifest_sha256": "1" * 64,
         "scoring_manifest_sha256": "2" * 64,
@@ -163,7 +163,7 @@ def _three_source_fixture(
     ]
     candidates_path = tmp_path / "candidates.jsonl"
     _write_jsonl(candidates_path, candidates)
-    manifest_path, _ = _write_final_bundle(tmp_path / "final-v1", decisions)
+    manifest_path, _ = _write_final_bundle(tmp_path / "final-v2", decisions)
     return (
         candidates_path,
         manifest_path,
@@ -195,7 +195,7 @@ def test_materializes_all_final_t1_retains_without_t2_or_balancing(
     assert {source: row["task_kind"] for source, row in by_source.items()} == {
         "vstar": "open",
         "arxivqa": "mcq",
-        "thinklite": "math",
+        "thinklite": "open",
     }
     for row in records:
         assert row["schema_version"] == POLICY_T1_MIXED_SAMPLE_SCHEMA
@@ -232,6 +232,24 @@ def test_materializes_all_final_t1_retains_without_t2_or_balancing(
         report["retained_share"] == pytest.approx(1 / 3)
         for report in manifest["sources"].values()
     )
+    assert manifest["task_kind_policy"] == (
+        "source-contract-plus-thinklite-answer-form-classifier-v2"
+    )
+    assert manifest["sources"]["vstar"]["task_kind_counts"] == {
+        "math": 0,
+        "mcq": 0,
+        "open": 1,
+    }
+    assert manifest["sources"]["arxivqa"]["task_kind_counts"] == {
+        "math": 0,
+        "mcq": 1,
+        "open": 0,
+    }
+    assert manifest["sources"]["thinklite"]["task_kind_counts"] == {
+        "math": 0,
+        "mcq": 0,
+        "open": 1,
+    }
     assert manifest["inputs"]["final_scoring_manifest"]["manifest_sha256"]
     assert manifest["inputs"]["final_scoring_manifest"]["file_sha256"]
     assert manifest["inputs"]["decisions"]["rows"] == 4
@@ -249,7 +267,7 @@ def test_materializes_all_final_t1_retains_without_t2_or_balancing(
     assert runtime.iteration_identity_sha256 == result.iteration_identity_sha256
     assert {
         sample.data_source: sample.task_kind.value for sample in runtime.samples
-    } == {"vstar": "open", "arxivqa": "mcq", "thinklite": "math"}
+    } == {"vstar": "open", "arxivqa": "mcq", "thinklite": "open"}
     assert all(sample.image_path.is_absolute() for sample in runtime.samples)
 
 
@@ -333,7 +351,7 @@ def test_rejects_incomplete_final_decision_population(tmp_path: Path) -> None:
     candidates_path = tmp_path / "candidates.jsonl"
     _write_jsonl(candidates_path, candidates)
     manifest_path, _ = _write_final_bundle(
-        tmp_path / "final-v1",
+        tmp_path / "final-v2",
         [
             _decision(candidates[0], "retain", t2=None),
             _decision(candidates[1], "retain", t2=None),

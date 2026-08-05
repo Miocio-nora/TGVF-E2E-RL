@@ -9,6 +9,9 @@ from .base import (
 )
 from .openai_compatible import (
     BoundOpenAICompatibleJudge,
+    JUDGE_SAMPLE_FAILURE_ABORT,
+    JUDGE_SAMPLE_FAILURE_ZERO,
+    JudgeSampleFailureError,
     OpenAICompatibleJudgeConfig,
     OpenAICompatibleJudgeProvider,
     QWEN25_72B_RL_JUDGE_PROMPT_VERSION,
@@ -23,6 +26,9 @@ __all__ = [
     "JudgeResult",
     "JudgeUsage",
     "BoundOpenAICompatibleJudge",
+    "JUDGE_SAMPLE_FAILURE_ABORT",
+    "JUDGE_SAMPLE_FAILURE_ZERO",
+    "JudgeSampleFailureError",
     "OpenAICompatibleJudgeConfig",
     "OpenAICompatibleJudgeProvider",
     "QWEN25_72B_RL_JUDGE_PROMPT_VERSION",

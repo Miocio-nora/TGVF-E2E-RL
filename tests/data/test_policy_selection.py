@@ -12,17 +12,123 @@ from tgvf_rl.data import (
     POLICY_SELECTION_ATTEMPT_SCHEMA,
     POLICY_SELECTION_CANDIDATE_SCHEMA,
     AttemptStatus,
+    DeepEyesTaskKind,
     SelectionBranch,
+    SelectionSource,
     T1Decision,
     T2Decision,
     build_selection_requests,
+    classify_policy_selection_task_kind,
+    policy_selection_semantic_judge_task_kind,
     records_sha256,
     reduce_selection_attempts,
     summarize_selection_decisions,
 )
 
 
-def _candidate(sample_id: str, source: str, *, regions: bool = True) -> dict[str, object]:
+@pytest.mark.parametrize(
+    ("source", "question", "ground_truth", "expected", "judge_route"),
+    [
+        (
+            SelectionSource.VSTAR,
+            r"Compute \\frac{1}{2}+\\frac{1}{2}.",
+            "1",
+            DeepEyesTaskKind.OPEN,
+            "open_vqa",
+        ),
+        (
+            SelectionSource.ARXIVQA,
+            "Which answer is correct?",
+            "B",
+            DeepEyesTaskKind.MCQ,
+            "open_vqa",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            "What establishment is serving this food?",
+            "food truck",
+            DeepEyesTaskKind.OPEN,
+            "open_vqa",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            r"Find \\angle ABC in the diagram.",
+            "45 degrees",
+            DeepEyesTaskKind.MATH,
+            "math",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            "Adriana wants to buy 3 pounds of silver confetti. How much?",
+            "36",
+            DeepEyesTaskKind.MATH,
+            "math",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            "What fraction of the fruit were plums?",
+            "36/89",
+            DeepEyesTaskKind.MATH,
+            "math",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            "Find the requested ratio.",
+            r"\\frac { 4 } { 5 }",
+            DeepEyesTaskKind.MATH,
+            "math",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            "How long does the trip take?",
+            "45 minutes",
+            DeepEyesTaskKind.MATH,
+            "math",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            "Choose one:\n(A) cat\n(B) dog",
+            "B",
+            DeepEyesTaskKind.MCQ,
+            "open_vqa",
+        ),
+        (
+            SelectionSource.THINKLITE,
+            "Choose one:\n(A) cat\n(B) dog",
+            "dog",
+            DeepEyesTaskKind.OPEN,
+            "open_vqa",
+        ),
+    ],
+)
+def test_policy_selection_task_kind_is_sample_specific_for_thinklite(
+    source: SelectionSource,
+    question: str,
+    ground_truth: str,
+    expected: DeepEyesTaskKind,
+    judge_route: str,
+) -> None:
+    assert (
+        classify_policy_selection_task_kind(
+            source=source,
+            question=question,
+            ground_truth=ground_truth,
+        )
+        is expected
+    )
+    assert (
+        policy_selection_semantic_judge_task_kind(
+            source=source,
+            question=question,
+            ground_truth=ground_truth,
+        )
+        == judge_route
+    )
+
+
+def _candidate(
+    sample_id: str, source: str, *, regions: bool = True
+) -> dict[str, object]:
     record: dict[str, object] = {
         "schema_version": POLICY_SELECTION_CANDIDATE_SCHEMA,
         "sample_id": sample_id,
@@ -56,7 +162,9 @@ def _attempts(
         attempt_index = int(request["attempt_index"])
         if branch == SelectionBranch.FULL_IMAGE.value:
             status = full_status_override.get(attempt_index, AttemptStatus.SCORED)
-            correct = attempt_index < full_correct if status is AttemptStatus.SCORED else None
+            correct = (
+                attempt_index < full_correct if status is AttemptStatus.SCORED else None
+            )
         else:
             status = AttemptStatus.SCORED
             correct = attempt_index < oracle_correct
@@ -115,7 +223,9 @@ def test_truncation_and_missing_attempt_are_unresolved_not_incorrect() -> None:
     assert missing_decision["t1"]["full_image"]["missing_indices"] == [7]
 
 
-def test_request_generation_is_deterministic_and_keeps_answers_out_of_model_input() -> None:
+def test_request_generation_is_deterministic_and_keeps_answers_out_of_model_input() -> (
+    None
+):
     candidates = [
         _candidate("b-chart", "arxivqa"),
         _candidate("a-vstar", "vstar"),
@@ -213,9 +323,7 @@ def test_cpu_cli_build_and_reduce_dry_run(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    requests = [
-        json.loads(line) for line in requests_path.read_text().splitlines()
-    ]
+    requests = [json.loads(line) for line in requests_path.read_text().splitlines()]
     attempts = _attempts(requests, full_correct=4)
     attempts_path.write_text(
         "".join(json.dumps(record) + "\n" for record in attempts),

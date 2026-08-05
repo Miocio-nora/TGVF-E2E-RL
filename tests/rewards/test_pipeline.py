@@ -5,7 +5,12 @@ from dataclasses import dataclass, replace
 import pytest
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
-from tgvf_rl.judges import JudgeResult, JudgeUsage
+from tgvf_rl.judges import (
+    JUDGE_SAMPLE_FAILURE_ZERO,
+    JudgeResult,
+    JudgeSampleFailureError,
+    JudgeUsage,
+)
 from tgvf_rl.rewards.pipeline import (
     ExactTextVerifier,
     PilotRewardPipeline,
@@ -172,6 +177,20 @@ class _Judge:
         return self.result
 
 
+class _CompletedFailureThenSuccessJudge:
+    def __init__(self, result: JudgeResult, usage: JudgeUsage) -> None:
+        self.result = result
+        self.usage = usage
+        self.calls = 0
+
+    def judge(self, request):
+        del request
+        self.calls += 1
+        if self.calls == 1:
+            raise JudgeSampleFailureError("malformed_output", usage=self.usage)
+        return self.result
+
+
 def _rule_first_verifier(
     *, judge_score: float = 1.0, judge_usage: JudgeUsage | None = None
 ):
@@ -202,6 +221,65 @@ def _rule_first_verifier(
         judge_calibration_identity=calibration,
     )
     return verifier, judge
+
+
+def test_sample_failure_mode_zeros_one_completed_response_then_continues() -> None:
+    base, fixed = _rule_first_verifier(judge_score=1.0)
+    usage = JudgeUsage(10, 1, 11, 0.0001)
+    judge = _CompletedFailureThenSuccessJudge(fixed.result, usage)
+    verifier = replace(
+        base,
+        judge=judge,
+        judge_sample_failure_mode=JUDGE_SAMPLE_FAILURE_ZERO,
+    )
+    context = RewardContext(
+        "open",
+        "What is shown?",
+        "a ship",
+        "a boat",
+        0,
+        task_kind=AnswerTaskKind.OPEN_VQA,
+    )
+
+    failed = verifier.verify(context)
+    succeeded = verifier.verify(context)
+
+    assert failed.correct is False
+    assert failed.route == (
+        "qwen2.5_72b_semantic_fallback_malformed_output_zero"
+    )
+    assert failed.judge_usage == usage
+    assert succeeded.correct is True
+    assert succeeded.route == "qwen2.5_72b_semantic_fallback"
+
+
+def test_default_mode_and_non_sample_failures_still_abort() -> None:
+    verifier, fixed = _rule_first_verifier()
+    malformed = _CompletedFailureThenSuccessJudge(
+        fixed.result, JudgeUsage(1, 1, 2, 0.0)
+    )
+    context = RewardContext(
+        "open",
+        "What is shown?",
+        "a ship",
+        "a boat",
+        0,
+        task_kind=AnswerTaskKind.OPEN_VQA,
+    )
+    with pytest.raises(JudgeSampleFailureError):
+        replace(verifier, judge=malformed).verify(context)
+
+    class _PermanentFailureJudge:
+        def judge(self, request):
+            del request
+            raise RuntimeError("HTTP 401")
+
+    with pytest.raises(RuntimeError, match="HTTP 401"):
+        replace(
+            verifier,
+            judge=_PermanentFailureJudge(),
+            judge_sample_failure_mode=JUDGE_SAMPLE_FAILURE_ZERO,
+        ).verify(context)
 
 
 def test_answer_router_uses_rules_for_mcq_and_numeric_math_before_judge() -> None:

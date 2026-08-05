@@ -11,6 +11,9 @@ import pytest
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.judges import (
+    JUDGE_SAMPLE_FAILURE_ABORT,
+    JUDGE_SAMPLE_FAILURE_ZERO,
+    JudgeSampleFailureError,
     JudgeRequest,
     OpenAICompatibleJudgeConfig,
     OpenAICompatibleJudgeProvider,
@@ -148,6 +151,41 @@ def test_rl_judge_fails_closed_on_nonbinary_or_malformed_output() -> None:
                     prompt_identity=prompt,
                 )
             )
+
+
+def test_completed_output_failure_retains_best_effort_usage() -> None:
+    initial, prompt = _provider("yes", [])
+
+    def opener(_request, *, timeout):
+        assert timeout == 120.0
+        return _Response(
+            {
+                "choices": [{"message": {"content": "yes"}}],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 1,
+                    "total_tokens": 11,
+                    "cost": 0.0001,
+                },
+            }
+        )
+
+    provider = OpenAICompatibleJudgeProvider(initial.config, opener=opener)
+    with pytest.raises(JudgeSampleFailureError) as caught:
+        provider.judge(
+            JudgeRequest(
+                request_id="malformed-with-usage",
+                task_kind="open_vqa",
+                question="What is shown?",
+                candidate_answer="ship",
+                reference_answer="boat",
+                prompt_identity=prompt,
+            )
+        )
+
+    assert caught.value.failure_kind == "malformed_output"
+    assert caught.value.usage is not None
+    assert caught.value.usage.total_tokens == 11
 
 
 def test_rl_judge_retries_transient_rate_limit_with_bound() -> None:
@@ -339,6 +377,20 @@ def test_formal_v3_binding_declares_indefinite_transient_retry() -> None:
     assert config.retryable_http_statuses == (408, 425, 429)
     assert config.retry_all_server_errors is True
     assert config.retry_transport_errors is True
+    assert bound.sample_failure_mode == JUDGE_SAMPLE_FAILURE_ABORT
+
+
+def test_formal_v4_binding_zeros_only_completed_output_failures() -> None:
+    path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/openrouter_qwen25_72b_formal_pilot_judge_v4.json"
+    )
+    bound = load_openai_compatible_judge(
+        path,
+        expected_file_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+    assert bound.sample_failure_mode == JUDGE_SAMPLE_FAILURE_ZERO
 
 
 def test_openrouter_binding_uses_env_auth_pinned_route_and_retains_usage(
