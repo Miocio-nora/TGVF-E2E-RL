@@ -23,7 +23,9 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     _torch_state,
     _wandb_metrics_from_event,
     add_policy_actor_rollout_worker,
+    make_policy_colocated_worker_class,
     make_policy_pilot_ray_trainer_class,
+    policy_worker_logical_cuda_ordinal,
 )
 from tgvf_rl.policy.checkpoint import DATA_CURSOR_OWNER, PilotOptimizerDataCursor
 from tgvf_rl.policy.metrics import (
@@ -119,6 +121,60 @@ def test_task_runner_maps_the_real_sidecar_releasing_role_worker() -> None:
     assert runner.mapping == {Role.ActorRolloutRef: "global_pool"}
     assert wrapped.actor_worker_cls is wrapped.ref_worker_cls
     assert wrapped.actor_worker_cls is not TrainingWorker
+
+
+@pytest.mark.parametrize(
+    ("allocated_gpu_id", "visible_devices", "expected"),
+    (
+        ("0", "0,1,2,3", 0),
+        ("3", "0,1,2,3", 3),
+        ("4", "4,5,6,7", 0),
+        ("7", "4,5,6,7", 3),
+        ("0", "4,5,6,7", 0),
+        ("GPU-b", "GPU-a,GPU-b", 1),
+    ),
+)
+def test_policy_worker_maps_ray_gpu_id_to_process_local_cuda_ordinal(
+    allocated_gpu_id: str,
+    visible_devices: str,
+    expected: int,
+) -> None:
+    assert (
+        policy_worker_logical_cuda_ordinal(allocated_gpu_id, visible_devices)
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("allocated_gpu_id", "visible_devices"),
+    (
+        ("8", "4,5,6,7"),
+        ("GPU-z", "GPU-a,GPU-b"),
+        ("4", "4,4"),
+        ("4", "4,"),
+    ),
+)
+def test_policy_worker_rejects_ambiguous_cuda_mapping(
+    allocated_gpu_id: str,
+    visible_devices: str,
+) -> None:
+    with pytest.raises(ValueError):
+        policy_worker_logical_cuda_ordinal(allocated_gpu_id, visible_devices)
+
+
+def test_policy_colocated_worker_wrapper_preserves_upstream_type() -> None:
+    import ray.cloudpickle
+
+    class UpstreamWorker:
+        def _setup_env_cuda_visible_devices(self):
+            return "upstream"
+
+    wrapped = make_policy_colocated_worker_class(UpstreamWorker)
+    restored = ray.cloudpickle.loads(ray.cloudpickle.dumps(wrapped))
+
+    assert issubclass(wrapped, UpstreamWorker)
+    assert wrapped is not UpstreamWorker
+    assert restored.__name__ == "PolicyPhysicalGPUWorker"
 
 
 def test_reference_diagnostic_routes_explicit_ref_engine_and_restores_flag() -> None:

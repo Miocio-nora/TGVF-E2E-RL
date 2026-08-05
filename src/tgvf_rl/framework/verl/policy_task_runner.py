@@ -711,6 +711,85 @@ class CheckpointAfterWeightSyncManager:
         return getattr(self.upstream, name)
 
 
+def policy_worker_logical_cuda_ordinal(
+    allocated_gpu_id: str,
+    visible_devices: str,
+) -> int:
+    """Map one Ray GPU resource ID to its process-local CUDA ordinal.
+
+    With ``RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1``, veRL normally
+    passes Ray's allocated ID directly to ``torch.cuda.set_device``.  That is
+    only valid when the physical allocation is ``0..N-1``.  For an isolated
+    launch on physical GPUs 4--7, CUDA renumbers those devices to local
+    ordinals 0--3, so the resource ID must first be resolved through
+    ``CUDA_VISIBLE_DEVICES``.
+    """
+
+    if not isinstance(allocated_gpu_id, str) or not allocated_gpu_id:
+        raise ValueError("allocated_gpu_id must be a non-empty string")
+    if not isinstance(visible_devices, str) or not visible_devices:
+        raise ValueError("visible_devices must be a non-empty string")
+    devices = tuple(part.strip() for part in visible_devices.split(","))
+    if any(not part for part in devices) or len(devices) != len(set(devices)):
+        raise ValueError("CUDA_VISIBLE_DEVICES must contain unique device IDs")
+    if allocated_gpu_id in devices:
+        return devices.index(allocated_gpu_id)
+    try:
+        logical_ordinal = int(allocated_gpu_id)
+    except ValueError as error:
+        raise ValueError(
+            "Ray GPU allocation is absent from CUDA_VISIBLE_DEVICES"
+        ) from error
+    if not 0 <= logical_ordinal < len(devices):
+        raise ValueError("Ray GPU allocation exceeds the local CUDA device view")
+    return logical_ordinal
+
+
+def make_policy_colocated_worker_class(upstream_worker_cls: type[Any]) -> type[Any]:
+    """Wrap veRL's dynamic WorkerDict with physical-to-logical GPU mapping."""
+
+    if not isinstance(upstream_worker_cls, type):
+        raise TypeError("upstream colocated worker must be a class")
+    if not callable(
+        getattr(upstream_worker_cls, "_setup_env_cuda_visible_devices", None)
+    ):
+        raise TypeError("upstream colocated worker lacks CUDA environment setup")
+
+    class PolicyPhysicalGPUWorker(upstream_worker_cls):
+        def _setup_env_cuda_visible_devices(self):
+            from verl.utils.ray_utils import ray_noset_visible_devices
+
+            visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+            if (
+                not ray_noset_visible_devices()
+                or not visible_devices
+                or os.environ.get("HIP_VISIBLE_DEVICES")
+                or os.environ.get("ROCR_VISIBLE_DEVICES")
+            ):
+                return super()._setup_env_cuda_visible_devices()
+
+            import ray
+            from verl.utils.device import get_resource_name, get_torch_device
+
+            resource_name = get_resource_name()
+            allocated = ray.get_runtime_context().get_accelerator_ids().get(
+                resource_name, []
+            )
+            if len(allocated) != 1:
+                raise RuntimeError(
+                    "Policy colocated worker requires exactly one Ray GPU allocation"
+                )
+            logical_ordinal = policy_worker_logical_cuda_ordinal(
+                str(allocated[0]), visible_devices
+            )
+            os.environ["LOCAL_RANK"] = str(logical_ordinal)
+            get_torch_device().set_device(logical_ordinal)
+
+    PolicyPhysicalGPUWorker.__name__ = "PolicyPhysicalGPUWorker"
+    PolicyPhysicalGPUWorker.__qualname__ = "PolicyPhysicalGPUWorker"
+    return PolicyPhysicalGPUWorker
+
+
 def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type[Any]:
     """Return the pinned v0 trainer with lifecycle/checkpoint hooks installed."""
 
@@ -747,11 +826,26 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             from .vllm_tool_runtime import tgvf_llm_server_manager_class
 
             original_manager_class = ray_trainer_module.LLMServerManager
+            original_colocated_factory = (
+                ray_trainer_module.create_colocated_worker_cls
+            )
+
+            def create_policy_colocated_worker_cls(*args, **kwargs):
+                return make_policy_colocated_worker_class(
+                    original_colocated_factory(*args, **kwargs)
+                )
+
             ray_trainer_module.LLMServerManager = tgvf_llm_server_manager_class()
+            ray_trainer_module.create_colocated_worker_cls = (
+                create_policy_colocated_worker_cls
+            )
             try:
                 result = super().init_workers()
             finally:
                 ray_trainer_module.LLMServerManager = original_manager_class
+                ray_trainer_module.create_colocated_worker_cls = (
+                    original_colocated_factory
+                )
             state = PolicyPilotTrainerCheckpointState.from_environment(self)
             original_actor_wg = self.actor_rollout_wg
             self._policy_checkpoint_state = state
@@ -1345,6 +1439,8 @@ __all__ = [
     "add_policy_actor_rollout_worker",
     "create_policy_pilot_task_runner_class",
     "make_policy_pilot_ray_trainer_class",
+    "make_policy_colocated_worker_class",
+    "policy_worker_logical_cuda_ordinal",
     "policy_metrics_observation_from_data_proto",
     "run_policy_pilot_v0_task",
 ]
