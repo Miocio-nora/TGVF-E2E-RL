@@ -50,13 +50,22 @@ class _ContextProvider:
 
 
 class _AnswerVerifier:
-    def __init__(self, identity: ArtifactIdentity) -> None:
+    def __init__(
+        self,
+        identity: ArtifactIdentity,
+        *,
+        judge_identity: ArtifactIdentity | None = None,
+        route: str = "fixture-rule",
+    ) -> None:
         self.identity = identity
+        self.route = route
+        if judge_identity is not None:
+            self.judge_model_identity = judge_identity
 
     def verify(self, context):
         return AnswerVerificationResult(
             correct=context.candidate_answer == context.expected_answer,
-            route="fixture-rule",
+            route=self.route,
             evidence="fixture exact answer",
             verifier_identity=self.identity,
         )
@@ -84,7 +93,13 @@ class _VisualJudge:
         )
 
 
-def _scorer(*, mode: str = "success"):
+def _scorer(
+    *,
+    mode: str = "success",
+    answer_result_identity: ArtifactIdentity | None = None,
+    answer_judge_identity: ArtifactIdentity | None = None,
+    answer_route: str = "fixture-rule",
+):
     answer_identity = _identity("answer", "1")
     visual_identity = _identity("visual", "2")
     spec = Stage3ShapedRewardSpec(
@@ -113,7 +128,11 @@ def _scorer(*, mode: str = "success"):
     return (
         Stage3VerlTrajectoryRewardScorer(
             spec=spec,
-            answer_verifier=_AnswerVerifier(answer_identity),
+            answer_verifier=_AnswerVerifier(
+                answer_result_identity or answer_identity,
+                judge_identity=answer_judge_identity,
+                route=answer_route,
+            ),
             context_provider=_ContextProvider(),
             tool_utility=utility,
             visual_quality_judge=judge,
@@ -146,6 +165,43 @@ def test_stage3_runtime_bridge_emits_exact_five_component_reward() -> None:
     assert scored.result.quality_judge_covered is True
     assert scored.reward_extra_info()["stage3_grounding_reward"] == 1.0
     assert judge.calls == 1
+
+
+def test_stage3_accepts_configured_answer_judge_fallback_identity() -> None:
+    judge_identity = _identity("answer-judge", "8")
+    scorer, _ = _scorer(
+        answer_result_identity=judge_identity,
+        answer_judge_identity=judge_identity,
+        answer_route="qwen2.5_72b_semantic_fallback",
+    )
+    trajectory = replace(
+        _record(tool_call_count=1).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+
+    scored = scorer.score(
+        request=SimpleNamespace(identity=trajectory.identity),
+        trajectory=trajectory,
+    )
+
+    assert scored.answer_verification.verifier_identity == judge_identity
+
+
+def test_stage3_rejects_unbound_answer_verifier_identity() -> None:
+    scorer, _ = _scorer()
+    scorer.answer_verifier = _AnswerVerifier(_identity("unknown-answer", "9"))
+    trajectory = replace(
+        _record(tool_call_count=1).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+
+    with pytest.raises(IdentityMismatchError, match="route and configured identity"):
+        scorer.score(
+            request=SimpleNamespace(identity=trajectory.identity),
+            trajectory=trajectory,
+        )
 
 
 def test_only_successful_observation_counts_as_tool_use() -> None:

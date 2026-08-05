@@ -314,8 +314,19 @@ class Stage3VerlTrajectoryRewardScorer:
             raise IdentityMismatchError("Stage3 tool sidecar identity differs")
         if tool_utility.manifest_sha256 != spec.tool_utility_manifest_sha256:
             raise IdentityMismatchError("Stage3 tool sidecar manifest differs")
+        rule_identity = getattr(answer_verifier, "rule_identity", None)
+        if rule_identity is not None and rule_identity != spec.answer_verifier_identity:
+            raise IdentityMismatchError("Stage3 answer rule identity differs")
+        judge_identity = getattr(answer_verifier, "judge_model_identity", None)
+        if judge_identity is not None and not isinstance(
+            judge_identity, ArtifactIdentity
+        ):
+            raise TypeError(
+                "answer verifier judge_model_identity must be ArtifactIdentity"
+            )
         self.spec = spec
         self.answer_verifier = answer_verifier
+        self.answer_judge_identity = judge_identity
         self.context_provider = context_provider
         self.tool_utility = tool_utility
         self.visual_quality_judge = visual_quality_judge
@@ -345,8 +356,25 @@ class Stage3VerlTrajectoryRewardScorer:
         verification = self.answer_verifier.verify(context)
         if not isinstance(verification, AnswerVerificationResult):
             raise TypeError("answer_verifier returned the wrong result type")
-        if verification.verifier_identity != self.spec.answer_verifier_identity:
-            raise IdentityMismatchError("Stage3 answer verifier identity differs")
+        # RuleFirstAnswerVerifier intentionally reports the configured judge
+        # model for semantic fallback and the rule identity otherwise.  Bind
+        # the route to the exact identity, rather than merely accepting either
+        # identity for every route.
+        used_semantic_fallback = verification.route.startswith(
+            "qwen2.5_72b_semantic_fallback"
+        )
+        expected_verifier_identity = (
+            self.answer_judge_identity
+            if used_semantic_fallback
+            else self.spec.answer_verifier_identity
+        )
+        if (
+            expected_verifier_identity is None
+            or verification.verifier_identity != expected_verifier_identity
+        ):
+            raise IdentityMismatchError(
+                "Stage3 answer verifier route and configured identity differ"
+            )
 
         focus_score: QualityJudgeScore | None = None
         grounding_score: QualityJudgeScore | None = None
