@@ -9433,3 +9433,31 @@ than inferred from a script name or prior conversation.
   `configs/policy/runs/prl_07_r0_smoke_qwen3_instruct_grpo_bs16_crop_t1mixed_final_1step_gpu0123.toml`
   and
   `configs/policy/runs/prl_07_r1_qwen3_instruct_grpo_bs16_crop_t1mixed_final_toolw0p2_20step_gpu0123.toml`.
+
+### PRL-08-QWEN3-INSTRUCT-CROP-BS16-CORRECTED-T1-V2
+
+- Cell/class and lifecycle: corrected-data rerun of the answer-primary Crop
+  reward pilot. `R0` is a fresh one-step smoke on GPU0-3; only a successful
+  smoke is eligible to start the separate fresh 20-step `R1` automatically.
+- Data correction: both arms bind the finalized `mixed-v2` pool of `77,541`
+  retained T1 samples: VStar `39,205`, ArxivQA `25,393`, and corrected
+  ThinkLite `12,943`. The exact manifest/content/samples/iteration identities
+  are pinned in each run config. This supersedes PRL-07's erroneous mixed-v1
+  pool of `79,069` samples.
+- Controlled recipe: Qwen3-VL-8B-Instruct, RP-66, Crop only, BS16, n8,
+  world4/GA4, AdamW LR `1e-6`, reward weights `.8/.2/.2`, zero KL, and the
+  original 80-step cosine horizon are unchanged. R1 stops at update 20 and
+  retains checkpoints at `1/5/10/20`; W&B is enabled and in-training
+  validation is disabled.
+- Recovery boundary: implementation commit
+  `ef0c495d82b0b6ce4dc1c666b27909f33f045378` adds the corrected ThinkLite
+  task classifier and isolates only malformed/nonbinary completed judge
+  responses to the current sample with answer reward zero and an auditable
+  route. Credential, HTTP, transport, response-model, configuration and
+  identity failures remain fail-closed. The historical v1-v3 judge bindings
+  retain their abort behavior; PRL-08 alone binds judge-v4 SHA-256
+  `1ec38f640f943702ad812dc367fc66edf843a663a1c1048ebb39a0d25fac18a9`.
+- Configs:
+  `configs/policy/runs/prl_08_r0_smoke_qwen3_instruct_grpo_bs16_crop_t1mixed_v2_1step_gpu0123.toml`
+  and
+  `configs/policy/runs/prl_08_r1_qwen3_instruct_grpo_bs16_crop_t1mixed_v2_toolw0p2_20step_gpu0123.toml`.
