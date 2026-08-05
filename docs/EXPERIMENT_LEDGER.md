@@ -9461,3 +9461,29 @@ than inferred from a script name or prior conversation.
   `configs/policy/runs/prl_08_r0_smoke_qwen3_instruct_grpo_bs16_crop_t1mixed_v2_1step_gpu0123.toml`
   and
   `configs/policy/runs/prl_08_r1_qwen3_instruct_grpo_bs16_crop_t1mixed_v2_toolw0p2_20step_gpu0123.toml`.
+- Runtime result through step 20: `R0` and `R1` both completed and passed their
+  artifact gates.  The R1 ledger contains exactly 20 contiguous optimizer
+  records, 320 prompts and 2,560 trajectories.  Its cumulative answer reward
+  is `.651953125`, conditional-tool reward is `.635546875`, tool-attempt rate
+  is `.967578125`, and mean calls per trajectory is `2.12734375`; no isolated
+  malformed/nonbinary judge response occurred.  The paired step-20 checkpoint
+  is complete on all four ranks and records the next data cursor after exactly
+  320 prompts.  W&B runs are `75sggp5u` (smoke) and `sz017s3n` (R1).
+- Horizon-extension decision at `2026-08-05 JST`: the user authorized this
+  same R1 lineage to continue from optimizer step 20 to step 80.  This is not a
+  fresh arm and must never restart from step 0.  The original TOML, run ID,
+  output root and checkpoint identity remain byte-for-byte unchanged; its
+  actor scheduler was already constructed with the 80-step cosine horizon.
+  A separate integrity-bound `policy-horizon-extension-v1` manifest is the
+  only permitted operational override.  It may change only the trainer stop
+  boundary to 80 and merge checkpoint boundaries `30/40/60/80` after the
+  existing `1/5/10/20` plan.  It binds the original 20-row metrics prefix,
+  source paired checkpoint/project state, latest LoRA identity and recovery
+  weights, and validates the current exact checkpoint on every restart.
+- Continuation acceptance: before GPU work, the tracker, metrics, paired
+  checkpoint, four-rank shards and latest LoRA pointer must agree on the same
+  completed step.  The first new metric must be step 21; any from-zero path is
+  rejected.  At completion the metrics must be exactly steps 1--80 and the
+  paired `global_step_80` checkpoint must be durable before external CoreDev
+  ACC-VAL starts.  With five retained actor checkpoints, the intended final
+  recovery set is `20/30/40/60/80`.

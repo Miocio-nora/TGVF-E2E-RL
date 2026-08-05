@@ -31,6 +31,7 @@ from tgvf_rl.policy.metrics import (
     PilotOptimizerStepMetricsObservation,
     PilotTrajectoryMetricsObservation,
 )
+from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.framework.verl.rollout_bridge import (
     AGENT_LOOP_EXACT_SIDECAR_FIELDS,
     DATAPROTO_META_SCHEMA_FIELD,
@@ -187,6 +188,22 @@ def test_trainer_gate_preserves_the_run_bound_actor_scheduler_horizon() -> None:
 
     assert trainer.total_training_steps == 20
     assert trainer.config.actor_rollout_ref.actor.optim.total_training_steps == 80
+
+
+def test_extension_checkpoint_schedule_is_used_after_resume() -> None:
+    state = object.__new__(PolicyPilotTrainerCheckpointState)
+    state.config = SimpleNamespace(
+        training=SimpleNamespace(checkpoint_steps=(0, 1, 5, 10, 20))
+    )
+    extension = object.__new__(PolicyHorizonExtension)
+    object.__setattr__(
+        extension,
+        "effective_checkpoint_steps",
+        (0, 1, 5, 10, 20, 30, 40, 60, 80),
+    )
+    state.horizon_extension = extension
+
+    assert state.effective_checkpoint_steps == (0, 1, 5, 10, 20, 30, 40, 60, 80)
 
 
 def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None:

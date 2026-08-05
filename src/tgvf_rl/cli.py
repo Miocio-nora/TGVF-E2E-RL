@@ -262,6 +262,12 @@ def _parser() -> argparse.ArgumentParser:
         default=Path(sys.executable).absolute(),
         help="absolute Python executable for the rendered upstream command",
     )
+    plan_policy.add_argument(
+        "--horizon-extension",
+        type=Path,
+        default=None,
+        help="explicit audited Policy horizon-extension JSON manifest",
+    )
     run_policy = subparsers.add_parser(
         "run-policy",
         help="replace this process with a launch-ready upstream veRL Policy E2E run",
@@ -272,6 +278,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(sys.executable).absolute(),
         help="absolute audited-stack Python executable (default: current Python)",
+    )
+    run_policy.add_argument(
+        "--horizon-extension",
+        type=Path,
+        default=None,
+        help="explicit audited Policy horizon-extension JSON manifest",
     )
     return parser
 
@@ -352,9 +364,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
             config = load_policy_e2e_smoke_run_config(args.path)
+            extension = None
+            if args.horizon_extension is not None:
+                from tgvf_rl.policy.horizon_extension import (
+                    load_policy_horizon_extension,
+                )
+
+                extension = load_policy_horizon_extension(
+                    args.horizon_extension, config, validate_artifacts=True
+                )
             result = build_policy_launch_record(
                 config,
                 python_executable=args.python,
+                horizon_extension=extension,
             )
             result["gpu_work_launched"] = False
         elif args.command == "run-policy":
@@ -364,6 +386,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
             config = load_policy_e2e_smoke_run_config(args.path)
+            extension = None
+            if args.horizon_extension is not None:
+                from tgvf_rl.policy.horizon_extension import (
+                    load_policy_horizon_extension,
+                )
+
+                extension = load_policy_horizon_extension(
+                    args.horizon_extension, config, validate_artifacts=True
+                )
             _assert_installed_stack_identity(
                 audited_compatibility_stack(CONTROL_COMPATIBILITY_STACK)
             )
@@ -375,6 +406,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             execute_policy_e2e_smoke(
                 config,
                 python_executable=args.python,
+                horizon_extension=extension,
             )
         else:  # pragma: no cover - argparse owns the command choices
             raise AssertionError(f"unhandled command {args.command}")

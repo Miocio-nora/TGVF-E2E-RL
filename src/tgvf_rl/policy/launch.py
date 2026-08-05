@@ -15,6 +15,10 @@ from tgvf_rl.framework.verl.launcher import (
     build_policy_e2e_smoke_verl_plan,
 )
 
+from .horizon_extension import (
+    PolicyHorizonExtension,
+    validate_policy_horizon_extension_resume,
+)
 from .run_config import PolicyE2ESmokeRunConfig
 
 
@@ -26,10 +30,13 @@ def build_policy_launch_record(
     config: PolicyE2ESmokeRunConfig,
     *,
     python_executable: str | Path | None = None,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> dict[str, object]:
     """Build a JSON-safe plan; blocked plans deliberately omit executable argv."""
 
-    plan = build_policy_e2e_smoke_verl_plan(config)
+    plan = build_policy_e2e_smoke_verl_plan(
+        config, horizon_extension=horizon_extension
+    )
     executable = Path(python_executable or sys.executable).absolute()
     record = plan.as_record()
     record["python_executable"] = str(executable)
@@ -58,6 +65,7 @@ def assert_policy_execution_identity(
     config: PolicyE2ESmokeRunConfig,
     *,
     repository_root: str | Path = POLICY_REPOSITORY_ROOT,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> None:
     """Verify code/config/output identities immediately before process replacement."""
 
@@ -67,11 +75,22 @@ def assert_policy_execution_identity(
     if not (root / ".git").is_dir():
         raise RuntimeError("Policy launch repository root is not a Git worktree")
     observed_commit = _git_output(root, "rev-parse", "HEAD")
+    configured_commit = (
+        horizon_extension.code_commit
+        if horizon_extension is not None
+        else config.code.commit
+    )
+    additional_allowed_paths: tuple[Path, ...] = ()
+    if horizon_extension is not None:
+        horizon_extension.validate_for_config(config)
+        validate_policy_horizon_extension_resume(horizon_extension, config)
+        additional_allowed_paths = (horizon_extension.source_path,)
     _assert_code_commit_or_ledger_only_descendant(
         root,
-        configured_commit=config.code.commit,
+        configured_commit=configured_commit,
         observed_commit=observed_commit,
         config_source_path=config.source_path,
+        additional_allowed_paths=additional_allowed_paths,
     )
     for args in (
         ("diff", "--quiet", "--ignore-submodules", "--"),
@@ -94,6 +113,10 @@ def assert_policy_execution_identity(
             raise RuntimeError("policy launch requires no tracked Git changes")
     if _sha256_file(config.source_path) != config.source_sha256:
         raise RuntimeError("policy run config changed after strict validation")
+    if horizon_extension is not None and (
+        _sha256_file(horizon_extension.source_path) != horizon_extension.source_sha256
+    ):
+        raise RuntimeError("policy horizon extension changed after strict validation")
     if config.training.resume_mode == "disable":
         if config.output.root.exists():
             raise RuntimeError(
@@ -123,12 +146,19 @@ def execute_policy_e2e_smoke(
     python_executable: str | Path | None = None,
     base_environment: Mapping[str, str] | None = None,
     repository_root: str | Path = POLICY_REPOSITORY_ROOT,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> NoReturn:
     """Replace the CLI process with upstream veRL after every local preflight."""
 
-    plan = build_policy_e2e_smoke_verl_plan(config)
+    plan = build_policy_e2e_smoke_verl_plan(
+        config, horizon_extension=horizon_extension
+    )
     plan.assert_launch_ready()
-    assert_policy_execution_identity(config, repository_root=repository_root)
+    assert_policy_execution_identity(
+        config,
+        repository_root=repository_root,
+        horizon_extension=horizon_extension,
+    )
     executable = Path(python_executable or sys.executable).absolute()
     command = plan.command(executable)
     environment = policy_child_environment(plan, base=base_environment)
@@ -156,6 +186,7 @@ def _assert_code_commit_or_ledger_only_descendant(
     configured_commit: str,
     observed_commit: str,
     config_source_path: Path | None = None,
+    additional_allowed_paths: tuple[Path, ...] = (),
 ) -> None:
     """Require descendant implementation recovery to be committed with its ledger.
 
@@ -207,6 +238,14 @@ def _assert_code_commit_or_ledger_only_descendant(
                 "policy run config must be inside the launch repository"
             ) from error
         allowed.add(config_relative.as_posix())
+    for allowed_path in additional_allowed_paths:
+        try:
+            relative = allowed_path.resolve().relative_to(root)
+        except ValueError as error:
+            raise RuntimeError(
+                "policy launch extension must be inside the launch repository"
+            ) from error
+        allowed.add(relative.as_posix())
     if _EXPERIMENT_LEDGER_PATH not in changed:
         raise RuntimeError(
             "policy launch descendant lacks its planned experiment ledger"

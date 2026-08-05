@@ -35,6 +35,10 @@ from tgvf_rl.policy.checkpoint import (
     PilotRunIdentityHashes,
 )
 from tgvf_rl.policy.lifecycle import PolicyBatchLifecycleManager
+from tgvf_rl.policy.horizon_extension import (
+    PolicyHorizonExtension,
+    policy_horizon_extension_from_environment,
+)
 from tgvf_rl.policy.metrics import (
     PilotMetricsAccumulator,
     PilotOptimizerStepMetricsObservation,
@@ -410,6 +414,7 @@ class PolicyPilotTrainerCheckpointState:
         self.trainer = trainer
         self.config = config
         self._run_identity = _run_identity(config)
+        self.horizon_extension = policy_horizon_extension_from_environment(config)
         self._weight_state = PolicyWeightSyncState.from_environment()
         if self._weight_state.run_id != config.run_id or (
             self._weight_state.run_identity_sha256 != config.identity_sha256
@@ -436,6 +441,13 @@ class PolicyPilotTrainerCheckpointState:
         self._recovery_rng = self._rng
         self._prepared_policy: PolicyVersion | None = None
         self.last_resume: PolicyPilotVerlResumeResult | None = None
+
+    @property
+    def effective_checkpoint_steps(self) -> tuple[int, ...]:
+        extension = self.horizon_extension
+        if isinstance(extension, PolicyHorizonExtension):
+            return extension.effective_checkpoint_steps
+        return self.config.training.checkpoint_steps
 
     @classmethod
     def from_environment(cls, trainer: object) -> "PolicyPilotTrainerCheckpointState":
@@ -1024,9 +1036,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self._policy_step_started_at = None
 
         def _save_checkpoint(self):
-            configured_steps = (
-                self._policy_checkpoint_state.config.training.checkpoint_steps
-            )
+            configured_steps = self._policy_checkpoint_state.effective_checkpoint_steps
             if self.global_steps not in configured_steps:
                 return None
             if self._policy_checkpoint_pending:

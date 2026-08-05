@@ -67,6 +67,7 @@ from tgvf_rl.framework.verl.smoke_dataset import (
     VerlSelectedSampleDatasetBinding,
 )
 from tgvf_rl.policy.launch import policy_child_environment
+from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.protocol import (
     IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256,
     TGVF_FOCUS_TOOL_SCHEMA_SHA256,
@@ -357,6 +358,62 @@ def _write_config(tmp_path: Path) -> tuple[Path, str, dict[str, object]]:
     path = tmp_path / "policy-smoke.toml"
     path.write_text(text, encoding="utf-8")
     return path, text, external
+
+
+def test_horizon_extension_plan_changes_only_stopping_and_checkpoint_boundaries(
+    tmp_path: Path,
+) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace("total_steps = 2", "total_steps = 4").replace(
+            'resume_mode = "disable"', 'resume_mode = "auto"'
+        ),
+        encoding="utf-8",
+    )
+    config = load_policy_e2e_smoke_run_config(path)
+    extension = PolicyHorizonExtension(
+        source_path=tmp_path / "extension.json",
+        source_sha256="d" * 64,
+        extension_id="fixture-step2-to4",
+        run_id=config.run_id,
+        base_config_path=config.source_path,
+        base_config_source_sha256=config.source_sha256,
+        base_run_identity_sha256=config.identity_sha256,
+        output_root=config.output.root,
+        source_optimizer_step=2,
+        target_optimizer_step=4,
+        scheduler_total_steps=4,
+        effective_checkpoint_steps=(0, 1, 2, 3, 4),
+        metrics_prefix_sha256="e" * 64,
+        checkpoint_pair_file_sha256="f" * 64,
+        project_state_file_sha256="1" * 64,
+        latest_lora_pointer_file_sha256="2" * 64,
+        source_weights_sha256="3" * 64,
+        code_commit=COMMIT,
+        integrity_sha256="4" * 64,
+    )
+
+    base = build_policy_e2e_smoke_verl_plan(config)
+    continued = build_policy_e2e_smoke_verl_plan(
+        config, horizon_extension=extension
+    )
+
+    assert base.run_identity_sha256 == continued.run_identity_sha256
+    changed = {
+        key
+        for key in base.overrides
+        if base.overrides[key] != continued.overrides[key]
+    }
+    assert changed == {
+        "actor_rollout_ref.rollout.custom",
+        "trainer.total_training_steps",
+    }
+    assert continued.overrides["trainer.total_training_steps"] == 4
+    custom = continued.overrides["actor_rollout_ref.rollout.custom"]
+    assert isinstance(custom, dict)
+    assert custom["checkpoint_steps"] == [0, 1, 2, 3, 4]
+    for key, value in extension.environment.items():
+        assert continued.environment[key] == value
 
 
 def test_loads_complete_nonformal_smoke_and_has_stable_digest(tmp_path: Path) -> None:

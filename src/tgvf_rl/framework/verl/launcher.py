@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from types import MappingProxyType
 
+from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
 from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
 from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
@@ -326,11 +327,17 @@ class UpstreamVerlLaunchPlan:
 
 def build_policy_e2e_smoke_verl_plan(
     config: PolicyE2ESmokeRunConfig,
+    *,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> UpstreamVerlLaunchPlan:
     """Map one strict smoke identity onto pinned veRL's public config paths."""
 
     if not isinstance(config, PolicyE2ESmokeRunConfig):
         raise TypeError("config must be PolicyE2ESmokeRunConfig")
+    if horizon_extension is not None:
+        if not isinstance(horizon_extension, PolicyHorizonExtension):
+            raise TypeError("horizon_extension must be PolicyHorizonExtension")
+        horizon_extension.validate_for_config(config)
     if not config.policy.sampling.is_run_bound:
         raise ValueError("Policy smoke sampling identity must be fully run-bound")
     if (
@@ -449,9 +456,19 @@ def build_policy_e2e_smoke_verl_plan(
         dataset_config = {"data.tgvf_deepeyes47k": full_binding.as_config()}
         dataset_samples_path = full_binding.root / "samples.jsonl"
     actor_batch = _actor_batch_contract(config)
+    effective_checkpoint_steps = (
+        horizon_extension.effective_checkpoint_steps
+        if horizon_extension is not None
+        else training.checkpoint_steps
+    )
+    effective_maximum_step = (
+        horizon_extension.target_optimizer_step
+        if horizon_extension is not None
+        else training.maximum_optimizer_steps
+    )
     save_frequency = _checkpoint_frequency(
-        training.checkpoint_steps,
-        maximum_step=training.maximum_optimizer_steps,
+        effective_checkpoint_steps,
+        maximum_step=effective_maximum_step,
     )
     precision = {
         "param_dtype": _precision_name(config.precision.parameter_dtype),
@@ -721,7 +738,7 @@ def build_policy_e2e_smoke_verl_plan(
                         distributed.weight_sync_interval_optimizer_steps
                     ),
                 },
-                "checkpoint_steps": list(training.checkpoint_steps),
+                "checkpoint_steps": list(effective_checkpoint_steps),
                 "runtime_state_directory": str(
                     config.output.root / "runtime-policy-state"
                 ),
@@ -729,7 +746,7 @@ def build_policy_e2e_smoke_verl_plan(
                 "metrics_path": str(config.output.metrics_path),
             },
             "trainer.total_epochs": training.total_training_epochs,
-            "trainer.total_training_steps": training.maximum_optimizer_steps,
+            "trainer.total_training_steps": effective_maximum_step,
             "trainer.nnodes": 1,
             "trainer.n_gpus_per_node": distributed.world_size,
             "trainer.project_name": training.project_name,
@@ -789,6 +806,8 @@ def build_policy_e2e_smoke_verl_plan(
     environment["TGVF_POLICY_SERVER_TIMEOUT_SECONDS"] = format(
         framework.server_timeout_seconds, ".17g"
     )
+    if horizon_extension is not None:
+        environment.update(horizon_extension.environment)
     environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
     environment["PYTHONHASHSEED"] = str(config.rollout_rng.master_seed)
     environment["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
