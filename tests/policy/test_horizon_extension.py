@@ -223,5 +223,8 @@ def test_resume_gate_accepts_intermediate_and_completed_checkpoint(
             _sha(pointer_path) if current_step == 20 else SHA
         ),
     )
+    if current_step == 21:
+        source_pair.unlink()
+        source_project.unlink()
 
     assert validate_policy_horizon_extension_resume(extension, config) == current_step

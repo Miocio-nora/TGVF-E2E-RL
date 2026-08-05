@@ -317,10 +317,19 @@ def validate_policy_horizon_extension_resume(
     )
     source_pair = source_actor / "tgvf_policy_checkpoint_pair.json"
     source_project = source_actor / "tgvf_policy_project_state.json"
-    if _file_sha256(source_pair) != extension.checkpoint_pair_file_sha256:
-        raise ValueError("horizon extension source checkpoint pair differs")
-    if _file_sha256(source_project) != extension.project_state_file_sha256:
-        raise ValueError("horizon extension source project state differs")
+    # The source generation must exist for the first extension launch.  Once a
+    # later paired checkpoint exists, veRL's bounded retention may legitimately
+    # prune that old generation (including after a failure-boundary save).  The
+    # manifest still anchors its pair/project byte hashes, while the current
+    # checkpoint and immutable metrics prefix prove the continued lineage.
+    source_files_exist = source_pair.is_file() and source_project.is_file()
+    if current_step == extension.source_optimizer_step and not source_files_exist:
+        raise ValueError("horizon extension source checkpoint is missing")
+    if source_files_exist:
+        if _file_sha256(source_pair) != extension.checkpoint_pair_file_sha256:
+            raise ValueError("horizon extension source checkpoint pair differs")
+        if _file_sha256(source_project) != extension.project_state_file_sha256:
+            raise ValueError("horizon extension source project state differs")
 
     actor = checkpoint_root / f"global_step_{current_step}" / "actor"
     for stem in ("model", "optim", "extra_state"):
