@@ -16,11 +16,14 @@ from tgvf_rl.data import (
     DEEPEYES47K_TOTAL_ROWS,
     DeepEyes47KRuntimeBinding,
     POLICY_T1_ARXIVQA_DATASET_KIND,
+    POLICY_T1_MIXED_DATASET_KIND,
     PolicyT1DecisionStage,
+    PolicyT1MixedRuntimeBinding,
     PolicyT1RLRuntimeBinding,
     SelectionCandidate,
     canonical_json_line,
     materialize_policy_t1_arxivqa_rl_dataset,
+    policy_t1_mixed_iteration_identity_sha256,
 )
 from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
@@ -50,6 +53,8 @@ from tgvf_rl.framework.verl.launcher import (
     DEEPEYES47K_DATASET_MODULE_PATH,
     POLICY_T1_ARXIVQA_DATASET_CLASS_NAME,
     POLICY_T1_ARXIVQA_DATASET_MODULE_PATH,
+    POLICY_T1_MIXED_DATASET_CLASS_NAME,
+    POLICY_T1_MIXED_DATASET_MODULE_PATH,
     NATIVE_INVOCATION_FACTORY_FQN,
     POLICY_CHECKPOINT_ENGINE_MANAGER_FQN,
     SELECTED_SAMPLE_DATASET_MODULE_PATH,
@@ -650,6 +655,92 @@ shuffle_seed = 42
     assert (
         plan.overrides["data.tgvf_policy_t1_arxivqa"]["decision_stage"] == "provisional"
     )
+
+
+def test_mixed_run_routes_final_all_source_t1_artifact_to_verl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    external = _prepare_external_inputs(tmp_path)
+    dataset_root = tmp_path / "mixed-t1-artifact"
+    dataset_root.mkdir()
+    binding = PolicyT1MixedRuntimeBinding(
+        manifest_file_sha256="1" * 64,
+        content_sha256="2" * 64,
+        shuffle_seed=42,
+        expected_sample_count=79_069,
+    )
+    samples_sha256 = "3" * 64
+    iteration_identity = policy_t1_mixed_iteration_identity_sha256(
+        binding, samples_sha256=samples_sha256
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.verify_policy_t1_mixed_artifact_binding",
+        lambda *_args, **_kwargs: {},
+    )
+
+    text = _config_text(tmp_path, external).replace(
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA, POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA
+    )
+    dataset_start = text.index("[dataset]")
+    representation_start = text.index("[representation]")
+    dataset_text = f'''[dataset]
+kind = "{POLICY_T1_MIXED_DATASET_KIND}"
+root = {_q(dataset_root)}
+decision_stage = "final"
+sample_count = 79069
+manifest_file_sha256 = "{binding.manifest_file_sha256}"
+content_sha256 = "{binding.content_sha256}"
+samples_sha256 = "{samples_sha256}"
+iteration_identity_sha256 = "{iteration_identity}"
+shuffle_seed = 42
+
+'''
+    text = text[:dataset_start] + dataset_text + text[representation_start:]
+    prompt_sha = visual_tool_prompt_identity(
+        NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=native_assistant_dialect_for_model(
+            POLICY_PILOT_V1_MODEL_NAME
+        ),
+    ).bundle_sha256
+    text = text.replace(f'prompt_sha256 = "{SHA_A}"', f'prompt_sha256 = "{prompt_sha}"')
+    text = text.replace('tool_profile = "tgvf_only"', 'tool_profile = "crop_only"')
+    text = text.replace(
+        f'tool_schema_sha256 = "{TGVF_FOCUS_TOOL_SCHEMA_SHA256}"',
+        f'tool_schema_sha256 = "{IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256}"',
+    ).replace(
+        'enabled_tool_names = ["tgvf_focus_tool"]',
+        'enabled_tool_names = ["image_zoom_in_tool"]',
+    )
+    judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    ).resolve()
+    judge_sha = hashlib.sha256(judge_path.read_bytes()).hexdigest()
+    text = text.replace(
+        'task_kind = "multiple_choice"\n'
+        'answer_verifier = "exact_match"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "not_applicable"\n'
+        'judge_reason = "bounded non-formal MCQ smoke"',
+        'task_kind = "mixed"\n'
+        'answer_verifier = "rule_first_qwen25_72b"\n'
+        f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"\n'
+        'judge_mode = "qwen25_72b_semantic_fallback"\n'
+        'judge_reason = "full final T1 crop pilot"\n'
+        f"judge_config_path = {_q(judge_path)}\n"
+        f'judge_config_sha256 = "{judge_sha}"',
+    )
+    config_path = tmp_path / "mixed-t1-policy.toml"
+    config_path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(config_path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+
+    assert isinstance(config.dataset.runtime_binding, PolicyT1MixedRuntimeBinding)
+    assert config.dataset.kind == POLICY_T1_MIXED_DATASET_KIND
+    assert plan.overrides["data.custom_cls.path"] == POLICY_T1_MIXED_DATASET_MODULE_PATH
+    assert plan.overrides["data.custom_cls.name"] == POLICY_T1_MIXED_DATASET_CLASS_NAME
+    assert plan.overrides["data.tgvf_policy_t1_mixed"]["decision_stage"] == "final"
 
 
 def test_loads_separately_identified_crop_only_experiment(tmp_path: Path) -> None:

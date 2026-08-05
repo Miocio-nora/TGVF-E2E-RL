@@ -35,9 +35,13 @@ from tgvf_rl.data import (
     DEEPEYES47K_TOTAL_ROWS,
     DeepEyes47KRuntimeBinding,
     POLICY_T1_ARXIVQA_DATASET_KIND,
+    POLICY_T1_MIXED_DATASET_KIND,
     PolicyT1DecisionStage,
+    PolicyT1MixedRuntimeBinding,
     PolicyT1RLRuntimeBinding,
+    policy_t1_mixed_iteration_identity_sha256,
     policy_t1_rl_iteration_identity_sha256,
+    verify_policy_t1_mixed_artifact_binding,
     verify_policy_t1_rl_artifact_binding,
 )
 from tgvf_rl.judges import load_openai_compatible_judge
@@ -268,7 +272,11 @@ class SmokeSelectedMCQSample:
 class SmokeDatasetSelection:
     kind: str
     root: Path
-    runtime_binding: DeepEyes47KRuntimeBinding | PolicyT1RLRuntimeBinding
+    runtime_binding: (
+        DeepEyes47KRuntimeBinding
+        | PolicyT1RLRuntimeBinding
+        | PolicyT1MixedRuntimeBinding
+    )
     samples_sha256: str
     iteration_identity_sha256: str
     sample_id: str | None
@@ -582,11 +590,15 @@ def load_policy_e2e_smoke_run_config(
     )
 
     raw_dataset = payload.get("dataset")
-    policy_t1_dataset = (
+    policy_t1_arxivqa_dataset = (
         isinstance(raw_dataset, Mapping)
         and raw_dataset.get("kind") == POLICY_T1_ARXIVQA_DATASET_KIND
     )
-    if policy_t1_dataset:
+    policy_t1_mixed_dataset = (
+        isinstance(raw_dataset, Mapping)
+        and raw_dataset.get("kind") == POLICY_T1_MIXED_DATASET_KIND
+    )
+    if policy_t1_arxivqa_dataset or policy_t1_mixed_dataset:
         if not mixed_run:
             raise ValueError("Policy T1 retained data requires a mixed/formal run")
         dataset_table = _table(
@@ -604,29 +616,20 @@ def load_policy_e2e_smoke_run_config(
                 "shuffle_seed",
             },
         )
-        dataset_kind = POLICY_T1_ARXIVQA_DATASET_KIND
+        dataset_kind = str(dataset_table["kind"])
         dataset_root = _existing_directory(dataset_table["root"], name="dataset.root")
-        try:
-            decision_stage = PolicyT1DecisionStage(dataset_table["decision_stage"])
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                "dataset.decision_stage must be provisional or final"
-            ) from error
-        runtime_binding = PolicyT1RLRuntimeBinding(
-            manifest_file_sha256=_sha256(
-                dataset_table["manifest_file_sha256"],
-                name="dataset.manifest_file_sha256",
-            ),
-            content_sha256=_sha256(
-                dataset_table["content_sha256"], name="dataset.content_sha256"
-            ),
-            shuffle_seed=_nonnegative_int(
-                dataset_table["shuffle_seed"], name="dataset.shuffle_seed"
-            ),
-            decision_stage=decision_stage,
-            expected_sample_count=_positive_int(
-                dataset_table["sample_count"], name="dataset.sample_count"
-            ),
+        manifest_file_sha256 = _sha256(
+            dataset_table["manifest_file_sha256"],
+            name="dataset.manifest_file_sha256",
+        )
+        content_sha256 = _sha256(
+            dataset_table["content_sha256"], name="dataset.content_sha256"
+        )
+        shuffle_seed = _nonnegative_int(
+            dataset_table["shuffle_seed"], name="dataset.shuffle_seed"
+        )
+        expected_sample_count = _positive_int(
+            dataset_table["sample_count"], name="dataset.sample_count"
         )
         samples_sha256 = _sha256(
             dataset_table["samples_sha256"], name="dataset.samples_sha256"
@@ -635,15 +638,54 @@ def load_policy_e2e_smoke_run_config(
             dataset_table["iteration_identity_sha256"],
             name="dataset.iteration_identity_sha256",
         )
-        if iteration_sha256 != policy_t1_rl_iteration_identity_sha256(
-            runtime_binding, samples_sha256=samples_sha256
-        ):
-            raise ValueError("dataset iteration identity differs from its T1 binding")
-        verify_policy_t1_rl_artifact_binding(
-            dataset_root,
-            binding=runtime_binding,
-            samples_sha256=samples_sha256,
-        )
+        if policy_t1_mixed_dataset:
+            _require_exact(
+                dataset_table["decision_stage"],
+                "final",
+                "dataset.decision_stage",
+            )
+            runtime_binding = PolicyT1MixedRuntimeBinding(
+                manifest_file_sha256=manifest_file_sha256,
+                content_sha256=content_sha256,
+                shuffle_seed=shuffle_seed,
+                expected_sample_count=expected_sample_count,
+            )
+            if iteration_sha256 != policy_t1_mixed_iteration_identity_sha256(
+                runtime_binding, samples_sha256=samples_sha256
+            ):
+                raise ValueError(
+                    "dataset iteration identity differs from its mixed T1 binding"
+                )
+            verify_policy_t1_mixed_artifact_binding(
+                dataset_root,
+                binding=runtime_binding,
+                samples_sha256=samples_sha256,
+            )
+        else:
+            try:
+                decision_stage = PolicyT1DecisionStage(dataset_table["decision_stage"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "dataset.decision_stage must be provisional or final"
+                ) from error
+            runtime_binding = PolicyT1RLRuntimeBinding(
+                manifest_file_sha256=manifest_file_sha256,
+                content_sha256=content_sha256,
+                shuffle_seed=shuffle_seed,
+                decision_stage=decision_stage,
+                expected_sample_count=expected_sample_count,
+            )
+            if iteration_sha256 != policy_t1_rl_iteration_identity_sha256(
+                runtime_binding, samples_sha256=samples_sha256
+            ):
+                raise ValueError(
+                    "dataset iteration identity differs from its T1 binding"
+                )
+            verify_policy_t1_rl_artifact_binding(
+                dataset_root,
+                binding=runtime_binding,
+                samples_sha256=samples_sha256,
+            )
         sample_id = None
         cursor = None
         selected_sample = None

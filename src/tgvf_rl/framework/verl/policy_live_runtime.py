@@ -18,7 +18,7 @@ from typing import Any
 
 import torch
 from PIL import Image
-from tgvf_rl.data import PolicyT1RLRuntimeBinding
+from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
 
 from tgvf_rl.checkpoint.coordinator import state_digest
 from tgvf_rl.conditioning import (
@@ -1047,7 +1047,10 @@ def _validate_sample_fields(
         bound_image_path = image.get("path")
         if not isinstance(bound_image_path, str):
             raise IdentityMismatchError("bound Policy image path differs")
-        if isinstance(config.dataset.runtime_binding, PolicyT1RLRuntimeBinding):
+        if isinstance(
+            config.dataset.runtime_binding,
+            (PolicyT1RLRuntimeBinding, PolicyT1MixedRuntimeBinding),
+        ):
             source_image_path = Path(bound_image_path).resolve()
         else:
             source_image_path = (config.dataset.root / bound_image_path).resolve()

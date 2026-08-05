@@ -17,7 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
-from tgvf_rl.data import PolicyT1RLRuntimeBinding
+from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
 from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
 
 from .adapter import LOSSLESS_AGENT_LOOP_MANAGER_FQN, VerlAdapterConfig
@@ -30,6 +30,7 @@ from .exact_replay_engine import TGVF_EXACT_REPLAY_MODEL_TYPE
 from .smoke_dataset import VerlSelectedSampleDatasetBinding
 from .deepeyes_dataset import VerlDeepEyes47KDatasetBinding
 from .policy_t1_dataset import VerlPolicyT1DatasetBinding
+from .policy_t1_mixed_dataset import VerlPolicyT1MixedDatasetBinding
 
 
 # Pinned e003's upstream main hard-codes its own TaskRunner.  The repo-owned
@@ -45,6 +46,10 @@ DEEPEYES47K_DATASET_CLASS_NAME = "TGVFDeepEyes47KDataset"
 DEEPEYES47K_DATASET_MODULE_PATH = "pkg://tgvf_rl.framework.verl.deepeyes_dataset"
 POLICY_T1_ARXIVQA_DATASET_CLASS_NAME = "TGVFPolicyT1ArxivQADataset"
 POLICY_T1_ARXIVQA_DATASET_MODULE_PATH = "pkg://tgvf_rl.framework.verl.policy_t1_dataset"
+POLICY_T1_MIXED_DATASET_CLASS_NAME = "TGVFPolicyT1MixedDataset"
+POLICY_T1_MIXED_DATASET_MODULE_PATH = (
+    "pkg://tgvf_rl.framework.verl.policy_t1_mixed_dataset"
+)
 NATIVE_AGENT_LOOP_NAME = "tgvf_native_policy"
 NATIVE_AGENT_LOOP_FQN = (
     "tgvf_rl.framework.verl.native_agent_loop.VerlFrameworkNeutralAgentLoop"
@@ -366,8 +371,24 @@ def build_policy_e2e_smoke_verl_plan(
     selected_binding = None
     full_binding = None
     t1_binding = None
+    t1_mixed_binding = None
     if config.dataset.selected_sample is None:
-        if isinstance(config.dataset.runtime_binding, PolicyT1RLRuntimeBinding):
+        if isinstance(config.dataset.runtime_binding, PolicyT1MixedRuntimeBinding):
+            mixed_typed_binding = config.dataset.runtime_binding
+            t1_mixed_binding = VerlPolicyT1MixedDatasetBinding(
+                root=config.dataset.root,
+                manifest_file_sha256=mixed_typed_binding.manifest_file_sha256,
+                content_sha256=mixed_typed_binding.content_sha256,
+                samples_sha256=config.dataset.samples_sha256,
+                iteration_identity_sha256=config.dataset.iteration_identity_sha256,
+                shuffle_seed=mixed_typed_binding.shuffle_seed,
+                expected_sample_count=mixed_typed_binding.expected_sample_count,
+                prompt_bundle_sha256=config.protocol.prompt_sha256,
+                tool_profile=config.protocol.tool_profile,
+                tokenizer_length=config.model.tokenizer_length,
+                model_name=config.model.model_name,
+            )
+        elif isinstance(config.dataset.runtime_binding, PolicyT1RLRuntimeBinding):
             t1_typed_binding = config.dataset.runtime_binding
             t1_binding = VerlPolicyT1DatasetBinding(
                 root=config.dataset.root,
@@ -404,7 +425,7 @@ def build_policy_e2e_smoke_verl_plan(
             )
     else:
         selected_binding = VerlSelectedSampleDatasetBinding.from_run_config(config)
-    dataset_binding = selected_binding or t1_binding or full_binding
+    dataset_binding = selected_binding or t1_mixed_binding or t1_binding or full_binding
     if dataset_binding is None:  # pragma: no cover - binding construction invariant
         raise RuntimeError("Policy dataset binding was not constructed")
     if selected_binding is not None:
@@ -412,6 +433,11 @@ def build_policy_e2e_smoke_verl_plan(
         dataset_class_name = SELECTED_SAMPLE_DATASET_CLASS_NAME
         dataset_config = {"data.tgvf_selected_sample": selected_binding.as_config()}
         dataset_samples_path = selected_binding.samples_path
+    elif t1_mixed_binding is not None:
+        dataset_module_path = POLICY_T1_MIXED_DATASET_MODULE_PATH
+        dataset_class_name = POLICY_T1_MIXED_DATASET_CLASS_NAME
+        dataset_config = {"data.tgvf_policy_t1_mixed": t1_mixed_binding.as_config()}
+        dataset_samples_path = t1_mixed_binding.root / "samples.jsonl"
     elif t1_binding is not None:
         dataset_module_path = POLICY_T1_ARXIVQA_DATASET_MODULE_PATH
         dataset_class_name = POLICY_T1_ARXIVQA_DATASET_CLASS_NAME
