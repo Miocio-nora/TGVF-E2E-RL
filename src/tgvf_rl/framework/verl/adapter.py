@@ -80,9 +80,9 @@ class VerlAdapterConfig:
                 "transport manager"
             )
         if self.max_tool_calls is not None and (
-            type(self.max_tool_calls) is not int or self.max_tool_calls <= 1
+            type(self.max_tool_calls) is not int or self.max_tool_calls < 1
         ):
-            raise ValueError("an explicit multi-call cap greater than one is required")
+            raise ValueError("an explicit positive tool-call cap is required")
         if self.policy_pilot is not None:
             if not isinstance(self.policy_pilot, PolicyPilotV1Config):
                 raise TypeError("policy_pilot must be PolicyPilotV1Config")

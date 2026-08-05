@@ -16,6 +16,20 @@ from tgvf_rl.objectives import (
     policy_pilot_v1_grpo_spec,
 )
 from tgvf_rl.rewards.schema import PILOT_REWARD_WEIGHT_PROFILES, RewardResult
+from tgvf_rl.rewards.stage3_shaped import Stage3ShapedRewardResult
+from tgvf_rl.rewards.stage3_verl_adapter import (
+    STAGE3_VERL_QUALITY_APPLICABLE_FIELD,
+    STAGE3_VERL_QUALITY_COVERED_FIELD,
+    STAGE3_VERL_QUALITY_FAILURE_FIELD,
+    STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+    STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD,
+    STAGE3_VERL_TOOL_LABEL_FIELD,
+    STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD,
+    STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD,
+    STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD,
+    Stage3VerlTrajectoryReward,
+    Stage3VerlTrajectoryRewardScorer,
+)
 from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD,
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
@@ -45,7 +59,7 @@ class RewardedTrajectoryFinalizerPort(Protocol):
         *,
         request: object,
         trajectory: TrajectoryRecord,
-        reward: RewardResult,
+        reward: RewardResult | Stage3ShapedRewardResult,
     ) -> RolloutBridgeRecord: ...
 
 
@@ -56,17 +70,21 @@ class VerlRewardedAgentLoopOutputBuilder:
         self,
         *,
         request: object,
-        scorer: PilotVerlTrajectoryRewardScorer,
+        scorer: PilotVerlTrajectoryRewardScorer | Stage3VerlTrajectoryRewardScorer,
         finalizer: RewardedTrajectoryFinalizerPort,
         metrics_factory: Callable[
-            [TrajectoryRecord, PilotVerlTrajectoryReward], object
+            [TrajectoryRecord, PilotVerlTrajectoryReward | Stage3VerlTrajectoryReward],
+            object,
         ],
         agent_loop_output_cls: type[Any] | None = None,
     ) -> None:
         if not hasattr(request, "identity"):
             raise TypeError("rewarded output request must expose identity")
-        if not isinstance(scorer, PilotVerlTrajectoryRewardScorer):
-            raise TypeError("scorer must be PilotVerlTrajectoryRewardScorer")
+        if not isinstance(
+            scorer,
+            (PilotVerlTrajectoryRewardScorer, Stage3VerlTrajectoryRewardScorer),
+        ):
+            raise TypeError("scorer must be a supported trajectory reward scorer")
         if not callable(getattr(finalizer, "finalize", None)):
             raise TypeError("finalizer must implement finalize()")
         if not callable(metrics_factory):
@@ -128,6 +146,7 @@ class VerlPilotRewardBatchView:
     upstream_group_uids: tuple[object, ...]
     rewards: tuple[float, ...]
     pipeline_sha256: str
+    reward_bridge_schema_version: str
 
 
 def validate_policy_pilot_reward_data_proto(
@@ -204,11 +223,34 @@ def validate_policy_pilot_reward_data_proto(
         for value in fields[POLICY_PILOT_VERL_REWARD_BATCH_SCHEMA_FIELD]
     ):
         raise ValueError("Policy Pilot reward-batch schema was changed")
-    if any(
-        value != PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION
-        for value in fields[PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD]
-    ):
+    bridge_schemas = set(fields[PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD])
+    if len(bridge_schemas) != 1:
+        raise ValueError("one reward batch cannot mix reward bridge schemas")
+    bridge_schema = next(iter(bridge_schemas))
+    if bridge_schema not in {
+        PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+        STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+    }:
         raise ValueError("trajectory reward bridge schema was changed")
+    stage3_fields: dict[str, tuple[object, ...]] = {}
+    if bridge_schema == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION:
+        stage3_fields = {
+            name: _row_values(
+                _required(non_tensors, name, "DataProto.non_tensor_batch"),
+                batch_size,
+                name,
+            )
+            for name in (
+                STAGE3_VERL_TOOL_LABEL_FIELD,
+                STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD,
+                STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD,
+                STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD,
+                STAGE3_VERL_QUALITY_APPLICABLE_FIELD,
+                STAGE3_VERL_QUALITY_COVERED_FIELD,
+                STAGE3_VERL_QUALITY_FAILURE_FIELD,
+                STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD,
+            )
+        }
 
     trajectory_ids: list[str] = []
     group_uids: list[str] = []
@@ -250,7 +292,10 @@ def validate_policy_pilot_reward_data_proto(
         _validate_component_sidecar(
             fields[PILOT_VERL_REWARD_COMPONENTS_FIELD][row_index],
             expected_total=float(exact_reward),
+            bridge_schema=bridge_schema,
         )
+        if stage3_fields:
+            _validate_stage3_row_sidecars(stage3_fields, row_index=row_index)
         trajectory_ids.append(trajectory_id)
         group_uids.append(exact_group)
         upstream_uids.append(upstream_uid)
@@ -315,6 +360,7 @@ def validate_policy_pilot_reward_data_proto(
         upstream_group_uids=tuple(upstream_uids),
         rewards=tuple(rewards),
         pipeline_sha256=pipeline_shas[0],
+        reward_bridge_schema_version=str(bridge_schema),
     )
 
 
@@ -349,7 +395,7 @@ def bind_policy_pilot_exact_grpo_fields(
 
 
 def _agent_loop_reward_sidecars(
-    scored: PilotVerlTrajectoryReward,
+    scored: PilotVerlTrajectoryReward | Stage3VerlTrajectoryReward,
 ) -> dict[str, object]:
     exact_group_field, exact_reward_field, group_schema_field, group_schema = (
         _policy_batch_fields()
@@ -433,11 +479,19 @@ def _require_sha256(value: object, name: str) -> str:
     return value
 
 
-def _validate_component_sidecar(value: object, *, expected_total: float) -> None:
+def _validate_component_sidecar(
+    value: object,
+    *,
+    expected_total: float,
+    bridge_schema: object = PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+) -> None:
     try:
         components = tuple(value)  # type: ignore[arg-type]
     except TypeError as error:
         raise TypeError("reward component sidecar must be iterable") from error
+    if bridge_schema == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION:
+        _validate_stage3_component_sidecar(components, expected_total=expected_total)
+        return
     names = ("answer_reward", "format_reward", "conditional_tool_reward")
     if len(components) != 3 or tuple(item[0] for item in components) != names:
         raise ValueError("reward component sidecar differs from Pilot equation")
@@ -461,6 +515,90 @@ def _validate_component_sidecar(value: object, *, expected_total: float) -> None
         for total in accepted_totals
     ):
         raise ValueError("reward component sidecar differs from exact total")
+
+
+def _validate_stage3_component_sidecar(
+    components: tuple[object, ...], *, expected_total: float
+) -> None:
+    names = ("answer", "tool", "focus", "grounding", "protocol")
+    try:
+        actual_names = tuple(item[0] for item in components)  # type: ignore[index]
+        values = tuple(float(item[1]) for item in components)  # type: ignore[index]
+    except (IndexError, TypeError, ValueError) as error:
+        raise ValueError("Stage3 reward component sidecar is malformed") from error
+    if len(components) != 5 or actual_names != names:
+        raise ValueError("reward component sidecar differs from Stage3 equation")
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("Stage3 reward components must be finite")
+    answer, _tool, focus, grounding, protocol = values
+    if (
+        answer not in {0.0, 2.0}
+        or focus not in {0.0, 0.5, 1.0}
+        or grounding not in {-1.0, 0.0, 0.5, 1.0}
+        or protocol not in {-1.0, 0.0}
+    ):
+        raise ValueError("Stage3 reward component sidecar has invalid values")
+    if not math.isclose(
+        math.fsum(values), expected_total, rel_tol=0.0, abs_tol=1.0e-12
+    ):
+        raise ValueError("reward component sidecar differs from exact total")
+
+
+def _validate_stage3_row_sidecars(
+    fields: Mapping[str, tuple[object, ...]], *, row_index: int
+) -> None:
+    label = fields[STAGE3_VERL_TOOL_LABEL_FIELD][row_index]
+    confidence = fields[STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD][row_index]
+    if label not in {"needed", "optional", "unnecessary"}:
+        raise ValueError("Stage3 tool label sidecar is invalid")
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not math.isfinite(float(confidence))
+        or not 0.0 <= float(confidence) <= 1.0
+    ):
+        raise ValueError("Stage3 tool label confidence is invalid")
+    _require_sha256(
+        fields[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD][row_index],
+        "Stage3 tool label row",
+    )
+    _require_sha256(
+        fields[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD][row_index],
+        "Stage3 tool sidecar",
+    )
+    applicable = fields[STAGE3_VERL_QUALITY_APPLICABLE_FIELD][row_index]
+    covered = fields[STAGE3_VERL_QUALITY_COVERED_FIELD][row_index]
+    failure = fields[STAGE3_VERL_QUALITY_FAILURE_FIELD][row_index]
+    visual_usage = fields[STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD][row_index]
+    if type(applicable) is not bool or type(covered) is not bool:
+        raise ValueError("Stage3 visual-quality coverage sidecars must be bool")
+    if not applicable and (covered or failure is not None):
+        raise ValueError("non-applicable Stage3 visual judge cannot be covered/failed")
+    if applicable and covered == (failure is not None):
+        raise ValueError("Stage3 visual-quality coverage/failure sidecars differ")
+    if failure is not None and (not isinstance(failure, str) or not failure.strip()):
+        raise ValueError("Stage3 visual-quality failure sidecar is invalid")
+    if visual_usage is not None:
+        try:
+            prompt_tokens, completion_tokens, total_tokens, cost = visual_usage  # type: ignore[misc]
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "Stage3 visual judge usage sidecar is malformed"
+            ) from error
+        if (
+            type(prompt_tokens) is not int
+            or type(completion_tokens) is not int
+            or type(total_tokens) is not int
+            or min(prompt_tokens, completion_tokens, total_tokens) < 0
+            or total_tokens != prompt_tokens + completion_tokens
+            or isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+            or not math.isfinite(float(cost))
+            or float(cost) < 0.0
+        ):
+            raise ValueError("Stage3 visual judge usage sidecar is invalid")
+    if visual_usage is not None and not applicable:
+        raise ValueError("Stage3 visual judge usage requires an applicable call")
 
 
 def _integer_group_ids(

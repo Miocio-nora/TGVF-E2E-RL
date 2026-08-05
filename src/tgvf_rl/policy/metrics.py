@@ -38,9 +38,7 @@ PILOT_V1_METRIC_REDUCTIONS = (
     MetricReductionContract(
         "mean_answer_reward", "answer_reward_total", "trajectories"
     ),
-    MetricReductionContract(
-        "format_error_rate", "format_errors", "trajectories"
-    ),
+    MetricReductionContract("format_error_rate", "format_errors", "trajectories"),
     MetricReductionContract(
         "mean_conditional_tool_reward",
         "conditional_tool_reward_total",
@@ -102,6 +100,15 @@ class PilotTrajectoryMetricsObservation:
     judge_prompt_tokens: int = 0
     judge_completion_tokens: int = 0
     judge_cost_usd: float = 0.0
+    reward_profile: str = "pilot-v1"
+    stage3_reward_components: tuple[float, float, float, float, float] | None = None
+    stage3_quality_judge_applicable: bool = False
+    stage3_quality_judge_covered: bool = False
+    stage3_quality_judge_failure: str | None = None
+    stage3_visual_judge_calls: int = 0
+    stage3_visual_judge_prompt_tokens: int = 0
+    stage3_visual_judge_completion_tokens: int = 0
+    stage3_visual_judge_cost_usd: float = 0.0
 
     def __post_init__(self) -> None:
         if type(self.prompt_id) is not str or not self.prompt_id.strip():
@@ -118,6 +125,9 @@ class PilotTrajectoryMetricsObservation:
             "judge_calls",
             "judge_prompt_tokens",
             "judge_completion_tokens",
+            "stage3_visual_judge_calls",
+            "stage3_visual_judge_prompt_tokens",
+            "stage3_visual_judge_completion_tokens",
         ):
             _nonnegative_int(getattr(self, name), name)
         if self.judge_calls not in {0, 1}:
@@ -132,10 +142,22 @@ class PilotTrajectoryMetricsObservation:
             or self.judge_cost_usd
         ):
             raise ValueError("judge usage requires a judge call")
-        if self.tool_call_attempts > POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS:
-            raise ValueError("Pilot v1 records at most five tool-call attempts")
-        if self.successful_tgvf_observations > POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS:
-            raise ValueError("Pilot v1 admits at most four successful observations")
+        if self.reward_profile not in {"pilot-v1", "stage3-shaped-v1"}:
+            raise ValueError("unsupported trajectory metrics reward profile")
+        maximum_attempts = (
+            POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS
+            if self.reward_profile == "pilot-v1"
+            else 2
+        )
+        admitted_attempts = (
+            POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
+            if self.reward_profile == "pilot-v1"
+            else 1
+        )
+        if self.tool_call_attempts > maximum_attempts:
+            raise ValueError("tool-call attempts exceed the reward profile bound")
+        if self.successful_tgvf_observations > admitted_attempts:
+            raise ValueError("successful observations exceed the reward profile bound")
         if self.successful_tgvf_observations > self.tool_call_attempts:
             raise ValueError("successful observations cannot exceed tool attempts")
         if self.reasoning_tokens > self.generated_policy_tokens:
@@ -156,7 +178,9 @@ class PilotTrajectoryMetricsObservation:
         ):
             raise TypeError("tool_error_codes must be a sequence of exact codes")
         object.__setattr__(self, "tool_error_codes", tuple(self.tool_error_codes))
-        if any(type(code) is not str or not code.strip() for code in self.tool_error_codes):
+        if any(
+            type(code) is not str or not code.strip() for code in self.tool_error_codes
+        ):
             raise ValueError("tool_error_codes must contain non-empty strings")
         if (
             self.successful_tgvf_observations + len(self.tool_error_codes)
@@ -166,17 +190,85 @@ class PilotTrajectoryMetricsObservation:
                 "each tool-call attempt must yield one TGVF observation or one error"
             )
         cap_code = ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value
-        if self.tool_call_attempts == POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS:
+        if self.tool_call_attempts == maximum_attempts:
             if self.tool_error_codes.count(cap_code) != 1:
-                raise ValueError("the fifth Pilot attempt must record one cap error")
+                if self.reward_profile == "pilot-v1":
+                    raise ValueError(
+                        "the fifth Pilot attempt must record one cap error"
+                    )
+                raise ValueError("the second Stage3 attempt must record one cap error")
         elif cap_code in self.tool_error_codes:
-            raise ValueError("a cap error is valid only on the fifth attempt")
+            if self.reward_profile == "pilot-v1":
+                raise ValueError("a cap error is valid only on the fifth attempt")
+            raise ValueError("a cap error is valid only on the second Stage3 attempt")
         if conditional == 1.0 and (
             answer != 1.0 or self.successful_tgvf_observations == 0
         ):
             raise ValueError(
                 "conditional tool reward requires a correct answer and successful D"
             )
+        self._validate_stage3_metrics()
+
+    def _validate_stage3_metrics(self) -> None:
+        stage3 = self.stage3_reward_components
+        if self.reward_profile == "pilot-v1":
+            if stage3 is not None or any(
+                (
+                    self.stage3_quality_judge_applicable,
+                    self.stage3_quality_judge_covered,
+                    self.stage3_quality_judge_failure is not None,
+                    self.stage3_visual_judge_calls,
+                    self.stage3_visual_judge_prompt_tokens,
+                    self.stage3_visual_judge_completion_tokens,
+                    self.stage3_visual_judge_cost_usd,
+                )
+            ):
+                raise ValueError("Pilot-v1 metrics cannot carry Stage3 fields")
+            return
+        if (
+            not isinstance(stage3, tuple)
+            or len(stage3) != 5
+            or any(not math.isfinite(float(value)) for value in stage3)
+        ):
+            raise ValueError("Stage3 metrics require five finite reward components")
+        for name in (
+            "stage3_quality_judge_applicable",
+            "stage3_quality_judge_covered",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be bool")
+        if not self.stage3_quality_judge_applicable and (
+            self.stage3_quality_judge_covered
+            or self.stage3_quality_judge_failure is not None
+        ):
+            raise ValueError(
+                "non-applicable Stage3 quality judge cannot be covered/failed"
+            )
+        if self.stage3_quality_judge_applicable and (
+            self.stage3_quality_judge_covered
+            == (self.stage3_quality_judge_failure is not None)
+        ):
+            raise ValueError("Stage3 quality coverage/failure fields differ")
+        if self.stage3_quality_judge_failure is not None and (
+            not isinstance(self.stage3_quality_judge_failure, str)
+            or not self.stage3_quality_judge_failure.strip()
+        ):
+            raise ValueError("Stage3 quality failure code is invalid")
+        if self.stage3_visual_judge_calls != int(self.stage3_quality_judge_applicable):
+            raise ValueError("Stage3 visual judge calls differ from applicability")
+        visual_cost = _finite_float(
+            self.stage3_visual_judge_cost_usd,
+            "stage3_visual_judge_cost_usd",
+        )
+        if visual_cost < 0.0:
+            raise ValueError("stage3_visual_judge_cost_usd must be non-negative")
+        object.__setattr__(self, "stage3_visual_judge_cost_usd", visual_cost)
+        if self.stage3_visual_judge_calls == 0 and (
+            self.stage3_visual_judge_prompt_tokens
+            or self.stage3_visual_judge_completion_tokens
+            or visual_cost
+        ):
+            raise ValueError("Stage3 visual judge usage requires a call")
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,9 +363,7 @@ class PilotMetricsCheckpointState:
         )
         for name in integer_fields:
             _nonnegative_int(getattr(self, name), name)
-        elapsed = _finite_float(
-            self.step_time_seconds_total, "step_time_seconds_total"
-        )
+        elapsed = _finite_float(self.step_time_seconds_total, "step_time_seconds_total")
         if elapsed < 0.0:
             raise ValueError("step_time_seconds_total must be non-negative")
         object.__setattr__(self, "step_time_seconds_total", elapsed)
@@ -293,12 +383,18 @@ class PilotMetricsCheckpointState:
         if self.trajectories != (
             self.prompts * POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
         ):
-            raise ValueError("Pilot trajectory count must equal prompts multiplied by 8")
+            raise ValueError(
+                "Pilot trajectory count must equal prompts multiplied by 8"
+            )
         if self.optimizer_steps == 0:
             if self.prompts != 0 or self.step_time_seconds_total != 0.0:
-                raise ValueError("empty metrics state must have no prompts or step time")
+                raise ValueError(
+                    "empty metrics state must have no prompts or step time"
+                )
         elif self.prompts < self.optimizer_steps or self.step_time_seconds_total <= 0.0:
-            raise ValueError("each optimizer step must contain prompts and positive time")
+            raise ValueError(
+                "each optimizer step must contain prompts and positive time"
+            )
         bounded_by_trajectories = {
             "trajectories_with_tool_call_attempts": (
                 self.trajectories_with_tool_call_attempts
@@ -338,9 +434,11 @@ class PilotMetricsCheckpointState:
             raise ValueError("judge usage totals require judge calls")
         if self.judge_calls and self.judge_prompt_tokens < self.judge_calls:
             raise ValueError("each judge call requires prompt tokens")
-        if sum(item.count for item in self.tool_error_counts) + (
-            self.successful_tgvf_observations
-        ) != self.tool_call_attempts:
+        if (
+            sum(item.count for item in self.tool_error_counts)
+            + (self.successful_tgvf_observations)
+            != self.tool_call_attempts
+        ):
             raise ValueError("tool observations plus typed errors must equal attempts")
 
     def to_checkpoint_mapping(self) -> dict[str, object]:
@@ -425,18 +523,14 @@ class PilotMetricsCheckpointState:
             prompts=payload["prompts"],
             trajectories=payload["trajectories"],
             generated_policy_tokens=payload["generated_policy_tokens"],
-            successful_tgvf_observations=payload[
-                "successful_tgvf_observations"
-            ],
+            successful_tgvf_observations=payload["successful_tgvf_observations"],
             trajectories_with_tool_call_attempts=payload[
                 "trajectories_with_tool_call_attempts"
             ],
             tool_call_attempts=payload["tool_call_attempts"],
             answer_reward_total=payload["answer_reward_total"],
             format_errors=payload["format_errors"],
-            conditional_tool_reward_total=payload[
-                "conditional_tool_reward_total"
-            ],
+            conditional_tool_reward_total=payload["conditional_tool_reward_total"],
             judge_calls=payload["judge_calls"],
             judge_prompt_tokens=payload["judge_prompt_tokens"],
             judge_completion_tokens=payload["judge_completion_tokens"],
@@ -546,8 +640,7 @@ class PilotMetricsAccumulator:
                 (self._state.judge_cost_usd, *(row.judge_cost_usd for row in rows))
             ),
             reasoning_tokens=(
-                self._state.reasoning_tokens
-                + sum(row.reasoning_tokens for row in rows)
+                self._state.reasoning_tokens + sum(row.reasoning_tokens for row in rows)
             ),
             original_visual_tokens=(
                 self._state.original_visual_tokens
@@ -585,9 +678,7 @@ class PilotMetricsAccumulator:
             mean_answer_reward=_zero_safe_mean(
                 state.answer_reward_total, state.trajectories
             ),
-            format_error_rate=_zero_safe_mean(
-                state.format_errors, state.trajectories
-            ),
+            format_error_rate=_zero_safe_mean(state.format_errors, state.trajectories),
             mean_conditional_tool_reward=_zero_safe_mean(
                 state.conditional_tool_reward_total, state.trajectories
             ),

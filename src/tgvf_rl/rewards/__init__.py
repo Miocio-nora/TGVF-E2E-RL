@@ -10,6 +10,16 @@ from .schema import (
     RewardPipelineSpec,
     RewardResult,
 )
+from .stage3_shaped import (
+    QualityJudgeScore,
+    STAGE3_SHAPED_REWARD_VERSION,
+    Stage3ShapedComponentName,
+    Stage3ShapedRewardComponent,
+    Stage3ShapedRewardFacts,
+    Stage3ShapedRewardKernel,
+    Stage3ShapedRewardResult,
+    ToolNecessityLabel,
+)
 from .verifiers import RuleFirstAnswerVerifier
 from .verl_adapter import (
     PILOT_VERL_ANSWER_ROUTE_FIELD,
@@ -45,5 +55,13 @@ __all__ = [
     "RewardPipelineSpec",
     "RewardResult",
     "RuleFirstAnswerVerifier",
+    "QualityJudgeScore",
+    "STAGE3_SHAPED_REWARD_VERSION",
+    "Stage3ShapedComponentName",
+    "Stage3ShapedRewardComponent",
+    "Stage3ShapedRewardFacts",
+    "Stage3ShapedRewardKernel",
+    "Stage3ShapedRewardResult",
+    "ToolNecessityLabel",
     "reward_context_from_trajectory",
 ]

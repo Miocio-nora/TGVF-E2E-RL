@@ -1,19 +1,34 @@
 from __future__ import annotations
 
 import inspect
+import json
+from pathlib import Path
 from types import SimpleNamespace
+from dataclasses import replace
 
 import torch
 
 from tgvf_rl.contracts.identity import ModelIdentity
+from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
     Qwen3PolicyE2ELiveRuntimeBuilder,
+    _BoundTGVFVisualQualityRuntimeJudge,
     _build_reward_pipeline,
     _default_metrics_factory,
 )
+from tgvf_rl.judges import (
+    TGVFVisualQualityJudgeConfig,
+    TGVFVisualQualityJudgeProvider,
+    tgvf_visual_quality_prompt_identity,
+)
+from tgvf_rl.rewards.context import reward_context_from_trajectory
+from tgvf_rl.rewards.schema import AnswerTaskKind
+from tgvf_rl.rewards.stage3_shaped import QualityJudgeScore
+from tgvf_rl.trajectories.schema import TrajectoryStop
+from tests.framework.test_verl_bridges import _record
 from tgvf_rl.observations.store import ObservationStore
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
@@ -62,6 +77,74 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
         answer_primary.spec.pipeline_identity.sha256
         != legacy.spec.pipeline_identity.sha256
     )
+
+
+def test_live_visual_quality_adapter_consumes_typed_provider_result(
+    tmp_path: Path,
+) -> None:
+    image_bytes = b"\x89PNG\r\n\x1a\nlive-runtime-test"
+    image_path = (tmp_path / "source.png").resolve()
+    image_path.write_bytes(image_bytes)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"focus_score":2,"grounding_score":1}'
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def identity(name: str, digit: str) -> ArtifactIdentity:
+        return ArtifactIdentity("live-visual-test", name, "v1", digit * 64)
+
+    provider = TGVFVisualQualityJudgeProvider(
+        TGVFVisualQualityJudgeConfig(
+            base_url="https://judge.invalid/v1",
+            model_name="fixture-vision-judge",
+            prompt_identity=tgvf_visual_quality_prompt_identity(),
+            service_identity=identity("service", "1"),
+            model_identity=identity("model", "2"),
+            sampling_identity=identity("sampling", "3"),
+        ),
+        opener=lambda *_args, **_kwargs: Response(),
+    )
+    trajectory = replace(
+        _record(tool_call_count=1).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="Which option is correct?",
+        expected_answer="fixture answer",
+        task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+    )
+    adapter = _BoundTGVFVisualQualityRuntimeJudge(
+        provider=provider,
+        image_path=image_path,
+        image_sha256=__import__("hashlib").sha256(image_bytes).hexdigest(),
+    )
+
+    result = adapter.judge(
+        request=SimpleNamespace(identity=trajectory.identity),
+        trajectory=trajectory,
+        context=context,
+    )
+
+    assert result.focus_score is QualityJudgeScore.PASS
+    assert result.grounding_score is QualityJudgeScore.PARTIAL
 
 
 class _NativeTokenizer:

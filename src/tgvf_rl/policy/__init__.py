@@ -34,12 +34,14 @@ from .config import (
     POLICY_PILOT_V1_POLICY_LOSS_NAME,
     POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
+    POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA,
     POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA,
     QWEN3_DECODER_LORA_TARGET_MODULE_PATTERN,
     DecoderLoRAConfig,
     PilotGRPOConfig,
     PilotSamplingConfig,
     PolicyPilotV1Config,
+    PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
 )
 from .deepeyes_input import (
@@ -103,6 +105,7 @@ from .runtime import (
     TrajectoryReplayFinalizerPort,
 )
 from .run_config import (
+    POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_SMOKE_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     formal_deepeyes47k_iteration_identity_sha256,
@@ -135,6 +138,7 @@ __all__ = [
     "PILOT_GROUP_BATCH_SCHEMA_FIELD",
     "POLICY_DEEPEYES_DATASET_BINDING_SCHEMA",
     "POLICY_E2E_SMOKE_CONFIG_SCHEMA",
+    "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",
     "POLICY_EXECUTION_GROUP_UID_PREFIX",
     "POLICY_EXECUTION_GROUP_UID_SCHEMA",
     "POLICY_NATIVE_PROMPT_INPUT_SCHEMA",
@@ -147,6 +151,7 @@ __all__ = [
     "POLICY_PILOT_V1_MODEL_PATH",
     "POLICY_PILOT_V1_POLICY_LOSS_NAME",
     "POLICY_PILOT_V1_TOKENIZER_LENGTH",
+    "POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE",
     "POLICY_PILOT_V1_PROJECT_CHECKPOINT_SCHEMA",
@@ -197,6 +202,7 @@ __all__ = [
     "PolicyPilotScopeAudit",
     "PolicyPilotRuntime",
     "PolicyPilotV1Config",
+    "PolicyTGVFStage3ExperimentConfig",
     "PolicyVisualToolExperimentConfig",
     "PolicyPilotV1RunManifest",
     "PolicyReplayMaterialization",

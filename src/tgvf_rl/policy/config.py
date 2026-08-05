@@ -24,9 +24,10 @@ POLICY_PILOT_V1_CONFIG_SCHEMA = "policy-pilot-v1-20260720"
 POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA = (
     "policy-visual-tool-experiment-v1-20260722"
 )
-POLICY_PILOT_V1_MODEL_PATH = (
-    "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA = (
+    "policy-tgvf-stage3-shaped-experiment-v1-20260806"
 )
+POLICY_PILOT_V1_MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
 POLICY_PILOT_V1_MODEL_FAMILY = "qwen3_vl"
 POLICY_PILOT_V1_MODEL_NAME = "Qwen3-VL-8B-Instruct"
 POLICY_PILOT_V1_TOKENIZER_LENGTH = 151_669
@@ -48,9 +49,7 @@ POLICY_PILOT_V1_VLLM_VERSION = "0.12.0"
 POLICY_PILOT_V1_POLICY_LOSS_NAME = "tgvf_policy_pilot_v1_grpo"
 POLICY_PILOT_V1_VERL_EXECUTION_LOSS_MODE = "bypass_mode"
 POLICY_PILOT_V1_VERL_ROLLOUT_LOSS_TYPE = "ppo_clip"
-POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE = (
-    "tgvf_rl.framework.verl.exact_bypass_loss"
-)
+POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE = "tgvf_rl.framework.verl.exact_bypass_loss"
 POLICY_PILOT_V1_TOOL_PROFILE = NativeToolCapabilityProfile.TGVF_ONLY
 POLICY_PILOT_V1_TOOL_NAMES = POLICY_PILOT_V1_TOOL_PROFILE.tool_names
 POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES = (1.0e-6, 3.0e-6, 1.0e-5)
@@ -382,9 +381,7 @@ class PilotGRPOConfig:
     verl_execution_loss_mode: str = POLICY_PILOT_V1_VERL_EXECUTION_LOSS_MODE
     rollout_correction_bypass_mode: bool = True
     rollout_correction_loss_type: str = POLICY_PILOT_V1_VERL_ROLLOUT_LOSS_TYPE
-    verl_external_loss_module: str = (
-        POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE
-    )
+    verl_external_loss_module: str = POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE
     rollout_importance_sampling: str | None = None
     rollout_rejection_sampling: str | None = None
     rollout_is_batch_normalize: bool = False
@@ -584,9 +581,52 @@ class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
             raise TypeError("grpo must be PilotGRPOConfig")
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyTGVFStage3ExperimentConfig(PolicyPilotV1Config):
+    """Pilot mathematics with the first Stage3-shaped arm's one-call cap."""
+
+    schema_version: str = POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA
+    max_tgvf_call_attempts: int = 1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        expected = {
+            "schema_version": (
+                self.schema_version,
+                POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA,
+            ),
+            "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
+            "native_deepstack_enabled": (self.native_deepstack_enabled, True),
+            "tool_profile": (self.tool_profile, POLICY_PILOT_V1_TOOL_PROFILE),
+            "enabled_tool_names": (
+                self.enabled_tool_names,
+                POLICY_PILOT_V1_TOOL_NAMES,
+            ),
+            "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 1),
+            "image_max_pixels": (self.image_max_pixels, 512 * 512),
+        }
+        for name, (actual, required) in expected.items():
+            if actual != required:
+                raise ValueError(
+                    "Stage3-shaped TGVF experiment requires "
+                    f"{name}={required!r}, got {actual!r}"
+                )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError(
+                "Stage3-shaped TGVF experiment model_path is not supported"
+            )
+        if not isinstance(self.sampling, PilotSamplingConfig):
+            raise TypeError("sampling must be PilotSamplingConfig")
+        if not isinstance(self.lora, DecoderLoRAConfig):
+            raise TypeError("lora must be DecoderLoRAConfig")
+        if not isinstance(self.grpo, PilotGRPOConfig):
+            raise TypeError("grpo must be PilotGRPOConfig")
+
+
 __all__ = [
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
     "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
+    "POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME",
@@ -610,5 +650,6 @@ __all__ = [
     "PilotGRPOConfig",
     "PilotSamplingConfig",
     "PolicyPilotV1Config",
+    "PolicyTGVFStage3ExperimentConfig",
     "PolicyVisualToolExperimentConfig",
 ]

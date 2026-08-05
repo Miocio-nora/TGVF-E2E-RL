@@ -83,9 +83,21 @@ from tgvf_rl.rewards.schema import (
     PILOT_REWARD_LEGACY_WEIGHTS,
     pilot_reward_weight_profile_name,
 )
-from tgvf_rl.judges import DisabledJudgeProvider, load_openai_compatible_judge
+from tgvf_rl.judges import (
+    DisabledJudgeProvider,
+    TGVFVisualQualityFailureKind,
+    TGVFVisualQualityJudgeProvider,
+    TGVFVisualQualityJudgeRequest,
+    TGVFVisualQualityJudgeResult,
+    load_openai_compatible_judge,
+    load_tgvf_visual_quality_judge,
+)
 from tgvf_rl.trajectories.behavior import BehaviorTraceStore, VLLMBehaviorRecorder
-from tgvf_rl.trajectories.schema import TrajectoryRecord, trajectory_checksum
+from tgvf_rl.trajectories.schema import (
+    ToolCallRecord,
+    TrajectoryRecord,
+    trajectory_checksum,
+)
 from tgvf_rl.framework.vllm import (
     LiveVLLMTurnContextRegistry,
     Qwen3VLLMObservationPayloadResolver,
@@ -107,6 +119,17 @@ from tgvf_rl.rewards.verl_adapter import (
     PilotVerlTrajectoryReward,
     PilotVerlTrajectoryRewardScorer,
 )
+from tgvf_rl.rewards.stage3_shaped import (
+    QualityJudgeScore,
+    Stage3ShapedRewardResult,
+)
+from tgvf_rl.rewards.stage3_verl_adapter import (
+    Stage3ShapedRewardSpec,
+    Stage3VerlTrajectoryReward,
+    Stage3VerlTrajectoryRewardScorer,
+    Stage3VisualJudgeSampleFailure,
+    Stage3VisualQualityJudgement,
+)
 
 
 QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA = "tgvf-qwen3-policy-e2e-live-runtime-v1"
@@ -122,7 +145,10 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
         self,
         *,
         agent_loop_output_cls: type[Any] | None = None,
-        metrics_factory: Callable[[TrajectoryRecord, PilotVerlTrajectoryReward], object]
+        metrics_factory: Callable[
+            [TrajectoryRecord, PilotVerlTrajectoryReward | Stage3VerlTrajectoryReward],
+            object,
+        ]
         | None = None,
     ) -> None:
         if metrics_factory is not None and not callable(metrics_factory):
@@ -275,7 +301,8 @@ class _Qwen3PolicyTrajectoryComponents:
         focus_execution_ledger: FocusExecutionLedger,
         crop_execution_ledger: CropExecutionLedger,
         metrics_factory: Callable[
-            [TrajectoryRecord, PilotVerlTrajectoryReward], object
+            [TrajectoryRecord, PilotVerlTrajectoryReward | Stage3VerlTrajectoryReward],
+            object,
         ],
         agent_loop_output_cls: type[Any] | None,
         sample_index: Mapping[str, Mapping[str, object]],
@@ -293,7 +320,12 @@ class _Qwen3PolicyTrajectoryComponents:
         self.metrics_factory = metrics_factory
         self.agent_loop_output_cls = agent_loop_output_cls
         self.sample_index = sample_index
-        self.reward_pipeline = _build_reward_pipeline(self.config)
+        if self.config.reward.profile == "pilot-v1":
+            self.reward_pipeline = _build_reward_pipeline(self.config)
+            self.stage3_reward_runtime = None
+        else:
+            self.reward_pipeline = None
+            self.stage3_reward_runtime = _build_stage3_reward_runtime(self.config)
 
     async def build_trajectory_components_async(
         self,
@@ -439,13 +471,31 @@ class _Qwen3PolicyTrajectoryComponents:
         reward_context = _BoundRewardContextProvider(
             **_reward_source_from_sample_fields(sample_fields),
         )
-        scorer = PilotVerlTrajectoryRewardScorer(
-            pipeline=self.reward_pipeline,
-            context_provider=reward_context,
-            audit_sink=PolicyTrajectoryAuditWriter(
-                Path(self.config.output.root) / "trajectory_audit"
-            ).record,
-        )
+        if self.reward_pipeline is not None:
+            scorer: PilotVerlTrajectoryRewardScorer | Stage3VerlTrajectoryRewardScorer
+            scorer = PilotVerlTrajectoryRewardScorer(
+                pipeline=self.reward_pipeline,
+                context_provider=reward_context,
+                audit_sink=PolicyTrajectoryAuditWriter(
+                    Path(self.config.output.root) / "trajectory_audit"
+                ).record,
+            )
+        else:
+            runtime = self.stage3_reward_runtime
+            if runtime is None or self.config.reward.tool_utility is None:
+                raise RuntimeError("Stage3-shaped reward runtime is incomplete")
+            spec, answer_verifier, visual_provider = runtime
+            scorer = Stage3VerlTrajectoryRewardScorer(
+                spec=spec,
+                answer_verifier=answer_verifier,
+                context_provider=reward_context,
+                tool_utility=self.config.reward.tool_utility,
+                visual_quality_judge=_BoundTGVFVisualQualityRuntimeJudge(
+                    provider=visual_provider,
+                    image_path=Path(_scalar(sample_fields["source_image_path"])),
+                    image_sha256=str(_scalar(sample_fields["source_image_sha256"])),
+                ),
+            )
         finalizer = _ExactQwen3RewardedTrajectoryFinalizer(
             request_identity=identity,
             model=model,
@@ -708,8 +758,8 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
 
         if getattr(request, "identity", None) != self.request_identity:
             raise IdentityMismatchError("reward finalization request identity changed")
-        if not isinstance(reward, RewardResult):
-            raise TypeError("reward finalizer requires RewardResult")
+        if not isinstance(reward, (RewardResult, Stage3ShapedRewardResult)):
+            raise TypeError("reward finalizer requires a supported reward result")
         if trajectory.identity != self.request_identity:
             raise IdentityMismatchError(
                 "trajectory identity changed before finalization"
@@ -815,6 +865,102 @@ class _BoundRewardContextProvider(PilotRewardContextProvider):
             expected_answer=self.expected_answer,
             task_kind=self.task_kind,
             data_source=self.data_source,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundTGVFVisualQualityRuntimeJudge:
+    """Adapt the gold-free multimodal provider to the Stage3 scorer seam."""
+
+    provider: TGVFVisualQualityJudgeProvider
+    image_path: Path
+    image_sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, TGVFVisualQualityJudgeProvider):
+            raise TypeError("visual-quality runtime requires the bound provider")
+        if not self.image_path.is_absolute() or not self.image_path.is_file():
+            raise ValueError("visual-quality runtime image path is invalid")
+        if len(self.image_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.image_sha256
+        ):
+            raise ValueError("visual-quality runtime image SHA256 is invalid")
+
+    def judge(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+        context: object,
+    ) -> Stage3VisualQualityJudgement:
+        from tgvf_rl.rewards.schema import RewardContext
+
+        if not isinstance(context, RewardContext):
+            raise TypeError("visual-quality runtime context has the wrong type")
+        if getattr(request, "identity", None) != trajectory.identity:
+            raise IdentityMismatchError(
+                "visual-quality request and trajectory identities differ"
+            )
+        if context.successful_tgvf_observation_count != 1:
+            raise ValueError(
+                "Stage3 one-call arm requires exactly one successful observation"
+            )
+        observation = trajectory.observations[0]
+        matching_calls = tuple(
+            call
+            for call in trajectory.tool_calls
+            if isinstance(call, ToolCallRecord)
+            and call.call_index == observation.call_index
+        )
+        if len(matching_calls) != 1:
+            raise IdentityMismatchError(
+                "visual-quality observation has no unique TGVF tool call"
+            )
+        tool_call = matching_calls[0]
+        post_tool_reasoning = "\n".join(
+            turn.raw_text
+            for turn in trajectory.assistant_turns
+            if turn.turn_index > tool_call.assistant_turn_index
+        )
+        provider_config = self.provider.config
+        provider_request = TGVFVisualQualityJudgeRequest(
+            request_id=trajectory.identity.canonical_id,
+            image_path=self.image_path,
+            image_sha256=self.image_sha256,
+            question=context.question,
+            tool_target=tool_call.target,
+            post_tool_reasoning=post_tool_reasoning,
+            final_answer=context.candidate_answer,
+            prompt_identity=provider_config.prompt_identity,
+        )
+        result = self.provider.judge(provider_request)
+        if not isinstance(result, TGVFVisualQualityJudgeResult):
+            raise TypeError("visual-quality provider returned the wrong result type")
+        if (
+            result.request_id != provider_request.request_id
+            or result.prompt_identity != provider_config.prompt_identity
+            or result.service_identity != provider_config.service_identity
+            or result.model_identity != provider_config.model_identity
+            or result.sampling_identity != provider_config.sampling_identity
+            or result.config_identity != provider_config.config_identity
+        ):
+            raise IdentityMismatchError("visual-quality provider identity differs")
+        if not result.ok:
+            failure = result.failure_kind
+            if type(failure) is not TGVFVisualQualityFailureKind:
+                raise TypeError("visual-quality sample failure kind is invalid")
+            raise Stage3VisualJudgeSampleFailure(
+                failure.value,
+                usage=result.usage,
+            )
+        return Stage3VisualQualityJudgement(
+            trajectory_id=trajectory.identity.canonical_id,
+            sample_id=trajectory.identity.sample_id,
+            successful_observation_count=1,
+            focus_score=QualityJudgeScore(result.focus_score),
+            grounding_score=QualityJudgeScore(result.grounding_score),
+            judge_identity=provider_config.config_identity,
+            usage=result.usage,
         )
 
 
@@ -931,18 +1077,15 @@ def _final_token_materialization(
 
 def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
     reward = config.reward
+    if getattr(reward, "profile", "pilot-v1") != "pilot-v1":
+        raise ValueError("legacy Pilot pipeline requires profile=pilot-v1")
     reward_weights = (
         reward.answer_weight,
         reward.format_weight,
         reward.conditional_tool_weight,
     )
     pilot_reward_weight_profile_name(reward_weights)
-    answer_identity = ArtifactIdentity(
-        "policy-reward",
-        reward.answer_verifier,
-        "pilot-v1",
-        reward.answer_verifier_sha256,
-    )
+    answer_identity, verifier = _build_rule_first_answer_verifier(config)
     format_identity = _artifact_identity(
         "policy-reward", "native-format", "pilot-v1", {"run": config.identity_sha256}
     )
@@ -971,6 +1114,30 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         "pilot-reward-equation",
         "-".join(format(weight, "g") for weight in reward_weights),
         pipeline_identity_payload,
+    )
+    return PilotRewardPipeline(
+        PilotRewardSpec(
+            pipeline_identity=pipeline_identity,
+            answer_verifier_identity=answer_identity,
+            format_verifier_identity=format_identity,
+            tool_verifier_identity=tool_identity,
+            answer_weight=reward_weights[0],
+            format_weight=reward_weights[1],
+            conditional_tool_weight=reward_weights[2],
+        ),
+        verifier,
+    )
+
+
+def _build_rule_first_answer_verifier(
+    config: object,
+) -> tuple[ArtifactIdentity, RuleFirstAnswerVerifier]:
+    reward = config.reward
+    answer_identity = ArtifactIdentity(
+        "policy-reward",
+        reward.answer_verifier,
+        "pilot-v1",
+        reward.answer_verifier_sha256,
     )
     if reward.judge_config_path is None:
         disabled = _artifact_identity(
@@ -1009,18 +1176,61 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         judge_calibration_identity=judge_calibration_identity,
         judge_sample_failure_mode=judge_sample_failure_mode,
     )
-    return PilotRewardPipeline(
-        PilotRewardSpec(
-            pipeline_identity=pipeline_identity,
-            answer_verifier_identity=answer_identity,
-            format_verifier_identity=format_identity,
-            tool_verifier_identity=tool_identity,
-            answer_weight=reward_weights[0],
-            format_weight=reward_weights[1],
-            conditional_tool_weight=reward_weights[2],
-        ),
-        verifier,
+    return answer_identity, verifier
+
+
+def _build_stage3_reward_runtime(
+    config: object,
+) -> tuple[
+    Stage3ShapedRewardSpec,
+    RuleFirstAnswerVerifier,
+    TGVFVisualQualityJudgeProvider,
+]:
+    reward = config.reward
+    if reward.profile != "stage3-shaped-v1" or reward.tool_utility is None:
+        raise ValueError("Stage3-shaped reward binding is incomplete")
+    if (
+        reward.answer_weight is not None
+        or reward.format_weight is not None
+        or reward.conditional_tool_weight is not None
+    ):
+        raise ValueError("Stage3-shaped reward cannot carry Pilot-v1 weights")
+    if (
+        reward.visual_quality_judge_config_path is None
+        or reward.visual_quality_judge_config_sha256 is None
+        or reward.visual_quality_judge_identity is None
+    ):
+        raise ValueError("Stage3-shaped visual-quality judge binding is incomplete")
+    answer_identity, answer_verifier = _build_rule_first_answer_verifier(config)
+    bound_visual = load_tgvf_visual_quality_judge(
+        reward.visual_quality_judge_config_path,
+        expected_file_sha256=reward.visual_quality_judge_config_sha256,
     )
+    if bound_visual.config_identity != reward.visual_quality_judge_identity:
+        raise IdentityMismatchError("visual-quality judge config identity changed")
+    bound_visual.provider.validate_credentials()
+    pipeline_identity = _artifact_identity(
+        "policy-reward",
+        "stage3-shaped-reward-equation",
+        "stage3-shaped-v1",
+        {
+            "run": config.identity_sha256,
+            "answer": answer_identity.sha256,
+            "answer_judge_config": reward.judge_config_sha256,
+            "tool_utility_sidecar": reward.tool_utility.sidecar_sha256,
+            "tool_utility_manifest": reward.tool_utility.manifest_sha256,
+            "visual_quality_judge_config": bound_visual.config_identity.sha256,
+            "equation": "2*A_gated+T+F+G+P",
+        },
+    )
+    spec = Stage3ShapedRewardSpec(
+        pipeline_identity=pipeline_identity,
+        answer_verifier_identity=answer_identity,
+        visual_judge_identity=bound_visual.config_identity,
+        tool_utility_sidecar_sha256=reward.tool_utility.sidecar_sha256,
+        tool_utility_manifest_sha256=reward.tool_utility.manifest_sha256,
+    )
+    return spec, answer_verifier, bound_visual.provider
 
 
 def _validate_sample_fields(

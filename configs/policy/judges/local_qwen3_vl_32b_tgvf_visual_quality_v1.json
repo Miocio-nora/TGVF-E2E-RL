@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "identity": "local-qwen3-vl-32b-thinking-tgvf-visual-quality-v1",
+  "role": "policy_rl_tgvf_visual_quality_judge_only",
+  "model": {
+    "repository": "Qwen/Qwen3-VL-32B-Thinking",
+    "revision": "7edd10ffd1196091948fb245ff63e406ccb2d4d1",
+    "served_name": "Qwen3-VL-32B-Thinking"
+  },
+  "prompt": {
+    "version": "tgvf-visual-quality-judge-v1",
+    "sha256": "5f5487f96bff35189b9300a6b79736e8ba12478517ea5d8537a65e9bff3be6e5",
+    "output_schema": {
+      "exact_keys": [
+        "focus_score",
+        "grounding_score"
+      ],
+      "score_type": "integer",
+      "allowed_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    "input_contract": {
+      "original_image": "absolute_path_plus_sha256",
+      "gold_or_reference_answer": "forbidden"
+    }
+  },
+  "sampling": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "max_tokens": 64,
+    "seed": 42,
+    "response_format": "json_object"
+  },
+  "service": {
+    "base_url": "http://127.0.0.1:8013/v1",
+    "timeout_seconds": 240.0,
+    "deployment": "vllm-0.12.0-b200-tp1-local-8013",
+    "expected_response_model": "Qwen3-VL-32B-Thinking",
+    "require_usage": false,
+    "send_json_response_format": true
+  },
+  "failure_policy": {
+    "transport": "zero_current_sample_after_audit",
+    "malformed_output": "zero_current_sample_after_audit",
+    "input_or_identity_error": "raise_and_abort_reward_batch"
+  },
+  "scope": {
+    "allows_policy_rl_reward": true,
+    "allows_answer_correctness_judging": false,
+    "accepts_gold_or_reference_answer": false,
+    "sample_local_provider_failure": true,
+    "formal_pilot_accepted": false
+  }
+}

@@ -32,10 +32,23 @@ def _parsed_call(target: str):
     return StrictToolCallParser().parse(SampledAssistantTurn(text, token_ids, spans))
 
 
-@pytest.mark.parametrize("cap", [True, False, -1, 0, 1, 2.5, "3", None])
-def test_cap_must_be_an_integer_greater_than_one(cap: object) -> None:
-    with pytest.raises(ValueError, match="greater than one"):
+@pytest.mark.parametrize("cap", [True, False, -1, 0, 2.5, "3", None])
+def test_cap_must_be_a_positive_integer(cap: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
         MultiCallStateMachine(cap)
+
+
+def test_one_call_cap_executes_once_then_emits_cap_error() -> None:
+    machine = MultiCallStateMachine(max_tool_calls=1)
+    state = machine.initial_state()
+    first = machine.apply(state, AgentEvent.valid_tool_call(_parsed_call("first")))
+    assert first.execute_tool is True
+    state = machine.apply(first.state, AgentEvent.tool_response()).state
+
+    capped = machine.apply(state, AgentEvent.valid_tool_call(_parsed_call("second")))
+
+    assert capped.execute_tool is False
+    assert capped.emit_error is True
 
 
 def test_two_sequential_calls_and_responses_then_final_answer() -> None:
@@ -118,9 +131,7 @@ def test_tool_error_returns_to_assistant_without_counting_success() -> None:
 
 
 def test_cap_error_can_allow_exactly_one_final_answer_turn() -> None:
-    machine = MultiCallStateMachine(
-        2, CapErrorBehavior.ONE_FINAL_ANSWER_TURN
-    )
+    machine = MultiCallStateMachine(2, CapErrorBehavior.ONE_FINAL_ANSWER_TURN)
     state = machine.initial_state()
     for target in ("first", "second"):
         call = machine.apply(state, AgentEvent.valid_tool_call(_parsed_call(target)))

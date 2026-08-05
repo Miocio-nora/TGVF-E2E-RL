@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -25,6 +26,10 @@ from tgvf_rl.data import (
     materialize_policy_t1_arxivqa_rl_dataset,
     policy_t1_mixed_iteration_identity_sha256,
 )
+from tgvf_rl.data.tgvf_tool_utility import (
+    TGVFToolUtilityLabelBinding,
+    TGVFToolUtilityRuntimeBinding,
+)
 from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_MODEL_FAMILY,
@@ -33,6 +38,7 @@ from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
     POLICY_PILOT_V1_VLLM_VERSION,
     PolicyVisualToolExperimentConfig,
+    PolicyTGVFStage3ExperimentConfig,
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
@@ -43,11 +49,14 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_SMOKE_CONFIG_SCHEMA,
     POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
     POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256,
+    POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256,
+    POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
     formal_deepeyes47k_iteration_identity_sha256,
     load_policy_e2e_smoke_run_config,
 )
+from tests.rewards.test_tgvf_visual_quality_judge import _config_document
 from tgvf_rl.framework.verl.launcher import (
     DEEPEYES47K_DATASET_CLASS_NAME,
     DEEPEYES47K_DATASET_MODULE_PATH,
@@ -394,15 +403,11 @@ def test_horizon_extension_plan_changes_only_stopping_and_checkpoint_boundaries(
     )
 
     base = build_policy_e2e_smoke_verl_plan(config)
-    continued = build_policy_e2e_smoke_verl_plan(
-        config, horizon_extension=extension
-    )
+    continued = build_policy_e2e_smoke_verl_plan(config, horizon_extension=extension)
 
     assert base.run_identity_sha256 == continued.run_identity_sha256
     changed = {
-        key
-        for key in base.overrides
-        if base.overrides[key] != continued.overrides[key]
+        key for key in base.overrides if base.overrides[key] != continued.overrides[key]
     }
     assert changed == {
         "actor_rollout_ref.rollout.custom",
@@ -816,6 +821,147 @@ shuffle_seed = 42
     assert plan.overrides["data.custom_cls.path"] == POLICY_T1_MIXED_DATASET_MODULE_PATH
     assert plan.overrides["data.custom_cls.name"] == POLICY_T1_MIXED_DATASET_CLASS_NAME
     assert plan.overrides["data.tgvf_policy_t1_mixed"]["decision_stage"] == "final"
+
+
+def test_stage3_profile_binds_one_call_sidecar_and_visual_judge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    external = _prepare_external_inputs(tmp_path)
+    dataset_root = tmp_path / "mixed-t1-artifact"
+    dataset_root.mkdir()
+    dataset_binding = PolicyT1MixedRuntimeBinding(
+        manifest_file_sha256="1" * 64,
+        content_sha256="2" * 64,
+        shuffle_seed=42,
+        expected_sample_count=79_069,
+    )
+    samples_sha256 = "3" * 64
+    iteration_identity = policy_t1_mixed_iteration_identity_sha256(
+        dataset_binding,
+        samples_sha256=samples_sha256,
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.verify_policy_t1_mixed_artifact_binding",
+        lambda *_args, **_kwargs: {},
+    )
+
+    sidecar_path = tmp_path / "tool-utility.jsonl"
+    sidecar_path.write_text("fixture\n", encoding="utf-8")
+    sidecar_sha = hashlib.sha256(sidecar_path.read_bytes()).hexdigest()
+    sidecar_manifest_path = tmp_path / "tool-utility-manifest.json"
+    sidecar_manifest_path.write_text("{}\n", encoding="utf-8")
+    sidecar_manifest_sha = hashlib.sha256(
+        sidecar_manifest_path.read_bytes()
+    ).hexdigest()
+    label = TGVFToolUtilityLabelBinding(
+        sample_id="fixture",
+        training_index=0,
+        utility_label="optional",
+        confidence=0.5,
+        row_sha256="4" * 64,
+    )
+    utility_binding = TGVFToolUtilityRuntimeBinding(
+        sidecar_path=sidecar_path,
+        sidecar_sha256=sidecar_sha,
+        manifest_path=sidecar_manifest_path,
+        manifest_sha256=sidecar_manifest_sha,
+        dataset_iteration_identity_sha256=iteration_identity,
+        labels=MappingProxyType({"fixture": label}),
+    )
+
+    def load_utility(*args, **kwargs):
+        assert Path(args[0]) == sidecar_path
+        assert kwargs["expected_sidecar_sha256"] == sidecar_sha
+        assert kwargs["expected_manifest_sha256"] == sidecar_manifest_sha
+        assert kwargs["expected_dataset_iteration_identity_sha256"] == (
+            iteration_identity
+        )
+        return utility_binding
+
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.load_tgvf_tool_utility_runtime_binding",
+        load_utility,
+    )
+    visual_config_path = tmp_path / "visual-quality.json"
+    visual_raw = (
+        json.dumps(_config_document(), ensure_ascii=False, indent=2).encode("utf-8")
+        + b"\n"
+    )
+    visual_config_path.write_bytes(visual_raw)
+    visual_config_sha = hashlib.sha256(visual_raw).hexdigest()
+    answer_judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    ).resolve()
+    answer_judge_sha = hashlib.sha256(answer_judge_path.read_bytes()).hexdigest()
+
+    text = _config_text(tmp_path, external).replace(
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA,
+        POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
+    )
+    dataset_start = text.index("[dataset]")
+    representation_start = text.index("[representation]")
+    dataset_text = f'''[dataset]
+kind = "{POLICY_T1_MIXED_DATASET_KIND}"
+root = {_q(dataset_root)}
+decision_stage = "final"
+sample_count = 79069
+manifest_file_sha256 = "{dataset_binding.manifest_file_sha256}"
+content_sha256 = "{dataset_binding.content_sha256}"
+samples_sha256 = "{samples_sha256}"
+iteration_identity_sha256 = "{iteration_identity}"
+shuffle_seed = 42
+
+'''
+    text = text[:dataset_start] + dataset_text + text[representation_start:]
+    prompt_sha = visual_tool_prompt_identity(
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        assistant_dialect=native_assistant_dialect_for_model(
+            POLICY_PILOT_V1_MODEL_NAME
+        ),
+    ).bundle_sha256
+    text = text.replace(f'prompt_sha256 = "{SHA_A}"', f'prompt_sha256 = "{prompt_sha}"')
+    text = text.replace(
+        f'cap_error_sha256 = "{POLICY_E2E_SMOKE_CAP_ERROR_SHA256}"',
+        f'cap_error_sha256 = "{POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256}"',
+    ).replace("maximum_tool_calls = 4", "maximum_tool_calls = 1")
+    reward_start = text.index("[reward]")
+    optimizer_start = text.index("[optimizer]")
+    reward_text = f'''[reward]
+profile = "stage3-shaped-v1"
+task_kind = "mixed"
+answer_verifier = "rule_first_qwen25_72b"
+answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"
+judge_mode = "qwen25_72b_semantic_fallback"
+judge_reason = "Stage3-shaped test"
+judge_config_path = {_q(answer_judge_path)}
+judge_config_sha256 = "{answer_judge_sha}"
+tool_utility_sidecar_path = {_q(sidecar_path)}
+tool_utility_sidecar_sha256 = "{sidecar_sha}"
+tool_utility_manifest_path = {_q(sidecar_manifest_path)}
+tool_utility_manifest_sha256 = "{sidecar_manifest_sha}"
+visual_quality_judge_config_path = {_q(visual_config_path)}
+visual_quality_judge_config_sha256 = "{visual_config_sha}"
+
+'''
+    text = text[:reward_start] + reward_text + text[optimizer_start:]
+    config_path = tmp_path / "stage3-policy.toml"
+    config_path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(config_path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+
+    assert isinstance(config.policy, PolicyTGVFStage3ExperimentConfig)
+    assert config.reward.profile == "stage3-shaped-v1"
+    assert config.reward.tool_utility is utility_binding
+    assert config.protocol.maximum_tool_calls == 1
+    reward_override = plan.overrides["actor_rollout_ref.rollout.custom"]["reward"]
+    assert reward_override["profile"] == "stage3-shaped-v1"
+    assert reward_override["tool_utility_sidecar_sha256"] == sidecar_sha
+    assert "answer_weight" not in reward_override
+    assert plan.external_components["reward_pipeline"] == (
+        "tgvf_rl.rewards.stage3_shaped.Stage3ShapedRewardKernel"
+    )
 
 
 def test_loads_separately_identified_crop_only_experiment(tmp_path: Path) -> None:

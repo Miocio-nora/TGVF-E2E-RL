@@ -12,6 +12,7 @@ from tgvf_rl.policy import (
     PilotGRPOConfig,
     PilotSamplingConfig,
     PolicyPilotV1Config,
+    PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
 )
 from tgvf_rl.protocol import NativeToolCapabilityProfile
@@ -133,9 +134,15 @@ def test_policy_pilot_v1_fixes_only_tgvf_and_exact_optimizer_envelope() -> None:
         PolicyPilotV1Config(tool_profile=NativeToolCapabilityProfile.CROP_ONLY)
     with pytest.raises(ValueError, match="dropout"):
         DecoderLoRAConfig(dropout=0.1)
-    assert DecoderLoRAConfig(initial_learning_rate=1.0e-6).initial_learning_rate == 1.0e-6
-    assert DecoderLoRAConfig(initial_learning_rate=3.0e-6).initial_learning_rate == 3.0e-6
-    assert DecoderLoRAConfig(initial_learning_rate=1.0e-5).initial_learning_rate == 1.0e-5
+    assert (
+        DecoderLoRAConfig(initial_learning_rate=1.0e-6).initial_learning_rate == 1.0e-6
+    )
+    assert (
+        DecoderLoRAConfig(initial_learning_rate=3.0e-6).initial_learning_rate == 3.0e-6
+    )
+    assert (
+        DecoderLoRAConfig(initial_learning_rate=1.0e-5).initial_learning_rate == 1.0e-5
+    )
     with pytest.raises(ValueError, match="initial_learning_rate"):
         DecoderLoRAConfig(initial_learning_rate=2.0e-6)
     with pytest.raises(ValueError, match="filter_groups"):
@@ -154,3 +161,16 @@ def test_visual_tool_experiment_accepts_crop_without_relaxing_formal_pilot() -> 
     assert crop.image_max_pixels == 512 * 512
     with pytest.raises(ValueError, match="TGVF-only"):
         PolicyVisualToolExperimentConfig(sampling=_bound_sampling())
+
+
+def test_stage3_tgvf_experiment_owns_an_exact_one_call_cap() -> None:
+    stage3 = PolicyTGVFStage3ExperimentConfig(sampling=_bound_sampling())
+
+    assert stage3.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
+    assert stage3.max_tgvf_call_attempts == 1
+    assert PolicyPilotV1Config(sampling=_bound_sampling()).max_tgvf_call_attempts == 4
+    with pytest.raises(ValueError, match="max_tgvf_call_attempts"):
+        PolicyTGVFStage3ExperimentConfig(
+            max_tgvf_call_attempts=2,
+            sampling=_bound_sampling(),
+        )

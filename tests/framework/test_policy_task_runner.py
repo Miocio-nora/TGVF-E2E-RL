@@ -51,12 +51,8 @@ def test_live_agent_loop_dataproto_gets_driver_and_worker_release_lease() -> Non
         name: np.array([object(), object()], dtype=object)
         for name in AGENT_LOOP_EXACT_SIDECAR_FIELDS
     }
-    non_tensor_batch[EXACT_PROMPT_IDS_FIELD] = np.array(
-        [(1,), (2,)], dtype=object
-    )
-    non_tensor_batch[EXACT_RESPONSE_IDS_FIELD] = np.array(
-        [(3,), (4,)], dtype=object
-    )
+    non_tensor_batch[EXACT_PROMPT_IDS_FIELD] = np.array([(1,), (2,)], dtype=object)
+    non_tensor_batch[EXACT_RESPONSE_IDS_FIELD] = np.array([(3,), (4,)], dtype=object)
     data = SimpleNamespace(
         batch={
             "prompts": torch.tensor([[1], [2]], dtype=torch.long),
@@ -68,9 +64,15 @@ def test_live_agent_loop_dataproto_gets_driver_and_worker_release_lease() -> Non
 
     assert bind_agent_loop_data_proto_sidecar_lease(data) is data
     assert data.meta_info[DATAPROTO_META_SCHEMA_FIELD] == DATAPROTO_META_SCHEMA_VERSION
-    assert data.meta_info[SIDECAR_RELEASE_SCHEMA_FIELD] == SIDECAR_RELEASE_SCHEMA_VERSION
-    assert data.meta_info[SIDECAR_RELEASE_FIELDS_FIELD] == AGENT_LOOP_EXACT_SIDECAR_FIELDS
-    assert release_verl_data_proto_sidecars(data) == len(AGENT_LOOP_EXACT_SIDECAR_FIELDS)
+    assert (
+        data.meta_info[SIDECAR_RELEASE_SCHEMA_FIELD] == SIDECAR_RELEASE_SCHEMA_VERSION
+    )
+    assert (
+        data.meta_info[SIDECAR_RELEASE_FIELDS_FIELD] == AGENT_LOOP_EXACT_SIDECAR_FIELDS
+    )
+    assert release_verl_data_proto_sidecars(data) == len(
+        AGENT_LOOP_EXACT_SIDECAR_FIELDS
+    )
     assert release_verl_data_proto_sidecars(data) == 0
     assert data.non_tensor_batch == {}
 
@@ -351,6 +353,63 @@ def test_policy_metrics_publish_step_and_cumulative_records_idempotently(
     changed["timing"] = dict(event["timing"], checkpoint_seconds=0.75)
     with pytest.raises(RuntimeError, match="changed an existing step"):
         _append_policy_metrics_event(path, changed)
+
+
+def test_stage3_metrics_publish_five_components_and_judge_coverage() -> None:
+    rows = tuple(
+        PilotTrajectoryMetricsObservation(
+            prompt_id="prompt-stage3",
+            trajectory_id=f"stage3-trajectory-{index}",
+            generated_policy_tokens=12,
+            successful_tgvf_observations=1,
+            tool_call_attempts=1,
+            answer_reward=1.0,
+            format_error=False,
+            conditional_tool_reward=0.0,
+            reasoning_tokens=6,
+            original_visual_tokens=4,
+            total_visual_tokens=6,
+            reward_profile="stage3-shaped-v1",
+            stage3_reward_components=(
+                2.0,
+                0.5,
+                1.0 if index < 4 else 0.0,
+                1.0 if index < 4 else 0.0,
+                0.0,
+            ),
+            stage3_quality_judge_applicable=True,
+            stage3_quality_judge_covered=index < 4,
+            stage3_quality_judge_failure=(None if index < 4 else "transport"),
+            stage3_visual_judge_calls=1,
+            stage3_visual_judge_prompt_tokens=10 if index < 4 else 0,
+            stage3_visual_judge_completion_tokens=2 if index < 4 else 0,
+            stage3_visual_judge_cost_usd=0.001 if index < 4 else 0.0,
+        )
+        for index in range(8)
+    )
+    observation = PilotOptimizerStepMetricsObservation(1, 1.0, rows)
+    summary = PilotMetricsAccumulator().record_optimizer_step(observation)
+
+    event = _pilot_metrics_event(observation, summary)
+    flat = _wandb_metrics_from_event(event)
+
+    assert flat["policy_pilot/mean_stage3_answer_reward"] == 2.0
+    assert flat["policy_pilot/mean_stage3_tool_reward"] == 0.5
+    assert flat["policy_pilot/mean_stage3_focus_reward"] == 0.5
+    assert flat["policy_pilot/mean_stage3_grounding_reward"] == 0.5
+    assert flat["policy_pilot/mean_stage3_protocol_reward"] == 0.0
+    assert flat["policy_pilot/stage3_quality_judge_applicable"] == 8
+    assert flat["policy_pilot/stage3_quality_judge_covered"] == 4
+    assert flat["policy_pilot/stage3_quality_judge_failures"] == 4
+    assert flat["policy_pilot/stage3_quality_judge_coverage"] == 0.5
+    assert flat["policy_pilot/stage3_visual_judge_calls"] == 8
+    assert flat["policy_pilot/stage3_visual_judge_prompt_tokens"] == 40
+    assert flat["policy_pilot/stage3_visual_judge_completion_tokens"] == 8
+    assert flat["policy_pilot/stage3_visual_judge_cost_usd"] == pytest.approx(0.004)
+    assert (
+        _policy_tracking_metrics(flat)["policy_pilot/mean_stage3_grounding_reward"]
+        == 0.5
+    )
 
 
 def test_policy_tracking_keeps_only_compact_operator_metrics() -> None:

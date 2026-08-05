@@ -35,6 +35,17 @@ from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD,
     PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD,
 )
+from tgvf_rl.rewards.stage3_verl_adapter import (
+    STAGE3_VERL_QUALITY_APPLICABLE_FIELD,
+    STAGE3_VERL_QUALITY_COVERED_FIELD,
+    STAGE3_VERL_QUALITY_FAILURE_FIELD,
+    STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+    STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD,
+    STAGE3_VERL_TOOL_LABEL_FIELD,
+    STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD,
+    STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD,
+    STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD,
+)
 from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
 
 
@@ -201,6 +212,67 @@ def test_answer_primary_reward_crosses_dataproto_sidecar_gate() -> None:
 
     assert view.rewards[3] == pytest.approx(1.0)
     assert view.rewards[7] == pytest.approx(1.0)
+
+
+def test_stage3_five_component_reward_crosses_dataproto_sidecar_gate() -> None:
+    data = _real_data_proto()
+    batch_size = data.batch["rm_scores"].shape[0]
+    patterns = (
+        (
+            ("answer", 2.0),
+            ("tool", 0.0),
+            ("focus", 0.0),
+            ("grounding", 0.0),
+            ("protocol", 0.0),
+        ),
+        (
+            ("answer", 0.0),
+            ("tool", 0.0),
+            ("focus", 0.0),
+            ("grounding", 0.0),
+            ("protocol", 0.0),
+        ),
+        (
+            ("answer", 0.0),
+            ("tool", 0.0),
+            ("focus", 0.0),
+            ("grounding", 0.0),
+            ("protocol", -1.0),
+        ),
+        (
+            ("answer", 2.0),
+            ("tool", 0.5),
+            ("focus", 1.0),
+            ("grounding", 1.0),
+            ("protocol", 0.0),
+        ),
+    )
+    components = [patterns[index % len(patterns)] for index in range(batch_size)]
+    rewards = [sum(score for _name, score in row) for row in components]
+    data.non_tensor_batch[PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD] = [
+        STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+    ] * batch_size
+    data.non_tensor_batch[PILOT_VERL_REWARD_COMPONENTS_FIELD] = components
+    data.non_tensor_batch[PILOT_EXACT_REWARD_FIELD] = rewards
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_FIELD] = ["optional"] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD] = [0.5] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD] = [
+        "b" * 64
+    ] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD] = [
+        "c" * 64
+    ] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_APPLICABLE_FIELD] = [False] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_COVERED_FIELD] = [False] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_FAILURE_FIELD] = [None] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD] = [None] * batch_size
+    data.batch["rm_scores"].zero_()
+    data.batch["rm_scores"][:, -1] = torch.tensor(rewards)
+
+    view = validate_policy_pilot_reward_data_proto(data)
+
+    assert view.reward_bridge_schema_version == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+    assert view.rewards[3] == pytest.approx(4.5)
 
 
 def test_dataproto_sidecar_rejects_unnamed_reward_total() -> None:

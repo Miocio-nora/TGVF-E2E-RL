@@ -70,6 +70,7 @@ EXACT_CURRENT_REFERENCE_REPLAY_FQN = (
     "tgvf_rl.policy.qwen_replay.replay_qwen3_current_reference"
 )
 POLICY_REWARD_PIPELINE_FQN = "tgvf_rl.rewards.pipeline.PilotRewardPipeline"
+STAGE3_REWARD_PIPELINE_FQN = "tgvf_rl.rewards.stage3_shaped.Stage3ShapedRewardKernel"
 POLICY_CHECKPOINT_ENGINE_MANAGER_FQN = (
     "tgvf_rl.framework.verl.policy_weight_sync.TGVFPolicyCheckpointEngineManager"
 )
@@ -154,9 +155,7 @@ class UpstreamVerlLaunchPlan:
             or len(set(physical_gpu_ids)) != 4
             or any(device < 0 for device in physical_gpu_ids)
         ):
-            raise ValueError(
-                "Policy Pilot launch must bind four unique physical GPUs"
-            )
+            raise ValueError("Policy Pilot launch must bind four unique physical GPUs")
         if self.overrides.get("trainer.n_gpus_per_node") != 4:
             raise ValueError("initial Policy Pilot launch must bind world size four")
         if (
@@ -725,22 +724,7 @@ def build_policy_e2e_smoke_verl_plan(
                         EXACT_CURRENT_REFERENCE_REPLAY_FQN
                     ),
                 },
-                "reward": {
-                    "pipeline_fqn": POLICY_REWARD_PIPELINE_FQN,
-                    "task_kind": config.reward.task_kind,
-                    "answer_verifier": config.reward.answer_verifier,
-                    "answer_verifier_sha256": (config.reward.answer_verifier_sha256),
-                    "judge_mode": config.reward.judge_mode,
-                    "answer_weight": config.reward.answer_weight,
-                    "format_weight": config.reward.format_weight,
-                    "conditional_tool_weight": (config.reward.conditional_tool_weight),
-                    "judge_config_path": (
-                        str(config.reward.judge_config_path)
-                        if config.reward.judge_config_path is not None
-                        else None
-                    ),
-                    "judge_config_sha256": config.reward.judge_config_sha256,
-                },
+                "reward": _reward_custom_config(config),
                 "reference_diagnostic": {
                     "enabled": True,
                     "coefficient": 0.0,
@@ -800,7 +784,11 @@ def build_policy_e2e_smoke_verl_plan(
         "exact_replay_registration": EXACT_REPLAY_ENGINE_REGISTRAR_FQN,
         "exact_replay_forward": EXACT_REPLAY_FORWARD_PORT_FQN,
         "exact_current_reference_replay": EXACT_CURRENT_REFERENCE_REPLAY_FQN,
-        "reward_pipeline": POLICY_REWARD_PIPELINE_FQN,
+        "reward_pipeline": (
+            POLICY_REWARD_PIPELINE_FQN
+            if config.reward.profile == "pilot-v1"
+            else STAGE3_REWARD_PIPELINE_FQN
+        ),
         "reference_diagnostic": (
             "tgvf_rl.framework.verl.policy_task_runner."
             "make_policy_pilot_ray_trainer_class"
@@ -870,6 +858,58 @@ def compose_upstream_verl_config(
             config_name=plan.config_name,
             overrides=list(plan.hydra_override_args()),
         )
+
+
+def _reward_custom_config(config: PolicyE2ESmokeRunConfig) -> dict[str, object]:
+    reward = config.reward
+    common: dict[str, object] = {
+        "task_kind": reward.task_kind,
+        "answer_verifier": reward.answer_verifier,
+        "answer_verifier_sha256": reward.answer_verifier_sha256,
+        "judge_mode": reward.judge_mode,
+        "judge_config_path": (
+            str(reward.judge_config_path)
+            if reward.judge_config_path is not None
+            else None
+        ),
+        "judge_config_sha256": reward.judge_config_sha256,
+    }
+    if reward.profile == "pilot-v1":
+        if (
+            reward.answer_weight is None
+            or reward.format_weight is None
+            or reward.conditional_tool_weight is None
+        ):
+            raise ValueError("Pilot-v1 reward weights are incomplete")
+        return {
+            "pipeline_fqn": POLICY_REWARD_PIPELINE_FQN,
+            **common,
+            "answer_weight": reward.answer_weight,
+            "format_weight": reward.format_weight,
+            "conditional_tool_weight": reward.conditional_tool_weight,
+        }
+    if reward.profile != "stage3-shaped-v1" or reward.tool_utility is None:
+        raise ValueError("unsupported or incomplete reward profile")
+    if (
+        reward.visual_quality_judge_config_path is None
+        or reward.visual_quality_judge_config_sha256 is None
+    ):
+        raise ValueError("Stage3-shaped visual-quality judge binding is incomplete")
+    return {
+        "pipeline_fqn": STAGE3_REWARD_PIPELINE_FQN,
+        "profile": reward.profile,
+        **common,
+        "tool_utility_sidecar_path": str(reward.tool_utility.sidecar_path),
+        "tool_utility_sidecar_sha256": reward.tool_utility.sidecar_sha256,
+        "tool_utility_manifest_path": str(reward.tool_utility.manifest_path),
+        "tool_utility_manifest_sha256": reward.tool_utility.manifest_sha256,
+        "visual_quality_judge_config_path": str(
+            reward.visual_quality_judge_config_path
+        ),
+        "visual_quality_judge_config_sha256": (
+            reward.visual_quality_judge_config_sha256
+        ),
+    }
 
 
 def _checkpoint_frequency(steps: Sequence[int], *, maximum_step: int) -> int:

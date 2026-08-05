@@ -131,8 +131,8 @@ class MultiCallStateMachine:
     cap_error_behavior: CapErrorBehavior = CapErrorBehavior.TERMINATE_AFTER_ERROR
 
     def __post_init__(self) -> None:
-        if type(self.max_tool_calls) is not int or self.max_tool_calls <= 1:
-            raise ValueError("max_tool_calls must be an integer greater than one")
+        if type(self.max_tool_calls) is not int or self.max_tool_calls < 1:
+            raise ValueError("max_tool_calls must be a positive integer")
         if not isinstance(self.cap_error_behavior, CapErrorBehavior):
             raise TypeError("cap_error_behavior must be CapErrorBehavior")
 

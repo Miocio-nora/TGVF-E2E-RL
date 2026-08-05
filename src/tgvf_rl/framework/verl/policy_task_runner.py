@@ -75,6 +75,13 @@ from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_JUDGE_USAGE_FIELD,
     PILOT_VERL_REWARD_COMPONENTS_FIELD,
 )
+from tgvf_rl.rewards.stage3_verl_adapter import (
+    STAGE3_VERL_QUALITY_APPLICABLE_FIELD,
+    STAGE3_VERL_QUALITY_COVERED_FIELD,
+    STAGE3_VERL_QUALITY_FAILURE_FIELD,
+    STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+    STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD,
+)
 from .rollout_bridge import (
     TRAJECTORY_PAYLOAD_FIELD,
     TRAJECTORY_REPLAY_BUNDLE_FIELD,
@@ -111,6 +118,19 @@ POLICY_TRACKING_METRIC_NAMES = frozenset(
         "policy_pilot/judge_prompt_tokens",
         "policy_pilot/judge_completion_tokens",
         "policy_pilot/judge_cost_usd",
+        "policy_pilot/mean_stage3_answer_reward",
+        "policy_pilot/mean_stage3_tool_reward",
+        "policy_pilot/mean_stage3_focus_reward",
+        "policy_pilot/mean_stage3_grounding_reward",
+        "policy_pilot/mean_stage3_protocol_reward",
+        "policy_pilot/stage3_quality_judge_applicable",
+        "policy_pilot/stage3_quality_judge_covered",
+        "policy_pilot/stage3_quality_judge_failures",
+        "policy_pilot/stage3_quality_judge_coverage",
+        "policy_pilot/stage3_visual_judge_calls",
+        "policy_pilot/stage3_visual_judge_prompt_tokens",
+        "policy_pilot/stage3_visual_judge_completion_tokens",
+        "policy_pilot/stage3_visual_judge_cost_usd",
         "policy_timing/end_to_end_step_seconds",
         "perf/throughput",
         "response_length/mean",
@@ -190,13 +210,49 @@ def _pilot_metrics_event(
         ),
         "judge_calls": sum(row.judge_calls for row in rows),
         "judge_prompt_tokens": sum(row.judge_prompt_tokens for row in rows),
-        "judge_completion_tokens": sum(
-            row.judge_completion_tokens for row in rows
-        ),
+        "judge_completion_tokens": sum(row.judge_completion_tokens for row in rows),
         "judge_cost_usd": sum(row.judge_cost_usd for row in rows),
         "pre_publication_elapsed_seconds": observation.step_time_seconds,
         "tool_error_counts": dict(sorted(errors.items())),
     }
+    stage3_rows = tuple(row for row in rows if row.reward_profile == "stage3-shaped-v1")
+    if stage3_rows:
+        if len(stage3_rows) != trajectories:
+            raise ValueError("one optimizer step cannot mix reward profiles")
+        component_names = ("answer", "tool", "focus", "grounding", "protocol")
+        for component_index, component_name in enumerate(component_names):
+            step[f"mean_stage3_{component_name}_reward"] = _zero_safe_mean(
+                sum(
+                    row.stage3_reward_components[component_index]
+                    for row in stage3_rows
+                    if row.stage3_reward_components is not None
+                ),
+                trajectories,
+            )
+        applicable = sum(row.stage3_quality_judge_applicable for row in stage3_rows)
+        covered = sum(row.stage3_quality_judge_covered for row in stage3_rows)
+        step.update(
+            {
+                "stage3_quality_judge_applicable": applicable,
+                "stage3_quality_judge_covered": covered,
+                "stage3_quality_judge_failures": sum(
+                    row.stage3_quality_judge_failure is not None for row in stage3_rows
+                ),
+                "stage3_quality_judge_coverage": _zero_safe_mean(covered, applicable),
+                "stage3_visual_judge_calls": sum(
+                    row.stage3_visual_judge_calls for row in stage3_rows
+                ),
+                "stage3_visual_judge_prompt_tokens": sum(
+                    row.stage3_visual_judge_prompt_tokens for row in stage3_rows
+                ),
+                "stage3_visual_judge_completion_tokens": sum(
+                    row.stage3_visual_judge_completion_tokens for row in stage3_rows
+                ),
+                "stage3_visual_judge_cost_usd": sum(
+                    row.stage3_visual_judge_cost_usd for row in stage3_rows
+                ),
+            }
+        )
     cumulative = {
         "optimizer_steps": summary.optimizer_steps,
         "prompts": summary.prompts,
@@ -364,7 +420,9 @@ def _load_torch_state(value: OpaqueProjectState) -> object:
     return torch.load(io.BytesIO(value.payload), map_location="cpu", weights_only=False)
 
 
-def _strict_json_state(value: OpaqueProjectState, *, owner: str) -> Mapping[str, object]:
+def _strict_json_state(
+    value: OpaqueProjectState, *, owner: str
+) -> Mapping[str, object]:
     if value.owner != owner or value.codec != "canonical-json-v1":
         raise ValueError(f"{owner} state identity differs")
     try:
@@ -384,26 +442,45 @@ def _reference_weights_sha256(config: PolicyE2ESmokeRunConfig) -> str:
 
 
 def _run_identity(config: PolicyE2ESmokeRunConfig) -> PilotRunIdentityHashes:
+    hashes = {
+        "agent_loop_config": config.framework.agent_loop_config_sha256,
+        "cap_error": config.protocol.cap_error_sha256,
+        "chat_template": config.model.chat_template_sha256,
+        "dataset_content": config.dataset.runtime_binding.content_sha256,
+        "dataset_iteration": config.dataset.iteration_identity_sha256,
+        "dataset_manifest_file": config.dataset.runtime_binding.manifest_file_sha256,
+        "dataset_samples": config.dataset.samples_sha256,
+        "prompt": config.protocol.prompt_sha256,
+        "representation_artifact_file": config.representation.artifact_file_sha256,
+        "representation_manifest": config.representation.artifact.sha256,
+        "representation_run": config.representation.expected_run_identity_sha256,
+        "reward_verifier": config.reward.answer_verifier_sha256,
+        "rollout_rng_derivation": config.rollout_rng.derivation_sha256,
+        "run_config": config.identity_sha256,
+        "run_config_file": config.source_sha256,
+        "tool_schema": config.protocol.tool_schema_sha256,
+    }
+    if config.reward.profile == "stage3-shaped-v1":
+        tool_utility = config.reward.tool_utility
+        visual_identity = config.reward.visual_quality_judge_identity
+        visual_config_sha256 = config.reward.visual_quality_judge_config_sha256
+        if (
+            tool_utility is None
+            or visual_identity is None
+            or visual_config_sha256 is None
+        ):
+            raise ValueError("Stage3 run identity dependencies are missing")
+        hashes.update(
+            {
+                "reward_tool_utility_sidecar": tool_utility.sidecar_sha256,
+                "reward_tool_utility_manifest": tool_utility.manifest_sha256,
+                "reward_visual_judge_config": visual_config_sha256,
+                "reward_visual_judge_identity": visual_identity.sha256,
+            }
+        )
     return PilotRunIdentityHashes.from_hashes(
         config.run_id,
-        {
-            "agent_loop_config": config.framework.agent_loop_config_sha256,
-            "cap_error": config.protocol.cap_error_sha256,
-            "chat_template": config.model.chat_template_sha256,
-            "dataset_content": config.dataset.runtime_binding.content_sha256,
-            "dataset_iteration": config.dataset.iteration_identity_sha256,
-            "dataset_manifest_file": config.dataset.runtime_binding.manifest_file_sha256,
-            "dataset_samples": config.dataset.samples_sha256,
-            "prompt": config.protocol.prompt_sha256,
-            "representation_artifact_file": config.representation.artifact_file_sha256,
-            "representation_manifest": config.representation.artifact.sha256,
-            "representation_run": config.representation.expected_run_identity_sha256,
-            "reward_verifier": config.reward.answer_verifier_sha256,
-            "rollout_rng_derivation": config.rollout_rng.derivation_sha256,
-            "run_config": config.identity_sha256,
-            "run_config_file": config.source_sha256,
-            "tool_schema": config.protocol.tool_schema_sha256,
-        },
+        hashes,
     )
 
 
@@ -419,7 +496,9 @@ class PolicyPilotTrainerCheckpointState:
         if self._weight_state.run_id != config.run_id or (
             self._weight_state.run_identity_sha256 != config.identity_sha256
         ):
-            raise RuntimeError("Policy checkpoint and weight-sync run identities differ")
+            raise RuntimeError(
+                "Policy checkpoint and weight-sync run identities differ"
+            )
         self.metrics_accumulator = PilotMetricsAccumulator()
         self.lifecycle_manager = PolicyBatchLifecycleManager(
             observation_store=ObservationStore(),
@@ -453,7 +532,9 @@ class PolicyPilotTrainerCheckpointState:
     def from_environment(cls, trainer: object) -> "PolicyPilotTrainerCheckpointState":
         path = os.environ.get("TGVF_POLICY_RUN_CONFIG_PATH")
         if not path:
-            raise RuntimeError("TGVF_POLICY_RUN_CONFIG_PATH is required by Policy TaskRunner")
+            raise RuntimeError(
+                "TGVF_POLICY_RUN_CONFIG_PATH is required by Policy TaskRunner"
+            )
         config = load_policy_e2e_smoke_run_config(Path(path))
         expected = os.environ.get("TGVF_POLICY_RUN_IDENTITY_SHA256")
         if expected != config.identity_sha256:
@@ -464,7 +545,9 @@ class PolicyPilotTrainerCheckpointState:
         if type(optimizer_step) is not int or optimizer_step <= 0:
             raise ValueError("Policy checkpoint optimizer step must be positive")
         if self.metrics_accumulator.state.optimizer_steps != optimizer_step:
-            raise RuntimeError("Policy metrics do not reach the checkpoint optimizer step")
+            raise RuntimeError(
+                "Policy metrics do not reach the checkpoint optimizer step"
+            )
         policy = load_latest_policy_version(
             self._weight_state,
             expected_optimizer_step=optimizer_step,
@@ -604,7 +687,9 @@ class PolicyPilotTrainerCheckpointState:
 class PairedActorWorkerGroup:
     """Delegate all actor calls, pairing only public save/load operations."""
 
-    def __init__(self, upstream: object, state: PolicyPilotTrainerCheckpointState) -> None:
+    def __init__(
+        self, upstream: object, state: PolicyPilotTrainerCheckpointState
+    ) -> None:
         self.upstream = upstream
         self.state = state
         self.paired = PairedPolicyPilotVerlCheckpoint(
@@ -772,8 +857,8 @@ def make_policy_colocated_worker_class(upstream_worker_cls: type[Any]) -> type[A
             from verl.utils.device import get_resource_name, get_torch_device
 
             resource_name = get_resource_name()
-            allocated = ray.get_runtime_context().get_accelerator_ids().get(
-                resource_name, []
+            allocated = (
+                ray.get_runtime_context().get_accelerator_ids().get(resource_name, [])
             )
             if len(allocated) != 1:
                 raise RuntimeError(
@@ -900,9 +985,13 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                     self._load_checkpoint()
                     if self.global_steps != completed_step:
                         raise RuntimeError("loaded Policy resume step changed")
-                    resumed = getattr(self._policy_checkpoint_state, "last_resume", None)
+                    resumed = getattr(
+                        self._policy_checkpoint_state, "last_resume", None
+                    )
                     if getattr(resumed, "optimizer_step", None) != completed_step:
-                        raise RuntimeError("paired Policy resume step differs from veRL")
+                        raise RuntimeError(
+                            "paired Policy resume step differs from veRL"
+                        )
                     self.checkpoint_manager.update_weights(self.global_steps)
                     self._shutdown_dump_executor()
                     return None
@@ -1018,7 +1107,9 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             manager = self.checkpoint_manager
             quiesce = getattr(manager, "quiesce_after_training_failure", None)
             if not callable(quiesce):
-                raise TypeError("Policy checkpoint manager cannot quiesce failed rollout")
+                raise TypeError(
+                    "Policy checkpoint manager cannot quiesce failed rollout"
+                )
             quiesce()
 
             failed_global_step = getattr(self, "global_steps", None)
@@ -1062,12 +1153,16 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 output = super()._update_actor(batch, *args, **kwargs)
                 started = self._policy_step_started_at
                 elapsed = perf_counter() - started if started is not None else 0.0
-                observation, summary = self._policy_checkpoint_state.record_optimizer_step(
-                    batch,
-                    elapsed_seconds=max(elapsed, 1.0e-12),
+                observation, summary = (
+                    self._policy_checkpoint_state.record_optimizer_step(
+                        batch,
+                        elapsed_seconds=max(elapsed, 1.0e-12),
+                    )
                 )
                 if getattr(self, "_policy_metrics_pending", None) is not None:
-                    raise RuntimeError("a Policy metrics publication is already pending")
+                    raise RuntimeError(
+                        "a Policy metrics publication is already pending"
+                    )
                 event = _pilot_metrics_event(observation, summary)
                 metrics = getattr(output, "meta_info", {}).get("metrics")
                 if not isinstance(metrics, dict):
@@ -1181,6 +1276,30 @@ def _restore_actor_scheduler_horizon(config: object, horizon: int) -> None:
     config.actor_rollout_ref.actor.optim.total_training_steps = horizon  # type: ignore[union-attr]
 
 
+def _decode_judge_usage(
+    raw_usage: object,
+    *,
+    owner: str,
+) -> tuple[int, int, int, float]:
+    """Decode one optional judge-usage sidecar without changing Pilot coercion."""
+
+    if raw_usage is None:
+        return 0, 0, 0, 0.0
+    try:
+        prompt_tokens, completion_tokens, total_tokens, cost_usd = raw_usage  # type: ignore[misc]
+        prompt_tokens = int(prompt_tokens)
+        completion_tokens = int(completion_tokens)
+        total_tokens = int(total_tokens)
+        cost_usd = float(cost_usd)
+    except (TypeError, ValueError) as error:
+        label = "Policy judge" if owner == "Policy answer judge" else owner
+        raise TypeError(f"{label} usage sidecar is malformed") from error
+    if total_tokens != prompt_tokens + completion_tokens:
+        label = "Policy judge" if owner == "Policy answer judge" else owner
+        raise ValueError(f"{label} usage token total differs")
+    return 1, prompt_tokens, completion_tokens, cost_usd
+
+
 def policy_metrics_observation_from_data_proto(
     data: object,
     *,
@@ -1189,7 +1308,11 @@ def policy_metrics_observation_from_data_proto(
 ) -> PilotOptimizerStepMetricsObservation:
     """Recover the checkpointed raw Pilot metrics from one exact update batch."""
 
-    validate_policy_pilot_reward_data_proto(data)
+    reward_view = validate_policy_pilot_reward_data_proto(data)
+    stage3_profile = (
+        reward_view.reward_bridge_schema_version
+        == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+    )
     batch = getattr(data, "batch")
     non_tensors = getattr(data, "non_tensor_batch")
     trajectories = tuple(non_tensors[TRAJECTORY_PAYLOAD_FIELD])
@@ -1201,6 +1324,16 @@ def policy_metrics_observation_from_data_proto(
         if raw_judge_usages is None
         else tuple(raw_judge_usages)
     )
+    if stage3_profile:
+        quality_applicable = tuple(non_tensors[STAGE3_VERL_QUALITY_APPLICABLE_FIELD])
+        quality_covered = tuple(non_tensors[STAGE3_VERL_QUALITY_COVERED_FIELD])
+        quality_failures = tuple(non_tensors[STAGE3_VERL_QUALITY_FAILURE_FIELD])
+        visual_judge_usages = tuple(non_tensors[STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD])
+    else:
+        quality_applicable = (False,) * len(trajectories)
+        quality_covered = (False,) * len(trajectories)
+        quality_failures = (None,) * len(trajectories)
+        visual_judge_usages = (None,) * len(trajectories)
     response_mask = batch["response_mask"]
     if not isinstance(response_mask, torch.Tensor):
         raise TypeError("Policy metric response_mask must be a tensor")
@@ -1209,14 +1342,38 @@ def policy_metrics_observation_from_data_proto(
         == len(replay_bundles)
         == len(components)
         == len(judge_usages)
+        == len(quality_applicable)
+        == len(quality_covered)
+        == len(quality_failures)
+        == len(visual_judge_usages)
         == response_mask.shape[0]
     ):
         raise RuntimeError("Policy metric rows differ from the update batch")
 
     rows: list[PilotTrajectoryMetricsObservation] = []
-    for index, (trajectory, bundle, raw_components, raw_judge_usage) in enumerate(
-        zip(trajectories, replay_bundles, components, judge_usages, strict=True)
+    for index, row_values in enumerate(
+        zip(
+            trajectories,
+            replay_bundles,
+            components,
+            judge_usages,
+            quality_applicable,
+            quality_covered,
+            quality_failures,
+            visual_judge_usages,
+            strict=True,
+        )
     ):
+        (
+            trajectory,
+            bundle,
+            raw_components,
+            raw_judge_usage,
+            raw_quality_applicable,
+            raw_quality_covered,
+            raw_quality_failure,
+            raw_visual_judge_usage,
+        ) = row_values
         if not isinstance(trajectory, TrajectoryRecord):
             raise TypeError("Policy metric trajectory sidecar is invalid")
         if not isinstance(bundle, TrajectoryReplayBundle):
@@ -1225,38 +1382,65 @@ def policy_metrics_observation_from_data_proto(
             reward = {str(name): float(value) for name, value in raw_components}
         except (TypeError, ValueError) as error:
             raise TypeError("Policy reward component sidecar is malformed") from error
-        if set(reward) != {
-            "answer_reward",
-            "format_reward",
-            "conditional_tool_reward",
-        }:
-            raise ValueError("Policy metric reward components differ")
-        if raw_judge_usage is None:
-            judge_calls = 0
-            judge_prompt_tokens = 0
-            judge_completion_tokens = 0
-            judge_cost_usd = 0.0
+        if stage3_profile:
+            if tuple(reward) != (
+                "answer",
+                "tool",
+                "focus",
+                "grounding",
+                "protocol",
+            ):
+                raise ValueError("Stage3 metric reward components differ")
+            stage3_components = tuple(reward.values())
+            compatibility_answer_reward = reward["answer"] / 2.0
+            compatibility_format_error = reward["protocol"] == -1.0
+            compatibility_conditional_tool_reward = 0.0
+            if (
+                type(raw_quality_applicable) is not bool
+                or type(raw_quality_covered) is not bool
+                or (
+                    raw_quality_failure is not None
+                    and not isinstance(raw_quality_failure, str)
+                )
+            ):
+                raise TypeError("Stage3 quality metric sidecars are malformed")
+            (
+                _visual_usage_present,
+                visual_judge_prompt_tokens,
+                visual_judge_completion_tokens,
+                visual_judge_cost_usd,
+            ) = _decode_judge_usage(
+                raw_visual_judge_usage,
+                owner="Stage3 visual judge",
+            )
         else:
-            try:
-                (
-                    judge_prompt_tokens,
-                    judge_completion_tokens,
-                    judge_total_tokens,
-                    judge_cost_usd,
-                ) = raw_judge_usage
-                judge_prompt_tokens = int(judge_prompt_tokens)
-                judge_completion_tokens = int(judge_completion_tokens)
-                judge_total_tokens = int(judge_total_tokens)
-                judge_cost_usd = float(judge_cost_usd)
-            except (TypeError, ValueError) as error:
-                raise TypeError("Policy judge usage sidecar is malformed") from error
-            if judge_total_tokens != judge_prompt_tokens + judge_completion_tokens:
-                raise ValueError("Policy judge usage token total differs")
-            judge_calls = 1
+            if set(reward) != {
+                "answer_reward",
+                "format_reward",
+                "conditional_tool_reward",
+            }:
+                raise ValueError("Policy metric reward components differ")
+            stage3_components = None
+            compatibility_answer_reward = reward["answer_reward"]
+            compatibility_format_error = reward["format_reward"] == -1.0
+            compatibility_conditional_tool_reward = reward["conditional_tool_reward"]
+            visual_judge_prompt_tokens = 0
+            visual_judge_completion_tokens = 0
+            visual_judge_cost_usd = 0.0
+        (
+            judge_calls,
+            judge_prompt_tokens,
+            judge_completion_tokens,
+            judge_cost_usd,
+        ) = _decode_judge_usage(raw_judge_usage, owner="Policy answer judge")
         original_visual = len(bundle.replay_record.source_visual.positions)
-        tool_visual = sum(_observation_visual_tokens(item) for item in bundle.observation_records)
+        tool_visual = sum(
+            _observation_visual_tokens(item) for item in bundle.observation_records
+        )
         reasoning = sum(
-            0 if turn.think_span is None else turn.think_span.end - turn.think_span.start
+            0
+            if turn.think_span is None
+            else turn.think_span.end - turn.think_span.start
             for turn in trajectory.assistant_turns
         )
         successful = len(trajectory.observations)
@@ -1268,9 +1452,9 @@ def policy_metrics_observation_from_data_proto(
                 generated_policy_tokens=int(response_mask[index].sum().item()),
                 successful_tgvf_observations=successful,
                 tool_call_attempts=successful + len(errors),
-                answer_reward=reward["answer_reward"],
-                format_error=reward["format_reward"] == -1.0,
-                conditional_tool_reward=reward["conditional_tool_reward"],
+                answer_reward=compatibility_answer_reward,
+                format_error=compatibility_format_error,
+                conditional_tool_reward=compatibility_conditional_tool_reward,
                 reasoning_tokens=reasoning,
                 original_visual_tokens=original_visual,
                 total_visual_tokens=original_visual + tool_visual,
@@ -1279,6 +1463,15 @@ def policy_metrics_observation_from_data_proto(
                 judge_prompt_tokens=judge_prompt_tokens,
                 judge_completion_tokens=judge_completion_tokens,
                 judge_cost_usd=judge_cost_usd,
+                reward_profile=("stage3-shaped-v1" if stage3_profile else "pilot-v1"),
+                stage3_reward_components=stage3_components,
+                stage3_quality_judge_applicable=bool(raw_quality_applicable),
+                stage3_quality_judge_covered=bool(raw_quality_covered),
+                stage3_quality_judge_failure=raw_quality_failure,
+                stage3_visual_judge_calls=int(raw_quality_applicable),
+                stage3_visual_judge_prompt_tokens=visual_judge_prompt_tokens,
+                stage3_visual_judge_completion_tokens=(visual_judge_completion_tokens),
+                stage3_visual_judge_cost_usd=visual_judge_cost_usd,
             )
         )
     return PilotOptimizerStepMetricsObservation(
@@ -1368,7 +1561,9 @@ def create_policy_pilot_task_runner_class() -> object:
     return ray.remote(PolicyPilotTaskRunner)
 
 
-def run_policy_pilot_v0_task(runner: object, config: object, *, trainer_cls: type[Any]) -> None:
+def run_policy_pilot_v0_task(
+    runner: object, config: object, *, trainer_cls: type[Any]
+) -> None:
     """Pinned TaskRunner.run with only the trainer class made project-owned."""
 
     import socket

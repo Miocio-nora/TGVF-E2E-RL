@@ -382,8 +382,8 @@ class StandardToolError:
             raise ValueError("tool error identity/code/message must be non-empty")
         if self.attempt_index < 0:
             raise ValueError("tool error attempt index must be non-negative")
-        if self.maximum_tool_calls <= 1:
-            raise ValueError("tool error maximum_tool_calls must be greater than one")
+        if type(self.maximum_tool_calls) is not int or self.maximum_tool_calls < 1:
+            raise ValueError("tool error maximum_tool_calls must be a positive integer")
 
     @property
     def canonical_payload(self) -> dict[str, object]:

@@ -48,8 +48,8 @@ def validate_run_config(config: RunConfig) -> None:
         raise ContractUnsetError(
             "rollout requires explicit prompt identity, enabled tools, and tool-call cap"
         )
-    if config.max_tool_calls <= 1:
-        raise ValueError("multi-call safety cap must be greater than one")
+    if type(config.max_tool_calls) is not int or config.max_tool_calls < 1:
+        raise ValueError("tool-call safety cap must be positive")
     tool_names = tuple(config.enabled_tool_names)
     if not tool_names or len(set(tool_names)) != len(tool_names):
         raise ValueError("enabled rollout tool names must be non-empty and unique")

@@ -44,7 +44,14 @@ from tgvf_rl.data import (
     verify_policy_t1_mixed_artifact_binding,
     verify_policy_t1_rl_artifact_binding,
 )
-from tgvf_rl.judges import load_openai_compatible_judge
+from tgvf_rl.data.tgvf_tool_utility import (
+    TGVFToolUtilityRuntimeBinding,
+    load_tgvf_tool_utility_runtime_binding,
+)
+from tgvf_rl.judges import (
+    load_openai_compatible_judge,
+    load_tgvf_visual_quality_judge,
+)
 from tgvf_rl.protocol import (
     NativeAssistantDialect,
     NativeToolCapabilityProfile,
@@ -54,6 +61,7 @@ from tgvf_rl.protocol import (
 )
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 from tgvf_rl.rewards.schema import pilot_reward_weight_profile_name
+from tgvf_rl.rewards.stage3_shaped import STAGE3_SHAPED_REWARD_VERSION
 
 from .config import (
     POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES,
@@ -71,6 +79,7 @@ from .config import (
     PilotGRPOConfig,
     PilotSamplingConfig,
     PolicyPilotV1Config,
+    PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
 )
 
@@ -78,6 +87,7 @@ from .config import (
 POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v3"
 POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA = "policy-e2e-mixed-run-config-v4"
 POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA = "policy-e2e-formal-pilot-config-v1"
+POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA = "policy-e2e-stage3-shaped-run-config-v1"
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
@@ -204,6 +214,16 @@ POLICY_E2E_SMOKE_CAP_ERROR_SHA256 = StandardToolError(
     recoverable=True,
     maximum_tool_calls=4,
 ).payload_sha256
+POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256 = StandardToolError(
+    code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+    message=(
+        "The maximum of 1 tool-call attempts has been reached; "
+        "this call was not executed."
+    ),
+    attempt_index=1,
+    recoverable=True,
+    maximum_tool_calls=1,
+).payload_sha256
 POLICY_E2E_AGENT_LOOP_CONFIG_PATH = (
     Path(__file__).resolve().parents[3]
     / "configs"
@@ -313,16 +333,21 @@ class SmokeRolloutRNGBinding:
 
 @dataclass(frozen=True, slots=True)
 class SmokeRewardBinding:
+    profile: str
     task_kind: str
     answer_verifier: str
     answer_verifier_sha256: str
     judge_mode: str
     judge_reason: str
-    answer_weight: float
-    format_weight: float
-    conditional_tool_weight: float
+    answer_weight: float | None
+    format_weight: float | None
+    conditional_tool_weight: float | None
     judge_config_path: Path | None = None
     judge_config_sha256: str | None = None
+    tool_utility: TGVFToolUtilityRuntimeBinding | None = None
+    visual_quality_judge_config_path: Path | None = None
+    visual_quality_judge_config_sha256: str | None = None
+    visual_quality_judge_identity: ArtifactIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +485,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_SMOKE_CONFIG_SCHEMA: False,
             POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA: True,
+            POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -526,12 +552,14 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_SMOKE_CONFIG_SCHEMA,
         POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
+        POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
     if payload["formal_pilot"] is not formal_pilot:
         raise ValueError("policy E2E run formal_pilot mode differs from schema")
     mixed_run = schema_version != POLICY_E2E_SMOKE_CONFIG_SCHEMA
+    stage3_shaped_run = schema_version == POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA
     run_id = _safe_run_id(payload["run_id"])
 
     code_table = _table(payload, "code", {"repository", "commit", "dirty"})
@@ -866,15 +894,22 @@ def load_policy_e2e_smoke_run_config(
         tool_profile.tool_set_sha256,
         "protocol.tool_schema_sha256",
     )
+    expected_maximum_tool_calls = 1 if stage3_shaped_run else 4
     _require_exact(
-        protocol_table["maximum_tool_calls"], 4, "protocol.maximum_tool_calls"
+        protocol_table["maximum_tool_calls"],
+        expected_maximum_tool_calls,
+        "protocol.maximum_tool_calls",
     )
     cap_error_sha256 = _sha256(
         protocol_table["cap_error_sha256"], name="protocol.cap_error_sha256"
     )
     _require_exact(
         cap_error_sha256,
-        POLICY_E2E_SMOKE_CAP_ERROR_SHA256,
+        (
+            POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
+            if stage3_shaped_run
+            else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
+        ),
         "protocol.cap_error_sha256",
     )
     protocol = SmokeProtocolBinding(
@@ -1016,12 +1051,25 @@ def load_policy_e2e_smoke_run_config(
         "answer_verifier_sha256",
         "judge_mode",
         "judge_reason",
-        "answer_weight",
-        "format_weight",
-        "conditional_tool_weight",
     }
     if mixed_run:
         reward_fields.update({"judge_config_path", "judge_config_sha256"})
+    if stage3_shaped_run:
+        reward_fields.update(
+            {
+                "profile",
+                "tool_utility_sidecar_path",
+                "tool_utility_sidecar_sha256",
+                "tool_utility_manifest_path",
+                "tool_utility_manifest_sha256",
+                "visual_quality_judge_config_path",
+                "visual_quality_judge_config_sha256",
+            }
+        )
+    else:
+        reward_fields.update(
+            {"answer_weight", "format_weight", "conditional_tool_weight"}
+        )
     reward_table = _table(
         payload,
         "reward",
@@ -1079,26 +1127,87 @@ def load_policy_e2e_smoke_run_config(
     else:
         judge_config_path = None
         judge_config_sha256 = None
-    reward_weights = (
-        _real(reward_table["answer_weight"], name="reward.answer_weight"),
-        _real(reward_table["format_weight"], name="reward.format_weight"),
-        _real(
-            reward_table["conditional_tool_weight"],
-            name="reward.conditional_tool_weight",
-        ),
-    )
-    pilot_reward_weight_profile_name(reward_weights)
+    if stage3_shaped_run:
+        _require_exact(
+            reward_table["profile"],
+            STAGE3_SHAPED_REWARD_VERSION,
+            "reward.profile",
+        )
+        if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
+            raise ValueError("Stage3-shaped reward requires the mixed-v2 T1 dataset")
+        if tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
+            raise ValueError("Stage3-shaped reward requires the TGVF-only tool profile")
+        sidecar_path = _existing_file(
+            reward_table["tool_utility_sidecar_path"],
+            name="reward.tool_utility_sidecar_path",
+        )
+        sidecar_sha256 = _sha256(
+            reward_table["tool_utility_sidecar_sha256"],
+            name="reward.tool_utility_sidecar_sha256",
+        )
+        sidecar_manifest_path = _existing_file(
+            reward_table["tool_utility_manifest_path"],
+            name="reward.tool_utility_manifest_path",
+        )
+        sidecar_manifest_sha256 = _sha256(
+            reward_table["tool_utility_manifest_sha256"],
+            name="reward.tool_utility_manifest_sha256",
+        )
+        tool_utility = load_tgvf_tool_utility_runtime_binding(
+            sidecar_path,
+            expected_sidecar_sha256=sidecar_sha256,
+            manifest_path=sidecar_manifest_path,
+            expected_manifest_sha256=sidecar_manifest_sha256,
+            expected_dataset_iteration_identity_sha256=iteration_sha256,
+        )
+        visual_quality_config_path = _existing_file(
+            reward_table["visual_quality_judge_config_path"],
+            name="reward.visual_quality_judge_config_path",
+        )
+        visual_quality_config_sha256 = _sha256(
+            reward_table["visual_quality_judge_config_sha256"],
+            name="reward.visual_quality_judge_config_sha256",
+        )
+        if _sha256_file(visual_quality_config_path) != visual_quality_config_sha256:
+            raise ValueError("reward visual-quality judge config SHA256 mismatch")
+        bound_visual_quality_judge = load_tgvf_visual_quality_judge(
+            visual_quality_config_path,
+            expected_file_sha256=visual_quality_config_sha256,
+        )
+        visual_quality_judge_identity = bound_visual_quality_judge.config_identity
+        reward_profile = STAGE3_SHAPED_REWARD_VERSION
+        reward_weights: tuple[float, float, float] | None = None
+    else:
+        reward_weights = (
+            _real(reward_table["answer_weight"], name="reward.answer_weight"),
+            _real(reward_table["format_weight"], name="reward.format_weight"),
+            _real(
+                reward_table["conditional_tool_weight"],
+                name="reward.conditional_tool_weight",
+            ),
+        )
+        pilot_reward_weight_profile_name(reward_weights)
+        reward_profile = "pilot-v1"
+        tool_utility = None
+        visual_quality_config_path = None
+        visual_quality_config_sha256 = None
+        visual_quality_judge_identity = None
     reward = SmokeRewardBinding(
+        profile=reward_profile,
         task_kind=reward_table["task_kind"],
         answer_verifier=reward_table["answer_verifier"],
         answer_verifier_sha256=answer_verifier_sha256,
         judge_mode=reward_table["judge_mode"],
         judge_reason=_text(reward_table["judge_reason"], name="reward.judge_reason"),
-        answer_weight=reward_weights[0],
-        format_weight=reward_weights[1],
-        conditional_tool_weight=reward_weights[2],
+        answer_weight=None if reward_weights is None else reward_weights[0],
+        format_weight=None if reward_weights is None else reward_weights[1],
+        conditional_tool_weight=None if reward_weights is None else reward_weights[2],
         judge_config_path=judge_config_path,
         judge_config_sha256=judge_config_sha256,
+        tool_utility=tool_utility,
+        visual_quality_judge_config_path=visual_quality_config_path,
+        visual_quality_judge_config_sha256=visual_quality_config_sha256,
+        visual_quality_judge_identity=visual_quality_judge_identity,
     )
 
     optimizer_table = _table(
@@ -1503,11 +1612,12 @@ def load_policy_e2e_smoke_run_config(
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
-    policy_type = (
-        PolicyPilotV1Config
-        if protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE
-        else PolicyVisualToolExperimentConfig
-    )
+    if stage3_shaped_run:
+        policy_type = PolicyTGVFStage3ExperimentConfig
+    elif protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE:
+        policy_type = PolicyPilotV1Config
+    else:
+        policy_type = PolicyVisualToolExperimentConfig
     policy = policy_type(
         model_family=model.family,
         model_path=model.revision_or_path,
@@ -2021,6 +2131,8 @@ def _normalize_json(value: object) -> object:
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
+    "POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256",
+    "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_MIXED_JUDGE_MODE",
