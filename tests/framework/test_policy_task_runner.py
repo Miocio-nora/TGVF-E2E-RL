@@ -79,6 +79,9 @@ def test_task_runner_maps_the_real_sidecar_releasing_role_worker() -> None:
     calls: list[object] = []
 
     class TrainingWorker:
+        def _setup_env_cuda_visible_devices(self):
+            return None
+
         def train_mini_batch(self, data):
             calls.append(("train", data))
 
@@ -124,6 +127,9 @@ def test_task_runner_maps_the_real_sidecar_releasing_role_worker() -> None:
     assert runner.mapping == {Role.ActorRolloutRef: "global_pool"}
     assert wrapped.actor_worker_cls is wrapped.ref_worker_cls
     assert wrapped.actor_worker_cls is not TrainingWorker
+    assert "PolicyPhysicalGPUWorker" in {
+        base.__name__ for base in wrapped.actor_worker_cls.__mro__
+    }
 
 
 @pytest.mark.parametrize(

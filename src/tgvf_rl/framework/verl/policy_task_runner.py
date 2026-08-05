@@ -1308,7 +1308,14 @@ def add_policy_actor_rollout_worker(
 ) -> tuple[type[Any], type[Any]]:
     """Publicly testable worker-map seam used by the repo-owned TaskRunner."""
 
-    wrapped = make_sidecar_releasing_actor_rollout_ref_worker_class(actor_worker_cls)
+    upstream_training_worker_cls = getattr(actor_worker_cls, "actor_worker_cls", None)
+    mapped_training_worker_cls = make_policy_colocated_worker_class(
+        upstream_training_worker_cls
+    )
+    wrapped = make_sidecar_releasing_actor_rollout_ref_worker_class(
+        actor_worker_cls,
+        upstream_training_worker_cls=mapped_training_worker_cls,
+    )
     # ActorRolloutRefWorker calls ``Worker.__init__(self)`` explicitly rather
     # than through ``super()``.  Its CUDA setup still dispatches dynamically,
     # so wrap the role worker itself as well as the outer WorkerDict base.
