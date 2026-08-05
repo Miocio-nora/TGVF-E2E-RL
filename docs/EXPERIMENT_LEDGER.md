@@ -9487,3 +9487,9 @@ than inferred from a script name or prior conversation.
   paired `global_step_80` checkpoint must be durable before external CoreDev
   ACC-VAL starts.  With five retained actor checkpoints, the intended final
   recovery set is `20/30/40/60/80`.
+- The committed authorization manifest is
+  `configs/policy/continuations/prl_08_r1_step20_to80.json`; it binds recovery
+  implementation commit `055bf3a6f31cc9f53a0d2fef8f2b1b74e4314222` and
+  the exact accepted step-20 artifact hashes.  Ordinary `run-policy` remains
+  unchanged; this continuation is reachable only through the explicit
+  `--horizon-extension` entry.

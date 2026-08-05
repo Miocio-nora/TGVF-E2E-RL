@@ -1,0 +1,20 @@
+{
+  "schema_version": "policy-horizon-extension-v1",
+  "extension_id": "PRL-08-R1-STEP20-TO80",
+  "run_id": "PRL-08-R1-QWEN3-INSTRUCT-GRPO-BS16-CROP-T1MIXED-V2-TOOLW0P2-20STEP-GPU0123",
+  "base_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl08-t1mixed-v2-bs16/configs/policy/runs/prl_08_r1_qwen3_instruct_grpo_bs16_crop_t1mixed_v2_toolw0p2_20step_gpu0123.toml",
+  "base_config_source_sha256": "e926fe22779d7996b1685d9f97e5f155b0d16faddca520a40bfb5fe855b0010b",
+  "base_run_identity_sha256": "44908c01a4ee905361ca68ce2d88a00fef3a7248e18c24f0034c3380e62a0cfd",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-08-R1-qwen3-instruct-grpo-bs16-crop-t1mixed-v2-toolw0p2-20step-gpu0123",
+  "source_optimizer_step": 20,
+  "target_optimizer_step": 80,
+  "scheduler_total_steps": 80,
+  "effective_checkpoint_steps": [0, 1, 5, 10, 20, 30, 40, 60, 80],
+  "metrics_prefix_sha256": "11d8b3ac9c4a3b940b217f3d9f4a6ea90f6e28d14d3142f72323e0366590ef6b",
+  "checkpoint_pair_file_sha256": "f0aa568ab643a540893474f14d55ab82c0a7eee3e98700b8e58d6d2ded6d1313",
+  "project_state_file_sha256": "451b6cedcce98e4bb56625955bdca73204712302c34e46443dddc27c7b79beb5",
+  "latest_lora_pointer_file_sha256": "1ece101dacb2e72ffdffbf5138d6027a7d9d86fc11ba5d3a41a2493a6b64987c",
+  "source_weights_sha256": "4ee1f918f41044bbac29f6bf2c096480212ca6aedeeeb10e29f37715c30df7f4",
+  "code_commit": "055bf3a6f31cc9f53a0d2fef8f2b1b74e4314222",
+  "integrity_sha256": "121d29bdbc27744acb833f354019b2ee4ea3023699fdd1388f2437a486071f68"
+}
