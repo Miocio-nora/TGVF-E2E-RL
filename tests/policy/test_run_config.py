@@ -484,9 +484,11 @@ def test_accepts_a_distinct_four_gpu_physical_mapping(tmp_path: Path) -> None:
     )
 
     config = load_policy_e2e_smoke_run_config(path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
 
     assert config.distributed.physical_gpu_ids == (4, 5, 6, 7)
     assert config.distributed.logical_gpu_ids == (0, 1, 2, 3)
+    assert plan.environment["CUDA_VISIBLE_DEVICES"] == "4,5,6,7"
 
 
 def test_rejects_unnamed_reward_weight_profile(tmp_path: Path) -> None:

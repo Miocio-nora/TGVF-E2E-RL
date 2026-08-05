@@ -140,8 +140,23 @@ class UpstreamVerlLaunchPlan:
             != LOSSLESS_AGENT_LOOP_MANAGER_FQN
         ):
             raise ValueError("launch plan lost the accepted lossless v0 manager")
-        if self.environment.get("CUDA_VISIBLE_DEVICES") != "0,1,2,3":
-            raise ValueError("initial Policy Pilot launch must bind physical GPUs 0-3")
+        visible_devices = self.environment.get("CUDA_VISIBLE_DEVICES", "")
+        try:
+            physical_gpu_ids = tuple(
+                int(device) for device in visible_devices.split(",")
+            )
+        except ValueError as error:
+            raise ValueError(
+                "Policy Pilot launch must bind four integer physical GPU IDs"
+            ) from error
+        if (
+            len(physical_gpu_ids) != 4
+            or len(set(physical_gpu_ids)) != 4
+            or any(device < 0 for device in physical_gpu_ids)
+        ):
+            raise ValueError(
+                "Policy Pilot launch must bind four unique physical GPUs"
+            )
         if self.overrides.get("trainer.n_gpus_per_node") != 4:
             raise ValueError("initial Policy Pilot launch must bind world size four")
         if (
