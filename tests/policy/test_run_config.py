@@ -473,6 +473,22 @@ def test_loads_answer_primary_reward_as_a_distinct_run_identity(
     assert answer_primary.as_record()["reward"]["conditional_tool_weight"] == 0.2
 
 
+def test_accepts_a_distinct_four_gpu_physical_mapping(tmp_path: Path) -> None:
+    path, text, _ = _write_config(tmp_path)
+    path.write_text(
+        text.replace(
+            "physical_gpu_ids = [0, 1, 2, 3]",
+            "physical_gpu_ids = [4, 5, 6, 7]",
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_policy_e2e_smoke_run_config(path)
+
+    assert config.distributed.physical_gpu_ids == (4, 5, 6, 7)
+    assert config.distributed.logical_gpu_ids == (0, 1, 2, 3)
+
+
 def test_rejects_unnamed_reward_weight_profile(tmp_path: Path) -> None:
     path, text, _ = _write_config(tmp_path)
     path.write_text(
