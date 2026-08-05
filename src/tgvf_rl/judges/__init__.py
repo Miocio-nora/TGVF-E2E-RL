@@ -18,6 +18,19 @@ from .openai_compatible import (
     QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT,
     load_openai_compatible_judge,
 )
+from .tgvf_visual_quality import (
+    BoundTGVFVisualQualityJudge,
+    TGVF_VISUAL_QUALITY_JUDGE_CONFIG_VERSION,
+    TGVF_VISUAL_QUALITY_JUDGE_PROMPT_VERSION,
+    TGVF_VISUAL_QUALITY_JUDGE_SYSTEM_PROMPT,
+    TGVFVisualQualityFailureKind,
+    TGVFVisualQualityJudgeConfig,
+    TGVFVisualQualityJudgeProvider,
+    TGVFVisualQualityJudgeRequest,
+    TGVFVisualQualityJudgeResult,
+    load_tgvf_visual_quality_judge,
+    tgvf_visual_quality_prompt_identity,
+)
 
 __all__ = [
     "DisabledJudgeProvider",
@@ -34,4 +47,15 @@ __all__ = [
     "QWEN25_72B_RL_JUDGE_PROMPT_VERSION",
     "QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT",
     "load_openai_compatible_judge",
+    "BoundTGVFVisualQualityJudge",
+    "TGVF_VISUAL_QUALITY_JUDGE_CONFIG_VERSION",
+    "TGVF_VISUAL_QUALITY_JUDGE_PROMPT_VERSION",
+    "TGVF_VISUAL_QUALITY_JUDGE_SYSTEM_PROMPT",
+    "TGVFVisualQualityFailureKind",
+    "TGVFVisualQualityJudgeConfig",
+    "TGVFVisualQualityJudgeProvider",
+    "TGVFVisualQualityJudgeRequest",
+    "TGVFVisualQualityJudgeResult",
+    "load_tgvf_visual_quality_judge",
+    "tgvf_visual_quality_prompt_identity",
 ]
