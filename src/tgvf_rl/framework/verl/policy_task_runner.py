@@ -821,30 +821,31 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             # global.  Replace that construction boundary only while upstream
             # creates workers so the normal trainer/lifecycle remains intact,
             # while vLLM receives the TGVF worker extension and sticky client.
+            import verl.single_controller.ray.base as ray_base_module
             import verl.trainer.ppo.ray_trainer as ray_trainer_module
 
             from .vllm_tool_runtime import tgvf_llm_server_manager_class
 
             original_manager_class = ray_trainer_module.LLMServerManager
-            original_colocated_factory = (
-                ray_trainer_module.create_colocated_worker_cls
+            original_base_class_resolver = (
+                ray_base_module._determine_fsdp_megatron_base_class
             )
 
-            def create_policy_colocated_worker_cls(*args, **kwargs):
+            def resolve_policy_colocated_worker_base(*args, **kwargs):
                 return make_policy_colocated_worker_class(
-                    original_colocated_factory(*args, **kwargs)
+                    original_base_class_resolver(*args, **kwargs)
                 )
 
             ray_trainer_module.LLMServerManager = tgvf_llm_server_manager_class()
-            ray_trainer_module.create_colocated_worker_cls = (
-                create_policy_colocated_worker_cls
+            ray_base_module._determine_fsdp_megatron_base_class = (
+                resolve_policy_colocated_worker_base
             )
             try:
                 result = super().init_workers()
             finally:
                 ray_trainer_module.LLMServerManager = original_manager_class
-                ray_trainer_module.create_colocated_worker_cls = (
-                    original_colocated_factory
+                ray_base_module._determine_fsdp_megatron_base_class = (
+                    original_base_class_resolver
                 )
             state = PolicyPilotTrainerCheckpointState.from_environment(self)
             original_actor_wg = self.actor_rollout_wg
