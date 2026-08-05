@@ -1309,6 +1309,12 @@ def add_policy_actor_rollout_worker(
     """Publicly testable worker-map seam used by the repo-owned TaskRunner."""
 
     wrapped = make_sidecar_releasing_actor_rollout_ref_worker_class(actor_worker_cls)
+    # ActorRolloutRefWorker calls ``Worker.__init__(self)`` explicitly rather
+    # than through ``super()``.  Its CUDA setup still dispatches dynamically,
+    # so wrap the role worker itself as well as the outer WorkerDict base.
+    # Otherwise alternate physical allocations such as GPUs 4--7 reach
+    # ``torch.cuda.set_device(4..7)`` inside a four-device local CUDA view.
+    wrapped = make_policy_colocated_worker_class(wrapped)
     if need_reference_policy_fn(config):
         raise ValueError(
             "Policy reference diagnostic requires zero-weight KL configuration"

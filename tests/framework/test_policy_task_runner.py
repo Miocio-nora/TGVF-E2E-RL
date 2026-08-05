@@ -89,6 +89,9 @@ def test_task_runner_maps_the_real_sidecar_releasing_role_worker() -> None:
         actor_worker_cls = TrainingWorker
         ref_worker_cls = TrainingWorker
 
+        def _setup_env_cuda_visible_devices(self):
+            return None
+
     class Role:
         ActorRollout = "actor"
         ActorRolloutRef = "actor_ref"
