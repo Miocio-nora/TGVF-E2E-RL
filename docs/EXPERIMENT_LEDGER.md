@@ -9493,3 +9493,48 @@ than inferred from a script name or prior conversation.
   the exact accepted step-20 artifact hashes.  Ordinary `run-policy` remains
   unchanged; this continuation is reachable only through the explicit
   `--horizon-extension` entry.
+
+### PRL-09-QWEN3-INSTRUCT-TGVF-SHAPED-REWARD
+
+- Cell/class and lifecycle: an isolated non-formal TGVF reward experiment.
+  It borrows the five-part answer/tool/focus/grounding/protocol shaping idea
+  from the previously successful project, but it is not a reproduction or
+  continuation of that old Stage3 run.  `R1` is the required fresh one-step
+  full-pipeline smoke on GPU4-7; only an accepted R1 is eligible for the
+  separate fresh 80-step `R2` run on GPU0-3.
+- Controlled model/data recipe: Qwen3-VL-8B-Instruct policy, frozen RP-66
+  representation adapter, corrected mixed-v2 T1 retained pool, BS16, n8,
+  world4/GA4, decoder LoRA r64, AdamW LR `1e-6`, zero KL and an 80-step cosine
+  scheduler.  TGVF is limited to one successful call attempt.  In-training
+  validation is disabled; the R2 step-80 checkpoint must trigger the external
+  strict CoreDev-2511 ACC-VAL automatically.
+- Reward equation: `2*A_gated + T + F + G + P`.  Tool necessity is bound to a
+  deterministic, sample-local counterfactual utility sidecar.  Focus and
+  grounding are scored by a gold-free local Qwen3-VL-32B-Thinking visual
+  judge over the original image, question, tool target, post-tool reasoning
+  and final answer.  The answer verifier remains rule-first with the pinned
+  Qwen2.5-72B semantic fallback.  The internal profile spelling
+  `stage3-shaped-v1` is retained only as a compatibility identifier; all run,
+  artifact and W&B identities are independently named TGVF-shaped.
+- Isolated implementation commit:
+  `56bde7ea8d9865fc284913f1c564cfaacf96c86d`.  The focused runtime suite passed
+  172 tests, and a clean closure audit passed 176 tests.  The launch plan binds
+  the shaped reward FQN rather than the legacy Pilot reward FQN.
+- Local visual judge gate: the exact production provider served
+  Qwen3-VL-32B-Thinking locally on port 8013 and passed repeated real-image
+  strict-JSON canaries.  It returned exactly `focus_score` and
+  `grounding_score`, both `2`, with no parsing/thinking leakage.  The first
+  request took about 10.8 seconds and a warm request about 0.36 seconds.
+  Config-file SHA-256 is
+  `d05a0e91554eaef7f700732d78d392b9ebec04be1012104af3a6d27d9e3be331`.
+- R1 utility prefix: 16 sequential training samples, eight attempts each,
+  with labels needed/optional/unnecessary = `3/10/3`.  Sidecar SHA-256 is
+  `1f6870500d0bc5b9ad63e48b6aced1ff5f64acfd44ddc0f6445fdbe517f143ce`;
+  manifest identity SHA-256 is
+  `8a3ef0318c7dadeb74a259fc2c4054552019b53c49e6a169385635b27b2f6119`.
+- R1 config:
+  `configs/policy/runs/prl_09_r1_smoke_qwen3_instruct_grpo_bs16_tgvf_t1mixed_v2_shaped_1step_gpu4567.toml`.
+  Acceptance requires one optimizer update over exactly 16 prompts / 128
+  trajectories, at least one successful TGVF observation, positive visual
+  judge applicability, complete visual coverage with zero visual failures,
+  finite five-component metrics and a complete four-rank step-1 checkpoint.
