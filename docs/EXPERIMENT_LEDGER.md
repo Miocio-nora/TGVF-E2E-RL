@@ -9407,3 +9407,29 @@ than inferred from a script name or prior conversation.
   It runs on GPU0-3, checkpoints at `1/5/10/20`, enables W&B, disables all
   in-training validation, and launches external evaluation only after the
   requested checkpoint is durably saved.
+
+### PRL-07-QWEN3-INSTRUCT-CROP-BS16-CORRECT-FINAL-T1-MIXED
+
+- Cell/class and lifecycle: correction rerun of the PRL-05 small-batch Crop
+  pilot. A separate one-step smoke (`R0`) must pass before the fresh 20-step
+  training run (`R1`) is launched on GPU0-3.
+- Corrected data identity: the run consumes all `79,069` final T1 retains from
+  the completed all-source pool, with VStar `39,205`, ArxivQA `25,393`, and
+  ThinkLite `14,471`. It replaces the incomplete provisional ArxivQA-only
+  `25,393` pool used by PRL-05/06. T2 and post-T1 balancing are not applied.
+- Controlled training recipe: fresh Qwen3-VL-8B-Instruct, Crop only, BS16,
+  n8, world4/GA4, decoder LoRA r64, AdamW LR `1e-6`, reward weights
+  `.8/.2/.2`, zero KL, 20 updates, and the original 80-step cosine horizon are
+  retained from PRL-05. Checkpoints are planned at `1/5/10/20`; W&B is on and
+  in-training validation is off.
+- Runtime gates: commit `2b5c258cdffa21439483a4e04109cfd2c94d6afc`
+  adds a separate fail-closed mixed-data loader without changing the old
+  ArxivQA loader. Focused and regression coverage passed 57 tests; the real
+  artifact load verified all 79,069 rows, source/task routing, deterministic
+  order, and 65,705 unique image byte hashes. The first 16 prompts contain
+  VStar 8 / ArxivQA 5 / ThinkLite 3. The formal OpenRouter Qwen2.5-72B judge
+  route passed a live MCQ/math/open health check before launch.
+- Configs:
+  `configs/policy/runs/prl_07_r0_smoke_qwen3_instruct_grpo_bs16_crop_t1mixed_final_1step_gpu0123.toml`
+  and
+  `configs/policy/runs/prl_07_r1_qwen3_instruct_grpo_bs16_crop_t1mixed_final_toolw0p2_20step_gpu0123.toml`.
