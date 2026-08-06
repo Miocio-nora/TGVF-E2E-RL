@@ -524,7 +524,10 @@ class BoundVerlNativeAgentLoopInvocationFactory:
         rollouts_per_prompt: int = 8,
     ) -> None:
         from tgvf_rl.contracts.identity import ModelIdentity
-        from tgvf_rl.policy.config import PilotSamplingConfig
+        from tgvf_rl.policy.config import (
+            POLICY_PILOT_ACCEPTED_SAMPLING_SCALES,
+            PilotSamplingConfig,
+        )
 
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("native invocation run_id must be non-empty")
@@ -557,8 +560,17 @@ class BoundVerlNativeAgentLoopInvocationFactory:
             raise ValueError("rollout_master_seed must be non-negative")
         if type(max_model_len) is not int or max_model_len <= 1:
             raise ValueError("max_model_len must be greater than one")
-        if type(rollouts_per_prompt) is not int or rollouts_per_prompt != 8:
-            raise ValueError("Policy Pilot native invocation requires exactly n=8")
+        accepted_group_sizes = {
+            group_size for group_size, _ in POLICY_PILOT_ACCEPTED_SAMPLING_SCALES
+        }
+        if (
+            type(rollouts_per_prompt) is not int
+            or rollouts_per_prompt not in accepted_group_sizes
+        ):
+            raise ValueError(
+                "Policy native invocation group size is unsupported: "
+                f"{rollouts_per_prompt!r}"
+            )
         if sampling_contract.trajectories_per_prompt != rollouts_per_prompt:
             raise ValueError("sampling contract and invocation group size differ")
         if sampling_contract.include_stop_str_in_output is not True:
@@ -740,11 +752,15 @@ class BoundVerlNativeAgentLoopInvocationFactory:
     def _claim_rollout_index(self, group_uid: str) -> int:
         with self._lock:
             if group_uid in self._completed_group_uids:
-                raise ReplayMismatchError("upstream reused a completed n=8 group uid")
+                raise ReplayMismatchError(
+                    "upstream reused a completed "
+                    f"n={self.rollouts_per_prompt} group uid"
+                )
             index = self._next_rollout_index.get(group_uid, 0)
             if index >= self.rollouts_per_prompt:
                 raise ReplayMismatchError(
-                    "upstream generated more than n=8 trajectories"
+                    "upstream generated more trajectories than the configured "
+                    f"n={self.rollouts_per_prompt}"
                 )
             if index + 1 == self.rollouts_per_prompt:
                 self._next_rollout_index.pop(group_uid, None)

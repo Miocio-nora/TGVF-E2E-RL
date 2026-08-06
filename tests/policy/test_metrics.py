@@ -70,6 +70,25 @@ def _step(
     )
 
 
+def _step_n16(
+    optimizer_step: int, prompt_id: str, elapsed: float
+) -> PilotOptimizerStepMetricsObservation:
+    rows = tuple(
+        replace(
+            row,
+            trajectory_id=f"{prompt_id}/trajectory-{copy_index * 8 + row_index}",
+        )
+        for copy_index in range(2)
+        for row_index, row in enumerate(_rows(prompt_id))
+    )
+    return PilotOptimizerStepMetricsObservation(
+        optimizer_step=optimizer_step,
+        step_time_seconds=elapsed,
+        trajectories=rows,
+        trajectories_per_prompt=16,
+    )
+
+
 def test_empty_summary_has_explicit_zero_denominator_contract() -> None:
     contracts = {item.metric: item for item in PILOT_V1_METRIC_REDUCTIONS}
     assert contracts["tool_call_attempt_rate"].denominator == "trajectories"
@@ -156,6 +175,27 @@ def test_checkpoint_restore_is_lossless_and_continues_at_exact_next_step() -> No
 
     payload["optimizer_steps"] = 999
     assert restored.state == uninterrupted.state
+
+
+def test_n16_metrics_round_trip_and_reject_mixed_group_sizes() -> None:
+    first = _step_n16(1, "prompt-a", 20.0)
+    second = _step_n16(2, "prompt-b", 22.0)
+    accumulator = PilotMetricsAccumulator()
+    summary = accumulator.record_optimizer_step(first)
+    assert summary.prompts == 1
+    assert summary.trajectories == 16
+
+    payload = json.loads(json.dumps(accumulator.checkpoint_state()))
+    restored = PilotMetricsAccumulator.from_checkpoint_state(payload)
+    restored.record_optimizer_step(second)
+    assert restored.summary().prompts == 2
+    assert restored.summary().trajectories == 32
+
+    with pytest.raises(ValueError, match="cannot mix"):
+        restored.record_optimizer_step(_step(3, "prompt-c", 1.0))
+
+    with pytest.raises(ValueError, match="zero-prompt"):
+        PilotMetricsCheckpointState(prompts=0, trajectories=16)
 
 
 def test_observation_step_and_atomic_restore_validation_fail_closed() -> None:

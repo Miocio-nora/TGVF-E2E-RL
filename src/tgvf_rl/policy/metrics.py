@@ -12,6 +12,7 @@ from tgvf_rl.protocol.schema import ToolErrorCode
 
 POLICY_PILOT_V1_METRICS_SCHEMA = "policy-pilot-v1-metrics-v1"
 POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT = 8
+POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT = (8, 16)
 POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS = 4
 POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS = 5
 
@@ -278,6 +279,7 @@ class PilotOptimizerStepMetricsObservation:
     optimizer_step: int
     step_time_seconds: float
     trajectories: tuple[PilotTrajectoryMetricsObservation, ...]
+    trajectories_per_prompt: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
 
     def __post_init__(self) -> None:
         _positive_int(self.optimizer_step, "optimizer_step")
@@ -286,6 +288,12 @@ class PilotOptimizerStepMetricsObservation:
             raise ValueError("step_time_seconds must be positive")
         object.__setattr__(self, "step_time_seconds", elapsed)
         object.__setattr__(self, "trajectories", tuple(self.trajectories))
+        _positive_int(self.trajectories_per_prompt, "trajectories_per_prompt")
+        if self.trajectories_per_prompt not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT:
+            raise ValueError(
+                "unsupported trajectories_per_prompt; accepted="
+                f"{POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT!r}"
+            )
         if not self.trajectories:
             raise ValueError("an optimizer-step metric observation cannot be empty")
         if any(
@@ -300,11 +308,18 @@ class PilotOptimizerStepMetricsObservation:
         incomplete = {
             prompt_id: count
             for prompt_id, count in prompt_sizes.items()
-            if count != POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
+            if count != self.trajectories_per_prompt
         }
         if incomplete:
+            group_label = (
+                "eight"
+                if self.trajectories_per_prompt
+                == POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
+                else str(self.trajectories_per_prompt)
+            )
             raise ValueError(
-                "each Pilot prompt must contribute exactly eight trajectories: "
+                "each Policy prompt must contribute exactly "
+                f"{group_label} trajectories: "
                 f"{dict(sorted(incomplete.items()))!r}"
             )
 
@@ -380,11 +395,23 @@ class PilotMetricsCheckpointState:
         self._validate_reduction_invariants()
 
     def _validate_reduction_invariants(self) -> None:
-        if self.trajectories != (
-            self.prompts * POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
-        ):
+        if self.prompts == 0:
+            if self.trajectories != 0:
+                raise ValueError(
+                    "zero-prompt metrics state cannot contain trajectories"
+                )
+            inferred_group_size = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT
+        elif self.trajectories % self.prompts:
             raise ValueError(
-                "Pilot trajectory count must equal prompts multiplied by 8"
+                "Policy trajectory count must be divisible by prompt count"
+            )
+        else:
+            inferred_group_size = self.trajectories // self.prompts
+        if inferred_group_size not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT:
+            raise ValueError(
+                "Policy trajectory count must equal prompts multiplied by 8 "
+                "or 16; inferred group size="
+                f"{inferred_group_size}"
             )
         if self.optimizer_steps == 0:
             if self.prompts != 0 or self.step_time_seconds_total != 0.0:
@@ -590,6 +617,14 @@ class PilotMetricsAccumulator:
                 f"expected {expected_step}, got {observation.optimizer_step}"
             )
         rows = observation.trajectories
+        if self._state.prompts:
+            existing_group_size = self._state.trajectories // self._state.prompts
+            if observation.trajectories_per_prompt != existing_group_size:
+                raise ValueError(
+                    "metrics cannot mix trajectories-per-prompt group sizes: "
+                    f"existing={existing_group_size} observed="
+                    f"{observation.trajectories_per_prompt}"
+                )
         errors = Counter(
             {item.code: item.count for item in self._state.tool_error_counts}
         )
@@ -765,6 +800,7 @@ __all__ = [
     "POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS",
     "POLICY_PILOT_V1_METRICS_SCHEMA",
     "POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT",
+    "POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT",
     "PILOT_V1_METRIC_REDUCTIONS",
     "MetricReductionContract",
     "PilotMetricsAccumulator",

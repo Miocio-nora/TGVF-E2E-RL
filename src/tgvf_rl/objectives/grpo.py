@@ -103,7 +103,9 @@ class GRPOSpec:
 
 
 def policy_pilot_v1_grpo_spec(
-    *, diagnostic_kl_estimator: ReferenceKLEstimator
+    *,
+    diagnostic_kl_estimator: ReferenceKLEstimator,
+    expected_group_size: int = 8,
 ) -> GRPOSpec:
     """Build the exact pure-loss contract accepted for Policy Pilot v1.
 
@@ -114,6 +116,8 @@ def policy_pilot_v1_grpo_spec(
 
     if not isinstance(diagnostic_kl_estimator, ReferenceKLEstimator):
         raise TypeError("diagnostic_kl_estimator must be ReferenceKLEstimator")
+    if type(expected_group_size) is not int or expected_group_size not in {8, 16}:
+        raise ValueError("expected_group_size must be one of {8, 16}")
     return GRPOSpec(
         center_rewards=True,
         scale_by_group_std=True,
@@ -132,7 +136,7 @@ def policy_pilot_v1_grpo_spec(
             mode=LossReduction.TOKEN_MEAN,
             fixed_token_normalizer=None,
         ),
-        expected_group_size=8,
+        expected_group_size=expected_group_size,
     )
 
 

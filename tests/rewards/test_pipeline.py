@@ -20,6 +20,8 @@ from tgvf_rl.rewards.schema import (
     AnswerTaskKind,
     AnswerVerificationResult,
     NormalizationSpec,
+    PILOT_REWARD_EQUATION_DEEPEYES_MATH,
+    PILOT_REWARD_EQUATION_DEEPEYES_VISUAL,
     PilotRewardSpec,
     RewardComponentSpec,
     RewardContext,
@@ -117,6 +119,105 @@ def test_answer_primary_reward_profile_lowers_only_the_tool_bonus() -> None:
         0.0,
         0.2,
     )
+
+
+@pytest.mark.parametrize("data_source", ("vstar", "arxivqa"))
+def test_deepeyes_source_aware_reward_routes_visual_sources(
+    data_source: str,
+) -> None:
+    spec = replace(_pilot_spec(), deepeyes_source_aware=True)
+    pipeline = PilotRewardPipeline(
+        spec, _FixedVerifier(True, spec.answer_verifier_identity)
+    )
+    common = dict(
+        sample_id="sample",
+        question="question",
+        candidate_answer="answer",
+        expected_answer="answer",
+        tool_call_count=1,
+        successful_tgvf_observation_count=1,
+    )
+
+    context = RewardContext(**common, data_source=data_source)
+    visual = pipeline.score(context)
+
+    assert spec.equation_for_context(context)[0] == (
+        PILOT_REWARD_EQUATION_DEEPEYES_VISUAL
+    )
+    assert visual.total == pytest.approx(2.0)
+    assert tuple(component.weighted_score for component in visual.components) == (
+        0.8,
+        0.0,
+        1.2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("data_source", "task_kind"),
+    (
+        *(
+            pytest.param("thinklite", kind, id=f"thinklite-{kind.value}")
+            for kind in AnswerTaskKind
+        ),
+        pytest.param("thinklite_eureka", AnswerTaskKind.MATH, id="thinklite-eureka"),
+        pytest.param("xince", AnswerTaskKind.MATH, id="xince"),
+    ),
+)
+def test_deepeyes_source_aware_reward_routes_entire_math_sources(
+    data_source: str,
+    task_kind: AnswerTaskKind,
+) -> None:
+    spec = replace(_pilot_spec(), deepeyes_source_aware=True)
+    pipeline = PilotRewardPipeline(
+        spec, _FixedVerifier(True, spec.answer_verifier_identity)
+    )
+    context = RewardContext(
+        sample_id="sample",
+        question="question",
+        candidate_answer="answer",
+        expected_answer="answer",
+        tool_call_count=1,
+        successful_tgvf_observation_count=1,
+        data_source=data_source,
+        task_kind=task_kind,
+    )
+
+    result = pipeline.score(context)
+
+    assert spec.equation_for_context(context)[0] == PILOT_REWARD_EQUATION_DEEPEYES_MATH
+    assert result.total == pytest.approx(1.2)
+    assert tuple(component.raw_score for component in result.components) == (
+        1.0,
+        0.0,
+        0.0,
+    )
+    assert tuple(component.weighted_score for component in result.components) == (
+        1.2,
+        0.0,
+        0.0,
+    )
+
+
+@pytest.mark.parametrize("data_source", (None, "unknown", "vstar_typo"))
+def test_deepeyes_source_aware_reward_fails_closed_for_unknown_source(
+    data_source: str | None,
+) -> None:
+    spec = replace(_pilot_spec(), deepeyes_source_aware=True)
+    pipeline = PilotRewardPipeline(
+        spec, _FixedVerifier(True, spec.answer_verifier_identity)
+    )
+
+    with pytest.raises(ValueError, match="unsupported data_source"):
+        pipeline.score(
+            RewardContext(
+                sample_id="sample",
+                question="question",
+                candidate_answer="answer",
+                expected_answer="answer",
+                tool_call_count=0,
+                data_source=data_source,
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -245,9 +346,7 @@ def test_sample_failure_mode_zeros_one_completed_response_then_continues() -> No
     succeeded = verifier.verify(context)
 
     assert failed.correct is False
-    assert failed.route == (
-        "qwen2.5_72b_semantic_fallback_malformed_output_zero"
-    )
+    assert failed.route == ("qwen2.5_72b_semantic_fallback_malformed_output_zero")
     assert failed.judge_usage == usage
     assert succeeded.correct is True
     assert succeeded.route == "qwen2.5_72b_semantic_fallback"

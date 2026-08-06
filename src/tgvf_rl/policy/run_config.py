@@ -88,6 +88,9 @@ POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v3"
 POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA = "policy-e2e-mixed-run-config-v4"
 POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA = "policy-e2e-formal-pilot-config-v1"
 POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA = "policy-e2e-stage3-shaped-run-config-v1"
+POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-deepeyes-scaled-crop-run-config-v1"
+)
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
@@ -486,6 +489,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA: True,
             POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -553,6 +557,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
         POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -560,6 +565,9 @@ def load_policy_e2e_smoke_run_config(
         raise ValueError("policy E2E run formal_pilot mode differs from schema")
     mixed_run = schema_version != POLICY_E2E_SMOKE_CONFIG_SCHEMA
     stage3_shaped_run = schema_version == POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA
+    deepeyes_scaled_crop_run = (
+        schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
+    )
     run_id = _safe_run_id(payload["run_id"])
 
     code_table = _table(payload, "code", {"repository", "commit", "dirty"})
@@ -608,7 +616,12 @@ def load_policy_e2e_smoke_run_config(
     _require_exact(
         model_table["native_deepstack_enabled"], True, "model.native_deepstack_enabled"
     )
-    _require_exact(model_table["image_max_pixels"], 512 * 512, "model.image_max_pixels")
+    expected_image_max_pixels = 1_003_520 if deepeyes_scaled_crop_run else 512 * 512
+    _require_exact(
+        model_table["image_max_pixels"],
+        expected_image_max_pixels,
+        "model.image_max_pixels",
+    )
     model = ModelIdentity(
         family=model_table["family"],
         model_name=model_name,
@@ -1009,6 +1022,12 @@ def load_policy_e2e_smoke_run_config(
             name="sampling.include_stop_str_in_output",
         ),
         ignore_eos=_boolean(sampling_table["ignore_eos"], name="sampling.ignore_eos"),
+    )
+    expected_sampling_scale = (16, 20480) if deepeyes_scaled_crop_run else (8, 8192)
+    _require_exact(
+        (sampling.trajectories_per_prompt, sampling.max_response_length),
+        expected_sampling_scale,
+        "sampling DeepEyes-reference scale",
     )
     if (
         "</tool_call>" in (sampling.stop_strings or ())
@@ -1632,6 +1651,112 @@ def load_policy_e2e_smoke_run_config(
     )
     if sampling.backend_version != POLICY_PILOT_V1_VLLM_VERSION:
         raise ValueError("sampling backend version differs from Policy Pilot v1")
+    if deepeyes_scaled_crop_run:
+        if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
+            raise ValueError(
+                "DeepEyes-scaled Crop reference requires the retained mixed-T1 dataset"
+            )
+        _require_exact(
+            model.model_name,
+            POLICY_PILOT_V1_MODEL_NAME,
+            "DeepEyes-scaled model edition",
+        )
+        _require_exact(
+            model_table["image_max_pixels"],
+            1_003_520,
+            "DeepEyes reference image pixel cap",
+        )
+        _require_exact(
+            protocol.tool_profile,
+            NativeToolCapabilityProfile.CROP_ONLY,
+            "DeepEyes-scaled tool profile",
+        )
+        _require_exact(
+            (
+                reward.answer_weight,
+                reward.format_weight,
+                reward.conditional_tool_weight,
+            ),
+            (0.8, 0.2, 1.2),
+            "DeepEyes reward weights",
+        )
+        _require_exact(
+            (
+                optimizer.name,
+                optimizer.learning_rate,
+                optimizer.beta1,
+                optimizer.beta2,
+                optimizer.epsilon,
+                optimizer.weight_decay,
+                optimizer.maximum_gradient_norm,
+            ),
+            ("adamw", 1.0e-6, 0.9, 0.999, 1.0e-8, 0.01, 1.0),
+            "DeepEyes actor optimizer contract",
+        )
+        _require_exact(
+            (
+                accumulation.global_prompt_batch_size,
+                accumulation.prompt_micro_batch_size_per_rank,
+                accumulation.rollout_prompt_micro_batch_size_per_engine,
+                accumulation.gradient_accumulation_steps,
+            ),
+            (256, 1, 1, 64),
+            "four-GPU accumulated DeepEyes batch contract",
+        )
+        _require_exact(
+            (
+                distributed.physical_gpu_ids,
+                distributed.logical_gpu_ids,
+                distributed.world_size,
+            ),
+            ((0, 1, 2, 3), (0, 1, 2, 3), 4),
+            "four-GPU DeepEyes-scaled placement",
+        )
+        _require_exact(
+            (
+                capacity.max_prompt_length,
+                capacity.actor_ppo_max_token_len_per_gpu,
+                capacity.rollout_log_prob_max_token_len_per_gpu,
+                capacity.reference_log_prob_max_token_len_per_gpu,
+                capacity.vllm_max_num_batched_tokens,
+                capacity.vllm_max_model_len,
+                capacity.vllm_max_num_seqs,
+                capacity.vllm_enable_chunked_prefill,
+                capacity.vllm_gpu_memory_utilization,
+                capacity.vllm_enforce_eager,
+            ),
+            (
+                8192,
+                524288,
+                524288,
+                524288,
+                32768,
+                32768,
+                32,
+                False,
+                0.45,
+                False,
+            ),
+            "four-B200 DeepEyes-scaled capacity adaptation",
+        )
+        _require_exact(
+            (
+                scheduler.name,
+                scheduler.warmup_steps,
+                scheduler.total_steps,
+                scheduler.minimum_learning_rate_ratio,
+                training.maximum_optimizer_steps,
+            ),
+            ("constant", 0, 80, 0.0, 20),
+            "DeepEyes phase-one optimization horizon",
+        )
+        _require_exact(
+            training.checkpoint_steps,
+            (0, 1, 2, 4, 8, 20),
+            "DeepEyes phase-one checkpoint plan",
+        )
+        if "wandb" not in training.logger:
+            raise ValueError("DeepEyes-scaled Crop reference requires W&B logging")
 
     canonical_json = json.dumps(
         _normalize_json(payload),
@@ -2130,6 +2255,7 @@ def _normalize_json(value: object) -> object:
 
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
     "POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",

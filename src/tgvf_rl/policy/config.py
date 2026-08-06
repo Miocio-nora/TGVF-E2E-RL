@@ -53,6 +53,10 @@ POLICY_PILOT_V1_VERL_EXTERNAL_LOSS_MODULE = "tgvf_rl.framework.verl.exact_bypass
 POLICY_PILOT_V1_TOOL_PROFILE = NativeToolCapabilityProfile.TGVF_ONLY
 POLICY_PILOT_V1_TOOL_NAMES = POLICY_PILOT_V1_TOOL_PROFILE.tool_names
 POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES = (1.0e-6, 3.0e-6, 1.0e-5)
+POLICY_PILOT_ACCEPTED_SAMPLING_SCALES = (
+    (8, 8192),
+    (16, 20480),
+)
 
 QWEN3_DECODER_LAYER_COUNT = 36
 QWEN3_DECODER_LORA_PROJECTIONS = (
@@ -134,15 +138,24 @@ class PilotSamplingConfig:
         ):
             if value is not None and not isinstance(value, bool):
                 raise TypeError(f"{name} must be bool when bound")
+        sampling_scale = (
+            self.trajectories_per_prompt,
+            self.max_response_length,
+        )
+        if sampling_scale not in POLICY_PILOT_ACCEPTED_SAMPLING_SCALES:
+            raise ValueError(
+                "Policy sampling requires one accepted "
+                "(trajectories_per_prompt, max_response_length) scale, got "
+                f"{sampling_scale!r}; accepted="
+                f"{POLICY_PILOT_ACCEPTED_SAMPLING_SCALES!r}"
+            )
         fixed_values = {
-            "trajectories_per_prompt": (self.trajectories_per_prompt, 8),
             "temperature": (self.temperature, 1.0),
             "top_p": (self.top_p, 1.0),
             "top_k": (self.top_k, -1),
             "repetition_penalty": (self.repetition_penalty, 1.0),
             "presence_penalty": (self.presence_penalty, 0.0),
             "frequency_penalty": (self.frequency_penalty, 0.0),
-            "max_response_length": (self.max_response_length, 8192),
             "asynchronous_staleness_steps": (
                 self.asynchronous_staleness_steps,
                 0,
@@ -548,6 +561,9 @@ class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
             raise TypeError("tool_profile must be NativeToolCapabilityProfile")
         if self.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             raise ValueError("TGVF-only runs must use PolicyPilotV1Config")
+        expected_image_max_pixels = (
+            1_003_520 if self.sampling.trajectories_per_prompt == 16 else 512 * 512
+        )
         expected = {
             "schema_version": (
                 self.schema_version,
@@ -560,7 +576,7 @@ class PolicyVisualToolExperimentConfig(PolicyPilotV1Config):
                 self.tool_profile.tool_names,
             ),
             "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 4),
-            "image_max_pixels": (self.image_max_pixels, 512 * 512),
+            "image_max_pixels": (self.image_max_pixels, expected_image_max_pixels),
         }
         for name, (actual, required) in expected.items():
             if actual != required:
@@ -624,6 +640,7 @@ class PolicyTGVFStage3ExperimentConfig(PolicyPilotV1Config):
 
 
 __all__ = [
+    "POLICY_PILOT_ACCEPTED_SAMPLING_SCALES",
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
     "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA",

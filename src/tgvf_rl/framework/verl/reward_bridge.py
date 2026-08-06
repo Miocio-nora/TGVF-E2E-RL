@@ -15,7 +15,16 @@ from tgvf_rl.objectives import (
     compute_group_advantages,
     policy_pilot_v1_grpo_spec,
 )
-from tgvf_rl.rewards.schema import PILOT_REWARD_WEIGHT_PROFILES, RewardResult
+from tgvf_rl.policy.metrics import (
+    POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
+    POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT,
+)
+from tgvf_rl.rewards.schema import (
+    PILOT_REWARD_EQUATION_DEEPEYES_MATH,
+    PILOT_REWARD_WEIGHTS_BY_EQUATION,
+    RewardResult,
+    deepeyes_reward_equation_for_data_source,
+)
 from tgvf_rl.rewards.stage3_shaped import Stage3ShapedRewardResult
 from tgvf_rl.rewards.stage3_verl_adapter import (
     STAGE3_VERL_QUALITY_APPLICABLE_FIELD,
@@ -33,7 +42,9 @@ from tgvf_rl.rewards.stage3_verl_adapter import (
 from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD,
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+    PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD,
     PILOT_VERL_REWARD_COMPONENTS_FIELD,
+    PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD,
     PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD,
     PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD,
     PilotVerlTrajectoryReward,
@@ -151,8 +162,19 @@ class VerlPilotRewardBatchView:
 
 def validate_policy_pilot_reward_data_proto(
     data: object,
+    *,
+    expected_group_size: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
 ) -> VerlPilotRewardBatchView:
-    """Prove upstream used exact trajectory rewards and retained every n=8 row."""
+    """Prove upstream used exact rewards and retained every configured group."""
+
+    if (
+        type(expected_group_size) is not int
+        or expected_group_size not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT
+    ):
+        raise ValueError(
+            "unsupported reward group size; accepted="
+            f"{POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT!r}"
+        )
 
     batch, non_tensors = _data_parts(data)
     required_tensors = {
@@ -191,8 +213,10 @@ def validate_policy_pilot_reward_data_proto(
         raise ValueError("every retained trajectory requires policy-owned tokens")
 
     batch_size = responses.shape[0]
-    if batch_size == 0 or batch_size % 8:
-        raise ValueError("Policy Pilot reward batch must contain complete n=8 groups")
+    if batch_size == 0 or batch_size % expected_group_size:
+        raise ValueError(
+            f"Policy reward batch must contain complete n={expected_group_size} groups"
+        )
     exact_group_field, exact_reward_field, group_schema_field, group_schema = (
         _policy_batch_fields()
     )
@@ -232,6 +256,25 @@ def validate_policy_pilot_reward_data_proto(
         STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
     }:
         raise ValueError("trajectory reward bridge schema was changed")
+    if bridge_schema == PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION:
+        fields.update(
+            {
+                name: _row_values(
+                    _required(non_tensors, name, "DataProto.non_tensor_batch"),
+                    batch_size,
+                    name,
+                )
+                for name in (
+                    PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD,
+                    PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD,
+                )
+            }
+        )
+        fields["data_source"] = _row_values(
+            _required(non_tensors, "data_source", "DataProto.non_tensor_batch"),
+            batch_size,
+            "data_source",
+        )
     stage3_fields: dict[str, tuple[object, ...]] = {}
     if bridge_schema == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION:
         stage3_fields = {
@@ -293,6 +336,21 @@ def validate_policy_pilot_reward_data_proto(
             fields[PILOT_VERL_REWARD_COMPONENTS_FIELD][row_index],
             expected_total=float(exact_reward),
             bridge_schema=bridge_schema,
+            equation_route=(
+                fields[PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD][row_index]
+                if bridge_schema == PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+                else None
+            ),
+            applied_weights=(
+                fields[PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD][row_index]
+                if bridge_schema == PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+                else None
+            ),
+            data_source=(
+                fields["data_source"][row_index]
+                if bridge_schema == PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+                else None
+            ),
         )
         if stage3_fields:
             _validate_stage3_row_sidecars(stage3_fields, row_index=row_index)
@@ -308,8 +366,10 @@ def validate_policy_pilot_reward_data_proto(
     if len(set(trajectory_ids)) != batch_size:
         raise ValueError("reward batch contains duplicate trajectories")
     for group_uid, row_indices in grouped_rows.items():
-        if len(row_indices) != 8:
-            raise ValueError(f"reward group {group_uid!r} is not complete n=8")
+        if len(row_indices) != expected_group_size:
+            raise ValueError(
+                f"reward group {group_uid!r} is not complete n={expected_group_size}"
+            )
         group_trajectories = tuple(
             fields[TRAJECTORY_PAYLOAD_FIELD][index] for index in row_indices
         )
@@ -324,8 +384,11 @@ def validate_policy_pilot_reward_data_proto(
             fields[TRAJECTORY_PAYLOAD_FIELD][index].identity.rollout_index
             for index in row_indices
         }
-        if rollout_indices != set(range(8)):
-            raise ValueError("reward group rollout indices must be exactly 0..7")
+        if rollout_indices != set(range(expected_group_size)):
+            raise ValueError(
+                "reward group rollout indices must be exactly "
+                f"0..{expected_group_size - 1}"
+            )
     if any(len(groups) != 1 for groups in upstream_to_exact.values()) or any(
         len(groups) != 1 for groups in exact_to_upstream.values()
     ):
@@ -368,10 +431,14 @@ def bind_policy_pilot_exact_grpo_fields(
     data: object,
     *,
     diagnostic_kl_estimator: ReferenceKLEstimator,
+    expected_group_size: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
 ) -> VerlPilotRewardBatchView:
     """Attach repo-owned scores/rewards/advantages consumed by the exact loss."""
 
-    view = validate_policy_pilot_reward_data_proto(data)
+    view = validate_policy_pilot_reward_data_proto(
+        data,
+        expected_group_size=expected_group_size,
+    )
     batch, _ = _data_parts(data)
     rm_scores = batch["rm_scores"]
     response_mask = batch["response_mask"].to(dtype=torch.bool)
@@ -381,7 +448,10 @@ def bind_policy_pilot_exact_grpo_fields(
         device=rm_scores.device,
     )
     group_ids = _integer_group_ids(view.group_uids, device=rm_scores.device)
-    spec = policy_pilot_v1_grpo_spec(diagnostic_kl_estimator=diagnostic_kl_estimator)
+    spec = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=diagnostic_kl_estimator,
+        expected_group_size=expected_group_size,
+    )
     sequence_advantages = compute_group_advantages(rewards, group_ids, spec)
     advantages = sequence_advantages[:, None] * response_mask
     for name, expected in (
@@ -391,7 +461,10 @@ def bind_policy_pilot_exact_grpo_fields(
         ("returns", advantages),
     ):
         _set_or_validate_tensor(batch, name, expected)
-    return validate_policy_pilot_reward_data_proto(data)
+    return validate_policy_pilot_reward_data_proto(
+        data,
+        expected_group_size=expected_group_size,
+    )
 
 
 def _agent_loop_reward_sidecars(
@@ -484,6 +557,9 @@ def _validate_component_sidecar(
     *,
     expected_total: float,
     bridge_schema: object = PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
+    equation_route: object = None,
+    applied_weights: object = None,
+    data_source: object = None,
 ) -> None:
     try:
         components = tuple(value)  # type: ignore[arg-type]
@@ -506,14 +582,27 @@ def _validate_component_sidecar(
         }
     ):
         raise ValueError("reward component sidecar has invalid raw values")
-    accepted_totals = tuple(
-        sum(score * weight for score, weight in zip(raw, weights, strict=True))
-        for weights in PILOT_REWARD_WEIGHT_PROFILES.values()
-    )
-    if not any(
-        math.isclose(total, expected_total, rel_tol=0.0, abs_tol=1.0e-12)
-        for total in accepted_totals
-    ):
+    if equation_route not in PILOT_REWARD_WEIGHTS_BY_EQUATION:
+        raise ValueError("reward equation route sidecar is unsupported")
+    try:
+        weights = tuple(float(weight) for weight in applied_weights)  # type: ignore[union-attr]
+    except (TypeError, ValueError) as error:
+        raise ValueError("reward applied-weight sidecar is malformed") from error
+    expected_weights = PILOT_REWARD_WEIGHTS_BY_EQUATION[equation_route]
+    if weights != expected_weights:
+        raise ValueError("reward applied weights differ from its equation route")
+    if isinstance(equation_route, str) and equation_route.startswith("deepeyes-"):
+        expected_route, source_weights = deepeyes_reward_equation_for_data_source(
+            data_source
+        )
+        if equation_route != expected_route or weights != source_weights:
+            raise ValueError(
+                "DeepEyes reward equation differs from DataProto data_source"
+            )
+    if equation_route == PILOT_REWARD_EQUATION_DEEPEYES_MATH and raw[2] != 0.0:
+        raise ValueError("DeepEyes math reward cannot contain a tool component")
+    total = sum(score * weight for score, weight in zip(raw, weights, strict=True))
+    if not math.isclose(total, expected_total, rel_tol=0.0, abs_tol=1.0e-12):
         raise ValueError("reward component sidecar differs from exact total")
 
 

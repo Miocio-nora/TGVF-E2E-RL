@@ -11,17 +11,21 @@ from tgvf_rl.trajectories.schema import TrajectoryRecord
 from .pipeline import PilotRewardPipeline
 from .schema import (
     AnswerTaskKind,
+    PILOT_REWARD_WEIGHTS_BY_EQUATION,
     PILOT_REWARD_WEIGHT_PROFILES,
     RewardContext,
     RewardResult,
+    deepeyes_reward_equation_for_data_source,
     pilot_reward_weight_profile_name,
 )
 
 
-PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION = "tgvf-pilot-verl-reward-bridge-v1"
+PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION = "tgvf-pilot-verl-reward-bridge-v2"
 PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD = "tgvf_reward_bridge_schema_version"
 PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD = "tgvf_reward_pipeline_sha256"
 PILOT_VERL_REWARD_COMPONENTS_FIELD = "tgvf_reward_components"
+PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD = "tgvf_reward_equation_route"
+PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD = "tgvf_reward_applied_weights"
 PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD = "tgvf_reward_trajectory_id"
 PILOT_VERL_ANSWER_ROUTE_FIELD = "tgvf_answer_verification_route"
 PILOT_VERL_JUDGE_USAGE_FIELD = "tgvf_judge_usage"
@@ -51,6 +55,8 @@ class PilotVerlTrajectoryReward:
     rollout_index: int
     context: RewardContext
     result: RewardResult
+    equation_route: str
+    applied_weights: tuple[float, float, float]
 
     def __post_init__(self) -> None:
         if not isinstance(self.trajectory_id, str) or not self.trajectory_id:
@@ -63,7 +69,29 @@ class PilotVerlTrajectoryReward:
             raise TypeError("reward context must be RewardContext")
         if not isinstance(self.result, RewardResult):
             raise TypeError("reward result must be RewardResult")
-        _validate_pilot_reward_result(self.context, self.result)
+        if self.equation_route not in PILOT_REWARD_WEIGHTS_BY_EQUATION:
+            raise ValueError("reward equation route is unsupported")
+        if (
+            self.applied_weights
+            != PILOT_REWARD_WEIGHTS_BY_EQUATION[self.equation_route]
+        ):
+            raise ValueError("reward applied weights differ from its equation route")
+        if self.equation_route.startswith("deepeyes-"):
+            expected_route, expected_weights = deepeyes_reward_equation_for_data_source(
+                self.context.data_source
+            )
+            if (self.equation_route, self.applied_weights) != (
+                expected_route,
+                expected_weights,
+            ):
+                raise ValueError(
+                    "DeepEyes reward equation differs from trajectory data_source"
+                )
+        _validate_pilot_reward_result(
+            self.context,
+            self.result,
+            expected_weights=self.applied_weights,
+        )
 
     @property
     def total(self) -> float:
@@ -91,6 +119,8 @@ class PilotVerlTrajectoryReward:
             ),
             PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD: self.pipeline_sha256,
             PILOT_VERL_REWARD_COMPONENTS_FIELD: self.raw_components,
+            PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD: self.equation_route,
+            PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD: self.applied_weights,
             PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD: self.trajectory_id,
             PILOT_VERL_ANSWER_ROUTE_FIELD: (
                 None if verification is None else verification.route
@@ -171,10 +201,13 @@ class PilotVerlTrajectoryRewardScorer:
         result = self.pipeline.score(context)
         if result.pipeline_identity != self.pipeline.spec.pipeline_identity:
             raise ValueError("reward pipeline identity changed while scoring")
+        equation_route, applied_weights = self.pipeline.spec.equation_for_context(
+            context
+        )
         _validate_pilot_reward_result(
             context,
             result,
-            expected_weights=self.component_weights,
+            expected_weights=applied_weights,
         )
         reward = PilotVerlTrajectoryReward(
             trajectory_id=trajectory.identity.canonical_id,
@@ -182,6 +215,8 @@ class PilotVerlTrajectoryRewardScorer:
             rollout_index=trajectory.identity.rollout_index,
             context=context,
             result=result,
+            equation_route=equation_route,
+            applied_weights=applied_weights,
         )
         if context.task_kind is AnswerTaskKind.MULTIPLE_CHOICE:
             answer = result.components[0]
@@ -232,7 +267,8 @@ def _validate_pilot_reward_result(
     if expected_weights is None:
         candidate_weights = tuple(PILOT_REWARD_WEIGHT_PROFILES.values())
     else:
-        pilot_reward_weight_profile_name(expected_weights)
+        if expected_weights not in PILOT_REWARD_WEIGHTS_BY_EQUATION.values():
+            pilot_reward_weight_profile_name(expected_weights)
         candidate_weights = (expected_weights,)
     matches_profile = any(
         all(
@@ -267,7 +303,9 @@ __all__ = [
     "PILOT_VERL_JUDGE_USAGE_FIELD",
     "PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD",
     "PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION",
+    "PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD",
     "PILOT_VERL_REWARD_COMPONENTS_FIELD",
+    "PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD",
     "PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD",
     "PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD",
     "PilotRewardContextProvider",

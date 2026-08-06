@@ -40,6 +40,7 @@ from tgvf_rl.policy.horizon_extension import (
     policy_horizon_extension_from_environment,
 )
 from tgvf_rl.policy.metrics import (
+    POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
     PilotMetricsAccumulator,
     PilotOptimizerStepMetricsObservation,
     PilotMetricsSummary,
@@ -570,6 +571,9 @@ class PolicyPilotTrainerCheckpointState:
             data,
             optimizer_step=step,
             elapsed_seconds=elapsed_seconds,
+            trajectories_per_prompt=(
+                self.config.policy.sampling.trajectories_per_prompt
+            ),
         )
         summary = self.metrics_accumulator.record_optimizer_step(observation)
         self._recovery_progress = PilotOptimizerDataCursor(
@@ -1148,7 +1152,12 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 # reward check after the synchronous update, but that later
                 # check is deliberately not the mutation safety boundary.
                 validate_data_proto_integrity(batch)
-                validate_policy_pilot_reward_data_proto(batch)
+                validate_policy_pilot_reward_data_proto(
+                    batch,
+                    expected_group_size=(
+                        self._policy_checkpoint_state.config.policy.sampling.trajectories_per_prompt
+                    ),
+                )
                 self._policy_actor_update_inflight = True
                 output = super()._update_actor(batch, *args, **kwargs)
                 started = self._policy_step_started_at
@@ -1305,10 +1314,14 @@ def policy_metrics_observation_from_data_proto(
     *,
     optimizer_step: int,
     elapsed_seconds: float,
+    trajectories_per_prompt: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
 ) -> PilotOptimizerStepMetricsObservation:
     """Recover the checkpointed raw Pilot metrics from one exact update batch."""
 
-    reward_view = validate_policy_pilot_reward_data_proto(data)
+    reward_view = validate_policy_pilot_reward_data_proto(
+        data,
+        expected_group_size=trajectories_per_prompt,
+    )
     stage3_profile = (
         reward_view.reward_bridge_schema_version
         == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION
@@ -1478,6 +1491,7 @@ def policy_metrics_observation_from_data_proto(
         optimizer_step=optimizer_step,
         step_time_seconds=elapsed_seconds,
         trajectories=tuple(rows),
+        trajectories_per_prompt=trajectories_per_prompt,
     )
 
 

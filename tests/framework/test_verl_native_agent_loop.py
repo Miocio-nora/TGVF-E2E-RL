@@ -568,7 +568,9 @@ def test_upstream_malformed_tool_turn_recovers_without_executing_tool() -> None:
     assert trajectory.tool_errors[0].code == "tool_parse.missing_think_closer"
     assert factory.runtime.contexts == []
     assert len(output.response_ids) == len(output.response_mask)
-    assert all(mask == 1 for mask in output.response_mask[: len(server_manager.outputs[0])])
+    assert all(
+        mask == 1 for mask in output.response_mask[: len(server_manager.outputs[0])]
+    )
 
 
 def _turn_request(text: str, *, max_tokens: int) -> VLLMPolicyTurnRequest:
@@ -812,4 +814,52 @@ def test_bound_invocation_factory_assigns_exactly_eight_group_indices() -> None:
     assert len({item.request.identity.group_id for item in invocations}) == 1
     assert all(item.request.behavior_policy == POLICY for item in invocations)
     with pytest.raises(ReplayMismatchError, match="reused a completed n=8 group"):
+        factory.build(sampling_params=upstream_sampling, sample_fields=sample)
+
+
+def test_bound_invocation_factory_assigns_deepeyes_n16_group_indices() -> None:
+    sampling = PilotSamplingConfig(
+        trajectories_per_prompt=16,
+        max_response_length=20480,
+    ).bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(ord("!"),),
+        stop_strings=("</tool_call>",),
+        include_stop_str_in_output=True,
+        ignore_eos=False,
+    )
+    factory = BoundVerlNativeAgentLoopInvocationFactory(
+        run_id=POLICY.run_id,
+        model=ModelIdentity("qwen3_vl", "fixture", "/fixture", 151_669, SHA0),
+        sampling_contract=sampling,
+        policy_version=_CurrentPolicy(),
+        trajectory_components=_TrajectoryComponents(),
+        decoding=DECODING,
+        termination=TERMINATION,
+        rollout_master_seed=42,
+        max_model_len=32_768,
+        rollouts_per_prompt=16,
+    )
+    upstream_sampling = {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "repetition_penalty": 1.0,
+        "logprobs": True,
+    }
+    sample = {
+        "sample_id": "sample-n16",
+        "uid": "upstream-group-n16",
+        "index": 0,
+        "initial_prompt_token_ids": (10, 20, 30),
+    }
+
+    invocations = tuple(
+        factory.build(sampling_params=upstream_sampling, sample_fields=sample)
+        for _ in range(16)
+    )
+    assert tuple(item.request.identity.rollout_index for item in invocations) == tuple(
+        range(16)
+    )
+    with pytest.raises(ReplayMismatchError, match="completed n=16 group"):
         factory.build(sampling_params=upstream_sampling, sample_fields=sample)

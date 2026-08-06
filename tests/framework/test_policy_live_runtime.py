@@ -24,6 +24,9 @@ from tgvf_rl.judges import (
     TGVFVisualQualityJudgeProvider,
     tgvf_visual_quality_prompt_identity,
 )
+from tgvf_rl.policy.run_config import (
+    POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+)
 from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.schema import AnswerTaskKind
 from tgvf_rl.rewards.stage3_shaped import QualityJudgeScore
@@ -51,8 +54,13 @@ def test_live_builder_has_no_agent_loop_model_loader_surface() -> None:
 
 
 def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
-    def config(tool_weight: float) -> SimpleNamespace:
+    def config(tool_weight: float, *, deepeyes: bool = False) -> SimpleNamespace:
         return SimpleNamespace(
+            schema_version=(
+                POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
+                if deepeyes
+                else "legacy-test-schema"
+            ),
             identity_sha256=SHA,
             reward=SimpleNamespace(
                 answer_verifier="exact_match",
@@ -68,6 +76,7 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
 
     legacy = _build_reward_pipeline(config(1.2))
     answer_primary = _build_reward_pipeline(config(0.2))
+    deepeyes = _build_reward_pipeline(config(1.2, deepeyes=True))
 
     assert legacy.spec.weights == (0.8, 0.2, 1.2)
     assert legacy.spec.pipeline_identity.version == "0.8-0.2-1.2"
@@ -76,6 +85,10 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
     assert (
         answer_primary.spec.pipeline_identity.sha256
         != legacy.spec.pipeline_identity.sha256
+    )
+    assert deepeyes.spec.deepeyes_source_aware is True
+    assert (
+        deepeyes.spec.pipeline_identity.sha256 != legacy.spec.pipeline_identity.sha256
     )
 
 

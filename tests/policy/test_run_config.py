@@ -42,6 +42,7 @@ from tgvf_rl.policy.config import (
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
+    POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
     POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
     POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256,
@@ -747,7 +748,7 @@ def test_mixed_run_routes_final_all_source_t1_artifact_to_verl(
         manifest_file_sha256="1" * 64,
         content_sha256="2" * 64,
         shuffle_seed=42,
-        expected_sample_count=79_069,
+        expected_sample_count=77_541,
     )
     samples_sha256 = "3" * 64
     iteration_identity = policy_t1_mixed_iteration_identity_sha256(
@@ -767,7 +768,7 @@ def test_mixed_run_routes_final_all_source_t1_artifact_to_verl(
 kind = "{POLICY_T1_MIXED_DATASET_KIND}"
 root = {_q(dataset_root)}
 decision_stage = "final"
-sample_count = 79069
+sample_count = 77541
 manifest_file_sha256 = "{binding.manifest_file_sha256}"
 content_sha256 = "{binding.content_sha256}"
 samples_sha256 = "{samples_sha256}"
@@ -821,6 +822,147 @@ shuffle_seed = 42
     assert plan.overrides["data.custom_cls.path"] == POLICY_T1_MIXED_DATASET_MODULE_PATH
     assert plan.overrides["data.custom_cls.name"] == POLICY_T1_MIXED_DATASET_CLASS_NAME
     assert plan.overrides["data.tgvf_policy_t1_mixed"]["decision_stage"] == "final"
+
+
+def test_deepeyes_scaled_crop_schema_binds_the_exact_four_gpu_phase_one_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    external = _prepare_external_inputs(tmp_path)
+    dataset_root = tmp_path / "mixed-t1-artifact"
+    dataset_root.mkdir()
+    binding = PolicyT1MixedRuntimeBinding(
+        manifest_file_sha256="1" * 64,
+        content_sha256="2" * 64,
+        shuffle_seed=42,
+        expected_sample_count=77_541,
+    )
+    samples_sha256 = "3" * 64
+    iteration_identity = policy_t1_mixed_iteration_identity_sha256(
+        binding, samples_sha256=samples_sha256
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.verify_policy_t1_mixed_artifact_binding",
+        lambda *_args, **_kwargs: {},
+    )
+
+    text = _config_text(tmp_path, external).replace(
+        POLICY_E2E_SMOKE_CONFIG_SCHEMA,
+        POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    )
+    dataset_start = text.index("[dataset]")
+    representation_start = text.index("[representation]")
+    dataset_text = f'''[dataset]
+kind = "{POLICY_T1_MIXED_DATASET_KIND}"
+root = {_q(dataset_root)}
+decision_stage = "final"
+sample_count = 77541
+manifest_file_sha256 = "{binding.manifest_file_sha256}"
+content_sha256 = "{binding.content_sha256}"
+samples_sha256 = "{samples_sha256}"
+iteration_identity_sha256 = "{iteration_identity}"
+shuffle_seed = 42
+
+'''
+    text = text[:dataset_start] + dataset_text + text[representation_start:]
+    prompt_sha = visual_tool_prompt_identity(
+        NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=native_assistant_dialect_for_model(
+            POLICY_PILOT_V1_MODEL_NAME
+        ),
+    ).bundle_sha256
+    judge_path = (
+        Path(__file__).parents[2]
+        / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+    ).resolve()
+    judge_sha = hashlib.sha256(judge_path.read_bytes()).hexdigest()
+    text = (
+        text.replace(f'prompt_sha256 = "{SHA_A}"', f'prompt_sha256 = "{prompt_sha}"')
+        .replace('tool_profile = "tgvf_only"', 'tool_profile = "crop_only"')
+        .replace(
+            f'tool_schema_sha256 = "{TGVF_FOCUS_TOOL_SCHEMA_SHA256}"',
+            f'tool_schema_sha256 = "{IMAGE_ZOOM_IN_TOOL_SCHEMA_SHA256}"',
+        )
+        .replace(
+            'enabled_tool_names = ["tgvf_focus_tool"]',
+            'enabled_tool_names = ["image_zoom_in_tool"]',
+        )
+        .replace("image_max_pixels = 262144", "image_max_pixels = 1003520")
+        .replace("trajectories_per_prompt = 8", "trajectories_per_prompt = 16")
+        .replace("max_response_length = 8192", "max_response_length = 20480")
+        .replace(
+            'task_kind = "multiple_choice"\n'
+            'answer_verifier = "exact_match"\n'
+            f'answer_verifier_sha256 = "{POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256}"\n'
+            'judge_mode = "not_applicable"\n'
+            'judge_reason = "bounded non-formal MCQ smoke"',
+            'task_kind = "mixed"\n'
+            'answer_verifier = "rule_first_qwen25_72b"\n'
+            f'answer_verifier_sha256 = "{POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256}"\n'
+            'judge_mode = "qwen25_72b_semantic_fallback"\n'
+            'judge_reason = "DeepEyes-scaled Crop reference"\n'
+            f"judge_config_path = {_q(judge_path)}\n"
+            f'judge_config_sha256 = "{judge_sha}"',
+        )
+        .replace("learning_rate = 0.00001", "learning_rate = 0.000001")
+        .replace('name = "cosine"', 'name = "constant"')
+        .replace("warmup_steps = 1", "warmup_steps = 0")
+        .replace("total_steps = 2", "total_steps = 80")
+        .replace(
+            "minimum_learning_rate_ratio = 0.1", "minimum_learning_rate_ratio = 0.0"
+        )
+        .replace("global_prompt_batch_size = 4", "global_prompt_batch_size = 256")
+        .replace("gradient_accumulation_steps = 1", "gradient_accumulation_steps = 64")
+        .replace("max_prompt_length = 4096", "max_prompt_length = 8192")
+        .replace("98304", "524288")
+        .replace(
+            "vllm_gpu_memory_utilization = 0.5",
+            "vllm_gpu_memory_utilization = 0.45",
+        )
+        .replace("vllm_max_num_seqs = 8", "vllm_max_num_seqs = 32")
+        .replace(
+            "vllm_enable_chunked_prefill = true", "vllm_enable_chunked_prefill = false"
+        )
+        .replace("maximum_optimizer_steps = 2", "maximum_optimizer_steps = 20")
+        .replace(
+            "checkpoint_steps = [0, 1, 2]",
+            "checkpoint_steps = [0, 1, 2, 4, 8, 20]",
+        )
+        .replace('logger = ["console"]', 'logger = ["console", "wandb"]')
+    )
+    config_path = tmp_path / "deepeyes-scaled-crop.toml"
+    config_path.write_text(text, encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(config_path)
+    plan = build_policy_e2e_smoke_verl_plan(config)
+    contract = plan.overrides["actor_rollout_ref.rollout.custom"][
+        "actor_batch_contract"
+    ]
+
+    assert config.schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
+    assert isinstance(config.policy, PolicyVisualToolExperimentConfig)
+    assert config.policy.sampling.trajectories_per_prompt == 16
+    assert config.policy.sampling.max_response_length == 20_480
+    assert config.policy.image_max_pixels == 1_003_520
+    assert config.training.maximum_optimizer_steps == 20
+    assert config.scheduler.name == "constant"
+    assert config.scheduler.warmup_steps == 0
+    assert config.scheduler.total_steps == 80
+    assert config.scheduler.minimum_learning_rate_ratio == 0.0
+    assert (
+        plan.overrides["actor_rollout_ref.actor.optim.lr_scheduler_type"] == "constant"
+    )
+    assert plan.overrides["actor_rollout_ref.actor.ppo_mini_batch_size"] == 256
+    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 1
+    assert (
+        plan.overrides["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] == 16
+    )
+    assert plan.overrides["actor_rollout_ref.rollout.n"] == 16
+    assert plan.overrides["actor_rollout_ref.rollout.response_length"] == 24_576
+    assert plan.overrides["actor_rollout_ref.rollout.gpu_memory_utilization"] == 0.45
+    assert plan.overrides["actor_rollout_ref.rollout.enforce_eager"] is False
+    assert contract["upstream_internal_mini_batch_size_trajectories"] == 4_096
+    assert contract["derived_actor_forward_backward_microbatches"] == 1_024
+    assert contract["derived_gradient_accumulation_steps"] == 64
 
 
 def test_stage3_profile_binds_one_call_sidecar_and_visual_judge(

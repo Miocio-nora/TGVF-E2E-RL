@@ -109,6 +109,23 @@ def test_sampling_identity_and_trajectory_budget_fail_closed() -> None:
         sampling.as_vllm_parameters(max_tokens=8193)
 
 
+def test_sampling_accepts_only_the_isolated_deepeyes_reference_scale() -> None:
+    deepeyes = PilotSamplingConfig(
+        trajectories_per_prompt=16,
+        max_response_length=20480,
+    )
+    assert deepeyes.trajectories_per_prompt == 16
+    assert deepeyes.max_response_length == 20480
+    assert deepeyes.remaining_response_tokens(480) == 20000
+
+    for group_size, response_length in ((16, 8192), (8, 20480), (32, 20480)):
+        with pytest.raises(ValueError, match="accepted"):
+            PilotSamplingConfig(
+                trajectories_per_prompt=group_size,
+                max_response_length=response_length,
+            )
+
+
 def test_policy_pilot_v1_fixes_only_tgvf_and_exact_optimizer_envelope() -> None:
     pilot = PolicyPilotV1Config(
         sampling=_bound_sampling(),
@@ -161,6 +178,24 @@ def test_visual_tool_experiment_accepts_crop_without_relaxing_formal_pilot() -> 
     assert crop.image_max_pixels == 512 * 512
     with pytest.raises(ValueError, match="TGVF-only"):
         PolicyVisualToolExperimentConfig(sampling=_bound_sampling())
+
+    deepeyes_sampling = PilotSamplingConfig(
+        trajectories_per_prompt=16,
+        max_response_length=20480,
+    ).bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(2,),
+        stop_strings=("</tool_call>",),
+        include_stop_str_in_output=True,
+        ignore_eos=False,
+    )
+    deepeyes_crop = PolicyVisualToolExperimentConfig(
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        enabled_tool_names=("image_zoom_in_tool",),
+        image_max_pixels=1_003_520,
+        sampling=deepeyes_sampling,
+    )
+    assert deepeyes_crop.image_max_pixels == 1_003_520
 
 
 def test_stage3_tgvf_experiment_owns_an_exact_one_call_cap() -> None:

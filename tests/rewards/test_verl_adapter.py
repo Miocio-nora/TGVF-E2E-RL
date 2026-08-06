@@ -19,11 +19,21 @@ from tgvf_rl.rewards import (
 )
 from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.pipeline import PilotRewardPipeline
-from tgvf_rl.rewards.schema import NormalizationSpec
+from tgvf_rl.rewards.schema import (
+    NormalizationSpec,
+    PILOT_REWARD_DEEPEYES_MATH_WEIGHTS,
+    PILOT_REWARD_EQUATION_ANSWER_PRIMARY,
+    PILOT_REWARD_EQUATION_DEEPEYES_MATH,
+    PILOT_REWARD_EQUATION_DEEPEYES_VISUAL,
+    PILOT_REWARD_EQUATION_LEGACY,
+    PILOT_REWARD_LEGACY_WEIGHTS,
+)
 from tgvf_rl.rewards.verifiers import RuleFirstAnswerVerifier
 from tgvf_rl.rewards.verl_adapter import (
     PILOT_VERL_ANSWER_ROUTE_FIELD,
     PILOT_VERL_JUDGE_USAGE_FIELD,
+    PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD,
+    PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD,
 )
 from tgvf_rl.trajectories.schema import TrajectoryStop
 
@@ -42,18 +52,32 @@ class _ExplodingJudge:
 
 
 class _ContextProvider:
+    def __init__(
+        self,
+        *,
+        data_source: str | None = None,
+        task_kind: AnswerTaskKind = AnswerTaskKind.MULTIPLE_CHOICE,
+    ) -> None:
+        self.data_source = data_source
+        self.task_kind = task_kind
+
     def build(self, *, request, trajectory):
         assert request.identity == trajectory.identity
         return reward_context_from_trajectory(
             trajectory,
             question="Which option is correct?",
             expected_answer="fixture answer",
-            task_kind=AnswerTaskKind.MULTIPLE_CHOICE,
+            task_kind=self.task_kind,
+            data_source=self.data_source,
         )
 
 
 def _scorer(
-    *, conditional_tool_weight: float = 1.2
+    *,
+    conditional_tool_weight: float = 1.2,
+    deepeyes_source_aware: bool = False,
+    data_source: str | None = None,
+    task_kind: AnswerTaskKind = AnswerTaskKind.MULTIPLE_CHOICE,
 ) -> tuple[PilotVerlTrajectoryRewardScorer, _ExplodingJudge]:
     spec = PilotRewardSpec(
         pipeline_identity=_identity("pipeline", "1"),
@@ -61,6 +85,7 @@ def _scorer(
         format_verifier_identity=_identity("format", "3"),
         tool_verifier_identity=_identity("tool", "4"),
         conditional_tool_weight=conditional_tool_weight,
+        deepeyes_source_aware=deepeyes_source_aware,
     )
     judge = _ExplodingJudge()
     verifier = RuleFirstAnswerVerifier(
@@ -76,7 +101,10 @@ def _scorer(
     return (
         PilotVerlTrajectoryRewardScorer(
             pipeline=PilotRewardPipeline(spec, verifier),
-            context_provider=_ContextProvider(),
+            context_provider=_ContextProvider(
+                data_source=data_source,
+                task_kind=task_kind,
+            ),
         ),
         judge,
     )
@@ -102,6 +130,16 @@ def test_mcq_trajectory_reward_is_exact_and_never_calls_judge() -> None:
         "route=multiple_choice_rule;"
     )
     assert scored.reward_extra_info()["tgvf_exact_trajectory_reward"] == 0.8
+    assert scored.equation_route == PILOT_REWARD_EQUATION_LEGACY
+    assert scored.applied_weights == PILOT_REWARD_LEGACY_WEIGHTS
+    assert (
+        scored.reward_sidecars()[PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD]
+        == PILOT_REWARD_EQUATION_LEGACY
+    )
+    assert (
+        scored.reward_sidecars()[PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD]
+        == PILOT_REWARD_LEGACY_WEIGHTS
+    )
     assert judge.calls == 0
 
     usage = JudgeUsage(201, 17, 218, 0.00007916)
@@ -145,6 +183,72 @@ def test_answer_primary_profile_crosses_verl_reward_scorer() -> None:
     assert tuple(
         component.weighted_score for component in scored.result.components
     ) == pytest.approx((0.8, 0.0, 0.2))
+    assert scored.equation_route == PILOT_REWARD_EQUATION_ANSWER_PRIMARY
+    assert judge.calls == 0
+
+
+@pytest.mark.parametrize(
+    (
+        "data_source",
+        "task_kind",
+        "expected_route",
+        "expected_weights",
+        "expected_raw_tool",
+        "expected_total",
+    ),
+    (
+        pytest.param(
+            "vstar",
+            AnswerTaskKind.MULTIPLE_CHOICE,
+            PILOT_REWARD_EQUATION_DEEPEYES_VISUAL,
+            PILOT_REWARD_LEGACY_WEIGHTS,
+            1.0,
+            2.0,
+            id="visual",
+        ),
+        pytest.param(
+            "thinklite",
+            AnswerTaskKind.OPEN_VQA,
+            PILOT_REWARD_EQUATION_DEEPEYES_MATH,
+            PILOT_REWARD_DEEPEYES_MATH_WEIGHTS,
+            0.0,
+            1.2,
+            id="math",
+        ),
+    ),
+)
+def test_deepeyes_source_route_and_weights_cross_verl_reward_sidecars(
+    data_source: str,
+    task_kind: AnswerTaskKind,
+    expected_route: str,
+    expected_weights: tuple[float, float, float],
+    expected_raw_tool: float,
+    expected_total: float,
+) -> None:
+    trajectory = replace(
+        _record(tool_call_count=1).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    request = SimpleNamespace(identity=trajectory.identity)
+    scorer, judge = _scorer(
+        deepeyes_source_aware=True,
+        data_source=data_source,
+        task_kind=task_kind,
+    )
+
+    scored = scorer.score(request=request, trajectory=trajectory)
+    sidecars = scored.reward_sidecars()
+
+    assert scored.total == pytest.approx(expected_total)
+    assert scored.raw_components[-1] == (
+        "conditional_tool_reward",
+        expected_raw_tool,
+    )
+    assert scored.equation_route == expected_route
+    assert scored.applied_weights == expected_weights
+    assert sidecars[PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD] == expected_route
+    assert sidecars[PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD] == expected_weights
     assert judge.calls == 0
 
 

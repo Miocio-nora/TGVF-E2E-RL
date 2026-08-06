@@ -11,6 +11,7 @@ from tgvf_rl.contracts.errors import ContractUnsetError, IdentityMismatchError
 from .schema import (
     AnswerVerifier,
     NormalizationSpec,
+    PILOT_REWARD_EQUATION_DEEPEYES_MATH,
     PilotRewardSpec,
     RewardComponent,
     RewardComponentResult,
@@ -97,23 +98,31 @@ class PilotRewardPipeline:
             and bool(context.candidate_answer.strip())
         )
         format_score = 0.0 if format_valid else -1.0
-        conditional_tool_score = float(
-            verification.correct
-            and context.successful_tgvf_observation_count >= 1
-        )
+        equation_route, weights = self.spec.equation_for_context(context)
+        answer_weight, format_weight, conditional_tool_weight = weights
+        deepeyes_math_route = equation_route == PILOT_REWARD_EQUATION_DEEPEYES_MATH
+        if deepeyes_math_route:
+            conditional_tool_score = 0.0
+        else:
+            conditional_tool_score = float(
+                verification.correct and context.successful_tgvf_observation_count >= 1
+            )
         error_summary = ",".join(context.tool_error_codes) or "none"
         components = (
             RewardComponentResult(
                 name="answer_reward",
                 raw_score=answer_score,
-                weighted_score=self.spec.answer_weight * answer_score,
+                weighted_score=answer_weight * answer_score,
                 verifier_identity=verification.verifier_identity,
-                evidence=f"route={verification.route}; {verification.evidence}",
+                evidence=(
+                    f"route={verification.route}; {verification.evidence}; "
+                    f"equation={equation_route}"
+                ),
             ),
             RewardComponentResult(
                 name="format_reward",
                 raw_score=format_score,
-                weighted_score=self.spec.format_weight * format_score,
+                weighted_score=format_weight * format_score,
                 verifier_identity=self.spec.format_verifier_identity,
                 evidence=(
                     f"protocol_valid={context.protocol_valid}; "
@@ -123,9 +132,7 @@ class PilotRewardPipeline:
             RewardComponentResult(
                 name="conditional_tool_reward",
                 raw_score=conditional_tool_score,
-                weighted_score=(
-                    self.spec.conditional_tool_weight * conditional_tool_score
-                ),
+                weighted_score=(conditional_tool_weight * conditional_tool_score),
                 verifier_identity=self.spec.tool_verifier_identity,
                 evidence=(
                     f"answer_correct={verification.correct}; "

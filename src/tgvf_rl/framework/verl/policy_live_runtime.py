@@ -68,6 +68,9 @@ from tgvf_rl.protocol.schema import (
 )
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.trajectory_audit import PolicyTrajectoryAuditWriter
+from tgvf_rl.policy.run_config import (
+    POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+)
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
 )
@@ -1084,6 +1087,10 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         reward.format_weight,
         reward.conditional_tool_weight,
     )
+    deepeyes_source_aware = (
+        getattr(config, "schema_version", None)
+        == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
+    )
     pilot_reward_weight_profile_name(reward_weights)
     answer_identity, verifier = _build_rule_first_answer_verifier(config)
     format_identity = _artifact_identity(
@@ -1109,6 +1116,19 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
     # experimental equation in the identity carried through the reward bridge.
     if reward_weights != PILOT_REWARD_LEGACY_WEIGHTS:
         pipeline_identity_payload["weights"] = reward_weights
+    if deepeyes_source_aware:
+        pipeline_identity_payload["source_equations"] = {
+            "math_sources": {
+                "sources": ["thinklite", "thinklite_eureka", "xince"],
+                "equation": "1.2*answer+0.4*format",
+            },
+            "visual_sources": {
+                "sources": ["arxivqa", "chart", "vl_agent", "vstar"],
+                "equation": "0.8*answer+0.2*format+1.2*correct_and_tool",
+            },
+            "unknown_source_behavior": "fail_closed",
+            "format_contract": "qwen3-native-protocol-adapted",
+        }
     pipeline_identity = _artifact_identity(
         "policy-reward",
         "pilot-reward-equation",
@@ -1124,6 +1144,7 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
             answer_weight=reward_weights[0],
             format_weight=reward_weights[1],
             conditional_tool_weight=reward_weights[2],
+            deepeyes_source_aware=deepeyes_source_aware,
         ),
         verifier,
     )

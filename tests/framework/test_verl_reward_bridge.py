@@ -29,9 +29,11 @@ from tgvf_rl.policy.batch import (
     POLICY_PILOT_V1_GROUP_BATCH_SCHEMA,
 )
 from tgvf_rl.rewards.verl_adapter import (
+    PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD,
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD,
     PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION,
     PILOT_VERL_REWARD_COMPONENTS_FIELD,
+    PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD,
     PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD,
     PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD,
 )
@@ -45,6 +47,15 @@ from tgvf_rl.rewards.stage3_verl_adapter import (
     STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD,
     STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD,
     STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD,
+)
+from tgvf_rl.rewards.schema import (
+    PILOT_REWARD_ANSWER_PRIMARY_WEIGHTS,
+    PILOT_REWARD_DEEPEYES_MATH_WEIGHTS,
+    PILOT_REWARD_EQUATION_ANSWER_PRIMARY,
+    PILOT_REWARD_EQUATION_DEEPEYES_MATH,
+    PILOT_REWARD_EQUATION_DEEPEYES_VISUAL,
+    PILOT_REWARD_EQUATION_LEGACY,
+    PILOT_REWARD_LEGACY_WEIGHTS,
 )
 from tgvf_rl.trajectories.schema import TrajectoryIdentity, TrajectoryStop
 
@@ -68,12 +79,28 @@ def _components(total: float) -> tuple[tuple[str, float], ...]:
     )
 
 
-def _real_data_proto(*, incomplete: bool = False, tool_weight: float = 1.2):
+def _real_data_proto(
+    *,
+    incomplete: bool = False,
+    tool_weight: float = 1.2,
+    group_size: int = 8,
+    equation_route: str | None = None,
+):
     pytest.importorskip("verl")
     from verl.protocol import DataProto
 
     correct_with_tool = 0.8 + tool_weight
-    rewards = [
+    if equation_route is None:
+        equation_route = {
+            1.2: PILOT_REWARD_EQUATION_LEGACY,
+            0.2: PILOT_REWARD_EQUATION_ANSWER_PRIMARY,
+        }[tool_weight]
+    applied_weights = {
+        PILOT_REWARD_EQUATION_LEGACY: PILOT_REWARD_LEGACY_WEIGHTS,
+        PILOT_REWARD_EQUATION_ANSWER_PRIMARY: PILOT_REWARD_ANSWER_PRIMARY_WEIGHTS,
+        PILOT_REWARD_EQUATION_DEEPEYES_VISUAL: PILOT_REWARD_LEGACY_WEIGHTS,
+    }[equation_route]
+    reward_pattern = [
         0.8,
         0.0,
         -0.2,
@@ -83,14 +110,16 @@ def _real_data_proto(*, incomplete: bool = False, tool_weight: float = 1.2):
         -0.2,
         correct_with_tool,
     ]
-    rewards.extend([0.8] * (7 if incomplete else 8))
+    assert group_size % len(reward_pattern) == 0
+    rewards = reward_pattern * (group_size // len(reward_pattern))
+    rewards.extend([0.8] * (group_size - 1 if incomplete else group_size))
     trajectories = []
     exact_groups = []
     upstream_groups = []
     components = []
     for row_index, reward in enumerate(rewards):
-        group_index = row_index // 8
-        rollout_index = row_index % 8
+        group_index = row_index // group_size
+        rollout_index = row_index % group_size
         exact_group = f"exact-group-{group_index}"
         upstream_group = f"upstream-group-{group_index}"
         template = _record(suffix=0, tool_call_count=0).trajectory_payload
@@ -123,7 +152,10 @@ def _real_data_proto(*, incomplete: bool = False, tool_weight: float = 1.2):
 
     batch_size = len(rewards)
     prompts = torch.tensor(
-        [[11, 12] if row_index < 8 else [21, 22] for row_index in range(batch_size)],
+        [
+            [11, 12] if row_index < group_size else [21, 22]
+            for row_index in range(batch_size)
+        ],
         dtype=torch.int64,
     )
     responses = torch.arange(batch_size * 4, dtype=torch.int64).reshape(batch_size, 4)
@@ -142,6 +174,7 @@ def _real_data_proto(*, incomplete: bool = False, tool_weight: float = 1.2):
         },
         non_tensors={
             "uid": upstream_groups,
+            "data_source": ["vstar"] * batch_size,
             PILOT_EXACT_GROUP_UID_FIELD: exact_groups,
             PILOT_EXACT_REWARD_FIELD: rewards,
             PILOT_GROUP_BATCH_SCHEMA_FIELD: [POLICY_PILOT_V1_GROUP_BATCH_SCHEMA]
@@ -156,6 +189,8 @@ def _real_data_proto(*, incomplete: bool = False, tool_weight: float = 1.2):
             * batch_size,
             PILOT_VERL_REWARD_PIPELINE_SHA256_FIELD: [_PIPELINE_SHA256] * batch_size,
             PILOT_VERL_REWARD_COMPONENTS_FIELD: components,
+            PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD: [equation_route] * batch_size,
+            PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD: [applied_weights] * batch_size,
             PILOT_VERL_REWARD_TRAJECTORY_ID_FIELD: trajectory_ids,
             TRAJECTORY_ID_FIELD: trajectory_ids,
             TRAJECTORY_PAYLOAD_FIELD: trajectories,
@@ -205,6 +240,45 @@ def test_real_dataproto_binds_repo_owned_exact_grpo_fields() -> None:
     assert torch.equal(data.batch["advantages"], expected)
 
 
+def test_real_dataproto_binds_deepeyes_n16_groups() -> None:
+    data = _real_data_proto(group_size=16)
+
+    view = bind_policy_pilot_exact_grpo_fields(
+        data,
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE,
+        expected_group_size=16,
+    )
+
+    assert len(view.trajectory_ids) == 32
+    assert view.group_uids[:16] == ("exact-group-0",) * 16
+    assert view.group_uids[16:] == ("exact-group-1",) * 16
+    assert torch.equal(
+        data.batch["advantages"][16:],
+        torch.zeros_like(data.batch["advantages"][16:]),
+    )
+    with pytest.raises(ValueError, match="complete n=16"):
+        validate_policy_pilot_reward_data_proto(
+            _real_data_proto(group_size=16, incomplete=True),
+            expected_group_size=16,
+        )
+    assert torch.equal(
+        data.batch["advantages"][:, 2:],
+        torch.zeros_like(data.batch["advantages"][:, 2:]),
+    )
+
+    spec = policy_pilot_v1_grpo_spec(
+        diagnostic_kl_estimator=ReferenceKLEstimator.K3_LOW_VARIANCE,
+        expected_group_size=16,
+    )
+    expected_sequences = compute_group_advantages(
+        torch.tensor(view.rewards, dtype=torch.float32),
+        torch.tensor([0] * 16 + [1] * 16, dtype=torch.int64),
+        spec,
+    )
+    expected = expected_sequences[:, None] * data.batch["response_mask"].bool()
+    assert torch.equal(data.batch["advantages"], expected)
+
+
 def test_answer_primary_reward_crosses_dataproto_sidecar_gate() -> None:
     data = _real_data_proto(tool_weight=0.2)
 
@@ -212,6 +286,66 @@ def test_answer_primary_reward_crosses_dataproto_sidecar_gate() -> None:
 
     assert view.rewards[3] == pytest.approx(1.0)
     assert view.rewards[7] == pytest.approx(1.0)
+
+
+def test_deepeyes_thinklite_math_reward_crosses_dataproto_sidecar_gate() -> None:
+    data = _real_data_proto(
+        group_size=16,
+        equation_route=PILOT_REWARD_EQUATION_DEEPEYES_VISUAL,
+    )
+    for row_index, reward in ((0, 1.2), (2, -0.4)):
+        data.non_tensor_batch["data_source"][row_index] = "thinklite"
+        data.non_tensor_batch[PILOT_EXACT_REWARD_FIELD][row_index] = reward
+        data.non_tensor_batch[PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD][row_index] = (
+            PILOT_REWARD_EQUATION_DEEPEYES_MATH
+        )
+        data.non_tensor_batch[PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD][row_index] = (
+            PILOT_REWARD_DEEPEYES_MATH_WEIGHTS
+        )
+        data.batch["rm_scores"][row_index, -1] = reward
+
+    view = validate_policy_pilot_reward_data_proto(
+        data,
+        expected_group_size=16,
+    )
+
+    assert view.rewards[0] == pytest.approx(1.2)
+    assert view.rewards[2] == pytest.approx(-0.4)
+    assert (
+        data.non_tensor_batch[PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD][1]
+        == PILOT_REWARD_EQUATION_DEEPEYES_VISUAL
+    )
+
+
+def test_deepeyes_dataproto_rejects_route_that_differs_from_data_source() -> None:
+    data = _real_data_proto(
+        group_size=16,
+        equation_route=PILOT_REWARD_EQUATION_DEEPEYES_VISUAL,
+    )
+    data.non_tensor_batch["data_source"][0] = "thinklite"
+
+    with pytest.raises(ValueError, match="differs from DataProto data_source"):
+        validate_policy_pilot_reward_data_proto(data, expected_group_size=16)
+
+
+def test_deepeyes_math_dataproto_rejects_nonzero_tool_component() -> None:
+    data = _real_data_proto(
+        group_size=16,
+        equation_route=PILOT_REWARD_EQUATION_DEEPEYES_VISUAL,
+    )
+    row_index = 3
+    data.non_tensor_batch["data_source"][row_index] = "thinklite"
+    data.non_tensor_batch[PILOT_VERL_REWARD_EQUATION_ROUTE_FIELD][row_index] = (
+        PILOT_REWARD_EQUATION_DEEPEYES_MATH
+    )
+    data.non_tensor_batch[PILOT_VERL_REWARD_APPLIED_WEIGHTS_FIELD][row_index] = (
+        PILOT_REWARD_DEEPEYES_MATH_WEIGHTS
+    )
+    data.non_tensor_batch[PILOT_EXACT_REWARD_FIELD][row_index] = 1.2
+    data.batch["rm_scores"][row_index, -1] = 1.2
+
+    with pytest.raises(ValueError, match="cannot contain a tool component"):
+        validate_policy_pilot_reward_data_proto(data, expected_group_size=16)
 
 
 def test_stage3_five_component_reward_crosses_dataproto_sidecar_gate() -> None:

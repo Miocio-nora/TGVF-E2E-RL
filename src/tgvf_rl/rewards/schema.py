@@ -14,12 +14,45 @@ from tgvf_rl.judges.base import JudgeUsage
 
 PILOT_REWARD_LEGACY_WEIGHTS = (0.8, 0.2, 1.2)
 PILOT_REWARD_ANSWER_PRIMARY_WEIGHTS = (0.8, 0.2, 0.2)
+PILOT_REWARD_DEEPEYES_MATH_WEIGHTS = (1.2, 0.4, 0.0)
+PILOT_REWARD_EQUATION_LEGACY = "pilot-legacy-v1"
+PILOT_REWARD_EQUATION_ANSWER_PRIMARY = "pilot-answer-primary-v1"
+PILOT_REWARD_EQUATION_DEEPEYES_VISUAL = "deepeyes-visual-v1"
+PILOT_REWARD_EQUATION_DEEPEYES_MATH = "deepeyes-math-v1"
 PILOT_REWARD_WEIGHT_PROFILES = MappingProxyType(
     {
         "legacy": PILOT_REWARD_LEGACY_WEIGHTS,
         "answer-primary": PILOT_REWARD_ANSWER_PRIMARY_WEIGHTS,
     }
 )
+PILOT_REWARD_WEIGHTS_BY_EQUATION = MappingProxyType(
+    {
+        PILOT_REWARD_EQUATION_LEGACY: PILOT_REWARD_LEGACY_WEIGHTS,
+        PILOT_REWARD_EQUATION_ANSWER_PRIMARY: PILOT_REWARD_ANSWER_PRIMARY_WEIGHTS,
+        PILOT_REWARD_EQUATION_DEEPEYES_VISUAL: PILOT_REWARD_LEGACY_WEIGHTS,
+        PILOT_REWARD_EQUATION_DEEPEYES_MATH: PILOT_REWARD_DEEPEYES_MATH_WEIGHTS,
+    }
+)
+
+_DEEPEYES_VISUAL_DATA_SOURCES = frozenset({"vstar", "vl_agent", "chart", "arxivqa"})
+_DEEPEYES_MATH_DATA_SOURCES = frozenset({"thinklite", "thinklite_eureka", "xince"})
+
+
+def deepeyes_reward_equation_for_data_source(
+    data_source: object,
+) -> tuple[str, tuple[float, float, float]]:
+    """Resolve the executable DeepEyes equation from its exact dataset source."""
+
+    if data_source in _DEEPEYES_VISUAL_DATA_SOURCES:
+        route = PILOT_REWARD_EQUATION_DEEPEYES_VISUAL
+    elif data_source in _DEEPEYES_MATH_DATA_SOURCES:
+        route = PILOT_REWARD_EQUATION_DEEPEYES_MATH
+    else:
+        raise ValueError(
+            "DeepEyes source-aware reward received an unsupported data_source: "
+            f"{data_source!r}"
+        )
+    return route, PILOT_REWARD_WEIGHTS_BY_EQUATION[route]
 
 
 def pilot_reward_weight_profile_name(weights: tuple[float, float, float], /) -> str:
@@ -152,8 +185,11 @@ class PilotRewardSpec:
     answer_weight: float = 0.8
     format_weight: float = 0.2
     conditional_tool_weight: float = 1.2
+    deepeyes_source_aware: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.deepeyes_source_aware) is not bool:
+            raise TypeError("deepeyes_source_aware must be bool")
         pilot_reward_weight_profile_name(
             (
                 self.answer_weight,
@@ -173,6 +209,23 @@ class PilotRewardSpec:
     @property
     def weight_profile_name(self) -> str:
         return pilot_reward_weight_profile_name(self.weights)
+
+    def weights_for_context(self, context: RewardContext) -> tuple[float, float, float]:
+        return self.equation_for_context(context)[1]
+
+    def equation_for_context(
+        self, context: RewardContext
+    ) -> tuple[str, tuple[float, float, float]]:
+        if not isinstance(context, RewardContext):
+            raise TypeError("context must be RewardContext")
+        if not self.deepeyes_source_aware:
+            route = {
+                "legacy": PILOT_REWARD_EQUATION_LEGACY,
+                "answer-primary": PILOT_REWARD_EQUATION_ANSWER_PRIMARY,
+            }[self.weight_profile_name]
+            return route, self.weights
+
+        return deepeyes_reward_equation_for_data_source(context.data_source)
 
 
 class RewardComponent(Protocol):
