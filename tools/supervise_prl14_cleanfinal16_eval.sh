@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
+eval_repo=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration
+python_bin="$main_root/.venv312/bin/python"
+vllm_bin="$main_root/.venv312/bin/vllm"
+train_root="$main_root/artifacts/policy/PRL-14-A-qwen3-instruct-grpo-bs16-n16-native-crop-t1-cleanfinal-16step-ws8"
+eval_root="$main_root/artifacts/evaluation/PRL14-A-CoreDev2511-cleanfinal-step0-step8-step16-v1"
+task_manifest="$main_root/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl"
+source_root=/nvmesv/dredvpn009/datasets/benchmarks/coredev_2511_vlmevalkit_7055d301_v1
+mathverse_json=/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json
+contract="$eval_repo/configs/policy/runs/prl_13_a_qwen3_instruct_grpo_bs256_n16_native_crop_t1_stratified_80step_gpu0123.toml"
+run_id=T20260809-PRL14-cleanfinal16
+judge_url=http://127.0.0.1:8012/v1
+judge_pid=
+
+mkdir -p "$eval_root/logs" "$eval_root/runtime"
+exec > >(tee -a "$eval_root/logs/supervisor.log") 2>&1
+
+cleanup() {
+  if [[ -n "$judge_pid" ]] && kill -0 "$judge_pid" 2>/dev/null; then
+    kill "$judge_pid" 2>/dev/null || true
+    wait "$judge_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+while [[ ! -s "$train_root/completion.json" ]]; do
+  if ! pgrep -f 'tools/launch_prl14_cleanfinal16.py --launch' >/dev/null; then
+    echo "training exited without completion.json"
+    exit 1
+  fi
+  sleep 30
+done
+
+step_source() {
+  case "$1" in
+    8) printf '%s\n' "$train_root/permanent-checkpoints/global_step_8" ;;
+    16) printf '%s\n' "$train_root/checkpoints/global_step_16" ;;
+    *) return 1 ;;
+  esac
+}
+
+for step in 8 16; do
+  source_path=$(step_source "$step")
+  "$python_bin" "$eval_repo/tools/materialize_prl13_full_model.py" materialize \
+    --run-config "$contract" \
+    --optimizer-step "$step" \
+    --source "$source_path" \
+    --runtime-fsdp-world-size 8 \
+    --snapshot-manifest "$eval_root/runtime/step${step}-snapshot.json" \
+    --receipt "$eval_root/runtime/step${step}-receipt.json" \
+    > "$eval_root/logs/materialize-step${step}.json"
+done
+
+for step in 8 16; do
+  if [[ "$step" == 8 ]]; then
+    gpu_ids=(0 1 2 3)
+  else
+    gpu_ids=(4 5 6 7)
+  fi
+  arm_root="$eval_root/step${step}"
+  mkdir -p "$arm_root"
+  "$python_bin" "$eval_repo/tools/materialize_full_model_policy_benchmark_config.py" \
+    --evaluation-id "PRL14-A-COREDEV2511-CLEANFINAL-STEP${step}-V1" \
+    --policy-config "$contract" \
+    --snapshot-manifest "$eval_root/runtime/step${step}-snapshot.json" \
+    --materialization-receipt "$eval_root/runtime/step${step}-receipt.json" \
+    --expected-optimizer-step "$step" \
+    --tasks "$task_manifest" \
+    --expected-task-count 2511 \
+    --expected-single-image-count 2240 \
+    --output-root "$arm_root" \
+    --config-output "$arm_root/config.json" \
+    --inference-concurrency-per-gpu 8 \
+    --max-model-len 32768 \
+    --max-num-batched-tokens 32768 \
+    --no-enable-chunked-prefill \
+    --gpu-memory-utilization 0.8 \
+    --gpu-ids "${gpu_ids[@]}" \
+    > "$eval_root/logs/config-step${step}.json"
+  "$python_bin" "$eval_repo/tools/run_policy_benchmark.py" \
+    --config "$arm_root/config.json" --mode prepare \
+    > "$eval_root/logs/prepare-step${step}.json"
+  "$python_bin" "$eval_repo/tools/run_policy_benchmark.py" \
+    --config "$arm_root/config.json" --mode validate --world-size 4 \
+    > "$eval_root/logs/validate-step${step}.json"
+done
+
+run_inference_arm() {
+  local step=$1
+  local gpu_base=$2
+  local arm_root="$eval_root/step${step}"
+  local pids=()
+  for rank in 0 1 2 3; do
+    local gpu=$((gpu_base + rank))
+    env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES="$gpu" \
+      "$python_bin" "$eval_repo/tools/run_policy_benchmark.py" \
+      --config "$arm_root/config.json" --mode worker \
+      --rank "$rank" --world-size 4 \
+      > "$eval_root/logs/step${step}-rank${rank}.log" 2>&1 &
+    pids+=("$!")
+  done
+  local failed=0
+  for pid in "${pids[@]}"; do
+    wait "$pid" || failed=1
+  done
+  if [[ "$failed" != 0 ]]; then
+    echo "step${step} inference worker failed"
+    return 1
+  fi
+  "$python_bin" "$eval_repo/tools/run_policy_benchmark.py" \
+    --config "$arm_root/config.json" --mode status --world-size 4 \
+    > "$eval_root/logs/status-step${step}.json"
+}
+
+run_inference_arm 8 0 &
+step8_pid=$!
+run_inference_arm 16 4 &
+step16_pid=$!
+wait "$step8_pid"
+wait "$step16_pid"
+
+for step in 8 16; do
+  scoring_root="$eval_root/step${step}/scoring/coredev-official-v1"
+  "$python_bin" "$eval_repo/tools/materialize_policy_coredev_scoring.py" \
+    --inference-root "$eval_root/step${step}/inference" \
+    --tasks "$task_manifest" \
+    --source-root "$source_root" \
+    --output-root "$scoring_root" \
+    --evaluation-id "PRL14-A-COREDEV2511-CLEANFINAL-STEP${step}-V1" \
+    --run-id "$run_id" \
+    --mathverse-source-json "$mathverse_json" \
+    > "$eval_root/logs/scoring-materialize-step${step}.json"
+done
+
+env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1 \
+  VLLM_ATTENTION_BACKEND=TRITON_ATTN \
+  "$vllm_bin" serve /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct \
+  --served-model-name Qwen2.5-72B-Instruct \
+  --host 127.0.0.1 --port 8012 \
+  --dtype bfloat16 --tensor-parallel-size 2 \
+  --max-model-len 32768 --gpu-memory-utilization 0.85 \
+  --max-num-seqs 64 --generation-config vllm --enable-prefix-caching \
+  > "$eval_root/logs/judge-qwen25-72b.log" 2>&1 &
+judge_pid=$!
+
+for _ in $(seq 1 120); do
+  if curl -fsS --max-time 2 "$judge_url/models" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$judge_pid" 2>/dev/null; then
+    echo "Qwen2.5-72B judge exited during startup"
+    exit 1
+  fi
+  sleep 5
+done
+curl -fsS --max-time 5 "$judge_url/models" >/dev/null
+
+datasets=(VStarBench HRBench4K BLINK OCRBench_v2 MMMU_Pro_10c MathVista_MINI MathVerse_MINI)
+for step in 8 16; do
+  score_pids=()
+  for dataset in "${datasets[@]}"; do
+    work_dir="$eval_root/step${step}/scoring/coredev-official-v1/$dataset"
+    env OPENAI_API_KEY=EMPTY \
+      "$python_bin" "$eval_repo/tools/run_coredev_2511_vlmevalkit.py" \
+      --data "$dataset" --model Qwen3-VL-8B-Instruct \
+      --work-dir "$work_dir" --mode eval --reuse \
+      --judge Qwen2.5-72B-Instruct --judge-base-url "$judge_url" \
+      --judge-key EMPTY --judge-api-nproc 4 --judge-retry 6 \
+      --judge-timeout 600 \
+      > "$eval_root/logs/score-step${step}-${dataset}.log" 2>&1 &
+    score_pids+=("$!")
+  done
+  failed=0
+  for pid in "${score_pids[@]}"; do
+    wait "$pid" || failed=1
+  done
+  if [[ "$failed" != 0 ]]; then
+    echo "step${step} scoring failed"
+    exit 1
+  fi
+done
+
+touch "$eval_root/evaluation-complete"
+echo "PRL14 step8/16 inference and scoring complete; step0 uses the prior clean paired baseline."
