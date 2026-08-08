@@ -1,0 +1,582 @@
+\documentclass[UTF8,twocolumn,10pt,a4paper]{ctexart}
+
+\usepackage[a4paper,left=1.55cm,right=1.55cm,top=1.45cm,bottom=1.60cm,columnsep=0.66cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\IfFontExistsTF{Noto Serif CJK SC}{\setCJKmainfont{Noto Serif CJK SC}}{}
+\IfFontExistsTF{Noto Sans CJK SC}{\setCJKsansfont{Noto Sans CJK SC}}{}
+\IfFontExistsTF{Noto Sans Mono CJK SC}{\setCJKmonofont{Noto Sans Mono CJK SC}}{}
+
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,tabularx,array,multirow}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{balance}
+\usepackage{fvextra}
+\usepackage[hidelinks]{hyperref}
+
+\hypersetup{
+  pdftitle={TGVF Policy RL Current Run Report: Crop Reproduction and TGVF Reward Plan},
+  pdfauthor={TGVF Project},
+  pdfsubject={Current Qwen3-VL-Instruct policy-RL configuration, T1 data preparation, Crop and TGVF protocols, rewards, judges, and evaluation plan},
+  pdfkeywords={TGVF, Crop, GRPO, Qwen3-VL-Instruct, DeepEyes, data selection, reward, judge}
+}
+
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0.12em}
+\renewcommand{\baselinestretch}{1.015}
+\setlength{\abovedisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\belowdisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\abovedisplayshortskip}{2.4pt plus 1pt}
+\setlength{\belowdisplayshortskip}{2.4pt plus 1pt minus 1pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\setlength{\emergencystretch}{1.5em}
+\ctexset{
+  section={beforeskip=0.72ex plus .2ex,afterskip=0.34ex plus .1ex,format=\large\bfseries},
+  subsection={beforeskip=0.58ex plus .2ex,afterskip=0.26ex plus .1ex,format=\normalsize\bfseries},
+  paragraph={beforeskip=0.45ex plus .15ex,afterskip=0.55em,runin=true,format=\normalsize\bfseries}
+}
+\setlist{nosep,leftmargin=1.45em}
+\allowdisplaybreaks
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+\newcommand{\TGVF}{\textsf{TGVF}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\pp}{\,\mathrm{pp}}
+\newcommand{\Rcrop}{R_{\mathrm{crop}}}
+\newcommand{\Rtgvf}{R_{\mathrm{tgvf}}}
+
+\title{\vspace{-1.0em}\textbf{TGVF Policy RL 当前实验报告\newline
+Instruct 数据筛选、Crop 复现与 TGVF Reward 路线}}
+\author{TGVF Project}
+\date{运行快照、实验合同与后续计划，2026 年 8 月 8 日}
+
+\begin{document}
+\maketitle
+\vspace{-1.55em}
+
+\begin{abstract}
+本文冻结当前 Policy RL 阶段的真实实验状态，并把 Crop 与 \TGVF{} 两条线分开记录。当前正在运行的不是 RP66/\TGVF{}，而是基于 Qwen3-VL-8B-Instruct 的 PRL-13-A native Crop/DeepEyes fidelity efficacy gate：8 张 B200、全参数训练（vision/projector/language 均可训练）、GRPO、prompt batch 16、每 prompt 16 条 rollout，即每个 optimizer step 256 条 trajectory；本次只跑到 step 8，不是 run ID 中名义的 BS256$\times$80 正式训练。
+
+训练数据来自 Instruct 模型的完整 T1 筛选：271,842 个候选各用原图无工具生成 8 次，保留天然正确次数在 1--7 之间的样本，最终得到 77,541 条 VStar/ArxivQA/ThinkLite 混合数据。当前 Crop visual reward 为 $0.8A+0.2F+1.2C$；每条 VStar/ArxivQA trajectory 的 $A$ 均由 text-only Qwen2.5-72B-Instruct 判定，Crop 工具自身不使用 VLM judge。ThinkLite 使用 $1.2A+0.4F$，先走规则 math verifier，必要时使用同一 72B fallback。
+
+报告同时给出未来 \TGVF{} arm 的 prompt、RP66 representation 绑定和 Stage3-shaped reward：$2A_{\rm gated}+T+F_{\rm focus}+G_{\rm grounding}+P$。其中答案判定仍是 rule-first/Qwen2.5-72B；只有 $F/G$ 需要 Qwen3-VL-32B-Thinking 视觉 judge。已完成的 PRL-09-R3 因关闭 $F/G$ 而没有加载 32B，因此不能写成“完整 shaped reward 已验证有效”。截至本文快照，当前 Crop 小门控运行数值稳定、无 OOM/aborted/judge failure，但 on-policy batch reward 不能替代固定 step-0 对 step-8 benchmark；是否提升仍须等待配对评测。
+\end{abstract}
+
+\noindent\textbf{关键词：} Policy RL；Crop；TGVF；GRPO；Qwen3-VL-Instruct；T1 数据筛选；reward judge
+
+\section{首页结论与范围}
+
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.965\textwidth}{\small
+\textbf{Current experiment contract.}
+当前活动 run 是 \textbf{PRL-13-A Crop efficacy gate}，不是 \TGVF{} run。基础模型为 Qwen3-VL-8B-Instruct；当前 override 为 BS16$\times$n16$\times$8 steps；8 GPU；full tuning；LR $10^{-6}$。名义 parent contract 才是 BS256$\times$n16$\times$80，不能把两者混写。VStar/ArxivQA 的 final-answer correctness 使用 \textbf{text-only Qwen2.5-72B-Instruct}，没有加载 32B VLM。\TGVF{} 里的 \textbf{Qwen3-VL-32B-Thinking} 只属于完整 focus/grounding quality reward，当前 Crop 不使用它。当前训练 reward、工具率和梯度均为健康性证据；只有固定 step-0/step-8 evaluation 才能回答“是否提升准确率”。}}
+\caption{本文最重要的身份边界。}
+\label{fig:contract}
+\end{figure*}
+
+本文回答四个问题：当前到底在跑什么；训练数据如何得到；Crop 和 \TGVF{} 分别看到什么 prompt、得到什么 reward；本次小门控通过后如何做可扩展验证。历史 Thinking-model、decoder-LoRA、错误 Crop 坐标和 RP66 小 batch 结果只作为诊断背景，不与当前 full-tuning Crop 直接混合比较。
+
+\begin{table}[t]
+\centering
+\caption{两条方法线与当前状态。}
+\label{tab:lines}
+\small
+\begin{tabularx}{\columnwidth}{lYY}
+\toprule
+线 & 当前角色 & 状态 \\
+\midrule
+Crop & DeepEyes positive control；验证 full vision-policy RL 是否能在小规模产生正确方向 & PRL-13-A step-8 gate 正在/刚完成运行，待固定评测 \\
+\TGVF{} & 学习何时请求 target-conditioned $D$，并利用 image+$D$ & 旧小 LoRA 与 PRL-09 已完成；full-scale matched arm 尚未启动 \\
+Representation & 为 \TGVF{} 工具提供冻结 Adapter & RP66 已证明 additive utility；RP67 只宜作独立表示消融 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{当前 PRL-13-A 的真实配置}
+
+\subsection{运行身份}
+
+当前 launcher 为 \path{/tmp/launch_prl13_formal_micro32_to8.py}；输出目录简称 \code{PRL13/pilot-bs16-n16-micro32}。W\&B run ID 为 \code{g9j7mkru}，可点击查看
+\href{https://wandb.ai/mio_nora/tgvf-policy-rl/runs/g9j7mkru}{online run g9j7mkru}。
+
+长 run ID 含 \code{BS256-N16-...-80STEP}，但 launcher 在 compose 后覆盖了 batch、world size、micro batch 和 target step。表~\ref{tab:parent-live} 是必须用于解释结果的最终口径。
+
+\begin{table}[t]
+\centering
+\caption{名义 parent contract 与本次 live override。}
+\label{tab:parent-live}
+\scriptsize
+\begin{tabularx}{\columnwidth}{Ycc}
+\toprule
+项目 & Parent formal & 当前 gate \\
+\midrule
+prompt batch/step & 256 & 16 \\
+rollout/prompt & 16 & 16 \\
+trajectory/step & 4,096 & 256 \\
+optimizer steps & 80 & 8 \\
+总 prompts & 20,480 & 128 \\
+总 trajectories & 327,680 & 2,048 \\
+GPU/world size & 4 & 8 \\
+actor micro/GPU & 4 & 32 \\
+FSDP/offload & 4-way, offload & 8-way, no offload \\
+save & 1/8/20/45/80 & 每 step，保留最新 actor \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{模型、优化器与 rollout}
+
+\begin{table}[t]
+\centering
+\caption{当前 gate 的 live resolved hyperparameters。}
+\label{tab:live-hp}
+\scriptsize
+\begin{tabularx}{\columnwidth}{lY}
+\toprule
+项目 & 实际值 \\
+\midrule
+Policy & Qwen3-VL-8B-Instruct \\
+训练范围 & full；LoRA rank 0；vision/projector/language 全部更新 \\
+算法 & GRPO，$n=16$，组内 advantage 按标准差归一化 \\
+Optimizer & AdamW；LR $10^{-6}$ constant；$\beta=(0.9,0.999)$；WD 0.01 \\
+Update & PPO epoch 1；clip $\epsilon=0.2$；dual clip 3；grad clip 1 \\
+Regularizer & KL reward 0；actor KL loss off；entropy coefficient 0 \\
+长度 & prompt 8,192；response 20,480；model len 32,768 \\
+Sampling & vLLM async；$T=1$，top-$p=1$，top-$k=-1$；TP=1 \\
+Agent & 8 workers；最多 7 assistant / 6 observation turns；单 turn 一次工具调用 \\
+视觉 & 原图加至多 6 张 crop；Qwen $0..1000$ bbox 映射至 immutable source pixels \\
+并行 & 8$\times$B200，FSDP2；BF16 compute；fused kernels；text FlexAttention、vision SDPA \\
+Checkpoint & save every step；step 8 内置 T1-PROBE256；无自动 CoreDev \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+这次 full tuning 是相对旧 pilot 的最大结构差异之一：Crop observation 重新经过原生 vision encoder，而 vision tower 本身也可被 reward 更新。旧 decoder-LoRA 设置只能学习“如何调用/读取已有视觉表示”，不能改变视觉编码路径，因此其失败不能直接推出 full Crop 也失败。
+
+\section{Instruct T1 数据制备}
+
+\subsection{候选池与生成合同}
+
+T1 selector 使用同一个 Qwen3-VL-8B-Instruct，而不是 Thinking model。三个已做 CoreDev exact image-byte leakage screening 的来源文件合计 361,709 rows；再以 outcome-independent content-hash bottom-$k$ 取固定 source quota：VStar 170,000、ArxivQA 32,000、ThinkLite 69,842，共 271,842 candidates。
+
+每个 candidate 只输入一张原图和原问题，无 system prompt、无工具、无人工短答案指令；图像处理范围为 65,536--262,144 pixels。采样为 $T=1$、top-$p=1$、top-$k=-1$，每题 8 个独立 seed，总计 2,174,736 attempts。生成模型和语义评分模型是两个不同角色：
+\begin{itemize}
+  \item \textbf{生成/难度测量：}Qwen3-VL-8B-Instruct；
+  \item \textbf{答案判定：}ArxivQA 使用 canonical A--Z rule；ThinkLite 使用 normalized exact/numeric/symbolic，必要时语义判定；VStar 使用 normalized exact 后语义判定；语义 judge 为本地 text-only Qwen2.5-72B-Instruct，temperature 0。
+\end{itemize}
+
+\subsection{保留规则与最终组成}
+
+设 8 次中答对次数为 $k$。T1 规则为
+\begin{equation}
+\operatorname{decision}(k)=
+\begin{cases}
+\text{too hard}, & k=0,\\
+\text{retain}, & 1\le k\le7,\\
+\text{too easy}, & k=8.
+\end{cases}
+\end{equation}
+截断、缺失或无法完成验证的 candidate 进入 unresolved；T2 明确不使用，T1 后不做按结果再平衡。最终 194 个 attempt 截断；candidate 决策为 too easy 168,378、too hard 25,762、retain 77,541、unresolved 161。
+
+\begin{table}[t]
+\centering
+\caption{T1-retained-final-v2 的来源组成。}
+\label{tab:data}
+\small
+\begin{tabular}{lrr}
+\toprule
+来源 & rows & share \\
+\midrule
+VStar & 39,205 & 50.56\% \\
+ArxivQA & 25,393 & 32.75\% \\
+ThinkLite & 12,943 & 16.69\% \\
+\midrule
+合计 & 77,541 & 100.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+最终 samples/content SHA-256 的短标识分别为 \code{06e5b1b9...611a} 与 \code{5ab99622...2934}。formal 80-step schedule 每 step 固定 120 VStar、77 ArxivQA、59 ThinkLite，without replacement，seed 42；独立的 T1-PROBE256 使用 seed 20260807，组成 120/77/59，并从训练 schedule 中排除。当前 BS16 gate 只读取每个 formal batch 的小前缀，而非真的实现每 step 120/77/59；因此 step 间 source composition 仍会波动，单 step reward 不能画成严格 learning curve。
+
+\paragraph{数据边界。}
+CoreDev 只做了 exact image-byte leakage gate，尚无 perceptual near-duplicate gate。更重要的是，当前 DeepEyes-compatible source routing 将 ThinkLite 送入 single-turn/no-tool 文本 prompt；当前实现不把其图像放入该 prompt。对依赖图形的 ThinkLite 问题，这可能引入答案先验/文本 shortcut，是 formal scale 前必须单独量化的风险，而不是在总 reward 中被平均掉。
+
+\section{Crop 协议：当前正在执行的路径}
+
+\subsection{交互与像素语义}
+
+VStar/ArxivQA 初始 context 为 system prompt 加 \{原图，question+user suffix\}。Policy 可输出 Hermes XML/JSON 工具调用；\code{bbox\_2d} 是 Qwen3-VL 原图相对 $0..1000$ 坐标。runtime 将其恰好一次转换为 immutable source-image pixel box，裁出 PIL RGB 图，再作为新的视觉 observation 送回 policy。每次 crop 都从原图裁，不对前一个 crop 递归裁；最多 6 次 observation。VStar 的 GT boxes 只用于 IoU/coverage audit，不进入 prompt、reward 或工具执行；ArxivQA 没有 GT box。
+
+工具 observation 以新的 user/tool-response context 出现，内容为 crop image 加同一条 user suffix。它使下一次 assistant generation 看见新图，但本身不作为 policy action 训练。
+
+\subsection{Crop 的 exact visible prompt}
+
+当前 visible system/user 文本有意对齐 DeepEyes public V2。完整 literal 放在附录~\ref{app:prompts}；其语义可概括为：只暴露 \code{image\_zoom\_in\_tool}，要求模型先思考，需要时输出一个 bbox 工具调用，最后以 \code{<answer>...</answer>} 返回答案。公开 system schema 内保留了 \code{required:["bbox"]} 的原始 typo，但 runtime 可执行 schema 正确要求 \code{bbox\_2d}；这是 visible fidelity 与 executable safety 的显式分离。
+
+ThinkLite 不暴露 Crop，单轮 suffix 为：
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+Let's think step by step and output the final answer within \boxed{}.
+\end{Verbatim}
+
+\section{当前 Crop reward 与 judge}
+
+\subsection{Visual route：VStar/ArxivQA}
+
+令 $A\in\{0,1\}$ 为答案是否正确；$F=0$ 表示格式合法，$F=-1$ 表示 think/answer 协议不合法；$C=1$ 当且仅当 $A=1$ 且至少一次 Crop runtime 执行成功。当前 reward 为
+\begin{equation}
+\boxed{\Rcrop^{\rm visual}=0.8A+0.2F+1.2C.}
+\label{eq:crop-visual}
+\end{equation}
+
+\begin{table}[t]
+\centering
+\caption{Visual route 的典型 reward。}
+\label{tab:crop-reward}
+\small
+\begin{tabularx}{\columnwidth}{Yc}
+\toprule
+轨迹结果 & Reward \\
+\midrule
+格式合法、直接答对 & 0.8 \\
+格式合法、成功 Crop 后答对 & 2.0 \\
+格式合法、答错 & 0.0 \\
+格式非法、答错 & $-0.2$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+$A$ 并非由视觉模型重新看图判定。每一条 VStar/ArxivQA trajectory 都抽取最后一个 \code{<answer>}；没有 answer tag 时把整段回复交给 \textbf{text-only Qwen2.5-72B-Instruct}，输入只有 question、standard answer 和 model answer，判断语义是否一致。服务通过 OpenRouter 固定 DeepInfra provider；visual judge sampling 为 temperature 0.3、top-$p=1$、max 16 tokens。答案文本达到 1,000 characters 时强制 $A=0$。当前 resilient 配置把耗尽重试的瞬时网络失败局部化为该 trajectory 的零分；auth/model identity 错误仍应中止。
+
+因此术语必须写准确：它是“visual-task final-answer text judge”，不是“看 Crop 是否正确的 VLM judge”。当前 reward 也没有直接奖励 bbox IoU、crop area、target quality 或因果 answer gain；这些量仅被记录为 audit metrics。
+
+\subsection{ThinkLite route}
+
+ThinkLite 不调用工具，reward 为
+\begin{equation}
+\boxed{\Rcrop^{\rm math}=1.2A+0.4F.}
+\label{eq:crop-math}
+\end{equation}
+从最后一个 post-think \verb|\boxed{}| 抽取答案：先使用 deterministic \code{math\_verify}；规则未判为正确且存在候选答案时，再调用相同的 text-only Qwen2.5-72B-Instruct，temperature 0。没有 boxed answer 时 $A=0,F=-1$，且不发起语义 judge。
+
+\subsection{Reward 的已知偏置}
+
+式~\eqref{eq:crop-visual} 中“正确+Crop”的 2.0 是“正确+直接回答”0.8 的 2.5 倍。它能快速教会工具调用，但也把“曾成功执行 Crop”与“Crop 对答案真正有帮助”混合在一起。当前 gate 的首要问题是检验 DeepEyes fidelity 是否能在 full tuning/大 $n$ 下产生 held-out 正向信号；若工具率快速饱和而准确率不升，下一步应减少无条件 tool bonus 或改为 real-vs-sham counterfactual gain，而不是继续依据训练 reward 扩大规模。
+
+\section{TGVF 协议与 reward 路线}
+
+\subsection{Representation 与工具语义}
+
+\TGVF{} arm 的 production representation 默认仍是 RP66 step-2000：Qwen3-VL-8B-Instruct contextual hidden state（layer $-1$）驱动冻结的 TGVF Adapter，输出 main $D$ 与 DeepStack 8/16/24；adapter SHA-256 为 \code{3429dc83880d...65ce5c9}。RP66 的 first-200 utility 已证明 image+$D^+$ 为 83.5\%，相对 image-only 72.5\% 的 raw gain 为 $+11.0\pp$，相对 zero/wrong-$D$ 的 controlled gain 为 $+7.5/+6.5\pp$。这证明“正确 $D$ 可作为原图的补充”，但不证明 free policy 会生成正确 target、会在正确时机调用、或端到端 RL 会提升。
+
+\TGVF{} 工具为 \code{tgvf\_focus\_tool(target: string)}。target 必须是自包含的视觉查询，同时说明“看什么”和“要提取什么属性/关系”；禁止只写物体名，也禁止写入猜测的最终答案。成功 observation 的可见文本为
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+Focused visual observation for target:
+"{target}"
+\end{Verbatim}
+并把 target-conditioned $D$ 作为新视觉信号加入后续 context。完整 TGVF system/user prompt 见附录~\ref{app:tgvf-prompt}。
+
+RP67 的 image-axis loss 没有在 Stage1 accuracy 上形成明确 promotion，且曾观察到过强 donor-image rejection/norm shortcut 风险。因而 scale 研究的主 arm 应先固定 RP66；RP67 可作为只改变 representation 的一变量 follow-up，不能与 batch/full-tuning/reward 同时变化后再归因。
+
+\subsection{Stage3-shaped reward 的准确公式}
+
+未来完整 \TGVF{} reward 参考旧 Stage3 的有效语义，但使用当前 runtime 实现：
+\begin{equation}
+\boxed{\Rtgvf=2A_{\rm gated}+T+F_{\rm focus}+G_{\rm grounding}+P.}
+\label{eq:tgvf}
+\end{equation}
+
+其五项定义如下。
+\begin{enumerate}
+  \item $A_{\rm gated}$：答案正确为 1；但 sidecar 标为 \code{needed} 且没有成功 \TGVF{} observation 时，答案项被 gate 为 0。它阻止“工具必要题上直接猜对仍拿满答案分”。
+  \item $T$：工具决策 reward。sidecar 标签为 needed/optional/unnecessary；成功使用与不使用的 base score 分别为 $(+1,-2)$、$(+0.5,0)$、$(-0.5,+1)$，再乘 label confidence；第一次后的每次额外调用罚 $0.05$。
+  \item $F_{\rm focus}$：target 是否与问题相关且聚焦，judge raw 0/1/2 映射为 $0/0.5/1$。
+  \item $G_{\rm grounding}$：post-tool reasoning 是否被图像与 observation 支持，raw 0/1/2 映射为 $-1/0.5/1$。负分是防止 hallucinated evidence 的关键。
+  \item $P$：任一 protocol error 时为 $-1$，否则为 0。
+\end{enumerate}
+
+\subsection{TGVF 到底用哪些 judge}
+
+\begin{table*}[t]
+\centering
+\caption{训练 reward 中的 judge 边界。Evaluation judge 是另一套合同。}
+\label{tab:judges}
+\scriptsize
+\begin{tabularx}{\textwidth}{lYYYl}
+\toprule
+路径 & 被判定对象 & 模型 & 模态/输入 & 是否在当前 Crop \\
+\midrule
+Crop visual $A$ & final answer 与 GT 是否一致 & Qwen2.5-72B-Instruct & text-only；Q/ref/candidate；每条 visual trajectory & 是 \\
+Crop ThinkLite $A$ & math/开放答案等价 & rule-first + Qwen2.5-72B-Instruct & text-only fallback & 是 \\
+TGVF answer $A$ & final answer correctness & rule-first + Qwen2.5-72B-Instruct & text-only semantic fallback & 否 \\
+TGVF $F/G$ & target focus；post-tool grounding & Qwen3-VL-32B-Thinking & 原图+问题+target+reasoning+answer & 否；仅 full-shaped \\
+CoreDev scoring & 各 benchmark 官方指标 & rules / 本地 Qwen2.5-72B-Instruct & VLMEvalKit task-specific & 后处理 \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+PRL-09-R1 smoke 曾完整启用 32B visual judge，验证了 focus/grounding 调用链。随后本地 32B 与 4-GPU actor colocate 造成显存/headroom 与 HTTP 400 风险；PRL-09-R3 因此关闭 $F/G$，实际优化的是 $2A_{\rm gated}+T+P$，并未加载 32B。R3 的 80-step 累计工具尝试率为 99.93\%，mean answer accuracy 约 59.07\%，CoreDev 没有形成稳定全面增益。该结果说明 ATP/no-vision reward 容易学成“几乎必调工具”，不能作为完整式~\eqref{eq:tgvf} 已失败或已成功的证据。
+
+若未来恢复 $F/G$，32B 可本地独占 GPU 或改用 API；但必须先做 latency/cost gate。当前 Crop 不应为此额外加载 32B，因为它的 reward 根本不需要视觉 judge。
+
+\section{GRPO、policy loss 与 token ownership}
+
+每个 prompt 的 $n=16$ 条 trajectory 构成一个 GRPO group。令 scalar reward 为 $r_i$，则
+\begin{equation}
+\hat A_i=\frac{r_i-\bar r}{s_r+10^{-6}}.
+\end{equation}
+同组 reward 全相同则 advantage 为 0。policy ratio 为
+\begin{equation}
+\rho_{it}=\exp\bigl(\log\pi_\theta(a_{it})-\log\pi_{\rm beh}(a_{it})\bigr),
+\end{equation}
+并使用 $\epsilon=0.2$ clipped PPO 与 dual clip 3。当前 loss mode 为 \code{deepeyes\_official\_micro\_token\_mean}：每个固定 local microbatch 先在有效 policy token 上取 mean，再在 gradient-accumulation micros/FSDP ranks 间平均。
+
+\begin{figure}[t]
+\centering
+\fbox{\parbox{0.94\columnwidth}{\small
+\textbf{Policy mask.}
+进入 policy loss 的只有模型自己生成的 assistant tokens：reasoning、tool-call XML/JSON 与 final answer。初始 prompt、system/user template、原图 token、Crop/$D$ observation、tool-response wrapper 与 padding 的 mask 均为 0。工具输出会影响后续 action 的条件分布，但其 token 本身不被当成 policy action 反向传播。}}
+\caption{工具 observation 与 policy loss 的关系。}
+\label{fig:mask}
+\end{figure}
+
+这回答了“工具输出是否参与 policy loss”：\textbf{不直接参与}。不过 full tuning 下，后续 assistant action 的梯度会经过其所依赖的视觉计算图/重放输入更新 vision、projector 和 language parameters；这与把 observation token 自身纳入 action loss 是两件不同的事。
+
+当前 KL 两条路径都关闭。日志中的 \code{rollout\_corr/kl}$\approx0.04$--$0.07$ 是 vLLM rollout logprob 与训练侧 logprob 的诊断差，不是 reference-policy KL penalty；\code{actor/ppo\_kl}=0 与该配置一致。
+
+\section{当前 gate 的在线健康度}
+
+\subsection{step 1--6 固定快照}
+
+为避免运行结束时间改变报告口径，表~\ref{tab:online} 固定使用 2026-08-08 16:40 JST 已完整落盘的 step 1--6，共 1,536 trajectories。此后 step 7/8 与 T1-PROBE256 应在最终实验结论中另行追加。
+
+\begin{table}[t]
+\centering
+\caption{当前 gate step 1--6 的 trajectory 汇总。}
+\label{tab:online}
+\small
+\begin{tabularx}{\columnwidth}{Yc}
+\toprule
+指标 & 值 \\
+\midrule
+raw answer acc（混合训练 batch） & 51.50\% \\
+mean scalar reward & 0.8285 \\
+任意 Crop call / all trajectories & 68.03\% \\
+任意成功 Crop / all trajectories & 67.06\% \\
+任意 Crop call / visual trajectories & 87.08\% \\
+mean Crop calls/trajectory & 1.726 \\
+correct+successful-crop $C$ rate & 31.51\% \\
+format error rate & 4.43\% \\
+72B judge calls & 1,543 \\
+judge failures / aborted trajectories & 0 / 0 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{前 6 step 的 on-policy batch 指标；仅作健康性诊断。}
+\label{tab:step-series}
+\scriptsize
+\begin{tabular}{lrrrrrr}
+\toprule
+step & 1 & 2 & 3 & 4 & 5 & 6 \\
+\midrule
+score & .648 & .914 & .952 & .787 & .800 & .870 \\
+raw acc (\%) & 45.3 & 55.9 & 60.2 & 50.0 & 44.1 & 53.5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+这些 batch 的 VStar/ArxivQA/ThinkLite 比例不同，且 rollout 随机，因此不能把高低顺序解释为单调学习曲线。step 5 pre-clip grad norm 曾到 42.62，但 grad clip 为 1，前后 steps 回到 3--12；entropy 有限，PPO clip fraction 为 0，未见 NaN、OOM、collapse 或全组 abort。
+
+\subsection{速度与资源}
+
+前 6 steps 分别用时 2,037、2,503、2,055、2,829、1,776、1,688 秒，平均 35.8 分钟/step。主要瓶颈是 old-logprob（704--1,268 秒）与 actor update（720--1,284 秒）；generation 为 90--208 秒，checkpoint 为 115--134 秒。72B reward judge 已并行批处理，除早期 transient latency 外不是总 wall-time 主瓶颈。训练 phase 峰值显存约 85.5 GiB allocated、93.5 GiB reserved/GPU；CPU snapshot 大部分 idle，当前不是 CPU bottleneck。
+
+因此“GPU utilization 看起来阶段性稀疏”来自 colocated RL 的 rollout、logprob、update、save 和 weight-sync 相位切换，不等于整个 step 都在同一个 kernel 上低效。进一步加速优先级应是 old-logprob/update 的 sequence packing 与减少非必要 checkpoint，而不是增加 judge GPU。
+
+\section{历史证据如何约束当前判断}
+
+\begin{table*}[t]
+\centering
+\caption{旧 pilot、PRL-09 与当前 PRL-13 的可比边界。}
+\label{tab:history}
+\scriptsize
+\begin{tabularx}{\textwidth}{lYYYY}
+\toprule
+实验 & Model/update & 数据与 rollout & 工具/reward & 可解释结论 \\
+\midrule
+旧 Thinking Pilot & Qwen3-VL-8B-Thinking；decoder LoRA r64；LR $10^{-5}$ & DeepEyes47K；BS16$n8$；80 & TGVF/Crop；0.8/0.2/1.2 & TGVF 未超过 baseline；Crop 坐标 bug，方法结论作废 \\
+PRL-04/05/06 & Instruct；decoder LoRA；LR $10^{-6}$ & 早期 T1；BS16/32$n8$；20--80 & 修复 Crop；tool weight 1.2 或 0.2 & 更小 tool weight/BS32 未形成稳定 held-out 增益 \\
+PRL-09-R3 & Instruct；decoder LoRA r64；RP66 frozen & mixed-T1-v2；BS16$n8$；80 & TGVF；$2A_g+T+P$，无 32B $F/G$ & 工具率饱和；不能代表完整 shaped reward \\
+当前 PRL-13 gate & Instruct；\textbf{full vision+projector+LM}；LR $10^{-6}$ & corrected mixed-T1-v2；BS16$n16$；8；8 GPU & native Crop；DeepEyes official reward/judge & 首次隔离 full tuning+$n16$；待 step0/8 固定评测 \\
+Formal scale（未启动） & 同 PRL-13 & BS256$n16$；20/80 & 先 Crop，后 matched TGVF & 只有小 gate 正向才扩展 \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+旧实验没有稳定提升，不足以证明“mixed 数据必须达到官方全部规模才有效”；它只说明 BS16$n8$、decoder LoRA、强 tool bonus 的组合没有提供可靠信号。当前设计用一个可 scale 的小 gate 分开测试三个最可能的差异：$n$ 从 8 到 16、视觉路径从 frozen 到 full trainable、协议/reward 对齐 DeepEyes。batch 16 仍不足以验证 BS256 的统计稳定性，但比直接投入 80-step formal run 更适合先判断方向。
+
+\section{评测计划与扩展门槛}
+
+\subsection{当前 Crop gate}
+
+step 8 保存完成后按以下顺序做评测：
+\begin{enumerate}
+  \item \textbf{T1-PROBE256：}内置、固定、训练排除；报告 overall/source accuracy、visual Crop rate、mean calls、format error、nonzero GRPO-group rate；
+  \item \textbf{受控 step-0 vs step-8：}同一 native Crop prompt、sampling、pixel cap、工具上限与 scorer，只改变 checkpoint；
+  \item \textbf{CoreDev-2511：}七项 VLMEvalKit；同时保留 direct/base policy 端到端 baseline，但明确 prompt/runtime 差异；
+  \item \textbf{Grounding-200/VStar GT audit：}首框/最佳 IoU、GT coverage、crop area 与正确率的条件关系；它是工具健康指标，不并入 reward。
+\end{enumerate}
+
+promotion 不能只看 training reward 上升。建议小 gate 至少满足：无 crash/judge systematic failure；step-8 对 step-0 的固定 probe 不下降；CoreDev macro/关键 vision slice 有一致正向或至少不损害 reasoning；工具率不能以接近 100\% 的方式独立于题目必要性饱和。若 gate 不满足，先修数据路由/reward，不扩到 BS256。
+
+\subsection{TGVF matched arm}
+
+Crop 给出正向或可解释的 signal 后，\TGVF{} arm 应尽量只换工具：同 Qwen3-VL-Instruct、同 T1 schedule、同 prompt batch/$n$/LR/full-vs-LoRA 决策、同 answer judge、同 checkpoint/evaluation。第一主 arm 建议 RP66；RP67 作为独立 follow-up。Reward 分三层报告：
+\begin{enumerate}
+  \item ATP-only：$2A_{\rm gated}+T+P$，便宜但已知会 over-call；
+  \item full-shaped：再加 32B $F/G$，验证 target/grounding；
+  \item causal gate：真实 $D$ 对 zero/wrong/sham $D$ 的 answer gain，作为最终是否真正 foveate 的核心指标。
+\end{enumerate}
+
+如果本地 32B 影响 actor headroom，应把 VLM judge 放到独立 GPU/service 或 API，不与训练 GPU0 colocate。无论部署方式，visual judge failure 必须 sample-local 且显式计 coverage，不能用默认 0 冒充“judge 判为中性”。
+
+\section{复现性与当前风险}
+
+\begin{enumerate}
+  \item \textbf{运行依赖已被清理：}当前进程的 cwd 指向已删除的 \code{tgvf-e2e-rl-prl13-integration}；train/probe schedule sentinel 也不在原位置。代码已加载入内存，所以当前 run 可继续，但若进程中断，\code{resume=auto} 不能在未重建这些文件前直接恢复。
+  \item \textbf{身份来源：}W\&B metadata 记录 code commit \code{0a74c199...57672cfc}，但该 object 当前 main repo 不可 checkout。完整 live resolved config 仍保存在 Ray worker log，报告数值以它和 trajectory JSONL 为准，而不是以当前 HEAD 推测。
+  \item \textbf{checkpoint 策略：}当前每步保存但只保留最新 actor；每个 live checkpoint 约 128 GiB。step 8 必须在任何清理前固定；若需要 step curve，应提前保留指定 step，而不是事后期待被删目录仍有权重。
+  \item \textbf{W\&B 指标缺口：}当前 W\&B 有 scalar score/reward、长度、梯度和 timing，但没有 answer/tool/format component means。完整分解应从每步 256-row trajectory JSONL 重算。
+  \item \textbf{ThinkLite route：}当前文本单轮路由可能丢失依赖图像的视觉信息；formal scale 前应做 image-present vs text-only probe，决定恢复图像还是剔除该 slice。
+  \item \textbf{训练 loss fidelity：}当前 micro/GPU=32，而 DeepEyes 发布配置的 micro 更小；loss reduction 保持 micro-token-mean，但 micro partition 仍可能改变等权平均边界。报告应把它列为 capacity adaptation，而非数学完全等价。
+\end{enumerate}
+
+\section{结论与证据索引}
+
+当前最准确的结论不是“RL 已有效”，也不是“RL 又失败”，而是：\textbf{PRL-13-A 已把此前最关键的 scale/vision-path 差异装进一个可承受的 8-step gate，当前机械与数值健康；能力结论尚欠固定 step-0/8 evaluation。}它使用正确的 Instruct T1-v2 77,541 条数据、native source-pixel Crop、full vision-policy update、$n=16$ 与 DeepEyes final-answer reward。当前 judge 是 text-only Qwen2.5-72B-Instruct，32B VLM 不在这条 Crop 训练路径中。
+
+\TGVF{} 仍有明确研究依据：RP66 的 image+$D$ additive utility 已成立；真正未解决的是 free target/tool policy 与 grounding。未来 TGVF reward 应保留 needed-tool answer gate 和 negative grounding，同时避免把工具成功本身当作效用。完整 $F/G$ 才使用 Qwen3-VL-32B-Thinking；PRL-09-R3 的 no-vision 结果不能代替该实验。
+
+\paragraph{关键证据路径。}
+当前 trajectory/checkpoint root：
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+artifacts/policy/PRL-13-A-qwen3-instruct-grpo-bs256-n16-native-crop-t1-stratified-80step-gpu0123/pilot-bs16-n16-micro32-fused-flex-ws8/
+\end{Verbatim}
+其余证据路径如下；live resolved config 以 Ray session worker log 为准。
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+artifacts/data/policy_rl/
+  T1-04-INSTRUCT-FULL-MIXED-T1-RETAINED-FINAL-v2/manifest.json
+artifacts/data/policy_selection/t1/
+  T1-04-QWEN3-INSTRUCT-512-FULLIMAGE-271842-GPU0123/
+  run-config.canonical.json
+src/tgvf_rl/protocol/tool_prompts.py
+src/tgvf_rl/rewards/stage3_shaped.py
+\end{Verbatim}
+
+\clearpage
+\onecolumn
+\appendix
+\small
+\setlength{\parskip}{0pt}
+\section{当前 Crop visible prompt（exact literal）}
+\label{app:prompts}
+
+\subsection{System prompt}
+
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+You are a helpful assistant.
+
+# Tools
+You may call one or more functions to assist with the user query.
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type":"function","function":{"name":"image_zoom_in_tool","description":"Zoom in on a specific region of an image by cropping it based on a bounding box (bbox) and an optional object label.","parameters":{"type":"object","properties":{"bbox_2d":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4,"description":"The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right corner."},"label":{"type":"string","description":"The name or label of the object in the specified bounding box (optional)."}},"required":["bbox"]}}}
+</tools>
+
+# How to call a tool
+Return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+
+**Example**:
+<tool_call>
+{"name": "image_zoom_in_tool", "arguments": {"bbox_2d": [10, 20, 100, 200], "label": "the apple on the desk"}}
+</tool_call>
+\end{Verbatim}
+
+\subsection{User suffix and post-tool suffix}
+
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+Think first, call **image_zoom_in_tool** if needed, then answer. Format strictly as:  <think>...</think>  <tool_call>...</tool_call> (if tools needed)  <answer>...</answer>
+\end{Verbatim}
+
+初始 user content 顺序为 \code{[original image, question + suffix]}。成功工具 observation 包含 \code{[crop image, suffix]}，在当前 adapter 中按 DeepEyes 语义转换为 user \code{<tool\_response>...} continuation。visible schema 的 \code{required:["bbox"]} 仅为 public prompt fidelity；runtime registry 使用 \code{required:["bbox\_2d"]}。
+
+\section{TGVF visible prompt（RP66/RP67 policy line）}
+\label{app:tgvf-prompt}
+
+\subsection{System prompt}
+
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+You are a visual reasoning assistant.
+
+Use tgvf_focus_tool when additional target-conditioned visual evidence
+is needed to answer the question.
+
+The target must be a concise, self-contained visual query specifying
+both what to inspect and what visual evidence or relation to obtain.
+It may request an attribute, text reading, texture, state, count,
+comparison, or spatial relation.
+
+Do not provide only an object name, and do not include a guessed final
+answer or answer-option value.
+
+After receiving a tool result, continue reasoning. You may call the
+tool again if more visual evidence is needed, up to four times. When
+sufficient evidence is available, provide a concise final answer.
+
+Example valid tool call:
+
+<tool_call>
+{"name":"tgvf_focus_tool","arguments":{"target":"the small circular gauge's needle position for reading its value"}}
+</tool_call>
+\end{Verbatim}
+
+\subsection{Qwen3-Instruct shared user prompt}
+
+\begin{Verbatim}[breaklines=true,breakanywhere=true,fontsize=\scriptsize]
+<image>
+{question}
+
+Think first, call an available visual tool if needed, then answer.
+
+Begin every assistant turn by generating one <think>...</think> block
+yourself; the chat template does not add it. After </think>, either make
+one native tool call if more visual evidence is needed or give only the
+final answer.
+
+After completing your reasoning, give only the final answer without explanation:
+- For multiple-choice questions, give only the option letter.
+- For mathematics questions, give only the final value or expression.
+- For other questions, give only a concise answer.
+\end{Verbatim}
+
+\section{Judge 输入边界（便于审计）}
+
+当前 Crop visual answer judge 的 system 为 \code{You are a helpful assistant.}，user prompt 给出 Question、Standard Answer 与 Model Answer，要求只输出 0/1 consistency judgement。它不包含原图、crop、bbox、checkpoint、arm 或 policy reward。ThinkLite math fallback 给出 question/reference/student final answer，要求只输出 TRUE/FALSE。两者 served model 均为 \code{qwen/qwen-2.5-72b-instruct}。
+
+\TGVF{} full-shaped 的 visual-quality judge 与之不同：Qwen3-VL-32B-Thinking 接收原图，并分别输出 \code{focus\_score} 与 \code{grounding\_score}（0/1/2）。focus 只看 question、image 与 target；grounding 看 post-tool reasoning 是否被视觉事实支持。final answer correctness 仍由独立 72B text judge/rules 决定，避免一个 VLM verdict 同时控制所有 reward 分量。
+
+\end{document}
