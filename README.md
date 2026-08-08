@@ -114,6 +114,8 @@ The third call is atomic: it crops first and then generates target-conditioned
 `D` from that exact crop. The three accepted v1 system prompts, shared user
 prompt, schemas, and successful response text are fixed in
 [TGVF Visual Tool Prompts v1](docs/TGVF_VISUAL_TOOL_PROMPTS_V1.md).
+Current plain-final TGVF and DeepEyes Crop message-level examples are collected
+in [Current TGVF / Crop Protocol Examples](docs/CURRENT_TGVF_AND_CROP_PROTOCOL_EXAMPLES.md).
 
 The crop uses half-open integer pixel coordinates over the immutable original
 image, clamps to its bounds, and records the exact RGB8 pixels plus rollout-time
