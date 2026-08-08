@@ -1,9 +1,10 @@
-"""Standalone CoreDev inference for completed visual-tool policy artifacts.
+"""Standalone benchmark inference for completed visual-tool policy artifacts.
 
 The training runtime already owns the native multi-turn protocol and the
 colocated vLLM visual-tool implementation.  This module supplies only the
-post-training boundary: an immutable LoRA snapshot, one vLLM replica, and the
-official CoreDev prompt rows.  It deliberately performs no reward or update.
+post-training boundary: an immutable LoRA or full-model snapshot, one vLLM
+replica, and the official CoreDev prompt rows.  It deliberately performs no
+reward or update.
 """
 
 from __future__ import annotations
@@ -11,9 +12,13 @@ from __future__ import annotations
 import asyncio
 import ast
 import csv
+from dataclasses import asdict
+import fcntl
 import hashlib
+import io
 import json
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +27,7 @@ from uuid import uuid4
 import re
 
 import torch
+from PIL import Image
 
 from tgvf_rl.conditioning import TargetConditioningProviderKind
 from tgvf_rl.contracts.identity import PolicyVersion
@@ -36,6 +42,11 @@ from tgvf_rl.environment import (
 )
 from tgvf_rl.environment.qwen3_crop_materializer import preprocess_qwen3_rgb
 from tgvf_rl.framework.verl.native_agent_loop import VerlAsyncServerPolicyTurnClient
+from tgvf_rl.framework.verl.policy_weight_sync import (
+    PolicyLoRASnapshot,
+    PolicyWeightSyncState,
+    load_lora_snapshot_pointer,
+)
 from tgvf_rl.framework.verl.policy_live_runtime import (
     _BRANCH_LAYERS,
     _RemoteCropVisualMaterializer,
@@ -43,7 +54,6 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _VisualTokenCountResolver,
     _artifact_identity,
     _initial_vllm_inputs,
-    _load_bound_rgb,
     _source_visual_positions,
 )
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
@@ -95,44 +105,248 @@ from tgvf_rl.trajectories.schema import (
     trajectory_checksum,
 )
 
+from .policy_full_model_snapshot import (
+    FULL_MODEL_EVALUATION_BACKEND,
+    FullModelEvaluationSnapshot,
+    FullModelSourceKind,
+    build_full_model_standalone_manager,
+    full_model_snapshot_identity_record,
+    load_full_model_evaluation_snapshot,
+)
+
 
 POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v1"
+POLICY_BENCHMARK_SCHEMA = "tgvf-policy-benchmark-evaluation-v1"
+POLICY_EVALUATION_IDENTITY_SCHEMA = "tgvf-policy-evaluation-identity-v1"
+POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
+TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
+DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
+    "deepeyes_official_visible_native_crop_v1"
+)
+POLICY_EVALUATION_PROTOCOLS = frozenset(
+    {
+        TRAINING_RUN_EVALUATION_PROTOCOL,
+        DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+    }
+)
+_LEGACY_COREDEV_TASK_COUNT = 2511
+_LEGACY_COREDEV_SINGLE_IMAGE_COUNT = 2240
+_SHA256_LENGTH = 64
+LORA_ADAPTER_EVALUATION_BACKEND = "lora_adapter"
+POLICY_EVALUATION_BACKENDS = frozenset(
+    {LORA_ADAPTER_EVALUATION_BACKEND, FULL_MODEL_EVALUATION_BACKEND}
+)
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyCoreDevConfig:
     evaluation_id: str
     policy_config_path: Path
-    lora_pointer_path: Path
+    lora_pointer_path: Path | None
     output_root: Path
     gpu_ids: tuple[int, ...]
     inference_concurrency_per_gpu: int = 8
     max_model_len: int = 16384
+    max_num_batched_tokens: int = 16384
+    enable_chunked_prefill: bool = True
     gpu_memory_utilization: float = 0.90
+    task_manifest_path: Path | None = None
+    task_manifest_sha256: str | None = None
+    expected_task_count: int = _LEGACY_COREDEV_TASK_COUNT
+    expected_single_image_count: int = _LEGACY_COREDEV_SINGLE_IMAGE_COUNT
+    lora_pointer_sha256: str | None = None
+    expected_policy_run_id: str | None = None
+    expected_policy_run_identity_sha256: str | None = None
+    expected_optimizer_step: int | None = None
+    expected_policy_weights_sha256: str | None = None
+    snapshot_backend: str = LORA_ADAPTER_EVALUATION_BACKEND
+    full_model_snapshot_manifest_path: Path | None = None
+    full_model_snapshot_manifest_sha256: str | None = None
+    full_model_materialization_receipt_path: Path | None = None
+    full_model_materialization_receipt_sha256: str | None = None
+    required_snapshot_identity_sha256: str | None = None
+    evaluation_protocol: str = TRAINING_RUN_EVALUATION_PROTOCOL
     schema_version: str = POLICY_COREDEV_SCHEMA
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "policy_config_path", Path(self.policy_config_path))
-        object.__setattr__(self, "lora_pointer_path", Path(self.lora_pointer_path))
+        if self.lora_pointer_path is not None:
+            object.__setattr__(self, "lora_pointer_path", Path(self.lora_pointer_path))
         object.__setattr__(self, "output_root", Path(self.output_root))
+        if self.task_manifest_path is not None:
+            object.__setattr__(
+                self, "task_manifest_path", Path(self.task_manifest_path)
+            )
+        for name in (
+            "full_model_snapshot_manifest_path",
+            "full_model_materialization_receipt_path",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, Path(value))
         object.__setattr__(self, "gpu_ids", tuple(self.gpu_ids))
-        if self.schema_version != POLICY_COREDEV_SCHEMA:
-            raise ValueError("policy CoreDev config schema differs")
+        if self.schema_version not in {POLICY_COREDEV_SCHEMA, POLICY_BENCHMARK_SCHEMA}:
+            raise ValueError("policy benchmark config schema differs")
+        if self.evaluation_protocol not in POLICY_EVALUATION_PROTOCOLS:
+            raise ValueError("policy benchmark evaluation protocol differs")
+        if self.snapshot_backend not in POLICY_EVALUATION_BACKENDS:
+            raise ValueError("policy benchmark snapshot backend differs")
         if not self.evaluation_id:
             raise ValueError("evaluation_id must be non-empty")
-        if self.gpu_ids != (0, 1, 2, 3):
-            raise ValueError("formal policy CoreDev evaluation requires GPUs 0-3")
+        if (
+            len(self.gpu_ids) != 4
+            or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in self.gpu_ids)
+            or len(set(self.gpu_ids)) != 4
+        ):
+            raise ValueError(
+                "formal policy benchmark evaluation requires four distinct "
+                "non-negative GPU IDs"
+            )
         if not 1 <= self.inference_concurrency_per_gpu <= 8:
             raise ValueError("inference_concurrency_per_gpu must be in [1,8]")
-        if self.max_model_len != 16384:
-            raise ValueError("policy CoreDev max_model_len must match training")
+        if type(self.max_model_len) is not int or self.max_model_len <= 0:
+            raise ValueError("max_model_len must be a positive integer")
+        if (
+            type(self.max_num_batched_tokens) is not int
+            or self.max_num_batched_tokens <= 0
+        ):
+            raise ValueError("max_num_batched_tokens must be a positive integer")
+        if type(self.enable_chunked_prefill) is not bool:
+            raise ValueError("enable_chunked_prefill must be boolean")
         if not 0.0 < self.gpu_memory_utilization <= 1.0:
             raise ValueError("gpu_memory_utilization must be in (0,1]")
+        if type(self.expected_task_count) is not int or self.expected_task_count <= 0:
+            raise ValueError("expected_task_count must be a positive integer")
+        if (
+            type(self.expected_single_image_count) is not int
+            or not 0 <= self.expected_single_image_count <= self.expected_task_count
+        ):
+            raise ValueError(
+                "expected_single_image_count must be in [0, expected_task_count]"
+            )
+        manifest_fields = (self.task_manifest_path, self.task_manifest_sha256)
+        if (manifest_fields[0] is None) != (manifest_fields[1] is None):
+            raise ValueError(
+                "task manifest path and SHA256 must be configured together"
+            )
+        if self.task_manifest_sha256 is not None:
+            digest = self.task_manifest_sha256
+            if (
+                len(digest) != _SHA256_LENGTH
+                or digest != digest.lower()
+                or any(character not in "0123456789abcdef" for character in digest)
+            ):
+                raise ValueError("task_manifest_sha256 must be lowercase SHA256")
+        elif (
+            self.expected_task_count != _LEGACY_COREDEV_TASK_COUNT
+            or self.expected_single_image_count != _LEGACY_COREDEV_SINGLE_IMAGE_COUNT
+        ):
+            raise ValueError(
+                "non-legacy task counts require an explicitly hashed task manifest"
+            )
+        if (
+            self.schema_version == POLICY_BENCHMARK_SCHEMA
+            and self.task_manifest_path is None
+        ):
+            raise ValueError(
+                "generic policy benchmark schema requires an explicitly hashed task manifest"
+            )
+        common_snapshot_binding = (
+            self.expected_policy_run_id,
+            self.expected_policy_run_identity_sha256,
+            self.expected_optimizer_step,
+            self.expected_policy_weights_sha256,
+        )
+        if any(value is not None for value in common_snapshot_binding) and not all(
+            value is not None for value in common_snapshot_binding
+        ):
+            raise ValueError("explicit policy snapshot binding fields are all-or-none")
+        if self.schema_version == POLICY_BENCHMARK_SCHEMA and not all(
+            value is not None for value in common_snapshot_binding
+        ):
+            raise ValueError(
+                "generic policy benchmark requires an explicit policy snapshot binding"
+            )
+        full_model_binding = (
+            self.full_model_snapshot_manifest_path,
+            self.full_model_snapshot_manifest_sha256,
+            self.full_model_materialization_receipt_path,
+            self.full_model_materialization_receipt_sha256,
+            self.required_snapshot_identity_sha256,
+        )
+        if self.snapshot_backend == LORA_ADAPTER_EVALUATION_BACKEND:
+            if self.lora_pointer_path is None:
+                raise ValueError("LoRA snapshot backend requires a pointer path")
+            if self.schema_version == POLICY_BENCHMARK_SCHEMA and (
+                self.lora_pointer_sha256 is None
+            ):
+                raise ValueError("generic LoRA benchmark requires a pointer SHA256")
+            if any(value is not None for value in full_model_binding):
+                raise ValueError("LoRA snapshot backend forbids full-model bindings")
+        else:
+            if self.lora_pointer_path is not None or self.lora_pointer_sha256 is not None:
+                raise ValueError("full-model snapshot backend forbids LoRA bindings")
+            if not all(value is not None for value in full_model_binding):
+                raise ValueError(
+                    "full-model snapshot backend requires manifest, receipt, and identity bindings"
+                )
+            if self.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+                raise ValueError(
+                    "full-model snapshots are supported only by official-visible evaluation"
+                )
+        for name, digest in (
+            ("lora_pointer_sha256", self.lora_pointer_sha256),
+            (
+                "expected_policy_run_identity_sha256",
+                self.expected_policy_run_identity_sha256,
+            ),
+            ("expected_policy_weights_sha256", self.expected_policy_weights_sha256),
+            (
+                "full_model_snapshot_manifest_sha256",
+                self.full_model_snapshot_manifest_sha256,
+            ),
+            (
+                "full_model_materialization_receipt_sha256",
+                self.full_model_materialization_receipt_sha256,
+            ),
+            (
+                "required_snapshot_identity_sha256",
+                self.required_snapshot_identity_sha256,
+            ),
+        ):
+            if digest is not None:
+                _require_sha256(digest, name=name)
+        if self.expected_policy_run_id is not None and not self.expected_policy_run_id:
+            raise ValueError("expected_policy_run_id must be non-empty")
+        if self.expected_optimizer_step is not None and (
+            type(self.expected_optimizer_step) is not int
+            or self.expected_optimizer_step < 0
+        ):
+            raise ValueError("expected_optimizer_step must be a non-negative integer")
+        if (
+            self.evaluation_protocol
+            == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+        ):
+            if self.schema_version != POLICY_BENCHMARK_SCHEMA:
+                raise ValueError(
+                    "official-visible DeepEyes evaluation requires generic benchmark schema"
+                )
+            if (
+                self.expected_optimizer_step != 0
+                and self.snapshot_backend != FULL_MODEL_EVALUATION_BACKEND
+            ):
+                raise ValueError(
+                    "official-visible nonzero evaluation requires a full-model snapshot"
+                )
+
+    @property
+    def uses_legacy_coredev_manifest(self) -> bool:
+        return self.task_manifest_path is None
 
 
 def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    expected = {
+    required = {
         "schema_version",
         "evaluation_id",
         "policy_config_path",
@@ -143,8 +357,28 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "max_model_len",
         "gpu_memory_utilization",
     }
-    if set(payload) != expected:
-        raise ValueError("policy CoreDev config fields differ")
+    optional = {
+        "task_manifest_path",
+        "task_manifest_sha256",
+        "expected_task_count",
+        "expected_single_image_count",
+        "max_num_batched_tokens",
+        "enable_chunked_prefill",
+        "lora_pointer_sha256",
+        "expected_policy_run_id",
+        "expected_policy_run_identity_sha256",
+        "expected_optimizer_step",
+        "expected_policy_weights_sha256",
+        "snapshot_backend",
+        "full_model_snapshot_manifest_path",
+        "full_model_snapshot_manifest_sha256",
+        "full_model_materialization_receipt_path",
+        "full_model_materialization_receipt_sha256",
+        "required_snapshot_identity_sha256",
+        "evaluation_protocol",
+    }
+    if not required <= set(payload) or not set(payload) <= required | optional:
+        raise ValueError("policy benchmark config fields differ")
     return PolicyCoreDevConfig(**payload)
 
 
@@ -156,31 +390,298 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def materialize_vllm_lora_adapter(config: PolicyCoreDevConfig) -> Path:
+def _require_sha256(value: object, *, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != _SHA256_LENGTH
+        or value != value.lower()
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{name} must be a lowercase SHA256")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyEvaluationSnapshot:
+    """One strictly loaded policy snapshot reused for the whole process."""
+
+    run: PolicyE2ESmokeRunConfig
+    lora: PolicyLoRASnapshot
+
+    def __post_init__(self) -> None:
+        if self.lora.policy_version.run_id != self.run.run_id:
+            raise ValueError("policy snapshot run_id differs from policy config")
+        if self.lora.run_identity_sha256 != self.run.identity_sha256:
+            raise ValueError("policy snapshot run identity differs from policy config")
+
+    @property
+    def policy_version(self) -> PolicyVersion:
+        return self.lora.policy_version
+
+
+PolicyEvaluationSubject = PolicyEvaluationSnapshot | FullModelEvaluationSnapshot
+
+
+def _assert_policy_snapshot_binding(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+    *,
+    owner: str,
+) -> None:
+    run_identity_sha256 = (
+        snapshot.lora.run_identity_sha256
+        if isinstance(snapshot, PolicyEvaluationSnapshot)
+        else snapshot.run_identity_sha256
+    )
+    if (
+        config.expected_policy_run_id is not None
+        and snapshot.policy_version.run_id != config.expected_policy_run_id
+    ):
+        raise ValueError(f"{owner} run_id differs from evaluation binding")
+    if (
+        config.expected_policy_run_identity_sha256 is not None
+        and run_identity_sha256 != config.expected_policy_run_identity_sha256
+    ):
+        raise ValueError(f"{owner} run identity differs from evaluation binding")
+    if (
+        config.expected_optimizer_step is not None
+        and snapshot.policy_version.optimizer_step != config.expected_optimizer_step
+    ):
+        raise ValueError(f"{owner} optimizer step differs from evaluation binding")
+    if (
+        config.expected_policy_weights_sha256 is not None
+        and snapshot.policy_version.weights_sha256
+        != config.expected_policy_weights_sha256
+    ):
+        raise ValueError(f"{owner} weights differ from evaluation binding")
+    if isinstance(snapshot, FullModelEvaluationSnapshot):
+        if config.required_snapshot_identity_sha256 is None:
+            raise ValueError("full-model evaluation lacks its required snapshot identity")
+        if (
+            snapshot.manifest.identity_sha256
+            != config.required_snapshot_identity_sha256
+        ):
+            raise ValueError(
+                f"{owner} full-model identity differs from evaluation binding"
+            )
+        if _sha256_file(config.policy_config_path) != (
+            snapshot.manifest.run_contract_file_sha256
+        ):
+            raise ValueError(f"{owner} full-model run contract bytes differ")
+
+
+def _load_full_model_from_paths(
+    config: PolicyCoreDevConfig,
+    *,
+    manifest_path: Path,
+    receipt_path: Path,
+) -> FullModelEvaluationSnapshot:
+    if (
+        config.full_model_snapshot_manifest_sha256 is None
+        or config.full_model_materialization_receipt_sha256 is None
+    ):
+        raise ValueError("full-model evaluation file hashes are absent")
+    if _sha256_file(manifest_path) != config.full_model_snapshot_manifest_sha256:
+        raise ValueError("full-model snapshot manifest file SHA256 differs")
+    if (
+        _sha256_file(receipt_path)
+        != config.full_model_materialization_receipt_sha256
+    ):
+        raise ValueError("full-model materialization receipt file SHA256 differs")
+    snapshot = load_full_model_evaluation_snapshot(
+        manifest_path, receipt_path, runtime_lightweight=True
+    )
+    _assert_policy_snapshot_binding(config, snapshot, owner="full-model snapshot")
+    return snapshot
+
+
+def load_policy_evaluation_snapshot(
+    config: PolicyCoreDevConfig,
+) -> PolicyEvaluationSubject:
+    """Strictly load the configured LoRA or full-model snapshot exactly once."""
+
+    if config.snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
+        assert config.full_model_snapshot_manifest_path is not None
+        assert config.full_model_materialization_receipt_path is not None
+        return _load_full_model_from_paths(
+            config,
+            manifest_path=config.full_model_snapshot_manifest_path,
+            receipt_path=config.full_model_materialization_receipt_path,
+        )
+
+    run = load_policy_e2e_smoke_run_config(
+        config.policy_config_path, allow_external_agent_loop_config=True
+    )
+    assert config.lora_pointer_path is not None
+    state = PolicyWeightSyncState(
+        directory=config.lora_pointer_path.parent,
+        run_id=run.run_id,
+        run_identity_sha256=run.identity_sha256,
+    )
+    snapshot = load_lora_snapshot_pointer(
+        state,
+        pointer_path=config.lora_pointer_path,
+        expected_pointer_file_sha256=config.lora_pointer_sha256,
+        expected_optimizer_step=config.expected_optimizer_step,
+    )
+    loaded = PolicyEvaluationSnapshot(run=run, lora=snapshot)
+    _assert_policy_snapshot_binding(config, loaded, owner="policy snapshot")
+    return loaded
+
+
+def frozen_policy_state_root(config: PolicyCoreDevConfig) -> Path:
+    return config.output_root / "runtime" / "frozen-policy-state"
+
+
+def frozen_full_model_state_root(config: PolicyCoreDevConfig) -> Path:
+    return config.output_root / "runtime" / "frozen-full-model-state"
+
+
+def _write_immutable_snapshot_file(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"frozen policy snapshot is not regular: {path}")
+        if path.read_bytes() != payload:
+            raise RuntimeError(f"frozen policy snapshot collision: {path}")
+        return
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != payload:
+                raise RuntimeError(f"frozen policy snapshot collision: {path}")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def freeze_policy_evaluation_snapshot(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+) -> PolicyEvaluationSubject:
+    """Copy verified identity records into evaluation-private storage."""
+
+    if isinstance(snapshot, FullModelEvaluationSnapshot):
+        assert config.full_model_snapshot_manifest_path is not None
+        assert config.full_model_materialization_receipt_path is not None
+        frozen_root = frozen_full_model_state_root(config)
+        _write_immutable_snapshot_file(
+            frozen_root / "snapshot-manifest.json",
+            _read_regular_file_bytes(
+                config.full_model_snapshot_manifest_path,
+                owner="full-model snapshot manifest",
+            ),
+        )
+        _write_immutable_snapshot_file(
+            frozen_root / "materialization-receipt.json",
+            _read_regular_file_bytes(
+                config.full_model_materialization_receipt_path,
+                owner="full-model materialization receipt",
+            ),
+        )
+        return load_frozen_policy_evaluation_snapshot(config)
+
+    if snapshot.run.run_id != snapshot.policy_version.run_id:
+        raise ValueError("cannot freeze a policy snapshot from another run")
+    source_root = snapshot.lora.pointer_file.parent
+    try:
+        manifest_relative = snapshot.lora.manifest_file.relative_to(source_root)
+        tensor_relative = snapshot.lora.tensor_file.relative_to(source_root)
+    except ValueError as error:
+        raise ValueError(
+            "policy snapshot closure escapes its state directory"
+        ) from error
+    frozen_root = frozen_policy_state_root(config)
+    pointer_path = frozen_root / "latest-lora-snapshot.json"
+
+    # Pointer publication is last so its existence proves the complete closure
+    # has already been materialized.
+    _write_immutable_snapshot_file(
+        frozen_root / tensor_relative, snapshot.lora.tensor_bytes
+    )
+    _write_immutable_snapshot_file(
+        frozen_root / manifest_relative, snapshot.lora.manifest_bytes
+    )
+    _write_immutable_snapshot_file(pointer_path, snapshot.lora.pointer_bytes)
+    return load_frozen_policy_evaluation_snapshot(config)
+
+
+def load_frozen_policy_evaluation_snapshot(
+    config: PolicyCoreDevConfig,
+) -> PolicyEvaluationSubject:
+    """Load only the evaluation-private identity records, never mutable latest."""
+
+    if config.snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
+        frozen_root = frozen_full_model_state_root(config)
+        return _load_full_model_from_paths(
+            config,
+            manifest_path=frozen_root / "snapshot-manifest.json",
+            receipt_path=frozen_root / "materialization-receipt.json",
+        )
+
+    run = load_policy_e2e_smoke_run_config(
+        config.policy_config_path, allow_external_agent_loop_config=True
+    )
+    state = PolicyWeightSyncState(
+        directory=frozen_policy_state_root(config),
+        run_id=run.run_id,
+        run_identity_sha256=run.identity_sha256,
+    )
+    snapshot = load_lora_snapshot_pointer(
+        state,
+        pointer_path=state.latest_path,
+        expected_pointer_file_sha256=config.lora_pointer_sha256,
+        expected_optimizer_step=config.expected_optimizer_step,
+    )
+    frozen = PolicyEvaluationSnapshot(run=run, lora=snapshot)
+    _assert_policy_snapshot_binding(config, frozen, owner="frozen policy snapshot")
+    return frozen
+
+
+def _write_private_file_exact(path: Path, payload: bytes) -> None:
+    """Write exact bytes without retaining a mutable hardlink to the source."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"evaluation output is not a regular file: {path}")
+        if path.read_bytes() != payload:
+            raise RuntimeError(f"immutable evaluation output differs: {path}")
+        if path.stat().st_nlink == 1:
+            return
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def materialize_vllm_lora_adapter(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSnapshot,
+) -> Path:
     """Expose an exact runtime snapshot through vLLM's PEFT directory ABI."""
 
-    pointer = json.loads(config.lora_pointer_path.read_text(encoding="utf-8"))
-    weights_sha256 = pointer["weights_sha256"]
-    manifest_path = config.lora_pointer_path.parent / pointer["manifest_file"]
-    if _sha256_file(manifest_path) != pointer["manifest_file_sha256"]:
-        raise ValueError("LoRA manifest SHA256 differs from latest pointer")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    snapshot = config.lora_pointer_path.parent / manifest["tensor_file"]
-    if snapshot.name != f"{weights_sha256}.safetensors":
-        raise ValueError("LoRA tensor mapping identity differs from latest pointer")
-    if _sha256_file(snapshot) != manifest["tensor_file_sha256"]:
-        raise ValueError("LoRA snapshot file SHA256 differs from manifest")
+    if not isinstance(snapshot, PolicyEvaluationSnapshot):
+        raise TypeError("snapshot must be a PolicyEvaluationSnapshot")
+    weights_sha256 = snapshot.policy_version.weights_sha256
     adapter_root = config.output_root / "runtime" / "lora-adapter"
     adapter_root.mkdir(parents=True, exist_ok=True)
     model_file = adapter_root / "adapter_model.safetensors"
-    if not model_file.exists():
-        os.link(snapshot, model_file)
-    if _sha256_file(model_file) != manifest["tensor_file_sha256"]:
+    _write_private_file_exact(model_file, snapshot.lora.tensor_bytes)
+    if _sha256_file(model_file) != snapshot.lora.tensor_file_sha256:
         raise RuntimeError("materialized vLLM LoRA differs from snapshot")
     adapter_config = {
-        "base_model_name_or_path": str(
-            load_policy_e2e_smoke_run_config(config.policy_config_path).model.revision_or_path
-        ),
+        "base_model_name_or_path": str(snapshot.run.model.revision_or_path),
         "bias": "none",
         "fan_in_fan_out": False,
         "inference_mode": True,
@@ -204,38 +705,44 @@ def materialize_vllm_lora_adapter(config: PolicyCoreDevConfig) -> Path:
         "use_dora": False,
         "use_rslora": False,
     }
-    config_text = json.dumps(adapter_config, indent=2, sort_keys=True) + "\n"
+    config_bytes = (json.dumps(adapter_config, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
     adapter_config_path = adapter_root / "adapter_config.json"
-    if adapter_config_path.exists():
-        if adapter_config_path.read_text(encoding="utf-8") != config_text:
-            raise RuntimeError("vLLM LoRA adapter config identity collision")
-    else:
-        adapter_config_path.write_text(config_text, encoding="utf-8")
+    _write_private_file_exact(adapter_config_path, config_bytes)
     identity = {
         "schema_version": "tgvf-policy-vllm-lora-adapter-v1",
         "evaluation_id": config.evaluation_id,
-        "optimizer_step": pointer["optimizer_step"],
-        "policy_run_id": pointer["run_id"],
-        "policy_run_identity_sha256": pointer["run_identity_sha256"],
+        "optimizer_step": snapshot.policy_version.optimizer_step,
+        "policy_run_id": snapshot.policy_version.run_id,
+        "policy_run_identity_sha256": snapshot.lora.run_identity_sha256,
         "weights_sha256": weights_sha256,
-        "tensor_file_sha256": manifest["tensor_file_sha256"],
-        "snapshot": str(snapshot),
+        "pointer_file_sha256": snapshot.lora.pointer_file_sha256,
+        "manifest_file_sha256": snapshot.lora.manifest_file_sha256,
+        "tensor_file_sha256": snapshot.lora.tensor_file_sha256,
+        "snapshot": str(snapshot.lora.tensor_file),
     }
     identity_path = adapter_root / "identity.json"
-    identity_text = json.dumps(identity, indent=2, sort_keys=True) + "\n"
-    if identity_path.exists() and identity_path.read_text(encoding="utf-8") != identity_text:
-        raise RuntimeError("vLLM LoRA identity collision")
-    identity_path.write_text(identity_text, encoding="utf-8")
+    identity_bytes = (json.dumps(identity, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    _write_private_file_exact(identity_path, identity_bytes)
     return adapter_root
 
 
 def policy_version_from_pointer(config: PolicyCoreDevConfig) -> PolicyVersion:
-    pointer = json.loads(config.lora_pointer_path.read_text(encoding="utf-8"))
-    return PolicyVersion(
-        run_id=pointer["run_id"],
-        optimizer_step=pointer["optimizer_step"],
-        weights_sha256=pointer["weights_sha256"],
-    )
+    """Backward-compatible strict one-shot policy identity loader."""
+
+    return load_policy_evaluation_snapshot(config).policy_version
+
+
+def policy_lora_request_name(snapshot: PolicyEvaluationSnapshot) -> str:
+    """Name the vLLM adapter after the already frozen optimizer step."""
+
+    step = snapshot.policy_version.optimizer_step
+    if type(step) is not int or step < 0:
+        raise ValueError("LoRA pointer optimizer_step must be a non-negative integer")
+    return f"policy-step{step}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,10 +753,188 @@ class CoreDevTask:
     index: str
     question: str
     image_paths: tuple[str, ...]
+    sample_id: str | None = None
+    answer: str | None = None
+    options: tuple[tuple[str, str], ...] = ()
+    metadata: tuple[tuple[str, str], ...] = ()
+    image_sha256s: tuple[str, ...] = ()
+    image_dimensions: tuple[tuple[int, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "image_paths", tuple(self.image_paths))
+        raw_options = self.options
+        if isinstance(raw_options, Mapping):
+            normalized_options = tuple(
+                (str(key), str(value)) for key, value in raw_options.items()
+            )
+        else:
+            normalized_options = tuple(tuple(item) for item in raw_options)
+        object.__setattr__(self, "options", normalized_options)
+        raw_metadata = self.metadata
+        if isinstance(raw_metadata, Mapping):
+            normalized_metadata = tuple(
+                (str(key), str(value)) for key, value in raw_metadata.items()
+            )
+        else:
+            normalized_metadata = tuple(tuple(item) for item in raw_metadata)
+        object.__setattr__(self, "metadata", normalized_metadata)
+        object.__setattr__(self, "image_sha256s", tuple(self.image_sha256s))
+        object.__setattr__(
+            self,
+            "image_dimensions",
+            tuple(tuple(item) for item in self.image_dimensions),
+        )
+        if type(self.ordinal) is not int or self.ordinal < 0:
+            raise ValueError("policy benchmark task ordinal must be non-negative")
+        if type(self.row_number) is not int or self.row_number < 0:
+            raise ValueError("policy benchmark row_number must be non-negative")
+        for name, value in (
+            ("dataset", self.dataset),
+            ("index", self.index),
+            ("question", self.question),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"policy benchmark task {name} must be non-empty")
+        if not self.image_paths or any(
+            not isinstance(path, str) or not path for path in self.image_paths
+        ):
+            raise ValueError("policy benchmark task must carry image_paths")
+        if self.sample_id is not None and (
+            not isinstance(self.sample_id, str) or not self.sample_id.strip()
+        ):
+            raise ValueError("policy benchmark task sample_id must be non-empty")
+        if self.answer is not None and (
+            not isinstance(self.answer, str) or not self.answer.strip()
+        ):
+            raise ValueError("policy benchmark task answer must be non-empty")
+        option_names: set[str] = set()
+        for item in self.options:
+            if (
+                len(item) != 2
+                or not isinstance(item[0], str)
+                or not item[0]
+                or not isinstance(item[1], str)
+                or not item[1]
+                or item[0] in option_names
+            ):
+                raise ValueError("policy benchmark task options are malformed")
+            option_names.add(item[0])
+        if self.answer is not None and self.options and self.answer not in option_names:
+            raise ValueError("policy benchmark task answer is absent from its options")
+        metadata_names: set[str] = set()
+        for item in self.metadata:
+            if (
+                len(item) != 2
+                or not isinstance(item[0], str)
+                or not item[0]
+                or not isinstance(item[1], str)
+                or item[0] in metadata_names
+            ):
+                raise ValueError("policy benchmark task metadata is malformed")
+            metadata_names.add(item[0])
+        image_identity_counts = (
+            len(self.image_sha256s),
+            len(self.image_dimensions),
+        )
+        if any(image_identity_counts) and image_identity_counts != (
+            len(self.image_paths),
+            len(self.image_paths),
+        ):
+            raise ValueError("policy benchmark task image identity counts differ")
+        for digest in self.image_sha256s:
+            _require_sha256(digest, name="task image SHA256")
+        for dimensions in self.image_dimensions:
+            if len(dimensions) != 2 or any(
+                type(value) is not int or value <= 0 for value in dimensions
+            ):
+                raise ValueError(
+                    "task image dimensions must be positive [width,height]"
+                )
 
     @property
     def single_image(self) -> bool:
         return len(self.image_paths) == 1
+
+    @property
+    def bound_sample_id(self) -> str:
+        """Return explicit generic identity or the legacy CoreDev fallback."""
+
+        return self.sample_id or f"{self.dataset}:{self.index}"
+
+    @property
+    def has_bound_images(self) -> bool:
+        return len(self.image_sha256s) == len(self.image_paths)
+
+
+def _read_regular_file_bytes(path: Path, *, owner: str) -> bytes:
+    if not path.is_absolute():
+        raise ValueError(f"{owner} path must be absolute")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f"{owner} is missing or unreadable: {path}") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"{owner} is not a regular file: {path}")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            return handle.read()
+    finally:
+        os.close(descriptor)
+
+
+def _read_bound_image_bytes(path: Path) -> bytes:
+    return _read_regular_file_bytes(path, owner="benchmark image")
+
+
+def _decode_rgb_bytes(
+    payload: bytes, *, path: Path
+) -> tuple[torch.Tensor, tuple[int, int]]:
+    try:
+        with Image.open(io.BytesIO(payload)) as opened:
+            dimensions = opened.size
+            rgb = opened.convert("RGB")
+            import numpy as np
+
+            array = np.asarray(rgb, dtype=np.uint8).copy()
+    except (OSError, ValueError) as error:
+        raise ValueError(f"benchmark image cannot be decoded: {path}") from error
+    return torch.from_numpy(array), (int(dimensions[0]), int(dimensions[1]))
+
+
+def image_file_identity(path: str | Path) -> tuple[str, tuple[int, int]]:
+    """Hash and decode the same open-file byte snapshot."""
+
+    resolved = Path(path)
+    payload = _read_bound_image_bytes(resolved)
+    _rgb, dimensions = _decode_rgb_bytes(payload, path=resolved)
+    return hashlib.sha256(payload).hexdigest(), dimensions
+
+
+def load_verified_task_image(task: CoreDevTask, image_index: int = 0) -> torch.Tensor:
+    """Load one task image from bytes that match its bound hash and dimensions."""
+
+    if not task.has_bound_images:
+        raise ValueError("policy benchmark task has no bound image identities")
+    if not 0 <= image_index < len(task.image_paths):
+        raise IndexError("task image index is out of range")
+    path = Path(task.image_paths[image_index])
+    payload = _read_bound_image_bytes(path)
+    actual_sha256 = hashlib.sha256(payload).hexdigest()
+    expected_sha256 = task.image_sha256s[image_index]
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"benchmark image SHA256 changed for {task.bound_sample_id}: "
+            f"expected {expected_sha256}, observed {actual_sha256}"
+        )
+    rgb, dimensions = _decode_rgb_bytes(payload, path=path)
+    if dimensions != task.image_dimensions[image_index]:
+        raise ValueError(
+            f"benchmark image dimensions changed for {task.bound_sample_id}: "
+            f"expected {task.image_dimensions[image_index]}, observed {dimensions}"
+        )
+    return rgb
 
 
 def write_official_coredev_tasks(output_path: str | Path) -> dict[str, int]:
@@ -257,10 +942,13 @@ def write_official_coredev_tasks(output_path: str | Path) -> dict[str, int]:
 
     repository_root = Path(__file__).resolve().parents[3]
     pinned = json.loads(
-        (repository_root / "configs/evaluation/coredev_2511_vlmevalkit_v1.json").read_text()
+        (
+            repository_root / "configs/evaluation/coredev_2511_vlmevalkit_v1.json"
+        ).read_text()
     )
     artifact_root = Path(pinned["artifact_root"])
     rows: list[dict[str, object]] = []
+    sample_ids: set[str] = set()
     ordinal = 0
     counts = {"total": 0, "single_image": 0, "multi_image": 0}
     for slice_spec in pinned["slices"]:
@@ -274,18 +962,33 @@ def write_official_coredev_tasks(output_path: str | Path) -> dict[str, int]:
             raise ValueError(f"pinned CoreDev row count changed: {dataset_name}")
         for row_number, source in enumerate(source_rows):
             images = _tsv_image_paths(source["image_path"])
+            image_identities = tuple(image_file_identity(path) for path in images)
             text = _official_prompt_text(dataset_name, source)
             index = source["index"]
             if not text.strip() or not images:
-                raise ValueError(f"official prompt is incomplete: {dataset_name}/{index}")
+                raise ValueError(
+                    f"official prompt is incomplete: {dataset_name}/{index}"
+                )
+            if index in sample_ids:
+                raise ValueError(f"CoreDev sample index is not globally unique: {index}")
+            sample_ids.add(index)
             rows.append(
                 {
                     "ordinal": ordinal,
                     "dataset": dataset_name,
                     "row_number": row_number,
                     "index": index,
+                    # Generic benchmark manifests require an explicit stable
+                    # identity.  The pinned CoreDev source indices are globally
+                    # unique, so preserve the official index verbatim instead
+                    # of inventing a second namespace.
+                    "sample_id": index,
                     "question": text,
                     "image_paths": list(images),
+                    "image_sha256s": [identity[0] for identity in image_identities],
+                    "image_dimensions": [
+                        list(identity[1]) for identity in image_identities
+                    ],
                 }
             )
             ordinal += 1
@@ -295,7 +998,9 @@ def write_official_coredev_tasks(output_path: str | Path) -> dict[str, int]:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.write_text(
-        "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows),
+        "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows
+        ),
         encoding="utf-8",
     )
     os.replace(temporary, target)
@@ -307,7 +1012,11 @@ def _tsv_image_paths(value: str) -> tuple[str, ...]:
         parsed = ast.literal_eval(value)
     except (SyntaxError, ValueError):
         parsed = value
-    paths = tuple(str(item) for item in parsed) if isinstance(parsed, list) else (str(parsed),)
+    paths = (
+        tuple(str(item) for item in parsed)
+        if isinstance(parsed, list)
+        else (str(parsed),)
+    )
     if not paths or any(not Path(path).is_file() for path in paths):
         raise ValueError("CoreDev TSV contains a missing image path")
     return paths
@@ -327,7 +1036,7 @@ def _option_lines(source: Mapping[str, str]) -> str:
 
 def _official_prompt_text(dataset: str, source: Mapping[str, str]) -> str:
     question = source["question"]
-    if dataset in {"VStarBench", "HRBench4K", "BLINK"}:
+    if dataset in {"VStarBench", "HRBench4K", "HRBench8K", "BLINK"}:
         return (
             f"Question: {question}\nOptions:\n{_option_lines(source)}\n"
             "Please select the correct answer from the options above. \n"
@@ -345,19 +1054,457 @@ def _official_prompt_text(dataset: str, source: Mapping[str, str]) -> str:
     raise ValueError(f"unsupported CoreDev dataset: {dataset}")
 
 
-def load_coredev_tasks(path: str | Path) -> tuple[CoreDevTask, ...]:
-    tasks = tuple(
-        CoreDevTask(**json.loads(line))
-        for line in Path(path).read_text(encoding="utf-8").splitlines()
-        if line
+def load_benchmark_tasks(
+    path: str | Path,
+    *,
+    expected_task_count: int,
+    expected_single_image_count: int | None,
+    expected_sha256: str | None = None,
+    verify_image_paths: bool = True,
+    verify_image_contents: bool = True,
+    require_explicit_sample_ids: bool = True,
+    require_image_identities: bool = True,
+) -> tuple[CoreDevTask, ...]:
+    """Load an ordered task manifest and enforce its complete bound identity."""
+
+    manifest_path = Path(path)
+    manifest_bytes = _read_regular_file_bytes(
+        manifest_path, owner="policy benchmark task manifest"
     )
-    if len(tasks) != 2511 or tuple(item.ordinal for item in tasks) != tuple(range(2511)):
-        raise ValueError("CoreDev task materialization differs from 2511-row order")
+    if (
+        expected_sha256 is not None
+        and hashlib.sha256(manifest_bytes).hexdigest() != expected_sha256
+    ):
+        raise ValueError("policy benchmark task manifest SHA256 differs")
+    try:
+        manifest_text = manifest_bytes.decode("utf-8")
+        tasks = tuple(
+            CoreDevTask(**json.loads(line))
+            for line in manifest_text.splitlines()
+            if line
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("policy benchmark task manifest is unreadable") from error
+    if len(tasks) != expected_task_count:
+        raise ValueError("policy benchmark task manifest count differs")
+    if tuple(item.ordinal for item in tasks) != tuple(range(expected_task_count)):
+        raise ValueError("policy benchmark task manifest order differs")
+    if require_explicit_sample_ids:
+        if any(task.sample_id is None for task in tasks):
+            raise ValueError(
+                "generic policy benchmark task manifest requires explicit sample_id"
+            )
+        if any(task.sample_id != task.index for task in tasks):
+            raise ValueError(
+                "generic policy benchmark task sample_id must equal its index"
+            )
+    if require_image_identities and any(not task.has_bound_images for task in tasks):
+        raise ValueError(
+            "policy benchmark task manifest requires image SHA256 and dimensions"
+        )
+    sample_ids = tuple(task.bound_sample_id for task in tasks)
+    if len(set(sample_ids)) != len(sample_ids):
+        raise ValueError("policy benchmark task manifest contains duplicate sample_id")
+    if verify_image_paths:
+        missing_or_relative = [
+            image_path
+            for task in tasks
+            for image_path in task.image_paths
+            if not Path(image_path).is_absolute() or not Path(image_path).is_file()
+        ]
+        if missing_or_relative:
+            raise ValueError(
+                "policy benchmark task manifest contains a relative or missing image_path"
+            )
+    if verify_image_contents:
+        for task in tasks:
+            if task.has_bound_images:
+                for image_index in range(len(task.image_paths)):
+                    load_verified_task_image(task, image_index)
+    single_image_count = sum(task.single_image for task in tasks)
+    if (
+        expected_single_image_count is not None
+        and single_image_count != expected_single_image_count
+    ):
+        raise ValueError("policy benchmark single-image task count differs")
     return tasks
 
 
+def load_coredev_tasks(path: str | Path) -> tuple[CoreDevTask, ...]:
+    """Backward-compatible loader for the historical 2,511-row suite."""
+
+    return load_benchmark_tasks(
+        path,
+        expected_task_count=_LEGACY_COREDEV_TASK_COUNT,
+        expected_single_image_count=None,
+        verify_image_paths=False,
+        verify_image_contents=False,
+        require_explicit_sample_ids=False,
+        require_image_identities=False,
+    )
+
+
+def policy_benchmark_task_path(config: PolicyCoreDevConfig) -> Path:
+    filename = (
+        "coredev-official-tasks.jsonl"
+        if config.uses_legacy_coredev_manifest
+        else "policy-benchmark-tasks.jsonl"
+    )
+    return config.output_root / "runtime" / filename
+
+
+def prepare_policy_benchmark_tasks(config: PolicyCoreDevConfig) -> dict[str, int]:
+    """Materialize the legacy suite or bind an immutable supplied task manifest."""
+
+    target = policy_benchmark_task_path(config)
+    if config.uses_legacy_coredev_manifest:
+        counts = write_official_coredev_tasks(target)
+    else:
+        assert config.task_manifest_path is not None
+        assert config.task_manifest_sha256 is not None
+        # Validate the source before copying so a partial/corrupt manifest is
+        # never admitted into a resumable evaluation directory.
+        tasks = load_benchmark_tasks(
+            config.task_manifest_path,
+            expected_task_count=config.expected_task_count,
+            expected_single_image_count=config.expected_single_image_count,
+            expected_sha256=config.task_manifest_sha256,
+            verify_image_contents=True,
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            load_benchmark_tasks(
+                target,
+                expected_task_count=config.expected_task_count,
+                expected_single_image_count=config.expected_single_image_count,
+                expected_sha256=config.task_manifest_sha256,
+                verify_image_contents=True,
+            )
+        else:
+            source_bytes = _read_regular_file_bytes(
+                config.task_manifest_path,
+                owner="policy benchmark task manifest",
+            )
+            if hashlib.sha256(source_bytes).hexdigest() != config.task_manifest_sha256:
+                raise ValueError("policy benchmark task manifest SHA256 changed")
+            temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+            try:
+                with temporary.open("xb") as handle:
+                    handle.write(source_bytes)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        counts = {
+            "total": len(tasks),
+            "single_image": sum(task.single_image for task in tasks),
+            "multi_image": sum(not task.single_image for task in tasks),
+        }
+    load_benchmark_tasks(
+        target,
+        expected_task_count=config.expected_task_count,
+        expected_single_image_count=config.expected_single_image_count,
+        expected_sha256=(
+            config.task_manifest_sha256
+            if not config.uses_legacy_coredev_manifest
+            else None
+        ),
+        require_explicit_sample_ids=not config.uses_legacy_coredev_manifest,
+        require_image_identities=True,
+        verify_image_contents=True,
+    )
+    return counts
+
+
+def load_bound_policy_benchmark_tasks(
+    config: PolicyCoreDevConfig,
+) -> tuple[CoreDevTask, ...]:
+    return load_benchmark_tasks(
+        policy_benchmark_task_path(config),
+        expected_task_count=config.expected_task_count,
+        expected_single_image_count=config.expected_single_image_count,
+        expected_sha256=(
+            config.task_manifest_sha256
+            if not config.uses_legacy_coredev_manifest
+            else None
+        ),
+        require_explicit_sample_ids=not config.uses_legacy_coredev_manifest,
+        require_image_identities=True,
+        # Each task is rehashed from one open-file byte snapshot immediately
+        # before inference. Avoid a redundant full-suite image read here.
+        verify_image_contents=False,
+    )
+
+
+def _canonical_json_sha256(payload: object) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _base_equivalent_step_zero_lora(
+    snapshot: PolicyEvaluationSnapshot,
+) -> dict[str, object]:
+    """Prove that the step-zero adapter has an exactly zero LoRA delta."""
+
+    if snapshot.policy_version.optimizer_step != 0:
+        raise ValueError("base-equivalent LoRA proof requires optimizer step zero")
+    tensors = snapshot.lora.tensors
+    if not tensors:
+        raise ValueError("step-zero LoRA snapshot contains no tensors")
+    a_by_stem: dict[str, torch.Tensor] = {}
+    b_by_stem: dict[str, torch.Tensor] = {}
+    for name, tensor in tensors.items():
+        if name.endswith(".lora_A.weight"):
+            a_by_stem[name.removesuffix(".lora_A.weight")] = tensor
+        elif name.endswith(".lora_B.weight"):
+            b_by_stem[name.removesuffix(".lora_B.weight")] = tensor
+        else:
+            raise ValueError("step-zero snapshot contains a non-LoRA tensor")
+    if not a_by_stem or set(a_by_stem) != set(b_by_stem):
+        raise ValueError("step-zero LoRA A/B tensor names differ")
+    b_evidence: list[dict[str, object]] = []
+    for stem in sorted(b_by_stem):
+        tensor = b_by_stem[stem]
+        if torch.count_nonzero(tensor).item() != 0:
+            raise ValueError("step-zero LoRA B tensor is not exactly zero")
+        b_evidence.append(
+            {
+                "name": f"{stem}.lora_B.weight",
+                "shape": list(tensor.shape),
+                "dtype": str(tensor.dtype).removeprefix("torch."),
+                "tensor_sha256": tensor_checksum(tensor),
+            }
+        )
+    proof_content = {
+        "schema_version": "tgvf-base-equivalent-step-zero-lora-v1",
+        "optimizer_step": 0,
+        "weights_sha256": snapshot.policy_version.weights_sha256,
+        "tensor_file_sha256": snapshot.lora.tensor_file_sha256,
+        "lora_pair_count": len(a_by_stem),
+        "only_lora_a_and_b": True,
+        "all_lora_b_exactly_zero": True,
+        "lora_b_tensors": b_evidence,
+    }
+    return {
+        **proof_content,
+        "proof_sha256": _canonical_json_sha256(proof_content),
+    }
+
+
+def _base_equivalent_step_zero_full_model(
+    snapshot: FullModelEvaluationSnapshot,
+) -> dict[str, object]:
+    """Bind step zero to the run contract's exact immutable base-HF tree."""
+
+    if (
+        snapshot.policy_version.optimizer_step != 0
+        or snapshot.manifest.source_kind is not FullModelSourceKind.BASE_HF
+    ):
+        raise ValueError("base-equivalent full-model proof requires base-HF step zero")
+    content = {
+        "schema_version": "tgvf-base-equivalent-step-zero-full-model-v1",
+        "optimizer_step": 0,
+        "source_kind": snapshot.manifest.source_kind.value,
+        "source_is_bound_run_base_model": True,
+        "snapshot_identity_sha256": snapshot.manifest.identity_sha256,
+        "checkpoint_sha256": snapshot.manifest.checkpoint_sha256,
+        "source_tree_sha256": snapshot.manifest.source_tree_sha256,
+        "weights_sha256": snapshot.policy_version.weights_sha256,
+        "materialized_model_tree_sha256": snapshot.receipt.model_tree_sha256,
+    }
+    return {**content, "proof_sha256": _canonical_json_sha256(content)}
+
+
+def _evaluation_protocol_identity(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+) -> dict[str, object]:
+    if config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
+        if not isinstance(snapshot, PolicyEvaluationSnapshot):
+            raise ValueError("training-run evaluation requires a LoRA snapshot")
+        protocol = snapshot.run.protocol
+        return {
+            "profile": TRAINING_RUN_EVALUATION_PROTOCOL,
+            "prompt_sha256": protocol.prompt_sha256,
+            "tool_schema_sha256": protocol.tool_schema_sha256,
+            "tool_profile": protocol.tool_profile.value,
+            "enabled_tool_names": list(protocol.enabled_tool_names),
+            "maximum_tool_calls": protocol.maximum_tool_calls,
+            "native_pixels": False,
+        }
+    if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        raise ValueError("unsupported policy evaluation protocol")
+    from tgvf_rl.policy.deepeyes_official_protocol import (
+        DEEPEYES_MAX_ACTIVE_PERCEPTION,
+        DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
+        DEEPEYES_TOOL_NAME,
+        DEEPEYES_TOOL_PARSER,
+        SYSTEM_PROMPT_V2_SHA256,
+        USER_PROMPT_V2_SHA256,
+        VISUAL_PROMPT_IDENTITY,
+    )
+    from tgvf_rl.qwen.crop_coordinates import (
+        QWEN3_CROP_CONVERSION_VERSION,
+        QWEN3_CROP_COORDINATE_SPACE,
+    )
+
+    if snapshot.run.model.model_name != "Qwen3-VL-8B-Instruct":
+        raise ValueError(
+            "official-visible base evaluation requires Qwen3-VL-8B-Instruct"
+        )
+    identity: dict[str, object] = {
+        "profile": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+        "protocol_schema_version": DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
+        "source_repository": "https://github.com/Visual-Agent/DeepEyes",
+        "source_commit": "11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1",
+        "prompt_source_path": (
+            "verl/workers/agent/envs/mm_process_engine/prompt.py"
+        ),
+        "prompt_source_file_sha256": (
+            "35ef1bae8da550827bc53e23751e64d4c8eecc76d9170ea5673aa2493628cc23"
+        ),
+        "crop_source_path": (
+            "verl/workers/agent/envs/mm_process_engine/visual_toolbox_v2.py"
+        ),
+        "crop_source_file_sha256": (
+            "0d56b2ff584fe56e68f20bbb4d25a9774ecbab605ad02cdaf1dac7cd6fa8bc60"
+        ),
+        "system_prompt_sha256": SYSTEM_PROMPT_V2_SHA256,
+        "user_prompt_sha256": USER_PROMPT_V2_SHA256,
+        "prompt_bundle_sha256": VISUAL_PROMPT_IDENTITY.bundle_sha256,
+        "visible_system_tool_schema": True,
+        "template_tools_argument": [],
+        "tool_parser": DEEPEYES_TOOL_PARSER,
+        "enabled_tool_names": [DEEPEYES_TOOL_NAME],
+        "maximum_tool_calls": DEEPEYES_MAX_ACTIVE_PERCEPTION,
+        "coordinate_mapper": "qwen_0_1000_to_source_v1",
+        "crop_coordinate_space": QWEN3_CROP_COORDINATE_SPACE,
+        "crop_coordinate_conversion_version": QWEN3_CROP_CONVERSION_VERSION,
+        "crop_coordinate_reference_size": [1000, 1000],
+        "crop_source": "immutable_original_image",
+        "native_pixels": True,
+        "precomputed_image_embeds": False,
+        "image_max_pixels": snapshot.run.policy.image_max_pixels,
+        "native_image_limit_per_prompt": DEEPEYES_MAX_ACTIVE_PERCEPTION + 1,
+        "observation_role": "user",
+        "observation_envelope": (
+            "<tool_response><image>USER_PROMPT_V2</tool_response>"
+        ),
+    }
+    if snapshot.policy_version.optimizer_step == 0:
+        identity["base_equivalence"] = (
+            _base_equivalent_step_zero_lora(snapshot)
+            if isinstance(snapshot, PolicyEvaluationSnapshot)
+            else _base_equivalent_step_zero_full_model(snapshot)
+        )
+    return identity
+
+
+def policy_evaluation_identity(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+) -> dict[str, object]:
+    """Bind experiment, model, task population, and exact policy bytes."""
+
+    task_path = policy_benchmark_task_path(config).resolve()
+    task_sha256 = _sha256_file(task_path)
+    if (
+        config.task_manifest_sha256 is not None
+        and task_sha256 != config.task_manifest_sha256
+    ):
+        raise ValueError("bound policy benchmark task manifest SHA256 changed")
+    policy_snapshot = (
+        {
+            "run_id": snapshot.policy_version.run_id,
+            "run_identity_sha256": snapshot.lora.run_identity_sha256,
+            "optimizer_step": snapshot.policy_version.optimizer_step,
+            "weights_sha256": snapshot.policy_version.weights_sha256,
+            "pointer_file_sha256": snapshot.lora.pointer_file_sha256,
+            "manifest_file_sha256": snapshot.lora.manifest_file_sha256,
+            "tensor_file_sha256": snapshot.lora.tensor_file_sha256,
+            "request_sha256": snapshot.lora.request_sha256,
+        }
+        if isinstance(snapshot, PolicyEvaluationSnapshot)
+        else full_model_snapshot_identity_record(snapshot)
+    )
+    policy_config_path = Path(
+        getattr(config, "policy_config_path", snapshot.contract.source_path)
+        if isinstance(snapshot, FullModelEvaluationSnapshot)
+        else config.policy_config_path
+    )
+    content: dict[str, object] = {
+        "schema_version": POLICY_EVALUATION_IDENTITY_SCHEMA,
+        "evaluation_id": config.evaluation_id,
+        "evaluation_schema_version": config.schema_version,
+        "policy_config_path": str(policy_config_path.resolve()),
+        "policy_config_file_sha256": _sha256_file(policy_config_path),
+        "policy_run_config_identity_sha256": snapshot.run.identity_sha256,
+        "model_identity": asdict(snapshot.run.model),
+        "policy_snapshot": policy_snapshot,
+        "task_manifest": {
+            "path": str(task_path),
+            "sha256": task_sha256,
+            "task_count": config.expected_task_count,
+            "single_image_count": config.expected_single_image_count,
+        },
+        "execution": {
+            "world_size": len(config.gpu_ids),
+            "gpu_ids": list(config.gpu_ids),
+            "max_model_len": config.max_model_len,
+            "max_num_batched_tokens": config.max_num_batched_tokens,
+            "enable_chunked_prefill": config.enable_chunked_prefill,
+            "inference_concurrency_per_gpu": config.inference_concurrency_per_gpu,
+        },
+    }
+    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        content["protocol"] = _evaluation_protocol_identity(config, snapshot)
+    return {**content, "identity_sha256": _canonical_json_sha256(content)}
+
+
+def write_policy_evaluation_identity(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+) -> dict[str, object]:
+    """Create one immutable run identity shared by all evaluator ranks."""
+
+    identity = policy_evaluation_identity(config, snapshot)
+    encoded = (
+        json.dumps(identity, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    path = config.output_root / "runtime" / "evaluation-identity.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("policy evaluation identity is not a regular file")
+        if path.read_bytes() != encoded:
+            raise RuntimeError("policy evaluation identity collision")
+        return identity
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(encoded)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != encoded:
+                raise RuntimeError("policy evaluation identity collision")
+    finally:
+        temporary.unlink(missing_ok=True)
+    return identity
+
+
 def _single_collective(value: object, *, operation: str) -> Mapping[str, object]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 1:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or len(value) != 1
+    ):
         raise RuntimeError(f"{operation} requires one vLLM worker result")
     result = value[0]
     if not isinstance(result, Mapping):
@@ -375,10 +1522,18 @@ class _TurnRoute:
 class StandaloneTGVFVLLMManager:
     """Small AsyncLLM adapter matching the already-audited training client ABI."""
 
-    def __init__(self, engine: object, lora_request: object, *, capture_hidden: bool) -> None:
+    def __init__(
+        self,
+        engine: object,
+        lora_request: object,
+        *,
+        capture_hidden: bool,
+        native_pixels: bool = False,
+    ) -> None:
         self.engine = engine
         self.lora_request = lora_request
         self.capture_hidden = capture_hidden
+        self.native_pixels = native_pixels
         self.turns: dict[str, _TurnRoute] = {}
         self.backend_ids: dict[str, list[str]] = {}
 
@@ -446,11 +1601,16 @@ class StandaloneTGVFVLLMManager:
         if parameters.get("logprobs") is True:
             parameters["logprobs"] = 0
         final = None
+        adapter_arguments = (
+            {}
+            if self.lora_request is None
+            else {"lora_request": self.lora_request}
+        )
         async for output in self.engine.generate(
             prompt,
             SamplingParams(**parameters),
             backend_id,
-            lora_request=self.lora_request,
+            **adapter_arguments,
         ):
             final = output
         if final is None or not final.finished or len(final.outputs) != 1:
@@ -549,6 +1709,12 @@ class StandaloneTGVFVLLMManager:
     async def release_trajectory(self, request_id: str) -> None:
         backend_ids = tuple(self.backend_ids.pop(request_id, ()))
         self.turns.pop(request_id, None)
+        if self.native_pixels:
+            if backend_ids:
+                raise RuntimeError(
+                    "native-pixel evaluator unexpectedly registered hidden traces"
+                )
+            return
         await self.engine.collective_rpc(
             "tgvf_release_trajectory", args=(request_id, backend_ids)
         )
@@ -556,25 +1722,53 @@ class StandaloneTGVFVLLMManager:
 
 async def build_standalone_manager(
     config: PolicyCoreDevConfig,
-) -> tuple[StandaloneTGVFVLLMManager, object, PolicyE2ESmokeRunConfig]:
+    snapshot: PolicyEvaluationSubject,
+) -> tuple[StandaloneTGVFVLLMManager, object, object]:
     """Construct one single-GPU post-training vLLM replica."""
+
+    if isinstance(snapshot, FullModelEvaluationSnapshot):
+        return await build_full_model_standalone_manager(config, snapshot)
 
     from vllm import AsyncEngineArgs
     from vllm.lora.request import LoRARequest
     from vllm.v1.engine.async_llm import AsyncLLM
 
-    run = load_policy_e2e_smoke_run_config(config.policy_config_path)
-    adapter_root = materialize_vllm_lora_adapter(config)
-    engine_args = AsyncEngineArgs(
+    if not isinstance(snapshot, PolicyEvaluationSnapshot):
+        raise TypeError("snapshot must be a PolicyEvaluationSnapshot")
+    run = snapshot.run
+    adapter_root = materialize_vllm_lora_adapter(config, snapshot)
+    engine_args = AsyncEngineArgs(**_standalone_engine_kwargs(config, run))
+    engine = AsyncLLM.from_engine_args(engine_args)
+    lora = LoRARequest(policy_lora_request_name(snapshot), 1, str(adapter_root))
+    manager = StandaloneTGVFVLLMManager(
+        engine,
+        lora,
+        capture_hidden=(
+            config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL
+            and run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
+        ),
+        native_pixels=(
+            config.evaluation_protocol
+            == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+        ),
+    )
+    return manager, engine, run
+
+
+def _standalone_engine_kwargs(
+    config: PolicyCoreDevConfig, run: PolicyE2ESmokeRunConfig
+) -> dict[str, object]:
+    """Build explicit vLLM arguments, including suite-specific context limits."""
+
+    common: dict[str, object] = dict(
         model=run.model.revision_or_path,
         dtype="bfloat16",
         trust_remote_code=True,
         distributed_executor_backend="mp",
-        worker_extension_cls=TGVF_VLLM_WORKER_EXTENSION_FQN,
         max_model_len=config.max_model_len,
         max_num_seqs=config.inference_concurrency_per_gpu,
-        max_num_batched_tokens=16384,
-        enable_chunked_prefill=True,
+        max_num_batched_tokens=config.max_num_batched_tokens,
+        enable_chunked_prefill=config.enable_chunked_prefill,
         enable_prefix_caching=False,
         gpu_memory_utilization=config.gpu_memory_utilization,
         logprobs_mode="processed_logprobs",
@@ -583,25 +1777,30 @@ async def build_standalone_manager(
         enable_lora=True,
         max_loras=1,
         max_lora_rank=64,
-        enable_mm_embeds=True,
         mm_processor_cache_gb=0,
-        mm_encoder_attn_backend=TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
         limit_mm_per_prompt={
-            "image": 1 + run.protocol.maximum_tool_calls,
+            "image": 1
+            + (
+                6
+                if config.evaluation_protocol
+                == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                else run.protocol.maximum_tool_calls
+            ),
             "video": 0,
         },
-        hf_overrides={"architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]},
     )
-    engine = AsyncLLM.from_engine_args(engine_args)
-    lora = LoRARequest("policy-step80", 1, str(adapter_root))
-    manager = StandaloneTGVFVLLMManager(
-        engine,
-        lora,
-        capture_hidden=(
-            run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
-        ),
-    )
-    return manager, engine, run
+    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        # This is the PRL13 comparison path: source/crop PIL images are handled
+        # by stock Qwen3-VL/vLLM.  Loading the recorded-feature architecture or
+        # worker extension here would silently turn the control into PRL11.
+        return common
+    return {
+        **common,
+        "worker_extension_cls": TGVF_VLLM_WORKER_EXTENSION_FQN,
+        "enable_mm_embeds": True,
+        "mm_encoder_attn_backend": TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
+        "hf_overrides": {"architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]},
+    }
 
 
 def _decoding_contract() -> VLLMOutputDecodingContract:
@@ -642,12 +1841,21 @@ class PolicyCoreDevEvaluator:
         run: PolicyE2ESmokeRunConfig,
         manager: StandaloneTGVFVLLMManager,
         processor: object,
+        snapshot: PolicyEvaluationSnapshot,
+        evaluation_identity: Mapping[str, object],
     ) -> None:
         self.config = config
         self.run = run
         self.manager = manager
         self.processor = processor
-        self.policy_version = policy_version_from_pointer(config)
+        if snapshot.run != run:
+            raise ValueError("evaluator run differs from its frozen policy snapshot")
+        expected_identity = policy_evaluation_identity(config, snapshot)
+        if dict(evaluation_identity) != expected_identity:
+            raise ValueError("evaluator identity differs from its bound experiment")
+        self.snapshot = snapshot
+        self.evaluation_identity = expected_identity
+        self.policy_version = snapshot.policy_version
         self.store = ObservationStore()
         self.behavior_store = BehaviorTraceStore()
         self.focus_ledger = FocusExecutionLedger()
@@ -673,7 +1881,7 @@ class PolicyCoreDevEvaluator:
             _artifact_identity(
                 "policy-evaluation",
                 "qwen3-contextual-behavior-forward",
-                POLICY_COREDEV_SCHEMA,
+                config.schema_version,
                 {
                     "evaluation_id": config.evaluation_id,
                     "policy": self.policy_version.weights_sha256,
@@ -707,7 +1915,9 @@ class PolicyCoreDevEvaluator:
             )
         )
 
-    def render_initial_prompt(self, task: CoreDevTask) -> tuple[int, ...]:
+    def render_initial_prompt(
+        self, task: CoreDevTask, *, source_rgb: torch.Tensor
+    ) -> tuple[int, ...]:
         if not task.single_image:
             raise ValueError("current visual-tool protocol has no multi-image selector")
         messages = build_visual_tool_prompt_messages(
@@ -725,20 +1935,27 @@ class PolicyCoreDevEvaluator:
             processor=self.processor,
             canonical_token_ids=rendered.token_ids,
             prompt_text=rendered.text,
-            image_path=Path(task.image_paths[0]),
             image_max_pixels=self.run.policy.image_max_pixels,
+            source_rgb=source_rgb,
         )
 
     async def evaluate(self, task: CoreDevTask) -> TrajectoryRecord:
-        prompt_ids = self.render_initial_prompt(task)
+        # This is deliberately the last filesystem read before model input
+        # construction. Prompt expansion and visual encoding share these exact
+        # verified bytes, so a mutable source/hardlink cannot create a TOCTOU.
+        source_rgb = load_verified_task_image(task)
+        prompt_ids = self.render_initial_prompt(task, source_rgb=source_rgb)
         identity = TrajectoryIdentity(
             self.config.evaluation_id,
-            f"{task.dataset}:{task.index}",
+            task.bound_sample_id,
             0,
-            f"coredev:{task.ordinal}",
+            (
+                f"coredev:{task.ordinal}"
+                if self.config.uses_legacy_coredev_manifest
+                else f"benchmark:{task.ordinal}"
+            ),
         )
         trajectory_id = identity.canonical_id
-        source_rgb = _load_bound_rgb(Path(task.image_paths[0]))
         pixel_values, image_grid_thw = preprocess_qwen3_rgb(
             processor=self.processor,
             rgb=source_rgb,
@@ -801,13 +2018,16 @@ class PolicyCoreDevEvaluator:
             processor_identity = _artifact_identity(
                 "policy-evaluation",
                 "qwen3-shared-vllm-crop-processor",
-                POLICY_COREDEV_SCHEMA,
-                {"model": self.run.model.revision_or_path, "max_pixels": self.run.policy.image_max_pixels},
+                self.config.schema_version,
+                {
+                    "model": self.run.model.revision_or_path,
+                    "max_pixels": self.run.policy.image_max_pixels,
+                },
             )
             layout_identity = _artifact_identity(
                 "policy-evaluation",
                 "qwen3-native-crop-layout",
-                POLICY_COREDEV_SCHEMA,
+                self.config.schema_version,
                 {"model": self.run.model.revision_or_path},
             )
             materializer = _RemoteCropVisualMaterializer(
@@ -896,7 +2116,14 @@ class PolicyCoreDevEvaluator:
                 self.store.release_trajectories(trajectory_ids)
 
 
-def trajectory_audit_payload(task: CoreDevTask, trajectory: TrajectoryRecord) -> dict[str, object]:
+def trajectory_audit_payload(
+    task: CoreDevTask,
+    trajectory: TrajectoryRecord,
+    *,
+    evaluation_identity: Mapping[str, object],
+    rank: int,
+    world_size: int,
+) -> dict[str, object]:
     def call_payload(call: object) -> dict[str, object]:
         common: dict[str, object]
         if isinstance(call, ToolCallRecord):
@@ -915,14 +2142,64 @@ def trajectory_audit_payload(task: CoreDevTask, trajectory: TrajectoryRecord) ->
             **common,
         }
 
-    return {
-        "schema_version": "tgvf-policy-coredev-trajectory-audit-v1",
+    identity_sha256 = evaluation_identity.get("identity_sha256")
+    if not isinstance(identity_sha256, str):
+        raise ValueError("evaluation identity SHA256 is missing")
+    _require_sha256(identity_sha256, name="evaluation identity SHA256")
+    execution = evaluation_identity.get("execution")
+    policy_snapshot = evaluation_identity.get("policy_snapshot")
+    task_manifest = evaluation_identity.get("task_manifest")
+    model_identity = evaluation_identity.get("model_identity")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (execution, policy_snapshot, task_manifest, model_identity)
+    ):
+        raise ValueError("evaluation identity sub-bindings are malformed")
+    assert isinstance(execution, Mapping)
+    assert isinstance(policy_snapshot, Mapping)
+    assert isinstance(task_manifest, Mapping)
+    assert isinstance(model_identity, Mapping)
+    if type(rank) is not int or type(world_size) is not int or world_size <= 0:
+        raise ValueError("result rank/world_size identity is invalid")
+    if execution.get("world_size") != world_size or not 0 <= rank < world_size:
+        raise ValueError("result rank/world_size differs from evaluation identity")
+    if task.ordinal % world_size != rank:
+        raise ValueError("task ordinal is assigned to another evaluator rank")
+    if asdict(trajectory.model) != dict(model_identity):
+        raise ValueError("trajectory model differs from evaluation identity")
+    if trajectory.behavior_policy != PolicyVersion(
+        run_id=str(policy_snapshot.get("run_id")),
+        optimizer_step=policy_snapshot.get("optimizer_step"),
+        weights_sha256=str(policy_snapshot.get("weights_sha256")),
+    ):
+        raise ValueError("trajectory policy differs from evaluation identity")
+    payload = {
+        "schema_version": POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA,
+        "selection_reasons": ["representative_rollout_zero"],
+        "evaluation_identity_sha256": identity_sha256,
+        "policy_run_identity_sha256": policy_snapshot["run_identity_sha256"],
+        "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
+        "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
+        "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
+        "policy_config_identity_sha256": evaluation_identity[
+            "policy_run_config_identity_sha256"
+        ],
+        "task_manifest_sha256": task_manifest["sha256"],
+        "model_identity": dict(model_identity),
+        "rank": rank,
+        "world_size": world_size,
+        "evaluation_id": trajectory.identity.run_id,
+        "sample_id": trajectory.identity.sample_id,
+        "group_uid": trajectory.identity.group_id,
+        "rollout_index": trajectory.identity.rollout_index,
         "ordinal": task.ordinal,
         "dataset": task.dataset,
         "row_number": task.row_number,
         "index": task.index,
         "question": task.question,
         "image_paths": list(task.image_paths),
+        "image_sha256s": list(task.image_sha256s),
+        "image_dimensions": [list(item) for item in task.image_dimensions],
         "trajectory_id": trajectory.identity.canonical_id,
         "trajectory_sha256": trajectory_checksum(trajectory),
         "policy_run_id": trajectory.behavior_policy.run_id,
@@ -954,19 +2231,208 @@ def trajectory_audit_payload(task: CoreDevTask, trajectory: TrajectoryRecord) ->
         ],
         "successful_observation_count": len(trajectory.observations),
     }
+    payload["result_identity_sha256"] = _canonical_json_sha256(payload)
+    return payload
+
+
+def validate_policy_benchmark_result(
+    payload: Mapping[str, object],
+    *,
+    task: CoreDevTask,
+    evaluation_identity: Mapping[str, object],
+    rank: int,
+    world_size: int,
+) -> None:
+    """Validate the complete resume identity of one durable result row."""
+
+    expected_hash = payload.get("result_identity_sha256")
+    _require_sha256(expected_hash, name="result identity SHA256")
+    hash_payload = dict(payload)
+    hash_payload.pop("result_identity_sha256", None)
+    hash_payload.pop("wall_seconds", None)
+    if _canonical_json_sha256(hash_payload) != expected_hash:
+        raise RuntimeError("policy benchmark result identity digest differs")
+    policy_snapshot = evaluation_identity["policy_snapshot"]
+    task_manifest = evaluation_identity["task_manifest"]
+    snapshot_backend = policy_snapshot.get(
+        "snapshot_backend", LORA_ADAPTER_EVALUATION_BACKEND
+    )
+    if snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
+        snapshot_expected = {
+            "policy_snapshot_backend": FULL_MODEL_EVALUATION_BACKEND,
+            "policy_full_snapshot_identity_sha256": policy_snapshot[
+                "snapshot_identity_sha256"
+            ],
+            "policy_checkpoint_sha256": policy_snapshot["checkpoint_sha256"],
+            "policy_source_tree_sha256": policy_snapshot["source_tree_sha256"],
+            "policy_materialization_identity_sha256": policy_snapshot[
+                "materialization_identity_sha256"
+            ],
+            "policy_materialized_model_tree_sha256": policy_snapshot[
+                "materialized_model_tree_sha256"
+            ],
+        }
+    elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
+        snapshot_expected = {
+            "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
+            "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
+            "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
+        }
+        # The legacy trajectory writer predates an explicit backend field;
+        # the official-visible writer emits its public audit spelling instead
+        # of the internal config spelling ``lora_adapter``.
+        if "policy_snapshot_backend" in payload:
+            snapshot_expected["policy_snapshot_backend"] = "lora"
+    else:
+        raise RuntimeError("policy benchmark snapshot backend differs")
+    expected = {
+        "schema_version": POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA,
+        "evaluation_identity_sha256": evaluation_identity["identity_sha256"],
+        "policy_run_identity_sha256": policy_snapshot["run_identity_sha256"],
+        **snapshot_expected,
+        "policy_config_identity_sha256": evaluation_identity[
+            "policy_run_config_identity_sha256"
+        ],
+        "task_manifest_sha256": task_manifest["sha256"],
+        "model_identity": evaluation_identity["model_identity"],
+        "rank": rank,
+        "world_size": world_size,
+        "evaluation_id": evaluation_identity["evaluation_id"],
+        "sample_id": task.bound_sample_id,
+        "group_uid": (
+            f"coredev:{task.ordinal}"
+            if evaluation_identity["evaluation_schema_version"] == POLICY_COREDEV_SCHEMA
+            else f"benchmark:{task.ordinal}"
+        ),
+        "rollout_index": 0,
+        "ordinal": task.ordinal,
+        "dataset": task.dataset,
+        "row_number": task.row_number,
+        "index": task.index,
+        "question": task.question,
+        "image_paths": list(task.image_paths),
+        "image_sha256s": list(task.image_sha256s),
+        "image_dimensions": [list(item) for item in task.image_dimensions],
+        "policy_run_id": policy_snapshot["run_id"],
+        "optimizer_step": policy_snapshot["optimizer_step"],
+        "policy_weights_sha256": policy_snapshot["weights_sha256"],
+    }
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            raise RuntimeError(f"policy benchmark result {field} differs")
+    expected_trajectory_id = TrajectoryIdentity(
+        str(evaluation_identity["evaluation_id"]),
+        task.bound_sample_id,
+        0,
+        str(expected["group_uid"]),
+    ).canonical_id
+    if payload.get("trajectory_id") != expected_trajectory_id:
+        raise RuntimeError("policy benchmark result trajectory_id differs")
+    if task.ordinal % world_size != rank:
+        raise RuntimeError("policy benchmark result is stored under the wrong rank")
+
+
+def load_policy_benchmark_results(
+    inference_root: str | Path,
+    *,
+    tasks: Sequence[CoreDevTask],
+    evaluation_identity: Mapping[str, object],
+    require_complete: bool = False,
+) -> dict[int, dict[str, object]]:
+    """Load all rank JSONLs, rejecting duplicates and any resume drift."""
+
+    root = Path(inference_root)
+    task_by_ordinal = {task.ordinal: task for task in tasks if task.single_image}
+    world_size = evaluation_identity.get("execution", {}).get("world_size")
+    if type(world_size) is not int or world_size <= 0:
+        raise ValueError("evaluation identity world_size is invalid")
+    records: dict[int, dict[str, object]] = {}
+    for rank in range(world_size):
+        path = root / f"rank-{rank}.jsonl"
+        if not path.exists():
+            if require_complete:
+                raise FileNotFoundError(f"missing policy benchmark rank result: {path}")
+            continue
+        try:
+            with path.open(encoding="utf-8") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+                try:
+                    lines = handle.read().splitlines()
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except (OSError, UnicodeDecodeError) as error:
+            raise RuntimeError(
+                f"cannot read policy benchmark result: {path}"
+            ) from error
+        for line_number, line in enumerate(lines, 1):
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise RuntimeError(
+                    f"invalid policy benchmark result at {path}:{line_number}"
+                ) from error
+            if not isinstance(raw, dict):
+                raise RuntimeError(
+                    f"policy benchmark result is not an object at {path}:{line_number}"
+                )
+            ordinal = raw.get("ordinal")
+            if type(ordinal) is not int or ordinal in records:
+                raise RuntimeError(
+                    f"duplicate/invalid policy benchmark ordinal at {path}:{line_number}"
+                )
+            task = task_by_ordinal.get(ordinal)
+            if task is None:
+                raise RuntimeError(
+                    "policy benchmark result is outside its task tranche"
+                )
+            validate_policy_benchmark_result(
+                raw,
+                task=task,
+                evaluation_identity=evaluation_identity,
+                rank=rank,
+                world_size=world_size,
+            )
+            records[ordinal] = raw
+    if require_complete and set(records) != set(task_by_ordinal):
+        missing = sorted(set(task_by_ordinal).difference(records))
+        raise RuntimeError(f"policy benchmark results are incomplete: {missing[:5]}")
+    return records
 
 
 __all__ = [
     "CoreDevTask",
+    "FULL_MODEL_EVALUATION_BACKEND",
+    "LORA_ADAPTER_EVALUATION_BACKEND",
+    "POLICY_BENCHMARK_SCHEMA",
+    "POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA",
     "POLICY_COREDEV_SCHEMA",
+    "POLICY_EVALUATION_IDENTITY_SCHEMA",
     "PolicyCoreDevConfig",
     "PolicyCoreDevEvaluator",
+    "PolicyEvaluationSnapshot",
+    "PolicyEvaluationSubject",
     "StandaloneTGVFVLLMManager",
     "build_standalone_manager",
+    "freeze_policy_evaluation_snapshot",
+    "frozen_full_model_state_root",
+    "frozen_policy_state_root",
+    "image_file_identity",
+    "load_benchmark_tasks",
+    "load_bound_policy_benchmark_tasks",
     "load_coredev_tasks",
+    "load_frozen_policy_evaluation_snapshot",
+    "load_policy_benchmark_results",
     "load_policy_coredev_config",
+    "load_policy_evaluation_snapshot",
+    "load_verified_task_image",
     "materialize_vllm_lora_adapter",
+    "policy_benchmark_task_path",
+    "policy_evaluation_identity",
+    "policy_lora_request_name",
     "policy_version_from_pointer",
+    "prepare_policy_benchmark_tasks",
     "trajectory_audit_payload",
+    "validate_policy_benchmark_result",
+    "write_policy_evaluation_identity",
     "write_official_coredev_tasks",
 ]
