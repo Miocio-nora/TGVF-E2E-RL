@@ -5,7 +5,7 @@ arm = "stratified"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "6c183f0aaa753a616cad09e2bbce10a7f992554d"
+commit = "dd4cecbfb71fb8d88317032e427d7c6c284ff6f9"
 dirty = false
 
 [model]
@@ -72,7 +72,7 @@ unified_train_eval_coordinate_mapper = true
 visual_judge_model = "Qwen/Qwen2.5-72B-Instruct"
 visual_judge_every_trajectory = true
 visual_judge_modality = "text_only"
-judge_service_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration/configs/policy/judges/prl13_qwen25_72b_binary_text_launch.json"
+judge_service_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/judges/prl13_qwen25_72b_binary_text_launch.json"
 judge_service_config_sha256 = "f9dac7a2baa727647b2310eae94cd1e0990bfc4e35f30760f454b0d46b1bfff5"
 judge_prompt_sha256 = "3d04cee0de48084fb040bd41946e1484a6f21b717a608b8d72219cdaf1b95107"
 thinklite_judge_prompt_sha256 = "72489a60587884f91bfb8dd4f8c547c0991a7409262ff1550b293f58cfceaf2f"
@@ -158,8 +158,8 @@ single_response_max_tokens = 10240
 
 [framework]
 agent_loop_manager = "verl.experimental.agent_loop.agent_loop.AgentLoopManager"
-agent_loop_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration/configs/policy/agent_loops/prl13_native_deepeyes.yaml"
-tool_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration/configs/policy/tools/prl13_native_crop.yaml"
+agent_loop_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/agent_loops/prl13_native_deepeyes.yaml"
+tool_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/tools/prl13_native_crop.yaml"
 native_visual_loop_target = "tgvf_rl.framework.verl.native_deepeyes_agent_loop.NativeDeepEyesAgentLoop"
 runtime_entrypoint = "tgvf_rl.framework.verl.prl13_main"
 standard_tool_agent_loop = true
