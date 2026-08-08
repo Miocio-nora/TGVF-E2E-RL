@@ -1,0 +1,205 @@
+schema_version = "policy-e2e-deepeyes-native-run-config-v1"
+launch_enabled = true
+run_id = "PRL-13-A-QWEN3-INSTRUCT-GRPO-BS256-N16-NATIVE-CROP-T1-STRATIFIED-80STEP-GPU0123"
+arm = "stratified"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "6c183f0aaa753a616cad09e2bbce10a7f992554d"
+dirty = false
+
+[model]
+family = "qwen3_vl"
+name = "Qwen3-VL-8B-Instruct"
+path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+training_mode = "full"
+lora_rank = 0
+native_pixels = true
+vision_trainable = true
+projector_trainable = true
+language_trainable = true
+
+[dataset]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/T1-04-INSTRUCT-FULL-MIXED-T1-RETAINED-FINAL-v2"
+sample_count = 77541
+manifest_file_sha256 = "752ebe9ea5fced48773b9bc0babfbb6bc57a335dd1b580455f6962053d29fddf"
+content_sha256 = "5ab99622a2698a7c52c45795215fa5c467b741c103827a1a7dbe3800ff052934"
+samples_sha256 = "06e5b1b9039680111df5ef01f7f969b9cf3d8d0eaefa5774fd8d16169428611a"
+candidate_sidecar_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_selection/full/qwen3-instruct-t1-vstar170k-arxiv32k-thinklite69842-v1/candidates.jsonl"
+candidate_sidecar_rows = 271842
+candidate_sidecar_sha256 = "51f4cfeeaa8278c2938f938a2992b30cf91ad9219d5c98d796c8137c60e8b3ec"
+selection_policy = "existing_final_t1_retain_t2_ignored"
+new_filtering = false
+dataloader_shuffle = false
+return_raw_chat = true
+filter_overlong_prompts = true
+length_filter_tool_schema = "none"
+schedule_mode = "stratified"
+schedule_seed = 42
+batch_size = 256
+vstar_per_batch = 120
+arxivqa_per_batch = 77
+thinklite_per_batch = 59
+steps = 80
+without_replacement = true
+probe_name = "T1-PROBE256"
+probe_seed = 20260807
+probe_size = 256
+probe_excluded_from_training = true
+verl_dataset_module_path = "pkg://tgvf_rl.framework.verl.deepeyes_official_dataset"
+verl_dataset_class_name = "TGVFDeepEyesOfficialDataset"
+train_files = ["/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/T1-04-INSTRUCT-FULL-MIXED-T1-RETAINED-FINAL-v2/prl13-train.schedule"]
+probe_files = ["/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/T1-04-INSTRUCT-FULL-MIXED-T1-RETAINED-FINAL-v2/prl13-probe.schedule"]
+
+[protocol]
+visual_prompt_bundle_sha256 = "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2"
+thinklite_prompt_bundle_sha256 = "72171d0d540de99ffecf75fd6d5820fc91f312c2079296bf5a270c2e7a8eea0b"
+tool_name = "image_zoom_in_tool"
+tool_parser = "hermes"
+multi_turn_format = "hermes"
+visual_agent_name = "prl13_native_deepeyes_visual"
+thinklite_agent_name = "single_turn_agent"
+visual_sources = ["vstar", "arxivqa"]
+thinklite_sources = ["thinklite"]
+max_active_perception = 6
+tool_observation_role = "user"
+tool_observation_policy_mask = 0
+successful_crop_source = "runtime_execution_status"
+coordinate_mapper = "qwen_0_1000_to_source_v1"
+unified_train_eval_coordinate_mapper = true
+
+[reward]
+visual_judge_model = "Qwen/Qwen2.5-72B-Instruct"
+visual_judge_every_trajectory = true
+visual_judge_modality = "text_only"
+judge_service_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration/configs/policy/judges/prl13_qwen25_72b_binary_text_launch.json"
+judge_service_config_sha256 = "f9dac7a2baa727647b2310eae94cd1e0990bfc4e35f30760f454b0d46b1bfff5"
+judge_prompt_sha256 = "3d04cee0de48084fb040bd41946e1484a6f21b717a608b8d72219cdaf1b95107"
+thinklite_judge_prompt_sha256 = "72489a60587884f91bfb8dd4f8c547c0991a7409262ff1550b293f58cfceaf2f"
+judge_output = "official_visual_judgement_and_math_true_false"
+judge_temperature = 0.3
+thinklite_judge_temperature = 0.0
+judge_top_p = 1.0
+judge_max_tokens = 16
+reward_manager = "deepeyes_official_async"
+reward_manager_source = "importlib"
+reward_manager_module_path = "pkg://tgvf_rl.rewards.deepeyes_verl_reward"
+reward_manager_class_name = "DeepEyesOfficialRewardManager"
+custom_reward_function = "none"
+judge_batch_max_concurrency = 64
+judge_max_attempts = 4
+judge_retry_backoff_seconds = 0.25
+judge_retry_maximum_seconds = 2.0
+judge_cache_max_entries = 100000
+judge_maximum_failure_fraction = 0.01
+reward_num_workers = 1
+visual_answer_weight = 0.8
+visual_format_weight = 0.2
+visual_conditional_tool_weight = 1.2
+visual_answer_length_limit = 1000
+thinklite_verifier = "task_routed_math_verify_or_qwen25_72b"
+thinklite_fallback_model = "Qwen/Qwen2.5-72B-Instruct"
+thinklite_answer_weight = 1.2
+thinklite_format_weight = 0.4
+format_valid_value = 0
+format_invalid_value = -1
+
+[algorithm]
+name = "grpo"
+advantage_estimator = "grpo"
+kl_coefficient = 0.0
+actor_kl_loss = false
+norm_adv_by_std_in_grpo = true
+gamma = 1.0
+lam = 1.0
+entropy_coefficient = 0.0
+
+[optimization]
+optimizer = "adamw"
+learning_rate = 0.000001
+actor_loss_reduction = "deepeyes_official_micro_token_mean"
+global_prompt_batch_size = 256
+ppo_mini_batch_size = 256
+actor_micro_batch_size_per_gpu = 4
+gradient_clip_norm = 1.0
+scheduler = "constant"
+warmup_steps = 0
+ppo_epochs = 1
+dynamic_batch_size = false
+
+[distributed]
+world_size = 4
+physical_gpu_ids = [0, 1, 2, 3]
+fsdp_strategy = "fsdp2"
+parameter_offload = true
+optimizer_offload = true
+reference_parameter_offload = true
+complete_weight_sync = true
+
+[rollout]
+backend = "vllm"
+trajectories_per_prompt = 16
+max_prompt_length = 8192
+max_response_length = 20480
+temperature = 1.0
+top_p = 1.0
+rollout_logprob_micro_batch_size_per_gpu = 8
+reference_logprob_micro_batch_size_per_gpu = 8
+gpu_memory_utilization = 0.8
+max_num_batched_tokens = 32768
+enable_chunked_prefill = false
+use_remove_padding = true
+max_user_turns = 6
+max_assistant_turns = 7
+max_parallel_calls = 1
+tensor_parallel_size = 1
+free_cache_engine = true
+single_response_max_tokens = 10240
+
+[framework]
+agent_loop_manager = "verl.experimental.agent_loop.agent_loop.AgentLoopManager"
+agent_loop_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration/configs/policy/agent_loops/prl13_native_deepeyes.yaml"
+tool_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration/configs/policy/tools/prl13_native_crop.yaml"
+native_visual_loop_target = "tgvf_rl.framework.verl.native_deepeyes_agent_loop.NativeDeepEyesAgentLoop"
+runtime_entrypoint = "tgvf_rl.framework.verl.prl13_main"
+standard_tool_agent_loop = true
+standard_multi_modal_inputs = true
+full_weight_sync = true
+custom_lossless_replay = false
+exact_replay = false
+
+[training]
+maximum_optimizer_steps = 80
+first_update_gate_step = 1
+require_vision_and_language_weight_change = true
+checkpoint_steps = [1, 8, 20, 45, 80]
+checkpoint_contents = ["model", "hf_model", "optimizer", "extra"]
+evaluation_steps = [0, 8, 20, 45, 80]
+checkpoint_before_evaluation = true
+validation_before_save = false
+resume_mode = "auto_latest_saved_checkpoint"
+wandb_enabled = true
+logger = ["console", "wandb"]
+project_name = "tgvf-policy-rl"
+
+[evaluation]
+protocol = "official_visible_free_crop"
+datasets = ["T1-PROBE256", "DeepEyesDev591", "Grounding-200", "CoreDev2511"]
+t1_probe_name = "T1-PROBE256"
+t1_probe_source_metrics = ["accuracy", "tool_rate", "crop_rate"]
+step0_required = true
+
+[audit]
+trajectory_retention = "all"
+trajectories_per_step = 4096
+retain_failed_and_zero_reward = true
+grounding_source = "candidate_sidecar_gt_regions"
+
+[metrics]
+required = ["source", "reward", "nonzero_grpo_group", "answer_length", "action_length", "response_length", "judge_requested", "visual_judge_requested", "thinklite_fallback_judge_requested", "judge_calls", "judge_cache_hits", "judge_retries", "judge_latency_seconds", "judge_failures"]
+vstar_grounding = ["first_iou", "best_iou", "gt_coverage", "crop_area", "action_count"]
+
+[output]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-13-A-qwen3-instruct-grpo-bs256-n16-native-crop-t1-stratified-80step-gpu0123"
+checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-13-A-qwen3-instruct-grpo-bs256-n16-native-crop-t1-stratified-80step-gpu0123/checkpoints"
+metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-13-A-qwen3-instruct-grpo-bs256-n16-native-crop-t1-stratified-80step-gpu0123/metrics.jsonl"

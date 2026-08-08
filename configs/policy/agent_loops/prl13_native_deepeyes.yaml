@@ -1,0 +1,3 @@
+- name: prl13_native_deepeyes_visual
+  _target_: tgvf_rl.framework.verl.native_deepeyes_agent_loop.NativeDeepEyesAgentLoop
+
