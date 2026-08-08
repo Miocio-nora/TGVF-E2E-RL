@@ -57,7 +57,9 @@ DEEPEYES_NATIVE_STRESS_SCOPE = (
     "not_maximum_visual_token_selection"
 )
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-_PYTHON312_DEV_ROOT = _REPOSITORY_ROOT / ".deps/python312-dev/usr/include"
+_PYTHON312_DEV_ROOT = (
+    _REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
+)
 
 LaunchMode = Literal[
     "formal",
