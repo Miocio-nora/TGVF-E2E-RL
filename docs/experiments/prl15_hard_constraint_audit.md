@@ -49,6 +49,9 @@ merely because an earlier run happened to use it.
   incompatible backend fails before rollout.
 - Removed the `{4, 8}` restriction from low-level RP66 weight synchronization;
   the current PRL15 launcher still declares the two controlled topologies.
+- Centralized ignored runtime-dependency discovery at the Git shared-worktree
+  root and removed the TGVF launcher's temporary mutation of launcher globals.
+  Crop and TGVF now resolve the same pinned veRL and Python-header environment.
 
 ## Verification gates
 
@@ -60,4 +63,3 @@ merely because an earlier run happened to use it.
   Crop compose/preflight path.
 - The TGVF one-step GPU smoke must complete an optimizer update, RP66/Qwen
   weight publication and a resumable paired checkpoint before formal launch.
-

@@ -184,31 +184,7 @@ def _legacy_base_plan(config: PolicyE2ESmokeRunConfig):
         config,
         protocol=replace(config.protocol, prompt_sha256=legacy_prompt),
     )
-    # Git worktrees do not copy the ignored development-header bundle.  Reuse
-    # the canonical project's exact bundle for the base plan's CPU preflight.
-    old_root = legacy_launcher._PYTHON312_DEV_INCLUDE_ROOT
-    old_include = legacy_launcher._PYTHON312_DEV_INCLUDE
-    old_cpath = legacy_launcher._TRITON_CPATH
-    local_python_h = old_include / "Python.h"
-    if not local_python_h.is_file():
-        canonical_root = (
-            Path(__file__).resolve().parents[4].parent
-            / "tgvf-e2e-rl/.deps/python312-dev/root/usr/include"
-        )
-        canonical_include = canonical_root / "python3.12"
-        if not (canonical_include / "Python.h").is_file():
-            raise ValueError("pinned Python 3.12 development headers are missing")
-        legacy_launcher._PYTHON312_DEV_INCLUDE_ROOT = canonical_root
-        legacy_launcher._PYTHON312_DEV_INCLUDE = canonical_include
-        legacy_launcher._TRITON_CPATH = os.pathsep.join(
-            (str(canonical_root), str(canonical_include))
-        )
-    try:
-        return legacy_launcher.build_policy_e2e_smoke_verl_plan(compatible)
-    finally:
-        legacy_launcher._PYTHON312_DEV_INCLUDE_ROOT = old_root
-        legacy_launcher._PYTHON312_DEV_INCLUDE = old_include
-        legacy_launcher._TRITON_CPATH = old_cpath
+    return legacy_launcher.build_policy_e2e_smoke_verl_plan(compatible)
 
 
 def _replace_custom_record(

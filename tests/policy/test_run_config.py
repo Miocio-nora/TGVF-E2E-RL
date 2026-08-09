@@ -59,6 +59,7 @@ from tgvf_rl.policy.run_config import (
 )
 from tests.rewards.test_tgvf_visual_quality_judge import _config_document
 from tgvf_rl.framework.verl.launcher import (
+    _POLICY_DEPENDENCY_ROOT,
     DEEPEYES47K_DATASET_CLASS_NAME,
     DEEPEYES47K_DATASET_MODULE_PATH,
     POLICY_T1_ARXIVQA_DATASET_CLASS_NAME,
@@ -1359,8 +1360,9 @@ def test_maps_strict_smoke_to_pinned_verl_v0_hydra_without_launch(
     assert plan.environment["TGVF_POLICY_STATE_DIR"] == str(
         config.output.root / "runtime-policy-state"
     )
-    repository_root = Path(__file__).resolve().parents[2]
-    python_include_root = repository_root / ".deps/python312-dev/root/usr/include"
+    python_include_root = (
+        _POLICY_DEPENDENCY_ROOT / ".deps/python312-dev/root/usr/include"
+    )
     assert plan.environment["CC"] == "/usr/bin/gcc"
     assert plan.environment["CXX"] == "/usr/bin/g++"
     assert plan.environment["CPATH"] == (
@@ -1438,7 +1440,7 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert not config.output.root.exists()
 
     upstream_config_dir = (
-        Path(__file__).resolve().parents[2]
+        _POLICY_DEPENDENCY_ROOT
         / ".deps"
         / "verl"
         / "verl"
@@ -1551,7 +1553,7 @@ def test_composed_selected_sample_binding_preserves_multiline_text(
     config = load_policy_e2e_smoke_run_config(path)
     plan = build_policy_e2e_smoke_verl_plan(config)
     upstream_config_dir = (
-        Path(__file__).resolve().parents[2]
+        _POLICY_DEPENDENCY_ROOT
         / ".deps"
         / "verl"
         / "verl"

@@ -83,8 +83,44 @@ VERL_POLICY_SMOKE_LAUNCH_SCHEMA = "tgvf-verl-policy-smoke-launch-v1"
 _POLICY_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _TRITON_CC = Path("/usr/bin/gcc")
 _TRITON_CXX = Path("/usr/bin/g++")
+
+
+def _shared_dependency_repository_root(repository_root: Path) -> Path:
+    """Resolve ignored runtime dependencies shared by Git worktrees.
+
+    Git worktrees intentionally do not duplicate ignored ``.deps`` content.
+    Their ``.git`` marker points into the primary repository's common Git
+    directory, whose parent is the authoritative shared dependency root.
+    """
+
+    local_headers = (
+        repository_root
+        / ".deps/python312-dev/root/usr/include/python3.12/Python.h"
+    )
+    if local_headers.is_file():
+        return repository_root
+    marker = repository_root / ".git"
+    if marker.is_file():
+        prefix = "gitdir: "
+        contents = marker.read_text(encoding="utf-8").strip()
+        if contents.startswith(prefix):
+            git_dir = Path(contents[len(prefix) :]).resolve()
+            if git_dir.parent.name == "worktrees" and len(git_dir.parents) >= 3:
+                shared_root = git_dir.parents[2]
+                shared_headers = (
+                    shared_root
+                    / ".deps/python312-dev/root/usr/include/python3.12/Python.h"
+                )
+                if shared_headers.is_file():
+                    return shared_root
+    return repository_root
+
+
+_POLICY_DEPENDENCY_ROOT = _shared_dependency_repository_root(
+    _POLICY_REPOSITORY_ROOT
+)
 _PYTHON312_DEV_INCLUDE_ROOT = (
-    _POLICY_REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
+    _POLICY_DEPENDENCY_ROOT / ".deps/python312-dev/root/usr/include"
 )
 _PYTHON312_DEV_INCLUDE = _PYTHON312_DEV_INCLUDE_ROOT / "python3.12"
 _TRITON_CPATH = os.pathsep.join(
