@@ -9672,3 +9672,21 @@ than inferred from a script name or prior conversation.
   and policy steps, the step-4 tracker, and the runtime `0..8` save schedule.
   No step-5 optimizer mutation occurred in the failed process; formal resume
   therefore starts at the exact step-4 boundary.
+- Formal step 5 and native EOS correction (2026-08-10): the corrected visual
+  containment path completed the next full matched batch and its paired
+  checkpoint in `874.23 s`, including `63.21 s` checkpointing and `8.18 s`
+  RP66 publication. Tracker `5`, project/metrics/policy step `5`, and rolling
+  generations 4/5 agree. The following step-6 rollout then stopped before any
+  optimizer update because the termination contract omitted Qwen3-VL's
+  secondary native EOS token `151643` (`<|endoftext|>`). The request's explicit
+  extra stop remains `151645`, but the pinned model generation config (SHA-256
+  `8469742d...fc4d44`) declares effective native EOS IDs `151645/151643`, as
+  did the preceding T1 selection contract.
+- The training and CoreDev evaluator now share one exact Qwen3-VL final-turn
+  outcome builder: both native EOS IDs, vLLM's hidden-native-EOS `stop/null`,
+  and an exact length stop are accepted; an unrelated token such as `151644`
+  remains rejected. Future mismatch errors include the exact finish/stop pair
+  without response text. A CPU fixture reproduced the step-6 failure with
+  `stop/151643` and verified the corrected behavior; 62 focused tests, Ruff,
+  and diff checks pass. The run TOML and reward are unchanged, and preflight
+  revalidated the exact step-4/step-5 recovery pair before resume.
