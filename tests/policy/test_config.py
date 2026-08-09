@@ -109,7 +109,7 @@ def test_sampling_identity_and_trajectory_budget_fail_closed() -> None:
         sampling.as_vllm_parameters(max_tokens=8193)
 
 
-def test_sampling_accepts_only_the_isolated_deepeyes_reference_scale() -> None:
+def test_sampling_accepts_the_reference_and_functional_canary_scales() -> None:
     deepeyes = PilotSamplingConfig(
         trajectories_per_prompt=16,
         max_response_length=20480,
@@ -118,7 +118,19 @@ def test_sampling_accepts_only_the_isolated_deepeyes_reference_scale() -> None:
     assert deepeyes.max_response_length == 20480
     assert deepeyes.remaining_response_tokens(480) == 20000
 
-    for group_size, response_length in ((16, 8192), (8, 20480), (32, 20480)):
+    canary = PilotSamplingConfig(
+        trajectories_per_prompt=2,
+        max_response_length=512,
+    )
+    assert canary.trajectories_per_prompt == 2
+    assert canary.max_response_length == 512
+
+    for group_size, response_length in (
+        (2, 8192),
+        (16, 8192),
+        (8, 20480),
+        (32, 20480),
+    ):
         with pytest.raises(ValueError, match="accepted"):
             PilotSamplingConfig(
                 trajectories_per_prompt=group_size,

@@ -89,6 +89,24 @@ def _step_n16(
     )
 
 
+def _step_n2(
+    optimizer_step: int, prompt_id: str, elapsed: float
+) -> PilotOptimizerStepMetricsObservation:
+    rows = tuple(
+        replace(
+            row,
+            trajectory_id=f"{prompt_id}/trajectory-{row_index}",
+        )
+        for row_index, row in enumerate(_rows(prompt_id)[:2])
+    )
+    return PilotOptimizerStepMetricsObservation(
+        optimizer_step=optimizer_step,
+        step_time_seconds=elapsed,
+        trajectories=rows,
+        trajectories_per_prompt=2,
+    )
+
+
 def test_empty_summary_has_explicit_zero_denominator_contract() -> None:
     contracts = {item.metric: item for item in PILOT_V1_METRIC_REDUCTIONS}
     assert contracts["tool_call_attempt_rate"].denominator == "trajectories"
@@ -198,6 +216,19 @@ def test_n16_metrics_round_trip_and_reject_mixed_group_sizes() -> None:
         PilotMetricsCheckpointState(prompts=0, trajectories=16)
 
 
+def test_n2_functional_canary_metrics_round_trip() -> None:
+    first = _step_n2(1, "prompt-a", 2.0)
+    accumulator = PilotMetricsAccumulator()
+    summary = accumulator.record_optimizer_step(first)
+
+    assert summary.prompts == 1
+    assert summary.trajectories == 2
+    restored = PilotMetricsAccumulator.from_checkpoint_state(
+        json.loads(json.dumps(accumulator.checkpoint_state()))
+    )
+    assert restored.summary() == summary
+
+
 def test_observation_step_and_atomic_restore_validation_fail_closed() -> None:
     valid = _rows("prompt-a")[0]
     with pytest.raises(ValueError, match="conditional tool reward"):
@@ -231,7 +262,7 @@ def test_observation_step_and_atomic_restore_validation_fail_closed() -> None:
 
     corrupt = deepcopy(accumulator.checkpoint_state())
     corrupt["trajectories"] = 7
-    with pytest.raises(ValueError, match="multiplied by 8"):
+    with pytest.raises(ValueError, match="supported group sizes"):
         accumulator.restore_checkpoint_state(corrupt)
     assert accumulator.state == before
 

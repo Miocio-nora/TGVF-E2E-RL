@@ -100,6 +100,9 @@ POLICY_REFERENCE_DIAGNOSTIC_ENABLED = True
 POLICY_REFERENCE_DIAGNOSTIC_ENV = "TGVF_POLICY_REFERENCE_DIAGNOSTIC"
 POLICY_PILOT_METRICS_EVENT_SCHEMA = "policy-pilot-v1-metrics-event-v1"
 POLICY_METRICS_PATH_ENV = "TGVF_POLICY_METRICS_PATH"
+POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV = (
+    "TGVF_POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION"
+)
 POLICY_TRACKING_METRIC_NAMES = frozenset(
     {
         "training/global_step",
@@ -390,11 +393,42 @@ def _resolved_policy_metrics_path(
         is not None
         and relative.parts[2] == "metrics.jsonl"
     )
-    if relative not in {Path("metrics.jsonl"), Path("smoke/metrics.jsonl")} and not labeled_smoke:
+    if relative not in {
+        Path("metrics.jsonl"),
+        Path("smoke/metrics.jsonl"),
+        Path("canary/metrics.jsonl"),
+    } and not labeled_smoke:
         raise ValueError(
-            f"{POLICY_METRICS_PATH_ENV} must select formal or smoke metrics"
+            f"{POLICY_METRICS_PATH_ENV} must select formal, smoke, or canary metrics"
         )
     return path
+
+
+def _require_successful_tgvf_observation_for_canary(
+    observation: PilotOptimizerStepMetricsObservation,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    """Reject a plumbing canary before mutation unless RP66 replay was exercised."""
+
+    if not isinstance(observation, PilotOptimizerStepMetricsObservation):
+        raise TypeError("canary observation gate requires optimizer-step metrics")
+    selected = os.environ if environment is None else environment
+    raw = selected.get(POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV)
+    if raw is None:
+        return
+    if raw != "1":
+        raise ValueError(
+            f"{POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV} must be 1 when set"
+        )
+    successful = sum(
+        row.successful_tgvf_observations for row in observation.trajectories
+    )
+    if successful < 1:
+        raise RuntimeError(
+            "functional TGVF canary produced no successful focused observation; "
+            "the optimizer was not mutated"
+        )
 
 
 def _completed_resume_checkpoint_step(
@@ -1264,8 +1298,14 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 if getattr(self, "_policy_metrics_pending", None) is not None:
                     raise RuntimeError(
                         "a Policy metrics publication is already pending"
-                    )
+                )
                 prepared = self._policy_checkpoint_state.prepare_optimizer_step(batch)
+                if os.environ.get(
+                    POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV
+                ) is not None:
+                    _require_successful_tgvf_observation_for_canary(
+                        prepared.observation
+                    )
                 self._policy_actor_update_inflight = True
                 output = super()._update_actor(batch, *args, **kwargs)
                 started = self._policy_step_started_at
@@ -1824,6 +1864,7 @@ __all__ = [
     "POLICY_METRICS_PATH_ENV",
     "POLICY_REFERENCE_DIAGNOSTIC_ENV",
     "POLICY_REFERENCE_DIAGNOSTIC_ENABLED",
+    "POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV",
     "PairedActorWorkerGroup",
     "PolicyPilotTrainerCheckpointState",
     "add_policy_actor_rollout_worker",
@@ -1833,6 +1874,7 @@ __all__ = [
     "policy_worker_logical_cuda_ordinal",
     "policy_metrics_observation_from_data_proto",
     "_policy_reference_diagnostic_enabled",
+    "_require_successful_tgvf_observation_for_canary",
     "_resolved_policy_metrics_path",
     "run_policy_pilot_v0_task",
 ]

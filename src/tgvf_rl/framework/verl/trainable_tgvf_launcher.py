@@ -59,6 +59,7 @@ from .policy_main import compose_pinned_verl_config, run_pinned_verl_config
 from .policy_task_runner import (
     POLICY_METRICS_PATH_ENV,
     POLICY_REFERENCE_DIAGNOSTIC_ENV,
+    POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV,
 )
 from .prl14_crop16_reference import (
     PRL14_CROP16_COMMON_OVERRIDES,
@@ -69,6 +70,7 @@ from .prl14_crop16_reference import (
 )
 from .tgvf_deepeyes_matched_dataset import (
     DEEPEYES_PROBE_SENTINEL,
+    DEEPEYES_SMOKE_SENTINEL,
     DEEPEYES_TRAIN_SENTINEL,
     DeepEyesTGVFMatchedDatasetBinding,
     TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
@@ -90,14 +92,19 @@ TRAINABLE_TGVF_DATASET_MODULE_PATH = (
 )
 TRAINABLE_TGVF_FORMAL_TARGET = 8
 TRAINABLE_TGVF_SMOKE_TARGET = 1
+TRAINABLE_TGVF_CANARY_TARGET = 1
+TRAINABLE_TGVF_CANARY_PROMPTS = 4
+TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT = 2
+TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH = 512
 TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
-TrainableTGVFLaunchMode = Literal["formal", "smoke"]
+TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 
 _OPTIONAL_PARENT_LAUNCH_ENV = frozenset(
     {
         "TGVF_POLICY_AGENT_LOOP_WORKER_INDEX",
         "TGVF_POLICY_HORIZON_EXTENSION_PATH",
         "TGVF_POLICY_HORIZON_EXTENSION_SHA256",
+        POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV,
     }
 )
 
@@ -161,6 +168,79 @@ def _assert_crop16_mathematical_controls(
         raise ValueError(
             "trainable TGVF differs from the Crop-16 mathematical controls: "
             f"mismatches={mismatches!r}, unexpected={unexpected!r}"
+        )
+
+
+def _apply_functional_canary_controls(values: dict[str, object]) -> None:
+    """Shrink only the dedicated plumbing canary after matched controls apply."""
+
+    values.update(
+        {
+            "data.train_files": [str(DEEPEYES_SMOKE_SENTINEL)],
+            "data.val_files": [str(DEEPEYES_SMOKE_SENTINEL)],
+            "data.train_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
+            "data.gen_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
+            "data.max_response_length": TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH,
+            "actor_rollout_ref.actor.ppo_mini_batch_size": (
+                TRAINABLE_TGVF_CANARY_PROMPTS
+            ),
+            "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": 2,
+            "actor_rollout_ref.rollout.n": (
+                TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
+            ),
+            "actor_rollout_ref.rollout.response_length": (
+                TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH
+            ),
+            "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": 2,
+            "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": 2,
+        }
+    )
+
+
+def _assert_functional_canary_config(config: PolicyE2ESmokeRunConfig) -> None:
+    """Require a serialized canary identity instead of mutating a formal run."""
+
+    expected = {
+        "distributed.world_size": (config.distributed.world_size, 4),
+        "sampling.trajectories_per_prompt": (
+            config.policy.sampling.trajectories_per_prompt,
+            TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT,
+        ),
+        "sampling.max_response_length": (
+            config.policy.sampling.max_response_length,
+            TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH,
+        ),
+        "accumulation.global_prompt_batch_size": (
+            config.accumulation.global_prompt_batch_size,
+            TRAINABLE_TGVF_CANARY_PROMPTS,
+        ),
+        "accumulation.prompt_micro_batch_size_per_rank": (
+            config.accumulation.prompt_micro_batch_size_per_rank,
+            1,
+        ),
+        "accumulation.rollout_prompt_micro_batch_size_per_engine": (
+            config.accumulation.rollout_prompt_micro_batch_size_per_engine,
+            1,
+        ),
+        "accumulation.gradient_accumulation_steps": (
+            config.accumulation.gradient_accumulation_steps,
+            1,
+        ),
+        "scheduler.total_steps": (config.scheduler.total_steps, 1),
+        "training.maximum_optimizer_steps": (
+            config.training.maximum_optimizer_steps,
+            1,
+        ),
+        "training.checkpoint_steps": (config.training.checkpoint_steps, (0, 1)),
+    }
+    mismatches = {
+        name: (actual, required)
+        for name, (actual, required) in expected.items()
+        if actual != required
+    }
+    if mismatches:
+        raise ValueError(
+            "functional canary run config differs: " f"mismatches={mismatches!r}"
         )
 
 
@@ -265,6 +345,12 @@ def _replace_custom_record(
             "launch_mode": mode,
         }
     )
+    if mode == "canary":
+        custom["functional_canary"] = {
+            "minimum_successful_tgvf_observations": 1,
+            "failure_boundary": "before_optimizer_mutation",
+            "dataset_split": "smoke",
+        }
     values["actor_rollout_ref.rollout.custom"] = custom
 
 
@@ -296,6 +382,8 @@ class TrainableTGVFVerlLaunchPlan:
             if self.mode == "formal"
             else TRAINABLE_TGVF_SMOKE_TARGET
             if self.mode == "smoke"
+            else TRAINABLE_TGVF_CANARY_TARGET
+            if self.mode == "canary"
             else None
         )
         if self.schema_version != TRAINABLE_TGVF_LAUNCH_SCHEMA or expected is None:
@@ -306,11 +394,44 @@ class TrainableTGVFVerlLaunchPlan:
 
     def _assert_trainable_path(self) -> None:
         values = self.overrides
-        _assert_crop16_mathematical_controls(
-            values,
-            world_size=self.config.distributed.world_size,
-            optimizer_horizon=self.config.scheduler.total_steps,
-        )
+        if self.mode == "canary":
+            _assert_functional_canary_config(self.config)
+            canary_expected = {
+                "data.train_files": [str(DEEPEYES_SMOKE_SENTINEL)],
+                "data.val_files": [str(DEEPEYES_SMOKE_SENTINEL)],
+                "data.train_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
+                "data.gen_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
+                "data.max_response_length": TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH,
+                "actor_rollout_ref.actor.ppo_mini_batch_size": (
+                    TRAINABLE_TGVF_CANARY_PROMPTS
+                ),
+                "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": 2,
+                "actor_rollout_ref.rollout.n": (
+                    TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
+                ),
+                "actor_rollout_ref.rollout.response_length": (
+                    TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH
+                ),
+                "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": 2,
+                "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": 2,
+                "trainer.n_gpus_per_node": 4,
+            }
+            mismatches = {
+                path: (values.get(path), expected)
+                for path, expected in canary_expected.items()
+                if values.get(path) != expected
+            }
+            if mismatches:
+                raise ValueError(
+                    "functional canary controls differ: "
+                    f"mismatches={mismatches!r}"
+                )
+        else:
+            _assert_crop16_mathematical_controls(
+                values,
+                world_size=self.config.distributed.world_size,
+                optimizer_horizon=self.config.scheduler.total_steps,
+            )
         required = {
             "actor_rollout_ref.model.lora_rank": 0,
             "actor_rollout_ref.model.lora.rank": 0,
@@ -331,8 +452,16 @@ class TrainableTGVFVerlLaunchPlan:
             "actor_rollout_ref.actor.loss_agg_mode": NATIVE_DEEPEYES_LOSS_AGG_MODE,
             "data.custom_cls.path": TRAINABLE_TGVF_DATASET_MODULE_PATH,
             "data.custom_cls.name": "TGVFDeepEyesMatchedDataset",
-            "data.train_batch_size": 16,
-            "actor_rollout_ref.rollout.n": 16,
+            "data.train_batch_size": (
+                TRAINABLE_TGVF_CANARY_PROMPTS
+                if self.mode == "canary"
+                else 16
+            ),
+            "actor_rollout_ref.rollout.n": (
+                TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
+                if self.mode == "canary"
+                else 16
+            ),
             "trainer.total_training_steps": self.target_step,
         }
         for path, expected in required.items():
@@ -356,6 +485,24 @@ class TrainableTGVFVerlLaunchPlan:
             raise ValueError("trainable TGVF reference diagnostic must be disabled")
         if self.environment.get(POLICY_REFERENCE_DIAGNOSTIC_ENV) != "0":
             raise ValueError("trainable TGVF reference diagnostic environment differs")
+        requires_observation = self.environment.get(
+            POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV
+        )
+        if self.mode == "canary":
+            if requires_observation != "1":
+                raise ValueError(
+                    "functional canary must require a successful TGVF observation"
+                )
+            if custom.get("functional_canary") != {
+                "minimum_successful_tgvf_observations": 1,
+                "failure_boundary": "before_optimizer_mutation",
+                "dataset_split": "smoke",
+            }:
+                raise ValueError("functional canary evidence contract differs")
+        elif requires_observation is not None:
+            raise ValueError(
+                "matched formal/smoke launch inherited the canary observation gate"
+            )
 
     def hydra_override_args(self) -> tuple[str, ...]:
         return tuple(
@@ -373,7 +520,7 @@ def build_trainable_tgvf_verl_launch_plan(
 ) -> TrainableTGVFVerlLaunchPlan:
     if config.schema_version != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA:
         raise ValueError("trainable TGVF launcher requires the RP66 run schema")
-    if mode not in {"formal", "smoke"}:
+    if mode not in {"formal", "smoke", "canary"}:
         raise ValueError(f"unsupported trainable TGVF launch mode: {mode!r}")
     if smoke_id is not None:
         if mode != "smoke":
@@ -385,6 +532,8 @@ def build_trainable_tgvf_verl_launch_plan(
         if mode == "formal"
         else TRAINABLE_TGVF_SMOKE_TARGET
         if mode == "smoke"
+        else TRAINABLE_TGVF_CANARY_TARGET
+        if mode == "canary"
         else -1
     )
     if target_step is not None and target_step != resolved_target:
@@ -431,6 +580,9 @@ def build_trainable_tgvf_verl_launch_plan(
         world_size=config.distributed.world_size,
         optimizer_horizon=config.scheduler.total_steps,
     )
+    if mode == "canary":
+        _assert_functional_canary_config(config)
+        _apply_functional_canary_controls(values)
     checkpoint_steps = (0, 1, 4, 8) if mode == "formal" else (0, 1)
     output_root = config.output.root
     environment = dict(base.environment)
@@ -452,6 +604,20 @@ def build_trainable_tgvf_verl_launch_plan(
         environment["TGVF_POLICY_STATE_DIR"] = str(
             output_root / "runtime-policy-state"
         )
+    elif mode == "canary":
+        output_root = output_root / "canary"
+        values.update(
+            {
+                "trainer.experiment_name": config.run_id + "-CANARY",
+                "trainer.logger": ["console"],
+                "trainer.default_local_dir": str(output_root / "checkpoints"),
+                "trainer.max_actor_ckpt_to_keep": 2,
+            }
+        )
+        environment["TGVF_POLICY_STATE_DIR"] = str(
+            output_root / "runtime-policy-state"
+        )
+        environment[POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV] = "1"
     environment[POLICY_METRICS_PATH_ENV] = str(output_root / "metrics.jsonl")
     environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] = "0"
     values["ray_kwargs.ray_init._temp_dir"] = str(
@@ -651,7 +817,9 @@ def _append_launch_provenance(
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-config", required=True, type=Path)
-    parser.add_argument("--mode", choices=("formal", "smoke"), default="formal")
+    parser.add_argument(
+        "--mode", choices=("formal", "smoke", "canary"), default="formal"
+    )
     parser.add_argument("--target-step", type=int)
     parser.add_argument("--smoke-id")
     parser.add_argument("--compose-only", action="store_true")
@@ -677,10 +845,15 @@ if __name__ == "__main__":
 
 __all__ = [
     "TRAINABLE_TGVF_EXTERNAL_MODULE",
+    "TRAINABLE_TGVF_CANARY_PROMPTS",
+    "TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH",
+    "TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT",
+    "TRAINABLE_TGVF_CANARY_TARGET",
     "TRAINABLE_TGVF_FORMAL_TARGET",
     "TRAINABLE_TGVF_LAUNCH_SCHEMA",
     "TRAINABLE_TGVF_SMOKE_TARGET",
     "TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES",
+    "POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV",
     "TrainableTGVFVerlLaunchPlan",
     "apply_trainable_tgvf_launch_environment",
     "build_trainable_tgvf_verl_launch_plan",

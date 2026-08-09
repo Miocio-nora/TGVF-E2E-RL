@@ -17,12 +17,14 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     PolicyPilotTrainerCheckpointState,
     POLICY_METRICS_PATH_ENV,
     POLICY_REFERENCE_DIAGNOSTIC_ENV,
+    POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV,
     _append_policy_metrics_event,
     _completed_resume_checkpoint_step,
     _finish_tracking_backends,
     _pilot_metrics_event,
     _policy_reference_diagnostic_enabled,
     _policy_tracking_metrics,
+    _require_successful_tgvf_observation_for_canary,
     _resolved_policy_metrics_path,
     _torch_state,
     _wandb_metrics_from_event,
@@ -467,15 +469,60 @@ def test_policy_metrics_path_separates_formal_and_smoke_roots(tmp_path) -> None:
         config,
         environment={POLICY_METRICS_PATH_ENV: str(labeled_smoke)},
     ) == labeled_smoke
+    canary = tmp_path / "canary/metrics.jsonl"
+    assert _resolved_policy_metrics_path(
+        config,
+        environment={POLICY_METRICS_PATH_ENV: str(canary)},
+    ) == canary
     with pytest.raises(ValueError, match="inside output.root"):
         _resolved_policy_metrics_path(
             config,
             environment={POLICY_METRICS_PATH_ENV: str(tmp_path.parent / "metrics.jsonl")},
         )
-    with pytest.raises(ValueError, match="formal or smoke"):
+    with pytest.raises(ValueError, match="formal, smoke, or canary"):
         _resolved_policy_metrics_path(
             config,
             environment={POLICY_METRICS_PATH_ENV: str(tmp_path / "other.jsonl")},
+        )
+
+
+def test_functional_canary_requires_tgvf_replay_before_optimizer_mutation() -> None:
+    def observation(successful: int) -> PilotOptimizerStepMetricsObservation:
+        rows = tuple(
+            PilotTrajectoryMetricsObservation(
+                prompt_id="canary-prompt",
+                trajectory_id=f"canary-trajectory-{index}",
+                generated_policy_tokens=10,
+                successful_tgvf_observations=successful if index == 0 else 0,
+                tool_call_attempts=successful if index == 0 else 0,
+                answer_reward=1.0,
+                format_error=False,
+                conditional_tool_reward=(float(successful) if index == 0 else 0.0),
+                reasoning_tokens=5,
+                original_visual_tokens=4,
+                total_visual_tokens=6,
+            )
+            for index in range(2)
+        )
+        return PilotOptimizerStepMetricsObservation(
+            1, 1.0, rows, trajectories_per_prompt=2
+        )
+
+    gate = {POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV: "1"}
+    _require_successful_tgvf_observation_for_canary(
+        observation(0), environment={}
+    )
+    with pytest.raises(RuntimeError, match="optimizer was not mutated"):
+        _require_successful_tgvf_observation_for_canary(
+            observation(0), environment=gate
+        )
+    _require_successful_tgvf_observation_for_canary(
+        observation(1), environment=gate
+    )
+    with pytest.raises(ValueError, match="must be 1 when set"):
+        _require_successful_tgvf_observation_for_canary(
+            observation(1),
+            environment={POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV: "true"},
         )
 
 

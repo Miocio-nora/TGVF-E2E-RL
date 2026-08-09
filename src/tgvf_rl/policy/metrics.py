@@ -12,7 +12,12 @@ from tgvf_rl.protocol.schema import ToolErrorCode
 
 POLICY_PILOT_V1_METRICS_SCHEMA = "policy-pilot-v1-metrics-v1"
 POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT = 8
-POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT = (8, 16)
+POLICY_FUNCTIONAL_CANARY_TRAJECTORIES_PER_PROMPT = 2
+POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT = (
+    POLICY_FUNCTIONAL_CANARY_TRAJECTORIES_PER_PROMPT,
+    POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
+    16,
+)
 POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS = 4
 POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS = 5
 
@@ -409,8 +414,8 @@ class PilotMetricsCheckpointState:
             inferred_group_size = self.trajectories // self.prompts
         if inferred_group_size not in POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT:
             raise ValueError(
-                "Policy trajectory count must equal prompts multiplied by 8 "
-                "or 16; inferred group size="
+                "Policy trajectory count must equal prompts multiplied by one "
+                "of the supported group sizes; inferred group size="
                 f"{inferred_group_size}"
             )
         if self.optimizer_steps == 0:
@@ -799,6 +804,7 @@ __all__ = [
     "POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS",
     "POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS",
     "POLICY_PILOT_V1_METRICS_SCHEMA",
+    "POLICY_FUNCTIONAL_CANARY_TRAJECTORIES_PER_PROMPT",
     "POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT",
     "POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT",
     "PILOT_V1_METRIC_REDUCTIONS",

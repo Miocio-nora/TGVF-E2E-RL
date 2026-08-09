@@ -64,6 +64,7 @@ from tgvf_rl.rewards.schema import pilot_reward_weight_profile_name
 from tgvf_rl.rewards.stage3_shaped import STAGE3_SHAPED_REWARD_VERSION
 
 from .config import (
+    POLICY_PILOT_FUNCTIONAL_CANARY_SAMPLING_SCALE,
     POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES,
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256,
@@ -1075,16 +1076,24 @@ def load_policy_e2e_smoke_run_config(
         ),
         ignore_eos=_boolean(sampling_table["ignore_eos"], name="sampling.ignore_eos"),
     )
-    expected_sampling_scale = (
-        (16, 20480)
-        if deepeyes_scaled_crop_run or trainable_rp66_run
-        else (8, 8192)
+    sampling_scale = (
+        sampling.trajectories_per_prompt,
+        sampling.max_response_length,
     )
-    _require_exact(
-        (sampling.trajectories_per_prompt, sampling.max_response_length),
-        expected_sampling_scale,
-        "sampling DeepEyes-reference scale",
-    )
+    if trainable_rp66_run:
+        accepted_sampling_scales = {
+            (16, 20480),
+            POLICY_PILOT_FUNCTIONAL_CANARY_SAMPLING_SCALE,
+        }
+    elif deepeyes_scaled_crop_run:
+        accepted_sampling_scales = {(16, 20480)}
+    else:
+        accepted_sampling_scales = {(8, 8192)}
+    if sampling_scale not in accepted_sampling_scales:
+        raise ValueError(
+            "sampling DeepEyes-reference scale differs from accepted values "
+            f"{sorted(accepted_sampling_scales)!r}"
+        )
     if (
         "</tool_call>" in (sampling.stop_strings or ())
         and sampling.include_stop_str_in_output is not True
@@ -1901,8 +1910,13 @@ def load_policy_e2e_smoke_run_config(
             ("adamw", 1.0e-6, 0.9, 0.999, 1.0e-8, 0.01, 1.0),
             "trainable RP66 actor optimizer contract",
         )
+        functional_canary = (
+            sampling_scale == POLICY_PILOT_FUNCTIONAL_CANARY_SAMPLING_SCALE
+        )
         expected_accumulation = (
-            (16, 2, 2, 1)
+            (4, 1, 1, 1)
+            if functional_canary
+            else (16, 2, 2, 1)
             if distributed.world_size == 8
             else (16, 2, 2, 2)
         )
@@ -1914,8 +1928,9 @@ def load_policy_e2e_smoke_run_config(
                 accumulation.gradient_accumulation_steps,
             ),
             expected_accumulation,
-            "trainable RP66 BS16 world-size-matched accumulation contract",
+            "trainable RP66 world-size-matched accumulation contract",
         )
+        expected_horizon = 1 if functional_canary else 8
         _require_exact(
             (
                 scheduler.name,
@@ -1924,15 +1939,23 @@ def load_policy_e2e_smoke_run_config(
                 scheduler.minimum_learning_rate_ratio,
                 training.maximum_optimizer_steps,
             ),
-            ("constant", 0, 8, 0.0, 8),
+            (
+                "constant",
+                0,
+                expected_horizon,
+                0.0,
+                expected_horizon,
+            ),
             "trainable RP66 pilot optimization horizon",
         )
         _require_exact(
             training.checkpoint_steps,
-            (0, 1, 4, 8),
+            (0, 1) if functional_canary else (0, 1, 4, 8),
             "trainable RP66 checkpoint plan",
         )
-        if "wandb" not in training.logger:
+        if functional_canary and training.logger != ("console",):
+            raise ValueError("trainable RP66 functional canary must be console-only")
+        if not functional_canary and "wandb" not in training.logger:
             raise ValueError("trainable RP66 pilot requires W&B logging")
 
     canonical_json = json.dumps(
