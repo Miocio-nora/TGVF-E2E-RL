@@ -36,12 +36,15 @@ from tgvf_rl.qwen.base import (
     InjectedVisualBlock,
     ReplayConsumer,
     gather_behavior_measure_logprobs,
+    resolve_lm_head,
     resolve_replay_request,
     validate_injected_request,
 )
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.adapter import TGVFAdapter, TGVFAdapterInput
 from tgvf_rl.tensor_device import tensor_compute_device
+
+from .logprob_materializer import SelectedTokenLogprobMaterializer
 
 
 TRAINABLE_TGVF_ADAPTER_ATTRIBUTE = "tgvf_adapter"
@@ -85,7 +88,13 @@ class TrainableTGVFRoleReplay:
 class TrainableTGVFCurrentReplayPort:
     """Exact-response replay whose current visual state is differentiable."""
 
-    def __init__(self, *, engine: Any, model: nn.Module) -> None:
+    def __init__(
+        self,
+        *,
+        engine: Any,
+        model: nn.Module,
+        selected_logprob_materializer: SelectedTokenLogprobMaterializer | None = None,
+    ) -> None:
         if not isinstance(model, nn.Module):
             raise TypeError("trainable TGVF replay model must be a torch module")
         adapter = getattr(model, TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, None)
@@ -93,10 +102,16 @@ class TrainableTGVFCurrentReplayPort:
             raise TypeError("current Qwen module has no attached trainable RP66 Adapter")
         if not any(parameter.requires_grad for parameter in adapter.parameters()):
             raise RuntimeError("attached RP66 Adapter has no trainable parameters")
+        if selected_logprob_materializer is not None and not callable(
+            selected_logprob_materializer
+        ):
+            raise TypeError("selected_logprob_materializer must be callable")
         self.engine = engine
         self.model = model
         self.adapter = adapter
         self.family_adapter = Qwen3VLAdapter()
+        self.selected_logprob_materializer = selected_logprob_materializer
+        self.materializes_fused_kernels = selected_logprob_materializer is not None
         self.binding = SimpleNamespace(role=ComponentRole.CURRENT)
 
     def replay_response_logprobs(
@@ -136,10 +151,6 @@ class TrainableTGVFCurrentReplayPort:
             store=store,
             replay_handle=replay_handle,
         )
-        with torch.enable_grad(), self._autocast_context():
-            output = self.family_adapter.forward_injected(self.model, request)
-            gradient_coverage_anchor = trainable_parameter_zero_anchor(self.adapter)
-        device = output.logits.device
         sampled_positions = torch.tensor(
             [
                 [
@@ -148,15 +159,31 @@ class TrainableTGVFCurrentReplayPort:
                 ]
             ],
             dtype=torch.long,
-            device=device,
         )
-        selected = gather_behavior_measure_logprobs(
-            output.logits,
-            request.input_ids.to(device=device),
-            sampled_positions,
-            sampling,
-        ).squeeze(0)
-        selected = selected + gradient_coverage_anchor.to(dtype=selected.dtype)
+        with torch.enable_grad(), self._autocast_context():
+            if self.selected_logprob_materializer is None:
+                output = self.family_adapter.forward_injected(self.model, request)
+                device = output.logits.device
+                selected = gather_behavior_measure_logprobs(
+                    output.logits,
+                    request.input_ids.to(device=device),
+                    sampled_positions.to(device=device),
+                    sampling,
+                ).squeeze(0)
+            else:
+                hidden = self.family_adapter.forward_injected_hidden(
+                    self.model, request
+                )
+                selected = self.selected_logprob_materializer(
+                    hidden_states=hidden.hidden_states,
+                    lm_head=resolve_lm_head(self.model),
+                    token_ids=request.input_ids,
+                    sampled_positions=sampled_positions,
+                    sampling=sampling,
+                ).squeeze(0)
+                device = selected.device
+            gradient_coverage_anchor = trainable_parameter_zero_anchor(self.adapter)
+            selected = selected + gradient_coverage_anchor.to(dtype=selected.dtype)
         if not selected.requires_grad:
             raise RuntimeError("current TGVF log-probabilities lost autograd")
         scatter = torch.tensor(

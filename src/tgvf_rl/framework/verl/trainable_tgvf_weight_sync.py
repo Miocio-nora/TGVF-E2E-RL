@@ -27,7 +27,6 @@ from .policy_weight_sync import (
 
 
 TRAINABLE_RP66_STATE_PREFIX = "tgvf_adapter."
-TRAINABLE_RP66_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,13 +59,11 @@ def split_trainable_rp66_parameter_stream_for_snapshot(
 
     if type(base_sync_done) is not bool:
         raise TypeError("base_sync_done must be bool")
-    resolved_rank, resolved_world_size = _distributed_identity(
+    resolved_rank, _resolved_world_size = _distributed_identity(
         rank=rank,
         world_size=world_size,
         environment=environment,
     )
-    if resolved_world_size not in TRAINABLE_RP66_SUPPORTED_WORLD_SIZES:
-        raise ValueError("PRL15 trainable RP66 sync requires four or eight actor ranks")
     state = PolicyWeightSyncState.from_environment(environment)
     request = load_policy_weight_sync_request(state)
     if global_steps is not None and request.optimizer_step != global_steps:
@@ -141,7 +138,6 @@ def _split_parameter_iterator(
 
 
 __all__ = [
-    "TRAINABLE_RP66_SUPPORTED_WORLD_SIZES",
     "TRAINABLE_RP66_STATE_PREFIX",
     "TrainableRP66Snapshot",
     "load_latest_trainable_rp66_snapshot",

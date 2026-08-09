@@ -29,6 +29,7 @@ from tgvf_rl.qwen.base import (
     gather_behavior_measure_logprobs,
     injected_request_from_recorded,
     resolve_language_model,
+    resolve_lm_head,
     resolve_replay_request,
     validate_replay_request,
 )
@@ -47,6 +48,7 @@ from .model_scope import (
     audit_reference_model_scope,
     resolve_qwen3_decoder_lora_targets,
 )
+from .logprob_materializer import SelectedTokenLogprobMaterializer
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +242,7 @@ class Qwen3RecordedPolicyForwardPort:
         binding: RecordedPolicyForwardBinding,
         lora_config: DecoderLoRAConfig | None = None,
         family_adapter: Qwen3VLAdapter | None = None,
+        selected_logprob_materializer: SelectedTokenLogprobMaterializer | None = None,
     ) -> None:
         if not isinstance(model, nn.Module):
             raise TypeError("Qwen3 replay model must be a torch module")
@@ -255,6 +258,10 @@ class Qwen3RecordedPolicyForwardPort:
         adapter = family_adapter or Qwen3VLAdapter()
         if not isinstance(adapter, Qwen3VLAdapter):
             raise TypeError("family_adapter must be Qwen3VLAdapter")
+        if selected_logprob_materializer is not None and not callable(
+            selected_logprob_materializer
+        ):
+            raise TypeError("selected_logprob_materializer must be callable")
 
         if binding.role is ComponentRole.CURRENT:
             scope_audit = audit_policy_model_scope(model, config=selected)
@@ -264,6 +271,8 @@ class Qwen3RecordedPolicyForwardPort:
         self.binding = binding
         self.lora_config = selected
         self.family_adapter = adapter
+        self.selected_logprob_materializer = selected_logprob_materializer
+        self.materializes_fused_kernels = selected_logprob_materializer is not None
         self.scope_audit = scope_audit
         self._forward_model = _unwrap_peft_model(model)
         self._expected_trainable_names = tuple(
@@ -386,19 +395,38 @@ class Qwen3RecordedPolicyForwardPort:
         if not response_indices:
             raise ValueError("Qwen3 role replay requires a policy-owned response token")
 
-        output = self.forward_replay_bundle(bundle)
-        device = output.logits.device
         sampled_positions = torch.tensor(
             [[len(prompt) + index for index in response_indices]],
             dtype=torch.int64,
-            device=device,
         )
-        selected = gather_behavior_measure_logprobs(
-            output.logits,
-            request.input_ids.to(device=device),
-            sampled_positions,
-            sampling,
-        ).squeeze(0)
+        if self.selected_logprob_materializer is None:
+            output = self.forward_replay_bundle(bundle)
+            device = output.logits.device
+            selected = gather_behavior_measure_logprobs(
+                output.logits,
+                request.input_ids.to(device=device),
+                sampled_positions.to(device=device),
+                sampling,
+            ).squeeze(0)
+        else:
+            self._validate_bundle_identity(bundle)
+            validate_replay_bundle(bundle)
+            before = self.capture_state_proof()
+            with self._gradient_context(), self._autocast_context():
+                hidden = self.family_adapter.forward_injected_hidden(
+                    self._forward_model,
+                    injected_request_from_recorded(request),
+                )
+                selected = self.selected_logprob_materializer(
+                    hidden_states=hidden.hidden_states,
+                    lm_head=resolve_lm_head(self._forward_model),
+                    token_ids=request.input_ids,
+                    sampled_positions=sampled_positions,
+                    sampling=sampling,
+                ).squeeze(0)
+            self._validate_state_after_forward(before)
+            validate_replay_bundle(bundle)
+            device = selected.device
         scatter_indices = torch.tensor(response_indices, dtype=torch.int64, device=device)
         response_logprobs = torch.zeros(
             len(response.token_ids), dtype=selected.dtype, device=device

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -36,6 +37,15 @@ from .crop_coordinates import (
     CropCoordinateMapping,
     map_qwen3_crop_bbox_to_source,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Qwen3VLHiddenReplayResult:
+    """Injected Qwen3-VL decoder output before the vocabulary projection."""
+
+    hidden_states: torch.Tensor
+    past_key_values: Any | None
+    visual_position_mask: torch.Tensor
 
 
 class Qwen3VLAdapter(QwenVLMFamilyAdapter):
@@ -83,6 +93,26 @@ class Qwen3VLAdapter(QwenVLMFamilyAdapter):
         model: Any,
         request: InjectedForwardRequest,
     ) -> RecordedReplayResult:
+        hidden_result = self.forward_injected_hidden(model, request)
+        return RecordedReplayResult(
+            logits=resolve_lm_head(model)(hidden_result.hidden_states),
+            hidden_states=hidden_result.hidden_states,
+            past_key_values=hidden_result.past_key_values,
+            visual_position_mask=hidden_result.visual_position_mask,
+        )
+
+    def forward_injected_hidden(
+        self,
+        model: Any,
+        request: InjectedForwardRequest,
+    ) -> Qwen3VLHiddenReplayResult:
+        """Run exact visual injection without materializing vocabulary logits.
+
+        Exact PPO replay can feed these hidden states to a fused selected-token
+        log-probability kernel.  The ordinary ``forward_injected`` API remains
+        unchanged for evaluation and non-fused callers.
+        """
+
         if not isinstance(request, InjectedForwardRequest):
             raise TypeError("request must be InjectedForwardRequest")
         if any(
@@ -113,9 +143,7 @@ class Qwen3VLAdapter(QwenVLMFamilyAdapter):
             if hasattr(outputs, "last_hidden_state")
             else outputs[0]
         )
-        logits = resolve_lm_head(model)(hidden)
-        return RecordedReplayResult(
-            logits=logits,
+        return Qwen3VLHiddenReplayResult(
             hidden_states=hidden,
             past_key_values=getattr(outputs, "past_key_values", None),
             visual_position_mask=visual_mask,

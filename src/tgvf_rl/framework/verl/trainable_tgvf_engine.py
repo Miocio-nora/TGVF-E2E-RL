@@ -33,6 +33,7 @@ from .exact_replay_engine import (
     _reshard_exact_replay_root,
     exact_replay_forward_step,
 )
+from .fused_exact_replay import fused_selected_next_token_logprobs
 from .trainable_tgvf_weight_sync import (
     split_trainable_rp66_parameter_stream_for_snapshot,
 )
@@ -54,8 +55,17 @@ class TrainableTGVFReplayPortFactory:
         model_training: bool,
     ) -> Any:
         _validate_worker(engine, model=model, role=role, bundle=bundle)
+        materializer = (
+            fused_selected_next_token_logprobs
+            if bool(getattr(engine.model_config, "use_fused_kernels", False))
+            else None
+        )
         if role is ComponentRole.CURRENT:
-            return TrainableTGVFCurrentReplayPort(engine=engine, model=model)
+            return TrainableTGVFCurrentReplayPort(
+                engine=engine,
+                model=model,
+                selected_logprob_materializer=materializer,
+            )
 
         from tgvf_rl.policy.qwen_replay import Qwen3RecordedPolicyForwardPort
 
@@ -66,7 +76,11 @@ class TrainableTGVFReplayPortFactory:
             bundle=bundle,
             model_training=model_training,
         )
-        return Qwen3RecordedPolicyForwardPort(model=model, binding=binding)
+        return Qwen3RecordedPolicyForwardPort(
+            model=model,
+            binding=binding,
+            selected_logprob_materializer=materializer,
+        )
 
 
 _PORT_FACTORY = TrainableTGVFReplayPortFactory()
@@ -82,6 +96,7 @@ def make_trainable_tgvf_fsdp2_engine_class(
                 raise ValueError("trainable RP66 engine supports FSDP2 only")
             if getattr(self.model_config, "model_type", None) != TRAINABLE_TGVF_MODEL_TYPE:
                 raise IdentityMismatchError("trainable RP66 model_type differs")
+            _validate_trainable_execution_capabilities(self.model_config)
             self.model_config.model_type = "language_model"
             try:
                 module = super()._build_module()
@@ -310,6 +325,25 @@ def _validate_worker(
         raise RuntimeError("trainable actor lost its RP66 Adapter")
     if role is ComponentRole.REFERENCE and attached is not None:
         raise RuntimeError("frozen reference must not own RP66")
+
+
+def _validate_trainable_execution_capabilities(model_config: Any) -> None:
+    """Validate optional kernels while the worker is building, before rollout."""
+
+    if not bool(getattr(model_config, "use_fused_kernels", False)):
+        return
+    options = getattr(model_config, "fused_kernel_options", None)
+    backend = options.get("impl_backend") if isinstance(options, Mapping) else None
+    if backend != "torch":
+        raise ValueError(
+            "trainable exact replay currently implements the veRL torch fused backend"
+        )
+    # Import at worker startup so a missing/incompatible pinned veRL primitive
+    # cannot surface only after rollout has already consumed GPU time.
+    from verl.utils.experimental.torch_functional import FusedLinearForPPO
+
+    if not callable(getattr(FusedLinearForPPO, "forward", None)):
+        raise RuntimeError("pinned veRL FusedLinearForPPO is unavailable")
 
 
 __all__ = [

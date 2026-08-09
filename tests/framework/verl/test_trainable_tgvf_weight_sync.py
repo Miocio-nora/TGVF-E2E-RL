@@ -16,7 +16,7 @@ from tgvf_rl.framework.verl.trainable_tgvf_weight_sync import (
 
 
 @pytest.mark.parametrize("base_sync_done", [False, True])
-@pytest.mark.parametrize("world_size", [4, 8])
+@pytest.mark.parametrize("world_size", [1, 2, 4, 8])
 def test_full_model_stream_sends_qwen_and_publishes_rp66(
     tmp_path: Path, base_sync_done: bool, world_size: int
 ) -> None:
