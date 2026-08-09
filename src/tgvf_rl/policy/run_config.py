@@ -1950,7 +1950,7 @@ def load_policy_e2e_smoke_run_config(
         )
         _require_exact(
             training.checkpoint_steps,
-            (0, 1) if functional_canary else tuple(range(9)),
+            (0, 1) if functional_canary else (0, 1, 4, 8),
             "trainable RP66 checkpoint plan",
         )
         if functional_canary and training.logger != ("console",):

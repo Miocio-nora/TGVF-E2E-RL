@@ -9610,5 +9610,7 @@ than inferred from a script name or prior conversation.
   physically saves every completed optimizer step, retains the newest two
   exact paired checkpoints across restarts, and hard-links step 8 into a
   separately validated permanent checkpoint. The original run TOML and its
-  run identity remain unchanged so the corrected process resumes from the
+  run identity remain unchanged: its `0/1/4/8` list continues to identify the
+  scientific milestone gates, while the formal runtime owns the denser
+  recovery-save lifecycle. The corrected process therefore resumes from the
   already committed step-1 Qwen/RP66 pair rather than replaying step 1.
