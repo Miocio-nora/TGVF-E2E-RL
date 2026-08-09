@@ -113,6 +113,32 @@ python -m tgvf_rl.framework.verl.trainable_tgvf_launcher \
   --mode smoke --smoke-id actor-rollout-only-v1
 ```
 
+## Accepted GPU smoke
+
+The labeled `actor-rollout-only-v1` smoke ran on GPU0-3 and completed one full
+optimizer step at `2026-08-09 22:49 JST` with exit status zero. It exercised
+the live TGVF rollout, 256 OpenRouter judge calls, the full-Qwen GRPO backward,
+the RP66 backward/publication path, and the paired recovery checkpoint.
+
+The step used 16 prompts and 256 trajectories, produced 194 successful TGVF
+observations, and recorded answer reward `0.6328125`, conditional tool reward
+`0.453125`, tool-attempt rate `0.75`, and format-error rate `0.0078125`.
+`actor/grad_norm=7.09375` proves a finite Qwen update. The published RP66 hash
+changed from `05778a43844f397e0ad898ffbb060cf37a71ce174768437fbe8e782adf820318`
+at step 0 to
+`697d2a2781ed9629e8c58b4c7c5581902549cca6826c26fd415879eaebcfff25`
+at step 1. The four model shards, four optimizer shards, project state, data
+cursor, and checkpoint-pair receipt are present.
+
+The measured optimizer-step time was `689.29 s`: `641.85 s` before final
+publication, `6.46 s` for RP66 weight sync, and `40.95 s` for checkpointing.
+No formal metrics or W&B run were created, and the older unlabeled smoke
+metrics retained their earlier modification time. GPU0-3 were released after
+exit. vLLM printed `pure virtual method called` while its four Adapter servers
+were being destroyed after the checkpoint; because the launcher exited zero
+and the full recovery closure validates, this is recorded as shutdown cleanup
+noise to remove, not as a hidden pass criterion.
+
 ## Git execution identity
 
 The run TOML binds an execution-code commit rather than the later config-only

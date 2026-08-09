@@ -9542,9 +9542,9 @@ than inferred from a script name or prior conversation.
 ### PRL-15-R0-QWEN3-INSTRUCT-FULL-RP66-MATCHED
 
 - Cell/class and lifecycle: controlled full-model TGVF pilot; implementation
-  and dynamic preflight are complete, while the new labeled one-step GPU smoke
-  is pending. Formal eight-step training is not authorized until that smoke is
-  accepted.
+  and dynamic preflight are complete. The isolated one-step GPU0-3 smoke
+  `actor-rollout-only-v1` completed successfully at `2026-08-09 22:49 JST`;
+  formal eight-step training remains a separate, not-yet-started lifecycle.
 - Training state: Qwen3-VL-8B-Instruct and the RP-66 Adapter are jointly
   trainable. The retained mixed-v2 T1 schedule, BS16, n16, world4/micro1/GA4,
   one PPO epoch, constant LR `1e-6`, six TGVF calls, and DeepEyes reward
@@ -9569,3 +9569,18 @@ than inferred from a script name or prior conversation.
   training and will automatically prepare, resume, run and score both arms.
 - Detailed protocol and commands:
   `docs/experiments/prl15_controlled_rl_preflight.md`.
+- Accepted smoke evidence: 16 prompts produced 256 trajectories and 194
+  successful TGVF observations, with answer reward `0.6328125`, conditional
+  tool reward `0.453125`, tool-attempt rate `0.75`, and format-error rate
+  `0.0078125`. The Qwen update had `actor/grad_norm=7.09375`; RP66 changed from
+  step-0 state `05778a43...0318` to step-1 state `697d2a27...f25`; the four
+  Qwen model shards, four optimizer shards, project state and Qwen/RP66 pair
+  receipt were all saved. End-to-end update time was `689.29 s`, including
+  `40.95 s` checkpointing and `6.46 s` RP66 publication. The process exited
+  zero and GPU0-3 were released. Shutdown emitted vLLM `pure virtual method`
+  cleanup warnings after useful work; these are retained as a non-blocking
+  cleanup issue rather than treated as training failure.
+- Isolation evidence: this smoke wrote only below
+  `output.root/smoke/actor-rollout-only-v1`, used console logging, created no
+  W&B run, did not create formal `output.root/metrics.jsonl`, and did not
+  modify the pre-existing legacy `output.root/smoke/metrics.jsonl`.
