@@ -33,7 +33,7 @@ from .exact_replay_engine import (
     _reshard_exact_replay_root,
     exact_replay_forward_step,
 )
-from .fused_exact_replay import fused_selected_next_token_logprobs
+from .fused_exact_replay import FusedExactReplayMicrobatchMaterializer
 from .trainable_tgvf_weight_sync import (
     split_trainable_rp66_parameter_stream_for_snapshot,
 )
@@ -56,7 +56,7 @@ class TrainableTGVFReplayPortFactory:
     ) -> Any:
         _validate_worker(engine, model=model, role=role, bundle=bundle)
         materializer = (
-            fused_selected_next_token_logprobs
+            FusedExactReplayMicrobatchMaterializer()
             if bool(getattr(engine.model_config, "use_fused_kernels", False))
             else None
         )

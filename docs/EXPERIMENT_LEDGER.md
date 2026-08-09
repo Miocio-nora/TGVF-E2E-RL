@@ -9690,3 +9690,32 @@ than inferred from a script name or prior conversation.
   `stop/151643` and verified the corrected behavior; 62 focused tests, Ruff,
   and diff checks pass. The run TOML and reward are unchanged, and preflight
   revalidated the exact step-4/step-5 recovery pair before resume.
+- Formal step 6 (2026-08-10): exact recovery from step 5 replayed the batch
+  that had exposed the secondary-EOS omission and completed it without a
+  termination error. The update took `1100.39 s`, with answer reward
+  `.5390625`, conditional-tool reward `.40625`, format-error rate `.03125`,
+  and 192 successful TGVF observations. Its four-rank paired checkpoint is
+  complete; tracker, project state and metrics all remain at the safe step-6
+  boundary.
+- Step-7 memory diagnosis (2026-08-10): the next batch stopped before its
+  optimizer mutation in exact replay. This was not allocator fragmentation:
+  a 32-row actor microbatch called `DTensor.full_tensor()` independently for
+  every row, and every fused-logprob autograd context retained its own full
+  BF16 LM-head copy until the single microbatch backward. Up to 32 copies
+  (about `37.1 GiB`) accumulated on top of the row graphs; the long step-7
+  batch reached 169--171 GiB allocated and then failed on the next 2.32-GiB
+  FP32 gather. The unknown-commit guard correctly refused a step-7 checkpoint,
+  so no partial optimizer state was admitted.
+- Low-cost memory correction gate: a microbatch-scoped fused materializer now
+  gathers/casts the LM head once and shares that differentiable tensor across
+  all replay rows. A new materializer is created for every actor/reference
+  microbatch and cannot cross an LM head, device or dtype boundary; it never
+  survives an optimizer step. This preserves the intended real-valued loss
+  and gradient sum and matches Crop's one-shared-weight-per-microbatch design.
+  It intentionally does not claim bitwise equivalence with the buggy per-row
+  BF16-cast accumulation: finite-precision LM-head gradients can differ in
+  rounding order. CPU value/gradient tests pass, and a two-rank real-DTensor
+  test completes in seconds with exactly one `full_tensor()` call per rank and
+  local-shard gradient error below `2.4e-7`. The formal batch must not be used
+  as the next debugger: a separate 4-prompt x 2-trajectory functional canary
+  is required before resuming from step 6.
