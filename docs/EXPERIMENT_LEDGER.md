@@ -9719,3 +9719,12 @@ than inferred from a script name or prior conversation.
   local-shard gradient error below `2.4e-7`. The formal batch must not be used
   as the next debugger: a separate 4-prompt x 2-trajectory functional canary
   is required before resuming from step 6.
+- LM-head-cache functional canary (2026-08-10): commit `8a6dd1b` completed an
+  isolated console-only 4-prompt x 2-trajectory joint Qwen/RP66 step. It
+  exercised rollout, exact replay, backward, optimizer, weight publication
+  and all four checkpoint shards without the repeated-head OOM; peak actor
+  allocation was `41.24 GiB` and end-to-end time was `175.69 s`. This sampled
+  group had zero policy advantage (`pg_loss=0`, `grad_norm=0`), so it is only
+  a code/lifecycle milestone; nonzero value and gradient equivalence is owned
+  by the CPU and two-rank DTensor tests, and no learning claim is made from
+  this canary.
