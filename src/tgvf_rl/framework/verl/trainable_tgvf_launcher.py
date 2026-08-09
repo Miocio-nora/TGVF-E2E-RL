@@ -432,6 +432,7 @@ def build_trainable_tgvf_verl_launch_plan(
         )
     environment[POLICY_METRICS_PATH_ENV] = str(output_root / "metrics.jsonl")
     environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] = "0"
+    values["ray_kwargs.ray_init._temp_dir"] = str(output_root / "ray")
     _replace_custom_record(
         values,
         config,

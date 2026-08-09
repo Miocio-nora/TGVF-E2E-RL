@@ -810,6 +810,11 @@ def build_policy_e2e_smoke_verl_plan(
             ),
             "trainer.save_freq": save_frequency,
             "trainer.default_local_dir": str(config.output.checkpoint_directory),
+            # Never discover or join another experiment's Ray cluster through
+            # /tmp/ray/session_latest. Each run owns a local control plane and
+            # session directory under its output root.
+            "ray_kwargs.ray_init.address": "local",
+            "ray_kwargs.ray_init._temp_dir": str(config.output.root / "ray"),
         }
     )
 

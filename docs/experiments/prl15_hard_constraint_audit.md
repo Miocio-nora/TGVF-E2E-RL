@@ -52,6 +52,9 @@ merely because an earlier run happened to use it.
 - Centralized ignored runtime-dependency discovery at the Git shared-worktree
   root and removed the TGVF launcher's temporary mutation of launcher globals.
   Crop and TGVF now resolve the same pinned veRL and Python-header environment.
+- Bound every launch to `ray.init(address="local")` and a run-owned Ray session
+  directory, preventing accidental attachment to another experiment through
+  `/tmp/ray/session_latest`.
 
 ## Verification gates
 
