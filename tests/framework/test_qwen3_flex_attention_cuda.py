@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,12 +45,8 @@ def test_qwen3_vl_packed_text_flex_matches_sdpa_forward_and_backward() -> None:
     flex_config._attn_implementation = "flex_attention"
 
     torch.manual_seed(17)
-    sdpa = Qwen3VLTextModel(sdpa_config).to(
-        device="cuda:0", dtype=torch.bfloat16
-    )
-    flex = Qwen3VLTextModel(flex_config).to(
-        device="cuda:0", dtype=torch.bfloat16
-    )
+    sdpa = Qwen3VLTextModel(sdpa_config).to(device="cuda:0", dtype=torch.bfloat16)
+    flex = Qwen3VLTextModel(flex_config).to(device="cuda:0", dtype=torch.bfloat16)
     flex.load_state_dict(sdpa.state_dict())
     sdpa.train()
     flex.train()
@@ -77,9 +74,7 @@ def test_qwen3_vl_packed_text_flex_matches_sdpa_forward_and_backward() -> None:
 
     sdpa_output.float().square().mean().backward()
     flex_output.float().square().mean().backward()
-    torch.testing.assert_close(
-        flex_input.grad, sdpa_input.grad, rtol=0.08, atol=0.08
-    )
+    torch.testing.assert_close(flex_input.grad, sdpa_input.grad, rtol=0.08, atol=0.08)
     torch.testing.assert_close(
         flex.layers[0].self_attn.q_proj.weight.grad,
         sdpa.layers[0].self_attn.q_proj.weight.grad,
@@ -149,9 +144,7 @@ def test_qwen3_vl_variable_length_nonreentrant_checkpoint_backward() -> None:
         },
     )
     config._attn_implementation = "flex_attention"
-    model = Qwen3VLTextModel(config).to(
-        device="cuda:0", dtype=torch.bfloat16
-    )
+    model = Qwen3VLTextModel(config).to(device="cuda:0", dtype=torch.bfloat16)
     model.gradient_checkpointing_enable(
         gradient_checkpointing_kwargs={"use_reentrant": False}
     )
@@ -160,7 +153,7 @@ def test_qwen3_vl_variable_length_nonreentrant_checkpoint_backward() -> None:
     assert isinstance(checkpoint_fn, partial)
     assert checkpoint_fn.keywords["use_reentrant"] is False
 
-    losses: list[torch.Tensor] = []
+    policy_log_probs: list[torch.Tensor] = []
     inputs: list[torch.Tensor] = []
     for sequence_length in (282, 310, 314, 308, 290, 330, 278, 300):
         values = torch.randn(
@@ -186,9 +179,64 @@ def test_qwen3_vl_variable_length_nonreentrant_checkpoint_backward() -> None:
             position_ids=position_ids,
             use_cache=False,
         ).last_hidden_state
-        losses.append(output.float().square().mean())
+        # One differentiable scalar per generated token is sufficient for the
+        # exact DeepEyes policy-loss regression.  The actor kernel only needs
+        # current/old token log probabilities with their real replay shapes;
+        # the tiny text model deliberately omits the production LM head.
+        policy_log_probs.append(output[..., 0].float().squeeze(0))
 
-    torch.stack(losses).sum().backward()
+    from tgvf_rl.framework.verl.deepeyes_actor_loss import (
+        DEEPEYES_OFFICIAL_LOSS_AGG_MODE,
+        DEEPEYES_OFFICIAL_POLICY_LOSS_MODE,
+        compute_deepeyes_official_micro_token_mean_loss,
+    )
+
+    maximum_length = max(value.shape[0] for value in policy_log_probs)
+    log_prob = torch.stack(
+        [
+            torch.nn.functional.pad(value, (0, maximum_length - value.shape[0]))
+            for value in policy_log_probs
+        ]
+    )
+    response_mask = torch.stack(
+        [
+            torch.nn.functional.pad(
+                torch.ones_like(value, dtype=torch.bool),
+                (0, maximum_length - value.shape[0]),
+            )
+            for value in policy_log_probs
+        ]
+    )
+    # Four deterministic n=2 groups provide genuine non-zero GRPO-style
+    # advantages.  This is an engineering regression, not a sampled RL result.
+    sequence_advantages = torch.tensor(
+        [-1.0, 1.0] * 4, device="cuda:0", dtype=log_prob.dtype
+    )
+    advantages = sequence_advantages[:, None] * response_mask
+    actor_config = SimpleNamespace(
+        policy_loss=SimpleNamespace(loss_mode=DEEPEYES_OFFICIAL_POLICY_LOSS_MODE),
+        use_dynamic_bsz=False,
+        ppo_epochs=1,
+        entropy_coeff=0.0,
+        use_kl_loss=False,
+        clip_ratio=0.2,
+        clip_ratio_low=0.2,
+        clip_ratio_high=0.2,
+        clip_ratio_c=3.0,
+        ppo_micro_batch_size_per_gpu=8,
+        global_batch_info={"dp_size": 1, "global_batch_size": 8},
+    )
+    policy_loss, _ = compute_deepeyes_official_micro_token_mean_loss(
+        old_log_prob=log_prob.detach().clone(),
+        log_prob=log_prob,
+        advantages=advantages,
+        response_mask=response_mask,
+        loss_agg_mode=DEEPEYES_OFFICIAL_LOSS_AGG_MODE,
+        config=actor_config,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1.0e-2)
+    q_weight_before = model.layers[0].self_attn.q_proj.weight.detach().clone()
+    policy_loss.backward()
     for values in inputs:
         assert values.grad is not None
         assert torch.isfinite(values.grad).all()
@@ -197,3 +245,10 @@ def test_qwen3_vl_variable_length_nonreentrant_checkpoint_backward() -> None:
     assert q_gradient is not None
     assert torch.isfinite(q_gradient).all()
     assert torch.count_nonzero(q_gradient) > 0
+    optimizer.step()
+    q_weight_after = model.layers[0].self_attn.q_proj.weight.detach()
+    assert not torch.equal(q_weight_after, q_weight_before)
+    q_optimizer_state = optimizer.state[model.layers[0].self_attn.q_proj.weight]
+    assert q_optimizer_state["step"].item() == 1
+    assert torch.count_nonzero(q_optimizer_state["exp_avg"]) > 0
+    assert torch.count_nonzero(q_optimizer_state["exp_avg_sq"]) > 0
