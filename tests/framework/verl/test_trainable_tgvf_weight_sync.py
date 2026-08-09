@@ -39,7 +39,7 @@ def test_full_model_stream_sends_qwen_and_publishes_rp66(
             ),
             base_sync_done=base_sync_done,
             rank=0,
-            world_size=4,
+            world_size=8,
             global_steps=3,
             environment=environment,
         )

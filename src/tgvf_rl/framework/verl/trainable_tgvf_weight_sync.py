@@ -16,7 +16,6 @@ import torch
 from tgvf_rl.contracts.errors import ReplayMismatchError
 
 from .policy_weight_sync import (
-    POLICY_REQUIRED_WORLD_SIZE,
     PolicyWeightSyncRequest,
     PolicyWeightSyncState,
     _distributed_identity,
@@ -28,6 +27,7 @@ from .policy_weight_sync import (
 
 
 TRAINABLE_RP66_STATE_PREFIX = "tgvf_adapter."
+TRAINABLE_RP66_REQUIRED_WORLD_SIZE = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,8 +65,8 @@ def split_trainable_rp66_parameter_stream_for_snapshot(
         world_size=world_size,
         environment=environment,
     )
-    if resolved_world_size != POLICY_REQUIRED_WORLD_SIZE:
-        raise ValueError("trainable RP66 sync requires exactly four actor ranks")
+    if resolved_world_size != TRAINABLE_RP66_REQUIRED_WORLD_SIZE:
+        raise ValueError("PRL15 trainable RP66 sync requires exactly eight actor ranks")
     state = PolicyWeightSyncState.from_environment(environment)
     request = load_policy_weight_sync_request(state)
     if global_steps is not None and request.optimizer_step != global_steps:
@@ -141,6 +141,7 @@ def _split_parameter_iterator(
 
 
 __all__ = [
+    "TRAINABLE_RP66_REQUIRED_WORLD_SIZE",
     "TRAINABLE_RP66_STATE_PREFIX",
     "TrainableRP66Snapshot",
     "load_latest_trainable_rp66_snapshot",

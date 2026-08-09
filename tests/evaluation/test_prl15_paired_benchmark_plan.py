@@ -15,7 +15,7 @@ _PLAN_PATH = (
 _RUN_PATH = (
     _ROOT
     / "configs/policy/runs/"
-    "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_matched_8step_gpu0123.toml"
+    "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
 
 

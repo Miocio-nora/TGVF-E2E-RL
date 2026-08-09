@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compose or launch the PRL15 world-4/micro-1 native-Crop control."""
+"""Audit PRL15 against the hash-verified PRL14 Crop-16 control; never relaunch it."""
 
 from __future__ import annotations
 

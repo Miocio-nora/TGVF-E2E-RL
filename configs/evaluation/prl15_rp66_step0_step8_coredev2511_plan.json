@@ -2,7 +2,7 @@
   "schema_version": "tgvf.prl15-paired-policy-benchmark-plan.v1",
   "evaluation_id": "PRL15-RP66-COREDEV2511-STEP0-STEP8-SAME-PROTOCOL-V1",
   "status": "awaiting_formal_step8_paired_snapshot",
-  "policy_config": "configs/policy/runs/prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_matched_8step_gpu0123.toml",
+  "policy_config": "configs/policy/runs/prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml",
   "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "expected_task_count": 2511,

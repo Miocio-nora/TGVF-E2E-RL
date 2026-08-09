@@ -73,7 +73,7 @@ class _PublishingUpstream:
                 ),
                 base_sync_done=False,
                 rank=0,
-                world_size=4,
+                world_size=8,
                 global_steps=global_steps,
                 environment=self.environment,
             )

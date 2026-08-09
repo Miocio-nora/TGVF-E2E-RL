@@ -49,6 +49,12 @@ from .policy_task_runner import (
     POLICY_METRICS_PATH_ENV,
     POLICY_REFERENCE_DIAGNOSTIC_ENV,
 )
+from .prl14_crop16_reference import (
+    PRL14_CROP16_COMPLETION_SHA256,
+    PRL14_CROP16_RUN_NAME,
+    apply_prl14_crop16_common_controls,
+    assert_prl14_crop16_common_controls,
+)
 from .tgvf_deepeyes_matched_dataset import (
     DEEPEYES_PROBE_SENTINEL,
     DEEPEYES_TRAIN_SENTINEL,
@@ -238,6 +244,7 @@ class TrainableTGVFVerlLaunchPlan:
 
     def _assert_trainable_path(self) -> None:
         values = self.overrides
+        assert_prl14_crop16_common_controls(values)
         required = {
             "actor_rollout_ref.model.lora_rank": 0,
             "actor_rollout_ref.model.lora.rank": 0,
@@ -351,6 +358,7 @@ def build_trainable_tgvf_verl_launch_plan(
             "trainer.save_freq": 1,
         }
     )
+    apply_prl14_crop16_common_controls(values)
     checkpoint_steps = (0, 1, 4, 8) if mode == "formal" else (0, 1)
     output_root = config.output.root
     environment = dict(base.environment)
@@ -367,10 +375,6 @@ def build_trainable_tgvf_verl_launch_plan(
                 "trainer.logger": ["console"],
                 "trainer.default_local_dir": str(output_root / "checkpoints"),
                 "trainer.max_actor_ckpt_to_keep": 2,
-                # CUDA graph capture is a pure serving optimization and adds
-                # minutes to every one-step restart.  Keep the scientific
-                # BS16 x n16 workload while making smoke iterations eager.
-                "actor_rollout_ref.rollout.enforce_eager": True,
             }
         )
         environment["TGVF_POLICY_STATE_DIR"] = str(
@@ -388,6 +392,8 @@ def build_trainable_tgvf_verl_launch_plan(
     external = dict(base.external_components)
     external.update(
         {
+            "control_run": PRL14_CROP16_RUN_NAME,
+            "control_completion_sha256": PRL14_CROP16_COMPLETION_SHA256,
             "dataset": TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
             "actor_engine": TRAINABLE_TGVF_MODEL_TYPE,
             "actor_external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,

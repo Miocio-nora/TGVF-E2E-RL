@@ -1,148 +1,99 @@
-# PRL15 controlled-RL preflight
+# PRL15 TGVF versus PRL14 Crop-16 controlled pilot
 
-This note records the implementation boundary for the matched RP66 pilot and
-its native-Crop control. No formal run should start from an uncommitted tree.
+PRL15 is a treatment of the completed PRL14 Crop experiment. The control is
+not regenerated from the TGVF plan. Its immutable source is the existing
+`completion.json` with SHA-256
+`3907b310642aa542cf7ffcb6dec12c2a23d87634cdd9f696b5f984eacb1f70f1`.
+The comparison uses PRL14's permanently retained step-8 checkpoint.
 
-## Frozen experimental shape
+## Scientific question and the only intended treatment
 
-Both arms use Qwen3-VL-8B-Instruct full-model training, the retained mixed T1
-schedule, 16 prompts per optimizer step, 16 trajectories per prompt, four
-FSDP ranks, one PPO epoch, AdamW at `1e-6`, and the released DeepEyes GRPO
-reward weights. The text judge uses Qwen2.5-72B through OpenRouter with the
-same proven service contract as Crop: concurrency 16, four bounded attempts,
-0.25--2.0 second backoff, transient exhaustion scored as zero and audited,
-and authentication/model-identity failures aborting the run.
+The question is whether replacing native Crop with trainable RP66/TGVF helps
+under the already successful Crop-16 RL recipe. Both Qwen3-VL-8B-Instruct and
+the RP66 Adapter are updated in the TGVF arm. The intended arm differences are:
 
-The scientific arm difference is the visual action and its trainable state:
+- Crop prompt/tool and Crop observation construction versus TGVF prompt/tool
+  and RP66 observation construction;
+- no RP66 state in Crop versus RP66 initialized from the stage-1 step-2000
+  artifact and updated jointly with Qwen in TGVF;
+- the minimum dataset, AgentLoop, rollout publication and paired-checkpoint
+  plumbing required to execute those two visual actions.
 
-- Crop uses the native DeepEyes crop prompt/tool and has no RP66 Adapter.
-- TGVF uses the matched TGVF prompt/tool and jointly updates full Qwen plus the
-  RP66 Adapter, publishing both to rollout after every optimizer step.
+Reward mathematics is not a treatment. Both arms use the source-aware
+DeepEyes equations: visual samples use
+`0.8*accuracy + 0.2*format + 1.2*I(correct and successful tool)`, while
+ThinkLite uses `1.2*accuracy + 0.4*format`. Both use the same Qwen2.5-72B
+OpenRouter/DeepInfra service record (concurrency 16 and the same bounded retry
+policy), whose file SHA-256 is
+`fff705c59408f4863244ff28df3443176e85de83147344df6a2350859c233021`.
+TGVF's async trajectory scorer is a transport adapter around the same official
+extractors, judge prompts, weights and failure behavior.
 
-## Why the world4/micro1 Crop control is required
+## Matched effective training configuration
 
-`deepeyes_official_micro_token_mean` reproduces the released reduction: it
-computes a token mean independently inside each fixed local actor micro-batch,
-then gives every micro-batch equal weight. With unequal response lengths,
-changing actor micro-batch size changes the effective trajectory/token
-weighting. It is not a generic veRL requirement, but it is part of this named
-objective.
+The two composed Hydra configurations match on the causal training controls:
 
-Therefore the earlier world8/micro32 Crop run is useful historical evidence,
-but it is not a strict scalar-loss control for PRL15 world4/micro1. The new
-launcher `tools/launch_prl15_crop_ws4_micro1_control.py` constructs a Crop arm
-and programmatically proves the common runtime fields equal the RP66 formal
-plan before composition or launch.
+- eight GPUs / eight FSDP ranks, TP1, and eight AgentLoop workers;
+- 16 prompts and 16 rollouts per prompt (256 trajectories per update);
+- actor micro-batch 32 per rank, rollout/ref log-prob micro-batch 32, one PPO
+  epoch, and no gradient accumulation;
+- full-model Qwen training, including vision tower and projector;
+- AdamW at `1e-6`, betas `(0.9, 0.999)`, weight decay `0.01`, effective epsilon
+  `1e-8`, constant LR, and grad clip `1.0`;
+- response length 20480, prompt length 8192, token caps 16384, vLLM model/batch
+  capacity 32768, max sequences 1024, and memory utilization 0.65;
+- gradient checkpointing and remove-padding enabled, fused Torch kernels,
+  text FlexAttention, vision SDPA, FSDP resharding and torch.compile enabled;
+- token-mean DeepEyes actor loss, GRPO advantage normalization, and zero KL.
 
-The comparison declaration is data, not Python code. It lives at
-`configs/policy/controls/prl15_crop_rp66_matched.json` and has two lists:
+PRL14 continued from step 8 to step 16, whereas the first PRL15 pilot stops at
+step 8. This does not change updates 1--8: the scheduler is constant and the
+effective optimizer horizon is `-1` in both composed configs. The comparison
+is therefore PRL14 step 8 versus PRL15 step 8, not PRL14 step 16.
 
-- `required_equal`: copied from the current RP66 launch plan into Crop, then
-  checked for equality;
-- `arm_specific`: expected scientific/runtime differences between Crop and
-  TGVF.
-
-Every other observed difference is preserved in
-`unclassified_differences`, but is informational rather than fatal. Therefore
-changing a later batch size, micro batch, capacity, scheduler, or other common
-variable requires editing the run config and, only if its scientific role has
-changed, this declaration. It does not require editing a hard-coded Python
-allowlist. Missing `required_equal` fields and unequal declared controls remain
-fatal because those would make the named comparison false.
-
-## Runtime isolation and reference diagnostic
-
-Smoke metrics are forced to either the legacy `output.root/smoke/metrics.jsonl`
-or a labeled closure `output.root/smoke/<smoke-id>/metrics.jsonl`; formal
-metrics are forced to `output.root/metrics.jsonl`. A labeled smoke also owns
-its own checkpoints and logs. The TaskRunner accepts only a safe lowercase
-label inside this layout, preventing a successful smoke from contaminating the
-formal history while allowing repeated engineering canaries without moving or
-overwriting old evidence.
-
-Both mathematical KL coefficients are zero. PRL15 consequently disables the
-extra frozen-reference forward and uses an ActorRollout worker role. This
-removes one full reference forward over 256 trajectories and its model/runtime
-headroom. The legacy default remains enabled so old experiment identities do
-not silently change. This switch does not alter reward, advantages, policy
-loss, or checkpoint weights because the diagnostic coefficient was already
-zero.
-
-## Step 0 versus step 8 benchmark contract
-
-The paired CoreDev-2511 plan is pinned in
-`configs/evaluation/prl15_rp66_step0_step8_coredev2511_plan.json`. Both arms
-must use the same task manifest, rank partition, TGVF prompt/tool protocol,
-call cap, and sampling contract.
-
-The state being compared is a pair, not a single model:
-
-- step 0 = base Qwen weights + the immutable RP66 stage-1 artifact;
-- step 8 = materialized full-Qwen step-8 checkpoint + the immutable RP66
-  step-8 content-addressed snapshot.
-
-The existing full-model CoreDev backend is Crop-only (`native_pixels=True`)
-and the older TGVF backend assumes a policy LoRA. Neither is a valid shortcut
-for this paired full-Qwen/RP66 state. The dedicated
-`full_model_trainable_rp66` backend now freezes and loads both members. It
-rejects a Qwen HF closure containing `tgvf_adapter.*` keys, installs the exact
-RP66 state through the vLLM Adapter update RPC, requires the worker ACK, and
-uses a combined Qwen-tree/RP66-state policy identity in every result row.
-
-`tools/run_prl15_paired_evaluation.py` is the resumable executor. It reads the
-plan and active run config rather than duplicating paths or hyperparameters.
-With eight GPU IDs it runs step0 and step8 concurrently as two four-rank arms;
-with four it runs them sequentially. `--wait-for-step8` makes it safe to start
-the evaluator before training: it waits for checkpoint step 8, the embedded HF
-tree, and the fixed RP66 pointer, then prepares, runs, resumes, and scores both
-arms. The plan remains marked `awaiting_formal_step8_paired_snapshot` until the
-formal closure exists.
-
-The intended unattended command is:
+The declaration is
+`configs/policy/controls/prl15_crop_rp66_matched.json`. Ordinary equal fields
+are checked directly. Semantically equal values stored under different
+framework paths, such as the judge SHA, are compared through explicit
+control/treatment paths. The audit command is:
 
 ```bash
-python tools/run_prl15_paired_evaluation.py \
-  --mode run --wait-for-step8 --gpu-ids 0 1 2 3 4 5 6 7
+python tools/audit_prl15_against_prl14_crop16.py \
+  --crop-contract /absolute/path/to/prl_13_a_...toml \
+  --rp66-config /absolute/path/to/prl_15_r0_...ws8.toml
 ```
 
-For a new engineering canary, use an explicit label and keep W&B disabled:
+`--launch` is deliberately forbidden because PRL14 already exists.
 
-```bash
-python -m tgvf_rl.framework.verl.trainable_tgvf_launcher \
-  --run-config configs/policy/runs/prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_matched_8step_gpu0123.toml \
-  --mode smoke --smoke-id actor-rollout-only-v1
-```
+## Smoke and formal lifecycle
 
-## Accepted GPU smoke
+The earlier `actor-rollout-only-v1` one-step smoke used four GPUs with
+micro-batch 1 and GA4. It remains useful evidence that joint Qwen/RP66
+backpropagation, publication and checkpoint recovery execute, but it is not a
+valid Crop-16 control and must not authorize formal training.
 
-The labeled `actor-rollout-only-v1` smoke ran on GPU0-3 and completed one full
-optimizer step at `2026-08-09 22:49 JST` with exit status zero. It exercised
-the live TGVF rollout, 256 OpenRouter judge calls, the full-Qwen GRPO backward,
-the RP66 backward/publication path, and the paired recovery checkpoint.
+A new one-step smoke must use the formal eight-GPU/micro32 execution shape.
+Smoke stays console-only and writes below
+`output.root/smoke/<smoke-id>/`; it cannot contaminate formal metrics or W&B.
+Formal launch remains blocked until that smoke completes with finite reward,
+finite Qwen gradients, a changed RP66 state, eight Qwen/optimizer shards, and
+a resumable paired checkpoint. Formal execution must use tmux.
 
-The step used 16 prompts and 256 trajectories, produced 194 successful TGVF
-observations, and recorded answer reward `0.6328125`, conditional tool reward
-`0.453125`, tool-attempt rate `0.75`, and format-error rate `0.0078125`.
-`actor/grad_norm=7.09375` proves a finite Qwen update. The published RP66 hash
-changed from `05778a43844f397e0ad898ffbb060cf37a71ce174768437fbe8e782adf820318`
-at step 0 to
-`697d2a2781ed9629e8c58b4c7c5581902549cca6826c26fd415879eaebcfff25`
-at step 1. The four model shards, four optimizer shards, project state, data
-cursor, and checkpoint-pair receipt are present.
+## Evaluation
 
-The measured optimizer-step time was `689.29 s`: `641.85 s` before final
-publication, `6.46 s` for RP66 weight sync, and `40.95 s` for checkpointing.
-No formal metrics or W&B run were created, and the older unlabeled smoke
-metrics retained their earlier modification time. GPU0-3 were released after
-exit. vLLM printed `pure virtual method called` while its four Adapter servers
-were being destroyed after the checkpoint; because the launcher exited zero
-and the full recovery closure validates, this is recorded as shutdown cleanup
-noise to remove, not as a hidden pass criterion.
+`configs/evaluation/prl15_rp66_step0_step8_coredev2511_plan.json` compares:
 
-## Git execution identity
+- step 0: base Qwen plus immutable RP66 stage-1 state;
+- step 8: Qwen step-8 checkpoint plus the content-addressed RP66 step-8 state.
 
-The run TOML binds an execution-code commit rather than the later config-only
-binding commit. The execution commit must be an ancestor of the checked-out
-launch commit, the tree must be clean, and the branch must be pushed before
-formal launch. This avoids a circular self-hash while preserving an exact,
-reconstructable code identity.
+The evaluator must use the same CoreDev-2511 task/protocol and sampling
+contract for both states. It loads both members of the Qwen/RP66 pair and
+requires the RP66 update acknowledgement; a Qwen-only checkpoint is invalid.
+
+## Git identity
+
+Formal launch requires a clean, pushed branch. The run TOML binds an execution
+commit that must be an ancestor of the final binding commit. Configuration,
+comparison declaration, launcher, runtime and tests are committed together;
+the old world4 experiment identity is retained only as historical smoke
+evidence.

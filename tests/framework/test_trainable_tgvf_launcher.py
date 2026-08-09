@@ -32,7 +32,7 @@ _ROOT = Path(__file__).parents[2]
 _CONFIG = (
     _ROOT
     / "configs/policy/runs/"
-    "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_matched_8step_gpu0123.toml"
+    "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
 
 
@@ -50,6 +50,23 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     assert values["data.custom_cls.name"] == "TGVFDeepEyesMatchedDataset"
     assert values["data.train_batch_size"] == 16
     assert values["actor_rollout_ref.rollout.n"] == 16
+    assert values["trainer.n_gpus_per_node"] == 8
+    assert values["actor_rollout_ref.actor.fsdp_config.fsdp_size"] == 8
+    assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 32
+    assert values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"] == 32
+    assert values["actor_rollout_ref.model.enable_gradient_checkpointing"] is True
+    assert values["actor_rollout_ref.model.use_remove_padding"] is True
+    assert values["actor_rollout_ref.model.use_fused_kernels"] is True
+    assert values["actor_rollout_ref.model.override_config.attn_implementation"] == (
+        "sdpa"
+    )
+    assert values["actor_rollout_ref.actor.fsdp_config.use_torch_compile"] is True
+    assert values["actor_rollout_ref.actor.fsdp_config.model_dtype"] == "fp32"
+    assert values["actor_rollout_ref.actor.optim.total_training_steps"] == -1
+    assert values["actor_rollout_ref.rollout.response_length"] == 20480
+    assert "actor_rollout_ref.rollout.repetition_penalty" not in values
+    assert values["data.filter_overlong_prompts"] is True
+    assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3,4,5,6,7"
     assert values["actor_rollout_ref.model.lora_rank"] == 0
     assert values["actor_rollout_ref.model.lora.rank"] == 0
     assert values["actor_rollout_ref.actor.freeze_vision_tower"] is False

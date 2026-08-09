@@ -17,7 +17,10 @@ from pathlib import Path
 from types import MappingProxyType
 
 from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
-from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
+from tgvf_rl.policy.run_config import (
+    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+    PolicyE2ESmokeRunConfig,
+)
 from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
 from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
 
@@ -148,24 +151,30 @@ class UpstreamVerlLaunchPlan:
             )
         except ValueError as error:
             raise ValueError(
-                "Policy Pilot launch must bind four integer physical GPU IDs"
+                "Policy Pilot launch must bind integer physical GPU IDs"
             ) from error
+        world_size = self.overrides.get("trainer.n_gpus_per_node")
         if (
-            len(physical_gpu_ids) != 4
-            or len(set(physical_gpu_ids)) != 4
+            type(world_size) is not int
+            or world_size <= 0
+            or len(physical_gpu_ids) != world_size
+            or len(set(physical_gpu_ids)) != world_size
             or any(device < 0 for device in physical_gpu_ids)
         ):
-            raise ValueError("Policy Pilot launch must bind four unique physical GPUs")
-        if self.overrides.get("trainer.n_gpus_per_node") != 4:
-            raise ValueError("initial Policy Pilot launch must bind world size four")
+            raise ValueError(
+                "Policy Pilot launch must bind one unique physical GPU per rank"
+            )
         if (
             self.overrides.get("actor_rollout_ref.rollout.tensor_model_parallel_size")
             != 1
         ):
             raise ValueError("initial Policy Pilot launch must bind vLLM TP=1")
-        if self.overrides.get("actor_rollout_ref.rollout.agent.num_workers") != 4:
+        if (
+            self.overrides.get("actor_rollout_ref.rollout.agent.num_workers")
+            != world_size
+        ):
             raise ValueError(
-                "initial Policy Pilot launch requires four AgentLoop workers"
+                "Policy Pilot launch requires one AgentLoop worker per rank"
             )
         if (
             self.overrides.get("actor_rollout_ref.actor.fsdp_config.forward_only")
@@ -946,7 +955,12 @@ def _actor_batch_contract(
     n = config.policy.sampling.trajectories_per_prompt
     dp_size = config.distributed.world_size
     trajectory_mini = prompts * n
-    actor_trajectory_micro_per_gpu = prompt_micro
+    crop16_matched = (
+        config.schema_version == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    )
+    actor_trajectory_micro_per_gpu = (
+        prompt_micro * n if crop16_matched else prompt_micro
+    )
     inference_trajectory_micro_per_gpu = prompt_micro * n
     denominator = dp_size * actor_trajectory_micro_per_gpu
     if trajectory_mini % denominator:
@@ -955,7 +969,9 @@ def _actor_batch_contract(
         )
     actor_forward_backward_microbatches = trajectory_mini // denominator
     configured_accumulation = config.accumulation.gradient_accumulation_steps
-    expected_actor_microbatches = configured_accumulation * n
+    expected_actor_microbatches = configured_accumulation * (
+        1 if crop16_matched else n
+    )
     if actor_forward_backward_microbatches != expected_actor_microbatches:
         raise ValueError(
             "pinned veRL actor microbatches differ from prompt accumulation times n"

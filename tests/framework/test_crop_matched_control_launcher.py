@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from omegaconf import OmegaConf
 
 from tgvf_rl.framework.verl.crop_matched_control_launcher import (
     CROP_MATCHED_CONTROL_COMPARISON_SPEC,
@@ -12,6 +13,13 @@ from tgvf_rl.framework.verl.crop_matched_control_launcher import (
     CropMatchedControlPlan,
     build_crop_matched_control_plan,
     load_control_comparison_spec,
+)
+from tgvf_rl.framework.verl.deepeyes_native_launcher import _hydra_literal
+from tgvf_rl.framework.verl.prl13_main import compose_pinned_deepeyes_config
+from tgvf_rl.framework.verl.prl14_crop16_reference import (
+    PRL14_CROP16_COMMON_OVERRIDES,
+    PRL14_CROP16_REMOVED_OVERRIDES,
+    load_prl14_crop16_completion,
 )
 from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
     build_trainable_tgvf_verl_launch_plan,
@@ -32,7 +40,7 @@ _CROP = (
 _RP66 = (
     _ROOT
     / "configs/policy/runs/"
-    "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_matched_8step_gpu0123.toml"
+    "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
 
 
@@ -54,12 +62,33 @@ def test_control_matches_every_declared_common_runtime_value() -> None:
         assert control.launch.overrides[path] == rp66.overrides[path]
     assert control.launch.overrides[
         "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
-    ] == 1
-    assert control.launch.overrides["trainer.n_gpus_per_node"] == 4
+    ] == 32
+    assert control.launch.overrides["trainer.n_gpus_per_node"] == 8
     assert control.launch.overrides["data.train_batch_size"] == 16
     assert control.launch.overrides["actor_rollout_ref.rollout.n"] == 16
     assert control.comparison_note == comparison.note
+    assert control.semantic_matched_values == {
+        "judge_config_sha256": rp66.config.reward.judge_config_sha256
+    }
     assert control.unclassified_differences
+
+
+def test_crop16_common_controls_match_the_hash_verified_completed_run() -> None:
+    completion = load_prl14_crop16_completion()
+    composed = compose_pinned_deepeyes_config(
+        tuple(
+            f"++{path}={_hydra_literal(value)}"
+            for path, value in completion.overrides.items()
+        )
+    )
+
+    for path, expected in PRL14_CROP16_COMMON_OVERRIDES.items():
+        actual = OmegaConf.select(composed, path, default=object())
+        if OmegaConf.is_config(actual):
+            actual = OmegaConf.to_container(actual, resolve=True)
+        assert actual == expected, path
+    for path in PRL14_CROP16_REMOVED_OVERRIDES:
+        assert OmegaConf.select(composed, path, default=None) is None, path
 
 
 def test_control_keeps_only_the_expected_crop_arm_differences() -> None:
@@ -91,6 +120,7 @@ def test_control_rejects_a_non_step8_launch() -> None:
                 },
             ),
             matched_values=control.matched_values,
+            semantic_matched_values=control.semantic_matched_values,
             arm_differences=control.arm_differences,
             unclassified_differences=control.unclassified_differences,
             comparison_spec_path=control.comparison_spec_path,
@@ -98,14 +128,15 @@ def test_control_rejects_a_non_step8_launch() -> None:
         )
 
 
-def test_common_values_follow_the_active_rp66_plan_without_python_edits(
+def test_common_values_are_checked_against_crop16_not_copied_from_rp66(
     tmp_path: Path,
 ) -> None:
     original = load_control_comparison_spec(CROP_MATCHED_CONTROL_COMPARISON_SPEC)
     payload = {
         "schema_version": "tgvf.control-comparison.v1",
-        "note": "test live declaration",
+        "note": "test Crop-16 reference declaration",
         "required_equal": ["actor_rollout_ref.rollout.temperature"],
+        "semantic_equal": [],
         "arm_specific": ["trainer.experiment_name"],
     }
     path = tmp_path / "comparison.json"
@@ -124,4 +155,4 @@ def test_common_values_follow_the_active_rp66_plan_without_python_edits(
             "actor_rollout_ref.rollout.temperature"
         ]
     }
-    assert control.comparison_note == "test live declaration"
+    assert control.comparison_note == "test Crop-16 reference declaration"

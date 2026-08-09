@@ -9541,26 +9541,36 @@ than inferred from a script name or prior conversation.
 
 ### PRL-15-R0-QWEN3-INSTRUCT-FULL-RP66-MATCHED
 
-- Cell/class and lifecycle: controlled full-model TGVF pilot; implementation
-  and dynamic preflight are complete. The isolated one-step GPU0-3 smoke
-  `actor-rollout-only-v1` completed successfully at `2026-08-09 22:49 JST`;
-  formal eight-step training remains a separate, not-yet-started lifecycle.
-- Training state: Qwen3-VL-8B-Instruct and the RP-66 Adapter are jointly
-  trainable. The retained mixed-v2 T1 schedule, BS16, n16, world4/micro1/GA4,
-  one PPO epoch, constant LR `1e-6`, six TGVF calls, and DeepEyes reward
-  weights `.8/.2/1.2` are bound in the run config. Both mathematical KL
-  coefficients are zero, so the unused frozen-reference forward is disabled;
-  the worker topology is ActorRollout rather than ActorRolloutRef.
-- Runtime evidence policy: formal metrics remain at `output.root/metrics.jsonl`.
-  Every engineering canary uses its own
-  `output.root/smoke/<smoke-id>/` closure and console-only logging, so neither
-  metrics, checkpoints nor W&B records can collide with the formal run.
-- Matched Crop control: common fields are declared in
-  `configs/policy/controls/prl15_crop_rp66_matched.json` and are copied from
-  the active RP66 plan. Expected arm differences and all unclassified
-  differences are recorded. Only missing or unequal `required_equal` fields
-  fail the scientific control; a new variable does not fail merely because a
-  Python allowlist was not updated.
+- Lifecycle correction (2026-08-09): the first implementation incorrectly
+  treated world4/micro1/GA4 as the control. That shape was derived from the
+  TGVF plan rather than the completed Crop experiment and is scientifically
+  invalid for the requested comparison. No formal run was started. The
+  one-step `actor-rollout-only-v1` GPU0-3 closure is retained only as
+  engineering evidence that joint Qwen/RP66 update and recovery execute.
+- Correct control: the external source of truth is the completed PRL14 Crop-16
+  record, SHA-256 `3907b310...f70f1`, and its permanent step-8 checkpoint.
+  PRL15 now matches world8, actor/log-prob micro32, BS16, n16 (256
+  trajectories), full Qwen vision/language training, one PPO epoch, constant
+  LR `1e-6`, token/capacity settings, FlexAttention/SDPA, FSDP compile/reshard,
+  DeepEyes token-mean loss, zero KL, and the official source-aware reward.
+- Intended treatment: native Crop prompt/tool/observation is replaced by the
+  matched TGVF prompt/tool and jointly trainable RP66 state. Dataset/AgentLoop,
+  weight-publication and paired-checkpoint differences are permitted only as
+  the plumbing needed to realize that treatment.
+- Control direction: `configs/policy/controls/prl15_crop_rp66_matched.json`
+  checks PRL15 against the hash-verified PRL14 record; it never copies TGVF
+  settings into a synthesized Crop run. The audit entry point is
+  `tools/audit_prl15_against_prl14_crop16.py`, and relaunching Crop from that
+  tool is forbidden.
+- Reward identity: both arms use `.8/.2/1.2` on visual samples and
+  `1.2/.4/0` on ThinkLite, with the same Qwen2.5-72B judge config SHA
+  `fff705c5...3021`. TGVF uses an asynchronous trajectory adapter around the
+  same official answer extractors, judge prompts and failure semantics.
+- Current gate: the corrected formal plan composes and the matched core fields
+  pass CPU tests. A new world8/micro32 one-step GPU smoke is still required;
+  until it passes, formal eight-step training is not authorized.
+- Runtime isolation: smoke uses console-only logging and an isolated
+  `output.root/smoke/<smoke-id>/` closure; formal metrics/W&B remain untouched.
 - External ACC-VAL: step0 and step8 are paired states, respectively base Qwen
   plus stage1 RP66 and step8 Qwen plus step8 RP66. The dedicated
   `full_model_trainable_rp66` backend binds both members, requires the RP66
@@ -9569,17 +9579,15 @@ than inferred from a script name or prior conversation.
   training and will automatically prepare, resume, run and score both arms.
 - Detailed protocol and commands:
   `docs/experiments/prl15_controlled_rl_preflight.md`.
-- Accepted smoke evidence: 16 prompts produced 256 trajectories and 194
+- Historical engineering smoke evidence: 16 prompts produced 256 trajectories and 194
   successful TGVF observations, with answer reward `0.6328125`, conditional
   tool reward `0.453125`, tool-attempt rate `0.75`, and format-error rate
   `0.0078125`. The Qwen update had `actor/grad_norm=7.09375`; RP66 changed from
   step-0 state `05778a43...0318` to step-1 state `697d2a27...f25`; the four
   Qwen model shards, four optimizer shards, project state and Qwen/RP66 pair
   receipt were all saved. End-to-end update time was `689.29 s`, including
-  `40.95 s` checkpointing and `6.46 s` RP66 publication. The process exited
-  zero and GPU0-3 were released. Shutdown emitted vLLM `pure virtual method`
-  cleanup warnings after useful work; these are retained as a non-blocking
-  cleanup issue rather than treated as training failure.
+  `40.95 s` checkpointing and `6.46 s` RP66 publication. These measurements
+  must not be used to estimate or authorize the corrected world8/micro32 run.
 - Isolation evidence: this smoke wrote only below
   `output.root/smoke/actor-rollout-only-v1`, used console logging, created no
   W&B run, did not create formal `output.root/metrics.jsonl`, and did not

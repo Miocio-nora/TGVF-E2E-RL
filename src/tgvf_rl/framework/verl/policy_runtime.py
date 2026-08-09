@@ -78,10 +78,10 @@ class PolicyAgentLoopWorkerPlacement:
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
-        if type(self.world_size) is not int or self.world_size != 4:
-            raise ValueError("Policy Pilot worker placement requires world_size=4")
+        if type(self.world_size) is not int or self.world_size <= 0:
+            raise ValueError("Policy worker placement requires positive world_size")
         if self.worker_index >= self.world_size:
-            raise ValueError("AgentLoop worker index lies outside the four-GPU world")
+            raise ValueError("AgentLoop worker index lies outside the configured world")
 
     @property
     def torch_device(self) -> torch.device:

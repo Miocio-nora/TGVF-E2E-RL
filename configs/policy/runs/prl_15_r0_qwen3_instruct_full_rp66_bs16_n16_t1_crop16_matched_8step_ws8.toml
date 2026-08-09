@@ -1,6 +1,6 @@
 schema_version = "policy-e2e-trainable-rp66-deepeyes-matched-run-config-v1"
 formal_pilot = false
-run_id = "PRL-15-R0-QWEN3-INSTRUCT-FULL-RP66-BS16-N16-T1-MATCHED-8STEP-GPU0123"
+run_id = "PRL-15-R0-QWEN3-INSTRUCT-FULL-RP66-BS16-N16-T1-CROP16-MATCHED-8STEP-WS8"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
@@ -110,18 +110,18 @@ allow_tf32 = true
 
 [accumulation]
 global_prompt_batch_size = 16
-prompt_micro_batch_size_per_rank = 1
-rollout_prompt_micro_batch_size_per_engine = 1
-gradient_accumulation_steps = 4
+prompt_micro_batch_size_per_rank = 2
+rollout_prompt_micro_batch_size_per_engine = 2
+gradient_accumulation_steps = 1
 
 [distributed]
-physical_gpu_ids = [0, 1, 2, 3]
-logical_gpu_ids = [0, 1, 2, 3]
-world_size = 4
-actor_logical_gpu_ids = [0, 1, 2, 3]
-rollout_logical_gpu_ids = [0, 1, 2, 3]
+physical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+logical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+world_size = 8
+actor_logical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+rollout_logical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
 fsdp_strategy = "fsdp2"
-fsdp_reshard_after_forward = false
+fsdp_reshard_after_forward = true
 rollout_backend = "vllm"
 vllm_tensor_parallel_size = 1
 placement = "colocated"
@@ -130,13 +130,13 @@ weight_sync_interval_optimizer_steps = 1
 
 [capacity]
 max_prompt_length = 8192
-actor_ppo_max_token_len_per_gpu = 524288
-rollout_log_prob_max_token_len_per_gpu = 524288
-reference_log_prob_max_token_len_per_gpu = 524288
-vllm_gpu_memory_utilization = 0.45
+actor_ppo_max_token_len_per_gpu = 16384
+rollout_log_prob_max_token_len_per_gpu = 16384
+reference_log_prob_max_token_len_per_gpu = 16384
+vllm_gpu_memory_utilization = 0.65
 vllm_max_num_batched_tokens = 32768
 vllm_max_model_len = 32768
-vllm_max_num_seqs = 32
+vllm_max_num_seqs = 1024
 vllm_enable_chunked_prefill = false
 vllm_enforce_eager = false
 
@@ -154,11 +154,11 @@ logger = ["console", "wandb"]
 project_name = "tgvf-policy-rl"
 validation_before_training = false
 validation_frequency = -1
-resume_mode = "disable"
+resume_mode = "auto"
 resume_from_path = ""
-maximum_actor_checkpoints_to_keep = 4
+maximum_actor_checkpoints_to_keep = 2
 
 [output]
-root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-15-R0-qwen3-instruct-full-rp66-bs16-n16-t1-matched-8step-gpu0123"
-checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-15-R0-qwen3-instruct-full-rp66-bs16-n16-t1-matched-8step-gpu0123/checkpoints"
-metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-15-R0-qwen3-instruct-full-rp66-bs16-n16-t1-matched-8step-gpu0123/metrics.jsonl"
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-15-R0-qwen3-instruct-full-rp66-bs16-n16-t1-crop16-matched-8step-ws8"
+checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-15-R0-qwen3-instruct-full-rp66-bs16-n16-t1-crop16-matched-8step-ws8/checkpoints"
+metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-15-R0-qwen3-instruct-full-rp66-bs16-n16-t1-crop16-matched-8step-ws8/metrics.jsonl"

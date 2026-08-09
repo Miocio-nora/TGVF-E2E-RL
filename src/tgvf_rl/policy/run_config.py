@@ -1450,7 +1450,9 @@ def load_policy_e2e_smoke_run_config(
             "weight_sync_interval_optimizer_steps",
         },
     )
-    distributed = _distributed(distributed_table)
+    distributed = _distributed(
+        distributed_table, required_world_size=8 if trainable_rp66_run else 4
+    )
     expected_global_batch = (
         accumulation.prompt_micro_batch_size_per_rank
         * distributed.world_size
@@ -1524,26 +1526,31 @@ def load_policy_e2e_smoke_run_config(
         raise ValueError(
             "capacity.vllm_max_model_len cannot hold max prompt plus response"
         )
-    minimum_actor_tokens = (
-        accumulation.prompt_micro_batch_size_per_rank
-        * sampling.trajectories_per_prompt
-        * minimum_context
-    )
-    if capacity.actor_ppo_max_token_len_per_gpu < minimum_actor_tokens:
-        raise ValueError(
-            "capacity.actor_ppo_max_token_len_per_gpu is smaller than one "
-            "expanded Policy Pilot micro-batch"
+    # PRL14/PRL15 use a fixed actor micro-batch and disable dynamic batching;
+    # the *_max_token_len_per_gpu fields are therefore inactive capacity
+    # metadata. The generic bound below assumes dynamic token batching and
+    # would incorrectly reject Crop-16's proven micro32/16384 configuration.
+    if not trainable_rp66_run:
+        minimum_actor_tokens = (
+            accumulation.prompt_micro_batch_size_per_rank
+            * sampling.trajectories_per_prompt
+            * minimum_context
         )
-    if (
-        capacity.rollout_log_prob_max_token_len_per_gpu
-        < capacity.actor_ppo_max_token_len_per_gpu
-        or capacity.reference_log_prob_max_token_len_per_gpu
-        < capacity.actor_ppo_max_token_len_per_gpu
-    ):
-        raise ValueError(
-            "rollout/reference log-prob token bounds cannot be smaller than the "
-            "actor bound"
-        )
+        if capacity.actor_ppo_max_token_len_per_gpu < minimum_actor_tokens:
+            raise ValueError(
+                "capacity.actor_ppo_max_token_len_per_gpu is smaller than one "
+                "expanded Policy Pilot micro-batch"
+            )
+        if (
+            capacity.rollout_log_prob_max_token_len_per_gpu
+            < capacity.actor_ppo_max_token_len_per_gpu
+            or capacity.reference_log_prob_max_token_len_per_gpu
+            < capacity.actor_ppo_max_token_len_per_gpu
+        ):
+            raise ValueError(
+                "rollout/reference log-prob token bounds cannot be smaller than the "
+                "actor bound"
+            )
     if capacity.vllm_max_num_batched_tokens > capacity.vllm_max_model_len:
         raise ValueError(
             "capacity.vllm_max_num_batched_tokens cannot exceed max_model_len"
@@ -1890,7 +1897,7 @@ def load_policy_e2e_smoke_run_config(
                 accumulation.rollout_prompt_micro_batch_size_per_engine,
                 accumulation.gradient_accumulation_steps,
             ),
-            (16, 1, 1, 4),
+            (16, 2, 2, 1),
             "trainable RP66 BS16 accumulation contract",
         )
         _require_exact(
@@ -2116,7 +2123,9 @@ def _conditioning(value: object) -> TargetConditioningConfig:
     )
 
 
-def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
+def _distributed(
+    table: Mapping[str, object], *, required_world_size: int = 4
+) -> SmokeDistributedBinding:
     physical = _nonnegative_int_tuple(
         table["physical_gpu_ids"], name="distributed.physical_gpu_ids"
     )
@@ -2140,17 +2149,21 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
     world_size = _positive_int(table["world_size"], name="distributed.world_size")
     if logical != tuple(range(len(logical))) or len(physical) != len(logical):
         raise ValueError("distributed physical/logical GPU mapping is invalid")
-    if len(physical) != 4 or logical != (0, 1, 2, 3):
+    expected_logical = tuple(range(required_world_size))
+    if len(physical) != required_world_size or logical != expected_logical:
         raise ValueError(
-            "this Policy E2E smoke requires four physical GPUs mapped to "
-            "logical GPUs 0-3"
+            f"this Policy E2E run requires {required_world_size} physical GPUs "
+            f"mapped to logical GPUs 0-{required_world_size - 1}"
         )
     if actor != logical or world_size != len(actor):
         raise ValueError(
             "this smoke requires every logical GPU in the FSDP2 actor world"
         )
-    if world_size != 4:
-        raise ValueError("this Policy E2E smoke identity requires world_size=4")
+    if world_size != required_world_size:
+        raise ValueError(
+            "this Policy E2E run identity requires "
+            f"world_size={required_world_size}"
+        )
     placement = _text(table["placement"], name="distributed.placement")
     if placement != "colocated" or rollout != actor:
         raise ValueError("this smoke requires colocated actor/rollout placement")
@@ -2160,7 +2173,7 @@ def _distributed(table: Mapping[str, object]) -> SmokeDistributedBinding:
         table["vllm_tensor_parallel_size"], name="distributed.vllm_tensor_parallel_size"
     )
     if tp != 1:
-        raise ValueError("the initial 4-GPU Policy E2E smoke requires vLLM TP=1")
+        raise ValueError("this Policy E2E run requires vLLM TP=1")
     if len(rollout) % tp != 0:
         raise ValueError("vLLM tensor parallel size must divide rollout GPUs")
     return SmokeDistributedBinding(
