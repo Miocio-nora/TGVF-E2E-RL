@@ -34,10 +34,20 @@ _CONFIG = (
     / "configs/policy/runs/"
     "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
+_CONFIG_WS4 = (
+    _ROOT
+    / "configs/policy/runs/"
+    "prl_15_r1_qwen3_instruct_full_rp66_bs16_n16_t1_"
+    "crop16_math_equiv_8step_ws4.toml"
+)
 
 
 def _config():
     return load_policy_e2e_smoke_run_config(_CONFIG)
+
+
+def _config_ws4():
+    return load_policy_e2e_smoke_run_config(_CONFIG_WS4)
 
 
 def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
@@ -127,6 +137,50 @@ def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> N
         "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu",
     ):
         assert smoke.overrides[key] == formal.overrides[key]
+
+
+def test_world4_smoke_preserves_crop16_equal_micro_objective() -> None:
+    world8 = build_trainable_tgvf_verl_launch_plan(_config(), mode="smoke")
+    world4 = build_trainable_tgvf_verl_launch_plan(_config_ws4(), mode="smoke")
+
+    assert world8.overrides["trainer.n_gpus_per_node"] == 8
+    assert world4.overrides["trainer.n_gpus_per_node"] == 4
+    assert world4.overrides["actor_rollout_ref.actor.fsdp_config.fsdp_size"] == 4
+    assert world4.overrides["actor_rollout_ref.ref.fsdp_config.fsdp_size"] == 4
+    assert world4.overrides["actor_rollout_ref.rollout.agent.num_workers"] == 4
+    assert world4.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
+
+    for key in (
+        "data.train_batch_size",
+        "actor_rollout_ref.rollout.n",
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu",
+        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu",
+        "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu",
+    ):
+        assert world4.overrides[key] == world8.overrides[key]
+
+    assert world4.overrides["data.train_batch_size"] == 16
+    assert world4.overrides["actor_rollout_ref.rollout.n"] == 16
+    assert world4.overrides[
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
+    ] == 32
+    actor_batch = world4.overrides["actor_rollout_ref.rollout.custom"][
+        "actor_batch_contract"
+    ]
+    assert actor_batch == {
+        "global_prompt_batch_size": 16,
+        "rollouts_per_prompt": 16,
+        "fsdp_data_parallel_size": 4,
+        "prompt_micro_batch_size_per_rank": 2,
+        "configured_gradient_accumulation_steps": 2,
+        "upstream_ppo_mini_batch_size_prompts": 16,
+        "upstream_internal_mini_batch_size_trajectories": 256,
+        "upstream_ppo_micro_batch_size_per_gpu_trajectories": 32,
+        "upstream_inference_micro_batch_size_per_gpu_trajectories": 32,
+        "derived_actor_forward_backward_microbatches": 2,
+        "derived_gradient_accumulation_steps": 2,
+        "optimizer_steps_per_trainer_step": 1,
+    }
 
 
 def test_labeled_smoke_gets_an_isolated_output_closure() -> None:

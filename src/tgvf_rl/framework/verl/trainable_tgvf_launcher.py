@@ -50,7 +50,9 @@ from .policy_task_runner import (
     POLICY_REFERENCE_DIAGNOSTIC_ENV,
 )
 from .prl14_crop16_reference import (
+    PRL14_CROP16_COMMON_OVERRIDES,
     PRL14_CROP16_COMPLETION_SHA256,
+    PRL14_CROP16_REMOVED_OVERRIDES,
     PRL14_CROP16_RUN_NAME,
     apply_prl14_crop16_common_controls,
     assert_prl14_crop16_common_controls,
@@ -75,7 +77,59 @@ TRAINABLE_TGVF_DATASET_MODULE_PATH = (
 )
 TRAINABLE_TGVF_FORMAL_TARGET = 8
 TRAINABLE_TGVF_SMOKE_TARGET = 1
+TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
 TrainableTGVFLaunchMode = Literal["formal", "smoke"]
+
+
+# World4 keeps Crop-16's global BS16, n16 and fixed actor trajectory micro32.
+# Each rank therefore accumulates two complete micros before the one optimizer
+# update instead of world8's one micro per rank.  Only physical execution
+# topology changes; the equal-micro DeepEyes loss still averages eight micros.
+_WORLD4_TOPOLOGY_OVERRIDES = MappingProxyType(
+    {
+        "actor_rollout_ref.actor.fsdp_config.fsdp_size": 4,
+        "actor_rollout_ref.ref.fsdp_config.fsdp_size": 4,
+        "actor_rollout_ref.rollout.agent.num_workers": 4,
+        "trainer.n_gpus_per_node": 4,
+    }
+)
+
+
+def _apply_crop16_mathematical_controls(
+    values: dict[str, object], *, world_size: int
+) -> None:
+    if world_size not in TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES:
+        raise ValueError("trainable TGVF topology must use world4 or world8")
+    apply_prl14_crop16_common_controls(values)
+    if world_size == 4:
+        values.update(_WORLD4_TOPOLOGY_OVERRIDES)
+
+
+def _assert_crop16_mathematical_controls(
+    values: Mapping[str, object], *, world_size: int
+) -> None:
+    if world_size == 8:
+        assert_prl14_crop16_common_controls(values)
+        return
+    if world_size != 4:
+        raise ValueError("trainable TGVF topology must use world4 or world8")
+    expected = dict(PRL14_CROP16_COMMON_OVERRIDES)
+    expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
+    mismatches = {
+        path: (values.get(path), value)
+        for path, value in expected.items()
+        if values.get(path) != value
+    }
+    unexpected = {
+        path: values[path]
+        for path in PRL14_CROP16_REMOVED_OVERRIDES
+        if path in values
+    }
+    if mismatches or unexpected:
+        raise ValueError(
+            "trainable TGVF differs from the Crop-16 mathematical controls: "
+            f"mismatches={mismatches!r}, unexpected={unexpected!r}"
+        )
 
 
 def _plain_binding(binding: DeepEyesTGVFMatchedDatasetBinding) -> dict[str, object]:
@@ -244,7 +298,9 @@ class TrainableTGVFVerlLaunchPlan:
 
     def _assert_trainable_path(self) -> None:
         values = self.overrides
-        assert_prl14_crop16_common_controls(values)
+        _assert_crop16_mathematical_controls(
+            values, world_size=self.config.distributed.world_size
+        )
         required = {
             "actor_rollout_ref.model.lora_rank": 0,
             "actor_rollout_ref.model.lora.rank": 0,
@@ -358,7 +414,9 @@ def build_trainable_tgvf_verl_launch_plan(
             "trainer.save_freq": 1,
         }
     )
-    apply_prl14_crop16_common_controls(values)
+    _apply_crop16_mathematical_controls(
+        values, world_size=config.distributed.world_size
+    )
     checkpoint_steps = (0, 1, 4, 8) if mode == "formal" else (0, 1)
     output_root = config.output.root
     environment = dict(base.environment)
@@ -466,6 +524,7 @@ __all__ = [
     "TRAINABLE_TGVF_FORMAL_TARGET",
     "TRAINABLE_TGVF_LAUNCH_SCHEMA",
     "TRAINABLE_TGVF_SMOKE_TARGET",
+    "TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES",
     "TrainableTGVFVerlLaunchPlan",
     "build_trainable_tgvf_verl_launch_plan",
     "compose_trainable_tgvf_verl_config",

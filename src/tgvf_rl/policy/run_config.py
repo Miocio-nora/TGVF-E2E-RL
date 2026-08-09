@@ -1450,8 +1450,19 @@ def load_policy_e2e_smoke_run_config(
             "weight_sync_interval_optimizer_steps",
         },
     )
+    if trainable_rp66_run:
+        trainable_rp66_world_size = _positive_int(
+            distributed_table["world_size"], name="distributed.world_size"
+        )
+        if trainable_rp66_world_size not in {4, 8}:
+            raise ValueError(
+                "trainable RP66 supports only the matched world4 or world8 topology"
+            )
+        required_world_size = trainable_rp66_world_size
+    else:
+        required_world_size = 4
     distributed = _distributed(
-        distributed_table, required_world_size=8 if trainable_rp66_run else 4
+        distributed_table, required_world_size=required_world_size
     )
     expected_global_batch = (
         accumulation.prompt_micro_batch_size_per_rank
@@ -1890,6 +1901,11 @@ def load_policy_e2e_smoke_run_config(
             ("adamw", 1.0e-6, 0.9, 0.999, 1.0e-8, 0.01, 1.0),
             "trainable RP66 actor optimizer contract",
         )
+        expected_accumulation = (
+            (16, 2, 2, 1)
+            if distributed.world_size == 8
+            else (16, 2, 2, 2)
+        )
         _require_exact(
             (
                 accumulation.global_prompt_batch_size,
@@ -1897,8 +1913,8 @@ def load_policy_e2e_smoke_run_config(
                 accumulation.rollout_prompt_micro_batch_size_per_engine,
                 accumulation.gradient_accumulation_steps,
             ),
-            (16, 2, 2, 1),
-            "trainable RP66 BS16 accumulation contract",
+            expected_accumulation,
+            "trainable RP66 BS16 world-size-matched accumulation contract",
         )
         _require_exact(
             (

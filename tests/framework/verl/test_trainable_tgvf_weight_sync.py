@@ -16,8 +16,9 @@ from tgvf_rl.framework.verl.trainable_tgvf_weight_sync import (
 
 
 @pytest.mark.parametrize("base_sync_done", [False, True])
+@pytest.mark.parametrize("world_size", [4, 8])
 def test_full_model_stream_sends_qwen_and_publishes_rp66(
-    tmp_path: Path, base_sync_done: bool
+    tmp_path: Path, base_sync_done: bool, world_size: int
 ) -> None:
     environment = {
         "TGVF_POLICY_STATE_DIR": str(tmp_path.resolve()),
@@ -39,7 +40,7 @@ def test_full_model_stream_sends_qwen_and_publishes_rp66(
             ),
             base_sync_done=base_sync_done,
             rank=0,
-            world_size=8,
+            world_size=world_size,
             global_steps=3,
             environment=environment,
         )
