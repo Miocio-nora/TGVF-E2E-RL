@@ -95,7 +95,8 @@ TRAINABLE_TGVF_SMOKE_TARGET = 1
 TRAINABLE_TGVF_CANARY_TARGET = 1
 TRAINABLE_TGVF_CANARY_PROMPTS = 4
 TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT = 2
-TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH = 512
+TRAINABLE_TGVF_CANARY_POLICY_TOKEN_BUDGET = 512
+TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH = 20480
 TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 
@@ -172,7 +173,14 @@ def _assert_crop16_mathematical_controls(
 
 
 def _apply_functional_canary_controls(values: dict[str, object]) -> None:
-    """Shrink only the dedicated plumbing canary after matched controls apply."""
+    """Shrink canary policy work while retaining room for tool observations.
+
+    The serialized 512-token budget counts policy-sampled tokens only.  veRL's
+    response tensors also carry environment-owned TGVF observation tokens, so
+    their transport width must remain larger than that budget.  Reuse the
+    proven Crop-16 width instead of asking ``tokenizer.pad(max_length=512)`` to
+    truncate (it does not) or silently dropping observation tokens.
+    """
 
     values.update(
         {
@@ -180,7 +188,9 @@ def _apply_functional_canary_controls(values: dict[str, object]) -> None:
             "data.val_files": [str(DEEPEYES_SMOKE_SENTINEL)],
             "data.train_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
             "data.gen_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
-            "data.max_response_length": TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH,
+            "data.max_response_length": (
+                TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH
+            ),
             "actor_rollout_ref.actor.ppo_mini_batch_size": (
                 TRAINABLE_TGVF_CANARY_PROMPTS
             ),
@@ -189,7 +199,7 @@ def _apply_functional_canary_controls(values: dict[str, object]) -> None:
                 TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
             ),
             "actor_rollout_ref.rollout.response_length": (
-                TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH
+                TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH
             ),
             "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": 2,
             "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": 2,
@@ -208,7 +218,7 @@ def _assert_functional_canary_config(config: PolicyE2ESmokeRunConfig) -> None:
         ),
         "sampling.max_response_length": (
             config.policy.sampling.max_response_length,
-            TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH,
+            TRAINABLE_TGVF_CANARY_POLICY_TOKEN_BUDGET,
         ),
         "accumulation.global_prompt_batch_size": (
             config.accumulation.global_prompt_batch_size,
@@ -401,7 +411,9 @@ class TrainableTGVFVerlLaunchPlan:
                 "data.val_files": [str(DEEPEYES_SMOKE_SENTINEL)],
                 "data.train_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
                 "data.gen_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
-                "data.max_response_length": TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH,
+                "data.max_response_length": (
+                    TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH
+                ),
                 "actor_rollout_ref.actor.ppo_mini_batch_size": (
                     TRAINABLE_TGVF_CANARY_PROMPTS
                 ),
@@ -410,7 +422,7 @@ class TrainableTGVFVerlLaunchPlan:
                     TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
                 ),
                 "actor_rollout_ref.rollout.response_length": (
-                    TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH
+                    TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH
                 ),
                 "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": 2,
                 "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": 2,
@@ -846,7 +858,8 @@ if __name__ == "__main__":
 __all__ = [
     "TRAINABLE_TGVF_EXTERNAL_MODULE",
     "TRAINABLE_TGVF_CANARY_PROMPTS",
-    "TRAINABLE_TGVF_CANARY_RESPONSE_LENGTH",
+    "TRAINABLE_TGVF_CANARY_POLICY_TOKEN_BUDGET",
+    "TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH",
     "TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT",
     "TRAINABLE_TGVF_CANARY_TARGET",
     "TRAINABLE_TGVF_FORMAL_TARGET",

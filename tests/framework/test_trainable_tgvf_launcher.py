@@ -210,9 +210,13 @@ def test_functional_canary_is_an_isolated_low_cost_full_path_launch() -> None:
     assert values["data.val_files"] == [str(DEEPEYES_SMOKE_SENTINEL)]
     assert values["data.train_batch_size"] == 4
     assert values["data.gen_batch_size"] == 4
-    assert values["data.max_response_length"] == 512
+    assert plan.config.policy.sampling.max_response_length == 512
+    assert values["data.max_response_length"] == 20480
     assert values["actor_rollout_ref.rollout.n"] == 2
-    assert values["actor_rollout_ref.rollout.response_length"] == 512
+    assert values["actor_rollout_ref.rollout.response_length"] == 20480
+    assert values["actor_rollout_ref.rollout.response_length"] > (
+        plan.config.policy.sampling.max_response_length
+    )
     assert values["actor_rollout_ref.actor.ppo_mini_batch_size"] == 4
     assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 2
     assert values[
