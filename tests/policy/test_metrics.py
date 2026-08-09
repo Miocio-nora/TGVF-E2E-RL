@@ -242,7 +242,7 @@ def test_observation_step_and_atomic_restore_validation_fail_closed() -> None:
         replace(valid, tool_call_attempts=2)
     with pytest.raises(ValueError, match="total visual tokens"):
         replace(valid, total_visual_tokens=valid.original_visual_tokens - 1)
-    with pytest.raises(ValueError, match="fifth Pilot attempt"):
+    with pytest.raises(ValueError, match="protocol-bound final attempt"):
         replace(
             valid,
             successful_tgvf_observations=4,
@@ -271,3 +271,140 @@ def test_observation_step_and_atomic_restore_validation_fail_closed() -> None:
     with pytest.raises(ValueError, match="fields differ"):
         PilotMetricsCheckpointState.from_checkpoint_mapping(missing)
     assert accumulator.state == before
+
+
+def test_metrics_preserve_legal_six_call_protocol_counts_without_clamping() -> None:
+    """PRL15 may legally execute six TGVF calls before its cap attempt."""
+
+    base = _rows("prl15-step4-prompt")[0]
+    six_call_rows = tuple(
+        replace(
+            base,
+            trajectory_id=f"prl15-step4-trajectory-{index}",
+            successful_tgvf_observations=6,
+            tool_call_attempts=6,
+            maximum_tool_calls=6,
+        )
+        for index in range(8)
+    )
+    observation = PilotOptimizerStepMetricsObservation(
+        1,
+        1.0,
+        six_call_rows,
+    )
+    accumulator = PilotMetricsAccumulator(maximum_tool_calls=6)
+    summary = accumulator.record_optimizer_step(observation)
+
+    assert summary.successful_tgvf_observations == 48
+    assert summary.mean_tool_call_attempts == 6.0
+
+    capped = replace(
+        six_call_rows[0],
+        tool_call_attempts=7,
+        tool_error_codes=(ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,),
+    )
+    assert capped.tool_call_attempts == 7
+    assert capped.successful_tgvf_observations == 6
+    assert capped.tool_error_codes == (
+        ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+    )
+
+    with pytest.raises(ValueError, match="tool-call attempts exceed"):
+        replace(
+            capped,
+            tool_call_attempts=8,
+            tool_error_codes=(
+                ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+                ToolErrorCode.TOOL_EXECUTION_FAILED.value,
+            ),
+        )
+    with pytest.raises(ValueError, match="successful observations exceed"):
+        replace(
+            capped,
+            successful_tgvf_observations=7,
+            tool_error_codes=(),
+        )
+    with pytest.raises(ValueError, match="protocol-bound final attempt"):
+        replace(
+            capped,
+            tool_error_codes=(ToolErrorCode.TOOL_EXECUTION_FAILED.value,),
+        )
+
+    with pytest.raises(ValueError, match="differs from the accumulator"):
+        PilotMetricsAccumulator().record_optimizer_step(observation)
+    with pytest.raises(ValueError, match="configured tool-call bound"):
+        PilotMetricsAccumulator.from_checkpoint_state(
+            accumulator.checkpoint_state(),
+            maximum_tool_calls=4,
+        )
+
+
+def test_prl15_step3_v1_metrics_payload_resumes_under_six_call_contract() -> None:
+    """The real pre-failure step-3 payload stays byte-schema compatible."""
+
+    payload = {
+        "schema_version": "policy-pilot-v1-metrics-v1",
+        "optimizer_steps": 3,
+        "prompts": 48,
+        "trajectories": 768,
+        "generated_policy_tokens": 186707,
+        "successful_tgvf_observations": 593,
+        "trajectories_with_tool_call_attempts": 592,
+        "tool_call_attempts": 593,
+        "answer_reward_total": 516,
+        "format_errors": 20,
+        "conditional_tool_reward_total": 395,
+        "judge_calls": 768,
+        "judge_prompt_tokens": 390028,
+        "judge_completion_tokens": 1344,
+        "judge_cost_usd": 0.14094768,
+        "reasoning_tokens": 0,
+        "original_visual_tokens": 347904,
+        "total_visual_tokens": 666021,
+        "step_time_seconds_total": 2638.7188123851083,
+        "tool_error_counts": [],
+    }
+    accumulator = PilotMetricsAccumulator.from_checkpoint_state(
+        payload,
+        maximum_tool_calls=6,
+    )
+    assert accumulator.checkpoint_state() == payload
+
+    base = _rows("prl15-step4-resume-prompt")[0]
+    rows = tuple(
+        replace(
+            base,
+            trajectory_id=f"prl15-step4-resume-trajectory-{index}",
+            successful_tgvf_observations=6,
+            tool_call_attempts=6,
+            maximum_tool_calls=6,
+        )
+        for index in range(16)
+    )
+    summary = accumulator.record_optimizer_step(
+        PilotOptimizerStepMetricsObservation(
+            4,
+            1.0,
+            rows,
+            trajectories_per_prompt=16,
+        )
+    )
+    assert summary.optimizer_steps == 4
+    assert summary.successful_tgvf_observations == 689
+
+
+def test_accumulator_rejects_impossible_aggregate_cap_position() -> None:
+    state = PilotMetricsCheckpointState(
+        optimizer_steps=1,
+        prompts=1,
+        trajectories=8,
+        trajectories_with_tool_call_attempts=1,
+        tool_call_attempts=1,
+        step_time_seconds_total=1.0,
+        tool_error_counts=(
+            ToolErrorCount(ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value, 1),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="before all admitted attempts"):
+        PilotMetricsAccumulator().restore_checkpoint_state(state)

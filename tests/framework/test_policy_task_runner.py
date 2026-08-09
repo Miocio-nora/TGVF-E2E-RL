@@ -27,6 +27,7 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     _require_successful_tgvf_observation_for_canary,
     _resolved_policy_metrics_path,
     _torch_state,
+    _validate_metric_tool_attempt_contract,
     _wandb_metrics_from_event,
     add_policy_actor_rollout_worker,
     make_policy_colocated_worker_class,
@@ -40,6 +41,7 @@ from tgvf_rl.policy.metrics import (
     PilotTrajectoryMetricsObservation,
 )
 from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
+from tgvf_rl.protocol.schema import ToolErrorCode
 from tgvf_rl.framework.verl.rollout_bridge import (
     AGENT_LOOP_EXACT_SIDECAR_FIELDS,
     DATAPROTO_META_SCHEMA_FIELD,
@@ -553,6 +555,42 @@ def test_policy_metrics_publish_step_and_cumulative_records_idempotently(
         _append_policy_metrics_event(path, changed)
 
 
+def test_metric_extraction_validates_six_call_cap_identity_without_clamping() -> None:
+    configured_cap_sha256 = "a" * 64
+    trajectory = SimpleNamespace(
+        tool_calls=tuple(SimpleNamespace(attempt_index=index) for index in range(6)),
+        tool_errors=(
+            SimpleNamespace(
+                attempt_index=6,
+                code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+                payload_sha256=configured_cap_sha256,
+            ),
+        ),
+    )
+
+    _validate_metric_tool_attempt_contract(
+        trajectory,
+        maximum_tool_calls=6,
+        cap_error_sha256=configured_cap_sha256,
+    )
+
+    with pytest.raises(ValueError, match="payload identity"):
+        _validate_metric_tool_attempt_contract(
+            trajectory,
+            maximum_tool_calls=6,
+            cap_error_sha256="b" * 64,
+        )
+    with pytest.raises(ValueError, match="successful tool attempt"):
+        _validate_metric_tool_attempt_contract(
+            SimpleNamespace(
+                tool_calls=(SimpleNamespace(attempt_index=6),),
+                tool_errors=(),
+            ),
+            maximum_tool_calls=6,
+            cap_error_sha256=configured_cap_sha256,
+        )
+
+
 def test_policy_metrics_path_separates_formal_and_smoke_roots(tmp_path) -> None:
     config = object.__new__(policy_task_runner.PolicyE2ESmokeRunConfig)
     object.__setattr__(
@@ -667,7 +705,9 @@ def test_stage3_metrics_publish_five_components_and_judge_coverage() -> None:
         for index in range(8)
     )
     observation = PilotOptimizerStepMetricsObservation(1, 1.0, rows)
-    summary = PilotMetricsAccumulator().record_optimizer_step(observation)
+    summary = PilotMetricsAccumulator(maximum_tool_calls=1).record_optimizer_step(
+        observation
+    )
 
     event = _pilot_metrics_event(observation, summary)
     flat = _wandb_metrics_from_event(event)

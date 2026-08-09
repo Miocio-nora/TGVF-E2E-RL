@@ -85,9 +85,11 @@ class PilotTrajectoryMetricsObservation:
     """Raw metric facts for one retained Pilot trajectory.
 
     ``tool_call_attempts`` includes every assistant tool-call attempt, including
-    the fifth cap-error attempt.  Each attempt must yield either one successful
-    TGVF observation or one typed error code.  Reward fields are the raw
-    unweighted Pilot components, not their weighted scalar contributions.
+    the protocol-bound cap-error attempt.  ``maximum_tool_calls`` is the live
+    protocol's admitted-call bound, not a bound inferred from the reward name.
+    Each attempt must yield either one successful TGVF observation or one typed
+    error code.  Reward fields are the raw unweighted Pilot components, not
+    their weighted scalar contributions.
     """
 
     prompt_id: str
@@ -107,6 +109,7 @@ class PilotTrajectoryMetricsObservation:
     judge_completion_tokens: int = 0
     judge_cost_usd: float = 0.0
     reward_profile: str = "pilot-v1"
+    maximum_tool_calls: int | None = None
     stage3_reward_components: tuple[float, float, float, float, float] | None = None
     stage3_quality_judge_applicable: bool = False
     stage3_quality_judge_covered: bool = False
@@ -150,19 +153,19 @@ class PilotTrajectoryMetricsObservation:
             raise ValueError("judge usage requires a judge call")
         if self.reward_profile not in {"pilot-v1", "stage3-shaped-v1"}:
             raise ValueError("unsupported trajectory metrics reward profile")
-        maximum_attempts = (
-            POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS
-            if self.reward_profile == "pilot-v1"
-            else 2
-        )
-        admitted_attempts = (
-            POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
-            if self.reward_profile == "pilot-v1"
-            else 1
-        )
+        maximum_tool_calls = self.maximum_tool_calls
+        if maximum_tool_calls is None:
+            maximum_tool_calls = (
+                POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS
+                if self.reward_profile == "pilot-v1"
+                else 1
+            )
+        _positive_int(maximum_tool_calls, "maximum_tool_calls")
+        object.__setattr__(self, "maximum_tool_calls", maximum_tool_calls)
+        maximum_attempts = maximum_tool_calls + 1
         if self.tool_call_attempts > maximum_attempts:
             raise ValueError("tool-call attempts exceed the reward profile bound")
-        if self.successful_tgvf_observations > admitted_attempts:
+        if self.successful_tgvf_observations > maximum_tool_calls:
             raise ValueError("successful observations exceed the reward profile bound")
         if self.successful_tgvf_observations > self.tool_call_attempts:
             raise ValueError("successful observations cannot exceed tool attempts")
@@ -198,15 +201,13 @@ class PilotTrajectoryMetricsObservation:
         cap_code = ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value
         if self.tool_call_attempts == maximum_attempts:
             if self.tool_error_codes.count(cap_code) != 1:
-                if self.reward_profile == "pilot-v1":
-                    raise ValueError(
-                        "the fifth Pilot attempt must record one cap error"
-                    )
-                raise ValueError("the second Stage3 attempt must record one cap error")
+                raise ValueError(
+                    "the protocol-bound final attempt must record one cap error"
+                )
         elif cap_code in self.tool_error_codes:
-            if self.reward_profile == "pilot-v1":
-                raise ValueError("a cap error is valid only on the fifth attempt")
-            raise ValueError("a cap error is valid only on the second Stage3 attempt")
+            raise ValueError(
+                "a cap error is valid only after all admitted attempts"
+            )
         if conditional == 1.0 and (
             answer != 1.0 or self.successful_tgvf_observations == 0
         ):
@@ -306,6 +307,13 @@ class PilotOptimizerStepMetricsObservation:
             for row in self.trajectories
         ):
             raise TypeError("trajectories must contain typed Pilot observations")
+        attempt_contracts = {
+            (row.reward_profile, row.maximum_tool_calls) for row in self.trajectories
+        }
+        if len(attempt_contracts) != 1:
+            raise ValueError(
+                "one optimizer step cannot mix reward/tool-attempt contracts"
+            )
         trajectory_ids = tuple(row.trajectory_id for row in self.trajectories)
         if len(trajectory_ids) != len(set(trajectory_ids)):
             raise ValueError("trajectory IDs must be unique within an optimizer step")
@@ -438,14 +446,11 @@ class PilotMetricsCheckpointState:
         }
         if any(value > self.trajectories for value in bounded_by_trajectories.values()):
             raise ValueError("trajectory metric numerators cannot exceed trajectories")
-        if self.tool_call_attempts > (
-            POLICY_PILOT_V1_MAX_RECORDED_TOOL_ATTEMPTS * self.trajectories
-        ):
-            raise ValueError("tool-call attempts exceed the Pilot trajectory bound")
-        if self.successful_tgvf_observations > (
-            POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS * self.trajectories
-        ):
-            raise ValueError("successful observations exceed the Pilot bound")
+        # This checkpoint state is deliberately a protocol-neutral additive
+        # reduction and does not persist a per-run tool-call limit.  The typed
+        # trajectory rows validate their exact run-bound protocol before they
+        # are reduced; the state retains only invariants recoverable from its
+        # lossless counts.
         if self.successful_tgvf_observations > self.tool_call_attempts:
             raise ValueError("successful observations cannot exceed tool attempts")
         if self.trajectories_with_tool_call_attempts > self.tool_call_attempts:
@@ -603,7 +608,13 @@ class PilotMetricsSummary:
 class PilotMetricsAccumulator:
     """Order-stable additive reducer with atomic checkpoint restoration."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        maximum_tool_calls: int = POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS,
+    ) -> None:
+        _positive_int(maximum_tool_calls, "maximum_tool_calls")
+        self._maximum_tool_calls = maximum_tool_calls
         self._state = PilotMetricsCheckpointState()
 
     @property
@@ -622,6 +633,13 @@ class PilotMetricsAccumulator:
                 f"expected {expected_step}, got {observation.optimizer_step}"
             )
         rows = observation.trajectories
+        observed_tool_call_bounds = {row.maximum_tool_calls for row in rows}
+        if observed_tool_call_bounds != {self._maximum_tool_calls}:
+            raise ValueError(
+                "trajectory metrics tool-call bound differs from the accumulator: "
+                f"expected={self._maximum_tool_calls} "
+                f"observed={sorted(observed_tool_call_bounds)!r}"
+            )
         if self._state.prompts:
             existing_group_size = self._state.trajectories // self._state.prompts
             if observation.trajectories_per_prompt != existing_group_size:
@@ -634,7 +652,7 @@ class PilotMetricsAccumulator:
             {item.code: item.count for item in self._state.tool_error_counts}
         )
         errors.update(code for row in rows for code in row.tool_error_codes)
-        self._state = PilotMetricsCheckpointState(
+        candidate = PilotMetricsCheckpointState(
             optimizer_steps=expected_step,
             prompts=self._state.prompts + observation.prompt_count,
             trajectories=self._state.trajectories + len(rows),
@@ -697,6 +715,8 @@ class PilotMetricsAccumulator:
                 ToolErrorCount(code, errors[code]) for code in sorted(errors)
             ),
         )
+        self._validate_protocol_bounds(candidate)
+        self._state = candidate
         return self.summary()
 
     def summary(self) -> PilotMetricsSummary:
@@ -748,13 +768,47 @@ class PilotMetricsAccumulator:
         """Validate fully before replacing state, so a failed restore is atomic."""
 
         restored = _coerce_checkpoint_state(payload)
+        self._validate_protocol_bounds(restored)
         self._state = restored
 
     @classmethod
-    def from_checkpoint_state(cls, payload: object) -> "PilotMetricsAccumulator":
-        accumulator = cls()
+    def from_checkpoint_state(
+        cls,
+        payload: object,
+        *,
+        maximum_tool_calls: int = POLICY_PILOT_V1_ADMITTED_TOOL_ATTEMPTS,
+    ) -> "PilotMetricsAccumulator":
+        accumulator = cls(maximum_tool_calls=maximum_tool_calls)
         accumulator.restore_checkpoint_state(payload)
         return accumulator
+
+    def _validate_protocol_bounds(self, state: PilotMetricsCheckpointState) -> None:
+        """Validate additive counts under this run's trusted protocol bound."""
+
+        maximum_admitted = self._maximum_tool_calls * state.trajectories
+        if state.successful_tgvf_observations > maximum_admitted:
+            raise ValueError(
+                "successful observations exceed the configured tool-call bound"
+            )
+        cap_code = ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value
+        cap_errors = next(
+            (
+                item.count
+                for item in state.tool_error_counts
+                if item.code == cap_code
+            ),
+            0,
+        )
+        if cap_errors > state.trajectories:
+            raise ValueError("cap-error count exceeds the trajectory count")
+        if (self._maximum_tool_calls + 1) * cap_errors > state.tool_call_attempts:
+            raise ValueError(
+                "cap-error count cannot occur before all admitted attempts"
+            )
+        if state.tool_call_attempts > maximum_admitted + cap_errors:
+            raise ValueError(
+                "tool-call attempts exceed the configured admitted/cap bound"
+            )
 
 
 def _coerce_checkpoint_state(payload: object) -> PilotMetricsCheckpointState:

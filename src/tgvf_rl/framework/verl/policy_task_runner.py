@@ -53,6 +53,7 @@ from tgvf_rl.policy.run_config import (
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
+from tgvf_rl.protocol.schema import ToolErrorCode
 from tgvf_rl.trajectories.behavior import BehaviorTraceStore
 from tgvf_rl.trajectories.schema import TrajectoryRecord
 
@@ -598,7 +599,9 @@ class PolicyPilotTrainerCheckpointState:
             raise RuntimeError(
                 "Policy checkpoint and weight-sync run identities differ"
             )
-        self.metrics_accumulator = PilotMetricsAccumulator()
+        self.metrics_accumulator = PilotMetricsAccumulator(
+            maximum_tool_calls=config.protocol.maximum_tool_calls
+        )
         self.lifecycle_manager = PolicyBatchLifecycleManager(
             observation_store=ObservationStore(),
             behavior_store=BehaviorTraceStore(),
@@ -678,11 +681,14 @@ class PolicyPilotTrainerCheckpointState:
             trajectories_per_prompt=(
                 self.config.policy.sampling.trajectories_per_prompt
             ),
+            maximum_tool_calls=self.config.protocol.maximum_tool_calls,
+            cap_error_sha256=self.config.protocol.cap_error_sha256,
         )
         # Exercise the complete reducer against a copy.  No data-derived
         # metrics failure is allowed to appear after optimizer mutation.
         probe = PilotMetricsAccumulator.from_checkpoint_state(
-            self.metrics_accumulator.state
+            self.metrics_accumulator.state,
+            maximum_tool_calls=self.config.protocol.maximum_tool_calls,
         )
         probe.record_optimizer_step(observation)
         return _PreparedPolicyOptimizerStep(
@@ -1543,6 +1549,8 @@ def policy_metrics_observation_from_data_proto(
     optimizer_step: int,
     elapsed_seconds: float,
     trajectories_per_prompt: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
+    maximum_tool_calls: int | None = None,
+    cap_error_sha256: str | None = None,
 ) -> PilotOptimizerStepMetricsObservation:
     """Recover the checkpointed raw Pilot metrics from one exact update batch."""
 
@@ -1619,6 +1627,11 @@ def policy_metrics_observation_from_data_proto(
             raise TypeError("Policy metric trajectory sidecar is invalid")
         if not isinstance(bundle, TrajectoryReplayBundle):
             raise TypeError("Policy metric replay bundle sidecar is invalid")
+        _validate_metric_tool_attempt_contract(
+            trajectory,
+            maximum_tool_calls=maximum_tool_calls,
+            cap_error_sha256=cap_error_sha256,
+        )
         try:
             reward = {str(name): float(value) for name, value in raw_components}
         except (TypeError, ValueError) as error:
@@ -1705,6 +1718,7 @@ def policy_metrics_observation_from_data_proto(
                 judge_completion_tokens=judge_completion_tokens,
                 judge_cost_usd=judge_cost_usd,
                 reward_profile=("stage3-shaped-v1" if stage3_profile else "pilot-v1"),
+                maximum_tool_calls=maximum_tool_calls,
                 stage3_reward_components=stage3_components,
                 stage3_quality_judge_applicable=bool(raw_quality_applicable),
                 stage3_quality_judge_covered=bool(raw_quality_covered),
@@ -1721,6 +1735,58 @@ def policy_metrics_observation_from_data_proto(
         trajectories=tuple(rows),
         trajectories_per_prompt=trajectories_per_prompt,
     )
+
+
+def _validate_metric_tool_attempt_contract(
+    trajectory: TrajectoryRecord,
+    *,
+    maximum_tool_calls: int | None,
+    cap_error_sha256: str | None,
+) -> None:
+    """Bind metric extraction to the same trusted cap as live rollout."""
+
+    if maximum_tool_calls is None:
+        if cap_error_sha256 is not None:
+            raise ValueError("cap-error identity requires a tool-call bound")
+        return
+    if type(maximum_tool_calls) is not int or maximum_tool_calls <= 0:
+        raise ValueError("maximum_tool_calls must be a positive integer")
+    for call in trajectory.tool_calls:
+        attempt_index = call.attempt_index
+        if (
+            type(attempt_index) is not int
+            or attempt_index < 0
+            or attempt_index >= maximum_tool_calls
+        ):
+            raise ValueError("successful tool attempt exceeds the configured bound")
+    cap_code = ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value
+    cap_errors = tuple(
+        error for error in trajectory.tool_errors if error.code == cap_code
+    )
+    if len(cap_errors) > 1:
+        raise ValueError("one trajectory cannot contain multiple cap errors")
+    for error in trajectory.tool_errors:
+        expected_upper = (
+            maximum_tool_calls
+            if error.code == cap_code
+            else maximum_tool_calls - 1
+        )
+        if (
+            type(error.attempt_index) is not int
+            or error.attempt_index < 0
+            or error.attempt_index > expected_upper
+        ):
+            raise ValueError("tool error attempt exceeds the configured bound")
+    if not cap_errors:
+        return
+    cap_error = cap_errors[0]
+    if cap_error.attempt_index != maximum_tool_calls:
+        raise ValueError("cap error does not follow all admitted attempts")
+    if (
+        cap_error_sha256 is not None
+        and cap_error.payload_sha256 != cap_error_sha256
+    ):
+        raise ValueError("cap-error payload identity differs from the run config")
 
 
 def _observation_visual_tokens(value: object) -> int:
