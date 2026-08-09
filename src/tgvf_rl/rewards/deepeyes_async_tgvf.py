@@ -281,14 +281,7 @@ class AsyncDeepEyesTGVFTrajectoryRewardScorer:
         )
 
         accuracy = scored.accuracy
-        # The official answer extractor owns answer-shape checks, while the
-        # trajectory state machine owns the native multi-turn protocol.  A
-        # locally contained protocol-invalid trajectory must keep any
-        # independently earned answer reward, but cannot escape the format
-        # penalty merely because its decoded text still looks answer-like.
-        format_penalty = (
-            scored.format_penalty if base_context.protocol_valid else -1
-        )
+        format_penalty = scored.format_penalty
         conditional_tool = scored.conditional_tool
         if scored.judge_outcome is not None and (
             scored.judge_outcome.failure_kind is not None

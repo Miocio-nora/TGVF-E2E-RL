@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-import pytest
-
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import OwnedTokenSequence, TokenOwnership, TokenSpan
 from tgvf_rl.judges.base import JudgeUsage
@@ -83,7 +81,6 @@ def _trajectory(
     *,
     successful_tgvf: bool = False,
     sample_id: str = "sample",
-    stop: TrajectoryStop = TrajectoryStop.FINAL_ANSWER,
 ) -> TrajectoryRecord:
     identity = TrajectoryIdentity("async-reward-test", sample_id, 0, "group")
     turns = [_turn(0, response)]
@@ -121,7 +118,7 @@ def _trajectory(
         tool_calls=calls,
         observations=observations,
         final_answer=response,
-        stop=stop,
+        stop=TrajectoryStop.FINAL_ANSWER,
     )
 
 
@@ -203,35 +200,6 @@ def test_visual_conditional_reward_requires_a_successful_tgvf_observation() -> N
     )
     assert focused.reward_extra_info()["judge_prompt_tokens"] == 211
     assert focused.pipeline_sha256 == DEEPEYES_ASYNC_PIPELINE_IDENTITY.sha256
-
-
-def test_protocol_invalid_visual_control_keeps_answer_but_gets_format_penalty() -> (
-    None
-):
-    judge = FakeAsyncJudge(_outcome(True))
-    scorer = AsyncDeepEyesTGVFTrajectoryRewardScorer(
-        question="What color?",
-        reference_answer="blue",
-        task_kind=AnswerTaskKind.OPEN_VQA,
-        data_source="vstar",
-        judge_transport=judge,
-    )
-
-    result = _score(
-        scorer,
-        _trajectory(
-            "blue<|vision_start|>",
-            stop=TrajectoryStop.INVALID_FORMAT,
-        ),
-    )
-
-    assert result.raw_components == (
-        ("answer_reward", 1.0),
-        ("format_reward", -1.0),
-        ("conditional_tool_reward", 0.0),
-    )
-    assert result.total == pytest.approx(0.6)
-    assert result.context.protocol_valid is False
 
 
 def test_thinklite_math_uses_math_verify_before_official_72b_fallback() -> None:
