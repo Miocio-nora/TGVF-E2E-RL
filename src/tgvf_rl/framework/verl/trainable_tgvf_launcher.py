@@ -96,7 +96,19 @@ TRAINABLE_TGVF_CANARY_TARGET = 1
 TRAINABLE_TGVF_CANARY_PROMPTS = 4
 TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT = 2
 TRAINABLE_TGVF_CANARY_POLICY_TOKEN_BUDGET = 512
-TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH = 20480
+# One focused observation contains at most 980 merged image tokens under the
+# pinned 1,003,520-pixel Qwen3 geometry plus at most 61 wrapper/text tokens.
+# Six admitted calls and one conservative cap-error slot therefore require no
+# more than 512 + 7 * 1,041 = 7,799 response-side tokens.  Use the next binary
+# capacity boundary without paying Crop-16's full 20,480-token transport cost.
+TRAINABLE_TGVF_CANARY_MAX_ENVIRONMENT_TOKENS_PER_TURN = 1041
+TRAINABLE_TGVF_CANARY_MAX_ENVIRONMENT_TURNS = 7
+TRAINABLE_TGVF_CANARY_MIN_RESPONSE_TRANSPORT_LENGTH = (
+    TRAINABLE_TGVF_CANARY_POLICY_TOKEN_BUDGET
+    + TRAINABLE_TGVF_CANARY_MAX_ENVIRONMENT_TURNS
+    * TRAINABLE_TGVF_CANARY_MAX_ENVIRONMENT_TOKENS_PER_TURN
+)
+TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH = 8192
 TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 
@@ -178,8 +190,8 @@ def _apply_functional_canary_controls(values: dict[str, object]) -> None:
     The serialized 512-token budget counts policy-sampled tokens only.  veRL's
     response tensors also carry environment-owned TGVF observation tokens, so
     their transport width must remain larger than that budget.  Reuse the
-    proven Crop-16 width instead of asking ``tokenizer.pad(max_length=512)`` to
-    truncate (it does not) or silently dropping observation tokens.
+    a derived safe width instead of asking ``tokenizer.pad(max_length=512)``
+    to truncate (it does not) or silently dropping observation tokens.
     """
 
     values.update(
@@ -406,6 +418,13 @@ class TrainableTGVFVerlLaunchPlan:
         values = self.overrides
         if self.mode == "canary":
             _assert_functional_canary_config(self.config)
+            if TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH < (
+                TRAINABLE_TGVF_CANARY_MIN_RESPONSE_TRANSPORT_LENGTH
+            ):
+                raise ValueError(
+                    "functional canary response transport cannot hold its "
+                    "policy and environment token bounds"
+                )
             canary_expected = {
                 "data.train_files": [str(DEEPEYES_SMOKE_SENTINEL)],
                 "data.val_files": [str(DEEPEYES_SMOKE_SENTINEL)],
@@ -859,6 +878,7 @@ __all__ = [
     "TRAINABLE_TGVF_EXTERNAL_MODULE",
     "TRAINABLE_TGVF_CANARY_PROMPTS",
     "TRAINABLE_TGVF_CANARY_POLICY_TOKEN_BUDGET",
+    "TRAINABLE_TGVF_CANARY_MIN_RESPONSE_TRANSPORT_LENGTH",
     "TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH",
     "TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT",
     "TRAINABLE_TGVF_CANARY_TARGET",
