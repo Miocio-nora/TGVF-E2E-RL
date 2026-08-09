@@ -9,6 +9,7 @@ paired Policy checkpoint lifecycle on the trainer driver.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, replace
 import io
 import json
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 import re
 from time import perf_counter
 from typing import Any
+import warnings
 
 import torch
 
@@ -141,6 +143,14 @@ POLICY_TRACKING_METRIC_NAMES = frozenset(
         "num_turns/mean",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPolicyOptimizerStep:
+    observation: PilotOptimizerStepMetricsObservation
+    recovery_progress: PilotOptimizerDataCursor
+    recovery_sampler: OpaqueProjectState
+    recovery_rng: OpaqueProjectState
 
 
 def _policy_reference_diagnostic_enabled(
@@ -614,24 +624,57 @@ class PolicyPilotTrainerCheckpointState:
     def record_optimizer_step(
         self, data: object, *, elapsed_seconds: float
     ) -> tuple[PilotOptimizerStepMetricsObservation, PilotMetricsSummary]:
+        prepared = self.prepare_optimizer_step(data)
+        return self.commit_optimizer_step(prepared, elapsed_seconds=elapsed_seconds)
+
+    def prepare_optimizer_step(self, data: object) -> _PreparedPolicyOptimizerStep:
+        """Validate metrics and capture the recovery cursor before mutation."""
+
         step = getattr(self.trainer, "global_steps", None)
         if type(step) is not int or step <= 0:
-            raise RuntimeError("veRL trainer global step is unavailable after update")
+            raise RuntimeError("veRL trainer global step is unavailable before update")
         observation = policy_metrics_observation_from_data_proto(
             data,
             optimizer_step=step,
-            elapsed_seconds=elapsed_seconds,
+            elapsed_seconds=1.0,
             trajectories_per_prompt=(
                 self.config.policy.sampling.trajectories_per_prompt
             ),
         )
-        summary = self.metrics_accumulator.record_optimizer_step(observation)
-        self._recovery_progress = PilotOptimizerDataCursor(
-            step,
-            _torch_state(DATA_CURSOR_OWNER, self._dataloader_state()),
+        # Exercise the complete reducer against a copy.  No data-derived
+        # metrics failure is allowed to appear after optimizer mutation.
+        probe = PilotMetricsAccumulator.from_checkpoint_state(
+            self.metrics_accumulator.state
         )
-        self._recovery_sampler = self._sampler_state(step)
-        self._recovery_rng = self._rng_state(step)
+        probe.record_optimizer_step(observation)
+        return _PreparedPolicyOptimizerStep(
+            observation=observation,
+            recovery_progress=PilotOptimizerDataCursor(
+                step,
+                _torch_state(DATA_CURSOR_OWNER, self._dataloader_state()),
+            ),
+            recovery_sampler=self._sampler_state(step),
+            recovery_rng=self._rng_state(step),
+        )
+
+    def commit_optimizer_step(
+        self,
+        prepared: _PreparedPolicyOptimizerStep,
+        *,
+        elapsed_seconds: float,
+    ) -> tuple[PilotOptimizerStepMetricsObservation, PilotMetricsSummary]:
+        """Commit a prevalidated metric/recovery boundary after optimizer return."""
+
+        if not isinstance(prepared, _PreparedPolicyOptimizerStep):
+            raise TypeError("prepared optimizer step has the wrong type")
+        observation = replace(
+            prepared.observation,
+            step_time_seconds=max(float(elapsed_seconds), 1.0e-12),
+        )
+        summary = self.metrics_accumulator.record_optimizer_step(observation)
+        self._recovery_progress = prepared.recovery_progress
+        self._recovery_sampler = prepared.recovery_sampler
+        self._recovery_rng = prepared.recovery_rng
         return observation, summary
 
     def recovery_optimizer_step(self) -> int:
@@ -954,6 +997,10 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self.use_reference_policy = _policy_reference_diagnostic_enabled()
 
         def init_workers(self):
+            # This state validates config/environment/metrics/resume bindings
+            # and captures the initial data cursor without constructing a GPU
+            # worker.  Keep it ahead of upstream FSDP/vLLM initialization.
+            state = PolicyPilotTrainerCheckpointState.from_environment(self)
             # Pinned veRL constructs its LLM server manager from a module
             # global.  Replace that construction boundary only while upstream
             # creates workers so the normal trainer/lifecycle remains intact,
@@ -984,7 +1031,6 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 ray_base_module._determine_fsdp_megatron_base_class = (
                     original_base_class_resolver
                 )
-            state = PolicyPilotTrainerCheckpointState.from_environment(self)
             original_actor_wg = self.actor_rollout_wg
             self._policy_checkpoint_state = state
             self.actor_rollout_wg = PairedActorWorkerGroup(original_actor_wg, state)
@@ -1001,6 +1047,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             self._policy_step_started_at = None
             self._policy_runtime_shutdown = False
             self._policy_metrics_pending = None
+            self._policy_metric_spool = []
             self._policy_actor_update_inflight = False
             return result
 
@@ -1084,7 +1131,14 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 except Exception as error:
                     errors.append(error)
                 if errors:
-                    raise ExceptionGroup("Policy runner shutdown failed", errors)
+                    warnings.warn(
+                        "Policy runner shutdown/bookkeeping degraded: "
+                        + "; ".join(
+                            f"{type(error).__name__}: {error}" for error in errors
+                        ),
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
         def _shutdown_policy_runtime(self) -> None:
             if getattr(self, "_policy_runtime_shutdown", False):
@@ -1194,7 +1248,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 self.ref_in_actor = True
 
         def _update_actor(self, batch, *args, **kwargs):
-            completed = False
+            optimizer_committed = False
             try:
                 # Reject transport/reward corruption before the upstream actor
                 # can mutate optimizer state.  Metric extraction repeats the
@@ -1207,39 +1261,68 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                         self._policy_checkpoint_state.config.policy.sampling.trajectories_per_prompt
                     ),
                 )
+                if getattr(self, "_policy_metrics_pending", None) is not None:
+                    raise RuntimeError(
+                        "a Policy metrics publication is already pending"
+                    )
+                prepared = self._policy_checkpoint_state.prepare_optimizer_step(batch)
                 self._policy_actor_update_inflight = True
                 output = super()._update_actor(batch, *args, **kwargs)
                 started = self._policy_step_started_at
                 elapsed = perf_counter() - started if started is not None else 0.0
                 observation, summary = (
-                    self._policy_checkpoint_state.record_optimizer_step(
-                        batch,
+                    self._policy_checkpoint_state.commit_optimizer_step(
+                        prepared,
                         elapsed_seconds=max(elapsed, 1.0e-12),
                     )
                 )
-                if getattr(self, "_policy_metrics_pending", None) is not None:
-                    raise RuntimeError(
-                        "a Policy metrics publication is already pending"
-                    )
-                event = _pilot_metrics_event(observation, summary)
-                metrics = getattr(output, "meta_info", {}).get("metrics")
-                if not isinstance(metrics, dict):
-                    raise TypeError("veRL actor output metrics must be a dictionary")
-                for name, value in _wandb_metrics_from_event(event).items():
-                    if name in metrics:
-                        raise RuntimeError(f"Policy metric already exists: {name}")
-                    metrics[name] = [value]
-                self._policy_metrics_pending = (output, event)
                 self._policy_actor_update_inflight = False
-                completed = True
+                optimizer_committed = True
+                try:
+                    event = _pilot_metrics_event(observation, summary)
+                    metrics = getattr(output, "meta_info", {}).get("metrics")
+                    if not isinstance(metrics, dict):
+                        warnings.warn(
+                            "veRL actor output omitted a mutable metrics dictionary; "
+                            "continuing with JSONL metrics only",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                    else:
+                        for name, value in _wandb_metrics_from_event(event).items():
+                            if name in metrics:
+                                warnings.warn(
+                                    f"Policy metric collision ignored: {name}",
+                                    RuntimeWarning,
+                                    stacklevel=2,
+                                )
+                                continue
+                            metrics[name] = [value]
+                    self._policy_metrics_pending = (output, event)
+                except Exception as error:
+                    warnings.warn(
+                        "post-commit Policy metric preparation degraded: "
+                        f"{type(error).__name__}: {error}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    self._policy_step_started_at = None
                 return output
             finally:
                 # All current/reference/update consumers are synchronous in the
                 # accepted v0 path.  The driver copy can release only after the
                 # actor call has returned; every Ray-local copy has its own
                 # worker ``finally`` in the wrapped TrainingWorker.
-                release_verl_data_proto_sidecars(batch)
-                if not completed:
+                try:
+                    release_verl_data_proto_sidecars(batch)
+                except Exception as error:
+                    warnings.warn(
+                        "driver DataProto sidecar cleanup degraded: "
+                        f"{type(error).__name__}: {error}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                if not optimizer_committed:
                     self._policy_step_started_at = None
 
         def _complete_policy_metric_publication(
@@ -1252,36 +1335,66 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             if pending is None:
                 return
             output, event = pending
-            started = self._policy_step_started_at
-            if started is None:
-                raise RuntimeError("Policy metric publication lost its step timer")
-            end_to_end_seconds = perf_counter() - started
-            if min(weight_sync_seconds, checkpoint_seconds, end_to_end_seconds) < 0:
-                raise RuntimeError("Policy timing metrics must be non-negative")
-            metrics = getattr(output, "meta_info", {}).get("metrics")
-            if not isinstance(metrics, dict):
-                raise TypeError("veRL actor output metrics must be a dictionary")
-            timings = {
-                "policy_timing/weight_sync_seconds": weight_sync_seconds,
-                "policy_timing/checkpoint_seconds": checkpoint_seconds,
-                "policy_timing/end_to_end_step_seconds": end_to_end_seconds,
-            }
-            for name, value in timings.items():
-                if name in metrics:
-                    raise RuntimeError(f"Policy timing metric already exists: {name}")
-                metrics[name] = [value]
-            persisted = dict(event)
-            persisted["timing"] = {
-                "weight_sync_seconds": weight_sync_seconds,
-                "checkpoint_seconds": checkpoint_seconds,
-                "end_to_end_step_seconds": end_to_end_seconds,
-            }
-            _append_policy_metrics_event(
-                self._policy_checkpoint_state.metrics_path,
-                persisted,
-            )
-            self._policy_metrics_pending = None
-            self._policy_step_started_at = None
+            try:
+                started = self._policy_step_started_at
+                end_to_end_seconds = (
+                    perf_counter() - started if started is not None else 0.0
+                )
+                timings = {
+                    "policy_timing/weight_sync_seconds": max(
+                        float(weight_sync_seconds), 0.0
+                    ),
+                    "policy_timing/checkpoint_seconds": max(
+                        float(checkpoint_seconds), 0.0
+                    ),
+                    "policy_timing/end_to_end_step_seconds": max(
+                        end_to_end_seconds, 0.0
+                    ),
+                }
+                metrics = getattr(output, "meta_info", {}).get("metrics")
+                if isinstance(metrics, dict):
+                    for name, value in timings.items():
+                        if name in metrics:
+                            warnings.warn(
+                                f"Policy timing metric collision ignored: {name}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                            continue
+                        metrics[name] = [value]
+                persisted = dict(event)
+                persisted["timing"] = {
+                    "weight_sync_seconds": timings[
+                        "policy_timing/weight_sync_seconds"
+                    ],
+                    "checkpoint_seconds": timings[
+                        "policy_timing/checkpoint_seconds"
+                    ],
+                    "end_to_end_step_seconds": timings[
+                        "policy_timing/end_to_end_step_seconds"
+                    ],
+                }
+                spool = getattr(self, "_policy_metric_spool", None)
+                if not isinstance(spool, list):
+                    spool = []
+                    self._policy_metric_spool = spool
+                spool.append(persisted)
+                while spool:
+                    _append_policy_metrics_event(
+                        self._policy_checkpoint_state.metrics_path,
+                        spool[0],
+                    )
+                    spool.pop(0)
+            except Exception as error:
+                warnings.warn(
+                    "post-commit Policy metric publication spooled for retry: "
+                    f"{type(error).__name__}: {error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            finally:
+                self._policy_metrics_pending = None
+                self._policy_step_started_at = None
 
         def _save_checkpoint(self):
             configured_steps = self._policy_checkpoint_state.effective_checkpoint_steps

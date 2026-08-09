@@ -9,6 +9,8 @@ particular, this module never adds the source snapshot under ``.deps`` to
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
+import hashlib
 from importlib import import_module, metadata, util
 import json
 from pathlib import Path
@@ -16,6 +18,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlparse
+import warnings
 
 from tgvf_rl.compatibility_stack import (
     CONTROL_COMPATIBILITY_STACK,
@@ -83,6 +86,39 @@ class VerlDistributionIdentity:
     commit: str
     source_kind: str
     source_clean: bool | None
+    source_state_sha256: str | None = None
+    source_changes: tuple[str, ...] = ()
+
+
+def _local_git_state(source_path: Path) -> tuple[bool, str | None, tuple[str, ...]]:
+    """Return cheap, non-blocking provenance for a local veRL checkout.
+
+    Local runtime patches are a supported deployment mode.  Their presence is
+    provenance, not evidence that veRL's public API is incompatible.  The
+    digest binds the porcelain status and tracked patch without recursively
+    hashing the checkout (or turning a provenance check into a startup cost).
+    """
+
+    try:
+        status = subprocess.run(
+            ["git", "-C", str(source_path), "status", "--porcelain=v1", "-z"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        patch = subprocess.run(
+            ["git", "-C", str(source_path), "diff", "--binary", "HEAD", "--"],
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise VerlCompatibilityError(
+            "local veRL install source is not an auditable git checkout"
+        ) from error
+    if not status:
+        return True, None, ()
+    records = tuple(item for item in status.decode("utf-8", "replace").split("\0") if item)
+    state_digest = hashlib.sha256(status + b"\0" + patch).hexdigest()
+    return False, state_digest, records
 
 
 def verl_is_available() -> bool:
@@ -191,6 +227,7 @@ def load_verl_public_api(
     )
 
 
+@lru_cache(maxsize=1)
 def installed_verl_distribution_identity() -> VerlDistributionIdentity:
     """Read the installed wheel/editable provenance and resolve its exact commit."""
 
@@ -224,12 +261,17 @@ def installed_verl_distribution_identity() -> VerlDistributionIdentity:
             raise VerlCompatibilityError(
                 "veRL import source is not a pinned git checkout"
             ) from error
+        source_clean, source_state_sha256, source_changes = _local_git_state(
+            source_path
+        )
         return VerlDistributionIdentity(
             distribution.version,
             str(source_path),
             commit,
             "import_git",
-            None,
+            source_clean,
+            source_state_sha256,
+            source_changes,
         )
     try:
         direct = json.loads(raw)
@@ -259,18 +301,19 @@ def installed_verl_distribution_identity() -> VerlDistributionIdentity:
             capture_output=True,
             text=True,
         ).stdout.strip()
-        status = subprocess.run(
-            ["git", "-C", str(source_path), "status", "--porcelain"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         raise VerlCompatibilityError(
             "local veRL install source is not an auditable git checkout"
         ) from error
+    source_clean, source_state_sha256, source_changes = _local_git_state(source_path)
     return VerlDistributionIdentity(
-        distribution.version, source_url, commit, "local_git", not bool(status)
+        distribution.version,
+        source_url,
+        commit,
+        "local_git",
+        source_clean,
+        source_state_sha256,
+        source_changes,
     )
 
 
@@ -287,7 +330,15 @@ def verify_verl_distribution_identity(
             "installed veRL revision differs from the requested compatibility identity"
         )
     if identity.source_clean is False:
-        raise VerlCompatibilityError("installed local veRL candidate source is dirty")
+        changes = ", ".join(identity.source_changes) or "unrecorded local changes"
+        digest = identity.source_state_sha256 or "unavailable"
+        warnings.warn(
+            "installed local veRL candidate contains runtime patches; "
+            "continuing with provenance "
+            f"source_state_sha256={digest}, changes=[{changes}]",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return identity
 
 

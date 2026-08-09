@@ -196,24 +196,13 @@ def build_trainable_rp66_adapter(
     from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 
     config = load_policy_e2e_smoke_run_config(run_config_path)
-    export = load_rank_zero_adapter_owned_state_export(
-        config.representation.artifact_path
-    )
-    if export.state is None:
-        raise RuntimeError("RP66 artifact omitted Adapter-owned state")
-    if state_digest(export.manifest) != config.representation.artifact.sha256:
-        raise IdentityMismatchError("RP66 manifest identity differs from run config")
-    run_identity = export.manifest.run_identity
-    if run_identity.model != config.model:
-        raise IdentityMismatchError("RP66 and actor Qwen identities differ")
-    if run_identity.provider != config.representation.conditioning:
-        raise IdentityMismatchError("RP66 conditioning identity differs")
+    export = _load_validated_trainable_rp66_export(config)
 
     visual = getattr(getattr(model, "model", model), "visual", None)
     if visual is None:
         raise TypeError("Qwen actor does not expose model.visual")
     mergers = (visual.merger, *tuple(visual.deepstack_merger_list))
-    contract = run_identity.adapter_contract
+    contract = export.manifest.run_identity.adapter_contract
     identities = (
         contract.main_projection_identity,
         *contract.deepstack_projection_identities,
@@ -265,6 +254,30 @@ def build_trainable_rp66_adapter(
     ):
         raise RuntimeError("RP66 registered duplicate Qwen merger parameters")
     return adapter
+
+
+def _load_validated_trainable_rp66_export(config: Any) -> Any:
+    """Load and validate RP66 without requiring an initialized Qwen model."""
+
+    export = load_rank_zero_adapter_owned_state_export(
+        config.representation.artifact_path
+    )
+    if export.state is None:
+        raise RuntimeError("RP66 artifact omitted Adapter-owned state")
+    if state_digest(export.manifest) != config.representation.artifact.sha256:
+        raise IdentityMismatchError("RP66 manifest identity differs from run config")
+    run_identity = export.manifest.run_identity
+    if run_identity.model != config.model:
+        raise IdentityMismatchError("RP66 and actor Qwen identities differ")
+    if run_identity.provider != config.representation.conditioning:
+        raise IdentityMismatchError("RP66 conditioning identity differs")
+    return export
+
+
+def preflight_trainable_rp66_artifact(config: Any) -> None:
+    """Fail before GPU allocation when the declared RP66 artifact is invalid."""
+
+    _load_validated_trainable_rp66_export(config)
 
 
 def _adapter_state_for_runtime_dtype(
@@ -352,5 +365,6 @@ __all__ = [
     "TrainableTGVFReplayPortFactory",
     "build_trainable_rp66_adapter",
     "make_trainable_tgvf_fsdp2_engine_class",
+    "preflight_trainable_rp66_artifact",
     "register_trainable_tgvf_fsdp2_engine",
 ]

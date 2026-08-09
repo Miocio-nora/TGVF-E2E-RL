@@ -9,6 +9,7 @@ import math
 from threading import RLock
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
+import warnings
 
 import torch
 
@@ -824,12 +825,14 @@ def worker_data_proto_sidecar_scope(data: object) -> Iterator[object]:
         try:
             release_verl_data_proto_sidecars(data)
         except BaseException as cleanup_error:
-            if active_error is None:
-                raise
-            active_error.add_note(
-                "veRL worker DataProto sidecar cleanup also failed: "
+            detail = (
+                "veRL worker DataProto sidecar cleanup failed: "
                 f"{type(cleanup_error).__name__}: {cleanup_error}"
             )
+            if active_error is not None:
+                active_error.add_note(detail)
+            else:
+                warnings.warn(detail, RuntimeWarning, stacklevel=2)
 
 
 def release_verl_worker_tensordict_sidecars(data: object) -> int:
@@ -899,12 +902,14 @@ def worker_tensordict_sidecar_scope(data: object) -> Iterator[object]:
         try:
             release_verl_worker_tensordict_sidecars(data)
         except BaseException as cleanup_error:
-            if active_error is None:
-                raise
-            active_error.add_note(
-                "veRL worker TensorDict sidecar cleanup also failed: "
+            detail = (
+                "veRL worker TensorDict sidecar cleanup failed: "
                 f"{type(cleanup_error).__name__}: {cleanup_error}"
             )
+            if active_error is not None:
+                active_error.add_note(detail)
+            else:
+                warnings.warn(detail, RuntimeWarning, stacklevel=2)
 
 
 def make_sidecar_releasing_training_worker_class(

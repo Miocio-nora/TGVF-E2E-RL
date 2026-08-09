@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import tgvf_rl.framework.verl.compatibility as verl_compatibility
+import tgvf_rl.framework.verl.data_bridge as verl_data_bridge
 from tgvf_rl.checkpoint import CheckpointCoordinator
 from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.framework.verl import (
@@ -526,6 +527,33 @@ def test_verl_distribution_identity_requires_an_explicit_audited_commit(
         verify_verl_distribution_identity(expected_commit="f" * 40)
 
 
+def test_verl_distribution_identity_records_local_patches_without_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = "638b8ff84f279e054982f1f4633a546f3c6ced68"
+    identity = VerlDistributionIdentity(
+        package_version="0.9.0.dev0",
+        source_url="file:///checkout/verl",
+        commit=candidate,
+        source_kind="local_git",
+        source_clean=False,
+        source_state_sha256="d" * 64,
+        source_changes=(" M verl/models/qwen3_vl.py",),
+    )
+    monkeypatch.setattr(
+        verl_compatibility,
+        "installed_verl_distribution_identity",
+        lambda: identity,
+    )
+
+    with pytest.warns(RuntimeWarning, match="continuing with provenance"):
+        observed = verify_verl_distribution_identity(expected_commit=candidate)
+
+    assert observed is identity
+    assert observed.source_state_sha256 == "d" * 64
+    assert observed.source_changes == (" M verl/models/qwen3_vl.py",)
+
+
 def test_runtime_requirements_are_vllm_only_and_fsdp2_strict() -> None:
     requirements = VerlRuntimeRequirements()
     assert requirements.rollout_backend == "vllm"
@@ -754,6 +782,25 @@ def test_worker_sidecar_scope_releases_ray_local_copy_on_success_and_error() -> 
 
     assert driver_data.non_tensor_batch
     assert payload.release_sidecars()
+
+
+def test_worker_sidecar_cleanup_failure_warns_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        verl_data_bridge,
+        "validate_data_proto_integrity",
+        lambda _data: None,
+    )
+    monkeypatch.setattr(
+        verl_data_bridge,
+        "release_verl_data_proto_sidecars",
+        lambda _data: (_ for _ in ()).throw(RuntimeError("cleanup failed")),
+    )
+
+    with pytest.warns(RuntimeWarning, match="cleanup failed"):
+        with worker_data_proto_sidecar_scope(object()):
+            pass
 
 
 def test_training_worker_wrapper_releases_dispatched_tensordict_in_finally() -> None:

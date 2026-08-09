@@ -9,6 +9,7 @@ interfaces; no installed vLLM file is modified.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import torch
@@ -25,7 +26,7 @@ try:
         Qwen3VLMultiModalProcessor,
         Qwen3VLProcessingInfo as _Qwen3VLProcessingInfo,
     )
-    from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalInputs
+    from vllm.multimodal.inputs import MultiModalFieldConfig
     from vllm.multimodal.parse import (
         DictEmbeddingItems,
         ImageItem,
@@ -33,6 +34,18 @@ try:
         ModalityDataItems,
         MultiModalDataParser,
     )
+    try:
+        # vLLM 0.12 public processor API.
+        from vllm.multimodal.inputs import MultiModalInputs
+
+        _VLLM_STRUCTURED_PROCESSOR_API = False
+    except ImportError:
+        # vLLM 0.23 public processor API.
+        from vllm.inputs.engine import MultiModalInput, mm_input
+        from vllm.multimodal.processing.context import TimingContext
+        from vllm.multimodal.processing.inputs import ProcessorInputs
+
+        _VLLM_STRUCTURED_PROCESSOR_API = True
 except (ImportError, ModuleNotFoundError) as error:  # pragma: no cover - env-specific
     VLLM_IMPORT_ERROR = error
 
@@ -168,7 +181,7 @@ if VLLM_IMPORT_ERROR is None:
             merge_size = int(self.get_hf_config().vision_config.spatial_merge_size)
             return TGVFQwen3VLDataParser(merge_size, **parser_kwargs)
 
-    class TGVFQwen3VLMultiModalProcessor(Qwen3VLMultiModalProcessor):
+    class _TGVFQwen3VLProcessorMixin:
         """Qwen3 processor with one fail-closed expanded-token coordinate.
 
         Production rollout submits token IDs whose image-pad runs already have
@@ -178,82 +191,6 @@ if VLLM_IMPORT_ERROR is None:
         the already-expanded placeholders and prove that vLLM retained the
         submitted hash, length, ranges, and item order exactly.
         """
-
-        def apply(
-            self,
-            prompt: str | list[int],
-            mm_data: Mapping[str, Any],
-            hf_processor_mm_kwargs: Mapping[str, object],
-            tokenization_kwargs: Mapping[str, object] | None = None,
-            *,
-            mm_uuids: Mapping[str, list[str | None] | str] | None = None,
-        ) -> MultiModalInputs:
-            # Keep stock string processing for vLLM's dummy/profile lifecycle.
-            # Every production policy turn uses token IDs and must carry the
-            # contract; absence or mismatch fails before model execution.
-            if isinstance(prompt, str):
-                return super().apply(
-                    prompt,
-                    mm_data,
-                    hf_processor_mm_kwargs,
-                    tokenization_kwargs,
-                    mm_uuids=mm_uuids,
-                )
-
-            contract, clean_mm_kwargs = split_preexpanded_prompt_contract(
-                hf_processor_mm_kwargs
-            )
-            mm_items = self._to_mm_items(mm_data)
-            item_counts = mm_items.get_all_counts()
-            if set(item_counts) != {"image"}:
-                raise ValueError(
-                    "TGVF pre-expanded processor requires exactly image items"
-                )
-            contract.validate_submitted_prompt(
-                prompt,
-                expected_image_items=item_counts["image"],
-            )
-            actual_image_token_id = self.info.get_hf_processor(
-                **clean_mm_kwargs
-            ).image_token_id
-            if contract.image_token_id != actual_image_token_id:
-                raise ValueError(
-                    "pre-expanded contract image token differs from Qwen processor"
-                )
-
-            if tokenization_kwargs is None:
-                tokenization_kwargs = {}
-            prompt_ids, mm_info, is_update_applied = self._cached_apply_hf_processor(
-                prompt,
-                mm_items,
-                clean_mm_kwargs,
-                tokenization_kwargs=tokenization_kwargs,
-                mm_uuids=mm_uuids,
-            )
-            if is_update_applied:
-                raise RuntimeError(
-                    "token-ID pre-expanded prompt unexpectedly reports an HF update"
-                )
-
-            # Intentionally do not call _maybe_apply_prompt_updates().  Locate
-            # each complete N-token replacement already present in the input.
-            mm_placeholders = self._find_mm_placeholders(
-                prompt_ids,
-                mm_info.prompt_updates,
-            )
-            self._validate_mm_placeholders(mm_placeholders, item_counts)
-            mm_placeholder_ranges = {
-                modality: [item.to_range() for item in placeholders]
-                for modality, placeholders in mm_placeholders.items()
-            }
-            contract.validate_processed_prompt(prompt_ids, mm_placeholder_ranges)
-            return MultiModalInputs(
-                type="multimodal",
-                prompt_token_ids=prompt_ids,
-                mm_kwargs=mm_info.kwargs,
-                mm_hashes=mm_info.hashes,
-                mm_placeholders=mm_placeholder_ranges,
-            )
 
         def _get_data_parser(self) -> TGVFQwen3VLDataParser:
             merge_size = int(self.info.get_hf_config().vision_config.spatial_merge_size)
@@ -280,6 +217,158 @@ if VLLM_IMPORT_ERROR is None:
                 "image", merged_sizes
             )
             return fields
+
+    if _VLLM_STRUCTURED_PROCESSOR_API:
+
+        class TGVFQwen3VLMultiModalProcessor(
+            _TGVFQwen3VLProcessorMixin, Qwen3VLMultiModalProcessor
+        ):
+            """vLLM 0.23 processor preserving pre-expanded image token runs."""
+
+            def apply(
+                self,
+                inputs: ProcessorInputs,
+                timing_ctx: TimingContext,
+            ) -> MultiModalInput:
+                # Keep stock string processing for dummy/profile lifecycles.
+                if isinstance(inputs.prompt, str):
+                    return super().apply(inputs, timing_ctx)
+
+                contract, clean_mm_kwargs = split_preexpanded_prompt_contract(
+                    inputs.hf_processor_mm_kwargs
+                )
+                clean_inputs = replace(
+                    inputs,
+                    hf_processor_mm_kwargs=clean_mm_kwargs,
+                )
+                mm_items = clean_inputs.mm_data_items
+                item_counts = mm_items.get_all_counts()
+                if set(item_counts) != {"image"}:
+                    raise ValueError(
+                        "TGVF pre-expanded processor requires exactly image items"
+                    )
+                contract.validate_submitted_prompt(
+                    clean_inputs.prompt,
+                    expected_image_items=item_counts["image"],
+                )
+                actual_image_token_id = self.info.get_hf_processor(
+                    **clean_mm_kwargs
+                ).image_token_id
+                if contract.image_token_id != actual_image_token_id:
+                    raise ValueError(
+                        "pre-expanded contract image token differs from Qwen processor"
+                    )
+
+                prompt_ids, mm_info, is_update_applied = (
+                    self._cached_apply_hf_processor(clean_inputs, timing_ctx)
+                )
+                if is_update_applied:
+                    raise RuntimeError(
+                        "token-ID pre-expanded prompt unexpectedly reports an HF update"
+                    )
+
+                # We intentionally skip _maybe_apply_prompt_updates(): the
+                # submitted token IDs already contain each complete N-token
+                # image run. Perform the validation that helper normally owns,
+                # then locate the existing runs without rewriting the prompt.
+                self._validate_mm_kwargs(mm_info.kwargs, item_counts)
+                self._validate_mm_updates(mm_info.prompt_updates, item_counts)
+                mm_placeholders = self._find_mm_placeholders(
+                    prompt_ids,
+                    mm_info.prompt_updates,
+                )
+                self._validate_mm_placeholders(mm_placeholders, item_counts)
+                mm_placeholder_ranges = {
+                    modality: [item.to_range() for item in placeholders]
+                    for modality, placeholders in mm_placeholders.items()
+                }
+                contract.validate_processed_prompt(prompt_ids, mm_placeholder_ranges)
+                return mm_input(
+                    prompt_token_ids=prompt_ids,
+                    mm_kwargs=mm_info.kwargs,
+                    mm_hashes=mm_info.hashes,
+                    mm_placeholders=mm_placeholder_ranges,
+                )
+
+    else:
+
+        class TGVFQwen3VLMultiModalProcessor(
+            _TGVFQwen3VLProcessorMixin, Qwen3VLMultiModalProcessor
+        ):
+            """vLLM 0.12 processor preserving pre-expanded image token runs."""
+
+            def apply(
+                self,
+                prompt: str | list[int],
+                mm_data: Mapping[str, Any],
+                hf_processor_mm_kwargs: Mapping[str, object],
+                tokenization_kwargs: Mapping[str, object] | None = None,
+                *,
+                mm_uuids: Mapping[str, list[str | None] | str] | None = None,
+            ) -> MultiModalInputs:
+                if isinstance(prompt, str):
+                    return super().apply(
+                        prompt,
+                        mm_data,
+                        hf_processor_mm_kwargs,
+                        tokenization_kwargs,
+                        mm_uuids=mm_uuids,
+                    )
+
+                contract, clean_mm_kwargs = split_preexpanded_prompt_contract(
+                    hf_processor_mm_kwargs
+                )
+                mm_items = self._to_mm_items(mm_data)
+                item_counts = mm_items.get_all_counts()
+                if set(item_counts) != {"image"}:
+                    raise ValueError(
+                        "TGVF pre-expanded processor requires exactly image items"
+                    )
+                contract.validate_submitted_prompt(
+                    prompt,
+                    expected_image_items=item_counts["image"],
+                )
+                actual_image_token_id = self.info.get_hf_processor(
+                    **clean_mm_kwargs
+                ).image_token_id
+                if contract.image_token_id != actual_image_token_id:
+                    raise ValueError(
+                        "pre-expanded contract image token differs from Qwen processor"
+                    )
+
+                if tokenization_kwargs is None:
+                    tokenization_kwargs = {}
+                prompt_ids, mm_info, is_update_applied = (
+                    self._cached_apply_hf_processor(
+                        prompt,
+                        mm_items,
+                        clean_mm_kwargs,
+                        tokenization_kwargs=tokenization_kwargs,
+                        mm_uuids=mm_uuids,
+                    )
+                )
+                if is_update_applied:
+                    raise RuntimeError(
+                        "token-ID pre-expanded prompt unexpectedly reports an HF update"
+                    )
+
+                mm_placeholders = self._find_mm_placeholders(
+                    prompt_ids,
+                    mm_info.prompt_updates,
+                )
+                self._validate_mm_placeholders(mm_placeholders, item_counts)
+                mm_placeholder_ranges = {
+                    modality: [item.to_range() for item in placeholders]
+                    for modality, placeholders in mm_placeholders.items()
+                }
+                contract.validate_processed_prompt(prompt_ids, mm_placeholder_ranges)
+                return MultiModalInputs(
+                    type="multimodal",
+                    prompt_token_ids=prompt_ids,
+                    mm_kwargs=mm_info.kwargs,
+                    mm_hashes=mm_info.hashes,
+                    mm_placeholders=mm_placeholder_ranges,
+                )
 
     class TGVFQwen3VLForConditionalGeneration(Qwen3VLForConditionalGeneration):
         """Qwen3-vLLM model accepting main+DeepStack precomputed embeddings."""

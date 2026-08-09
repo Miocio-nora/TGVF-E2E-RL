@@ -169,6 +169,8 @@ def _environment_payload(
                     "commit": identity.commit,
                     "source_kind": identity.source_kind,
                     "source_clean": identity.source_clean,
+                    "source_state_sha256": identity.source_state_sha256,
+                    "source_changes": list(identity.source_changes),
                 },
                 "versions": {
                     name: metadata.version(name)

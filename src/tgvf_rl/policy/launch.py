@@ -72,8 +72,13 @@ def assert_policy_execution_identity(
     if not isinstance(config, PolicyE2ESmokeRunConfig):
         raise TypeError("config must be PolicyE2ESmokeRunConfig")
     root = Path(repository_root).resolve()
-    if not (root / ".git").is_dir():
+    if not root.is_dir() or _git_output(
+        root, "rev-parse", "--is-inside-work-tree"
+    ) != "true":
         raise RuntimeError("Policy launch repository root is not a Git worktree")
+    observed_root = Path(_git_output(root, "rev-parse", "--show-toplevel")).resolve()
+    if observed_root != root:
+        raise RuntimeError("Policy launch repository root differs from Git toplevel")
     observed_commit = _git_output(root, "rev-parse", "HEAD")
     configured_commit = (
         horizon_extension.code_commit

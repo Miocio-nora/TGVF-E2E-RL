@@ -633,6 +633,78 @@ def test_actor_update_rejects_invalid_batch_before_optimizer_mutation(
     assert events == ["release"]
 
 
+def test_post_commit_metrics_and_cleanup_failures_do_not_reject_the_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    output = SimpleNamespace(meta_info={"metrics": {}})
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            events.append("optimizer_mutation")
+            return output
+
+        def _save_checkpoint(self):
+            return None
+
+    class State:
+        config = SimpleNamespace(
+            policy=SimpleNamespace(
+                sampling=SimpleNamespace(trajectories_per_prompt=16)
+            )
+        )
+
+        def prepare_optimizer_step(self, _batch):
+            events.append("prepare")
+            return "prepared"
+
+        def commit_optimizer_step(self, prepared, *, elapsed_seconds):
+            assert prepared == "prepared"
+            assert elapsed_seconds > 0
+            events.append("commit_recovery_boundary")
+            return object(), object()
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer._policy_checkpoint_state = State()
+    trainer._policy_step_started_at = None
+    trainer._policy_metrics_pending = None
+    trainer._policy_actor_update_inflight = False
+    monkeypatch.setattr(policy_task_runner, "validate_data_proto_integrity", lambda _: None)
+    monkeypatch.setattr(
+        policy_task_runner,
+        "validate_policy_pilot_reward_data_proto",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        policy_task_runner,
+        "_pilot_metrics_event",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("metrics failed")),
+    )
+    monkeypatch.setattr(
+        policy_task_runner,
+        "release_verl_data_proto_sidecars",
+        lambda _batch: (_ for _ in ()).throw(RuntimeError("cleanup failed")),
+    )
+
+    with pytest.warns(RuntimeWarning) as captured:
+        observed = trainer._update_actor(object())
+
+    assert observed is output
+    assert events == ["prepare", "optimizer_mutation", "commit_recovery_boundary"]
+    assert trainer._policy_actor_update_inflight is False
+    assert trainer._policy_step_started_at is None
+    messages = tuple(str(item.message) for item in captured)
+    assert any("metrics failed" in message for message in messages)
+    assert any("cleanup failed" in message for message in messages)
+
+
 def test_recovery_checkpoint_restores_last_completed_data_cursor() -> None:
     class Loader:
         def __init__(self) -> None:

@@ -23,6 +23,7 @@ from tgvf_rl.framework.verl.trainable_tgvf_engine import TRAINABLE_TGVF_MODEL_TY
 from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
     TRAINABLE_TGVF_EXTERNAL_MODULE,
     TrainableTGVFVerlLaunchPlan,
+    apply_trainable_tgvf_launch_environment,
     build_trainable_tgvf_verl_launch_plan,
 )
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
@@ -197,6 +198,28 @@ def test_labeled_smoke_gets_an_isolated_output_closure() -> None:
     assert smoke.environment[POLICY_METRICS_PATH_ENV].endswith(
         "/smoke/actor-rollout-only-v1/metrics.jsonl"
     )
+
+
+def test_launch_environment_drops_optional_state_from_an_earlier_run() -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(_config_ws4(), mode="smoke")
+    environment = {
+        "UNRELATED_PARENT_VALUE": "preserve",
+        "TGVF_POLICY_AGENT_LOOP_WORKER_INDEX": "7",
+        "TGVF_POLICY_HORIZON_EXTENSION_PATH": "/stale/extension.json",
+        "TGVF_POLICY_HORIZON_EXTENSION_SHA256": "f" * 64,
+    }
+
+    observed = apply_trainable_tgvf_launch_environment(
+        plan,
+        environment=environment,
+    )
+
+    assert observed is environment
+    assert observed["UNRELATED_PARENT_VALUE"] == "preserve"
+    assert "TGVF_POLICY_AGENT_LOOP_WORKER_INDEX" not in observed
+    assert "TGVF_POLICY_HORIZON_EXTENSION_PATH" not in observed
+    assert "TGVF_POLICY_HORIZON_EXTENSION_SHA256" not in observed
+    assert observed["TGVF_POLICY_RUN_ID"] == plan.config.run_id
 
 
 def test_dedicated_plan_rejects_an_enabled_policy_lora() -> None:

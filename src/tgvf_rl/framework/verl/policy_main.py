@@ -29,6 +29,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     arguments = tuple(sys.argv[1:] if argv is None else argv)
     config = compose_pinned_verl_config(arguments)
+    run_pinned_verl_config(config)
+
+
+def run_pinned_verl_config(config: object) -> None:
+    """Run one already-composed config without a second Hydra composition."""
+
     from verl.trainer.main_ppo import run_ppo
     from verl.trainer.ppo.utils import need_critic
     from verl.utils.config import validate_config
@@ -52,4 +58,4 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["compose_pinned_verl_config", "main"]
+__all__ = ["compose_pinned_verl_config", "main", "run_pinned_verl_config"]

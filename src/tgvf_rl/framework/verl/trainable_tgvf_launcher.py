@@ -5,11 +5,15 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import re
+import subprocess
 from types import MappingProxyType
 from typing import Literal
+import warnings
 
 from tgvf_rl.data.deepeyes_official_schedule import (
     DEEPEYES_CANDIDATE_SHA256,
@@ -35,6 +39,13 @@ from tgvf_rl.protocol import visual_tool_prompt_identity
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 
 from . import launcher as legacy_launcher
+from .compatibility import (
+    SPIKE_CANDIDATE_VERL_COMMIT,
+    VerlDistributionIdentity,
+    _local_git_state,
+    installed_verl_distribution_identity,
+    load_verl_public_api,
+)
 from .launcher import (
     UPSTREAM_VERL_CONFIG_NAME,
     UPSTREAM_VERL_MAIN_MODULE,
@@ -44,7 +55,7 @@ from .native_deepeyes_runtime import (
     NATIVE_DEEPEYES_LOSS_AGG_MODE,
     NATIVE_DEEPEYES_POLICY_LOSS_MODE,
 )
-from .policy_main import compose_pinned_verl_config
+from .policy_main import compose_pinned_verl_config, run_pinned_verl_config
 from .policy_task_runner import (
     POLICY_METRICS_PATH_ENV,
     POLICY_REFERENCE_DIAGNOSTIC_ENV,
@@ -66,7 +77,10 @@ from .tgvf_deepeyes_matched_dataset import (
 from .trainable_tgvf_checkpoint_manager import (
     TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN,
 )
-from .trainable_tgvf_engine import TRAINABLE_TGVF_MODEL_TYPE
+from .trainable_tgvf_engine import (
+    TRAINABLE_TGVF_MODEL_TYPE,
+    preflight_trainable_rp66_artifact,
+)
 
 
 TRAINABLE_TGVF_LAUNCH_SCHEMA = "tgvf.trainable-rp66-verl-launch.v1"
@@ -78,6 +92,14 @@ TRAINABLE_TGVF_FORMAL_TARGET = 8
 TRAINABLE_TGVF_SMOKE_TARGET = 1
 TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
 TrainableTGVFLaunchMode = Literal["formal", "smoke"]
+
+_OPTIONAL_PARENT_LAUNCH_ENV = frozenset(
+    {
+        "TGVF_POLICY_AGENT_LOOP_WORKER_INDEX",
+        "TGVF_POLICY_HORIZON_EXTENSION_PATH",
+        "TGVF_POLICY_HORIZON_EXTENSION_SHA256",
+    }
+)
 
 
 # World4 keeps Crop-16's global BS16, n16 and fixed actor trajectory micro32.
@@ -486,6 +508,146 @@ def compose_trainable_tgvf_verl_config(plan: TrainableTGVFVerlLaunchPlan) -> obj
     return composed
 
 
+def apply_trainable_tgvf_launch_environment(
+    plan: TrainableTGVFVerlLaunchPlan,
+    *,
+    environment: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Install one run's environment without inheriting optional prior-run state."""
+
+    if not isinstance(plan, TrainableTGVFVerlLaunchPlan):
+        raise TypeError("plan must be TrainableTGVFVerlLaunchPlan")
+    target = os.environ if environment is None else environment
+    for name in _OPTIONAL_PARENT_LAUNCH_ENV:
+        if name not in plan.environment:
+            target.pop(name, None)
+    target.update(plan.environment)
+    return target
+
+
+def preflight_trainable_tgvf_verl_runtime(
+    plan: TrainableTGVFVerlLaunchPlan | None = None,
+    composed: object | None = None,
+) -> VerlDistributionIdentity:
+    """Resolve all static dependencies before Ray or GPU workers are started."""
+
+    load_verl_public_api(expected_commit=SPIKE_CANDIDATE_VERL_COMMIT)
+    identity = installed_verl_distribution_identity()
+    from verl.checkpoint_engine import CheckpointEngineManager
+    from verl.utils.experimental.torch_functional import FusedLinearForPPO
+
+    if not isinstance(CheckpointEngineManager, type):
+        raise RuntimeError("pinned veRL CheckpointEngineManager is unavailable")
+    if not callable(getattr(FusedLinearForPPO, "forward", None)):
+        raise RuntimeError("pinned veRL FusedLinearForPPO is unavailable")
+    from tgvf_rl.framework.vllm import load_vllm_public_plugin_api
+
+    load_vllm_public_plugin_api()
+    if plan is None and composed is None:
+        return identity
+    if plan is None or composed is None:
+        raise TypeError("plan and composed config must be provided together")
+
+    from tgvf_rl.rewards.deepeyes_verl_reward import (
+        load_deepeyes_judge_service_config,
+    )
+
+    from .deepeyes_official_dataset import _verified_schedule_index
+    from .policy_runtime import _validate_trainer_runtime_identity
+    from .policy_task_runner import (
+        _actor_scheduler_horizon,
+        _resolved_policy_metrics_path,
+    )
+    from .policy_weight_sync import PolicyWeightSyncState
+
+    config = plan.config
+    _actor_scheduler_horizon(composed)
+    _validate_trainer_runtime_identity(composed, config)
+    _resolved_policy_metrics_path(config, environment=os.environ)
+    weight_state = PolicyWeightSyncState.from_environment(os.environ)
+    if (
+        weight_state.run_id != config.run_id
+        or weight_state.run_identity_sha256 != config.identity_sha256
+    ):
+        raise RuntimeError("Policy preflight weight-sync identity differs")
+    configured_path = os.environ.get("TGVF_POLICY_RUN_CONFIG_PATH")
+    if configured_path is None or Path(configured_path).resolve() != config.source_path:
+        raise RuntimeError("Policy preflight run-config path differs")
+    preflight_trainable_rp66_artifact(config)
+    _verified_schedule_index()
+    if config.reward.judge_config_path is None or config.reward.judge_config_sha256 is None:
+        raise RuntimeError("Policy preflight judge binding is missing")
+    judge = load_deepeyes_judge_service_config(
+        config.reward.judge_config_path,
+        expected_file_sha256=config.reward.judge_config_sha256,
+    )
+    if not os.environ.get(judge.api_key_env, "").strip():
+        raise RuntimeError(
+            f"Policy preflight requires judge credential {judge.api_key_env}"
+        )
+    _append_launch_provenance(plan, identity)
+    return identity
+
+
+def _append_launch_provenance(
+    plan: TrainableTGVFVerlLaunchPlan,
+    verl_identity: VerlDistributionIdentity,
+) -> None:
+    """Best-effort durable provenance; bookkeeping must never kill training."""
+
+    project_root = Path(__file__).resolve().parents[4]
+    project: dict[str, object]
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        clean, state_sha256, changes = _local_git_state(project_root)
+        project = {
+            "root": str(project_root),
+            "commit": commit,
+            "clean": clean,
+            "source_state_sha256": state_sha256,
+            "changes": list(changes),
+        }
+    except Exception as error:  # provenance must not become an admission gate
+        project = {
+            "root": str(project_root),
+            "unavailable": f"{type(error).__name__}: {error}",
+        }
+    record = {
+        "schema_version": "tgvf.prl15-launch-provenance.v1",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "pid": os.getpid(),
+        "run_id": plan.config.run_id,
+        "run_identity_sha256": plan.config.identity_sha256,
+        "run_config_path": str(plan.config.source_path),
+        "run_config_file_sha256": plan.config.source_sha256,
+        "mode": plan.mode,
+        "target_step": plan.target_step,
+        "project": project,
+        "verl": asdict(verl_identity),
+    }
+    metrics_path = Path(plan.environment[POLICY_METRICS_PATH_ENV])
+    destination = metrics_path.parent / "launch-provenance.jsonl"
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as error:
+        warnings.warn(
+            f"could not persist PRL15 launch provenance: {error}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-config", required=True, type=Path)
@@ -501,13 +663,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         target_step=args.target_step,
         smoke_id=args.smoke_id,
     )
-    os.environ.update(plan.environment)
+    apply_trainable_tgvf_launch_environment(plan)
+    composed = compose_trainable_tgvf_verl_config(plan)
     if args.compose_only:
-        compose_trainable_tgvf_verl_config(plan)
         return
-    from .policy_main import main as policy_main
-
-    policy_main(plan.hydra_override_args())
+    preflight_trainable_tgvf_verl_runtime(plan, composed)
+    run_pinned_verl_config(composed)
 
 
 if __name__ == "__main__":
@@ -521,7 +682,9 @@ __all__ = [
     "TRAINABLE_TGVF_SMOKE_TARGET",
     "TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES",
     "TrainableTGVFVerlLaunchPlan",
+    "apply_trainable_tgvf_launch_environment",
     "build_trainable_tgvf_verl_launch_plan",
     "compose_trainable_tgvf_verl_config",
     "main",
+    "preflight_trainable_tgvf_verl_runtime",
 ]
