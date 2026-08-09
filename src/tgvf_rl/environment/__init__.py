@@ -31,6 +31,7 @@ from .focus_runtime import (
 )
 from .agent_loop import (
     FrameworkNeutralAgentLoop,
+    ResponseBudgetScope,
     RolloutRequest,
     SampledPolicyTurn,
     ToolExecutionContext,
@@ -76,6 +77,7 @@ __all__ = [
     "BehaviorHiddenStateMaterialization",
     "BranchMergerRuntimeBinding",
     "FrameworkNeutralAgentLoop",
+    "ResponseBudgetScope",
     "BehaviorHiddenStateCapture",
     "BehaviorHiddenStateCapturePort",
     "BehaviorHiddenStateCaptureRequest",

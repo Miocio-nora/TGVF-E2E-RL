@@ -12,6 +12,7 @@ import torch
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
+from tgvf_rl.environment.agent_loop import ResponseBudgetScope
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
@@ -20,6 +21,11 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _build_reward_pipeline,
     _default_metrics_factory,
     _rp66_matched_source_route,
+    _rp66_response_budget_controls,
+    _trainable_rp66_launch_mode,
+)
+from tgvf_rl.framework.verl.native_deepeyes_runtime import (
+    NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS,
 )
 from tgvf_rl.judges import (
     TGVFVisualQualityJudgeConfig,
@@ -139,6 +145,49 @@ def test_trainable_rp66_runtime_rejects_unknown_source() -> None:
 
     with pytest.raises(ValueError, match="unsupported data_source"):
         _rp66_matched_source_route(config, {"data_source": "unknown"})
+
+
+@pytest.mark.parametrize("launch_mode", ("formal", "smoke"))
+def test_matched_visual_rows_use_crop_total_horizon(
+    launch_mode: str,
+) -> None:
+    assert _rp66_response_budget_controls(
+        launch_mode=launch_mode,
+        direct_only=False,
+        matched_visual_observation=True,
+    ) == (
+        ResponseBudgetScope.TOTAL_RESPONSE,
+        NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS,
+    )
+
+
+def test_functional_canary_retains_separate_policy_token_transport() -> None:
+    assert _rp66_response_budget_controls(
+        launch_mode="canary",
+        direct_only=False,
+        matched_visual_observation=True,
+    ) == (ResponseBudgetScope.POLICY_SAMPLED, None)
+
+
+def test_matched_thinklite_direct_route_keeps_single_turn_policy_budget() -> None:
+    assert _rp66_response_budget_controls(
+        launch_mode="formal",
+        direct_only=True,
+        matched_visual_observation=False,
+    ) == (ResponseBudgetScope.POLICY_SAMPLED, None)
+
+
+def test_trainable_rp66_launch_mode_comes_from_live_trainer_config() -> None:
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    )
+    trainer = {
+        "actor_rollout_ref": {
+            "rollout": {"custom": {"launch_mode": "smoke"}}
+        }
+    }
+
+    assert _trainable_rp66_launch_mode(config, trainer) == "smoke"
 
 
 def test_live_visual_quality_adapter_consumes_typed_provider_result(

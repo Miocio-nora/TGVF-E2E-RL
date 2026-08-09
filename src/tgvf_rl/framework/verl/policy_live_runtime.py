@@ -36,6 +36,7 @@ from tgvf_rl.environment import (
     ImageZoomInToolRuntime,
     Qwen3NativeToolLayoutBuilder,
     QwenNativeToolObservationAppender,
+    ResponseBudgetScope,
     record_trajectory_source_visual,
 )
 from tgvf_rl.environment.native_appender import (
@@ -122,6 +123,7 @@ from tgvf_rl.framework.vllm import (
 )
 
 from .native_agent_loop import VerlNativeTrajectoryComponents
+from .native_deepeyes_runtime import NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS
 from .objective_bridge import make_objective_sentinels
 from .reward_bridge import (
     VerlAsyncRewardedAgentLoopOutputBuilder,
@@ -155,6 +157,8 @@ QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA = "tgvf-qwen3-policy-e2e-live-runtime-v1"
 _BRANCH_LAYERS = (8, 16, 24)
 _RP66_MATCHED_VISUAL_SOURCES = frozenset({"vstar", "arxivqa"})
 _RP66_MATCHED_DIRECT_ONLY_SOURCE = "thinklite"
+_RP66_MATCHED_TOTAL_HORIZON_MODES = frozenset({"formal", "smoke"})
+_RP66_LAUNCH_MODES = _RP66_MATCHED_TOTAL_HORIZON_MODES | {"canary"}
 
 
 def _rp66_matched_source_route(
@@ -177,6 +181,59 @@ def _rp66_matched_source_route(
         "trainable RP66 runtime received an unsupported data_source: "
         f"{data_source!r}"
     )
+
+
+def _trainable_rp66_launch_mode(config: object, trainer_config: object) -> str | None:
+    """Read the launcher-owned mode that separates canary from matched runs."""
+
+    if (
+        getattr(config, "schema_version", None)
+        != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    ):
+        return None
+    value = trainer_config
+    path = ("actor_rollout_ref", "rollout", "custom", "launch_mode")
+    for name in path:
+        if isinstance(value, Mapping):
+            if name not in value:
+                raise IdentityMismatchError(
+                    f"trainable RP66 trainer config omitted {'.'.join(path)!r}"
+                )
+            value = value[name]
+        else:
+            if not hasattr(value, name):
+                raise IdentityMismatchError(
+                    f"trainable RP66 trainer config omitted {'.'.join(path)!r}"
+                )
+            value = getattr(value, name)
+    if value not in _RP66_LAUNCH_MODES:
+        raise IdentityMismatchError(
+            f"trainable RP66 launch mode is invalid: {value!r}"
+        )
+    return str(value)
+
+
+def _rp66_response_budget_controls(
+    *,
+    launch_mode: str | None,
+    direct_only: bool,
+    matched_visual_observation: bool,
+) -> tuple[ResponseBudgetScope, int | None]:
+    """Select Crop-matched visual limits without changing ThinkLite/canary."""
+
+    if direct_only and matched_visual_observation:
+        raise ValueError("one RP66 row cannot be direct-only and visual-tool routed")
+    if launch_mode not in _RP66_LAUNCH_MODES | {None}:
+        raise ValueError(f"unsupported RP66 launch mode: {launch_mode!r}")
+    if (
+        launch_mode in _RP66_MATCHED_TOTAL_HORIZON_MODES
+        and matched_visual_observation
+    ):
+        return (
+            ResponseBudgetScope.TOTAL_RESPONSE,
+            NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS,
+        )
+    return ResponseBudgetScope.POLICY_SAMPLED, None
 
 
 class Qwen3PolicyE2ELiveRuntimeBuilder:
@@ -321,6 +378,7 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             metrics_factory=self.metrics_factory,
             agent_loop_output_cls=self.agent_loop_output_cls,
             sample_index=_load_bound_sample_index(config),
+            launch_mode=_trainable_rp66_launch_mode(config, context.trainer_config),
         )
         return PolicyE2ERuntimeProduct(
             trajectory_components=components,
@@ -349,6 +407,7 @@ class _Qwen3PolicyTrajectoryComponents:
         ],
         agent_loop_output_cls: type[Any] | None,
         sample_index: Mapping[str, Mapping[str, object]],
+        launch_mode: str | None,
     ) -> None:
         self.context = context
         self.config = context.config
@@ -363,6 +422,7 @@ class _Qwen3PolicyTrajectoryComponents:
         self.metrics_factory = metrics_factory
         self.agent_loop_output_cls = agent_loop_output_cls
         self.sample_index = sample_index
+        self.launch_mode = launch_mode
         self.official_deepeyes_judge = None
         if (
             self.config.schema_version
@@ -459,6 +519,13 @@ class _Qwen3PolicyTrajectoryComponents:
             self.config,
             sample_fields,
         )
+        response_budget_scope, single_response_max_tokens = (
+            _rp66_response_budget_controls(
+                launch_mode=self.launch_mode,
+                direct_only=direct_only,
+                matched_visual_observation=matched_visual_observation,
+            )
+        )
         success_environment_text_renderer = (
             render_qwen_native_matched_tgvf_success_environment_text
             if matched_visual_observation
@@ -540,6 +607,8 @@ class _Qwen3PolicyTrajectoryComponents:
                 cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
                 assistant_dialect=assistant_dialect,
                 direct_only=direct_only,
+                response_budget_scope=response_budget_scope,
+                single_response_max_tokens=single_response_max_tokens,
             )
 
         reward_source = _reward_source_from_sample_fields(sample_fields)

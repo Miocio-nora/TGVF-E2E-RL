@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import json
 from typing import Mapping, Protocol
 
@@ -106,6 +107,13 @@ class PolicySamplerPort(Protocol):
         *,
         turn_index: int,
     ) -> SampledPolicyTurn: ...
+
+
+class ResponseBudgetScope(str, Enum):
+    """Tokens that consume one trajectory's configured response horizon."""
+
+    POLICY_SAMPLED = "policy_sampled_tokens"
+    TOTAL_RESPONSE = "total_response_tokens"
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +227,10 @@ class FrameworkNeutralAgentLoop:
             NativeAssistantDialect.QWEN3_VL_THINKING
         ),
         direct_only: bool = False,
+        response_budget_scope: ResponseBudgetScope = (
+            ResponseBudgetScope.POLICY_SAMPLED
+        ),
+        single_response_max_tokens: int | None = None,
     ) -> None:
         self.sampler = sampler
         self.tool_runtime = tool_runtime
@@ -229,8 +241,17 @@ class FrameworkNeutralAgentLoop:
             raise TypeError("assistant_dialect must be NativeAssistantDialect")
         if type(direct_only) is not bool:
             raise TypeError("direct_only must be a bool")
+        if not isinstance(response_budget_scope, ResponseBudgetScope):
+            raise TypeError("response_budget_scope must be ResponseBudgetScope")
+        if single_response_max_tokens is not None and (
+            type(single_response_max_tokens) is not int
+            or single_response_max_tokens <= 0
+        ):
+            raise ValueError("single_response_max_tokens must be positive when set")
         self.assistant_dialect = assistant_dialect
         self.direct_only = direct_only
+        self.response_budget_scope = response_budget_scope
+        self.single_response_max_tokens = single_response_max_tokens
         names = tuple(enabled_tool_names)
         if not names or len(names) != len(set(names)):
             raise ValueError("enabled tool names must be non-empty and unique")
@@ -250,13 +271,46 @@ class FrameworkNeutralAgentLoop:
         final_answer: str | None = None
         stop: TrajectoryStop | None = None
         generated_policy_tokens = 0
+        total_response_tokens = 0
+
+        def append_environment_within_budget(
+            sampled: SampledPolicyTurn,
+            value: ObservationHandle | StandardToolError,
+            *,
+            call_index: int,
+            parsed_call: NativeToolCall | None,
+        ) -> tuple[int, ...] | None:
+            nonlocal prompt, total_response_tokens
+            updated_prompt, environment_tokens = self._append_environment(
+                prompt,
+                sampled,
+                value,
+                call_index=call_index,
+                parsed_call=parsed_call,
+            )
+            if not self._environment_fits_response_budget(
+                request,
+                total_response_tokens=total_response_tokens,
+                environment_token_count=len(environment_tokens),
+            ):
+                return None
+            prompt = updated_prompt
+            total_response_tokens += len(environment_tokens)
+            return environment_tokens
 
         while state.phase is not AgentPhase.TERMINATED:
+            consumed_response_budget = (
+                total_response_tokens
+                if self.response_budget_scope is ResponseBudgetScope.TOTAL_RESPONSE
+                else generated_policy_tokens
+            )
             if (
                 request.sampling_contract is not None
-                and generated_policy_tokens
-                == request.sampling_contract.max_response_length
+                and consumed_response_budget
+                >= request.sampling_contract.max_response_length
             ):
+                if consumed_response_budget > request.sampling_contract.max_response_length:
+                    raise RuntimeError("trajectory exceeded its response-token budget")
                 stop = TrajectoryStop.MAX_TOKENS
                 break
             sampling_parameters: Mapping[str, object]
@@ -265,8 +319,10 @@ class FrameworkNeutralAgentLoop:
                 sampling_parameters = request.sampling_parameters
             else:
                 remaining = request.sampling_contract.remaining_response_tokens(
-                    generated_policy_tokens
+                    consumed_response_budget
                 )
+                if self.single_response_max_tokens is not None:
+                    remaining = min(remaining, self.single_response_max_tokens)
                 expected_max_tokens = remaining
                 sampling_parameters = request.sampling_contract.as_vllm_parameters(
                     max_tokens=remaining
@@ -285,8 +341,9 @@ class FrameworkNeutralAgentLoop:
                     expected_max_tokens=expected_max_tokens,
                 )
                 generated_policy_tokens += len(sampled.token_ids)
+                total_response_tokens += len(sampled.token_ids)
                 if (
-                    generated_policy_tokens
+                    consumed_response_budget + len(sampled.token_ids)
                     > request.sampling_contract.max_response_length
                 ):
                     raise ValueError(
@@ -320,6 +377,16 @@ class FrameworkNeutralAgentLoop:
                     stop_reason=sampled.stop_reason,
                 )
             )
+            if (
+                request.sampling_contract is not None
+                and self.response_budget_scope is ResponseBudgetScope.TOTAL_RESPONSE
+                and total_response_tokens
+                >= request.sampling_contract.max_response_length
+            ):
+                # Match veRL ToolAgentLoop: a turn that fills the total response
+                # horizon terminates before parsing or executing another tool.
+                stop = TrajectoryStop.MAX_TOKENS
+                break
             if self.direct_only and has_tool_marker:
                 # A direct-only trajectory is complete after this sampled row:
                 # preserve its exact policy tokens/logprobs for replay, but do
@@ -382,13 +449,15 @@ class FrameworkNeutralAgentLoop:
                     or self.machine.cap_error_behavior
                     is CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
                 )
-                prompt, environment_tokens = self._append_environment(
-                    prompt,
+                environment_tokens = append_environment_within_budget(
                     sampled,
                     error,
                     call_index=transition.attempt_index,
                     parsed_call=None,
                 )
+                if environment_tokens is None:
+                    stop = TrajectoryStop.MAX_TOKENS
+                    break
                 errors.append(
                     self._error_record(
                         error,
@@ -413,13 +482,15 @@ class FrameworkNeutralAgentLoop:
                     recoverable=self.machine.cap_error_behavior
                     is CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
                 )
-                prompt, environment_tokens = self._append_environment(
-                    prompt,
+                environment_tokens = append_environment_within_budget(
                     sampled,
                     error,
                     call_index=transition.attempt_index,
                     parsed_call=None,
                 )
+                if environment_tokens is None:
+                    stop = TrajectoryStop.MAX_TOKENS
+                    break
                 errors.append(
                     self._error_record(
                         error,
@@ -447,13 +518,15 @@ class FrameworkNeutralAgentLoop:
                     attempt_index=attempt_index,
                     recoverable=True,
                 )
-                prompt, environment_tokens = self._append_environment(
-                    prompt,
+                environment_tokens = append_environment_within_budget(
                     sampled,
                     error,
                     call_index=attempt_index,
                     parsed_call=None,
                 )
+                if environment_tokens is None:
+                    stop = TrajectoryStop.MAX_TOKENS
+                    break
                 errors.append(
                     self._error_record(
                         error,
@@ -490,13 +563,15 @@ class FrameworkNeutralAgentLoop:
                     attempt_index=attempt_index,
                     recoverable=True,
                 )
-                prompt, environment_tokens = self._append_environment(
-                    prompt,
+                environment_tokens = append_environment_within_budget(
                     sampled,
                     error,
                     call_index=attempt_index,
                     parsed_call=None,
                 )
+                if environment_tokens is None:
+                    stop = TrajectoryStop.MAX_TOKENS
+                    break
                 errors.append(
                     self._error_record(
                         error,
@@ -507,13 +582,15 @@ class FrameworkNeutralAgentLoop:
                 )
                 state = self.machine.apply(state, AgentEvent.tool_error()).state
                 continue
-            prompt, environment_tokens = self._append_environment(
-                prompt,
+            environment_tokens = append_environment_within_budget(
                 sampled,
                 handle,
                 call_index=call_index,
                 parsed_call=parsed,
             )
+            if environment_tokens is None:
+                stop = TrajectoryStop.MAX_TOKENS
+                break
             if isinstance(parsed, ParsedImageZoomInCall):
                 calls.append(
                     CropToolCallRecord(
@@ -570,7 +647,12 @@ class FrameworkNeutralAgentLoop:
             state = self.machine.apply(state, AgentEvent.tool_response()).state
             if (
                 request.sampling_contract is not None
-                and generated_policy_tokens
+                and (
+                    total_response_tokens
+                    if self.response_budget_scope
+                    is ResponseBudgetScope.TOTAL_RESPONSE
+                    else generated_policy_tokens
+                )
                 == request.sampling_contract.max_response_length
             ):
                 stop = TrajectoryStop.MAX_TOKENS
@@ -589,6 +671,27 @@ class FrameworkNeutralAgentLoop:
             final_answer=final_answer,
             stop=stop,
             tool_errors=tuple(errors),
+        )
+
+    def _environment_fits_response_budget(
+        self,
+        request: RolloutRequest,
+        *,
+        total_response_tokens: int,
+        environment_token_count: int,
+    ) -> bool:
+        """Apply Crop's boundary before publishing an environment response."""
+
+        if environment_token_count <= 0:
+            raise ValueError("environment token count must be positive")
+        if (
+            request.sampling_contract is None
+            or self.response_budget_scope is ResponseBudgetScope.POLICY_SAMPLED
+        ):
+            return True
+        return (
+            total_response_tokens + environment_token_count
+            < request.sampling_contract.max_response_length
         )
 
     def _append_environment(

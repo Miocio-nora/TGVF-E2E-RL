@@ -12,6 +12,7 @@ from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
 from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, TokenSpan
 from tgvf_rl.environment.agent_loop import (
     FrameworkNeutralAgentLoop,
+    ResponseBudgetScope,
     RolloutRequest,
     SampledPolicyTurn,
 )
@@ -131,6 +132,35 @@ def _pilot_fixture_sampling(version: PolicyVersion) -> SamplingIdentity:
         (),
         LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
         0,
+    )
+
+
+def _typed_sampling_identity(
+    version: PolicyVersion,
+    *,
+    max_tokens: int,
+    seed: int = 42,
+) -> SamplingIdentity:
+    return SamplingIdentity(
+        version,
+        "vllm",
+        "0.12.0",
+        seed,
+        SHA,
+        1.0,
+        1.0,
+        -1,
+        0.0,
+        1.0,
+        (),
+        LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        0,
+        max_tokens=max_tokens,
+        do_sample=True,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
     )
 
 
@@ -1101,6 +1131,207 @@ def test_typed_pilot_sampling_contract_controls_each_remaining_turn_budget() -> 
     assert sampler.parameters[1]["max_tokens"] == 8192 - len(call.token_ids)
     assert sampler.parameters[0]["top_k"] == -1
     assert sampler.parameters[0]["min_p"] == 0.0
+
+
+def test_total_response_budget_charges_tool_observation_tokens() -> None:
+    version = PolicyVersion("matched-total", 0, SHA)
+    sampling_contract = PilotSamplingConfig(
+        trajectories_per_prompt=2,
+        max_response_length=512,
+    ).bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
+    )
+    first_sampling = _typed_sampling_identity(version, max_tokens=512)
+    call = _sample(
+        "reason</think><tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+        "</tool_call>",
+        first_sampling,
+    )
+    environment_token_count = 5
+    second_max_tokens = 512 - len(call.token_ids) - environment_token_count
+    answer = _sample(
+        "reason</think>B",
+        _typed_sampling_identity(
+            version,
+            max_tokens=second_max_tokens,
+            seed=43,
+        ),
+    )
+
+    class RecordingSampler(Sampler):
+        def __init__(self, turns):
+            super().__init__(turns)
+            self.parameters = []
+
+        def sample(self, prompt_token_ids, sampling_parameters, *, turn_index):
+            self.parameters.append(dict(sampling_parameters))
+            return super().sample(
+                prompt_token_ids, sampling_parameters, turn_index=turn_index
+            )
+
+    sampler = RecordingSampler((call, answer))
+    loop = FrameworkNeutralAgentLoop(
+        sampler=sampler,
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=4,
+        enabled_tool_names=("tgvf_focus_tool",),
+        response_budget_scope=ResponseBudgetScope.TOTAL_RESPONSE,
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("matched-total", "sampling", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+            sampling_contract,
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert len(trajectory.observations) == 1
+    assert sampler.parameters[0]["max_tokens"] == 512
+    assert sampler.parameters[1]["max_tokens"] == second_max_tokens
+
+
+def test_matched_visual_turn_cap_equals_native_crop() -> None:
+    version = PolicyVersion("matched-cap", 0, SHA)
+    sampling_contract = PilotSamplingConfig(
+        trajectories_per_prompt=16,
+        max_response_length=20_480,
+    ).bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
+    )
+    turn_cap = 10_240
+    call = _sample(
+        "reason</think><tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+        "</tool_call>",
+        _typed_sampling_identity(version, max_tokens=turn_cap),
+    )
+    answer = _sample(
+        "reason</think>B",
+        _typed_sampling_identity(version, max_tokens=turn_cap, seed=43),
+    )
+
+    class RecordingSampler(Sampler):
+        def __init__(self, turns):
+            super().__init__(turns)
+            self.parameters = []
+
+        def sample(self, prompt_token_ids, sampling_parameters, *, turn_index):
+            self.parameters.append(dict(sampling_parameters))
+            return super().sample(
+                prompt_token_ids, sampling_parameters, turn_index=turn_index
+            )
+
+    sampler = RecordingSampler((call, answer))
+    loop = FrameworkNeutralAgentLoop(
+        sampler=sampler,
+        tool_runtime=Runtime(),
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=6,
+        enabled_tool_names=("tgvf_focus_tool",),
+        response_budget_scope=ResponseBudgetScope.TOTAL_RESPONSE,
+        single_response_max_tokens=turn_cap,
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("matched-cap", "sampling", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+            sampling_contract,
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.FINAL_ANSWER
+    assert [item["max_tokens"] for item in sampler.parameters] == [turn_cap, turn_cap]
+
+
+def test_total_response_budget_rejects_crop_equal_environment_boundary() -> None:
+    version = PolicyVersion("matched-boundary", 0, SHA)
+    sampling_contract = PilotSamplingConfig(
+        trajectories_per_prompt=2,
+        max_response_length=512,
+    ).bind_run_inputs(
+        min_p=0.0,
+        stop_token_ids=(),
+        stop_strings=(),
+        include_stop_str_in_output=False,
+        ignore_eos=False,
+    )
+    call = _sample(
+        "reason</think><tool_call>"
+        '{"name":"tgvf_focus_tool","arguments":{"target":"label"}}'
+        "</tool_call>",
+        _typed_sampling_identity(version, max_tokens=512),
+    )
+    environment_token_count = 512 - len(call.token_ids)
+    assert environment_token_count > 0
+
+    class BoundaryAppender(Appender):
+        def append(
+            self,
+            prompt_token_ids,
+            sampled_turn,
+            observation,
+            *,
+            call_index,
+            parsed_call,
+        ):
+            environment = tuple(151_665 for _ in range(environment_token_count))
+            return (
+                prompt_token_ids + sampled_turn.token_ids + environment,
+                environment,
+            )
+
+    runtime = Runtime()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((call,)),
+        tool_runtime=runtime,
+        appender=BoundaryAppender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(BehaviorTraceStore()),
+        max_tool_calls=6,
+        enabled_tool_names=("tgvf_focus_tool",),
+        response_budget_scope=ResponseBudgetScope.TOTAL_RESPONSE,
+    )
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("matched-boundary", "sampling", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+            sampling_contract,
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.MAX_TOKENS
+    assert len(runtime.contexts) == 1
+    assert trajectory.tool_calls == trajectory.observations == ()
 
 
 def test_typed_pilot_sampling_rejects_backend_probability_mismatch() -> None:
