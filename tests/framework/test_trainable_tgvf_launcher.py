@@ -7,6 +7,10 @@ import pytest
 from tgvf_rl.framework.verl.native_deepeyes_runtime import (
     NATIVE_DEEPEYES_POLICY_LOSS_MODE,
 )
+from tgvf_rl.framework.verl.policy_task_runner import (
+    POLICY_METRICS_PATH_ENV,
+    POLICY_REFERENCE_DIAGNOSTIC_ENV,
+)
 from tgvf_rl.framework.verl.tgvf_deepeyes_matched_dataset import (
     DEEPEYES_PROBE_SENTINEL,
     DEEPEYES_TRAIN_SENTINEL,
@@ -69,6 +73,13 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
         plan.config.reward.judge_config_sha256
     )
     assert custom["checkpoint_steps"] == [0, 1, 4, 8]
+    assert custom["reference_diagnostic"] == {
+        "enabled": False,
+        "coefficient": 0.0,
+        "worker_route": "disabled_zero_kl_control",
+        "observation_source": "not_computed",
+    }
+    assert plan.environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] == "0"
 
 
 def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> None:
@@ -81,6 +92,11 @@ def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> N
     assert smoke.overrides["trainer.total_training_steps"] == 1
     assert smoke.overrides["trainer.default_local_dir"].endswith(
         "/smoke/checkpoints"
+    )
+    assert formal.environment[POLICY_METRICS_PATH_ENV].endswith("/metrics.jsonl")
+    assert "/smoke/" not in formal.environment[POLICY_METRICS_PATH_ENV]
+    assert smoke.environment[POLICY_METRICS_PATH_ENV].endswith(
+        "/smoke/metrics.jsonl"
     )
     assert smoke.overrides["actor_rollout_ref.rollout.custom"][
         "checkpoint_steps"

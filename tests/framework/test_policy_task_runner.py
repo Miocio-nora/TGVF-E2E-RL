@@ -15,11 +15,15 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     CheckpointAfterWeightSyncManager,
     PairedActorWorkerGroup,
     PolicyPilotTrainerCheckpointState,
+    POLICY_METRICS_PATH_ENV,
+    POLICY_REFERENCE_DIAGNOSTIC_ENV,
     _append_policy_metrics_event,
     _completed_resume_checkpoint_step,
     _finish_tracking_backends,
     _pilot_metrics_event,
+    _policy_reference_diagnostic_enabled,
     _policy_tracking_metrics,
+    _resolved_policy_metrics_path,
     _torch_state,
     _wandb_metrics_from_event,
     add_policy_actor_rollout_worker,
@@ -132,6 +136,61 @@ def test_task_runner_maps_the_real_sidecar_releasing_role_worker() -> None:
     assert "PolicyPhysicalGPUWorker" in {
         base.__name__ for base in wrapped.actor_worker_cls.__mro__
     }
+
+
+def test_policy_reference_diagnostic_can_be_disabled_for_zero_kl_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TrainingWorker:
+        def _setup_env_cuda_visible_devices(self):
+            return None
+
+        def train_mini_batch(self, data):
+            return data
+
+        def infer_batch(self, data):
+            return data
+
+    class ActorRolloutRefWorker:
+        actor_worker_cls = TrainingWorker
+        ref_worker_cls = TrainingWorker
+
+        def _setup_env_cuda_visible_devices(self):
+            return None
+
+    class Role:
+        ActorRollout = "actor"
+        ActorRolloutRef = "actor_ref"
+
+    class Ray:
+        @staticmethod
+        def remote(value):
+            return value
+
+    monkeypatch.setenv(POLICY_REFERENCE_DIAGNOSTIC_ENV, "0")
+    runner = SimpleNamespace(role_worker_mapping={}, mapping={})
+    config = SimpleNamespace(
+        actor_rollout_ref=SimpleNamespace(
+            model={"lora": {"rank": 0}, "lora_adapter_path": None}
+        )
+    )
+    add_policy_actor_rollout_worker(
+        runner,
+        config,
+        ray_module=Ray,
+        role_type=Role,
+        actor_worker_cls=ActorRolloutRefWorker,
+        ray_worker_group_cls=dict,
+        need_reference_policy_fn=lambda _config: False,
+    )
+
+    assert _policy_reference_diagnostic_enabled() is False
+    assert set(runner.role_worker_mapping) == {Role.ActorRollout}
+    assert runner.mapping == {Role.ActorRollout: "global_pool"}
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        _policy_reference_diagnostic_enabled(
+            {POLICY_REFERENCE_DIAGNOSTIC_ENV: "false"}
+        )
 
 
 @pytest.mark.parametrize(
@@ -382,6 +441,37 @@ def test_policy_metrics_publish_step_and_cumulative_records_idempotently(
     changed["timing"] = dict(event["timing"], checkpoint_seconds=0.75)
     with pytest.raises(RuntimeError, match="changed an existing step"):
         _append_policy_metrics_event(path, changed)
+
+
+def test_policy_metrics_path_separates_formal_and_smoke_roots(tmp_path) -> None:
+    config = object.__new__(policy_task_runner.PolicyE2ESmokeRunConfig)
+    object.__setattr__(
+        config,
+        "output",
+        SimpleNamespace(
+            root=tmp_path,
+            metrics_path=tmp_path / "metrics.jsonl",
+        ),
+    )
+
+    assert _resolved_policy_metrics_path(config, environment={}) == (
+        tmp_path / "metrics.jsonl"
+    )
+    smoke = tmp_path / "smoke/metrics.jsonl"
+    assert _resolved_policy_metrics_path(
+        config,
+        environment={POLICY_METRICS_PATH_ENV: str(smoke)},
+    ) == smoke
+    with pytest.raises(ValueError, match="inside output.root"):
+        _resolved_policy_metrics_path(
+            config,
+            environment={POLICY_METRICS_PATH_ENV: str(tmp_path.parent / "metrics.jsonl")},
+        )
+    with pytest.raises(ValueError, match="formal or smoke"):
+        _resolved_policy_metrics_path(
+            config,
+            environment={POLICY_METRICS_PATH_ENV: str(tmp_path / "other.jsonl")},
+        )
 
 
 def test_stage3_metrics_publish_five_components_and_judge_coverage() -> None:

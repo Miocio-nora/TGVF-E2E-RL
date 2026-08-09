@@ -94,7 +94,9 @@ POLICY_PILOT_TASK_RUNNER_FQN = (
 )
 POLICY_PILOT_TRAINER_LIFECYCLE_SCHEMA = "tgvf-policy-trainer-lifecycle-v1"
 POLICY_REFERENCE_DIAGNOSTIC_ENABLED = True
+POLICY_REFERENCE_DIAGNOSTIC_ENV = "TGVF_POLICY_REFERENCE_DIAGNOSTIC"
 POLICY_PILOT_METRICS_EVENT_SCHEMA = "policy-pilot-v1-metrics-event-v1"
+POLICY_METRICS_PATH_ENV = "TGVF_POLICY_METRICS_PATH"
 POLICY_TRACKING_METRIC_NAMES = frozenset(
     {
         "training/global_step",
@@ -138,6 +140,18 @@ POLICY_TRACKING_METRIC_NAMES = frozenset(
         "num_turns/mean",
     }
 )
+
+
+def _policy_reference_diagnostic_enabled(
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    selected_environment = os.environ if environment is None else environment
+    value = selected_environment.get(POLICY_REFERENCE_DIAGNOSTIC_ENV)
+    if value is None:
+        return POLICY_REFERENCE_DIAGNOSTIC_ENABLED
+    if value not in {"0", "1"}:
+        raise ValueError(f"{POLICY_REFERENCE_DIAGNOSTIC_ENV} must be 0 or 1")
+    return value == "1"
 
 
 def _finish_tracking_backends(tracker: object) -> None:
@@ -338,6 +352,33 @@ def _append_policy_metrics_event(path: Path, event: Mapping[str, object]) -> Non
         os.fsync(handle.fileno())
 
 
+def _resolved_policy_metrics_path(
+    config: PolicyE2ESmokeRunConfig,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the launch-mode metrics file without crossing the run root."""
+
+    if not isinstance(config, PolicyE2ESmokeRunConfig):
+        raise TypeError("config must be PolicyE2ESmokeRunConfig")
+    selected_environment = os.environ if environment is None else environment
+    value = selected_environment.get(POLICY_METRICS_PATH_ENV)
+    path = config.output.metrics_path if value is None else Path(value)
+    if not path.is_absolute():
+        raise ValueError(f"{POLICY_METRICS_PATH_ENV} must be absolute")
+    try:
+        relative = path.relative_to(config.output.root)
+    except ValueError as error:
+        raise ValueError(
+            f"{POLICY_METRICS_PATH_ENV} must remain inside output.root"
+        ) from error
+    if relative not in {Path("metrics.jsonl"), Path("smoke/metrics.jsonl")}:
+        raise ValueError(
+            f"{POLICY_METRICS_PATH_ENV} must select formal or smoke metrics"
+        )
+    return path
+
+
 def _completed_resume_checkpoint_step(
     trainer: object,
     *,
@@ -491,6 +532,7 @@ class PolicyPilotTrainerCheckpointState:
     def __init__(self, trainer: object, config: PolicyE2ESmokeRunConfig) -> None:
         self.trainer = trainer
         self.config = config
+        self.metrics_path = _resolved_policy_metrics_path(config)
         self._run_identity = _run_identity(config)
         self.horizon_extension = policy_horizon_extension_from_environment(config)
         self._weight_state = PolicyWeightSyncState.from_environment()
@@ -897,13 +939,11 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 self.config,
                 actor_scheduler_horizon,
             )
-            # The Pilot keeps both mathematical KL coefficients at zero, so
-            # upstream's ``need_reference_policy`` is intentionally false.
-            # We nevertheless execute a frozen-base reference forward as a
-            # diagnostic on the exact rollout-recorded observation bundle.
-            # The ActorRolloutRef role installed below owns that explicit ref
-            # engine; this flag makes the v0 trainer schedule the forward.
-            self.use_reference_policy = POLICY_REFERENCE_DIAGNOSTIC_ENABLED
+            # Both mathematical KL coefficients stay zero. Legacy runs may
+            # still opt into the frozen-base diagnostic through the explicit
+            # environment binding; PRL15 disables the otherwise unused extra
+            # forward and routes an ActorRollout-only worker group below.
+            self.use_reference_policy = _policy_reference_diagnostic_enabled()
 
         def init_workers(self):
             # Pinned veRL constructs its LLM server manager from a module
@@ -1229,7 +1269,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 "end_to_end_step_seconds": end_to_end_seconds,
             }
             _append_policy_metrics_event(
-                self._policy_checkpoint_state.config.output.metrics_path,
+                self._policy_checkpoint_state.metrics_path,
                 persisted,
             )
             self._policy_metrics_pending = None
@@ -1534,10 +1574,13 @@ def add_policy_actor_rollout_worker(
         raise ValueError(
             "Policy reference diagnostic requires zero-weight KL configuration"
         )
-    # Force the combined worker even though upstream's objective-driven helper
-    # returns false.  Its reference engine is frozen/base-only; the trainer
-    # override schedules it solely for the recorded KL diagnostic.
-    role = role_type.ActorRolloutRef
+    # Preserve the historical diagnostic by default, while allowing a run-bound
+    # zero-KL control to avoid constructing and executing an unused frozen base.
+    role = (
+        role_type.ActorRolloutRef
+        if _policy_reference_diagnostic_enabled()
+        else role_type.ActorRollout
+    )
     runner.role_worker_mapping[role] = ray_module.remote(wrapped)
     runner.mapping[role] = "global_pool"
     return wrapped, ray_worker_group_cls
@@ -1606,7 +1649,7 @@ def run_policy_pilot_v0_task(
     runner.add_ref_policy_worker(config, actor_rollout_cls)
     validate_config(
         config=config,
-        use_reference_policy=POLICY_REFERENCE_DIAGNOSTIC_ENABLED,
+        use_reference_policy=_policy_reference_diagnostic_enabled(),
         use_critic=need_critic(config),
     )
     local_path = copy_to_local(
@@ -1657,6 +1700,8 @@ def run_policy_pilot_v0_task(
 __all__ = [
     "CheckpointAfterWeightSyncManager",
     "POLICY_PILOT_TASK_RUNNER_FQN",
+    "POLICY_METRICS_PATH_ENV",
+    "POLICY_REFERENCE_DIAGNOSTIC_ENV",
     "POLICY_REFERENCE_DIAGNOSTIC_ENABLED",
     "PairedActorWorkerGroup",
     "PolicyPilotTrainerCheckpointState",
@@ -1666,5 +1711,7 @@ __all__ = [
     "make_policy_colocated_worker_class",
     "policy_worker_logical_cuda_ordinal",
     "policy_metrics_observation_from_data_proto",
+    "_policy_reference_diagnostic_enabled",
+    "_resolved_policy_metrics_path",
     "run_policy_pilot_v0_task",
 ]

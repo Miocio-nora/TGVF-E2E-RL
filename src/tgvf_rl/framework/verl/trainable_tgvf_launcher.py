@@ -44,6 +44,10 @@ from .native_deepeyes_runtime import (
     NATIVE_DEEPEYES_POLICY_LOSS_MODE,
 )
 from .policy_main import compose_pinned_verl_config
+from .policy_task_runner import (
+    POLICY_METRICS_PATH_ENV,
+    POLICY_REFERENCE_DIAGNOSTIC_ENV,
+)
 from .tgvf_deepeyes_matched_dataset import (
     DEEPEYES_PROBE_SENTINEL,
     DEEPEYES_TRAIN_SENTINEL,
@@ -180,6 +184,12 @@ def _replace_custom_record(
                 "interval_optimizer_steps": 1,
                 "payload": "full_qwen_plus_trainable_rp66",
             },
+            "reference_diagnostic": {
+                "enabled": False,
+                "coefficient": 0.0,
+                "worker_route": "disabled_zero_kl_control",
+                "observation_source": "not_computed",
+            },
             "checkpoint_steps": list(checkpoint_steps),
             "runtime_state_directory": str(output_root / "runtime-policy-state"),
             "metrics_path": str(output_root / "metrics.jsonl"),
@@ -263,6 +273,15 @@ class TrainableTGVFVerlLaunchPlan:
             "payload": "full_qwen_plus_trainable_rp66",
         }:
             raise ValueError("trainable TGVF sync identity differs")
+        if custom.get("reference_diagnostic") != {
+            "enabled": False,
+            "coefficient": 0.0,
+            "worker_route": "disabled_zero_kl_control",
+            "observation_source": "not_computed",
+        }:
+            raise ValueError("trainable TGVF reference diagnostic must be disabled")
+        if self.environment.get(POLICY_REFERENCE_DIAGNOSTIC_ENV) != "0":
+            raise ValueError("trainable TGVF reference diagnostic environment differs")
 
     def hydra_override_args(self) -> tuple[str, ...]:
         return tuple(
@@ -348,6 +367,8 @@ def build_trainable_tgvf_verl_launch_plan(
         environment["TGVF_POLICY_STATE_DIR"] = str(
             output_root / "runtime-policy-state"
         )
+    environment[POLICY_METRICS_PATH_ENV] = str(output_root / "metrics.jsonl")
+    environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] = "0"
     _replace_custom_record(
         values,
         config,

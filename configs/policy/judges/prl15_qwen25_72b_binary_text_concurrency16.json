@@ -22,11 +22,11 @@
     "timeout_seconds": 120.0,
     "maximum_concurrency": 16,
     "maximum_attempts": 4,
-    "retry_backoff_seconds": 1.0,
-    "retry_maximum_seconds": 8.0,
+    "retry_backoff_seconds": 0.25,
+    "retry_maximum_seconds": 2.0,
     "cache_max_entries": 100000,
     "transient_failure_window_size": 3152,
-    "maximum_transient_failure_fraction": 0.01
+    "maximum_transient_failure_fraction": 1.0
   },
   "failure_policy": {
     "transport_error": "bounded_retry_then_zero_with_threshold",

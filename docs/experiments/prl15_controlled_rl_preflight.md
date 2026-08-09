@@ -1,0 +1,79 @@
+# PRL15 controlled-RL preflight
+
+This note records the implementation boundary for the matched RP66 pilot and
+its native-Crop control. No formal run should start from an uncommitted tree.
+
+## Frozen experimental shape
+
+Both arms use Qwen3-VL-8B-Instruct full-model training, the retained mixed T1
+schedule, 16 prompts per optimizer step, 16 trajectories per prompt, four
+FSDP ranks, one PPO epoch, AdamW at `1e-6`, and the released DeepEyes GRPO
+reward weights. The text judge uses Qwen2.5-72B through OpenRouter with the
+same proven service contract as Crop: concurrency 16, four bounded attempts,
+0.25--2.0 second backoff, transient exhaustion scored as zero and audited,
+and authentication/model-identity failures aborting the run.
+
+The scientific arm difference is the visual action and its trainable state:
+
+- Crop uses the native DeepEyes crop prompt/tool and has no RP66 Adapter.
+- TGVF uses the matched TGVF prompt/tool and jointly updates full Qwen plus the
+  RP66 Adapter, publishing both to rollout after every optimizer step.
+
+## Why the world4/micro1 Crop control is required
+
+`deepeyes_official_micro_token_mean` reproduces the released reduction: it
+computes a token mean independently inside each fixed local actor micro-batch,
+then gives every micro-batch equal weight. With unequal response lengths,
+changing actor micro-batch size changes the effective trajectory/token
+weighting. It is not a generic veRL requirement, but it is part of this named
+objective.
+
+Therefore the earlier world8/micro32 Crop run is useful historical evidence,
+but it is not a strict scalar-loss control for PRL15 world4/micro1. The new
+launcher `tools/launch_prl15_crop_ws4_micro1_control.py` constructs a Crop arm
+and programmatically proves the common runtime fields equal the RP66 formal
+plan before composition or launch.
+
+## Runtime isolation and reference diagnostic
+
+Smoke metrics are now forced to `output.root/smoke/metrics.jsonl`; formal
+metrics are forced to `output.root/metrics.jsonl`. The TaskRunner accepts no
+other metrics destination, preventing a successful smoke from contaminating
+the formal history.
+
+Both mathematical KL coefficients are zero. PRL15 consequently disables the
+extra frozen-reference forward and uses an ActorRollout worker role. This
+removes one full reference forward over 256 trajectories and its model/runtime
+headroom. The legacy default remains enabled so old experiment identities do
+not silently change. This switch does not alter reward, advantages, policy
+loss, or checkpoint weights because the diagnostic coefficient was already
+zero.
+
+## Step 0 versus step 8 benchmark contract
+
+The paired CoreDev-2511 plan is pinned in
+`configs/evaluation/prl15_rp66_step0_step8_coredev2511_plan.json`. Both arms
+must use the same task manifest, rank partition, TGVF prompt/tool protocol,
+call cap, and sampling contract.
+
+The state being compared is a pair, not a single model:
+
+- step 0 = base Qwen weights + the immutable RP66 stage-1 artifact;
+- step 8 = materialized full-Qwen step-8 checkpoint + the immutable RP66
+  step-8 content-addressed snapshot.
+
+The existing full-model CoreDev backend is Crop-only (`native_pixels=True`)
+and the older TGVF backend assumes a policy LoRA. Neither is a valid shortcut
+for this paired full-Qwen/RP66 state. Evaluation must freeze and load both
+members of each pair; treating RP66 as a policy LoRA or evaluating only the
+Qwen checkpoint would answer a different question. The plan is deliberately
+marked `awaiting_formal_step8_paired_snapshot` until formal training produces
+that closure.
+
+## Git execution identity
+
+The run TOML binds an execution-code commit rather than the later config-only
+binding commit. The execution commit must be an ancestor of the checked-out
+launch commit, the tree must be clean, and the branch must be pushed before
+formal launch. This avoids a circular self-hash while preserving an exact,
+reconstructable code identity.

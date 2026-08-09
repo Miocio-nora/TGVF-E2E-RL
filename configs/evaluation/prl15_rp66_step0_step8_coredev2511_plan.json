@@ -1,0 +1,40 @@
+{
+  "schema_version": "tgvf.prl15-paired-policy-benchmark-plan.v1",
+  "evaluation_id": "PRL15-RP66-COREDEV2511-STEP0-STEP8-SAME-PROTOCOL-V1",
+  "status": "awaiting_formal_step8_paired_snapshot",
+  "policy_config": "configs/policy/runs/prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_matched_8step_gpu0123.toml",
+  "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
+  "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+  "expected_task_count": 2511,
+  "expected_single_image_count": 2240,
+  "protocol": {
+    "evaluation_protocol": "training_run",
+    "prompt_sha256": "e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633",
+    "tool_profile": "tgvf_only",
+    "tool_schema_sha256": "f33f61d48bc4341f88077e90afca941819769b6209eb54893a9ed6b44856aba5",
+    "maximum_tool_calls": 6,
+    "sampling_source": "bound_policy_run_config",
+    "same_tasks_and_rank_partition": true
+  },
+  "arms": [
+    {
+      "name": "step0",
+      "optimizer_step": 0,
+      "qwen_source": "model.path",
+      "rp66_source": "representation.artifact_path"
+    },
+    {
+      "name": "step8",
+      "optimizer_step": 8,
+      "qwen_source": "output.checkpoint_directory/global_step_8",
+      "rp66_source": "output.root/runtime-policy-state/lora-manifests/step-00000008-*.json"
+    }
+  ],
+  "required_pairing": {
+    "qwen_and_rp66_optimizer_step_must_match": true,
+    "adapter_manifest_and_tensor_sha256_must_be_frozen": true,
+    "full_qwen_checkpoint_must_be_materialized_without_adapter_keys": true,
+    "do_not_use_crop_native_pixels_backend": true,
+    "do_not_treat_rp66_as_policy_lora": true
+  }
+}
