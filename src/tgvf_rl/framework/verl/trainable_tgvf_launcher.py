@@ -55,7 +55,6 @@ from .prl14_crop16_reference import (
     PRL14_CROP16_REMOVED_OVERRIDES,
     PRL14_CROP16_RUN_NAME,
     apply_prl14_crop16_common_controls,
-    assert_prl14_crop16_common_controls,
 )
 from .tgvf_deepeyes_matched_dataset import (
     DEEPEYES_PROBE_SENTINEL,
@@ -96,25 +95,36 @@ _WORLD4_TOPOLOGY_OVERRIDES = MappingProxyType(
 
 
 def _apply_crop16_mathematical_controls(
-    values: dict[str, object], *, world_size: int
+    values: dict[str, object], *, world_size: int, optimizer_horizon: int
 ) -> None:
     if world_size not in TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES:
         raise ValueError("trainable TGVF topology must use world4 or world8")
+    if type(optimizer_horizon) is not int or optimizer_horizon <= 0:
+        raise ValueError("trainable TGVF optimizer horizon must be positive")
     apply_prl14_crop16_common_controls(values)
+    # PRL14's serialized completion contains -1 because its upstream trainer
+    # filled the scheduler horizon later.  The project TaskRunner deliberately
+    # preserves an explicit run-bound horizon before upstream construction.
+    values["actor_rollout_ref.actor.optim.total_training_steps"] = (
+        optimizer_horizon
+    )
     if world_size == 4:
         values.update(_WORLD4_TOPOLOGY_OVERRIDES)
 
 
 def _assert_crop16_mathematical_controls(
-    values: Mapping[str, object], *, world_size: int
+    values: Mapping[str, object], *, world_size: int, optimizer_horizon: int
 ) -> None:
-    if world_size == 8:
-        assert_prl14_crop16_common_controls(values)
-        return
-    if world_size != 4:
+    if world_size not in TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES:
         raise ValueError("trainable TGVF topology must use world4 or world8")
+    if type(optimizer_horizon) is not int or optimizer_horizon <= 0:
+        raise ValueError("trainable TGVF optimizer horizon must be positive")
     expected = dict(PRL14_CROP16_COMMON_OVERRIDES)
-    expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
+    expected["actor_rollout_ref.actor.optim.total_training_steps"] = (
+        optimizer_horizon
+    )
+    if world_size == 4:
+        expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
     mismatches = {
         path: (values.get(path), value)
         for path, value in expected.items()
@@ -299,7 +309,9 @@ class TrainableTGVFVerlLaunchPlan:
     def _assert_trainable_path(self) -> None:
         values = self.overrides
         _assert_crop16_mathematical_controls(
-            values, world_size=self.config.distributed.world_size
+            values,
+            world_size=self.config.distributed.world_size,
+            optimizer_horizon=self.config.scheduler.total_steps,
         )
         required = {
             "actor_rollout_ref.model.lora_rank": 0,
@@ -410,12 +422,16 @@ def build_trainable_tgvf_verl_launch_plan(
                 TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
             ),
             "trainer.total_training_steps": resolved_target,
-            "actor_rollout_ref.actor.optim.total_training_steps": resolved_target,
+            "actor_rollout_ref.actor.optim.total_training_steps": (
+                config.scheduler.total_steps
+            ),
             "trainer.save_freq": 1,
         }
     )
     _apply_crop16_mathematical_controls(
-        values, world_size=config.distributed.world_size
+        values,
+        world_size=config.distributed.world_size,
+        optimizer_horizon=config.scheduler.total_steps,
     )
     checkpoint_steps = (0, 1, 4, 8) if mode == "formal" else (0, 1)
     output_root = config.output.root

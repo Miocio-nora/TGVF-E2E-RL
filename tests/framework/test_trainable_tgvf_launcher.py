@@ -72,7 +72,7 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     )
     assert values["actor_rollout_ref.actor.fsdp_config.use_torch_compile"] is True
     assert values["actor_rollout_ref.actor.fsdp_config.model_dtype"] == "fp32"
-    assert values["actor_rollout_ref.actor.optim.total_training_steps"] == -1
+    assert values["actor_rollout_ref.actor.optim.total_training_steps"] == 8
     assert values["actor_rollout_ref.rollout.response_length"] == 20480
     assert "actor_rollout_ref.rollout.repetition_penalty" not in values
     assert values["data.filter_overlong_prompts"] is True
@@ -164,6 +164,9 @@ def test_world4_smoke_preserves_crop16_equal_micro_objective() -> None:
     assert world4.overrides[
         "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
     ] == 32
+    assert world4.overrides[
+        "actor_rollout_ref.actor.optim.total_training_steps"
+    ] == 8
     actor_batch = world4.overrides["actor_rollout_ref.rollout.custom"][
         "actor_batch_contract"
     ]

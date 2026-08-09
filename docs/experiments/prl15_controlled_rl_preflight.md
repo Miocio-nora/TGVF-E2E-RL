@@ -79,6 +79,14 @@ Formal launch remains blocked until that smoke completes with finite reward,
 finite Qwen gradients, a changed RP66 state, eight Qwen/optimizer shards, and
 a resumable paired checkpoint. Formal execution must use tmux.
 
+The completed Crop closure serialized
+`actor_rollout_ref.actor.optim.total_training_steps=-1` because its upstream
+trainer filled that field during construction. The project TaskRunner instead
+requires and preserves a positive run-bound scheduler horizon. PRL15 therefore
+binds this runtime-plumbing field to the configured eight-step horizon in both
+formal and one-step smoke modes. With the constant, zero-warmup scheduler this
+does not change the Crop-16 learning-rate sequence.
+
 ## Evaluation
 
 `configs/evaluation/prl15_rp66_step0_step8_coredev2511_plan.json` compares:
