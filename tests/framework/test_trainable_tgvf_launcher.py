@@ -29,6 +29,11 @@ from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
     build_trainable_tgvf_verl_launch_plan,
     compose_trainable_tgvf_verl_config,
 )
+from tgvf_rl.framework.verl.policy_checkpoint_lifecycle import (
+    POLICY_CHECKPOINT_LIFECYCLE_SCHEMA,
+    policy_checkpoint_lifecycle_from_runtime,
+)
+from tgvf_rl.policy.checkpoint import PilotRunIdentityHashes
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 
 
@@ -112,7 +117,16 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     assert custom["reward"]["judge_config_sha256"] == (
         plan.config.reward.judge_config_sha256
     )
-    assert custom["checkpoint_steps"] == [0, 1, 4, 8]
+    assert custom["checkpoint_steps"] == list(range(9))
+    assert custom["checkpoint_lifecycle"] == {
+        "schema_version": POLICY_CHECKPOINT_LIFECYCLE_SCHEMA,
+        "checkpoint_steps": list(range(9)),
+        "every_completed_step": True,
+        "rolling_retention_across_restarts": True,
+        "rolling_max_checkpoints": 2,
+        "permanent_steps": [8],
+        "permanent_directory": str(plan.config.output.root / "permanent-checkpoints"),
+    }
     assert custom["reference_diagnostic"] == {
         "enabled": False,
         "coefficient": 0.0,
@@ -141,6 +155,17 @@ def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> N
     assert smoke.overrides["actor_rollout_ref.rollout.custom"][
         "checkpoint_steps"
     ] == [0, 1]
+    assert smoke.overrides["actor_rollout_ref.rollout.custom"][
+        "checkpoint_lifecycle"
+    ] == {
+        "schema_version": POLICY_CHECKPOINT_LIFECYCLE_SCHEMA,
+        "checkpoint_steps": [0, 1],
+        "every_completed_step": False,
+        "rolling_retention_across_restarts": True,
+        "rolling_max_checkpoints": 2,
+        "permanent_steps": [],
+        "permanent_directory": "",
+    }
     for key in (
         "data.train_files",
         "data.val_files",
@@ -241,6 +266,8 @@ def test_functional_canary_is_an_isolated_low_cost_full_path_launch() -> None:
 
     custom = values["actor_rollout_ref.rollout.custom"]
     assert custom["checkpoint_steps"] == [0, 1]
+    assert custom["checkpoint_lifecycle"]["every_completed_step"] is False
+    assert custom["checkpoint_lifecycle"]["permanent_steps"] == []
     assert custom["functional_canary"] == {
         "minimum_successful_tgvf_observations": 1,
         "failure_boundary": "before_optimizer_mutation",
@@ -265,6 +292,25 @@ def test_functional_canary_is_an_isolated_low_cost_full_path_launch() -> None:
     assert composed.data.train_batch_size == 4
     assert composed.actor_rollout_ref.rollout.n == 2
     assert composed.trainer.total_training_steps == 1
+
+
+def test_composed_formal_lifecycle_is_every_step_and_permanently_keeps_step8() -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(_config(), mode="formal")
+    composed = compose_trainable_tgvf_verl_config(plan)
+    identity = PilotRunIdentityHashes.from_hashes(
+        plan.config.run_id, {"test": "0" * 64}
+    )
+
+    lifecycle = policy_checkpoint_lifecycle_from_runtime(
+        composed,
+        run_identity=identity,
+        world_size=8,
+    )
+
+    assert lifecycle is not None
+    assert lifecycle.checkpoint_steps == tuple(range(9))
+    assert lifecycle.every_completed_step is True
+    assert lifecycle.permanent_steps == (8,)
 
 
 def test_functional_canary_cannot_silently_shrink_a_matched_control_config() -> None:

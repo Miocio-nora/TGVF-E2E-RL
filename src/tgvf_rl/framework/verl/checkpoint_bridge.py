@@ -332,36 +332,7 @@ class PairedPolicyPilotVerlCheckpoint:
     def _read_committed_pair(
         self, destination: Path
     ) -> tuple["PilotProjectCheckpointState", PolicyPilotVerlCheckpointPair]:
-        from tgvf_rl.policy.checkpoint import PilotProjectCheckpointState
-
-        state_path = destination / POLICY_PILOT_PROJECT_STATE_FILENAME
-        pair_path = destination / POLICY_PILOT_CHECKPOINT_PAIR_FILENAME
-        if not state_path.is_file() or not pair_path.is_file():
-            raise ReplayMismatchError(
-                "Policy Pilot checkpoint is incomplete: committed pair files missing"
-            )
-        state = PilotProjectCheckpointState.from_checkpoint_mapping(
-            _read_json(state_path)
-        )
-        pair = PolicyPilotVerlCheckpointPair.from_checkpoint_mapping(
-            _read_json(pair_path)
-        )
-        mismatches: dict[str, object] = {}
-        expected = {
-            "run_id": state.run_identity.run_id,
-            "optimizer_step": state.progress.optimizer_step,
-            "project_state_sha256": state.integrity_sha256,
-            "upstream_save_contents": self.fsdp2.checkpoint_save_contents,
-            "upstream_load_contents": self.fsdp2.checkpoint_load_contents,
-        }
-        for name, value in expected.items():
-            if getattr(pair, name) != value:
-                mismatches[name] = (getattr(pair, name), value)
-        if mismatches:
-            raise ReplayMismatchError(
-                f"Policy Pilot checkpoint pair identity mismatch: {mismatches!r}"
-            )
-        return state, pair
+        return read_committed_policy_checkpoint_pair(destination, fsdp2=self.fsdp2)
 
     def _restore_project_owners(self, state: "PilotProjectCheckpointState") -> None:
         before_progress = self.state_port.progress()
@@ -480,6 +451,55 @@ def _local_checkpoint_path(
     if not path.is_absolute():
         raise ValueError("Policy Pilot checkpoint local_path must be absolute")
     return path
+
+
+def read_committed_policy_checkpoint_pair(
+    destination: str | Path,
+    *,
+    fsdp2: FSDP2BridgeConfig,
+) -> tuple["PilotProjectCheckpointState", PolicyPilotVerlCheckpointPair]:
+    """Read one committed project/upstream pair without restoring its owners.
+
+    Checkpoint retention and permanent-copy code must make deletion decisions
+    from the same integrity-checked commit marker used by clean-process resume.
+    Keeping this reader beside the save/load bridge prevents a weaker directory
+    naming check from being mistaken for checkpoint identity.
+    """
+
+    from tgvf_rl.policy.checkpoint import PilotProjectCheckpointState
+
+    validate_fsdp2_checkpoint_config(fsdp2)
+    path = Path(destination)
+    if not path.is_absolute():
+        raise ValueError("Policy Pilot checkpoint destination must be absolute")
+    state_path = path / POLICY_PILOT_PROJECT_STATE_FILENAME
+    pair_path = path / POLICY_PILOT_CHECKPOINT_PAIR_FILENAME
+    if not state_path.is_file() or not pair_path.is_file():
+        raise ReplayMismatchError(
+            "Policy Pilot checkpoint is incomplete: committed pair files missing"
+        )
+    state = PilotProjectCheckpointState.from_checkpoint_mapping(
+        _read_json(state_path)
+    )
+    pair = PolicyPilotVerlCheckpointPair.from_checkpoint_mapping(
+        _read_json(pair_path)
+    )
+    mismatches: dict[str, object] = {}
+    expected = {
+        "run_id": state.run_identity.run_id,
+        "optimizer_step": state.progress.optimizer_step,
+        "project_state_sha256": state.integrity_sha256,
+        "upstream_save_contents": fsdp2.checkpoint_save_contents,
+        "upstream_load_contents": fsdp2.checkpoint_load_contents,
+    }
+    for name, value in expected.items():
+        if getattr(pair, name) != value:
+            mismatches[name] = (getattr(pair, name), value)
+    if mismatches:
+        raise ReplayMismatchError(
+            f"Policy Pilot checkpoint pair identity mismatch: {mismatches!r}"
+        )
+    return state, pair
 
 
 def _write_json_exclusive(path: Path, value: Mapping[str, object]) -> None:

@@ -70,6 +70,10 @@ from .data_bridge import (
 )
 from .exact_replay_engine import _operational_base_identity_sha256
 from .padding_compat import install_verl_sdpa_padding_compat
+from .policy_checkpoint_lifecycle import (
+    PolicyCheckpointLifecycle,
+    policy_checkpoint_lifecycle_from_runtime,
+)
 from .policy_weight_sync import (
     PolicyWeightSyncState,
     load_latest_policy_version,
@@ -1035,6 +1039,11 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             # and captures the initial data cursor without constructing a GPU
             # worker.  Keep it ahead of upstream FSDP/vLLM initialization.
             state = PolicyPilotTrainerCheckpointState.from_environment(self)
+            checkpoint_lifecycle = policy_checkpoint_lifecycle_from_runtime(
+                self.config,
+                run_identity=state.run_identity(),
+                world_size=state.config.distributed.world_size,
+            )
             # Pinned veRL constructs its LLM server manager from a module
             # global.  Replace that construction boundary only while upstream
             # creates workers so the normal trainer/lifecycle remains intact,
@@ -1067,6 +1076,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 )
             original_actor_wg = self.actor_rollout_wg
             self._policy_checkpoint_state = state
+            self._policy_checkpoint_lifecycle = checkpoint_lifecycle
             self.actor_rollout_wg = PairedActorWorkerGroup(original_actor_wg, state)
             if getattr(self, "ref_policy_wg", None) is original_actor_wg:
                 self.ref_policy_wg = self.actor_rollout_wg
@@ -1126,6 +1136,11 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                             "paired Policy resume step differs from veRL"
                         )
                     self.checkpoint_manager.update_weights(self.global_steps)
+                    lifecycle = getattr(
+                        self, "_policy_checkpoint_lifecycle", None
+                    )
+                    if isinstance(lifecycle, PolicyCheckpointLifecycle):
+                        lifecycle.finalize_saved_checkpoint(completed_step)
                     self._shutdown_dump_executor()
                     return None
                 except Exception as training_error:
@@ -1450,8 +1465,14 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 raise RuntimeError("no Policy checkpoint is pending")
             if global_steps != self.global_steps:
                 raise RuntimeError("weight-sync and trainer checkpoint steps differ")
+            lifecycle = getattr(self, "_policy_checkpoint_lifecycle", None)
             try:
-                return super(PolicyPilotRayPPOTrainer, self)._save_checkpoint()
+                if isinstance(lifecycle, PolicyCheckpointLifecycle):
+                    lifecycle.prepare_for_save(global_steps)
+                result = super(PolicyPilotRayPPOTrainer, self)._save_checkpoint()
+                if isinstance(lifecycle, PolicyCheckpointLifecycle):
+                    lifecycle.finalize_saved_checkpoint(global_steps)
+                return result
             finally:
                 self._policy_checkpoint_pending = False
 

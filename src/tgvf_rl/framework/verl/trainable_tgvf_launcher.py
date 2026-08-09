@@ -56,6 +56,7 @@ from .native_deepeyes_runtime import (
     NATIVE_DEEPEYES_POLICY_LOSS_MODE,
 )
 from .policy_main import compose_pinned_verl_config, run_pinned_verl_config
+from .policy_checkpoint_lifecycle import POLICY_CHECKPOINT_LIFECYCLE_SCHEMA
 from .policy_task_runner import (
     POLICY_METRICS_PATH_ENV,
     POLICY_REFERENCE_DIAGNOSTIC_ENV,
@@ -334,6 +335,8 @@ def _replace_custom_record(
             "source_aware": True,
         }
     )
+    every_completed_step = mode == "formal"
+    permanent_steps = [TRAINABLE_TGVF_FORMAL_TARGET] if every_completed_step else []
     custom.update(
         {
             "schema_version": TRAINABLE_TGVF_LAUNCH_SCHEMA,
@@ -362,6 +365,19 @@ def _replace_custom_record(
                 "observation_source": "not_computed",
             },
             "checkpoint_steps": list(checkpoint_steps),
+            "checkpoint_lifecycle": {
+                "schema_version": POLICY_CHECKPOINT_LIFECYCLE_SCHEMA,
+                "checkpoint_steps": list(checkpoint_steps),
+                "every_completed_step": every_completed_step,
+                "rolling_retention_across_restarts": True,
+                "rolling_max_checkpoints": 2,
+                "permanent_steps": permanent_steps,
+                "permanent_directory": (
+                    str(output_root / "permanent-checkpoints")
+                    if permanent_steps
+                    else ""
+                ),
+            },
             "runtime_state_directory": str(output_root / "runtime-policy-state"),
             "metrics_path": str(output_root / "metrics.jsonl"),
             "launch_mode": mode,
@@ -514,6 +530,30 @@ class TrainableTGVFVerlLaunchPlan:
             "observation_source": "not_computed",
         }:
             raise ValueError("trainable TGVF reference diagnostic must be disabled")
+        expected_checkpoint_steps = (
+            list(range(TRAINABLE_TGVF_FORMAL_TARGET + 1))
+            if self.mode == "formal"
+            else [0, 1]
+        )
+        expected_permanent_steps = (
+            [TRAINABLE_TGVF_FORMAL_TARGET] if self.mode == "formal" else []
+        )
+        if custom.get("checkpoint_steps") != expected_checkpoint_steps:
+            raise ValueError("trainable TGVF checkpoint schedule differs")
+        if custom.get("checkpoint_lifecycle") != {
+            "schema_version": POLICY_CHECKPOINT_LIFECYCLE_SCHEMA,
+            "checkpoint_steps": expected_checkpoint_steps,
+            "every_completed_step": self.mode == "formal",
+            "rolling_retention_across_restarts": True,
+            "rolling_max_checkpoints": 2,
+            "permanent_steps": expected_permanent_steps,
+            "permanent_directory": (
+                str(self.config.output.root / "permanent-checkpoints")
+                if self.mode == "formal"
+                else ""
+            ),
+        }:
+            raise ValueError("trainable TGVF checkpoint lifecycle differs")
         if self.environment.get(POLICY_REFERENCE_DIAGNOSTIC_ENV) != "0":
             raise ValueError("trainable TGVF reference diagnostic environment differs")
         requires_observation = self.environment.get(
@@ -614,7 +654,11 @@ def build_trainable_tgvf_verl_launch_plan(
     if mode == "canary":
         _assert_functional_canary_config(config)
         _apply_functional_canary_controls(values)
-    checkpoint_steps = (0, 1, 4, 8) if mode == "formal" else (0, 1)
+    checkpoint_steps = (
+        tuple(range(TRAINABLE_TGVF_FORMAL_TARGET + 1))
+        if mode == "formal"
+        else (0, 1)
+    )
     output_root = config.output.root
     environment = dict(base.environment)
     if mode == "smoke":

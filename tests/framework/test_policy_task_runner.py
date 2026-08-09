@@ -397,6 +397,50 @@ def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None
     assert events[4][1]["checkpoint_seconds"] >= 0.0
 
 
+def test_checkpoint_lifecycle_wraps_upstream_save_in_prepare_finalize_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+
+    class FakeLifecycle:
+        def prepare_for_save(self, step):
+            events.append(("prepare", step))
+
+        def finalize_saved_checkpoint(self, step):
+            events.append(("finalize", step))
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            events.append(("upstream_save", self.global_steps))
+            return "saved"
+
+    monkeypatch.setattr(
+        policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle
+    )
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.global_steps = 3
+    trainer._policy_checkpoint_pending = True
+    trainer._policy_checkpoint_lifecycle = FakeLifecycle()
+
+    assert trainer._commit_policy_checkpoint_after_weight_sync(3) == "saved"
+    assert events == [
+        ("prepare", 3),
+        ("upstream_save", 3),
+        ("finalize", 3),
+    ]
+    assert trainer._policy_checkpoint_pending is False
+
+
 def test_policy_metrics_publish_step_and_cumulative_records_idempotently(
     tmp_path,
 ) -> None:
@@ -891,7 +935,9 @@ def test_policy_fit_preserves_training_and_recovery_checkpoint_failures() -> Non
     )
 
 
-def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> None:
+def test_completed_resume_checkpoint_exits_without_an_extra_update(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     events: list[object] = []
     checkpoint_root = tmp_path / "checkpoints"
     checkpoint = checkpoint_root / "global_step_1"
@@ -932,6 +978,14 @@ def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> 
         def shutdown(self):
             events.append("runtime_shutdown")
 
+    class FakeLifecycle:
+        def finalize_saved_checkpoint(self, step):
+            events.append(("finalize", step))
+
+    monkeypatch.setattr(
+        policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle
+    )
+
     trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
     trainer = object.__new__(trainer_cls)
     trainer.config = SimpleNamespace(
@@ -944,12 +998,19 @@ def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> 
     )
     trainer.total_training_steps = 1
     trainer._policy_checkpoint_state = SimpleNamespace(last_resume=None)
+    trainer._policy_checkpoint_lifecycle = FakeLifecycle()
     trainer.checkpoint_manager = CheckpointManager()
     trainer.llm_server_manager = RuntimeManager()
 
     assert _completed_resume_checkpoint_step(trainer) == 1
     assert trainer.fit() is None
-    assert events == ["load", ("sync", 1), "shutdown", "runtime_shutdown"]
+    assert events == [
+        "load",
+        ("sync", 1),
+        ("finalize", 1),
+        "shutdown",
+        "runtime_shutdown",
+    ]
 
 
 def test_policy_fit_closes_dataloader_workers_and_runtime_after_failure() -> None:
