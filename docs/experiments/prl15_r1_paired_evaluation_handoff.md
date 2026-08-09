@@ -15,12 +15,24 @@ It binds the active
 run contract and compares:
 
 - step 0: base Qwen3-VL-8B-Instruct plus the immutable stage-1 RP66 state;
-- step 8: `global_step_8/actor/huggingface` plus the content-addressed RP66
-  step-8 state referenced by `latest-lora-snapshot.json`.
+- step 8: the Qwen parameters reconstructed from the four
+  `global_step_8/actor/model_world_size_4_rank_*.pt` FSDP shards, plus the
+  content-addressed RP66 step-8 state referenced by
+  `latest-lora-snapshot.json`.
 
 Both arms use the training-run TGVF prompt, schema, six-call limit, sampling
 contract, tasks, and canonical four-rank partition.  A Qwen-only or RP66-only
 state is rejected by the paired snapshot backend.
+
+The FSDP shards contain two parameter namespaces: the trainable full Qwen
+state and `tgvf_adapter.*`.  The embedded `actor/huggingface` directory holds
+configuration/tokenizer files, not merged model weights.  Before step-8
+inference, the evaluator therefore wraps the pinned veRL FSDP merger, verifies
+that every tensor belongs to either the exact base-Qwen key closure or the
+exact RP66 snapshot closure, removes only `tgvf_adapter.*`, and atomically
+writes `step8/runtime/qwen-only-bundle/model/`.  RP66 is then loaded once from
+its separate same-step snapshot.  The bundle receipt makes this CPU-side merge
+resumable and prevents accidental double embedding of RP66.
 
 ## CoreDev coverage and scorer
 
@@ -65,13 +77,20 @@ official seven-suite scorer instead.
 ## Automatic tmux watcher
 
 The watcher may be started before training finishes.  It first waits for the
-step-8 tracker, Hugging Face model tree, and RP66 pointer, then requires two
-consecutive free-memory polls on GPUs 0--7 before constructing either vLLM
-arm.  No `CUDA_VISIBLE_DEVICES` value should be set on the watcher itself;
-each inference worker and the judge receive an explicit physical binding.
+step-8 tracker, complete FSDP model shards, paired checkpoint markers, and
+RP66 pointer, then requires two consecutive free-memory polls on the requested
+GPUs before constructing either vLLM arm.  No `CUDA_VISIBLE_DEVICES` value
+should be set on the watcher itself; each inference worker and the judge
+receive an explicit physical binding.
+
+This command is the matched scientific evaluation, not the cheap code-function
+smoke.  New implementation changes should first pass a tiny, low-cost smoke;
+only then should this complete step-0/step-8 matched protocol be scheduled.
+For the current allocation, request GPUs 0--3 only so unrelated work on 4--7
+cannot block the watcher.
 
 ```bash
-cd /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl15-eval-handoff
+cd /nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl15-rp66-matched
 
 tmux -L prl15_r1_eval new-session -d -s paired_eval \
   "env \
@@ -85,7 +104,7 @@ tmux -L prl15_r1_eval new-session -d -s paired_eval \
       --mode run \
       --wait-for-step8 \
       --wait-for-gpus \
-      --gpu-ids 0 1 2 3 4 5 6 7 \
+      --gpu-ids 0 1 2 3 \
     > .runlogs/prl15_r1_step0_step8_paired_eval.log 2>&1"
 ```
 
@@ -97,10 +116,12 @@ the pinned judge devices 2/3.
 
 Historical same-protocol runs imply approximately 40--50 minutes for both
 inference arms in parallel and 10--25 minutes for materialization/judging, or
-about 55--75 minutes total on eight GPUs.  Four-GPU sequential execution is
-approximately 1.7--2.2 hours.  Durable rank JSONLs, immutable paired snapshot
-receipts, VLMEvalKit `--reuse`, and accepted arm summaries make reruns
-resumable without repeating completed inference.
+about 55--75 minutes total on eight GPUs.  Four-GPU execution runs the two arms
+sequentially.  Including the one-time CPU FSDP-to-HF merge, budget about
+2 hours to 2 hours 25 minutes until the paired summary; this merge allowance
+is an estimate until measured on the final step-8 shards.  Durable rank JSONLs,
+the reusable Qwen-only bundle, immutable paired snapshot receipts, VLMEvalKit
+`--reuse`, and accepted arm summaries avoid repeating completed work.
 
 The final output is below the R1 training root at
 `evaluation/PRL15-R1-RP66-COREDEV2511-STEP0-STEP8-SAME-PROTOCOL-V1/` and must

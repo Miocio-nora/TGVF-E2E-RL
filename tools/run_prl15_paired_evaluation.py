@@ -36,6 +36,9 @@ from tgvf_rl.evaluation.policy_coredev_scoring import (  # noqa: E402
     MODEL_NAME as EVALUATED_MODEL,
     materialize_policy_coredev_scoring_views,
 )
+from tgvf_rl.evaluation.policy_paired_qwen_materialization import (  # noqa: E402
+    materialize_qwen_only_policy_checkpoint,
+)
 from tgvf_rl.policy.run_config import (  # noqa: E402
     load_policy_e2e_smoke_run_config,
 )
@@ -141,13 +144,12 @@ def _resolve_repo_path(value: str) -> Path:
 
 def _step8_sources(run: Any) -> tuple[Path, Path]:
     checkpoint = run.output.checkpoint_directory / "global_step_8"
-    model_path = checkpoint / "actor/huggingface"
     pointer = run.output.root / "runtime-policy-state/latest-lora-snapshot.json"
-    return model_path, pointer
+    return checkpoint, pointer
 
 
 def _wait_for_step8(run: Any, *, timeout_seconds: int, poll_seconds: int) -> None:
-    model_path, pointer = _step8_sources(run)
+    checkpoint, pointer = _step8_sources(run)
     deadline = time.monotonic() + timeout_seconds
     while True:
         latest = run.output.checkpoint_directory / "latest_checkpointed_iteration.txt"
@@ -157,7 +159,25 @@ def _wait_for_step8(run: Any, *, timeout_seconds: int, poll_seconds: int) -> Non
                 latest_step = int(latest.read_text(encoding="utf-8").strip())
             except (OSError, ValueError):
                 latest_step = None
-        if latest_step == 8 and model_path.is_dir() and pointer.is_file():
+        actor = checkpoint / "actor"
+        required = (
+            checkpoint / "data.pt",
+            actor / "fsdp_config.json",
+            actor / "huggingface/config.json",
+            actor / "tgvf_policy_checkpoint_pair.json",
+            actor / "tgvf_policy_project_state.json",
+            *(
+                actor
+                / f"model_world_size_{run.distributed.world_size}_rank_{rank}.pt"
+                for rank in range(run.distributed.world_size)
+            ),
+        )
+        if (
+            latest_step == 8
+            and checkpoint.is_dir()
+            and pointer.is_file()
+            and all(path.is_file() and path.stat().st_size > 0 for path in required)
+        ):
             return
         if time.monotonic() >= deadline:
             raise TimeoutError("timed out waiting for the complete PRL15 step8 closure")
@@ -243,7 +263,14 @@ def _materialize_arm(
         qwen_model = Path(run.model.revision_or_path)
         rp66_pointer = None
     else:
-        qwen_model, rp66_pointer = _step8_sources(run)
+        checkpoint, rp66_pointer = _step8_sources(run)
+        qwen_model = materialize_qwen_only_policy_checkpoint(
+            policy_config_path=_resolve_repo_path(plan["policy_config"]),
+            optimizer_step=step,
+            checkpoint_path=checkpoint,
+            rp66_pointer_path=rp66_pointer,
+            bundle_path=paths["root"] / "runtime/qwen-only-bundle",
+        )
     materialize_paired_tgvf_policy_benchmark_config(
         evaluation_id=f"{plan['evaluation_id']}-{arm.upper()}",
         policy_config_path=_resolve_repo_path(plan["policy_config"]),
