@@ -9,6 +9,7 @@ from dataclasses import replace
 import pytest
 import torch
 
+from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
@@ -20,6 +21,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _BoundTGVFVisualQualityRuntimeJudge,
     _build_reward_pipeline,
     _default_metrics_factory,
+    _final_token_materialization,
     _rp66_matched_source_route,
     _rp66_response_budget_controls,
     _trainable_rp66_launch_mode,
@@ -372,3 +374,48 @@ def test_policy_layout_focus_and_final_expansion_share_one_idempotent_coordinate
     )
     assert rope_inputs[0] == initial_ids
     assert rope_inputs[1][: len(conditioning_ids)] == conditioning_ids
+
+    # A sampled assistant can emit Qwen's reserved visual tokens.  They remain
+    # exact policy-owned input IDs, but are not extra multimodal items and must
+    # not be offered to Qwen's M-RoPE image-discovery path as such.
+    policy_suffix = (1, 2, 3, 1)
+    final_ids = initial_ids + policy_suffix
+    policy_positions = tuple(range(len(initial_ids), len(final_ids)))
+    malformed_policy_layout = builder.expand_recorded_visual_sequence(
+        final_ids,
+        trajectory_source_visual=source,
+        observation_handles=(),
+        policy_token_positions=policy_positions,
+    )
+    assert tuple(malformed_policy_layout.input_ids[0].tolist()) == final_ids
+    assert rope_inputs[-1] == initial_ids + (3, 2, 3, 3)
+
+    # The same malformed opener outside policy ownership still proves real
+    # prompt/environment corruption and remains fatal.
+    with pytest.raises(ReplayMismatchError, match="malformed native"):
+        builder.expand_recorded_visual_sequence(
+            initial_ids + (1,),
+            trajectory_source_visual=source,
+            observation_handles=(),
+        )
+
+    with pytest.raises(ReplayMismatchError, match="ownership overlaps"):
+        builder.expand_recorded_visual_sequence(
+            initial_ids,
+            trajectory_source_visual=source,
+            observation_handles=(),
+            policy_token_positions=(positions[0],),
+        )
+
+
+def test_final_materialization_tracks_only_policy_owned_positions() -> None:
+    record = _record(tool_call_count=2, prompt_ids=(1, 2))
+
+    final_ids, native_rows, policy_positions = _final_token_materialization(
+        record.prompt_ids,
+        record.trajectory_payload,
+    )
+
+    assert final_ids == record.prompt_ids + record.response_ids
+    assert native_rows == ((100, 101), (102, 103, 104))
+    assert policy_positions == (2, 3, 4, 7, 8, 9)

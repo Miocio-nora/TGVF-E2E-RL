@@ -2263,6 +2263,9 @@ class PolicyCoreDevEvaluator:
             enabled_tool_names=self.run.protocol.enabled_tool_names,
             cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
             assistant_dialect=self.assistant_dialect,
+            forbidden_policy_token_ids=(
+                self.layout_builder.forbidden_policy_visual_token_ids
+            ),
         )
         from tgvf_rl.environment.agent_loop import RolloutRequest
 

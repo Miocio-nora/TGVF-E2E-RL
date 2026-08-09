@@ -609,6 +609,9 @@ class _Qwen3PolicyTrajectoryComponents:
                 direct_only=direct_only,
                 response_budget_scope=response_budget_scope,
                 single_response_max_tokens=single_response_max_tokens,
+                forbidden_policy_token_ids=(
+                    self.layout_builder.forbidden_policy_visual_token_ids
+                ),
             )
 
         reward_source = _reward_source_from_sample_fields(sample_fields)
@@ -941,7 +944,7 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
         ):
             raise IdentityMismatchError("trajectory model/policy changed before replay")
 
-        final_ids, native_rows = _final_token_materialization(
+        final_ids, native_rows, policy_token_positions = _final_token_materialization(
             self.initial_prompt_token_ids,
             trajectory,
         )
@@ -956,6 +959,7 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
             final_ids,
             trajectory_source_visual=self.source_visual,
             observation_handles=handles,
+            policy_token_positions=policy_token_positions,
         )
         if tuple(int(value) for value in expanded.input_ids[0].tolist()) != final_ids:
             raise ReplayMismatchError(
@@ -1222,7 +1226,7 @@ def _source_visual_positions(
 
 def _final_token_materialization(
     initial_prompt_token_ids: tuple[int, ...], trajectory: TrajectoryRecord
-) -> tuple[tuple[int, ...], tuple[tuple[int, ...], ...]]:
+) -> tuple[tuple[int, ...], tuple[tuple[int, ...], ...], tuple[int, ...]]:
     observation_rows = {
         call.assistant_turn_index: observation.template_token_ids
         for call, observation in zip(
@@ -1235,15 +1239,19 @@ def _final_token_materialization(
     }
     final = list(initial_prompt_token_ids)
     native_rows: list[tuple[int, ...]] = []
+    policy_token_positions: list[int] = []
     for expected_turn, turn in enumerate(trajectory.assistant_turns):
         if turn.turn_index != expected_turn:
             raise ReplayMismatchError("assistant turns are not contiguous")
+        policy_token_positions.extend(
+            range(len(final), len(final) + len(turn.tokens.token_ids))
+        )
         final.extend(turn.tokens.token_ids)
         row = observation_rows.get(turn.turn_index, error_rows.get(turn.turn_index))
         if row is not None:
             native_rows.append(tuple(row))
             final.extend(row)
-    return tuple(final), tuple(native_rows)
+    return tuple(final), tuple(native_rows), tuple(policy_token_positions)
 
 
 def _build_reward_pipeline(config: object) -> PilotRewardPipeline:

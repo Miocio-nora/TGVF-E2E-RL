@@ -256,6 +256,40 @@ def test_recorded_deepstack_materializes_on_embedding_device_and_target_dtype() 
     assert all(branch.dtype == torch.float64 for branch in branches)
 
 
+def test_policy_visual_controls_outside_recorded_blocks_keep_text_embeddings() -> None:
+    """Exact replay scatters vision by ownership positions, never token ID."""
+
+    model = TinyQwen()
+    store, replay = _replay(branches=3, calls=0)
+    request = injected_request_from_recorded(
+        resolve_replay_request(store, replay, ReplayConsumer.POLICY)
+    )
+    # Stand in for policy-sampled vision_start/image_pad/vision_end IDs at
+    # three non-visual positions.  Their numeric identity is deliberately
+    # irrelevant to the exact injected path.
+    policy_positions = (5, 6, 7)
+    policy_control_ids = (29, 30, 31)
+    exact_ids = request.input_ids.clone()
+    exact_ids[0, list(policy_positions)] = torch.tensor(policy_control_ids)
+    request = replace(request, input_ids=exact_ids)
+    vocabulary_embeddings = model.model.language_model.get_input_embeddings()(
+        exact_ids
+    )
+
+    inputs_embeds, visual_mask = materialize_inputs_embeds(model, request)
+
+    assert tuple(int(value) for value in request.input_ids[0].tolist()) == tuple(
+        int(value) for value in exact_ids[0].tolist()
+    )
+    assert not bool(visual_mask[0, list(policy_positions)].any().item())
+    torch.testing.assert_close(
+        inputs_embeds[0, list(policy_positions)],
+        vocabulary_embeddings[0, list(policy_positions)],
+        rtol=0,
+        atol=0,
+    )
+
+
 def test_cpu_offloaded_embedding_uses_its_accelerator_mesh_device(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

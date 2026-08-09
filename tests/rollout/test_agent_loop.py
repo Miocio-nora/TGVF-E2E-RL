@@ -217,6 +217,57 @@ def test_invalid_direct_format_retains_behavior_row(
     assert context.protocol_valid is False
 
 
+@pytest.mark.parametrize("sampled_control_id", (151_652, 151_655, 151_653))
+def test_policy_sampled_visual_control_is_a_local_invalid_trajectory(
+    sampled_control_id: int,
+) -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampled = _sample(
+        "B",
+        _pilot_fixture_sampling(version),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    sampled = replace(
+        sampled,
+        token_ids=(sampled_control_id,),
+        token_byte_spans=(TokenByteSpan(0, sampled_control_id, 0, 1),),
+    )
+    behavior_store = BehaviorTraceStore()
+    runtime = Runtime()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=runtime,
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=4,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        forbidden_policy_token_ids=(151_652, 151_655, 151_653),
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "visual-control", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.INVALID_FORMAT
+    assert trajectory.final_answer is None
+    assert trajectory.tool_calls == ()
+    assert trajectory.observations == ()
+    assert runtime.contexts == []
+    assert trajectory.assistant_turns[0].tokens.token_ids == (sampled_control_id,)
+    trace = behavior_store.resolve(trajectory.assistant_turns[0].behavior_trace)
+    assert trace.behavior.sampled_token_ids == (sampled_control_id,)
+    assert trace.behavior.logprobs == sampled.behavior_logprobs
+
+
 def test_direct_only_keeps_the_existing_instruct_direct_answer_path() -> None:
     version = PolicyVersion("smoke", 0, SHA)
     sampled = _sample(

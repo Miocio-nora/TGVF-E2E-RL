@@ -231,6 +231,7 @@ class FrameworkNeutralAgentLoop:
             ResponseBudgetScope.POLICY_SAMPLED
         ),
         single_response_max_tokens: int | None = None,
+        forbidden_policy_token_ids: tuple[int, ...] = (),
     ) -> None:
         self.sampler = sampler
         self.tool_runtime = tool_runtime
@@ -252,6 +253,14 @@ class FrameworkNeutralAgentLoop:
         self.direct_only = direct_only
         self.response_budget_scope = response_budget_scope
         self.single_response_max_tokens = single_response_max_tokens
+        forbidden = tuple(forbidden_policy_token_ids)
+        if any(type(token_id) is not int or token_id < 0 for token_id in forbidden):
+            raise ValueError(
+                "forbidden policy token IDs must be non-negative exact integers"
+            )
+        if len(set(forbidden)) != len(forbidden):
+            raise ValueError("forbidden policy token IDs must be unique")
+        self.forbidden_policy_token_ids = frozenset(forbidden)
         names = tuple(enabled_tool_names)
         if not names or len(names) != len(set(names)):
             raise ValueError("enabled tool names must be non-empty and unique")
@@ -377,6 +386,13 @@ class FrameworkNeutralAgentLoop:
                     stop_reason=sampled.stop_reason,
                 )
             )
+            if self.forbidden_policy_token_ids.intersection(sampled.token_ids):
+                # Native visual delimiters/placeholders are environment-owned.
+                # Preserve the exact sampled IDs/logprobs in this trajectory,
+                # but never reinterpret them as a visual item or execute a
+                # tool from the same malformed assistant turn.
+                stop = TrajectoryStop.INVALID_FORMAT
+                break
             if (
                 request.sampling_contract is not None
                 and self.response_budget_scope is ResponseBudgetScope.TOTAL_RESPONSE

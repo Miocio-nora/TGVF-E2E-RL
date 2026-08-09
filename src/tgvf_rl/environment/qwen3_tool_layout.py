@@ -374,6 +374,7 @@ class Qwen3NativeToolLayoutBuilder:
         *,
         trajectory_source_visual: TrajectorySourceVisual,
         observation_handles: Sequence[object],
+        policy_token_positions: Sequence[int] = (),
     ) -> _ExpandedNativeVisualLayout:
         """Expand/validate a sequence containing only recorded visual items.
 
@@ -400,7 +401,23 @@ class Qwen3NativeToolLayoutBuilder:
                     "recorded visual observations are out of order"
                 )
             expected.append(_record_visual_geometry(record))
-        return self._expand_sequence(tuple(token_ids), tuple(expected))
+        return self._expand_sequence(
+            tuple(token_ids),
+            tuple(expected),
+            policy_token_positions=policy_token_positions,
+        )
+
+    @property
+    def forbidden_policy_visual_token_ids(self) -> tuple[int, int, int]:
+        """Native visual controls which an assistant may not synthesize.
+
+        These IDs are framework-owned delimiters/placeholders, not textual
+        assistant protocol.  The runtime records an assistant that samples one
+        exactly, but terminates that trajectory as invalid format before the
+        token can be mistaken for a new multimodal item.
+        """
+
+        return (self.vision_start_id, self.image_pad_id, self.vision_end_id)
 
     def build_crop(
         self,
@@ -477,19 +494,54 @@ class Qwen3NativeToolLayoutBuilder:
         expected: tuple[
             tuple[tuple[int, int, int], int, tuple[int, ...] | None], ...
         ],
+        *,
+        policy_token_positions: Sequence[int] = (),
     ) -> _ExpandedNativeVisualLayout:
+        policy_positions = tuple(policy_token_positions)
+        if any(type(position) is not int for position in policy_positions):
+            raise TypeError("policy token positions must contain exact integers")
+        if len(set(policy_positions)) != len(policy_positions):
+            raise ReplayMismatchError("policy token positions contain duplicates")
+        if any(
+            position < 0 or position >= len(token_ids) for position in policy_positions
+        ):
+            raise ReplayMismatchError("policy token position lies outside the sequence")
+        policy_position_set = frozenset(policy_positions)
         blocks = _vision_blocks(
             token_ids,
             vision_start_id=self.vision_start_id,
             image_pad_id=self.image_pad_id,
             vision_end_id=self.vision_end_id,
+            ignored_vision_start_positions=policy_position_set,
         )
         if len(blocks) != len(expected):
             raise ReplayMismatchError(
                 "native visual block count differs from recorded visual items"
             )
+        if any(
+            position in policy_position_set
+            for start, _pad_start, _pad_end, end in blocks
+            for position in range(start, end)
+        ):
+            raise ReplayMismatchError(
+                "policy token ownership overlaps a recorded visual placeholder"
+            )
+
+        # Qwen3's M-RoPE helper discovers images by looking at every
+        # ``vision_start`` token.  A policy-sampled control token is retained in
+        # the real input IDs and receives its ordinary text position, but must
+        # not be presented to that discovery helper as an environment-owned
+        # image opener.  ``vision_end`` is inert to Qwen3's discovery logic and
+        # is used only in this equal-length position-calculation view.
+        rope_token_ids = tuple(
+            self.vision_end_id
+            if index in policy_position_set and token_id == self.vision_start_id
+            else token_id
+            for index, token_id in enumerate(token_ids)
+        )
 
         expanded: list[int] = []
+        rope_expanded: list[int] = []
         expanded_positions: list[tuple[int, ...]] = []
         cursor = 0
         for block, (grid, merge_size, recorded_positions) in zip(
@@ -497,10 +549,13 @@ class Qwen3NativeToolLayoutBuilder:
         ):
             _start, pad_start, pad_end, end = block
             expanded.extend(token_ids[cursor:pad_start])
+            rope_expanded.extend(rope_token_ids[cursor:pad_start])
             count = _merged_token_count(grid, merge_size)
             positions = tuple(range(len(expanded), len(expanded) + count))
             expanded.extend((self.image_pad_id,) * count)
+            rope_expanded.extend((self.image_pad_id,) * count)
             expanded.extend(token_ids[pad_end:end])
+            rope_expanded.extend(rope_token_ids[pad_end:end])
             expanded_positions.append(positions)
             if recorded_positions is not None and positions != recorded_positions:
                 raise ReplayMismatchError(
@@ -508,13 +563,15 @@ class Qwen3NativeToolLayoutBuilder:
                 )
             cursor = end
         expanded.extend(token_ids[cursor:])
+        rope_expanded.extend(rope_token_ids[cursor:])
 
         input_ids = torch.tensor((tuple(expanded),), dtype=torch.long)
+        rope_input_ids = torch.tensor((tuple(rope_expanded),), dtype=torch.long)
         attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
         grids = torch.tensor(tuple(item[0] for item in expected), dtype=torch.long)
         with torch.no_grad():
             result = self.get_rope_index(
-                input_ids=input_ids,
+                input_ids=rope_input_ids,
                 image_grid_thw=grids,
                 video_grid_thw=None,
                 attention_mask=attention_mask,
@@ -610,11 +667,15 @@ def _vision_blocks(
     vision_start_id: int,
     image_pad_id: int,
     vision_end_id: int,
+    ignored_vision_start_positions: frozenset[int] = frozenset(),
 ) -> tuple[tuple[int, int, int, int], ...]:
     blocks: list[tuple[int, int, int, int]] = []
     index = 0
     while index < len(token_ids):
         if token_ids[index] != vision_start_id:
+            index += 1
+            continue
+        if index in ignored_vision_start_positions:
             index += 1
             continue
         start = index
