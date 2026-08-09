@@ -9644,3 +9644,31 @@ than inferred from a script name or prior conversation.
   and replay-integrity checks. Legacy Pilot `M=4` and Stage3-shaped `M=1`
   remain separately covered. The v1 checkpoint mapping and the existing
   step-3 project-state bytes are unchanged.
+- Formal step 4 (2026-08-10): exact recovery from step 3 completed the full
+  matched batch in `1348.86 s`, including `58.82 s` checkpointing and `9.41 s`
+  RP66 weight publication. The batch produced answer reward `.7734375`,
+  conditional-tool reward `.578125`, format-error rate `.03515625`, 213
+  successful observations, and exactly one legal unexecuted seventh cap
+  attempt. The complete four-rank Qwen/RP66 pair is committed at step 4; the
+  tracker is `4` and the rolling generations are steps 3 and 4.
+- Policy visual-control containment (2026-08-10): step 5 stopped before its
+  optimizer update because one policy response sampled Qwen's reserved
+  `<|vision_start|>` token without a native image placeholder body. The old
+  layout scanner misclassified every such policy-owned token as an
+  environment image and killed the whole batch. The corrected agent loop
+  retains the exact action IDs and behavior logprobs, marks only that
+  trajectory invalid-format, and excludes it from further tool turns. Exact
+  replay identifies visual content solely through recorded source/tool-image
+  positions; its temporary M-RoPE view treats only the policy-owned opener as
+  text, while actual replay IDs remain byte-for-byte unchanged. Recorded
+  source and tool visual blocks remain strict, so genuine replay corruption is
+  still fatal. The official reward extraction and weights are unchanged.
+- Recovery gate for that correction: a low-cost targeted replay milestone ran
+  before another matched batch. It reproduces the failure with Qwen's real
+  visual token IDs and covers all three policy-owned visual controls through
+  the current and frozen-reference injected-forward paths. The active tree
+  passed 64 focused CPU/integration tests plus Ruff and diff checks. A formal
+  preflight then re-read the exact step-3/step-4 committed pairs, their metrics
+  and policy steps, the step-4 tracker, and the runtime `0..8` save schedule.
+  No step-5 optimizer mutation occurred in the failed process; formal resume
+  therefore starts at the exact step-4 boundary.
