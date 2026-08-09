@@ -112,6 +112,19 @@ def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> N
         assert smoke.overrides[key] == formal.overrides[key]
 
 
+def test_labeled_smoke_gets_an_isolated_output_closure() -> None:
+    smoke = build_trainable_tgvf_verl_launch_plan(
+        _config(), mode="smoke", smoke_id="actor-rollout-only-v1"
+    )
+
+    assert smoke.overrides["trainer.default_local_dir"].endswith(
+        "/smoke/actor-rollout-only-v1/checkpoints"
+    )
+    assert smoke.environment[POLICY_METRICS_PATH_ENV].endswith(
+        "/smoke/actor-rollout-only-v1/metrics.jsonl"
+    )
+
+
 def test_dedicated_plan_rejects_an_enabled_policy_lora() -> None:
     valid = build_trainable_tgvf_verl_launch_plan(_config(), mode="smoke")
     with pytest.raises(ValueError, match="lora_rank"):

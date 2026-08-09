@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any
 
@@ -372,7 +373,14 @@ def _resolved_policy_metrics_path(
         raise ValueError(
             f"{POLICY_METRICS_PATH_ENV} must remain inside output.root"
         ) from error
-    if relative not in {Path("metrics.jsonl"), Path("smoke/metrics.jsonl")}:
+    labeled_smoke = (
+        len(relative.parts) == 3
+        and relative.parts[0] == "smoke"
+        and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", relative.parts[1])
+        is not None
+        and relative.parts[2] == "metrics.jsonl"
+    )
+    if relative not in {Path("metrics.jsonl"), Path("smoke/metrics.jsonl")} and not labeled_smoke:
         raise ValueError(
             f"{POLICY_METRICS_PATH_ENV} must select formal or smoke metrics"
         )

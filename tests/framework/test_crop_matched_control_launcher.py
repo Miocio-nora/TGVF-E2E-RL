@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import pytest
 
 from tgvf_rl.framework.verl.crop_matched_control_launcher import (
+    CROP_MATCHED_CONTROL_COMPARISON_SPEC,
     CROP_MATCHED_CONTROL_OUTPUT_ROOT,
-    MATCHED_OVERRIDE_PATHS,
     CropMatchedControlPlan,
     build_crop_matched_control_plan,
+    load_control_comparison_spec,
 )
 from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
     build_trainable_tgvf_verl_launch_plan,
@@ -45,9 +47,10 @@ def _plans():
 
 def test_control_matches_every_declared_common_runtime_value() -> None:
     control, rp66 = _plans()
+    comparison = load_control_comparison_spec(CROP_MATCHED_CONTROL_COMPARISON_SPEC)
 
-    assert set(control.matched_values) == set(MATCHED_OVERRIDE_PATHS)
-    for path in MATCHED_OVERRIDE_PATHS:
+    assert set(control.matched_values) == set(comparison.required_equal)
+    for path in comparison.required_equal:
         assert control.launch.overrides[path] == rp66.overrides[path]
     assert control.launch.overrides[
         "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
@@ -55,6 +58,8 @@ def test_control_matches_every_declared_common_runtime_value() -> None:
     assert control.launch.overrides["trainer.n_gpus_per_node"] == 4
     assert control.launch.overrides["data.train_batch_size"] == 16
     assert control.launch.overrides["actor_rollout_ref.rollout.n"] == 16
+    assert control.comparison_note == comparison.note
+    assert control.unclassified_differences
 
 
 def test_control_keeps_only_the_expected_crop_arm_differences() -> None:
@@ -86,4 +91,37 @@ def test_control_rejects_a_non_step8_launch() -> None:
                 },
             ),
             matched_values=control.matched_values,
+            arm_differences=control.arm_differences,
+            unclassified_differences=control.unclassified_differences,
+            comparison_spec_path=control.comparison_spec_path,
+            comparison_note=control.comparison_note,
         )
+
+
+def test_common_values_follow_the_active_rp66_plan_without_python_edits(
+    tmp_path: Path,
+) -> None:
+    original = load_control_comparison_spec(CROP_MATCHED_CONTROL_COMPARISON_SPEC)
+    payload = {
+        "schema_version": "tgvf.control-comparison.v1",
+        "note": "test live declaration",
+        "required_equal": ["actor_rollout_ref.rollout.temperature"],
+        "arm_specific": ["trainer.experiment_name"],
+    }
+    path = tmp_path / "comparison.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    rp66_config = load_policy_e2e_smoke_run_config(_RP66)
+    control = build_crop_matched_control_plan(
+        load_deepeyes_native_run_contract(_CROP),
+        rp66_config,
+        comparison_spec_path=path,
+    )
+    rp66 = build_trainable_tgvf_verl_launch_plan(rp66_config, mode="formal")
+
+    assert original.required_equal
+    assert control.matched_values == {
+        "actor_rollout_ref.rollout.temperature": rp66.overrides[
+            "actor_rollout_ref.rollout.temperature"
+        ]
+    }
+    assert control.comparison_note == "test live declaration"

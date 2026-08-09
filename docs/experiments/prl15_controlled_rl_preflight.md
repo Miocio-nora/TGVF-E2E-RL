@@ -34,12 +34,31 @@ launcher `tools/launch_prl15_crop_ws4_micro1_control.py` constructs a Crop arm
 and programmatically proves the common runtime fields equal the RP66 formal
 plan before composition or launch.
 
+The comparison declaration is data, not Python code. It lives at
+`configs/policy/controls/prl15_crop_rp66_matched.json` and has two lists:
+
+- `required_equal`: copied from the current RP66 launch plan into Crop, then
+  checked for equality;
+- `arm_specific`: expected scientific/runtime differences between Crop and
+  TGVF.
+
+Every other observed difference is preserved in
+`unclassified_differences`, but is informational rather than fatal. Therefore
+changing a later batch size, micro batch, capacity, scheduler, or other common
+variable requires editing the run config and, only if its scientific role has
+changed, this declaration. It does not require editing a hard-coded Python
+allowlist. Missing `required_equal` fields and unequal declared controls remain
+fatal because those would make the named comparison false.
+
 ## Runtime isolation and reference diagnostic
 
-Smoke metrics are now forced to `output.root/smoke/metrics.jsonl`; formal
-metrics are forced to `output.root/metrics.jsonl`. The TaskRunner accepts no
-other metrics destination, preventing a successful smoke from contaminating
-the formal history.
+Smoke metrics are forced to either the legacy `output.root/smoke/metrics.jsonl`
+or a labeled closure `output.root/smoke/<smoke-id>/metrics.jsonl`; formal
+metrics are forced to `output.root/metrics.jsonl`. A labeled smoke also owns
+its own checkpoints and logs. The TaskRunner accepts only a safe lowercase
+label inside this layout, preventing a successful smoke from contaminating the
+formal history while allowing repeated engineering canaries without moving or
+overwriting old evidence.
 
 Both mathematical KL coefficients are zero. PRL15 consequently disables the
 extra frozen-reference forward and uses an ActorRollout worker role. This
@@ -64,11 +83,35 @@ The state being compared is a pair, not a single model:
 
 The existing full-model CoreDev backend is Crop-only (`native_pixels=True`)
 and the older TGVF backend assumes a policy LoRA. Neither is a valid shortcut
-for this paired full-Qwen/RP66 state. Evaluation must freeze and load both
-members of each pair; treating RP66 as a policy LoRA or evaluating only the
-Qwen checkpoint would answer a different question. The plan is deliberately
-marked `awaiting_formal_step8_paired_snapshot` until formal training produces
-that closure.
+for this paired full-Qwen/RP66 state. The dedicated
+`full_model_trainable_rp66` backend now freezes and loads both members. It
+rejects a Qwen HF closure containing `tgvf_adapter.*` keys, installs the exact
+RP66 state through the vLLM Adapter update RPC, requires the worker ACK, and
+uses a combined Qwen-tree/RP66-state policy identity in every result row.
+
+`tools/run_prl15_paired_evaluation.py` is the resumable executor. It reads the
+plan and active run config rather than duplicating paths or hyperparameters.
+With eight GPU IDs it runs step0 and step8 concurrently as two four-rank arms;
+with four it runs them sequentially. `--wait-for-step8` makes it safe to start
+the evaluator before training: it waits for checkpoint step 8, the embedded HF
+tree, and the fixed RP66 pointer, then prepares, runs, resumes, and scores both
+arms. The plan remains marked `awaiting_formal_step8_paired_snapshot` until the
+formal closure exists.
+
+The intended unattended command is:
+
+```bash
+python tools/run_prl15_paired_evaluation.py \
+  --mode run --wait-for-step8 --gpu-ids 0 1 2 3 4 5 6 7
+```
+
+For a new engineering canary, use an explicit label and keep W&B disabled:
+
+```bash
+python -m tgvf_rl.framework.verl.trainable_tgvf_launcher \
+  --run-config configs/policy/runs/prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_matched_8step_gpu0123.toml \
+  --mode smoke --smoke-id actor-rollout-only-v1
+```
 
 ## Git execution identity
 

@@ -59,9 +59,12 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVF_VLLM_WORKER_EXTENSION_FQN,
     TGVFFocusMaterializationResult,
+    _adapter_owned_state_to_utility_wire,
     _focus_from_utility_wire,
     _source_from_utility_wire,
     _tensor_to_utility_wire,
+    _validate_adapter_update_ack,
+    adapter_owned_state_sha256,
 )
 from tgvf_rl.framework.vllm import (
     ContentAddressedVLLMTurnRNG,
@@ -113,6 +116,12 @@ from .policy_full_model_snapshot import (
     full_model_snapshot_identity_record,
     load_full_model_evaluation_snapshot,
 )
+from .policy_paired_tgvf_snapshot import (
+    PAIRED_TGVF_EVALUATION_BACKEND,
+    PairedTGVFEvaluationSnapshot,
+    load_paired_tgvf_snapshot,
+    paired_tgvf_snapshot_identity_record,
+)
 
 
 POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v1"
@@ -134,7 +143,11 @@ _LEGACY_COREDEV_SINGLE_IMAGE_COUNT = 2240
 _SHA256_LENGTH = 64
 LORA_ADAPTER_EVALUATION_BACKEND = "lora_adapter"
 POLICY_EVALUATION_BACKENDS = frozenset(
-    {LORA_ADAPTER_EVALUATION_BACKEND, FULL_MODEL_EVALUATION_BACKEND}
+    {
+        LORA_ADAPTER_EVALUATION_BACKEND,
+        FULL_MODEL_EVALUATION_BACKEND,
+        PAIRED_TGVF_EVALUATION_BACKEND,
+    }
 )
 
 
@@ -165,6 +178,8 @@ class PolicyCoreDevConfig:
     full_model_materialization_receipt_path: Path | None = None
     full_model_materialization_receipt_sha256: str | None = None
     required_snapshot_identity_sha256: str | None = None
+    paired_snapshot_receipt_path: Path | None = None
+    paired_snapshot_receipt_sha256: str | None = None
     evaluation_protocol: str = TRAINING_RUN_EVALUATION_PROTOCOL
     schema_version: str = POLICY_COREDEV_SCHEMA
 
@@ -180,6 +195,7 @@ class PolicyCoreDevConfig:
         for name in (
             "full_model_snapshot_manifest_path",
             "full_model_materialization_receipt_path",
+            "paired_snapshot_receipt_path",
         ):
             value = getattr(self, name)
             if value is not None:
@@ -274,6 +290,10 @@ class PolicyCoreDevConfig:
             self.full_model_materialization_receipt_sha256,
             self.required_snapshot_identity_sha256,
         )
+        paired_binding = (
+            self.paired_snapshot_receipt_path,
+            self.paired_snapshot_receipt_sha256,
+        )
         if self.snapshot_backend == LORA_ADAPTER_EVALUATION_BACKEND:
             if self.lora_pointer_path is None:
                 raise ValueError("LoRA snapshot backend requires a pointer path")
@@ -283,7 +303,9 @@ class PolicyCoreDevConfig:
                 raise ValueError("generic LoRA benchmark requires a pointer SHA256")
             if any(value is not None for value in full_model_binding):
                 raise ValueError("LoRA snapshot backend forbids full-model bindings")
-        else:
+            if any(value is not None for value in paired_binding):
+                raise ValueError("LoRA snapshot backend forbids paired bindings")
+        elif self.snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
             if self.lora_pointer_path is not None or self.lora_pointer_sha256 is not None:
                 raise ValueError("full-model snapshot backend forbids LoRA bindings")
             if not all(value is not None for value in full_model_binding):
@@ -294,6 +316,17 @@ class PolicyCoreDevConfig:
                 raise ValueError(
                     "full-model snapshots are supported only by official-visible evaluation"
                 )
+            if any(value is not None for value in paired_binding):
+                raise ValueError("full-model snapshot backend forbids paired bindings")
+        else:
+            if self.lora_pointer_path is not None or self.lora_pointer_sha256 is not None:
+                raise ValueError("paired snapshot backend forbids policy-LoRA bindings")
+            if any(value is not None for value in full_model_binding):
+                raise ValueError("paired snapshot backend forbids Crop full-model bindings")
+            if not all(value is not None for value in paired_binding):
+                raise ValueError("paired snapshot backend requires its receipt binding")
+            if self.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL:
+                raise ValueError("paired TGVF snapshots require training-run evaluation")
         for name, digest in (
             ("lora_pointer_sha256", self.lora_pointer_sha256),
             (
@@ -313,6 +346,7 @@ class PolicyCoreDevConfig:
                 "required_snapshot_identity_sha256",
                 self.required_snapshot_identity_sha256,
             ),
+            ("paired_snapshot_receipt_sha256", self.paired_snapshot_receipt_sha256),
         ):
             if digest is not None:
                 _require_sha256(digest, name=name)
@@ -375,6 +409,8 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "full_model_materialization_receipt_path",
         "full_model_materialization_receipt_sha256",
         "required_snapshot_identity_sha256",
+        "paired_snapshot_receipt_path",
+        "paired_snapshot_receipt_sha256",
         "evaluation_protocol",
     }
     if not required <= set(payload) or not set(payload) <= required | optional:
@@ -419,7 +455,11 @@ class PolicyEvaluationSnapshot:
         return self.lora.policy_version
 
 
-PolicyEvaluationSubject = PolicyEvaluationSnapshot | FullModelEvaluationSnapshot
+PolicyEvaluationSubject = (
+    PolicyEvaluationSnapshot
+    | FullModelEvaluationSnapshot
+    | PairedTGVFEvaluationSnapshot
+)
 
 
 def _assert_policy_snapshot_binding(
@@ -468,6 +508,15 @@ def _assert_policy_snapshot_binding(
             snapshot.manifest.run_contract_file_sha256
         ):
             raise ValueError(f"{owner} full-model run contract bytes differ")
+    if isinstance(snapshot, PairedTGVFEvaluationSnapshot):
+        if config.required_snapshot_identity_sha256 is not None:
+            raise ValueError("paired snapshot must not use Crop snapshot identity")
+        if config.paired_snapshot_receipt_sha256 is None:
+            raise ValueError("paired snapshot receipt binding is absent")
+        if _sha256_file(config.policy_config_path) != (
+            snapshot.receipt.policy_config_sha256
+        ):
+            raise ValueError(f"{owner} paired run config bytes differ")
 
 
 def _load_full_model_from_paths(
@@ -508,6 +557,18 @@ def load_policy_evaluation_snapshot(
             manifest_path=config.full_model_snapshot_manifest_path,
             receipt_path=config.full_model_materialization_receipt_path,
         )
+    if config.snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
+        assert config.paired_snapshot_receipt_path is not None
+        assert config.paired_snapshot_receipt_sha256 is not None
+        if _sha256_file(config.paired_snapshot_receipt_path) != (
+            config.paired_snapshot_receipt_sha256
+        ):
+            raise ValueError("paired TGVF snapshot receipt file SHA256 differs")
+        loaded = load_paired_tgvf_snapshot(
+            config.paired_snapshot_receipt_path, runtime_lightweight=True
+        )
+        _assert_policy_snapshot_binding(config, loaded, owner="paired TGVF snapshot")
+        return loaded
 
     run = load_policy_e2e_smoke_run_config(
         config.policy_config_path, allow_external_agent_loop_config=True
@@ -535,6 +596,10 @@ def frozen_policy_state_root(config: PolicyCoreDevConfig) -> Path:
 
 def frozen_full_model_state_root(config: PolicyCoreDevConfig) -> Path:
     return config.output_root / "runtime" / "frozen-full-model-state"
+
+
+def frozen_paired_tgvf_state_root(config: PolicyCoreDevConfig) -> Path:
+    return config.output_root / "runtime" / "frozen-paired-tgvf-state"
 
 
 def _write_immutable_snapshot_file(path: Path, payload: bytes) -> None:
@@ -585,6 +650,16 @@ def freeze_policy_evaluation_snapshot(
             ),
         )
         return load_frozen_policy_evaluation_snapshot(config)
+    if isinstance(snapshot, PairedTGVFEvaluationSnapshot):
+        assert config.paired_snapshot_receipt_path is not None
+        _write_immutable_snapshot_file(
+            frozen_paired_tgvf_state_root(config) / "snapshot-receipt.json",
+            _read_regular_file_bytes(
+                config.paired_snapshot_receipt_path,
+                owner="paired TGVF snapshot receipt",
+            ),
+        )
+        return load_frozen_policy_evaluation_snapshot(config)
 
     if snapshot.run.run_id != snapshot.policy_version.run_id:
         raise ValueError("cannot freeze a policy snapshot from another run")
@@ -623,6 +698,16 @@ def load_frozen_policy_evaluation_snapshot(
             manifest_path=frozen_root / "snapshot-manifest.json",
             receipt_path=frozen_root / "materialization-receipt.json",
         )
+    if config.snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
+        receipt = frozen_paired_tgvf_state_root(config) / "snapshot-receipt.json"
+        assert config.paired_snapshot_receipt_sha256 is not None
+        if _sha256_file(receipt) != config.paired_snapshot_receipt_sha256:
+            raise ValueError("frozen paired TGVF receipt SHA256 differs")
+        loaded = load_paired_tgvf_snapshot(receipt, runtime_lightweight=True)
+        _assert_policy_snapshot_binding(
+            config, loaded, owner="frozen paired TGVF snapshot"
+        )
+        return loaded
 
     run = load_policy_e2e_smoke_run_config(
         config.policy_config_path, allow_external_agent_loop_config=True
@@ -1327,8 +1412,12 @@ def _evaluation_protocol_identity(
     snapshot: PolicyEvaluationSubject,
 ) -> dict[str, object]:
     if config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
-        if not isinstance(snapshot, PolicyEvaluationSnapshot):
-            raise ValueError("training-run evaluation requires a LoRA snapshot")
+        if not isinstance(
+            snapshot, (PolicyEvaluationSnapshot, PairedTGVFEvaluationSnapshot)
+        ):
+            raise ValueError(
+                "training-run evaluation requires a LoRA or paired TGVF snapshot"
+            )
         protocol = snapshot.run.protocol
         return {
             "profile": TRAINING_RUN_EVALUATION_PROTOCOL,
@@ -1420,8 +1509,8 @@ def policy_evaluation_identity(
         and task_sha256 != config.task_manifest_sha256
     ):
         raise ValueError("bound policy benchmark task manifest SHA256 changed")
-    policy_snapshot = (
-        {
+    if isinstance(snapshot, PolicyEvaluationSnapshot):
+        policy_snapshot = {
             "run_id": snapshot.policy_version.run_id,
             "run_identity_sha256": snapshot.lora.run_identity_sha256,
             "optimizer_step": snapshot.policy_version.optimizer_step,
@@ -1431,9 +1520,10 @@ def policy_evaluation_identity(
             "tensor_file_sha256": snapshot.lora.tensor_file_sha256,
             "request_sha256": snapshot.lora.request_sha256,
         }
-        if isinstance(snapshot, PolicyEvaluationSnapshot)
-        else full_model_snapshot_identity_record(snapshot)
-    )
+    elif isinstance(snapshot, PairedTGVFEvaluationSnapshot):
+        policy_snapshot = paired_tgvf_snapshot_identity_record(snapshot)
+    else:
+        policy_snapshot = full_model_snapshot_identity_record(snapshot)
     policy_config_path = Path(
         getattr(config, "policy_config_path", snapshot.contract.source_path)
         if isinstance(snapshot, FullModelEvaluationSnapshot)
@@ -1463,7 +1553,10 @@ def policy_evaluation_identity(
             "inference_concurrency_per_gpu": config.inference_concurrency_per_gpu,
         },
     }
-    if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+    if (
+        config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+        or isinstance(snapshot, PairedTGVFEvaluationSnapshot)
+    ):
         content["protocol"] = _evaluation_protocol_identity(config, snapshot)
     return {**content, "identity_sha256": _canonical_json_sha256(content)}
 
@@ -1536,6 +1629,30 @@ class StandaloneTGVFVLLMManager:
         self.native_pixels = native_pixels
         self.turns: dict[str, _TurnRoute] = {}
         self.backend_ids: dict[str, list[str]] = {}
+
+    async def update_adapter_owned_state(
+        self,
+        *,
+        optimizer_step: int,
+        state: Mapping[str, torch.Tensor],
+    ) -> dict[str, object]:
+        """Install the RP66 member of a paired evaluation snapshot."""
+
+        state_sha256 = adapter_owned_state_sha256(state)
+        result = await self.engine.collective_rpc(
+            "tgvf_update_adapter_owned_state",
+            kwargs={
+                "optimizer_step": optimizer_step,
+                "state_sha256": state_sha256,
+                "state_wire": _adapter_owned_state_to_utility_wire(state),
+            },
+        )
+        return _validate_adapter_update_ack(
+            _single_collective(result, operation="Adapter-owned state update"),
+            expected_optimizer_step=optimizer_step,
+            expected_state_sha256=state_sha256,
+            expected_tensor_count=len(state),
+        )
 
     async def materialize_source(
         self,
@@ -1729,6 +1846,29 @@ async def build_standalone_manager(
     if isinstance(snapshot, FullModelEvaluationSnapshot):
         return await build_full_model_standalone_manager(config, snapshot)
 
+    if isinstance(snapshot, PairedTGVFEvaluationSnapshot):
+        from vllm import AsyncEngineArgs
+        from vllm.v1.engine.async_llm import AsyncLLM
+
+        os.environ["TGVF_POLICY_RUN_CONFIG_PATH"] = str(
+            Path(snapshot.receipt.policy_config_path).resolve()
+        )
+        engine_args = AsyncEngineArgs(
+            **_paired_tgvf_engine_kwargs(config, snapshot)
+        )
+        engine = AsyncLLM.from_engine_args(engine_args)
+        manager = StandaloneTGVFVLLMManager(
+            engine, None, capture_hidden=True, native_pixels=False
+        )
+        acknowledgement = await manager.update_adapter_owned_state(
+            optimizer_step=snapshot.policy_version.optimizer_step,
+            state=snapshot.rp66_tensors,
+        )
+        if acknowledgement["state_sha256"] != snapshot.receipt.rp66_state_sha256:
+            engine.shutdown()
+            raise RuntimeError("paired evaluator loaded a different RP66 state")
+        return manager, engine, snapshot.run
+
     from vllm import AsyncEngineArgs
     from vllm.lora.request import LoRARequest
     from vllm.v1.engine.async_llm import AsyncLLM
@@ -1753,6 +1893,38 @@ async def build_standalone_manager(
         ),
     )
     return manager, engine, run
+
+
+def _paired_tgvf_engine_kwargs(
+    config: PolicyCoreDevConfig, snapshot: PairedTGVFEvaluationSnapshot
+) -> dict[str, object]:
+    run = snapshot.run
+    return {
+        "model": str(snapshot.model_path),
+        "tokenizer": run.model.revision_or_path,
+        "dtype": "bfloat16",
+        "trust_remote_code": True,
+        "distributed_executor_backend": "mp",
+        "max_model_len": config.max_model_len,
+        "max_num_seqs": config.inference_concurrency_per_gpu,
+        "max_num_batched_tokens": config.max_num_batched_tokens,
+        "enable_chunked_prefill": config.enable_chunked_prefill,
+        "enable_prefix_caching": False,
+        "gpu_memory_utilization": config.gpu_memory_utilization,
+        "logprobs_mode": "processed_logprobs",
+        "enforce_eager": False,
+        "seed": run.rollout_rng.master_seed,
+        "enable_lora": False,
+        "worker_extension_cls": TGVF_VLLM_WORKER_EXTENSION_FQN,
+        "enable_mm_embeds": True,
+        "mm_encoder_attn_backend": TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
+        "hf_overrides": {"architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]},
+        "mm_processor_cache_gb": 0,
+        "limit_mm_per_prompt": {
+            "image": 1 + run.protocol.maximum_tool_calls,
+            "video": 0,
+        },
+    }
 
 
 def _standalone_engine_kwargs(
@@ -2174,14 +2346,35 @@ def trajectory_audit_payload(
         weights_sha256=str(policy_snapshot.get("weights_sha256")),
     ):
         raise ValueError("trajectory policy differs from evaluation identity")
+    snapshot_backend = policy_snapshot.get(
+        "snapshot_backend", LORA_ADAPTER_EVALUATION_BACKEND
+    )
+    if snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
+        snapshot_fields = {
+            "policy_snapshot_backend": PAIRED_TGVF_EVALUATION_BACKEND,
+            "policy_paired_snapshot_identity_sha256": policy_snapshot[
+                "snapshot_identity_sha256"
+            ],
+            "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
+            "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
+            "policy_rp66_storage_sha256": policy_snapshot[
+                "rp66_storage_sha256"
+            ],
+        }
+    elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
+        snapshot_fields = {
+            "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
+            "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
+            "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
+        }
+    else:
+        raise ValueError("training-run trajectory snapshot backend differs")
     payload = {
         "schema_version": POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA,
         "selection_reasons": ["representative_rollout_zero"],
         "evaluation_identity_sha256": identity_sha256,
         "policy_run_identity_sha256": policy_snapshot["run_identity_sha256"],
-        "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
-        "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
-        "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
+        **snapshot_fields,
         "policy_config_identity_sha256": evaluation_identity[
             "policy_run_config_identity_sha256"
         ],
@@ -2271,6 +2464,18 @@ def validate_policy_benchmark_result(
             ],
             "policy_materialized_model_tree_sha256": policy_snapshot[
                 "materialized_model_tree_sha256"
+            ],
+        }
+    elif snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
+        snapshot_expected = {
+            "policy_snapshot_backend": PAIRED_TGVF_EVALUATION_BACKEND,
+            "policy_paired_snapshot_identity_sha256": policy_snapshot[
+                "snapshot_identity_sha256"
+            ],
+            "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
+            "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
+            "policy_rp66_storage_sha256": policy_snapshot[
+                "rp66_storage_sha256"
             ],
         }
     elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:

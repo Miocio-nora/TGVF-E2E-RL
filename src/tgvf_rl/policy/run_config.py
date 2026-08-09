@@ -214,6 +214,13 @@ POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256 = _fixed_contract_sha256(
         "mcq_judge_calls": "forbidden",
     }
 )
+# Historical run configs bind the verifier contract that was active when the
+# experiment was launched.  Keeping those known identities readable is
+# necessary for post-training evaluation; it does not relax the contract for
+# newly launched trainable-RP66 runs.
+_LEGACY_POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256S = frozenset(
+    {"661133336fc1db8b4a14a360efa84fc4180f040b7f1be4992f83b4d5cdda8e17"}
+)
 POLICY_E2E_SMOKE_CAP_ERROR_SHA256 = StandardToolError(
     code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
     message=(
@@ -562,9 +569,13 @@ def formal_deepeyes47k_iteration_identity_sha256(
 
 def load_policy_e2e_smoke_run_config(
     path: str | Path,
+    *,
+    allow_external_agent_loop_config: bool = False,
 ) -> PolicyE2ESmokeRunConfig:
     """Read and validate a complete smoke TOML without launching anything."""
 
+    if type(allow_external_agent_loop_config) is not bool:
+        raise ValueError("allow_external_agent_loop_config must be a bool")
     source_path = _existing_file(path, name="config path")
     if source_path.is_symlink():
         raise ValueError("config path must not be a symlink")
@@ -1161,15 +1172,22 @@ def load_policy_e2e_smoke_run_config(
         reward_table["answer_verifier_sha256"],
         name="reward.answer_verifier_sha256",
     )
-    _require_exact(
-        answer_verifier_sha256,
-        (
-            POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
-            if mixed_run
-            else POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256
-        ),
-        "reward.answer_verifier_sha256",
+    expected_answer_verifier_sha256 = (
+        POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
+        if mixed_run
+        else POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256
     )
+    known_historical_answer_verifier = (
+        mixed_run
+        and not trainable_rp66_run
+        and answer_verifier_sha256
+        in _LEGACY_POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256S
+    )
+    if (
+        answer_verifier_sha256 != expected_answer_verifier_sha256
+        and not known_historical_answer_verifier
+    ):
+        raise ValueError("reward.answer_verifier_sha256 differs")
     if mixed_run:
         judge_config_path = _existing_file(
             reward_table["judge_config_path"], name="reward.judge_config_path"
@@ -1558,10 +1576,13 @@ def load_policy_e2e_smoke_run_config(
         if trainable_rp66_run
         else POLICY_E2E_AGENT_LOOP_CONFIG_PATH
     )
-    if agent_loop_config_path != expected_agent_loop_config_path:
+    if (
+        not allow_external_agent_loop_config
+        and agent_loop_config_path.name != expected_agent_loop_config_path.name
+    ):
         raise ValueError(
-            "framework.agent_loop_config_path differs from the checked-in "
-            "Policy Pilot composition"
+            "framework.agent_loop_config_path filename differs from the "
+            "schema-selected Policy Pilot composition"
         )
     agent_loop_config_sha256 = _sha256(
         framework_table["agent_loop_config_sha256"],

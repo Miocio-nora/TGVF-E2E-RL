@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 from pathlib import Path
@@ -16,6 +17,7 @@ from tgvf_rl.framework.verl.policy_weight_sync import (
     TGVFPolicyCheckpointEngineManager,
     load_latest_lora_snapshot,
     load_latest_policy_version,
+    load_lora_snapshot_pointer,
     load_policy_weight_sync_request,
     lora_parameter_mapping_sha256,
     publish_policy_weight_sync_request,
@@ -109,6 +111,15 @@ def test_rank_zero_publishes_exact_snapshot_without_changing_stream(
         lora_parameter_mapping_sha256(expected_mapping),
     )
     assert tuple(sorted(snapshot.tensors)) == tuple(sorted(expected_mapping))
+    assert hashlib.sha256(snapshot.pointer_bytes).hexdigest() == (
+        snapshot.pointer_file_sha256
+    )
+    assert hashlib.sha256(snapshot.manifest_bytes).hexdigest() == (
+        snapshot.manifest_file_sha256
+    )
+    assert hashlib.sha256(snapshot.tensor_bytes).hexdigest() == (
+        snapshot.tensor_file_sha256
+    )
     for name, tensor in expected_mapping.items():
         torch.testing.assert_close(snapshot.tensors[name], tensor.cpu(), rtol=0, atol=0)
 
@@ -170,6 +181,41 @@ def test_strict_latest_load_rejects_pointer_tampering(tmp_path: Path) -> None:
 
     with pytest.raises(ReplayMismatchError, match="integrity mismatch"):
         load_latest_policy_version(state)
+
+
+def test_bound_historical_pointer_is_not_redirected_by_latest(
+    tmp_path: Path,
+) -> None:
+    state, _ = _publish(tmp_path, step=0)
+    historical = state.directory / "step-0-pointer.json"
+    historical.write_bytes(state.latest_path.read_bytes())
+    historical_sha256 = hashlib.sha256(historical.read_bytes()).hexdigest()
+    _publish(tmp_path, step=8)
+
+    snapshot = load_lora_snapshot_pointer(
+        state,
+        pointer_path=historical,
+        expected_pointer_file_sha256=historical_sha256,
+        expected_optimizer_step=0,
+    )
+
+    assert snapshot.policy_version.optimizer_step == 0
+    assert snapshot.pointer_file == historical
+    with pytest.raises(ReplayMismatchError, match="pointer file digest"):
+        load_lora_snapshot_pointer(
+            state,
+            pointer_path=historical,
+            expected_pointer_file_sha256="0" * 64,
+        )
+
+
+def test_bound_pointer_rejects_symlink(tmp_path: Path) -> None:
+    state, _ = _publish(tmp_path, step=1)
+    symlink = state.directory / "pointer-symlink.json"
+    symlink.symlink_to(state.latest_path.name)
+
+    with pytest.raises(ReplayMismatchError, match="missing or unreadable"):
+        load_lora_snapshot_pointer(state, pointer_path=symlink)
 
 
 def test_step_mismatch_fails_before_lora_stream_is_consumed(tmp_path: Path) -> None:

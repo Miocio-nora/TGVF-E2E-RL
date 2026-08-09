@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 import os
 from pathlib import Path
+import re
 from types import MappingProxyType
 from typing import Literal
 
@@ -295,11 +296,17 @@ def build_trainable_tgvf_verl_launch_plan(
     *,
     mode: TrainableTGVFLaunchMode = "formal",
     target_step: int | None = None,
+    smoke_id: str | None = None,
 ) -> TrainableTGVFVerlLaunchPlan:
     if config.schema_version != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA:
         raise ValueError("trainable TGVF launcher requires the RP66 run schema")
     if mode not in {"formal", "smoke"}:
         raise ValueError(f"unsupported trainable TGVF launch mode: {mode!r}")
+    if smoke_id is not None:
+        if mode != "smoke":
+            raise ValueError("smoke_id is valid only in smoke mode")
+        if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", smoke_id) is None:
+            raise ValueError("smoke_id must be a safe lowercase run label")
     resolved_target = (
         TRAINABLE_TGVF_FORMAL_TARGET
         if mode == "formal"
@@ -349,6 +356,8 @@ def build_trainable_tgvf_verl_launch_plan(
     environment = dict(base.environment)
     if mode == "smoke":
         output_root = output_root / "smoke"
+        if smoke_id is not None:
+            output_root = output_root / smoke_id
         values.update(
             {
                 "trainer.experiment_name": config.run_id + "-SMOKE",
@@ -423,6 +432,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--run-config", required=True, type=Path)
     parser.add_argument("--mode", choices=("formal", "smoke"), default="formal")
     parser.add_argument("--target-step", type=int)
+    parser.add_argument("--smoke-id")
     parser.add_argument("--compose-only", action="store_true")
     args = parser.parse_args(argv)
     config = load_policy_e2e_smoke_run_config(args.run_config)
@@ -430,6 +440,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         config,
         mode=args.mode,
         target_step=args.target_step,
+        smoke_id=args.smoke_id,
     )
     os.environ.update(plan.environment)
     if args.compose_only:

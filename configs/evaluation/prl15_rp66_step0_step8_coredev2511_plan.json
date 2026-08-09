@@ -7,6 +7,14 @@
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "expected_task_count": 2511,
   "expected_single_image_count": 2240,
+  "executor": {
+    "path": "tools/run_prl15_paired_evaluation.py",
+    "snapshot_backend": "full_model_trainable_rp66",
+    "supports_wait_before_training": true,
+    "supports_resume": true,
+    "four_gpu_schedule": "step0_then_step8",
+    "eight_gpu_schedule": "step0_and_step8_parallel"
+  },
   "protocol": {
     "evaluation_protocol": "training_run",
     "prompt_sha256": "e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633",

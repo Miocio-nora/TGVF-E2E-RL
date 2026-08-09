@@ -37,6 +37,14 @@ def test_paired_benchmark_plan_binds_the_training_protocol_and_both_states() -> 
     assert [arm["optimizer_step"] for arm in plan["arms"]] == [0, 8]
     assert plan["required_pairing"]["qwen_and_rp66_optimizer_step_must_match"]
     assert plan["required_pairing"]["do_not_treat_rp66_as_policy_lora"]
+    assert plan["executor"] == {
+        "path": "tools/run_prl15_paired_evaluation.py",
+        "snapshot_backend": "full_model_trainable_rp66",
+        "supports_wait_before_training": True,
+        "supports_resume": True,
+        "four_gpu_schedule": "step0_then_step8",
+        "eight_gpu_schedule": "step0_and_step8_parallel",
+    }
 
 
 def test_paired_benchmark_task_manifest_bytes_are_still_pinned() -> None:

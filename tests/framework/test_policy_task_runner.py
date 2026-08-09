@@ -462,6 +462,11 @@ def test_policy_metrics_path_separates_formal_and_smoke_roots(tmp_path) -> None:
         config,
         environment={POLICY_METRICS_PATH_ENV: str(smoke)},
     ) == smoke
+    labeled_smoke = tmp_path / "smoke/actor-rollout-only-v1/metrics.jsonl"
+    assert _resolved_policy_metrics_path(
+        config,
+        environment={POLICY_METRICS_PATH_ENV: str(labeled_smoke)},
+    ) == labeled_smoke
     with pytest.raises(ValueError, match="inside output.root"):
         _resolved_policy_metrics_path(
             config,

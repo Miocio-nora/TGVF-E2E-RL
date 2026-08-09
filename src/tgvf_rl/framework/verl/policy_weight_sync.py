@@ -30,6 +30,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 from typing import Any, TypeVar
 from uuid import uuid4
@@ -143,16 +144,34 @@ class PolicyLoRASnapshot:
     policy_version: PolicyVersion
     run_identity_sha256: str
     request_sha256: str
+    pointer_file: Path
+    pointer_file_sha256: str
+    pointer_bytes: bytes
     tensor_file: Path
     tensor_file_sha256: str
+    tensor_bytes: bytes
     manifest_file: Path
+    manifest_file_sha256: str
+    manifest_bytes: bytes
     tensors: Mapping[str, torch.Tensor]
 
     def __post_init__(self) -> None:
         _require_sha256(self.run_identity_sha256, "run identity")
         _require_sha256(self.request_sha256, "request identity")
+        _require_sha256(self.pointer_file_sha256, "pointer file digest")
         _require_sha256(self.tensor_file_sha256, "safetensors file digest")
-        if not self.tensor_file.is_absolute() or not self.manifest_file.is_absolute():
+        _require_sha256(self.manifest_file_sha256, "manifest file digest")
+        for owner, payload in (
+            ("pointer", self.pointer_bytes),
+            ("manifest", self.manifest_bytes),
+            ("tensor", self.tensor_bytes),
+        ):
+            if not isinstance(payload, bytes) or not payload:
+                raise ValueError(f"LoRA snapshot {owner} bytes must be non-empty")
+        if not all(
+            path.is_absolute()
+            for path in (self.pointer_file, self.tensor_file, self.manifest_file)
+        ):
             raise ValueError("LoRA snapshot paths must be absolute")
 
 
@@ -262,14 +281,50 @@ def load_latest_lora_snapshot(
 ) -> PolicyLoRASnapshot:
     """Load and verify the latest pointer, manifest, safetensors, and tensors."""
 
+    return load_lora_snapshot_pointer(
+        state,
+        pointer_path=state.latest_path,
+        expected_optimizer_step=expected_optimizer_step,
+        expected_request_sha256=expected_request_sha256,
+    )
+
+
+def load_lora_snapshot_pointer(
+    state: PolicyWeightSyncState,
+    *,
+    pointer_path: str | Path,
+    expected_pointer_file_sha256: str | None = None,
+    expected_optimizer_step: int | None = None,
+    expected_request_sha256: str | None = None,
+) -> PolicyLoRASnapshot:
+    """Strictly load one fixed pointer and its complete immutable closure."""
+
     if not isinstance(state, PolicyWeightSyncState):
         raise TypeError("state must be PolicyWeightSyncState")
+    pointer = Path(pointer_path)
+    pointer_owner = (
+        "latest LoRA pointer" if pointer == state.latest_path else "LoRA pointer"
+    )
+    if not pointer.is_absolute():
+        raise ValueError("LoRA pointer path must be absolute")
+    if pointer.parent != state.directory:
+        raise ReplayMismatchError("LoRA pointer is outside its state directory")
+    if expected_pointer_file_sha256 is not None:
+        _require_sha256(
+            expected_pointer_file_sha256, "expected LoRA pointer file digest"
+        )
     if expected_optimizer_step is not None:
         _nonnegative_step(expected_optimizer_step)
     if expected_request_sha256 is not None:
         _require_sha256(expected_request_sha256, "expected request identity")
-    latest = _strict_json_mapping(
-        state.latest_path,
+    pointer_bytes = _read_bytes(pointer, pointer_owner)
+    pointer_file_sha256 = _sha256_bytes(pointer_bytes)
+    if expected_pointer_file_sha256 is not None and not hmac.compare_digest(
+        pointer_file_sha256, expected_pointer_file_sha256
+    ):
+        raise ReplayMismatchError("LoRA pointer file digest mismatch")
+    latest = _strict_json_bytes_mapping(
+        pointer_bytes,
         {
             "schema_version",
             "run_id",
@@ -281,11 +336,11 @@ def load_latest_lora_snapshot(
             "manifest_file_sha256",
             "integrity_sha256",
         },
-        "latest LoRA pointer",
+        "LoRA pointer",
     )
-    _verify_integrity_field(latest, "integrity_sha256", "latest LoRA pointer")
+    _verify_integrity_field(latest, "integrity_sha256", "LoRA pointer")
     if latest["schema_version"] != POLICY_LORA_LATEST_SCHEMA:
-        raise ReplayMismatchError("latest LoRA pointer schema differs")
+        raise ReplayMismatchError("LoRA pointer schema differs")
     _require_run_identity(
         state,
         _required_text(latest, "run_id"),
@@ -358,9 +413,15 @@ def load_latest_lora_snapshot(
         policy_version=version,
         run_identity_sha256=state.run_identity_sha256,
         request_sha256=request_sha256,
+        pointer_file=pointer,
+        pointer_file_sha256=pointer_file_sha256,
+        pointer_bytes=pointer_bytes,
         tensor_file=tensor_path,
         tensor_file_sha256=tensor_file_sha256,
+        tensor_bytes=tensor_bytes,
         manifest_file=manifest_path,
+        manifest_file_sha256=manifest_file_sha256,
+        manifest_bytes=manifest_bytes,
         tensors=tensors,
     )
 
@@ -752,20 +813,45 @@ def _strict_json_bytes_mapping(
 
 
 def _read_bytes(path: Path, owner: str) -> bytes:
+    descriptor: int | None = None
     try:
-        return path.read_bytes()
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReplayMismatchError(f"{owner} must be a regular file")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 8 * 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        return b"".join(chunks)
     except OSError as error:
         raise ReplayMismatchError(f"{owner} is missing or unreadable") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _safe_relative_path(root: Path, value: str) -> Path:
     relative = Path(value)
     if relative.is_absolute() or ".." in relative.parts:
         raise ReplayMismatchError("LoRA snapshot contains an unsafe path")
-    resolved = (root / relative).resolve()
-    if not resolved.is_relative_to(root):
-        raise ReplayMismatchError("LoRA snapshot path escapes the state directory")
-    return resolved
+    candidate = root / relative
+    current = root
+    for part in relative.parts[:-1]:
+        current /= part
+        try:
+            metadata = current.stat(follow_symlinks=False)
+        except OSError as error:
+            raise ReplayMismatchError(
+                "LoRA snapshot parent directory is missing or unreadable"
+            ) from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ReplayMismatchError(
+                "LoRA snapshot parent path must be a regular directory"
+            )
+    return candidate
 
 
 def _require_run_identity(
@@ -846,6 +932,7 @@ __all__ = [
     "TGVFPolicyCheckpointEngineManager",
     "load_latest_lora_snapshot",
     "load_latest_policy_version",
+    "load_lora_snapshot_pointer",
     "load_policy_weight_sync_request",
     "lora_parameter_mapping_sha256",
     "publish_policy_weight_sync_request",

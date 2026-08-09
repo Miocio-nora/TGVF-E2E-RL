@@ -46,48 +46,53 @@ CROP_MATCHED_CONTROL_JUDGE_CONFIG = Path(
     "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/configs/policy/judges/"
     "prl13_qwen25_72b_binary_text_resilient.json"
 )
-
-# Prompt, tool runtime, trainable RP66 state/synchronization, and output paths
-# define the experimental arms and are deliberately not in this equality set.
-MATCHED_OVERRIDE_PATHS = (
-    "data.train_files",
-    "data.val_files",
-    "data.train_batch_size",
-    "data.gen_batch_size",
-    "data.seed",
-    "actor_rollout_ref.model.path",
-    "actor_rollout_ref.model.lora_rank",
-    "actor_rollout_ref.model.lora.rank",
-    "actor_rollout_ref.model.lora.freeze_vision_model",
-    "actor_rollout_ref.model.lora.freeze_vision_projection",
-    "actor_rollout_ref.model.lora.freeze_language_model",
-    "actor_rollout_ref.model.enable_gradient_checkpointing",
-    "actor_rollout_ref.actor.freeze_vision_tower",
-    "actor_rollout_ref.actor.ppo_mini_batch_size",
-    "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu",
-    "actor_rollout_ref.actor.ppo_epochs",
-    "actor_rollout_ref.actor.loss_agg_mode",
-    "actor_rollout_ref.actor.policy_loss.loss_mode",
-    "actor_rollout_ref.actor.use_kl_loss",
-    "actor_rollout_ref.actor.optim.lr",
-    "actor_rollout_ref.actor.optim.lr_scheduler_type",
-    "actor_rollout_ref.actor.optim.lr_warmup_steps",
-    "actor_rollout_ref.actor.optim.clip_grad",
-    "actor_rollout_ref.rollout.n",
-    "actor_rollout_ref.rollout.temperature",
-    "actor_rollout_ref.rollout.top_p",
-    "actor_rollout_ref.rollout.top_k",
-    "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu",
-    "actor_rollout_ref.rollout.gpu_memory_utilization",
-    "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu",
-    "algorithm.norm_adv_by_std_in_grpo",
-    "algorithm.use_kl_in_reward",
-    "algorithm.kl_ctrl.kl_coef",
-    "trainer.nnodes",
-    "trainer.n_gpus_per_node",
-    "trainer.total_training_steps",
-    "trainer.val_before_train",
+CROP_MATCHED_CONTROL_COMPARISON_SPEC = (
+    Path(__file__).resolve().parents[4]
+    / "configs/policy/controls/prl15_crop_rp66_matched.json"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlComparisonSpec:
+    """Editable scientific comparison declaration, separate from runtime code."""
+
+    required_equal: tuple[str, ...]
+    arm_specific: tuple[str, ...]
+    note: str
+
+    def __post_init__(self) -> None:
+        for owner, rows in (
+            ("required_equal", self.required_equal),
+            ("arm_specific", self.arm_specific),
+        ):
+            if not rows or any(not isinstance(row, str) or not row for row in rows):
+                raise ValueError(f"control comparison {owner} must be non-empty paths")
+            if len(set(rows)) != len(rows):
+                raise ValueError(f"control comparison {owner} contains duplicates")
+        overlap = set(self.required_equal) & set(self.arm_specific)
+        if overlap:
+            raise ValueError(f"control comparison paths overlap: {sorted(overlap)!r}")
+        if not self.note:
+            raise ValueError("control comparison note must be non-empty")
+
+
+def load_control_comparison_spec(path: str | Path) -> ControlComparisonSpec:
+    source = Path(path).resolve(strict=True)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "schema_version",
+        "required_equal",
+        "arm_specific",
+        "note",
+    }:
+        raise ValueError("control comparison spec fields differ")
+    if payload["schema_version"] != "tgvf.control-comparison.v1":
+        raise ValueError("control comparison spec schema differs")
+    return ControlComparisonSpec(
+        required_equal=tuple(payload["required_equal"]),
+        arm_specific=tuple(payload["arm_specific"]),
+        note=str(payload["note"]),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +101,10 @@ class CropMatchedControlPlan:
 
     launch: DeepEyesNativeVerlLaunchPlan
     matched_values: Mapping[str, object]
+    arm_differences: Mapping[str, tuple[object, object]]
+    unclassified_differences: Mapping[str, tuple[object, object]]
+    comparison_spec_path: Path
+    comparison_note: str
     schema_version: str = CROP_MATCHED_CONTROL_SCHEMA
 
     def __post_init__(self) -> None:
@@ -105,6 +114,17 @@ class CropMatchedControlPlan:
             raise ValueError("Crop matched control must be a formal step-8 plan")
         object.__setattr__(
             self, "matched_values", MappingProxyType(dict(self.matched_values))
+        )
+        object.__setattr__(
+            self, "arm_differences", MappingProxyType(dict(self.arm_differences))
+        )
+        object.__setattr__(
+            self,
+            "unclassified_differences",
+            MappingProxyType(dict(self.unclassified_differences)),
+        )
+        object.__setattr__(
+            self, "comparison_spec_path", Path(self.comparison_spec_path).resolve()
         )
 
     def as_record(self) -> dict[str, object]:
@@ -125,6 +145,13 @@ class CropMatchedControlPlan:
                 ),
             },
             "matched_values": dict(self.matched_values),
+            "comparison": {
+                "spec_path": str(self.comparison_spec_path),
+                "note": self.comparison_note,
+                "arm_differences": dict(self.arm_differences),
+                "unclassified_differences": dict(self.unclassified_differences),
+                "unclassified_differences_are_fatal": False,
+            },
             "launch": self.launch.as_record(),
         }
 
@@ -132,9 +159,13 @@ class CropMatchedControlPlan:
 def build_crop_matched_control_plan(
     crop_contract: DeepEyesNativeRunContract,
     rp66_config: PolicyE2ESmokeRunConfig,
+    *,
+    comparison_spec_path: str | Path = CROP_MATCHED_CONTROL_COMPARISON_SPEC,
 ) -> CropMatchedControlPlan:
-    """Build Crop and prove every declared common runtime value equals RP66."""
+    """Build Crop from an editable match declaration and record every difference."""
 
+    comparison_path = Path(comparison_spec_path).resolve(strict=True)
+    comparison = load_control_comparison_spec(comparison_path)
     rp66 = build_trainable_tgvf_verl_launch_plan(rp66_config, mode="formal")
     base = build_deepeyes_native_verl_launch_plan(
         crop_contract, mode="formal", target_step=CROP_MATCHED_CONTROL_TARGET_STEP
@@ -158,25 +189,6 @@ def build_crop_matched_control_plan(
             "trainer.val_before_train": False,
             "trainer.resume_mode": "disable",
             "trainer.max_actor_ckpt_to_keep": 4,
-            "data.train_batch_size": 16,
-            "data.gen_batch_size": 16,
-            "actor_rollout_ref.actor.ppo_mini_batch_size": 16,
-            "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": 1,
-            "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": 16,
-            "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": 16,
-            "trainer.n_gpus_per_node": 4,
-            "actor_rollout_ref.actor.fsdp_config.fsdp_size": 4,
-            "actor_rollout_ref.ref.fsdp_config.fsdp_size": 4,
-            "actor_rollout_ref.rollout.agent.num_workers": 4,
-            "actor_rollout_ref.actor.fsdp_config.param_offload": False,
-            "actor_rollout_ref.actor.fsdp_config.optimizer_offload": False,
-            "actor_rollout_ref.actor.fsdp_config.offload_policy": False,
-            "actor_rollout_ref.ref.fsdp_config.param_offload": False,
-            "actor_rollout_ref.ref.fsdp_config.offload_policy": False,
-            "actor_rollout_ref.model.enable_gradient_checkpointing": False,
-            "actor_rollout_ref.actor.fsdp_config.reshard_after_forward": False,
-            "actor_rollout_ref.rollout.gpu_memory_utilization": 0.45,
-            "actor_rollout_ref.model.use_fused_kernels": False,
             "reward.deepeyes_official.judge_service_config_path": (
                 CROP_MATCHED_CONTROL_JUDGE_CONFIG
             ),
@@ -185,25 +197,66 @@ def build_crop_matched_control_plan(
             ),
         }
     )
+    missing = tuple(
+        path for path in comparison.required_equal if path not in rp66.overrides
+    )
+    if missing:
+        raise ValueError(
+            "comparison spec selects values absent from RP66: " + ", ".join(missing)
+        )
+    # The active RP66 plan is the source of truth. Changing a common variable
+    # in a later run config automatically propagates into this Crop control;
+    # no Python constant or checker rewrite is required.
+    for path in comparison.required_equal:
+        values[path] = rp66.overrides[path]
     environment = dict(base.environment)
     environment["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
     launch = replace(base, overrides=values, environment=environment)
 
     mismatches = {
         path: (launch.overrides.get(path), rp66.overrides.get(path))
-        for path in MATCHED_OVERRIDE_PATHS
+        for path in comparison.required_equal
         if launch.overrides.get(path) != rp66.overrides.get(path)
     }
     if mismatches:
         raise ValueError(f"Crop/RP66 matched-control values differ: {mismatches!r}")
-    matched = {path: launch.overrides[path] for path in MATCHED_OVERRIDE_PATHS}
-    return CropMatchedControlPlan(launch=launch, matched_values=matched)
+    matched = {path: launch.overrides[path] for path in comparison.required_equal}
+    all_differences = {
+        path: (launch.overrides.get(path), rp66.overrides.get(path))
+        for path in sorted(set(launch.overrides) | set(rp66.overrides))
+        if launch.overrides.get(path) != rp66.overrides.get(path)
+    }
+    arm_differences = {
+        path: all_differences[path]
+        for path in comparison.arm_specific
+        if path in all_differences
+    }
+    classified = set(comparison.required_equal) | set(comparison.arm_specific)
+    unclassified = {
+        path: difference
+        for path, difference in all_differences.items()
+        if path not in classified
+    }
+    return CropMatchedControlPlan(
+        launch=launch,
+        matched_values=matched,
+        arm_differences=arm_differences,
+        unclassified_differences=unclassified,
+        comparison_spec_path=comparison_path,
+        comparison_note=comparison.note,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--crop-contract", required=True, type=Path)
     parser.add_argument("--rp66-config", required=True, type=Path)
+    parser.add_argument(
+        "--comparison-spec",
+        type=Path,
+        default=CROP_MATCHED_CONTROL_COMPARISON_SPEC,
+        help="Editable declaration of matched and arm-specific fields.",
+    )
     parser.add_argument(
         "--launch",
         action="store_true",
@@ -218,7 +271,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     crop_contract = load_deepeyes_native_run_contract(args.crop_contract.resolve())
     rp66_config = load_policy_e2e_smoke_run_config(args.rp66_config.resolve())
-    control = build_crop_matched_control_plan(crop_contract, rp66_config)
+    control = build_crop_matched_control_plan(
+        crop_contract,
+        rp66_config,
+        comparison_spec_path=args.comparison_spec,
+    )
     composed = compose_pinned_deepeyes_config(control.launch.hydra_override_args())
     preflight = preflight_pinned_deepeyes_config(composed)
     record = {**control.as_record(), "compose_preflight": preflight}
@@ -247,8 +304,10 @@ __all__ = [
     "CROP_MATCHED_CONTROL_RUN_ID",
     "CROP_MATCHED_CONTROL_SCHEMA",
     "CROP_MATCHED_CONTROL_TARGET_STEP",
-    "MATCHED_OVERRIDE_PATHS",
+    "CROP_MATCHED_CONTROL_COMPARISON_SPEC",
+    "ControlComparisonSpec",
     "CropMatchedControlPlan",
     "build_crop_matched_control_plan",
+    "load_control_comparison_spec",
     "main",
 ]

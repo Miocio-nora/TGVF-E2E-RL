@@ -9538,3 +9538,34 @@ than inferred from a script name or prior conversation.
   trajectories, at least one successful TGVF observation, positive visual
   judge applicability, complete visual coverage with zero visual failures,
   finite five-component metrics and a complete four-rank step-1 checkpoint.
+
+### PRL-15-R0-QWEN3-INSTRUCT-FULL-RP66-MATCHED
+
+- Cell/class and lifecycle: controlled full-model TGVF pilot; implementation
+  and dynamic preflight are complete, while the new labeled one-step GPU smoke
+  is pending. Formal eight-step training is not authorized until that smoke is
+  accepted.
+- Training state: Qwen3-VL-8B-Instruct and the RP-66 Adapter are jointly
+  trainable. The retained mixed-v2 T1 schedule, BS16, n16, world4/micro1/GA4,
+  one PPO epoch, constant LR `1e-6`, six TGVF calls, and DeepEyes reward
+  weights `.8/.2/1.2` are bound in the run config. Both mathematical KL
+  coefficients are zero, so the unused frozen-reference forward is disabled;
+  the worker topology is ActorRollout rather than ActorRolloutRef.
+- Runtime evidence policy: formal metrics remain at `output.root/metrics.jsonl`.
+  Every engineering canary uses its own
+  `output.root/smoke/<smoke-id>/` closure and console-only logging, so neither
+  metrics, checkpoints nor W&B records can collide with the formal run.
+- Matched Crop control: common fields are declared in
+  `configs/policy/controls/prl15_crop_rp66_matched.json` and are copied from
+  the active RP66 plan. Expected arm differences and all unclassified
+  differences are recorded. Only missing or unequal `required_equal` fields
+  fail the scientific control; a new variable does not fail merely because a
+  Python allowlist was not updated.
+- External ACC-VAL: step0 and step8 are paired states, respectively base Qwen
+  plus stage1 RP66 and step8 Qwen plus step8 RP66. The dedicated
+  `full_model_trainable_rp66` backend binds both members, requires the RP66
+  vLLM update ACK, and writes their combined identity into every trajectory.
+  `tools/run_prl15_paired_evaluation.py --wait-for-step8` can be started before
+  training and will automatically prepare, resume, run and score both arms.
+- Detailed protocol and commands:
+  `docs/experiments/prl15_controlled_rl_preflight.md`.
