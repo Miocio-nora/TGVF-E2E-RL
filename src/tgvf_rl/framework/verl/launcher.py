@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -126,6 +127,13 @@ _PYTHON312_DEV_INCLUDE = _PYTHON312_DEV_INCLUDE_ROOT / "python3.12"
 _TRITON_CPATH = os.pathsep.join(
     (str(_PYTHON312_DEV_INCLUDE_ROOT), str(_PYTHON312_DEV_INCLUDE))
 )
+
+
+def _ray_temp_dir(output_root: Path) -> Path:
+    """Return a run-owned Ray root short enough for AF_UNIX socket paths."""
+
+    identity = hashlib.sha256(str(output_root).encode("utf-8")).hexdigest()[:16]
+    return Path("/tmp/tgvf-policy-ray") / identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -814,7 +822,9 @@ def build_policy_e2e_smoke_verl_plan(
             # /tmp/ray/session_latest. Each run owns a local control plane and
             # session directory under its output root.
             "ray_kwargs.ray_init.address": "local",
-            "ray_kwargs.ray_init._temp_dir": str(config.output.root / "ray"),
+            "ray_kwargs.ray_init._temp_dir": str(
+                _ray_temp_dir(config.output.root)
+            ),
         }
     )
 
