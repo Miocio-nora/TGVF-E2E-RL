@@ -1,12 +1,31 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
 import torch
 from torch import nn
 
+from tests.policy.test_exact_replay import _payload
+from tgvf_rl.contracts.tokens import (
+    LogProbMeasurement,
+    OwnedTokenSequence,
+    SamplingIdentity,
+    TokenOwnership,
+)
+from tgvf_rl.policy import trainable_tgvf_replay as replay_module
 from tgvf_rl.policy.trainable_tgvf_replay import (
+    TRAINABLE_TGVF_ADAPTER_ATTRIBUTE,
+    TrainableTGVFCurrentReplayPort,
     extract_live_qwen3_vision_features,
     trainable_parameter_zero_anchor,
 )
+from tgvf_rl.qwen.base import (
+    ReplayConsumer,
+    injected_request_from_recorded,
+    resolve_replay_request,
+)
+from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
 
 
 class _ToyMerger(nn.Module):
@@ -42,6 +61,34 @@ class _ToyQwen(nn.Module):
         super().__init__()
         self.model = nn.Module()
         self.model.visual = _ToyVisual()
+
+
+def _trainable_adapter() -> TGVFAdapter:
+    projections = tuple(
+        FrozenProjectionPort(
+            _ToyMerger(),
+            identity=f"mixed-precision-merger-{index}",
+            input_dim=3,
+            output_dim=5,
+            spatial_merge_size=2,
+        )
+        for index in range(4)
+    )
+    return TGVFAdapter(
+        d_lm=5,
+        d_v=3,
+        attn_dim=4,
+        main_projection=projections[0],
+        deepstack_projections=projections[1:],
+        branch_layers=(8, 16, 24),
+    )
+
+
+class _AutocastBoundaryQwen(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lm_head = nn.Linear(5, 128, bias=False)
+        self.add_module(TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, _trainable_adapter())
 
 
 def test_live_vision_capture_keeps_pixel_stem_and_merger_autograd() -> None:
@@ -85,3 +132,81 @@ def test_zero_anchor_materializes_exact_zero_gradient_for_every_parameter() -> N
         torch.count_nonzero(parameter.grad).item() == 0
         for parameter in module.parameters()
     )
+
+
+def test_current_replay_autocast_starts_before_live_vision_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live vision/RP66 request and decoder share one precision scope."""
+
+    payload, _observation = _payload()
+    bundle = payload.non_tensor_batch["tgvf_trajectory_replay_bundle"][0]
+    model = _AutocastBoundaryQwen()
+    port = TrainableTGVFCurrentReplayPort(
+        engine=SimpleNamespace(_autocast_dtype=torch.bfloat16),
+        model=model,
+        selected_logprob_materializer=lambda **kwargs: kwargs["hidden_states"][
+            :, : kwargs["sampled_positions"].shape[1], 0
+        ],
+    )
+    saw_autocast: list[bool] = []
+
+    def build_request(*, model, adapter, store, replay_handle):
+        del model, adapter
+        saw_autocast.append(torch.is_autocast_enabled("cpu"))
+        recorded = resolve_replay_request(
+            store, replay_handle, ReplayConsumer.POLICY
+        )
+        return injected_request_from_recorded(recorded)
+
+    class _Family:
+        def forward_injected_hidden(self, current_model, request):
+            assert torch.is_autocast_enabled("cpu")
+            hidden = current_model.lm_head.weight[0].view(1, 1, 5).expand(
+                1, request.input_ids.shape[1], 5
+            )
+            return SimpleNamespace(hidden_states=hidden)
+
+    monkeypatch.setattr(
+        replay_module, "build_trainable_tgvf_current_request", build_request
+    )
+    port.family_adapter = _Family()
+    response = OwnedTokenSequence(
+        (20, 21, 22, 90, 91, 30, 31, 32, 33),
+        (
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.TOOL_OBSERVATION,
+            TokenOwnership.TOOL_OBSERVATION,
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.POLICY_SAMPLED,
+            TokenOwnership.POLICY_SAMPLED,
+        ),
+    )
+    sampling = SamplingIdentity(
+        policy_version=bundle.replay_record.behavior_policy,
+        backend="vllm",
+        backend_version="autocast-regression",
+        seed=42,
+        rng_state_sha256="0" * 64,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=-1,
+        min_p=0.0,
+        repetition_penalty=1.0,
+        logit_processors=(),
+        measurement=LogProbMeasurement.AFTER_SAMPLING_TRANSFORMS,
+        asynchronous_staleness_steps=0,
+    )
+
+    result = port.replay_response_logprobs(
+        bundle=bundle,
+        prompt_token_ids=(101, 102, 103),
+        response=response,
+        sampling=sampling,
+    )
+
+    assert saw_autocast == [True]
+    assert result.logprobs.requires_grad

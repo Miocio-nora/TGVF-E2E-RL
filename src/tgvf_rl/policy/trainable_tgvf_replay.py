@@ -145,12 +145,6 @@ class TrainableTGVFCurrentReplayPort:
         if not response.policy_indices:
             raise ValueError("current replay requires policy-owned response tokens")
 
-        request = build_trainable_tgvf_current_request(
-            model=self.model,
-            adapter=self.adapter,
-            store=store,
-            replay_handle=replay_handle,
-        )
         sampled_positions = torch.tensor(
             [
                 [
@@ -161,6 +155,20 @@ class TrainableTGVFCurrentReplayPort:
             dtype=torch.long,
         )
         with torch.enable_grad(), self._autocast_context():
+            # The current-policy replay is one differentiable visual-language
+            # forward, so its mixed-precision boundary must begin before the
+            # live Qwen vision tower and RP66 Adapter are recomputed.  In
+            # particular, Qwen's vision blocks use activation checkpointing;
+            # creating those checkpoints outside autocast lets their backward
+            # recomputation see FP32 FSDP master parameters with BF16 hidden
+            # states.  Crop's ordinary top-level forward already scopes the
+            # complete vision-to-decoder path this way.
+            request = build_trainable_tgvf_current_request(
+                model=self.model,
+                adapter=self.adapter,
+                store=store,
+                replay_handle=replay_handle,
+            )
             if self.selected_logprob_materializer is None:
                 output = self.family_adapter.forward_injected(self.model, request)
                 device = output.logits.device
