@@ -7,6 +7,7 @@ from tgvf_rl.framework.verl.qwen3_flex_attention_compat import (
 
 
 def test_qwen3_vl_text_flex_compat_is_narrow_and_idempotent() -> None:
+    from transformers.integrations import flex_attention as flex_runtime
     from transformers.models.qwen3_vl.modeling_qwen3_vl import (
         Qwen3VLForConditionalGeneration,
         Qwen3VLTextModel,
@@ -27,6 +28,7 @@ def test_qwen3_vl_text_flex_compat_is_narrow_and_idempotent() -> None:
     assert Qwen3VLTextModel._supports_flex_attn is True
     assert Qwen3VLForConditionalGeneration._supports_flex_attn is conditional_before
     assert Qwen3VLVisionModel._supports_flex_attn is vision_before
+    assert flex_runtime.WrappedFlexAttention._tgvf_dynamic_training_compile is True
 
 
 def test_qwen3_vl_config_routes_flex_only_to_text_subconfig() -> None:
