@@ -75,6 +75,7 @@ from tgvf_rl.framework.vllm import (
     VLLMPolicySampler,
     VLLMTerminationOutcome,
     VLLMTurnTerminationContract,
+    qwen3_vl_final_turn_outcomes,
 )
 from tgvf_rl.framework.vllm.registration import (
     TGVF_QWEN3_VLLM_ARCHITECTURE,
@@ -1992,15 +1993,8 @@ def _termination_contract(run: PolicyE2ESmokeRunConfig) -> VLLMTurnTerminationCo
         include_stop_str_in_output=bool(sampling.include_stop_str_in_output),
         tool_call_terminal_suffixes=("",),
         tool_call_outcomes=(VLLMTerminationOutcome("stop", "</tool_call>"),),
-        final_turn_outcomes=tuple(
-            VLLMTerminationOutcome("stop", token_id)
-            for token_id in tuple(sampling.stop_token_ids or ())
-        )
-        + (
-            # vLLM 0.12 reports native EOS as finish_reason="stop" with no
-            # separate stop_reason; this remains distinct from a length stop.
-            VLLMTerminationOutcome("stop", None),
-            VLLMTerminationOutcome("length", None),
+        final_turn_outcomes=qwen3_vl_final_turn_outcomes(
+            tuple(sampling.stop_token_ids or ())
         ),
     )
 

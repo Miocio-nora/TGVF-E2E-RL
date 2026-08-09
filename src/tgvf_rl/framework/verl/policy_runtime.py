@@ -34,6 +34,7 @@ from tgvf_rl.framework.vllm import (
     VLLMOutputDecodingContract,
     VLLMTerminationOutcome,
     VLLMTurnTerminationContract,
+    qwen3_vl_final_turn_outcomes,
 )
 from tgvf_rl.policy.run_config import (
     PolicyE2ESmokeRunConfig,
@@ -559,15 +560,7 @@ def _policy_termination_contract(
     stop_token_ids = tuple(sampling.stop_token_ids or ())
     if "</tool_call>" not in stop_strings:
         raise ValueError("native multi-turn execution requires </tool_call> stop")
-    final_outcomes = tuple(
-        VLLMTerminationOutcome("stop", token_id) for token_id in stop_token_ids
-    ) + (
-        # vLLM 0.12 reports a native model EOS as finish_reason="stop" while
-        # omitting the special EOS token and exposing no separate stop_reason.
-        # This is the live analogue of the evaluator's accepted EOS outcome.
-        VLLMTerminationOutcome("stop", None),
-        VLLMTerminationOutcome("length", None),
-    )
+    final_outcomes = qwen3_vl_final_turn_outcomes(stop_token_ids)
     return VLLMTurnTerminationContract(
         required_request_stop_strings=stop_strings,
         required_request_stop_token_ids=stop_token_ids,

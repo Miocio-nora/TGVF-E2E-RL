@@ -52,6 +52,12 @@ VLLM_POLICY_TURN_REQUEST_SCHEMA = "tgvf-vllm-policy-turn-request-v1"
 VLLM_POLICY_TURN_RESPONSE_SCHEMA = "tgvf-vllm-policy-turn-response-v1"
 VLLM_PROCESSED_LOGPROBS_MODE = "processed_logprobs"
 
+# Both supported Qwen3-VL 8B policy editions declare this exact EOS list in
+# generation_config.json.  vLLM may expose either native EOS as the integer
+# stop_reason even when the request's additional stop_token_ids lists only the
+# primary EOS.  Keep this model-owned set distinct from request-owned stops.
+QWEN3_VL_NATIVE_EOS_TOKEN_IDS = (151_645, 151_643)
+
 _SAMPLING_PARAMETER_KEYS = frozenset(
     {
         "temperature",
@@ -282,6 +288,35 @@ class VLLMTurnTerminationContract:
     @property
     def sha256(self) -> str:
         return _canonical_json_sha256(self.canonical_payload)
+
+
+def qwen3_vl_final_turn_outcomes(
+    request_stop_token_ids: tuple[int, ...],
+) -> tuple[VLLMTerminationOutcome, ...]:
+    """Return the exact final-turn outcomes possible for Qwen3-VL/vLLM.
+
+    ``stop_token_ids`` in a request are additional explicit stops; they do not
+    replace the EOS IDs loaded from the model's generation configuration.
+    vLLM 0.12 can report either source as an integer ``stop_reason`` and can
+    omit a native EOS token from output while reporting ``stop_reason=None``.
+    Only those stop outcomes plus an exact length cap are accepted here.
+    """
+
+    requested = tuple(request_stop_token_ids)
+    if any(type(token_id) is not int or token_id < 0 for token_id in requested):
+        raise ValueError("request stop token IDs must be non-negative integers")
+    if len(set(requested)) != len(requested):
+        raise ValueError("request stop token IDs must be unique")
+    effective_stop_token_ids = tuple(
+        dict.fromkeys((*requested, *QWEN3_VL_NATIVE_EOS_TOKEN_IDS))
+    )
+    return tuple(
+        VLLMTerminationOutcome("stop", token_id)
+        for token_id in effective_stop_token_ids
+    ) + (
+        VLLMTerminationOutcome("stop", None),
+        VLLMTerminationOutcome("length", None),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -677,7 +712,9 @@ class VLLMPolicySampler:
             )
             if outcome not in self.termination.tool_call_outcomes:
                 raise ReplayMismatchError(
-                    "tool-call termination differs from the run-bound contract"
+                    "tool-call termination differs from the run-bound contract: "
+                    f"finish_reason={outcome.finish_reason!r}, "
+                    f"stop_reason={outcome.stop_reason!r}"
                 )
         else:
             outcome = VLLMTerminationOutcome(
@@ -685,7 +722,9 @@ class VLLMPolicySampler:
             )
             if outcome not in self.termination.final_turn_outcomes:
                 raise ReplayMismatchError(
-                    "final/non-complete-call termination differs from the run-bound contract"
+                    "final/non-complete-call termination differs from the run-bound "
+                    f"contract: finish_reason={outcome.finish_reason!r}, "
+                    f"stop_reason={outcome.stop_reason!r}"
                 )
 
 
@@ -925,6 +964,7 @@ def _stop_reason_text(response: VLLMPolicyTurnResponse) -> str:
 
 
 __all__ = [
+    "QWEN3_VL_NATIVE_EOS_TOKEN_IDS",
     "VLLM_POLICY_TURN_REQUEST_SCHEMA",
     "VLLM_POLICY_TURN_RESPONSE_SCHEMA",
     "VLLM_PROCESSED_LOGPROBS_MODE",
@@ -939,4 +979,5 @@ __all__ = [
     "VLLMTurnTerminationContract",
     "VLLMTurnRNGIdentity",
     "VLLMTurnRNGPort",
+    "qwen3_vl_final_turn_outcomes",
 ]

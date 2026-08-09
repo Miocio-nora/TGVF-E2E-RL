@@ -50,6 +50,7 @@ from .registration import (
     vllm_is_available,
 )
 from .sampler import (
+    QWEN3_VL_NATIVE_EOS_TOKEN_IDS,
     VLLM_POLICY_TURN_REQUEST_SCHEMA,
     VLLM_POLICY_TURN_RESPONSE_SCHEMA,
     VLLM_PROCESSED_LOGPROBS_MODE,
@@ -64,6 +65,7 @@ from .sampler import (
     VLLMTurnRNGIdentity,
     VLLMTurnRNGPort,
     VLLMTurnTerminationContract,
+    qwen3_vl_final_turn_outcomes,
 )
 from .turn_runtime import (
     ContentAddressedVLLMTurnRNG,
@@ -79,6 +81,7 @@ from .turn_runtime import (
 __all__ = [
     "QWEN3_DEEPSTACK_BRANCH_COUNT",
     "QWEN3_DEEPSTACK_BRANCH_LAYERS",
+    "QWEN3_VL_NATIVE_EOS_TOKEN_IDS",
     "ContentAddressedVLLMTurnRNG",
     "FastTokenizerTokenByteSpanDecoder",
     "LiveVLLMTurnContextRegistry",
@@ -133,6 +136,7 @@ __all__ = [
     "pack_qwen3_vllm_replay",
     "pack_qwen3_vllm_replay_bundle",
     "prompt_token_ids_sha256",
+    "qwen3_vl_final_turn_outcomes",
     "rebind_preexpanded_prompt_contract",
     "register_tgvf_qwen3_vllm_plugin",
     "install_verl_preexpanded_prompt_compatibility",
