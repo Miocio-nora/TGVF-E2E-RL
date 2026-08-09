@@ -561,7 +561,13 @@ def _policy_termination_contract(
         raise ValueError("native multi-turn execution requires </tool_call> stop")
     final_outcomes = tuple(
         VLLMTerminationOutcome("stop", token_id) for token_id in stop_token_ids
-    ) + (VLLMTerminationOutcome("length", None),)
+    ) + (
+        # vLLM 0.12 reports a native model EOS as finish_reason="stop" while
+        # omitting the special EOS token and exposing no separate stop_reason.
+        # This is the live analogue of the evaluator's accepted EOS outcome.
+        VLLMTerminationOutcome("stop", None),
+        VLLMTerminationOutcome("length", None),
+    )
     return VLLMTurnTerminationContract(
         required_request_stop_strings=stop_strings,
         required_request_stop_token_ids=stop_token_ids,

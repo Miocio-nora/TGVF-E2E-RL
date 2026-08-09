@@ -15,6 +15,8 @@ from tgvf_rl.environment.focus_tool import (
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
     TGVFFocusMaterializationResult,
+    TGVF_VLLM_FINISH_REASON_FIELD,
+    TGVF_VLLM_STOP_REASON_FIELD,
     TGVFVLLMWorkerExtension,
     _BehaviorTraceBuffer,
     _adapter_owned_state_from_utility_wire,
@@ -394,6 +396,71 @@ def test_http_server_adapter_update_uses_collective_rpc_and_validates_ack() -> N
     assert calls[0][0] == "tgvf_update_adapter_owned_state"
     assert calls[0][1]["optimizer_step"] == 4
     assert calls[0][1]["state_sha256"] == digest
+
+
+@pytest.mark.parametrize(
+    ("finish_reason", "stop_reason"),
+    (
+        ("stop", None),
+        ("length", None),
+        ("stop", "</tool_call>"),
+    ),
+    ids=("hidden-eos", "length", "tool-stop"),
+)
+def test_http_server_preserves_exact_vllm_termination_before_verl_collapse(
+    monkeypatch: pytest.MonkeyPatch,
+    finish_reason: str,
+    stop_reason: int | str | None,
+) -> None:
+    from verl.workers.rollout.vllm_rollout.vllm_async_server import vLLMHttpServer
+
+    class Engine:
+        def generate(self, *args: object, **kwargs: object) -> object:
+            del args, kwargs
+
+            async def outputs():
+                yield SimpleNamespace(
+                    outputs=(
+                        SimpleNamespace(
+                            finish_reason=finish_reason,
+                            stop_reason=stop_reason,
+                        ),
+                    )
+                )
+
+            return outputs()
+
+    async def collapsed_upstream_generate(
+        self: object,
+        *,
+        request_id: str,
+        **kwargs: object,
+    ) -> object:
+        del kwargs
+        final = None
+        async for item in self.engine.generate(request_id=request_id):
+            final = item
+        assert final is not None
+        return SimpleNamespace(
+            stop_reason="completed",
+            extra_fields={"global_steps": 3},
+        )
+
+    monkeypatch.setattr(vLLMHttpServer, "generate", collapsed_upstream_generate)
+
+    async def exercise() -> object:
+        server_cls = _runtime_classes()[3]
+        server = object.__new__(server_cls)
+        server.engine = Engine()
+        return await server.generate(
+            prompt_ids=[1, 2],
+            sampling_params={"max_tokens": 16},
+            request_id="backend-request-0",
+        )
+
+    output = asyncio.run(exercise())
+    assert output.extra_fields[TGVF_VLLM_FINISH_REASON_FIELD] == finish_reason
+    assert output.extra_fields[TGVF_VLLM_STOP_REASON_FIELD] == stop_reason
 
 
 def test_client_and_manager_adapter_update_entries_validate_every_server_ack() -> None:

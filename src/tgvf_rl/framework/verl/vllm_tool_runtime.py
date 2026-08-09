@@ -57,9 +57,130 @@ TGVF_VLLM_WORKER_EXTENSION_FQN = (
 )
 TGVF_TWO_MODEL_RUNTIME_SCHEMA = "tgvf-vllm-two-model-runtime-v1"
 TGVF_ADAPTER_UPDATE_ACK_SCHEMA = "tgvf-vllm-adapter-owned-state-ack-v1"
+TGVF_VLLM_FINISH_REASON_FIELD = "tgvf_vllm_finish_reason"
+TGVF_VLLM_STOP_REASON_FIELD = "tgvf_vllm_stop_reason"
 _SOURCE_WIRE_SCHEMA = "tgvf-source-visual-utility-wire-v1"
 _FOCUS_WIRE_SCHEMA = "tgvf-focus-utility-wire-v1"
 _ADAPTER_OWNED_STATE_WIRE_SCHEMA = "tgvf-adapter-owned-state-utility-wire-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _VLLMTerminationEvidence:
+    """Raw terminal fields from one final vLLM ``CompletionOutput``."""
+
+    finish_reason: str
+    stop_reason: int | str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.finish_reason, str) or not self.finish_reason:
+            raise TypeError("vLLM finish_reason must be a non-empty string")
+        if isinstance(self.stop_reason, bool) or (
+            self.stop_reason is not None
+            and not isinstance(self.stop_reason, (int, str))
+        ):
+            raise TypeError("vLLM stop_reason must be int, str, or None")
+
+
+class _TerminationCapturingAsyncEngine:
+    """Transparent AsyncLLM proxy retaining exact per-request termination.
+
+    veRL's vLLM HTTP server intentionally collapses both raw ``stop`` and
+    ``length`` finishes into ``TokenOutput.stop_reason == \"completed\"``.  The
+    native TGVF loop needs the raw pair because an EOS special token is not
+    present in returned token IDs.  This proxy observes the final
+    ``RequestOutput`` before veRL performs that lossy conversion.  Request IDs
+    make the capture concurrency-safe for the HTTP server's overlapping calls.
+    """
+
+    def __init__(self, engine: object) -> None:
+        object.__setattr__(self, "_tgvf_engine", engine)
+        object.__setattr__(self, "_tgvf_active_request_ids", set())
+        object.__setattr__(self, "_tgvf_terminations", {})
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._tgvf_engine, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name.startswith("_tgvf_"):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._tgvf_engine, name, value)
+
+    def generate(self, *args: object, **kwargs: object) -> object:
+        request_id = kwargs.get("request_id")
+        if request_id is None and len(args) >= 3:
+            request_id = args[2]
+        if not isinstance(request_id, str) or not request_id:
+            raise TypeError("vLLM generation request_id must be a non-empty string")
+        if (
+            request_id in self._tgvf_active_request_ids
+            or request_id in self._tgvf_terminations
+        ):
+            raise RuntimeError("vLLM generation request_id was reused")
+
+        source = self._tgvf_engine.generate(*args, **kwargs)
+        if not hasattr(source, "__aiter__"):
+            raise TypeError("AsyncLLM.generate() must return an async iterator")
+        self._tgvf_active_request_ids.add(request_id)
+
+        async def observe() -> Any:
+            try:
+                async for output in source:
+                    completions = getattr(output, "outputs", None)
+                    if completions:
+                        completion = completions[0]
+                        finish_reason = getattr(completion, "finish_reason", None)
+                        if finish_reason is not None:
+                            self._tgvf_terminations[request_id] = (
+                                _VLLMTerminationEvidence(
+                                    finish_reason=finish_reason,
+                                    stop_reason=getattr(
+                                        completion, "stop_reason", None
+                                    ),
+                                )
+                            )
+                    yield output
+            finally:
+                self._tgvf_active_request_ids.discard(request_id)
+
+        return observe()
+
+    def pop_termination(self, request_id: str) -> _VLLMTerminationEvidence | None:
+        return self._tgvf_terminations.pop(request_id, None)
+
+    def discard_request(self, request_id: str) -> None:
+        self._tgvf_active_request_ids.discard(request_id)
+        self._tgvf_terminations.pop(request_id, None)
+
+
+def _attach_exact_vllm_termination(
+    output: object,
+    evidence: _VLLMTerminationEvidence | None,
+) -> None:
+    """Attach exact vLLM termination to veRL's otherwise lossy TokenOutput."""
+
+    upstream_stop_reason = getattr(output, "stop_reason", None)
+    if upstream_stop_reason == "completed":
+        if evidence is None:
+            raise RuntimeError(
+                "veRL completed output lost exact vLLM termination evidence"
+            )
+        if evidence.finish_reason not in ("stop", "length"):
+            raise RuntimeError(
+                "veRL completed output has incompatible vLLM finish_reason"
+            )
+    if evidence is None:
+        return
+    extra_fields = getattr(output, "extra_fields", None)
+    if not isinstance(extra_fields, dict):
+        raise TypeError("veRL TokenOutput.extra_fields must be a dict")
+    if (
+        TGVF_VLLM_FINISH_REASON_FIELD in extra_fields
+        or TGVF_VLLM_STOP_REASON_FIELD in extra_fields
+    ):
+        raise RuntimeError("exact vLLM termination fields were already populated")
+    extra_fields[TGVF_VLLM_FINISH_REASON_FIELD] = evidence.finish_reason
+    extra_fields[TGVF_VLLM_STOP_REASON_FIELD] = evidence.stop_reason
 
 
 def _tensor_to_utility_wire(value: torch.Tensor) -> dict[str, object]:
@@ -1038,6 +1159,43 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
     class TGVFVLLMHttpServer(vLLMHttpServer):
         def _get_worker_extension_cls(self) -> str:
             return TGVF_VLLM_WORKER_EXTENSION_FQN
+
+        async def generate(
+            self,
+            prompt_ids: list[int],
+            sampling_params: dict[str, Any],
+            request_id: str,
+            image_data: list[Any] | None = None,
+            video_data: list[Any] | None = None,
+            audio_data: list[Any] | None = None,
+            mm_processor_kwargs: dict[str, Any] | None = None,
+            priority: int = 0,
+            kv_transfer_params: dict[str, Any] | None = None,
+        ) -> object:
+            """Preserve vLLM's raw terminal pair across veRL TokenOutput."""
+
+            engine = self.engine
+            if not isinstance(engine, _TerminationCapturingAsyncEngine):
+                engine = _TerminationCapturingAsyncEngine(engine)
+                self.engine = engine
+            try:
+                output = await super().generate(
+                    prompt_ids=prompt_ids,
+                    sampling_params=sampling_params,
+                    request_id=request_id,
+                    image_data=image_data,
+                    video_data=video_data,
+                    audio_data=audio_data,
+                    mm_processor_kwargs=mm_processor_kwargs,
+                    priority=priority,
+                    kv_transfer_params=kv_transfer_params,
+                )
+                evidence = engine.pop_termination(request_id)
+                _attach_exact_vllm_termination(output, evidence)
+                return output
+            except BaseException:
+                engine.discard_request(request_id)
+                raise
 
         def _require_step(self, expected_step: int) -> None:
             if type(expected_step) is not int or self.global_steps != expected_step:

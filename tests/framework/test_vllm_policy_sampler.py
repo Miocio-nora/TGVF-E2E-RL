@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha256
+from pathlib import Path
 import subprocess
 import sys
 
@@ -25,8 +26,11 @@ from tgvf_rl.framework.vllm import (
     VLLMTurnRNGIdentity,
     VLLMTurnTerminationContract,
 )
+from tgvf_rl.framework.verl.policy_runtime import _policy_termination_contract
 from tgvf_rl.policy import PilotSamplingConfig
+from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 from tgvf_rl.protocol import TokenByteSpan
+from tests.policy.test_run_config import _write_config
 
 
 SHA0 = "0" * 64
@@ -161,7 +165,11 @@ def _parameters(**updates: object) -> dict[str, object]:
     return values
 
 
-def _sampler(client: _Client) -> VLLMPolicySampler:
+def _sampler(
+    client: _Client,
+    *,
+    termination: VLLMTurnTerminationContract | None = None,
+) -> VLLMPolicySampler:
     return VLLMPolicySampler(
         client=client,
         behavior_policy=POLICY,
@@ -173,7 +181,7 @@ def _sampler(client: _Client) -> VLLMPolicySampler:
             spaces_between_special_tokens=False,
             output_kind="final_only",
         ),
-        termination=_termination(),
+        termination=termination or _termination(),
     )
 
 
@@ -262,6 +270,31 @@ def test_sampler_identity_satisfies_bound_policy_pilot_contract() -> None:
     config.validate_sampling_identity(sampled.sampling, expected_max_tokens=8000)
     assert sampled.sampling.seed == 43
     assert sampled.sampling.asynchronous_staleness_steps == 0
+
+
+def test_live_policy_contract_accepts_hidden_native_eos(
+    tmp_path: Path,
+) -> None:
+    path, _, _ = _write_config(tmp_path)
+    run = load_policy_e2e_smoke_run_config(path)
+    termination = _policy_termination_contract(run)
+    hidden_eos = VLLMTerminationOutcome("stop", None)
+    assert hidden_eos in termination.final_turn_outcomes
+
+    client = _Client(
+        "reason</think>final answer",
+        finish_reason="stop",
+        stop_reason=None,
+    )
+    sampled = _sampler(client, termination=termination).sample(
+        (1, 2),
+        run.policy.sampling.as_vllm_parameters(max_tokens=8000),
+        turn_index=0,
+    )
+
+    assert sampled.text == "reason</think>final answer"
+    assert '"finish_reason":"stop"' in sampled.stop_reason
+    assert '"stop_reason":null' in sampled.stop_reason
 
 
 def test_final_answer_may_terminate_on_explicit_eos_without_becoming_tool_call() -> None:

@@ -9592,3 +9592,23 @@ than inferred from a script name or prior conversation.
   `output.root/smoke/actor-rollout-only-v1`, used console logging, created no
   W&B run, did not create formal `output.root/metrics.jsonl`, and did not
   modify the pre-existing legacy `output.root/smoke/metrics.jsonl`.
+- Matched R1 gate (2026-08-10): the corrected world4 mathematical-equivalent
+  execution of the Crop world8/micro32 control passed one complete optimizer
+  step over BS16 x n16. It produced 256 trajectories and 192 successful TGVF
+  observations, changed both the Qwen and RP66 states, and completed in
+  `809.16 s` including a `65.16 s` paired checkpoint. This is the accepted
+  scientific one-step gate, not the low-cost functionality canary.
+- Formal recovery (2026-08-10): formal step 1 completed and was durably saved;
+  step 2 then stopped before its optimizer update because pinned veRL had
+  collapsed a normal vLLM native-EOS termination into `completed` while
+  discarding the raw finish/stop pair. The project-owned vLLM server boundary
+  now transports the exact pair and the live termination contract accepts
+  vLLM's documented `stop + null` native-EOS outcome. It does not infer or
+  forgive aborted, unknown, or malformed generations. Focused transport,
+  recovery, and sampler tests cover native EOS, length, and tool-string stops.
+- Checkpoint recovery correction (2026-08-10): the remaining formal horizon
+  physically saves every completed optimizer step, retains the newest two
+  exact paired checkpoints across restarts, and hard-links step 8 into a
+  separately validated permanent checkpoint. The original run TOML and its
+  run identity remain unchanged so the corrected process resumes from the
+  already committed step-1 Qwen/RP66 pair rather than replaying step 1.

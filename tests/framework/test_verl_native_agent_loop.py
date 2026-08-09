@@ -652,6 +652,33 @@ def test_exact_standalone_vllm_stop_survives_collapsed_verl_output() -> None:
     ) == ("stop", 151645)
 
 
+@pytest.mark.parametrize(
+    ("finish_reason", "stop_reason", "expected"),
+    (
+        ("stop", None, ("stop", None)),
+        ("length", None, ("length", None)),
+        ("stop", "</tool_call>", ("stop", "</tool_call>")),
+    ),
+    ids=("hidden-eos", "length", "tool-stop"),
+)
+def test_exact_vllm_termination_bypasses_lossy_token_inference(
+    finish_reason: str,
+    stop_reason: int | str | None,
+    expected: tuple[str, int | str | None],
+) -> None:
+    text = "reason</think>answer"
+    token_ids = tuple(ord(character) for character in text)
+
+    assert _recover_termination(
+        request=_turn_request(text, max_tokens=len(token_ids) + 17),
+        token_ids=token_ids,
+        text=text,
+        upstream_stop_reason="completed",
+        exact_finish_reason=finish_reason,
+        exact_stop_reason=stop_reason,
+    ) == expected
+
+
 def test_bridge_rejects_upstream_silent_max_token_clamp() -> None:
     tokenizer = _CharacterTokenizer()
     factory = _InvocationFactory(tokenizer)
