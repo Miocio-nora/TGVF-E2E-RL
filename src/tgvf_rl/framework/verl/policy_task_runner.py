@@ -1452,7 +1452,12 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 self._policy_step_started_at = None
 
         def _save_checkpoint(self):
-            configured_steps = self._policy_checkpoint_state.effective_checkpoint_steps
+            lifecycle = getattr(self, "_policy_checkpoint_lifecycle", None)
+            configured_steps = (
+                lifecycle.checkpoint_steps
+                if isinstance(lifecycle, PolicyCheckpointLifecycle)
+                else self._policy_checkpoint_state.effective_checkpoint_steps
+            )
             if self.global_steps not in configured_steps:
                 return None
             if self._policy_checkpoint_pending:

@@ -441,6 +441,70 @@ def test_checkpoint_lifecycle_wraps_upstream_save_in_prepare_finalize_order(
     assert trainer._policy_checkpoint_pending is False
 
 
+def test_resumed_formal_step2_uses_runtime_lifecycle_checkpoint_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A step-1 resume must persist step 2 without changing TOML identity.
+
+    PRL15 deliberately preserves the original scientific milestone schedule
+    in its serialized run config.  The formal launcher expands only the
+    execution schedule to every completed step.  This models the first update
+    after resuming step 1 and ensures the runtime lifecycle, rather than the
+    preserved TOML milestones, owns both the save gate and retention calls.
+    """
+
+    events: list[object] = []
+
+    class FakeLifecycle:
+        checkpoint_steps = tuple(range(9))
+        every_completed_step = True
+
+        def prepare_for_save(self, step):
+            events.append(("prepare", step))
+
+        def finalize_saved_checkpoint(self, step):
+            events.append(("finalize", step))
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            events.append(("upstream_save", self.global_steps))
+            return "saved"
+
+    monkeypatch.setattr(
+        policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle
+    )
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.global_steps = 2
+    trainer._policy_checkpoint_pending = False
+    trainer._policy_checkpoint_state = SimpleNamespace(
+        # The source TOML remains byte-identical and names only scientific
+        # milestones; it intentionally does not include step 2.
+        effective_checkpoint_steps=(0, 1, 4, 8),
+        last_resume=SimpleNamespace(optimizer_step=1),
+    )
+    trainer._policy_checkpoint_lifecycle = FakeLifecycle()
+
+    assert trainer._save_checkpoint() is None
+    assert trainer._policy_checkpoint_pending is True
+    assert trainer._commit_policy_checkpoint_after_weight_sync(2) == "saved"
+    assert events == [
+        ("prepare", 2),
+        ("upstream_save", 2),
+        ("finalize", 2),
+    ]
+    assert trainer._policy_checkpoint_pending is False
+
+
 def test_policy_metrics_publish_step_and_cumulative_records_idempotently(
     tmp_path,
 ) -> None:
