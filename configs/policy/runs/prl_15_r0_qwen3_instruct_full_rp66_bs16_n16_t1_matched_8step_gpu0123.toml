@@ -4,7 +4,7 @@ run_id = "PRL-15-R0-QWEN3-INSTRUCT-FULL-RP66-BS16-N16-T1-MATCHED-8STEP-GPU0123"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "fd1b2fe8e705f604dce367e256daf3741677dc2f"
+commit = "4210f09d95fa36f56b898cddd25103c853958fef"
 dirty = false
 
 [model]
