@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 import torch
@@ -237,7 +238,9 @@ def build_trainable_rp66_adapter(
     if adapter_device.type == "meta":
         adapter_device = torch.device("cpu")
     adapter.to(device=adapter_device, dtype=owner.dtype)
-    adapter.load_artifact_state_dict(export.state)
+    adapter.load_artifact_state_dict(
+        _adapter_state_for_runtime_dtype(export.state, dtype=owner.dtype)
+    )
     adapter.requires_grad_(True)
     adapter.train(True)
     contract.assert_matches(adapter)
@@ -247,6 +250,33 @@ def build_trainable_rp66_adapter(
     ):
         raise RuntimeError("RP66 registered duplicate Qwen merger parameters")
     return adapter
+
+
+def _adapter_state_for_runtime_dtype(
+    state: Mapping[str, torch.Tensor], *, dtype: torch.dtype
+) -> dict[str, torch.Tensor]:
+    """Cast floating artifact storage to the actor's master-parameter dtype.
+
+    RP66's immutable Stage-1 artifact is stored in BF16, while the matched
+    Crop-16 FSDP actor owns FP32 master parameters under BF16 mixed precision.
+    Dtype is an execution property rather than artifact identity: the loader
+    has already verified the source file and manifest hashes.  Keep the source
+    tensors unchanged and preserve any non-floating state exactly.
+    """
+
+    if not isinstance(state, Mapping):
+        raise TypeError("RP66 Adapter state must be a mapping")
+    probe = torch.empty((), dtype=dtype)
+    if not probe.is_floating_point():
+        raise TypeError("RP66 runtime parameter dtype must be floating point")
+    normalized: dict[str, torch.Tensor] = {}
+    for name, value in state.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("RP66 Adapter state names must be non-empty strings")
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"RP66 Adapter state {name!r} is not a tensor")
+        normalized[name] = value.to(dtype=dtype) if value.is_floating_point() else value
+    return normalized
 
 
 def _required_run_config_path() -> Path:
