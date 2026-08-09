@@ -45,9 +45,10 @@ def test_policy_evaluation_accepts_native_vllm_eos_identity() -> None:
         / "configs/policy/runs/prl_02_r5_qwen3_grpo_bs16_tgvf_t1_formal_pilot_80step_gpu0123.toml"
     )
 
-    assert VLLMTerminationOutcome("stop", None) in _termination_contract(
-        run
-    ).final_turn_outcomes
+    outcomes = _termination_contract(run).final_turn_outcomes
+    assert VLLMTerminationOutcome("stop", None) in outcomes
+    assert VLLMTerminationOutcome("stop", 151_643) in outcomes
+    assert VLLMTerminationOutcome("stop", 151_644) not in outcomes
 
 
 def test_coredev_task_loader_keeps_order_and_single_image_boundary(tmp_path: Path) -> None:

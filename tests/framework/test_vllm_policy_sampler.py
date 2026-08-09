@@ -297,6 +297,61 @@ def test_live_policy_contract_accepts_hidden_native_eos(
     assert '"stop_reason":null' in sampled.stop_reason
 
 
+def test_live_policy_contract_accepts_secondary_model_native_eos() -> None:
+    """Reproduce the rare PRL15 step-6 outcome without starting vLLM/GPU."""
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "configs/policy/runs"
+        / "prl_15_r1_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_math_equiv_8step_ws4.toml"
+    )
+    run = load_policy_e2e_smoke_run_config(path)
+    termination = _policy_termination_contract(run)
+    secondary_native_eos = VLLMTerminationOutcome("stop", 151_643)
+    assert run.policy.sampling.stop_token_ids == (151_645,)
+    assert secondary_native_eos in termination.final_turn_outcomes
+
+    client = _Client(
+        "reason</think>final answer",
+        finish_reason="stop",
+        stop_reason=151_643,
+    )
+    sampled = _sampler(client, termination=termination).sample(
+        (1, 2),
+        run.policy.sampling.as_vllm_parameters(max_tokens=20_480),
+        turn_index=0,
+    )
+
+    assert sampled.token_ids == client.responses[0].token_ids
+    assert '"stop_reason":151643' in sampled.stop_reason
+
+
+def test_live_policy_contract_still_rejects_unknown_stop_reason() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "configs/policy/runs"
+        / "prl_15_r1_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_math_equiv_8step_ws4.toml"
+    )
+    run = load_policy_e2e_smoke_run_config(path)
+    client = _Client(
+        "reason</think>final answer",
+        finish_reason="stop",
+        stop_reason=151_644,
+    )
+
+    with pytest.raises(
+        ReplayMismatchError,
+        match=(
+            "termination differs.*finish_reason='stop'.*stop_reason=151644"
+        ),
+    ):
+        _sampler(client, termination=_policy_termination_contract(run)).sample(
+            (1, 2),
+            run.policy.sampling.as_vllm_parameters(max_tokens=20_480),
+            turn_index=0,
+        )
+
+
 def test_final_answer_may_terminate_on_explicit_eos_without_becoming_tool_call() -> None:
     text = "reason</think>final answer"
     client = _Client(text, finish_reason="stop", stop_reason=151645)
