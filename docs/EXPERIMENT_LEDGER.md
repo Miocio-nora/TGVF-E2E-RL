@@ -9614,3 +9614,33 @@ than inferred from a script name or prior conversation.
   scientific milestone gates, while the formal runtime owns the denser
   recovery-save lifecycle. The corrected process therefore resumes from the
   already committed step-1 Qwen/RP66 pair rather than replaying step 1.
+- Low-cost functionality gate (2026-08-10): before the formal resume, a
+  console-only canary used 4 prompts x 2 trajectories and one real joint
+  Qwen/RP66 optimizer update. It completed without termination/replay errors,
+  produced 6 successful TGVF observations, and saved a complete paired
+  checkpoint. The update itself took `164.28 s`; cold startup plus the update
+  was about six minutes. This canary is engineering evidence only and is not
+  a matched scientific result.
+- Formal steps 2--3 and recovery (2026-08-10): the formal run resumed the
+  exact step-1 model, optimizer, scheduler, RNG and data cursor under the same
+  W&B run `ja23wygu`. Step 2 re-executed the batch that had previously exposed
+  the hidden native-EOS bug and completed without any termination or tool
+  error. Step 3 also completed. Their respective end-to-end times were
+  `934.47 s` and `942.33 s`; answer rewards were `.6875` and `.71875`, and
+  conditional-tool rewards were `.5234375` and `.546875`.
+- Runtime checkpoint schedule correction (2026-08-10): step 2 revealed that
+  the trainer save gate still read the identity-preserving TOML milestone list
+  `0/1/4/8`, even though the formal lifecycle owned the recovery schedule
+  `0..8`. The gate now consumes the same runtime lifecycle schedule as
+  prepare/finalize/rotation. Failure recovery durably saved the last complete
+  boundary as paired `global_step_3` with tracker `3`; no step-4 optimizer
+  mutation occurred.
+- Tool-attempt metrics correction (2026-08-10): the next step-4 batch exposed
+  a metrics-only legacy bound of four admitted calls/fifth cap attempt. PRL15's
+  locked live protocol permits six executed calls and records a seventh call
+  only as the unexecuted cap error. Metrics validation now receives that bound
+  from the run config, preserves all counts without clamping or dropping
+  trajectories, and retains conservation, cap position/count, payload identity
+  and replay-integrity checks. Legacy Pilot `M=4` and Stage3-shaped `M=1`
+  remain separately covered. The v1 checkpoint mapping and the existing
+  step-3 project-state bytes are unchanged.
