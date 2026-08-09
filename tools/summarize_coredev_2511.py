@@ -23,6 +23,7 @@ def main() -> int:
     parser.add_argument("--phase", choices=("infer", "eval"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--judge-base-url")
+    parser.add_argument("--expected-model", default="Qwen3-VL-8B-Thinking")
     args = parser.parse_args()
 
     summary = summarize_coredev_results(
@@ -30,6 +31,7 @@ def main() -> int:
         repository_root=REPOSITORY_ROOT,
         phase=args.phase,
         expected_judge_base_url=args.judge_base_url,
+        expected_model=args.expected_model,
     )
     write_json_atomic(args.output.resolve(), summary)
     print(json.dumps(summary, indent=2, ensure_ascii=False))

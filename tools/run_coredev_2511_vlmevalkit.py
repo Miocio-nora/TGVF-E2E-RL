@@ -149,6 +149,11 @@ def main() -> int:
     install_coredev_batched_inference(inference_module)
 
     mode = sys.argv[sys.argv.index("--mode") + 1] if "--mode" in sys.argv else "all"
+    evaluated_model = (
+        _required_option("--model")
+        if "--help" not in sys.argv
+        else model_name
+    )
     judge_base_url = None
     if "--help" not in sys.argv and mode in {"all", "eval"}:
         if "--judge" not in sys.argv:
@@ -189,6 +194,7 @@ def main() -> int:
             phase="eval",
             datasets=selected_datasets,
             expected_judge_base_url=judge_base_url,
+            expected_model=evaluated_model,
         )
     return 0
 

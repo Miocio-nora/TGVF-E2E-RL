@@ -167,13 +167,15 @@ def _write_health(path: Path) -> None:
     )
 
 
-def _materialize_eval_fixture(root: Path) -> dict[str, Path]:
+def _materialize_eval_fixture(
+    root: Path, *, evaluated_model: str = COREDEV_BASELINE_MODEL
+) -> dict[str, Path]:
     artifacts = {}
     for spec in COREDEV_2511.slices:
         dataset_root = root / spec.vlmeval_dataset
-        run_dir = dataset_root / COREDEV_BASELINE_MODEL / "T20260721-150000"
+        run_dir = dataset_root / evaluated_model / "T20260721-150000"
         run_dir.mkdir(parents=True)
-        prediction = run_dir / f"{COREDEV_BASELINE_MODEL}_{spec.vlmeval_dataset}.tsv"
+        prediction = run_dir / f"{evaluated_model}_{spec.vlmeval_dataset}.tsv"
         rows = ["index\tprediction"]
         rows.extend(f"{index}\tanswer-{index}" for index in range(spec.sample_count))
         prediction.write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -190,7 +192,7 @@ def _materialize_eval_fixture(root: Path) -> dict[str, Path]:
         status = {
             "schema_version": "1.0",
             "eval_id": "T20260721-150000",
-            "model_name": COREDEV_BASELINE_MODEL,
+            "model_name": evaluated_model,
             "commit": "7055d301",
             "mode": "eval",
             "datasets": {spec.vlmeval_dataset: entry},
@@ -202,7 +204,7 @@ def _materialize_eval_fixture(root: Path) -> dict[str, Path]:
             _write_health(dataset_root / "judge-health-pre.json")
             _write_health(dataset_root / "judge-health-post.json")
             artifact = run_dir / (
-                f"{COREDEV_BASELINE_MODEL}_{spec.vlmeval_dataset}_"
+                f"{evaluated_model}_{spec.vlmeval_dataset}_"
                 f"{COREDEV_LLM_JUDGE_MODEL}_result.tsv"
             )
             artifact.write_text("index\tlog\n0\tSucceed\n", encoding="utf-8")
@@ -228,6 +230,25 @@ def test_seven_slice_aggregate_requires_complete_status_rows_and_judge_evidence(
     assert tuple(item["dataset"] for item in result["slices"]) == tuple(
         spec.vlmeval_dataset for spec in COREDEV_2511.slices
     )
+
+
+def test_seven_slice_aggregate_accepts_explicit_instruct_model_identity(
+    tmp_path: Path,
+) -> None:
+    evaluated_model = "Qwen3-VL-8B-Instruct"
+    _materialize_eval_fixture(tmp_path, evaluated_model=evaluated_model)
+
+    result = summarize_coredev_results(
+        work_dir=tmp_path,
+        repository_root=tmp_path,
+        phase="eval",
+        expected_judge_base_url=JUDGE_BASE_URL,
+        expected_model=evaluated_model,
+    )
+
+    assert result["status"] == "pass"
+    assert result["model"] == evaluated_model
+    assert result["sample_count"] == 2511
 
 
 def test_aggregate_rejects_silent_exact_or_random_judge_fallback(

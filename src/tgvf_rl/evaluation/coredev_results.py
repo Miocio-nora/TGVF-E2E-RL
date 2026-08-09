@@ -269,9 +269,10 @@ def _latest_status(
     *,
     dataset_name: str,
     phase: Literal["infer", "eval"],
+    expected_model: str,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     status_paths = sorted(
-        (dataset_root / COREDEV_BASELINE_MODEL).glob("T*/status.json"), reverse=True
+        (dataset_root / expected_model).glob("T*/status.json"), reverse=True
     )
     for status_path in status_paths:
         payload = _load_status(status_path)
@@ -361,11 +362,14 @@ def summarize_coredev_results(
     phase: Literal["infer", "eval"],
     datasets: tuple[str, ...] | None = None,
     expected_judge_base_url: str | None = None,
+    expected_model: str = COREDEV_BASELINE_MODEL,
 ) -> dict[str, Any]:
     """Validate statuses, exact row counts, judge evidence, and aggregate metrics."""
 
     if not work_dir.is_absolute() or not repository_root.is_absolute():
         raise ValueError("work_dir and repository_root must be absolute")
+    if not isinstance(expected_model, str) or not expected_model.strip():
+        raise ValueError("expected_model must be non-empty text")
     canonical = tuple(spec.vlmeval_dataset for spec in COREDEV_2511.slices)
     selected = canonical if datasets is None else datasets
     if not selected or len(set(selected)) != len(selected):
@@ -381,7 +385,7 @@ def summarize_coredev_results(
     slices = []
     for dataset_name in selected:
         nested_root = work_dir / dataset_name
-        if (nested_root / COREDEV_BASELINE_MODEL).is_dir():
+        if (nested_root / expected_model).is_dir():
             dataset_root = nested_root
         else:
             dataset_root = work_dir
@@ -389,8 +393,9 @@ def summarize_coredev_results(
             dataset_root,
             dataset_name=dataset_name,
             phase=phase,
+            expected_model=expected_model,
         )
-        if status.get("model_name") != COREDEV_BASELINE_MODEL:
+        if status.get("model_name") != expected_model:
             raise RuntimeError(f"evaluated model identity mismatch: {dataset_name}")
         commit = status.get("commit")
         if not isinstance(commit, str) or not VLMEVALKIT_REVIEW_COMMIT.startswith(commit):
@@ -452,7 +457,7 @@ def summarize_coredev_results(
         "suite": "coredev-2511-vlmevalkit-7055d301-v1",
         "phase": phase,
         "status": "pass",
-        "model": COREDEV_BASELINE_MODEL,
+        "model": expected_model,
         "vlmevalkit_commit": VLMEVALKIT_REVIEW_COMMIT,
         "sample_count": sum(item["sample_count"] for item in slices),
         "slice_count": len(slices),
