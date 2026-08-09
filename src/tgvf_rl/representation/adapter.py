@@ -20,6 +20,8 @@ from .deepstack import (
     DDeepStackPayload,
     DDeepStackProjectionPorts,
     FrozenProjectionPort,
+    ProjectionPort,
+    TrainableBorrowedProjectionPort,
     _validate_token_tensor,
 )
 
@@ -352,9 +354,9 @@ class TGVFAdapter(TGVFBidirectionalAttention):
         *,
         d_lm: int,
         d_v: int,
-        main_projection: FrozenProjectionPort,
+        main_projection: ProjectionPort,
         deepstack_projections: DDeepStackProjectionPorts
-        | Sequence[FrozenProjectionPort],
+        | Sequence[ProjectionPort],
         branch_layers: Sequence[int] = (8, 16, 24),
         attn_dim: int | None = None,
         variant: TGVFAdapterVariant = TGVFAdapterVariant.FULL_D_DEEPSTACK,
@@ -367,8 +369,11 @@ class TGVFAdapter(TGVFBidirectionalAttention):
             attn_dim=attn_dim,
             vision_routing_only=variant.uses_vision_routing_only,
         )
-        if not isinstance(main_projection, FrozenProjectionPort):
-            raise TypeError("main_projection must be a FrozenProjectionPort")
+        if not isinstance(
+            main_projection,
+            (FrozenProjectionPort, TrainableBorrowedProjectionPort),
+        ):
+            raise TypeError("main_projection must be a supported projection port")
         if isinstance(deepstack_projections, DDeepStackProjectionPorts):
             projection_ports = deepstack_projections
             if (
@@ -478,9 +483,19 @@ class TGVFAdapter(TGVFBidirectionalAttention):
 
         full_state_keys = set(super().state_dict())
         borrowed_keys = full_state_keys - set(expected)
-        if not borrowed_keys or any(
-            not name.startswith(_BORROWED_PROJECTION_STATE_PREFIXES)
-            for name in borrowed_keys
+        projection_ports = (
+            self.main_projection,
+            *tuple(self.d_deepstack_projections.projections),
+        )
+        registered_projection_expected = any(
+            isinstance(port, FrozenProjectionPort) for port in projection_ports
+        )
+        if (
+            (registered_projection_expected and not borrowed_keys)
+            or any(
+                not name.startswith(_BORROWED_PROJECTION_STATE_PREFIXES)
+                for name in borrowed_keys
+            )
         ):
             raise RuntimeError("borrowed Qwen merger state boundary is inconsistent")
         incompatible = super().load_state_dict(dict(state), strict=False)

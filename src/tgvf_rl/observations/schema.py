@@ -13,6 +13,12 @@ from tgvf_rl.contracts.identity import (
 from tgvf_rl.contracts.tensors import TensorArtifactRef, TensorPayloadSet
 
 
+TRAJECTORY_SOURCE_VISUAL_SCHEMA_V1 = "trajectory-source-visual-v1"
+TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2 = "trajectory-source-visual-v2"
+FOCUSED_OBSERVATION_SCHEMA_V1 = "focused-observation-v1"
+FOCUSED_OBSERVATION_SCHEMA_V2 = "focused-observation-v2"
+
+
 @dataclass(frozen=True, slots=True)
 class ConditionProvenance:
     provider: str
@@ -178,6 +184,43 @@ class TrajectorySourceVisual:
 
 
 @dataclass(frozen=True, slots=True)
+class TrajectorySourceVisualV2(TrajectorySourceVisual):
+    """Trainable-replay source state with exact processor output."""
+
+    preprocessed_pixel_values: TensorArtifactRef | None = None
+    schema_version: str = TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2
+
+    def __post_init__(self) -> None:
+        TrajectorySourceVisual.__post_init__(self)
+        if self.schema_version != TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2:
+            raise ValueError(
+                f"unsupported trajectory source visual schema {self.schema_version!r}"
+            )
+        if self.preprocessed_pixel_values is None:
+            raise ValueError(
+                "trajectory source visual v2 requires preprocessed pixel_values"
+            )
+        pixel_values = self.preprocessed_pixel_values.descriptor
+        if (
+            len(pixel_values.shape) != 2
+            or pixel_values.shape[0] <= 0
+            or pixel_values.shape[1] <= 0
+        ):
+            raise ValueError("preprocessed pixel_values must have shape [N, patch_dim]")
+        if not _is_floating_dtype(pixel_values.dtype):
+            raise TypeError("preprocessed pixel_values must use a floating dtype")
+        expected_tokens = _grid_token_count(self.state.image_grid_thw)
+        if pixel_values.shape[0] != expected_tokens:
+            raise ValueError(
+                "preprocessed pixel_values rows differ from image_grid_thw"
+            )
+        if pixel_values.shape[0] != _feature_count(self.state.premerge_main):
+            raise ValueError(
+                "preprocessed pixel_values rows differ from source pre-merge tokens"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class VisualLayout:
     sequence_length: int
     original_image_positions: tuple[int, ...]
@@ -266,7 +309,7 @@ class FocusedObservationRecord:
     cache: CacheContract
 
     def __post_init__(self) -> None:
-        if self.schema_version != "focused-observation-v1" or not self.observation_id:
+        if self.schema_version != FOCUSED_OBSERVATION_SCHEMA_V1 or not self.observation_id:
             raise ValueError("observation schema_version and ID must be non-empty")
         if self.call_index < 0:
             raise ValueError("call_index must be non-negative")
@@ -330,6 +373,51 @@ class FocusedObservationRecord:
                 raise ValueError(
                     f"D-DeepStack branch {branch.layer} features and positions differ"
                 )
+
+
+@dataclass(frozen=True, slots=True)
+class FocusedObservationRecordV2(FocusedObservationRecord):
+    """Focused replay observation carrying the exact rollout-time Hq."""
+
+    condition_hq: TensorArtifactRef | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != FOCUSED_OBSERVATION_SCHEMA_V2
+            or not self.observation_id
+        ):
+            raise ValueError("observation schema_version and ID must be non-empty")
+        # Reuse the checksum-stable v1 contract for every shared field without
+        # adding optional fields to legacy records.
+        FocusedObservationRecord(
+            schema_version=FOCUSED_OBSERVATION_SCHEMA_V1,
+            observation_id=self.observation_id,
+            call_index=self.call_index,
+            model=self.model,
+            representation=self.representation,
+            condition=self.condition,
+            source_visual=self.source_visual,
+            payload=self.payload,
+            branches=self.branches,
+            layout=self.layout,
+            masks=self.masks,
+            cache=self.cache,
+        )
+        if self.condition_hq is None:
+            raise ValueError("focused observation v2 requires condition Hq")
+        hq = self.condition_hq.descriptor
+        if len(hq.shape) != 2 or hq.shape[0] <= 0 or hq.shape[1] <= 0:
+            raise ValueError("condition Hq must have shape [target_tokens, hidden]")
+        if not _is_floating_dtype(hq.dtype):
+            raise TypeError("condition Hq must use a floating dtype")
+        target_tokens = (
+            self.condition.conditioning_target_token_end
+            - self.condition.conditioning_target_token_start
+        )
+        if hq.shape[0] != target_tokens:
+            raise ValueError("condition Hq rows differ from conditioning target span")
+        if hq.shape[1] != _feature_dim(self.payload.main_d):
+            raise ValueError("condition Hq hidden size differs from main D")
 
 
 @dataclass(frozen=True, slots=True)
@@ -661,3 +749,19 @@ def _feature_count(ref: TensorArtifactRef) -> int:
     if len(shape) == 3 and shape[0] == 1:
         return shape[1]
     raise ValueError(f"visual tensor {ref.name!r} must have shape [N,H] or [1,N,H]")
+
+
+def _feature_dim(ref: TensorArtifactRef) -> int:
+    shape = ref.descriptor.shape
+    if len(shape) not in {2, 3} or shape[-1] <= 0:
+        raise ValueError(f"visual tensor {ref.name!r} must have shape [N,H] or [1,N,H]")
+    return shape[-1]
+
+
+def _grid_token_count(grid: tuple[int, int, int]) -> int:
+    temporal, height, width = grid
+    return temporal * height * width
+
+
+def _is_floating_dtype(dtype: str) -> bool:
+    return dtype == "bfloat16" or dtype.startswith("float")

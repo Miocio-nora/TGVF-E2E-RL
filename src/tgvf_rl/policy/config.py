@@ -27,6 +27,9 @@ POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA = (
 POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA = (
     "policy-tgvf-stage3-shaped-experiment-v1-20260806"
 )
+POLICY_TRAINABLE_RP66_EXPERIMENT_CONFIG_SCHEMA = (
+    "policy-trainable-rp66-deepeyes-matched-experiment-v1"
+)
 POLICY_PILOT_V1_MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
 POLICY_PILOT_V1_MODEL_FAMILY = "qwen3_vl"
 POLICY_PILOT_V1_MODEL_NAME = "Qwen3-VL-8B-Instruct"
@@ -639,11 +642,53 @@ class PolicyTGVFStage3ExperimentConfig(PolicyPilotV1Config):
             raise TypeError("grpo must be PilotGRPOConfig")
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyTrainableRP66ExperimentConfig(PolicyPilotV1Config):
+    """Full-model RP66 arm with the DeepEyes six-perception envelope."""
+
+    schema_version: str = POLICY_TRAINABLE_RP66_EXPERIMENT_CONFIG_SCHEMA
+    max_tgvf_call_attempts: int = 6
+    image_max_pixels: int = 1_003_520
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        expected = {
+            "schema_version": (
+                self.schema_version,
+                POLICY_TRAINABLE_RP66_EXPERIMENT_CONFIG_SCHEMA,
+            ),
+            "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
+            "native_deepstack_enabled": (self.native_deepstack_enabled, True),
+            "tool_profile": (self.tool_profile, POLICY_PILOT_V1_TOOL_PROFILE),
+            "enabled_tool_names": (
+                self.enabled_tool_names,
+                POLICY_PILOT_V1_TOOL_NAMES,
+            ),
+            "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 6),
+            "image_max_pixels": (self.image_max_pixels, 1_003_520),
+        }
+        for name, (actual, required) in expected.items():
+            if actual != required:
+                raise ValueError(
+                    "trainable RP66 experiment requires "
+                    f"{name}={required!r}, got {actual!r}"
+                )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError("trainable RP66 model_path is not supported")
+        if not isinstance(self.sampling, PilotSamplingConfig):
+            raise TypeError("sampling must be PilotSamplingConfig")
+        if not isinstance(self.lora, DecoderLoRAConfig):
+            raise TypeError("lora must be DecoderLoRAConfig")
+        if not isinstance(self.grpo, PilotGRPOConfig):
+            raise TypeError("grpo must be PilotGRPOConfig")
+
+
 __all__ = [
     "POLICY_PILOT_ACCEPTED_SAMPLING_SCALES",
     "POLICY_PILOT_V1_CONFIG_SCHEMA",
     "POLICY_VISUAL_TOOL_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_TGVF_STAGE3_EXPERIMENT_CONFIG_SCHEMA",
+    "POLICY_TRAINABLE_RP66_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME",
@@ -668,5 +713,6 @@ __all__ = [
     "PilotSamplingConfig",
     "PolicyPilotV1Config",
     "PolicyTGVFStage3ExperimentConfig",
+    "PolicyTrainableRP66ExperimentConfig",
     "PolicyVisualToolExperimentConfig",
 ]

@@ -941,7 +941,13 @@ class VerlFrameworkNeutralAgentLoop:
             ),
         )
 
-        def execute_sync() -> tuple[TrajectoryRecord, object]:
+        output_builder_async = getattr(
+            invocation.output_builder,
+            "build_async",
+            None,
+        )
+
+        def execute_sync() -> tuple[TrajectoryRecord, object | None]:
             from tgvf_rl.environment.agent_loop import FrameworkNeutralAgentLoop
 
             native_loop = invocation.native_loop_factory(sampler)
@@ -950,14 +956,23 @@ class VerlFrameworkNeutralAgentLoop:
                     "native_loop_factory must return FrameworkNeutralAgentLoop"
                 )
             trajectory = native_loop.run(invocation.request)
-            return trajectory, invocation.output_builder(trajectory)
+            output = (
+                None
+                if callable(output_builder_async)
+                else invocation.output_builder(trajectory)
+            )
+            return trajectory, output
 
         try:
             trajectory, output = await asyncio.to_thread(execute_sync)
+            if callable(output_builder_async):
+                output = await output_builder_async(trajectory)
         finally:
             release = getattr(self.server_manager, "release_trajectory", None)
             if callable(release):
                 await release(invocation.sticky_request_id)
+        if output is None:  # pragma: no cover - guarded by builder dispatch
+            raise RuntimeError("native output builder returned no output")
         _validate_structural_agent_loop_output(
             output,
             expected_prompt_ids=invocation.request.initial_prompt_token_ids,

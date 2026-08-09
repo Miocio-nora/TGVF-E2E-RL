@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 import pytest
 
 from tgvf_rl.environment import record_trajectory_source_visual
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
-from tgvf_rl.observations.schema import SourceVisualState
+from tgvf_rl.observations.schema import (
+    TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2,
+    SourceVisualState,
+    TrajectorySourceVisual,
+    TrajectorySourceVisualV2,
+)
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 
 
@@ -41,7 +48,15 @@ def _record(
         deepstack_branch_layers=(8, 16),
         deepstack_injection_positions=((3, 4), (3, 4)),
         observation_store=store,
+        preprocessed_pixel_values=_pixel_values(source),
     )
+
+
+def _pixel_values(source: SourceVisualTensorBundle) -> torch.Tensor:
+    token_count = 1
+    for value in source.image_grid_thw:
+        token_count *= value
+    return torch.arange(token_count * 3, dtype=torch.float32).view(token_count, 3)
 
 
 def _state_identity(state: SourceVisualState) -> tuple[object, ...]:
@@ -63,6 +78,14 @@ def test_records_complete_source_visual_without_a_tool_call() -> None:
     store = ObservationStore()
     source = _bundle()
     recorded = _record(store, source, trajectory_id="trajectory-0")
+
+    assert isinstance(recorded, TrajectorySourceVisualV2)
+    assert recorded.schema_version == TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2
+    assert recorded.preprocessed_pixel_values is not None
+    torch.testing.assert_close(
+        store.resolve_verified(recorded.preprocessed_pixel_values),
+        _pixel_values(source),
+    )
 
     torch.testing.assert_close(
         store.resolve_verified(recorded.state.premerge_main), source.premerge_main
@@ -131,6 +154,9 @@ def test_records_exact_immutable_source_rgb_for_crop_capabilities() -> None:
         deepstack_branch_layers=(8, 16),
         deepstack_injection_positions=((3, 4), (3, 4)),
         observation_store=store,
+        preprocessed_pixel_values=_pixel_values(
+            _bundle(decoded_rgb_sha256=tensor_checksum(pixels))
+        ),
         source_rgb=pixels,
     )
     assert recorded.source_pixels is not None
@@ -159,5 +185,73 @@ def test_rejects_source_features_bound_to_different_decoded_rgb() -> None:
             deepstack_branch_layers=(8, 16),
             deepstack_injection_positions=((3, 4), (3, 4)),
             observation_store=store,
+            preprocessed_pixel_values=_pixel_values(
+                _bundle(decoded_rgb_sha256="b" * 64)
+            ),
             source_rgb=pixels,
+        )
+
+
+def test_preprocessed_pixel_values_are_immutable_and_legacy_schema_remains_readable() -> (
+    None
+):
+    store = ObservationStore()
+    source = _bundle()
+    pixel_values = _pixel_values(source)
+    expected = pixel_values.clone()
+    recorded = record_trajectory_source_visual(
+        trajectory_id="trajectory-pixel-values",
+        source_visual=source,
+        source_positions=(3, 4),
+        deepstack_branch_layers=(8, 16),
+        deepstack_injection_positions=((3, 4), (3, 4)),
+        observation_store=store,
+        preprocessed_pixel_values=pixel_values,
+    )
+    assert recorded.preprocessed_pixel_values is not None
+    pixel_values.zero_()
+    torch.testing.assert_close(
+        store.resolve_verified_for_trajectory(
+            recorded.preprocessed_pixel_values,
+            trajectory_id="trajectory-pixel-values",
+        ),
+        expected,
+        rtol=0,
+        atol=0,
+    )
+
+    legacy = TrajectorySourceVisual(
+        state=recorded.state,
+        positions=recorded.positions,
+        deepstack_branch_layers=recorded.deepstack_branch_layers,
+        deepstack_injection_positions=recorded.deepstack_injection_positions,
+        source_pixels=recorded.source_pixels,
+    )
+    assert type(legacy) is TrajectorySourceVisual
+    assert not hasattr(legacy, "preprocessed_pixel_values")
+    with pytest.raises(ValueError, match="requires preprocessed pixel_values"):
+        replace(recorded, preprocessed_pixel_values=None)
+
+
+@pytest.mark.parametrize(
+    ("pixel_values", "message"),
+    (
+        (torch.ones(8, dtype=torch.float32), "floating \\[N, patch_dim\\]"),
+        (torch.ones((8, 3), dtype=torch.int64), "floating \\[N, patch_dim\\]"),
+        (torch.ones((7, 3), dtype=torch.float32), "image_grid_thw"),
+    ),
+)
+def test_rejects_invalid_preprocessed_pixel_value_shapes(
+    pixel_values: torch.Tensor,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        record_trajectory_source_visual(
+            trajectory_id="trajectory-invalid-pixel-values",
+            source_visual=_bundle(),
+            source_positions=(3, 4),
+            deepstack_branch_layers=(8, 16),
+            deepstack_injection_positions=((3, 4), (3, 4)),
+            observation_store=ObservationStore(),
+            preprocessed_pixel_values=pixel_values,
         )

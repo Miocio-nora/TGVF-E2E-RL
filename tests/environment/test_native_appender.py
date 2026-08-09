@@ -14,6 +14,7 @@ from tgvf_rl.environment.native_appender import (
     QWEN_NATIVE_RESPONSE_SUFFIX,
     QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
+    render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_payload,
 )
 from tgvf_rl.observations.store import ObservationHandle
@@ -24,6 +25,9 @@ from tgvf_rl.protocol import (
     TokenByteSpan,
 )
 from tgvf_rl.protocol.schema import StandardToolError
+from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
+    TGVF_DEEPEYES_MATCHED_USER_PROMPT,
+)
 
 
 class _CharacterTokenizer:
@@ -223,6 +227,40 @@ def test_instruct_tool_response_starts_next_assistant_without_think() -> None:
     )
     next_assistant = suffix_text.rsplit("<|im_start|>assistant\n", 1)[1]
     assert "<think>" not in next_assistant
+
+
+def test_injected_matched_tgvf_response_is_latent_only_without_target_echo() -> None:
+    tokenizer = _CharacterTokenizer()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=_Registrar(),
+        success_environment_text_renderer=(
+            render_qwen_native_matched_tgvf_success_environment_text
+        ),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    secret_target = "UNIQUE_POLICY_TARGET_MUST_NOT_BE_ECHOED"
+    sampled, parsed = _ascii_sampled_call("tgvf_focus_tool", {"target": secret_target})
+
+    _updated, suffix = appender.append(
+        (7, 8),
+        sampled,
+        ObservationHandle("obs-matched", "5" * 64),
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    suffix_text = "".join(map(chr, suffix))
+    assert suffix_text == (
+        QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
+        + QWEN_NATIVE_IMAGE_PLACEHOLDER
+        + TGVF_DEEPEYES_MATCHED_USER_PROMPT
+        + QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX
+    )
+    assert secret_target not in suffix_text
+    assert "Focused visual observation for target" not in suffix_text
+    assert "<answer>" not in suffix_text
+    assert suffix_text.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
 
 
 def test_error_append_uses_canonical_json_without_visual_placeholder() -> None:

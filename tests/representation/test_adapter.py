@@ -9,6 +9,7 @@ from tgvf_rl.representation import (
     TGVFAdapter,
     TGVFAdapterVariant,
 )
+from tgvf_rl.representation.deepstack import TrainableBorrowedProjectionPort
 
 
 class ToyMerger(nn.Module):
@@ -230,6 +231,70 @@ def test_adapter_artifact_state_excludes_every_borrowed_qwen_merger() -> None:
     polluted["main_projection.projection.weight"] = torch.zeros(1)
     with pytest.raises(ValueError, match="artifact keys mismatch"):
         target.load_artifact_state_dict(polluted)
+
+
+def test_adapter_loads_rp66_subset_with_trainable_non_registered_mergers() -> None:
+    source = _adapter()
+    artifact_state = {
+        name: value.clone() for name, value in source.artifact_state_dict().items()
+    }
+    owner = nn.Module()
+    owner.mergers = nn.ModuleList(ToyMerger(4, 6) for _ in range(4))
+    ports = tuple(
+        TrainableBorrowedProjectionPort(
+            merger,
+            identity=identity,
+            input_dim=4,
+            output_dim=6,
+            spatial_merge_size=2,
+        )
+        for merger, identity in zip(
+            owner.mergers,
+            ("main-merger", "merger-8", "merger-16", "merger-24"),
+            strict=True,
+        )
+    )
+    owner.adapter = TGVFAdapter(
+        d_lm=6,
+        d_v=4,
+        attn_dim=5,
+        main_projection=ports[0],
+        deepstack_projections=ports[1:],
+        branch_layers=(8, 16, 24),
+    )
+
+    owner.adapter.load_artifact_state_dict(artifact_state)
+
+    assert set(owner.adapter.state_dict()) == set(artifact_state)
+    assert all(
+        torch.equal(value, owner.adapter.state_dict()[name])
+        for name, value in artifact_state.items()
+    )
+    owner_parameter_names = tuple(dict(owner.named_parameters()))
+    assert sum(name.endswith("linear.weight") for name in owner_parameter_names) == 4
+    assert sum(name.endswith("linear.bias") for name in owner_parameter_names) == 4
+    assert not any(
+        name.startswith("adapter.main_projection.projection.")
+        or name.startswith("adapter.d_deepstack_projections.projections.")
+        for name in owner_parameter_names
+    )
+
+    target = torch.randn(3, 6, requires_grad=True)
+    main_visual = torch.randn(8, 4, requires_grad=True)
+    branch_visual = tuple(torch.randn(8, 4, requires_grad=True) for _ in range(3))
+    output = owner.adapter(
+        target_hidden_states=target,
+        pre_merge_visual_tokens=main_visual,
+        deepstack_pre_merge_visual_tokens=branch_visual,
+    )
+    (output.main_d.sum() + sum(output.deepstack_visual_embeds).sum()).backward()
+
+    assert target.grad is not None
+    assert main_visual.grad is not None
+    assert all(branch.grad is not None for branch in branch_visual)
+    assert all(
+        parameter.grad is not None for merger in owner.mergers for parameter in merger.parameters()
+    )
 
 
 def test_main_d_only_has_no_learned_branch_parameters_or_branch_objective() -> None:

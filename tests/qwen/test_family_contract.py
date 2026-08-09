@@ -40,6 +40,7 @@ from tgvf_rl.qwen.base import (
 )
 from tgvf_rl.qwen.qwen25_vl import Qwen25VLAdapter
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
+from tgvf_rl.tensor_device import tensor_compute_device
 
 
 class TinyLanguageModel(nn.Module):
@@ -253,6 +254,25 @@ def test_recorded_deepstack_materializes_on_embedding_device_and_target_dtype() 
     assert len(branches) == 3
     assert all(branch.device == inputs_embeds.device for branch in branches)
     assert all(branch.dtype == torch.float64 for branch in branches)
+
+
+def test_cpu_offloaded_embedding_uses_its_accelerator_mesh_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embedding = nn.Embedding(8, 4)
+    embedding.weight.device_mesh = SimpleNamespace(device_type="cuda")
+    monkeypatch.setattr(
+        torch.accelerator,
+        "current_accelerator",
+        lambda: torch.device("cuda"),
+    )
+    monkeypatch.setattr(torch.accelerator, "current_device_index", lambda: 3)
+
+    assert tensor_compute_device(embedding.weight) == torch.device("cuda", 3)
+
+
+def test_ordinary_cpu_embedding_keeps_its_physical_device() -> None:
+    assert tensor_compute_device(nn.Embedding(8, 4).weight) == torch.device("cpu")
 
 
 @pytest.mark.parametrize(

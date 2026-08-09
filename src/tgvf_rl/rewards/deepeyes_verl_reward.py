@@ -22,6 +22,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from tgvf_rl.judges.base import JudgeUsage
 from tgvf_rl.rewards.deepeyes_batch import (
     JudgeGlobalFailure,
     JudgeSampleOutputError,
@@ -234,6 +235,11 @@ class AsyncJudgeOutcome:
     cache_hit: int
     failure_kind: str | None
     latency_seconds: float
+    usage: JudgeUsage | None = None
+
+    def __post_init__(self) -> None:
+        if self.usage is not None and not isinstance(self.usage, JudgeUsage):
+            raise TypeError("DeepEyes async judge usage must be JudgeUsage or None")
 
 
 class AsyncDeepEyesOpenRouterJudge:
@@ -271,13 +277,30 @@ class AsyncDeepEyesOpenRouterJudge:
                 )
 
         attempts = 0
+        last_transient_error: Exception | None = None
         failure_slot = await self._reserve_failure_slot()
         async with self._semaphore:
             while attempts < self.config.maximum_attempts:
                 attempts += 1
                 try:
                     payload = await self._request_json(request)
-                    verdict = self._parse_response(payload, request=request)
+                    try:
+                        verdict = self._parse_response(payload, request=request)
+                    except JudgeSampleOutputError:
+                        # A completed response consumed real judge tokens even
+                        # when its answer is malformed/non-binary.  Preserve
+                        # that response's usage on the sample-local failure.
+                        usage = self._parse_response_usage(payload)
+                        return AsyncJudgeOutcome(
+                            False,
+                            attempts,
+                            attempts - 1,
+                            0,
+                            "completed_invalid_output",
+                            max(0.0, self._clock() - started),
+                            usage=usage,
+                        )
+                    usage = self._parse_response_usage(payload)
                     async with self._cache_lock:
                         if self.config.cache_max_entries:
                             self._cache[request.request_id] = verdict
@@ -291,8 +314,11 @@ class AsyncDeepEyesOpenRouterJudge:
                         0,
                         None,
                         max(0.0, self._clock() - started),
+                        usage=usage,
                     )
                 except JudgeSampleOutputError:
+                    # No parseable completed response exists, so there is no
+                    # truthful token usage to attach to this failed sample.
                     return AsyncJudgeOutcome(
                         False,
                         attempts,
@@ -303,7 +329,8 @@ class AsyncDeepEyesOpenRouterJudge:
                     )
                 except JudgeGlobalFailure:
                     raise
-                except (TimeoutError, ConnectionError, RuntimeError):
+                except (TimeoutError, ConnectionError, RuntimeError) as error:
+                    last_transient_error = error
                     if attempts == self.config.maximum_attempts:
                         break
                     delay = min(
@@ -311,7 +338,9 @@ class AsyncDeepEyesOpenRouterJudge:
                         self.config.retry_backoff_seconds * (2 ** (attempts - 1)),
                     )
                     await self._sleeper(delay)
-        await self._record_transient_failure(failure_slot)
+        await self._record_transient_failure(
+            failure_slot, last_error=last_transient_error
+        )
         return AsyncJudgeOutcome(
             False,
             attempts,
@@ -331,7 +360,12 @@ class AsyncDeepEyesOpenRouterJudge:
             state[0] += 1
             return window, offset
 
-    async def _record_transient_failure(self, slot: tuple[int, int]) -> None:
+    async def _record_transient_failure(
+        self,
+        slot: tuple[int, int],
+        *,
+        last_error: Exception | None,
+    ) -> None:
         window, _offset = slot
         async with self._failure_lock:
             state = self._failure_windows[window]
@@ -341,9 +375,15 @@ class AsyncDeepEyesOpenRouterJudge:
                 * self.config.maximum_transient_failure_fraction
             )
             if state[1] > maximum:
-                raise JudgeGlobalFailure(
-                    "DeepEyes transient judge failures exceed the bounded window"
+                detail = (
+                    "unknown"
+                    if last_error is None
+                    else f"{type(last_error).__name__}: {last_error}"
                 )
+                raise JudgeGlobalFailure(
+                    "DeepEyes transient judge failures exceed the bounded window; "
+                    f"last_error={detail}"
+                ) from last_error
 
     async def _request_json(
         self, request: DeepEyesBinaryJudgeRequest
@@ -456,6 +496,30 @@ class AsyncDeepEyesOpenRouterJudge:
             return parse_binary_judge_output(content, prompt_kind=request.prompt_kind)
         except (TypeError, ValueError) as error:
             raise JudgeSampleOutputError("judge output is nonbinary") from error
+
+    def _parse_response_usage(self, value: Mapping[str, object]) -> JudgeUsage:
+        raw_usage = value.get("usage")
+        if not isinstance(raw_usage, Mapping):
+            raise JudgeGlobalFailure("DeepEyes judge response lacks required usage")
+        try:
+            cost = raw_usage["cost"]
+            if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+                raise TypeError("cost")
+            usage = JudgeUsage(
+                prompt_tokens=raw_usage["prompt_tokens"],
+                completion_tokens=raw_usage["completion_tokens"],
+                total_tokens=raw_usage["total_tokens"],
+                cost_usd=float(cost),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise JudgeGlobalFailure(
+                "DeepEyes judge response usage is invalid"
+            ) from error
+        if usage.prompt_tokens == 0:
+            raise JudgeGlobalFailure(
+                "DeepEyes completed judge response requires prompt tokens"
+            )
+        return usage
 
 
 def _official_math_verify(reference_answer: str, candidate_answer: str) -> bool:

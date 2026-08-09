@@ -33,6 +33,7 @@ from tgvf_rl.qwen.base import (
     validate_replay_request,
 )
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
+from tgvf_rl.tensor_device import tensor_compute_device
 
 from .config import POLICY_PILOT_V1_MODEL_FAMILY, DecoderLoRAConfig
 from .exact_replay import (
@@ -540,7 +541,7 @@ def _embedding_compute_dtype(model: nn.Module) -> str:
 
 def _module_device_type(model: nn.Module) -> str:
     try:
-        return next(model.parameters()).device.type
+        return tensor_compute_device(next(model.parameters())).type
     except StopIteration as error:
         raise ValueError("Qwen3 replay model has no parameters") from error
 

@@ -149,6 +149,7 @@ def _fixture(*, record_pixels: bool = True, bbox: str = "[-1,1,4,8]"):
         deepstack_branch_layers=(8,),
         deepstack_injection_positions=((1,),),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
         source_rgb=pixels if record_pixels else None,
     )
     parsed = _parsed_call(bbox)

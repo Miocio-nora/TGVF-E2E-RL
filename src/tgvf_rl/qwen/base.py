@@ -24,6 +24,7 @@ from tgvf_rl.observations.schema import (
     FocusedObservationRecord,
 )
 from tgvf_rl.tokenizer_invariants import effective_tokenizer_length
+from tgvf_rl.tensor_device import tensor_compute_device
 
 from .crop_coordinates import CropCoordinateMapping
 
@@ -739,7 +740,7 @@ def materialize_inputs_embeds(
     )
     language_model = resolve_language_model(model)
     embedding_layer = language_model.get_input_embeddings()
-    embedding_device = embedding_layer.weight.device
+    embedding_device = tensor_compute_device(embedding_layer.weight)
     embeddings = embedding_layer(request.input_ids.to(embedding_device)).clone()
     hidden = embeddings.shape[-1]
     if embeddings.shape != (batch, sequence, hidden):

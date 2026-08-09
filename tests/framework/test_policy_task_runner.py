@@ -217,6 +217,35 @@ def test_reference_diagnostic_routes_explicit_ref_engine_and_restores_flag() -> 
     assert trainer.ref_in_actor is True
 
 
+def test_reference_diagnostic_preserves_full_model_explicit_ref_route() -> None:
+    events: list[object] = []
+
+    class UpstreamTrainer:
+        def init_workers(self):
+            return None
+
+        def _get_gen_batch(self):
+            return None
+
+        def _update_actor(self, _batch):
+            return None
+
+        def _save_checkpoint(self):
+            return None
+
+        def _compute_ref_log_prob(self, batch):
+            events.append(("reference", batch, self.ref_in_actor))
+            return "frozen-reference-logprobs"
+
+    trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
+    trainer = object.__new__(trainer_cls)
+    trainer.ref_in_actor = False
+
+    assert trainer._compute_ref_log_prob("exact-bundle") == "frozen-reference-logprobs"
+    assert events == [("reference", "exact-bundle", False)]
+    assert trainer.ref_in_actor is False
+
+
 def test_trainer_gate_preserves_the_run_bound_actor_scheduler_horizon() -> None:
     from omegaconf import OmegaConf
 

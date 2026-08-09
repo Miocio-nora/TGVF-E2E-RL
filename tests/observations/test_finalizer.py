@@ -248,6 +248,38 @@ def test_finalizer_freezes_zero_one_and_multi_call_replay(call_count: int) -> No
     assert (replay.tensors.rope_delta is not None) is (call_count == 2)
 
 
+def test_finalizer_preserves_direct_only_invalid_tool_marker_replay() -> None:
+    store, behavior_store, request = _completed_trajectory(0)
+    original = request.trajectory
+    trajectory = replace(
+        original,
+        assistant_turns=(
+            replace(
+                original.assistant_turns[0],
+                raw_text=(
+                    '<tool_call>{"name":"tgvf_focus_tool",'
+                    '"arguments":{"target":"x"}}</tool_call>'
+                ),
+                think_span=None,
+                is_tool_call=True,
+            ),
+        ),
+        final_answer=None,
+        stop=TrajectoryStop.INVALID_FORMAT,
+    )
+
+    bridge = finalize_trajectory_replay(
+        replace(request, trajectory=trajectory, replay_id="direct-only-marker"),
+        observation_store=store,
+        behavior_store=behavior_store,
+    )
+
+    assert bridge.trajectory_payload == trajectory
+    assert bridge.response_ids == trajectory.assistant_turns[0].tokens.token_ids
+    assert bridge.response_mask == (1,) * len(bridge.response_ids)
+    assert bridge.exact_observation_handles == ()
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     (

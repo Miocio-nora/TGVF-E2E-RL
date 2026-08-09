@@ -218,6 +218,7 @@ class FrameworkNeutralAgentLoop:
         assistant_dialect: NativeAssistantDialect = (
             NativeAssistantDialect.QWEN3_VL_THINKING
         ),
+        direct_only: bool = False,
     ) -> None:
         self.sampler = sampler
         self.tool_runtime = tool_runtime
@@ -226,7 +227,10 @@ class FrameworkNeutralAgentLoop:
         self.behavior_recorder = behavior_recorder
         if not isinstance(assistant_dialect, NativeAssistantDialect):
             raise TypeError("assistant_dialect must be NativeAssistantDialect")
+        if type(direct_only) is not bool:
+            raise TypeError("direct_only must be a bool")
         self.assistant_dialect = assistant_dialect
+        self.direct_only = direct_only
         names = tuple(enabled_tool_names)
         if not names or len(names) != len(set(names)):
             raise ValueError("enabled tool names must be non-empty and unique")
@@ -316,6 +320,12 @@ class FrameworkNeutralAgentLoop:
                     stop_reason=sampled.stop_reason,
                 )
             )
+            if self.direct_only and has_tool_marker:
+                # A direct-only trajectory is complete after this sampled row:
+                # preserve its exact policy tokens/logprobs for replay, but do
+                # not parse, append an error turn, or execute any tool marker.
+                stop = TrajectoryStop.INVALID_FORMAT
+                break
             if not has_tool_marker:
                 final_answer = _extract_final_answer(
                     sampled.text,

@@ -19,7 +19,13 @@ from tgvf_rl.environment.focus_tool import (
     TGVFFocusTool,
     ToolExecutionRequest,
 )
-from tgvf_rl.observations.schema import VisualLayout
+from tgvf_rl.observations.schema import (
+    FOCUSED_OBSERVATION_SCHEMA_V1,
+    FOCUSED_OBSERVATION_SCHEMA_V2,
+    FocusedObservationRecord,
+    FocusedObservationRecordV2,
+    VisualLayout,
+)
 from tgvf_rl.observations.store import ObservationStore, record_checksum
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
@@ -130,6 +136,15 @@ def test_focus_tool_materializes_main_and_deepstack_once() -> None:
     )
     result = TGVFFocusTool(adapter, store).execute(request)
     replay = store.resolve_record(result.handle)
+    assert isinstance(replay, FocusedObservationRecordV2)
+    assert replay.schema_version == FOCUSED_OBSERVATION_SCHEMA_V2
+    assert replay.condition_hq is not None
+    torch.testing.assert_close(
+        store.resolve_verified(replay.condition_hq),
+        condition.values,
+        rtol=0,
+        atol=0,
+    )
     torch.testing.assert_close(
         store.resolve_verified(replay.payload.main_d),
         result.adapter_output.main_d,
@@ -157,3 +172,41 @@ def test_focus_tool_materializes_main_and_deepstack_once() -> None:
     assert record_checksum(tampered) != result.handle.record_sha256
     with pytest.raises(IdentityMismatchError, match="reused with different content"):
         store.put(tampered)
+
+    legacy = FocusedObservationRecord(
+        schema_version=FOCUSED_OBSERVATION_SCHEMA_V1,
+        observation_id=replay.observation_id,
+        call_index=replay.call_index,
+        model=replay.model,
+        representation=replay.representation,
+        condition=replay.condition,
+        source_visual=replay.source_visual,
+        payload=replay.payload,
+        branches=replay.branches,
+        layout=replay.layout,
+        masks=replay.masks,
+        cache=replay.cache,
+    )
+    assert type(legacy) is FocusedObservationRecord
+    with pytest.raises(ValueError, match="requires condition Hq"):
+        replace(replay, condition_hq=None)
+
+    target_tokens = (
+        replay.condition.conditioning_target_token_end
+        - replay.condition.conditioning_target_token_start
+    )
+    bad_rows = store.put_tensor(
+        "bad.condition_hq.rows", torch.randn(target_tokens + 1, 8)
+    )
+    with pytest.raises(ValueError, match="rows differ"):
+        replace(replay, condition_hq=bad_rows)
+    bad_hidden = store.put_tensor(
+        "bad.condition_hq.hidden", torch.randn(target_tokens, 7)
+    )
+    with pytest.raises(ValueError, match="hidden size differs"):
+        replace(replay, condition_hq=bad_hidden)
+    bad_dtype = store.put_tensor(
+        "bad.condition_hq.dtype", torch.ones(target_tokens, 8, dtype=torch.int64)
+    )
+    with pytest.raises(TypeError, match="floating dtype"):
+        replace(replay, condition_hq=bad_dtype)

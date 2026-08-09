@@ -187,6 +187,112 @@ def test_invalid_direct_format_retains_behavior_row(
     assert context.protocol_valid is False
 
 
+def test_direct_only_keeps_the_existing_instruct_direct_answer_path() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampled = _sample(
+        "B",
+        _pilot_fixture_sampling(version),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    behavior_store = BehaviorTraceStore()
+    runtime = Runtime()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=runtime,
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=4,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        direct_only=True,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "direct-only-answer", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.DIRECT_ANSWER
+    assert trajectory.final_answer == "B"
+    assert len(trajectory.assistant_turns) == 1
+    assert trajectory.tool_calls == trajectory.observations == ()
+    assert trajectory.tool_errors == ()
+    assert runtime.contexts == []
+    TrajectoryValidator(_SOURCE_STORE, behavior_store).validate(trajectory)
+
+
+@pytest.mark.parametrize(
+    "sampled_text",
+    (
+        '<tool_call>{"name":"tgvf_focus_tool","arguments":{"target":"x"}}'
+        "</tool_call>",
+        "prefix <tool_call>",
+        "prefix </tool_call>",
+    ),
+)
+def test_direct_only_retains_any_first_turn_tool_marker_without_execution(
+    sampled_text: str,
+) -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampled = _sample(
+        sampled_text,
+        _pilot_fixture_sampling(version),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    behavior_store = BehaviorTraceStore()
+    runtime = Runtime()
+
+    class ForbiddenAppender:
+        def append(self, *_args, **_kwargs):
+            raise AssertionError("direct-only must not append a tool response")
+
+    class ForbiddenParser:
+        def parse(self, *_args, **_kwargs):
+            raise AssertionError("direct-only must not parse a tool marker")
+
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((sampled,)),
+        tool_runtime=runtime,
+        appender=ForbiddenAppender(),
+        parser=ForbiddenParser(),  # type: ignore[arg-type]
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=4,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        direct_only=True,
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "direct-only-marker", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.INVALID_FORMAT
+    assert trajectory.final_answer is None
+    assert len(trajectory.assistant_turns) == 1
+    assert trajectory.assistant_turns[0].is_tool_call is True
+    assert trajectory.tool_calls == trajectory.observations == ()
+    assert trajectory.tool_errors == ()
+    assert runtime.contexts == []
+    trace = behavior_store.resolve(trajectory.assistant_turns[0].behavior_trace)
+    assert trace.behavior.sampled_token_ids == sampled.token_ids
+    assert trace.behavior.logprobs == sampled.behavior_logprobs
+    TrajectoryValidator(_SOURCE_STORE, behavior_store).validate(trajectory)
+
+
 def test_length_termination_is_not_promoted_to_a_valid_final_answer() -> None:
     version = PolicyVersion("smoke", 0, SHA)
     sampled = replace(

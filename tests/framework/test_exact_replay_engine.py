@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import multiprocessing
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,7 @@ from tgvf_rl.framework.verl.data_bridge import (
 from tgvf_rl.framework.verl.exact_replay_engine import (
     TGVF_EXACT_REPLAY_MODEL_TYPE,
     Qwen3ConfigBoundReplayPortFactory,
+    _exact_replay_root_forward_method,
     make_exact_replay_fsdp2_engine_class,
     register_exact_replay_fsdp2_engine,
 )
@@ -44,14 +46,18 @@ from tgvf_rl.policy.qwen_replay import (
 
 
 class _NoRawForwardModel(nn.Module):
+    _tgvf_exact_replay_root_forward_registered = True
+
     def __init__(self, weight: float) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.tensor(weight))
-        self.unshard_calls = 0
+        self.root_forward_calls = 0
         self.reshard_calls = 0
 
-    def unshard(self) -> None:
-        self.unshard_calls += 1
+    def _tgvf_exact_replay_root_forward(self, *, operation):
+        self.root_forward_calls += 1
+        result = operation()
+        return result.logprobs, result
 
     def reshard(self) -> None:
         self.reshard_calls += 1
@@ -85,7 +91,7 @@ class _FakeResponsePort:
         sampling,
     ) -> _FakeRoleResult:
         del prompt_token_ids, sampling
-        assert self.model.unshard_calls == 1
+        assert self.model.root_forward_calls == 1
         self.calls.append(bundle.bundle_sha256)
         mask = torch.tensor(
             tuple(
@@ -127,9 +133,7 @@ class _FakeUpstreamFSDPEngineWithLMHead:
     def forward_step(self, micro_batch, loss_function, forward_only):
         raise AssertionError((micro_batch, loss_function, forward_only))
 
-    def forward_backward_batch(
-        self, micro_batch, loss_function, forward_only
-    ):
+    def forward_backward_batch(self, micro_batch, loss_function, forward_only):
         loss, output = self.forward_step(
             micro_batch,
             loss_function,
@@ -455,7 +459,7 @@ def test_same_registered_engine_restores_actor_and_ref_full_sequence_layout() ->
     assert actor_output["metrics"] == {"selected": 7}
     assert not actor_output["model_output"]["log_probs"].requires_grad
     assert actor.exact_replay_evidence.role is ComponentRole.CURRENT
-    assert actor_model.unshard_calls == 1
+    assert actor_model.root_forward_calls == 1
 
     reference_model = _NoRawForwardModel(0.5)
     reference = engine_cls(
@@ -478,14 +482,14 @@ def test_same_registered_engine_restores_actor_and_ref_full_sequence_layout() ->
     assert reference_full[-1].item() == 0.0
     assert not reference_full.requires_grad
     assert reference.exact_replay_evidence.role is ComponentRole.REFERENCE
-    assert reference_model.unshard_calls == 1
+    assert reference_model.root_forward_calls == 1
     assert ports[0].binding.role is ComponentRole.CURRENT
     assert ports[1].binding.role is ComponentRole.REFERENCE
     assert ports[0].calls == ports[1].calls
     payload.release_sidecars()
 
 
-def test_exact_replay_rejects_a_root_without_fsdp2_unshard() -> None:
+def test_exact_replay_rejects_a_root_without_fsdp2_forward_hooks() -> None:
     _FakeEngineRegistry.registrations.clear()
     payload, _, micro_batch = _live_tensordict()
 
@@ -503,7 +507,7 @@ def test_exact_replay_rejects_a_root_without_fsdp2_unshard() -> None:
         module=nn.Linear(1, 1),
     )
 
-    with pytest.raises(RuntimeError, match="FSDP2 unshard"):
+    with pytest.raises(RuntimeError, match="FSDP2 root forward"):
         engine.forward_step(micro_batch, None, True)
     payload.release_sidecars()
 
@@ -532,7 +536,151 @@ def test_exact_replay_reshards_root_after_forward_backward_batch() -> None:
 
     engine.forward_backward_batch(micro_batch, loss_fn, False)
 
-    assert model.unshard_calls == 1
+    assert model.root_forward_calls == 1
     assert model.reshard_calls == 1
     assert model.weight.grad is not None
     payload.release_sidecars()
+
+
+class _FSDPRootReplayFixture(nn.Module):
+    """Tiny analogue of a separately wrapped Qwen child plus root RP66."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.child = nn.Linear(4, 4, bias=False)
+        self.tgvf_adapter = nn.Linear(4, 4, bias=False)
+
+    def forward(self, *_: object, **__: object) -> torch.Tensor:
+        raise AssertionError("the exact-replay regression must bypass raw forward")
+
+
+@dataclass(frozen=True)
+class _FSDPRootReplayResult:
+    logprobs: torch.Tensor
+
+
+@dataclass(frozen=True)
+class _ChecksumBoundReplayTensor:
+    values: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.values.dtype is not torch.float32:
+            raise RuntimeError("checksum-bound replay tensor was transformed")
+
+
+def _run_fsdp_root_replay_regression(
+    rank: int,
+    world_size: int,
+    rendezvous: str,
+    output_queue,
+) -> None:
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+    torch.distributed.init_process_group(
+        "gloo",
+        rank=rank,
+        world_size=world_size,
+        init_method=f"file://{rendezvous}",
+    )
+    try:
+        torch.manual_seed(17)
+        mesh = init_device_mesh("cpu", (world_size,), mesh_dim_names=("fsdp",))
+        model = _FSDPRootReplayFixture()
+        # veRL wraps decoder/vision layers independently and leaves RP66 in
+        # the final root parameter group.
+        mixed_precision = MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+            cast_forward_inputs=True,
+        )
+        fully_shard(
+            model.child,
+            mesh=mesh,
+            mp_policy=mixed_precision,
+            reshard_after_forward=False,
+        )
+        fully_shard(
+            model,
+            mesh=mesh,
+            mp_policy=mixed_precision,
+            reshard_after_forward=False,
+        )
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.125)
+
+        sharded = dict(model.named_parameters())
+        adapter_parameter = sharded["tgvf_adapter.weight"]
+        child_parameter = sharded["child.weight"]
+        adapter_before = adapter_parameter.to_local().detach().clone()
+        child_before = child_parameter.to_local().detach().clone()
+
+        root_forward = _exact_replay_root_forward_method(model)
+
+        sealed_first = _ChecksumBoundReplayTensor(torch.tensor(1.0))
+        sealed_second = _ChecksumBoundReplayTensor(torch.tensor(2.0))
+
+        def replay_operation(
+            sealed: _ChecksumBoundReplayTensor,
+        ) -> _FSDPRootReplayResult:
+            inputs = torch.full(
+                (2, 4),
+                sealed.values.item(),
+                dtype=model.tgvf_adapter.weight.dtype,
+            )
+            values = model.child(inputs) + model.tgvf_adapter(inputs)
+            return _FSDPRootReplayResult(logprobs=values)
+
+        first_anchor, first_result = root_forward(
+            operation=lambda: replay_operation(sealed_first),
+        )
+        second_anchor, second_result = root_forward(
+            operation=lambda: replay_operation(sealed_second),
+        )
+        assert sealed_first.values.dtype is torch.float32
+        assert sealed_second.values.dtype is torch.float32
+        assert first_anchor is first_result.logprobs
+        assert second_anchor is second_result.logprobs
+        (-(first_anchor.sum() + second_anchor.sum())).backward()
+        adapter_has_sharded_grad = adapter_parameter.grad is not None
+        child_has_sharded_grad = child_parameter.grad is not None
+        optimizer.step()
+
+        adapter_changed = not torch.equal(adapter_parameter.to_local(), adapter_before)
+        child_changed = not torch.equal(child_parameter.to_local(), child_before)
+        output_queue.put(
+            (
+                rank,
+                adapter_has_sharded_grad,
+                child_has_sharded_grad,
+                adapter_changed,
+                child_changed,
+            )
+        )
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+def test_registered_root_forward_updates_root_owned_rp66_shards(tmp_path) -> None:
+    if (
+        not torch.distributed.is_available()
+        or not torch.distributed.is_gloo_available()
+    ):
+        pytest.skip("two-rank FSDP2 regression requires torch.distributed gloo")
+    if torch.distributed.is_initialized():
+        pytest.skip("two-rank FSDP2 regression requires process-group ownership")
+
+    world_size = 2
+    context = multiprocessing.get_context("spawn")
+    output_queue = context.SimpleQueue()
+    torch.multiprocessing.start_processes(
+        _run_fsdp_root_replay_regression,
+        args=(world_size, str(tmp_path / "fsdp-root-rendezvous"), output_queue),
+        nprocs=world_size,
+        join=True,
+        start_method="spawn",
+    )
+    observed = sorted(output_queue.get() for _ in range(world_size))
+    assert observed == [
+        (0, True, True, True, True),
+        (1, True, True, True, True),
+    ]

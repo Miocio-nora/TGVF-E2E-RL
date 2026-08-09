@@ -429,6 +429,7 @@ def test_bridge_freezes_adapter_runs_both_providers_and_records_all_branches(
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=((1,), (1,), (1,)),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
     )
     second_source = record_trajectory_source_visual(
         trajectory_id=second_identity.canonical_id,
@@ -437,6 +438,7 @@ def test_bridge_freezes_adapter_runs_both_providers_and_records_all_branches(
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=((1,), (1,), (1,)),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
     )
     sampled, parsed = _sampled_turn()
     first_context = _context(first_identity, first_source)
@@ -593,6 +595,7 @@ def test_contextual_behavior_policy_and_forward_identity_must_match(
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=((1,), (1,), (1,)),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
     )
     context = _context(identity, source)
     _, parsed = _sampled_turn()
@@ -639,6 +642,7 @@ def test_source_port_rejects_released_trajectory_when_digest_is_still_shared(
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=((1,), (1,), (1,)),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
     )
     live_source = record_trajectory_source_visual(
         trajectory_id=live_identity.canonical_id,
@@ -647,6 +651,7 @@ def test_source_port_rejects_released_trajectory_when_digest_is_still_shared(
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=((1,), (1,), (1,)),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
     )
     store.release_trajectories((released_identity.canonical_id,))
     assert store.resource_counts().tensors > 0

@@ -4,26 +4,75 @@ import asyncio
 import pickle
 from types import SimpleNamespace
 
+import pytest
 import torch
 
+from tgvf_rl.contracts.errors import IdentityMismatchError
 from tgvf_rl.environment.focus_tool import (
     PrecomputedTGVFObservationPayload,
     SourceVisualTensorBundle,
 )
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
     TGVFFocusMaterializationResult,
     TGVFVLLMWorkerExtension,
     _BehaviorTraceBuffer,
+    _adapter_owned_state_from_utility_wire,
+    _adapter_owned_state_to_utility_wire,
     _focus_from_utility_wire,
     _focus_to_utility_wire,
+    _runtime_classes,
     _source_from_utility_wire,
     _source_to_utility_wire,
     _tensor_from_utility_wire,
     _tensor_to_utility_wire,
-    _runtime_classes,
+    adapter_owned_state_sha256,
+    bind_tgvf_adapter_state_update_manager,
 )
 from tgvf_rl.representation.adapter import TGVFAdapterMetadata
 from tgvf_rl.representation.deepstack import DDeepStackPayload
+
+
+class _FakeAdapter:
+    def __init__(self, state: dict[str, torch.Tensor]) -> None:
+        self.state = {name: tensor.clone() for name, tensor in state.items()}
+        self.load_count = 0
+        self.requires_grad_value = True
+        self.training = True
+
+    def artifact_state_dict(self, *, keep_vars: bool = False):
+        del keep_vars
+        return self.state
+
+    def load_artifact_state_dict(self, state):
+        self.load_count += 1
+        self.state = {name: tensor.clone() for name, tensor in state.items()}
+
+    def requires_grad_(self, value: bool):
+        self.requires_grad_value = value
+        return self
+
+    def eval(self):
+        self.training = False
+        return self
+
+
+def _adapter_ack(
+    optimizer_step: int,
+    state_sha256: str,
+    tensor_count: int,
+    *,
+    applied: bool = True,
+) -> dict[str, object]:
+    return {
+        "schema_version": TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
+        "optimizer_step": optimizer_step,
+        "state_sha256": state_sha256,
+        "tensor_count": tensor_count,
+        "applied": applied,
+        "cleared_source_count": 0,
+        "cleared_trace_count": 0,
+    }
 
 
 def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
@@ -61,6 +110,138 @@ def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
     visual_restored = _source_from_utility_wire(visual_wire)
     assert isinstance(visual_restored, SourceVisualTensorBundle)
     torch.testing.assert_close(visual_restored.premerge_main, visual.premerge_main)
+
+
+def test_adapter_owned_state_wire_and_digest_are_order_independent() -> None:
+    state = {
+        "branch.weight": torch.arange(8, dtype=torch.bfloat16).reshape(2, 4),
+        "query.weight": torch.arange(6, dtype=torch.float32).reshape(2, 3),
+    }
+    reordered = dict(reversed(tuple(state.items())))
+
+    assert adapter_owned_state_sha256(state) == adapter_owned_state_sha256(reordered)
+    restored = _adapter_owned_state_from_utility_wire(
+        _adapter_owned_state_to_utility_wire(state)
+    )
+    assert set(restored) == set(state)
+    for name in state:
+        torch.testing.assert_close(restored[name], state[name])
+
+
+def test_worker_adapter_update_is_strict_versioned_and_clears_caches() -> None:
+    initial = {
+        "query.weight": torch.zeros((2, 3), dtype=torch.bfloat16),
+        "value.bias": torch.zeros((2,), dtype=torch.bfloat16),
+    }
+    updated = {
+        "query.weight": torch.arange(6, dtype=torch.bfloat16).reshape(2, 3),
+        "value.bias": torch.tensor([3.0, 4.0], dtype=torch.bfloat16),
+    }
+    adapter = _FakeAdapter(initial)
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    extension._tgvf_adapter_module = adapter
+    extension._tgvf_source_cache = {"source": object()}
+    extension._tgvf_behavior_traces = {"trace": object()}
+    digest = adapter_owned_state_sha256(updated)
+
+    ack = extension.tgvf_update_adapter_owned_state(
+        7,
+        digest,
+        _adapter_owned_state_to_utility_wire(updated),
+    )
+
+    assert ack == {
+        "schema_version": TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
+        "optimizer_step": 7,
+        "state_sha256": digest,
+        "tensor_count": 2,
+        "applied": True,
+        "cleared_source_count": 1,
+        "cleared_trace_count": 1,
+    }
+    assert adapter.load_count == 1
+    assert not adapter.requires_grad_value
+    assert not adapter.training
+    for name in updated:
+        torch.testing.assert_close(adapter.state[name], updated[name])
+    assert extension._tgvf_sources() == {}
+    assert extension._tgvf_traces() == {}
+
+    extension._tgvf_source_cache["retry"] = object()
+    retry = extension.tgvf_update_adapter_owned_state(
+        7,
+        digest,
+        _adapter_owned_state_to_utility_wire(updated),
+    )
+    assert retry["applied"] is False
+    assert retry["cleared_source_count"] == 1
+    assert adapter.load_count == 1
+    assert extension._tgvf_sources() == {}
+
+    conflicting = {**updated, "value.bias": updated["value.bias"] + 1}
+    with pytest.raises(IdentityMismatchError, match="same Adapter optimizer step"):
+        extension.tgvf_update_adapter_owned_state(
+            7,
+            adapter_owned_state_sha256(conflicting),
+            _adapter_owned_state_to_utility_wire(conflicting),
+        )
+    with pytest.raises(RuntimeError, match="stale Adapter-owned state"):
+        extension.tgvf_update_adapter_owned_state(
+            6,
+            digest,
+            _adapter_owned_state_to_utility_wire(updated),
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"query.weight": torch.zeros((3, 2), dtype=torch.bfloat16)},
+        {"query.weight": torch.zeros((2, 3), dtype=torch.float32)},
+        {"unexpected.weight": torch.zeros((2, 3), dtype=torch.bfloat16)},
+    ],
+)
+def test_worker_adapter_update_rejects_state_before_mutating(
+    invalid: dict[str, torch.Tensor],
+) -> None:
+    initial = {"query.weight": torch.ones((2, 3), dtype=torch.bfloat16)}
+    adapter = _FakeAdapter(initial)
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    extension._tgvf_adapter_module = adapter
+    extension._tgvf_source_cache = {"source": object()}
+    extension._tgvf_behavior_traces = {"trace": object()}
+
+    with pytest.raises(ValueError, match="keys mismatch|shape/dtype"):
+        extension.tgvf_update_adapter_owned_state(
+            1,
+            adapter_owned_state_sha256(invalid),
+            _adapter_owned_state_to_utility_wire(invalid),
+        )
+
+    assert adapter.load_count == 0
+    torch.testing.assert_close(adapter.state["query.weight"], initial["query.weight"])
+    assert set(extension._tgvf_sources()) == {"source"}
+    assert set(extension._tgvf_traces()) == {"trace"}
+
+
+def test_worker_adapter_update_rejects_payload_digest_mismatch() -> None:
+    state = {"query.weight": torch.ones((2, 3), dtype=torch.bfloat16)}
+    adapter = _FakeAdapter(state)
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    extension._tgvf_adapter_module = adapter
+    extension._tgvf_source_cache = {"source": object()}
+    extension._tgvf_behavior_traces = {"trace": object()}
+
+    with pytest.raises(IdentityMismatchError, match="update digest differs"):
+        extension.tgvf_update_adapter_owned_state(
+            1,
+            "f" * 64,
+            _adapter_owned_state_to_utility_wire(state),
+        )
+
+    assert adapter.load_count == 0
+    assert set(extension._tgvf_sources()) == {"source"}
+    assert set(extension._tgvf_traces()) == {"trace"}
 
 
 def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() -> None:
@@ -185,16 +366,134 @@ def test_crop_rpc_reuses_the_rollout_worker_visual_path() -> None:
     assert tuple(calls[0]["image_grid_thw"].shape) == (1, 3)
 
 
+def test_http_server_adapter_update_uses_collective_rpc_and_validates_ack() -> None:
+    state = {"query.weight": torch.arange(6, dtype=torch.bfloat16).reshape(2, 3)}
+    digest = adapter_owned_state_sha256(state)
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Engine:
+        async def collective_rpc(self, *, method: str, kwargs: dict[str, object]):
+            calls.append((method, kwargs))
+            restored = _adapter_owned_state_from_utility_wire(kwargs["state_wire"])
+            torch.testing.assert_close(restored["query.weight"], state["query.weight"])
+            return [_adapter_ack(4, digest, 1)]
+
+    async def exercise() -> dict[str, object]:
+        server_cls = _runtime_classes()[3]
+        server = object.__new__(server_cls)
+        server.global_steps = 4
+        server.engine = Engine()
+        return await server.tgvf_update_adapter_owned_state(
+            optimizer_step=4,
+            state_sha256=digest,
+            state=state,
+        )
+
+    ack = asyncio.run(exercise())
+    assert ack == _adapter_ack(4, digest, 1)
+    assert calls[0][0] == "tgvf_update_adapter_owned_state"
+    assert calls[0][1]["optimizer_step"] == 4
+    assert calls[0][1]["state_sha256"] == digest
+
+
+def test_client_and_manager_adapter_update_entries_validate_every_server_ack() -> None:
+    state = {"query.weight": torch.arange(6, dtype=torch.float32).reshape(2, 3)}
+    digest = adapter_owned_state_sha256(state)
+    calls: list[tuple[str, int]] = []
+
+    class RemoteMethod:
+        def __init__(self, server_name: str) -> None:
+            self.server_name = server_name
+
+        async def remote(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs["state"] is state
+            assert kwargs["state_sha256"] == digest
+            calls.append((self.server_name, int(kwargs["optimizer_step"])))
+            return _adapter_ack(9, digest, 1)
+
+    async def exercise():
+        manager_cls, client_cls, _replica_cls, _server_cls = _runtime_classes()
+        client_server = SimpleNamespace(
+            tgvf_update_adapter_owned_state=RemoteMethod("client")
+        )
+        client = object.__new__(client_cls)
+        client._tgvf_routes = {"request": ("client-server", client_server)}
+        client_ack = await client.update_adapter_owned_state(
+            request_id="request",
+            optimizer_step=9,
+            state_sha256=digest,
+            state=state,
+        )
+
+        manager_servers = tuple(
+            SimpleNamespace(tgvf_update_adapter_owned_state=RemoteMethod(name))
+            for name in ("server-0", "server-1")
+        )
+        manager = object.__new__(manager_cls)
+        manager.rollout_replicas = [SimpleNamespace(servers=manager_servers)]
+        manager_acks = await manager.update_adapter_owned_state(
+            optimizer_step=9,
+            state_sha256=digest,
+            state=state,
+        )
+        return client_ack, manager_acks
+
+    client_ack, manager_acks = asyncio.run(exercise())
+    assert client_ack == _adapter_ack(9, digest, 1)
+    assert manager_acks == (
+        _adapter_ack(9, digest, 1),
+        _adapter_ack(9, digest, 1),
+    )
+    assert calls == [("client", 9), ("server-0", 9), ("server-1", 9)]
+
+
+def test_adapter_update_manager_binds_existing_rollout_replicas() -> None:
+    replicas = [SimpleNamespace(servers=(object(),))]
+
+    manager = bind_tgvf_adapter_state_update_manager(replicas)
+
+    assert manager.rollout_replicas == replicas
+    assert manager.rollout_replicas is not replicas
+
+
+def test_manager_adapter_update_rejects_one_divergent_ack() -> None:
+    state = {"query.weight": torch.ones((1,), dtype=torch.float32)}
+    digest = adapter_owned_state_sha256(state)
+
+    class RemoteMethod:
+        async def remote(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return _adapter_ack(5, "f" * 64, 1)
+
+    async def exercise() -> None:
+        manager_cls = _runtime_classes()[0]
+        manager = object.__new__(manager_cls)
+        manager.rollout_replicas = [
+            SimpleNamespace(
+                servers=(
+                    SimpleNamespace(tgvf_update_adapter_owned_state=RemoteMethod()),
+                )
+            )
+        ]
+        await manager.update_adapter_owned_state(
+            optimizer_step=5,
+            state_sha256=digest,
+            state=state,
+        )
+
+    with pytest.raises(RuntimeError, match="ACK state digest differs"):
+        asyncio.run(exercise())
+
+
 def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
     events: list[str] = []
 
     class Engine:
         output_handler = None
-        engine_core = object()
+        engine_core = None
 
         def shutdown(self):
             events.append("engine")
-            self.output_handler.cancel()
 
     class Socket:
         def __init__(self, name: str) -> None:
@@ -214,18 +513,32 @@ def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
             finally:
                 events.append("handler")
 
+        async def core_reader(name: str) -> None:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                events.append(name)
+
         engine.output_handler = asyncio.create_task(output_handler())
+        resources = SimpleNamespace(
+            output_queue_task=asyncio.create_task(core_reader("core-output")),
+            stats_update_task=asyncio.create_task(core_reader("core-stats")),
+        )
+        engine.engine_core = SimpleNamespace(resources=resources)
         server.engine = engine
         server._server_task = asyncio.create_task(asyncio.Event().wait())
         server._master_sock = Socket("master")
         server._dp_rpc_sock = Socket("rpc")
         server._dp_master_sock = Socket("dp-master")
         await server.tgvf_shutdown()
-        return server, engine
+        return server, engine, resources
 
-    server, engine = asyncio.run(exercise())
-    assert events == ["engine", "handler", "master", "rpc", "dp-master"]
+    server, engine, resources = asyncio.run(exercise())
+    assert set(events[:3]) == {"handler", "core-output", "core-stats"}
+    assert events[3:] == ["engine", "master", "rpc", "dp-master"]
     assert server.engine is None
     assert engine.output_handler is None
     assert engine.engine_core is None
+    assert resources.output_queue_task is None
+    assert resources.stats_update_task is None
     assert server._master_sock is None

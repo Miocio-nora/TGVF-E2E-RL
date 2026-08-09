@@ -177,6 +177,7 @@ def _source(
             deepstack_branch_layers=BRANCH_LAYERS,
             deepstack_injection_positions=((1, 2, 3, 4),) * 3,
             observation_store=store,
+            preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
             source_rgb=pixels,
         ),
         pixels,

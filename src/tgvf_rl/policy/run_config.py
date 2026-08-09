@@ -80,7 +80,11 @@ from .config import (
     PilotSamplingConfig,
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
+    PolicyTrainableRP66ExperimentConfig,
     PolicyVisualToolExperimentConfig,
+)
+from .tgvf_deepeyes_matched_protocol import (
+    TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
 
 
@@ -90,6 +94,9 @@ POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA = "policy-e2e-formal-pilot-config-v1"
 POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA = "policy-e2e-stage3-shaped-run-config-v1"
 POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA = (
     "policy-e2e-deepeyes-scaled-crop-run-config-v1"
+)
+POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-trainable-rp66-deepeyes-matched-run-config-v1"
 )
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
@@ -227,12 +234,29 @@ POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256 = StandardToolError(
     recoverable=True,
     maximum_tool_calls=1,
 ).payload_sha256
+POLICY_E2E_TRAINABLE_RP66_SIX_CALL_CAP_ERROR_SHA256 = StandardToolError(
+    code=ToolErrorCode.TOOL_CALL_LIMIT_EXCEEDED.value,
+    message=(
+        "The maximum of 6 tool-call attempts has been reached; "
+        "this call was not executed."
+    ),
+    attempt_index=6,
+    recoverable=True,
+    maximum_tool_calls=6,
+).payload_sha256
 POLICY_E2E_AGENT_LOOP_CONFIG_PATH = (
     Path(__file__).resolve().parents[3]
     / "configs"
     / "policy"
     / "agent_loops"
     / "tgvf_native_policy_v1.yaml"
+)
+POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "configs"
+    / "policy"
+    / "agent_loops"
+    / "prl15_trainable_rp66_matched.yaml"
 )
 POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN = (
     "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
@@ -490,6 +514,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA: True,
             POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -558,6 +583,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
         POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -567,6 +593,9 @@ def load_policy_e2e_smoke_run_config(
     stage3_shaped_run = schema_version == POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
+    )
+    trainable_rp66_run = (
+        schema_version == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
     )
     run_id = _safe_run_id(payload["run_id"])
 
@@ -616,7 +645,11 @@ def load_policy_e2e_smoke_run_config(
     _require_exact(
         model_table["native_deepstack_enabled"], True, "model.native_deepstack_enabled"
     )
-    expected_image_max_pixels = 1_003_520 if deepeyes_scaled_crop_run else 512 * 512
+    expected_image_max_pixels = (
+        1_003_520
+        if deepeyes_scaled_crop_run or trainable_rp66_run
+        else 512 * 512
+    )
     _require_exact(
         model_table["image_max_pixels"],
         expected_image_max_pixels,
@@ -907,7 +940,9 @@ def load_policy_e2e_smoke_run_config(
         tool_profile.tool_set_sha256,
         "protocol.tool_schema_sha256",
     )
-    expected_maximum_tool_calls = 1 if stage3_shaped_run else 4
+    expected_maximum_tool_calls = (
+        1 if stage3_shaped_run else 6 if trainable_rp66_run else 4
+    )
     _require_exact(
         protocol_table["maximum_tool_calls"],
         expected_maximum_tool_calls,
@@ -921,6 +956,8 @@ def load_policy_e2e_smoke_run_config(
         (
             POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
             if stage3_shaped_run
+            else POLICY_E2E_TRAINABLE_RP66_SIX_CALL_CAP_ERROR_SHA256
+            if trainable_rp66_run
             else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
         ),
         "protocol.cap_error_sha256",
@@ -942,6 +979,10 @@ def load_policy_e2e_smoke_run_config(
                 assistant_dialect=assistant_dialect,
             ).bundle_sha256
         }
+        if trainable_rp66_run:
+            accepted_prompt_hashes = {
+                TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+            }
         if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
             accepted_prompt_hashes.add(
                 _HISTORICAL_THINKING_PROMPT_BUNDLES[tool_profile]
@@ -1023,7 +1064,11 @@ def load_policy_e2e_smoke_run_config(
         ),
         ignore_eos=_boolean(sampling_table["ignore_eos"], name="sampling.ignore_eos"),
     )
-    expected_sampling_scale = (16, 20480) if deepeyes_scaled_crop_run else (8, 8192)
+    expected_sampling_scale = (
+        (16, 20480)
+        if deepeyes_scaled_crop_run or trainable_rp66_run
+        else (8, 8192)
+    )
     _require_exact(
         (sampling.trajectories_per_prompt, sampling.max_response_length),
         expected_sampling_scale,
@@ -1137,12 +1182,22 @@ def load_policy_e2e_smoke_run_config(
         )
         if _sha256_file(judge_config_path) != judge_config_sha256:
             raise ValueError("reward judge config SHA256 mismatch")
-        bound_judge = load_openai_compatible_judge(
-            judge_config_path,
-            expected_file_sha256=judge_config_sha256,
-        )
-        if formal_pilot and not bound_judge.formal_pilot_accepted:
-            raise ValueError("reward judge is not accepted for the formal Pilot")
+        if trainable_rp66_run:
+            from tgvf_rl.rewards.deepeyes_verl_reward import (
+                load_deepeyes_judge_service_config,
+            )
+
+            load_deepeyes_judge_service_config(
+                judge_config_path,
+                expected_file_sha256=judge_config_sha256,
+            )
+        else:
+            bound_judge = load_openai_compatible_judge(
+                judge_config_path,
+                expected_file_sha256=judge_config_sha256,
+            )
+            if formal_pilot and not bound_judge.formal_pilot_accepted:
+                raise ValueError("reward judge is not accepted for the formal Pilot")
     else:
         judge_config_path = None
         judge_config_sha256 = None
@@ -1498,7 +1553,12 @@ def load_policy_e2e_smoke_run_config(
         framework_table["agent_loop_config_path"],
         name="framework.agent_loop_config_path",
     )
-    if agent_loop_config_path != POLICY_E2E_AGENT_LOOP_CONFIG_PATH:
+    expected_agent_loop_config_path = (
+        POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH
+        if trainable_rp66_run
+        else POLICY_E2E_AGENT_LOOP_CONFIG_PATH
+    )
+    if agent_loop_config_path != expected_agent_loop_config_path:
         raise ValueError(
             "framework.agent_loop_config_path differs from the checked-in "
             "Policy Pilot composition"
@@ -1633,6 +1693,8 @@ def load_policy_e2e_smoke_run_config(
 
     if stage3_shaped_run:
         policy_type = PolicyTGVFStage3ExperimentConfig
+    elif trainable_rp66_run:
+        policy_type = PolicyTrainableRP66ExperimentConfig
     elif protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE:
         policy_type = PolicyPilotV1Config
     else:
@@ -1757,6 +1819,77 @@ def load_policy_e2e_smoke_run_config(
         )
         if "wandb" not in training.logger:
             raise ValueError("DeepEyes-scaled Crop reference requires W&B logging")
+
+    if trainable_rp66_run:
+        if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
+            raise ValueError(
+                "trainable RP66 pilot requires the retained mixed-T1 dataset"
+            )
+        _require_exact(
+            model.model_name,
+            POLICY_PILOT_V1_MODEL_NAME,
+            "trainable RP66 model edition",
+        )
+        _require_exact(
+            model_table["image_max_pixels"],
+            1_003_520,
+            "trainable RP66 image pixel cap",
+        )
+        _require_exact(
+            protocol.tool_profile,
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            "trainable RP66 tool profile",
+        )
+        _require_exact(
+            (
+                reward.answer_weight,
+                reward.format_weight,
+                reward.conditional_tool_weight,
+            ),
+            (0.8, 0.2, 1.2),
+            "trainable RP66 DeepEyes reward weights",
+        )
+        _require_exact(
+            (
+                optimizer.name,
+                optimizer.learning_rate,
+                optimizer.beta1,
+                optimizer.beta2,
+                optimizer.epsilon,
+                optimizer.weight_decay,
+                optimizer.maximum_gradient_norm,
+            ),
+            ("adamw", 1.0e-6, 0.9, 0.999, 1.0e-8, 0.01, 1.0),
+            "trainable RP66 actor optimizer contract",
+        )
+        _require_exact(
+            (
+                accumulation.global_prompt_batch_size,
+                accumulation.prompt_micro_batch_size_per_rank,
+                accumulation.rollout_prompt_micro_batch_size_per_engine,
+                accumulation.gradient_accumulation_steps,
+            ),
+            (16, 1, 1, 4),
+            "trainable RP66 BS16 accumulation contract",
+        )
+        _require_exact(
+            (
+                scheduler.name,
+                scheduler.warmup_steps,
+                scheduler.total_steps,
+                scheduler.minimum_learning_rate_ratio,
+                training.maximum_optimizer_steps,
+            ),
+            ("constant", 0, 8, 0.0, 8),
+            "trainable RP66 pilot optimization horizon",
+        )
+        _require_exact(
+            training.checkpoint_steps,
+            (0, 1, 4, 8),
+            "trainable RP66 checkpoint plan",
+        )
+        if "wandb" not in training.logger:
+            raise ValueError("trainable RP66 pilot requires W&B logging")
 
     canonical_json = json.dumps(
         _normalize_json(payload),
@@ -2259,6 +2392,9 @@ __all__ = [
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
     "POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_TRAINABLE_RP66_SIX_CALL_CAP_ERROR_SHA256",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER",
     "POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_MIXED_JUDGE_MODE",

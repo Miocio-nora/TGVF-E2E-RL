@@ -152,6 +152,7 @@ def _source(store: ObservationStore, trajectory_id: str):
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=tuple((1,) for _ in BRANCH_LAYERS),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
         source_rgb=pixels,
     )
     return pixels, binding

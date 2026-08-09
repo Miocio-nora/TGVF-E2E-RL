@@ -38,6 +38,10 @@ from tgvf_rl.environment import (
     QwenNativeToolObservationAppender,
     record_trajectory_source_visual,
 )
+from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_tgvf_success_environment_text,
+    render_qwen_native_success_environment_text,
+)
 from tgvf_rl.environment.focus_runtime import _call_fingerprint
 from tgvf_rl.environment.focus_tool import (
     SourceVisualTensorBundle,
@@ -70,7 +74,9 @@ from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.trajectory_audit import PolicyTrajectoryAuditWriter
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
 )
+from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
 )
@@ -80,6 +86,13 @@ from tgvf_rl.rewards import (
     PilotRewardSpec,
     RuleFirstAnswerVerifier,
     reward_context_from_trajectory,
+)
+from tgvf_rl.rewards.deepeyes_async_tgvf import (
+    AsyncDeepEyesTGVFTrajectoryRewardScorer,
+)
+from tgvf_rl.rewards.deepeyes_verl_reward import (
+    AsyncDeepEyesOpenRouterJudge,
+    load_deepeyes_judge_service_config,
 )
 from tgvf_rl.rewards.schema import (
     NormalizationSpec,
@@ -110,7 +123,10 @@ from tgvf_rl.framework.vllm import (
 
 from .native_agent_loop import VerlNativeTrajectoryComponents
 from .objective_bridge import make_objective_sentinels
-from .reward_bridge import VerlRewardedAgentLoopOutputBuilder
+from .reward_bridge import (
+    VerlAsyncRewardedAgentLoopOutputBuilder,
+    VerlRewardedAgentLoopOutputBuilder,
+)
 from .rollout_bridge import RolloutBridgeRecord
 from .policy_runtime import (
     PolicyE2ERuntimeBuildContext,
@@ -137,6 +153,30 @@ from tgvf_rl.rewards.stage3_verl_adapter import (
 
 QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA = "tgvf-qwen3-policy-e2e-live-runtime-v1"
 _BRANCH_LAYERS = (8, 16, 24)
+_RP66_MATCHED_VISUAL_SOURCES = frozenset({"vstar", "arxivqa"})
+_RP66_MATCHED_DIRECT_ONLY_SOURCE = "thinklite"
+
+
+def _rp66_matched_source_route(
+    config: object,
+    sample_fields: Mapping[str, object],
+) -> tuple[bool, bool]:
+    """Return ``(direct_only, matched_visual_observation)`` for one row."""
+
+    if (
+        getattr(config, "schema_version", None)
+        != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    ):
+        return False, False
+    data_source = _scalar(sample_fields.get("data_source"))
+    if data_source == _RP66_MATCHED_DIRECT_ONLY_SOURCE:
+        return True, False
+    if data_source in _RP66_MATCHED_VISUAL_SOURCES:
+        return False, True
+    raise ValueError(
+        "trainable RP66 runtime received an unsupported data_source: "
+        f"{data_source!r}"
+    )
 
 
 class Qwen3PolicyE2ELiveRuntimeBuilder:
@@ -323,7 +363,22 @@ class _Qwen3PolicyTrajectoryComponents:
         self.metrics_factory = metrics_factory
         self.agent_loop_output_cls = agent_loop_output_cls
         self.sample_index = sample_index
-        if self.config.reward.profile == "pilot-v1":
+        self.official_deepeyes_judge = None
+        if (
+            self.config.schema_version
+            == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+        ):
+            reward = self.config.reward
+            if reward.judge_config_path is None or reward.judge_config_sha256 is None:
+                raise ValueError("trainable RP66 requires the official judge service")
+            service = load_deepeyes_judge_service_config(
+                reward.judge_config_path,
+                expected_file_sha256=reward.judge_config_sha256,
+            )
+            self.official_deepeyes_judge = AsyncDeepEyesOpenRouterJudge(service)
+            self.reward_pipeline = None
+            self.stage3_reward_runtime = None
+        elif self.config.reward.profile == "pilot-v1":
             self.reward_pipeline = _build_reward_pipeline(self.config)
             self.stage3_reward_runtime = None
         else:
@@ -380,6 +435,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 source_positions for _ in _BRANCH_LAYERS
             ),
             observation_store=self.store,
+            preprocessed_pixel_values=pixel_values,
             source_rgb=source_rgb,
         )
 
@@ -399,10 +455,20 @@ class _Qwen3PolicyTrajectoryComponents:
         assistant_dialect = native_assistant_dialect_for_model(
             self.config.model.model_name
         )
+        direct_only, matched_visual_observation = _rp66_matched_source_route(
+            self.config,
+            sample_fields,
+        )
+        success_environment_text_renderer = (
+            render_qwen_native_matched_tgvf_success_environment_text
+            if matched_visual_observation
+            else render_qwen_native_success_environment_text
+        )
         appender = QwenNativeToolObservationAppender(
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
+            success_environment_text_renderer=success_environment_text_renderer,
             assistant_dialect=assistant_dialect,
         )
         parser = StrictToolCallParser(
@@ -419,6 +485,10 @@ class _Qwen3PolicyTrajectoryComponents:
                 execution_ledger=self.focus_execution_ledger,
                 contextual_forward_identity=self.contextual_forward_identity,
                 branch_merger_identities=self.branch_merger_identities,
+                success_environment_text_renderer=(
+                    success_environment_text_renderer
+                ),
+                assistant_dialect=assistant_dialect,
             )
         elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
             crop_processor_identity = _artifact_identity(
@@ -469,12 +539,22 @@ class _Qwen3PolicyTrajectoryComponents:
                 enabled_tool_names=self.config.protocol.enabled_tool_names,
                 cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
                 assistant_dialect=assistant_dialect,
+                direct_only=direct_only,
             )
 
-        reward_context = _BoundRewardContextProvider(
-            **_reward_source_from_sample_fields(sample_fields),
-        )
-        if self.reward_pipeline is not None:
+        reward_source = _reward_source_from_sample_fields(sample_fields)
+        reward_context = _BoundRewardContextProvider(**reward_source)
+        official_deepeyes_scorer = None
+        if self.official_deepeyes_judge is not None:
+            official_deepeyes_scorer = AsyncDeepEyesTGVFTrajectoryRewardScorer(
+                question=reward_source["question"],
+                reference_answer=reward_source["expected_answer"],
+                task_kind=reward_source["task_kind"],
+                data_source=reward_source["data_source"],
+                judge_transport=self.official_deepeyes_judge,
+            )
+            scorer = official_deepeyes_scorer
+        elif self.reward_pipeline is not None:
             scorer: PilotVerlTrajectoryRewardScorer | Stage3VerlTrajectoryRewardScorer
             scorer = PilotVerlTrajectoryRewardScorer(
                 pipeline=self.reward_pipeline,
@@ -510,13 +590,22 @@ class _Qwen3PolicyTrajectoryComponents:
             behavior_store=self.behavior_store,
         )
         request_proxy = _RewardRequestProxy(identity)
-        output_builder = VerlRewardedAgentLoopOutputBuilder(
-            request=request_proxy,
-            scorer=scorer,
-            finalizer=finalizer,
-            metrics_factory=self.metrics_factory,
-            agent_loop_output_cls=self.agent_loop_output_cls,
-        )
+        if official_deepeyes_scorer is not None:
+            output_builder = VerlAsyncRewardedAgentLoopOutputBuilder(
+                request=request_proxy,
+                scorer=official_deepeyes_scorer,
+                finalizer=finalizer,
+                metrics_factory=self.metrics_factory,
+                agent_loop_output_cls=self.agent_loop_output_cls,
+            )
+        else:
+            output_builder = VerlRewardedAgentLoopOutputBuilder(
+                request=request_proxy,
+                scorer=scorer,
+                finalizer=finalizer,
+                metrics_factory=self.metrics_factory,
+                agent_loop_output_cls=self.agent_loop_output_cls,
+            )
         return VerlNativeTrajectoryComponents(
             source_visual=trajectory_source,
             native_loop_factory=native_loop_factory,
@@ -557,6 +646,8 @@ class _RemoteTGVFFocusToolRuntime:
         execution_ledger: FocusExecutionLedger,
         contextual_forward_identity: ArtifactIdentity | None,
         branch_merger_identities: tuple[ArtifactIdentity, ...],
+        success_environment_text_renderer: Callable[..., str],
+        assistant_dialect: object,
     ) -> None:
         self.event_loop = event_loop
         self.server_client = server_client
@@ -567,6 +658,10 @@ class _RemoteTGVFFocusToolRuntime:
         self.execution_ledger = execution_ledger
         self.contextual_forward_identity = contextual_forward_identity
         self.branch_merger_identities = tuple(branch_merger_identities)
+        if not callable(success_environment_text_renderer):
+            raise TypeError("focus runtime success renderer must be callable")
+        self.success_environment_text_renderer = success_environment_text_renderer
+        self.assistant_dialect = assistant_dialect
 
     def execute(self, parsed_call: object, context: object) -> ObservationHandle:
         from tgvf_rl.environment.agent_loop import ToolExecutionContext
@@ -644,6 +739,10 @@ class _RemoteTGVFFocusToolRuntime:
             trajectory_source_visual=context.trajectory_source_visual,
             prior_observation_handles=context.prior_observation_handles,
             source_visual=self.source_visual,
+            environment_success_text=self.success_environment_text_renderer(
+                parsed_call,
+                assistant_dialect=self.assistant_dialect,
+            ),
         )
         result = self.focus_tool.record_precomputed(
             ToolExecutionRequest(
@@ -1087,10 +1186,10 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         reward.format_weight,
         reward.conditional_tool_weight,
     )
-    deepeyes_source_aware = (
-        getattr(config, "schema_version", None)
-        == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
-    )
+    deepeyes_source_aware = getattr(config, "schema_version", None) in {
+        POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+    }
     pilot_reward_weight_profile_name(reward_weights)
     answer_identity, verifier = _build_rule_first_answer_verifier(config)
     format_identity = _artifact_identity(
@@ -1288,18 +1387,30 @@ def _validate_sample_fields(
             source_image_path = Path(bound_image_path).resolve()
         else:
             source_image_path = (config.dataset.root / bound_image_path).resolve()
+        bound_data_source = record.get("data_source")
+        expected_prompt_sha256 = config.protocol.prompt_sha256
+        if (
+            getattr(config, "schema_version", None)
+            == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+            and bound_data_source == _RP66_MATCHED_DIRECT_ONLY_SOURCE
+        ):
+            expected_prompt_sha256 = THINKLITE_PROMPT_IDENTITY.bundle_sha256
         expected = {
             "sample_id": sample_id,
-            "dataset_iteration_identity_sha256": (
-                config.dataset.iteration_identity_sha256
-            ),
-            "prompt_bundle_sha256": config.protocol.prompt_sha256,
+            "prompt_bundle_sha256": expected_prompt_sha256,
             "source_image_path": str(source_image_path),
             "source_image_sha256": image.get("sha256"),
             "question": extra_info.get("question"),
-            "data_source": record.get("data_source"),
+            "data_source": bound_data_source,
             "task_kind": record.get("task_kind"),
         }
+        if (
+            getattr(config, "schema_version", None)
+            != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+        ):
+            expected["dataset_iteration_identity_sha256"] = (
+                config.dataset.iteration_identity_sha256
+            )
         expected_ground_truth = bound_reward.get("ground_truth")
     else:
         expected = {

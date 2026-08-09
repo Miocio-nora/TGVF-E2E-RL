@@ -314,12 +314,22 @@ class TrajectoryValidator:
                     "invalid-format trajectory must retain its assistant turn"
                 )
             final_turn = trajectory.assistant_turns[-1]
-            if final_turn.is_tool_call or (
+            direct_only_tool_marker = (
+                len(trajectory.assistant_turns) == 1
+                and final_turn.is_tool_call
+                and trajectory.final_answer is None
+                and not trajectory.tool_calls
+                and not trajectory.observations
+                and not trajectory.tool_errors
+            )
+            malformed_final_response = not final_turn.is_tool_call and not (
                 final_turn.think_span is not None
                 and trajectory.final_answer is not None
-            ):
+            )
+            if not (direct_only_tool_marker or malformed_final_response):
                 raise ReplayMismatchError(
-                    "invalid-format terminal turn must be a malformed final response"
+                    "invalid-format terminal turn must be a malformed final response "
+                    "or an unexecuted first-turn direct-only tool marker"
                 )
 
     def validate_batch(self, batch: TrajectoryBatch) -> None:

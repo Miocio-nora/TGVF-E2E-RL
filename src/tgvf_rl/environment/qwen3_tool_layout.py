@@ -277,6 +277,7 @@ class Qwen3NativeToolLayoutBuilder:
         trajectory_source_visual: TrajectorySourceVisual,
         prior_observation_handles: Sequence[object],
         source_visual: SourceVisualTensorBundle,
+        environment_success_text: str | None = None,
     ) -> ReplayLayoutTensors:
         """Build focus layout from the neutral runtime request fields."""
 
@@ -305,9 +306,16 @@ class Qwen3NativeToolLayoutBuilder:
                 None,
             )
         )
+        rendered_environment = (
+            render_qwen_native_success_environment_text(parsed_call)
+            if environment_success_text is None
+            else environment_success_text
+        )
+        if not isinstance(rendered_environment, str) or not rendered_environment:
+            raise ValueError("Qwen3 native success response must be non-empty text")
         environment_ids = tuple(
             self.tokenizer.encode(
-                render_qwen_native_success_environment_text(parsed_call),
+                rendered_environment,
                 add_special_tokens=False,
             )
         )

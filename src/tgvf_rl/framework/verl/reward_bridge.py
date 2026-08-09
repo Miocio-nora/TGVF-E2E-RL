@@ -148,6 +148,98 @@ class VerlRewardedAgentLoopOutputBuilder:
         return output
 
 
+class AsyncPilotTrajectoryRewardScorerPort(Protocol):
+    """Async scorer used when the official DeepEyes judge owns network I/O."""
+
+    async def score_async(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+    ) -> PilotVerlTrajectoryReward: ...
+
+
+class VerlAsyncRewardedAgentLoopOutputBuilder:
+    """Async equivalent of the exact rewarded AgentLoop output boundary."""
+
+    def __init__(
+        self,
+        *,
+        request: object,
+        scorer: AsyncPilotTrajectoryRewardScorerPort,
+        finalizer: RewardedTrajectoryFinalizerPort,
+        metrics_factory: Callable[
+            [TrajectoryRecord, PilotVerlTrajectoryReward], object
+        ],
+        agent_loop_output_cls: type[Any] | None = None,
+    ) -> None:
+        if not hasattr(request, "identity"):
+            raise TypeError("rewarded output request must expose identity")
+        if not callable(getattr(scorer, "score_async", None)):
+            raise TypeError("async scorer must implement score_async()")
+        if not callable(getattr(finalizer, "finalize", None)):
+            raise TypeError("finalizer must implement finalize()")
+        if not callable(metrics_factory):
+            raise TypeError("metrics_factory must be callable")
+        self.request = request
+        self.scorer = scorer
+        self.finalizer = finalizer
+        self.metrics_factory = metrics_factory
+        self.agent_loop_output_cls = agent_loop_output_cls
+
+    def __call__(self, trajectory: TrajectoryRecord) -> object:
+        """Satisfy the historical callable seam; live execution uses build_async."""
+
+        del trajectory
+        raise RuntimeError("async rewarded output builder requires build_async()")
+
+    async def build_async(self, trajectory: TrajectoryRecord) -> object:
+        scored = await self.scorer.score_async(
+            request=self.request,
+            trajectory=trajectory,
+        )
+        if not isinstance(scored, PilotVerlTrajectoryReward):
+            raise TypeError("async scorer returned an invalid Pilot reward")
+        record = self.finalizer.finalize(
+            request=self.request,
+            trajectory=trajectory,
+            reward=scored.result,
+        )
+        if not isinstance(record, RolloutBridgeRecord):
+            raise TypeError("rewarded finalizer must return RolloutBridgeRecord")
+        if record.trajectory_payload != trajectory:
+            raise ValueError("rewarded finalizer changed the trajectory")
+        if record.trajectory_id != scored.trajectory_id:
+            raise ValueError("rewarded finalizer changed the trajectory identity")
+        if record.reward_score is None or not math.isclose(
+            float(record.reward_score),
+            scored.total,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError("rewarded finalizer changed or omitted reward_score")
+        output = build_agent_loop_output(
+            record,
+            metrics=self.metrics_factory(trajectory, scored),
+            agent_loop_output_cls=self.agent_loop_output_cls,
+        )
+        extras = getattr(output, "extra_fields", None)
+        if type(extras) is not dict:
+            raise TypeError("public AgentLoopOutput.extra_fields must be a dict")
+        sidecars = _agent_loop_reward_sidecars(scored)
+        collisions = (set(sidecars) | {"reward_extra_info"}) & set(extras)
+        if collisions:
+            raise ValueError(
+                "rollout extra fields collide with exact reward fields: "
+                f"{sorted(collisions)!r}"
+            )
+        extras.update(sidecars)
+        extras["reward_extra_info"] = scored.reward_extra_info()
+        if getattr(output, "reward_score", None) != scored.total:
+            raise RuntimeError("public AgentLoopOutput lost exact reward_score")
+        return output
+
+
 @dataclass(frozen=True, slots=True)
 class VerlPilotRewardBatchView:
     """Validated row identities recovered from an upstream DataProto."""
@@ -714,10 +806,12 @@ def _set_or_validate_tensor(batch: Any, name: str, expected: torch.Tensor) -> No
 
 
 __all__ = [
+    "AsyncPilotTrajectoryRewardScorerPort",
     "POLICY_PILOT_VERL_REWARD_BATCH_SCHEMA",
     "POLICY_PILOT_VERL_REWARD_BATCH_SCHEMA_FIELD",
     "RewardedTrajectoryFinalizerPort",
     "VerlPilotRewardBatchView",
+    "VerlAsyncRewardedAgentLoopOutputBuilder",
     "VerlRewardedAgentLoopOutputBuilder",
     "bind_policy_pilot_exact_grpo_fields",
     "validate_policy_pilot_reward_data_proto",

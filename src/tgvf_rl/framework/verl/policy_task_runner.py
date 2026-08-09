@@ -1127,10 +1127,11 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
 
         def _compute_ref_log_prob(self, batch):
             if not self.ref_in_actor:
-                raise RuntimeError(
-                    "Policy reference diagnostic requires the colocated "
-                    "ActorRolloutRef worker"
-                )
+                # Full-model training has no LoRA, so pinned veRL correctly
+                # initializes ``ref_in_actor=False`` and routes this call to
+                # the explicit frozen reference engine owned by the combined
+                # ActorRolloutRef worker group.  No flag override is needed.
+                return super()._compute_ref_log_prob(batch)
             # Upstream interprets ``ref_in_actor`` as "temporarily disable the
             # actor LoRA" and calls the actor engine.  That is insufficient for
             # our exact replay contract because engine role is identified by

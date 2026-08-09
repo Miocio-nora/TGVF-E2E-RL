@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import hashlib
 import inspect
 import json
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, Callable, Mapping, Protocol
 
 import torch
@@ -68,6 +68,8 @@ from .policy_weight_sync import wrap_lora_parameter_stream_for_snapshot
 
 
 TGVF_EXACT_REPLAY_MODEL_TYPE = "tgvf_exact_replay_language_model"
+_EXACT_REPLAY_ROOT_FORWARD_METHOD = "_tgvf_exact_replay_root_forward"
+_EXACT_REPLAY_ROOT_FORWARD_REGISTERED = "_tgvf_exact_replay_root_forward_registered"
 
 _INTEGRITY_SIDECAR_FIELDS = (
     BRIDGE_SCHEMA_FIELD,
@@ -245,7 +247,7 @@ def exact_replay_forward_step(
         model_training=bool(module.training),
     )
     _validate_port_role(port, role)
-    _unshard_exact_replay_root(module)
+    root_forward = _exact_replay_root_forward_method(module)
 
     prompt_rows = _batched_sidecar(micro_batch, EXACT_PROMPT_IDS_FIELD)
     response_rows = _batched_sidecar(micro_batch, EXACT_RESPONSE_IDS_FIELD)
@@ -257,12 +259,22 @@ def exact_replay_forward_step(
         response_ids = _token_tuple(response_rows[row_index], "exact response")
         ownership = integrity.response_token_ownership[row_index][: len(response_ids)]
         response = OwnedTokenSequence(response_ids, ownership)
-        result = port.replay_response_logprobs(
-            bundle=bundle,
-            prompt_token_ids=prompt_ids,
-            response=response,
-            sampling=sampling,
-        )
+
+        def replay_operation() -> ExactReplayResponseResult:
+            return port.replay_response_logprobs(
+                bundle=bundle,
+                prompt_token_ids=prompt_ids,
+                response=response,
+                sampling=sampling,
+            )
+
+        # Keep the checksum-bound replay bundle inside an opaque closure.
+        # FSDP's registered-forward pre-hook recursively casts tensor-bearing
+        # args/kwargs; exposing the bundle there would rebuild its dataclasses
+        # with transformed tensors and invalidate the recorded checksums.
+        anchor, result = root_forward(operation=replay_operation)
+        if anchor is not getattr(result, "logprobs", None):
+            raise RuntimeError("exact replay root forward changed its autograd anchor")
         values = _validate_response_result(
             result,
             role=role,
@@ -339,33 +351,75 @@ def exact_replay_forward_step(
     }
 
 
-def _unshard_exact_replay_root(module: nn.Module) -> None:
-    """Run the root FSDP2 pre-forward materialization bypassed by replay.
+def _exact_replay_root_forward_method(module: nn.Module):
+    """Return a root-forward entrypoint carrying the standard FSDP2 hooks.
 
-    Exact replay intentionally invokes the injected inner language-model path
-    instead of the raw root forward. Child decoder, embedding, and lm-head
-    FSDP2 hooks still run normally, but root-owned parameters (notably the
-    Qwen final norm) would otherwise remain DTensors. ``FSDPModule.unshard``
-    is non-recursive, so this materializes only that root parameter group and
-    preserves the child modules' upstream-managed sharding behavior.
+    Calling ``FSDPModule.unshard()`` and then bypassing the root ``forward`` is
+    not equivalent to an FSDP forward. In particular, it does not initialize
+    the root state hierarchy or install the pre-backward callback that
+    reduce-scatters gradients from transient unsharded parameters into the
+    sharded parameters owned by the optimizer. RP66 and every other root-owned
+    parameter would therefore receive a local autograd gradient but silently
+    skip the optimizer update.
 
-    The root is deliberately not resharded inside this forward step because
-    actor autograd must retain the exact forward state through backward. The
-    custom engine reshares it at the enclosing forward/backward batch boundary.
+    PyTorch's public ``register_fsdp_forward_method`` API applies the ordinary
+    root pre/post-forward hooks to this project-owned trampoline. The complete
+    replay operation is invoked inside that trampoline, so current-policy live
+    vision, RP66, and injected language-model execution all share one valid
+    FSDP root lifecycle. The first tuple item is the raw differentiable tensor;
+    returning it explicitly lets FSDP attach its pre-backward hook while the
+    second item preserves the typed replay result used by contract validation.
     """
 
-    unshard = getattr(module, "unshard", None)
-    if not callable(unshard):
-        raise RuntimeError(
-            "exact replay requires the live root module to expose FSDP2 unshard()"
+    existing = getattr(module, _EXACT_REPLAY_ROOT_FORWARD_METHOD, None)
+    if getattr(module, _EXACT_REPLAY_ROOT_FORWARD_REGISTERED, False) is True:
+        if not callable(existing):
+            raise RuntimeError("registered exact replay root forward is not callable")
+        return existing
+
+    try:
+        from torch.distributed.fsdp import (
+            FSDPModule,
+            register_fsdp_forward_method,
         )
-    handle = unshard()
-    if handle is not None:
-        raise RuntimeError("synchronous FSDP2 root unshard returned an async handle")
+    except ImportError as error:  # pragma: no cover - accepted runtime pins it.
+        raise RuntimeError(
+            "exact replay requires FSDP2 register_fsdp_forward_method()"
+        ) from error
+    if not isinstance(module, FSDPModule):
+        raise RuntimeError("exact replay requires a live FSDP2 root forward module")
+    if existing is not None:
+        raise RuntimeError("exact replay root forward method name already exists")
+
+    setattr(
+        module,
+        _EXACT_REPLAY_ROOT_FORWARD_METHOD,
+        MethodType(_dispatch_exact_replay_root_forward, module),
+    )
+    register_fsdp_forward_method(module, _EXACT_REPLAY_ROOT_FORWARD_METHOD)
+    setattr(module, _EXACT_REPLAY_ROOT_FORWARD_REGISTERED, True)
+    registered = getattr(module, _EXACT_REPLAY_ROOT_FORWARD_METHOD, None)
+    if not callable(registered):
+        raise RuntimeError("FSDP2 did not register the exact replay root forward")
+    return registered
+
+
+def _dispatch_exact_replay_root_forward(
+    _module: nn.Module,
+    *,
+    operation: Callable[[], ExactReplayResponseResult],
+) -> tuple[torch.Tensor, ExactReplayResponseResult]:
+    if not callable(operation):
+        raise TypeError("exact replay root operation must be callable")
+    result = operation()
+    anchor = getattr(result, "logprobs", None)
+    if not isinstance(anchor, torch.Tensor):
+        raise TypeError("exact replay root operation must return tensor logprobs")
+    return anchor, result
 
 
 def _reshard_exact_replay_root(module: nn.Module) -> None:
-    """Release the manually materialized root after replay/backward completes."""
+    """Release a root retained by reshard_after_forward=False after a batch."""
 
     reshard = getattr(module, "reshard", None)
     if not callable(reshard):

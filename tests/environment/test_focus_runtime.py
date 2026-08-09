@@ -279,6 +279,7 @@ def _runtime(provider_kind: str = "contextual_hidden_state"):
         deepstack_branch_layers=(8,),
         deepstack_injection_positions=((1,),),
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
     )
     tool = _CountingFocusTool(_adapter(), store)
     runtime = TGVFFocusToolRuntime(

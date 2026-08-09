@@ -7,6 +7,7 @@ from torch import nn
 from tgvf_rl.representation.deepstack import (
     DDeepStackProjectionPorts,
     FrozenProjectionPort,
+    TrainableBorrowedProjectionPort,
     _build_original_image_key_block_mask_from_positions,
     build_original_image_key_block_mask,
 )
@@ -47,6 +48,67 @@ def test_frozen_projection_port_supports_unbatched_and_batched_inputs() -> None:
     output.sum().backward()
     assert tokens.grad is not None
     assert all(parameter.grad is None for parameter in port.projection.parameters())
+
+
+def test_trainable_borrowed_projection_port_is_non_owning_and_keeps_autograd() -> (
+    None
+):
+    merger = ToyMerger(3, 5)
+    merger.train(True)
+    port = TrainableBorrowedProjectionPort(
+        merger,
+        identity="qwen.visual.merger",
+        input_dim=3,
+        output_dim=5,
+        spatial_merge_size=2,
+    )
+    owner = nn.Module()
+    owner.merger = merger
+    owner.port = port
+
+    # The canonical Qwen path is the sole parameter/state owner.  The port is
+    # registered as a zero-parameter shell, but its borrowed merger is not.
+    assert port._modules == {}
+    assert tuple(port.parameters()) == ()
+    assert port.state_dict() == {}
+    assert tuple(dict(owner.named_parameters())) == ("merger.linear.weight",)
+    port.eval()
+    assert merger.training
+
+    tokens = torch.randn(2, 8, 3, requires_grad=True)
+    output = port(tokens)
+    output.square().sum().backward()
+
+    assert output.shape == (2, 2, 5)
+    assert tokens.grad is not None
+    assert merger.linear.weight.requires_grad
+    assert merger.linear.weight.grad is not None
+
+
+def test_deepstack_ports_accept_trainable_non_owning_projection_ports() -> None:
+    mergers = tuple(ToyMerger(3, 5) for _ in range(3))
+    ports = DDeepStackProjectionPorts(
+        branch_layers=(8, 16, 24),
+        projections=tuple(
+            TrainableBorrowedProjectionPort(
+                merger,
+                identity=f"branch-{layer}",
+                input_dim=3,
+                output_dim=5,
+                spatial_merge_size=2,
+            )
+            for merger, layer in zip(mergers, (8, 16, 24), strict=True)
+        ),
+    )
+    branches = tuple(torch.randn(8, 3, requires_grad=True) for _ in range(3))
+
+    payload = ports(branches)
+    sum(branch.sum() for branch in payload.branches).backward()
+
+    assert ports.state_dict() == {}
+    assert payload.projection_identities == ("branch-8", "branch-16", "branch-24")
+    assert all(branch.grad is not None for branch in branches)
+    assert all(merger.linear.weight.grad is not None for merger in mergers)
 
 
 def test_projection_port_rejects_invalid_merge_layout_and_output_shape() -> None:

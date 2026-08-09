@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from dataclasses import replace
 
+import pytest
 import torch
 
 from tgvf_rl.contracts.identity import ModelIdentity
@@ -18,6 +19,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _BoundTGVFVisualQualityRuntimeJudge,
     _build_reward_pipeline,
     _default_metrics_factory,
+    _rp66_matched_source_route,
 )
 from tgvf_rl.judges import (
     TGVFVisualQualityJudgeConfig,
@@ -26,6 +28,7 @@ from tgvf_rl.judges import (
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
 )
 from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.schema import AnswerTaskKind
@@ -54,13 +57,13 @@ def test_live_builder_has_no_agent_loop_model_loader_surface() -> None:
 
 
 def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
-    def config(tool_weight: float, *, deepeyes: bool = False) -> SimpleNamespace:
+    def config(
+        tool_weight: float,
+        *,
+        schema_version: str = "legacy-test-schema",
+    ) -> SimpleNamespace:
         return SimpleNamespace(
-            schema_version=(
-                POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
-                if deepeyes
-                else "legacy-test-schema"
-            ),
+            schema_version=schema_version,
             identity_sha256=SHA,
             reward=SimpleNamespace(
                 answer_verifier="exact_match",
@@ -76,7 +79,18 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
 
     legacy = _build_reward_pipeline(config(1.2))
     answer_primary = _build_reward_pipeline(config(0.2))
-    deepeyes = _build_reward_pipeline(config(1.2, deepeyes=True))
+    deepeyes = _build_reward_pipeline(
+        config(
+            1.2,
+            schema_version=POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+        )
+    )
+    trainable_rp66 = _build_reward_pipeline(
+        config(
+            1.2,
+            schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        )
+    )
 
     assert legacy.spec.weights == (0.8, 0.2, 1.2)
     assert legacy.spec.pipeline_identity.version == "0.8-0.2-1.2"
@@ -87,9 +101,44 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
         != legacy.spec.pipeline_identity.sha256
     )
     assert deepeyes.spec.deepeyes_source_aware is True
+    assert trainable_rp66.spec.deepeyes_source_aware is True
     assert (
         deepeyes.spec.pipeline_identity.sha256 != legacy.spec.pipeline_identity.sha256
     )
+
+
+@pytest.mark.parametrize("data_source", ("vstar", "arxivqa"))
+def test_trainable_rp66_visual_rows_select_matched_observation_renderer(
+    data_source: str,
+) -> None:
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    )
+
+    assert _rp66_matched_source_route(config, {"data_source": data_source}) == (
+        False,
+        True,
+    )
+
+
+def test_trainable_rp66_thinklite_rows_are_direct_only() -> None:
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    )
+
+    assert _rp66_matched_source_route(config, {"data_source": "thinklite"}) == (
+        True,
+        False,
+    )
+
+
+def test_trainable_rp66_runtime_rejects_unknown_source() -> None:
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    )
+
+    with pytest.raises(ValueError, match="unsupported data_source"):
+        _rp66_matched_source_route(config, {"data_source": "unknown"})
 
 
 def test_live_visual_quality_adapter_consumes_typed_provider_result(
@@ -228,6 +277,7 @@ def test_policy_layout_focus_and_final_expansion_share_one_idempotent_coordinate
         deepstack_branch_layers=BRANCH_LAYERS,
         deepstack_injection_positions=(positions,) * 3,
         observation_store=store,
+        preprocessed_pixel_values=torch.ones((4, 3), dtype=torch.float32),
     )
 
     rope_inputs: list[tuple[int, ...]] = []

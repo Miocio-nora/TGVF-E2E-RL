@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 
 from tgvf_rl.contracts.errors import ReplayMismatchError
+from tgvf_rl.observations.schema import (
+    FOCUSED_OBSERVATION_SCHEMA_V2,
+    FocusedObservationRecordV2,
+    TrajectorySourceVisualV2,
+)
 from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayRecord,
@@ -109,6 +116,107 @@ def test_replay_bundle_is_self_contained_across_worker_store_boundary() -> None:
     torch.testing.assert_close(
         restored.resolve_verified(restored_record.payload.main_d),
         store.resolve_verified(source_record.payload.main_d),
+        rtol=0,
+        atol=0,
+    )
+
+
+def test_legacy_v1_record_and_replay_checksums_remain_stable() -> None:
+    store, observation_handle = populated_observation_store()
+    replay_handle = _put_replay(store, observation_handle)
+
+    assert observation_handle.record_sha256 == (
+        "b3c99536c3629fc1304801572216d7f7e1e1896a046b34a9eacc20bf604e4bea"
+    )
+    assert replay_handle.record_sha256 == (
+        "8b0afbaabe19eced858e82e8f9f4b8e2c926ac9c26a5343f212c5e52df02d6e7"
+    )
+
+
+def test_v2_replay_bundle_round_trip_carries_pixel_values_and_condition_hq() -> None:
+    store, legacy_handle = populated_observation_store()
+    legacy = store.resolve_record(legacy_handle)
+    source_state = replace(legacy.source_visual, image_grid_thw=(1, 2, 2))
+    hq = store.put_tensor(
+        "observation-v2.condition_hq",
+        torch.arange(8, dtype=torch.float32).view(2, 4),
+        trajectory_id="smoke/sample/0/group",
+    )
+    record = FocusedObservationRecordV2(
+        schema_version=FOCUSED_OBSERVATION_SCHEMA_V2,
+        observation_id="observation-v2",
+        call_index=legacy.call_index,
+        model=legacy.model,
+        representation=legacy.representation,
+        condition=legacy.condition,
+        source_visual=source_state,
+        payload=legacy.payload,
+        branches=legacy.branches,
+        layout=legacy.layout,
+        masks=legacy.masks,
+        cache=legacy.cache,
+        condition_hq=hq,
+    )
+    observation_handle = store.put(record)
+    pixel_values = store.put_tensor(
+        "replay-v2.pixel_values",
+        torch.arange(12, dtype=torch.float32).view(4, 3),
+        trajectory_id="smoke/sample/0/group",
+    )
+    source_visual = TrajectorySourceVisualV2(
+        state=source_state,
+        positions=record.layout.original_image_positions,
+        deepstack_branch_layers=record.layout.deepstack_branch_layers,
+        deepstack_injection_positions=tuple(
+            record.layout.original_image_positions
+            for _ in source_state.merged_deepstack
+        ),
+        preprocessed_pixel_values=pixel_values,
+    )
+    input_ids = store.put_tensor(
+        "replay-v2.input_ids", torch.arange(12, dtype=torch.int64).view(1, 12)
+    )
+    replay_handle = store.put_replay(
+        TrajectoryReplayRecord(
+            schema_version="trajectory-replay-v1",
+            replay_id="replay-v2",
+            trajectory_id="smoke/sample/0/group",
+            model=record.model,
+            behavior_policy=policy_version(),
+            source_visual=source_visual,
+            observation_handles=(observation_handle,),
+            tensors=TrajectoryReplayTensorRefs(
+                input_ids=input_ids,
+                position_ids=record.payload.position_ids,
+                attention_mask=record.payload.attention_mask,
+                policy_attention_mask=record.masks.policy_visible,
+                reference_attention_mask=record.masks.reference_visible,
+                teacher_attention_mask=record.masks.teacher_visible,
+            ),
+        )
+    )
+
+    restored, restored_handle = ObservationStore.from_replay_bundle(
+        store.export_replay_bundle(replay_handle)
+    )
+    restored_replay = restored.resolve_replay(restored_handle)
+    assert isinstance(restored_replay.source_visual, TrajectorySourceVisualV2)
+    restored_pixels = restored_replay.source_visual.preprocessed_pixel_values
+    assert restored_pixels is not None
+    torch.testing.assert_close(
+        restored.resolve_verified(restored_pixels),
+        torch.arange(12, dtype=torch.float32).view(4, 3),
+        rtol=0,
+        atol=0,
+    )
+    restored_record = restored.resolve_record(
+        restored_replay.observation_handles[0]
+    )
+    assert isinstance(restored_record, FocusedObservationRecordV2)
+    assert restored_record.condition_hq is not None
+    torch.testing.assert_close(
+        restored.resolve_verified(restored_record.condition_hq),
+        torch.arange(8, dtype=torch.float32).view(2, 4),
         rtol=0,
         atol=0,
     )

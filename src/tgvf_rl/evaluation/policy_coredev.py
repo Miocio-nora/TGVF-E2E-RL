@@ -1980,6 +1980,7 @@ class PolicyCoreDevEvaluator:
             deepstack_branch_layers=_BRANCH_LAYERS,
             deepstack_injection_positions=tuple(positions for _ in _BRANCH_LAYERS),
             observation_store=self.store,
+            preprocessed_pixel_values=pixel_values,
             source_rgb=source_rgb,
         )
         registry = LiveVLLMTurnContextRegistry(

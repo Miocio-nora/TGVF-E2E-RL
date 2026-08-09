@@ -14,7 +14,9 @@ from tgvf_rl.observations.schema import (
     CacheContract,
     ConditionProvenance,
     DeepStackBranchRecord,
+    FOCUSED_OBSERVATION_SCHEMA_V2,
     FocusedObservationRecord,
+    FocusedObservationRecordV2,
     ObservationMasks,
     SourceVisualState,
     VisualLayout,
@@ -224,6 +226,8 @@ class TGVFFocusTool:
             ):
                 raise ValueError("adapter and replay layout DeepStack layers differ")
 
+        _validate_condition_hq(request.condition.values, adapter_output.main_d)
+
         def put(name: str, tensor: torch.Tensor):
             return self.store.put_tensor(
                 name, tensor, trajectory_id=request.trajectory_id
@@ -242,6 +246,9 @@ class TGVFFocusTool:
         source_merged_branches = tuple(
             put(f"call.{request.call_index}.source.merged.deepstack.{index}", tensor)
             for index, tensor in enumerate(source.merged_deepstack)
+        )
+        condition_hq = put(
+            f"call.{request.call_index}.condition_hq", request.condition.values
         )
         main_d = put(f"call.{request.call_index}.main_d", adapter_output.main_d)
         d_branches = tuple(
@@ -311,8 +318,8 @@ class TGVFFocusTool:
             policy_version=request.policy_version,
             embedding_identity=provenance.embedding_identity,
         )
-        record = FocusedObservationRecord(
-            schema_version="focused-observation-v1",
+        record = FocusedObservationRecordV2(
+            schema_version=FOCUSED_OBSERVATION_SCHEMA_V2,
             observation_id=_observation_id(request, adapter_output),
             call_index=request.call_index,
             model=request.model,
@@ -357,6 +364,7 @@ class TGVFFocusTool:
                 deterministic_forward=True,
                 adapter_dropout=0.0,
             ),
+            condition_hq=condition_hq,
         )
         return ToolExecutionResult(self.store.put(record), record, adapter_output)
 
@@ -372,3 +380,18 @@ def _observation_id(
     digest.update(request.condition.provenance.source_input_ids_sha256.encode())
     digest.update(output.metadata.schema_version.encode())
     return digest.hexdigest()
+
+
+def _validate_condition_hq(hq: torch.Tensor, main_d: torch.Tensor) -> None:
+    if (
+        not isinstance(hq, torch.Tensor)
+        or hq.ndim != 2
+        or not hq.is_floating_point()
+        or hq.shape[0] <= 0
+        or hq.shape[1] <= 0
+    ):
+        raise ValueError("condition Hq must be floating [target_tokens, hidden]")
+    if not isinstance(main_d, torch.Tensor) or main_d.ndim not in {2, 3}:
+        raise ValueError("main D must have shape [N,H] or [1,N,H]")
+    if hq.shape[-1] != main_d.shape[-1]:
+        raise ValueError("condition Hq hidden size differs from main D")

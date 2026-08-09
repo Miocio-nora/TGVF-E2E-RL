@@ -200,8 +200,36 @@ def installed_verl_distribution_identity() -> VerlDistributionIdentity:
         raise VerlUnavailableError("the veRL distribution is not installed") from error
     raw = distribution.read_text("direct_url.json")
     if not raw:
-        raise VerlCompatibilityError(
-            "veRL direct_url.json is absent; the exact source revision cannot be proven"
+        # Source checkouts placed on PYTHONPATH are a normal deployment mode
+        # for the pinned veRL tree and do not necessarily carry wheel metadata.
+        # Prove the revision from the actually imported package instead of
+        # rejecting a valid checkout solely because pip did not emit
+        # direct_url.json.  Local project patches are intentionally allowed;
+        # the public-surface compatibility checks below remain authoritative.
+        spec = util.find_spec("verl")
+        origin = None if spec is None else spec.origin
+        if not isinstance(origin, str):
+            raise VerlCompatibilityError(
+                "veRL direct_url.json is absent and import source is unknown"
+            )
+        source_path = Path(origin).resolve().parent.parent
+        try:
+            commit = subprocess.run(
+                ["git", "-C", str(source_path), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise VerlCompatibilityError(
+                "veRL import source is not a pinned git checkout"
+            ) from error
+        return VerlDistributionIdentity(
+            distribution.version,
+            str(source_path),
+            commit,
+            "import_git",
+            None,
         )
     try:
         direct = json.loads(raw)

@@ -14,6 +14,7 @@ from tensordict import TensorDict
 from verl import DataProto
 from verl.trainer.ppo.reward import resolve_reward_manager_cls
 
+from tgvf_rl.judges.base import JudgeUsage
 from tgvf_rl.rewards.deepeyes_batch import JudgeGlobalFailure
 from tgvf_rl.rewards.deepeyes_official import (
     DEEPEYES_VISUAL_JUDGE_PROMPT_KIND,
@@ -74,10 +75,19 @@ def _request(trajectory_id: str) -> DeepEyesBinaryJudgeRequest:
     )
 
 
+_RESPONSE_USAGE = JudgeUsage(41, 3, 44, 0.0000123)
+
+
 def _response(content: str = "1") -> dict[str, object]:
     return {
         "model": "qwen/qwen-2.5-72b-instruct",
         "choices": [{"message": {"content": content}}],
+        "usage": {
+            "prompt_tokens": _RESPONSE_USAGE.prompt_tokens,
+            "completion_tokens": _RESPONSE_USAGE.completion_tokens,
+            "total_tokens": _RESPONSE_USAGE.total_tokens,
+            "cost": _RESPONSE_USAGE.cost_usd,
+        },
     }
 
 
@@ -109,9 +119,11 @@ def test_async_transport_bounds_concurrency_retries_and_cache() -> None:
         assert maximum == 2
         assert outcomes[-1].calls == 2
         assert outcomes[-1].retries == 1
+        assert all(outcome.usage == _RESPONSE_USAGE for outcome in outcomes)
         cached = await judge.judge(_request("a"))
         assert cached.cache_hit == 1
         assert cached.calls == 0
+        assert cached.usage is None
 
     asyncio.run(exercise())
 
@@ -127,6 +139,7 @@ def test_async_transport_isolates_completed_output_but_aborts_model_mismatch() -
     )
     assert outcome.verdict is False
     assert outcome.failure_kind == "completed_invalid_output"
+    assert outcome.usage == _RESPONSE_USAGE
 
     async def wrong_model(_request: object, _payload: object) -> object:
         value = _response()
@@ -138,6 +151,49 @@ def test_async_transport_isolates_completed_output_but_aborts_model_mismatch() -
             AsyncDeepEyesOpenRouterJudge(_service(), request_json=wrong_model).judge(
                 _request("global")
             )
+        )
+
+
+@pytest.mark.parametrize(
+    ("usage", "message"),
+    (
+        (None, "lacks required usage"),
+        (
+            {
+                "prompt_tokens": 0,
+                "completion_tokens": 1,
+                "total_tokens": 1,
+                "cost": 0.0,
+            },
+            "requires prompt tokens",
+        ),
+        (
+            {
+                "prompt_tokens": 41,
+                "completion_tokens": 3,
+                "total_tokens": 44,
+            },
+            "usage is invalid",
+        ),
+    ),
+)
+def test_async_transport_rejects_missing_or_nonbillable_completed_usage(
+    usage: object,
+    message: str,
+) -> None:
+    async def response_without_real_usage(_request: object, _payload: object) -> object:
+        response = _response()
+        if usage is None:
+            response.pop("usage")
+        else:
+            response["usage"] = usage
+        return response
+
+    with pytest.raises(JudgeGlobalFailure, match=message):
+        asyncio.run(
+            AsyncDeepEyesOpenRouterJudge(
+                _service(), request_json=response_without_real_usage
+            ).judge(_request("missing-usage"))
         )
 
 

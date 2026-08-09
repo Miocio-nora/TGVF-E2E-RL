@@ -13,6 +13,7 @@ from tgvf_rl.representation.training.transcript import (
     _build_visual_token_expansion,
     _materialize_model_evidence_supervision,
 )
+from tgvf_rl.tensor_device import tensor_compute_device
 
 from .base import (
     CachedTokenForwardRequest,
@@ -179,7 +180,9 @@ class Qwen3VLAdapter(QwenVLMFamilyAdapter):
         if not isinstance(request, CachedTokenForwardRequest):
             raise TypeError("request must be CachedTokenForwardRequest")
         language_model = resolve_language_model(model)
-        embedding_device = language_model.get_input_embeddings().weight.device
+        embedding_device = tensor_compute_device(
+            language_model.get_input_embeddings().weight
+        )
         outputs = language_model(
             input_ids=request.input_ids.to(embedding_device),
             inputs_embeds=None,
