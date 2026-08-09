@@ -4,7 +4,7 @@ run_id = "PRL-15-C0-QWEN3-INSTRUCT-FULL-RP66-BS4-N2-FUNCTIONAL-CANARY-WS4"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "ce2535e963233bf574a1b376c5c99534f6f99e3e"
+commit = "509001f520cc9aa3ca4a31bb34d463a1c1183f2d"
 dirty = false
 
 [model]
