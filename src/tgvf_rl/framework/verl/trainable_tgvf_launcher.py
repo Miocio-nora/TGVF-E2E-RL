@@ -492,7 +492,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--smoke-id")
     parser.add_argument("--compose-only", action="store_true")
     args = parser.parse_args(argv)
-    config = load_policy_e2e_smoke_run_config(args.run_config)
+    config = load_policy_e2e_smoke_run_config(args.run_config.resolve())
     plan = build_trainable_tgvf_verl_launch_plan(
         config,
         mode=args.mode,
