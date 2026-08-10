@@ -99,6 +99,9 @@ POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA = (
     "policy-e2e-trainable-rp66-deepeyes-matched-run-config-v1"
 )
+POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-rp66-deepeyes-matched-control-run-config-v2"
+)
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
@@ -339,6 +342,13 @@ class SmokeDatasetSelection:
     selected_sample: SmokeSelectedMCQSample | None
 
 
+class RP66AdapterUpdateMode(str, Enum):
+    """Optimizer ownership of RP66 inside a matched TGVF policy run."""
+
+    JOINT = "joint"
+    FROZEN_ADAPTER = "frozen_adapter"
+
+
 @dataclass(frozen=True, slots=True)
 class SmokeRepresentationBinding:
     artifact_path: Path
@@ -347,6 +357,11 @@ class SmokeRepresentationBinding:
     expected_run_id: str
     expected_run_identity_sha256: str
     conditioning: TargetConditioningConfig
+    adapter_update_mode: RP66AdapterUpdateMode = RP66AdapterUpdateMode.JOINT
+
+    @property
+    def adapter_trainable(self) -> bool:
+        return self.adapter_update_mode is RP66AdapterUpdateMode.JOINT
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,6 +538,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -596,6 +612,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -606,9 +623,10 @@ def load_policy_e2e_smoke_run_config(
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
     )
-    trainable_rp66_run = (
-        schema_version == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
-    )
+    rp66_matched_run = schema_version in {
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    }
     run_id = _safe_run_id(payload["run_id"])
 
     code_table = _table(payload, "code", {"repository", "commit", "dirty"})
@@ -658,9 +676,7 @@ def load_policy_e2e_smoke_run_config(
         model_table["native_deepstack_enabled"], True, "model.native_deepstack_enabled"
     )
     expected_image_max_pixels = (
-        1_003_520
-        if deepeyes_scaled_crop_run or trainable_rp66_run
-        else 512 * 512
+        1_003_520 if deepeyes_scaled_crop_run or rp66_matched_run else 512 * 512
     )
     _require_exact(
         model_table["image_max_pixels"],
@@ -863,20 +879,23 @@ def load_policy_e2e_smoke_run_config(
         selected_sample=selected_sample,
     )
 
+    representation_fields = {
+        "artifact_path",
+        "artifact_file_sha256",
+        "artifact_manifest_sha256",
+        "artifact_namespace",
+        "artifact_name",
+        "artifact_version",
+        "expected_run_id",
+        "expected_run_identity_sha256",
+        "conditioning",
+    }
+    if schema_version == POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA:
+        representation_fields.add("adapter_update_mode")
     representation_table = _table(
         payload,
         "representation",
-        {
-            "artifact_path",
-            "artifact_file_sha256",
-            "artifact_manifest_sha256",
-            "artifact_namespace",
-            "artifact_name",
-            "artifact_version",
-            "expected_run_id",
-            "expected_run_identity_sha256",
-            "conditioning",
-        },
+        representation_fields,
     )
     artifact_path = _existing_file(
         representation_table["artifact_path"], name="representation.artifact_path"
@@ -908,6 +927,15 @@ def load_policy_e2e_smoke_run_config(
         ),
     )
     conditioning = _conditioning(representation_table["conditioning"])
+    if schema_version == POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA:
+        try:
+            adapter_update_mode = RP66AdapterUpdateMode(
+                representation_table["adapter_update_mode"]
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("representation.adapter_update_mode is invalid") from error
+    else:
+        adapter_update_mode = RP66AdapterUpdateMode.JOINT
     representation = SmokeRepresentationBinding(
         artifact_path=artifact_path,
         artifact_file_sha256=artifact_file_sha256,
@@ -921,6 +949,7 @@ def load_policy_e2e_smoke_run_config(
             name="representation.expected_run_identity_sha256",
         ),
         conditioning=conditioning,
+        adapter_update_mode=adapter_update_mode,
     )
 
     protocol_table = _table(
@@ -953,7 +982,7 @@ def load_policy_e2e_smoke_run_config(
         "protocol.tool_schema_sha256",
     )
     expected_maximum_tool_calls = (
-        1 if stage3_shaped_run else 6 if trainable_rp66_run else 4
+        1 if stage3_shaped_run else 6 if rp66_matched_run else 4
     )
     _require_exact(
         protocol_table["maximum_tool_calls"],
@@ -969,7 +998,7 @@ def load_policy_e2e_smoke_run_config(
             POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
             if stage3_shaped_run
             else POLICY_E2E_TRAINABLE_RP66_SIX_CALL_CAP_ERROR_SHA256
-            if trainable_rp66_run
+            if rp66_matched_run
             else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
         ),
         "protocol.cap_error_sha256",
@@ -991,7 +1020,7 @@ def load_policy_e2e_smoke_run_config(
                 assistant_dialect=assistant_dialect,
             ).bundle_sha256
         }
-        if trainable_rp66_run:
+        if rp66_matched_run:
             accepted_prompt_hashes = {
                 TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
             }
@@ -1080,7 +1109,7 @@ def load_policy_e2e_smoke_run_config(
         sampling.trajectories_per_prompt,
         sampling.max_response_length,
     )
-    if trainable_rp66_run:
+    if rp66_matched_run:
         accepted_sampling_scales = {
             (16, 20480),
             POLICY_PILOT_FUNCTIONAL_CANARY_SAMPLING_SCALE,
@@ -1188,9 +1217,8 @@ def load_policy_e2e_smoke_run_config(
     )
     known_historical_answer_verifier = (
         mixed_run
-        and not trainable_rp66_run
-        and answer_verifier_sha256
-        in _LEGACY_POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256S
+        and not rp66_matched_run
+        and answer_verifier_sha256 in _LEGACY_POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256S
     )
     if (
         answer_verifier_sha256 != expected_answer_verifier_sha256
@@ -1209,7 +1237,7 @@ def load_policy_e2e_smoke_run_config(
         )
         if _sha256_file(judge_config_path) != judge_config_sha256:
             raise ValueError("reward judge config SHA256 mismatch")
-        if trainable_rp66_run:
+        if rp66_matched_run:
             from tgvf_rl.rewards.deepeyes_verl_reward import (
                 load_deepeyes_judge_service_config,
             )
@@ -1459,7 +1487,7 @@ def load_policy_e2e_smoke_run_config(
             "weight_sync_interval_optimizer_steps",
         },
     )
-    if trainable_rp66_run:
+    if rp66_matched_run:
         trainable_rp66_world_size = _positive_int(
             distributed_table["world_size"], name="distributed.world_size"
         )
@@ -1550,7 +1578,7 @@ def load_policy_e2e_smoke_run_config(
     # the *_max_token_len_per_gpu fields are therefore inactive capacity
     # metadata. The generic bound below assumes dynamic token batching and
     # would incorrectly reject Crop-16's proven micro32/16384 configuration.
-    if not trainable_rp66_run:
+    if not rp66_matched_run:
         minimum_actor_tokens = (
             accumulation.prompt_micro_batch_size_per_rank
             * sampling.trajectories_per_prompt
@@ -1600,7 +1628,7 @@ def load_policy_e2e_smoke_run_config(
     )
     expected_agent_loop_config_path = (
         POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH
-        if trainable_rp66_run
+        if rp66_matched_run
         else POLICY_E2E_AGENT_LOOP_CONFIG_PATH
     )
     if (
@@ -1741,7 +1769,7 @@ def load_policy_e2e_smoke_run_config(
 
     if stage3_shaped_run:
         policy_type = PolicyTGVFStage3ExperimentConfig
-    elif trainable_rp66_run:
+    elif rp66_matched_run:
         policy_type = PolicyTrainableRP66ExperimentConfig
     elif protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE:
         policy_type = PolicyPilotV1Config
@@ -1868,7 +1896,7 @@ def load_policy_e2e_smoke_run_config(
         if "wandb" not in training.logger:
             raise ValueError("DeepEyes-scaled Crop reference requires W&B logging")
 
-    if trainable_rp66_run:
+    if rp66_matched_run:
         if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
             raise ValueError(
                 "trainable RP66 pilot requires the retained mixed-T1 dataset"
@@ -2200,8 +2228,7 @@ def _distributed(
         )
     if world_size != required_world_size:
         raise ValueError(
-            "this Policy E2E run identity requires "
-            f"world_size={required_world_size}"
+            f"this Policy E2E run identity requires world_size={required_world_size}"
         )
     placement = _text(table["placement"], name="distributed.placement")
     if placement != "colocated" or rollout != actor:
@@ -2473,6 +2500,7 @@ __all__ = [
     "POLICY_E2E_MIXED_JUDGE_MODE",
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_SMOKE_CAP_ERROR_SHA256",
@@ -2484,6 +2512,7 @@ __all__ = [
     "POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256",
     "POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN",
     "PolicyE2ESmokeRunConfig",
+    "RP66AdapterUpdateMode",
     "SmokeAccumulationBinding",
     "SmokeCapacityBinding",
     "SmokeDatasetSelection",

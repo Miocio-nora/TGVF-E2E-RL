@@ -99,9 +99,22 @@ class TrainableTGVFCurrentReplayPort:
             raise TypeError("trainable TGVF replay model must be a torch module")
         adapter = getattr(model, TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, None)
         if not isinstance(adapter, TGVFAdapter):
-            raise TypeError("current Qwen module has no attached trainable RP66 Adapter")
-        if not any(parameter.requires_grad for parameter in adapter.parameters()):
-            raise RuntimeError("attached RP66 Adapter has no trainable parameters")
+            raise TypeError(
+                "current Qwen module has no attached trainable RP66 Adapter"
+            )
+        artifact_names = set(adapter.artifact_state_dict(keep_vars=True))
+        adapter_parameters = tuple(
+            parameter
+            for name, parameter in adapter.named_parameters()
+            if name in artifact_names
+        )
+        if not adapter_parameters:
+            raise RuntimeError("attached RP66 Adapter has no owned parameters")
+        trainable_flags = {
+            bool(parameter.requires_grad) for parameter in adapter_parameters
+        }
+        if len(trainable_flags) != 1:
+            raise RuntimeError("RP66 Adapter mixes frozen and trainable parameters")
         if selected_logprob_materializer is not None and not callable(
             selected_logprob_materializer
         ):
@@ -109,6 +122,7 @@ class TrainableTGVFCurrentReplayPort:
         self.engine = engine
         self.model = model
         self.adapter = adapter
+        self.adapter_trainable = trainable_flags == {True}
         self.family_adapter = Qwen3VLAdapter()
         self.selected_logprob_materializer = selected_logprob_materializer
         self.materializes_fused_kernels = selected_logprob_materializer is not None
@@ -134,9 +148,7 @@ class TrainableTGVFCurrentReplayPort:
             )
         validate_replay_bundle(bundle)
         store, replay_handle = ObservationStore.from_replay_bundle(bundle)
-        recorded = resolve_replay_request(
-            store, replay_handle, ReplayConsumer.POLICY
-        )
+        recorded = resolve_replay_request(store, replay_handle, ReplayConsumer.POLICY)
         exact_ids = tuple(int(value) for value in recorded.input_ids[0].tolist())
         if exact_ids != tuple(prompt_token_ids) + response.token_ids:
             raise ReplayMismatchError(
@@ -146,12 +158,7 @@ class TrainableTGVFCurrentReplayPort:
             raise ValueError("current replay requires policy-owned response tokens")
 
         sampled_positions = torch.tensor(
-            [
-                [
-                    len(prompt_token_ids) + index
-                    for index in response.policy_indices
-                ]
-            ],
+            [[len(prompt_token_ids) + index for index in response.policy_indices]],
             dtype=torch.long,
         )
         with torch.enable_grad(), self._autocast_context():
@@ -190,20 +197,18 @@ class TrainableTGVFCurrentReplayPort:
                     sampling=sampling,
                 ).squeeze(0)
                 device = selected.device
-            gradient_coverage_anchor = trainable_parameter_zero_anchor(self.adapter)
-            selected = selected + gradient_coverage_anchor.to(dtype=selected.dtype)
+            if self.adapter_trainable:
+                gradient_coverage_anchor = trainable_parameter_zero_anchor(self.adapter)
+                selected = selected + gradient_coverage_anchor.to(dtype=selected.dtype)
         if not selected.requires_grad:
             raise RuntimeError("current TGVF log-probabilities lost autograd")
-        scatter = torch.tensor(
-            response.policy_indices, dtype=torch.long, device=device
-        )
+        scatter = torch.tensor(response.policy_indices, dtype=torch.long, device=device)
         response_logprobs = torch.zeros(
             len(response.token_ids), dtype=selected.dtype, device=device
         ).scatter(0, scatter, selected)
         mask = torch.tensor(
             tuple(
-                owner is TokenOwnership.POLICY_SAMPLED
-                for owner in response.ownership
+                owner is TokenOwnership.POLICY_SAMPLED for owner in response.ownership
             ),
             dtype=torch.bool,
             device=device,
@@ -240,7 +245,9 @@ def build_trainable_tgvf_current_request(
     """Replace recorded source/D tensors with current differentiable tensors."""
 
     recorded = resolve_replay_request(
-        store, replay_handle, ReplayConsumer.POLICY  # type: ignore[arg-type]
+        store,
+        replay_handle,
+        ReplayConsumer.POLICY,  # type: ignore[arg-type]
     )
     replay = store.resolve_replay(replay_handle)  # type: ignore[arg-type]
     source = replay.source_visual
@@ -289,9 +296,7 @@ def build_trainable_tgvf_current_request(
         owner_device = tensor_compute_device(owner)
         output = adapter(
             TGVFAdapterInput(
-                target_hidden_states=hq.to(
-                    device=owner_device, dtype=owner.dtype
-                ),
+                target_hidden_states=hq.to(device=owner_device, dtype=owner.dtype),
                 pre_merge_visual_tokens=vision.premerge_main,
                 deepstack_pre_merge_visual_tokens=vision.premerge_deepstack,
             )
@@ -338,9 +343,7 @@ def extract_live_qwen3_vision_features(
     )
     if len(mergers) != 4 or len({id(value) for value in mergers}) != 4:
         raise ValueError("Qwen3 vision must expose four distinct mergers")
-    captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [
-        [] for _ in mergers
-    ]
+    captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [[] for _ in mergers]
     handles = tuple(
         merger.register_forward_hook(
             _capture_live_merger(captures[index]), with_kwargs=True
@@ -349,9 +352,7 @@ def extract_live_qwen3_vision_features(
     )
     owner = next(visual.parameters())
     owner_device = tensor_compute_device(owner)
-    grid = torch.tensor(
-        (image_grid_thw,), dtype=torch.long, device=owner_device
-    )
+    grid = torch.tensor((image_grid_thw,), dtype=torch.long, device=owner_device)
     try:
         visual(
             pixel_values.to(device=owner_device, dtype=owner.dtype),
@@ -382,9 +383,7 @@ def _capture_live_merger(destination: list[tuple[torch.Tensor, torch.Tensor]]):
         source = args[0] if args and isinstance(args[0], torch.Tensor) else None
         if source is None:
             source = kwargs.get("hidden_states")  # type: ignore[assignment]
-        if not isinstance(source, torch.Tensor) or not isinstance(
-            output, torch.Tensor
-        ):
+        if not isinstance(source, torch.Tensor) or not isinstance(output, torch.Tensor):
             raise TypeError("Qwen3 merger must expose tensor input and output")
         if source.ndim == 3 and source.shape[1] == 1:
             source = source[:, 0]

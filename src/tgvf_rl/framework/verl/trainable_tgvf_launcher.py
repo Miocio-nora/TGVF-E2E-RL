@@ -28,6 +28,7 @@ from tgvf_rl.data.deepeyes_official_schedule import (
 )
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
@@ -111,6 +112,12 @@ TRAINABLE_TGVF_CANARY_MIN_RESPONSE_TRANSPORT_LENGTH = (
 )
 TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH = 8192
 TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
+TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    }
+)
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 
 _OPTIONAL_PARENT_LAUNCH_ENV = frozenset(
@@ -148,9 +155,7 @@ def _apply_crop16_mathematical_controls(
     # PRL14's serialized completion contains -1 because its upstream trainer
     # filled the scheduler horizon later.  The project TaskRunner deliberately
     # preserves an explicit run-bound horizon before upstream construction.
-    values["actor_rollout_ref.actor.optim.total_training_steps"] = (
-        optimizer_horizon
-    )
+    values["actor_rollout_ref.actor.optim.total_training_steps"] = optimizer_horizon
     if world_size == 4:
         values.update(_WORLD4_TOPOLOGY_OVERRIDES)
 
@@ -163,9 +168,7 @@ def _assert_crop16_mathematical_controls(
     if type(optimizer_horizon) is not int or optimizer_horizon <= 0:
         raise ValueError("trainable TGVF optimizer horizon must be positive")
     expected = dict(PRL14_CROP16_COMMON_OVERRIDES)
-    expected["actor_rollout_ref.actor.optim.total_training_steps"] = (
-        optimizer_horizon
-    )
+    expected["actor_rollout_ref.actor.optim.total_training_steps"] = optimizer_horizon
     if world_size == 4:
         expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
     mismatches = {
@@ -174,9 +177,7 @@ def _assert_crop16_mathematical_controls(
         if values.get(path) != value
     }
     unexpected = {
-        path: values[path]
-        for path in PRL14_CROP16_REMOVED_OVERRIDES
-        if path in values
+        path: values[path] for path in PRL14_CROP16_REMOVED_OVERRIDES if path in values
     }
     if mismatches or unexpected:
         raise ValueError(
@@ -208,9 +209,7 @@ def _apply_functional_canary_controls(values: dict[str, object]) -> None:
                 TRAINABLE_TGVF_CANARY_PROMPTS
             ),
             "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": 2,
-            "actor_rollout_ref.rollout.n": (
-                TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
-            ),
+            "actor_rollout_ref.rollout.n": (TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT),
             "actor_rollout_ref.rollout.response_length": (
                 TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH
             ),
@@ -263,7 +262,7 @@ def _assert_functional_canary_config(config: PolicyE2ESmokeRunConfig) -> None:
     }
     if mismatches:
         raise ValueError(
-            "functional canary run config differs: " f"mismatches={mismatches!r}"
+            f"functional canary run config differs: mismatches={mismatches!r}"
         )
 
 
@@ -307,9 +306,22 @@ def _legacy_base_plan(config: PolicyE2ESmokeRunConfig):
     ).bundle_sha256
     compatible = replace(
         config,
+        # The generic e003 launcher uses the historical v1 schema to select
+        # Crop-16's expanded-trajectory batch contract. Project v2 configs
+        # differ only in RP66 optimizer ownership, so project them onto that
+        # same proven base path while retaining their canonical run identity.
+        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         protocol=replace(config.protocol, prompt_sha256=legacy_prompt),
     )
     return legacy_launcher.build_policy_e2e_smoke_verl_plan(compatible)
+
+
+def _adapter_weight_sync_payload(config: PolicyE2ESmokeRunConfig) -> str:
+    return (
+        "full_qwen_plus_trainable_rp66"
+        if config.representation.adapter_trainable
+        else "full_qwen_plus_frozen_rp66"
+    )
 
 
 def _replace_custom_record(
@@ -331,7 +343,7 @@ def _replace_custom_record(
     reward = dict(custom["reward"])  # type: ignore[arg-type]
     reward.update(
         {
-            "schema_version": POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+            "schema_version": config.schema_version,
             "source_aware": True,
         }
     )
@@ -350,13 +362,16 @@ def _replace_custom_record(
                 ),
                 "policy_lora": False,
                 "vision_trainable": True,
-                "adapter_trainable": True,
+                "adapter_update_mode": (
+                    config.representation.adapter_update_mode.value
+                ),
+                "adapter_trainable": config.representation.adapter_trainable,
                 "sync_every_optimizer_step": True,
             },
             "weight_sync": {
                 "mode": config.distributed.weight_sync_mode,
                 "interval_optimizer_steps": 1,
-                "payload": "full_qwen_plus_trainable_rp66",
+                "payload": _adapter_weight_sync_payload(config),
             },
             "reference_diagnostic": {
                 "enabled": False,
@@ -432,6 +447,11 @@ class TrainableTGVFVerlLaunchPlan:
 
     def _assert_trainable_path(self) -> None:
         values = self.overrides
+        if (
+            self.config.schema_version
+            not in TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS
+        ):
+            raise ValueError("trainable TGVF launcher requires an RP66 run schema")
         if self.mode == "canary":
             _assert_functional_canary_config(self.config)
             if TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH < (
@@ -470,8 +490,7 @@ class TrainableTGVFVerlLaunchPlan:
             }
             if mismatches:
                 raise ValueError(
-                    "functional canary controls differ: "
-                    f"mismatches={mismatches!r}"
+                    f"functional canary controls differ: mismatches={mismatches!r}"
                 )
         else:
             _assert_crop16_mathematical_controls(
@@ -500,9 +519,7 @@ class TrainableTGVFVerlLaunchPlan:
             "data.custom_cls.path": TRAINABLE_TGVF_DATASET_MODULE_PATH,
             "data.custom_cls.name": "TGVFDeepEyesMatchedDataset",
             "data.train_batch_size": (
-                TRAINABLE_TGVF_CANARY_PROMPTS
-                if self.mode == "canary"
-                else 16
+                TRAINABLE_TGVF_CANARY_PROMPTS if self.mode == "canary" else 16
             ),
             "actor_rollout_ref.rollout.n": (
                 TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
@@ -517,12 +534,31 @@ class TrainableTGVFVerlLaunchPlan:
         custom = values.get("actor_rollout_ref.rollout.custom")
         if not isinstance(custom, Mapping):
             raise ValueError("trainable TGVF custom record is missing")
+        expected_trainable_tgvf = {
+            "external_module": TRAINABLE_TGVF_EXTERNAL_MODULE,
+            "model_type": TRAINABLE_TGVF_MODEL_TYPE,
+            "checkpoint_manager_fqn": (TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN),
+            "policy_lora": False,
+            "vision_trainable": True,
+            "adapter_update_mode": (
+                self.config.representation.adapter_update_mode.value
+            ),
+            "adapter_trainable": self.config.representation.adapter_trainable,
+            "sync_every_optimizer_step": True,
+        }
+        if custom.get("trainable_tgvf") != expected_trainable_tgvf:
+            raise ValueError("trainable TGVF adapter identity differs")
         if custom.get("weight_sync") != {
             "mode": self.config.distributed.weight_sync_mode,
             "interval_optimizer_steps": 1,
-            "payload": "full_qwen_plus_trainable_rp66",
+            "payload": _adapter_weight_sync_payload(self.config),
         }:
             raise ValueError("trainable TGVF sync identity differs")
+        reward = custom.get("reward")
+        if not isinstance(reward, Mapping) or reward.get("schema_version") != (
+            self.config.schema_version
+        ):
+            raise ValueError("trainable TGVF reward schema differs")
         if custom.get("reference_diagnostic") != {
             "enabled": False,
             "coefficient": 0.0,
@@ -589,8 +625,8 @@ def build_trainable_tgvf_verl_launch_plan(
     target_step: int | None = None,
     smoke_id: str | None = None,
 ) -> TrainableTGVFVerlLaunchPlan:
-    if config.schema_version != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA:
-        raise ValueError("trainable TGVF launcher requires the RP66 run schema")
+    if config.schema_version not in TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS:
+        raise ValueError("trainable TGVF launcher requires an RP66 run schema")
     if mode not in {"formal", "smoke", "canary"}:
         raise ValueError(f"unsupported trainable TGVF launch mode: {mode!r}")
     if smoke_id is not None:
@@ -655,9 +691,7 @@ def build_trainable_tgvf_verl_launch_plan(
         _assert_functional_canary_config(config)
         _apply_functional_canary_controls(values)
     checkpoint_steps = (
-        tuple(range(TRAINABLE_TGVF_FORMAL_TARGET + 1))
-        if mode == "formal"
-        else (0, 1)
+        tuple(range(TRAINABLE_TGVF_FORMAL_TARGET + 1)) if mode == "formal" else (0, 1)
     )
     output_root = config.output.root
     environment = dict(base.environment)
@@ -676,9 +710,7 @@ def build_trainable_tgvf_verl_launch_plan(
                 "trainer.max_actor_ckpt_to_keep": 2,
             }
         )
-        environment["TGVF_POLICY_STATE_DIR"] = str(
-            output_root / "runtime-policy-state"
-        )
+        environment["TGVF_POLICY_STATE_DIR"] = str(output_root / "runtime-policy-state")
     elif mode == "canary":
         output_root = output_root / "canary"
         values.update(
@@ -689,9 +721,7 @@ def build_trainable_tgvf_verl_launch_plan(
                 "trainer.max_actor_ckpt_to_keep": 2,
             }
         )
-        environment["TGVF_POLICY_STATE_DIR"] = str(
-            output_root / "runtime-policy-state"
-        )
+        environment["TGVF_POLICY_STATE_DIR"] = str(output_root / "runtime-policy-state")
         environment[POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV] = "1"
     environment[POLICY_METRICS_PATH_ENV] = str(output_root / "metrics.jsonl")
     environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] = "0"
@@ -713,9 +743,7 @@ def build_trainable_tgvf_verl_launch_plan(
             "dataset": TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
             "actor_engine": TRAINABLE_TGVF_MODEL_TYPE,
             "actor_external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,
-            "checkpoint_engine_manager": (
-                TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
-            ),
+            "checkpoint_engine_manager": (TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN),
         }
     )
     return TrainableTGVFVerlLaunchPlan(
@@ -816,7 +844,10 @@ def preflight_trainable_tgvf_verl_runtime(
         raise RuntimeError("Policy preflight run-config path differs")
     preflight_trainable_rp66_artifact(config)
     _verified_schedule_index()
-    if config.reward.judge_config_path is None or config.reward.judge_config_sha256 is None:
+    if (
+        config.reward.judge_config_path is None
+        or config.reward.judge_config_sha256 is None
+    ):
         raise RuntimeError("Policy preflight judge binding is missing")
     judge = load_deepeyes_judge_service_config(
         config.reward.judge_config_path,

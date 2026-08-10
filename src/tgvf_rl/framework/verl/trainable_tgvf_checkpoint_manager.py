@@ -14,8 +14,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import hmac
 import inspect
 from typing import Any
+
+from tgvf_rl.contracts.errors import IdentityMismatchError
 
 from .policy_weight_sync import (
     PolicyWeightSyncState,
@@ -34,6 +37,11 @@ from .vllm_tool_runtime import (
 TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN = (
     "tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager."
     "TrainableTGVFCheckpointEngineManager"
+)
+TGVF_ADAPTER_UPDATE_MODE_JOINT = "joint"
+TGVF_ADAPTER_UPDATE_MODE_FROZEN = "frozen_adapter"
+_TGVF_ADAPTER_UPDATE_MODES = frozenset(
+    {TGVF_ADAPTER_UPDATE_MODE_JOINT, TGVF_ADAPTER_UPDATE_MODE_FROZEN}
 )
 
 
@@ -61,7 +69,10 @@ class TrainableTGVFRolloutPublication:
                 or any(character not in "0123456789abcdef" for character in value)
             ):
                 raise ValueError(f"{owner} digest must be lowercase SHA256")
-        if type(self.acknowledgement_count) is not int or self.acknowledgement_count <= 0:
+        if (
+            type(self.acknowledgement_count) is not int
+            or self.acknowledgement_count <= 0
+        ):
             raise ValueError("RP66 publication requires positive ACK count")
         if (
             type(self.applied_count) is not int
@@ -72,7 +83,13 @@ class TrainableTGVFRolloutPublication:
 
 
 class TrainableTGVFCheckpointEngineManager:
-    """Coordinate one full-Qwen sync and one RP66 fan-out per optimizer step."""
+    """Coordinate one full-Qwen sync and one RP66 fan-out per optimizer step.
+
+    Historical PRL15 configurations omit ``adapter_update_mode`` and therefore
+    retain joint Qwen/RP66 updates.  The frozen-Adapter control still publishes
+    a request-scoped RP66 pointer and fans its state out at every optimizer step,
+    but rejects any Adapter tensor drift after the first completed publication.
+    """
 
     def __init__(
         self,
@@ -86,6 +103,7 @@ class TrainableTGVFCheckpointEngineManager:
     ) -> None:
         if not isinstance(replicas, list) or not replicas:
             raise ValueError("trainable RP66 sync requires rollout replicas")
+        self._adapter_update_mode = _adapter_update_mode(config)
         self._state = PolicyWeightSyncState.from_environment(environment)
         upstream_factory = (
             upstream_manager_factory or _load_upstream_checkpoint_manager_class()
@@ -96,7 +114,9 @@ class TrainableTGVFCheckpointEngineManager:
             replicas=replicas,
         )
         if not callable(getattr(self._upstream, "update_weights", None)):
-            raise TypeError("upstream checkpoint manager must implement update_weights()")
+            raise TypeError(
+                "upstream checkpoint manager must implement update_weights()"
+            )
 
         rollout_factory = (
             rollout_manager_factory or bind_tgvf_adapter_state_update_manager
@@ -110,6 +130,7 @@ class TrainableTGVFCheckpointEngineManager:
             )
         self._expected_acknowledgement_count = _rollout_server_count(replicas)
         self._last_publication: TrainableTGVFRolloutPublication | None = None
+        self._frozen_adapter_state_sha256: str | None = None
 
     @property
     def last_publication(self) -> TrainableTGVFRolloutPublication | None:
@@ -120,7 +141,9 @@ class TrainableTGVFCheckpointEngineManager:
         """Block until Qwen and RP66 for exactly ``global_steps`` are accepted."""
 
         if global_steps is None:
-            raise ValueError("trainable RP66 weight sync requires explicit global_steps")
+            raise ValueError(
+                "trainable RP66 weight sync requires explicit global_steps"
+            )
         _nonnegative_step(global_steps)
         if (
             self._last_publication is not None
@@ -142,6 +165,16 @@ class TrainableTGVFCheckpointEngineManager:
             expected_request_sha256=request.request_sha256,
         )
         adapter_sha256 = adapter_owned_state_sha256(snapshot.tensors)
+        if (
+            self._adapter_update_mode == TGVF_ADAPTER_UPDATE_MODE_FROZEN
+            and self._frozen_adapter_state_sha256 is not None
+            and not hmac.compare_digest(
+                adapter_sha256, self._frozen_adapter_state_sha256
+            )
+        ):
+            raise IdentityMismatchError(
+                "frozen RP66 Adapter state changed across optimizer steps"
+            )
         acknowledgements = self._rollout_manager.update_adapter_owned_state(
             optimizer_step=global_steps,
             state_sha256=adapter_sha256,
@@ -156,6 +189,11 @@ class TrainableTGVFCheckpointEngineManager:
             tensor_count=len(snapshot.tensors),
             expected_count=self._expected_acknowledgement_count,
         )
+        if (
+            self._adapter_update_mode == TGVF_ADAPTER_UPDATE_MODE_FROZEN
+            and self._frozen_adapter_state_sha256 is None
+        ):
+            self._frozen_adapter_state_sha256 = adapter_sha256
         self._last_publication = TrainableTGVFRolloutPublication(
             optimizer_step=global_steps,
             adapter_state_sha256=adapter_sha256,
@@ -170,6 +208,32 @@ class TrainableTGVFCheckpointEngineManager:
         if name.startswith("_"):
             raise AttributeError(name)
         return getattr(self._upstream, name)
+
+
+def _adapter_update_mode(config: object) -> str:
+    """Resolve the composed-config mode, defaulting old PRL15 runs to joint."""
+
+    current: object = config
+    for field in (
+        "actor_rollout_ref",
+        "rollout",
+        "custom",
+        "trainable_tgvf",
+        "adapter_update_mode",
+    ):
+        if isinstance(current, Mapping):
+            if field not in current:
+                return TGVF_ADAPTER_UPDATE_MODE_JOINT
+            current = current[field]
+        else:
+            if not hasattr(current, field):
+                return TGVF_ADAPTER_UPDATE_MODE_JOINT
+            current = getattr(current, field)
+    if type(current) is not str or current not in _TGVF_ADAPTER_UPDATE_MODES:
+        raise ValueError(
+            "trainable_tgvf.adapter_update_mode must be 'joint' or 'frozen_adapter'"
+        )
+    return current
 
 
 def _validate_all_acknowledgements(
@@ -217,6 +281,8 @@ def _load_upstream_checkpoint_manager_class() -> type[Any]:
 
 __all__ = [
     "TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN",
+    "TGVF_ADAPTER_UPDATE_MODE_FROZEN",
+    "TGVF_ADAPTER_UPDATE_MODE_JOINT",
     "TrainableTGVFCheckpointEngineManager",
     "TrainableTGVFRolloutPublication",
 ]

@@ -1,4 +1,4 @@
-"""FSDP2 engine for full-Qwen and jointly trainable RP66 replay."""
+"""FSDP2 engine for full-Qwen with configurable RP66 optimizer ownership."""
 
 from __future__ import annotations
 
@@ -94,7 +94,10 @@ def make_trainable_tgvf_fsdp2_engine_class(
         def _build_module(self):
             if getattr(self.engine_config, "strategy", None) != "fsdp2":
                 raise ValueError("trainable RP66 engine supports FSDP2 only")
-            if getattr(self.model_config, "model_type", None) != TRAINABLE_TGVF_MODEL_TYPE:
+            if (
+                getattr(self.model_config, "model_type", None)
+                != TRAINABLE_TGVF_MODEL_TYPE
+            ):
                 raise IdentityMismatchError("trainable RP66 model_type differs")
             _validate_trainable_execution_capabilities(self.model_config)
             self.model_config.model_type = "language_model"
@@ -106,14 +109,53 @@ def make_trainable_tgvf_fsdp2_engine_class(
                 module.requires_grad_(False)
                 module.eval()
                 return module
+            from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
+
+            run_config = load_policy_e2e_smoke_run_config(_required_run_config_path())
+            self._rp66_adapter_update_mode = (
+                run_config.representation.adapter_update_mode
+            )
             module.requires_grad_(True)
             adapter = build_trainable_rp66_adapter(
                 module,
-                run_config_path=_required_run_config_path(),
+                run_config=run_config,
             )
             module.add_module(TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, adapter)
+            # Keep the forward-mode control identical to PRL15.  RP66 contains
+            # only Linear/LayerNorm state, so optimizer ownership is expressed
+            # solely through requires_grad rather than silently changing the
+            # module's execution semantics.
             module.train(True)
+            adapter.train(True)
+            _assert_adapter_update_mode(
+                adapter,
+                expected_trainable=run_config.representation.adapter_trainable,
+            )
             return module
+
+        def _build_optimizer(self, module):
+            mode = getattr(self, "_rp66_adapter_update_mode", None)
+            if mode is None or getattr(mode, "value", None) == "joint":
+                return super()._build_optimizer(module)
+            if getattr(mode, "value", None) != "frozen_adapter":
+                raise ValueError("RP66 adapter update mode is unsupported")
+
+            # Pinned veRL forwards module.parameters() directly to AdamW and
+            # does not filter requires_grad=False parameters.  Explicitly
+            # construct the frozen-control optimizer scope so RP66 owns no
+            # optimizer slot or checkpoint state.
+            from verl.workers.config.optimizer import build_optimizer
+
+            parameters = tuple(
+                parameter
+                for parameter in module.parameters()
+                if parameter.requires_grad
+            )
+            if not parameters:
+                raise RuntimeError("frozen-RP66 actor exposes no trainable Qwen state")
+            optimizer = build_optimizer(parameters, self.optimizer_config)
+            assert_frozen_rp66_optimizer_scope(module, optimizer)
+            return optimizer
 
         def get_per_tensor_param(
             self,
@@ -156,12 +198,8 @@ def make_trainable_tgvf_fsdp2_engine_class(
             finally:
                 _reshard_exact_replay_root(self.module)
 
-    TrainableTGVFFSDPEngineWithLMHead.__name__ = (
-        "TrainableTGVFFSDPEngineWithLMHead"
-    )
-    TrainableTGVFFSDPEngineWithLMHead.__qualname__ = (
-        "TrainableTGVFFSDPEngineWithLMHead"
-    )
+    TrainableTGVFFSDPEngineWithLMHead.__name__ = "TrainableTGVFFSDPEngineWithLMHead"
+    TrainableTGVFFSDPEngineWithLMHead.__qualname__ = "TrainableTGVFFSDPEngineWithLMHead"
     TrainableTGVFFSDPEngineWithLMHead.__module__ = __name__
     return TrainableTGVFFSDPEngineWithLMHead
 
@@ -189,13 +227,21 @@ def register_trainable_tgvf_fsdp2_engine(
 
 
 def build_trainable_rp66_adapter(
-    model: nn.Module, *, run_config_path: str | Path
+    model: nn.Module,
+    *,
+    run_config_path: str | Path | None = None,
+    run_config: Any | None = None,
 ) -> TGVFAdapter:
     """Load RP66 owned tensors while borrowing canonical live Qwen mergers."""
 
-    from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
+    if (run_config_path is None) is (run_config is None):
+        raise ValueError("provide exactly one RP66 run config source")
+    if run_config is None:
+        from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 
-    config = load_policy_e2e_smoke_run_config(run_config_path)
+        config = load_policy_e2e_smoke_run_config(run_config_path)
+    else:
+        config = run_config
     export = _load_validated_trainable_rp66_export(config)
 
     visual = getattr(getattr(model, "model", model), "visual", None)
@@ -245,7 +291,7 @@ def build_trainable_rp66_adapter(
     adapter.load_artifact_state_dict(
         _adapter_state_for_runtime_dtype(export.state, dtype=owner.dtype)
     )
-    adapter.requires_grad_(True)
+    adapter.requires_grad_(config.representation.adapter_trainable)
     adapter.train(True)
     contract.assert_matches(adapter)
     if any(
@@ -254,6 +300,78 @@ def build_trainable_rp66_adapter(
     ):
         raise RuntimeError("RP66 registered duplicate Qwen merger parameters")
     return adapter
+
+
+def _assert_adapter_update_mode(
+    adapter: TGVFAdapter, *, expected_trainable: bool
+) -> None:
+    parameters = tuple(
+        parameter for _name, parameter in _adapter_owned_named_parameters(adapter)
+    )
+    if not parameters:
+        raise RuntimeError("RP66 Adapter has no owned parameters")
+    actual = tuple(parameter.requires_grad for parameter in parameters)
+    if any(value is not expected_trainable for value in actual):
+        raise RuntimeError("RP66 Adapter requires_grad differs from run config")
+    if not expected_trainable and any(
+        parameter.grad is not None for parameter in parameters
+    ):
+        raise RuntimeError("frozen RP66 Adapter unexpectedly owns gradients")
+
+
+def assert_frozen_rp66_optimizer_scope(
+    module: nn.Module, optimizer: torch.optim.Optimizer
+) -> None:
+    """Prove frozen RP66 is absent while every trainable Qwen param is owned."""
+
+    adapter = getattr(module, TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, None)
+    if not isinstance(adapter, TGVFAdapter):
+        raise TypeError("frozen-RP66 actor lost its Adapter")
+    _assert_adapter_update_mode(adapter, expected_trainable=False)
+    adapter_ids = {
+        id(parameter) for _name, parameter in _adapter_owned_named_parameters(adapter)
+    }
+    optimizer_ids = {
+        id(parameter)
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+    overlap = adapter_ids & optimizer_ids
+    if overlap:
+        raise RuntimeError("frozen RP66 parameters entered optimizer param groups")
+    qwen_trainable_ids = {
+        id(parameter)
+        for name, parameter in module.named_parameters()
+        if not name.startswith(f"{TRAINABLE_TGVF_ADAPTER_ATTRIBUTE}.")
+        and parameter.requires_grad
+    }
+    if not qwen_trainable_ids:
+        raise RuntimeError("frozen-RP66 control exposes no trainable Qwen parameters")
+    missing = qwen_trainable_ids - optimizer_ids
+    if missing:
+        raise RuntimeError("optimizer omitted trainable Qwen parameters")
+
+
+def _adapter_owned_named_parameters(
+    adapter: TGVFAdapter,
+) -> tuple[tuple[str, nn.Parameter], ...]:
+    """Return only RP66-owned parameters, excluding borrowed Qwen mergers."""
+
+    artifact_names = set(adapter.artifact_state_dict(keep_vars=True))
+    owned = tuple(
+        (name, parameter)
+        for name, parameter in adapter.named_parameters()
+        if name in artifact_names
+    )
+    if not owned:
+        raise RuntimeError("RP66 Adapter has no owned parameters")
+    missing = artifact_names - {name for name, _parameter in owned}
+    if missing:
+        raise RuntimeError(
+            "RP66 Adapter artifact state contains non-parameter tensors: "
+            f"{tuple(sorted(missing))}"
+        )
+    return owned
 
 
 def _load_validated_trainable_rp66_export(config: Any) -> Any:
@@ -328,7 +446,10 @@ def _validate_worker(
         raise ValueError("trainable RP66 replay requires FSDP2")
     if getattr(engine.model_config, "model_type", None) != TRAINABLE_TGVF_MODEL_TYPE:
         raise IdentityMismatchError("trainable RP66 worker model_type differs")
-    if getattr(engine.model_config, "path", None) != bundle.replay_record.model.revision_or_path:
+    if (
+        getattr(engine.model_config, "path", None)
+        != bundle.replay_record.model.revision_or_path
+    ):
         raise IdentityMismatchError("trainable RP66 worker model path differs")
     forward_only = bool(getattr(engine.engine_config, "forward_only", False))
     if forward_only is not (role is ComponentRole.REFERENCE):
@@ -363,6 +484,7 @@ __all__ = [
     "TRAINABLE_TGVF_MODEL_TYPE",
     "TRAINABLE_TGVF_RUN_CONFIG_ENV",
     "TrainableTGVFReplayPortFactory",
+    "assert_frozen_rp66_optimizer_scope",
     "build_trainable_rp66_adapter",
     "make_trainable_tgvf_fsdp2_engine_class",
     "preflight_trainable_rp66_artifact",
