@@ -246,6 +246,24 @@ class _JudgeResponseIdentityError(JudgeSampleOutputError):
     """One completed response whose model metadata cannot be trusted."""
 
 
+def _merge_judge_usage(
+    prior: JudgeUsage | None,
+    current: JudgeUsage | None,
+) -> JudgeUsage | None:
+    """Accumulate every billable completed response across judge retries."""
+
+    if prior is None:
+        return current
+    if current is None:
+        return prior
+    return JudgeUsage(
+        prompt_tokens=prior.prompt_tokens + current.prompt_tokens,
+        completion_tokens=prior.completion_tokens + current.completion_tokens,
+        total_tokens=prior.total_tokens + current.total_tokens,
+        cost_usd=prior.cost_usd + current.cost_usd,
+    )
+
+
 class AsyncDeepEyesOpenRouterJudge:
     """One-process bounded async transport used by the veRL reward worker."""
 
@@ -282,6 +300,7 @@ class AsyncDeepEyesOpenRouterJudge:
 
         attempts = 0
         last_transient_error: Exception | None = None
+        completed_retry_usage: JudgeUsage | None = None
         failure_slot = await self._reserve_failure_slot()
         async with self._semaphore:
             while attempts < self.config.maximum_attempts:
@@ -290,29 +309,38 @@ class AsyncDeepEyesOpenRouterJudge:
                     payload = await self._request_json(request)
                     try:
                         verdict = self._parse_response(payload, request=request)
-                    except _JudgeResponseIdentityError:
+                    except _JudgeResponseIdentityError as error:
                         # The request itself remains pinned to the configured
-                        # model and DeepInfra-only/no-fallback route.  A single
-                        # completed response with inconsistent model metadata
-                        # must not be consumed as reward, but neither should it
-                        # terminate every other trajectory in the optimizer
-                        # step.  Isolate it as a conservative zero and retain
-                        # the billable usage for health/cost accounting.
-                        usage = self._parse_response_usage(payload)
-                        return AsyncJudgeOutcome(
-                            False,
-                            attempts,
-                            attempts - 1,
-                            0,
-                            "completed_identity_mismatch",
-                            max(0.0, self._clock() - started),
-                            usage=usage,
+                        # model and DeepInfra-only/no-fallback route.  Never
+                        # score a response whose returned identity differs;
+                        # retry it within the existing bounded attempt policy
+                        # and preserve its billable usage.  A persistent
+                        # identity mismatch is a real global provenance fault,
+                        # unlike one transient gateway metadata glitch.
+                        completed_retry_usage = _merge_judge_usage(
+                            completed_retry_usage,
+                            self._parse_response_usage(payload),
                         )
+                        if attempts == self.config.maximum_attempts:
+                            raise JudgeGlobalFailure(
+                                "DeepEyes judge response model mismatch persisted "
+                                f"for {attempts} attempts: {error}"
+                            ) from error
+                        delay = min(
+                            self.config.retry_maximum_seconds,
+                            self.config.retry_backoff_seconds
+                            * (2 ** (attempts - 1)),
+                        )
+                        await self._sleeper(delay)
+                        continue
                     except JudgeSampleOutputError:
                         # A completed response consumed real judge tokens even
                         # when its answer is malformed/non-binary.  Preserve
                         # that response's usage on the sample-local failure.
-                        usage = self._parse_response_usage(payload)
+                        usage = _merge_judge_usage(
+                            completed_retry_usage,
+                            self._parse_response_usage(payload),
+                        )
                         return AsyncJudgeOutcome(
                             False,
                             attempts,
@@ -322,7 +350,10 @@ class AsyncDeepEyesOpenRouterJudge:
                             max(0.0, self._clock() - started),
                             usage=usage,
                         )
-                    usage = self._parse_response_usage(payload)
+                    usage = _merge_judge_usage(
+                        completed_retry_usage,
+                        self._parse_response_usage(payload),
+                    )
                     async with self._cache_lock:
                         if self.config.cache_max_entries:
                             self._cache[request.request_id] = verdict
@@ -370,6 +401,7 @@ class AsyncDeepEyesOpenRouterJudge:
             0,
             "transient_exhausted",
             max(0.0, self._clock() - started),
+            usage=completed_retry_usage,
         )
 
     async def _reserve_failure_slot(self) -> tuple[int, int]:
@@ -508,7 +540,8 @@ class AsyncDeepEyesOpenRouterJudge:
         if value.get("model") != self.config.model:
             raise _JudgeResponseIdentityError(
                 "DeepEyes judge response model differs: "
-                f"expected={self.config.model!r}, actual={value.get('model')!r}"
+                f"expected={self.config.model!r}, actual={value.get('model')!r}, "
+                f"response_id={value.get('id')!r}"
             )
         try:
             choices = value["choices"]

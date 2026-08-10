@@ -128,7 +128,7 @@ def test_async_transport_bounds_concurrency_retries_and_cache() -> None:
     asyncio.run(exercise())
 
 
-def test_async_transport_isolates_completed_output_and_model_mismatch() -> None:
+def test_async_transport_isolates_completed_output_and_retries_model_mismatch() -> None:
     async def malformed(_request: object, _payload: object) -> object:
         return _response("maybe")
 
@@ -141,21 +141,47 @@ def test_async_transport_isolates_completed_output_and_model_mismatch() -> None:
     assert outcome.failure_kind == "completed_invalid_output"
     assert outcome.usage == _RESPONSE_USAGE
 
-    async def wrong_model(_request: object, _payload: object) -> object:
+    model_attempts = 0
+
+    async def transient_wrong_model(_request: object, _payload: object) -> object:
+        nonlocal model_attempts
+        model_attempts += 1
         value = _response()
+        if model_attempts == 1:
+            value["model"] = "wrong/model"
+        return value
+
+    recovered = asyncio.run(
+        AsyncDeepEyesOpenRouterJudge(
+            _service(), request_json=transient_wrong_model
+        ).judge(
+            _request("transient-identity-mismatch")
+        )
+    )
+    assert recovered.verdict is True
+    assert recovered.calls == 2
+    assert recovered.retries == 1
+    assert recovered.failure_kind is None
+    assert recovered.usage == JudgeUsage(82, 6, 88, 0.0000246)
+
+    async def persistent_wrong_model(_request: object, _payload: object) -> object:
+        value = _response()
+        value["id"] = "safe-response-id"
         value["model"] = "wrong/model"
         return value
 
-    identity_mismatch = asyncio.run(
-        AsyncDeepEyesOpenRouterJudge(_service(), request_json=wrong_model).judge(
-            _request("identity-mismatch")
+    with pytest.raises(
+        JudgeGlobalFailure,
+        match=(
+            "model mismatch persisted for 2 attempts: .*"
+            "actual='wrong/model'.*response_id='safe-response-id'"
+        ),
+    ):
+        asyncio.run(
+            AsyncDeepEyesOpenRouterJudge(
+                _service(), request_json=persistent_wrong_model
+            ).judge(_request("persistent-identity-mismatch"))
         )
-    )
-    assert identity_mismatch.verdict is False
-    assert identity_mismatch.calls == 1
-    assert identity_mismatch.retries == 0
-    assert identity_mismatch.failure_kind == "completed_identity_mismatch"
-    assert identity_mismatch.usage == _RESPONSE_USAGE
 
 
 @pytest.mark.parametrize(
