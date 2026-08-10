@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -30,8 +31,14 @@ from tgvf_rl.evaluation.coredev_results import (  # noqa: E402
     write_json_atomic,
 )
 from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
+    PolicyEvaluationSnapshot,
+    freeze_policy_evaluation_snapshot,
+    load_benchmark_tasks,
     load_policy_coredev_config,
     load_policy_evaluation_snapshot,
+    materialize_vllm_lora_adapter,
+    policy_benchmark_task_path,
+    write_policy_evaluation_identity,
 )
 from tgvf_rl.evaluation.policy_coredev_scoring import (  # noqa: E402
     DATASETS as COREDEV_DATASETS,
@@ -98,10 +105,21 @@ def _load_plan(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("schema_version") != PLAN_SCHEMA:
         raise ValueError("PRL15 paired evaluation plan schema differs")
-    if [arm.get("optimizer_step") for arm in payload.get("arms", ())] != [0, 8]:
-        raise ValueError("PRL15 paired evaluation plan must contain step0 and step8")
-    if [arm.get("name") for arm in payload["arms"]] != ["step0", "step8"]:
-        raise ValueError("PRL15 paired evaluation arm names differ")
+    arms = payload.get("arms")
+    if not isinstance(arms, list) or not arms:
+        raise ValueError("paired evaluation plan must contain at least one arm")
+    steps = [arm.get("optimizer_step") for arm in arms if isinstance(arm, dict)]
+    names = [arm.get("name") for arm in arms if isinstance(arm, dict)]
+    if (
+        len(steps) != len(arms)
+        or any(type(step) is not int or step < 0 for step in steps)
+        or steps != sorted(steps)
+        or len(set(steps)) != len(steps)
+        or names != [f"step{step}" for step in steps]
+    ):
+        raise ValueError("paired evaluation arms must be unique ordered stepN states")
+    if steps[0] != 0:
+        raise ValueError("paired evaluation must begin with the step0 control")
     if (
         payload.get("expected_task_count") != 2511
         or payload.get("expected_single_image_count") != 2240
@@ -203,7 +221,7 @@ def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
 
 
 def _validate_materialized_frozen_pairing(
-    plan: dict[str, Any], step0_config: Path, step8_config: Path
+    plan: dict[str, Any], configs: dict[str, Path]
 ) -> None:
     """Prove that a frozen-RP66 evaluation binds identical endpoint state."""
 
@@ -211,24 +229,26 @@ def _validate_materialized_frozen_pairing(
     if required_pairing.get("rp66_state_must_remain_constant") is not True:
         return
     snapshots = []
-    for config_path in (step0_config, step8_config):
+    for arm in plan["arms"]:
+        config_path = configs[arm["name"]]
         config = load_policy_coredev_config(config_path)
         snapshot = load_policy_evaluation_snapshot(config)
         receipt = getattr(snapshot, "receipt", None)
         if receipt is None:
             raise RuntimeError("constant RP66 pairing requires paired snapshots")
         snapshots.append(receipt)
-    step0_receipt, step8_receipt = snapshots
+    step0_receipt, *nonzero_receipts = snapshots
     if step0_receipt.rp66_kind != "stage1_artifact":
         raise RuntimeError("frozen RP66 step0 must use the stage1 artifact")
-    if step8_receipt.rp66_kind != "runtime_snapshot":
-        raise RuntimeError("frozen RP66 step8 must use a runtime snapshot")
-    if step0_receipt.rp66_state_sha256 != step8_receipt.rp66_state_sha256:
-        raise RuntimeError("frozen RP66 state changed between step0 and step8")
-    if step8_receipt.rp66_storage_sha256 != required_pairing[
-        "expected_runtime_rp66_weights_sha256"
-    ]:
-        raise RuntimeError("frozen RP66 step8 storage identity differs")
+    for receipt in nonzero_receipts:
+        if receipt.rp66_kind != "runtime_snapshot":
+            raise RuntimeError("frozen RP66 nonzero arm must use a runtime snapshot")
+        if step0_receipt.rp66_state_sha256 != receipt.rp66_state_sha256:
+            raise RuntimeError("frozen RP66 state changed between evaluation arms")
+        if receipt.rp66_storage_sha256 != required_pairing[
+            "expected_runtime_rp66_weights_sha256"
+        ]:
+            raise RuntimeError("frozen RP66 runtime storage identity differs")
 
 
 def _resolve_repo_path(value: str) -> Path:
@@ -236,14 +256,139 @@ def _resolve_repo_path(value: str) -> Path:
     return (REPOSITORY_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
 
 
-def _step8_sources(run: Any) -> tuple[Path, Path]:
-    checkpoint = run.output.checkpoint_directory / "global_step_8"
-    pointer = run.output.root / "runtime-policy-state/latest-lora-snapshot.json"
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+
+
+def _write_immutable_file(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != payload:
+            raise RuntimeError(f"immutable evaluation source differs: {path}")
+        return
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_bytes(payload)
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _link_immutable_file(source: Path, destination: Path, *, sha256: str) -> None:
+    if _sha256_file(source) != sha256:
+        raise RuntimeError("runtime RP66 source file SHA256 differs")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() or destination.is_symlink():
+        if (
+            destination.is_symlink()
+            or not destination.is_file()
+            or _sha256_file(destination) != sha256
+        ):
+            raise RuntimeError(f"immutable evaluation source differs: {destination}")
+        return
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copyfile(source, destination)
+    if _sha256_file(destination) != sha256:
+        raise RuntimeError("materialized runtime RP66 file SHA256 differs")
+
+
+def _materialize_step_pointer(run: Any, *, step: int, destination: Path) -> Path:
+    """Freeze one exact historical RP66 manifest without changing training state."""
+
+    if type(step) is not int or step <= 0:
+        raise ValueError("historical RP66 pointer requires a positive step")
+    source_root = run.output.root / "runtime-policy-state"
+    manifests = tuple(
+        sorted((source_root / "lora-manifests").glob(f"step-{step:08d}-*.json"))
+    )
+    if len(manifests) != 1:
+        raise RuntimeError(f"expected exactly one runtime RP66 manifest for step {step}")
+    source_manifest = manifests[0]
+    manifest_bytes = source_manifest.read_bytes()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    manifest = json.loads(manifest_bytes)
+    expected_fields = {
+        "schema_version", "run_id", "run_identity_sha256", "optimizer_step",
+        "request_sha256", "weights_sha256", "tensor_file",
+        "tensor_file_sha256", "tensor_names", "tensor_metadata", "integrity_sha256",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected_fields:
+        raise RuntimeError("runtime RP66 manifest fields differ")
+    if (
+        manifest["schema_version"] != "tgvf-policy-lora-snapshot-v1"
+        or manifest["run_id"] != run.run_id
+        or manifest["run_identity_sha256"] != run.identity_sha256
+        or manifest["optimizer_step"] != step
+    ):
+        raise RuntimeError("runtime RP66 manifest identity differs")
+    manifest_relative = Path("lora-manifests") / source_manifest.name
+    tensor_relative = Path(str(manifest["tensor_file"]))
+    if tensor_relative.is_absolute() or ".." in tensor_relative.parts:
+        raise RuntimeError("runtime RP66 tensor path is unsafe")
+    source_tensor = source_root / tensor_relative
+    destination_root = destination.resolve()
+    _link_immutable_file(
+        source_manifest,
+        destination_root / manifest_relative,
+        sha256=manifest_sha256,
+    )
+    _link_immutable_file(
+        source_tensor,
+        destination_root / tensor_relative,
+        sha256=str(manifest["tensor_file_sha256"]),
+    )
+    content = {
+        "schema_version": "tgvf-policy-lora-latest-v1",
+        "run_id": run.run_id,
+        "run_identity_sha256": run.identity_sha256,
+        "optimizer_step": step,
+        "request_sha256": manifest["request_sha256"],
+        "weights_sha256": manifest["weights_sha256"],
+        "manifest_file": manifest_relative.as_posix(),
+        "manifest_file_sha256": manifest_sha256,
+    }
+    pointer = {
+        **content,
+        "integrity_sha256": hashlib.sha256(_canonical_json_bytes(content)).hexdigest(),
+    }
+    pointer_path = destination_root / f"step-{step:08d}-pointer.json"
+    _write_immutable_file(pointer_path, _canonical_json_bytes(pointer) + b"\n")
+    return pointer_path
+
+
+def _step_sources(
+    run: Any, *, step: int, output_base: Path, arm: str
+) -> tuple[Path, Path]:
+    checkpoint = run.output.checkpoint_directory / f"global_step_{step}"
+    manifests = tuple(
+        (run.output.root / "runtime-policy-state/lora-manifests").glob(
+            f"step-{step:08d}-*.json"
+        )
+    )
+    if step == 8 and not manifests:
+        return (
+            checkpoint,
+            run.output.root / "runtime-policy-state/latest-lora-snapshot.json",
+        )
+    pointer = _materialize_step_pointer(
+        run,
+        step=step,
+        destination=output_base / arm / "runtime/source-rp66-state",
+    )
     return checkpoint, pointer
 
 
 def _wait_for_step8(run: Any, *, timeout_seconds: int, poll_seconds: int) -> None:
-    checkpoint, pointer = _step8_sources(run)
+    checkpoint = run.output.checkpoint_directory / "global_step_8"
+    pointer = run.output.root / "runtime-policy-state/latest-lora-snapshot.json"
     deadline = time.monotonic() + timeout_seconds
     while True:
         latest = run.output.checkpoint_directory / "latest_checkpointed_iteration.txt"
@@ -357,7 +502,12 @@ def _materialize_arm(
         qwen_model = Path(run.model.revision_or_path)
         rp66_pointer = None
     else:
-        checkpoint, rp66_pointer = _step8_sources(run)
+        checkpoint, rp66_pointer = _step_sources(
+            run,
+            step=step,
+            output_base=output_base,
+            arm=arm,
+        )
         qwen_model = materialize_qwen_only_policy_checkpoint(
             policy_config_path=_resolve_repo_path(plan["policy_config"]),
             optimizer_step=step,
@@ -422,6 +572,51 @@ def _prepare(config_path: Path) -> None:
     _run_checked([sys.executable, str(RUNNER), "--config", str(config_path), "--mode", "prepare"])
 
 
+def _prepare_prevalidated_bound_manifest(config_path: Path) -> None:
+    """Prepare one materialized arm without re-decoding all 2,511 images.
+
+    Arm materialization immediately before this call already validates every
+    image byte/dimension while binding the immutable config.  Repeating that
+    full decode two or three more times adds minutes but no new identity proof;
+    this path rechecks the manifest bytes and snapshot closure only.
+    """
+
+    config = load_policy_coredev_config(config_path)
+    if config.task_manifest_path is None or config.task_manifest_sha256 is None:
+        _prepare(config_path)
+        return
+    source = config.task_manifest_path
+    source_bytes = source.read_bytes()
+    if hashlib.sha256(source_bytes).hexdigest() != config.task_manifest_sha256:
+        raise RuntimeError("prevalidated task manifest SHA256 changed")
+    tasks = load_benchmark_tasks(
+        source,
+        expected_task_count=config.expected_task_count,
+        expected_single_image_count=config.expected_single_image_count,
+        expected_sha256=config.task_manifest_sha256,
+        verify_image_contents=False,
+    )
+    target = policy_benchmark_task_path(config)
+    _write_immutable_file(target, source_bytes)
+    source_snapshot = load_policy_evaluation_snapshot(config)
+    snapshot = freeze_policy_evaluation_snapshot(config, source_snapshot)
+    if isinstance(snapshot, PolicyEvaluationSnapshot):
+        materialize_vllm_lora_adapter(config, snapshot)
+    write_policy_evaluation_identity(config, snapshot)
+    print(
+        json.dumps(
+            {
+                "total": len(tasks),
+                "single_image": sum(task.single_image for task in tasks),
+                "multi_image": sum(not task.single_image for task in tasks),
+                "image_content_scan_reused_from_arm_materialization": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def _validate(config_path: Path) -> None:
     _run_checked(
         [
@@ -444,6 +639,37 @@ def _launch_workers(config_path: Path) -> list[subprocess.Popen[bytes]]:
         environment = dict(os.environ)
         environment["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         environment["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        dependency_root = Path(sys.prefix).parent
+        header_root = dependency_root / ".deps/python312-dev/root/usr/include"
+        python_headers = header_root / "python3.12"
+        required_headers = (
+            python_headers / "Python.h",
+            python_headers / "pyconfig.h",
+            header_root / "x86_64-linux-gnu/python3.12/pyconfig.h",
+        )
+        if any(not path.is_file() for path in required_headers):
+            raise RuntimeError("policy evaluator Python development headers are absent")
+        triton_cache = config.output_root / "runtime/cache/triton" / f"rank-{rank}"
+        inductor_cache = (
+            config.output_root / "runtime/cache/torchinductor" / f"rank-{rank}"
+        )
+        triton_cache.mkdir(parents=True, exist_ok=True)
+        inductor_cache.mkdir(parents=True, exist_ok=True)
+        environment.update(
+            {
+                "VLLM_USE_V1": "1",
+                "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+                "TOKENIZERS_PARALLELISM": "false",
+                "PYTHONHASHSEED": "42",
+                "TORCH_DEVICE_BACKEND_AUTOLOAD": "0",
+                "CC": "/usr/bin/gcc",
+                "CXX": "/usr/bin/g++",
+                "CPATH": os.pathsep.join((str(header_root), str(python_headers))),
+                "LIBRARY_PATH": str(Path(sys.prefix) / "lib"),
+                "TRITON_CACHE_DIR": str(triton_cache),
+                "TORCHINDUCTOR_CACHE_DIR": str(inductor_cache),
+            }
+        )
         command = [
             sys.executable,
             str(RUNNER),
@@ -901,7 +1127,8 @@ def _score_missing_arms(
     """Run every missing arm concurrently and drain all scorers before failure."""
 
     launched: list[tuple[str, str, subprocess.Popen[bytes]]] = []
-    pending = [arm for arm in ("step0", "step8") if existing[arm] is None]
+    arm_names = [arm["name"] for arm in plan.get("arms", ())] or list(configs)
+    pending = [arm for arm in arm_names if existing[arm] is None]
     for arm in pending:
         launched.extend(
             (arm, dataset, process)
@@ -1005,58 +1232,68 @@ def main() -> int:
         if args.output_root is not None
         else run.output.root / "evaluation" / plan["evaluation_id"]
     )
-    first_gpus = tuple(args.gpu_ids[:4])
-    second_gpus = tuple(args.gpu_ids[-4:])
+    gpu_groups = [tuple(args.gpu_ids[:4])]
+    if len(args.gpu_ids) == 8:
+        gpu_groups.append(tuple(args.gpu_ids[4:]))
+    plan_arms = plan.get("arms") or (
+        {"name": "step0", "optimizer_step": 0},
+        {"name": "step8", "optimizer_step": 8},
+    )
+    arms = tuple((arm["name"], arm["optimizer_step"]) for arm in plan_arms)
     if args.mode == "score":
-        step0 = _load_existing_arm(
-            plan=plan, output_base=output_base, arm="step0", step=0
-        )
-        step8 = _load_existing_arm(
-            plan=plan, output_base=output_base, arm="step8", step=8
-        )
+        configs = {
+            arm: _load_existing_arm(
+                plan=plan, output_base=output_base, arm=arm, step=step
+            )
+            for arm, step in arms
+        }
     else:
-        step0 = _materialize_arm(
-            plan=plan,
-            run=run,
-            arm="step0",
-            step=0,
-            output_base=output_base,
-            gpu_ids=first_gpus,
-        )
-        step8 = _materialize_arm(
-            plan=plan,
-            run=run,
-            arm="step8",
-            step=8,
-            output_base=output_base,
-            gpu_ids=second_gpus,
-        )
-    _validate_materialized_frozen_pairing(plan, step0, step8)
+        configs = {
+            arm: _materialize_arm(
+                plan=plan,
+                run=run,
+                arm=arm,
+                step=step,
+                output_base=output_base,
+                gpu_ids=gpu_groups[index % len(gpu_groups)],
+            )
+            for index, (arm, step) in enumerate(arms)
+        }
+    _validate_materialized_frozen_pairing(plan, configs)
     if args.mode == "status":
-        for config in (step0, step8):
+        for config in configs.values():
             _run_checked([sys.executable, str(RUNNER), "--config", str(config), "--mode", "status"])
         return 0
     if args.mode == "score":
-        _materialize_official_scoring_view(step0, plan, arm="step0")
-        _materialize_official_scoring_view(step8, plan, arm="step8")
+        for arm, _step in arms:
+            _materialize_official_scoring_view(configs[arm], plan, arm=arm)
         materialization = {
-            "step0": _load_existing_official_scoring_view(step0, plan, arm="step0"),
-            "step8": _load_existing_official_scoring_view(step8, plan, arm="step8"),
+            arm: _load_existing_official_scoring_view(configs[arm], plan, arm=arm)
+            for arm, _step in arms
         }
     else:
-        _prepare(step0)
-        _prepare(step8)
-        _validate(step0)
-        _validate(step8)
+        for config in configs.values():
+            _prepare(config)
+        for config in configs.values():
+            _validate(config)
         if args.mode == "prepare":
             return 0
         if len(args.gpu_ids) == 8:
-            processes = _launch_workers(step0) + _launch_workers(step8)
-            _wait_workers(processes)
+            for offset in range(0, len(arms), 2):
+                batch = arms[offset : offset + 2]
+                processes = [
+                    process
+                    for arm, _step in batch
+                    for process in _launch_workers(configs[arm])
+                ]
+                _wait_workers(
+                    processes,
+                    owner=" + ".join(arm for arm, _step in batch),
+                )
         else:
-            _wait_workers(_launch_workers(step0))
-            _wait_workers(_launch_workers(step8))
-        for config in (step0, step8):
+            for arm, _step in arms:
+                _wait_workers(_launch_workers(configs[arm]), owner=arm)
+        for config in configs.values():
             _run_checked(
                 [
                     sys.executable,
@@ -1070,13 +1307,13 @@ def main() -> int:
                 ]
             )
         materialization = {
-            "step0": _materialize_official_scoring_view(step0, plan, arm="step0"),
-            "step8": _materialize_official_scoring_view(step8, plan, arm="step8"),
+            arm: _materialize_official_scoring_view(configs[arm], plan, arm=arm)
+            for arm, _step in arms
         }
     log_root = output_base / "logs"
     existing = {
-        "step0": _accepted_official_summary(_scoring_root(step0, plan), judge),
-        "step8": _accepted_official_summary(_scoring_root(step8, plan), judge),
+        arm: _accepted_official_summary(_scoring_root(configs[arm], plan), judge)
+        for arm, _step in arms
     }
     if any(value is None for value in existing.values()):
         with _local_judge_service(
@@ -1085,24 +1322,13 @@ def main() -> int:
             timeout_seconds=args.judge_startup_timeout_seconds,
             poll_seconds=max(5, min(args.poll_seconds, 30)),
         ):
-            if args.mode == "score":
-                existing = _score_missing_arms(
-                    {"step0": step0, "step8": step8},
-                    existing,
-                    plan,
-                    judge,
-                    log_root=log_root,
-                )
-            else:
-                for arm, config in (("step0", step0), ("step8", step8)):
-                    if existing[arm] is None:
-                        existing[arm] = _score_arm(
-                            config,
-                            plan,
-                            judge,
-                            arm=arm,
-                            log_root=log_root,
-                        )
+            existing = _score_missing_arms(
+                configs,
+                existing,
+                plan,
+                judge,
+                log_root=log_root,
+            )
     report = {
         "schema_version": PAIR_SUMMARY_SCHEMA,
         "evaluation_id": plan["evaluation_id"],
@@ -1113,9 +1339,16 @@ def main() -> int:
             "multi_image_policy": "unsupported_explicit_hold",
         },
         "materialization": materialization,
-        "step0": existing["step0"],
-        "step8": existing["step8"],
+        "arms": {
+            arm: {
+                "optimizer_step": step,
+                "official_summary": existing[arm],
+            }
+            for arm, step in arms
+        },
     }
+    for arm, _step in arms:
+        report[arm] = existing[arm]
     report_path = output_base / "paired-summary.json"
     write_json_atomic(report_path, report)
     _write_evaluation_complete(
