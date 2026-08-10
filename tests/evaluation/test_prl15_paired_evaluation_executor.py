@@ -183,6 +183,9 @@ def test_score_mode_reuses_existing_arms_without_policy_pipeline(
         lambda config, _plan: tmp_path / "scoring" / config.parent.name,
     )
     monkeypatch.setattr(_MODULE, "write_json_atomic", lambda *_args: None)
+    monkeypatch.setattr(
+        _MODULE, "_write_evaluation_complete", lambda *_args, **_kwargs: None
+    )
     for name in ("_prepare", "_validate", "_materialize_arm", "_launch_workers"):
         monkeypatch.setattr(
             _MODULE,

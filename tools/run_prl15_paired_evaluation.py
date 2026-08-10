@@ -930,6 +930,22 @@ def _score_missing_arms(
     return existing
 
 
+def _write_evaluation_complete(
+    output_base: Path, report_path: Path, *, evaluation_id: str
+) -> dict[str, str]:
+    """Atomically publish completion only after the paired summary is durable."""
+
+    record = {
+        "schema_version": "tgvf.paired-coredev-evaluation-complete.v1",
+        "status": "complete",
+        "evaluation_id": evaluation_id,
+        "paired_summary_path": str(report_path.resolve()),
+        "paired_summary_sha256": _sha256_file(report_path),
+    }
+    write_json_atomic(output_base / "evaluation-complete", record)
+    return record
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
@@ -1102,6 +1118,9 @@ def main() -> int:
     }
     report_path = output_base / "paired-summary.json"
     write_json_atomic(report_path, report)
+    _write_evaluation_complete(
+        output_base, report_path, evaluation_id=plan["evaluation_id"]
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

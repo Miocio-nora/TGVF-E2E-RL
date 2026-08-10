@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +28,7 @@ _RUN = (
     "prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_crop16_exact_matched_8step_ws8.toml"
 )
 _TOOL = _ROOT / "tools/run_prl15_paired_evaluation.py"
+_SUPERVISOR = _ROOT / "tools/supervise_prl16_f1_evaluation.sh"
 _SPEC = importlib.util.spec_from_file_location("prl16_f1_evaluation", _TOOL)
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
@@ -80,3 +84,29 @@ def test_frozen_pairing_accepts_equal_state_and_rejects_drift(monkeypatch) -> No
     receipts[step8].rp66_state_sha256 = "b" * 64
     with pytest.raises(RuntimeError, match="state changed"):
         _MODULE._validate_materialized_frozen_pairing(plan, step0, step8)
+
+
+def test_completion_marker_atomically_binds_paired_summary(tmp_path: Path) -> None:
+    report = tmp_path / "paired-summary.json"
+    report.write_text('{"result":"pass"}\n', encoding="utf-8")
+
+    record = _MODULE._write_evaluation_complete(
+        tmp_path, report, evaluation_id="PRL16-F1-EVAL"
+    )
+
+    assert record["paired_summary_sha256"] == hashlib.sha256(
+        report.read_bytes()
+    ).hexdigest()
+    assert json.loads((tmp_path / "evaluation-complete").read_text()) == record
+
+
+def test_supervisor_waits_retries_and_fails_fast_on_contract_errors() -> None:
+    subprocess.run(["bash", "-n", str(_SUPERVISOR)], check=True)
+    source = _SUPERVISOR.read_text(encoding="utf-8")
+
+    assert "--wait-for-step8" in source
+    assert "--wait-for-gpus" in source
+    assert "PRL16_F1_EVAL_MAX_RESTARTS" in source
+    assert "deterministic evaluation contract failure; refusing retry" in source
+    assert "identity differs" in source
+    assert "SHA256 differs" in source
