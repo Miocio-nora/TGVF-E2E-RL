@@ -113,9 +113,14 @@ TRAINABLE_TGVF_CANARY_MIN_RESPONSE_TRANSPORT_LENGTH = (
 )
 TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH = 8192
 TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
-TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = (
-    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
-)
+# Crop-16's matched schedule presents at most 2 prompt micros * n16 = 32
+# trajectories to each TP1 rollout engine. vLLM otherwise derives capture
+# sizes up to 512 from max_num_seqs=1024. Those unused CUDA-graph pools remain
+# resident while the actor trains and can collide with the following rollout
+# weight remap. Bound graph residency to the real per-engine concurrency; this
+# changes execution scheduling only, never samples, losses, or gradients.
+TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES = (1, 2, 4, 8, 16, 32)
+TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 
 _OPTIONAL_PARENT_LAUNCH_ENV = frozenset(
@@ -154,6 +159,9 @@ def _apply_crop16_mathematical_controls(
     # filled the scheduler horizon later.  The project TaskRunner deliberately
     # preserves an explicit run-bound horizon before upstream construction.
     values["actor_rollout_ref.actor.optim.total_training_steps"] = optimizer_horizon
+    values["actor_rollout_ref.rollout.cudagraph_capture_sizes"] = list(
+        TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
+    )
     if world_size == 4:
         values.update(_WORLD4_TOPOLOGY_OVERRIDES)
 
@@ -167,6 +175,9 @@ def _assert_crop16_mathematical_controls(
         raise ValueError("trainable TGVF optimizer horizon must be positive")
     expected = dict(PRL14_CROP16_COMMON_OVERRIDES)
     expected["actor_rollout_ref.actor.optim.total_training_steps"] = optimizer_horizon
+    expected["actor_rollout_ref.rollout.cudagraph_capture_sizes"] = list(
+        TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
+    )
     if world_size == 4:
         expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
     mismatches = {
@@ -971,6 +982,7 @@ __all__ = [
     "TRAINABLE_TGVF_CANARY_TARGET",
     "TRAINABLE_TGVF_FORMAL_TARGET",
     "TRAINABLE_TGVF_LAUNCH_SCHEMA",
+    "TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES",
     "TRAINABLE_TGVF_SMOKE_TARGET",
     "TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES",
     "POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV",

@@ -25,6 +25,7 @@ from tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager import (
 from tgvf_rl.framework.verl.trainable_tgvf_engine import TRAINABLE_TGVF_MODEL_TYPE
 from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
     TRAINABLE_TGVF_EXTERNAL_MODULE,
+    TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES,
     TrainableTGVFVerlLaunchPlan,
     apply_trainable_tgvf_launch_environment,
     build_trainable_tgvf_verl_launch_plan,
@@ -112,6 +113,9 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     assert values["actor_rollout_ref.actor.fsdp_config.model_dtype"] == "fp32"
     assert values["actor_rollout_ref.actor.optim.total_training_steps"] == 8
     assert values["actor_rollout_ref.rollout.response_length"] == 20480
+    assert values["actor_rollout_ref.rollout.cudagraph_capture_sizes"] == list(
+        TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
+    )
     assert "actor_rollout_ref.rollout.repetition_penalty" not in values
     assert values["data.filter_overlong_prompts"] is True
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3,4,5,6,7"
@@ -226,6 +230,14 @@ def test_v2_plan_records_dynamic_adapter_ownership(
     # v2 optimizer ownership must not leave the historical Crop-16 batch path.
     assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 32
     assert plan.overrides["actor_rollout_ref.actor.optim.total_training_steps"] == 8
+    assert plan.overrides["actor_rollout_ref.rollout.cudagraph_capture_sizes"] == [
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+    ]
 
 
 def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> None:
