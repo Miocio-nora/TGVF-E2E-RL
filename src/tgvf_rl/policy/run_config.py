@@ -102,6 +102,12 @@ POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA = (
     "policy-e2e-rp66-deepeyes-matched-control-run-config-v2"
 )
+POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    }
+)
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
 POLICY_E2E_SMOKE_JUDGE_MODE = "not_applicable"
 POLICY_E2E_SMOKE_REWARD_TASK = "multiple_choice"
@@ -623,10 +629,7 @@ def load_policy_e2e_smoke_run_config(
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
     )
-    rp66_matched_run = schema_version in {
-        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
-        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
-    }
+    rp66_matched_run = schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
     run_id = _safe_run_id(payload["run_id"])
 
     code_table = _table(payload, "code", {"repository", "commit", "dirty"})
@@ -2501,6 +2504,7 @@ __all__ = [
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_SMOKE_CAP_ERROR_SHA256",

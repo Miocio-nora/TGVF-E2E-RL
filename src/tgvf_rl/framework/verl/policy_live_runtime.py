@@ -75,7 +75,7 @@ from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.trajectory_audit import PolicyTrajectoryAuditWriter
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
-    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
 )
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.representation.training.distributed_checkpoint import (
@@ -169,7 +169,7 @@ def _rp66_matched_source_route(
 
     if (
         getattr(config, "schema_version", None)
-        != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+        not in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
     ):
         return False, False
     data_source = _scalar(sample_fields.get("data_source"))
@@ -188,7 +188,7 @@ def _trainable_rp66_launch_mode(config: object, trainer_config: object) -> str |
 
     if (
         getattr(config, "schema_version", None)
-        != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+        not in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
     ):
         return None
     value = trainer_config
@@ -425,8 +425,7 @@ class _Qwen3PolicyTrajectoryComponents:
         self.launch_mode = launch_mode
         self.official_deepeyes_judge = None
         if (
-            self.config.schema_version
-            == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+            self.config.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
         ):
             reward = self.config.reward
             if reward.judge_config_path is None or reward.judge_config_sha256 is None:
@@ -1263,10 +1262,11 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
         reward.format_weight,
         reward.conditional_tool_weight,
     )
-    deepeyes_source_aware = getattr(config, "schema_version", None) in {
-        POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
-        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
-    }
+    schema_version = getattr(config, "schema_version", None)
+    deepeyes_source_aware = (
+        schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
+        or schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+    )
     pilot_reward_weight_profile_name(reward_weights)
     answer_identity, verifier = _build_rule_first_answer_verifier(config)
     format_identity = _artifact_identity(
@@ -1468,7 +1468,7 @@ def _validate_sample_fields(
         expected_prompt_sha256 = config.protocol.prompt_sha256
         if (
             getattr(config, "schema_version", None)
-            == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+            in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
             and bound_data_source == _RP66_MATCHED_DIRECT_ONLY_SOURCE
         ):
             expected_prompt_sha256 = THINKLITE_PROMPT_IDENTITY.bundle_sha256
@@ -1483,7 +1483,7 @@ def _validate_sample_fields(
         }
         if (
             getattr(config, "schema_version", None)
-            != POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+            not in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
         ):
             expected["dataset_iteration_identity_sha256"] = (
                 config.dataset.iteration_identity_sha256

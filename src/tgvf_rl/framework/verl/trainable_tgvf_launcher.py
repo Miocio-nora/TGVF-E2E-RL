@@ -28,7 +28,7 @@ from tgvf_rl.data.deepeyes_official_schedule import (
 )
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
-    POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
@@ -113,11 +113,8 @@ TRAINABLE_TGVF_CANARY_MIN_RESPONSE_TRANSPORT_LENGTH = (
 )
 TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH = 8192
 TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
-TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = frozenset(
-    {
-        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
-        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
-    }
+TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = (
+    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
 )
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 

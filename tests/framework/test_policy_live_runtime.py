@@ -19,6 +19,7 @@ from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
     Qwen3PolicyE2ELiveRuntimeBuilder,
     _BoundTGVFVisualQualityRuntimeJudge,
+    _Qwen3PolicyTrajectoryComponents,
     _build_reward_pipeline,
     _default_metrics_factory,
     _final_token_materialization,
@@ -36,6 +37,7 @@ from tgvf_rl.judges import (
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
 )
 from tgvf_rl.rewards.context import reward_context_from_trajectory
@@ -99,6 +101,12 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
             schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         )
     )
+    frozen_rp66 = _build_reward_pipeline(
+        config(
+            1.2,
+            schema_version=POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        )
+    )
 
     assert legacy.spec.weights == (0.8, 0.2, 1.2)
     assert legacy.spec.pipeline_identity.version == "0.8-0.2-1.2"
@@ -110,18 +118,25 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
     )
     assert deepeyes.spec.deepeyes_source_aware is True
     assert trainable_rp66.spec.deepeyes_source_aware is True
+    assert frozen_rp66.spec.deepeyes_source_aware is True
     assert (
         deepeyes.spec.pipeline_identity.sha256 != legacy.spec.pipeline_identity.sha256
     )
 
 
+@pytest.mark.parametrize(
+    "schema_version",
+    (
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    ),
+)
 @pytest.mark.parametrize("data_source", ("vstar", "arxivqa"))
 def test_trainable_rp66_visual_rows_select_matched_observation_renderer(
+    schema_version: str,
     data_source: str,
 ) -> None:
-    config = SimpleNamespace(
-        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
-    )
+    config = SimpleNamespace(schema_version=schema_version)
 
     assert _rp66_matched_source_route(config, {"data_source": data_source}) == (
         False,
@@ -129,10 +144,15 @@ def test_trainable_rp66_visual_rows_select_matched_observation_renderer(
     )
 
 
-def test_trainable_rp66_thinklite_rows_are_direct_only() -> None:
-    config = SimpleNamespace(
-        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
-    )
+@pytest.mark.parametrize(
+    "schema_version",
+    (
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    ),
+)
+def test_trainable_rp66_thinklite_rows_are_direct_only(schema_version: str) -> None:
+    config = SimpleNamespace(schema_version=schema_version)
 
     assert _rp66_matched_source_route(config, {"data_source": "thinklite"}) == (
         True,
@@ -179,10 +199,17 @@ def test_matched_thinklite_direct_route_keeps_single_turn_policy_budget() -> Non
     ) == (ResponseBudgetScope.POLICY_SAMPLED, None)
 
 
-def test_trainable_rp66_launch_mode_comes_from_live_trainer_config() -> None:
-    config = SimpleNamespace(
-        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
-    )
+@pytest.mark.parametrize(
+    "schema_version",
+    (
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    ),
+)
+def test_trainable_rp66_launch_mode_comes_from_live_trainer_config(
+    schema_version: str,
+) -> None:
+    config = SimpleNamespace(schema_version=schema_version)
     trainer = {
         "actor_rollout_ref": {
             "rollout": {"custom": {"launch_mode": "smoke"}}
@@ -190,6 +217,60 @@ def test_trainable_rp66_launch_mode_comes_from_live_trainer_config() -> None:
     }
 
     assert _trainable_rp66_launch_mode(config, trainer) == "smoke"
+
+
+def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    judge_path = Path("/fixture/deepeyes-judge.json")
+    judge_sha256 = "9" * 64
+    loaded_service = object()
+    calls: list[tuple[Path, str]] = []
+
+    def load_service(path: Path, *, expected_file_sha256: str) -> object:
+        calls.append((path, expected_file_sha256))
+        return loaded_service
+
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime."
+        "load_deepeyes_judge_service_config",
+        load_service,
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.AsyncDeepEyesOpenRouterJudge",
+        lambda service: ("official-deepeyes", service),
+    )
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        reward=SimpleNamespace(
+            judge_config_path=judge_path,
+            judge_config_sha256=judge_sha256,
+        ),
+    )
+
+    components = _Qwen3PolicyTrajectoryComponents(
+        context=SimpleNamespace(config=config),
+        layout_builder=object(),
+        server_client=object(),
+        contextual_forward_identity=None,
+        branch_merger_identities=(),
+        observation_store=object(),
+        behavior_store=object(),
+        focus_execution_ledger=object(),
+        crop_execution_ledger=object(),
+        metrics_factory=lambda *_args: object(),
+        agent_loop_output_cls=None,
+        sample_index={},
+        launch_mode="canary",
+    )
+
+    assert calls == [(judge_path, judge_sha256)]
+    assert components.official_deepeyes_judge == (
+        "official-deepeyes",
+        loaded_service,
+    )
+    assert components.reward_pipeline is None
+    assert components.stage3_reward_runtime is None
 
 
 def test_live_visual_quality_adapter_consumes_typed_provider_result(
