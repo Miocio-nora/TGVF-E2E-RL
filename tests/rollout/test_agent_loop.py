@@ -268,6 +268,65 @@ def test_policy_sampled_visual_control_is_a_local_invalid_trajectory(
     assert trace.behavior.logprobs == sampled.behavior_logprobs
 
 
+def test_later_policy_sampled_visual_control_retains_prior_tool_error() -> None:
+    version = PolicyVersion("smoke", 0, SHA)
+    sampling = _pilot_fixture_sampling(version)
+    malformed = _sample(
+        "<tool_call>{invalid}</tool_call>",
+        sampling,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    forbidden = _sample(
+        "<tool_call>{not-executed}</tool_call>",
+        replace(sampling, seed=8),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    forbidden = replace(
+        forbidden,
+        token_ids=(151_652,),
+        token_byte_spans=(TokenByteSpan(0, 151_652, 0, 1),),
+        behavior_logprobs=(-0.1,),
+    )
+    behavior_store = BehaviorTraceStore()
+    runtime = Runtime()
+    loop = FrameworkNeutralAgentLoop(
+        sampler=Sampler((malformed, forbidden)),
+        tool_runtime=runtime,
+        appender=Appender(),
+        parser=StrictToolCallParser(),
+        behavior_recorder=VLLMBehaviorRecorder(behavior_store),
+        max_tool_calls=4,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        forbidden_policy_token_ids=(151_652, 151_655, 151_653),
+    )
+
+    trajectory = loop.run(
+        RolloutRequest(
+            "trajectory-v1",
+            TrajectoryIdentity("smoke", "later-visual-control", 0, "group"),
+            ModelIdentity("qwen3_vl", "fixture", "/fixture", 151669, SHA),
+            version,
+            SOURCE_VISUAL,
+            (1,),
+            {},
+        )
+    )
+
+    assert trajectory.stop is TrajectoryStop.INVALID_FORMAT
+    assert trajectory.final_answer is None
+    assert len(trajectory.assistant_turns) == 2
+    assert len(trajectory.tool_errors) == 1
+    assert trajectory.tool_errors[0].assistant_turn_index == 0
+    assert trajectory.tool_calls == trajectory.observations == ()
+    assert runtime.contexts == []
+    assert trajectory.assistant_turns[-1].is_tool_call is True
+    assert all(
+        event.assistant_turn_index != trajectory.assistant_turns[-1].turn_index
+        for event in trajectory.tool_errors
+    )
+    TrajectoryValidator(_SOURCE_STORE, behavior_store).validate(trajectory)
+
+
 def test_direct_only_keeps_the_existing_instruct_direct_answer_path() -> None:
     version = PolicyVersion("smoke", 0, SHA)
     sampled = _sample(
@@ -312,8 +371,7 @@ def test_direct_only_keeps_the_existing_instruct_direct_answer_path() -> None:
 @pytest.mark.parametrize(
     "sampled_text",
     (
-        '<tool_call>{"name":"tgvf_focus_tool","arguments":{"target":"x"}}'
-        "</tool_call>",
+        '<tool_call>{"name":"tgvf_focus_tool","arguments":{"target":"x"}}</tool_call>',
         "prefix <tool_call>",
         "prefix </tool_call>",
     ),
