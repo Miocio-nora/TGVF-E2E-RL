@@ -803,9 +803,16 @@ def test_worker_sidecar_cleanup_failure_warns_after_success(
             pass
 
 
-def test_training_worker_wrapper_releases_dispatched_tensordict_in_finally() -> None:
+def test_training_worker_wrapper_releases_dispatched_tensordict_in_finally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = build_data_proto_payload((_record(),))
     driver_data = to_verl_data_proto(payload, data_proto_cls=_FakeDataProto)
+    cache_cleanup_events: list[str] = []
+    monkeypatch.setattr(
+        "verl.utils.memory_utils.aggressive_empty_cache",
+        lambda *, force_sync: cache_cleanup_events.append(f"cleanup:{force_sync}"),
+    )
 
     def worker_copy():
         value = dict(driver_data.non_tensor_batch)
@@ -835,6 +842,14 @@ def test_training_worker_wrapper_releases_dispatched_tensordict_in_finally() -> 
     assert worker.train_mini_batch(train_data) == "trained"
     assert not any(name in train_data for name in release_fields)
     assert train_data["worker_metric"] == "preserve"
+    assert cache_cleanup_events == ["cleanup:True"]
+
+    failed_train_data = worker_copy()
+    with pytest.raises(ValueError, match="training worker failed"):
+        worker.train_mini_batch(failed_train_data, fail=True)
+    assert not any(name in failed_train_data for name in release_fields)
+    assert failed_train_data["worker_metric"] == "preserve"
+    assert cache_cleanup_events == ["cleanup:True", "cleanup:True"]
 
     infer_data = worker_copy()
     with pytest.raises(ValueError, match="inference worker failed"):
@@ -859,6 +874,7 @@ def test_training_worker_wrapper_releases_dispatched_tensordict_in_finally() -> 
     role_data = worker_copy()
     assert role_actor.train_mini_batch(role_data) == "trained"
     assert not any(name in role_data for name in release_fields)
+    assert cache_cleanup_events == ["cleanup:True", "cleanup:True", "cleanup:True"]
     assert payload.release_sidecars()
 
 

@@ -930,8 +930,20 @@ def make_sidecar_releasing_training_worker_class(
 
     class SidecarReleasingTrainingWorker(upstream_worker_cls):
         def train_mini_batch(self, data, *args, **kwargs):
-            with worker_tensordict_sidecar_scope(data):
-                return super().train_mini_batch(data, *args, **kwargs)
+            try:
+                with worker_tensordict_sidecar_scope(data):
+                    return super().train_mini_batch(data, *args, **kwargs)
+            finally:
+                # veRL's FSDP train context has already zeroed gradients and
+                # completed any configured CPU offload when the upstream call
+                # returns.  Release its now-dead allocator blocks here, in the
+                # actor CUDA process, before checkpoint-engine weight sync
+                # asks the colocated sleeping vLLM process to remap weights.
+                # Upstream otherwise performs this cleanup only *after* that
+                # remap, which is too late for long multimodal TGVF batches.
+                from verl.utils.memory_utils import aggressive_empty_cache
+
+                aggressive_empty_cache(force_sync=True)
 
         def infer_batch(self, data, *args, **kwargs):
             with worker_tensordict_sidecar_scope(data):
