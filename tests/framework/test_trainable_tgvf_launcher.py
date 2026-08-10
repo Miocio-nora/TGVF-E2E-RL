@@ -34,24 +34,26 @@ from tgvf_rl.framework.verl.policy_checkpoint_lifecycle import (
     policy_checkpoint_lifecycle_from_runtime,
 )
 from tgvf_rl.policy.checkpoint import PilotRunIdentityHashes
-from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
+from tgvf_rl.policy.run_config import (
+    POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+    RP66AdapterUpdateMode,
+    load_policy_e2e_smoke_run_config,
+)
 
 
 _ROOT = Path(__file__).parents[2]
 _CONFIG = (
-    _ROOT
-    / "configs/policy/runs/"
+    _ROOT / "configs/policy/runs/"
     "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
 _CONFIG_WS4 = (
-    _ROOT
-    / "configs/policy/runs/"
+    _ROOT / "configs/policy/runs/"
     "prl_15_r1_qwen3_instruct_full_rp66_bs16_n16_t1_"
     "crop16_math_equiv_8step_ws4.toml"
 )
 _CONFIG_CANARY = (
-    _ROOT
-    / "configs/policy/runs/"
+    _ROOT / "configs/policy/runs/"
     "prl_15_c0_qwen3_instruct_full_rp66_bs4_n2_functional_canary_ws4.toml"
 )
 
@@ -66,6 +68,23 @@ def _config_ws4():
 
 def _config_canary():
     return load_policy_e2e_smoke_run_config(_CONFIG_CANARY)
+
+
+def _v2_config(tmp_path: Path, adapter_update_mode: RP66AdapterUpdateMode):
+    source = _CONFIG.read_text(encoding="utf-8")
+    source = source.replace(
+        (f'schema_version = "{POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA}"'),
+        (f'schema_version = "{POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA}"'),
+        1,
+    )
+    source = source.replace(
+        "[representation]\n",
+        (f'[representation]\nadapter_update_mode = "{adapter_update_mode.value}"\n'),
+        1,
+    )
+    path = tmp_path / f"rp66-control-{adapter_update_mode.value}.toml"
+    path.write_text(source, encoding="utf-8")
+    return load_policy_e2e_smoke_run_config(path)
 
 
 def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
@@ -113,7 +132,26 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     )
     custom = values["actor_rollout_ref.rollout.custom"]
     assert custom["protocol"]["maximum_tool_calls"] == 6
-    assert custom["weight_sync"]["interval_optimizer_steps"] == 1
+    assert (
+        custom["trainable_tgvf"]["adapter_update_mode"]
+        == (plan.config.representation.adapter_update_mode.value)
+        == "joint"
+    )
+    assert (
+        custom["trainable_tgvf"]["adapter_trainable"]
+        is (plan.config.representation.adapter_trainable)
+        is True
+    )
+    assert custom["weight_sync"] == {
+        "mode": plan.config.distributed.weight_sync_mode,
+        "interval_optimizer_steps": 1,
+        "payload": "full_qwen_plus_trainable_rp66",
+    }
+    assert (
+        custom["reward"]["schema_version"]
+        == (plan.config.schema_version)
+        == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+    )
     assert custom["reward"]["judge_config_sha256"] == (
         plan.config.reward.judge_config_sha256
     )
@@ -136,6 +174,49 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     assert plan.environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] == "0"
 
 
+@pytest.mark.parametrize(
+    ("adapter_update_mode", "adapter_trainable", "payload"),
+    (
+        (
+            RP66AdapterUpdateMode.JOINT,
+            True,
+            "full_qwen_plus_trainable_rp66",
+        ),
+        (
+            RP66AdapterUpdateMode.FROZEN_ADAPTER,
+            False,
+            "full_qwen_plus_frozen_rp66",
+        ),
+    ),
+)
+def test_v2_plan_records_dynamic_adapter_ownership(
+    tmp_path: Path,
+    adapter_update_mode: RP66AdapterUpdateMode,
+    adapter_trainable: bool,
+    payload: str,
+) -> None:
+    config = _v2_config(tmp_path, adapter_update_mode)
+    plan = build_trainable_tgvf_verl_launch_plan(config, mode="formal")
+    custom = plan.overrides["actor_rollout_ref.rollout.custom"]
+
+    assert plan.config.schema_version == POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA
+    assert plan.config.representation.adapter_update_mode is adapter_update_mode
+    assert plan.config.representation.adapter_trainable is adapter_trainable
+    assert custom["trainable_tgvf"]["adapter_update_mode"] == (
+        adapter_update_mode.value
+    )
+    assert custom["trainable_tgvf"]["adapter_trainable"] is adapter_trainable
+    assert custom["weight_sync"] == {
+        "mode": config.distributed.weight_sync_mode,
+        "interval_optimizer_steps": 1,
+        "payload": payload,
+    }
+    assert custom["reward"]["schema_version"] == config.schema_version
+    # v2 optimizer ownership must not leave the historical Crop-16 batch path.
+    assert plan.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 32
+    assert plan.overrides["actor_rollout_ref.actor.optim.total_training_steps"] == 8
+
+
 def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> None:
     formal = build_trainable_tgvf_verl_launch_plan(_config(), mode="formal")
     smoke = build_trainable_tgvf_verl_launch_plan(_config(), mode="smoke")
@@ -144,17 +225,14 @@ def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> N
     assert formal.overrides["trainer.logger"] == ["console", "wandb"]
     assert smoke.overrides["trainer.logger"] == ["console"]
     assert smoke.overrides["trainer.total_training_steps"] == 1
-    assert smoke.overrides["trainer.default_local_dir"].endswith(
-        "/smoke/checkpoints"
-    )
+    assert smoke.overrides["trainer.default_local_dir"].endswith("/smoke/checkpoints")
     assert formal.environment[POLICY_METRICS_PATH_ENV].endswith("/metrics.jsonl")
     assert "/smoke/" not in formal.environment[POLICY_METRICS_PATH_ENV]
-    assert smoke.environment[POLICY_METRICS_PATH_ENV].endswith(
-        "/smoke/metrics.jsonl"
-    )
-    assert smoke.overrides["actor_rollout_ref.rollout.custom"][
-        "checkpoint_steps"
-    ] == [0, 1]
+    assert smoke.environment[POLICY_METRICS_PATH_ENV].endswith("/smoke/metrics.jsonl")
+    assert smoke.overrides["actor_rollout_ref.rollout.custom"]["checkpoint_steps"] == [
+        0,
+        1,
+    ]
     assert smoke.overrides["actor_rollout_ref.rollout.custom"][
         "checkpoint_lifecycle"
     ] == {
@@ -199,12 +277,10 @@ def test_world4_smoke_preserves_crop16_equal_micro_objective() -> None:
 
     assert world4.overrides["data.train_batch_size"] == 16
     assert world4.overrides["actor_rollout_ref.rollout.n"] == 16
-    assert world4.overrides[
-        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
-    ] == 32
-    assert world4.overrides[
-        "actor_rollout_ref.actor.optim.total_training_steps"
-    ] == 8
+    assert (
+        world4.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 32
+    )
+    assert world4.overrides["actor_rollout_ref.actor.optim.total_training_steps"] == 8
     actor_batch = world4.overrides["actor_rollout_ref.rollout.custom"][
         "actor_batch_contract"
     ]
@@ -225,9 +301,7 @@ def test_world4_smoke_preserves_crop16_equal_micro_objective() -> None:
 
 
 def test_functional_canary_is_an_isolated_low_cost_full_path_launch() -> None:
-    plan = build_trainable_tgvf_verl_launch_plan(
-        _config_canary(), mode="canary"
-    )
+    plan = build_trainable_tgvf_verl_launch_plan(_config_canary(), mode="canary")
     values = plan.overrides
 
     assert plan.target_step == values["trainer.total_training_steps"] == 1
@@ -244,18 +318,14 @@ def test_functional_canary_is_an_isolated_low_cost_full_path_launch() -> None:
     )
     assert values["actor_rollout_ref.actor.ppo_mini_batch_size"] == 4
     assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 2
-    assert values[
-        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"
-    ] == 2
+    assert values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"] == 2
     assert values["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] == 2
     assert values["trainer.n_gpus_per_node"] == 4
     assert values["actor_rollout_ref.actor.fsdp_config.fsdp_size"] == 4
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
     assert values["trainer.logger"] == ["console"]
     assert values["trainer.default_local_dir"].endswith("/canary/checkpoints")
-    assert plan.environment[POLICY_METRICS_PATH_ENV].endswith(
-        "/canary/metrics.jsonl"
-    )
+    assert plan.environment[POLICY_METRICS_PATH_ENV].endswith("/canary/metrics.jsonl")
     assert plan.environment["TGVF_POLICY_STATE_DIR"].endswith(
         "/canary/runtime-policy-state"
     )

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-from tgvf_rl.contracts.errors import ReplayMismatchError
+from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager import (
+    TGVF_ADAPTER_UPDATE_MODE_FROZEN,
     TrainableTGVFCheckpointEngineManager,
 )
 from tgvf_rl.framework.verl.trainable_tgvf_weight_sync import (
@@ -36,6 +38,20 @@ def _replicas() -> list[object]:
     ]
 
 
+def _config(*, adapter_update_mode: str) -> dict[str, object]:
+    return {
+        "actor_rollout_ref": {
+            "rollout": {
+                "custom": {
+                    "trainable_tgvf": {
+                        "adapter_update_mode": adapter_update_mode,
+                    }
+                }
+            }
+        }
+    }
+
+
 def _ack(
     optimizer_step: int,
     state_sha256: str,
@@ -55,16 +71,24 @@ def _ack(
 
 
 class _PublishingUpstream:
-    def __init__(self, environment: dict[str, str], events: list[str]) -> None:
+    def __init__(
+        self,
+        environment: dict[str, str],
+        events: list[str],
+        *,
+        adapter_changes: bool = True,
+    ) -> None:
         self.environment = environment
         self.events = events
+        self.adapter_changes = adapter_changes
         self.calls: list[int] = []
 
     def update_weights(self, global_steps: int) -> dict[str, int]:
         self.calls.append(global_steps)
         self.events.append(f"qwen:{global_steps}")
         qwen = torch.tensor([100.0 + global_steps], dtype=torch.bfloat16)
-        adapter = torch.tensor([float(global_steps), 2.0], dtype=torch.bfloat16)
+        adapter_step = global_steps if self.adapter_changes else 0
+        adapter = torch.tensor([float(adapter_step), 2.0], dtype=torch.bfloat16)
         forwarded = tuple(
             split_trainable_rp66_parameter_stream_for_snapshot(
                 (
@@ -167,6 +191,110 @@ def test_manager_preserves_async_surface_for_later_optimizer_steps(
     assert events == ["qwen:1", "rp66:1"]
     assert manager.last_publication is not None
     assert manager.last_publication.optimizer_step == 1
+
+
+def test_historical_config_defaults_to_joint_and_allows_adapter_updates(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path)
+    events: list[str] = []
+    upstream = _PublishingUpstream(environment, events)
+    rollout = _AcknowledgingRolloutManager(events)
+    manager = TrainableTGVFCheckpointEngineManager(
+        config=object(),
+        actor_wg=object(),
+        replicas=_replicas(),
+        upstream_manager_factory=lambda **_kwargs: upstream,
+        rollout_manager_factory=lambda _replicas: rollout,
+        environment=environment,
+    )
+
+    manager.update_weights(0)
+    first = manager.last_publication
+    assert first is not None
+    manager.update_weights(1)
+
+    assert [call[0] for call in rollout.calls] == [0, 1]
+    assert rollout.calls[1][1] != first.adapter_state_sha256
+    assert manager.last_publication is not None
+    assert manager.last_publication.optimizer_step == 1
+
+
+def test_frozen_adapter_publishes_a_step_pointer_with_constant_tensor_state(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path)
+    events: list[str] = []
+    upstream = _PublishingUpstream(environment, events, adapter_changes=False)
+    rollout = _AcknowledgingRolloutManager(events)
+    manager = TrainableTGVFCheckpointEngineManager(
+        config=_config(adapter_update_mode=TGVF_ADAPTER_UPDATE_MODE_FROZEN),
+        actor_wg=object(),
+        replicas=_replicas(),
+        upstream_manager_factory=lambda **_kwargs: upstream,
+        rollout_manager_factory=lambda _replicas: rollout,
+        environment=environment,
+    )
+
+    manager.update_weights(0)
+    first = manager.last_publication
+    assert first is not None
+    manager.update_weights(1)
+    second = manager.last_publication
+
+    assert second is not None
+    assert [call[0] for call in rollout.calls] == [0, 1]
+    assert rollout.calls[0][1] == rollout.calls[1][1]
+    assert first.adapter_state_sha256 == second.adapter_state_sha256
+    assert first.snapshot_storage_sha256 == second.snapshot_storage_sha256
+    assert first.request_sha256 != second.request_sha256
+    latest = json.loads((tmp_path / "latest-lora-snapshot.json").read_text())
+    assert latest["optimizer_step"] == 1
+    assert latest["request_sha256"] == second.request_sha256
+
+
+def test_frozen_adapter_rejects_tensor_drift_before_rollout_publication(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path)
+    events: list[str] = []
+    upstream = _PublishingUpstream(environment, events)
+    rollout = _AcknowledgingRolloutManager(events)
+    manager = TrainableTGVFCheckpointEngineManager(
+        config=_config(adapter_update_mode=TGVF_ADAPTER_UPDATE_MODE_FROZEN),
+        actor_wg=object(),
+        replicas=_replicas(),
+        upstream_manager_factory=lambda **_kwargs: upstream,
+        rollout_manager_factory=lambda _replicas: rollout,
+        environment=environment,
+    )
+
+    manager.update_weights(0)
+    first = manager.last_publication
+    assert first is not None
+    with pytest.raises(
+        IdentityMismatchError,
+        match="frozen RP66 Adapter state changed",
+    ):
+        manager.update_weights(1)
+
+    assert upstream.calls == [0, 1]
+    assert [call[0] for call in rollout.calls] == [0]
+    assert manager.last_publication == first
+
+
+def test_manager_rejects_unknown_adapter_update_mode(tmp_path: Path) -> None:
+    environment = _environment(tmp_path)
+
+    with pytest.raises(ValueError, match="adapter_update_mode"):
+        TrainableTGVFCheckpointEngineManager(
+            config=_config(adapter_update_mode="frozen-ish"),
+            actor_wg=object(),
+            replicas=_replicas(),
+            upstream_manager_factory=lambda **_kwargs: object(),
+            rollout_manager_factory=lambda _replicas: object(),
+            environment=environment,
+        )
 
 
 def test_manager_does_not_complete_when_any_rollout_server_ack_is_missing(

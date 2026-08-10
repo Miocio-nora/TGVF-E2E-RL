@@ -134,6 +134,46 @@ def test_zero_anchor_materializes_exact_zero_gradient_for_every_parameter() -> N
     )
 
 
+def test_frozen_adapter_keeps_autograd_to_visual_and_target_inputs() -> None:
+    """Frozen RP66 is a fixed differentiable transform, not a detached one."""
+
+    adapter = _trainable_adapter()
+    adapter.requires_grad_(False)
+    target = torch.randn(3, 5, requires_grad=True)
+    visual = torch.randn(8, 3, requires_grad=True)
+    branches = tuple(torch.randn(8, 3, requires_grad=True) for _ in range(3))
+
+    output = adapter(
+        target_hidden_states=target,
+        pre_merge_visual_tokens=visual,
+        deepstack_pre_merge_visual_tokens=branches,
+    )
+    loss = output.main_d.square().sum() + sum(
+        branch.square().sum() for branch in output.d_deepstack.branches
+    )
+    loss.backward()
+
+    assert target.grad is not None
+    assert torch.count_nonzero(target.grad).item() > 0
+    assert visual.grad is not None
+    assert torch.count_nonzero(visual.grad).item() > 0
+    assert all(branch.grad is not None for branch in branches)
+    assert all(parameter.grad is None for parameter in adapter.parameters())
+
+
+def test_current_replay_accepts_fully_frozen_adapter() -> None:
+    model = _AutocastBoundaryQwen()
+    model.tgvf_adapter.requires_grad_(False)
+
+    port = TrainableTGVFCurrentReplayPort(
+        engine=SimpleNamespace(_autocast_dtype=torch.bfloat16),
+        model=model,
+        selected_logprob_materializer=lambda **_kwargs: torch.ones(1),
+    )
+
+    assert port.adapter_trainable is False
+
+
 def test_current_replay_autocast_starts_before_live_vision_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -154,16 +194,16 @@ def test_current_replay_autocast_starts_before_live_vision_request(
     def build_request(*, model, adapter, store, replay_handle):
         del model, adapter
         saw_autocast.append(torch.is_autocast_enabled("cpu"))
-        recorded = resolve_replay_request(
-            store, replay_handle, ReplayConsumer.POLICY
-        )
+        recorded = resolve_replay_request(store, replay_handle, ReplayConsumer.POLICY)
         return injected_request_from_recorded(recorded)
 
     class _Family:
         def forward_injected_hidden(self, current_model, request):
             assert torch.is_autocast_enabled("cpu")
-            hidden = current_model.lm_head.weight[0].view(1, 1, 5).expand(
-                1, request.input_ids.shape[1], 5
+            hidden = (
+                current_model.lm_head.weight[0]
+                .view(1, 1, 5)
+                .expand(1, request.input_ids.shape[1], 5)
             )
             return SimpleNamespace(hidden_states=hidden)
 

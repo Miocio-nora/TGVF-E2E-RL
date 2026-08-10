@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import tomllib
 from types import MappingProxyType
 
 import pytest
@@ -54,6 +55,9 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+    RP66AdapterUpdateMode,
     formal_deepeyes47k_iteration_identity_sha256,
     load_policy_e2e_smoke_run_config,
 )
@@ -92,6 +96,12 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 COMMIT = "c" * 40
 SAMPLE_ID = "deepeyes47k:fixture-selected-sample"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+PRL16_FROZEN_CANARY_CONFIG = (
+    REPOSITORY_ROOT / "configs/policy/runs/"
+    "prl_16_c0_qwen3_instruct_full_frozen_rp66_bs4_n2_"
+    "functional_canary_ws4.toml"
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -369,6 +379,82 @@ def _write_config(tmp_path: Path) -> tuple[Path, str, dict[str, object]]:
     path = tmp_path / "policy-smoke.toml"
     path.write_text(text, encoding="utf-8")
     return path, text, external
+
+
+def _write_prl16_mode_config(tmp_path: Path, text: str) -> Path:
+    """Make the checked-in PRL16 identity portable to the active checkout."""
+
+    parsed = tomllib.loads(text)
+    bound_paths = (
+        Path(parsed["reward"]["judge_config_path"]),
+        Path(parsed["framework"]["agent_loop_config_path"]),
+    )
+    bound_roots = {path.parents[3] for path in bound_paths}
+    if len(bound_roots) != 1:
+        raise AssertionError("PRL16 config dependencies do not share one checkout")
+    portable = text.replace(str(bound_roots.pop()), str(REPOSITORY_ROOT))
+    path = tmp_path / "prl16-rp66-update-mode.toml"
+    path.write_text(portable, encoding="utf-8")
+    return path
+
+
+def test_legacy_trainable_rp66_v1_defaults_to_joint_update(
+    tmp_path: Path,
+) -> None:
+    text = PRL16_FROZEN_CANARY_CONFIG.read_text(encoding="utf-8")
+    legacy = text.replace(
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+        1,
+    ).replace('adapter_update_mode = "frozen_adapter"\n', "", 1)
+
+    config = load_policy_e2e_smoke_run_config(
+        _write_prl16_mode_config(tmp_path, legacy)
+    )
+
+    assert config.representation.adapter_update_mode is RP66AdapterUpdateMode.JOINT
+    assert config.representation.adapter_trainable is True
+
+
+def test_rp66_control_v2_loads_frozen_adapter_as_not_trainable(
+    tmp_path: Path,
+) -> None:
+    text = PRL16_FROZEN_CANARY_CONFIG.read_text(encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(_write_prl16_mode_config(tmp_path, text))
+
+    assert config.schema_version == POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA
+    assert (
+        config.representation.adapter_update_mode
+        is RP66AdapterUpdateMode.FROZEN_ADAPTER
+    )
+    assert config.representation.adapter_trainable is False
+
+
+def test_rp66_control_v2_requires_explicit_adapter_update_mode(
+    tmp_path: Path,
+) -> None:
+    text = PRL16_FROZEN_CANARY_CONFIG.read_text(encoding="utf-8").replace(
+        'adapter_update_mode = "frozen_adapter"\n', "", 1
+    )
+
+    with pytest.raises(ValueError, match=r"representation.*fields differ"):
+        load_policy_e2e_smoke_run_config(_write_prl16_mode_config(tmp_path, text))
+
+
+def test_rp66_control_v2_rejects_invalid_adapter_update_mode(
+    tmp_path: Path,
+) -> None:
+    text = PRL16_FROZEN_CANARY_CONFIG.read_text(encoding="utf-8").replace(
+        'adapter_update_mode = "frozen_adapter"',
+        'adapter_update_mode = "frozen-ish"',
+        1,
+    )
+
+    with pytest.raises(
+        ValueError, match="representation.adapter_update_mode is invalid"
+    ):
+        load_policy_e2e_smoke_run_config(_write_prl16_mode_config(tmp_path, text))
 
 
 def test_horizon_extension_plan_changes_only_stopping_and_checkpoint_boundaries(
@@ -1440,12 +1526,7 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert not config.output.root.exists()
 
     upstream_config_dir = (
-        _POLICY_DEPENDENCY_ROOT
-        / ".deps"
-        / "verl"
-        / "verl"
-        / "trainer"
-        / "config"
+        _POLICY_DEPENDENCY_ROOT / ".deps" / "verl" / "verl" / "trainer" / "config"
     )
     composed = compose_upstream_verl_config(plan, config_directory=upstream_config_dir)
     assert composed.trainer.use_v1 is False
@@ -1553,12 +1634,7 @@ def test_composed_selected_sample_binding_preserves_multiline_text(
     config = load_policy_e2e_smoke_run_config(path)
     plan = build_policy_e2e_smoke_verl_plan(config)
     upstream_config_dir = (
-        _POLICY_DEPENDENCY_ROOT
-        / ".deps"
-        / "verl"
-        / "verl"
-        / "trainer"
-        / "config"
+        _POLICY_DEPENDENCY_ROOT / ".deps" / "verl" / "verl" / "trainer" / "config"
     )
     composed = compose_upstream_verl_config(plan, config_directory=upstream_config_dir)
 
