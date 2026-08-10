@@ -128,7 +128,7 @@ def test_async_transport_bounds_concurrency_retries_and_cache() -> None:
     asyncio.run(exercise())
 
 
-def test_async_transport_isolates_completed_output_but_aborts_model_mismatch() -> None:
+def test_async_transport_isolates_completed_output_and_model_mismatch() -> None:
     async def malformed(_request: object, _payload: object) -> object:
         return _response("maybe")
 
@@ -146,12 +146,16 @@ def test_async_transport_isolates_completed_output_but_aborts_model_mismatch() -
         value["model"] = "wrong/model"
         return value
 
-    with pytest.raises(JudgeGlobalFailure, match="model differs"):
-        asyncio.run(
-            AsyncDeepEyesOpenRouterJudge(_service(), request_json=wrong_model).judge(
-                _request("global")
-            )
+    identity_mismatch = asyncio.run(
+        AsyncDeepEyesOpenRouterJudge(_service(), request_json=wrong_model).judge(
+            _request("identity-mismatch")
         )
+    )
+    assert identity_mismatch.verdict is False
+    assert identity_mismatch.calls == 1
+    assert identity_mismatch.retries == 0
+    assert identity_mismatch.failure_kind == "completed_identity_mismatch"
+    assert identity_mismatch.usage == _RESPONSE_USAGE
 
 
 @pytest.mark.parametrize(

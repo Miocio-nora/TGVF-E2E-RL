@@ -242,6 +242,10 @@ class AsyncJudgeOutcome:
             raise TypeError("DeepEyes async judge usage must be JudgeUsage or None")
 
 
+class _JudgeResponseIdentityError(JudgeSampleOutputError):
+    """One completed response whose model metadata cannot be trusted."""
+
+
 class AsyncDeepEyesOpenRouterJudge:
     """One-process bounded async transport used by the veRL reward worker."""
 
@@ -286,6 +290,24 @@ class AsyncDeepEyesOpenRouterJudge:
                     payload = await self._request_json(request)
                     try:
                         verdict = self._parse_response(payload, request=request)
+                    except _JudgeResponseIdentityError:
+                        # The request itself remains pinned to the configured
+                        # model and DeepInfra-only/no-fallback route.  A single
+                        # completed response with inconsistent model metadata
+                        # must not be consumed as reward, but neither should it
+                        # terminate every other trajectory in the optimizer
+                        # step.  Isolate it as a conservative zero and retain
+                        # the billable usage for health/cost accounting.
+                        usage = self._parse_response_usage(payload)
+                        return AsyncJudgeOutcome(
+                            False,
+                            attempts,
+                            attempts - 1,
+                            0,
+                            "completed_identity_mismatch",
+                            max(0.0, self._clock() - started),
+                            usage=usage,
+                        )
                     except JudgeSampleOutputError:
                         # A completed response consumed real judge tokens even
                         # when its answer is malformed/non-binary.  Preserve
@@ -484,7 +506,10 @@ class AsyncDeepEyesOpenRouterJudge:
         request: DeepEyesBinaryJudgeRequest,
     ) -> bool:
         if value.get("model") != self.config.model:
-            raise JudgeGlobalFailure("DeepEyes judge response model differs")
+            raise _JudgeResponseIdentityError(
+                "DeepEyes judge response model differs: "
+                f"expected={self.config.model!r}, actual={value.get('model')!r}"
+            )
         try:
             choices = value["choices"]
             first = choices[0]
