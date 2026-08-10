@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+import tomllib
 
 import pytest
 from omegaconf import OmegaConf
@@ -43,6 +44,16 @@ _RP66 = (
     _ROOT / "configs/policy/runs/"
     "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
+_RP66_EXACT = (
+    _ROOT / "configs/policy/runs/"
+    "prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_"
+    "crop16_exact_matched_8step_ws8.toml"
+)
+_EXACT_COMPARISON_SPEC = (
+    _ROOT / "configs/policy/controls/"
+    "prl16_frozen_rp66_crop_exact_optimizer_residency.json"
+)
+_ACTOR_OPTIMIZER_OFFLOAD_PATH = "actor_rollout_ref.actor.fsdp_config.optimizer_offload"
 
 
 def _plans():
@@ -89,6 +100,45 @@ def test_control_matches_every_declared_common_runtime_value() -> None:
     assert recorded["path"] == optimizer_offload_path
     assert recorded["verified"] is True
     assert control.unclassified_differences
+
+
+def test_exact_control_matches_crop_actor_optimizer_residency(tmp_path: Path) -> None:
+    legacy = load_control_comparison_spec(CROP_MATCHED_CONTROL_COMPARISON_SPEC)
+    exact = load_control_comparison_spec(_EXACT_COMPARISON_SPEC)
+
+    assert set(exact.required_equal) == {
+        *legacy.required_equal,
+        _ACTOR_OPTIMIZER_OFFLOAD_PATH,
+    }
+    assert len(exact.required_equal) == len(legacy.required_equal) + 1
+    assert exact.semantic_equal == legacy.semantic_equal
+    assert exact.arm_specific == legacy.arm_specific
+    assert exact.allowed_execution_deviations == ()
+
+    text = _RP66_EXACT.read_text(encoding="utf-8")
+    payload = tomllib.loads(text)
+    dependency_paths = (
+        Path(payload["reward"]["judge_config_path"]),
+        Path(payload["framework"]["agent_loop_config_path"]),
+    )
+    dependency_roots = {path.parents[3] for path in dependency_paths}
+    assert len(dependency_roots) == 1
+    portable = text.replace(str(dependency_roots.pop()), str(_ROOT))
+    portable_path = tmp_path / _RP66_EXACT.name
+    portable_path.write_text(portable, encoding="utf-8")
+    rp66_config = load_policy_e2e_smoke_run_config(portable_path)
+    control = build_crop_matched_control_plan(
+        load_deepeyes_native_run_contract(_CROP),
+        rp66_config,
+        comparison_spec_path=_EXACT_COMPARISON_SPEC,
+    )
+    rp66 = build_trainable_tgvf_verl_launch_plan(rp66_config, mode="formal")
+
+    assert control.launch.overrides[_ACTOR_OPTIMIZER_OFFLOAD_PATH] is False
+    assert rp66.overrides[_ACTOR_OPTIMIZER_OFFLOAD_PATH] is False
+    assert control.matched_values[_ACTOR_OPTIMIZER_OFFLOAD_PATH] is False
+    assert control.allowed_execution_deviations == ()
+    assert _ACTOR_OPTIMIZER_OFFLOAD_PATH not in control.unclassified_differences
 
 
 def test_crop16_common_controls_match_the_hash_verified_completed_run() -> None:

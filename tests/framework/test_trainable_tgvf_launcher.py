@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -39,6 +40,7 @@ from tgvf_rl.framework.verl.policy_checkpoint_lifecycle import (
 from tgvf_rl.policy.checkpoint import PilotRunIdentityHashes
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     RP66AdapterUpdateMode,
     load_policy_e2e_smoke_run_config,
@@ -59,6 +61,11 @@ _CONFIG_CANARY = (
     _ROOT / "configs/policy/runs/"
     "prl_15_c0_qwen3_instruct_full_rp66_bs4_n2_functional_canary_ws4.toml"
 )
+_CONFIG_EXACT = (
+    _ROOT / "configs/policy/runs/"
+    "prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_"
+    "crop16_exact_matched_8step_ws8.toml"
+)
 
 
 def _config():
@@ -71,6 +78,21 @@ def _config_ws4():
 
 def _config_canary():
     return load_policy_e2e_smoke_run_config(_CONFIG_CANARY)
+
+
+def _exact_config(tmp_path: Path):
+    text = _CONFIG_EXACT.read_text(encoding="utf-8")
+    payload = tomllib.loads(text)
+    dependency_paths = (
+        Path(payload["reward"]["judge_config_path"]),
+        Path(payload["framework"]["agent_loop_config_path"]),
+    )
+    dependency_roots = {path.parents[3] for path in dependency_paths}
+    assert len(dependency_roots) == 1
+    portable = text.replace(str(dependency_roots.pop()), str(_ROOT))
+    path = tmp_path / _CONFIG_EXACT.name
+    path.write_text(portable, encoding="utf-8")
+    return load_policy_e2e_smoke_run_config(path)
 
 
 def _v2_config(tmp_path: Path, adapter_update_mode: RP66AdapterUpdateMode):
@@ -242,6 +264,51 @@ def test_v2_plan_records_dynamic_adapter_ownership(
         16,
         32,
     ]
+
+
+def test_v3_exact_plan_disables_offload_and_keeps_diagnostic_checkpoints(
+    tmp_path: Path,
+) -> None:
+    config = _exact_config(tmp_path)
+    plan = build_trainable_tgvf_verl_launch_plan(config, mode="formal")
+    custom = plan.overrides["actor_rollout_ref.rollout.custom"]
+
+    assert config.schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA
+    assert config.distributed.actor_optimizer_offload is False
+    assert (
+        plan.overrides["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] is False
+    )
+    assert custom["checkpoint_lifecycle"]["permanent_steps"] == [4, 5, 6, 8]
+    assert custom["checkpoint_lifecycle"]["checkpoint_steps"] == list(range(9))
+
+    composed = compose_trainable_tgvf_verl_config(plan)
+    identity = PilotRunIdentityHashes.from_hashes(
+        plan.config.run_id, {"test": "1" * 64}
+    )
+    lifecycle = policy_checkpoint_lifecycle_from_runtime(
+        composed,
+        run_identity=identity,
+        world_size=8,
+    )
+    assert lifecycle is not None
+    assert lifecycle.permanent_steps == (4, 5, 6, 8)
+
+
+def test_v3_exact_smoke_never_permanently_retains_a_checkpoint(
+    tmp_path: Path,
+) -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(
+        _exact_config(tmp_path), mode="smoke", smoke_id="offload-false-v3"
+    )
+
+    assert plan.overrides["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] is (
+        False
+    )
+    lifecycle = plan.overrides["actor_rollout_ref.rollout.custom"][
+        "checkpoint_lifecycle"
+    ]
+    assert lifecycle["permanent_steps"] == []
+    assert lifecycle["permanent_directory"] == ""
 
 
 def test_smoke_changes_horizon_output_and_checkpoint_not_scientific_shape() -> None:

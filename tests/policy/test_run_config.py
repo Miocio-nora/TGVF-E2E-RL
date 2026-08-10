@@ -56,6 +56,7 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256,
     POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     RP66AdapterUpdateMode,
     formal_deepeyes47k_iteration_identity_sha256,
@@ -101,6 +102,11 @@ PRL16_FROZEN_CANARY_CONFIG = (
     REPOSITORY_ROOT / "configs/policy/runs/"
     "prl_16_c0_qwen3_instruct_full_frozen_rp66_bs4_n2_"
     "functional_canary_ws4.toml"
+)
+PRL16_FROZEN_EXACT_CONFIG = (
+    REPOSITORY_ROOT / "configs/policy/runs/"
+    "prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_"
+    "crop16_exact_matched_8step_ws8.toml"
 )
 
 
@@ -454,6 +460,75 @@ def test_rp66_control_v2_rejects_invalid_adapter_update_mode(
     with pytest.raises(
         ValueError, match="representation.adapter_update_mode is invalid"
     ):
+        load_policy_e2e_smoke_run_config(_write_prl16_mode_config(tmp_path, text))
+
+
+def test_rp66_exact_control_v3_binds_residency_and_permanent_steps(
+    tmp_path: Path,
+) -> None:
+    text = PRL16_FROZEN_EXACT_CONFIG.read_text(encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(_write_prl16_mode_config(tmp_path, text))
+
+    assert config.schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA
+    assert config.representation.adapter_update_mode is (
+        RP66AdapterUpdateMode.FROZEN_ADAPTER
+    )
+    assert config.distributed.actor_optimizer_offload is False
+    assert config.training.permanent_checkpoint_steps == (4, 5, 6, 8)
+
+
+def test_rp66_legacy_controls_preserve_effective_optimizer_offload(
+    tmp_path: Path,
+) -> None:
+    text = PRL16_FROZEN_CANARY_CONFIG.read_text(encoding="utf-8")
+
+    config = load_policy_e2e_smoke_run_config(_write_prl16_mode_config(tmp_path, text))
+
+    assert config.schema_version == POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA
+    assert config.distributed.actor_optimizer_offload is True
+    assert config.training.permanent_checkpoint_steps == ()
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "match"),
+    (
+        (
+            "actor_optimizer_offload = false\n",
+            "",
+            r"distributed.*fields differ",
+        ),
+        (
+            "actor_optimizer_offload = false",
+            'actor_optimizer_offload = "false"',
+            "distributed.actor_optimizer_offload must be bool",
+        ),
+        (
+            "permanent_checkpoint_steps = [4, 5, 6, 8]",
+            "permanent_checkpoint_steps = [0, 4, 5, 6, 8]",
+            r"training.permanent_checkpoint_steps\[\] must be positive",
+        ),
+        (
+            "permanent_checkpoint_steps = [4, 5, 6, 8]",
+            "permanent_checkpoint_steps = [4, 5, 5, 8]",
+            "training.permanent_checkpoint_steps must increase strictly",
+        ),
+        (
+            "permanent_checkpoint_steps = [4, 5, 6, 8]",
+            "permanent_checkpoint_steps = [4, 5, 9]",
+            "training permanent checkpoint step exceeds maximum_optimizer_steps",
+        ),
+    ),
+)
+def test_rp66_exact_control_v3_rejects_unbound_or_invalid_execution_fields(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    match: str,
+) -> None:
+    text = PRL16_FROZEN_EXACT_CONFIG.read_text(encoding="utf-8").replace(old, new, 1)
+
+    with pytest.raises(ValueError, match=match):
         load_policy_e2e_smoke_run_config(_write_prl16_mode_config(tmp_path, text))
 
 

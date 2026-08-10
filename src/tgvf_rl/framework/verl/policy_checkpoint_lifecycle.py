@@ -38,9 +38,7 @@ POLICY_CHECKPOINT_LIFECYCLE_SCHEMA = "tgvf.prl15-checkpoint-lifecycle.v1"
 POLICY_PERMANENT_CHECKPOINT_RECEIPT_SCHEMA = (
     "tgvf.prl15-permanent-checkpoint-receipt.v1"
 )
-POLICY_PERMANENT_CHECKPOINT_RECEIPT_FILENAME = (
-    "tgvf_permanent_checkpoint_receipt.json"
-)
+POLICY_PERMANENT_CHECKPOINT_RECEIPT_FILENAME = "tgvf_permanent_checkpoint_receipt.json"
 _CHECKPOINT_NAME = re.compile(r"global_step_([1-9][0-9]*)\Z")
 
 
@@ -124,6 +122,11 @@ class PolicyCheckpointLifecycle:
 
         self._require_configured_step(optimizer_step)
         generations = self.scan_committed()
+        # The upstream save and tracker commit happen before
+        # ``finalize_saved_checkpoint`` publishes a permanent hard-link tree.
+        # A process death in that narrow window must not let the next rolling
+        # prune delete the only committed copy of a permanent milestone.
+        self._reconcile_visible_permanent_generations(generations)
         if any(item.optimizer_step >= optimizer_step for item in generations):
             raise RuntimeError(
                 "Policy checkpoint destination already has this or a future generation"
@@ -183,6 +186,17 @@ class PolicyCheckpointLifecycle:
         assert self.permanent_root is not None
         return self.permanent_root / f"global_step_{optimizer_step}"
 
+    def _reconcile_visible_permanent_generations(
+        self, generations: Sequence[CommittedPolicyCheckpoint]
+    ) -> None:
+        """Finish permanent publication interrupted after an upstream commit."""
+
+        if not self.permanent_steps:
+            return
+        for generation in generations:
+            if generation.optimizer_step in self.permanent_steps:
+                self._retain_permanently(generation)
+
     def _require_configured_step(self, optimizer_step: int) -> None:
         if type(optimizer_step) is not int or optimizer_step <= 0:
             raise ValueError("Policy checkpoint optimizer step must be positive")
@@ -216,8 +230,7 @@ class PolicyCheckpointLifecycle:
                 ("extra_state", "extra-state shard"),
             ):
                 _require_nonempty_file(
-                    actor
-                    / f"{prefix}_world_size_{self.world_size}_rank_{rank}.pt",
+                    actor / f"{prefix}_world_size_{self.world_size}_rank_{rank}.pt",
                     f"Policy {owner}",
                 )
         return CommittedPolicyCheckpoint(optimizer_step, path, state, pair)
@@ -307,9 +320,7 @@ class PolicyCheckpointLifecycle:
         temporary: bool = False,
     ) -> None:
         assert self.permanent_root is not None
-        expected_parent = (
-            destination.parent.parent if temporary else destination.parent
-        )
+        expected_parent = destination.parent.parent if temporary else destination.parent
         if expected_parent != self.permanent_root:
             raise ValueError("permanent Policy checkpoint is outside its root")
         # Temporarily validate the copied generation against its actual parent;
@@ -400,7 +411,9 @@ def policy_checkpoint_lifecycle_from_runtime(
     if every_completed_step and lifecycle.checkpoint_steps != tuple(
         range(total_steps + 1)
     ):
-        raise ValueError("formal Policy checkpoint lifecycle does not cover its horizon")
+        raise ValueError(
+            "formal Policy checkpoint lifecycle does not cover its horizon"
+        )
     return lifecycle
 
 

@@ -120,12 +120,10 @@ TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
 # weight remap. Bound graph residency to the real per-engine concurrency; this
 # changes execution scheduling only, never samples, losses, or gradients.
 TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES = (1, 2, 4, 8, 16, 32)
-# TGVF replay has a larger and more variable multimodal actor high-water mark
-# than the Crop control. Keep AdamW state on CPU outside the train context so
-# vLLM can remap its sleeping weights without competing with an idle ~8 GiB
-# optimizer shard. The state is copied losslessly around the same optimizer
-# update; batch composition, reduction order, and optimizer mathematics remain
-# unchanged.
+# Legacy v1/v2 records predate an identity-bound optimizer residency control and
+# therefore retain their effective True setting. New exact-control records bind
+# residency explicitly in the run config; this constant is compatibility data,
+# not a launcher-wide policy.
 TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD = True
 TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
@@ -155,7 +153,11 @@ _WORLD4_TOPOLOGY_OVERRIDES = MappingProxyType(
 
 
 def _apply_crop16_mathematical_controls(
-    values: dict[str, object], *, world_size: int, optimizer_horizon: int
+    values: dict[str, object],
+    *,
+    world_size: int,
+    optimizer_horizon: int,
+    actor_optimizer_offload: bool,
 ) -> None:
     if world_size not in TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES:
         raise ValueError("trainable TGVF topology must use world4 or world8")
@@ -170,14 +172,18 @@ def _apply_crop16_mathematical_controls(
         TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
     )
     values["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] = (
-        TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD
+        actor_optimizer_offload
     )
     if world_size == 4:
         values.update(_WORLD4_TOPOLOGY_OVERRIDES)
 
 
 def _assert_crop16_mathematical_controls(
-    values: Mapping[str, object], *, world_size: int, optimizer_horizon: int
+    values: Mapping[str, object],
+    *,
+    world_size: int,
+    optimizer_horizon: int,
+    actor_optimizer_offload: bool,
 ) -> None:
     if world_size not in TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES:
         raise ValueError("trainable TGVF topology must use world4 or world8")
@@ -189,7 +195,7 @@ def _assert_crop16_mathematical_controls(
         TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
     )
     expected["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] = (
-        TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD
+        actor_optimizer_offload
     )
     if world_size == 4:
         expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
@@ -346,6 +352,15 @@ def _adapter_weight_sync_payload(config: PolicyE2ESmokeRunConfig) -> str:
     )
 
 
+def _permanent_checkpoint_steps(
+    config: PolicyE2ESmokeRunConfig, *, mode: TrainableTGVFLaunchMode
+) -> list[int]:
+    if mode != "formal":
+        return []
+    configured = config.training.permanent_checkpoint_steps
+    return list(configured) if configured else [TRAINABLE_TGVF_FORMAL_TARGET]
+
+
 def _replace_custom_record(
     values: dict[str, object],
     config: PolicyE2ESmokeRunConfig,
@@ -370,7 +385,7 @@ def _replace_custom_record(
         }
     )
     every_completed_step = mode == "formal"
-    permanent_steps = [TRAINABLE_TGVF_FORMAL_TARGET] if every_completed_step else []
+    permanent_steps = _permanent_checkpoint_steps(config, mode=mode)
     custom.update(
         {
             "schema_version": TRAINABLE_TGVF_LAUNCH_SCHEMA,
@@ -519,6 +534,9 @@ class TrainableTGVFVerlLaunchPlan:
                 values,
                 world_size=self.config.distributed.world_size,
                 optimizer_horizon=self.config.scheduler.total_steps,
+                actor_optimizer_offload=(
+                    self.config.distributed.actor_optimizer_offload
+                ),
             )
         required = {
             "actor_rollout_ref.model.lora_rank": 0,
@@ -600,8 +618,8 @@ class TrainableTGVFVerlLaunchPlan:
             if self.mode == "formal"
             else [0, 1]
         )
-        expected_permanent_steps = (
-            [TRAINABLE_TGVF_FORMAL_TARGET] if self.mode == "formal" else []
+        expected_permanent_steps = _permanent_checkpoint_steps(
+            self.config, mode=self.mode
         )
         if custom.get("checkpoint_steps") != expected_checkpoint_steps:
             raise ValueError("trainable TGVF checkpoint schedule differs")
@@ -722,6 +740,7 @@ def build_trainable_tgvf_verl_launch_plan(
         values,
         world_size=config.distributed.world_size,
         optimizer_horizon=config.scheduler.total_steps,
+        actor_optimizer_offload=config.distributed.actor_optimizer_offload,
     )
     if mode == "canary":
         _assert_functional_canary_config(config)

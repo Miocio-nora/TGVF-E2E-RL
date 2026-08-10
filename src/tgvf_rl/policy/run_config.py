@@ -102,10 +102,19 @@ POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA = (
     "policy-e2e-rp66-deepeyes-matched-control-run-config-v2"
 )
+POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-rp66-deepeyes-matched-control-run-config-v3"
+)
+POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+    }
+)
 POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
-        POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        *POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS,
     }
 )
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
@@ -457,6 +466,7 @@ class SmokeDistributedBinding:
     placement: str
     weight_sync_mode: str
     weight_sync_interval_optimizer_steps: int
+    actor_optimizer_offload: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +509,7 @@ class SmokeTrainingBinding:
     resume_mode: str
     resume_from_path: Path | None
     maximum_actor_checkpoints_to_keep: int
+    permanent_checkpoint_steps: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +556,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -619,6 +631,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -893,7 +906,7 @@ def load_policy_e2e_smoke_run_config(
         "expected_run_identity_sha256",
         "conditioning",
     }
-    if schema_version == POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA:
+    if schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS:
         representation_fields.add("adapter_update_mode")
     representation_table = _table(
         payload,
@@ -930,7 +943,7 @@ def load_policy_e2e_smoke_run_config(
         ),
     )
     conditioning = _conditioning(representation_table["conditioning"])
-    if schema_version == POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA:
+    if schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS:
         try:
             adapter_update_mode = RP66AdapterUpdateMode(
                 representation_table["adapter_update_mode"]
@@ -1472,23 +1485,26 @@ def load_policy_e2e_smoke_run_config(
         ),
     )
 
+    distributed_fields = {
+        "physical_gpu_ids",
+        "logical_gpu_ids",
+        "world_size",
+        "actor_logical_gpu_ids",
+        "rollout_logical_gpu_ids",
+        "fsdp_strategy",
+        "fsdp_reshard_after_forward",
+        "rollout_backend",
+        "vllm_tensor_parallel_size",
+        "placement",
+        "weight_sync_mode",
+        "weight_sync_interval_optimizer_steps",
+    }
+    if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA:
+        distributed_fields.add("actor_optimizer_offload")
     distributed_table = _table(
         payload,
         "distributed",
-        {
-            "physical_gpu_ids",
-            "logical_gpu_ids",
-            "world_size",
-            "actor_logical_gpu_ids",
-            "rollout_logical_gpu_ids",
-            "fsdp_strategy",
-            "fsdp_reshard_after_forward",
-            "rollout_backend",
-            "vllm_tensor_parallel_size",
-            "placement",
-            "weight_sync_mode",
-            "weight_sync_interval_optimizer_steps",
-        },
+        distributed_fields,
     )
     if rp66_matched_run:
         trainable_rp66_world_size = _positive_int(
@@ -1502,7 +1518,16 @@ def load_policy_e2e_smoke_run_config(
     else:
         required_world_size = 4
     distributed = _distributed(
-        distributed_table, required_world_size=required_world_size
+        distributed_table,
+        required_world_size=required_world_size,
+        actor_optimizer_offload=(
+            _boolean(
+                distributed_table["actor_optimizer_offload"],
+                name="distributed.actor_optimizer_offload",
+            )
+            if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA
+            else True
+        ),
     )
     expected_global_batch = (
         accumulation.prompt_micro_batch_size_per_rank
@@ -1667,21 +1692,24 @@ def load_policy_e2e_smoke_run_config(
         ),
     )
 
+    training_fields = {
+        "total_training_epochs",
+        "maximum_optimizer_steps",
+        "checkpoint_steps",
+        "logger",
+        "project_name",
+        "validation_before_training",
+        "validation_frequency",
+        "resume_mode",
+        "resume_from_path",
+        "maximum_actor_checkpoints_to_keep",
+    }
+    if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA:
+        training_fields.add("permanent_checkpoint_steps")
     training_table = _table(
         payload,
         "training",
-        {
-            "total_training_epochs",
-            "maximum_optimizer_steps",
-            "checkpoint_steps",
-            "logger",
-            "project_name",
-            "validation_before_training",
-            "validation_frequency",
-            "resume_mode",
-            "resume_from_path",
-            "maximum_actor_checkpoints_to_keep",
-        },
+        training_fields,
     )
     loggers = _text_tuple(training_table["logger"], name="training.logger")
     if not loggers or len(set(loggers)) != len(loggers):
@@ -1736,6 +1764,14 @@ def load_policy_e2e_smoke_run_config(
             training_table["maximum_actor_checkpoints_to_keep"],
             name="training.maximum_actor_checkpoints_to_keep",
         ),
+        permanent_checkpoint_steps=(
+            _strictly_increasing_positive_int_tuple(
+                training_table["permanent_checkpoint_steps"],
+                name="training.permanent_checkpoint_steps",
+            )
+            if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA
+            else ()
+        ),
     )
     if training.validation_before_training:
         raise ValueError(
@@ -1743,6 +1779,13 @@ def load_policy_e2e_smoke_run_config(
         )
     if training.checkpoint_steps[-1] > training.maximum_optimizer_steps:
         raise ValueError("training checkpoint step exceeds maximum_optimizer_steps")
+    if any(
+        step > training.maximum_optimizer_steps
+        for step in training.permanent_checkpoint_steps
+    ):
+        raise ValueError(
+            "training permanent checkpoint step exceeds maximum_optimizer_steps"
+        )
     if scheduler.total_steps < training.maximum_optimizer_steps:
         raise ValueError(
             "scheduler total_steps is smaller than maximum_optimizer_steps"
@@ -2194,7 +2237,10 @@ def _conditioning(value: object) -> TargetConditioningConfig:
 
 
 def _distributed(
-    table: Mapping[str, object], *, required_world_size: int = 4
+    table: Mapping[str, object],
+    *,
+    required_world_size: int = 4,
+    actor_optimizer_offload: bool = True,
 ) -> SmokeDistributedBinding:
     physical = _nonnegative_int_tuple(
         table["physical_gpu_ids"], name="distributed.physical_gpu_ids"
@@ -2266,6 +2312,7 @@ def _distributed(
             table["weight_sync_interval_optimizer_steps"],
             name="distributed.weight_sync_interval_optimizer_steps",
         ),
+        actor_optimizer_offload=actor_optimizer_offload,
     )
 
 
@@ -2394,6 +2441,17 @@ def _nonnegative_int_tuple(value: object, *, name: str) -> tuple[int, ...]:
     )
 
 
+def _strictly_increasing_positive_int_tuple(
+    value: object, *, name: str
+) -> tuple[int, ...]:
+    values = tuple(
+        _positive_int(item, name=f"{name}[]") for item in _sequence(value, name=name)
+    )
+    if not values or any(left >= right for left, right in zip(values, values[1:])):
+        raise ValueError(f"{name} must increase strictly")
+    return values
+
+
 def _checkpoint_steps(value: object) -> tuple[int, ...]:
     steps = _nonnegative_int_tuple(value, name="training.checkpoint_steps")
     if (
@@ -2504,6 +2562,8 @@ __all__ = [
     "POLICY_E2E_MIXED_REWARD_TASK",
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
