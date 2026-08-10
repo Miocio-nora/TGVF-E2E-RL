@@ -120,6 +120,13 @@ TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES = frozenset({4, 8})
 # weight remap. Bound graph residency to the real per-engine concurrency; this
 # changes execution scheduling only, never samples, losses, or gradients.
 TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES = (1, 2, 4, 8, 16, 32)
+# TGVF replay has a larger and more variable multimodal actor high-water mark
+# than the Crop control. Keep AdamW state on CPU outside the train context so
+# vLLM can remap its sleeping weights without competing with an idle ~8 GiB
+# optimizer shard. The state is copied losslessly around the same optimizer
+# update; batch composition, reduction order, and optimizer mathematics remain
+# unchanged.
+TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD = True
 TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 
@@ -162,6 +169,9 @@ def _apply_crop16_mathematical_controls(
     values["actor_rollout_ref.rollout.cudagraph_capture_sizes"] = list(
         TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
     )
+    values["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] = (
+        TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD
+    )
     if world_size == 4:
         values.update(_WORLD4_TOPOLOGY_OVERRIDES)
 
@@ -177,6 +187,9 @@ def _assert_crop16_mathematical_controls(
     expected["actor_rollout_ref.actor.optim.total_training_steps"] = optimizer_horizon
     expected["actor_rollout_ref.rollout.cudagraph_capture_sizes"] = list(
         TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
+    )
+    expected["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] = (
+        TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD
     )
     if world_size == 4:
         expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
@@ -982,6 +995,7 @@ __all__ = [
     "TRAINABLE_TGVF_CANARY_TARGET",
     "TRAINABLE_TGVF_FORMAL_TARGET",
     "TRAINABLE_TGVF_LAUNCH_SCHEMA",
+    "TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD",
     "TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES",
     "TRAINABLE_TGVF_SMOKE_TARGET",
     "TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES",

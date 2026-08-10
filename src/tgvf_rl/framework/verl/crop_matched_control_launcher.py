@@ -34,8 +34,7 @@ from .trainable_tgvf_launcher import build_trainable_tgvf_verl_launch_plan
 
 CROP_MATCHED_CONTROL_SCHEMA = "tgvf.prl15-crop16-reference-audit.v1"
 CROP_MATCHED_CONTROL_RUN_ID = (
-    "PRL-14-A-QWEN3-INSTRUCT-GRPO-BS16-N16-NATIVE-CROP-T1-"
-    "CLEANFINAL-16STEP-WS8"
+    "PRL-14-A-QWEN3-INSTRUCT-GRPO-BS16-N16-NATIVE-CROP-T1-CLEANFINAL-16STEP-WS8"
 )
 CROP_MATCHED_CONTROL_OUTPUT_ROOT = Path(
     "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/"
@@ -43,6 +42,9 @@ CROP_MATCHED_CONTROL_OUTPUT_ROOT = Path(
     "cleanfinal-16step-ws8"
 )
 CROP_MATCHED_CONTROL_TARGET_STEP = PRL14_CROP16_COMPARISON_STEP
+CROP_MATCHED_CONTROL_COMPARISON_SCHEMA = "tgvf.control-comparison.v2"
+MATHEMATICALLY_EQUIVALENT_EXECUTION_EFFECT = "mathematically_equivalent"
+RESIDENCY_SAFETY_ONLY_SCOPE = "residency_safety_only"
 CROP_MATCHED_CONTROL_COMPARISON_SPEC = (
     Path(__file__).resolve().parents[4]
     / "configs/policy/controls/prl15_crop_rp66_matched.json"
@@ -65,11 +67,55 @@ class SemanticEqualField:
 
 
 @dataclass(frozen=True, slots=True)
+class AllowedExecutionDeviation:
+    """One exact non-mathematical runtime difference between the two arms."""
+
+    name: str
+    path: str
+    control_value: object
+    treatment_value: object
+    effect: str
+    scope: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("name", "path", "reason"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"allowed execution deviation {field_name} must be non-empty"
+                )
+        if self.control_value == self.treatment_value:
+            raise ValueError("allowed execution deviation values must differ")
+        if self.effect != MATHEMATICALLY_EQUIVALENT_EXECUTION_EFFECT:
+            raise ValueError(
+                "allowed execution deviation must be mathematically equivalent"
+            )
+        if self.scope != RESIDENCY_SAFETY_ONLY_SCOPE:
+            raise ValueError(
+                "allowed execution deviation must be residency-safety-only"
+            )
+
+    def as_record(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "path": self.path,
+            "control_value": self.control_value,
+            "treatment_value": self.treatment_value,
+            "effect": self.effect,
+            "scope": self.scope,
+            "reason": self.reason,
+            "verified": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ControlComparisonSpec:
     """Editable scientific comparison declaration, separate from runtime code."""
 
     required_equal: tuple[str, ...]
     semantic_equal: tuple[SemanticEqualField, ...]
+    allowed_execution_deviations: tuple[AllowedExecutionDeviation, ...]
     arm_specific: tuple[str, ...]
     note: str
 
@@ -82,7 +128,20 @@ class ControlComparisonSpec:
                 raise ValueError(f"control comparison {owner} must be non-empty paths")
             if len(set(rows)) != len(rows):
                 raise ValueError(f"control comparison {owner} contains duplicates")
-        overlap = set(self.required_equal) & set(self.arm_specific)
+        deviation_paths = tuple(
+            deviation.path for deviation in self.allowed_execution_deviations
+        )
+        if len(set(deviation_paths)) != len(deviation_paths):
+            raise ValueError("allowed execution deviation paths contain duplicates")
+        categorized_paths = (
+            set(self.required_equal),
+            set(self.arm_specific),
+            set(deviation_paths),
+        )
+        overlap = set()
+        for index, paths in enumerate(categorized_paths):
+            for other in categorized_paths[index + 1 :]:
+                overlap.update(paths & other)
         if overlap:
             raise ValueError(f"control comparison paths overlap: {sorted(overlap)!r}")
         if not self.note:
@@ -90,6 +149,11 @@ class ControlComparisonSpec:
         names = tuple(field.name for field in self.semantic_equal)
         if len(set(names)) != len(names):
             raise ValueError("semantic equality names contain duplicates")
+        deviation_names = tuple(
+            deviation.name for deviation in self.allowed_execution_deviations
+        )
+        if len(set(deviation_names)) != len(deviation_names):
+            raise ValueError("allowed execution deviation names contain duplicates")
 
 
 def load_control_comparison_spec(path: str | Path) -> ControlComparisonSpec:
@@ -99,12 +163,30 @@ def load_control_comparison_spec(path: str | Path) -> ControlComparisonSpec:
         "schema_version",
         "required_equal",
         "semantic_equal",
+        "allowed_execution_deviations",
         "arm_specific",
         "note",
     }:
         raise ValueError("control comparison spec fields differ")
-    if payload["schema_version"] != "tgvf.control-comparison.v1":
+    if payload["schema_version"] != CROP_MATCHED_CONTROL_COMPARISON_SCHEMA:
         raise ValueError("control comparison spec schema differs")
+    deviations = payload["allowed_execution_deviations"]
+    if not isinstance(deviations, list):
+        raise TypeError("allowed execution deviations must be a list")
+    deviation_fields = {
+        "name",
+        "path",
+        "control_value",
+        "treatment_value",
+        "effect",
+        "scope",
+        "reason",
+    }
+    if any(
+        not isinstance(row, Mapping) or set(row) != deviation_fields
+        for row in deviations
+    ):
+        raise ValueError("allowed execution deviation fields differ")
     return ControlComparisonSpec(
         required_equal=tuple(payload["required_equal"]),
         semantic_equal=tuple(
@@ -114,6 +196,18 @@ def load_control_comparison_spec(path: str | Path) -> ControlComparisonSpec:
                 treatment_path=row["treatment_path"],
             )
             for row in payload["semantic_equal"]
+        ),
+        allowed_execution_deviations=tuple(
+            AllowedExecutionDeviation(
+                name=row["name"],
+                path=row["path"],
+                control_value=row["control_value"],
+                treatment_value=row["treatment_value"],
+                effect=row["effect"],
+                scope=row["scope"],
+                reason=row["reason"],
+            )
+            for row in deviations
         ),
         arm_specific=tuple(payload["arm_specific"]),
         note=str(payload["note"]),
@@ -127,6 +221,7 @@ class CropMatchedControlPlan:
     launch: DeepEyesNativeVerlLaunchPlan
     matched_values: Mapping[str, object]
     semantic_matched_values: Mapping[str, object]
+    allowed_execution_deviations: tuple[AllowedExecutionDeviation, ...]
     arm_differences: Mapping[str, tuple[object, object]]
     unclassified_differences: Mapping[str, tuple[object, object]]
     comparison_spec_path: Path
@@ -146,6 +241,18 @@ class CropMatchedControlPlan:
             "semantic_matched_values",
             MappingProxyType(dict(self.semantic_matched_values)),
         )
+        object.__setattr__(
+            self,
+            "allowed_execution_deviations",
+            tuple(self.allowed_execution_deviations),
+        )
+        if any(
+            not isinstance(deviation, AllowedExecutionDeviation)
+            for deviation in self.allowed_execution_deviations
+        ):
+            raise TypeError(
+                "Crop matched control requires typed allowed execution deviations"
+            )
         object.__setattr__(
             self, "arm_differences", MappingProxyType(dict(self.arm_differences))
         )
@@ -180,6 +287,10 @@ class CropMatchedControlPlan:
             "comparison": {
                 "spec_path": str(self.comparison_spec_path),
                 "note": self.comparison_note,
+                "allowed_execution_deviations": [
+                    deviation.as_record()
+                    for deviation in self.allowed_execution_deviations
+                ],
                 "arm_differences": dict(self.arm_differences),
                 "unclassified_differences": dict(self.unclassified_differences),
                 "raw_unclassified_overrides_are_informational": True,
@@ -229,6 +340,16 @@ def build_crop_matched_control_plan(
                 f"{control_value!r} != {treatment_value!r}"
             )
         semantic_matched[field.name] = control_value
+    for deviation in comparison.allowed_execution_deviations:
+        control_value = _select_override_path(values, deviation.path)
+        treatment_value = _select_override_path(rp66.overrides, deviation.path)
+        actual = (control_value, treatment_value)
+        expected = (deviation.control_value, deviation.treatment_value)
+        if actual != expected:
+            raise ValueError(
+                "Crop/RP66 allowed execution deviation differs for "
+                f"{deviation.name}: {actual!r} != {expected!r}"
+            )
     environment = dict(completion.environment)
     launch = replace(base, overrides=values, environment=environment)
 
@@ -250,7 +371,11 @@ def build_crop_matched_control_plan(
         for path in comparison.arm_specific
         if path in all_differences
     }
-    classified = set(comparison.required_equal) | set(comparison.arm_specific)
+    classified = (
+        set(comparison.required_equal)
+        | set(comparison.arm_specific)
+        | {deviation.path for deviation in comparison.allowed_execution_deviations}
+    )
     unclassified = {
         path: difference
         for path, difference in all_differences.items()
@@ -260,6 +385,7 @@ def build_crop_matched_control_plan(
         launch=launch,
         matched_values=matched,
         semantic_matched_values=semantic_matched,
+        allowed_execution_deviations=comparison.allowed_execution_deviations,
         arm_differences=arm_differences,
         unclassified_differences=unclassified,
         comparison_spec_path=comparison_path,
@@ -337,6 +463,10 @@ __all__ = [
     "CROP_MATCHED_CONTROL_SCHEMA",
     "CROP_MATCHED_CONTROL_TARGET_STEP",
     "CROP_MATCHED_CONTROL_COMPARISON_SPEC",
+    "CROP_MATCHED_CONTROL_COMPARISON_SCHEMA",
+    "MATHEMATICALLY_EQUIVALENT_EXECUTION_EFFECT",
+    "RESIDENCY_SAFETY_ONLY_SCOPE",
+    "AllowedExecutionDeviation",
     "ControlComparisonSpec",
     "CropMatchedControlPlan",
     "build_crop_matched_control_plan",

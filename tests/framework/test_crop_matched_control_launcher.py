@@ -8,8 +8,11 @@ import pytest
 from omegaconf import OmegaConf
 
 from tgvf_rl.framework.verl.crop_matched_control_launcher import (
+    CROP_MATCHED_CONTROL_COMPARISON_SCHEMA,
     CROP_MATCHED_CONTROL_COMPARISON_SPEC,
     CROP_MATCHED_CONTROL_OUTPUT_ROOT,
+    MATHEMATICALLY_EQUIVALENT_EXECUTION_EFFECT,
+    RESIDENCY_SAFETY_ONLY_SCOPE,
     CropMatchedControlPlan,
     build_crop_matched_control_plan,
     load_control_comparison_spec,
@@ -32,14 +35,12 @@ from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 
 _ROOT = Path(__file__).parents[2]
 _CROP = (
-    _ROOT
-    / "configs/policy/runs/"
+    _ROOT / "configs/policy/runs/"
     "prl_13_a_qwen3_instruct_grpo_bs256_n16_native_crop_t1_stratified_"
     "80step_gpu0123.toml"
 )
 _RP66 = (
-    _ROOT
-    / "configs/policy/runs/"
+    _ROOT / "configs/policy/runs/"
     "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
 
@@ -60,9 +61,10 @@ def test_control_matches_every_declared_common_runtime_value() -> None:
     assert set(control.matched_values) == set(comparison.required_equal)
     for path in comparison.required_equal:
         assert control.launch.overrides[path] == rp66.overrides[path]
-    assert control.launch.overrides[
-        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
-    ] == 32
+    assert (
+        control.launch.overrides["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"]
+        == 32
+    )
     assert control.launch.overrides["trainer.n_gpus_per_node"] == 8
     assert control.launch.overrides["data.train_batch_size"] == 16
     assert control.launch.overrides["actor_rollout_ref.rollout.n"] == 16
@@ -70,6 +72,22 @@ def test_control_matches_every_declared_common_runtime_value() -> None:
     assert control.semantic_matched_values == {
         "judge_config_sha256": rp66.config.reward.judge_config_sha256
     }
+    optimizer_offload_path = "actor_rollout_ref.actor.fsdp_config.optimizer_offload"
+    assert optimizer_offload_path not in comparison.required_equal
+    assert len(control.allowed_execution_deviations) == 1
+    deviation = control.allowed_execution_deviations[0]
+    assert deviation.name == "actor_optimizer_state_cpu_residency"
+    assert deviation.path == optimizer_offload_path
+    assert deviation.control_value is False
+    assert deviation.treatment_value is True
+    assert deviation.effect == MATHEMATICALLY_EQUIVALENT_EXECUTION_EFFECT
+    assert deviation.scope == RESIDENCY_SAFETY_ONLY_SCOPE
+    assert control.launch.overrides[optimizer_offload_path] is False
+    assert rp66.overrides[optimizer_offload_path] is True
+    assert optimizer_offload_path not in control.unclassified_differences
+    recorded = control.as_record()["comparison"]["allowed_execution_deviations"][0]
+    assert recorded["path"] == optimizer_offload_path
+    assert recorded["verified"] is True
     assert control.unclassified_differences
 
 
@@ -98,8 +116,9 @@ def test_control_keeps_only_the_expected_crop_arm_differences() -> None:
     assert values["trainer.default_local_dir"] == str(
         CROP_MATCHED_CONTROL_OUTPUT_ROOT / "checkpoints"
     )
-    assert values["actor_rollout_ref.rollout.agent.default_agent_loop"] != (
-        rp66.overrides["actor_rollout_ref.rollout.agent.default_agent_loop"]
+    assert (
+        values["actor_rollout_ref.rollout.agent.default_agent_loop"]
+        != (rp66.overrides["actor_rollout_ref.rollout.agent.default_agent_loop"])
     )
     assert "actor_rollout_ref.rollout.checkpoint_manager_class" not in values
     assert values["reward.deepeyes_official.judge_service_config_sha256"] == (
@@ -121,6 +140,7 @@ def test_control_rejects_a_non_step8_launch() -> None:
             ),
             matched_values=control.matched_values,
             semantic_matched_values=control.semantic_matched_values,
+            allowed_execution_deviations=control.allowed_execution_deviations,
             arm_differences=control.arm_differences,
             unclassified_differences=control.unclassified_differences,
             comparison_spec_path=control.comparison_spec_path,
@@ -133,10 +153,11 @@ def test_common_values_are_checked_against_crop16_not_copied_from_rp66(
 ) -> None:
     original = load_control_comparison_spec(CROP_MATCHED_CONTROL_COMPARISON_SPEC)
     payload = {
-        "schema_version": "tgvf.control-comparison.v1",
+        "schema_version": CROP_MATCHED_CONTROL_COMPARISON_SCHEMA,
         "note": "test Crop-16 reference declaration",
         "required_equal": ["actor_rollout_ref.rollout.temperature"],
         "semantic_equal": [],
+        "allowed_execution_deviations": [],
         "arm_specific": ["trainer.experiment_name"],
     }
     path = tmp_path / "comparison.json"
@@ -156,3 +177,40 @@ def test_common_values_are_checked_against_crop16_not_copied_from_rp66(
         ]
     }
     assert control.comparison_note == "test Crop-16 reference declaration"
+
+
+def test_allowed_execution_deviation_declared_values_are_enforced(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(
+        CROP_MATCHED_CONTROL_COMPARISON_SPEC.read_text(encoding="utf-8")
+    )
+    payload["allowed_execution_deviations"][0]["treatment_value"] = "enabled"
+    path = tmp_path / "wrong-execution-deviation.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="allowed execution deviation differs.*actor_optimizer_state_cpu_residency",
+    ):
+        build_crop_matched_control_plan(
+            load_deepeyes_native_run_contract(_CROP),
+            load_policy_e2e_smoke_run_config(_RP66),
+            comparison_spec_path=path,
+        )
+
+
+def test_execution_deviation_cannot_overlap_a_strict_equal_field(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(
+        CROP_MATCHED_CONTROL_COMPARISON_SPEC.read_text(encoding="utf-8")
+    )
+    payload["required_equal"].append(
+        "actor_rollout_ref.actor.fsdp_config.optimizer_offload"
+    )
+    path = tmp_path / "overlapping-execution-deviation.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="control comparison paths overlap"):
+        load_control_comparison_spec(path)

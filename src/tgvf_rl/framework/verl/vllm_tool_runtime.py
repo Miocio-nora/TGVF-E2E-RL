@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 import gc
 import hashlib
 import hmac
 import json
+import logging
 import os
 from types import MethodType
 from typing import Any
@@ -57,11 +58,15 @@ TGVF_VLLM_WORKER_EXTENSION_FQN = (
 )
 TGVF_TWO_MODEL_RUNTIME_SCHEMA = "tgvf-vllm-two-model-runtime-v1"
 TGVF_ADAPTER_UPDATE_ACK_SCHEMA = "tgvf-vllm-adapter-owned-state-ack-v1"
+TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA = "tgvf-vllm-phase-boundary-quiesce-v1"
 TGVF_VLLM_FINISH_REASON_FIELD = "tgvf_vllm_finish_reason"
 TGVF_VLLM_STOP_REASON_FIELD = "tgvf_vllm_stop_reason"
 _SOURCE_WIRE_SCHEMA = "tgvf-source-visual-utility-wire-v1"
 _FOCUS_WIRE_SCHEMA = "tgvf-focus-utility-wire-v1"
 _ADAPTER_OWNED_STATE_WIRE_SCHEMA = "tgvf-adapter-owned-state-utility-wire-v1"
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,8 +609,103 @@ class TGVFFocusMaterializationResult:
             raise TypeError("TGVF focus result requires a typed observation payload")
 
 
+def _logical_tensor_bytes(value: object) -> int:
+    """Count cached tensor payload bytes without retaining cache contents.
+
+    The source bundles and behavior traces are nested slot dataclasses.  Walk
+    only their data-bearing container shapes and deduplicate tensor objects so
+    the diagnostic remains stable if two cache entries share one tensor.
+    """
+
+    seen_objects: set[int] = set()
+    seen_tensors: set[int] = set()
+
+    def visit(item: object) -> int:
+        if isinstance(item, torch.Tensor):
+            identity = id(item)
+            if identity in seen_tensors:
+                return 0
+            seen_tensors.add(identity)
+            return item.numel() * item.element_size()
+        if isinstance(item, (str, bytes, bytearray, memoryview)) or item is None:
+            return 0
+
+        identity = id(item)
+        if identity in seen_objects:
+            return 0
+        seen_objects.add(identity)
+        if isinstance(item, Mapping):
+            return sum(visit(child) for child in item.values())
+        if is_dataclass(item) and not isinstance(item, type):
+            return sum(visit(getattr(item, field.name)) for field in fields(item))
+        if isinstance(item, Sequence):
+            return sum(visit(child) for child in item)
+        return 0
+
+    return visit(value)
+
+
+def _cuda_memory_snapshot(device: int) -> dict[str, int]:
+    free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+    return {
+        "allocated_bytes": int(torch.cuda.memory_allocated(device)),
+        "reserved_bytes": int(torch.cuda.memory_reserved(device)),
+        "free_bytes": int(free_bytes),
+        "total_bytes": int(total_bytes),
+    }
+
+
 class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
     """veRL worker extension adding small, exact TGVF operations."""
+
+    def tgvf_quiesce_phase_boundary(self) -> dict[str, object]:
+        """Release request-scoped TGVF tensors before vLLM enters sleep.
+
+        The replica invokes this utility RPC only after upstream request drain.
+        Memory observations are diagnostics, not an admission or correctness
+        gate; the replica logs an RPC failure and still proceeds to vLLM sleep.
+        """
+
+        device = torch.cuda.current_device()
+        sources = self._tgvf_sources()
+        traces = self._tgvf_traces()
+        try:
+            source_count_before = len(sources)
+            trace_count_before = len(traces)
+            source_tensor_bytes_before = _logical_tensor_bytes(sources)
+            trace_tensor_bytes_before = _logical_tensor_bytes(traces)
+            tensor_bytes_before = _logical_tensor_bytes((sources, traces))
+            memory_before = _cuda_memory_snapshot(device)
+        finally:
+            # Cleanup is the invariant; diagnostics above are best effort. A
+            # telemetry failure must still drop every request-owned reference.
+            sources.clear()
+            traces.clear()
+            collected_objects = gc.collect()
+            # Finish final utility-RPC kernels before returning their now-dead
+            # allocator blocks. The second sync makes after-state telemetry
+            # describe the completed reclamation boundary.
+            try:
+                torch.cuda.synchronize(device)
+            finally:
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize(device)
+
+        return {
+            "schema_version": TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA,
+            "device": int(device),
+            "source_count_before": source_count_before,
+            "source_count_after": len(sources),
+            "trace_count_before": trace_count_before,
+            "trace_count_after": len(traces),
+            "source_tensor_bytes_before": source_tensor_bytes_before,
+            "trace_tensor_bytes_before": trace_tensor_bytes_before,
+            "tensor_bytes_before": tensor_bytes_before,
+            "tensor_bytes_after": _logical_tensor_bytes((sources, traces)),
+            "gc_collected_objects": int(collected_objects),
+            "memory_before": memory_before,
+            "memory_after": _cuda_memory_snapshot(device),
+        }
 
     def tgvf_register_behavior_trace(
         self,
@@ -720,9 +820,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         if visual is None:
             raise RuntimeError("vLLM Qwen3 worker has no visual tower")
         mergers = (visual.merger, *tuple(visual.deepstack_merger_list))
-        captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [
-            [] for _ in mergers
-        ]
+        captures: list[list[tuple[torch.Tensor, torch.Tensor]]] = [[] for _ in mergers]
         handles = tuple(
             merger.register_forward_hook(
                 _capture_vllm_merger(captures[index]), with_kwargs=True
@@ -737,9 +835,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
                         device=owner.device,
                         dtype=owner.dtype,
                     ),
-                    grid_thw=image_grid_thw.detach().to(
-                        device="cpu", dtype=torch.long
-                    ),
+                    grid_thw=image_grid_thw.detach().to(device="cpu", dtype=torch.long),
                 )
         finally:
             for handle in handles:
@@ -949,9 +1045,7 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
         )
         run_identity = export.manifest.run_identity
         if state_digest(export.manifest) != config.representation.artifact.sha256:
-            raise IdentityMismatchError(
-                "vLLM Adapter export manifest identity differs"
-            )
+            raise IdentityMismatchError("vLLM Adapter export manifest identity differs")
         if (
             run_identity.run_id != config.representation.expected_run_id
             or export.manifest.run_identity_sha256
@@ -1048,14 +1142,10 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
             count = int(scheduler_output.num_scheduled_tokens[request_id])
             trace = traces.get(request_id)
             if trace is not None and count > 0:
-                sequence_start = int(
-                    runner.input_batch.num_computed_tokens_cpu[index]
-                )
+                sequence_start = int(runner.input_batch.num_computed_tokens_cpu[index])
                 sequence_end = sequence_start + count
                 copy_start = max(sequence_start, trace.prompt_length)
-                copy_end = min(
-                    sequence_end, trace.prompt_length + trace.capacity
-                )
+                copy_end = min(sequence_end, trace.prompt_length + trace.capacity)
                 if copy_start < copy_end:
                     source_start = offset + copy_start - sequence_start
                     source_end = source_start + copy_end - copy_start
@@ -1289,6 +1379,18 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             if errors:
                 raise ExceptionGroup("TGVF vLLM server shutdown failed", errors)
 
+        async def tgvf_quiesce_phase_boundary(self) -> list[dict[str, object]]:
+            """Clear every local TGVF worker cache and record memory release."""
+
+            reports = await self.engine.collective_rpc(
+                method="tgvf_quiesce_phase_boundary", kwargs={}
+            )
+            logger.info(
+                "TGVF phase-boundary quiesce reports=%s",
+                json.dumps(reports, sort_keys=True),
+            )
+            return reports
+
         async def tgvf_update_adapter_owned_state(
             self,
             *,
@@ -1411,6 +1513,55 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
         def __init__(self, *args: object, **kwargs: object) -> None:
             super().__init__(*args, **kwargs)
             self.server_class = ray.remote(TGVFVLLMHttpServer)
+
+        async def sleep(self) -> tuple[object, ...]:
+            """Drain, best-effort quiesce TGVF workers, then sleep vLLM."""
+
+            # The trainer reaches replica sleep only after it has gathered all
+            # AgentLoop tasks, whose finally blocks await trajectory release.
+            # Preserve upstream's additional DP-wide generation drain before
+            # reclaiming any request-scoped source/trace tensor left behind by
+            # an exceptional path.
+            await self.servers[0].wait_for_requests_to_drain.remote()
+            cache_results = await asyncio.gather(
+                *(server.clear_kv_cache.remote() for server in self.servers),
+                return_exceptions=True,
+            )
+            for server_index, result in enumerate(cache_results):
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    # vLLM 0.12 clear_kv_cache includes reset_mm_cache(), which
+                    # releases Qwen-VL GPU encoder-cache tensors before sleep.
+                    # Keep cleanup best effort and still attempt custom
+                    # request-cache reclamation plus standard vLLM sleep.
+                    logger.warning(
+                        "TGVF phase-boundary multimodal-cache reset failed "
+                        "for server %d: %r",
+                        server_index,
+                        result,
+                    )
+            reports = await asyncio.gather(
+                *(
+                    server.tgvf_quiesce_phase_boundary.remote()
+                    for server in self.servers
+                ),
+                return_exceptions=True,
+            )
+            for server_index, report in enumerate(reports):
+                if isinstance(report, asyncio.CancelledError):
+                    raise report
+                if isinstance(report, Exception):
+                    # This diagnostic cleanup must never become a new
+                    # fail-closed training gate. Always attempt standard vLLM
+                    # sleep below even when supplemental cleanup failed.
+                    logger.warning(
+                        "TGVF phase-boundary quiesce failed for server %d: %r",
+                        server_index,
+                        report,
+                    )
+            await asyncio.gather(*(server.sleep.remote() for server in self.servers))
+            return tuple(reports)
 
     class TGVFLLMServerClient(LLMServerClient):
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -1598,9 +1749,7 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
         async def release_trajectory(self, request_id: str) -> None:
             route = self._tgvf_routes.pop(request_id, None)
             self._tgvf_turns.pop(request_id, None)
-            backend_request_ids = tuple(
-                self._tgvf_backend_ids.pop(request_id, ())
-            )
+            backend_request_ids = tuple(self._tgvf_backend_ids.pop(request_id, ()))
             if route is None:
                 return
             server_id, server = route
@@ -1618,9 +1767,7 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             super().__init__(*args, **kwargs)
 
         @classmethod
-        def bind_adapter_state_updates(
-            cls, replicas: Sequence[object]
-        ) -> Any:
+        def bind_adapter_state_updates(cls, replicas: Sequence[object]) -> Any:
             """Bind the Adapter publication surface to already-created replicas."""
 
             if not isinstance(replicas, Sequence) or isinstance(replicas, (str, bytes)):
@@ -1631,7 +1778,9 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             manager.rollout_replicas = list(replicas)
             return manager
 
-        def get_client(self, client_cls: type[Any] = TGVFLLMServerClient, **kwargs: Any):
+        def get_client(
+            self, client_cls: type[Any] = TGVFLLMServerClient, **kwargs: Any
+        ):
             return super().get_client(client_cls=client_cls, **kwargs)
 
         @auto_await
@@ -1725,6 +1874,7 @@ def bind_tgvf_adapter_state_update_manager(
 
 __all__ = [
     "TGVF_ADAPTER_UPDATE_ACK_SCHEMA",
+    "TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA",
     "TGVF_TWO_MODEL_RUNTIME_SCHEMA",
     "TGVFFocusMaterializationResult",
     "TGVF_VLLM_WORKER_EXTENSION_FQN",

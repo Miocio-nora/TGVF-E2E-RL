@@ -15,6 +15,7 @@ from tgvf_rl.environment.focus_tool import (
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
     TGVFFocusMaterializationResult,
+    TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA,
     TGVF_VLLM_FINISH_REASON_FIELD,
     TGVF_VLLM_STOP_REASON_FIELD,
     TGVFVLLMWorkerExtension,
@@ -106,9 +107,11 @@ def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
         spatial_merge_size=2,
         decoded_rgb_sha256="a" * 64,
     )
-    visual_wire = MsgpackDecoder(UtilityResult).decode(
-        MsgpackEncoder().encode(UtilityResult(_source_to_utility_wire(visual)))
-    ).result
+    visual_wire = (
+        MsgpackDecoder(UtilityResult)
+        .decode(MsgpackEncoder().encode(UtilityResult(_source_to_utility_wire(visual))))
+        .result
+    )
     visual_restored = _source_from_utility_wire(visual_wire)
     assert isinstance(visual_restored, SourceVisualTensorBundle)
     torch.testing.assert_close(visual_restored.premerge_main, visual.premerge_main)
@@ -258,8 +261,7 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
             d_deepstack=DDeepStackPayload(
                 branch_layers=layers,
                 branches=tuple(
-                    torch.full((2, 8), float(i), dtype=torch.bfloat16)
-                    for i in range(3)
+                    torch.full((2, 8), float(i), dtype=torch.bfloat16) for i in range(3)
                 ),
                 projection_identities=identities,
             ),
@@ -277,9 +279,11 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
         ),
     )
 
-    transported_wire = MsgpackDecoder(UtilityResult).decode(
-        MsgpackEncoder().encode(UtilityResult(_focus_to_utility_wire(result)))
-    ).result
+    transported_wire = (
+        MsgpackDecoder(UtilityResult)
+        .decode(MsgpackEncoder().encode(UtilityResult(_focus_to_utility_wire(result))))
+        .result
+    )
     transported = _focus_from_utility_wire(transported_wire)
 
     assert isinstance(transported, TGVFFocusMaterializationResult)
@@ -287,10 +291,14 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
     assert isinstance(transported.observation.d_deepstack, DDeepStackPayload)
     assert isinstance(transported.observation.metadata, TGVFAdapterMetadata)
     torch.testing.assert_close(transported.hq, result.hq)
-    torch.testing.assert_close(transported.observation.main_d, result.observation.main_d)
+    torch.testing.assert_close(
+        transported.observation.main_d, result.observation.main_d
+    )
 
 
-def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases() -> None:
+def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases() -> (
+    None
+):
     extension = object.__new__(TGVFVLLMWorkerExtension)
     trace = _BehaviorTraceBuffer(
         prompt_length=3,
@@ -319,15 +327,123 @@ def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases
 
     extension._tgvf_capture_execute_state()
 
-    torch.testing.assert_close(
-        trace.hidden[:2], torch.tensor([[1.0, 2.0], [3.0, 4.0]])
-    )
+    torch.testing.assert_close(trace.hidden[:2], torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
     assert trace.covered == bytearray((1, 1, 0, 0))
-    assert extension.tgvf_release_trajectory(
-        "trajectory-0", ("turn-0",)
-    )
+    assert extension.tgvf_release_trajectory("trajectory-0", ("turn-0",))
     assert extension._tgvf_sources() == {}
     assert extension._tgvf_traces() == {}
+
+
+def test_worker_phase_boundary_quiesce_clears_tensors_and_reports_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    shared_source = torch.ones((4,), dtype=torch.float32)
+    extension._tgvf_source_cache = {
+        "trajectory-0": {
+            "main": shared_source,
+            "shared-alias": shared_source,
+        }
+    }
+    extension._tgvf_behavior_traces = {
+        "turn-0": _BehaviorTraceBuffer(
+            prompt_length=2,
+            capacity=3,
+            hidden=torch.ones((3, 2), dtype=torch.float16),
+            covered=bytearray((1, 0, 0)),
+        )
+    }
+    released = False
+    events: list[object] = []
+
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 3)
+    monkeypatch.setattr(
+        torch.cuda,
+        "memory_allocated",
+        lambda device: 20 if released else 100,
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "memory_reserved",
+        lambda device: 40 if released else 160,
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "mem_get_info",
+        lambda device: (700, 1000) if released else (400, 1000),
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.vllm_tool_runtime.gc.collect",
+        lambda: events.append("gc") or 7,
+    )
+
+    def empty_cache() -> None:
+        nonlocal released
+        events.append("empty_cache")
+        released = True
+
+    monkeypatch.setattr(torch.cuda, "empty_cache", empty_cache)
+    monkeypatch.setattr(
+        torch.cuda, "synchronize", lambda device: events.append(("sync", device))
+    )
+
+    report = extension.tgvf_quiesce_phase_boundary()
+
+    assert extension._tgvf_source_cache == {}
+    assert extension._tgvf_behavior_traces == {}
+    assert events == ["gc", ("sync", 3), "empty_cache", ("sync", 3)]
+    assert report == {
+        "schema_version": TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA,
+        "device": 3,
+        "source_count_before": 1,
+        "source_count_after": 0,
+        "trace_count_before": 1,
+        "trace_count_after": 0,
+        "source_tensor_bytes_before": 16,
+        "trace_tensor_bytes_before": 12,
+        "tensor_bytes_before": 28,
+        "tensor_bytes_after": 0,
+        "gc_collected_objects": 7,
+        "memory_before": {
+            "allocated_bytes": 100,
+            "reserved_bytes": 160,
+            "free_bytes": 400,
+            "total_bytes": 1000,
+        },
+        "memory_after": {
+            "allocated_bytes": 20,
+            "reserved_bytes": 40,
+            "free_bytes": 700,
+            "total_bytes": 1000,
+        },
+    }
+
+
+def test_worker_phase_boundary_quiesce_clears_even_if_diagnostics_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    extension._tgvf_source_cache = {"trajectory-0": torch.ones((1,))}
+    extension._tgvf_behavior_traces = {"turn-0": torch.ones((1,))}
+    events: list[str] = []
+
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.vllm_tool_runtime._logical_tensor_bytes",
+        lambda value: (_ for _ in ()).throw(RuntimeError("telemetry failed")),
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.vllm_tool_runtime.gc.collect", lambda: 0
+    )
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: events.append("empty"))
+
+    with pytest.raises(RuntimeError, match="telemetry failed"):
+        extension.tgvf_quiesce_phase_boundary()
+
+    assert extension._tgvf_source_cache == {}
+    assert extension._tgvf_behavior_traces == {}
+    assert events == ["empty"]
 
 
 def test_crop_rpc_reuses_the_rollout_worker_visual_path() -> None:
@@ -396,6 +512,90 @@ def test_http_server_adapter_update_uses_collective_rpc_and_validates_ack() -> N
     assert calls[0][0] == "tgvf_update_adapter_owned_state"
     assert calls[0][1]["optimizer_step"] == 4
     assert calls[0][1]["state_sha256"] == digest
+
+
+def test_http_server_phase_boundary_quiesce_uses_collective_rpc_and_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    expected = [
+        {
+            "schema_version": TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA,
+            "source_count_before": 2,
+            "trace_count_before": 3,
+        }
+    ]
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Engine:
+        async def collective_rpc(self, *, method: str, kwargs: dict[str, object]):
+            calls.append((method, kwargs))
+            return expected
+
+    async def exercise() -> object:
+        server_cls = _runtime_classes()[3]
+        server = object.__new__(server_cls)
+        server.engine = Engine()
+        return await server.tgvf_quiesce_phase_boundary()
+
+    with caplog.at_level("INFO"):
+        result = asyncio.run(exercise())
+
+    assert result is expected
+    assert calls == [("tgvf_quiesce_phase_boundary", {})]
+    assert "source_count_before" in caplog.text
+
+
+def test_replica_sleep_drains_then_quiesces_without_fail_closed_gate(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+
+    class RemoteMethod:
+        def __init__(
+            self, name: str, *, result: object = None, error: Exception | None = None
+        ) -> None:
+            self.name = name
+            self.result = result
+            self.error = error
+
+        async def remote(self) -> object:
+            events.append(self.name)
+            if self.error is not None:
+                raise self.error
+            return self.result
+
+    server0 = SimpleNamespace(
+        wait_for_requests_to_drain=RemoteMethod("drain"),
+        clear_kv_cache=RemoteMethod("clear-0"),
+        tgvf_quiesce_phase_boundary=RemoteMethod(
+            "quiesce-0", result=[{"source_count_before": 1}]
+        ),
+        sleep=RemoteMethod("sleep-0"),
+    )
+    server1 = SimpleNamespace(
+        clear_kv_cache=RemoteMethod("clear-1"),
+        tgvf_quiesce_phase_boundary=RemoteMethod(
+            "quiesce-1", error=RuntimeError("diagnostic RPC failed")
+        ),
+        sleep=RemoteMethod("sleep-1"),
+    )
+
+    async def exercise() -> tuple[object, ...]:
+        replica_cls = _runtime_classes()[2]
+        replica = object.__new__(replica_cls)
+        replica.servers = [server0, server1]
+        return await replica.sleep()
+
+    with caplog.at_level("WARNING"):
+        reports = asyncio.run(exercise())
+
+    assert events[0] == "drain"
+    assert set(events[1:3]) == {"clear-0", "clear-1"}
+    assert set(events[3:5]) == {"quiesce-0", "quiesce-1"}
+    assert set(events[5:]) == {"sleep-0", "sleep-1"}
+    assert reports[0] == [{"source_count_before": 1}]
+    assert isinstance(reports[1], RuntimeError)
+    assert "diagnostic RPC failed" in caplog.text
 
 
 @pytest.mark.parametrize(

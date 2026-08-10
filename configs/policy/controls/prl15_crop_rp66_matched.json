@@ -1,6 +1,6 @@
 {
-  "schema_version": "tgvf.control-comparison.v1",
-  "note": "The completed PRL14 Crop-16 closure is the external control. PRL15 must equal it on every common field; TGVF must never generate or redefine the Crop baseline.",
+  "schema_version": "tgvf.control-comparison.v2",
+  "note": "The completed PRL14 Crop-16 closure is the external control. PRL15 must equal it on every common mathematical field; explicitly declared execution deviations may change residency only and TGVF must never generate or redefine the Crop baseline.",
   "required_equal": [
     "data.train_batch_size",
     "data.gen_batch_size",
@@ -39,7 +39,6 @@
     "actor_rollout_ref.actor.optim.override_optimizer_config",
     "actor_rollout_ref.actor.fsdp_config.fsdp_size",
     "actor_rollout_ref.actor.fsdp_config.param_offload",
-    "actor_rollout_ref.actor.fsdp_config.optimizer_offload",
     "actor_rollout_ref.actor.fsdp_config.offload_policy",
     "actor_rollout_ref.actor.fsdp_config.reshard_after_forward",
     "actor_rollout_ref.actor.fsdp_config.full_determinism",
@@ -85,6 +84,17 @@
       "name": "judge_config_sha256",
       "control_path": "reward.deepeyes_official.judge_service_config_sha256",
       "treatment_path": "actor_rollout_ref.rollout.custom.reward.judge_config_sha256"
+    }
+  ],
+  "allowed_execution_deviations": [
+    {
+      "name": "actor_optimizer_state_cpu_residency",
+      "path": "actor_rollout_ref.actor.fsdp_config.optimizer_offload",
+      "control_value": false,
+      "treatment_value": true,
+      "effect": "mathematically_equivalent",
+      "scope": "residency_safety_only",
+      "reason": "Keep the identical AdamW state on CPU outside the actor train context to leave deterministic GPU headroom for the colocated vLLM weight wake; loss, batch composition, reduction order, optimizer update, and checkpoint state are unchanged."
     }
   ],
   "arm_specific": [

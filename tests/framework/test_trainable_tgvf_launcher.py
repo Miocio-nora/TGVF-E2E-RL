@@ -24,6 +24,7 @@ from tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager import (
 )
 from tgvf_rl.framework.verl.trainable_tgvf_engine import TRAINABLE_TGVF_MODEL_TYPE
 from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
+    TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD,
     TRAINABLE_TGVF_EXTERNAL_MODULE,
     TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES,
     TrainableTGVFVerlLaunchPlan,
@@ -110,6 +111,9 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
         "sdpa"
     )
     assert values["actor_rollout_ref.actor.fsdp_config.use_torch_compile"] is True
+    assert values["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] is (
+        TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD
+    )
     assert values["actor_rollout_ref.actor.fsdp_config.model_dtype"] == "fp32"
     assert values["actor_rollout_ref.actor.optim.total_training_steps"] == 8
     assert values["actor_rollout_ref.rollout.response_length"] == 20480
