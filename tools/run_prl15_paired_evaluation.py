@@ -174,6 +174,61 @@ def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
     }
     if protocol != expected:
         raise RuntimeError("PRL15 plan protocol differs from its policy run")
+    required_pairing = plan.get("required_pairing")
+    if not isinstance(required_pairing, dict):
+        raise ValueError("paired evaluation plan required_pairing is missing")
+    expected_update_mode = required_pairing.get("adapter_update_mode")
+    if expected_update_mode is not None:
+        observed_update_mode = getattr(
+            run.representation.adapter_update_mode,
+            "value",
+            run.representation.adapter_update_mode,
+        )
+        if observed_update_mode != expected_update_mode:
+            raise RuntimeError("paired evaluation adapter update mode differs")
+    if required_pairing.get("rp66_state_must_remain_constant") is True:
+        if expected_update_mode != "frozen_adapter":
+            raise ValueError(
+                "constant RP66 pairing requires adapter_update_mode=frozen_adapter"
+            )
+        expected_weights = required_pairing.get(
+            "expected_runtime_rp66_weights_sha256"
+        )
+        if (
+            not isinstance(expected_weights, str)
+            or len(expected_weights) != 64
+            or any(character not in "0123456789abcdef" for character in expected_weights)
+        ):
+            raise ValueError("constant RP66 pairing requires a lowercase SHA256")
+
+
+def _validate_materialized_frozen_pairing(
+    plan: dict[str, Any], step0_config: Path, step8_config: Path
+) -> None:
+    """Prove that a frozen-RP66 evaluation binds identical endpoint state."""
+
+    required_pairing = plan.get("required_pairing", {})
+    if required_pairing.get("rp66_state_must_remain_constant") is not True:
+        return
+    snapshots = []
+    for config_path in (step0_config, step8_config):
+        config = load_policy_coredev_config(config_path)
+        snapshot = load_policy_evaluation_snapshot(config)
+        receipt = getattr(snapshot, "receipt", None)
+        if receipt is None:
+            raise RuntimeError("constant RP66 pairing requires paired snapshots")
+        snapshots.append(receipt)
+    step0_receipt, step8_receipt = snapshots
+    if step0_receipt.rp66_kind != "stage1_artifact":
+        raise RuntimeError("frozen RP66 step0 must use the stage1 artifact")
+    if step8_receipt.rp66_kind != "runtime_snapshot":
+        raise RuntimeError("frozen RP66 step8 must use a runtime snapshot")
+    if step0_receipt.rp66_state_sha256 != step8_receipt.rp66_state_sha256:
+        raise RuntimeError("frozen RP66 state changed between step0 and step8")
+    if step8_receipt.rp66_storage_sha256 != required_pairing[
+        "expected_runtime_rp66_weights_sha256"
+    ]:
+        raise RuntimeError("frozen RP66 step8 storage identity differs")
 
 
 def _resolve_repo_path(value: str) -> Path:
@@ -960,6 +1015,7 @@ def main() -> int:
             output_base=output_base,
             gpu_ids=second_gpus,
         )
+    _validate_materialized_frozen_pairing(plan, step0, step8)
     if args.mode == "status":
         for config in (step0, step8):
             _run_checked([sys.executable, str(RUNNER), "--config", str(config), "--mode", "status"])

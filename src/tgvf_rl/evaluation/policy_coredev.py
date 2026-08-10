@@ -89,7 +89,7 @@ from tgvf_rl.framework.vllm.registration import (
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
-    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -161,7 +161,7 @@ POLICY_EVALUATION_BACKENDS = frozenset(
 def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
     return (
         render_qwen_native_matched_tgvf_success_environment_text
-        if run.schema_version == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+        if run.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
         else render_qwen_native_success_environment_text
     )
 
