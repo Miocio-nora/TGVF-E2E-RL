@@ -286,6 +286,7 @@ be inherited silently from a library default.
 
 ## Documentation
 
+- [Policy RL primary baseline: Original / Crop / TGVF, Step 0 / Step 8](docs/POLICY_RL_PRIMARY_BASELINE_20260810.md)
 - [Project task and architectural baseline](docs/PROJECT_TASK.md)
 - [Open implementation contracts and promotion gates](docs/OPEN_IMPLEMENTATION_CONTRACTS.md)
 - [Accepted bounded veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
