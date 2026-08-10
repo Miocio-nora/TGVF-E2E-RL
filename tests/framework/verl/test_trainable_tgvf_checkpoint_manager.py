@@ -12,6 +12,7 @@ import torch
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager import (
     TGVF_ADAPTER_UPDATE_MODE_FROZEN,
+    TGVF_CHECKPOINT_ENGINE_CONTROL_KEY,
     TrainableTGVFCheckpointEngineManager,
 )
 from tgvf_rl.framework.verl.trainable_tgvf_weight_sync import (
@@ -38,18 +39,14 @@ def _replicas() -> list[object]:
     ]
 
 
-def _config(*, adapter_update_mode: str) -> dict[str, object]:
-    return {
-        "actor_rollout_ref": {
-            "rollout": {
-                "custom": {
-                    "trainable_tgvf": {
-                        "adapter_update_mode": adapter_update_mode,
-                    }
-                }
+def _config(*, adapter_update_mode: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        engine_kwargs={
+            TGVF_CHECKPOINT_ENGINE_CONTROL_KEY: {
+                "adapter_update_mode": adapter_update_mode,
             }
-        }
-    }
+        },
+    )
 
 
 def _ack(

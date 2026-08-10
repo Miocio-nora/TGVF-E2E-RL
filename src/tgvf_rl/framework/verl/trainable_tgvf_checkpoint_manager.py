@@ -43,6 +43,7 @@ TGVF_ADAPTER_UPDATE_MODE_FROZEN = "frozen_adapter"
 _TGVF_ADAPTER_UPDATE_MODES = frozenset(
     {TGVF_ADAPTER_UPDATE_MODE_JOINT, TGVF_ADAPTER_UPDATE_MODE_FROZEN}
 )
+TGVF_CHECKPOINT_ENGINE_CONTROL_KEY = "tgvf_control"
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,29 +212,26 @@ class TrainableTGVFCheckpointEngineManager:
 
 
 def _adapter_update_mode(config: object) -> str:
-    """Resolve the composed-config mode, defaulting old PRL15 runs to joint."""
+    """Resolve mode from veRL's actual CheckpointEngineConfig interface."""
 
-    current: object = config
-    for field in (
-        "actor_rollout_ref",
-        "rollout",
-        "custom",
-        "trainable_tgvf",
-        "adapter_update_mode",
-    ):
-        if isinstance(current, Mapping):
-            if field not in current:
-                return TGVF_ADAPTER_UPDATE_MODE_JOINT
-            current = current[field]
-        else:
-            if not hasattr(current, field):
-                return TGVF_ADAPTER_UPDATE_MODE_JOINT
-            current = getattr(current, field)
-    if type(current) is not str or current not in _TGVF_ADAPTER_UPDATE_MODES:
+    engine_kwargs = getattr(config, "engine_kwargs", None)
+    if engine_kwargs is None and type(config) is dict:
+        engine_kwargs = config.get("engine_kwargs")
+    if engine_kwargs is None:
+        return TGVF_ADAPTER_UPDATE_MODE_JOINT
+    if not isinstance(engine_kwargs, Mapping):
+        raise TypeError("checkpoint engine_kwargs must be a mapping")
+    control = engine_kwargs.get(TGVF_CHECKPOINT_ENGINE_CONTROL_KEY)
+    if control is None:
+        return TGVF_ADAPTER_UPDATE_MODE_JOINT
+    if not isinstance(control, Mapping):
+        raise TypeError("TGVF checkpoint-engine control must be a mapping")
+    mode = control.get("adapter_update_mode")
+    if type(mode) is not str or mode not in _TGVF_ADAPTER_UPDATE_MODES:
         raise ValueError(
             "trainable_tgvf.adapter_update_mode must be 'joint' or 'frozen_adapter'"
         )
-    return current
+    return mode
 
 
 def _validate_all_acknowledgements(
@@ -283,6 +281,7 @@ __all__ = [
     "TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN",
     "TGVF_ADAPTER_UPDATE_MODE_FROZEN",
     "TGVF_ADAPTER_UPDATE_MODE_JOINT",
+    "TGVF_CHECKPOINT_ENGINE_CONTROL_KEY",
     "TrainableTGVFCheckpointEngineManager",
     "TrainableTGVFRolloutPublication",
 ]

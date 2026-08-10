@@ -20,6 +20,7 @@ from tgvf_rl.framework.verl.tgvf_deepeyes_matched_dataset import (
 )
 from tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager import (
     TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN,
+    TGVF_CHECKPOINT_ENGINE_CONTROL_KEY,
 )
 from tgvf_rl.framework.verl.trainable_tgvf_engine import TRAINABLE_TGVF_MODEL_TYPE
 from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
@@ -124,6 +125,9 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     assert values["actor_rollout_ref.rollout.checkpoint_manager_class"] == (
         TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
     )
+    assert values["actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs"] == {
+        TGVF_CHECKPOINT_ENGINE_CONTROL_KEY: {"adapter_update_mode": "joint"}
+    }
     assert values["actor_rollout_ref.rollout.agent.default_agent_loop"] == (
         TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
     )
@@ -206,6 +210,13 @@ def test_v2_plan_records_dynamic_adapter_ownership(
         adapter_update_mode.value
     )
     assert custom["trainable_tgvf"]["adapter_trainable"] is adapter_trainable
+    assert plan.overrides[
+        "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs"
+    ] == {
+        TGVF_CHECKPOINT_ENGINE_CONTROL_KEY: {
+            "adapter_update_mode": adapter_update_mode.value
+        }
+    }
     assert custom["weight_sync"] == {
         "mode": config.distributed.weight_sync_mode,
         "interval_optimizer_steps": 1,

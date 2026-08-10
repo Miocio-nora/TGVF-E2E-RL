@@ -80,6 +80,7 @@ from .tgvf_deepeyes_matched_dataset import (
 )
 from .trainable_tgvf_checkpoint_manager import (
     TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN,
+    TGVF_CHECKPOINT_ENGINE_CONTROL_KEY,
 )
 from .trainable_tgvf_engine import (
     TRAINABLE_TGVF_MODEL_TYPE,
@@ -509,6 +510,13 @@ class TrainableTGVFVerlLaunchPlan:
             "actor_rollout_ref.rollout.checkpoint_manager_class": (
                 TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
             ),
+            "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs": {
+                TGVF_CHECKPOINT_ENGINE_CONTROL_KEY: {
+                    "adapter_update_mode": (
+                        self.config.representation.adapter_update_mode.value
+                    )
+                }
+            },
             "actor_rollout_ref.rollout.agent.default_agent_loop": (
                 TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
             ),
@@ -675,6 +683,13 @@ def build_trainable_tgvf_verl_launch_plan(
             "actor_rollout_ref.rollout.checkpoint_manager_class": (
                 TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
             ),
+            "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs": {
+                TGVF_CHECKPOINT_ENGINE_CONTROL_KEY: {
+                    "adapter_update_mode": (
+                        config.representation.adapter_update_mode.value
+                    )
+                }
+            },
             "trainer.total_training_steps": resolved_target,
             "actor_rollout_ref.actor.optim.total_training_steps": (
                 config.scheduler.total_steps
