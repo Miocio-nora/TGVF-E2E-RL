@@ -8,6 +8,7 @@ from functools import wraps
 from hashlib import sha256
 import csv
 import json
+import math
 from pathlib import Path
 import re
 import time
@@ -23,11 +24,20 @@ from .vlmevalkit import COREDEV_2511, VLMEVALKIT_REVIEW_COMMIT
 
 COREDEV_BASELINE_MODEL = "Qwen3-VL-8B-Thinking"
 JUDGE_READY_TEXT = "TGVF_JUDGE_READY"
+RANDOM_JUDGE_FALLBACK_MARKER = "Failed to predict, thus randomly generate one"
+DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER = (
+    "TGVF deterministic judge parse failure; scored incorrect"
+)
+MAX_JUDGE_PARSE_FAILURE_RATE = 0.05
+MIN_JUDGE_PARSE_FAILURE_LIMIT = 3
 JUDGE_FAILURE_MARKERS = (
     "Failed to obtain answer via API",
     "Failed in Prefetch, no GPT-based answer matching",
-    "Failed to predict, thus randomly generate one",
+    RANDOM_JUDGE_FALLBACK_MARKER,
     "All 5 retries failed",
+)
+_COREDEV_VERBOSE_OPTION = re.compile(
+    r"(?i)(?:correct\s+)?(?:answer|output)\s+is\s+\**([A-Z])\**"
 )
 _MATHVERSE_SCORE_PROMPT_PREFIX = (
     "Below are two answers to a math question. Question is [Question], "
@@ -215,6 +225,75 @@ def install_fail_closed_judge_builders(modules: Iterable[Any]) -> None:
         module.build_judge = build_fail_closed
 
 
+class _DeterministicChoiceProxy:
+    """Replace ValKit's MCQ random fallback with an invalid sentinel."""
+
+    __slots__ = ("_delegate",)
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def choice(self, _population: object) -> str:
+        return "Z"
+
+
+def install_deterministic_mcq_answer_policy(module: Any) -> None:
+    """Parse A--J responses and score exhausted matching as incorrect.
+
+    The pinned ValKit matcher randomly chooses an option after three failed
+    parses. CoreDev instead emits ``Z``, which cannot match an A--J gold label,
+    and preserves a dedicated row-local audit marker.
+    """
+
+    original_can_infer = getattr(module, "can_infer")
+    if not getattr(original_can_infer, "_tgvf_coredev_answer_policy", False):
+
+        @wraps(original_can_infer)
+        def can_infer_coredev(answer: object, choices: Mapping[str, object]) -> Any:
+            inferred = original_can_infer(answer, choices)
+            if inferred:
+                return inferred
+            match = _COREDEV_VERBOSE_OPTION.search(str(answer))
+            if match is None:
+                return False
+            candidate = match.group(1).upper()
+            return candidate if candidate in choices or candidate == "Z" else False
+
+        can_infer_coredev._tgvf_coredev_answer_policy = True  # type: ignore[attr-defined]
+        module.can_infer = can_infer_coredev
+
+    if not isinstance(getattr(module, "rd"), _DeterministicChoiceProxy):
+        module.rd = _DeterministicChoiceProxy(module.rd)
+
+    original_extract = getattr(module, "extract_answer_from_item")
+    if getattr(original_extract, "_tgvf_coredev_answer_policy", False):
+        return
+
+    @wraps(original_extract)
+    def extract_answer_coredev(*args: Any, **kwargs: Any) -> Any:
+        result = original_extract(*args, **kwargs)
+        if not isinstance(result, Mapping):
+            raise RuntimeError(
+                "ValKit MCQ answer matcher returned a non-mapping result"
+            )
+        if RANDOM_JUDGE_FALLBACK_MARKER not in str(result.get("log", "")):
+            return result
+        if result.get("opt") != "Z":
+            raise RuntimeError(
+                "CoreDev deterministic MCQ fallback was not bound to invalid option Z"
+            )
+        deterministic = dict(result)
+        deterministic["opt"] = "Z"
+        deterministic["log"] = DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER
+        return deterministic
+
+    extract_answer_coredev._tgvf_coredev_answer_policy = True  # type: ignore[attr-defined]
+    module.extract_answer_from_item = extract_answer_coredev
+
+
 def _read_tsv(path: Path) -> tuple[list[str], list[str]]:
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -355,6 +434,79 @@ def _reject_judge_failure_markers(paths: Iterable[Path]) -> None:
             )
 
 
+def _deterministic_judge_parse_failures(
+    paths: Iterable[Path],
+    *,
+    expected_indices: Iterable[str],
+    require_mcq_result: bool,
+) -> list[str]:
+    """Audit result coverage and return deterministic parse-failure IDs."""
+
+    marker = DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER
+    marker_bytes = marker.encode("utf-8")
+    marker_present = False
+    sample_ids: set[str] = set()
+    expected = tuple(str(index) for index in expected_indices)
+    expected_set = set(expected)
+    structured_result_count = 0
+    for path in paths:
+        payload = path.read_bytes()
+        marker_present = marker_present or marker_bytes in payload
+        if path.suffix.lower() != ".tsv":
+            continue
+        with path.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            fields = set(reader.fieldnames or ())
+            if not {"index", "hit", "log"}.issubset(fields):
+                continue
+            structured_result_count += 1
+            rows = list(reader)
+            observed = [str(row.get("index") or "").strip() for row in rows]
+            if (
+                len(observed) != len(expected)
+                or len(set(observed)) != len(expected)
+                or set(observed) != expected_set
+            ):
+                raise RuntimeError(f"judge result row identity mismatch: {path}")
+            for row in rows:
+                if marker not in str(row.get("log") or ""):
+                    continue
+                if str(row.get("hit", "")).strip() not in {
+                    "0",
+                    "0.0",
+                    "False",
+                    "false",
+                }:
+                    raise RuntimeError(
+                        "deterministic judge parse failure was not scored incorrect: "
+                        f"{path}"
+                    )
+                sample_id = str(row.get("index") or "").strip()
+                if not sample_id:
+                    raise RuntimeError(
+                        f"deterministic judge parse failure lacks sample id: {path}"
+                    )
+                sample_ids.add(sample_id)
+    if require_mcq_result and structured_result_count != 1:
+        raise RuntimeError(
+            "CoreDev MCQ scoring requires exactly one complete structured result TSV"
+        )
+    if marker_present and not sample_ids:
+        raise RuntimeError(
+            "deterministic judge parse failure lacks structured TSV audit evidence"
+        )
+    return sorted(sample_ids)
+
+
+def _judge_parse_failure_limit(sample_count: int) -> int:
+    """Allow isolated bad rows while rejecting systemic scorer failure."""
+
+    return max(
+        MIN_JUDGE_PARSE_FAILURE_LIMIT,
+        math.ceil(sample_count * MAX_JUDGE_PARSE_FAILURE_RATE),
+    )
+
+
 def summarize_coredev_results(
     *,
     work_dir: Path,
@@ -415,6 +567,7 @@ def summarize_coredev_results(
         judge_contract = COREDEV_JUDGE_CONTRACTS[dataset_name]
         metrics = entry.get("metrics")
         judge_artifacts: list[Path] = []
+        parse_failure_ids: list[str] = []
         if phase == "eval":
             if not isinstance(metrics, Mapping) or not metrics:
                 raise RuntimeError(f"evaluation metrics are missing: {dataset_name}")
@@ -435,6 +588,20 @@ def summarize_coredev_results(
                 if not judge_artifacts:
                     raise RuntimeError(f"judge evidence is missing: {dataset_name}")
                 _reject_judge_failure_markers(judge_artifacts)
+                parse_failure_ids = _deterministic_judge_parse_failures(
+                    judge_artifacts,
+                    expected_indices=indices,
+                    require_mcq_result=(
+                        judge_contract == "qwen2_5_72b_fallback_or_exact_matching"
+                    ),
+                )
+                parse_failure_limit = _judge_parse_failure_limit(expected_count)
+                if len(parse_failure_ids) > parse_failure_limit:
+                    raise RuntimeError(
+                        "systemic judge parse failure rate: "
+                        f"{dataset_name} has {len(parse_failure_ids)}/{expected_count}, "
+                        f"limit={parse_failure_limit}"
+                    )
 
         slices.append(
             {
@@ -447,6 +614,9 @@ def summarize_coredev_results(
                 "prediction_sha256": sha256(prediction_path.read_bytes()).hexdigest(),
                 "judge_model": entry.get("judge_model"),
                 "judge_artifacts": [str(path) for path in judge_artifacts],
+                "judge_parse_failure_count": len(parse_failure_ids),
+                "judge_parse_failure_sample_ids": parse_failure_ids,
+                "judge_parse_failure_limit": _judge_parse_failure_limit(expected_count),
                 "primary_metric": entry.get("primary_metric"),
                 "metrics": dict(metrics) if isinstance(metrics, Mapping) else {},
             }
@@ -461,5 +631,10 @@ def summarize_coredev_results(
         "vlmevalkit_commit": VLMEVALKIT_REVIEW_COMMIT,
         "sample_count": sum(item["sample_count"] for item in slices),
         "slice_count": len(slices),
+        "judge_parse_failure_policy": "deterministic_incorrect",
+        "judge_parse_failure_rate_limit": MAX_JUDGE_PARSE_FAILURE_RATE,
+        "judge_parse_failure_count": sum(
+            item["judge_parse_failure_count"] for item in slices
+        ),
         "slices": slices,
     }

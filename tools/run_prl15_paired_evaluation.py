@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from datetime import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -35,6 +37,7 @@ from tgvf_rl.evaluation.policy_coredev_scoring import (  # noqa: E402
     DATASETS as COREDEV_DATASETS,
     MODEL_NAME as EVALUATED_MODEL,
     materialize_policy_coredev_scoring_views,
+    validate_vlmevalkit_eval_id,
 )
 from tgvf_rl.evaluation.policy_paired_qwen_materialization import (  # noqa: E402
     materialize_qwen_only_policy_checkpoint,
@@ -52,6 +55,35 @@ RUNNER = REPOSITORY_ROOT / "tools/run_policy_benchmark.py"
 COREDEV_RUNNER = REPOSITORY_ROOT / "tools/run_coredev_2511_vlmevalkit.py"
 PLAN_SCHEMA = "tgvf.prl15-paired-policy-benchmark-plan.v2"
 PAIR_SUMMARY_SCHEMA = "tgvf.prl15-paired-coredev-summary.v1"
+_SCORING_RUN_PREFIX = re.compile(r"T(?P<date>\d{8})-[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _vlmevalkit_scoring_run_id(
+    *, run_id_prefix: object, arm_evaluation_id: object
+) -> str:
+    """Derive a stable legacy VLMEvalKit ID without losing semantic identity.
+
+    The date remains visibly pinned by the plan.  The complete arm evaluation
+    ID is retained separately as ``evaluation_id`` in materializer metadata;
+    its SHA-256 supplies the legacy ``G<hex>`` component used only for reuse
+    discovery and filesystem layout.
+    """
+
+    if (
+        not isinstance(run_id_prefix, str)
+        or (match := _SCORING_RUN_PREFIX.fullmatch(run_id_prefix)) is None
+    ):
+        raise ValueError(
+            "PRL15 VLMEvalKit run prefix must match TYYYYMMDD-<semantic-name>"
+        )
+    try:
+        datetime.strptime(match.group("date"), "%Y%m%d")
+    except ValueError as error:
+        raise ValueError("PRL15 VLMEvalKit run prefix date is invalid") from error
+    if not isinstance(arm_evaluation_id, str) or not arm_evaluation_id:
+        raise ValueError("PRL15 arm evaluation ID must be non-empty")
+    identity_hex = hashlib.sha256(arm_evaluation_id.encode("utf-8")).hexdigest()
+    return validate_vlmevalkit_eval_id(f"T{match.group('date')}_G{identity_hex}")
 
 
 def _sha256_file(path: Path) -> str:
@@ -85,11 +117,18 @@ def _load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("PRL15 evaluated model name differs")
     if scoring.get("gpt_fallback") is not False:
         raise ValueError("PRL15 official scoring must forbid GPT fallback")
-    if (
-        not isinstance(scoring.get("run_id_prefix"), str)
-        or not scoring["run_id_prefix"].startswith("T")
-    ):
-        raise ValueError("PRL15 VLMEvalKit run prefix is invalid")
+    evaluation_id = payload.get("evaluation_id")
+    if not isinstance(evaluation_id, str) or not evaluation_id:
+        raise ValueError("PRL15 paired evaluation ID must be non-empty")
+    generated_run_ids = {
+        _vlmevalkit_scoring_run_id(
+            run_id_prefix=scoring.get("run_id_prefix"),
+            arm_evaluation_id=f"{evaluation_id}-{arm['name'].upper()}",
+        )
+        for arm in payload["arms"]
+    }
+    if len(generated_run_ids) != len(payload["arms"]):
+        raise ValueError("PRL15 VLMEvalKit arm run IDs must be distinct")
     for field in ("judge_api_nproc", "judge_retry", "judge_timeout_seconds"):
         if type(scoring.get(field)) is not int or scoring[field] <= 0:
             raise ValueError(f"PRL15 scoring {field} must be positive")
@@ -290,6 +329,33 @@ def _materialize_arm(
         enable_chunked_prefill=False,
         gpu_memory_utilization=0.9,
     )
+    return paths["config"]
+
+
+def _load_existing_arm(
+    *,
+    plan: dict[str, Any],
+    output_base: Path,
+    arm: str,
+    step: int,
+) -> Path:
+    """Load one completed arm without preparing or mutating it."""
+
+    paths = _arm_paths(output_base, arm)
+    if not paths["config"].is_file() or not paths["receipt"].is_file():
+        raise FileNotFoundError(f"score mode requires existing {arm} config and receipt")
+    config = load_policy_coredev_config(paths["config"])
+    snapshot = load_policy_evaluation_snapshot(config)
+    if config.evaluation_id != f"{plan['evaluation_id']}-{arm.upper()}":
+        raise RuntimeError(f"existing {arm} evaluation ID differs from plan")
+    if config.output_root.resolve() != paths["root"].resolve():
+        raise RuntimeError(f"existing {arm} output root differs from plan")
+    if snapshot.policy_version.optimizer_step != step:
+        raise RuntimeError(f"existing {arm} optimizer step differs from plan")
+    for rank in range(4):
+        inference = config.output_root / "inference" / f"rank-{rank}.jsonl"
+        if not inference.is_file() or inference.stat().st_size == 0:
+            raise RuntimeError(f"score mode requires complete {arm} inference ranks")
     return paths["config"]
 
 
@@ -536,7 +602,10 @@ def _materialize_official_scoring_view(
     config = load_policy_coredev_config(config_path)
     root = _scoring_root(config_path, plan)
     summary_path = root / "materialization-summary.json"
-    run_id = f"{plan['scoring']['run_id_prefix']}-{arm.upper()}"
+    run_id = _vlmevalkit_scoring_run_id(
+        run_id_prefix=plan["scoring"]["run_id_prefix"],
+        arm_evaluation_id=config.evaluation_id,
+    )
     if summary_path.is_file():
         result = json.loads(summary_path.read_text(encoding="utf-8"))
         expected = {
@@ -566,6 +635,78 @@ def _materialize_official_scoring_view(
     )
 
 
+def _load_existing_official_scoring_view(
+    config_path: Path, plan: dict[str, Any], *, arm: str
+) -> dict[str, Any]:
+    """Strictly accept an immutable scoring view without rematerializing it."""
+
+    config = load_policy_coredev_config(config_path)
+    root = _scoring_root(config_path, plan)
+    summary_path = root / "materialization-summary.json"
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"score mode requires existing {arm} materialization")
+    result = json.loads(summary_path.read_text(encoding="utf-8"))
+    expected = {
+        "evaluation_id": config.evaluation_id,
+        "observed_single_image_count": 2240,
+        "unsupported_multi_image_count": 271,
+        "official_row_count": 2511,
+    }
+    if not isinstance(result, dict) or any(
+        result.get(key) != value for key, value in expected.items()
+    ):
+        raise RuntimeError(f"existing {arm} scoring view identity differs")
+    slices = result.get("slices")
+    if not isinstance(slices, list) or [item.get("dataset") for item in slices] != list(
+        COREDEV_DATASETS
+    ):
+        raise RuntimeError(f"existing {arm} scoring slice order differs")
+    observed_total = unsupported_total = official_total = 0
+    for item in slices:
+        dataset = item["dataset"]
+        work_dir = (root / dataset).resolve()
+        prediction = Path(str(item.get("prediction_file", "")))
+        manifest = Path(str(item.get("manifest", "")))
+        if (
+            Path(str(item.get("work_dir", ""))).resolve() != work_dir
+            or not prediction.is_file()
+            or not manifest.is_file()
+            or prediction.parent.parent.name != EVALUATED_MODEL
+        ):
+            raise RuntimeError(f"existing {arm} {dataset} materialization differs")
+        run_dir = prediction.parent.resolve()
+        discoverable = False
+        for candidate in prediction.parent.parent.iterdir():
+            try:
+                validate_vlmevalkit_eval_id(candidate.name)
+            except ValueError:
+                continue
+            if candidate.is_dir() and candidate.resolve() == run_dir:
+                discoverable = (candidate / "status.json").is_file()
+                if discoverable:
+                    break
+        if not discoverable:
+            raise RuntimeError(
+                f"existing {arm} {dataset} prediction is not discoverable by VLMEvalKit"
+            )
+        counts = tuple(
+            item.get(field)
+            for field in (
+                "observed_single_image_count",
+                "unsupported_multi_image_count",
+                "official_row_count",
+            )
+        )
+        if any(type(value) is not int or value < 0 for value in counts):
+            raise RuntimeError(f"existing {arm} {dataset} counts are invalid")
+        observed_total += counts[0]
+        unsupported_total += counts[1]
+        official_total += counts[2]
+    if (observed_total, unsupported_total, official_total) != (2240, 271, 2511):
+        raise RuntimeError(f"existing {arm} scoring coverage differs")
+    return result
+
+
 def _official_score_command(
     *, dataset: str, scoring_root: Path, judge: dict[str, Any], plan: dict[str, Any]
 ) -> list[str]:
@@ -582,6 +723,8 @@ def _official_score_command(
         "--mode",
         "eval",
         "--reuse",
+        "--reuse-aux",
+        "infer",
         "--judge",
         str(judge["model"]["served_name"]),
         "--judge-base-url",
@@ -627,15 +770,39 @@ def _score_arm(
     accepted = _accepted_official_summary(scoring_root, judge)
     if accepted is not None:
         return accepted
-    processes: list[subprocess.Popen[bytes]] = []
+    workers = _launch_score_arm(
+        config_path,
+        plan,
+        judge,
+        arm=arm,
+        log_root=log_root,
+    )
+    failures = [dataset for dataset, process in workers if process.wait() != 0]
+    if failures:
+        raise RuntimeError(f"{arm} official scorers failed after drain: {failures}")
+    return _summarize_scored_arm(config_path, plan, judge)
+
+
+def _launch_score_arm(
+    config_path: Path,
+    plan: dict[str, Any],
+    judge: dict[str, Any],
+    *,
+    arm: str,
+    log_root: Path,
+) -> list[tuple[str, subprocess.Popen[bytes]]]:
+    scoring_root = _scoring_root(config_path, plan)
+    workers: list[tuple[str, subprocess.Popen[bytes]]] = []
     for dataset in COREDEV_DATASETS:
         log_path = log_root / f"score-{arm}-{dataset}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab", buffering=0) as log_handle:
             environment = dict(os.environ)
             environment["OPENAI_API_KEY"] = "EMPTY"
-            processes.append(
-                subprocess.Popen(
+            workers.append(
+                (
+                    dataset,
+                    subprocess.Popen(
                     _official_score_command(
                         dataset=dataset,
                         scoring_root=scoring_root,
@@ -645,9 +812,18 @@ def _score_arm(
                     env=environment,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
+                    ),
                 )
             )
-    _wait_workers(processes, owner=f"{arm} official scorer")
+    return workers
+
+
+def _summarize_scored_arm(
+    config_path: Path,
+    plan: dict[str, Any],
+    judge: dict[str, Any],
+) -> dict[str, Any]:
+    scoring_root = _scoring_root(config_path, plan)
     result = summarize_coredev_results(
         work_dir=scoring_root.resolve(),
         repository_root=REPOSITORY_ROOT,
@@ -659,10 +835,52 @@ def _score_arm(
     return result
 
 
+def _score_missing_arms(
+    configs: dict[str, Path],
+    existing: dict[str, dict[str, Any] | None],
+    plan: dict[str, Any],
+    judge: dict[str, Any],
+    *,
+    log_root: Path,
+) -> dict[str, dict[str, Any] | None]:
+    """Run every missing arm concurrently and drain all scorers before failure."""
+
+    launched: list[tuple[str, str, subprocess.Popen[bytes]]] = []
+    pending = [arm for arm in ("step0", "step8") if existing[arm] is None]
+    for arm in pending:
+        launched.extend(
+            (arm, dataset, process)
+            for dataset, process in _launch_score_arm(
+                configs[arm], plan, judge, arm=arm, log_root=log_root
+            )
+        )
+    failures: list[str] = []
+    arm_failed: set[str] = set()
+    for arm, dataset, process in launched:
+        code = process.wait()
+        if code != 0:
+            arm_failed.add(arm)
+            failures.append(f"{arm}/{dataset}={code}")
+    for arm in pending:
+        if arm in arm_failed:
+            continue
+        try:
+            existing[arm] = _summarize_scored_arm(configs[arm], plan, judge)
+        except Exception as error:
+            failures.append(f"{arm}/summary={error}")
+    if failures:
+        raise RuntimeError(
+            "official scorers failed after all workers drained: " + ", ".join(failures)
+        )
+    return existing
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
-    parser.add_argument("--mode", choices=("prepare", "run", "status"), default="run")
+    parser.add_argument(
+        "--mode", choices=("prepare", "run", "score", "status"), default="run"
+    )
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--gpu-ids", type=int, nargs="+", default=tuple(range(8)))
     parser.add_argument("--wait-for-step8", action="store_true")
@@ -680,6 +898,8 @@ def main() -> int:
         raise ValueError("evaluation wait durations must be positive")
     if len(args.gpu_ids) not in {4, 8} or len(set(args.gpu_ids)) != len(args.gpu_ids):
         raise ValueError("paired evaluator requires four or eight distinct GPU IDs")
+    if args.mode == "score" and args.wait_for_step8:
+        raise ValueError("score mode cannot wait on a training checkpoint")
     plan = _load_plan(args.plan.resolve())
     policy_config = _resolve_repo_path(plan["policy_config"])
     run = load_policy_e2e_smoke_run_config(
@@ -716,45 +936,71 @@ def main() -> int:
     )
     first_gpus = tuple(args.gpu_ids[:4])
     second_gpus = tuple(args.gpu_ids[-4:])
-    step0 = _materialize_arm(
-        plan=plan, run=run, arm="step0", step=0, output_base=output_base, gpu_ids=first_gpus
-    )
-    step8 = _materialize_arm(
-        plan=plan, run=run, arm="step8", step=8, output_base=output_base, gpu_ids=second_gpus
-    )
+    if args.mode == "score":
+        step0 = _load_existing_arm(
+            plan=plan, output_base=output_base, arm="step0", step=0
+        )
+        step8 = _load_existing_arm(
+            plan=plan, output_base=output_base, arm="step8", step=8
+        )
+    else:
+        step0 = _materialize_arm(
+            plan=plan,
+            run=run,
+            arm="step0",
+            step=0,
+            output_base=output_base,
+            gpu_ids=first_gpus,
+        )
+        step8 = _materialize_arm(
+            plan=plan,
+            run=run,
+            arm="step8",
+            step=8,
+            output_base=output_base,
+            gpu_ids=second_gpus,
+        )
     if args.mode == "status":
         for config in (step0, step8):
             _run_checked([sys.executable, str(RUNNER), "--config", str(config), "--mode", "status"])
         return 0
-    _prepare(step0)
-    _prepare(step8)
-    _validate(step0)
-    _validate(step8)
-    if args.mode == "prepare":
-        return 0
-    if len(args.gpu_ids) == 8:
-        processes = _launch_workers(step0) + _launch_workers(step8)
-        _wait_workers(processes)
+    if args.mode == "score":
+        _materialize_official_scoring_view(step0, plan, arm="step0")
+        _materialize_official_scoring_view(step8, plan, arm="step8")
+        materialization = {
+            "step0": _load_existing_official_scoring_view(step0, plan, arm="step0"),
+            "step8": _load_existing_official_scoring_view(step8, plan, arm="step8"),
+        }
     else:
-        _wait_workers(_launch_workers(step0))
-        _wait_workers(_launch_workers(step8))
-    for config in (step0, step8):
-        _run_checked(
-            [
-                sys.executable,
-                str(RUNNER),
-                "--config",
-                str(config),
-                "--mode",
-                "status",
-                "--world-size",
-                "4",
-            ]
-        )
-    materialization = {
-        "step0": _materialize_official_scoring_view(step0, plan, arm="step0"),
-        "step8": _materialize_official_scoring_view(step8, plan, arm="step8"),
-    }
+        _prepare(step0)
+        _prepare(step8)
+        _validate(step0)
+        _validate(step8)
+        if args.mode == "prepare":
+            return 0
+        if len(args.gpu_ids) == 8:
+            processes = _launch_workers(step0) + _launch_workers(step8)
+            _wait_workers(processes)
+        else:
+            _wait_workers(_launch_workers(step0))
+            _wait_workers(_launch_workers(step8))
+        for config in (step0, step8):
+            _run_checked(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--config",
+                    str(config),
+                    "--mode",
+                    "status",
+                    "--world-size",
+                    "4",
+                ]
+            )
+        materialization = {
+            "step0": _materialize_official_scoring_view(step0, plan, arm="step0"),
+            "step8": _materialize_official_scoring_view(step8, plan, arm="step8"),
+        }
     log_root = output_base / "logs"
     existing = {
         "step0": _accepted_official_summary(_scoring_root(step0, plan), judge),
@@ -767,15 +1013,24 @@ def main() -> int:
             timeout_seconds=args.judge_startup_timeout_seconds,
             poll_seconds=max(5, min(args.poll_seconds, 30)),
         ):
-            for arm, config in (("step0", step0), ("step8", step8)):
-                if existing[arm] is None:
-                    existing[arm] = _score_arm(
-                        config,
-                        plan,
-                        judge,
-                        arm=arm,
-                        log_root=log_root,
-                    )
+            if args.mode == "score":
+                existing = _score_missing_arms(
+                    {"step0": step0, "step8": step8},
+                    existing,
+                    plan,
+                    judge,
+                    log_root=log_root,
+                )
+            else:
+                for arm, config in (("step0", step0), ("step8", step8)):
+                    if existing[arm] is None:
+                        existing[arm] = _score_arm(
+                            config,
+                            plan,
+                            judge,
+                            arm=arm,
+                            log_root=log_root,
+                        )
     report = {
         "schema_version": PAIR_SUMMARY_SCHEMA,
         "evaluation_id": plan["evaluation_id"],
