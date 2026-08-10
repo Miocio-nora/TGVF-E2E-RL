@@ -16,6 +16,7 @@ from dataclasses import asdict
 import fcntl
 import hashlib
 import io
+import inspect
 import json
 import os
 import stat
@@ -39,6 +40,10 @@ from tgvf_rl.environment import (
     Qwen3NativeToolLayoutBuilder,
     QwenNativeToolObservationAppender,
     record_trajectory_source_visual,
+)
+from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_tgvf_success_environment_text,
+    render_qwen_native_success_environment_text,
 )
 from tgvf_rl.environment.qwen3_crop_materializer import preprocess_qwen3_rgb
 from tgvf_rl.framework.verl.native_agent_loop import VerlAsyncServerPolicyTurnClient
@@ -84,6 +89,7 @@ from tgvf_rl.framework.vllm.registration import (
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -150,6 +156,88 @@ POLICY_EVALUATION_BACKENDS = frozenset(
         PAIRED_TGVF_EVALUATION_BACKEND,
     }
 )
+
+
+def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
+    return (
+        render_qwen_native_matched_tgvf_success_environment_text
+        if run.schema_version == POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
+        else render_qwen_native_success_environment_text
+    )
+
+
+def _build_remote_tgvf_focus_tool_runtime(
+    *,
+    event_loop: asyncio.AbstractEventLoop,
+    server_client: object,
+    config: object,
+    source_visual: object,
+    layout_builder: object,
+    observation_store: ObservationStore,
+    execution_ledger: FocusExecutionLedger,
+    contextual_forward_identity: object | None,
+    branch_merger_identities: tuple[object, ...],
+    success_environment_text_renderer: object,
+    assistant_dialect: object,
+) -> _RemoteTGVFFocusToolRuntime:
+    """Single construction boundary shared by preflight and live inference."""
+
+    return _RemoteTGVFFocusToolRuntime(
+        event_loop=event_loop,
+        server_client=server_client,
+        config=config,
+        source_visual=source_visual,
+        layout_builder=layout_builder,
+        observation_store=observation_store,
+        execution_ledger=execution_ledger,
+        contextual_forward_identity=contextual_forward_identity,
+        branch_merger_identities=branch_merger_identities,
+        success_environment_text_renderer=success_environment_text_renderer,
+        assistant_dialect=assistant_dialect,
+    )
+
+
+def validate_policy_benchmark_runtime_interfaces(
+    run: PolicyE2ESmokeRunConfig,
+) -> dict[str, object]:
+    """Exercise CPU-only evaluator interfaces before any vLLM construction."""
+
+    from tgvf_rl.framework.verl.smoke_dataset import (
+        _materialize_source_image_prompt_token_ids,
+    )
+
+    inspect.signature(_materialize_source_image_prompt_token_ids).bind(
+        processor=object(),
+        canonical_token_ids=(),
+        prompt_text="",
+        source_rgb=torch.zeros((1, 1, 3), dtype=torch.uint8),
+        image_max_pixels=1,
+    )
+    dialect = native_assistant_dialect_for_model(run.model.model_name)
+    renderer = _success_environment_text_renderer(run)
+    event_loop = asyncio.new_event_loop()
+    try:
+        runtime = _build_remote_tgvf_focus_tool_runtime(
+            event_loop=event_loop,
+            server_client=object(),
+            config=run,
+            source_visual=object(),
+            layout_builder=object(),
+            observation_store=ObservationStore(),
+            execution_ledger=FocusExecutionLedger(),
+            contextual_forward_identity=None,
+            branch_merger_identities=(),
+            success_environment_text_renderer=renderer,
+            assistant_dialect=dialect,
+        )
+    finally:
+        event_loop.close()
+    return {
+        "source_rgb_prompt_materializer": True,
+        "remote_tgvf_focus_runtime": type(runtime).__name__,
+        "success_environment_renderer": renderer.__name__,
+        "assistant_dialect": dialect.value,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -2035,6 +2123,9 @@ class PolicyCoreDevEvaluator:
         self.assistant_dialect = native_assistant_dialect_for_model(
             run.model.model_name
         )
+        self.success_environment_text_renderer = (
+            _success_environment_text_renderer(run)
+        )
         self.renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=run.model.tokenizer_length,
@@ -2167,10 +2258,13 @@ class PolicyCoreDevEvaluator:
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
+            success_environment_text_renderer=(
+                self.success_environment_text_renderer
+            ),
             assistant_dialect=self.assistant_dialect,
         )
         if self.run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
-            tool_runtime = _RemoteTGVFFocusToolRuntime(
+            tool_runtime = _build_remote_tgvf_focus_tool_runtime(
                 event_loop=asyncio.get_running_loop(),
                 server_client=self.manager,
                 config=self.run,
@@ -2180,6 +2274,10 @@ class PolicyCoreDevEvaluator:
                 execution_ledger=self.focus_ledger,
                 contextual_forward_identity=self.contextual_identity,
                 branch_merger_identities=self.branch_identities,
+                success_environment_text_renderer=(
+                    self.success_environment_text_renderer
+                ),
+                assistant_dialect=self.assistant_dialect,
             )
         elif self.run.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
             processor_identity = _artifact_identity(
@@ -2635,6 +2733,7 @@ __all__ = [
     "policy_version_from_pointer",
     "prepare_policy_benchmark_tasks",
     "trajectory_audit_payload",
+    "validate_policy_benchmark_runtime_interfaces",
     "validate_policy_benchmark_result",
     "write_policy_evaluation_identity",
     "write_official_coredev_tasks",

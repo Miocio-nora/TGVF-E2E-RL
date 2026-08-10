@@ -11,6 +11,7 @@ import torch
 from tgvf_rl.framework.verl.smoke_dataset import (
     TGVFSelectedSampleDataset,
     VerlSelectedSampleDatasetBinding,
+    _materialize_source_image_prompt_token_ids,
     build_tgvf_only_smoke_messages,
 )
 from tgvf_rl.protocol import (
@@ -104,6 +105,23 @@ class _SourceImageProcessor:
             "input_ids": torch.tensor((expanded,), dtype=torch.long),
             "image_grid_thw": torch.tensor(((1, 4, 4),), dtype=torch.long),
         }
+
+
+def test_prompt_materializer_accepts_verified_rgb_without_reopening_path() -> None:
+    processor = _SourceImageProcessor()
+    prompt = "<|vision_start|><|image_pad|><|vision_end|>question"
+    canonical = processor.tokenizer.encode(prompt, add_special_tokens=False)
+    rgb = torch.zeros((8, 16, 3), dtype=torch.uint8)
+
+    result = _materialize_source_image_prompt_token_ids(
+        processor=processor,
+        canonical_token_ids=canonical,
+        prompt_text=prompt,
+        source_rgb=rgb,
+        image_max_pixels=512 * 512,
+    )
+
+    assert result.count(processor.tokenizer.image_token_id) == 4
 
 
 def test_verl_smoke_render_and_raw_rows_share_exact_tgvf_only_prompt() -> None:

@@ -433,10 +433,20 @@ def _materialize_source_image_prompt_token_ids(
     processor: object,
     canonical_token_ids: Sequence[int],
     prompt_text: str,
-    image_path: Path,
+    image_path: Path | None = None,
+    source_rgb: torch.Tensor | None = None,
     image_max_pixels: int,
 ) -> tuple[int, ...]:
-    """Expand one source-image placeholder with processor-owned merged tokens."""
+    """Expand one verified source image with processor-owned merged tokens.
+
+    Dataset callers bind an immutable path.  Benchmark callers have already
+    decoded and hash-verified the exact file bytes, so accepting that RGB
+    tensor avoids reopening a mutable path between verification and prompt
+    materialization.
+    """
+
+    if (image_path is None) == (source_rgb is None):
+        raise ValueError("exactly one of image_path or source_rgb is required")
 
     image_processor = getattr(processor, "image_processor", None)
     size = getattr(image_processor, "size", None)
@@ -457,8 +467,15 @@ def _materialize_source_image_prompt_token_ids(
         from PIL import Image
     except ImportError as error:  # pragma: no cover - production dependency guard
         raise RuntimeError("Pillow is required to materialize source images") from error
-    with Image.open(image_path) as opened:
-        image = opened.convert("RGB")
+    if source_rgb is not None:
+        if (
+            source_rgb.device.type != "cpu"
+            or source_rgb.dtype != torch.uint8
+            or source_rgb.ndim != 3
+            or source_rgb.shape[-1] != 3
+        ):
+            raise ValueError("source_rgb must be one CPU uint8 [H,W,3] tensor")
+        image = Image.fromarray(source_rgb.numpy(), mode="RGB")
         batch = processor(
             text=[prompt_text],
             images=[image],
@@ -471,6 +488,22 @@ def _materialize_source_image_prompt_token_ids(
                 }
             },
         )
+    else:
+        assert image_path is not None
+        with Image.open(image_path) as opened:
+            image = opened.convert("RGB")
+            batch = processor(
+                text=[prompt_text],
+                images=[image],
+                padding=False,
+                return_tensors="pt",
+                images_kwargs={
+                    "size": {
+                        "shortest_edge": shortest_edge,
+                        "longest_edge": image_max_pixels,
+                    }
+                },
+            )
     if not isinstance(batch, Mapping):
         raise TypeError("Qwen processor output must be a mapping")
     model_token_ids = _one_integer_row(batch.get("input_ids"), "input_ids")
