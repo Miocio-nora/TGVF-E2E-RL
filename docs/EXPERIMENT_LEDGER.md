@@ -9756,3 +9756,24 @@ than inferred from a script name or prior conversation.
   confirms the checkpoint level-2 sleep/bare-wake boundary as the cause of the
   observed same-process live-sync collapse and validates commit `2dbdf85` as
   the scoped runtime fix.
+
+### PRL-17-R1-QWEN3-INSTRUCT-FULL-FROZEN-RP67-SHAPED
+
+- Planned 2026-08-12 as the representation-only follow-up to the successful
+  PRL17-R0 frozen-RP66 shaped-reward pilot. The sole scientific treatment is
+  RP66 step 2000 to RP67 step 2000; RP67 remains frozen during RL.
+- RP67 artifact SHA-256 is `13332865...f0f68`, manifest SHA-256 is
+  `2ea09896...33b1`, semantic state SHA-256 is `f223d1f0...0256`, and frozen
+  runtime storage SHA-256 is `3f60f365...53a14`. RP66 and RP67 have identical
+  104-tensor, 72,055,808-parameter BF16 Adapter structures.
+- Model, T1 schedule, prompt, BS16 x n16, world8/micro2/GA1, constant `1e-6`
+  learning rate, eight-step horizon, answer judge, checkpoint lifecycle, and
+  executed reward `2*A_gated + T + P` are held fixed against R0. Focus and
+  Grounding remain disabled.
+- The RP66-derived 128-row utility sidecar is intentionally fixed. Recomputing
+  RP67-dependent labels would introduce a second reward variable and belongs
+  in a later experiment.
+- Required sequence: console-only 4-prompt x 2-trajectory functional canary;
+  then the tmux-owned eight-GPU formal run; then automatic paired step0/step8
+  CoreDev-2511 evaluation. Detailed protocol:
+  `docs/experiments/prl17_r1_rp67_shaped_reward_control.md`.
