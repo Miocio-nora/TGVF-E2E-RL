@@ -208,6 +208,19 @@ def test_formal_plan_binds_full_model_matched_rp66_path() -> None:
     assert plan.environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] == "0"
 
 
+def test_formal_diagnostic_can_stop_at_two_continuous_steps() -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(
+        _config(), mode="formal", target_step=2
+    )
+
+    assert plan.target_step == 2
+    assert plan.overrides["trainer.total_training_steps"] == 2
+    custom = plan.overrides["actor_rollout_ref.rollout.custom"]
+    assert custom["checkpoint_steps"] == [0, 1, 2]
+    assert custom["checkpoint_lifecycle"]["checkpoint_steps"] == [0, 1, 2]
+    assert custom["checkpoint_lifecycle"]["permanent_steps"] == [2]
+
+
 @pytest.mark.parametrize(
     ("adapter_update_mode", "adapter_trainable", "payload"),
     (

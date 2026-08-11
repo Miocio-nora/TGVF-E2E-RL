@@ -353,12 +353,17 @@ def _adapter_weight_sync_payload(config: PolicyE2ESmokeRunConfig) -> str:
 
 
 def _permanent_checkpoint_steps(
-    config: PolicyE2ESmokeRunConfig, *, mode: TrainableTGVFLaunchMode
+    config: PolicyE2ESmokeRunConfig,
+    *,
+    mode: TrainableTGVFLaunchMode,
+    target_step: int,
 ) -> list[int]:
     if mode != "formal":
         return []
     configured = config.training.permanent_checkpoint_steps
-    return list(configured) if configured else [TRAINABLE_TGVF_FORMAL_TARGET]
+    if configured:
+        return [step for step in configured if step <= target_step]
+    return [target_step]
 
 
 def _replace_custom_record(
@@ -385,7 +390,11 @@ def _replace_custom_record(
         }
     )
     every_completed_step = mode == "formal"
-    permanent_steps = _permanent_checkpoint_steps(config, mode=mode)
+    permanent_steps = _permanent_checkpoint_steps(
+        config,
+        mode=mode,
+        target_step=checkpoint_steps[-1],
+    )
     custom.update(
         {
             "schema_version": TRAINABLE_TGVF_LAUNCH_SCHEMA,
@@ -468,8 +477,9 @@ class TrainableTGVFVerlLaunchPlan:
             MappingProxyType(dict(self.external_components)),
         )
         expected = (
-            TRAINABLE_TGVF_FORMAL_TARGET
+            self.target_step
             if self.mode == "formal"
+            and 0 < self.target_step <= TRAINABLE_TGVF_FORMAL_TARGET
             else TRAINABLE_TGVF_SMOKE_TARGET
             if self.mode == "smoke"
             else TRAINABLE_TGVF_CANARY_TARGET
@@ -614,12 +624,14 @@ class TrainableTGVFVerlLaunchPlan:
         }:
             raise ValueError("trainable TGVF reference diagnostic must be disabled")
         expected_checkpoint_steps = (
-            list(range(TRAINABLE_TGVF_FORMAL_TARGET + 1))
+            list(range(self.target_step + 1))
             if self.mode == "formal"
             else [0, 1]
         )
         expected_permanent_steps = _permanent_checkpoint_steps(
-            self.config, mode=self.mode
+            self.config,
+            mode=self.mode,
+            target_step=self.target_step,
         )
         if custom.get("checkpoint_steps") != expected_checkpoint_steps:
             raise ValueError("trainable TGVF checkpoint schedule differs")
@@ -682,7 +694,7 @@ def build_trainable_tgvf_verl_launch_plan(
         if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", smoke_id) is None:
             raise ValueError("smoke_id must be a safe lowercase run label")
     resolved_target = (
-        TRAINABLE_TGVF_FORMAL_TARGET
+        target_step or TRAINABLE_TGVF_FORMAL_TARGET
         if mode == "formal"
         else TRAINABLE_TGVF_SMOKE_TARGET
         if mode == "smoke"
@@ -690,7 +702,11 @@ def build_trainable_tgvf_verl_launch_plan(
         if mode == "canary"
         else -1
     )
-    if target_step is not None and target_step != resolved_target:
+    if mode == "formal" and not (0 < resolved_target <= TRAINABLE_TGVF_FORMAL_TARGET):
+        raise ValueError(
+            f"formal target must be between 1 and {TRAINABLE_TGVF_FORMAL_TARGET}"
+        )
+    if mode != "formal" and target_step is not None and target_step != resolved_target:
         raise ValueError(f"{mode} target must be step {resolved_target}")
     base = _legacy_base_plan(config)
     values = dict(base.overrides)
@@ -746,7 +762,7 @@ def build_trainable_tgvf_verl_launch_plan(
         _assert_functional_canary_config(config)
         _apply_functional_canary_controls(values)
     checkpoint_steps = (
-        tuple(range(TRAINABLE_TGVF_FORMAL_TARGET + 1)) if mode == "formal" else (0, 1)
+        tuple(range(resolved_target + 1)) if mode == "formal" else (0, 1)
     )
     output_root = config.output.root
     environment = dict(base.environment)
