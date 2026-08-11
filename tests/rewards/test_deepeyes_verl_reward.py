@@ -26,6 +26,7 @@ from tgvf_rl.rewards.deepeyes_verl_reward import (
     DeepEyesJudgeServiceConfig,
     DeepEyesOfficialRewardManager,
     load_deepeyes_judge_service_config,
+    process_local_judge_concurrency,
 )
 
 
@@ -126,6 +127,57 @@ def test_async_transport_bounds_concurrency_retries_and_cache() -> None:
         assert cached.usage is None
 
     asyncio.run(exercise())
+
+
+def test_run_global_concurrency_sums_exactly_across_eight_workers() -> None:
+    permits = tuple(
+        process_local_judge_concurrency(
+            16,
+            worker_index=index,
+            worker_count=8,
+        )
+        for index in range(8)
+    )
+
+    assert permits == (2,) * 8
+    assert sum(permits) == 16
+    assert tuple(
+        process_local_judge_concurrency(
+            16,
+            worker_index=index,
+            worker_count=4,
+        )
+        for index in range(4)
+    ) == (4,) * 4
+
+    with pytest.raises(ValueError, match="at least one permit"):
+        process_local_judge_concurrency(4, worker_index=0, worker_count=8)
+
+
+def test_async_transport_honors_process_local_concurrency_override() -> None:
+    active = 0
+    maximum = 0
+
+    async def request_json(_request: object, _payload: object) -> object:
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return _response()
+
+    async def exercise() -> None:
+        judge = AsyncDeepEyesOpenRouterJudge(
+            _service(concurrency=16),
+            local_maximum_concurrency=2,
+            request_json=request_json,
+        )
+        await asyncio.gather(*[judge.judge(_request(str(index))) for index in range(8)])
+        assert judge.config.maximum_concurrency == 16
+        assert judge.local_maximum_concurrency == 2
+
+    asyncio.run(exercise())
+    assert maximum == 2
 
 
 def test_async_transport_isolates_completed_output_and_retries_model_mismatch() -> None:

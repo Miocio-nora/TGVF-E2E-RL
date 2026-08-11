@@ -31,6 +31,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _rp66_response_budget_controls,
     _trainable_rp66_launch_mode,
 )
+from tgvf_rl.framework.verl.policy_runtime import PolicyAgentLoopWorkerPlacement
 from tgvf_rl.framework.verl.native_deepeyes_runtime import (
     NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS,
 )
@@ -232,7 +233,7 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
 ) -> None:
     judge_path = Path("/fixture/deepeyes-judge.json")
     judge_sha256 = "9" * 64
-    loaded_service = object()
+    loaded_service = SimpleNamespace(maximum_concurrency=16)
     calls: list[tuple[Path, str]] = []
 
     def load_service(path: Path, *, expected_file_sha256: str) -> object:
@@ -244,9 +245,17 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
         "load_deepeyes_judge_service_config",
         load_service,
     )
+    judge_calls: list[tuple[object, int]] = []
+
+    def build_judge(
+        service: object, *, local_maximum_concurrency: int
+    ) -> tuple[str, object, int]:
+        judge_calls.append((service, local_maximum_concurrency))
+        return ("official-deepeyes", service, local_maximum_concurrency)
+
     monkeypatch.setattr(
         "tgvf_rl.framework.verl.policy_live_runtime.AsyncDeepEyesOpenRouterJudge",
-        lambda service: ("official-deepeyes", service),
+        build_judge,
     )
     config = SimpleNamespace(
         schema_version=POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
@@ -257,7 +266,10 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
     )
 
     components = _Qwen3PolicyTrajectoryComponents(
-        context=SimpleNamespace(config=config),
+        context=SimpleNamespace(
+            config=config,
+            placement=PolicyAgentLoopWorkerPlacement(3, 3, 3, 8),
+        ),
         layout_builder=object(),
         server_client=object(),
         contextual_forward_identity=None,
@@ -276,7 +288,9 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
     assert components.official_deepeyes_judge == (
         "official-deepeyes",
         loaded_service,
+        2,
     )
+    assert judge_calls == [(loaded_service, 2)]
     assert components.reward_pipeline is None
     assert components.stage3_reward_runtime is None
 
@@ -284,7 +298,7 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
 def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    loaded_service = object()
+    loaded_service = SimpleNamespace(maximum_concurrency=16)
     monkeypatch.setattr(
         "tgvf_rl.framework.verl.policy_live_runtime."
         "load_deepeyes_judge_service_config",
@@ -292,7 +306,11 @@ def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(
     )
     monkeypatch.setattr(
         "tgvf_rl.framework.verl.policy_live_runtime.AsyncDeepEyesOpenRouterJudge",
-        lambda service: ("official-deepeyes", service),
+        lambda service, *, local_maximum_concurrency: (
+            "official-deepeyes",
+            service,
+            local_maximum_concurrency,
+        ),
     )
     label = TGVFToolUtilityLabelBinding(
         sample_id="sample",
@@ -324,7 +342,10 @@ def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(
     )
 
     components = _Qwen3PolicyTrajectoryComponents(
-        context=SimpleNamespace(config=config),
+        context=SimpleNamespace(
+            config=config,
+            placement=PolicyAgentLoopWorkerPlacement(7, 7, 7, 8),
+        ),
         layout_builder=object(),
         server_client=object(),
         contextual_forward_identity=None,
@@ -342,6 +363,7 @@ def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(
     assert components.official_deepeyes_judge == (
         "official-deepeyes",
         loaded_service,
+        2,
     )
     assert components.async_stage3_spec is not None
     assert components.async_stage3_spec.visual_quality_enabled is False

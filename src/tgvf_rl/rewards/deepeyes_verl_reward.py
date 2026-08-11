@@ -130,6 +130,8 @@ def _batch_safe_reward_extra_info(result: Mapping[str, object]) -> dict[str, obj
 
 @dataclass(frozen=True, slots=True)
 class DeepEyesJudgeServiceConfig:
+    """Exact judge binding with a run-global HTTP concurrency budget."""
+
     file_sha256: str
     model: str
     base_url: str
@@ -173,6 +175,34 @@ class DeepEyesJudgeServiceConfig:
             raise ValueError("judge transient-failure window must be positive")
         if not 0.0 <= self.maximum_transient_failure_fraction <= 1.0:
             raise ValueError("judge transient-failure fraction differs")
+
+
+def process_local_judge_concurrency(
+    run_global_maximum: int,
+    *,
+    worker_index: int,
+    worker_count: int,
+) -> int:
+    """Deterministically shard one run-global budget across worker processes.
+
+    AgentLoop workers own process-local transports, so giving every process the
+    configured value would multiply the intended request pressure.  Remainder
+    permits go to the lowest worker indices; the sum over all workers remains
+    exactly ``run_global_maximum``.
+    """
+
+    if type(run_global_maximum) is not int or run_global_maximum <= 0:
+        raise ValueError("run-global judge concurrency must be positive")
+    if type(worker_count) is not int or worker_count <= 0:
+        raise ValueError("judge worker count must be positive")
+    if type(worker_index) is not int or not 0 <= worker_index < worker_count:
+        raise ValueError("judge worker index lies outside the worker count")
+    if run_global_maximum < worker_count:
+        raise ValueError(
+            "run-global judge concurrency must provide at least one permit per worker"
+        )
+    quotient, remainder = divmod(run_global_maximum, worker_count)
+    return quotient + int(worker_index < remainder)
 
 
 def load_deepeyes_judge_service_config(
@@ -271,15 +301,26 @@ class AsyncDeepEyesOpenRouterJudge:
         self,
         config: DeepEyesJudgeServiceConfig,
         *,
+        local_maximum_concurrency: int | None = None,
         request_json: Callable[..., Any] | None = None,
         sleeper: Callable[[float], Any] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        if local_maximum_concurrency is None:
+            local_maximum_concurrency = config.maximum_concurrency
+        if (
+            type(local_maximum_concurrency) is not int
+            or not 1 <= local_maximum_concurrency <= config.maximum_concurrency
+        ):
+            raise ValueError(
+                "process-local judge concurrency must lie within the run-global budget"
+            )
         self.config = config
+        self.local_maximum_concurrency = local_maximum_concurrency
         self._request_json_override = request_json
         self._sleeper = sleeper
         self._clock = clock
-        self._semaphore = asyncio.Semaphore(config.maximum_concurrency)
+        self._semaphore = asyncio.Semaphore(local_maximum_concurrency)
         self._cache: OrderedDict[str, bool] = OrderedDict()
         self._cache_lock = asyncio.Lock()
         self._failure_lock = asyncio.Lock()
@@ -468,7 +509,7 @@ class AsyncDeepEyesOpenRouterJudge:
                 session = self._session
                 if session is None or getattr(session, "closed", True):
                     connector = aiohttp.TCPConnector(
-                        limit=self.config.maximum_concurrency
+                        limit=self.local_maximum_concurrency
                     )
                     session = aiohttp.ClientSession(
                         timeout=timeout, connector=connector
@@ -1117,4 +1158,5 @@ __all__ = [
     "DeepEyesJudgeServiceConfig",
     "DeepEyesOfficialRewardManager",
     "load_deepeyes_judge_service_config",
+    "process_local_judge_concurrency",
 ]
