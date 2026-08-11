@@ -98,6 +98,14 @@ The evaluator must use the same CoreDev-2511 task/protocol and sampling
 contract for both states. It loads both members of the Qwen/RP66 pair and
 requires the RP66 update acknowledgement; a Qwen-only checkpoint is invalid.
 
+The active world4 mathematical-equivalence lineage has a separate R1-bound
+plan and automatic post-training watcher:
+`configs/evaluation/prl15_r1_rp66_step0_step8_coredev2511_plan.json` and
+`docs/experiments/prl15_r1_paired_evaluation_handoff.md`.  That path evaluates
+the 2,240 supported single-image rows, explicitly holds all 271 multi-image
+rows, and uses the PRL14-style pinned VLMEvalKit/Qwen2.5-72B scorer rather than
+the generic MCQ scorer.
+
 ## Git identity
 
 Formal launch requires a clean, pushed branch. The run TOML binds an execution

@@ -75,6 +75,7 @@ def main() -> int:
     )
     from tgvf_rl.evaluation.coredev_results import (  # noqa: PLC0415
         check_qwen25_72b_judge,
+        install_deterministic_mcq_answer_policy,
         install_fail_closed_judge_builders,
         summarize_coredev_results,
         write_json_atomic,
@@ -149,6 +150,11 @@ def main() -> int:
     install_coredev_batched_inference(inference_module)
 
     mode = sys.argv[sys.argv.index("--mode") + 1] if "--mode" in sys.argv else "all"
+    evaluated_model = (
+        _required_option("--model")
+        if "--help" not in sys.argv
+        else model_name
+    )
     judge_base_url = None
     if "--help" not in sys.argv and mode in {"all", "eval"}:
         if "--judge" not in sys.argv:
@@ -174,7 +180,11 @@ def main() -> int:
         write_json_atomic(work_dir / "judge-health-pre.json", preflight)
         image_mcq_module = importlib.import_module("vlmeval.dataset.image_mcq")
         image_vqa_module = importlib.import_module("vlmeval.dataset.image_vqa")
+        multiple_choice_module = importlib.import_module(
+            "vlmeval.dataset.utils.multiple_choice"
+        )
         install_fail_closed_judge_builders((image_mcq_module, image_vqa_module))
+        install_deterministic_mcq_answer_policy(multiple_choice_module)
 
     run_path = checkout / "run.py"
     sys.argv[0] = str(run_path)
@@ -189,6 +199,7 @@ def main() -> int:
             phase="eval",
             datasets=selected_datasets,
             expected_judge_base_url=judge_base_url,
+            expected_model=evaluated_model,
         )
     return 0
 

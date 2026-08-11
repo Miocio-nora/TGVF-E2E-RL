@@ -8,6 +8,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import Any
 
@@ -27,6 +28,25 @@ DATASETS = (
     "MathVerse_MINI",
 )
 _TERMINAL_MARKERS = ("<|im_end|>", "<|endoftext|>")
+_VLMEVALKIT_EVAL_ID = re.compile(r"(?:T\d{8}-\d{6}|T\d{8}_G[0-9a-fA-F]+)")
+
+
+def validate_vlmevalkit_eval_id(value: object) -> str:
+    """Return one ID accepted by the pinned VLMEvalKit reuse scanner.
+
+    VLMEvalKit discovers reusable inference results by enumerating sibling
+    directories whose names match one of its two exact run-ID grammars.  A
+    merely human-readable directory name is therefore not metadata: it makes
+    an otherwise complete prediction file undiscoverable in ``--mode eval``.
+    Keep this validation at the scoring-materializer boundary so an invalid
+    view cannot be written successfully and fail only after inference.
+    """
+
+    if not isinstance(value, str) or _VLMEVALKIT_EVAL_ID.fullmatch(value) is None:
+        raise ValueError(
+            "VLMEvalKit eval ID must match TYYYYMMDD-HHMMSS or TYYYYMMDD_G<hex> exactly"
+        )
+    return value
 
 
 def normalize_policy_final_answer(value: object) -> str | None:
@@ -155,11 +175,10 @@ def materialize_policy_coredev_scoring_views(
     tasks = Path(tasks_path).resolve()
     source = Path(source_root).resolve()
     output = Path(output_root).resolve()
-    if not evaluation_id or not run_id:
-        raise ValueError("evaluation_id and run_id must be non-empty")
-    trajectories, unsupported_count = _load_trajectories(
-        inference, tasks_path=tasks
-    )
+    if not evaluation_id:
+        raise ValueError("evaluation_id must be non-empty")
+    run_id = validate_vlmevalkit_eval_id(run_id)
+    trajectories, unsupported_count = _load_trajectories(inference, tasks_path=tasks)
     created_at = datetime.now().astimezone().isoformat()
     slices: list[dict[str, Any]] = []
     observed_total = 0
@@ -285,4 +304,5 @@ __all__ = [
     "POLICY_SCORING_VIEW_SCHEMA",
     "materialize_policy_coredev_scoring_views",
     "normalize_policy_final_answer",
+    "validate_vlmevalkit_eval_id",
 ]

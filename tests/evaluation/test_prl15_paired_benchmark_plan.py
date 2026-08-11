@@ -17,6 +17,15 @@ _RUN_PATH = (
     / "configs/policy/runs/"
     "prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml"
 )
+_R1_PLAN_PATH = (
+    _ROOT
+    / "configs/evaluation/prl15_r1_rp66_step0_step8_coredev2511_plan.json"
+)
+_R1_RUN_PATH = (
+    _ROOT
+    / "configs/policy/runs/"
+    "prl_15_r1_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_math_equiv_8step_ws4.toml"
+)
 
 
 def test_paired_benchmark_plan_binds_the_training_protocol_and_both_states() -> None:
@@ -41,6 +50,7 @@ def test_paired_benchmark_plan_binds_the_training_protocol_and_both_states() -> 
         "path": "tools/run_prl15_paired_evaluation.py",
         "snapshot_backend": "full_model_trainable_rp66",
         "supports_wait_before_training": True,
+        "waits_for_gpu_release": True,
         "supports_resume": True,
         "four_gpu_schedule": "step0_then_step8",
         "eight_gpu_schedule": "step0_and_step8_parallel",
@@ -54,3 +64,31 @@ def test_paired_benchmark_task_manifest_bytes_are_still_pinned() -> None:
 
     assert digest == plan["task_manifest_sha256"]
     assert sum(1 for _ in task_path.open("rb")) == plan["expected_task_count"]
+
+
+def test_r1_paired_plan_binds_current_ws4_lineage_and_official_scoring() -> None:
+    plan = json.loads(_R1_PLAN_PATH.read_text(encoding="utf-8"))
+    run = load_policy_e2e_smoke_run_config(_R1_RUN_PATH)
+
+    assert plan["schema_version"] == "tgvf.prl15-paired-policy-benchmark-plan.v2"
+    assert Path(plan["policy_config"]).name == _R1_RUN_PATH.name
+    assert hashlib.sha256(_R1_RUN_PATH.read_bytes()).hexdigest() == plan[
+        "policy_config_sha256"
+    ]
+    assert plan["protocol"]["prompt_sha256"] == run.protocol.prompt_sha256
+    assert plan["protocol"]["tool_schema_sha256"] == run.protocol.tool_schema_sha256
+    assert plan["expected_task_count"] == 2511
+    assert plan["expected_single_image_count"] == 2240
+    assert plan["unsupported_multi_image_count"] == 271
+    assert plan["executor"]["waits_for_gpu_release"] is True
+    assert plan["scoring"]["evaluated_model"] == "Qwen3-VL-8B-Instruct"
+    assert plan["scoring"]["gpt_fallback"] is False
+    assert plan["scoring"]["datasets"] == [
+        "VStarBench",
+        "HRBench4K",
+        "BLINK",
+        "OCRBench_v2",
+        "MMMU_Pro_10c",
+        "MathVista_MINI",
+        "MathVerse_MINI",
+    ]

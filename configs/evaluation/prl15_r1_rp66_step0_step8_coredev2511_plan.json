@@ -1,9 +1,9 @@
 {
   "schema_version": "tgvf.prl15-paired-policy-benchmark-plan.v2",
-  "evaluation_id": "PRL15-RP66-COREDEV2511-STEP0-STEP8-SAME-PROTOCOL-V1",
+  "evaluation_id": "PRL15-R1-RP66-COREDEV2511-STEP0-STEP8-SAME-PROTOCOL-V1",
   "status": "awaiting_formal_step8_paired_snapshot",
-  "policy_config": "configs/policy/runs/prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml",
-  "policy_config_sha256": "e3481f10c1ff603ff1e54d4075c627db4b979aac7bc40cd5ca17bdfa579a8b08",
+  "policy_config": "configs/policy/runs/prl_15_r1_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_math_equiv_8step_ws4.toml",
+  "policy_config_sha256": "843f368f00ed8e4d8ed0f948835b0457ea8c4640c6b1b2f884ef062a0b481616",
   "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "expected_task_count": 2511,
@@ -58,7 +58,7 @@
     "mathverse_source_json": "/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json",
     "mathverse_source_sha256": "f4ce9b18d111b23d5950dcbc8f377c6a05955a458db6a3103aec706fa63b0e9b",
     "evaluated_model": "Qwen3-VL-8B-Instruct",
-    "run_id_prefix": "T20260810-PRL15-R0-RP66",
+    "run_id_prefix": "T20260810-PRL15-R1-RP66",
     "datasets": [
       "VStarBench",
       "HRBench4K",

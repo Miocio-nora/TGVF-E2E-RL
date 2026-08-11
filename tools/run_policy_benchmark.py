@@ -33,6 +33,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     materialize_vllm_lora_adapter,
     prepare_policy_benchmark_tasks,
     trajectory_audit_payload,
+    validate_policy_benchmark_runtime_interfaces,
     write_policy_evaluation_identity,
 )
 from tgvf_rl.evaluation.policy_official_visible import (  # noqa: E402
@@ -293,6 +294,10 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
         "gpu_or_api_used": False,
         "vllm_engine_constructed": False,
     }
+    if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        result["runtime_interface_preflight"] = (
+            validate_policy_benchmark_runtime_interfaces(snapshot.run)
+        )
     if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
         from transformers import AutoProcessor
 

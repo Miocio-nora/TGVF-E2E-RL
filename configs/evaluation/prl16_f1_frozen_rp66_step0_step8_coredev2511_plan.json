@@ -1,9 +1,9 @@
 {
   "schema_version": "tgvf.prl15-paired-policy-benchmark-plan.v2",
-  "evaluation_id": "PRL15-RP66-COREDEV2511-STEP0-STEP8-SAME-PROTOCOL-V1",
+  "evaluation_id": "PRL16-F1-FROZEN-RP66-COREDEV2511-STEP0-STEP8-SAME-PROTOCOL-V1",
   "status": "awaiting_formal_step8_paired_snapshot",
-  "policy_config": "configs/policy/runs/prl_15_r0_qwen3_instruct_full_rp66_bs16_n16_t1_crop16_matched_8step_ws8.toml",
-  "policy_config_sha256": "e3481f10c1ff603ff1e54d4075c627db4b979aac7bc40cd5ca17bdfa579a8b08",
+  "policy_config": "configs/policy/runs/prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_crop16_exact_matched_8step_ws8.toml",
+  "policy_config_sha256": "6d77d197d819b45a9d20b9c2fbe1458dbbb7de61b0b40afd0801920f700de2a1",
   "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "expected_task_count": 2511,
@@ -46,7 +46,10 @@
     "adapter_manifest_and_tensor_sha256_must_be_frozen": true,
     "full_qwen_checkpoint_must_be_materialized_without_adapter_keys": true,
     "do_not_use_crop_native_pixels_backend": true,
-    "do_not_treat_rp66_as_policy_lora": true
+    "do_not_treat_rp66_as_policy_lora": true,
+    "adapter_update_mode": "frozen_adapter",
+    "rp66_state_must_remain_constant": true,
+    "expected_runtime_rp66_weights_sha256": "05778a43844f397e0ad898ffbb060cf37a71ce174768437fbe8e782adf820318"
   },
   "scoring": {
     "view_name": "coredev-official-v1",
@@ -58,7 +61,7 @@
     "mathverse_source_json": "/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json",
     "mathverse_source_sha256": "f4ce9b18d111b23d5950dcbc8f377c6a05955a458db6a3103aec706fa63b0e9b",
     "evaluated_model": "Qwen3-VL-8B-Instruct",
-    "run_id_prefix": "T20260810-PRL15-R0-RP66",
+    "run_id_prefix": "T20260811-PRL16-F1-FROZEN-RP66",
     "datasets": [
       "VStarBench",
       "HRBench4K",
