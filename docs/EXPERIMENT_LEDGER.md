@@ -9728,3 +9728,16 @@ than inferred from a script name or prior conversation.
   a code/lifecycle milestone; nonzero value and gradient equivalence is owned
   by the CPU and two-rank DTensor tests, and no learning claim is made from
   this canary.
+- PRL16 F2 live-sync lifecycle correction (2026-08-11): F1 isolated its first
+  same-process boundary as the failure: step 1 was healthy from a fresh
+  process, while step 2 produced 90.23% format errors, zero observations and
+  12,133.6 mean response tokens immediately after the first save/sync cycle.
+  The project checkpoint bridge had synchronized and awakened the new Qwen +
+  RP66 state, then performed another full-model vLLM level-2 sleep for the
+  paired checkpoint and used a bare wake. Level-2 sleep discards the newly
+  published full weights, so the custom TGVF runtime did not have a valid
+  current-policy restore boundary. Commit `2dbdf85` makes only the trainable
+  TGVF manager publish the same current-step Qwen + RP66 state again after the
+  checkpoint sleep; the Crop lifecycle remains unchanged. F2 is a clean,
+  separate output identity and will run a bounded two-continuous-step formal
+  diagnostic before any longer scientific continuation.
