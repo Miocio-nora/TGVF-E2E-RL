@@ -9741,3 +9741,18 @@ than inferred from a script name or prior conversation.
   checkpoint sleep; the Crop lifecycle remains unchanged. F2 is a clean,
   separate output identity and will run a bounded two-continuous-step formal
   diagnostic before any longer scientific continuation.
+- F2 result (2026-08-11): the exact world8, BS16 x n16 matched diagnostic
+  completed two steps in one process and exited normally. Step 1/2 respectively
+  produced answer reward `.48046875/.47265625`, format-error rate
+  `.03125/.01953125`, `193/192` successful TGVF observations, and response
+  length mean `575.15/736.59`. Step 2 therefore no longer reproduces F1's
+  answer `0`, format error `.90234375`, zero observations, or response mean
+  `12133.62`. The step-1 and step-2 state directories each contain two
+  request-distinct RP66 manifests, proving that the post-checkpoint corrective
+  publication ran at both boundaries. The paired step-2 checkpoint, all eight
+  model/optimizer shards, project state, pair marker and tracker `2` are
+  complete. Peak actor allocation at step 2 was `61.23 GiB`, not F1's
+  `167.39 GiB`; all GPU processes shut down cleanly after completion. This
+  confirms the checkpoint level-2 sleep/bare-wake boundary as the cause of the
+  observed same-process live-sync collapse and validates commit `2dbdf85` as
+  the scoped runtime fix.
