@@ -11,7 +11,7 @@ present.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -491,6 +491,176 @@ def materialize_tgvf_tool_utility_schedule(
     )
 
 
+def materialize_indexed_tgvf_tool_utility_schedule(
+    dataset_root: str | Path,
+    output_root: str | Path,
+    ordered_sample_ids: Sequence[str],
+    *,
+    source_selection: str,
+    source_schedule_identity_sha256: str,
+    global_prompt_batch_size: int = 16,
+    optimizer_steps: int = 8,
+    canary_sample_count: int = 16,
+) -> TGVFToolUtilityScheduleResult:
+    """Export an externally verified training prefix in its declared order.
+
+    The matched Crop/RP66 runs consume the immutable DeepEyes stratified index,
+    rather than the mixed-v2 dataset's legacy sequential order.  The caller is
+    responsible for loading and validating that index; this materializer then
+    proves that every requested sample still exists in the canonical mixed-v2
+    artifact, preserves the supplied order, and binds the source schedule
+    identity into the output manifest.
+    """
+
+    batch_size = _positive_integer(global_prompt_batch_size, "global_prompt_batch_size")
+    steps = _positive_integer(optimizer_steps, "optimizer_steps")
+    sample_count = batch_size * steps
+    if (
+        type(canary_sample_count) is not int
+        or canary_sample_count <= 0
+        or canary_sample_count > sample_count
+        or canary_sample_count % batch_size
+    ):
+        raise TGVFToolUtilityError(
+            "canary_sample_count must be a positive whole number of prompt batches"
+        )
+    if not isinstance(source_selection, str) or not source_selection.strip():
+        raise TGVFToolUtilityError("source_selection must be non-empty text")
+    source_identity = _require_sha256(
+        source_schedule_identity_sha256, "source_schedule_identity_sha256"
+    )
+    selected_ids = tuple(ordered_sample_ids)
+    if (
+        len(selected_ids) != sample_count
+        or any(not isinstance(sample_id, str) or not sample_id for sample_id in selected_ids)
+        or len(set(selected_ids)) != sample_count
+    ):
+        raise TGVFToolUtilityError(
+            "ordered_sample_ids must contain exactly one unique ID per training row"
+        )
+
+    dataset = Path(dataset_root).resolve(strict=True)
+    manifest_path = dataset / POLICY_T1_MIXED_MANIFEST_FILE
+    samples_path = dataset / POLICY_T1_MIXED_SAMPLES_FILE
+    manifest = _load_object(manifest_path, field="mixed-v2 manifest")
+    shuffle = manifest.get("shuffle")
+    samples_descriptor = manifest.get("samples")
+    if (
+        manifest.get("dataset_kind") != POLICY_T1_MIXED_DATASET_KIND
+        or not isinstance(shuffle, Mapping)
+        or shuffle.get("algorithm") != POLICY_T1_MIXED_SHUFFLE_ALGORITHM
+        or type(shuffle.get("seed")) is not int
+        or not isinstance(samples_descriptor, Mapping)
+        or samples_descriptor.get("path") != POLICY_T1_MIXED_SAMPLES_FILE
+    ):
+        raise TGVFToolUtilityError("mixed-v2 dataset metadata differs")
+    shuffle_seed = int(shuffle["seed"])
+    dataset_sample_count = _positive_integer(
+        samples_descriptor.get("rows"), "samples.rows"
+    )
+    expected_samples_sha256 = _require_sha256(
+        samples_descriptor.get("sha256"), "samples.sha256"
+    )
+    content_sha256 = _require_sha256(manifest.get("content_sha256"), "content_sha256")
+
+    selected = set(selected_ids)
+    rows_by_id: dict[str, Mapping[str, Any]] = {}
+    digest = hashlib.sha256()
+    seen: set[str] = set()
+    previous_key: tuple[str, str] | None = None
+    observed_rows = 0
+    for row, payload in _jsonl(samples_path, field="mixed-v2 samples"):
+        digest.update(payload)
+        sample_id = row.get("sample_id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise TGVFToolUtilityError("mixed-v2 sample_id differs")
+        key = _shuffle_key(sample_id, shuffle_seed)
+        if sample_id in seen or (previous_key is not None and key <= previous_key):
+            raise TGVFToolUtilityError(
+                "mixed-v2 rows differ from sequential hash order"
+            )
+        seen.add(sample_id)
+        previous_key = key
+        if sample_id in selected:
+            rows_by_id[sample_id] = row
+        observed_rows += 1
+    if observed_rows != dataset_sample_count:
+        raise TGVFToolUtilityError("mixed-v2 sample row count differs")
+    observed_samples_sha256 = digest.hexdigest()
+    if observed_samples_sha256 != expected_samples_sha256:
+        raise TGVFToolUtilityError("mixed-v2 samples SHA-256 differs")
+    missing = selected.difference(rows_by_id)
+    if missing:
+        raise TGVFToolUtilityError(
+            f"indexed schedule samples are absent from mixed-v2: {sorted(missing)[:3]}"
+        )
+
+    schedule_rows = [
+        _schedule_projection(
+            rows_by_id[sample_id],
+            training_index=training_index,
+            global_prompt_batch_size=batch_size,
+            canary_sample_count=canary_sample_count,
+        )
+        for training_index, sample_id in enumerate(selected_ids)
+    ]
+    output = Path(output_root)
+    output.mkdir(parents=True, exist_ok=False)
+    schedule_path = output / SCHEDULE_FILE
+    with schedule_path.open("wb") as handle:
+        for row in schedule_rows:
+            handle.write(_canonical_json_line(row))
+    schedule_sha256 = _sha256_bytes(schedule_path.read_bytes())
+    manifest_file_sha256 = _sha256_bytes(manifest_path.read_bytes())
+    iteration_identity = _iteration_identity(
+        manifest_file_sha256=manifest_file_sha256,
+        content_sha256=content_sha256,
+        samples_sha256=observed_samples_sha256,
+        sample_count=dataset_sample_count,
+        shuffle_seed=shuffle_seed,
+    )
+    schedule_manifest_path = output / SCHEDULE_MANIFEST_FILE
+    manifest_identity: dict[str, object] = {
+        "schema_version": TGVF_TOOL_UTILITY_SCHEDULE_SCHEMA,
+        "dataset": {
+            "kind": POLICY_T1_MIXED_DATASET_KIND,
+            "manifest_file_sha256": manifest_file_sha256,
+            "content_sha256": content_sha256,
+            "samples_sha256": observed_samples_sha256,
+            "sample_count": dataset_sample_count,
+            "iteration_identity_sha256": iteration_identity,
+            "shuffle_algorithm": POLICY_T1_MIXED_SHUFFLE_ALGORITHM,
+            "shuffle_seed": shuffle_seed,
+        },
+        "schedule": {
+            "selection": source_selection,
+            "source_schedule_identity_sha256": source_identity,
+            "global_prompt_batch_size": batch_size,
+            "optimizer_steps": steps,
+            "sample_count": sample_count,
+            "canary_sample_count": canary_sample_count,
+            "canary_optimizer_steps": canary_sample_count // batch_size,
+        },
+        "files": {
+            "schedule": {
+                "path": SCHEDULE_FILE,
+                "rows": sample_count,
+                "sha256": schedule_sha256,
+            }
+        },
+    }
+    manifest_sha256 = _write_manifest(schedule_manifest_path, manifest_identity)
+    return TGVFToolUtilityScheduleResult(
+        output_root=output,
+        schedule_path=schedule_path,
+        manifest_path=schedule_manifest_path,
+        sample_count=sample_count,
+        canary_sample_count=canary_sample_count,
+        schedule_sha256=schedule_sha256,
+        manifest_sha256=manifest_sha256,
+    )
+
+
 def _validated_schedule(
     schedule_root: Path, *, sample_count: int | None
 ) -> tuple[list[dict[str, Any]], dict[str, Any], str]:
@@ -699,7 +869,7 @@ def materialize_tgvf_tool_utility_sidecar(
             "manifest_sha256": schedule_manifest_sha256,
             "dataset": schedule_manifest["dataset"],
             "sample_count": len(sidecar_rows),
-            "selection": "sequential-prefix-v1",
+            "selection": schedule_manifest["schedule"]["selection"],
         },
         "labeling": {
             "p_full_attempts": 8,
@@ -871,6 +1041,7 @@ __all__ = [
     "TGVFToolUtilityLabelBinding",
     "TGVFToolUtilityRuntimeBinding",
     "load_tgvf_tool_utility_runtime_binding",
+    "materialize_indexed_tgvf_tool_utility_schedule",
     "materialize_tgvf_tool_utility_schedule",
     "materialize_tgvf_tool_utility_sidecar",
 ]

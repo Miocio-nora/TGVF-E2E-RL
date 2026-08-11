@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+import hashlib
 import io
 import json
 import os
@@ -563,20 +564,34 @@ def _run_identity(config: PolicyE2ESmokeRunConfig) -> PilotRunIdentityHashes:
         tool_utility = config.reward.tool_utility
         visual_identity = config.reward.visual_quality_judge_identity
         visual_config_sha256 = config.reward.visual_quality_judge_config_sha256
-        if (
-            tool_utility is None
-            or visual_identity is None
-            or visual_config_sha256 is None
-        ):
-            raise ValueError("Stage3 run identity dependencies are missing")
+        if tool_utility is None:
+            raise ValueError("Stage3 tool-utility identity is missing")
         hashes.update(
             {
                 "reward_tool_utility_sidecar": tool_utility.sidecar_sha256,
                 "reward_tool_utility_manifest": tool_utility.manifest_sha256,
-                "reward_visual_judge_config": visual_config_sha256,
-                "reward_visual_judge_identity": visual_identity.sha256,
             }
         )
+        if config.reward.focus_reward_enabled is not None:
+            hashes.update(
+                {
+                    "reward_focus_enabled": hashlib.sha256(
+                        str(config.reward.focus_reward_enabled).encode("ascii")
+                    ).hexdigest(),
+                    "reward_grounding_enabled": hashlib.sha256(
+                        str(config.reward.grounding_reward_enabled).encode("ascii")
+                    ).hexdigest(),
+                }
+            )
+        if visual_identity is not None and visual_config_sha256 is not None:
+            hashes.update(
+                {
+                    "reward_visual_judge_config": visual_config_sha256,
+                    "reward_visual_judge_identity": visual_identity.sha256,
+                }
+            )
+        elif visual_identity is not None or visual_config_sha256 is not None:
+            raise ValueError("Stage3 visual judge identity is incomplete")
     return PilotRunIdentityHashes.from_hashes(
         config.run_id,
         hashes,

@@ -10,6 +10,7 @@ from tgvf_rl.data.tgvf_tool_utility import (
     TGVF_TOOL_UTILITY_ATTEMPT_SCHEMA,
     TGVFToolUtilityError,
     load_tgvf_tool_utility_runtime_binding,
+    materialize_indexed_tgvf_tool_utility_schedule,
     materialize_tgvf_tool_utility_schedule,
     materialize_tgvf_tool_utility_sidecar,
 )
@@ -158,6 +159,28 @@ def test_schedule_is_exact_sequential_training_prefix(tmp_path: Path) -> None:
     assert manifest["files"]["schedule"]["sha256"] == _sha256(
         result.schedule_path.read_bytes()
     )
+
+
+def test_indexed_schedule_preserves_external_training_order(tmp_path: Path) -> None:
+    dataset, ordered_ids = _dataset(tmp_path, [1, 2, 3, 4])
+    external_order = [ordered_ids[2], ordered_ids[0], ordered_ids[3], ordered_ids[1]]
+    result = materialize_indexed_tgvf_tool_utility_schedule(
+        dataset,
+        tmp_path / "indexed-schedule",
+        external_order,
+        source_selection="deepeyes-stratified-prefix-v1",
+        source_schedule_identity_sha256="d" * 64,
+        global_prompt_batch_size=2,
+        optimizer_steps=2,
+        canary_sample_count=2,
+    )
+
+    rows = [json.loads(line) for line in result.schedule_path.read_text().splitlines()]
+    assert [row["sample_id"] for row in rows] == external_order
+    assert [row["training_index"] for row in rows] == [0, 1, 2, 3]
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["schedule"]["selection"] == "deepeyes-stratified-prefix-v1"
+    assert manifest["schedule"]["source_schedule_identity_sha256"] == "d" * 64
 
 
 def test_sidecar_labels_real_complete_counterfactual_attempts(tmp_path: Path) -> None:

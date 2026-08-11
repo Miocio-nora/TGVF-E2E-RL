@@ -63,21 +63,29 @@ class Stage3ShapedRewardSpec:
 
     pipeline_identity: ArtifactIdentity
     answer_verifier_identity: ArtifactIdentity
-    visual_judge_identity: ArtifactIdentity
+    visual_judge_identity: ArtifactIdentity | None
     tool_utility_sidecar_sha256: str
     tool_utility_manifest_sha256: str
+    visual_quality_enabled: bool = True
     profile: str = STAGE3_SHAPED_REWARD_VERSION
 
     def __post_init__(self) -> None:
         if self.profile != STAGE3_SHAPED_REWARD_VERSION:
             raise ValueError("unexpected Stage3-shaped reward profile")
-        for field_name in (
-            "pipeline_identity",
-            "answer_verifier_identity",
-            "visual_judge_identity",
-        ):
+        for field_name in ("pipeline_identity", "answer_verifier_identity"):
             if not isinstance(getattr(self, field_name), ArtifactIdentity):
                 raise TypeError(f"{field_name} must be ArtifactIdentity")
+        if type(self.visual_quality_enabled) is not bool:
+            raise TypeError("visual_quality_enabled must be bool")
+        if self.visual_quality_enabled:
+            if not isinstance(self.visual_judge_identity, ArtifactIdentity):
+                raise TypeError(
+                    "enabled visual quality requires an ArtifactIdentity"
+                )
+        elif self.visual_judge_identity is not None:
+            raise ValueError(
+                "disabled visual quality cannot bind a visual judge identity"
+            )
         for field_name in (
             "tool_utility_sidecar_sha256",
             "tool_utility_manifest_sha256",
@@ -295,7 +303,7 @@ class Stage3VerlTrajectoryRewardScorer:
         answer_verifier: AnswerVerifier,
         context_provider: PilotRewardContextProvider,
         tool_utility: TGVFToolUtilityRuntimeBinding,
-        visual_quality_judge: Stage3VisualQualityJudge,
+        visual_quality_judge: Stage3VisualQualityJudge | None,
         kernel: Stage3ShapedRewardKernel | None = None,
         audit_sink: Callable[[TrajectoryRecord, Stage3VerlTrajectoryReward], None]
         | None = None,
@@ -308,8 +316,13 @@ class Stage3VerlTrajectoryRewardScorer:
             raise TypeError("context_provider must implement build()")
         if not isinstance(tool_utility, TGVFToolUtilityRuntimeBinding):
             raise TypeError("tool_utility must be a verified runtime binding")
-        if not callable(getattr(visual_quality_judge, "judge", None)):
-            raise TypeError("visual_quality_judge must implement judge()")
+        if spec.visual_quality_enabled:
+            if not callable(getattr(visual_quality_judge, "judge", None)):
+                raise TypeError("visual_quality_judge must implement judge()")
+        elif visual_quality_judge is not None:
+            raise ValueError(
+                "disabled visual quality cannot bind a visual judge provider"
+            )
         if tool_utility.sidecar_sha256 != spec.tool_utility_sidecar_sha256:
             raise IdentityMismatchError("Stage3 tool sidecar identity differs")
         if tool_utility.manifest_sha256 != spec.tool_utility_manifest_sha256:
@@ -380,7 +393,11 @@ class Stage3VerlTrajectoryRewardScorer:
         grounding_score: QualityJudgeScore | None = None
         quality_judge_failure: str | None = None
         visual_judge_usage: JudgeUsage | None = None
-        if context.successful_tgvf_observation_count >= 1:
+        if (
+            self.spec.visual_quality_enabled
+            and context.successful_tgvf_observation_count >= 1
+        ):
+            assert self.visual_quality_judge is not None
             try:
                 judgement = self.visual_quality_judge.judge(
                     request=request,
@@ -428,6 +445,7 @@ class Stage3VerlTrajectoryRewardScorer:
                 focus_score=focus_score,
                 grounding_score=grounding_score,
                 quality_judge_failure=quality_judge_failure,
+                quality_rewards_enabled=self.spec.visual_quality_enabled,
                 label_confidence=label.confidence,
                 protocol_errors=protocol_errors,
             )

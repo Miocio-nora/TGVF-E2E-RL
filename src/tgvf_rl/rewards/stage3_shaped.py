@@ -47,9 +47,11 @@ class Stage3ShapedRewardFacts:
     term. ``successful_tgvf_observation_count`` records calls that actually
     triggered the tool and produced a TGVF observation; matching old Stage3's
     ``native_result.triggered``, it controls both the tool-choice reward and the
-    answer gate. A successful observation must have both quality-judge scores;
-    without an observation, those scores must be absent because there is no D to
-    judge.
+    answer gate. When visual-quality rewards are enabled, a successful
+    observation must have both quality-judge scores; without an observation,
+    those scores must be absent because there is no D to judge. A run may
+    explicitly disable both quality components, in which case judge facts are
+    forbidden and both components remain zero.
     """
 
     answer_correct: bool
@@ -59,12 +61,15 @@ class Stage3ShapedRewardFacts:
     focus_score: QualityJudgeScore | None = None
     grounding_score: QualityJudgeScore | None = None
     quality_judge_failure: str | None = None
+    quality_rewards_enabled: bool = True
     label_confidence: float = 0.5
     protocol_errors: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.answer_correct) is not bool:
             raise TypeError("answer_correct must be bool")
+        if type(self.quality_rewards_enabled) is not bool:
+            raise TypeError("quality_rewards_enabled must be bool")
         if type(self.tool_label) is not ToolNecessityLabel:
             raise TypeError("tool_label must be ToolNecessityLabel")
         for field_name, value in (
@@ -110,7 +115,12 @@ class Stage3ShapedRewardFacts:
                 "quality_judge_failure must be non-empty stripped text when present"
             )
         judge_failed = self.quality_judge_failure is not None
-        if has_observation and has_both_scores == judge_failed:
+        if not self.quality_rewards_enabled:
+            if has_any_score or judge_failed:
+                raise ValueError(
+                    "disabled quality rewards cannot carry judge scores or failures"
+                )
+        elif has_observation and has_both_scores == judge_failed:
             raise ValueError(
                 "successful TGVF observations require focus and grounding scores "
                 "or one explicit sample-local judge failure"
@@ -258,7 +268,13 @@ class Stage3ShapedRewardKernel:
         extra_call_penalty = -0.05 * extra_call_count
         tool_score = decision_score + extra_call_penalty
 
-        if tool_succeeded and facts.quality_judge_failure is None:
+        if not facts.quality_rewards_enabled:
+            focus_score = 0.0
+            grounding_score = 0.0
+            focus_evidence = "disabled_by_run_config"
+            grounding_evidence = "disabled_by_run_config"
+            quality_judge_covered = False
+        elif tool_succeeded and facts.quality_judge_failure is None:
             assert facts.focus_score is not None
             assert facts.grounding_score is not None
             focus_score = self._FOCUS_SCORE[facts.focus_score]
@@ -333,7 +349,9 @@ class Stage3ShapedRewardKernel:
             total=float(math.fsum(component.score for component in components)),
             components=components,
             answer_gated=answer_gated,
-            quality_judge_applicable=tool_succeeded,
+            quality_judge_applicable=(
+                tool_succeeded and facts.quality_rewards_enabled
+            ),
             quality_judge_covered=quality_judge_covered,
             quality_judge_failure=facts.quality_judge_failure,
         )

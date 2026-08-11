@@ -38,8 +38,9 @@ from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_MODEL_PATH,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
     POLICY_PILOT_V1_VLLM_VERSION,
-    PolicyVisualToolExperimentConfig,
     PolicyTGVFStage3ExperimentConfig,
+    PolicyTrainableRP66ExperimentConfig,
+    PolicyVisualToolExperimentConfig,
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
@@ -57,6 +58,7 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     RP66AdapterUpdateMode,
     formal_deepeyes47k_iteration_identity_sha256,
@@ -77,6 +79,9 @@ from tgvf_rl.framework.verl.launcher import (
     UPSTREAM_VERL_V0_RUNNER_FQN,
     build_policy_e2e_smoke_verl_plan,
     compose_upstream_verl_config,
+)
+from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
+    build_trainable_tgvf_verl_launch_plan,
 )
 from tgvf_rl.framework.verl.smoke_dataset import (
     TGVFSelectedSampleDataset,
@@ -107,6 +112,11 @@ PRL16_FROZEN_EXACT_CONFIG = (
     REPOSITORY_ROOT / "configs/policy/runs/"
     "prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_"
     "crop16_exact_matched_8step_ws8.toml"
+)
+PRL16_F2_CONFIG = (
+    REPOSITORY_ROOT / "configs/policy/runs/"
+    "prl_16_f2_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_"
+    "crop16_lifecycle_fix_8step_ws8.toml"
 )
 
 
@@ -476,6 +486,85 @@ def test_rp66_exact_control_v3_binds_residency_and_permanent_steps(
     )
     assert config.distributed.actor_optimizer_offload is False
     assert config.training.permanent_checkpoint_steps == (4, 5, 6, 8)
+
+
+def test_rp66_shaped_control_changes_only_reward_and_disables_visual_judge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = PRL16_F2_CONFIG.read_text(encoding="utf-8").replace(
+        POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        1,
+    )
+    parsed = tomllib.loads(text)
+    dataset_iteration = parsed["dataset"]["iteration_identity_sha256"]
+    sidecar_path = tmp_path / "tool-utility.jsonl"
+    sidecar_path.write_text("fixture\n", encoding="utf-8")
+    sidecar_sha = hashlib.sha256(sidecar_path.read_bytes()).hexdigest()
+    manifest_path = tmp_path / "tool-utility-manifest.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    label = TGVFToolUtilityLabelBinding(
+        sample_id="fixture",
+        training_index=0,
+        utility_label="optional",
+        confidence=0.5,
+        row_sha256="4" * 64,
+    )
+    utility = TGVFToolUtilityRuntimeBinding(
+        sidecar_path=sidecar_path,
+        sidecar_sha256=sidecar_sha,
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha,
+        dataset_iteration_identity_sha256=dataset_iteration,
+        labels=MappingProxyType({label.sample_id: label}),
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.load_tgvf_tool_utility_runtime_binding",
+        lambda *_args, **_kwargs: utility,
+    )
+    old_reward = parsed["reward"]
+    reward_text = f'''[reward]
+profile = "stage3-shaped-v1"
+task_kind = "{old_reward["task_kind"]}"
+answer_verifier = "{old_reward["answer_verifier"]}"
+answer_verifier_sha256 = "{old_reward["answer_verifier_sha256"]}"
+judge_mode = "{old_reward["judge_mode"]}"
+judge_reason = "RP66 matched Stage3-shaped reward control"
+judge_config_path = {_q(old_reward["judge_config_path"])}
+judge_config_sha256 = "{old_reward["judge_config_sha256"]}"
+tool_utility_sidecar_path = {_q(sidecar_path)}
+tool_utility_sidecar_sha256 = "{sidecar_sha}"
+tool_utility_manifest_path = {_q(manifest_path)}
+tool_utility_manifest_sha256 = "{manifest_sha}"
+focus_reward_enabled = false
+grounding_reward_enabled = false
+visual_quality_judge_mode = "disabled"
+
+'''
+    reward_start = text.index("[reward]")
+    optimizer_start = text.index("[optimizer]")
+    text = text[:reward_start] + reward_text + text[optimizer_start:]
+    config = load_policy_e2e_smoke_run_config(
+        _write_prl16_mode_config(tmp_path, text)
+    )
+    plan = build_trainable_tgvf_verl_launch_plan(config, mode="formal", target_step=8)
+    reward_override = plan.overrides["actor_rollout_ref.rollout.custom"]["reward"]
+
+    assert config.schema_version == POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA
+    assert isinstance(config.policy, PolicyTrainableRP66ExperimentConfig)
+    assert config.representation.adapter_update_mode is (
+        RP66AdapterUpdateMode.FROZEN_ADAPTER
+    )
+    assert config.reward.tool_utility is utility
+    assert config.reward.focus_reward_enabled is False
+    assert config.reward.grounding_reward_enabled is False
+    assert config.reward.visual_quality_judge_identity is None
+    assert config.distributed.actor_optimizer_offload is False
+    assert config.training.permanent_checkpoint_steps == (4, 5, 6, 8)
+    assert reward_override["focus_reward_enabled"] is False
+    assert reward_override["grounding_reward_enabled"] is False
+    assert "visual_quality_judge_config_path" not in reward_override
 
 
 def test_rp66_legacy_controls_preserve_effective_optimizer_offload(

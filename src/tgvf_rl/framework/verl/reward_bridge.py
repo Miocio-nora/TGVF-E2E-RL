@@ -156,7 +156,7 @@ class AsyncPilotTrajectoryRewardScorerPort(Protocol):
         *,
         request: object,
         trajectory: TrajectoryRecord,
-    ) -> PilotVerlTrajectoryReward: ...
+    ) -> PilotVerlTrajectoryReward | Stage3VerlTrajectoryReward: ...
 
 
 class VerlAsyncRewardedAgentLoopOutputBuilder:
@@ -169,7 +169,11 @@ class VerlAsyncRewardedAgentLoopOutputBuilder:
         scorer: AsyncPilotTrajectoryRewardScorerPort,
         finalizer: RewardedTrajectoryFinalizerPort,
         metrics_factory: Callable[
-            [TrajectoryRecord, PilotVerlTrajectoryReward], object
+            [
+                TrajectoryRecord,
+                PilotVerlTrajectoryReward | Stage3VerlTrajectoryReward,
+            ],
+            object,
         ],
         agent_loop_output_cls: type[Any] | None = None,
     ) -> None:
@@ -198,8 +202,10 @@ class VerlAsyncRewardedAgentLoopOutputBuilder:
             request=self.request,
             trajectory=trajectory,
         )
-        if not isinstance(scored, PilotVerlTrajectoryReward):
-            raise TypeError("async scorer returned an invalid Pilot reward")
+        if not isinstance(
+            scored, (PilotVerlTrajectoryReward, Stage3VerlTrajectoryReward)
+        ):
+            raise TypeError("async scorer returned an invalid trajectory reward")
         record = self.finalizer.finalize(
             request=self.request,
             trajectory=trajectory,

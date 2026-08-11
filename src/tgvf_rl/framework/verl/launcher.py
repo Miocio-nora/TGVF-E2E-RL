@@ -950,12 +950,20 @@ def _reward_custom_config(config: PolicyE2ESmokeRunConfig) -> dict[str, object]:
         }
     if reward.profile != "stage3-shaped-v1" or reward.tool_utility is None:
         raise ValueError("unsupported or incomplete reward profile")
-    if (
+    if reward.focus_reward_enabled != reward.grounding_reward_enabled:
+        raise ValueError("Stage3 Focus/Grounding reward switches must agree")
+    quality_enabled = reward.focus_reward_enabled is not False
+    if quality_enabled and (
         reward.visual_quality_judge_config_path is None
         or reward.visual_quality_judge_config_sha256 is None
     ):
         raise ValueError("Stage3-shaped visual-quality judge binding is incomplete")
-    return {
+    if not quality_enabled and (
+        reward.visual_quality_judge_config_path is not None
+        or reward.visual_quality_judge_config_sha256 is not None
+    ):
+        raise ValueError("disabled visual quality cannot bind a judge config")
+    shaped = {
         "pipeline_fqn": STAGE3_REWARD_PIPELINE_FQN,
         "profile": reward.profile,
         **common,
@@ -963,13 +971,21 @@ def _reward_custom_config(config: PolicyE2ESmokeRunConfig) -> dict[str, object]:
         "tool_utility_sidecar_sha256": reward.tool_utility.sidecar_sha256,
         "tool_utility_manifest_path": str(reward.tool_utility.manifest_path),
         "tool_utility_manifest_sha256": reward.tool_utility.manifest_sha256,
-        "visual_quality_judge_config_path": str(
-            reward.visual_quality_judge_config_path
-        ),
-        "visual_quality_judge_config_sha256": (
-            reward.visual_quality_judge_config_sha256
-        ),
+        "focus_reward_enabled": quality_enabled,
+        "grounding_reward_enabled": quality_enabled,
     }
+    if quality_enabled:
+        shaped.update(
+            {
+                "visual_quality_judge_config_path": str(
+                    reward.visual_quality_judge_config_path
+                ),
+                "visual_quality_judge_config_sha256": (
+                    reward.visual_quality_judge_config_sha256
+                ),
+            }
+        )
+    return shaped
 
 
 def _checkpoint_frequency(steps: Sequence[int], *, maximum_step: int) -> int:

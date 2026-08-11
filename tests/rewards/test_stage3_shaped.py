@@ -208,6 +208,42 @@ def test_sample_local_quality_judge_failure_is_zero_not_raw_fail() -> None:
     )
 
 
+def test_disabled_quality_rewards_require_no_judge_for_successful_tool_use() -> None:
+    result = Stage3ShapedRewardKernel().score(
+        Stage3ShapedRewardFacts(
+            answer_correct=True,
+            tool_label=ToolNecessityLabel.NEEDED,
+            tool_call_count=1,
+            successful_tgvf_observation_count=1,
+            quality_rewards_enabled=False,
+        )
+    )
+
+    assert result.total == pytest.approx(2.5)
+    assert result.quality_judge_applicable is False
+    assert result.quality_judge_covered is False
+    assert result.quality_judge_failure is None
+    assert result.component(Stage3ShapedComponentName.FOCUS).score == 0.0
+    assert result.component(Stage3ShapedComponentName.GROUNDING).score == 0.0
+    assert (
+        result.component(Stage3ShapedComponentName.FOCUS).evidence
+        == "disabled_by_run_config"
+    )
+
+
+def test_disabled_quality_rewards_reject_accidental_judge_facts() -> None:
+    with pytest.raises(ValueError, match="disabled quality rewards"):
+        Stage3ShapedRewardFacts(
+            answer_correct=False,
+            tool_label=ToolNecessityLabel.OPTIONAL,
+            tool_call_count=1,
+            successful_tgvf_observation_count=1,
+            quality_rewards_enabled=False,
+            focus_score=QualityJudgeScore.PASS,
+            grounding_score=QualityJudgeScore.PASS,
+        )
+
+
 def test_any_number_of_protocol_errors_produces_one_protocol_penalty() -> None:
     result = Stage3ShapedRewardKernel().score(
         Stage3ShapedRewardFacts(

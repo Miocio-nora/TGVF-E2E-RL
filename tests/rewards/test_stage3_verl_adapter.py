@@ -99,15 +99,17 @@ def _scorer(
     answer_result_identity: ArtifactIdentity | None = None,
     answer_judge_identity: ArtifactIdentity | None = None,
     answer_route: str = "fixture-rule",
+    visual_quality_enabled: bool = True,
 ):
     answer_identity = _identity("answer", "1")
     visual_identity = _identity("visual", "2")
     spec = Stage3ShapedRewardSpec(
         pipeline_identity=_identity("pipeline", "3"),
         answer_verifier_identity=answer_identity,
-        visual_judge_identity=visual_identity,
+        visual_judge_identity=(visual_identity if visual_quality_enabled else None),
         tool_utility_sidecar_sha256="4" * 64,
         tool_utility_manifest_sha256="5" * 64,
+        visual_quality_enabled=visual_quality_enabled,
     )
     label = TGVFToolUtilityLabelBinding(
         sample_id="sample-0",
@@ -135,7 +137,7 @@ def _scorer(
             ),
             context_provider=_ContextProvider(),
             tool_utility=utility,
-            visual_quality_judge=judge,
+            visual_quality_judge=(judge if visual_quality_enabled else None),
         ),
         judge,
     )
@@ -242,6 +244,25 @@ def test_sample_local_visual_failure_records_zero_and_coverage() -> None:
     assert components["grounding"] == 0.0
     assert scored.result.quality_judge_failure == "transport"
     assert scored.reward_extra_info()["stage3_quality_judge_failed"] == 1
+
+
+def test_disabled_visual_quality_never_calls_provider() -> None:
+    trajectory = replace(
+        _record(tool_call_count=1).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    scorer, judge = _scorer(visual_quality_enabled=False)
+
+    scored = scorer.score(
+        request=SimpleNamespace(identity=trajectory.identity),
+        trajectory=trajectory,
+    )
+
+    assert scored.total == pytest.approx(2.5)
+    assert scored.result.quality_judge_applicable is False
+    assert scored.reward_extra_info()["visual_judge_calls"] == 0
+    assert judge.calls == 0
 
 
 def test_visual_result_identity_error_fails_closed() -> None:

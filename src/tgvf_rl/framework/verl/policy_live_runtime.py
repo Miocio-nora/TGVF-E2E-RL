@@ -89,6 +89,7 @@ from tgvf_rl.rewards import (
     reward_context_from_trajectory,
 )
 from tgvf_rl.rewards.deepeyes_async_tgvf import (
+    DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY,
     AsyncDeepEyesTGVFTrajectoryRewardScorer,
 )
 from tgvf_rl.rewards.deepeyes_verl_reward import (
@@ -143,6 +144,9 @@ from tgvf_rl.rewards.verl_adapter import (
 from tgvf_rl.rewards.stage3_shaped import (
     QualityJudgeScore,
     Stage3ShapedRewardResult,
+)
+from tgvf_rl.rewards.stage3_async_tgvf import (
+    AsyncStage3ShapedTGVFTrajectoryRewardScorer,
 )
 from tgvf_rl.rewards.stage3_verl_adapter import (
     Stage3ShapedRewardSpec,
@@ -424,6 +428,7 @@ class _Qwen3PolicyTrajectoryComponents:
         self.sample_index = sample_index
         self.launch_mode = launch_mode
         self.official_deepeyes_judge = None
+        self.async_stage3_spec = None
         if (
             self.config.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
         ):
@@ -435,6 +440,45 @@ class _Qwen3PolicyTrajectoryComponents:
                 expected_file_sha256=reward.judge_config_sha256,
             )
             self.official_deepeyes_judge = AsyncDeepEyesOpenRouterJudge(service)
+            if getattr(reward, "profile", "pilot-v1") == "stage3-shaped-v1":
+                if (
+                    reward.tool_utility is None
+                    or reward.focus_reward_enabled is not False
+                    or reward.grounding_reward_enabled is not False
+                    or reward.visual_quality_judge_identity is not None
+                ):
+                    raise ValueError(
+                        "matched RP66 shaped reward controls are incomplete"
+                    )
+                pipeline_identity = _artifact_identity(
+                    "policy-reward",
+                    "rp66-stage3-shaped-no-visual",
+                    "stage3-shaped-v1",
+                    {
+                        "run": self.config.identity_sha256,
+                        "answer": DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY.sha256,
+                        "answer_judge_config": reward.judge_config_sha256,
+                        "tool_utility_sidecar": reward.tool_utility.sidecar_sha256,
+                        "tool_utility_manifest": reward.tool_utility.manifest_sha256,
+                        "focus_reward_enabled": False,
+                        "grounding_reward_enabled": False,
+                        "equation": "2*A_gated+T+P",
+                    },
+                )
+                self.async_stage3_spec = Stage3ShapedRewardSpec(
+                    pipeline_identity=pipeline_identity,
+                    answer_verifier_identity=(
+                        DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY
+                    ),
+                    visual_judge_identity=None,
+                    tool_utility_sidecar_sha256=(
+                        reward.tool_utility.sidecar_sha256
+                    ),
+                    tool_utility_manifest_sha256=(
+                        reward.tool_utility.manifest_sha256
+                    ),
+                    visual_quality_enabled=False,
+                )
             self.reward_pipeline = None
             self.stage3_reward_runtime = None
         elif self.config.reward.profile == "pilot-v1":
@@ -617,13 +661,26 @@ class _Qwen3PolicyTrajectoryComponents:
         reward_context = _BoundRewardContextProvider(**reward_source)
         official_deepeyes_scorer = None
         if self.official_deepeyes_judge is not None:
-            official_deepeyes_scorer = AsyncDeepEyesTGVFTrajectoryRewardScorer(
+            answer_scorer = AsyncDeepEyesTGVFTrajectoryRewardScorer(
                 question=reward_source["question"],
                 reference_answer=reward_source["expected_answer"],
                 task_kind=reward_source["task_kind"],
                 data_source=reward_source["data_source"],
                 judge_transport=self.official_deepeyes_judge,
             )
+            if self.async_stage3_spec is not None:
+                tool_utility = self.config.reward.tool_utility
+                if tool_utility is None:
+                    raise RuntimeError("Stage3 tool utility is missing")
+                official_deepeyes_scorer = (
+                    AsyncStage3ShapedTGVFTrajectoryRewardScorer(
+                        answer_scorer=answer_scorer,
+                        spec=self.async_stage3_spec,
+                        tool_utility=tool_utility,
+                    )
+                )
+            else:
+                official_deepeyes_scorer = answer_scorer
             scorer = official_deepeyes_scorer
         elif self.reward_pipeline is not None:
             scorer: PilotVerlTrajectoryRewardScorer | Stage3VerlTrajectoryRewardScorer

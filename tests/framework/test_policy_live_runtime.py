@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from dataclasses import replace
 
 import pytest
@@ -12,6 +12,10 @@ import torch
 from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.contracts.identity import ArtifactIdentity
+from tgvf_rl.data.tgvf_tool_utility import (
+    TGVFToolUtilityLabelBinding,
+    TGVFToolUtilityRuntimeBinding,
+)
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.agent_loop import ResponseBudgetScope
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
@@ -38,6 +42,7 @@ from tgvf_rl.judges import (
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
 )
 from tgvf_rl.rewards.context import reward_context_from_trajectory
@@ -129,6 +134,7 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
     (
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     ),
 )
 @pytest.mark.parametrize("data_source", ("vstar", "arxivqa"))
@@ -149,6 +155,7 @@ def test_trainable_rp66_visual_rows_select_matched_observation_renderer(
     (
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     ),
 )
 def test_trainable_rp66_thinklite_rows_are_direct_only(schema_version: str) -> None:
@@ -204,6 +211,7 @@ def test_matched_thinklite_direct_route_keeps_single_turn_policy_budget() -> Non
     (
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     ),
 )
 def test_trainable_rp66_launch_mode_comes_from_live_trainer_config(
@@ -271,6 +279,73 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
     )
     assert components.reward_pipeline is None
     assert components.stage3_reward_runtime is None
+
+
+def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded_service = object()
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime."
+        "load_deepeyes_judge_service_config",
+        lambda *_args, **_kwargs: loaded_service,
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.AsyncDeepEyesOpenRouterJudge",
+        lambda service: ("official-deepeyes", service),
+    )
+    label = TGVFToolUtilityLabelBinding(
+        sample_id="sample",
+        training_index=0,
+        utility_label="optional",
+        confidence=0.5,
+        row_sha256="4" * 64,
+    )
+    utility = TGVFToolUtilityRuntimeBinding(
+        sidecar_path=Path("/fixture/tool-utility.jsonl"),
+        sidecar_sha256="5" * 64,
+        manifest_path=Path("/fixture/manifest.json"),
+        manifest_sha256="6" * 64,
+        dataset_iteration_identity_sha256="7" * 64,
+        labels=MappingProxyType({label.sample_id: label}),
+    )
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        identity_sha256="8" * 64,
+        reward=SimpleNamespace(
+            profile="stage3-shaped-v1",
+            judge_config_path=Path("/fixture/deepeyes-judge.json"),
+            judge_config_sha256="9" * 64,
+            tool_utility=utility,
+            focus_reward_enabled=False,
+            grounding_reward_enabled=False,
+            visual_quality_judge_identity=None,
+        ),
+    )
+
+    components = _Qwen3PolicyTrajectoryComponents(
+        context=SimpleNamespace(config=config),
+        layout_builder=object(),
+        server_client=object(),
+        contextual_forward_identity=None,
+        branch_merger_identities=(),
+        observation_store=object(),
+        behavior_store=object(),
+        focus_execution_ledger=object(),
+        crop_execution_ledger=object(),
+        metrics_factory=lambda *_args: object(),
+        agent_loop_output_cls=None,
+        sample_index={},
+        launch_mode="smoke",
+    )
+
+    assert components.official_deepeyes_judge == (
+        "official-deepeyes",
+        loaded_service,
+    )
+    assert components.async_stage3_spec is not None
+    assert components.async_stage3_spec.visual_quality_enabled is False
+    assert components.async_stage3_spec.visual_judge_identity is None
 
 
 def test_live_visual_quality_adapter_consumes_typed_provider_result(

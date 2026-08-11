@@ -105,10 +105,14 @@ POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA = (
     "policy-e2e-rp66-deepeyes-matched-control-run-config-v3"
 )
+POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-rp66-shaped-matched-control-run-config-v1"
+)
 POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     }
 )
 POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
@@ -410,6 +414,8 @@ class SmokeRewardBinding:
     judge_config_path: Path | None = None
     judge_config_sha256: str | None = None
     tool_utility: TGVFToolUtilityRuntimeBinding | None = None
+    focus_reward_enabled: bool | None = None
+    grounding_reward_enabled: bool | None = None
     visual_quality_judge_config_path: Path | None = None
     visual_quality_judge_config_sha256: str | None = None
     visual_quality_judge_identity: ArtifactIdentity | None = None
@@ -557,6 +563,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -632,13 +639,20 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
     if payload["formal_pilot"] is not formal_pilot:
         raise ValueError("policy E2E run formal_pilot mode differs from schema")
     mixed_run = schema_version != POLICY_E2E_SMOKE_CONFIG_SCHEMA
-    stage3_shaped_run = schema_version == POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA
+    stage3_shaped_run = schema_version in {
+        POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+    }
+    rp66_shaped_run = (
+        schema_version == POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA
+    )
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
     )
@@ -998,7 +1012,11 @@ def load_policy_e2e_smoke_run_config(
         "protocol.tool_schema_sha256",
     )
     expected_maximum_tool_calls = (
-        1 if stage3_shaped_run else 6 if rp66_matched_run else 4
+        6
+        if rp66_matched_run
+        else 1
+        if stage3_shaped_run
+        else 4
     )
     _require_exact(
         protocol_table["maximum_tool_calls"],
@@ -1011,10 +1029,10 @@ def load_policy_e2e_smoke_run_config(
     _require_exact(
         cap_error_sha256,
         (
-            POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
-            if stage3_shaped_run
-            else POLICY_E2E_TRAINABLE_RP66_SIX_CALL_CAP_ERROR_SHA256
+            POLICY_E2E_TRAINABLE_RP66_SIX_CALL_CAP_ERROR_SHA256
             if rp66_matched_run
+            else POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
+            if stage3_shaped_run
             else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
         ),
         "protocol.cap_error_sha256",
@@ -1191,10 +1209,23 @@ def load_policy_e2e_smoke_run_config(
                 "tool_utility_sidecar_sha256",
                 "tool_utility_manifest_path",
                 "tool_utility_manifest_sha256",
-                "visual_quality_judge_config_path",
-                "visual_quality_judge_config_sha256",
             }
         )
+        if rp66_shaped_run:
+            reward_fields.update(
+                {
+                    "focus_reward_enabled",
+                    "grounding_reward_enabled",
+                    "visual_quality_judge_mode",
+                }
+            )
+        else:
+            reward_fields.update(
+                {
+                    "visual_quality_judge_config_path",
+                    "visual_quality_judge_config_sha256",
+                }
+            )
     else:
         reward_fields.update(
             {"answer_weight", "format_weight", "conditional_tool_weight"}
@@ -1305,21 +1336,54 @@ def load_policy_e2e_smoke_run_config(
             expected_manifest_sha256=sidecar_manifest_sha256,
             expected_dataset_iteration_identity_sha256=iteration_sha256,
         )
-        visual_quality_config_path = _existing_file(
-            reward_table["visual_quality_judge_config_path"],
-            name="reward.visual_quality_judge_config_path",
-        )
-        visual_quality_config_sha256 = _sha256(
-            reward_table["visual_quality_judge_config_sha256"],
-            name="reward.visual_quality_judge_config_sha256",
-        )
-        if _sha256_file(visual_quality_config_path) != visual_quality_config_sha256:
-            raise ValueError("reward visual-quality judge config SHA256 mismatch")
-        bound_visual_quality_judge = load_tgvf_visual_quality_judge(
-            visual_quality_config_path,
-            expected_file_sha256=visual_quality_config_sha256,
-        )
-        visual_quality_judge_identity = bound_visual_quality_judge.config_identity
+        if rp66_shaped_run:
+            focus_reward_enabled = _boolean(
+                reward_table["focus_reward_enabled"],
+                name="reward.focus_reward_enabled",
+            )
+            grounding_reward_enabled = _boolean(
+                reward_table["grounding_reward_enabled"],
+                name="reward.grounding_reward_enabled",
+            )
+            _require_exact(
+                (
+                    focus_reward_enabled,
+                    grounding_reward_enabled,
+                    reward_table["visual_quality_judge_mode"],
+                ),
+                (False, False, "disabled"),
+                "RP66 shaped visual-quality reward controls",
+            )
+            visual_quality_config_path = None
+            visual_quality_config_sha256 = None
+            visual_quality_judge_identity = None
+        else:
+            # Historical Stage3 configs predate component switches.  Keep the
+            # sentinel values absent so their serialized runtime/run identity
+            # remains byte-for-byte compatible; ``None`` means the legacy
+            # visual Focus/Grounding path stays enabled.
+            focus_reward_enabled = None
+            grounding_reward_enabled = None
+            visual_quality_config_path = _existing_file(
+                reward_table["visual_quality_judge_config_path"],
+                name="reward.visual_quality_judge_config_path",
+            )
+            visual_quality_config_sha256 = _sha256(
+                reward_table["visual_quality_judge_config_sha256"],
+                name="reward.visual_quality_judge_config_sha256",
+            )
+            if (
+                _sha256_file(visual_quality_config_path)
+                != visual_quality_config_sha256
+            ):
+                raise ValueError("reward visual-quality judge config SHA256 mismatch")
+            bound_visual_quality_judge = load_tgvf_visual_quality_judge(
+                visual_quality_config_path,
+                expected_file_sha256=visual_quality_config_sha256,
+            )
+            visual_quality_judge_identity = (
+                bound_visual_quality_judge.config_identity
+            )
         reward_profile = STAGE3_SHAPED_REWARD_VERSION
         reward_weights: tuple[float, float, float] | None = None
     else:
@@ -1334,6 +1398,8 @@ def load_policy_e2e_smoke_run_config(
         pilot_reward_weight_profile_name(reward_weights)
         reward_profile = "pilot-v1"
         tool_utility = None
+        focus_reward_enabled = None
+        grounding_reward_enabled = None
         visual_quality_config_path = None
         visual_quality_config_sha256 = None
         visual_quality_judge_identity = None
@@ -1350,6 +1416,8 @@ def load_policy_e2e_smoke_run_config(
         judge_config_path=judge_config_path,
         judge_config_sha256=judge_config_sha256,
         tool_utility=tool_utility,
+        focus_reward_enabled=focus_reward_enabled,
+        grounding_reward_enabled=grounding_reward_enabled,
         visual_quality_judge_config_path=visual_quality_config_path,
         visual_quality_judge_config_sha256=visual_quality_config_sha256,
         visual_quality_judge_identity=visual_quality_judge_identity,
@@ -1499,7 +1567,11 @@ def load_policy_e2e_smoke_run_config(
         "weight_sync_mode",
         "weight_sync_interval_optimizer_steps",
     }
-    if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA:
+    lifecycle_control_run = schema_version in {
+        POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+    }
+    if lifecycle_control_run:
         distributed_fields.add("actor_optimizer_offload")
     distributed_table = _table(
         payload,
@@ -1525,7 +1597,7 @@ def load_policy_e2e_smoke_run_config(
                 distributed_table["actor_optimizer_offload"],
                 name="distributed.actor_optimizer_offload",
             )
-            if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA
+            if lifecycle_control_run
             else True
         ),
     )
@@ -1704,7 +1776,7 @@ def load_policy_e2e_smoke_run_config(
         "resume_from_path",
         "maximum_actor_checkpoints_to_keep",
     }
-    if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA:
+    if lifecycle_control_run:
         training_fields.add("permanent_checkpoint_steps")
     training_table = _table(
         payload,
@@ -1769,7 +1841,7 @@ def load_policy_e2e_smoke_run_config(
                 training_table["permanent_checkpoint_steps"],
                 name="training.permanent_checkpoint_steps",
             )
-            if schema_version == POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA
+            if lifecycle_control_run
             else ()
         ),
     )
@@ -1813,10 +1885,10 @@ def load_policy_e2e_smoke_run_config(
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
-    if stage3_shaped_run:
-        policy_type = PolicyTGVFStage3ExperimentConfig
-    elif rp66_matched_run:
+    if rp66_matched_run:
         policy_type = PolicyTrainableRP66ExperimentConfig
+    elif stage3_shaped_run:
+        policy_type = PolicyTGVFStage3ExperimentConfig
     elif protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE:
         policy_type = PolicyPilotV1Config
     else:
@@ -1962,15 +2034,29 @@ def load_policy_e2e_smoke_run_config(
             NativeToolCapabilityProfile.TGVF_ONLY,
             "trainable RP66 tool profile",
         )
-        _require_exact(
-            (
-                reward.answer_weight,
-                reward.format_weight,
-                reward.conditional_tool_weight,
-            ),
-            (0.8, 0.2, 1.2),
-            "trainable RP66 DeepEyes reward weights",
-        )
+        if rp66_shaped_run:
+            _require_exact(
+                (
+                    reward.profile,
+                    reward.answer_weight,
+                    reward.format_weight,
+                    reward.conditional_tool_weight,
+                    reward.focus_reward_enabled,
+                    reward.grounding_reward_enabled,
+                ),
+                (STAGE3_SHAPED_REWARD_VERSION, None, None, None, False, False),
+                "RP66 shaped reward controls",
+            )
+        else:
+            _require_exact(
+                (
+                    reward.answer_weight,
+                    reward.format_weight,
+                    reward.conditional_tool_weight,
+                ),
+                (0.8, 0.2, 1.2),
+                "trainable RP66 DeepEyes reward weights",
+            )
         _require_exact(
             (
                 optimizer.name,
@@ -2563,6 +2649,7 @@ __all__ = [
     "POLICY_E2E_MIXED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
