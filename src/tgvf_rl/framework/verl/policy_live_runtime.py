@@ -94,6 +94,7 @@ from tgvf_rl.rewards.deepeyes_async_tgvf import (
 )
 from tgvf_rl.rewards.deepeyes_verl_reward import (
     AsyncDeepEyesOpenRouterJudge,
+    effective_deepeyes_judge_transport_config,
     effective_run_global_judge_concurrency,
     load_deepeyes_judge_service_config,
     process_local_judge_concurrency,
@@ -441,6 +442,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 reward.judge_config_path,
                 expected_file_sha256=reward.judge_config_sha256,
             )
+            transport_service = effective_deepeyes_judge_transport_config(service)
             effective_global_judge_concurrency = (
                 effective_run_global_judge_concurrency(
                     service.maximum_concurrency,
@@ -453,7 +455,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 worker_count=context.placement.world_size,
             )
             self.official_deepeyes_judge = AsyncDeepEyesOpenRouterJudge(
-                service,
+                transport_service,
                 local_maximum_concurrency=local_judge_concurrency,
             )
             if getattr(reward, "profile", "pilot-v1") == "stage3-shaped-v1":

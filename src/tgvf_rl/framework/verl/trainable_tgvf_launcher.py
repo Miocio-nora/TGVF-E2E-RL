@@ -889,7 +889,12 @@ def preflight_trainable_tgvf_verl_runtime(
         raise TypeError("plan and composed config must be provided together")
 
     from tgvf_rl.rewards.deepeyes_verl_reward import (
+        DEEPEYES_MAXIMUM_ATTEMPTS_ENV,
+        DEEPEYES_RETRY_BACKOFF_SECONDS_ENV,
+        DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV,
         DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV,
+        DEEPEYES_TRANSIENT_FAILURE_FRACTION_ENV,
+        effective_deepeyes_judge_transport_config,
         effective_run_global_judge_concurrency,
         load_deepeyes_judge_service_config,
     )
@@ -934,6 +939,7 @@ def preflight_trainable_tgvf_verl_runtime(
         judge.maximum_concurrency,
         worker_count=config.distributed.world_size,
     )
+    effective_judge = effective_deepeyes_judge_transport_config(judge)
     _append_launch_provenance(
         plan,
         identity,
@@ -951,6 +957,31 @@ def preflight_trainable_tgvf_verl_runtime(
             "runtime_cap_environment_value": os.environ.get(
                 DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV
             ),
+            "configured_maximum_attempts": judge.maximum_attempts,
+            "effective_maximum_attempts": effective_judge.maximum_attempts,
+            "configured_retry_backoff_seconds": judge.retry_backoff_seconds,
+            "effective_retry_backoff_seconds": (
+                effective_judge.retry_backoff_seconds
+            ),
+            "configured_retry_maximum_seconds": judge.retry_maximum_seconds,
+            "effective_retry_maximum_seconds": (
+                effective_judge.retry_maximum_seconds
+            ),
+            "configured_maximum_transient_failure_fraction": (
+                judge.maximum_transient_failure_fraction
+            ),
+            "effective_maximum_transient_failure_fraction": (
+                effective_judge.maximum_transient_failure_fraction
+            ),
+            "retry_environment": {
+                name: os.environ.get(name)
+                for name in (
+                    DEEPEYES_MAXIMUM_ATTEMPTS_ENV,
+                    DEEPEYES_RETRY_BACKOFF_SECONDS_ENV,
+                    DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV,
+                    DEEPEYES_TRANSIENT_FAILURE_FRACTION_ENV,
+                )
+            },
         },
     )
     return identity

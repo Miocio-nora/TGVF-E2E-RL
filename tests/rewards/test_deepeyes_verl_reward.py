@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from hashlib import sha256
 import json
 import math
@@ -25,6 +26,7 @@ from tgvf_rl.rewards.deepeyes_verl_reward import (
     DEEPEYES_VERL_AUDIT_SEQUENCE_ENCODING,
     DeepEyesJudgeServiceConfig,
     DeepEyesOfficialRewardManager,
+    effective_deepeyes_judge_transport_config,
     effective_run_global_judge_concurrency,
     load_deepeyes_judge_service_config,
     process_local_judge_concurrency,
@@ -176,6 +178,117 @@ def test_runtime_cap_only_reduces_run_global_concurrency() -> None:
         effective_run_global_judge_concurrency(
             16, worker_count=8, environment={name: "8.0"}
         )
+
+
+def test_runtime_retry_hardening_only_increases_patience() -> None:
+    configured = replace(
+        _service(attempts=4, failure_fraction=0.25),
+        retry_backoff_seconds=0.25,
+        retry_maximum_seconds=2.0,
+    )
+    environment = {
+        "TGVF_DEEPEYES_JUDGE_MAXIMUM_ATTEMPTS": "8",
+        "TGVF_DEEPEYES_JUDGE_RETRY_BACKOFF_SECONDS": "2",
+        "TGVF_DEEPEYES_JUDGE_RETRY_MAXIMUM_SECONDS": "30",
+        "TGVF_DEEPEYES_JUDGE_MAXIMUM_TRANSIENT_FAILURE_FRACTION": "0",
+    }
+    effective = effective_deepeyes_judge_transport_config(
+        configured, environment=environment
+    )
+
+    assert effective.maximum_attempts == 8
+    assert effective.retry_backoff_seconds == 2.0
+    assert effective.retry_maximum_seconds == 30.0
+    assert effective.maximum_transient_failure_fraction == 0.0
+    assert effective.file_sha256 == configured.file_sha256
+    assert effective_deepeyes_judge_transport_config(
+        configured, environment={}
+    ) is configured
+
+    invalid = dict(environment)
+    invalid["TGVF_DEEPEYES_JUDGE_MAXIMUM_ATTEMPTS"] = "3"
+    with pytest.raises(ValueError, match="cannot reduce"):
+        effective_deepeyes_judge_transport_config(configured, environment=invalid)
+    invalid = dict(environment)
+    invalid["TGVF_DEEPEYES_JUDGE_MAXIMUM_TRANSIENT_FAILURE_FRACTION"] = "0.5"
+    with pytest.raises(ValueError, match="cannot exceed"):
+        effective_deepeyes_judge_transport_config(configured, environment=invalid)
+
+
+def test_transient_retry_uses_equal_jitter_and_respects_retry_after() -> None:
+    import tgvf_rl.rewards.deepeyes_verl_reward as reward_module
+
+    configured = replace(
+        _service(attempts=8),
+        retry_backoff_seconds=2.0,
+        retry_maximum_seconds=30.0,
+    )
+    request_id = "deterministic-request"
+    delays = [
+        reward_module._transient_retry_delay_seconds(
+            configured,
+            completed_attempts=attempt,
+            error=RuntimeError("transient"),
+            request_id=request_id,
+        )
+        for attempt in range(1, 8)
+    ]
+    maxima = [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
+    assert all(maximum / 2 <= delay <= maximum for delay, maximum in zip(delays, maxima))
+    assert delays == [
+        reward_module._transient_retry_delay_seconds(
+            configured,
+            completed_attempts=attempt,
+            error=RuntimeError("transient"),
+            request_id=request_id,
+        )
+        for attempt in range(1, 8)
+    ]
+
+    retry_after = reward_module._JudgeTransientHTTPError(
+        429, retry_after_seconds=17.0
+    )
+    assert reward_module._transient_retry_delay_seconds(
+        configured,
+        completed_attempts=1,
+        error=retry_after,
+        request_id=request_id,
+    ) == 17.0
+
+
+def test_hardened_transport_recovers_on_eighth_attempt() -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    async def transient_then_success(_request: object, _payload: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls < 8:
+            raise RuntimeError("429")
+        return _response()
+
+    async def record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def exercise() -> None:
+        configured = replace(
+            _service(attempts=8, failure_fraction=0.0),
+            retry_backoff_seconds=2.0,
+            retry_maximum_seconds=30.0,
+        )
+        outcome = await AsyncDeepEyesOpenRouterJudge(
+            configured,
+            request_json=transient_then_success,
+            sleeper=record_sleep,
+        ).judge(_request("eighth-attempt"))
+        assert outcome.verdict is True
+        assert outcome.calls == 8
+        assert outcome.retries == 7
+
+    asyncio.run(exercise())
+    assert calls == 8
+    assert len(sleeps) == 7
+    assert sum(sleeps) <= 120.0
 
 
 def test_async_transport_honors_process_local_concurrency_override() -> None:

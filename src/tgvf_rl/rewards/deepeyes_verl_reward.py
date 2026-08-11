@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
 import math
@@ -54,6 +54,16 @@ DEEPEYES_VERL_REWARD_MANAGER_CLASS = (
 DEEPEYES_VERL_AUDIT_SEQUENCE_ENCODING = "canonical-json-v1"
 DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV = (
     "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP"
+)
+DEEPEYES_MAXIMUM_ATTEMPTS_ENV = "TGVF_DEEPEYES_JUDGE_MAXIMUM_ATTEMPTS"
+DEEPEYES_RETRY_BACKOFF_SECONDS_ENV = (
+    "TGVF_DEEPEYES_JUDGE_RETRY_BACKOFF_SECONDS"
+)
+DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV = (
+    "TGVF_DEEPEYES_JUDGE_RETRY_MAXIMUM_SECONDS"
+)
+DEEPEYES_TRANSIENT_FAILURE_FRACTION_ENV = (
+    "TGVF_DEEPEYES_JUDGE_MAXIMUM_TRANSIENT_FAILURE_FRACTION"
 )
 _RAGGED_AUDIT_FIELDS = frozenset(
     {
@@ -244,6 +254,100 @@ def effective_run_global_judge_concurrency(
             "run-global judge concurrency cap must provide one permit per worker"
         )
     return effective
+
+
+def effective_deepeyes_judge_transport_config(
+    configured: DeepEyesJudgeServiceConfig,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> DeepEyesJudgeServiceConfig:
+    """Apply launch-scoped retry hardening without changing judge identity.
+
+    The serialized service file remains the immutable experiment binding.  The
+    optional environment values may only make transient-failure recovery more
+    patient; they cannot reduce the configured attempt or delay bounds.  This
+    keeps checkpoint identity stable while preventing a short provider 429
+    burst from discarding an otherwise valid rollout.
+    """
+
+    values = os.environ if environment is None else environment
+    names = (
+        DEEPEYES_MAXIMUM_ATTEMPTS_ENV,
+        DEEPEYES_RETRY_BACKOFF_SECONDS_ENV,
+        DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV,
+        DEEPEYES_TRANSIENT_FAILURE_FRACTION_ENV,
+    )
+    if not any(name in values for name in names):
+        return configured
+
+    attempts = _positive_integer_environment(
+        values,
+        DEEPEYES_MAXIMUM_ATTEMPTS_ENV,
+        default=configured.maximum_attempts,
+    )
+    backoff = _nonnegative_float_environment(
+        values,
+        DEEPEYES_RETRY_BACKOFF_SECONDS_ENV,
+        default=configured.retry_backoff_seconds,
+    )
+    maximum = _nonnegative_float_environment(
+        values,
+        DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV,
+        default=configured.retry_maximum_seconds,
+    )
+    failure_fraction = _nonnegative_float_environment(
+        values,
+        DEEPEYES_TRANSIENT_FAILURE_FRACTION_ENV,
+        default=configured.maximum_transient_failure_fraction,
+    )
+    if attempts < configured.maximum_attempts:
+        raise ValueError("judge runtime attempts cannot reduce the serialized value")
+    if backoff < configured.retry_backoff_seconds:
+        raise ValueError("judge runtime backoff cannot reduce the serialized value")
+    if maximum < configured.retry_maximum_seconds:
+        raise ValueError("judge runtime retry maximum cannot reduce the serialized value")
+    if failure_fraction > configured.maximum_transient_failure_fraction:
+        raise ValueError(
+            "judge runtime failure fraction cannot exceed the serialized value"
+        )
+    if failure_fraction > 1.0:
+        raise ValueError("judge runtime failure fraction must lie in [0,1]")
+    return replace(
+        configured,
+        maximum_attempts=attempts,
+        retry_backoff_seconds=backoff,
+        retry_maximum_seconds=maximum,
+        maximum_transient_failure_fraction=failure_fraction,
+    )
+
+
+def _positive_integer_environment(
+    environment: Mapping[str, str], name: str, *, default: int
+) -> int:
+    raw = environment.get(name)
+    if raw is None:
+        return default
+    if not isinstance(raw, str) or not raw or not raw.isdecimal():
+        raise ValueError(f"{name} must be a positive integer")
+    value = int(raw)
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _nonnegative_float_environment(
+    environment: Mapping[str, str], name: str, *, default: float
+) -> float:
+    raw = environment.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a finite non-negative number") from error
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be a finite non-negative number")
+    return value
 
 
 def load_deepeyes_judge_service_config(
@@ -468,9 +572,11 @@ class AsyncDeepEyesOpenRouterJudge:
                     last_transient_error = error
                     if attempts == self.config.maximum_attempts:
                         break
-                    delay = min(
-                        self.config.retry_maximum_seconds,
-                        self.config.retry_backoff_seconds * (2 ** (attempts - 1)),
+                    delay = _transient_retry_delay_seconds(
+                        self.config,
+                        completed_attempts=attempts,
+                        error=error,
+                        request_id=request.request_id,
                     )
                     await self._sleeper(delay)
         await self._record_transient_failure(
@@ -566,8 +672,11 @@ class AsyncDeepEyesOpenRouterJudge:
                         f"DeepEyes judge global HTTP failure {response.status}"
                     )
                 if response.status == 429 or response.status >= 500:
-                    raise RuntimeError(
-                        f"DeepEyes judge transient HTTP failure {response.status}"
+                    raise _JudgeTransientHTTPError(
+                        response.status,
+                        retry_after_seconds=_retry_after_seconds(
+                            response.headers.get("Retry-After")
+                        ),
                     )
                 if response.status >= 400:
                     raise JudgeGlobalFailure(
@@ -660,6 +769,51 @@ class AsyncDeepEyesOpenRouterJudge:
                 "DeepEyes completed judge response requires prompt tokens"
             )
         return usage
+
+
+class _JudgeTransientHTTPError(RuntimeError):
+    """Retryable HTTP response with an optional server-requested delay."""
+
+    def __init__(self, status: int, *, retry_after_seconds: float | None) -> None:
+        super().__init__(f"DeepEyes judge transient HTTP failure {status}")
+        self.status = status
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _retry_after_seconds(value: object) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = float(value.strip())
+    except ValueError:
+        return None
+    if not math.isfinite(parsed) or parsed < 0:
+        return None
+    return parsed
+
+
+def _transient_retry_delay_seconds(
+    config: DeepEyesJudgeServiceConfig,
+    *,
+    completed_attempts: int,
+    error: Exception,
+    request_id: str,
+) -> float:
+    maximum_delay = min(
+        config.retry_maximum_seconds,
+        config.retry_backoff_seconds * (2 ** (completed_attempts - 1)),
+    )
+    # Equal jitter keeps half of the exponential delay while deterministically
+    # spreading synchronized AgentLoop workers across the remaining half.  The
+    # request identity makes retries reproducible without sharing an RNG.
+    digest = sha256(f"{request_id}:{completed_attempts}".encode("utf-8")).digest()
+    unit = int.from_bytes(digest[:8], "big") / float(2**64)
+    delay = maximum_delay * (0.5 + 0.5 * unit)
+    if isinstance(error, _JudgeTransientHTTPError):
+        requested = error.retry_after_seconds
+        if requested is not None:
+            delay = max(delay, min(config.retry_maximum_seconds, requested))
+    return delay
 
 
 def _official_math_verify(reference_answer: str, candidate_answer: str) -> bool:
@@ -1192,13 +1346,18 @@ class DeepEyesOfficialRewardManager(RewardManagerBase):
 
 
 __all__ = [
+    "DEEPEYES_MAXIMUM_ATTEMPTS_ENV",
+    "DEEPEYES_RETRY_BACKOFF_SECONDS_ENV",
+    "DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV",
     "DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV",
+    "DEEPEYES_TRANSIENT_FAILURE_FRACTION_ENV",
     "DEEPEYES_VERL_REWARD_MANAGER_CLASS",
     "DEEPEYES_VERL_REWARD_SCHEMA",
     "AsyncDeepEyesOpenRouterJudge",
     "AsyncJudgeOutcome",
     "DeepEyesJudgeServiceConfig",
     "DeepEyesOfficialRewardManager",
+    "effective_deepeyes_judge_transport_config",
     "effective_run_global_judge_concurrency",
     "load_deepeyes_judge_service_config",
     "process_local_judge_concurrency",
