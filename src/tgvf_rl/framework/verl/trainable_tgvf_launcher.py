@@ -644,7 +644,7 @@ class TrainableTGVFVerlLaunchPlan:
             "permanent_steps": expected_permanent_steps,
             "permanent_directory": (
                 str(self.config.output.root / "permanent-checkpoints")
-                if self.mode == "formal"
+                if expected_permanent_steps
                 else ""
             ),
         }:

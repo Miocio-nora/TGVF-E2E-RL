@@ -221,6 +221,20 @@ def test_formal_diagnostic_can_stop_at_two_continuous_steps() -> None:
     assert custom["checkpoint_lifecycle"]["permanent_steps"] == [2]
 
 
+def test_two_step_diagnostic_does_not_retain_future_permanent_steps(
+    tmp_path: Path,
+) -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(
+        _exact_config(tmp_path), mode="formal", target_step=2
+    )
+
+    lifecycle = plan.overrides["actor_rollout_ref.rollout.custom"][
+        "checkpoint_lifecycle"
+    ]
+    assert lifecycle["permanent_steps"] == []
+    assert lifecycle["permanent_directory"] == ""
+
+
 @pytest.mark.parametrize(
     ("adapter_update_mode", "adapter_trainable", "payload"),
     (
