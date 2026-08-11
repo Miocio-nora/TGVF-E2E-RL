@@ -889,6 +889,8 @@ def preflight_trainable_tgvf_verl_runtime(
         raise TypeError("plan and composed config must be provided together")
 
     from tgvf_rl.rewards.deepeyes_verl_reward import (
+        DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV,
+        effective_run_global_judge_concurrency,
         load_deepeyes_judge_service_config,
     )
 
@@ -928,13 +930,37 @@ def preflight_trainable_tgvf_verl_runtime(
         raise RuntimeError(
             f"Policy preflight requires judge credential {judge.api_key_env}"
         )
-    _append_launch_provenance(plan, identity)
+    effective_judge_concurrency = effective_run_global_judge_concurrency(
+        judge.maximum_concurrency,
+        worker_count=config.distributed.world_size,
+    )
+    _append_launch_provenance(
+        plan,
+        identity,
+        answer_judge_transport={
+            "configured_run_global_maximum_concurrency": (
+                judge.maximum_concurrency
+            ),
+            "effective_run_global_maximum_concurrency": (
+                effective_judge_concurrency
+            ),
+            "worker_count": config.distributed.world_size,
+            "runtime_cap_environment_name": (
+                DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV
+            ),
+            "runtime_cap_environment_value": os.environ.get(
+                DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV
+            ),
+        },
+    )
     return identity
 
 
 def _append_launch_provenance(
     plan: TrainableTGVFVerlLaunchPlan,
     verl_identity: VerlDistributionIdentity,
+    *,
+    answer_judge_transport: Mapping[str, object] | None = None,
 ) -> None:
     """Best-effort durable provenance; bookkeeping must never kill training."""
 
@@ -973,6 +999,8 @@ def _append_launch_provenance(
         "project": project,
         "verl": asdict(verl_identity),
     }
+    if answer_judge_transport is not None:
+        record["answer_judge_transport"] = dict(answer_judge_transport)
     metrics_path = Path(plan.environment[POLICY_METRICS_PATH_ENV])
     destination = metrics_path.parent / "launch-provenance.jsonl"
     try:

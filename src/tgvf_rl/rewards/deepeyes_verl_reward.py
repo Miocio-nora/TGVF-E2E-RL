@@ -52,6 +52,9 @@ DEEPEYES_VERL_REWARD_MANAGER_CLASS = (
     "tgvf_rl.rewards.deepeyes_verl_reward.DeepEyesOfficialRewardManager"
 )
 DEEPEYES_VERL_AUDIT_SEQUENCE_ENCODING = "canonical-json-v1"
+DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV = (
+    "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP"
+)
 _RAGGED_AUDIT_FIELDS = frozenset(
     {
         "crop_boxes",
@@ -203,6 +206,44 @@ def process_local_judge_concurrency(
         )
     quotient, remainder = divmod(run_global_maximum, worker_count)
     return quotient + int(worker_index < remainder)
+
+
+def effective_run_global_judge_concurrency(
+    configured_maximum: int,
+    *,
+    worker_count: int,
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Apply an explicit operational cap without changing reward identity.
+
+    The serialized judge service value remains the experiment's immutable
+    maximum.  A launch-scoped environment cap may only reduce request pressure
+    and must still leave one permit for every AgentLoop worker.  It therefore
+    changes neither requests nor verdicts and is safe for checkpoint resume,
+    while malformed or identity-expanding overrides fail before use.
+    """
+
+    if type(configured_maximum) is not int or configured_maximum <= 0:
+        raise ValueError("configured run-global judge concurrency must be positive")
+    if type(worker_count) is not int or worker_count <= 0:
+        raise ValueError("judge worker count must be positive")
+    values = os.environ if environment is None else environment
+    raw = values.get(DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV)
+    if raw is None:
+        effective = configured_maximum
+    else:
+        if not isinstance(raw, str) or not raw or not raw.isdecimal():
+            raise ValueError("run-global judge concurrency cap must be an integer")
+        effective = int(raw)
+    if effective > configured_maximum:
+        raise ValueError(
+            "run-global judge concurrency cap exceeds the serialized maximum"
+        )
+    if effective < worker_count:
+        raise ValueError(
+            "run-global judge concurrency cap must provide one permit per worker"
+        )
+    return effective
 
 
 def load_deepeyes_judge_service_config(
@@ -1151,12 +1192,14 @@ class DeepEyesOfficialRewardManager(RewardManagerBase):
 
 
 __all__ = [
+    "DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV",
     "DEEPEYES_VERL_REWARD_MANAGER_CLASS",
     "DEEPEYES_VERL_REWARD_SCHEMA",
     "AsyncDeepEyesOpenRouterJudge",
     "AsyncJudgeOutcome",
     "DeepEyesJudgeServiceConfig",
     "DeepEyesOfficialRewardManager",
+    "effective_run_global_judge_concurrency",
     "load_deepeyes_judge_service_config",
     "process_local_judge_concurrency",
 ]

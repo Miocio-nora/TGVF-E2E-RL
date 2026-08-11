@@ -231,6 +231,9 @@ def test_trainable_rp66_launch_mode_comes_from_live_trainer_config(
 def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv(
+        "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP", raising=False
+    )
     judge_path = Path("/fixture/deepeyes-judge.json")
     judge_sha256 = "9" * 64
     loaded_service = SimpleNamespace(maximum_concurrency=16)
@@ -293,6 +296,53 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
     assert judge_calls == [(loaded_service, 2)]
     assert components.reward_pipeline is None
     assert components.stage3_reward_runtime is None
+
+
+def test_rp66_control_applies_launch_scoped_run_global_judge_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP", "8")
+    loaded_service = SimpleNamespace(maximum_concurrency=16)
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime."
+        "load_deepeyes_judge_service_config",
+        lambda *_args, **_kwargs: loaded_service,
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.AsyncDeepEyesOpenRouterJudge",
+        lambda service, *, local_maximum_concurrency: (
+            service,
+            local_maximum_concurrency,
+        ),
+    )
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
+        reward=SimpleNamespace(
+            judge_config_path=Path("/fixture/deepeyes-judge.json"),
+            judge_config_sha256="9" * 64,
+        ),
+    )
+
+    components = _Qwen3PolicyTrajectoryComponents(
+        context=SimpleNamespace(
+            config=config,
+            placement=PolicyAgentLoopWorkerPlacement(3, 3, 3, 8),
+        ),
+        layout_builder=object(),
+        server_client=object(),
+        contextual_forward_identity=None,
+        branch_merger_identities=(),
+        observation_store=object(),
+        behavior_store=object(),
+        focus_execution_ledger=object(),
+        crop_execution_ledger=object(),
+        metrics_factory=lambda *_args: object(),
+        agent_loop_output_cls=None,
+        sample_index={},
+        launch_mode="formal",
+    )
+
+    assert components.official_deepeyes_judge == (loaded_service, 1)
 
 
 def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(

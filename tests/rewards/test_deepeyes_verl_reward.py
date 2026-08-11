@@ -25,6 +25,7 @@ from tgvf_rl.rewards.deepeyes_verl_reward import (
     DEEPEYES_VERL_AUDIT_SEQUENCE_ENCODING,
     DeepEyesJudgeServiceConfig,
     DeepEyesOfficialRewardManager,
+    effective_run_global_judge_concurrency,
     load_deepeyes_judge_service_config,
     process_local_judge_concurrency,
 )
@@ -152,6 +153,29 @@ def test_run_global_concurrency_sums_exactly_across_eight_workers() -> None:
 
     with pytest.raises(ValueError, match="at least one permit"):
         process_local_judge_concurrency(4, worker_index=0, worker_count=8)
+
+
+def test_runtime_cap_only_reduces_run_global_concurrency() -> None:
+    name = "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP"
+
+    assert effective_run_global_judge_concurrency(
+        16, worker_count=8, environment={}
+    ) == 16
+    assert effective_run_global_judge_concurrency(
+        16, worker_count=8, environment={name: "8"}
+    ) == 8
+    with pytest.raises(ValueError, match="exceeds the serialized maximum"):
+        effective_run_global_judge_concurrency(
+            16, worker_count=8, environment={name: "17"}
+        )
+    with pytest.raises(ValueError, match="one permit per worker"):
+        effective_run_global_judge_concurrency(
+            16, worker_count=8, environment={name: "7"}
+        )
+    with pytest.raises(ValueError, match="must be an integer"):
+        effective_run_global_judge_concurrency(
+            16, worker_count=8, environment={name: "8.0"}
+        )
 
 
 def test_async_transport_honors_process_local_concurrency_override() -> None:

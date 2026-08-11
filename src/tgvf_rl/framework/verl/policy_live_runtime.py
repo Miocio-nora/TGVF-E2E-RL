@@ -94,6 +94,7 @@ from tgvf_rl.rewards.deepeyes_async_tgvf import (
 )
 from tgvf_rl.rewards.deepeyes_verl_reward import (
     AsyncDeepEyesOpenRouterJudge,
+    effective_run_global_judge_concurrency,
     load_deepeyes_judge_service_config,
     process_local_judge_concurrency,
 )
@@ -440,8 +441,14 @@ class _Qwen3PolicyTrajectoryComponents:
                 reward.judge_config_path,
                 expected_file_sha256=reward.judge_config_sha256,
             )
+            effective_global_judge_concurrency = (
+                effective_run_global_judge_concurrency(
+                    service.maximum_concurrency,
+                    worker_count=context.placement.world_size,
+                )
+            )
             local_judge_concurrency = process_local_judge_concurrency(
-                service.maximum_concurrency,
+                effective_global_judge_concurrency,
                 worker_index=context.placement.worker_index,
                 worker_count=context.placement.world_size,
             )
