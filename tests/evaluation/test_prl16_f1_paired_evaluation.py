@@ -80,10 +80,11 @@ def test_frozen_pairing_accepts_equal_state_and_rejects_drift(monkeypatch) -> No
         lambda path: SimpleNamespace(receipt=receipts[path]),
     )
 
-    _MODULE._validate_materialized_frozen_pairing(plan, step0, step8)
+    configs = {"step0": step0, "step8": step8}
+    _MODULE._validate_materialized_frozen_pairing(plan, configs)
     receipts[step8].rp66_state_sha256 = "b" * 64
     with pytest.raises(RuntimeError, match="state changed"):
-        _MODULE._validate_materialized_frozen_pairing(plan, step0, step8)
+        _MODULE._validate_materialized_frozen_pairing(plan, configs)
 
 
 def test_completion_marker_atomically_binds_paired_summary(tmp_path: Path) -> None:

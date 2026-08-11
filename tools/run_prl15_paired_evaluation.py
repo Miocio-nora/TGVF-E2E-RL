@@ -309,12 +309,49 @@ def _materialize_step_pointer(run: Any, *, step: int, destination: Path) -> Path
     manifests = tuple(
         sorted((source_root / "lora-manifests").glob(f"step-{step:08d}-*.json"))
     )
-    if len(manifests) != 1:
-        raise RuntimeError(f"expected exactly one runtime RP66 manifest for step {step}")
-    source_manifest = manifests[0]
+    if not manifests:
+        raise RuntimeError(f"runtime RP66 manifest is missing for step {step}")
+
+    # A checkpoint lifecycle may republish the same frozen RP66 state after
+    # waking vLLM.  Such a corrective publication has a distinct request ID,
+    # but it is not a distinct model state.  Prefer the manifest named by the
+    # durable latest pointer when it refers to this step, and otherwise accept
+    # multiple publications only when their model/tensor identities agree.
+    parsed_manifests: dict[Path, dict[str, Any]] = {}
+    state_identities: set[tuple[object, object, object]] = set()
+    for candidate in manifests:
+        payload = json.loads(candidate.read_bytes())
+        if not isinstance(payload, dict):
+            raise RuntimeError("runtime RP66 manifest payload is malformed")
+        parsed_manifests[candidate] = payload
+        state_identities.add(
+            (
+                payload.get("weights_sha256"),
+                payload.get("tensor_file"),
+                payload.get("tensor_file_sha256"),
+            )
+        )
+    if len(state_identities) != 1:
+        raise RuntimeError(
+            f"runtime RP66 manifests disagree on model state for step {step}"
+        )
+
+    source_manifest: Path | None = None
+    latest_pointer = source_root / "latest-lora-snapshot.json"
+    if latest_pointer.is_file():
+        latest = json.loads(latest_pointer.read_bytes())
+        if isinstance(latest, dict) and latest.get("optimizer_step") == step:
+            referenced = source_root / str(latest.get("manifest_file", ""))
+            if referenced in parsed_manifests:
+                expected_sha256 = latest.get("manifest_file_sha256")
+                if expected_sha256 != _sha256_file(referenced):
+                    raise RuntimeError("latest runtime RP66 manifest SHA256 differs")
+                source_manifest = referenced
+    if source_manifest is None:
+        source_manifest = manifests[-1]
     manifest_bytes = source_manifest.read_bytes()
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-    manifest = json.loads(manifest_bytes)
+    manifest = parsed_manifests[source_manifest]
     expected_fields = {
         "schema_version", "run_id", "run_identity_sha256", "optimizer_step",
         "request_sha256", "weights_sha256", "tensor_file",
