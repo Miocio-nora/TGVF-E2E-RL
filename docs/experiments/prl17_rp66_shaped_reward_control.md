@@ -62,6 +62,12 @@ covered. PRL17 therefore materializes the exact first 128 sample IDs from the
 verified DeepEyes stratified schedule and reruns the established eight-attempt
 forced-RP66 counterfactual procedure.
 
+The completed sidecar contains 128 rows: 36 `needed`, 53 `optional`, and 39
+`unnecessary`. Its payload SHA-256 is
+`1bd0bcda438bb542f9378c36a3800351318cfbf008fa5af1b9564c1067d8b3d2` and
+its manifest SHA-256 is
+`f967af7f3e1ebe15a5a8ffdf7724d7e3a48a7acdcf9923a8d9459bd1b02dd04c`.
+
 For each sample,
 
 \[
