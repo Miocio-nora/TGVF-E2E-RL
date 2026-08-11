@@ -163,6 +163,13 @@ def test_manager_syncs_step_zero_qwen_then_rp66_and_waits_for_all_acks(
     assert publication.applied_count == 2
 
 
+def test_manager_declares_post_checkpoint_full_weight_resync() -> None:
+    assert (
+        TrainableTGVFCheckpointEngineManager.requires_post_checkpoint_weight_resync
+        is True
+    )
+
+
 def test_manager_preserves_async_surface_for_later_optimizer_steps(
     tmp_path: Path,
 ) -> None:

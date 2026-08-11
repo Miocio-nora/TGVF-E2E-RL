@@ -922,7 +922,30 @@ class CheckpointAfterWeightSyncManager:
             self.sleep_replicas()
             try:
                 self.trainer._commit_policy_checkpoint_after_weight_sync(global_steps)
-            finally:
+            except BaseException:
+                # Preserve the historical recovery behavior if checkpoint I/O
+                # itself fails: make the replica callable before propagating.
+                self.wake_up_replicas()
+                raise
+            if bool(
+                getattr(
+                    self.upstream,
+                    "requires_post_checkpoint_weight_resync",
+                    False,
+                )
+            ):
+                # A full-model level-2 sleep discards the just-published Qwen
+                # weights.  Re-run the normal Qwen + RP66 publication instead
+                # of waking an incomplete TGVF runtime.  Calling the upstream
+                # manager directly avoids recursively committing a checkpoint.
+                try:
+                    self.upstream.update_weights(global_steps)
+                finally:
+                    # update_weights may already have made replicas callable
+                    # before a later acknowledgement error.  Mark them awake
+                    # conservatively so failure recovery will quiesce them.
+                    self._replicas_sleeping = False
+            else:
                 self.wake_up_replicas()
             checkpoint_seconds = perf_counter() - checkpoint_started
         complete = getattr(self.trainer, "_complete_policy_metric_publication", None)

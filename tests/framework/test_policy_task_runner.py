@@ -399,6 +399,47 @@ def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None
     assert events[4][1]["checkpoint_seconds"] >= 0.0
 
 
+def test_tgvf_checkpoint_resyncs_discarded_weights_instead_of_bare_wake() -> None:
+    events: list[object] = []
+
+    class UpstreamManager:
+        requires_post_checkpoint_weight_resync = True
+
+        def update_weights(self, step):
+            events.append(("sync", step))
+            return {"synced": step}
+
+        def sleep_replicas(self):
+            events.append("sleep")
+
+        def wake_up_replicas(self):
+            events.append("wake")
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+        def _commit_policy_checkpoint_after_weight_sync(self, step):
+            events.append(("checkpoint", step))
+            self._policy_checkpoint_pending = False
+
+        def _complete_policy_metric_publication(self, **timings):
+            events.append(("metrics", timings))
+
+    trainer = Trainer()
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), trainer)
+
+    assert manager.update_weights(3) == {"synced": 3}
+    assert events[:4] == [
+        ("sync", 3),
+        "sleep",
+        ("checkpoint", 3),
+        ("sync", 3),
+    ]
+    assert "wake" not in events
+    assert manager._replicas_sleeping is False
+    assert events[4][0] == "metrics"
+
+
 def test_checkpoint_lifecycle_wraps_upstream_save_in_prepare_finalize_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

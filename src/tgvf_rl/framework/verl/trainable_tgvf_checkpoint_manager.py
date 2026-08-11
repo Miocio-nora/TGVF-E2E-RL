@@ -92,6 +92,13 @@ class TrainableTGVFCheckpointEngineManager:
     but rejects any Adapter tensor drift after the first completed publication.
     """
 
+    # The project checkpoint bridge has to save after the first publication so
+    # its content-addressed RP66 version exists.  Saving requires another vLLM
+    # level-2 sleep, which discards full-model weights.  A bare wake is not a
+    # valid restore boundary for this custom full-Qwen + RP66 runtime; publish
+    # both payloads again while replicas are still asleep.
+    requires_post_checkpoint_weight_resync = True
+
     def __init__(
         self,
         config: object,
