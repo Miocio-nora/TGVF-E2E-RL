@@ -54,6 +54,14 @@ R = 2A_{\mathrm{gated}} + T + P.
 If Focus or Grounding is tested later, it must use an API visual judge. A local
 32B visual judge is not part of PRL17.
 
+The answer judge keeps the matched Qwen2.5-72B model, DeepInfra-only route,
+concurrency 16, four attempts, prompts, sampling, and sample-local zero
+fallback. Its transient-health window is tightened to 16 requests at 25%:
+up to four transient failures remain sample-local, while the fifth failure in
+one window aborts before an optimizer update. This prevents a provider outage
+from silently turning an entire answer component into zeros without changing
+the reward of any successfully judged trajectory.
+
 ## Utility-label artifact
 
 The historical shaped-reward sidecar follows the old sequential small-batch

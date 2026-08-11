@@ -1,0 +1,36 @@
+{
+  "schema_version": "tgvf.deepeyes-binary-judge-service.v1",
+  "launch_enabled": true,
+  "model": "qwen/qwen-2.5-72b-instruct",
+  "modality": "text_only",
+  "prompt_profiles": {
+    "visual_vl_agent_get_prompt_sha256": "3d04cee0de48084fb040bd41946e1484a6f21b717a608b8d72219cdaf1b95107",
+    "thinklite_math_verify_prompt_sha256": "72489a60587884f91bfb8dd4f8c547c0991a7409262ff1550b293f58cfceaf2f"
+  },
+  "sampling": {
+    "visual_temperature": 0.3,
+    "thinklite_temperature": 0.0,
+    "top_p": 1.0,
+    "max_tokens": 16
+  },
+  "output": "official_visual_judgement_and_math_true_false",
+  "service": {
+    "base_url": "https://openrouter.ai/api/v1",
+    "api_key_env": "OPENROUTER_API_KEY",
+    "provider_only": ["deepinfra"],
+    "allow_fallbacks": false,
+    "timeout_seconds": 120.0,
+    "maximum_concurrency": 16,
+    "maximum_attempts": 4,
+    "retry_backoff_seconds": 0.25,
+    "retry_maximum_seconds": 2.0,
+    "cache_max_entries": 100000,
+    "transient_failure_window_size": 16,
+    "maximum_transient_failure_fraction": 0.25
+  },
+  "failure_policy": {
+    "transport_error": "bounded_retry_then_zero_with_threshold",
+    "malformed_or_nonbinary": "zero_current_sample_after_audit",
+    "auth_or_model_identity": "abort_run"
+  }
+}
