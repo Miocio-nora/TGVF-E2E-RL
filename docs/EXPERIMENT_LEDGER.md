@@ -9784,3 +9784,10 @@ than inferred from a script name or prior conversation.
   exact first four formal rows and validates all four immutable utility labels
   before Ray or GPU initialization. Missing labels remain fatal; no default or
   fallback label was introduced. Formal training data and reward are unchanged.
+- Corrected canary result (2026-08-12): the exact four labeled prefix rows
+  produced eight trajectories and six successful TGVF observations. The one
+  optimizer step completed in `131.51 s` with total reward mean `1.375`,
+  policy loss `0.01898`, gradient norm `3.7118`, and no judge transport error.
+  All four model/optimizer/extra-state shards and the frozen-RP67 step-1 pair
+  were saved, the tracker is `1`, all GPUs shut down cleanly, and no W&B run
+  was created. This is an engineering gate only; formal R1 is now authorized.
