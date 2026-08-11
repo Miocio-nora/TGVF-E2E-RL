@@ -87,6 +87,41 @@ def test_frozen_pairing_accepts_equal_state_and_rejects_drift(monkeypatch) -> No
         _MODULE._validate_materialized_frozen_pairing(plan, configs)
 
 
+def test_frozen_pairing_accepts_two_equal_runtime_snapshots(monkeypatch) -> None:
+    plan = _MODULE._load_plan(
+        _ROOT
+        / "configs/evaluation/"
+        "prl17_r0_frozen_rp66_step4_step8_coredev2511_plan.json"
+    )
+    step4 = Path("step4.json")
+    step8 = Path("step8.json")
+    storage = plan["required_pairing"]["expected_runtime_rp66_weights_sha256"]
+    receipts = {
+        step4: SimpleNamespace(
+            rp66_kind="runtime_snapshot",
+            rp66_state_sha256="a" * 64,
+            rp66_storage_sha256=storage,
+        ),
+        step8: SimpleNamespace(
+            rp66_kind="runtime_snapshot",
+            rp66_state_sha256="a" * 64,
+            rp66_storage_sha256=storage,
+        ),
+    }
+    monkeypatch.setattr(_MODULE, "load_policy_coredev_config", lambda path: path)
+    monkeypatch.setattr(
+        _MODULE,
+        "load_policy_evaluation_snapshot",
+        lambda path: SimpleNamespace(receipt=receipts[path]),
+    )
+
+    configs = {"step4": step4, "step8": step8}
+    _MODULE._validate_materialized_frozen_pairing(plan, configs)
+    receipts[step8].rp66_storage_sha256 = "b" * 64
+    with pytest.raises(RuntimeError, match="storage identity"):
+        _MODULE._validate_materialized_frozen_pairing(plan, configs)
+
+
 def test_completion_marker_atomically_binds_paired_summary(tmp_path: Path) -> None:
     report = tmp_path / "paired-summary.json"
     report.write_text('{"result":"pass"}\n', encoding="utf-8")

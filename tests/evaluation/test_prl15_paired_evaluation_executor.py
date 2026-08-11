@@ -13,6 +13,10 @@ import pytest
 _ROOT = Path(__file__).parents[2]
 _TOOL = _ROOT / "tools/run_prl15_paired_evaluation.py"
 _PLAN = _ROOT / "configs/evaluation/prl15_r1_rp66_step0_step8_coredev2511_plan.json"
+_PRL17_PLAN = (
+    _ROOT
+    / "configs/evaluation/prl17_r0_frozen_rp66_step4_step8_coredev2511_plan.json"
+)
 _SPEC = importlib.util.spec_from_file_location("prl15_paired_evaluation", _TOOL)
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
@@ -95,6 +99,15 @@ def test_plan_loader_rejects_non_generatable_scoring_prefix(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="run prefix"):
         _MODULE._load_plan(path)
+
+
+def test_plan_loader_accepts_ordered_nonzero_checkpoint_pair() -> None:
+    plan = _MODULE._load_plan(_PRL17_PLAN)
+
+    assert [(arm["name"], arm["optimizer_step"]) for arm in plan["arms"]] == [
+        ("step4", 4),
+        ("step8", 8),
+    ]
 
 
 def test_scoring_materialization_keeps_semantic_and_legacy_ids_separate(
@@ -363,3 +376,34 @@ def test_step8_arm_materializes_qwen_only_before_pairing(
     assert calls["pair"]["rp66_pointer_path"] == calls["qwen"][
         "rp66_pointer_path"
     ]
+
+
+def test_nonzero_step_source_falls_back_to_permanent_checkpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output_root = tmp_path / "training"
+    checkpoint_root = output_root / "checkpoints"
+    permanent = output_root / "permanent-checkpoints/global_step_4"
+    permanent.mkdir(parents=True)
+    pointer = tmp_path / "step4-pointer.json"
+    run = SimpleNamespace(
+        output=SimpleNamespace(
+            checkpoint_directory=checkpoint_root,
+            root=output_root,
+        )
+    )
+    monkeypatch.setattr(
+        _MODULE,
+        "_materialize_step_pointer",
+        lambda *_args, **_kwargs: pointer,
+    )
+
+    checkpoint, observed_pointer = _MODULE._step_sources(
+        run,
+        step=4,
+        output_base=tmp_path / "evaluation",
+        arm="step4",
+    )
+
+    assert checkpoint == permanent
+    assert observed_pointer == pointer

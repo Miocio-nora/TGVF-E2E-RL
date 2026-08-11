@@ -118,8 +118,6 @@ def _load_plan(path: Path) -> dict[str, Any]:
         or names != [f"step{step}" for step in steps]
     ):
         raise ValueError("paired evaluation arms must be unique ordered stepN states")
-    if steps[0] != 0:
-        raise ValueError("paired evaluation must begin with the step0 control")
     if (
         payload.get("expected_task_count") != 2511
         or payload.get("expected_single_image_count") != 2240
@@ -237,17 +235,25 @@ def _validate_materialized_frozen_pairing(
         if receipt is None:
             raise RuntimeError("constant RP66 pairing requires paired snapshots")
         snapshots.append(receipt)
-    step0_receipt, *nonzero_receipts = snapshots
-    if step0_receipt.rp66_kind != "stage1_artifact":
-        raise RuntimeError("frozen RP66 step0 must use the stage1 artifact")
-    for receipt in nonzero_receipts:
-        if receipt.rp66_kind != "runtime_snapshot":
-            raise RuntimeError("frozen RP66 nonzero arm must use a runtime snapshot")
-        if step0_receipt.rp66_state_sha256 != receipt.rp66_state_sha256:
+    expected_runtime_storage = required_pairing[
+        "expected_runtime_rp66_weights_sha256"
+    ]
+    expected_state: str | None = None
+    for arm, receipt in zip(plan["arms"], snapshots, strict=True):
+        step = arm["optimizer_step"]
+        expected_kind = "stage1_artifact" if step == 0 else "runtime_snapshot"
+        if receipt.rp66_kind != expected_kind:
+            raise RuntimeError(
+                f"frozen RP66 step{step} must use the {expected_kind}"
+            )
+        if expected_state is None:
+            expected_state = receipt.rp66_state_sha256
+        elif receipt.rp66_state_sha256 != expected_state:
             raise RuntimeError("frozen RP66 state changed between evaluation arms")
-        if receipt.rp66_storage_sha256 != required_pairing[
-            "expected_runtime_rp66_weights_sha256"
-        ]:
+        if (
+            step > 0
+            and receipt.rp66_storage_sha256 != expected_runtime_storage
+        ):
             raise RuntimeError("frozen RP66 runtime storage identity differs")
 
 
@@ -405,6 +411,10 @@ def _step_sources(
     run: Any, *, step: int, output_base: Path, arm: str
 ) -> tuple[Path, Path]:
     checkpoint = run.output.checkpoint_directory / f"global_step_{step}"
+    if not checkpoint.is_dir():
+        permanent = run.output.root / "permanent-checkpoints" / f"global_step_{step}"
+        if permanent.is_dir():
+            checkpoint = permanent
     manifests = tuple(
         (run.output.root / "runtime-policy-state/lora-manifests").glob(
             f"step-{step:08d}-*.json"
