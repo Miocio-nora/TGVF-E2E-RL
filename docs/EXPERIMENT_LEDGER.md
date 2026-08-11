@@ -9777,3 +9777,10 @@ than inferred from a script name or prior conversation.
   then the tmux-owned eight-GPU formal run; then automatic paired step0/step8
   CoreDev-2511 evaluation. Detailed protocol:
   `docs/experiments/prl17_r1_rp67_shaped_reward_control.md`.
+- Canary attempt 1 stopped before any optimizer mutation because the generic
+  source-covering smoke split is intentionally disjoint from formal training,
+  while the shaped reward sidecar intentionally covers only the 128 formal
+  rows consumed by eight steps. The corrected shaped-reward canary uses the
+  exact first four formal rows and validates all four immutable utility labels
+  before Ray or GPU initialization. Missing labels remain fatal; no default or
+  fallback label was introduced. Formal training data and reward are unchanged.

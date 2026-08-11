@@ -47,6 +47,7 @@ from .compatibility import (
     installed_verl_distribution_identity,
     load_verl_public_api,
 )
+from .deepeyes_official_dataset import _verified_schedule_index
 from .launcher import (
     UPSTREAM_VERL_CONFIG_NAME,
     UPSTREAM_VERL_MAIN_MODULE,
@@ -214,7 +215,37 @@ def _assert_crop16_mathematical_controls(
         )
 
 
-def _apply_functional_canary_controls(values: dict[str, object]) -> None:
+def _functional_canary_dataset(
+    config: PolicyE2ESmokeRunConfig,
+) -> tuple[Path, str]:
+    """Select a canary split that is valid for the configured reward.
+
+    Stage3-shaped reward requires an immutable utility label for every sampled
+    row.  Its sidecar is intentionally scoped to the formal training prefix,
+    while the historical smoke split is intentionally disjoint from formal
+    data.  Use the first four labeled formal rows for that engineering gate;
+    retain the source-covering smoke split for rewards without a sidecar.
+    """
+
+    tool_utility = config.reward.tool_utility
+    if tool_utility is None:
+        return DEEPEYES_SMOKE_SENTINEL, "smoke"
+
+    selected = _verified_schedule_index().train[:TRAINABLE_TGVF_CANARY_PROMPTS]
+    if len(selected) != TRAINABLE_TGVF_CANARY_PROMPTS:
+        raise ValueError("functional utility-labeled canary prefix is incomplete")
+    for ordinal, sample in enumerate(selected):
+        label = tool_utility.label_for_sample(sample.sample_id)
+        if label.training_index != ordinal:
+            raise ValueError(
+                "functional utility-labeled canary order differs from sidecar"
+            )
+    return DEEPEYES_TRAIN_SENTINEL, "utility_labeled_train_prefix"
+
+
+def _apply_functional_canary_controls(
+    values: dict[str, object], config: PolicyE2ESmokeRunConfig
+) -> None:
     """Shrink canary policy work while retaining room for tool observations.
 
     The serialized 512-token budget counts policy-sampled tokens only.  veRL's
@@ -224,10 +255,11 @@ def _apply_functional_canary_controls(values: dict[str, object]) -> None:
     to truncate (it does not) or silently dropping observation tokens.
     """
 
+    sentinel, _ = _functional_canary_dataset(config)
     values.update(
         {
-            "data.train_files": [str(DEEPEYES_SMOKE_SENTINEL)],
-            "data.val_files": [str(DEEPEYES_SMOKE_SENTINEL)],
+            "data.train_files": [str(sentinel)],
+            "data.val_files": [str(sentinel)],
             "data.train_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
             "data.gen_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
             "data.max_response_length": (
@@ -292,6 +324,7 @@ def _assert_functional_canary_config(config: PolicyE2ESmokeRunConfig) -> None:
         raise ValueError(
             f"functional canary run config differs: mismatches={mismatches!r}"
         )
+    _functional_canary_dataset(config)
 
 
 def _plain_binding(binding: DeepEyesTGVFMatchedDatasetBinding) -> dict[str, object]:
@@ -445,10 +478,11 @@ def _replace_custom_record(
         }
     )
     if mode == "canary":
+        _, canary_split = _functional_canary_dataset(config)
         custom["functional_canary"] = {
             "minimum_successful_tgvf_observations": 1,
             "failure_boundary": "before_optimizer_mutation",
-            "dataset_split": "smoke",
+            "dataset_split": canary_split,
         }
     values["actor_rollout_ref.rollout.custom"] = custom
 
@@ -501,6 +535,7 @@ class TrainableTGVFVerlLaunchPlan:
             raise ValueError("trainable TGVF launcher requires an RP66 run schema")
         if self.mode == "canary":
             _assert_functional_canary_config(self.config)
+            canary_sentinel, canary_split = _functional_canary_dataset(self.config)
             if TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH < (
                 TRAINABLE_TGVF_CANARY_MIN_RESPONSE_TRANSPORT_LENGTH
             ):
@@ -509,8 +544,8 @@ class TrainableTGVFVerlLaunchPlan:
                     "policy and environment token bounds"
                 )
             canary_expected = {
-                "data.train_files": [str(DEEPEYES_SMOKE_SENTINEL)],
-                "data.val_files": [str(DEEPEYES_SMOKE_SENTINEL)],
+                "data.train_files": [str(canary_sentinel)],
+                "data.val_files": [str(canary_sentinel)],
                 "data.train_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
                 "data.gen_batch_size": TRAINABLE_TGVF_CANARY_PROMPTS,
                 "data.max_response_length": (
@@ -662,7 +697,7 @@ class TrainableTGVFVerlLaunchPlan:
             if custom.get("functional_canary") != {
                 "minimum_successful_tgvf_observations": 1,
                 "failure_boundary": "before_optimizer_mutation",
-                "dataset_split": "smoke",
+                "dataset_split": canary_split,
             }:
                 raise ValueError("functional canary evidence contract differs")
         elif requires_observation is not None:
@@ -760,7 +795,7 @@ def build_trainable_tgvf_verl_launch_plan(
     )
     if mode == "canary":
         _assert_functional_canary_config(config)
-        _apply_functional_canary_controls(values)
+        _apply_functional_canary_controls(values, config)
     checkpoint_steps = (
         tuple(range(resolved_target + 1)) if mode == "formal" else (0, 1)
     )

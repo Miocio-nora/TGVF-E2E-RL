@@ -8,6 +8,9 @@ import pytest
 from tgvf_rl.framework.verl.native_deepeyes_runtime import (
     NATIVE_DEEPEYES_POLICY_LOSS_MODE,
 )
+from tgvf_rl.framework.verl.deepeyes_official_dataset import (
+    _verified_schedule_index,
+)
 from tgvf_rl.framework.verl.policy_task_runner import (
     POLICY_METRICS_PATH_ENV,
     POLICY_REFERENCE_DIAGNOSTIC_ENV,
@@ -61,6 +64,11 @@ _CONFIG_CANARY = (
     _ROOT / "configs/policy/runs/"
     "prl_15_c0_qwen3_instruct_full_rp66_bs4_n2_functional_canary_ws4.toml"
 )
+_CONFIG_SHAPED_CANARY = (
+    _ROOT / "configs/policy/runs/"
+    "prl_17_r1_c0_qwen3_instruct_full_frozen_rp67_bs4_n2_t1_"
+    "shaped_novisual_canary_ws4.toml"
+)
 _CONFIG_EXACT = (
     _ROOT / "configs/policy/runs/"
     "prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_"
@@ -78,6 +86,10 @@ def _config_ws4():
 
 def _config_canary():
     return load_policy_e2e_smoke_run_config(_CONFIG_CANARY)
+
+
+def _config_shaped_canary():
+    return load_policy_e2e_smoke_run_config(_CONFIG_SHAPED_CANARY)
 
 
 def _exact_config(tmp_path: Path):
@@ -483,6 +495,29 @@ def test_functional_canary_is_an_isolated_low_cost_full_path_launch() -> None:
     assert composed.data.train_batch_size == 4
     assert composed.actor_rollout_ref.rollout.n == 2
     assert composed.trainer.total_training_steps == 1
+
+
+def test_shaped_canary_uses_only_utility_labeled_formal_prefix() -> None:
+    config = _config_shaped_canary()
+    plan = build_trainable_tgvf_verl_launch_plan(config, mode="canary")
+    values = plan.overrides
+
+    assert values["data.train_files"] == [str(DEEPEYES_TRAIN_SENTINEL)]
+    assert values["data.val_files"] == [str(DEEPEYES_TRAIN_SENTINEL)]
+    assert values["data.shuffle"] is False
+    assert values["actor_rollout_ref.rollout.custom"]["functional_canary"] == {
+        "minimum_successful_tgvf_observations": 1,
+        "failure_boundary": "before_optimizer_mutation",
+        "dataset_split": "utility_labeled_train_prefix",
+    }
+
+    selected = _verified_schedule_index().train[:4]
+    assert len(selected) == 4
+    assert config.reward.tool_utility is not None
+    assert [
+        config.reward.tool_utility.label_for_sample(sample.sample_id).training_index
+        for sample in selected
+    ] == [0, 1, 2, 3]
 
 
 def test_composed_formal_lifecycle_is_every_step_and_permanently_keeps_step8() -> None:
