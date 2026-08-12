@@ -15,6 +15,8 @@ Contract ID：`POLICY-RL-COREDEV2511-MEASUREMENT-20260812-v1`
 
 本文只替代旧文档中的 headline 聚合值，不否定旧文档记录的模型、prompt、checkpoint、训练配置与 artifact 身份。特别是 `docs/POLICY_RL_PRIMARY_BASELINE_20260810.md` 中使用 HRBench cycle 0 和 OCR Chinese-only 得到的旧均值，不再作为主汇报值。
 
+2026-08-12 的 RP67 T-free Step 0/8/16 `paired-seed-v1` 结果补记在第 7 节。该结果附录不修改本文件冻结的 benchmark、scorer、prompt、sampling 或聚合契约；第 3 节的历史结果与第 7 节的 paired 结果必须按 RNG 身份分别引用。
+
 ## 1. 今后的 headline 口径
 
 ### 1.1 数据与 scorer
@@ -135,6 +137,8 @@ ABORTED / GREEDY-STABILITY STRESS DIAGNOSTIC / NOT ACCURACY EVIDENCE
 
 所有数字单位为 `%`。OCR mean 是 EN/CN 的均值；Macro* 只把 OCR mean 计入一次。
 
+注意：本节 RP67 T-free 的 `56.37 / 57.28` 来自历史 `legacy-RNG` 评测，其 seed 会随 evaluation ID 改变。它们保留为历史 canonical 记录，不能被无标签地替换为第 7 节的 `paired-seed-v1` 数值，也不能和 paired Step 16 跨块计算 delta。
+
 | benchmark | Original | Crop clean S0 | Crop clean-final S8 | RP67 +T S0 | RP67 +T S8 | RP67 T-free S0 | RP67 T-free S8 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | VStarBench Overall | 50.79 | 78.01 | 76.96 | 66.49 | 58.64 | 64.92 | 65.45 |
@@ -201,6 +205,17 @@ artifacts/policy/
       paired-summary.json
 ```
 
+### RP67 T-free R2 Step 0 / Step 8 / Step 16 paired-seed-v1
+
+```text
+artifacts/policy/
+  PRL-17-R2-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-novisual-8step-ws8/
+    evaluation/PRL17-R2-FROZEN-RP67-TFREE-COREDEV2511-STEP0-STEP8-STEP16-PAIRED-SEED-V1/
+      paired-summary.json
+```
+
+该 summary 的 SHA256 为 `bf90a99f52f1943509fa83b8c377c959d32699e5127021ea1b09c49941119176`。
+
 R1/R2 Step 0 的共同身份：
 
 | 字段 | SHA256 |
@@ -227,7 +242,9 @@ R1/R2 Step 0 的共同身份：
 8. 同协议 Step 0 与目标 checkpoint；使用的 paired RNG namespace 或其尚未启用的明确声明；
 9. 小于当前 `1.01 pp` 单次波动参照的变化，只能作为趋势。
 
-## 6. RP67 T-free Step 8 → Step 16 验证计划
+## 6. RP67 T-free Step 8 → Step 16 验证计划（执行前记录）
+
+状态：`COMPLETED`。本节保留执行前的设计与时间估计；实际结果见第 7 节。
 
 继续训练是合理的，因为它能区分三种情况：
 
@@ -248,3 +265,64 @@ R1/R2 Step 0 的共同身份：
 当前 Step 8 checkpoint 的 optimizer/data/RNG 状态完整。实测前八步纯训练共 `4,924.7 s`，因此 Step 8 → 16 预计训练 `87–95 min`，保守 `1 h 30 min–1 h 45 min`。只做 Step 8/16 两臂的完整 CoreDev temp=1 评测约 `52 min`；推荐的 Step 0/8/16 三臂配对评测约 `75–90 min`，训练加推荐评测合计约 `2 h 45 min–3 h 15 min`。
 
 现有 launcher、supervisor 和 paired evaluator 把目标/arm 写死为 Step 8，不能直接启动。实现时应从实际训练提交 `d4286ca` 建立窄 continuation 分支，只加入 Step 8 → 16 continuation manifest、world8 恢复 gate、Step 16 永久保存和 Step 0/8/16 自动配对评测；不要把 temp=0 evaluator 的共享 sampler 改动带入训练代码。
+
+## 7. RP67 T-free Step 0 / Step 8 / Step 16 paired-seed-v1 结果
+
+### 7.1 结果身份
+
+本次一次性评测了三个 checkpoint：Step 0、Step 8 和 Step 16。三臂继续使用第 1、2 节冻结的 CoreDev-2511 协议：同一 2,511-row manifest（实际推理 2,240 条单图，显式 hold 271 条多图）、同一 prompt、TGVF tool schema、`temperature=1` sampling、VLMEvalKit scorer 和七分量 Macro* 聚合。
+
+本次唯一有意改变的是随机流身份。三臂共同使用：
+
+```text
+mode = common_random_numbers_per_task_turn
+master_seed = 42
+seed_namespace = coredev2511-official-v1/rp67-tfree/step0-step8-step16/temp1/seed42/v1
+protocol_sha256 = e82f05a663928df20e5a757c2de14264c990cc04cb9bf4985e23f1e90e257a25
+```
+
+seed 由 task/sample/rollout/assistant-turn 身份导出，并明确排除 evaluation ID、arm 名、optimizer step、checkpoint hash、policy weight hash 与 prompt-token hash。2,240 条共同推理样本的三臂 paired stream identity mismatch 为 `0`。
+
+旧结果与新结果使用的是相同模型权重，不是换了 checkpoint：
+
+- Step 0 的 combined/Qwen/RP67 身份哈希在两次评测中直接一致；
+- Step 8 的旧、新导出采用不同 shard layout，因此文件/tree hash 不同；逐 named-tensor 核验覆盖 `750/750` tensors、`8,767,123,696` 个 bf16 elements，key/shape/dtype mismatch 为 `0`，`torch.equal` mismatch 为 `0`；
+- RP67 state 均为 `f223d1f01b1a188de54b4c6458e1aa456696e566e015fcb570135517848c0256`。
+
+因此，同一 Step 在 legacy 与 paired 块之间出现的分数差异不能归因于模型权重变化；主要区别是 `temperature=1` 的采样随机流。
+
+### 7.2 三 checkpoint 配对结果
+
+所有数字单位为 `%`；Macro* 使用未四舍五入的分量计算。
+
+| benchmark | paired Step 0 | paired Step 8 | paired Step 16 |
+|---|---:|---:|---:|
+| VStarBench Overall | 62.83 | 65.45 | 64.92 |
+| HRBench Average / all | 58.50 | 60.00 | 64.50 |
+| BLINK single-image（180） | 62.78（113/180） | 60.56（109/180） | 63.33（114/180） |
+| OCRBench v2 English | 46.20 | 44.33 | 43.83 |
+| OCRBench v2 Chinese | 40.87 | 34.45 | 37.95 |
+| OCR EN/CN mean | 43.53 | 39.39 | 40.89 |
+| MMMU-Pro single-image（269） | 50.19（135/269） | 47.58（128/269） | 47.96（129/269） |
+| MathVista MINI | 68.00 | 68.00 | 70.00 |
+| MathVerse five-version macro | 53.40 | 52.40 | 55.80 |
+| **Macro\*** | **57.0320** | **56.1964** | **58.1996** |
+
+有效的同块 delta 为：
+
+| 对比 | Macro* delta | 解释 |
+|---|---:|---|
+| Step 8 − Step 0 | -0.84 pp | paired 单次负向变化 |
+| Step 16 − Step 8 | +2.00 pp | 继续训练后明显回升 |
+| Step 16 − Step 0 | +1.17 pp | 当前支持 RL 有效的正向信号 |
+
+### 7.3 与 legacy-RNG 的边界
+
+| RNG block | Step 0 | Step 8 | Step 16 |
+|---|---:|---:|---:|
+| `legacy-RNG` | 56.37 | 57.28 | — |
+| `paired-seed-v1` | 57.0320 | 56.1964 | 58.1996 |
+
+合法的主结论必须来自完整 paired 块 `57.0320 → 56.1964 → 58.1996`。禁止用 legacy Step 8 `57.28` 与 paired Step 16 `58.1996` 相减，也禁止在不写 RNG block 的情况下只报告“RP67 Step 0/8”。
+
+paired common-random-numbers 显著改善了 checkpoint 间 delta 的可比性，但没有把 `temperature=1` 变成确定性评测：每题仍只有一次采样，且不同 checkpoint 的 token 分布会使轨迹逐步分叉。因此 `Step 16 − Step 0 = +1.17 pp` 当前应表述为“正向信号，支持继续验证 RL 有效”，不能表述为已经统计确认的稳定增益。Step 0/8 的 legacy 与 paired 分数分别相差 `+0.66 pp` 和 `-1.08 pp`，也直接说明 temp=1 单次评测仍存在足以影响约 1 pp 结论的波动。
