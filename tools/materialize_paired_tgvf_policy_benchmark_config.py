@@ -36,6 +36,7 @@ def main() -> int:
     parser.add_argument("--max-num-batched-tokens", type=int, default=32768)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enable-chunked-prefill", action="store_true")
+    parser.add_argument("--paired-seed-namespace")
     args = parser.parse_args()
     payload = materialize_paired_tgvf_policy_benchmark_config(
         evaluation_id=args.evaluation_id,
@@ -55,6 +56,7 @@ def main() -> int:
         enable_chunked_prefill=args.enable_chunked_prefill,
         gpu_memory_utilization=args.gpu_memory_utilization,
         gpu_ids=tuple(args.gpu_ids),
+        paired_seed_namespace=args.paired_seed_namespace,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

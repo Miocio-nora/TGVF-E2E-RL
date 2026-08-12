@@ -79,6 +79,7 @@ from tgvf_rl.framework.vllm import (
     VLLMOutputDecodingContract,
     VLLMPolicySampler,
     VLLMTerminationOutcome,
+    VLLMTurnRNGIdentity,
     VLLMTurnTerminationContract,
     qwen3_vl_final_turn_outcomes,
 )
@@ -135,6 +136,7 @@ POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v1"
 POLICY_BENCHMARK_SCHEMA = "tgvf-policy-benchmark-evaluation-v1"
 POLICY_EVALUATION_IDENTITY_SCHEMA = "tgvf-policy-evaluation-identity-v1"
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
+PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-rng-v1"
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
     "deepeyes_official_visible_native_crop_v1"
@@ -148,6 +150,7 @@ POLICY_EVALUATION_PROTOCOLS = frozenset(
 _LEGACY_COREDEV_TASK_COUNT = 2511
 _LEGACY_COREDEV_SINGLE_IMAGE_COUNT = 2240
 _SHA256_LENGTH = 64
+_VLLM_SEED_MODULUS = 2**31 - 1
 LORA_ADAPTER_EVALUATION_BACKEND = "lora_adapter"
 POLICY_EVALUATION_BACKENDS = frozenset(
     {
@@ -270,6 +273,7 @@ class PolicyCoreDevConfig:
     paired_snapshot_receipt_path: Path | None = None
     paired_snapshot_receipt_sha256: str | None = None
     evaluation_protocol: str = TRAINING_RUN_EVALUATION_PROTOCOL
+    paired_seed_namespace: str | None = None
     schema_version: str = POLICY_COREDEV_SCHEMA
 
     def __post_init__(self) -> None:
@@ -298,6 +302,29 @@ class PolicyCoreDevConfig:
             raise ValueError("policy benchmark snapshot backend differs")
         if not self.evaluation_id:
             raise ValueError("evaluation_id must be non-empty")
+        if self.paired_seed_namespace is not None:
+            namespace = self.paired_seed_namespace
+            if (
+                not isinstance(namespace, str)
+                or not namespace
+                or namespace.strip() != namespace
+                or any(character.isspace() for character in namespace)
+            ):
+                raise ValueError(
+                    "paired_seed_namespace must be a non-empty canonical string"
+                )
+            if self.schema_version != POLICY_BENCHMARK_SCHEMA:
+                raise ValueError(
+                    "paired evaluation RNG requires the generic benchmark schema"
+                )
+            if self.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL:
+                raise ValueError(
+                    "paired evaluation RNG is supported only by training-run evaluation"
+                )
+            if self.task_manifest_sha256 is None:
+                raise ValueError(
+                    "paired evaluation RNG requires an explicitly hashed task manifest"
+                )
         if (
             len(self.gpu_ids) != 4
             or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in self.gpu_ids)
@@ -395,27 +422,40 @@ class PolicyCoreDevConfig:
             if any(value is not None for value in paired_binding):
                 raise ValueError("LoRA snapshot backend forbids paired bindings")
         elif self.snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
-            if self.lora_pointer_path is not None or self.lora_pointer_sha256 is not None:
+            if (
+                self.lora_pointer_path is not None
+                or self.lora_pointer_sha256 is not None
+            ):
                 raise ValueError("full-model snapshot backend forbids LoRA bindings")
             if not all(value is not None for value in full_model_binding):
                 raise ValueError(
                     "full-model snapshot backend requires manifest, receipt, and identity bindings"
                 )
-            if self.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+            if (
+                self.evaluation_protocol
+                != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+            ):
                 raise ValueError(
                     "full-model snapshots are supported only by official-visible evaluation"
                 )
             if any(value is not None for value in paired_binding):
                 raise ValueError("full-model snapshot backend forbids paired bindings")
         else:
-            if self.lora_pointer_path is not None or self.lora_pointer_sha256 is not None:
+            if (
+                self.lora_pointer_path is not None
+                or self.lora_pointer_sha256 is not None
+            ):
                 raise ValueError("paired snapshot backend forbids policy-LoRA bindings")
             if any(value is not None for value in full_model_binding):
-                raise ValueError("paired snapshot backend forbids Crop full-model bindings")
+                raise ValueError(
+                    "paired snapshot backend forbids Crop full-model bindings"
+                )
             if not all(value is not None for value in paired_binding):
                 raise ValueError("paired snapshot backend requires its receipt binding")
             if self.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL:
-                raise ValueError("paired TGVF snapshots require training-run evaluation")
+                raise ValueError(
+                    "paired TGVF snapshots require training-run evaluation"
+                )
         for name, digest in (
             ("lora_pointer_sha256", self.lora_pointer_sha256),
             (
@@ -446,10 +486,7 @@ class PolicyCoreDevConfig:
             or self.expected_optimizer_step < 0
         ):
             raise ValueError("expected_optimizer_step must be a non-negative integer")
-        if (
-            self.evaluation_protocol
-            == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
-        ):
+        if self.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
             if self.schema_version != POLICY_BENCHMARK_SCHEMA:
                 raise ValueError(
                     "official-visible DeepEyes evaluation requires generic benchmark schema"
@@ -501,6 +538,7 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "paired_snapshot_receipt_path",
         "paired_snapshot_receipt_sha256",
         "evaluation_protocol",
+        "paired_seed_namespace",
     }
     if not required <= set(payload) or not set(payload) <= required | optional:
         raise ValueError("policy benchmark config fields differ")
@@ -585,7 +623,9 @@ def _assert_policy_snapshot_binding(
         raise ValueError(f"{owner} weights differ from evaluation binding")
     if isinstance(snapshot, FullModelEvaluationSnapshot):
         if config.required_snapshot_identity_sha256 is None:
-            raise ValueError("full-model evaluation lacks its required snapshot identity")
+            raise ValueError(
+                "full-model evaluation lacks its required snapshot identity"
+            )
         if (
             snapshot.manifest.identity_sha256
             != config.required_snapshot_identity_sha256
@@ -621,10 +661,7 @@ def _load_full_model_from_paths(
         raise ValueError("full-model evaluation file hashes are absent")
     if _sha256_file(manifest_path) != config.full_model_snapshot_manifest_sha256:
         raise ValueError("full-model snapshot manifest file SHA256 differs")
-    if (
-        _sha256_file(receipt_path)
-        != config.full_model_materialization_receipt_sha256
-    ):
+    if _sha256_file(receipt_path) != config.full_model_materialization_receipt_sha256:
         raise ValueError("full-model materialization receipt file SHA256 differs")
     snapshot = load_full_model_evaluation_snapshot(
         manifest_path, receipt_path, runtime_lightweight=True
@@ -1144,7 +1181,9 @@ def write_official_coredev_tasks(output_path: str | Path) -> dict[str, int]:
                     f"official prompt is incomplete: {dataset_name}/{index}"
                 )
             if index in sample_ids:
-                raise ValueError(f"CoreDev sample index is not globally unique: {index}")
+                raise ValueError(
+                    f"CoreDev sample index is not globally unique: {index}"
+                )
             sample_ids.add(index)
             rows.append(
                 {
@@ -1422,6 +1461,156 @@ def _canonical_json_sha256(payload: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class PairedEvaluationVLLMTurnRNG:
+    """Common-random-number stream used only by benchmark evaluation.
+
+    Unlike the training RNG, this evaluator-owned stream deliberately excludes
+    the evaluation ID, arm name, optimizer step, checkpoint hash, behavior
+    policy identity, and evolving prompt tokens.  Consequently the same task
+    and assistant-turn index receive the same vLLM seed at every compared
+    checkpoint, while the ordinary rollout RNG remains completely unchanged.
+    """
+
+    master_seed: int
+    seed_namespace: str
+    task_manifest_sha256: str
+    protocol_sha256: str
+    sample_id: str
+    rollout_index: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.master_seed) is not int
+            or self.master_seed < 0
+            or self.master_seed >= 2**63
+        ):
+            raise ValueError("paired evaluation master_seed must be in [0, 2**63)")
+        if (
+            not isinstance(self.seed_namespace, str)
+            or not self.seed_namespace
+            or self.seed_namespace.strip() != self.seed_namespace
+            or any(character.isspace() for character in self.seed_namespace)
+        ):
+            raise ValueError("paired evaluation seed namespace is not canonical")
+        _require_sha256(
+            self.task_manifest_sha256, name="paired RNG task manifest SHA256"
+        )
+        _require_sha256(self.protocol_sha256, name="paired RNG protocol SHA256")
+        if not isinstance(self.sample_id, str) or not self.sample_id:
+            raise ValueError("paired evaluation sample_id must be non-empty")
+        if type(self.rollout_index) is not int or self.rollout_index < 0:
+            raise ValueError("paired evaluation rollout_index must be non-negative")
+
+    @property
+    def stream_identity(self) -> dict[str, object]:
+        return {
+            "schema_version": PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+            "seed_namespace": self.seed_namespace,
+            "master_seed": self.master_seed,
+            "task_manifest_sha256": self.task_manifest_sha256,
+            "protocol_sha256": self.protocol_sha256,
+            "sample_id": self.sample_id,
+            "rollout_index": self.rollout_index,
+        }
+
+    @property
+    def stream_identity_sha256(self) -> str:
+        return _canonical_json_sha256(self.stream_identity)
+
+    def for_turn(
+        self,
+        prompt_token_ids: tuple[int, ...],
+        *,
+        turn_index: int,
+        behavior_policy: PolicyVersion,
+    ) -> VLLMTurnRNGIdentity:
+        # Validate the sampler port inputs even though prompt/policy identity is
+        # intentionally not part of the paired probability stream.
+        if not prompt_token_ids or any(
+            type(token_id) is not int or token_id < 0 for token_id in prompt_token_ids
+        ):
+            raise ValueError("paired evaluation RNG prompt token IDs are invalid")
+        if type(turn_index) is not int or turn_index < 0:
+            raise ValueError("paired evaluation turn_index must be non-negative")
+        if not isinstance(behavior_policy, PolicyVersion):
+            raise TypeError("paired evaluation behavior_policy must be PolicyVersion")
+        state = {
+            **self.stream_identity,
+            "assistant_turn_index": turn_index,
+        }
+        rng_state_sha256 = _canonical_json_sha256(state)
+        seed_digest = hashlib.sha256(
+            b"tgvf-policy-paired-evaluation-seed-v1\0" + bytes.fromhex(rng_state_sha256)
+        ).digest()
+        return VLLMTurnRNGIdentity(
+            seed=int.from_bytes(seed_digest[:8], "big") % _VLLM_SEED_MODULUS,
+            rng_state_sha256=rng_state_sha256,
+        )
+
+
+def _paired_evaluation_rng_contract(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+    *,
+    task_manifest_sha256: str,
+) -> dict[str, object] | None:
+    namespace = getattr(config, "paired_seed_namespace", None)
+    if namespace is None:
+        return None
+    protocol_sha256 = _canonical_json_sha256(
+        _evaluation_protocol_identity(config, snapshot)
+    )
+    return {
+        "schema_version": PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+        "mode": "common_random_numbers_per_task_turn",
+        "seed_namespace": namespace,
+        "master_seed": snapshot.run.rollout_rng.master_seed,
+        "task_manifest_sha256": task_manifest_sha256,
+        "protocol_sha256": protocol_sha256,
+        "seed_components": [
+            "master_seed",
+            "seed_namespace",
+            "task_manifest_sha256",
+            "protocol_sha256",
+            "sample_id",
+            "rollout_index",
+            "assistant_turn_index",
+        ],
+        "excluded_arm_components": [
+            "evaluation_id",
+            "arm_name",
+            "optimizer_step",
+            "checkpoint_hash",
+            "policy_weights_sha256",
+            "prompt_token_ids_sha256",
+        ],
+    }
+
+
+def paired_evaluation_rng_for_task(
+    evaluation_identity: Mapping[str, object],
+    *,
+    sample_id: str,
+    rollout_index: int,
+) -> PairedEvaluationVLLMTurnRNG:
+    """Construct the evaluator RNG from an already immutable identity."""
+
+    contract = evaluation_identity.get("sampling_rng")
+    if not isinstance(contract, Mapping):
+        raise ValueError("evaluation identity has no paired sampling RNG contract")
+    if contract.get("schema_version") != PAIRED_POLICY_EVALUATION_RNG_SCHEMA:
+        raise ValueError("paired sampling RNG schema differs")
+    return PairedEvaluationVLLMTurnRNG(
+        master_seed=contract.get("master_seed"),
+        seed_namespace=contract.get("seed_namespace"),
+        task_manifest_sha256=contract.get("task_manifest_sha256"),
+        protocol_sha256=contract.get("protocol_sha256"),
+        sample_id=sample_id,
+        rollout_index=rollout_index,
+    )
+
+
 def _base_equivalent_step_zero_lora(
     snapshot: PolicyEvaluationSnapshot,
 ) -> dict[str, object]:
@@ -1542,9 +1731,7 @@ def _evaluation_protocol_identity(
         "protocol_schema_version": DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA,
         "source_repository": "https://github.com/Visual-Agent/DeepEyes",
         "source_commit": "11d20c6be32b2cf62c914e0c73a06db2f9a7e3a1",
-        "prompt_source_path": (
-            "verl/workers/agent/envs/mm_process_engine/prompt.py"
-        ),
+        "prompt_source_path": ("verl/workers/agent/envs/mm_process_engine/prompt.py"),
         "prompt_source_file_sha256": (
             "35ef1bae8da550827bc53e23751e64d4c8eecc76d9170ea5673aa2493628cc23"
         ),
@@ -1647,6 +1834,13 @@ def policy_evaluation_identity(
         or isinstance(snapshot, PairedTGVFEvaluationSnapshot)
     ):
         content["protocol"] = _evaluation_protocol_identity(config, snapshot)
+    paired_rng = _paired_evaluation_rng_contract(
+        config,
+        snapshot,
+        task_manifest_sha256=task_sha256,
+    )
+    if paired_rng is not None:
+        content["sampling_rng"] = paired_rng
     return {**content, "identity_sha256": _canonical_json_sha256(content)}
 
 
@@ -1808,9 +2002,7 @@ class StandaloneTGVFVLLMManager:
             parameters["logprobs"] = 0
         final = None
         adapter_arguments = (
-            {}
-            if self.lora_request is None
-            else {"lora_request": self.lora_request}
+            {} if self.lora_request is None else {"lora_request": self.lora_request}
         )
         async for output in self.engine.generate(
             prompt,
@@ -1942,9 +2134,7 @@ async def build_standalone_manager(
         os.environ["TGVF_POLICY_RUN_CONFIG_PATH"] = str(
             Path(snapshot.receipt.policy_config_path).resolve()
         )
-        engine_args = AsyncEngineArgs(
-            **_paired_tgvf_engine_kwargs(config, snapshot)
-        )
+        engine_args = AsyncEngineArgs(**_paired_tgvf_engine_kwargs(config, snapshot))
         engine = AsyncLLM.from_engine_args(engine_args)
         manager = StandaloneTGVFVLLMManager(
             engine, None, capture_hidden=True, native_pixels=False
@@ -1977,8 +2167,7 @@ async def build_standalone_manager(
             and run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
         ),
         native_pixels=(
-            config.evaluation_protocol
-            == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+            config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
         ),
     )
     return manager, engine, run
@@ -2123,9 +2312,7 @@ class PolicyCoreDevEvaluator:
         self.assistant_dialect = native_assistant_dialect_for_model(
             run.model.model_name
         )
-        self.success_environment_text_renderer = (
-            _success_environment_text_renderer(run)
-        )
+        self.success_environment_text_renderer = _success_environment_text_renderer(run)
         self.renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=run.model.tokenizer_length,
@@ -2258,9 +2445,7 @@ class PolicyCoreDevEvaluator:
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
             visual_token_count_resolver=_VisualTokenCountResolver(self.store),
-            success_environment_text_renderer=(
-                self.success_environment_text_renderer
-            ),
+            success_environment_text_renderer=(self.success_environment_text_renderer),
             assistant_dialect=self.assistant_dialect,
         )
         if self.run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
@@ -2334,9 +2519,17 @@ class PolicyCoreDevEvaluator:
         sampler = VLLMPolicySampler(
             client=client,
             behavior_policy=self.policy_version,
-            rng=ContentAddressedVLLMTurnRNG(
-                master_seed=self.run.rollout_rng.master_seed,
-                stream_identity=trajectory_id,
+            rng=(
+                paired_evaluation_rng_for_task(
+                    self.evaluation_identity,
+                    sample_id=identity.sample_id,
+                    rollout_index=identity.rollout_index,
+                )
+                if self.config.paired_seed_namespace is not None
+                else ContentAddressedVLLMTurnRNG(
+                    master_seed=self.run.rollout_rng.master_seed,
+                    stream_identity=trajectory_id,
+                )
             ),
             request_context=registry,
             decoding=decoding,
@@ -2452,9 +2645,7 @@ def trajectory_audit_payload(
             ],
             "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
             "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
-            "policy_rp66_storage_sha256": policy_snapshot[
-                "rp66_storage_sha256"
-            ],
+            "policy_rp66_storage_sha256": policy_snapshot["rp66_storage_sha256"],
         }
     elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
         snapshot_fields = {
@@ -2520,6 +2711,14 @@ def trajectory_audit_payload(
         ],
         "successful_observation_count": len(trajectory.observations),
     }
+    if "sampling_rng" in evaluation_identity:
+        rng = paired_evaluation_rng_for_task(
+            evaluation_identity,
+            sample_id=trajectory.identity.sample_id,
+            rollout_index=trajectory.identity.rollout_index,
+        )
+        payload["sampling_rng"] = dict(evaluation_identity["sampling_rng"])
+        payload["paired_rng_stream_identity_sha256"] = rng.stream_identity_sha256
     payload["result_identity_sha256"] = _canonical_json_sha256(payload)
     return payload
 
@@ -2569,9 +2768,7 @@ def validate_policy_benchmark_result(
             ],
             "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
             "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
-            "policy_rp66_storage_sha256": policy_snapshot[
-                "rp66_storage_sha256"
-            ],
+            "policy_rp66_storage_sha256": policy_snapshot["rp66_storage_sha256"],
         }
     elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
         snapshot_expected = {
@@ -2618,6 +2815,14 @@ def validate_policy_benchmark_result(
         "optimizer_step": policy_snapshot["optimizer_step"],
         "policy_weights_sha256": policy_snapshot["weights_sha256"],
     }
+    if "sampling_rng" in evaluation_identity:
+        rng = paired_evaluation_rng_for_task(
+            evaluation_identity,
+            sample_id=task.bound_sample_id,
+            rollout_index=0,
+        )
+        expected["sampling_rng"] = evaluation_identity["sampling_rng"]
+        expected["paired_rng_stream_identity_sha256"] = rng.stream_identity_sha256
     for field, value in expected.items():
         if payload.get(field) != value:
             raise RuntimeError(f"policy benchmark result {field} differs")
@@ -2708,6 +2913,8 @@ __all__ = [
     "POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA",
     "POLICY_COREDEV_SCHEMA",
     "POLICY_EVALUATION_IDENTITY_SCHEMA",
+    "PAIRED_POLICY_EVALUATION_RNG_SCHEMA",
+    "PairedEvaluationVLLMTurnRNG",
     "PolicyCoreDevConfig",
     "PolicyCoreDevEvaluator",
     "PolicyEvaluationSnapshot",
@@ -2731,6 +2938,7 @@ __all__ = [
     "policy_evaluation_identity",
     "policy_lora_request_name",
     "policy_version_from_pointer",
+    "paired_evaluation_rng_for_task",
     "prepare_policy_benchmark_tasks",
     "trajectory_audit_payload",
     "validate_policy_benchmark_runtime_interfaces",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wait for, run, resume, and officially score the PRL15 step0/step8 pair."""
+"""Wait for, run, resume, and officially score ordered policy checkpoints."""
 
 from __future__ import annotations
 
@@ -62,6 +62,15 @@ RUNNER = REPOSITORY_ROOT / "tools/run_policy_benchmark.py"
 COREDEV_RUNNER = REPOSITORY_ROOT / "tools/run_coredev_2511_vlmevalkit.py"
 PLAN_SCHEMA = "tgvf.prl15-paired-policy-benchmark-plan.v2"
 PAIR_SUMMARY_SCHEMA = "tgvf.prl15-paired-coredev-summary.v1"
+PAIRED_RNG_PLAN_SCHEMA = "tgvf.policy-paired-evaluation-rng-plan.v1"
+_PAIRED_RNG_EXCLUSIONS = (
+    "evaluation_id",
+    "arm_name",
+    "optimizer_step",
+    "checkpoint_hash",
+    "policy_weights_sha256",
+    "prompt_token_ids_sha256",
+)
 _SCORING_RUN_PREFIX = re.compile(r"T(?P<date>\d{8})-[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
@@ -99,6 +108,23 @@ def _sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _canonical_json_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _paired_seed_namespace(plan: dict[str, Any]) -> str | None:
+    contract = plan.get("paired_rng")
+    return None if contract is None else str(contract["seed_namespace"])
 
 
 def _load_plan(path: Path) -> dict[str, Any]:
@@ -145,6 +171,41 @@ def _load_plan(path: Path) -> dict[str, Any]:
     }
     if len(generated_run_ids) != len(payload["arms"]):
         raise ValueError("PRL15 VLMEvalKit arm run IDs must be distinct")
+    paired_rng = payload.get("paired_rng")
+    if paired_rng is not None:
+        expected_fields = {
+            "schema_version",
+            "mode",
+            "seed_namespace",
+            "master_seed",
+            "task_manifest_sha256",
+            "protocol_sha256",
+            "temperature",
+            "do_sample",
+            "excluded_arm_components",
+        }
+        if not isinstance(paired_rng, dict) or set(paired_rng) != expected_fields:
+            raise ValueError("paired evaluation RNG plan fields differ")
+        if (
+            paired_rng["schema_version"] != PAIRED_RNG_PLAN_SCHEMA
+            or paired_rng["mode"] != "common_random_numbers_per_task_turn"
+            or not isinstance(paired_rng["seed_namespace"], str)
+            or not paired_rng["seed_namespace"]
+            or paired_rng["seed_namespace"].strip() != paired_rng["seed_namespace"]
+            or any(character.isspace() for character in paired_rng["seed_namespace"])
+        ):
+            raise ValueError("paired evaluation RNG plan identity differs")
+        if (
+            type(paired_rng["master_seed"]) is not int
+            or paired_rng["master_seed"] < 0
+            or paired_rng["temperature"] != 1.0
+            or paired_rng["do_sample"] is not True
+        ):
+            raise ValueError("paired evaluation must retain canonical temp=1 sampling")
+        if paired_rng["task_manifest_sha256"] != payload["task_manifest_sha256"]:
+            raise ValueError("paired RNG task manifest differs from evaluation plan")
+        if tuple(paired_rng["excluded_arm_components"]) != _PAIRED_RNG_EXCLUSIONS:
+            raise ValueError("paired RNG arm-invariant exclusions differ")
     for field in ("judge_api_nproc", "judge_retry", "judge_timeout_seconds"):
         if type(scoring.get(field)) is not int or scoring[field] <= 0:
             raise ValueError(f"PRL15 scoring {field} must be positive")
@@ -190,6 +251,24 @@ def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
     }
     if protocol != expected:
         raise RuntimeError("PRL15 plan protocol differs from its policy run")
+    paired_rng = plan.get("paired_rng")
+    if paired_rng is not None:
+        runtime_protocol = {
+            "profile": "training_run",
+            "prompt_sha256": run.protocol.prompt_sha256,
+            "tool_schema_sha256": run.protocol.tool_schema_sha256,
+            "tool_profile": run.protocol.tool_profile.value,
+            "enabled_tool_names": list(run.protocol.enabled_tool_names),
+            "maximum_tool_calls": run.protocol.maximum_tool_calls,
+            "native_pixels": False,
+        }
+        if _canonical_json_sha256(runtime_protocol) != paired_rng["protocol_sha256"]:
+            raise RuntimeError("paired RNG protocol identity differs from policy run")
+        if run.rollout_rng.master_seed != paired_rng["master_seed"]:
+            raise RuntimeError("paired RNG master seed differs from policy run")
+        sampling = run.policy.sampling
+        if sampling.temperature != 1.0 or sampling.do_sample is not True:
+            raise RuntimeError("paired evaluation no longer uses canonical temp=1")
     required_pairing = plan.get("required_pairing")
     if not isinstance(required_pairing, dict):
         raise ValueError("paired evaluation plan required_pairing is missing")
@@ -207,13 +286,13 @@ def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
             raise ValueError(
                 "constant RP66 pairing requires adapter_update_mode=frozen_adapter"
             )
-        expected_weights = required_pairing.get(
-            "expected_runtime_rp66_weights_sha256"
-        )
+        expected_weights = required_pairing.get("expected_runtime_rp66_weights_sha256")
         if (
             not isinstance(expected_weights, str)
             or len(expected_weights) != 64
-            or any(character not in "0123456789abcdef" for character in expected_weights)
+            or any(
+                character not in "0123456789abcdef" for character in expected_weights
+            )
         ):
             raise ValueError("constant RP66 pairing requires a lowercase SHA256")
 
@@ -230,36 +309,37 @@ def _validate_materialized_frozen_pairing(
     for arm in plan["arms"]:
         config_path = configs[arm["name"]]
         config = load_policy_coredev_config(config_path)
+        if getattr(config, "paired_seed_namespace", None) != _paired_seed_namespace(
+            plan
+        ):
+            raise RuntimeError(
+                f"existing {arm['name']} paired seed namespace differs from plan"
+            )
         snapshot = load_policy_evaluation_snapshot(config)
         receipt = getattr(snapshot, "receipt", None)
         if receipt is None:
             raise RuntimeError("constant RP66 pairing requires paired snapshots")
         snapshots.append(receipt)
-    expected_runtime_storage = required_pairing[
-        "expected_runtime_rp66_weights_sha256"
-    ]
+    expected_runtime_storage = required_pairing["expected_runtime_rp66_weights_sha256"]
     expected_state: str | None = None
     for arm, receipt in zip(plan["arms"], snapshots, strict=True):
         step = arm["optimizer_step"]
         expected_kind = "stage1_artifact" if step == 0 else "runtime_snapshot"
         if receipt.rp66_kind != expected_kind:
-            raise RuntimeError(
-                f"frozen RP66 step{step} must use the {expected_kind}"
-            )
+            raise RuntimeError(f"frozen RP66 step{step} must use the {expected_kind}")
         if expected_state is None:
             expected_state = receipt.rp66_state_sha256
         elif receipt.rp66_state_sha256 != expected_state:
             raise RuntimeError("frozen RP66 state changed between evaluation arms")
-        if (
-            step > 0
-            and receipt.rp66_storage_sha256 != expected_runtime_storage
-        ):
+        if step > 0 and receipt.rp66_storage_sha256 != expected_runtime_storage:
             raise RuntimeError("frozen RP66 runtime storage identity differs")
 
 
 def _resolve_repo_path(value: str) -> Path:
     path = Path(value)
-    return (REPOSITORY_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+    return (
+        (REPOSITORY_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+    )
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -359,9 +439,17 @@ def _materialize_step_pointer(run: Any, *, step: int, destination: Path) -> Path
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     manifest = parsed_manifests[source_manifest]
     expected_fields = {
-        "schema_version", "run_id", "run_identity_sha256", "optimizer_step",
-        "request_sha256", "weights_sha256", "tensor_file",
-        "tensor_file_sha256", "tensor_names", "tensor_metadata", "integrity_sha256",
+        "schema_version",
+        "run_id",
+        "run_identity_sha256",
+        "optimizer_step",
+        "request_sha256",
+        "weights_sha256",
+        "tensor_file",
+        "tensor_file_sha256",
+        "tensor_names",
+        "tensor_metadata",
+        "integrity_sha256",
     }
     if not isinstance(manifest, dict) or set(manifest) != expected_fields:
         raise RuntimeError("runtime RP66 manifest fields differ")
@@ -433,8 +521,15 @@ def _step_sources(
     return checkpoint, pointer
 
 
-def _wait_for_step8(run: Any, *, timeout_seconds: int, poll_seconds: int) -> None:
-    checkpoint = run.output.checkpoint_directory / "global_step_8"
+def _wait_for_optimizer_step(
+    run: Any,
+    *,
+    optimizer_step: int,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> None:
+    if type(optimizer_step) is not int or optimizer_step <= 0:
+        raise ValueError("checkpoint wait requires a positive optimizer step")
     pointer = run.output.root / "runtime-policy-state/latest-lora-snapshot.json"
     deadline = time.monotonic() + timeout_seconds
     while True:
@@ -445,29 +540,60 @@ def _wait_for_step8(run: Any, *, timeout_seconds: int, poll_seconds: int) -> Non
                 latest_step = int(latest.read_text(encoding="utf-8").strip())
             except (OSError, ValueError):
                 latest_step = None
-        actor = checkpoint / "actor"
-        required = (
-            checkpoint / "data.pt",
-            actor / "fsdp_config.json",
-            actor / "huggingface/config.json",
-            actor / "tgvf_policy_checkpoint_pair.json",
-            actor / "tgvf_policy_project_state.json",
-            *(
-                actor
-                / f"model_world_size_{run.distributed.world_size}_rank_{rank}.pt"
-                for rank in range(run.distributed.world_size)
-            ),
+        checkpoints = (
+            run.output.checkpoint_directory / f"global_step_{optimizer_step}",
+            run.output.root / "permanent-checkpoints" / f"global_step_{optimizer_step}",
         )
+        complete_checkpoint = False
+        for checkpoint in checkpoints:
+            actor = checkpoint / "actor"
+            required = (
+                checkpoint / "data.pt",
+                actor / "fsdp_config.json",
+                actor / "huggingface/config.json",
+                actor / "tgvf_policy_checkpoint_pair.json",
+                actor / "tgvf_policy_project_state.json",
+                *(
+                    actor
+                    / f"model_world_size_{run.distributed.world_size}_rank_{rank}.pt"
+                    for rank in range(run.distributed.world_size)
+                ),
+            )
+            if checkpoint.is_dir() and all(
+                path.is_file() and path.stat().st_size > 0 for path in required
+            ):
+                complete_checkpoint = True
+                break
+        pointer_step = None
+        if pointer.is_file():
+            try:
+                pointer_payload = json.loads(pointer.read_text(encoding="utf-8"))
+                pointer_step = pointer_payload.get("optimizer_step")
+            except (OSError, json.JSONDecodeError, AttributeError):
+                pointer_step = None
         if (
-            latest_step == 8
-            and checkpoint.is_dir()
-            and pointer.is_file()
-            and all(path.is_file() and path.stat().st_size > 0 for path in required)
+            latest_step == optimizer_step
+            and complete_checkpoint
+            and pointer_step == optimizer_step
         ):
             return
         if time.monotonic() >= deadline:
-            raise TimeoutError("timed out waiting for the complete PRL15 step8 closure")
+            raise TimeoutError(
+                "timed out waiting for complete optimizer-step "
+                f"{optimizer_step} closure"
+            )
         time.sleep(poll_seconds)
+
+
+def _wait_for_step8(run: Any, *, timeout_seconds: int, poll_seconds: int) -> None:
+    """Compatibility wrapper retained for existing two-arm supervisors."""
+
+    _wait_for_optimizer_step(
+        run,
+        optimizer_step=8,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+    )
 
 
 def _gpu_memory_mib() -> dict[int, int]:
@@ -543,6 +669,10 @@ def _materialize_arm(
     paths = _arm_paths(output_base, arm)
     if paths["config"].is_file() and paths["receipt"].is_file():
         config = load_policy_coredev_config(paths["config"])
+        if config.paired_seed_namespace != _paired_seed_namespace(plan):
+            raise RuntimeError(
+                f"existing {arm} paired seed namespace differs from plan"
+            )
         load_policy_evaluation_snapshot(config)
         return paths["config"]
     if step == 0:
@@ -580,6 +710,7 @@ def _materialize_arm(
         max_num_batched_tokens=32768,
         enable_chunked_prefill=False,
         gpu_memory_utilization=0.9,
+        paired_seed_namespace=_paired_seed_namespace(plan),
     )
     return paths["config"]
 
@@ -595,8 +726,12 @@ def _load_existing_arm(
 
     paths = _arm_paths(output_base, arm)
     if not paths["config"].is_file() or not paths["receipt"].is_file():
-        raise FileNotFoundError(f"score mode requires existing {arm} config and receipt")
+        raise FileNotFoundError(
+            f"score mode requires existing {arm} config and receipt"
+        )
     config = load_policy_coredev_config(paths["config"])
+    if config.paired_seed_namespace != _paired_seed_namespace(plan):
+        raise RuntimeError(f"existing {arm} paired seed namespace differs from plan")
     snapshot = load_policy_evaluation_snapshot(config)
     if config.evaluation_id != f"{plan['evaluation_id']}-{arm.upper()}":
         raise RuntimeError(f"existing {arm} evaluation ID differs from plan")
@@ -611,12 +746,16 @@ def _load_existing_arm(
     return paths["config"]
 
 
-def _run_checked(command: list[str], *, environment: dict[str, str] | None = None) -> None:
+def _run_checked(
+    command: list[str], *, environment: dict[str, str] | None = None
+) -> None:
     subprocess.run(command, check=True, env=environment)
 
 
 def _prepare(config_path: Path) -> None:
-    _run_checked([sys.executable, str(RUNNER), "--config", str(config_path), "--mode", "prepare"])
+    _run_checked(
+        [sys.executable, str(RUNNER), "--config", str(config_path), "--mode", "prepare"]
+    )
 
 
 def _prepare_prevalidated_bound_manifest(config_path: Path) -> None:
@@ -752,9 +891,7 @@ def _wait_workers(
                 process.terminate()
         for process in processes:
             process.wait()
-        raise RuntimeError(
-            f"{owner} worker {failure[0]} exited with {failure[1]}"
-        )
+        raise RuntimeError(f"{owner} worker {failure[0]} exited with {failure[1]}")
     codes = [process.wait() for process in processes]
     if any(code != 0 for code in codes):
         raise RuntimeError(f"{owner} workers failed: {codes}")
@@ -828,9 +965,7 @@ def _judge_environment(judge: dict[str, Any]) -> dict[str, str]:
     environment["CUDA_VISIBLE_DEVICES"] = ",".join(
         str(value) for value in judge["devices"]["physical"]
     )
-    environment["VLLM_ATTENTION_BACKEND"] = str(
-        judge["server"]["attention_backend"]
-    )
+    environment["VLLM_ATTENTION_BACKEND"] = str(judge["server"]["attention_backend"])
     runtime = judge.get("runtime", {})
     for source, destination in (("cc", "CC"), ("cxx", "CXX"), ("cpath", "CPATH")):
         value = runtime.get(source)
@@ -1131,15 +1266,15 @@ def _launch_score_arm(
                 (
                     dataset,
                     subprocess.Popen(
-                    _official_score_command(
-                        dataset=dataset,
-                        scoring_root=scoring_root,
-                        judge=judge,
-                        plan=plan,
-                    ),
-                    env=environment,
-                    stdout=log_handle,
-                    stderr=subprocess.STDOUT,
+                        _official_score_command(
+                            dataset=dataset,
+                            scoring_root=scoring_root,
+                            judge=judge,
+                            plan=plan,
+                        ),
+                        env=environment,
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
                     ),
                 )
             )
@@ -1220,6 +1355,33 @@ def _write_evaluation_complete(
     return record
 
 
+def _arm_evaluation_identity_sha256(config_path: Path) -> str:
+    config = load_policy_coredev_config(config_path)
+    identity_path = config.output_root / "runtime/evaluation-identity.json"
+    payload = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity_sha256 = payload.get("identity_sha256")
+    if (
+        not isinstance(identity_sha256, str)
+        or len(identity_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in identity_sha256)
+    ):
+        raise RuntimeError("arm evaluation identity SHA256 is malformed")
+    return identity_sha256
+
+
+def _sampling_report(plan: dict[str, Any], run: Any) -> dict[str, object]:
+    sampling = run.policy.sampling
+    return {
+        "source": "bound_policy_run_config",
+        "temperature": sampling.temperature,
+        "top_p": sampling.top_p,
+        "top_k": sampling.top_k,
+        "min_p": sampling.min_p,
+        "do_sample": sampling.do_sample,
+        "paired_rng": plan.get("paired_rng"),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
@@ -1229,21 +1391,27 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--gpu-ids", type=int, nargs="+", default=tuple(range(8)))
     parser.add_argument("--wait-for-step8", action="store_true")
+    parser.add_argument("--wait-for-final-arm", action="store_true")
     parser.add_argument("--wait-for-gpus", action="store_true")
     parser.add_argument("--wait-timeout-seconds", type=int, default=24 * 60 * 60)
     parser.add_argument("--poll-seconds", type=int, default=30)
     parser.add_argument("--gpu-free-threshold-mib", type=int, default=1024)
     parser.add_argument("--judge-startup-timeout-seconds", type=int, default=15 * 60)
     args = parser.parse_args()
-    if min(
-        args.wait_timeout_seconds,
-        args.poll_seconds,
-        args.judge_startup_timeout_seconds,
-    ) <= 0:
+    if (
+        min(
+            args.wait_timeout_seconds,
+            args.poll_seconds,
+            args.judge_startup_timeout_seconds,
+        )
+        <= 0
+    ):
         raise ValueError("evaluation wait durations must be positive")
     if len(args.gpu_ids) not in {4, 8} or len(set(args.gpu_ids)) != len(args.gpu_ids):
         raise ValueError("paired evaluator requires four or eight distinct GPU IDs")
-    if args.mode == "score" and args.wait_for_step8:
+    if args.wait_for_step8 and args.wait_for_final_arm:
+        raise ValueError("select only one checkpoint-wait mode")
+    if args.mode == "score" and (args.wait_for_step8 or args.wait_for_final_arm):
         raise ValueError("score mode cannot wait on a training checkpoint")
     plan = _load_plan(args.plan.resolve())
     policy_config = _resolve_repo_path(plan["policy_config"])
@@ -1264,6 +1432,16 @@ def main() -> int:
     if args.wait_for_step8:
         _wait_for_step8(
             run,
+            timeout_seconds=args.wait_timeout_seconds,
+            poll_seconds=args.poll_seconds,
+        )
+    if args.wait_for_final_arm:
+        final_step = max(arm["optimizer_step"] for arm in plan["arms"])
+        if final_step <= 0:
+            raise ValueError("final-arm wait requires a positive checkpoint arm")
+        _wait_for_optimizer_step(
+            run,
+            optimizer_step=final_step,
             timeout_seconds=args.wait_timeout_seconds,
             poll_seconds=args.poll_seconds,
         )
@@ -1309,7 +1487,16 @@ def main() -> int:
     _validate_materialized_frozen_pairing(plan, configs)
     if args.mode == "status":
         for config in configs.values():
-            _run_checked([sys.executable, str(RUNNER), "--config", str(config), "--mode", "status"])
+            _run_checked(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--config",
+                    str(config),
+                    "--mode",
+                    "status",
+                ]
+            )
         return 0
     if args.mode == "score":
         for arm, _step in arms:
@@ -1386,9 +1573,13 @@ def main() -> int:
             "multi_image_policy": "unsupported_explicit_hold",
         },
         "materialization": materialization,
+        "sampling": _sampling_report(plan, run),
         "arms": {
             arm: {
                 "optimizer_step": step,
+                "evaluation_identity_sha256": _arm_evaluation_identity_sha256(
+                    configs[arm]
+                ),
                 "official_summary": existing[arm],
             }
             for arm, step in arms

@@ -14,8 +14,7 @@ _ROOT = Path(__file__).parents[2]
 _TOOL = _ROOT / "tools/run_prl15_paired_evaluation.py"
 _PLAN = _ROOT / "configs/evaluation/prl15_r1_rp66_step0_step8_coredev2511_plan.json"
 _PRL17_PLAN = (
-    _ROOT
-    / "configs/evaluation/prl17_r0_frozen_rp66_step4_step8_coredev2511_plan.json"
+    _ROOT / "configs/evaluation/prl17_r0_frozen_rp66_step4_step8_coredev2511_plan.json"
 )
 _SPEC = importlib.util.spec_from_file_location("prl15_paired_evaluation", _TOOL)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -39,13 +38,9 @@ def test_r1_plan_and_judge_commands_are_fully_bound() -> None:
         judge=judge,
         plan=plan,
     )
-    assert score_command[score_command.index("--model") + 1] == (
-        "Qwen3-VL-8B-Instruct"
-    )
+    assert score_command[score_command.index("--model") + 1] == ("Qwen3-VL-8B-Instruct")
     assert score_command[score_command.index("--mode") + 1] == "eval"
-    assert score_command[score_command.index("--judge") + 1] == (
-        "Qwen2.5-72B-Instruct"
-    )
+    assert score_command[score_command.index("--judge") + 1] == ("Qwen2.5-72B-Instruct")
     assert "--reuse" in score_command
     assert score_command[score_command.index("--reuse-aux") + 1] == "infer"
 
@@ -199,6 +194,14 @@ def test_score_mode_reuses_existing_arms_without_policy_pipeline(
     monkeypatch.setattr(
         _MODULE, "_write_evaluation_complete", lambda *_args, **_kwargs: None
     )
+    monkeypatch.setattr(
+        _MODULE,
+        "_sampling_report",
+        lambda *_args: {"source": "bound_policy_run_config"},
+    )
+    monkeypatch.setattr(
+        _MODULE, "_arm_evaluation_identity_sha256", lambda _path: "a" * 64
+    )
     for name in ("_prepare", "_validate", "_materialize_arm", "_launch_workers"):
         monkeypatch.setattr(
             _MODULE,
@@ -313,7 +316,7 @@ def test_step8_wait_binds_complete_fsdp_shards_without_assuming_embedded_hf(
     output_root = tmp_path / "output"
     pointer = output_root / "runtime-policy-state/latest-lora-snapshot.json"
     pointer.parent.mkdir(parents=True)
-    pointer.write_bytes(b"pointer")
+    pointer.write_text('{"optimizer_step": 8}\n', encoding="utf-8")
     run = SimpleNamespace(
         output=SimpleNamespace(
             checkpoint_directory=checkpoint_root,
@@ -373,9 +376,7 @@ def test_step8_arm_materializes_qwen_only_before_pairing(
         output_root / "runtime-policy-state/latest-lora-snapshot.json"
     )
     assert calls["pair"]["qwen_model_path"] == qwen_model
-    assert calls["pair"]["rp66_pointer_path"] == calls["qwen"][
-        "rp66_pointer_path"
-    ]
+    assert calls["pair"]["rp66_pointer_path"] == calls["qwen"]["rp66_pointer_path"]
 
 
 def test_nonzero_step_source_falls_back_to_permanent_checkpoint(

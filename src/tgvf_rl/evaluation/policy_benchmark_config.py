@@ -195,10 +195,7 @@ def materialize_full_model_policy_benchmark_config(
     )
     if snapshot.policy_version.optimizer_step != expected_optimizer_step:
         raise ValueError("full-model optimizer step differs from requested step")
-    if (
-        _sha256_file(policy_config)
-        != snapshot.manifest.run_contract_file_sha256
-    ):
+    if _sha256_file(policy_config) != snapshot.manifest.run_contract_file_sha256:
         raise ValueError("policy config bytes differ from full-model run contract")
 
     task_sha256 = _sha256_file(task_manifest)
@@ -221,9 +218,7 @@ def materialize_full_model_policy_benchmark_config(
         "full_model_snapshot_manifest_path": str(snapshot_manifest),
         "full_model_snapshot_manifest_sha256": snapshot_manifest_sha256,
         "full_model_materialization_receipt_path": str(materialization_receipt),
-        "full_model_materialization_receipt_sha256": (
-            materialization_receipt_sha256
-        ),
+        "full_model_materialization_receipt_sha256": (materialization_receipt_sha256),
         "required_snapshot_identity_sha256": snapshot.manifest.identity_sha256,
         "expected_policy_run_id": snapshot.policy_version.run_id,
         "expected_policy_run_identity_sha256": snapshot.run_identity_sha256,
@@ -270,6 +265,7 @@ def materialize_paired_tgvf_policy_benchmark_config(
     enable_chunked_prefill: bool = False,
     gpu_memory_utilization: float = 0.9,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
+    paired_seed_namespace: str | None = None,
 ) -> dict[str, Any]:
     """Bind one same-step full-Qwen/RP66 pair to a benchmark arm."""
 
@@ -323,6 +319,8 @@ def materialize_paired_tgvf_policy_benchmark_config(
         "expected_task_count": expected_task_count,
         "expected_single_image_count": expected_single_image_count,
     }
+    if paired_seed_namespace is not None:
+        payload["paired_seed_namespace"] = paired_seed_namespace
     PolicyCoreDevConfig(**payload)
     encoded = (
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
