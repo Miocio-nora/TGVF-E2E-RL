@@ -9809,3 +9809,40 @@ than inferred from a script name or prior conversation.
 - Required sequence: console-only 4-prompt x 2-trajectory functional canary;
   then the tmux-owned eight-GPU formal run; then automatic paired step0/step8
   CoreDev-2511 evaluation. Smoke outputs are isolated and never sent to W&B.
+
+### PRL-18-R0-QWEN3-INSTRUCT-FULL-JOINT-RP67-TFREE
+
+- Authorized 2026-08-13 as the trainable-Adapter control following the
+  completed PRL17-R2 paired Step 0/8/16 result. It starts fresh from the same
+  Qwen3-VL-8B-Instruct and RP67 Stage1 artifacts; it does not resume the
+  frozen PRL17 model.
+- The sole scientific treatment is
+  `representation.adapter_update_mode=frozen_adapter -> joint`. Consequently
+  the 72,055,808 RP67-owned parameters enter the same AdamW optimizer at
+  `1e-6` and are republished to every rollout worker after each optimizer
+  step. Full Qwen parameters, including the visual path, remain trainable as
+  in PRL17-R2.
+- Data, order and seed, TGVF prompt/schema, BS16 x n16, world8/micro2/GA1,
+  `temperature=1`, constant LR, maximum response/tool-call limits and T-free
+  reward are fixed. The executed reward remains answer correctness plus
+  protocol and repeated-call penalties; tool utility `T`, focus and grounding
+  remain disabled. Operational run/output/provenance paths and permanent-copy
+  retention are separately named and are not scientific variables.
+- Lifecycle: a console-only exact world8/BS16/n16 one-step smoke must prove a
+  changed RP67 state and complete paired checkpoint. The formal run then stops
+  at Step 8, binds its exact model/optimizer/scheduler/data/RNG/Adapter state
+  into a runtime continuation manifest, and resumes in place to Step 16.
+  Step 8 and Step 16 are permanent; rolling recovery checkpoints are saved
+  every step. The outer supervisor is tmux-owned and retries only recoverable
+  process/API interruptions.
+- Evaluation: after Step 16 closes, evaluate only Step 8 and Step 16 in
+  parallel on eight GPUs. Both arms use the frozen CoreDev-2511 headline
+  contract and the same paired RNG namespace as PRL17-R2:
+  `coredev2511-official-v1/rp67-tfree/step0-step8-step16/temp1/seed42/v1`.
+  Step 0 is intentionally not rerun; the already measured PRL17-R2 paired
+  Step 0 is the common initialization reference.
+- Config:
+  `configs/policy/runs/prl_18_r0_qwen3_instruct_full_joint_rp67_bs16_n16_tfree_novisual_8step_ws8.toml`.
+  W&B is enabled only for formal training under run ID `prl18r0u`; smoke is
+  console-only. Expected wall time is roughly 2 h 45 min--3 h for 16 training
+  steps plus 50--65 min for the two-arm evaluation.
