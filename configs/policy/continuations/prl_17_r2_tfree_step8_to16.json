@@ -1,0 +1,20 @@
+{
+  "schema_version": "policy-horizon-extension-v1",
+  "extension_id": "PRL-17-R2-TFREE-STEP8-TO16",
+  "run_id": "PRL-17-R2-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-NOVISUAL-8STEP-WS8",
+  "base_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.worktrees/prl17-r2-tfree-step16/configs/policy/runs/prl_17_r2_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_novisual_8step_ws8.toml",
+  "base_config_source_sha256": "3820cf64ddf5e7cc825f6596f5a5ca02f4234fa65d0e67e3f8ec0e906e78593d",
+  "base_run_identity_sha256": "9c64b840e540fccd98bab30e2f05783b15f43dddcc0e926a1778e713a1f74746",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-17-R2-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-novisual-8step-ws8",
+  "source_optimizer_step": 8,
+  "target_optimizer_step": 16,
+  "scheduler_total_steps": 8,
+  "effective_checkpoint_steps": [0, 1, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+  "metrics_prefix_sha256": "5778742e5555e62d44551cadbf0b6be16345a5db3e1562b040f36771e8913e5e",
+  "checkpoint_pair_file_sha256": "8a84d6361d328b4dff986f1766438bb1acb8dbba6854166b4b869b170c417c76",
+  "project_state_file_sha256": "7dc398e6dd01d90e61a48f708ac14b0a4340196d0d59025b061361b83d0f35ad",
+  "latest_lora_pointer_file_sha256": "51b6c97ea94a4a71e3679d0ea946e119be48816ddba142297bba08196998bfb4",
+  "source_weights_sha256": "3f60f36589a3c0f3549c12b949eaabb140f6edfac849aa2b25a623bbcde53a14",
+  "code_commit": "81199c6521624ea9d49fe2f1d11d2428278af20e",
+  "integrity_sha256": "5a9e34615c9cabd82b919ab530176c087ab7a7fe7078d721989636c6b6e93ed6"
+}
