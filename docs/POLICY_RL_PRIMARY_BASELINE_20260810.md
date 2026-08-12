@@ -4,6 +4,13 @@
 
 状态：`PRIMARY BASELINE / FROZEN SNAPSHOT`
 
+> **2026-08-12 measurement update：** 本文的模型、训练配置、checkpoint 与
+> artifact 身份仍有效；但第 1、8、10 节的 headline 聚合使用了 HRBench cycle 0
+> 和 OCR Chinese-only，已由
+> `docs/POLICY_RL_COREDEV2511_MEASUREMENT_CONTRACT_AND_BASELINES_20260812.md`
+> 的 HR `Average/all`、OCR EN/CN mean 和 canonical Macro* 口径取代。后续不得再把
+> 本文的 `53.83 / 56.57 / 58.77` 当作统一主均值。
+
 Baseline ID：`POLICY-RL-PRIMARY-BASELINE-20260810-v1`
 
 模型：`Qwen3-VL-8B-Instruct`
