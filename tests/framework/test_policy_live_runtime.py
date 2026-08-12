@@ -44,6 +44,7 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
 )
 from tgvf_rl.rewards.context import reward_context_from_trajectory
@@ -418,6 +419,63 @@ def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(
     assert components.async_stage3_spec is not None
     assert components.async_stage3_spec.visual_quality_enabled is False
     assert components.async_stage3_spec.visual_judge_identity is None
+
+
+def test_rp66_tfree_control_builds_async_scorer_without_utility_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded_service = SimpleNamespace(maximum_concurrency=16)
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime."
+        "load_deepeyes_judge_service_config",
+        lambda *_args, **_kwargs: loaded_service,
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.AsyncDeepEyesOpenRouterJudge",
+        lambda service, *, local_maximum_concurrency: (
+            "official-deepeyes",
+            service,
+            local_maximum_concurrency,
+        ),
+    )
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        identity_sha256="8" * 64,
+        reward=SimpleNamespace(
+            profile="stage3-shaped-v1",
+            judge_config_path=Path("/fixture/deepeyes-judge.json"),
+            judge_config_sha256="9" * 64,
+            tool_utility=None,
+            tool_utility_reward_enabled=False,
+            focus_reward_enabled=False,
+            grounding_reward_enabled=False,
+            visual_quality_judge_identity=None,
+        ),
+    )
+
+    components = _Qwen3PolicyTrajectoryComponents(
+        context=SimpleNamespace(
+            config=config,
+            placement=PolicyAgentLoopWorkerPlacement(0, 0, 0, 8),
+        ),
+        layout_builder=object(),
+        server_client=object(),
+        contextual_forward_identity=None,
+        branch_merger_identities=(),
+        observation_store=object(),
+        behavior_store=object(),
+        focus_execution_ledger=object(),
+        crop_execution_ledger=object(),
+        metrics_factory=lambda *_args: object(),
+        agent_loop_output_cls=None,
+        sample_index={},
+        launch_mode="smoke",
+    )
+
+    assert components.async_stage3_spec is not None
+    assert components.async_stage3_spec.tool_utility_reward_enabled is False
+    assert components.async_stage3_spec.tool_utility_sidecar_sha256 is None
+    assert components.async_stage3_spec.tool_utility_manifest_sha256 is None
 
 
 def test_live_visual_quality_adapter_consumes_typed_provider_result(

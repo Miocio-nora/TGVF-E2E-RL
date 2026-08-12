@@ -100,6 +100,7 @@ def _scorer(
     answer_judge_identity: ArtifactIdentity | None = None,
     answer_route: str = "fixture-rule",
     visual_quality_enabled: bool = True,
+    tool_utility_reward_enabled: bool = True,
 ):
     answer_identity = _identity("answer", "1")
     visual_identity = _identity("visual", "2")
@@ -107,9 +108,14 @@ def _scorer(
         pipeline_identity=_identity("pipeline", "3"),
         answer_verifier_identity=answer_identity,
         visual_judge_identity=(visual_identity if visual_quality_enabled else None),
-        tool_utility_sidecar_sha256="4" * 64,
-        tool_utility_manifest_sha256="5" * 64,
+        tool_utility_sidecar_sha256=(
+            "4" * 64 if tool_utility_reward_enabled else None
+        ),
+        tool_utility_manifest_sha256=(
+            "5" * 64 if tool_utility_reward_enabled else None
+        ),
         visual_quality_enabled=visual_quality_enabled,
+        tool_utility_reward_enabled=tool_utility_reward_enabled,
     )
     label = TGVFToolUtilityLabelBinding(
         sample_id="sample-0",
@@ -136,7 +142,7 @@ def _scorer(
                 route=answer_route,
             ),
             context_provider=_ContextProvider(),
-            tool_utility=utility,
+            tool_utility=(utility if tool_utility_reward_enabled else None),
             visual_quality_judge=(judge if visual_quality_enabled else None),
         ),
         judge,
@@ -167,6 +173,37 @@ def test_stage3_runtime_bridge_emits_exact_five_component_reward() -> None:
     assert scored.result.quality_judge_covered is True
     assert scored.reward_extra_info()["stage3_grounding_reward"] == 1.0
     assert judge.calls == 1
+
+
+def test_tfree_runtime_neither_requires_nor_emits_tool_utility_identity() -> None:
+    trajectory = replace(
+        _record(tool_call_count=2).trajectory_payload,
+        final_answer="fixture answer",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    scorer, judge = _scorer(
+        visual_quality_enabled=False,
+        tool_utility_reward_enabled=False,
+    )
+
+    scored = scorer.score(
+        request=SimpleNamespace(identity=trajectory.identity),
+        trajectory=trajectory,
+    )
+
+    assert scored.total == pytest.approx(1.95)
+    assert scored.raw_components == (
+        ("answer", 2.0),
+        ("tool", pytest.approx(-0.05)),
+        ("focus", 0.0),
+        ("grounding", 0.0),
+        ("protocol", 0.0),
+    )
+    assert scored.tool_label is None
+    sidecars = scored.reward_sidecars()
+    assert sidecars["tgvf_stage3_tool_necessity_label"] is None
+    assert sidecars["tgvf_stage3_tool_sidecar_sha256"] is None
+    assert judge.calls == 0
 
 
 def test_stage3_accepts_configured_answer_judge_fallback_identity() -> None:

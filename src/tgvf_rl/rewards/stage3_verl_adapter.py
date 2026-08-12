@@ -64,9 +64,10 @@ class Stage3ShapedRewardSpec:
     pipeline_identity: ArtifactIdentity
     answer_verifier_identity: ArtifactIdentity
     visual_judge_identity: ArtifactIdentity | None
-    tool_utility_sidecar_sha256: str
-    tool_utility_manifest_sha256: str
+    tool_utility_sidecar_sha256: str | None
+    tool_utility_manifest_sha256: str | None
     visual_quality_enabled: bool = True
+    tool_utility_reward_enabled: bool = True
     profile: str = STAGE3_SHAPED_REWARD_VERSION
 
     def __post_init__(self) -> None:
@@ -77,6 +78,8 @@ class Stage3ShapedRewardSpec:
                 raise TypeError(f"{field_name} must be ArtifactIdentity")
         if type(self.visual_quality_enabled) is not bool:
             raise TypeError("visual_quality_enabled must be bool")
+        if type(self.tool_utility_reward_enabled) is not bool:
+            raise TypeError("tool_utility_reward_enabled must be bool")
         if self.visual_quality_enabled:
             if not isinstance(self.visual_judge_identity, ArtifactIdentity):
                 raise TypeError(
@@ -86,17 +89,31 @@ class Stage3ShapedRewardSpec:
             raise ValueError(
                 "disabled visual quality cannot bind a visual judge identity"
             )
-        for field_name in (
-            "tool_utility_sidecar_sha256",
-            "tool_utility_manifest_sha256",
-        ):
-            value = getattr(self, field_name)
-            if (
-                not isinstance(value, str)
-                or len(value) != 64
-                or any(character not in "0123456789abcdef" for character in value)
+        utility_hashes = (
+            self.tool_utility_sidecar_sha256,
+            self.tool_utility_manifest_sha256,
+        )
+        if self.tool_utility_reward_enabled:
+            for field_name, value in zip(
+                (
+                    "tool_utility_sidecar_sha256",
+                    "tool_utility_manifest_sha256",
+                ),
+                utility_hashes,
+                strict=True,
             ):
-                raise ValueError(f"{field_name} must be a lowercase SHA-256")
+                if (
+                    not isinstance(value, str)
+                    or len(value) != 64
+                    or any(
+                        character not in "0123456789abcdef" for character in value
+                    )
+                ):
+                    raise ValueError(f"{field_name} must be a lowercase SHA-256")
+        elif utility_hashes != (None, None):
+            raise ValueError(
+                "disabled tool-utility reward cannot bind utility identities"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +188,7 @@ class Stage3VerlTrajectoryReward:
     rollout_index: int
     context: RewardContext
     answer_verification: AnswerVerificationResult
-    tool_label: TGVFToolUtilityLabelBinding
+    tool_label: TGVFToolUtilityLabelBinding | None
     spec: Stage3ShapedRewardSpec
     result: Stage3ShapedRewardResult
     visual_judge_usage: JudgeUsage | None = None
@@ -185,17 +202,23 @@ class Stage3VerlTrajectoryReward:
             raise TypeError("Stage3 reward context has the wrong type")
         if not isinstance(self.answer_verification, AnswerVerificationResult):
             raise TypeError("Stage3 answer verification has the wrong type")
-        if not isinstance(self.tool_label, TGVFToolUtilityLabelBinding):
-            raise TypeError("Stage3 tool label has the wrong type")
         if not isinstance(self.spec, Stage3ShapedRewardSpec):
             raise TypeError("Stage3 reward spec has the wrong type")
+        if self.spec.tool_utility_reward_enabled:
+            if not isinstance(self.tool_label, TGVFToolUtilityLabelBinding):
+                raise TypeError("enabled Stage3 utility reward requires a tool label")
+        elif self.tool_label is not None:
+            raise ValueError("disabled Stage3 utility reward cannot carry a tool label")
         if not isinstance(self.result, Stage3ShapedRewardResult):
             raise TypeError("Stage3 reward result has the wrong type")
         if self.visual_judge_usage is not None and not isinstance(
             self.visual_judge_usage, JudgeUsage
         ):
             raise TypeError("Stage3 visual judge usage has the wrong type")
-        if self.tool_label.sample_id != self.context.sample_id:
+        if (
+            self.tool_label is not None
+            and self.tool_label.sample_id != self.context.sample_id
+        ):
             raise IdentityMismatchError("Stage3 tool label belongs to another sample")
         if not math.isfinite(self.result.total):
             raise ValueError("Stage3 trajectory reward must be finite")
@@ -236,9 +259,15 @@ class Stage3VerlTrajectoryReward:
                     usage.cost_usd,
                 )
             ),
-            STAGE3_VERL_TOOL_LABEL_FIELD: self.tool_label.utility_label,
-            STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD: self.tool_label.confidence,
-            STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD: self.tool_label.row_sha256,
+            STAGE3_VERL_TOOL_LABEL_FIELD: (
+                None if self.tool_label is None else self.tool_label.utility_label
+            ),
+            STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD: (
+                None if self.tool_label is None else self.tool_label.confidence
+            ),
+            STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD: (
+                None if self.tool_label is None else self.tool_label.row_sha256
+            ),
             STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD: (
                 self.spec.tool_utility_sidecar_sha256
             ),
@@ -302,7 +331,7 @@ class Stage3VerlTrajectoryRewardScorer:
         spec: Stage3ShapedRewardSpec,
         answer_verifier: AnswerVerifier,
         context_provider: PilotRewardContextProvider,
-        tool_utility: TGVFToolUtilityRuntimeBinding,
+        tool_utility: TGVFToolUtilityRuntimeBinding | None,
         visual_quality_judge: Stage3VisualQualityJudge | None,
         kernel: Stage3ShapedRewardKernel | None = None,
         audit_sink: Callable[[TrajectoryRecord, Stage3VerlTrajectoryReward], None]
@@ -314,8 +343,15 @@ class Stage3VerlTrajectoryRewardScorer:
             raise TypeError("answer_verifier must implement verify()")
         if not callable(getattr(context_provider, "build", None)):
             raise TypeError("context_provider must implement build()")
-        if not isinstance(tool_utility, TGVFToolUtilityRuntimeBinding):
-            raise TypeError("tool_utility must be a verified runtime binding")
+        if spec.tool_utility_reward_enabled:
+            if not isinstance(tool_utility, TGVFToolUtilityRuntimeBinding):
+                raise TypeError(
+                    "enabled tool-utility reward requires a verified runtime binding"
+                )
+        elif tool_utility is not None:
+            raise ValueError(
+                "disabled tool-utility reward cannot bind a utility sidecar"
+            )
         if spec.visual_quality_enabled:
             if not callable(getattr(visual_quality_judge, "judge", None)):
                 raise TypeError("visual_quality_judge must implement judge()")
@@ -323,10 +359,11 @@ class Stage3VerlTrajectoryRewardScorer:
             raise ValueError(
                 "disabled visual quality cannot bind a visual judge provider"
             )
-        if tool_utility.sidecar_sha256 != spec.tool_utility_sidecar_sha256:
-            raise IdentityMismatchError("Stage3 tool sidecar identity differs")
-        if tool_utility.manifest_sha256 != spec.tool_utility_manifest_sha256:
-            raise IdentityMismatchError("Stage3 tool sidecar manifest differs")
+        if tool_utility is not None:
+            if tool_utility.sidecar_sha256 != spec.tool_utility_sidecar_sha256:
+                raise IdentityMismatchError("Stage3 tool sidecar identity differs")
+            if tool_utility.manifest_sha256 != spec.tool_utility_manifest_sha256:
+                raise IdentityMismatchError("Stage3 tool sidecar manifest differs")
         rule_identity = getattr(answer_verifier, "rule_identity", None)
         if rule_identity is not None and rule_identity != spec.answer_verifier_identity:
             raise IdentityMismatchError("Stage3 answer rule identity differs")
@@ -365,7 +402,11 @@ class Stage3VerlTrajectoryRewardScorer:
             raise IdentityMismatchError(
                 "Stage3 reward context belongs to another sample"
             )
-        label = self.tool_utility.label_for_sample(context.sample_id)
+        label = (
+            None
+            if self.tool_utility is None
+            else self.tool_utility.label_for_sample(context.sample_id)
+        )
         verification = self.answer_verifier.verify(context)
         if not isinstance(verification, AnswerVerificationResult):
             raise TypeError("answer_verifier returned the wrong result type")
@@ -437,7 +478,11 @@ class Stage3VerlTrajectoryRewardScorer:
         result = self.kernel.score(
             Stage3ShapedRewardFacts(
                 answer_correct=verification.correct,
-                tool_label=ToolNecessityLabel(label.utility_label),
+                tool_label=(
+                    None
+                    if label is None
+                    else ToolNecessityLabel(label.utility_label)
+                ),
                 tool_call_count=context.tool_call_count,
                 successful_tgvf_observation_count=(
                     context.successful_tgvf_observation_count
@@ -446,7 +491,10 @@ class Stage3VerlTrajectoryRewardScorer:
                 grounding_score=grounding_score,
                 quality_judge_failure=quality_judge_failure,
                 quality_rewards_enabled=self.spec.visual_quality_enabled,
-                label_confidence=label.confidence,
+                label_confidence=None if label is None else label.confidence,
+                tool_utility_reward_enabled=(
+                    self.spec.tool_utility_reward_enabled
+                ),
                 protocol_errors=protocol_errors,
             )
         )

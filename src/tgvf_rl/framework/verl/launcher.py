@@ -948,8 +948,13 @@ def _reward_custom_config(config: PolicyE2ESmokeRunConfig) -> dict[str, object]:
             "format_weight": reward.format_weight,
             "conditional_tool_weight": reward.conditional_tool_weight,
         }
-    if reward.profile != "stage3-shaped-v1" or reward.tool_utility is None:
-        raise ValueError("unsupported or incomplete reward profile")
+    if reward.profile != "stage3-shaped-v1":
+        raise ValueError("unsupported reward profile")
+    utility_enabled = reward.tool_utility_reward_enabled
+    if type(utility_enabled) is not bool:
+        raise ValueError("Stage3 tool-utility reward switch is missing")
+    if utility_enabled != (reward.tool_utility is not None):
+        raise ValueError("Stage3 tool-utility binding differs from its switch")
     if reward.focus_reward_enabled != reward.grounding_reward_enabled:
         raise ValueError("Stage3 Focus/Grounding reward switches must agree")
     quality_enabled = reward.focus_reward_enabled is not False
@@ -967,13 +972,20 @@ def _reward_custom_config(config: PolicyE2ESmokeRunConfig) -> dict[str, object]:
         "pipeline_fqn": STAGE3_REWARD_PIPELINE_FQN,
         "profile": reward.profile,
         **common,
-        "tool_utility_sidecar_path": str(reward.tool_utility.sidecar_path),
-        "tool_utility_sidecar_sha256": reward.tool_utility.sidecar_sha256,
-        "tool_utility_manifest_path": str(reward.tool_utility.manifest_path),
-        "tool_utility_manifest_sha256": reward.tool_utility.manifest_sha256,
+        "tool_utility_reward_enabled": utility_enabled,
         "focus_reward_enabled": quality_enabled,
         "grounding_reward_enabled": quality_enabled,
     }
+    if utility_enabled:
+        assert reward.tool_utility is not None
+        shaped.update(
+            {
+                "tool_utility_sidecar_path": str(reward.tool_utility.sidecar_path),
+                "tool_utility_sidecar_sha256": reward.tool_utility.sidecar_sha256,
+                "tool_utility_manifest_path": str(reward.tool_utility.manifest_path),
+                "tool_utility_manifest_sha256": reward.tool_utility.manifest_sha256,
+            }
+        )
     if quality_enabled:
         shaped.update(
             {

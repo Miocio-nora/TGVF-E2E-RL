@@ -108,11 +108,15 @@ POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA = (
     "policy-e2e-rp66-shaped-matched-control-run-config-v1"
 )
+POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-rp66-tfree-matched-control-run-config-v1"
+)
 POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     }
 )
 POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
@@ -414,6 +418,7 @@ class SmokeRewardBinding:
     judge_config_path: Path | None = None
     judge_config_sha256: str | None = None
     tool_utility: TGVFToolUtilityRuntimeBinding | None = None
+    tool_utility_reward_enabled: bool | None = None
     focus_reward_enabled: bool | None = None
     grounding_reward_enabled: bool | None = None
     visual_quality_judge_config_path: Path | None = None
@@ -564,6 +569,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -640,6 +646,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -649,9 +656,14 @@ def load_policy_e2e_smoke_run_config(
     stage3_shaped_run = schema_version in {
         POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     }
-    rp66_shaped_run = (
-        schema_version == POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA
+    rp66_shaped_run = schema_version in {
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+    }
+    tfree_reward_run = (
+        schema_version == POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA
     )
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
@@ -1202,15 +1214,18 @@ def load_policy_e2e_smoke_run_config(
     if mixed_run:
         reward_fields.update({"judge_config_path", "judge_config_sha256"})
     if stage3_shaped_run:
-        reward_fields.update(
-            {
-                "profile",
-                "tool_utility_sidecar_path",
-                "tool_utility_sidecar_sha256",
-                "tool_utility_manifest_path",
-                "tool_utility_manifest_sha256",
-            }
-        )
+        reward_fields.add("profile")
+        if tfree_reward_run:
+            reward_fields.add("tool_utility_reward_enabled")
+        else:
+            reward_fields.update(
+                {
+                    "tool_utility_sidecar_path",
+                    "tool_utility_sidecar_sha256",
+                    "tool_utility_manifest_path",
+                    "tool_utility_manifest_sha256",
+                }
+            )
         if rp66_shaped_run:
             reward_fields.update(
                 {
@@ -1313,29 +1328,42 @@ def load_policy_e2e_smoke_run_config(
             raise ValueError("Stage3-shaped reward requires the mixed-v2 T1 dataset")
         if tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
             raise ValueError("Stage3-shaped reward requires the TGVF-only tool profile")
-        sidecar_path = _existing_file(
-            reward_table["tool_utility_sidecar_path"],
-            name="reward.tool_utility_sidecar_path",
-        )
-        sidecar_sha256 = _sha256(
-            reward_table["tool_utility_sidecar_sha256"],
-            name="reward.tool_utility_sidecar_sha256",
-        )
-        sidecar_manifest_path = _existing_file(
-            reward_table["tool_utility_manifest_path"],
-            name="reward.tool_utility_manifest_path",
-        )
-        sidecar_manifest_sha256 = _sha256(
-            reward_table["tool_utility_manifest_sha256"],
-            name="reward.tool_utility_manifest_sha256",
-        )
-        tool_utility = load_tgvf_tool_utility_runtime_binding(
-            sidecar_path,
-            expected_sidecar_sha256=sidecar_sha256,
-            manifest_path=sidecar_manifest_path,
-            expected_manifest_sha256=sidecar_manifest_sha256,
-            expected_dataset_iteration_identity_sha256=iteration_sha256,
-        )
+        if tfree_reward_run:
+            tool_utility_reward_enabled = _boolean(
+                reward_table["tool_utility_reward_enabled"],
+                name="reward.tool_utility_reward_enabled",
+            )
+            _require_exact(
+                tool_utility_reward_enabled,
+                False,
+                "T-free tool-utility reward switch",
+            )
+            tool_utility = None
+        else:
+            tool_utility_reward_enabled = True
+            sidecar_path = _existing_file(
+                reward_table["tool_utility_sidecar_path"],
+                name="reward.tool_utility_sidecar_path",
+            )
+            sidecar_sha256 = _sha256(
+                reward_table["tool_utility_sidecar_sha256"],
+                name="reward.tool_utility_sidecar_sha256",
+            )
+            sidecar_manifest_path = _existing_file(
+                reward_table["tool_utility_manifest_path"],
+                name="reward.tool_utility_manifest_path",
+            )
+            sidecar_manifest_sha256 = _sha256(
+                reward_table["tool_utility_manifest_sha256"],
+                name="reward.tool_utility_manifest_sha256",
+            )
+            tool_utility = load_tgvf_tool_utility_runtime_binding(
+                sidecar_path,
+                expected_sidecar_sha256=sidecar_sha256,
+                manifest_path=sidecar_manifest_path,
+                expected_manifest_sha256=sidecar_manifest_sha256,
+                expected_dataset_iteration_identity_sha256=iteration_sha256,
+            )
         if rp66_shaped_run:
             focus_reward_enabled = _boolean(
                 reward_table["focus_reward_enabled"],
@@ -1398,6 +1426,7 @@ def load_policy_e2e_smoke_run_config(
         pilot_reward_weight_profile_name(reward_weights)
         reward_profile = "pilot-v1"
         tool_utility = None
+        tool_utility_reward_enabled = None
         focus_reward_enabled = None
         grounding_reward_enabled = None
         visual_quality_config_path = None
@@ -1416,6 +1445,7 @@ def load_policy_e2e_smoke_run_config(
         judge_config_path=judge_config_path,
         judge_config_sha256=judge_config_sha256,
         tool_utility=tool_utility,
+        tool_utility_reward_enabled=tool_utility_reward_enabled,
         focus_reward_enabled=focus_reward_enabled,
         grounding_reward_enabled=grounding_reward_enabled,
         visual_quality_judge_config_path=visual_quality_config_path,
@@ -1570,6 +1600,7 @@ def load_policy_e2e_smoke_run_config(
     lifecycle_control_run = schema_version in {
         POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     }
     if lifecycle_control_run:
         distributed_fields.add("actor_optimizer_offload")
@@ -2041,10 +2072,19 @@ def load_policy_e2e_smoke_run_config(
                     reward.answer_weight,
                     reward.format_weight,
                     reward.conditional_tool_weight,
+                    reward.tool_utility_reward_enabled,
                     reward.focus_reward_enabled,
                     reward.grounding_reward_enabled,
                 ),
-                (STAGE3_SHAPED_REWARD_VERSION, None, None, None, False, False),
+                (
+                    STAGE3_SHAPED_REWARD_VERSION,
+                    None,
+                    None,
+                    None,
+                    not tfree_reward_run,
+                    False,
+                    False,
+                ),
                 "RP66 shaped reward controls",
             )
         else:
@@ -2650,6 +2690,7 @@ __all__ = [
     "POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",

@@ -736,23 +736,23 @@ def _validate_stage3_row_sidecars(
 ) -> None:
     label = fields[STAGE3_VERL_TOOL_LABEL_FIELD][row_index]
     confidence = fields[STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD][row_index]
-    if label not in {"needed", "optional", "unnecessary"}:
-        raise ValueError("Stage3 tool label sidecar is invalid")
-    if (
-        isinstance(confidence, bool)
-        or not isinstance(confidence, (int, float))
-        or not math.isfinite(float(confidence))
-        or not 0.0 <= float(confidence) <= 1.0
-    ):
-        raise ValueError("Stage3 tool label confidence is invalid")
-    _require_sha256(
-        fields[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD][row_index],
-        "Stage3 tool label row",
-    )
-    _require_sha256(
-        fields[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD][row_index],
-        "Stage3 tool sidecar",
-    )
+    label_row_sha256 = fields[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD][row_index]
+    sidecar_sha256 = fields[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD][row_index]
+    utility_fields = (label, confidence, label_row_sha256, sidecar_sha256)
+    if utility_fields != (None, None, None, None):
+        if any(value is None for value in utility_fields):
+            raise ValueError("Stage3 tool-utility sidecars are partially bound")
+        if label not in {"needed", "optional", "unnecessary"}:
+            raise ValueError("Stage3 tool label sidecar is invalid")
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isfinite(float(confidence))
+            or not 0.0 <= float(confidence) <= 1.0
+        ):
+            raise ValueError("Stage3 tool label confidence is invalid")
+        _require_sha256(label_row_sha256, "Stage3 tool label row")
+        _require_sha256(sidecar_sha256, "Stage3 tool sidecar")
     applicable = fields[STAGE3_VERL_QUALITY_APPLICABLE_FIELD][row_index]
     covered = fields[STAGE3_VERL_QUALITY_COVERED_FIELD][row_index]
     failure = fields[STAGE3_VERL_QUALITY_FAILURE_FIELD][row_index]

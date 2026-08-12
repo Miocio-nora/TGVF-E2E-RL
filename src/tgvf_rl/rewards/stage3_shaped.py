@@ -55,14 +55,15 @@ class Stage3ShapedRewardFacts:
     """
 
     answer_correct: bool
-    tool_label: ToolNecessityLabel
+    tool_label: ToolNecessityLabel | None
     tool_call_count: int = 0
     successful_tgvf_observation_count: int = 0
     focus_score: QualityJudgeScore | None = None
     grounding_score: QualityJudgeScore | None = None
     quality_judge_failure: str | None = None
     quality_rewards_enabled: bool = True
-    label_confidence: float = 0.5
+    label_confidence: float | None = 0.5
+    tool_utility_reward_enabled: bool = True
     protocol_errors: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -70,8 +71,15 @@ class Stage3ShapedRewardFacts:
             raise TypeError("answer_correct must be bool")
         if type(self.quality_rewards_enabled) is not bool:
             raise TypeError("quality_rewards_enabled must be bool")
-        if type(self.tool_label) is not ToolNecessityLabel:
-            raise TypeError("tool_label must be ToolNecessityLabel")
+        if type(self.tool_utility_reward_enabled) is not bool:
+            raise TypeError("tool_utility_reward_enabled must be bool")
+        if self.tool_utility_reward_enabled:
+            if type(self.tool_label) is not ToolNecessityLabel:
+                raise TypeError(
+                    "enabled tool-utility reward requires a ToolNecessityLabel"
+                )
+        elif self.tool_label is not None:
+            raise ValueError("disabled tool-utility reward cannot carry a tool label")
         for field_name, value in (
             ("tool_call_count", self.tool_call_count),
             (
@@ -88,12 +96,19 @@ class Stage3ShapedRewardFacts:
                 "successful TGVF observations cannot exceed attempted tool calls"
             )
 
-        if type(self.label_confidence) is not float:
-            raise TypeError("label_confidence must be float")
-        if not math.isfinite(self.label_confidence):
-            raise ValueError("label_confidence must be finite")
-        if not 0.0 <= self.label_confidence <= 1.0:
-            raise ValueError("label_confidence must be within [0, 1]")
+        if self.tool_utility_reward_enabled:
+            if type(self.label_confidence) is not float:
+                raise TypeError(
+                    "enabled tool-utility reward requires float label_confidence"
+                )
+            if not math.isfinite(self.label_confidence):
+                raise ValueError("label_confidence must be finite")
+            if not 0.0 <= self.label_confidence <= 1.0:
+                raise ValueError("label_confidence must be within [0, 1]")
+        elif self.label_confidence is not None:
+            raise ValueError(
+                "disabled tool-utility reward cannot carry label confidence"
+            )
 
         for field_name, score in (
             ("focus_score", self.focus_score),
@@ -232,7 +247,13 @@ class Stage3ShapedRewardResult:
 
 
 class Stage3ShapedRewardKernel:
-    """Implement ``2*A_gated + T + F + G + P`` exactly."""
+    """Implement the configured Stage3-shaped component equation exactly.
+
+    The default remains the historical ``2*A_gated + T + F + G + P``.  A
+    run may explicitly disable tool-utility supervision, which removes both
+    the label-dependent decision score and answer gate while retaining the
+    label-independent repeated-call penalty in the TOOL component.
+    """
 
     _TOOL_DECISION_BASE = {
         ToolNecessityLabel.NEEDED: (1.0, -2.0),
@@ -256,14 +277,28 @@ class Stage3ShapedRewardKernel:
 
         tool_attempted = facts.tool_call_count >= 1
         tool_succeeded = facts.successful_tgvf_observation_count >= 1
-        answer_gated = (
-            facts.tool_label is ToolNecessityLabel.NEEDED and not tool_succeeded
+        answer_gated = bool(
+            facts.tool_utility_reward_enabled
+            and facts.tool_label is ToolNecessityLabel.NEEDED
+            and not tool_succeeded
         )
         answer_score = 2.0 * float(facts.answer_correct and not answer_gated)
 
-        used_base, unused_base = self._TOOL_DECISION_BASE[facts.tool_label]
-        tool_decision_base = used_base if tool_succeeded else unused_base
-        decision_score = facts.label_confidence * tool_decision_base
+        if facts.tool_utility_reward_enabled:
+            assert facts.tool_label is not None
+            assert facts.label_confidence is not None
+            used_base, unused_base = self._TOOL_DECISION_BASE[facts.tool_label]
+            tool_decision_base = used_base if tool_succeeded else unused_base
+            decision_score = facts.label_confidence * tool_decision_base
+            decision_evidence = (
+                f"label={facts.tool_label.value}; "
+                f"decision_base={tool_decision_base}; "
+                f"label_confidence={facts.label_confidence}; "
+                f"decision_score={decision_score}"
+            )
+        else:
+            decision_score = 0.0
+            decision_evidence = "tool_utility_reward=disabled; decision_score=0.0"
         extra_call_count = max(0, facts.tool_call_count - 1)
         extra_call_penalty = -0.05 * extra_call_count
         tool_score = decision_score + extra_call_penalty
@@ -320,11 +355,8 @@ class Stage3ShapedRewardKernel:
                 Stage3ShapedComponentName.TOOL,
                 tool_score,
                 (
-                    f"label={facts.tool_label.value}; tool_attempted={tool_attempted}; "
+                    f"{decision_evidence}; tool_attempted={tool_attempted}; "
                     f"tool_used={tool_succeeded}; "
-                    f"decision_base={tool_decision_base}; "
-                    f"label_confidence={facts.label_confidence}; "
-                    f"decision_score={decision_score}; "
                     f"extra_call_count={extra_call_count}; "
                     f"extra_call_penalty={extra_call_penalty}"
                 ),

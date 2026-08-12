@@ -46,7 +46,7 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         *,
         answer_scorer: AsyncAnswerTrajectoryScorer,
         spec: Stage3ShapedRewardSpec,
-        tool_utility: TGVFToolUtilityRuntimeBinding,
+        tool_utility: TGVFToolUtilityRuntimeBinding | None,
         kernel: Stage3ShapedRewardKernel | None = None,
     ) -> None:
         if not callable(getattr(answer_scorer, "score_async", None)):
@@ -55,12 +55,20 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
             raise TypeError("spec must be Stage3ShapedRewardSpec")
         if spec.visual_quality_enabled:
             raise ValueError("async no-visual scorer requires disabled visual quality")
-        if not isinstance(tool_utility, TGVFToolUtilityRuntimeBinding):
-            raise TypeError("tool_utility must be a verified runtime binding")
-        if tool_utility.sidecar_sha256 != spec.tool_utility_sidecar_sha256:
-            raise IdentityMismatchError("Stage3 tool sidecar identity differs")
-        if tool_utility.manifest_sha256 != spec.tool_utility_manifest_sha256:
-            raise IdentityMismatchError("Stage3 tool sidecar manifest differs")
+        if spec.tool_utility_reward_enabled:
+            if not isinstance(tool_utility, TGVFToolUtilityRuntimeBinding):
+                raise TypeError(
+                    "enabled tool-utility reward requires a verified runtime binding"
+                )
+        elif tool_utility is not None:
+            raise ValueError(
+                "disabled tool-utility reward cannot bind a utility sidecar"
+            )
+        if tool_utility is not None:
+            if tool_utility.sidecar_sha256 != spec.tool_utility_sidecar_sha256:
+                raise IdentityMismatchError("Stage3 tool sidecar identity differs")
+            if tool_utility.manifest_sha256 != spec.tool_utility_manifest_sha256:
+                raise IdentityMismatchError("Stage3 tool sidecar manifest differs")
         self.answer_scorer = answer_scorer
         self.spec = spec
         self.tool_utility = tool_utility
@@ -86,7 +94,11 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
             raise TypeError("answer scorer returned an invalid Pilot reward")
         context = answer_reward.context
         verification = answer_reward.result.answer_verification
-        label = self.tool_utility.label_for_sample(context.sample_id)
+        label = (
+            None
+            if self.tool_utility is None
+            else self.tool_utility.label_for_sample(context.sample_id)
+        )
         protocol_errors = tuple(
             dict.fromkeys(
                 (
@@ -98,13 +110,20 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         result = self.kernel.score(
             Stage3ShapedRewardFacts(
                 answer_correct=verification.correct,
-                tool_label=ToolNecessityLabel(label.utility_label),
+                tool_label=(
+                    None
+                    if label is None
+                    else ToolNecessityLabel(label.utility_label)
+                ),
                 tool_call_count=context.tool_call_count,
                 successful_tgvf_observation_count=(
                     context.successful_tgvf_observation_count
                 ),
                 quality_rewards_enabled=False,
-                label_confidence=label.confidence,
+                label_confidence=None if label is None else label.confidence,
+                tool_utility_reward_enabled=(
+                    self.spec.tool_utility_reward_enabled
+                ),
                 protocol_errors=protocol_errors,
             )
         )

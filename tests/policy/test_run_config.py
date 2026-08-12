@@ -59,6 +59,7 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     RP66AdapterUpdateMode,
     formal_deepeyes47k_iteration_identity_sha256,
@@ -565,6 +566,55 @@ visual_quality_judge_mode = "disabled"
     assert reward_override["focus_reward_enabled"] is False
     assert reward_override["grounding_reward_enabled"] is False
     assert "visual_quality_judge_config_path" not in reward_override
+
+
+def test_rp66_tfree_control_does_not_load_or_emit_tool_utility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = PRL16_F2_CONFIG.read_text(encoding="utf-8").replace(
+        POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        1,
+    )
+    parsed = tomllib.loads(text)
+    old_reward = parsed["reward"]
+    reward_text = f'''[reward]
+profile = "stage3-shaped-v1"
+task_kind = "{old_reward["task_kind"]}"
+answer_verifier = "{old_reward["answer_verifier"]}"
+answer_verifier_sha256 = "{old_reward["answer_verifier_sha256"]}"
+judge_mode = "{old_reward["judge_mode"]}"
+judge_reason = "RP67 matched T-free reward control"
+judge_config_path = {_q(old_reward["judge_config_path"])}
+judge_config_sha256 = "{old_reward["judge_config_sha256"]}"
+tool_utility_reward_enabled = false
+focus_reward_enabled = false
+grounding_reward_enabled = false
+visual_quality_judge_mode = "disabled"
+
+'''
+    reward_start = text.index("[reward]")
+    optimizer_start = text.index("[optimizer]")
+    text = text[:reward_start] + reward_text + text[optimizer_start:]
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.load_tgvf_tool_utility_runtime_binding",
+        lambda *_args, **_kwargs: pytest.fail("T-free config loaded a utility sidecar"),
+    )
+
+    config = load_policy_e2e_smoke_run_config(
+        _write_prl16_mode_config(tmp_path, text)
+    )
+    plan = build_trainable_tgvf_verl_launch_plan(config, mode="formal", target_step=8)
+    reward_override = plan.overrides["actor_rollout_ref.rollout.custom"]["reward"]
+
+    assert config.schema_version == POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA
+    assert config.reward.tool_utility_reward_enabled is False
+    assert config.reward.tool_utility is None
+    assert reward_override["tool_utility_reward_enabled"] is False
+    assert "tool_utility_sidecar_path" not in reward_override
+    assert "tool_utility_sidecar_sha256" not in reward_override
+    assert reward_override["focus_reward_enabled"] is False
+    assert reward_override["grounding_reward_enabled"] is False
 
 
 def test_rp66_legacy_controls_preserve_effective_optimizer_offload(

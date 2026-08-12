@@ -159,6 +159,70 @@ def test_each_extra_call_costs_point_zero_five_without_confidence_scaling() -> N
     assert "extra_call_penalty=-0.1" in tool.evidence
 
 
+@pytest.mark.parametrize("tool_calls", (0, 1))
+def test_tfree_correct_answer_is_independent_of_tool_use(tool_calls: int) -> None:
+    result = Stage3ShapedRewardKernel().score(
+        Stage3ShapedRewardFacts(
+            answer_correct=True,
+            tool_label=None,
+            tool_call_count=tool_calls,
+            successful_tgvf_observation_count=tool_calls,
+            quality_rewards_enabled=False,
+            label_confidence=None,
+            tool_utility_reward_enabled=False,
+        )
+    )
+
+    assert result.answer_gated is False
+    assert result.component(Stage3ShapedComponentName.ANSWER).score == 2.0
+    assert result.component(Stage3ShapedComponentName.TOOL).score == 0.0
+    assert "tool_utility_reward=disabled" in result.component(
+        Stage3ShapedComponentName.TOOL
+    ).evidence
+
+
+def test_tfree_keeps_repeat_and_protocol_penalties_without_answer_gate() -> None:
+    result = Stage3ShapedRewardKernel().score(
+        Stage3ShapedRewardFacts(
+            answer_correct=True,
+            tool_label=None,
+            tool_call_count=3,
+            successful_tgvf_observation_count=0,
+            quality_rewards_enabled=False,
+            label_confidence=None,
+            tool_utility_reward_enabled=False,
+            protocol_errors=("tool_execution_failed",),
+        )
+    )
+
+    assert result.answer_gated is False
+    assert _component_scores(result) == {
+        Stage3ShapedComponentName.ANSWER: 2.0,
+        Stage3ShapedComponentName.TOOL: pytest.approx(-0.1),
+        Stage3ShapedComponentName.FOCUS: 0.0,
+        Stage3ShapedComponentName.GROUNDING: 0.0,
+        Stage3ShapedComponentName.PROTOCOL: -1.0,
+    }
+    assert result.total == pytest.approx(0.9)
+
+
+def test_tool_utility_switch_and_label_binding_must_agree() -> None:
+    with pytest.raises(ValueError, match="cannot carry a tool label"):
+        Stage3ShapedRewardFacts(
+            answer_correct=False,
+            tool_label=ToolNecessityLabel.NEEDED,
+            label_confidence=None,
+            tool_utility_reward_enabled=False,
+        )
+    with pytest.raises(TypeError, match="requires a ToolNecessityLabel"):
+        Stage3ShapedRewardFacts(
+            answer_correct=False,
+            tool_label=None,
+            label_confidence=0.5,
+            tool_utility_reward_enabled=True,
+        )
+
+
 @pytest.mark.parametrize(
     ("raw_score", "focus", "grounding"),
     (

@@ -562,16 +562,23 @@ def _run_identity(config: PolicyE2ESmokeRunConfig) -> PilotRunIdentityHashes:
     }
     if config.reward.profile == "stage3-shaped-v1":
         tool_utility = config.reward.tool_utility
+        utility_enabled = config.reward.tool_utility_reward_enabled
         visual_identity = config.reward.visual_quality_judge_identity
         visual_config_sha256 = config.reward.visual_quality_judge_config_sha256
-        if tool_utility is None:
-            raise ValueError("Stage3 tool-utility identity is missing")
-        hashes.update(
-            {
-                "reward_tool_utility_sidecar": tool_utility.sidecar_sha256,
-                "reward_tool_utility_manifest": tool_utility.manifest_sha256,
-            }
-        )
+        if type(utility_enabled) is not bool:
+            raise ValueError("Stage3 tool-utility reward switch is missing")
+        if utility_enabled != (tool_utility is not None):
+            raise ValueError("Stage3 tool-utility identity differs from its switch")
+        hashes["reward_tool_utility_enabled"] = hashlib.sha256(
+            str(utility_enabled).encode("ascii")
+        ).hexdigest()
+        if tool_utility is not None:
+            hashes.update(
+                {
+                    "reward_tool_utility_sidecar": tool_utility.sidecar_sha256,
+                    "reward_tool_utility_manifest": tool_utility.manifest_sha256,
+                }
+            )
         if config.reward.focus_reward_enabled is not None:
             hashes.update(
                 {

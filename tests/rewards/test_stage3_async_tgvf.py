@@ -31,7 +31,9 @@ def _identity(name: str, digit: str) -> ArtifactIdentity:
     return ArtifactIdentity("async-stage3-test", name, "v1", digit * 64)
 
 
-def _scorer() -> AsyncStage3ShapedTGVFTrajectoryRewardScorer:
+def _scorer(
+    *, tool_utility_reward_enabled: bool = True
+) -> AsyncStage3ShapedTGVFTrajectoryRewardScorer:
     label = TGVFToolUtilityLabelBinding(
         sample_id="sample",
         training_index=0,
@@ -51,9 +53,14 @@ def _scorer() -> AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         pipeline_identity=_identity("pipeline", "1"),
         answer_verifier_identity=DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY,
         visual_judge_identity=None,
-        tool_utility_sidecar_sha256=utility.sidecar_sha256,
-        tool_utility_manifest_sha256=utility.manifest_sha256,
+        tool_utility_sidecar_sha256=(
+            utility.sidecar_sha256 if tool_utility_reward_enabled else None
+        ),
+        tool_utility_manifest_sha256=(
+            utility.manifest_sha256 if tool_utility_reward_enabled else None
+        ),
         visual_quality_enabled=False,
+        tool_utility_reward_enabled=tool_utility_reward_enabled,
     )
     answer = AsyncDeepEyesTGVFTrajectoryRewardScorer(
         question="What color?",
@@ -65,7 +72,7 @@ def _scorer() -> AsyncStage3ShapedTGVFTrajectoryRewardScorer:
     return AsyncStage3ShapedTGVFTrajectoryRewardScorer(
         answer_scorer=answer,
         spec=spec,
-        tool_utility=utility,
+        tool_utility=utility if tool_utility_reward_enabled else None,
     )
 
 
@@ -108,3 +115,26 @@ def test_async_shaped_gates_needed_answer_without_successful_tool() -> None:
 
     assert result.total == pytest.approx(-1.0)
     assert result.result.answer_gated is True
+
+
+def test_async_tfree_scores_answer_without_sidecar_or_gate() -> None:
+    trajectory = _trajectory("<think>see</think>blue")
+    scorer = _scorer(tool_utility_reward_enabled=False)
+
+    result = asyncio.run(
+        scorer.score_async(
+            request=SimpleNamespace(identity=trajectory.identity),
+            trajectory=trajectory,
+        )
+    )
+
+    assert result.total == pytest.approx(2.0)
+    assert result.result.answer_gated is False
+    assert result.tool_label is None
+    assert dict(result.raw_components) == {
+        "answer": 2.0,
+        "tool": 0.0,
+        "focus": 0.0,
+        "grounding": 0.0,
+        "protocol": 0.0,
+    }

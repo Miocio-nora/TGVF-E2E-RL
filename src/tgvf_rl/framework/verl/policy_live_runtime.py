@@ -459,8 +459,14 @@ class _Qwen3PolicyTrajectoryComponents:
                 local_maximum_concurrency=local_judge_concurrency,
             )
             if getattr(reward, "profile", "pilot-v1") == "stage3-shaped-v1":
+                utility_enabled = getattr(
+                    reward,
+                    "tool_utility_reward_enabled",
+                    reward.tool_utility is not None,
+                )
                 if (
-                    reward.tool_utility is None
+                    type(utility_enabled) is not bool
+                    or utility_enabled != (reward.tool_utility is not None)
                     or reward.focus_reward_enabled is not False
                     or reward.grounding_reward_enabled is not False
                     or reward.visual_quality_judge_identity is not None
@@ -468,20 +474,35 @@ class _Qwen3PolicyTrajectoryComponents:
                     raise ValueError(
                         "matched RP66 shaped reward controls are incomplete"
                     )
+                identity_fields: dict[str, object] = {
+                    "run": self.config.identity_sha256,
+                    "answer": DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY.sha256,
+                    "answer_judge_config": reward.judge_config_sha256,
+                    "tool_utility_reward_enabled": utility_enabled,
+                    "focus_reward_enabled": False,
+                    "grounding_reward_enabled": False,
+                    "equation": (
+                        "2*A_gated+T+R_repeat+P"
+                        if utility_enabled
+                        else "2*A+R_repeat+P"
+                    ),
+                }
+                if reward.tool_utility is not None:
+                    identity_fields.update(
+                        {
+                            "tool_utility_sidecar": (
+                                reward.tool_utility.sidecar_sha256
+                            ),
+                            "tool_utility_manifest": (
+                                reward.tool_utility.manifest_sha256
+                            ),
+                        }
+                    )
                 pipeline_identity = _artifact_identity(
                     "policy-reward",
                     "rp66-stage3-shaped-no-visual",
                     "stage3-shaped-v1",
-                    {
-                        "run": self.config.identity_sha256,
-                        "answer": DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY.sha256,
-                        "answer_judge_config": reward.judge_config_sha256,
-                        "tool_utility_sidecar": reward.tool_utility.sidecar_sha256,
-                        "tool_utility_manifest": reward.tool_utility.manifest_sha256,
-                        "focus_reward_enabled": False,
-                        "grounding_reward_enabled": False,
-                        "equation": "2*A_gated+T+P",
-                    },
+                    identity_fields,
                 )
                 self.async_stage3_spec = Stage3ShapedRewardSpec(
                     pipeline_identity=pipeline_identity,
@@ -490,12 +511,17 @@ class _Qwen3PolicyTrajectoryComponents:
                     ),
                     visual_judge_identity=None,
                     tool_utility_sidecar_sha256=(
-                        reward.tool_utility.sidecar_sha256
+                        None
+                        if reward.tool_utility is None
+                        else reward.tool_utility.sidecar_sha256
                     ),
                     tool_utility_manifest_sha256=(
-                        reward.tool_utility.manifest_sha256
+                        None
+                        if reward.tool_utility is None
+                        else reward.tool_utility.manifest_sha256
                     ),
                     visual_quality_enabled=False,
+                    tool_utility_reward_enabled=utility_enabled,
                 )
             self.reward_pipeline = None
             self.stage3_reward_runtime = None
@@ -688,8 +714,6 @@ class _Qwen3PolicyTrajectoryComponents:
             )
             if self.async_stage3_spec is not None:
                 tool_utility = self.config.reward.tool_utility
-                if tool_utility is None:
-                    raise RuntimeError("Stage3 tool utility is missing")
                 official_deepeyes_scorer = (
                     AsyncStage3ShapedTGVFTrajectoryRewardScorer(
                         answer_scorer=answer_scorer,
@@ -711,7 +735,7 @@ class _Qwen3PolicyTrajectoryComponents:
             )
         else:
             runtime = self.stage3_reward_runtime
-            if runtime is None or self.config.reward.tool_utility is None:
+            if runtime is None:
                 raise RuntimeError("Stage3-shaped reward runtime is incomplete")
             spec, answer_verifier, visual_provider = runtime
             scorer = Stage3VerlTrajectoryRewardScorer(
@@ -1459,8 +1483,13 @@ def _build_stage3_reward_runtime(
     TGVFVisualQualityJudgeProvider,
 ]:
     reward = config.reward
-    if reward.profile != "stage3-shaped-v1" or reward.tool_utility is None:
-        raise ValueError("Stage3-shaped reward binding is incomplete")
+    if reward.profile != "stage3-shaped-v1":
+        raise ValueError("Stage3-shaped reward profile differs")
+    utility_enabled = reward.tool_utility_reward_enabled
+    if type(utility_enabled) is not bool:
+        raise ValueError("Stage3 tool-utility reward switch is missing")
+    if utility_enabled != (reward.tool_utility is not None):
+        raise ValueError("Stage3 tool-utility binding differs from its switch")
     if (
         reward.answer_weight is not None
         or reward.format_weight is not None
@@ -1481,26 +1510,46 @@ def _build_stage3_reward_runtime(
     if bound_visual.config_identity != reward.visual_quality_judge_identity:
         raise IdentityMismatchError("visual-quality judge config identity changed")
     bound_visual.provider.validate_credentials()
+    identity_fields: dict[str, object] = {
+        "run": config.identity_sha256,
+        "answer": answer_identity.sha256,
+        "answer_judge_config": reward.judge_config_sha256,
+        "tool_utility_reward_enabled": utility_enabled,
+        "visual_quality_judge_config": bound_visual.config_identity.sha256,
+        "equation": (
+            "2*A_gated+T+R_repeat+F+G+P"
+            if utility_enabled
+            else "2*A+R_repeat+F+G+P"
+        ),
+    }
+    if reward.tool_utility is not None:
+        identity_fields.update(
+            {
+                "tool_utility_sidecar": reward.tool_utility.sidecar_sha256,
+                "tool_utility_manifest": reward.tool_utility.manifest_sha256,
+            }
+        )
     pipeline_identity = _artifact_identity(
         "policy-reward",
         "stage3-shaped-reward-equation",
         "stage3-shaped-v1",
-        {
-            "run": config.identity_sha256,
-            "answer": answer_identity.sha256,
-            "answer_judge_config": reward.judge_config_sha256,
-            "tool_utility_sidecar": reward.tool_utility.sidecar_sha256,
-            "tool_utility_manifest": reward.tool_utility.manifest_sha256,
-            "visual_quality_judge_config": bound_visual.config_identity.sha256,
-            "equation": "2*A_gated+T+F+G+P",
-        },
+        identity_fields,
     )
     spec = Stage3ShapedRewardSpec(
         pipeline_identity=pipeline_identity,
         answer_verifier_identity=answer_identity,
         visual_judge_identity=bound_visual.config_identity,
-        tool_utility_sidecar_sha256=reward.tool_utility.sidecar_sha256,
-        tool_utility_manifest_sha256=reward.tool_utility.manifest_sha256,
+        tool_utility_sidecar_sha256=(
+            None
+            if reward.tool_utility is None
+            else reward.tool_utility.sidecar_sha256
+        ),
+        tool_utility_manifest_sha256=(
+            None
+            if reward.tool_utility is None
+            else reward.tool_utility.manifest_sha256
+        ),
+        tool_utility_reward_enabled=utility_enabled,
     )
     return spec, answer_verifier, bound_visual.provider
 
