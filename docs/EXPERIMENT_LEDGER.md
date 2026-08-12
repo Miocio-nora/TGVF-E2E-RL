@@ -9791,3 +9791,21 @@ than inferred from a script name or prior conversation.
   All four model/optimizer/extra-state shards and the frozen-RP67 step-1 pair
   were saved, the tracker is `1`, all GPUs shut down cleanly, and no W&B run
   was created. This is an engineering gate only; formal R1 is now authorized.
+
+### PRL-17-R2-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE
+
+- Planned 2026-08-12 as the reward-only follow-up to PRL17-R1. RP67 remains
+  frozen and model, retained T1 schedule, prompt, BS16 x n16, world8/micro2,
+  constant `1e-6` learning rate, eight-step horizon, answer judge, seeds and
+  checkpoint lifecycle remain matched to R1.
+- The sole scientific treatment removes counterfactual tool-utility `T`: both
+  its needed/optional/unnecessary decision score and its needed-without-tool
+  answer gate are disabled. The executed no-visual equation is
+  `2*A - 0.05*max(0, tool_calls-1) + P`, where `P=-1` for any protocol or
+  tool-execution error. Focus and Grounding remain implemented but disabled.
+- This is a real sidecar-free treatment: the RP66 or partial RP67 utility
+  sidecars are neither loaded nor included in run/checkpoint identity. The
+  historical T-enabled schema and runtime remain backward compatible.
+- Required sequence: console-only 4-prompt x 2-trajectory functional canary;
+  then the tmux-owned eight-GPU formal run; then automatic paired step0/step8
+  CoreDev-2511 evaluation. Smoke outputs are isolated and never sent to W&B.
