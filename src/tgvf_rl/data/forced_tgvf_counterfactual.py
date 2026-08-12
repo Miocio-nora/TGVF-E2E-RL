@@ -1,11 +1,12 @@
 """Isolated forced-TGVF counterfactual generation for Stage3 utility labels.
 
 This module deliberately does not enter the Policy training runtime.  It reads
-the immutable TGVF-80 schedule, materializes one RP66 focused observation from
-the source image and a declared question-derived target, injects the original
-image plus RP66 main-D/DeepStack into the frozen Qwen3-VL-Instruct reader, and
-samples eight answer attempts.  The resulting attempt JSONL is the input
-contract accepted by :mod:`tgvf_rl.data.tgvf_tool_utility`.
+the immutable TGVF-80 schedule, materializes one focused observation from the
+explicitly selected representation artifact and a declared question-derived
+target, injects the original image plus its main-D/DeepStack into the frozen
+Qwen3-VL-Instruct reader, and samples eight answer attempts.  The resulting
+attempt JSONL is the input contract accepted by
+:mod:`tgvf_rl.data.tgvf_tool_utility`.
 
 Each GPU owns a deterministic modulo shard and an independently locked,
 atomically rewritten ledger.  Attempt seeds depend only on the run identity,
@@ -398,7 +399,9 @@ def build_forced_tgvf_run_plan(
     )
     identity: dict[str, Any] = {
         "schema_version": FORCED_TGVF_RUN_SCHEMA,
-        "claim_scope": "forced_one_tgvf_image_plus_rp66_d_answer_utility",
+        "claim_scope": (
+            "forced_one_tgvf_image_plus_selected_representation_d_answer_utility"
+        ),
         "run_id": run_id,
         "schedule": {
             "root": str(Path(schedule_root).resolve()),
@@ -418,7 +421,8 @@ def build_forced_tgvf_run_plan(
                 for sample in samples
             ],
         },
-        "rp66": {
+        "representation": {
+            "source_run_id": source.run_id,
             "source_evaluation_config": str(source.source_path),
             "source_evaluation_config_sha256": source.source_sha256,
             "training_config": str(source.training_config_path),
@@ -544,7 +548,7 @@ def build_forced_policy_action_target(
     target: str,
     policy_renderer: NativeProtocolRenderer,
 ) -> NativeActionTarget:
-    """Bind RP66 target conditioning to the exact formal Policy transcript."""
+    """Bind representation target conditioning to the formal Policy transcript."""
 
     if policy_renderer.assistant_dialect is not (
         NativeAssistantDialect.QWEN3_VL_INSTRUCT
@@ -623,7 +627,7 @@ def materialize_forced_policy_visuals(
     group_builder: Qwen3NativeRepresentationGroupBuilder,
     policy_renderer: NativeProtocolRenderer,
 ) -> OracleGroupVisuals:
-    """Generate RP66 D from the formal Policy system/user/action context."""
+    """Generate D from the selected representation and formal Policy context."""
 
     if model_input.sample_id != sample.sample_id or model_input.target != target:
         raise ValueError("forced Policy visual input identity differs")
@@ -633,7 +637,7 @@ def materialize_forced_policy_visuals(
         policy_renderer.processor is not runtime.processor
         or policy_renderer.tokenizer is not runtime.tokenizer
     ):
-        raise ValueError("Policy renderer and RP66 runtime processor differ")
+        raise ValueError("Policy renderer and representation runtime processor differ")
 
     with runtime.validated_group_execution():
         action = build_forced_policy_action_target(
@@ -1269,7 +1273,7 @@ def run_forced_tgvf_shard(
         )
         export = _load_validated_production_export(training, source_config)
         if export.state is None:
-            raise ValueError("RP66 production export has no Adapter state")
+            raise ValueError("representation production export has no Adapter state")
         judge_path = Path(judge_config).resolve(strict=True)
         bound_judge = load_openai_compatible_judge(
             judge_path, expected_file_sha256=_file_sha256(judge_path)
@@ -1294,7 +1298,7 @@ def run_forced_tgvf_shard(
             runtime.renderer.assistant_dialect
             is not NativeAssistantDialect.QWEN3_VL_INSTRUCT
         ):
-            raise ValueError("RP66 runtime is not Qwen3-VL-Instruct")
+            raise ValueError("representation runtime is not Qwen3-VL-Instruct")
         runtime.adapter.load_artifact_state_dict(export.state)
         runtime.adapter.requires_grad_(False)
         runtime.adapter.eval()

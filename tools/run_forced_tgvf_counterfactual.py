@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate, run, resume, or finalize forced-RP66 TGVF attempts."""
+"""Validate, run, resume, or finalize forced-representation TGVF attempts."""
 
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ def _common(parser: argparse.ArgumentParser, *, include_model: bool) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate image+RP66-D counterfactual answer attempts over the exact "
-            "TGVF-80 schedule."
+            "Generate image+selected-representation-D counterfactual answer "
+            "attempts over the exact TGVF-80 schedule."
         )
     )
     commands = parser.add_subparsers(dest="command", required=True)
