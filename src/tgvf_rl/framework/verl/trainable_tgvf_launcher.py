@@ -33,6 +33,10 @@ from tgvf_rl.policy.run_config import (
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
+from tgvf_rl.policy.horizon_extension import (
+    PolicyHorizonExtension,
+    policy_horizon_extension_from_environment,
+)
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
@@ -390,10 +394,16 @@ def _permanent_checkpoint_steps(
     *,
     mode: TrainableTGVFLaunchMode,
     target_step: int,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> list[int]:
     if mode != "formal":
         return []
-    configured = config.training.permanent_checkpoint_steps
+    if horizon_extension is not None:
+        return [
+            horizon_extension.source_optimizer_step,
+            horizon_extension.target_optimizer_step,
+        ]
+    configured = list(config.training.permanent_checkpoint_steps)
     if configured:
         return [step for step in configured if step <= target_step]
     return [target_step]
@@ -406,6 +416,7 @@ def _replace_custom_record(
     mode: TrainableTGVFLaunchMode,
     checkpoint_steps: tuple[int, ...],
     output_root: Path,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> None:
     custom = dict(values["actor_rollout_ref.rollout.custom"])  # type: ignore[arg-type]
     protocol = dict(custom["protocol"])  # type: ignore[arg-type]
@@ -427,6 +438,7 @@ def _replace_custom_record(
         config,
         mode=mode,
         target_step=checkpoint_steps[-1],
+        horizon_extension=horizon_extension,
     )
     custom.update(
         {
@@ -495,6 +507,7 @@ class TrainableTGVFVerlLaunchPlan:
     overrides: Mapping[str, object]
     environment: Mapping[str, str]
     external_components: Mapping[str, str]
+    horizon_extension: PolicyHorizonExtension | None = None
     schema_version: str = TRAINABLE_TGVF_LAUNCH_SCHEMA
     main_module: str = UPSTREAM_VERL_MAIN_MODULE
     config_name: str = UPSTREAM_VERL_CONFIG_NAME
@@ -511,9 +524,10 @@ class TrainableTGVFVerlLaunchPlan:
             MappingProxyType(dict(self.external_components)),
         )
         expected = (
-            self.target_step
-            if self.mode == "formal"
-            and 0 < self.target_step <= TRAINABLE_TGVF_FORMAL_TARGET
+            self.horizon_extension.target_optimizer_step
+            if self.mode == "formal" and self.horizon_extension is not None
+            else self.target_step
+            if self.mode == "formal" and 0 < self.target_step <= TRAINABLE_TGVF_FORMAL_TARGET
             else TRAINABLE_TGVF_SMOKE_TARGET
             if self.mode == "smoke"
             else TRAINABLE_TGVF_CANARY_TARGET
@@ -667,6 +681,7 @@ class TrainableTGVFVerlLaunchPlan:
             self.config,
             mode=self.mode,
             target_step=self.target_step,
+            horizon_extension=self.horizon_extension,
         )
         if custom.get("checkpoint_steps") != expected_checkpoint_steps:
             raise ValueError("trainable TGVF checkpoint schedule differs")
@@ -718,6 +733,7 @@ def build_trainable_tgvf_verl_launch_plan(
     mode: TrainableTGVFLaunchMode = "formal",
     target_step: int | None = None,
     smoke_id: str | None = None,
+    horizon_extension: PolicyHorizonExtension | None = None,
 ) -> TrainableTGVFVerlLaunchPlan:
     if config.schema_version not in TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS:
         raise ValueError("trainable TGVF launcher requires an RP66 run schema")
@@ -728,7 +744,16 @@ def build_trainable_tgvf_verl_launch_plan(
             raise ValueError("smoke_id is valid only in smoke mode")
         if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", smoke_id) is None:
             raise ValueError("smoke_id must be a safe lowercase run label")
+    if horizon_extension is not None:
+        if mode != "formal":
+            raise ValueError("Policy horizon extension is valid only in formal mode")
+        horizon_extension.validate_for_config(config)
+        if target_step is not None and target_step != horizon_extension.target_optimizer_step:
+            raise ValueError("explicit target step differs from horizon extension")
     resolved_target = (
+        horizon_extension.target_optimizer_step
+        if horizon_extension is not None
+        else
         target_step or TRAINABLE_TGVF_FORMAL_TARGET
         if mode == "formal"
         else TRAINABLE_TGVF_SMOKE_TARGET
@@ -737,7 +762,9 @@ def build_trainable_tgvf_verl_launch_plan(
         if mode == "canary"
         else -1
     )
-    if mode == "formal" and not (0 < resolved_target <= TRAINABLE_TGVF_FORMAL_TARGET):
+    if mode == "formal" and horizon_extension is None and not (
+        0 < resolved_target <= TRAINABLE_TGVF_FORMAL_TARGET
+    ):
         raise ValueError(
             f"formal target must be between 1 and {TRAINABLE_TGVF_FORMAL_TARGET}"
         )
@@ -796,11 +823,11 @@ def build_trainable_tgvf_verl_launch_plan(
     if mode == "canary":
         _assert_functional_canary_config(config)
         _apply_functional_canary_controls(values, config)
-    checkpoint_steps = (
-        tuple(range(resolved_target + 1)) if mode == "formal" else (0, 1)
-    )
+    checkpoint_steps = tuple(range(resolved_target + 1)) if mode == "formal" else (0, 1)
     output_root = config.output.root
     environment = dict(base.environment)
+    if horizon_extension is not None:
+        environment.update(horizon_extension.environment)
     if mode == "smoke":
         output_root = output_root / "smoke"
         if smoke_id is not None:
@@ -840,6 +867,7 @@ def build_trainable_tgvf_verl_launch_plan(
         mode=mode,
         checkpoint_steps=checkpoint_steps,
         output_root=output_root,
+        horizon_extension=horizon_extension,
     )
     external = dict(base.external_components)
     external.update(
@@ -859,6 +887,7 @@ def build_trainable_tgvf_verl_launch_plan(
         overrides=values,
         environment=environment,
         external_components=external,
+        horizon_extension=horizon_extension,
     )
 
 
@@ -1096,11 +1125,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--compose-only", action="store_true")
     args = parser.parse_args(argv)
     config = load_policy_e2e_smoke_run_config(args.run_config.resolve())
+    horizon_extension = policy_horizon_extension_from_environment(config)
     plan = build_trainable_tgvf_verl_launch_plan(
         config,
         mode=args.mode,
         target_step=args.target_step,
         smoke_id=args.smoke_id,
+        horizon_extension=horizon_extension,
     )
     apply_trainable_tgvf_launch_environment(plan)
     composed = compose_trainable_tgvf_verl_config(plan)

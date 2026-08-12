@@ -149,8 +149,23 @@ class PolicyHorizonExtension:
             raise ValueError("horizon extension target must exceed its source")
         if self.scheduler_total_steps != config.scheduler.total_steps:
             raise ValueError("horizon extension changes the actor scheduler horizon")
-        if self.target_optimizer_step != self.scheduler_total_steps:
-            raise ValueError("horizon extension must end at the existing scheduler horizon")
+        if config.scheduler.name == "constant":
+            # A zero-warmup constant schedule has no terminal decay boundary:
+            # stepping it beyond the originally declared trainer stop keeps
+            # exactly the same learning rate. Preserve the serialized
+            # scheduler identity/horizon and extend only the trainer stop.
+            if config.scheduler.warmup_steps != 0:
+                raise ValueError(
+                    "constant-scheduler horizon extension requires zero warmup"
+                )
+            if self.scheduler_total_steps != self.source_optimizer_step:
+                raise ValueError(
+                    "constant-scheduler extension must start at its declared horizon"
+                )
+        elif self.target_optimizer_step != self.scheduler_total_steps:
+            raise ValueError(
+                "non-constant horizon extension must end at the scheduler horizon"
+            )
         if self.effective_checkpoint_steps[-1] != self.target_optimizer_step:
             raise ValueError("horizon extension checkpoint plan lacks its target")
         base_steps = config.training.checkpoint_steps
@@ -332,9 +347,12 @@ def validate_policy_horizon_extension_resume(
             raise ValueError("horizon extension source project state differs")
 
     actor = checkpoint_root / f"global_step_{current_step}" / "actor"
+    world_size = config.distributed.world_size
     for stem in ("model", "optim", "extra_state"):
-        shards = sorted(actor.glob(f"{stem}_world_size_4_rank_*.pt"))
-        if len(shards) != 4 or any(not path.is_file() or path.stat().st_size == 0 for path in shards):
+        shards = sorted(actor.glob(f"{stem}_world_size_{world_size}_rank_*.pt"))
+        if len(shards) != world_size or any(
+            not path.is_file() or path.stat().st_size == 0 for path in shards
+        ):
             raise ValueError(f"horizon extension current {stem} shard set is incomplete")
     pair = _read_json(actor / "tgvf_policy_checkpoint_pair.json", owner="checkpoint pair")
     project = _read_json(

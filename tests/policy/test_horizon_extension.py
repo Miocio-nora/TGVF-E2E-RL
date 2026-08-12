@@ -54,6 +54,9 @@ def _config(tmp_path: Path) -> MagicMock:
     config.training.maximum_optimizer_steps = 20
     config.training.checkpoint_steps = (0, 1, 5, 10, 20)
     config.scheduler.total_steps = 80
+    config.scheduler.name = "linear_warmup_decay"
+    config.scheduler.warmup_steps = 0
+    config.distributed.world_size = 4
     return config
 
 
