@@ -552,6 +552,18 @@ def test_live_visual_quality_request_preserves_all_successful_target_order(
     tmp_path: Path,
 ) -> None:
     trajectory = _record(tool_call_count=2).trajectory_payload
+    final_turn = replace(
+        trajectory.assistant_turns[-1],
+        turn_index=2,
+        raw_text="The lower label is visibly below the red label.",
+        is_tool_call=False,
+    )
+    trajectory = replace(
+        trajectory,
+        assistant_turns=(*trajectory.assistant_turns, final_turn),
+        final_answer="lower label",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
     context = reward_context_from_trajectory(
         trajectory,
         question="Which label is lower?",
@@ -577,6 +589,8 @@ def test_live_visual_quality_request_preserves_all_successful_target_order(
     assert successful_count == 2
     assert provider_request.tool_target is None
     assert provider_request.tool_targets == ("red label", "lower label")
+    assert provider_request.post_tool_reasoning == final_turn.raw_text
+    assert "<tool_call>" not in provider_request.post_tool_reasoning
 
 
 class _NativeTokenizer:

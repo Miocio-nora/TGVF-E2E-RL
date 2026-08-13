@@ -1358,11 +1358,11 @@ def _visual_quality_provider_request(
                 "visual-quality observation has no unique TGVF tool call"
             )
         successful_calls.append(matching_calls[0])
-    first_successful_call = successful_calls[0]
+    last_successful_call = successful_calls[-1]
     post_tool_reasoning = "\n".join(
         turn.raw_text
         for turn in trajectory.assistant_turns
-        if turn.turn_index > first_successful_call.assistant_turn_index
+        if turn.turn_index > last_successful_call.assistant_turn_index
     )
     targets = tuple(call.target for call in successful_calls)
     if prompt_identity.version == TGVF_VISUAL_QUALITY_JUDGE_PROMPT_VERSION:
