@@ -9929,14 +9929,16 @@ than inferred from a script name or prior conversation.
   same paired PRL17-R2 no-visual control (`56.1964`, `58.1996`), the visual
   treatment is `+1.6885 pp` at Step 8 and `-0.6573 pp` at Step 16. Against the
   common Step 0 (`57.0320`), visual Steps 8/16 are respectively `+0.8529` and
-  `+0.5102 pp`. The accepted interpretation is an early visual-shaping benefit
-  without sustained scaling; PRL19 Step 8 is the selected treatment checkpoint.
+  `+0.5102 pp`. These are auxiliary answer-accuracy observations, not direct
+  measurements of image-dependent target quality or visual hallucination.
+  The earlier early-shaping/Step-8-selection interpretation is withdrawn until
+  a paired held-out Focus/Grounding and wrong-image calibration audit completes.
 - Step-16 output health is worse in the extreme tail. OCR prediction mean/P99
   grows from `1,979.3/47,296.2` chars at Step 8 to `2,829.6/80,924.2` at Step
   16, while the no-visual Step-16 P99 is `31,473.8`. Max-token stops remain
   `26/2,240` in both PRL19 arms, so the finding is heavier stochastic
   repetition rather than a larger capped-response count. This is recorded as
-  a health warning against scaling the current F/G scalar unchanged.
+  an output-health warning, not as direct evidence that hallucination increased.
 - The Step-16 official OCR metric completed successfully, but one
   `134,775`-character prediction exceeded Python `csv`'s historical 128-KiB
   per-field default during local result summarization. The reader now raises

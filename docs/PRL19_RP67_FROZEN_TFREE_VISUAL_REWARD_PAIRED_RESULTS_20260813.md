@@ -1,27 +1,32 @@
 # PRL19 RP67 Frozen T-free Visual Reward Paired Results
 
 Date: 2026-08-13  
-Status: complete paired evaluation; headline artifact accepted  
+Status: paired accuracy evaluation complete; primary held-out target/grounding audit pending
 Experiment: `PRL-19-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-VISUAL-API-8STEP-WS8`
 
 ## 1. Executive conclusion
 
-PRL19 is a useful but non-monotonic visual-reward result.
+The completed CoreDev evaluation measures downstream answer accuracy; it does
+**not** directly measure the two properties that Focus/Target and Grounding
+were introduced to improve.  Accuracy is therefore an auxiliary outcome in
+this experiment, not the primary decision criterion.
 
-- At Step 8, enabling Focus/Target plus Grounding improves the canonical
+- At Step 8, the visual-reward arm improves the canonical
   paired CoreDev-2511 Macro* from the matched no-visual control's `56.1964`
   to `57.8849`, a same-step gain of **`+1.6885 pp`**. It is also `+0.8529 pp`
-  above the common Step-0 initialization.
+  above the common Step-0 initialization.  This is an accuracy observation,
+  not by itself evidence that targets became more image-dependent or that
+  visual hallucinations decreased.
 - At Step 16, the visual arm falls to `57.5422`. This remains `+0.5102 pp`
   above Step 0, but is `-0.3427 pp` below its own Step 8 and `-0.6573 pp`
   below the matched no-visual Step 16 (`58.1996`).
-- The visual reward therefore provides a credible **early shaping benefit**,
-  but the present weight and horizon do not provide sustained scaling. The
-  selected PRL19 checkpoint is Step 8, not Step 16.
+- The accuracy result is non-monotonic and does not support selecting a
+  checkpoint on its own.  A primary held-out audit must compare target quality
+  and visual grounding on paired trajectories before the visual reward can be
+  called beneficial or harmful.
 - Step 16 also develops a heavier extreme-length/repetition tail, especially
-  on OCRBench. This is a model-health warning and is consistent with the
-  visual judge rewarding verbose judge-facing grounding without guaranteeing
-  greater answer utility.
+  on OCRBench. This is a model-health warning only: verbosity and repetition
+  are not direct measurements of visual hallucination.
 
 This is one paired `temperature=1`, seed-42 evaluation. The deltas are valid
 within the common-random-numbers block, but remain single-seed evidence rather
@@ -68,7 +73,7 @@ provider failures received zero visual reward. Visual-judge cost was
 `$0.5436`; answer-judge cost was `$0.7821`; combined judge cost was about
 `$1.3257`.
 
-## 3. Canonical paired result
+## 3. Auxiliary paired accuracy result
 
 All values are percentages. OCR mean is `(EN + CN) / 2` and contributes once
 to Macro*. BLINK and MMMU use only their supported single-image subsets. The
@@ -92,8 +97,8 @@ The exact paired deltas are:
 
 | Comparison | Macro* delta | Interpretation |
 |---|---:|---|
-| Visual S8 - common S0 | **+0.8529 pp** | early visual shaping is positive |
-| Visual S8 - no-visual S8 | **+1.6885 pp** | clear same-step visual-treatment signal |
+| Visual S8 - common S0 | **+0.8529 pp** | auxiliary accuracy increase |
+| Visual S8 - no-visual S8 | **+1.6885 pp** | same-step accuracy difference |
 | Visual S16 - common S0 | +0.5102 pp | remains mildly above initialization |
 | Visual S16 - Visual S8 | -0.3427 pp | visual arm does not scale monotonically |
 | Visual S16 - no-visual S16 | -0.6573 pp | no-visual continuation wins at Step 16 |
@@ -107,8 +112,13 @@ This is capability redistribution rather than uniform improvement.
 ## 4. Training-reward behavior
 
 The visual judge itself remains active and mostly stable; it does not collapse
-in the second half. However, answer reward decreases while the combined visual
-reward stays comparable:
+in the second half. However, the logged means include trajectories on which the
+visual judge is not applicable.  Conditioning on covered, successful-tool
+trajectories gives `F=0.7982 -> 0.8082` and `G=0.7286 -> 0.7717` from the first
+to second half, while answer correctness falls `0.6860 -> 0.5991`.  These are
+endogenous on-policy training signals over different prompt batches.  They
+show what the training judge rewarded, but cannot establish held-out target or
+hallucination improvement.
 
 | Mean over optimizer steps | Steps 1-8 | Steps 9-16 |
 |---|---:|---:|
@@ -119,7 +129,7 @@ reward stays comparable:
 | Tool-attempt rate | 0.7773 | 0.7573 |
 | Format-error rate | 0.0376 | 0.0322 |
 
-This exposes a reward-ordering problem. A wrong answer can earn as much as
+The scalar still exposes a possible reward-ordering problem. A wrong answer can earn as much as
 `F+G=2`, equal to the entire reward gap supplied by a correct answer
 (`2*A=2`). In the latter eight steps, average `F+G` is almost exactly the same
 size as average answer reward. The optimizer can therefore trade answer
@@ -176,24 +186,34 @@ of the already materialized artifact and restores the process-global setting
 afterward in commit `c40030e`; 22 focused tests and the real
 134,775-character artifact pass.
 
-## 6. Decision and next controlled test
+## 6. Decision and primary controlled audit
 
-1. Retain Visual Step 8 as the selected PRL19 treatment checkpoint. Do not use
-   Step 16 as evidence that a longer visual-reward horizon is better.
-2. Treat `F/G` as useful shaping channels, not as yet validated headline
-   objectives. Their Step-8 benefit justifies further work; their Step-16
-   behavior rules out scaling the present scalar unchanged.
-3. The next experiment should restore strict answer dominance while changing
+1. Do not select Visual Step 8 or Step 16 from Macro* alone.  Freeze both until
+   the paired target/grounding audit is complete.
+2. On the same held-out ordinals, compare common Step 0, no-visual Step 8/16,
+   and visual Step 8/16. Report policy-level tool coverage separately, then
+   paired `F/G` score distributions and win/tie/loss only on ordinals where
+   both compared arms have a successful tool observation. Direct-answer rows
+   are not zero-quality targets and must not be scored as zero.
+3. Add a deterministic wrong-image calibration panel.  A healthy image-aware
+   judge should lower Focus and Grounding when the original image is replaced
+   by a donor image; otherwise apparent improvement may be a text-only judge
+   shortcut.  Because the audit reuses the reward judge, its result remains a
+   proxy and should be supplemented by blinded human review or an independent
+   VLM on a stratified subset.
+4. If the primary audit supports the treatment, the next experiment should
+   restore strict answer dominance while changing
    only visual-reward composition. A theoretically clean constraint is to
    choose a visual coefficient whose maximum gain cannot compensate for a
    wrong answer, or to apply positive `F/G` shaping only within the same answer
    correctness class. This preserves learning from visual quality without
    allowing judge-facing verbosity to replace task success.
-4. Add output-length/repetition diagnostics to the report and reward audit.
+5. Keep output-length/repetition diagnostics in the report and reward audit.
    Do not silently truncate benchmark answers or change official scoring;
    truncation would change the measured policy rather than fix its behavior.
-5. Any new reward variant should evaluate Step 8 first. Continue to Step 16
-   only if Step-8 Macro* and tail-health both pass against this PRL19 baseline.
+6. Any new reward variant should evaluate Step 8 first. Continue to Step 16
+   only if target health, hallucination rate, auxiliary Macro*, and tail health
+   jointly pass against this PRL19 baseline.
 
 ## 7. Provenance
 

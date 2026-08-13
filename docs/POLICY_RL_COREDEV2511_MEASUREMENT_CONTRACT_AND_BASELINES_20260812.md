@@ -347,12 +347,15 @@ Focus/Target 与 Grounding visual reward；工具效用 `T` 仍关闭。两者�
 | MathVerse five-version macro | 53.40 | 52.40 | 56.00 | 55.80 | 54.40 |
 | **Macro\*** | **57.0320** | **56.1964** | **57.8849** | **58.1996** | **57.5422** |
 
-关键 delta：Visual S8 相对同 step no-visual 为 **`+1.6885 pp`**，相对
+辅助 accuracy delta：Visual S8 相对同 step no-visual 为 **`+1.6885 pp`**，相对
 共同 S0 为 `+0.8529 pp`；Visual S16 相对自身 S8 为 `-0.3427 pp`，相对
-no-visual S16 为 `-0.6573 pp`。因此当前结论是 visual reward 存在明确的
-早期 shaping 信号，但当前标量不支持继续放大训练长度；PRL19 选择 Step 8。
+no-visual S16 为 `-0.6573 pp`。这些数值只测最终答案，不能直接证明
+target 更依赖图像或视觉幻觉更少，因此不能据此宣称 visual shaping 已起效，
+也不能仅据此选择 PRL19 Step 8。主结论等待同一 held-out trajectory 上的
+paired Focus/Target、Grounding 与 wrong-image calibration 审计。
 
 Step 16 还出现了明显更重的 OCR 极端重复尾部：P99 从 Step 8 的
 `47,296` chars 升至 `80,924`，而 no-visual Step 16 为 `31,474`。完整配置、
-reward 分解、训练 telemetry、输出健康度与 artifact SHA 见
+reward 分解、训练 telemetry、输出健康度与 artifact SHA 见下述报告；
+该尾部是健康度旁证，不等价于直接的 hallucination measurement：
 `docs/PRL19_RP67_FROZEN_TFREE_VISUAL_REWARD_PAIRED_RESULTS_20260813.md`。
