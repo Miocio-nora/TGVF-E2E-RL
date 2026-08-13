@@ -1,0 +1,169 @@
+schema_version = "policy-e2e-crop-tgvf-tfree-deepeyes-matched-run-config-v1"
+formal_pilot = false
+run_id = "PRL-20-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-CROP-TGVF-8STEP-WS8"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "eadae55c5feea79972b850cb88089853b47440a0"
+dirty = false
+
+[model]
+family = "qwen3_vl"
+name = "Qwen3-VL-8B-Instruct"
+path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+tokenizer_length = 151669
+chat_template_sha256 = "3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4"
+native_deepstack_enabled = true
+image_max_pixels = 1003520
+
+[dataset]
+kind = "policy_t1_retained_mixed"
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/T1-04-INSTRUCT-FULL-MIXED-T1-RETAINED-FINAL-v2"
+decision_stage = "final"
+sample_count = 77541
+manifest_file_sha256 = "752ebe9ea5fced48773b9bc0babfbb6bc57a335dd1b580455f6962053d29fddf"
+content_sha256 = "5ab99622a2698a7c52c45795215fa5c467b741c103827a1a7dbe3800ff052934"
+samples_sha256 = "06e5b1b9039680111df5ef01f7f969b9cf3d8d0eaefa5774fd8d16169428611a"
+iteration_identity_sha256 = "00487767040b6a04abe94679813b41ef76342e93b5dfa65cb6290c45002f96c9"
+shuffle_seed = 42
+
+[representation]
+artifact_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/RP-67-qwen3-instruct-balanced-t1-image-axis-grounded-2000-gpu01/adapter.pt"
+artifact_file_sha256 = "13332865eb30a2b04ce2ee90a9228e490c718e87fa57bc758078cdd28b6f0f68"
+artifact_manifest_sha256 = "2ea098967ba36671d6975a17e3830778d441149c27f5f80e43e78daf818933b1"
+artifact_namespace = "tgvf-representation"
+artifact_name = "qwen3-instruct-balanced-t1-image-axis-grounded"
+artifact_version = "rp67-step2000"
+expected_run_id = "RP-67-QWEN3-INSTRUCT-REP-BALANCED-T1-IMAGE-AXIS-GROUNDED-2000-GPU01"
+expected_run_identity_sha256 = "0b53d04cf8e4c8b665e76279da1df8d1e6ebabee63318c644a3bff5bad099b44"
+adapter_update_mode = "frozen_adapter"
+
+[representation.conditioning]
+provider = "contextual_hidden_state"
+hidden_layer = -1
+
+[protocol]
+prompt_sha256 = "5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69"
+cap_error_sha256 = "67ff606dc08e4ecdbebc5873a6badfef287a4a8767b283f956b089a2458932ac"
+tool_profile = "crop_tgvf"
+tool_schema_sha256 = "0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39"
+enabled_tool_names = ["tgvf_crop_tool"]
+maximum_tool_calls = 6
+
+[sampling]
+trajectories_per_prompt = 16
+temperature = 1.0
+top_p = 1.0
+top_k = -1
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_response_length = 20480
+asynchronous_staleness_steps = 0
+do_sample = true
+backend = "vllm"
+backend_version = "0.12.0"
+logit_processors = []
+logprob_measurement = "after_sampling_transforms"
+stop_token_ids = [151645]
+stop_strings = ["</tool_call>"]
+include_stop_str_in_output = true
+ignore_eos = false
+rollout_master_seed = 42
+seed_derivation_name = "content-addressed-vllm-turn-rng-v1"
+seed_derivation_sha256 = "fe8d2da92471dcf97ff195f9c1e085fe422673e3b0a4b863ad28ca528ace867e"
+
+[reward]
+profile = "stage3-shaped-v1"
+task_kind = "mixed"
+answer_verifier = "rule_first_qwen25_72b"
+answer_verifier_sha256 = "2d7b4da3add10fd6ca8f45aa146731634163a1b39bb4e7952a74b8e649248b97"
+judge_mode = "qwen25_72b_semantic_fallback"
+judge_reason = "PRL20 atomic Crop+TGVF matched control; Answer plus protocol and repeated-call penalty only"
+judge_config_path = "${TGVF_REPOSITORY_ROOT}/configs/policy/judges/prl17_qwen25_72b_binary_text_concurrency16_health25.json"
+judge_config_sha256 = "f121fee61e2473f7b82527e59ea15f6f234cd829261c3b642d56436da300954a"
+tool_utility_reward_enabled = false
+focus_reward_enabled = false
+grounding_reward_enabled = false
+visual_quality_judge_mode = "disabled"
+
+[optimizer]
+name = "adamw"
+learning_rate = 0.000001
+beta1 = 0.9
+beta2 = 0.999
+epsilon = 0.00000001
+weight_decay = 0.01
+maximum_gradient_norm = 1.0
+
+[scheduler]
+name = "constant"
+warmup_steps = 0
+total_steps = 8
+minimum_learning_rate_ratio = 0.0
+
+[precision]
+parameter_dtype = "bfloat16"
+reduce_dtype = "float32"
+optimizer_state_dtype = "float32"
+autocast_dtype = "bfloat16"
+gradient_scaler_enabled = false
+allow_tf32 = true
+
+[accumulation]
+global_prompt_batch_size = 16
+prompt_micro_batch_size_per_rank = 2
+rollout_prompt_micro_batch_size_per_engine = 2
+gradient_accumulation_steps = 1
+
+[distributed]
+physical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+logical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+world_size = 8
+actor_logical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+rollout_logical_gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+fsdp_strategy = "fsdp2"
+fsdp_reshard_after_forward = true
+rollout_backend = "vllm"
+vllm_tensor_parallel_size = 1
+placement = "colocated"
+weight_sync_mode = "nccl_full_qwen_plus_trainable_rp66_v1"
+weight_sync_interval_optimizer_steps = 1
+actor_optimizer_offload = false
+
+[capacity]
+max_prompt_length = 8192
+actor_ppo_max_token_len_per_gpu = 16384
+rollout_log_prob_max_token_len_per_gpu = 16384
+reference_log_prob_max_token_len_per_gpu = 16384
+vllm_gpu_memory_utilization = 0.65
+vllm_max_num_batched_tokens = 32768
+vllm_max_model_len = 32768
+vllm_max_num_seqs = 1024
+vllm_enable_chunked_prefill = false
+vllm_enforce_eager = false
+
+[framework]
+agent_loop_config_path = "${TGVF_REPOSITORY_ROOT}/configs/policy/agent_loops/prl20_crop_tgvf_deepeyes_matched.yaml"
+agent_loop_config_sha256 = "99f802111227ec5445cedd92e5091e747fffb09f70610b227c6cb5e56971ece3"
+runtime_invocation_factory_fqn = "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
+server_timeout_seconds = 2400.0
+
+[training]
+total_training_epochs = 1
+maximum_optimizer_steps = 8
+checkpoint_steps = [0, 1, 4, 8]
+logger = ["console", "wandb"]
+project_name = "tgvf-policy-rl"
+validation_before_training = false
+validation_frequency = -1
+resume_mode = "auto"
+resume_from_path = ""
+maximum_actor_checkpoints_to_keep = 2
+permanent_checkpoint_steps = [4, 5, 6, 8]
+
+[output]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8"
+checkpoint_directory = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/checkpoints"
+metrics_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/metrics.jsonl"

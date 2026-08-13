@@ -9948,3 +9948,43 @@ than inferred from a script name or prior conversation.
   scorer or metric.
 - Full results, reward analysis, output-health audit and artifact hashes are in
   `docs/PRL19_RP67_FROZEN_TFREE_VISUAL_REWARD_PAIRED_RESULTS_20260813.md`.
+
+### PRL-20-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-CROP-TGVF
+
+- Authorized 2026-08-13 as the atomic TGVF+Crop treatment. The direct control
+  is PRL17-R2 frozen-RP67 T-free. Model, retained mixed-T1 data/order, full
+  policy update, frozen RP67 Step-2000 artifact, BS16 x n16, world8,
+  micro2/GA1, temperature 1, constant `1e-6` learning rate, answer judge,
+  eight optimizer steps, six-call cap and clean plain-final dialect are fixed.
+- The sole intended scientific treatment replaces `tgvf_focus_tool(target)`
+  with one atomic `tgvf_crop_tool(bbox_2d,target)`. Runtime crops the immutable
+  original RGB, runs crop vision and frozen RP67 on the sticky rollout replica,
+  and returns only D/D-DeepStack. The policy never receives RGB crop or raw
+  crop-vision features. Tool utility T, Focus, Grounding and visual API judges
+  remain disabled.
+- Prompt identity is
+  `5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69`;
+  tool-schema identity is
+  `0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39`.
+  ThinkLite stays direct-only/no-tool.
+- RPC identity binds immutable source RGB SHA, exact crop RGB SHA, the complete
+  preprocessed Qwen visual tensor plus grid, bbox, call index, sampled target
+  span/token IDs, conditioning provider and returned D payload. A swapped
+  preprocessed tensor is rejected before visual/Adapter execution.
+- Actor replay uses the explicit `crop-tgvf-observation-v3` boundary. Each
+  observation persists the exact crop processor tensor and sampled Hq; the
+  current policy recomputes crop vision differentiably, applies frozen RP67,
+  and injects only the resulting D/D-DeepStack. Historical v2 observations are
+  not valid resume inputs for this run, and the reference remains bound to the
+  rollout-recorded visual features.
+- The training-run benchmark path is corrected at the same boundary: matched
+  TGVF uses `build_tgvf_visual_messages(...), tools=[]`, atomic TGVF+Crop uses
+  `build_crop_tgvf_visual_messages(...), tools=[]`, and the prompt materializer
+  is part of evaluation identity. Legacy generic and official-visible Crop
+  routes are unchanged. Historical matched-TGVF benchmark rows rendered with
+  the generic prompt cannot be mixed with corrected rows and must be rerun for
+  a fair PRL20 comparison.
+- Lifecycle gate: console-only world4 BS4 x n2 one-step functional canary first;
+  only after one successful atomic D observation and finite update may the
+  exact world8 BS16 x n16 eight-step pilot start. Formal W&B is enabled;
+  canary/smoke W&B is disabled.
