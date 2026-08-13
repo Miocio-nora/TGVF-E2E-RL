@@ -789,10 +789,6 @@ class AsyncTGVFVisualQualityJudgeProvider:
                     result.failure_kind
                     is TGVFVisualQualityFailureKind.MALFORMED_OUTPUT
                 )
-                response_identity_mismatch = (
-                    retryable_malformed_output
-                    and reason == "response_model_mismatch"
-                )
                 retryable_transport = (
                     result.failure_kind is TGVFVisualQualityFailureKind.TRANSPORT
                     and (
