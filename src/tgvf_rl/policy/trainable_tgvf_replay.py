@@ -25,7 +25,10 @@ from tgvf_rl.contracts.tokens import (
     SamplingIdentity,
     TokenOwnership,
 )
-from tgvf_rl.observations.schema import FocusedObservationRecord
+from tgvf_rl.observations.schema import (
+    CropTGVFObservationRecord,
+    FocusedObservationRecord,
+)
 from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayBundle,
@@ -281,24 +284,48 @@ def build_trainable_tgvf_current_request(
         raise ReplayMismatchError("recorded observation/block counts differ")
     live_blocks: list[InjectedVisualBlock] = [source_block]
     for record, block in zip(observations, recorded_blocks[1:], strict=True):
-        if not isinstance(record, FocusedObservationRecord):
+        if isinstance(record, CropTGVFObservationRecord):
+            if block.kind != "crop_focused_d":
+                raise ReplayMismatchError(
+                    "atomic Crop+TGVF observation and replay block differ"
+                )
+            crop_pixels = store.resolve_verified(
+                record.crop_visual.preprocessed_pixel_values
+            )
+            observation_vision = extract_live_qwen3_vision_features(
+                model,
+                pixel_values=crop_pixels,
+                image_grid_thw=record.crop_visual.source.image_grid_thw,
+            )
+            output_kind = "crop_focused_d"
+        elif isinstance(record, FocusedObservationRecord):
+            if block.kind != "focused_d":
+                raise ReplayMismatchError(
+                    "focused observation and replay block differ"
+                )
+            if record.condition_hq is None:
+                raise ReplayMismatchError(
+                    "joint RP66 replay requires focused-observation-v2 condition Hq"
+                )
+            observation_vision = vision
+            output_kind = "focused_d"
+        else:
             raise ValueError(
-                "trainable RP66 pilot accepts original-image TGVF observations only"
+                "trainable RP66 replay accepts TGVF or atomic Crop+TGVF "
+                "observations only"
             )
-        if block.kind != "focused_d" or block.call_index != record.call_index:
-            raise ReplayMismatchError("focused observation and replay block differ")
-        if record.condition_hq is None:
-            raise ReplayMismatchError(
-                "joint RP66 replay requires focused-observation-v2 condition Hq"
-            )
+        if block.call_index != record.call_index:
+            raise ReplayMismatchError("TGVF observation and replay call index differ")
         hq = store.resolve_verified(record.condition_hq)
         owner = next(adapter.parameters())
         owner_device = tensor_compute_device(owner)
         output = adapter(
             TGVFAdapterInput(
                 target_hidden_states=hq.to(device=owner_device, dtype=owner.dtype),
-                pre_merge_visual_tokens=vision.premerge_main,
-                deepstack_pre_merge_visual_tokens=vision.premerge_deepstack,
+                pre_merge_visual_tokens=observation_vision.premerge_main,
+                deepstack_pre_merge_visual_tokens=(
+                    observation_vision.premerge_deepstack
+                ),
             )
         )
         if tuple(output.metadata.branch_layers) != tuple(
@@ -307,7 +334,7 @@ def build_trainable_tgvf_current_request(
             raise ReplayMismatchError("current RP66 branch layout changed")
         live_blocks.append(
             InjectedVisualBlock(
-                kind="focused_d",
+                kind=output_kind,
                 positions=block.positions,
                 embeddings=_batched(output.main_d),
                 deepstack=tuple(

@@ -14,6 +14,7 @@ from tgvf_rl.environment.focus_tool import (
 )
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
+    TGVFCropMaterializationResult,
     TGVFFocusMaterializationResult,
     TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA,
     TGVF_VLLM_FINISH_REASON_FIELD,
@@ -24,6 +25,8 @@ from tgvf_rl.framework.verl.vllm_tool_runtime import (
     _adapter_owned_state_to_utility_wire,
     _focus_from_utility_wire,
     _focus_to_utility_wire,
+    _crop_tgvf_from_utility_wire,
+    _crop_tgvf_to_utility_wire,
     _runtime_classes,
     _source_from_utility_wire,
     _source_to_utility_wire,
@@ -31,6 +34,7 @@ from tgvf_rl.framework.verl.vllm_tool_runtime import (
     _tensor_to_utility_wire,
     adapter_owned_state_sha256,
     bind_tgvf_adapter_state_update_manager,
+    preprocessed_visual_identity_sha256,
 )
 from tgvf_rl.representation.adapter import TGVFAdapterMetadata
 from tgvf_rl.representation.deepstack import DDeepStackPayload
@@ -115,6 +119,19 @@ def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
     visual_restored = _source_from_utility_wire(visual_wire)
     assert isinstance(visual_restored, SourceVisualTensorBundle)
     torch.testing.assert_close(visual_restored.premerge_main, visual.premerge_main)
+
+
+def test_preprocessed_visual_identity_binds_tensor_and_geometry() -> None:
+    pixels = torch.arange(24, dtype=torch.float32).reshape(4, 6)
+    identity = preprocessed_visual_identity_sha256(pixels, (1, 2, 2))
+
+    assert identity == preprocessed_visual_identity_sha256(
+        pixels.clone(), torch.tensor([[1, 2, 2]])
+    )
+    assert identity != preprocessed_visual_identity_sha256(
+        pixels.add(1), (1, 2, 2)
+    )
+    assert identity != preprocessed_visual_identity_sha256(pixels, (1, 1, 4))
 
 
 def test_adapter_owned_state_wire_and_digest_are_order_independent() -> None:
@@ -294,6 +311,74 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
     torch.testing.assert_close(
         transported.observation.main_d, result.observation.main_d
     )
+
+
+def test_crop_tgvf_wire_binds_source_bbox_target_crop_visual_and_d() -> None:
+    layers = (8, 16, 24)
+    identities = ("deep-8", "deep-16", "deep-24")
+    crop_sha256 = "c" * 64
+    observation = PrecomputedTGVFObservationPayload(
+        main_d=torch.ones((2, 8), dtype=torch.bfloat16),
+        d_deepstack=DDeepStackPayload(
+            branch_layers=layers,
+            branches=tuple(
+                torch.full((2, 8), float(index), dtype=torch.bfloat16)
+                for index in range(3)
+            ),
+            projection_identities=identities,
+        ),
+        metadata=TGVFAdapterMetadata(
+            branch_layers=layers,
+            main_projection_identity="main",
+            deepstack_projection_identities=identities,
+            batched=False,
+            batch_size=1,
+            target_token_count=3,
+            pre_merge_visual_token_count=8,
+            d_token_count=2,
+            condition_provenance=None,
+        ),
+    )
+    crop_visual = SourceVisualTensorBundle(
+        image_sha256=crop_sha256,
+        premerge_main=torch.ones((8, 4), dtype=torch.bfloat16),
+        premerge_deepstack=tuple(
+            torch.full((8, 4), float(index), dtype=torch.bfloat16)
+            for index in range(3)
+        ),
+        merged_main=torch.ones((2, 8), dtype=torch.bfloat16),
+        merged_deepstack=tuple(
+            torch.full((2, 8), float(index), dtype=torch.bfloat16)
+            for index in range(3)
+        ),
+        image_grid_thw=(1, 2, 4),
+        spatial_merge_size=2,
+        decoded_rgb_sha256=crop_sha256,
+    )
+    expected = TGVFCropMaterializationResult(
+        source_image_sha256="a" * 64,
+        crop_sha256=crop_sha256,
+        preprocessed_visual_sha256="c" * 64,
+        image_grid_thw=(1, 2, 4),
+        call_index=2,
+        model_bbox_2d=(10, 20, 800, 900),
+        target_start=4,
+        target_end=7,
+        target_token_ids=(31, 32, 33),
+        provider="contextual_hidden_state",
+        hq=torch.arange(12, dtype=torch.bfloat16).reshape(3, 4),
+        crop_visual=crop_visual,
+        observation=observation,
+    )
+
+    restored = _crop_tgvf_from_utility_wire(_crop_tgvf_to_utility_wire(expected))
+
+    assert restored.source_image_sha256 == expected.source_image_sha256
+    assert restored.crop_sha256 == expected.crop_sha256
+    assert restored.model_bbox_2d == expected.model_bbox_2d
+    assert restored.target_token_ids == expected.target_token_ids
+    torch.testing.assert_close(restored.crop_visual.premerge_main, crop_visual.premerge_main)
+    torch.testing.assert_close(restored.observation.main_d, observation.main_d)
 
 
 def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases() -> (
@@ -482,6 +567,132 @@ def test_crop_rpc_reuses_the_rollout_worker_visual_path() -> None:
     assert restored.image_sha256 == expected.image_sha256
     assert calls[0]["image_sha256"] == "c" * 64
     assert tuple(calls[0]["image_grid_thw"].shape) == (1, 3)
+
+
+def test_worker_atomic_crop_tgvf_materializes_crop_vision_and_adapter_once() -> None:
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    source_sha256 = "a" * 64
+    crop_sha256 = "c" * 64
+    extension._tgvf_source_cache = {
+        "trajectory-0": SimpleNamespace(image_sha256=source_sha256)
+    }
+    crop_visual = SourceVisualTensorBundle(
+        image_sha256=crop_sha256,
+        premerge_main=torch.ones((8, 4), dtype=torch.bfloat16),
+        premerge_deepstack=tuple(
+            torch.full((8, 4), float(index), dtype=torch.bfloat16)
+            for index in range(3)
+        ),
+        merged_main=torch.ones((2, 8), dtype=torch.bfloat16),
+        merged_deepstack=tuple(
+            torch.full((2, 8), float(index), dtype=torch.bfloat16)
+            for index in range(3)
+        ),
+        image_grid_thw=(1, 2, 4),
+        spatial_merge_size=2,
+        decoded_rgb_sha256=crop_sha256,
+    )
+    layers = (8, 16, 24)
+    identities = ("deep-8", "deep-16", "deep-24")
+    adapter_output = SimpleNamespace(
+        main_d=torch.ones((2, 8), dtype=torch.bfloat16),
+        d_deepstack=DDeepStackPayload(
+            branch_layers=layers,
+            branches=tuple(
+                torch.full((2, 8), float(index), dtype=torch.bfloat16)
+                for index in range(3)
+            ),
+            projection_identities=identities,
+        ),
+        metadata=TGVFAdapterMetadata(
+            branch_layers=layers,
+            main_projection_identity="main",
+            deepstack_projection_identities=identities,
+            batched=False,
+            batch_size=1,
+            target_token_count=2,
+            pre_merge_visual_token_count=8,
+            d_token_count=2,
+            condition_provenance=None,
+        ),
+    )
+    calls: list[object] = []
+
+    def materialize_visual(**kwargs: object) -> SourceVisualTensorBundle:
+        calls.append(("vision", kwargs))
+        return crop_visual
+
+    class Adapter:
+        def __call__(self, adapter_input: object) -> object:
+            calls.append(("adapter", adapter_input))
+            return adapter_output
+
+    extension._tgvf_materialize_visual = materialize_visual
+    extension._tgvf_target_hidden_states = lambda **kwargs: torch.ones(
+        (2, 8), dtype=torch.bfloat16
+    )
+    extension._tgvf_adapter = lambda: Adapter()
+    extension._tgvf_behavior_traces = {"turn-0": object()}
+
+    wire = extension.tgvf_materialize_crop_tgvf(
+        "trajectory-0",
+        "turn-0",
+        1,
+        _tensor_to_utility_wire(torch.ones((8, 6))),
+        (1, 2, 4),
+        source_sha256,
+        crop_sha256,
+        preprocessed_visual_identity_sha256(
+            torch.ones((8, 6)),
+            (1, 2, 4),
+        ),
+        (10, 20, 800, 900),
+        3,
+        5,
+        (41, 42),
+        "contextual_hidden_state",
+    )
+    result = _crop_tgvf_from_utility_wire(wire)
+
+    assert [call[0] for call in calls] == ["vision", "adapter"]
+    assert result.source_image_sha256 == source_sha256
+    assert result.crop_sha256 == crop_sha256
+    assert result.model_bbox_2d == (10, 20, 800, 900)
+    assert result.target_token_ids == (41, 42)
+    assert "turn-0" not in extension._tgvf_behavior_traces
+
+
+def test_worker_atomic_crop_tgvf_rejects_swapped_preprocessed_tensor() -> None:
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    source_sha256 = "a" * 64
+    extension._tgvf_source_cache = {
+        "trajectory-0": SimpleNamespace(image_sha256=source_sha256)
+    }
+    declared_pixels = torch.zeros((8, 6))
+    swapped_pixels = torch.ones((8, 6))
+
+    with pytest.raises(
+        IdentityMismatchError,
+        match="preprocessed visual content changed across RPC",
+    ):
+        extension.tgvf_materialize_crop_tgvf(
+            "trajectory-0",
+            "turn-0",
+            0,
+            _tensor_to_utility_wire(swapped_pixels),
+            (1, 2, 4),
+            source_sha256,
+            "b" * 64,
+            preprocessed_visual_identity_sha256(
+                declared_pixels,
+                (1, 2, 4),
+            ),
+            (10, 20, 800, 900),
+            3,
+            5,
+            (41, 42),
+            "contextual_hidden_state",
+        )
 
 
 def test_http_server_adapter_update_uses_collective_rpc_and_validates_ack() -> None:

@@ -31,7 +31,7 @@ import torch
 from PIL import Image
 
 from tgvf_rl.conditioning import TargetConditioningProviderKind
-from tgvf_rl.contracts.errors import PolicyOutputContractError
+from tgvf_rl.contracts.errors import IdentityMismatchError, PolicyOutputContractError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.environment import (
     CropExecutionLedger,
@@ -43,9 +43,11 @@ from tgvf_rl.environment import (
     record_trajectory_source_visual,
 )
 from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_environment_text,
 )
+from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.qwen3_crop_materializer import preprocess_qwen3_rgb
 from tgvf_rl.framework.verl.native_agent_loop import VerlAsyncServerPolicyTurnClient
 from tgvf_rl.framework.verl.policy_weight_sync import (
@@ -55,6 +57,7 @@ from tgvf_rl.framework.verl.policy_weight_sync import (
 )
 from tgvf_rl.framework.verl.policy_live_runtime import (
     _BRANCH_LAYERS,
+    _RemoteAtomicCropTGVFToolRuntime,
     _RemoteCropVisualMaterializer,
     _RemoteTGVFFocusToolRuntime,
     _VisualTokenCountResolver,
@@ -65,8 +68,10 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVF_VLLM_WORKER_EXTENSION_FQN,
     TGVFFocusMaterializationResult,
+    TGVFCropMaterializationResult,
     _adapter_owned_state_to_utility_wire,
     _focus_from_utility_wire,
+    _crop_tgvf_from_utility_wire,
     _source_from_utility_wire,
     _tensor_to_utility_wire,
     _validate_adapter_update_ack,
@@ -91,9 +96,20 @@ from tgvf_rl.framework.vllm.registration import (
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
+)
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
+    build_crop_tgvf_visual_messages,
+)
+from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
+    TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+    TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
+    build_tgvf_visual_messages,
 )
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
@@ -136,6 +152,12 @@ from .policy_paired_tgvf_snapshot import (
 POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v1"
 POLICY_BENCHMARK_SCHEMA = "tgvf-policy-benchmark-evaluation-v1"
 POLICY_EVALUATION_IDENTITY_SCHEMA = "tgvf-policy-evaluation-identity-v1"
+POLICY_MATCHED_PROMPT_MATERIALIZER_SCHEMA = (
+    "tgvf-policy-evaluation-matched-prompt-materializer-v1"
+)
+POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION = (
+    "qwen3-native-chat-template-explicit-empty-tools-v1"
+)
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
 POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA = "tgvf-policy-output-contract-failure-v1"
 PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-rng-v1"
@@ -164,11 +186,115 @@ POLICY_EVALUATION_BACKENDS = frozenset(
 
 
 def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
+    if (
+        run.schema_version
+        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    ):
+        return render_qwen_native_matched_crop_tgvf_success_environment_text
     return (
         render_qwen_native_matched_tgvf_success_environment_text
         if run.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
         else render_qwen_native_success_environment_text
     )
+
+
+def _matched_prompt_materializer_identity(
+    run: PolicyE2ESmokeRunConfig,
+) -> dict[str, object] | None:
+    """Bind the corrected training-matched prompt path without legacy drift."""
+
+    if run.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS:
+        if run.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
+            raise ValueError("matched TGVF run has a non-TGVF tool profile")
+        builder = "build_tgvf_visual_messages"
+        prompt_version = TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+        prompt_sha256 = TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    elif (
+        run.schema_version
+        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    ):
+        if run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_TGVF:
+            raise ValueError("matched Crop+TGVF run has a non-combined tool profile")
+        builder = "build_crop_tgvf_visual_messages"
+        prompt_version = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+        prompt_sha256 = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    else:
+        # Existing generic native and official-visible evaluations retain their
+        # historical rendering and identity bytes.
+        return None
+    return {
+        "schema_version": POLICY_MATCHED_PROMPT_MATERIALIZER_SCHEMA,
+        "version": POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION,
+        "message_builder": builder,
+        "prompt_version": prompt_version,
+        "prompt_bundle_sha256": prompt_sha256,
+        "template_tools_argument": [],
+    }
+
+
+def _evaluation_prompt_materializer_identity(
+    config: PolicyCoreDevConfig,
+    run: PolicyE2ESmokeRunConfig,
+) -> dict[str, object] | None:
+    """Keep official-visible and legacy identity envelopes byte-compatible."""
+
+    if config.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL:
+        return None
+    return _matched_prompt_materializer_identity(run)
+
+
+def _render_training_run_visual_prompt(
+    *,
+    run: PolicyE2ESmokeRunConfig,
+    processor: object,
+    renderer: NativeProtocolRenderer,
+    question: str,
+) -> tuple[str, tuple[int, ...]]:
+    """Render one training-run prompt, preserving all historical routes."""
+
+    materializer = _matched_prompt_materializer_identity(run)
+    if materializer is None:
+        messages = build_visual_tool_prompt_messages(
+            question,
+            tool_profile=run.protocol.tool_profile,
+            assistant_dialect=renderer.assistant_dialect,
+        )
+        rendered = renderer.render(messages, add_generation_prompt=True)
+        renderer.assert_generation_prefill(rendered, renderer.tokenizer)
+        return rendered.text, rendered.token_ids
+
+    messages = (
+        build_crop_tgvf_visual_messages(question)
+        if run.schema_version
+        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+        else build_tgvf_visual_messages(question)
+    )
+    renderer.assert_tokenizer_length()
+    renderer.assert_chat_template_identity()
+    renderer.assert_tool_schema_identity()
+    text = processor.apply_chat_template(
+        list(messages),
+        tools=[],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    renderer.assert_tokenizer_length()
+    renderer.assert_chat_template_identity()
+    renderer.assert_tool_schema_identity()
+    if not isinstance(text, str):
+        raise TypeError("matched evaluation chat template did not return text")
+    if "<answer>" in text or "</answer>" in text:
+        raise ValueError("matched evaluation prompt contains an answer wrapper")
+    token_ids = tuple(renderer.tokenizer.encode(text, add_special_tokens=False))
+    if not token_ids or any(type(token_id) is not int or token_id < 0 for token_id in token_ids):
+        raise TypeError("matched evaluation tokenizer returned invalid prompt IDs")
+    renderer.assert_tokenizer_length()
+    renderer.assert_chat_template_identity()
+    renderer.assert_tool_schema_identity()
+    renderer.assert_generation_prefill(
+        SimpleNamespace(text=text, token_ids=token_ids), renderer.tokenizer
+    )
+    return text, token_ids
 
 
 def _build_remote_tgvf_focus_tool_runtime(
@@ -220,29 +346,95 @@ def validate_policy_benchmark_runtime_interfaces(
     )
     dialect = native_assistant_dialect_for_model(run.model.model_name)
     renderer = _success_environment_text_renderer(run)
+    profile = run.protocol.tool_profile
+    manager_method = {
+        NativeToolCapabilityProfile.TGVF_ONLY: "materialize_focus",
+        NativeToolCapabilityProfile.CROP_ONLY: "materialize_crop",
+        NativeToolCapabilityProfile.CROP_TGVF: "materialize_crop_tgvf",
+    }.get(profile)
+    if manager_method is None:
+        raise ValueError("policy benchmark has an unsupported tool profile")
+    if not callable(getattr(StandaloneTGVFVLLMManager, manager_method, None)):
+        raise TypeError(f"standalone evaluator lacks {manager_method}()")
+
     event_loop = asyncio.new_event_loop()
     try:
-        runtime = _build_remote_tgvf_focus_tool_runtime(
-            event_loop=event_loop,
-            server_client=object(),
-            config=run,
-            source_visual=object(),
-            layout_builder=object(),
-            observation_store=ObservationStore(),
-            execution_ledger=FocusExecutionLedger(),
-            contextual_forward_identity=None,
-            branch_merger_identities=(),
-            success_environment_text_renderer=renderer,
-            assistant_dialect=dialect,
-        )
+        if profile is NativeToolCapabilityProfile.TGVF_ONLY:
+            runtime = _build_remote_tgvf_focus_tool_runtime(
+                event_loop=event_loop,
+                server_client=object(),
+                config=run,
+                source_visual=object(),
+                layout_builder=object(),
+                observation_store=ObservationStore(),
+                execution_ledger=FocusExecutionLedger(),
+                contextual_forward_identity=None,
+                branch_merger_identities=(),
+                success_environment_text_renderer=renderer,
+                assistant_dialect=dialect,
+            )
+        elif profile is NativeToolCapabilityProfile.CROP_ONLY:
+            runtime = _RemoteCropVisualMaterializer(
+                event_loop=event_loop,
+                server_client=object(),
+                processor=object(),
+                model_identity=run.model,
+                image_max_pixels=run.policy.image_max_pixels,
+                trajectory_id="cpu-preflight",
+                behavior_policy=PolicyVersion("cpu-preflight", 0, "0" * 64),
+            )
+        else:
+            zero = torch.zeros((1, 1), dtype=torch.bfloat16)
+            source = SourceVisualTensorBundle(
+                image_sha256="0" * 64,
+                premerge_main=zero,
+                premerge_deepstack=(),
+                merged_main=zero,
+                merged_deepstack=(),
+                image_grid_thw=(1, 1, 1),
+                spatial_merge_size=1,
+                decoded_rgb_sha256="0" * 64,
+            )
+            runtime = _RemoteAtomicCropTGVFToolRuntime(
+                event_loop=event_loop,
+                server_client=object(),
+                config=run,
+                source_visual=source,
+                layout_builder=object(),
+                observation_store=ObservationStore(),
+                execution_ledger=FocusExecutionLedger(),
+                contextual_forward_identity=None,
+                branch_merger_identities=(),
+                crop_processor_identity=_artifact_identity(
+                    "policy-evaluation-preflight",
+                    "crop-processor",
+                    "v1",
+                    {"profile": profile.value},
+                ),
+                crop_layout_identity=_artifact_identity(
+                    "policy-evaluation-preflight",
+                    "crop-layout",
+                    "v1",
+                    {"profile": profile.value},
+                ),
+                processor=object(),
+                image_max_pixels=run.policy.image_max_pixels,
+                success_environment_text_renderer=renderer,
+                assistant_dialect=dialect,
+            )
     finally:
         event_loop.close()
-    return {
+    result = {
         "source_rgb_prompt_materializer": True,
-        "remote_tgvf_focus_runtime": type(runtime).__name__,
+        "tool_profile": profile.value,
+        "standalone_manager_method": manager_method,
+        "remote_tool_runtime": type(runtime).__name__,
         "success_environment_renderer": renderer.__name__,
         "assistant_dialect": dialect.value,
     }
+    if profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        result["remote_tgvf_focus_runtime"] = type(runtime).__name__
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -1831,6 +2023,15 @@ def policy_evaluation_identity(
             "inference_concurrency_per_gpu": config.inference_concurrency_per_gpu,
         },
     }
+    prompt_materializer = _evaluation_prompt_materializer_identity(
+        config, snapshot.run
+    )
+    if prompt_materializer is not None:
+        # This top-level binding intentionally does not enter
+        # _evaluation_protocol_identity(): paired common-random-number
+        # streams keep their established protocol partition while resume
+        # identity rejects outputs from the formerly mismatched renderer.
+        content["prompt_materializer"] = prompt_materializer
     if (
         config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
         or isinstance(snapshot, PairedTGVFEvaluationSnapshot)
@@ -2096,6 +2297,96 @@ class StandaloneTGVFVLLMManager:
             _single_collective(result, operation="crop materialization")
         )
 
+    async def materialize_crop_tgvf(
+        self,
+        *,
+        request_id: str,
+        expected_step: int,
+        sampled_output_ids: tuple[int, ...],
+        call_index: int,
+        pixel_values: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        source_image_sha256: str,
+        crop_sha256: str,
+        preprocessed_visual_sha256: str,
+        model_bbox_2d: tuple[int, int, int, int],
+        target_start: int,
+        target_end: int,
+        expected_target_token_ids: tuple[int, ...],
+        provider: str,
+    ) -> TGVFCropMaterializationResult:
+        """Materialize one crop-conditioned D bound to the sampled target."""
+
+        turn = self._validated_turn(request_id, expected_step, sampled_output_ids)
+        target_token_ids = tuple(expected_target_token_ids)
+        if (
+            type(target_start) is not int
+            or type(target_end) is not int
+            or target_start < 0
+            or target_end <= target_start
+            or turn.output_ids[target_start:target_end] != target_token_ids
+        ):
+            raise RuntimeError("crop+TGVF target differs from sampled output")
+        if not isinstance(image_grid_thw, torch.Tensor) or image_grid_thw.shape != (
+            1,
+            3,
+        ):
+            raise TypeError("crop+TGVF image_grid_thw must have shape [1,3]")
+        image_grid = tuple(int(value) for value in image_grid_thw[0].tolist())
+        bbox = tuple(model_bbox_2d)
+        result = await self.engine.collective_rpc(
+            "tgvf_materialize_crop_tgvf",
+            kwargs={
+                "trajectory_id": request_id,
+                "backend_request_id": turn.backend_request_id,
+                "call_index": call_index,
+                "pixel_values_wire": _tensor_to_utility_wire(pixel_values),
+                "image_grid_thw": image_grid,
+                "source_image_sha256": source_image_sha256,
+                "crop_sha256": crop_sha256,
+                "preprocessed_visual_sha256": preprocessed_visual_sha256,
+                "model_bbox_2d": bbox,
+                "target_start": target_start,
+                "target_end": target_end,
+                "expected_target_token_ids": target_token_ids,
+                "provider": provider,
+            },
+        )
+        typed = _crop_tgvf_from_utility_wire(
+            _single_collective(result, operation="crop+TGVF materialization")
+        )
+        if not isinstance(typed, TGVFCropMaterializationResult):
+            raise TypeError("crop+TGVF RPC returned an invalid result")
+        expected_binding = (
+            source_image_sha256,
+            crop_sha256,
+            preprocessed_visual_sha256,
+            image_grid,
+            call_index,
+            bbox,
+            target_start,
+            target_end,
+            target_token_ids,
+            provider,
+        )
+        actual_binding = (
+            typed.source_image_sha256,
+            typed.crop_sha256,
+            typed.preprocessed_visual_sha256,
+            typed.image_grid_thw,
+            typed.call_index,
+            typed.model_bbox_2d,
+            typed.target_start,
+            typed.target_end,
+            typed.target_token_ids,
+            typed.provider,
+        )
+        if actual_binding != expected_binding:
+            raise IdentityMismatchError(
+                "crop+TGVF RPC result differs from requested binding"
+            )
+        return typed
+
     def _validated_turn(
         self, request_id: str, expected_step: int, output_ids: tuple[int, ...]
     ) -> _TurnRoute:
@@ -2164,15 +2455,26 @@ async def build_standalone_manager(
     manager = StandaloneTGVFVLLMManager(
         engine,
         lora,
-        capture_hidden=(
-            config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL
-            and run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
-        ),
+        capture_hidden=_evaluation_requires_hidden_capture(config, run),
         native_pixels=(
             config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
         ),
     )
     return manager, engine, run
+
+
+def _evaluation_requires_hidden_capture(
+    config: PolicyCoreDevConfig,
+    run: PolicyE2ESmokeRunConfig,
+) -> bool:
+    return (
+        config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL
+        and run.protocol.tool_profile
+        in {
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            NativeToolCapabilityProfile.CROP_TGVF,
+        }
+    )
 
 
 def _paired_tgvf_engine_kwargs(
@@ -2286,7 +2588,7 @@ class PolicyCoreDevEvaluator:
         run: PolicyE2ESmokeRunConfig,
         manager: StandaloneTGVFVLLMManager,
         processor: object,
-        snapshot: PolicyEvaluationSnapshot,
+        snapshot: PolicyEvaluationSubject,
         evaluation_identity: Mapping[str, object],
     ) -> None:
         self.config = config
@@ -2366,21 +2668,20 @@ class PolicyCoreDevEvaluator:
     ) -> tuple[int, ...]:
         if not task.single_image:
             raise ValueError("current visual-tool protocol has no multi-image selector")
-        messages = build_visual_tool_prompt_messages(
-            task.question,
-            tool_profile=self.run.protocol.tool_profile,
-            assistant_dialect=self.assistant_dialect,
+        prompt_text, canonical_token_ids = _render_training_run_visual_prompt(
+            run=self.run,
+            processor=self.processor,
+            renderer=self.renderer,
+            question=task.question,
         )
-        rendered = self.renderer.render(messages, add_generation_prompt=True)
-        self.renderer.assert_generation_prefill(rendered, self.renderer.tokenizer)
         from tgvf_rl.framework.verl.smoke_dataset import (
             _materialize_source_image_prompt_token_ids,
         )
 
         return _materialize_source_image_prompt_token_ids(
             processor=self.processor,
-            canonical_token_ids=rendered.token_ids,
-            prompt_text=rendered.text,
+            canonical_token_ids=canonical_token_ids,
+            prompt_text=prompt_text,
             image_max_pixels=self.run.policy.image_max_pixels,
             source_rgb=source_rgb,
         )
@@ -2501,8 +2802,43 @@ class PolicyCoreDevEvaluator:
                 execution_ledger=self.crop_ledger,
                 coordinate_mapper=Qwen3VLAdapter(),
             )
+        elif self.run.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
+            processor_identity = _artifact_identity(
+                "policy-evaluation",
+                "qwen3-shared-vllm-crop-tgvf-processor",
+                self.config.schema_version,
+                {
+                    "model": self.run.model.revision_or_path,
+                    "max_pixels": self.run.policy.image_max_pixels,
+                },
+            )
+            layout_identity = _artifact_identity(
+                "policy-evaluation",
+                "qwen3-native-crop-tgvf-layout",
+                self.config.schema_version,
+                {"model": self.run.model.revision_or_path},
+            )
+            tool_runtime = _RemoteAtomicCropTGVFToolRuntime(
+                event_loop=asyncio.get_running_loop(),
+                server_client=self.manager,
+                config=self.run,
+                source_visual=source,
+                layout_builder=self.layout_builder,
+                observation_store=self.store,
+                execution_ledger=self.focus_ledger,
+                contextual_forward_identity=self.contextual_identity,
+                branch_merger_identities=self.branch_identities,
+                crop_processor_identity=processor_identity,
+                crop_layout_identity=layout_identity,
+                processor=self.processor,
+                image_max_pixels=self.run.policy.image_max_pixels,
+                success_environment_text_renderer=(
+                    self.success_environment_text_renderer
+                ),
+                assistant_dialect=self.assistant_dialect,
+            )
         else:
-            raise RuntimeError("policy CoreDev supports the two trained atomic arms")
+            raise RuntimeError("policy CoreDev has an unsupported visual-tool profile")
 
         decoding = _decoding_contract()
         client = VerlAsyncServerPolicyTurnClient(
@@ -3137,6 +3473,8 @@ __all__ = [
     "POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA",
     "POLICY_COREDEV_SCHEMA",
     "POLICY_EVALUATION_IDENTITY_SCHEMA",
+    "POLICY_MATCHED_PROMPT_MATERIALIZER_SCHEMA",
+    "POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION",
     "POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA",
     "PAIRED_POLICY_EVALUATION_RNG_SCHEMA",
     "PairedEvaluationVLLMTurnRNG",

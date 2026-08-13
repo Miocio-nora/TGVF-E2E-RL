@@ -6,6 +6,7 @@ import pytest
 import torch
 from torch import nn
 
+from tests.environment.test_crop_tgvf_runtime import _fixture as _atomic_fixture
 from tests.policy.test_exact_replay import _payload
 from tgvf_rl.contracts.tokens import (
     LogProbMeasurement,
@@ -17,8 +18,13 @@ from tgvf_rl.policy import trainable_tgvf_replay as replay_module
 from tgvf_rl.policy.trainable_tgvf_replay import (
     TRAINABLE_TGVF_ADAPTER_ATTRIBUTE,
     TrainableTGVFCurrentReplayPort,
+    build_trainable_tgvf_current_request,
     extract_live_qwen3_vision_features,
     trainable_parameter_zero_anchor,
+)
+from tgvf_rl.observations.store import (
+    TrajectoryReplayRecord,
+    TrajectoryReplayTensorRefs,
 )
 from tgvf_rl.qwen.base import (
     ReplayConsumer,
@@ -26,6 +32,7 @@ from tgvf_rl.qwen.base import (
     resolve_replay_request,
 )
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
+from tgvf_rl.representation.deepstack import TrainableBorrowedProjectionPort
 
 
 class _ToyMerger(nn.Module):
@@ -61,6 +68,69 @@ class _ToyQwen(nn.Module):
         super().__init__()
         self.model = nn.Module()
         self.model.visual = _ToyVisual()
+
+
+class _AtomicToyMerger(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.projection = nn.Linear(4, 8, bias=False)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        grouped = hidden_states.reshape(-1, 4, 4).mean(dim=1)
+        return self.projection(grouped)
+
+
+class _AtomicToyVisual(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stem = nn.Linear(3, 4, bias=False)
+        self.merger = _AtomicToyMerger()
+        self.deepstack_merger_list = nn.ModuleList(
+            _AtomicToyMerger() for _ in range(3)
+        )
+        self.seen_pixel_values: list[torch.Tensor] = []
+
+    def forward(self, pixel_values: torch.Tensor, *, grid_thw: torch.Tensor):
+        assert tuple(grid_thw.shape) == (1, 3)
+        self.seen_pixel_values.append(pixel_values.detach().cpu().clone())
+        hidden = self.stem(pixel_values)
+        outputs = [self.merger(hidden)]
+        outputs.extend(
+            merger(hidden * (index + 2))
+            for index, merger in enumerate(self.deepstack_merger_list)
+        )
+        return outputs[0], tuple(outputs[1:])
+
+
+class _AtomicToyQwen(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Module()
+        self.model.visual = _AtomicToyVisual()
+        mergers = (
+            self.model.visual.merger,
+            *tuple(self.model.visual.deepstack_merger_list),
+        )
+        ports = tuple(
+            TrainableBorrowedProjectionPort(
+                merger,
+                identity=f"atomic-current-merger-{index}",
+                input_dim=4,
+                output_dim=8,
+                spatial_merge_size=2,
+            )
+            for index, merger in enumerate(mergers)
+        )
+        adapter = TGVFAdapter(
+            d_lm=8,
+            d_v=4,
+            attn_dim=4,
+            main_projection=ports[0],
+            deepstack_projections=ports[1:],
+            branch_layers=(8, 16, 24),
+        )
+        adapter.requires_grad_(False).train(True)
+        self.add_module(TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, adapter)
 
 
 def _trainable_adapter() -> TGVFAdapter:
@@ -159,6 +229,93 @@ def test_frozen_adapter_keeps_autograd_to_visual_and_target_inputs() -> None:
     assert torch.count_nonzero(visual.grad).item() > 0
     assert all(branch.grad is not None for branch in branches)
     assert all(parameter.grad is None for parameter in adapter.parameters())
+
+
+def test_atomic_crop_tgvf_current_replay_reruns_crop_vision_and_injects_only_live_d(
+    tmp_path,
+) -> None:
+    """Current actor uses exact crop pixels, not rollout D or raw crop features."""
+
+    runtime, _materializer, store, _pixels, _capture, context, parsed = (
+        _atomic_fixture(tmp_path, provider_kind="contextual_hidden_state")
+    )
+    observation_handle = runtime.execute(parsed, context)
+    record = store.resolve_record(observation_handle)
+    sequence = record.layout.sequence_length
+    replay = TrajectoryReplayRecord(
+        schema_version="trajectory-replay-v1",
+        replay_id="atomic-current-replay",
+        trajectory_id=context.trajectory_identity.canonical_id,
+        model=context.model,
+        behavior_policy=context.behavior_policy,
+        source_visual=context.trajectory_source_visual,
+        observation_handles=(observation_handle,),
+        tensors=TrajectoryReplayTensorRefs(
+            input_ids=store.put_tensor(
+                "atomic-current.input_ids",
+                torch.arange(sequence, dtype=torch.long).view(1, sequence),
+                trajectory_id=context.trajectory_identity.canonical_id,
+            ),
+            position_ids=record.payload.position_ids,
+            attention_mask=record.payload.attention_mask,
+            policy_attention_mask=record.masks.policy_visible,
+            reference_attention_mask=record.masks.reference_visible,
+            teacher_attention_mask=record.masks.teacher_visible,
+        ),
+        crop_vision_replay_mode="current_live_reference_recorded_features",
+    )
+    replay_handle = store.put_replay(replay)
+    recorded_d = store.resolve_verified(record.payload.main_d)
+    source_pixels = store.resolve_verified(
+        context.trajectory_source_visual.preprocessed_pixel_values
+    )
+    crop_pixels = store.resolve_verified(
+        record.crop_visual.preprocessed_pixel_values
+    )
+
+    torch.manual_seed(91)
+    model = _AtomicToyQwen()
+    adapter = model.tgvf_adapter
+    request = build_trainable_tgvf_current_request(
+        model=model,
+        adapter=adapter,
+        store=store,
+        replay_handle=replay_handle,
+    )
+
+    assert tuple(block.kind for block in request.visual_blocks) == (
+        "source_image",
+        "crop_focused_d",
+    )
+    assert len(model.model.visual.seen_pixel_values) == 2
+    torch.testing.assert_close(
+        model.model.visual.seen_pixel_values[0], source_pixels, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        model.model.visual.seen_pixel_values[1], crop_pixels, rtol=0, atol=0
+    )
+    assert not torch.allclose(
+        request.visual_blocks[1].embeddings.squeeze(0), recorded_d
+    )
+
+    loss = sum(
+        block.embeddings.square().sum()
+        + sum(branch.square().sum() for branch in block.deepstack)
+        for block in request.visual_blocks
+    )
+    loss.backward()
+
+    assert model.model.visual.stem.weight.grad is not None
+    assert torch.count_nonzero(model.model.visual.stem.weight.grad).item() > 0
+    assert model.model.visual.merger.projection.weight.grad is not None
+    assert all(
+        merger.projection.weight.grad is not None
+        for merger in model.model.visual.deepstack_merger_list
+    )
+    assert all(
+        parameter.grad is None
+        for parameter in adapter.artifact_state_dict(keep_vars=True).values()
+    )
 
 
 def test_current_replay_accepts_fully_frozen_adapter() -> None:

@@ -19,7 +19,7 @@ from types import MappingProxyType
 
 from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.policy.run_config import (
-    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
 )
 from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
@@ -1035,7 +1035,7 @@ def _actor_batch_contract(
     dp_size = config.distributed.world_size
     trajectory_mini = prompts * n
     crop16_matched = (
-        config.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+        config.schema_version in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
     )
     actor_trajectory_micro_per_gpu = (
         prompt_micro * n if crop16_matched else prompt_micro

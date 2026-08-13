@@ -1,6 +1,7 @@
 """Immutable focused-observation schema and storage."""
 
 from .schema import (
+    CROP_TGVF_OBSERVATION_SCHEMA_V3,
     CropObservationRecord,
     CropTGVFObservationRecord,
     CropTGVFVisualState,
@@ -39,6 +40,7 @@ def __getattr__(name: str):
     return getattr(finalizer, name)
 
 __all__ = [
+    "CROP_TGVF_OBSERVATION_SCHEMA_V3",
     "FocusedObservationRecord",
     "MaterializedTrajectoryReplayTensors",
     "CropObservationRecord",

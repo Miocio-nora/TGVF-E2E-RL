@@ -16,6 +16,7 @@ from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.environment.crop_tgvf_tool import (
     AtomicCropTGVFTool,
     CropTGVFToolExecutionRequest,
+    CropTGVFVisualMaterialization,
 )
 from tgvf_rl.environment.focus_tool import (
     ReplayLayoutTensors,
@@ -86,6 +87,21 @@ class Materializer:
             image_grid_thw=(1, 2, 2),
             spatial_merge_size=2,
             decoded_rgb_sha256=tensor_checksum(crop_rgb),
+        )
+
+    def materialize_crop_tgvf_visual(
+        self, crop_rgb, *, parsed_call, call_index
+    ):
+        source = self.materialize_source_visual(
+            crop_rgb,
+            parsed_call=parsed_call,
+            call_index=call_index,
+        )
+        return CropTGVFVisualMaterialization(
+            preprocessed_pixel_values=torch.arange(
+                12, dtype=torch.float32
+            ).view(4, 3),
+            source_visual=source,
         )
 
 
@@ -282,7 +298,7 @@ def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
             reference_attention_mask=result.record.masks.reference_visible,
             teacher_attention_mask=result.record.masks.teacher_visible,
         ),
-        crop_vision_replay_mode="shared_frozen_recorded_features",
+        crop_vision_replay_mode="current_live_reference_recorded_features",
     )
     replay_handle = store.put_replay(replay)
     bundle = store.export_replay_bundle(replay_handle)
@@ -328,3 +344,34 @@ def test_atomic_crop_tgvf_refuses_external_source_pixel_reconstruction() -> None
             coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
         ).execute(request)
     assert materializer.received == []
+
+
+def test_precomputed_atomic_record_refuses_crop_not_derived_from_immutable_source() -> (
+    None
+):
+    store, _, _, materializer, _, adapter, request = _fixture()
+    tool = AtomicCropTGVFTool(
+        materializer=materializer,
+        adapter=adapter,
+        store=store,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+    )
+    result = tool.execute(request)
+    changed_crop = result.crop_rgb.clone()
+    changed_crop[0, 0, 0] += 1
+
+    with pytest.raises(
+        ReplayMismatchError,
+        match="differs from immutable source/bbox",
+    ):
+        AtomicCropTGVFTool.record_precomputed(
+            request,
+            crop_rgb=changed_crop,
+            crop_preprocessed_pixel_values=store.resolve_verified(
+                result.record.crop_visual.preprocessed_pixel_values
+            ),
+            crop_visual=result.crop_visual,
+            adapter_output=result.adapter_output,
+            store=store,
+            coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+        )

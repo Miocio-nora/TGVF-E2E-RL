@@ -28,7 +28,8 @@ from tgvf_rl.data.deepeyes_official_schedule import (
 )
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
-    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
@@ -37,8 +38,12 @@ from tgvf_rl.policy.horizon_extension import (
     PolicyHorizonExtension,
     policy_horizon_extension_from_environment,
 )
+from tgvf_rl.policy.launch import assert_policy_execution_identity
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+)
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
 from tgvf_rl.protocol import visual_tool_prompt_identity
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
@@ -76,9 +81,12 @@ from .prl14_crop16_reference import (
     apply_prl14_crop16_common_controls,
 )
 from .tgvf_deepeyes_matched_dataset import (
+    CROP_TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
+    CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
     DEEPEYES_PROBE_SENTINEL,
     DEEPEYES_SMOKE_SENTINEL,
     DEEPEYES_TRAIN_SENTINEL,
+    DeepEyesCropTGVFMatchedDatasetBinding,
     DeepEyesTGVFMatchedDatasetBinding,
     TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
     TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
@@ -130,7 +138,9 @@ TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES = (1, 2, 4, 8, 16, 32)
 # residency explicitly in the run config; this constant is compatibility data,
 # not a launcher-wide policy.
 TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD = True
-TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS = (
+    POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
+)
 TrainableTGVFLaunchMode = Literal["formal", "smoke", "canary"]
 
 _OPTIONAL_PARENT_LAUNCH_ENV = frozenset(
@@ -341,7 +351,20 @@ def _plain_binding(binding: DeepEyesTGVFMatchedDatasetBinding) -> dict[str, obje
 def _matched_dataset_binding(
     config: PolicyE2ESmokeRunConfig,
 ) -> DeepEyesTGVFMatchedDatasetBinding:
-    return DeepEyesTGVFMatchedDatasetBinding(
+    crop_tgvf = (
+        config.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    )
+    binding_type = (
+        DeepEyesCropTGVFMatchedDatasetBinding
+        if crop_tgvf
+        else DeepEyesTGVFMatchedDatasetBinding
+    )
+    prompt_identity = (
+        CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+        if crop_tgvf
+        else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+    )
+    return binding_type(
         root=DEEPEYES_T1_ROOT,
         candidate_sidecar_path=DEEPEYES_CANDIDATE_SIDECAR,
         manifest_file_sha256=DEEPEYES_T1_MANIFEST_FILE_SHA256,
@@ -352,9 +375,7 @@ def _matched_dataset_binding(
         schedule_mode="stratified",
         schedule_seed=DEEPEYES_TRAIN_SEED,
         probe_seed=DEEPEYES_PROBE_SEED,
-        visual_prompt_bundle_sha256=(
-            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
-        ),
+        visual_prompt_bundle_sha256=prompt_identity.bundle_sha256,
         thinklite_prompt_bundle_sha256=THINKLITE_PROMPT_IDENTITY.bundle_sha256,
         model_name=config.model.model_name,
         tokenizer_length=config.model.tokenizer_length,
@@ -379,6 +400,24 @@ def _legacy_base_plan(config: PolicyE2ESmokeRunConfig):
         protocol=replace(config.protocol, prompt_sha256=legacy_prompt),
     )
     return legacy_launcher.build_policy_e2e_smoke_verl_plan(compatible)
+
+
+def _matched_dataset_runtime_identity(
+    config: PolicyE2ESmokeRunConfig,
+) -> tuple[str, str, str, str]:
+    if config.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+        return (
+            CROP_TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
+            "CropTGVFDeepEyesMatchedDataset",
+            "deepeyes_crop_tgvf_matched",
+            CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+        )
+    return (
+        TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
+        "TGVFDeepEyesMatchedDataset",
+        "deepeyes_tgvf_matched",
+        TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+    )
 
 
 def _adapter_weight_sync_payload(config: PolicyE2ESmokeRunConfig) -> str:
@@ -542,6 +581,12 @@ class TrainableTGVFVerlLaunchPlan:
 
     def _assert_trainable_path(self) -> None:
         values = self.overrides
+        (
+            _dataset_class,
+            dataset_class_name,
+            dataset_config_name,
+            visual_agent_name,
+        ) = _matched_dataset_runtime_identity(self.config)
         if (
             self.config.schema_version
             not in TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS
@@ -616,14 +661,14 @@ class TrainableTGVFVerlLaunchPlan:
                 }
             },
             "actor_rollout_ref.rollout.agent.default_agent_loop": (
-                TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+                visual_agent_name
             ),
             "actor_rollout_ref.actor.policy_loss.loss_mode": (
                 NATIVE_DEEPEYES_POLICY_LOSS_MODE
             ),
             "actor_rollout_ref.actor.loss_agg_mode": NATIVE_DEEPEYES_LOSS_AGG_MODE,
             "data.custom_cls.path": TRAINABLE_TGVF_DATASET_MODULE_PATH,
-            "data.custom_cls.name": "TGVFDeepEyesMatchedDataset",
+            "data.custom_cls.name": dataset_class_name,
             "data.train_batch_size": (
                 TRAINABLE_TGVF_CANARY_PROMPTS if self.mode == "canary" else 16
             ),
@@ -637,6 +682,11 @@ class TrainableTGVFVerlLaunchPlan:
         for path, expected in required.items():
             if values.get(path) != expected:
                 raise ValueError(f"trainable TGVF override differs at {path}")
+        matched_binding_path = f"data.{dataset_config_name}"
+        if matched_binding_path not in values:
+            raise ValueError(
+                f"trainable TGVF matched dataset binding is missing at {matched_binding_path}"
+            )
         custom = values.get("actor_rollout_ref.rollout.custom")
         if not isinstance(custom, Mapping):
             raise ValueError("trainable TGVF custom record is missing")
@@ -773,14 +823,20 @@ def build_trainable_tgvf_verl_launch_plan(
     base = _legacy_base_plan(config)
     values = dict(base.overrides)
     binding = _matched_dataset_binding(config)
+    (
+        dataset_class,
+        dataset_class_name,
+        dataset_config_name,
+        visual_agent_name,
+    ) = _matched_dataset_runtime_identity(config)
     values.pop("data.tgvf_policy_t1_mixed", None)
     values.update(
         {
             "data.train_files": [str(DEEPEYES_TRAIN_SENTINEL)],
             "data.val_files": [str(DEEPEYES_PROBE_SENTINEL)],
             "data.custom_cls.path": TRAINABLE_TGVF_DATASET_MODULE_PATH,
-            "data.custom_cls.name": "TGVFDeepEyesMatchedDataset",
-            "data.deepeyes_tgvf_matched": _plain_binding(binding),
+            "data.custom_cls.name": dataset_class_name,
+            f"data.{dataset_config_name}": _plain_binding(binding),
             "data.seed": DEEPEYES_TRAIN_SEED,
             "actor_rollout_ref.model.external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,
             "actor_rollout_ref.model.model_type": TRAINABLE_TGVF_MODEL_TYPE,
@@ -795,7 +851,7 @@ def build_trainable_tgvf_verl_launch_plan(
                 NATIVE_DEEPEYES_POLICY_LOSS_MODE
             ),
             "actor_rollout_ref.rollout.agent.default_agent_loop": (
-                TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+                visual_agent_name
             ),
             "actor_rollout_ref.rollout.checkpoint_manager_class": (
                 TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
@@ -874,7 +930,7 @@ def build_trainable_tgvf_verl_launch_plan(
         {
             "control_run": PRL14_CROP16_RUN_NAME,
             "control_completion_sha256": PRL14_CROP16_COMPLETION_SHA256,
-            "dataset": TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
+            "dataset": dataset_class,
             "actor_engine": TRAINABLE_TGVF_MODEL_TYPE,
             "actor_external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,
             "checkpoint_engine_manager": (TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN),
@@ -935,6 +991,15 @@ def preflight_trainable_tgvf_verl_runtime(
 ) -> VerlDistributionIdentity:
     """Resolve all static dependencies before Ray or GPU workers are started."""
 
+    if (plan is None) != (composed is None):
+        raise TypeError("plan and composed config must be provided together")
+    if plan is not None:
+        assert_policy_execution_identity(
+            plan.config,
+            repository_root=Path(__file__).resolve().parents[4],
+            horizon_extension=policy_horizon_extension_from_environment(plan.config),
+        )
+
     load_verl_public_api(expected_commit=SPIKE_CANDIDATE_VERL_COMMIT)
     identity = installed_verl_distribution_identity()
     from verl.checkpoint_engine import CheckpointEngineManager
@@ -949,8 +1014,6 @@ def preflight_trainable_tgvf_verl_runtime(
     load_vllm_public_plugin_api()
     if plan is None and composed is None:
         return identity
-    if plan is None or composed is None:
-        raise TypeError("plan and composed config must be provided together")
 
     from tgvf_rl.rewards.deepeyes_verl_reward import (
         DEEPEYES_MAXIMUM_ATTEMPTS_ENV,

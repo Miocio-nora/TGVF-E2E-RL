@@ -17,6 +17,7 @@ TRAJECTORY_SOURCE_VISUAL_SCHEMA_V1 = "trajectory-source-visual-v1"
 TRAJECTORY_SOURCE_VISUAL_SCHEMA_V2 = "trajectory-source-visual-v2"
 FOCUSED_OBSERVATION_SCHEMA_V1 = "focused-observation-v1"
 FOCUSED_OBSERVATION_SCHEMA_V2 = "focused-observation-v2"
+CROP_TGVF_OBSERVATION_SCHEMA_V3 = "crop-tgvf-observation-v3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,6 +580,7 @@ class CropTGVFVisualState:
     """Exact crop pixels and processor-owned visual state consumed by TGVF."""
 
     crop_pixels: TensorArtifactRef
+    preprocessed_pixel_values: TensorArtifactRef
     processor_identity: ArtifactIdentity
     layout_identity: ArtifactIdentity
     source: SourceVisualState
@@ -591,6 +593,16 @@ class CropTGVFVisualState:
             raise ValueError("atomic crop pixels must be RGB uint8 [H,W,3]")
         if any(value <= 0 for value in self.crop_pixels.descriptor.shape[:2]):
             raise ValueError("atomic crop pixels must have positive dimensions")
+        preprocessed = self.preprocessed_pixel_values.descriptor
+        if (
+            len(preprocessed.shape) != 2
+            or preprocessed.shape[0] <= 0
+            or preprocessed.shape[1] <= 0
+            or not _is_floating_dtype(preprocessed.dtype)
+        ):
+            raise ValueError(
+                "atomic crop preprocessed pixels must be floating [tokens, patch]"
+            )
         if not isinstance(self.processor_identity, ArtifactIdentity) or not isinstance(
             self.layout_identity, ArtifactIdentity
         ):
@@ -627,9 +639,13 @@ class CropTGVFObservationRecord:
     layout: VisualLayout
     masks: ObservationMasks
     cache: CacheContract
+    condition_hq: TensorArtifactRef
 
     def __post_init__(self) -> None:
-        if self.schema_version != "crop-tgvf-observation-v2" or not self.observation_id:
+        if (
+            self.schema_version != CROP_TGVF_OBSERVATION_SCHEMA_V3
+            or not self.observation_id
+        ):
             raise ValueError("atomic crop+TGVF schema version and ID are required")
         if self.call_index < 0:
             raise ValueError("atomic crop+TGVF call index must be non-negative")
@@ -719,6 +735,27 @@ class CropTGVFObservationRecord:
             raise ValueError("atomic original source features and positions differ")
         if _feature_count(self.payload.main_d) != len(self.layout.d_positions):
             raise ValueError("atomic main D features and positions differ")
+        preprocessed = self.crop_visual.preprocessed_pixel_values.descriptor
+        if preprocessed.shape[0] != _feature_count(
+            self.crop_visual.source.premerge_main
+        ):
+            raise ValueError(
+                "atomic crop preprocessed pixels and pre-merge vision tokens differ"
+            )
+        hq = self.condition_hq.descriptor
+        target_tokens = (
+            self.condition.conditioning_target_token_end
+            - self.condition.conditioning_target_token_start
+        )
+        if (
+            len(hq.shape) != 2
+            or hq.shape[0] != target_tokens
+            or hq.shape[1] != _feature_dim(self.payload.main_d)
+            or not _is_floating_dtype(hq.dtype)
+        ):
+            raise ValueError(
+                "atomic condition Hq must match target tokens and main D hidden size"
+            )
         branch_count = len(self.branches)
         if len(self.source_visual.merged_deepstack) != branch_count or len(
             self.crop_visual.source.premerge_deepstack

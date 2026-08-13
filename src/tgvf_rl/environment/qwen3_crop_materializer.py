@@ -25,6 +25,7 @@ from tgvf_rl.protocol.native import (
 )
 
 from .crop_tool import CropVisualTensorBundle
+from .crop_tgvf_tool import CropTGVFVisualMaterialization
 from .focus_tool import SourceVisualTensorBundle
 
 
@@ -179,6 +180,21 @@ class Qwen3CropVisualMaterializer:
     ) -> SourceVisualTensorBundle:
         """Return the crop visual source needed by atomic crop+TGVF."""
 
+        return self.materialize_crop_tgvf_visual(
+            crop_rgb,
+            parsed_call=parsed_call,
+            call_index=call_index,
+        ).source_visual
+
+    def materialize_crop_tgvf_visual(
+        self,
+        crop_rgb: torch.Tensor,
+        *,
+        parsed_call: object,
+        call_index: int,
+    ) -> CropTGVFVisualMaterialization:
+        """Return both the exact processor tensor and its frozen-vision state."""
+
         if type(call_index) is not int or call_index < 0:
             raise ValueError("crop materializer call_index must be non-negative")
         if parsed_call is None:
@@ -220,15 +236,18 @@ class Qwen3CropVisualMaterializer:
             merged=merged,
         )
         crop_sha256 = tensor_checksum(crop)
-        return SourceVisualTensorBundle(
-            image_sha256=crop_sha256,
-            premerge_main=premerge[0],
-            premerge_deepstack=premerge[1:],
-            merged_main=merged[0],
-            merged_deepstack=merged[1:],
-            image_grid_thw=grid_tuple,
-            spatial_merge_size=merge_size,
-            decoded_rgb_sha256=crop_sha256,
+        return CropTGVFVisualMaterialization(
+            preprocessed_pixel_values=pixel_values.detach(),
+            source_visual=SourceVisualTensorBundle(
+                image_sha256=crop_sha256,
+                premerge_main=premerge[0],
+                premerge_deepstack=premerge[1:],
+                merged_main=merged[0],
+                merged_deepstack=merged[1:],
+                image_grid_thw=grid_tuple,
+                spatial_merge_size=merge_size,
+                decoded_rgb_sha256=crop_sha256,
+            ),
         )
 
     def _preprocess(self, crop: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

@@ -14,6 +14,7 @@ from tgvf_rl.environment.native_appender import (
     QWEN_NATIVE_RESPONSE_SUFFIX,
     QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
+    render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_payload,
 )
@@ -27,6 +28,9 @@ from tgvf_rl.protocol import (
 from tgvf_rl.protocol.schema import StandardToolError
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_USER_PROMPT,
+)
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_USER_PROMPT,
 )
 
 
@@ -113,8 +117,7 @@ def _sampled(
         asynchronous_staleness_steps=0,
     )
     spans = token_byte_spans or tuple(
-        TokenByteSpan(index, token_id, 0, 0)
-        for index, token_id in enumerate(token_ids)
+        TokenByteSpan(index, token_id, 0, 0) for index, token_id in enumerate(token_ids)
     )
     return SampledPolicyTurn(
         text=text,
@@ -208,9 +211,7 @@ def test_instruct_tool_response_starts_next_assistant_without_think() -> None:
         registrar=_Registrar(),
         assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
     )
-    sampled, parsed = _ascii_sampled_call(
-        "tgvf_focus_tool", {"target": "the gauge"}
-    )
+    sampled, parsed = _ascii_sampled_call("tgvf_focus_tool", {"target": "the gauge"})
 
     _updated, suffix = appender.append(
         (7, 8),
@@ -259,6 +260,44 @@ def test_injected_matched_tgvf_response_is_latent_only_without_target_echo() -> 
     )
     assert secret_target not in suffix_text
     assert "Focused visual observation for target" not in suffix_text
+    assert "<answer>" not in suffix_text
+    assert suffix_text.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
+
+
+def test_injected_matched_crop_tgvf_response_is_d_only_without_argument_echo() -> None:
+    tokenizer = _CharacterTokenizer()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=_Registrar(),
+        success_environment_text_renderer=(
+            render_qwen_native_matched_crop_tgvf_success_environment_text
+        ),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    secret_target = "UNIQUE_ATOMIC_TARGET_MUST_NOT_BE_ECHOED"
+    sampled, parsed = _ascii_sampled_call(
+        "tgvf_crop_tool",
+        {"bbox_2d": [111, 222, 333, 444], "target": secret_target},
+    )
+
+    _updated, suffix = appender.append(
+        (7, 8),
+        sampled,
+        ObservationHandle("obs-atomic-matched", "5" * 64),
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    suffix_text = "".join(map(chr, suffix))
+    assert suffix_text == (
+        QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
+        + QWEN_NATIVE_IMAGE_PLACEHOLDER
+        + CROP_TGVF_DEEPEYES_MATCHED_USER_PROMPT
+        + QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX
+    )
+    assert secret_target not in suffix_text
+    assert "111" not in suffix_text
+    assert "Target-conditioned crop for" not in suffix_text
     assert "<answer>" not in suffix_text
     assert suffix_text.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
 
@@ -436,9 +475,7 @@ def _fast_token_spans(tokenizer, text: str, token_ids: tuple[int, ...]):
     assert tuple(encoded["input_ids"]) == token_ids
     byte_boundaries = [0]
     for character in text:
-        byte_boundaries.append(
-            byte_boundaries[-1] + len(character.encode("utf-8"))
-        )
+        byte_boundaries.append(byte_boundaries[-1] + len(character.encode("utf-8")))
     spans = []
     for index, (token_id, offsets) in enumerate(
         zip(token_ids, encoded["offset_mapping"], strict=True)

@@ -27,9 +27,12 @@ from tgvf_rl.conditioning import (
 )
 from tgvf_rl.contracts.tokens import TokenSpan
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
+from tgvf_rl.contracts.errors import RecoverableToolExecutionError
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity, PolicyVersion
 from tgvf_rl.environment import (
+    AtomicCropTGVFTool,
     CropExecutionLedger,
+    CropTGVFToolExecutionRequest,
     CropVisualTensorBundle,
     FocusExecutionLedger,
     FrameworkNeutralAgentLoop,
@@ -40,11 +43,17 @@ from tgvf_rl.environment import (
     record_trajectory_source_visual,
 )
 from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_environment_text,
 )
 from tgvf_rl.environment.focus_runtime import _call_fingerprint
+from tgvf_rl.environment.crop_tgvf_runtime import (
+    _call_fingerprint as _crop_tgvf_call_fingerprint,
+)
+from tgvf_rl.environment.crop_tool import clamp_bbox_to_image
 from tgvf_rl.environment.focus_tool import (
+    PrecomputedTGVFObservationPayload,
     SourceVisualTensorBundle,
     TGVFFocusTool,
     ToolExecutionRequest,
@@ -58,7 +67,7 @@ from tgvf_rl.observations.finalizer import (
     finalize_trajectory_replay,
 )
 from tgvf_rl.observations.schema import FocusedObservationRecord, TrajectorySourceVisual
-from tgvf_rl.observations.schema import CropObservationRecord
+from tgvf_rl.observations.schema import CropObservationRecord, CropTGVFObservationRecord
 from tgvf_rl.observations.store import (
     ObservationHandle,
     ObservationStore,
@@ -68,6 +77,7 @@ from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 from tgvf_rl.protocol.schema import (
     NativeToolCapabilityProfile,
+    ParsedCropTGVFCall,
     ParsedImageZoomInCall,
     ParsedToolCall,
 )
@@ -75,7 +85,7 @@ from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.trajectory_audit import PolicyTrajectoryAuditWriter
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
-    POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
 )
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.representation.training.distributed_checkpoint import (
@@ -118,6 +128,7 @@ from tgvf_rl.judges import (
 )
 from tgvf_rl.trajectories.behavior import BehaviorTraceStore, VLLMBehaviorRecorder
 from tgvf_rl.trajectories.schema import (
+    CropTGVFToolCallRecord,
     ToolCallRecord,
     TrajectoryRecord,
     trajectory_checksum,
@@ -127,6 +138,10 @@ from tgvf_rl.framework.vllm import (
     Qwen3VLLMObservationPayloadResolver,
     VLLMLivePromptInputs,
     bind_preexpanded_prompt_contract,
+)
+from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    TGVFCropMaterializationResult,
+    preprocessed_visual_identity_sha256,
 )
 
 from .native_agent_loop import VerlNativeTrajectoryComponents
@@ -179,7 +194,7 @@ def _rp66_matched_source_route(
 
     if (
         getattr(config, "schema_version", None)
-        not in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+        not in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
     ):
         return False, False
     data_source = _scalar(sample_fields.get("data_source"))
@@ -198,7 +213,7 @@ def _trainable_rp66_launch_mode(config: object, trainer_config: object) -> str |
 
     if (
         getattr(config, "schema_version", None)
-        not in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+        not in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
     ):
         return None
     value = trainer_config
@@ -282,8 +297,10 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             required_methods.append("materialize_focus")
         elif config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
             required_methods.append("materialize_crop")
+        elif config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
+            required_methods.append("materialize_crop_tgvf")
         else:
-            raise ValueError("atomic crop+TGVF is not wired into this live runtime")
+            raise ValueError("unsupported live visual-tool profile")
         for method in required_methods:
             if not callable(getattr(server_client, method, None)):
                 raise TypeError(
@@ -300,7 +317,10 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             model_identity=config.model,
             observation_store=store,
         )
-        if config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        if config.protocol.tool_profile in {
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            NativeToolCapabilityProfile.CROP_TGVF,
+        }:
             export = load_rank_zero_adapter_owned_state_export(
                 config.representation.artifact_path
             )
@@ -437,7 +457,8 @@ class _Qwen3PolicyTrajectoryComponents:
         self.async_visual_quality_provider = None
         self.async_stage3_spec = None
         if (
-            self.config.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+            self.config.schema_version
+            in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
         ):
             reward = self.config.reward
             if reward.judge_config_path is None or reward.judge_config_sha256 is None:
@@ -677,11 +698,21 @@ class _Qwen3PolicyTrajectoryComponents:
                 matched_visual_observation=matched_visual_observation,
             )
         )
-        success_environment_text_renderer = (
-            render_qwen_native_matched_tgvf_success_environment_text
-            if matched_visual_observation
-            else render_qwen_native_success_environment_text
-        )
+        if (
+            self.config.protocol.tool_profile
+            is NativeToolCapabilityProfile.CROP_TGVF
+        ):
+            success_environment_text_renderer = (
+                render_qwen_native_matched_crop_tgvf_success_environment_text
+            )
+        elif matched_visual_observation:
+            success_environment_text_renderer = (
+                render_qwen_native_matched_tgvf_success_environment_text
+            )
+        else:
+            success_environment_text_renderer = (
+                render_qwen_native_success_environment_text
+            )
         appender = QwenNativeToolObservationAppender(
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
@@ -742,6 +773,41 @@ class _Qwen3PolicyTrajectoryComponents:
                 crop_layout_identity=crop_layout_identity,
                 execution_ledger=self.crop_execution_ledger,
                 coordinate_mapper=Qwen3VLAdapter(),
+            )
+        elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
+            crop_processor_identity = _artifact_identity(
+                "policy-runtime",
+                "qwen3-shared-vllm-crop-processor",
+                QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA,
+                {
+                    "model": self.config.model.revision_or_path,
+                    "max_pixels": self.config.policy.image_max_pixels,
+                },
+            )
+            crop_layout_identity = _artifact_identity(
+                "policy-runtime",
+                "qwen3-native-crop-tgvf-layout",
+                QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA,
+                {"model": self.config.model.revision_or_path},
+            )
+            tool_runtime = _RemoteAtomicCropTGVFToolRuntime(
+                event_loop=asyncio.get_running_loop(),
+                server_client=self.server_client,
+                config=self.config,
+                source_visual=source,
+                layout_builder=self.layout_builder,
+                observation_store=self.store,
+                execution_ledger=self.focus_execution_ledger,
+                contextual_forward_identity=self.contextual_forward_identity,
+                branch_merger_identities=self.branch_merger_identities,
+                crop_processor_identity=crop_processor_identity,
+                crop_layout_identity=crop_layout_identity,
+                processor=self.context.processor,
+                image_max_pixels=self.config.policy.image_max_pixels,
+                success_environment_text_renderer=(
+                    success_environment_text_renderer
+                ),
+                assistant_dialect=assistant_dialect,
             )
         else:  # guarded by the builder
             raise RuntimeError("unsupported live visual-tool profile")
@@ -1012,6 +1078,259 @@ class _RemoteTGVFFocusToolRuntime:
         return result.handle
 
 
+class _RemoteAtomicCropTGVFToolRuntime:
+    """Execute one bbox+target call on the sticky rollout replica.
+
+    The AgentLoop process owns the immutable decoded RGB and therefore derives
+    the exact crop once. The sole remote operation materializes crop vision,
+    sampled-target Hq, and frozen RP67 D on the same vLLM worker. Recording then
+    recomputes the crop from the immutable source and exposes only D/DeepStack
+    through the policy replay resolver.
+    """
+
+    def __init__(
+        self,
+        *,
+        event_loop: asyncio.AbstractEventLoop,
+        server_client: object,
+        config: object,
+        source_visual: SourceVisualTensorBundle,
+        layout_builder: Qwen3NativeToolLayoutBuilder,
+        observation_store: ObservationStore,
+        execution_ledger: FocusExecutionLedger,
+        contextual_forward_identity: ArtifactIdentity | None,
+        branch_merger_identities: tuple[ArtifactIdentity, ...],
+        crop_processor_identity: ArtifactIdentity,
+        crop_layout_identity: ArtifactIdentity,
+        processor: object,
+        image_max_pixels: int,
+        success_environment_text_renderer: Callable[..., str],
+        assistant_dialect: object,
+    ) -> None:
+        if not isinstance(source_visual, SourceVisualTensorBundle):
+            raise TypeError("atomic crop+TGVF requires the source visual bundle")
+        if not isinstance(observation_store, ObservationStore):
+            raise TypeError("atomic crop+TGVF requires an ObservationStore")
+        if not isinstance(execution_ledger, FocusExecutionLedger):
+            raise TypeError("atomic crop+TGVF requires an execution ledger")
+        if not callable(success_environment_text_renderer):
+            raise TypeError("atomic crop+TGVF success renderer must be callable")
+        self.event_loop = event_loop
+        self.server_client = server_client
+        self.config = config
+        self.source_visual = source_visual
+        self.layout_builder = layout_builder
+        self.store = observation_store
+        self.execution_ledger = execution_ledger
+        self.contextual_forward_identity = contextual_forward_identity
+        self.branch_merger_identities = tuple(branch_merger_identities)
+        self.crop_processor_identity = crop_processor_identity
+        self.crop_layout_identity = crop_layout_identity
+        self.processor = processor
+        self.image_max_pixels = image_max_pixels
+        self.success_environment_text_renderer = success_environment_text_renderer
+        self.assistant_dialect = assistant_dialect
+        self.coordinate_mapper = Qwen3VLAdapter()
+
+    def execute(self, parsed_call: object, context: object) -> ObservationHandle:
+        from tgvf_rl.environment.agent_loop import ToolExecutionContext
+
+        if not isinstance(parsed_call, ParsedCropTGVFCall):
+            raise TypeError("remote atomic runtime requires ParsedCropTGVFCall")
+        if not isinstance(context, ToolExecutionContext):
+            raise TypeError("remote atomic runtime requires ToolExecutionContext")
+        if (
+            parsed_call.sampled_text != context.sampled_turn.text
+            or parsed_call.sampled_token_ids != context.sampled_turn.token_ids
+            or parsed_call.sampled_token_byte_spans
+            != context.sampled_turn.token_byte_spans
+        ):
+            raise ReplayMismatchError(
+                "parsed crop+TGVF call differs from sampled turn"
+            )
+        conditioning = self.config.representation.conditioning
+        fingerprint = _crop_tgvf_call_fingerprint(
+            parsed_call=parsed_call,
+            context=context,
+            provider_name=conditioning.provider.value,
+            hidden_layer=conditioning.hidden_layer,
+            contextual_forward_identity=self.contextual_forward_identity,
+            representation=self.config.representation.artifact,
+            branch_mergers=self.branch_merger_identities,
+            crop_processor_identity=self.crop_processor_identity,
+            crop_layout_identity=self.crop_layout_identity,
+            coordinate_space=self.coordinate_mapper.crop_coordinate_space,
+            coordinate_conversion_version=(
+                self.coordinate_mapper.crop_coordinate_conversion_version
+            ),
+            processor_resized_size=None,
+        )
+        return self.execution_ledger.execute_once(
+            key=(context.trajectory_identity.canonical_id, context.call_index),
+            fingerprint=fingerprint,
+            operation=lambda: self._execute_once(parsed_call, context),
+        )
+
+    def _execute_once(
+        self,
+        parsed_call: ParsedCropTGVFCall,
+        context: object,
+    ) -> ObservationHandle:
+        from tgvf_rl.environment.agent_loop import ToolExecutionContext
+
+        assert isinstance(context, ToolExecutionContext)
+        trajectory_id = context.trajectory_identity.canonical_id
+        source_ref = context.trajectory_source_visual.source_pixels
+        if source_ref is None:
+            raise RuntimeError(
+                "atomic crop+TGVF requires rollout-recorded immutable source RGB"
+            )
+        if source_ref.address.digest != self.source_visual.image_sha256:
+            raise IdentityMismatchError(
+                "atomic recorded RGB differs from sticky vLLM source visual"
+            )
+        source_rgb = self.store.resolve_verified_for_trajectory(
+            source_ref,
+            trajectory_id=trajectory_id,
+        )
+        if tensor_checksum(source_rgb) != source_ref.address.digest:
+            raise ReplayMismatchError("atomic source RGB changed before crop")
+        height, width, channels = source_rgb.shape
+        if source_rgb.dtype != torch.uint8 or channels != 3:
+            raise ValueError("atomic source must be uint8 RGB [H,W,3]")
+        try:
+            mapping = self.coordinate_mapper.map_crop_bbox_to_source(
+                parsed_call.bbox_2d,
+                source_width=width,
+                source_height=height,
+                processor_resized_size=None,
+            )
+            left, top, right, bottom = clamp_bbox_to_image(
+                mapping.source_bbox_2d,
+                width=width,
+                height=height,
+            )
+        except ValueError as error:
+            raise RecoverableToolExecutionError(str(error)) from error
+        crop_rgb = source_rgb[top:bottom, left:right, :].contiguous().clone()
+        crop_sha256 = tensor_checksum(crop_rgb)
+        pixel_values, image_grid_thw = preprocess_qwen3_rgb(
+            processor=self.processor,
+            rgb=crop_rgb,
+            image_max_pixels=self.image_max_pixels,
+        )
+        preprocessed_visual_sha256 = preprocessed_visual_identity_sha256(
+            pixel_values,
+            image_grid_thw,
+        )
+        target = parsed_call.target_span
+        future = asyncio.run_coroutine_threadsafe(
+            self.server_client.materialize_crop_tgvf(
+                request_id=trajectory_id,
+                expected_step=context.behavior_policy.optimizer_step,
+                sampled_output_ids=context.sampled_turn.token_ids,
+                call_index=context.call_index,
+                pixel_values=pixel_values,
+                image_grid_thw=image_grid_thw,
+                source_image_sha256=source_ref.address.digest,
+                crop_sha256=crop_sha256,
+                preprocessed_visual_sha256=preprocessed_visual_sha256,
+                model_bbox_2d=parsed_call.bbox_2d,
+                target_start=target.token_start,
+                target_end=target.token_end,
+                expected_target_token_ids=target.token_ids,
+                provider=self.config.representation.conditioning.provider.value,
+            ),
+            self.event_loop,
+        )
+        result = future.result(timeout=300.0)
+        if not isinstance(result, TGVFCropMaterializationResult):
+            raise TypeError("remote atomic RPC returned an invalid result")
+        expected_binding = (
+            source_ref.address.digest,
+            crop_sha256,
+            preprocessed_visual_sha256,
+            tuple(int(value) for value in image_grid_thw[0].tolist()),
+            context.call_index,
+            parsed_call.bbox_2d,
+            target.token_start,
+            target.token_end,
+            target.token_ids,
+            self.config.representation.conditioning.provider.value,
+        )
+        actual_binding = (
+            result.source_image_sha256,
+            result.crop_sha256,
+            result.preprocessed_visual_sha256,
+            result.image_grid_thw,
+            result.call_index,
+            result.model_bbox_2d,
+            result.target_start,
+            result.target_end,
+            result.target_token_ids,
+            result.provider,
+        )
+        if actual_binding != expected_binding:
+            raise IdentityMismatchError(
+                "remote atomic result differs from source/bbox/target call"
+            )
+
+        prefix_length = len(context.prompt_token_ids_before_turn)
+        global_span = TokenSpan(
+            prefix_length + target.token_start,
+            prefix_length + target.token_end,
+        )
+        condition = bind_preselected_target_conditioning(
+            values=result.hq,
+            input_ids=torch.tensor(context.conditioning_input_ids, dtype=torch.long),
+            target_span=global_span,
+            expected_target_token_ids=target.token_ids,
+            trajectory_id=trajectory_id,
+            call_index=context.call_index,
+            model_identity=context.model,
+            provider=self.config.representation.conditioning.provider,
+            hidden_layer=self.config.representation.conditioning.hidden_layer,
+            embedding_identity=(
+                self.config.representation.conditioning.embedding_identity
+            ),
+        )
+        environment_text = self.success_environment_text_renderer(
+            parsed_call,
+            assistant_dialect=self.assistant_dialect,
+        )
+        request = CropTGVFToolExecutionRequest(
+            trajectory_id=trajectory_id,
+            call_index=context.call_index,
+            parsed_call=parsed_call,
+            condition=condition,
+            trajectory_source_visual=context.trajectory_source_visual,
+            layout_builder=self.layout_builder.bind_crop_tgvf(
+                context,
+                environment_success_text=environment_text,
+            ),
+            model=context.model,
+            policy_version=context.behavior_policy,
+            contextual_forward_identity=self.contextual_forward_identity,
+            representation=self.config.representation.artifact,
+            branch_merger_identities=self.branch_merger_identities,
+            crop_processor_identity=self.crop_processor_identity,
+            crop_layout_identity=self.crop_layout_identity,
+        )
+        recorded = AtomicCropTGVFTool.record_precomputed(
+            request,
+            crop_rgb=crop_rgb,
+            crop_preprocessed_pixel_values=pixel_values,
+            crop_visual=result.crop_visual,
+            adapter_output=result.observation,
+            store=self.store,
+            coordinate_mapper=self.coordinate_mapper,
+            processor_resized_size=None,
+        )
+        if not isinstance(recorded.adapter_output, PrecomputedTGVFObservationPayload):
+            raise TypeError("remote atomic recording changed the D payload type")
+        return recorded.handle
+
+
 class _RemoteCropVisualMaterializer:
     """Run crop vision on the same sticky vLLM replica as rollout sampling."""
 
@@ -1125,9 +1444,21 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
         )
         handles = tuple(item.handle for item in trajectory.observations)
         records = tuple(self.store.resolve_record(handle) for handle in handles)
+        has_plain_crop = any(
+            isinstance(record, CropObservationRecord) for record in records
+        )
+        has_crop_tgvf = any(
+            isinstance(record, CropTGVFObservationRecord) for record in records
+        )
+        if has_plain_crop and has_crop_tgvf:
+            raise ReplayMismatchError(
+                "one trajectory cannot mix plain Crop and atomic Crop+TGVF"
+            )
         crop_vision_replay_mode = (
             "shared_frozen_recorded_features"
-            if any(isinstance(record, CropObservationRecord) for record in records)
+            if has_plain_crop
+            else "current_live_reference_recorded_features"
+            if has_crop_tgvf
             else "no_crop"
         )
         expanded = self.layout_builder.expand_recorded_visual_sequence(
@@ -1346,12 +1677,13 @@ def _visual_quality_provider_request(
         raise IdentityMismatchError(
             "visual-quality observation call indices are not strictly ordered"
         )
-    successful_calls: list[ToolCallRecord] = []
+    successful_calls: list[ToolCallRecord | CropTGVFToolCallRecord] = []
     for call_index in call_indices:
         matching_calls = tuple(
             call
             for call in trajectory.tool_calls
-            if isinstance(call, ToolCallRecord) and call.call_index == call_index
+            if isinstance(call, (ToolCallRecord, CropTGVFToolCallRecord))
+            and call.call_index == call_index
         )
         if len(matching_calls) != 1:
             raise IdentityMismatchError(
@@ -1441,7 +1773,7 @@ class _VisualTokenCountResolver:
 
     def resolve_visual_token_count(self, observation: ObservationHandle) -> int:
         record = self.store.resolve_record(observation)
-        if isinstance(record, FocusedObservationRecord):
+        if isinstance(record, (FocusedObservationRecord, CropTGVFObservationRecord)):
             return len(record.layout.d_positions)
         if isinstance(record, CropObservationRecord):
             return len(record.crop_visual.positions)
@@ -1562,7 +1894,7 @@ def _build_reward_pipeline(config: object) -> PilotRewardPipeline:
     schema_version = getattr(config, "schema_version", None)
     deepeyes_source_aware = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
-        or schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+        or schema_version in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
     )
     pilot_reward_weight_profile_name(reward_weights)
     answer_identity, verifier = _build_rule_first_answer_verifier(config)
@@ -1790,7 +2122,7 @@ def _validate_sample_fields(
         expected_prompt_sha256 = config.protocol.prompt_sha256
         if (
             getattr(config, "schema_version", None)
-            in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+            in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
             and bound_data_source == _RP66_MATCHED_DIRECT_ONLY_SOURCE
         ):
             expected_prompt_sha256 = THINKLITE_PROMPT_IDENTITY.bundle_sha256
@@ -1805,7 +2137,7 @@ def _validate_sample_fields(
         }
         if (
             getattr(config, "schema_version", None)
-            not in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+            not in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
         ):
             expected["dataset_iteration_identity_sha256"] = (
                 config.dataset.iteration_identity_sha256

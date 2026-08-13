@@ -82,7 +82,11 @@ from .config import (
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
     PolicyTrainableRP66ExperimentConfig,
+    PolicyCropTGVFMatchedExperimentConfig,
     PolicyVisualToolExperimentConfig,
+)
+from .crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
 from .tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
@@ -111,6 +115,9 @@ POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA = (
     "policy-e2e-rp66-tfree-matched-control-run-config-v1"
 )
+POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-crop-tgvf-tfree-deepeyes-matched-run-config-v1"
+)
 POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
@@ -123,6 +130,12 @@ POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
         *POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS,
+    }
+)
+POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        *POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
+        POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     }
 )
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
@@ -291,6 +304,13 @@ POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH = (
     / "policy"
     / "agent_loops"
     / "prl15_trainable_rp66_matched.yaml"
+)
+POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "configs"
+    / "policy"
+    / "agent_loops"
+    / "prl20_crop_tgvf_deepeyes_matched.yaml"
 )
 POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN = (
     "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
@@ -570,6 +590,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -647,6 +668,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -657,18 +679,27 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     }
     rp66_shaped_run = schema_version in {
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     }
-    tfree_reward_run = (
-        schema_version == POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA
-    )
+    tfree_reward_run = schema_version in {
+        POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    }
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
     )
     rp66_matched_run = schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+    crop_tgvf_matched_run = (
+        schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    )
+    tgvf_backed_matched_run = (
+        schema_version in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
+    )
     run_id = _safe_run_id(payload["run_id"])
 
     code_table = _table(payload, "code", {"repository", "commit", "dirty"})
@@ -718,7 +749,9 @@ def load_policy_e2e_smoke_run_config(
         model_table["native_deepstack_enabled"], True, "model.native_deepstack_enabled"
     )
     expected_image_max_pixels = (
-        1_003_520 if deepeyes_scaled_crop_run or rp66_matched_run else 512 * 512
+        1_003_520
+        if deepeyes_scaled_crop_run or tgvf_backed_matched_run
+        else 512 * 512
     )
     _require_exact(
         model_table["image_max_pixels"],
@@ -932,7 +965,10 @@ def load_policy_e2e_smoke_run_config(
         "expected_run_identity_sha256",
         "conditioning",
     }
-    if schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS:
+    if (
+        schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS
+        or crop_tgvf_matched_run
+    ):
         representation_fields.add("adapter_update_mode")
     representation_table = _table(
         payload,
@@ -969,7 +1005,10 @@ def load_policy_e2e_smoke_run_config(
         ),
     )
     conditioning = _conditioning(representation_table["conditioning"])
-    if schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS:
+    if (
+        schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS
+        or crop_tgvf_matched_run
+    ):
         try:
             adapter_update_mode = RP66AdapterUpdateMode(
                 representation_table["adapter_update_mode"]
@@ -1025,7 +1064,7 @@ def load_policy_e2e_smoke_run_config(
     )
     expected_maximum_tool_calls = (
         6
-        if rp66_matched_run
+        if tgvf_backed_matched_run
         else 1
         if stage3_shaped_run
         else 4
@@ -1042,7 +1081,7 @@ def load_policy_e2e_smoke_run_config(
         cap_error_sha256,
         (
             POLICY_E2E_TRAINABLE_RP66_SIX_CALL_CAP_ERROR_SHA256
-            if rp66_matched_run
+            if tgvf_backed_matched_run
             else POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
             if stage3_shaped_run
             else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
@@ -1066,7 +1105,11 @@ def load_policy_e2e_smoke_run_config(
                 assistant_dialect=assistant_dialect,
             ).bundle_sha256
         }
-        if rp66_matched_run:
+        if crop_tgvf_matched_run:
+            accepted_prompt_hashes = {
+                CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+            }
+        elif rp66_matched_run:
             accepted_prompt_hashes = {
                 TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
             }
@@ -1155,7 +1198,7 @@ def load_policy_e2e_smoke_run_config(
         sampling.trajectories_per_prompt,
         sampling.max_response_length,
     )
-    if rp66_matched_run:
+    if tgvf_backed_matched_run:
         accepted_sampling_scales = {
             (16, 20480),
             POLICY_PILOT_FUNCTIONAL_CANARY_SAMPLING_SCALE,
@@ -1290,7 +1333,7 @@ def load_policy_e2e_smoke_run_config(
     )
     known_historical_answer_verifier = (
         mixed_run
-        and not rp66_matched_run
+        and not tgvf_backed_matched_run
         and answer_verifier_sha256 in _LEGACY_POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256S
     )
     if (
@@ -1310,7 +1353,7 @@ def load_policy_e2e_smoke_run_config(
         )
         if _sha256_file(judge_config_path) != judge_config_sha256:
             raise ValueError("reward judge config SHA256 mismatch")
-        if rp66_matched_run:
+        if tgvf_backed_matched_run:
             from tgvf_rl.rewards.deepeyes_verl_reward import (
                 load_deepeyes_judge_service_config,
             )
@@ -1337,8 +1380,15 @@ def load_policy_e2e_smoke_run_config(
         )
         if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
             raise ValueError("Stage3-shaped reward requires the mixed-v2 T1 dataset")
-        if tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
-            raise ValueError("Stage3-shaped reward requires the TGVF-only tool profile")
+        expected_shaped_profile = (
+            NativeToolCapabilityProfile.CROP_TGVF
+            if crop_tgvf_matched_run
+            else NativeToolCapabilityProfile.TGVF_ONLY
+        )
+        if tool_profile is not expected_shaped_profile:
+            raise ValueError(
+                "Stage3-shaped reward tool profile differs from its run schema"
+            )
         if tfree_reward_run:
             tool_utility_reward_enabled = _boolean(
                 reward_table["tool_utility_reward_enabled"],
@@ -1645,6 +1695,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     }
     if lifecycle_control_run:
         distributed_fields.add("actor_optimizer_offload")
@@ -1653,7 +1704,7 @@ def load_policy_e2e_smoke_run_config(
         "distributed",
         distributed_fields,
     )
-    if rp66_matched_run:
+    if tgvf_backed_matched_run:
         trainable_rp66_world_size = _positive_int(
             distributed_table["world_size"], name="distributed.world_size"
         )
@@ -1753,7 +1804,7 @@ def load_policy_e2e_smoke_run_config(
     # the *_max_token_len_per_gpu fields are therefore inactive capacity
     # metadata. The generic bound below assumes dynamic token batching and
     # would incorrectly reject Crop-16's proven micro32/16384 configuration.
-    if not rp66_matched_run:
+    if not tgvf_backed_matched_run:
         minimum_actor_tokens = (
             accumulation.prompt_micro_batch_size_per_rank
             * sampling.trajectories_per_prompt
@@ -1802,7 +1853,9 @@ def load_policy_e2e_smoke_run_config(
         name="framework.agent_loop_config_path",
     )
     expected_agent_loop_config_path = (
-        POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH
+        POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH
+        if crop_tgvf_matched_run
+        else POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH
         if rp66_matched_run
         else POLICY_E2E_AGENT_LOOP_CONFIG_PATH
     )
@@ -1960,7 +2013,9 @@ def load_policy_e2e_smoke_run_config(
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
-    if rp66_matched_run:
+    if crop_tgvf_matched_run:
+        policy_type = PolicyCropTGVFMatchedExperimentConfig
+    elif rp66_matched_run:
         policy_type = PolicyTrainableRP66ExperimentConfig
     elif stage3_shaped_run:
         policy_type = PolicyTGVFStage3ExperimentConfig
@@ -2089,7 +2144,7 @@ def load_policy_e2e_smoke_run_config(
         if "wandb" not in training.logger:
             raise ValueError("DeepEyes-scaled Crop reference requires W&B logging")
 
-    if rp66_matched_run:
+    if tgvf_backed_matched_run:
         if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
             raise ValueError(
                 "trainable RP66 pilot requires the retained mixed-T1 dataset"
@@ -2106,8 +2161,12 @@ def load_policy_e2e_smoke_run_config(
         )
         _require_exact(
             protocol.tool_profile,
-            NativeToolCapabilityProfile.TGVF_ONLY,
-            "trainable RP66 tool profile",
+            (
+                NativeToolCapabilityProfile.CROP_TGVF
+                if crop_tgvf_matched_run
+                else NativeToolCapabilityProfile.TGVF_ONLY
+            ),
+            "matched TGVF-backed tool profile",
         )
         if rp66_shaped_run:
             _require_exact(
@@ -2666,6 +2725,10 @@ def _existing_directory(value: object, *, name: str) -> Path:
 
 def _absolute_path(value: object, *, name: str) -> Path:
     raw = str(value) if isinstance(value, Path) else _text(value, name=name)
+    repository_token = "${TGVF_REPOSITORY_ROOT}"
+    if raw == repository_token or raw.startswith(repository_token + "/"):
+        suffix = raw.removeprefix(repository_token).lstrip("/")
+        raw = str(Path(__file__).resolve().parents[3] / suffix)
     path = Path(raw)
     if not path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{name} must be an absolute normalized path")
@@ -2723,6 +2786,7 @@ def _normalize_json(value: object) -> object:
 
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH",
     "POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",
     "POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256",
@@ -2739,8 +2803,10 @@ __all__ = [
     "POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS",
+    "POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER",
     "POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256",
     "POLICY_E2E_SMOKE_CAP_ERROR_SHA256",
