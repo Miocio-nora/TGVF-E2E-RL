@@ -9846,3 +9846,38 @@ than inferred from a script name or prior conversation.
   W&B is enabled only for formal training under run ID `prl18r0u`; smoke is
   console-only. Expected wall time is roughly 2 h 45 min--3 h for 16 training
   steps plus 50--65 min for the two-arm evaluation.
+
+### PRL-19-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-VISUAL-API
+
+- Authorized 2026-08-13 as the visual-reward treatment against the frozen
+  PRL17-R2 RP67 T-free control. Qwen3-VL-8B-Instruct, the RP67 Step-2000
+  Adapter, frozen-Adapter mode, retained T1 data/order, policy prompt and tool
+  protocol, BS16 x n16, world8/micro2/GA1, temperature 1, constant `1e-6`
+  learning rate, answer judge and all rollout limits remain fixed.
+- The only scientific treatment enables Focus/Target and Grounding. Tool
+  utility `T` remains disabled. The executed scalar is
+  `2*A - 0.05*max(0, tool_calls-1) + F + G + P`, with the existing F mapping
+  `2/1/0 -> 1/0.5/0`, G mapping `2/1/0 -> 1/0.5/-1`, and protocol/tool errors
+  contributing `P=-1`.
+- One gold-free OpenRouter request to pinned
+  `qwen/qwen3-vl-32b-instruct` returns both F and G. The request contains the
+  original image, question, all successful tool targets in call order,
+  post-tool reasoning and final answer; it cannot contain any gold/reference
+  answer. The run-global visual concurrency is 16 (two permits per AgentLoop
+  worker), with four bounded attempts, exponential backoff, exact-request
+  cache, explicit coverage/failure accounting and a 25% rolling provider
+  failure circuit breaker.
+- A real-image API canary passed exact model/schema/usage checks and separated
+  a specific valid target and grounded statement `(F=2,G=2)` from an
+  irrelevant target/hallucinated statement and an answer shortcut
+  `(F=0,G=0)`. Observed API latency was about 1.1--2.1 seconds and cost about
+  `$0.000085` per combined judgement.
+- Lifecycle: first run a console-only BS4 x n2 world4 functional canary, then
+  one exact world8/BS16/n16 matched smoke. After both gates pass, a tmux-owned
+  fresh formal run proceeds Step 0 -> 8, binds an immutable horizon extension,
+  and automatically continues Step 8 -> 16. The RP67 Adapter must remain
+  byte-identical; Step 8 and Step 16 are permanent checkpoints.
+- Evaluation starts automatically after Step 16 and runs only Step 8 and
+  Step 16 under the same paired CoreDev-2511 seven-suite protocol and RNG
+  namespace as PRL17-R2. The already measured paired PRL17-R2 Step 0 is the
+  common initialization reference and is not rerun.
