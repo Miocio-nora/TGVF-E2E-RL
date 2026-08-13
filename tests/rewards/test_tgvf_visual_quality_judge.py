@@ -320,6 +320,64 @@ def test_async_provider_retries_429_then_caches_success(tmp_path: Path) -> None:
     assert calls == 2
 
 
+def test_async_provider_retries_malformed_completion_then_succeeds(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def opener(_request, *, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _Response(
+                {
+                    "model": "vision-judge-pinned",
+                    "choices": [{"message": {"content": "not json"}}],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 2,
+                        "total_tokens": 12,
+                        "cost": 0.001,
+                    },
+                }
+            )
+        return _Response(
+            {
+                "model": "vision-judge-pinned",
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"focus_score":2,"grounding_score":1}'
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 3,
+                    "total_tokens": 14,
+                    "cost": 0.002,
+                },
+            }
+        )
+
+    provider = AsyncTGVFVisualQualityJudgeProvider(
+        TGVFVisualQualityJudgeProvider(
+            _config(async_transport=_async_policy()), opener=opener
+        ),
+        local_maximum_concurrency=2,
+    )
+
+    outcome = asyncio.run(provider.judge(_request(tmp_path)))
+
+    assert outcome.result.ok is True
+    assert (outcome.result.focus_score, outcome.result.grounding_score) == (2, 1)
+    assert (outcome.attempts, outcome.retries) == (2, 1)
+    assert outcome.result.usage is not None
+    assert outcome.result.usage.total_tokens == 26
+    assert outcome.result.usage.cost_usd == pytest.approx(0.003)
+    assert calls == 2
+
+
 def test_async_provider_rejects_request_id_content_collision(tmp_path: Path) -> None:
     strict = TGVFVisualQualityJudgeProvider(
         _config(async_transport=_async_policy()),

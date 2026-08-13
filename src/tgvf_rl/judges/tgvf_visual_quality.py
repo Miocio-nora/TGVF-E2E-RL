@@ -785,9 +785,12 @@ class AsyncTGVFVisualQualityJudgeProvider:
                     raise TGVFVisualQualityGlobalFailure(
                         f"visual-quality judge global HTTP failure {status}"
                     )
-                response_identity_mismatch = (
+                retryable_malformed_output = (
                     result.failure_kind
                     is TGVFVisualQualityFailureKind.MALFORMED_OUTPUT
+                )
+                response_identity_mismatch = (
+                    retryable_malformed_output
                     and reason == "response_model_mismatch"
                 )
                 retryable_transport = (
@@ -797,7 +800,12 @@ class AsyncTGVFVisualQualityJudgeProvider:
                         or status in self.policy.retryable_http_statuses
                     )
                 )
-                if not response_identity_mismatch and not retryable_transport:
+                # A valid HTTP completion can still be transiently malformed
+                # (for example, truncated JSON or a provider-side structured-
+                # output miss).  Give it the same bounded retry budget as a
+                # retryable transport error.  Identity mismatches remain
+                # global failures if they persist through the full budget.
+                if not retryable_malformed_output and not retryable_transport:
                     await self._record_sample_failure(failure_slot, reason=reason)
                     return TGVFVisualQualityAsyncOutcome(
                         result=replace(result, usage=accumulated_usage),
