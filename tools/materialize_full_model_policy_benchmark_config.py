@@ -39,6 +39,11 @@ def main() -> int:
     )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument(
+        "--image-max-pixels",
+        type=int,
+        help="Evaluation-only visual area cap; use 262144 for the 512x512 profile.",
+    )
+    parser.add_argument(
         "--gpu-ids",
         type=int,
         nargs=4,
@@ -63,6 +68,7 @@ def main() -> int:
         max_num_batched_tokens=args.max_num_batched_tokens,
         enable_chunked_prefill=args.enable_chunked_prefill,
         gpu_memory_utilization=args.gpu_memory_utilization,
+        image_max_pixels=args.image_max_pixels,
         gpu_ids=tuple(args.gpu_ids),
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))

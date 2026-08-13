@@ -39,7 +39,11 @@ from tgvf_rl.representation.adapter import (
 )
 
 from .crop_tool import clamp_bbox_to_image
-from .focus_tool import ReplayLayoutTensors, SourceVisualTensorBundle
+from .focus_tool import (
+    PrecomputedTGVFObservationPayload,
+    ReplayLayoutTensors,
+    SourceVisualTensorBundle,
+)
 
 
 class CropTGVFVisualMaterializer(Protocol):
@@ -91,7 +95,21 @@ class CropTGVFToolExecutionResult:
     record: CropTGVFObservationRecord
     crop_rgb: torch.Tensor
     crop_visual: SourceVisualTensorBundle
-    adapter_output: TGVFAdapterOutput
+    adapter_output: TGVFAdapterOutput | PrecomputedTGVFObservationPayload
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCropTGVFInput:
+    """Exact immutable-source crop prepared before the colocated worker RPC."""
+
+    trajectory_id: str
+    call_index: int
+    source_pixels_sha256: str
+    source_width: int
+    source_height: int
+    mapping: CropCoordinateMapping
+    effective_bbox_2d: tuple[int, int, int, int]
+    crop_rgb: torch.Tensor
 
 
 class AtomicCropTGVFTool:
@@ -102,16 +120,22 @@ class AtomicCropTGVFTool:
     def __init__(
         self,
         *,
-        materializer: CropTGVFVisualMaterializer,
-        adapter: TGVFAdapter,
+        materializer: CropTGVFVisualMaterializer | None,
+        adapter: TGVFAdapter | None,
         store: ObservationStore,
         coordinate_mapper: CropCoordinateMapper,
         processor_resized_size: tuple[int, int] | None = None,
     ) -> None:
-        if not callable(getattr(materializer, "materialize_source_visual", None)):
+        if materializer is not None and not callable(
+            getattr(materializer, "materialize_source_visual", None)
+        ):
             raise TypeError("atomic crop+TGVF requires a visual materializer")
-        if not isinstance(adapter, nn.Module):
+        if adapter is not None and not isinstance(adapter, nn.Module):
             raise TypeError("atomic crop+TGVF requires a torch Adapter module")
+        if (materializer is None) != (adapter is None):
+            raise ValueError(
+                "atomic crop+TGVF materializer and Adapter must both be present or absent"
+            )
         if not isinstance(store, ObservationStore):
             raise TypeError("atomic crop+TGVF requires an ObservationStore")
         if not callable(getattr(coordinate_mapper, "map_crop_bbox_to_source", None)):
@@ -121,51 +145,28 @@ class AtomicCropTGVFTool:
         self.store = store
         self.coordinate_mapper = coordinate_mapper
         self.processor_resized_size = processor_resized_size
-        _assert_frozen_adapter(adapter)
+        if adapter is not None:
+            _assert_frozen_adapter(adapter)
 
     def execute(
         self, request: CropTGVFToolExecutionRequest
     ) -> CropTGVFToolExecutionResult:
         _validate_request(request)
+        if self.adapter is None or self.materializer is None:
+            raise RuntimeError("model-free crop+TGVF recorder cannot execute models")
         _assert_frozen_adapter(self.adapter)
-        source_ref = request.trajectory_source_visual.source_pixels
-        if source_ref is None:
-            raise RuntimeError(
-                "atomic crop+TGVF requires rollout-recorded immutable source RGB"
-            )
-        source = self.store.resolve_verified_for_trajectory(
-            source_ref,
+        prepared = self.prepare_precomputed_crop(
             trajectory_id=request.trajectory_id,
+            call_index=request.call_index,
+            parsed_call=request.parsed_call,
+            trajectory_source_visual=request.trajectory_source_visual,
         )
-        _validate_source_rgb(source)
-        if tensor_checksum(source) != source_ref.address.digest:
-            raise RuntimeError("resolved source pixels changed after rollout recording")
-        _verify_source_visual_ownership(
-            self.store,
-            request.trajectory_source_visual,
-            trajectory_id=request.trajectory_id,
-        )
-        height, width, _ = source.shape
-        mapping = self.coordinate_mapper.map_crop_bbox_to_source(
-            request.parsed_call.bbox_2d,
-            source_width=width,
-            source_height=height,
-            processor_resized_size=self.processor_resized_size,
-        )
-        if not isinstance(mapping, CropCoordinateMapping):
-            raise TypeError("atomic crop coordinate mapper returned an invalid mapping")
-        requested = mapping.model_bbox_2d
-        source_bbox = mapping.source_bbox_2d
-        effective = clamp_bbox_to_image(source_bbox, width=width, height=height)
-        left, top, right, bottom = effective
-        crop = source[top:bottom, left:right, :].contiguous().clone()
-
         crop_visual = self.materializer.materialize_source_visual(
-            crop.clone(),
+            prepared.crop_rgb.clone(),
             parsed_call=request.parsed_call,
             call_index=request.call_index,
         )
-        _validate_crop_visual(crop_visual, crop, request)
+        _validate_crop_visual(crop_visual, prepared.crop_rgb, request)
         layout = request.layout_builder.build(
             trajectory_id=request.trajectory_id,
             call_index=request.call_index,
@@ -183,6 +184,128 @@ class AtomicCropTGVFTool:
                 )
             )
         _validate_adapter_output(adapter_output, layout)
+        return self.record_precomputed(
+            request,
+            prepared,
+            crop_visual,
+            adapter_output,
+            _validated_layout=layout,
+        )
+
+    def prepare_precomputed_crop(
+        self,
+        *,
+        trajectory_id: str,
+        call_index: int,
+        parsed_call: ParsedCropTGVFCall,
+        trajectory_source_visual: TrajectorySourceVisual,
+    ) -> PreparedCropTGVFInput:
+        """Crop only rollout-recorded immutable RGB before the worker RPC."""
+
+        if not trajectory_id or type(call_index) is not int or call_index < 0:
+            raise ValueError("atomic crop preparation requires valid call identity")
+        if not isinstance(parsed_call, ParsedCropTGVFCall) or (
+            parsed_call.name != self.name
+        ):
+            raise TypeError("atomic crop preparation requires ParsedCropTGVFCall")
+        if not isinstance(trajectory_source_visual, TrajectorySourceVisual):
+            raise TypeError("atomic crop preparation requires trajectory source visual")
+        source_ref = trajectory_source_visual.source_pixels
+        if source_ref is None:
+            raise RuntimeError(
+                "atomic crop+TGVF requires rollout-recorded immutable source RGB"
+            )
+        source = self.store.resolve_verified_for_trajectory(
+            source_ref,
+            trajectory_id=trajectory_id,
+        )
+        _validate_source_rgb(source)
+        if tensor_checksum(source) != source_ref.address.digest:
+            raise RuntimeError("resolved source pixels changed after rollout recording")
+        _verify_source_visual_ownership(
+            self.store,
+            trajectory_source_visual,
+            trajectory_id=trajectory_id,
+        )
+        height, width, _ = source.shape
+        mapping = self.coordinate_mapper.map_crop_bbox_to_source(
+            parsed_call.bbox_2d,
+            source_width=width,
+            source_height=height,
+            processor_resized_size=self.processor_resized_size,
+        )
+        if not isinstance(mapping, CropCoordinateMapping):
+            raise TypeError("atomic crop coordinate mapper returned an invalid mapping")
+        source_bbox = mapping.source_bbox_2d
+        effective = clamp_bbox_to_image(source_bbox, width=width, height=height)
+        left, top, right, bottom = effective
+        crop = source[top:bottom, left:right, :].contiguous().clone()
+        return PreparedCropTGVFInput(
+            trajectory_id=trajectory_id,
+            call_index=call_index,
+            source_pixels_sha256=source_ref.address.digest,
+            source_width=width,
+            source_height=height,
+            mapping=mapping,
+            effective_bbox_2d=effective,
+            crop_rgb=crop,
+        )
+
+    def record_precomputed(
+        self,
+        request: CropTGVFToolExecutionRequest,
+        prepared: PreparedCropTGVFInput,
+        crop_visual: SourceVisualTensorBundle,
+        adapter_output: TGVFAdapterOutput | PrecomputedTGVFObservationPayload,
+        *,
+        _validated_layout: ReplayLayoutTensors | None = None,
+    ) -> CropTGVFToolExecutionResult:
+        """Record one worker-materialized crop visual and TGVF payload safely."""
+
+        _validate_request(request)
+        if not isinstance(prepared, PreparedCropTGVFInput):
+            raise TypeError("precomputed crop+TGVF recording requires a prepared crop")
+        if not isinstance(
+            adapter_output,
+            (TGVFAdapterOutput, PrecomputedTGVFObservationPayload),
+        ):
+            raise TypeError("precomputed crop+TGVF recording requires a TGVF payload")
+        trusted = self.prepare_precomputed_crop(
+            trajectory_id=request.trajectory_id,
+            call_index=request.call_index,
+            parsed_call=request.parsed_call,
+            trajectory_source_visual=request.trajectory_source_visual,
+        )
+        _assert_prepared_crop_matches(trusted, prepared)
+        crop = trusted.crop_rgb
+        mapping = trusted.mapping
+        requested = mapping.model_bbox_2d
+        source_bbox = mapping.source_bbox_2d
+        effective = trusted.effective_bbox_2d
+        _validate_crop_visual(crop_visual, crop, request)
+        if adapter_output.metadata.target_token_count != int(
+            request.condition.values.shape[-2]
+        ):
+            raise ValueError(
+                "precomputed Adapter target count differs from conditioning"
+            )
+        if adapter_output.metadata.pre_merge_visual_token_count != int(
+            crop_visual.premerge_main.shape[-2]
+        ):
+            raise ValueError(
+                "precomputed Adapter visual count differs from crop visual"
+            )
+        layout = _validated_layout
+        if layout is None:
+            layout = request.layout_builder.build(
+                trajectory_id=request.trajectory_id,
+                call_index=request.call_index,
+                parsed_call=request.parsed_call,
+                trajectory_source_visual=request.trajectory_source_visual,
+                crop_visual=crop_visual,
+            )
+        _validate_layout(layout, request)
+        _validate_adapter_output(adapter_output, layout)
 
         def put(name: str, tensor: torch.Tensor):
             return self.store.put_tensor(
@@ -193,9 +316,7 @@ class AtomicCropTGVFTool:
 
         prefix = f"call.{request.call_index}.crop_tgvf"
         crop_pixels = put(f"{prefix}.crop.rgb", crop)
-        crop_premerge = put(
-            f"{prefix}.crop.premerge.main", crop_visual.premerge_main
-        )
+        crop_premerge = put(f"{prefix}.crop.premerge.main", crop_visual.premerge_main)
         crop_premerge_branches = tuple(
             put(f"{prefix}.crop.premerge.deepstack.{index}", tensor)
             for index, tensor in enumerate(crop_visual.premerge_deepstack)
@@ -269,16 +390,16 @@ class AtomicCropTGVFTool:
             observation_id=_observation_id(
                 request,
                 mapping,
-                source_ref.address.digest,
+                trusted.source_pixels_sha256,
                 crop_pixels.address.digest,
             ),
             call_index=request.call_index,
             model=request.model,
             representation=request.representation,
             condition=condition,
-            source_pixels_sha256=source_ref.address.digest,
-            source_width=width,
-            source_height=height,
+            source_pixels_sha256=trusted.source_pixels_sha256,
+            source_width=trusted.source_width,
+            source_height=trusted.source_height,
             model_coordinate_space=mapping.coordinate_space,
             coordinate_conversion_version=mapping.conversion_version,
             coordinate_reference_width=mapping.coordinate_reference_width,
@@ -413,6 +534,31 @@ def _verify_source_visual_ownership(
         store.resolve_verified_for_trajectory(ref, trajectory_id=trajectory_id)
 
 
+def _assert_prepared_crop_matches(
+    trusted: PreparedCropTGVFInput,
+    provided: PreparedCropTGVFInput,
+) -> None:
+    metadata_matches = (
+        provided.trajectory_id == trusted.trajectory_id
+        and provided.call_index == trusted.call_index
+        and provided.source_pixels_sha256 == trusted.source_pixels_sha256
+        and provided.source_width == trusted.source_width
+        and provided.source_height == trusted.source_height
+        and provided.mapping == trusted.mapping
+        and provided.effective_bbox_2d == trusted.effective_bbox_2d
+    )
+    if not metadata_matches:
+        raise ValueError("prepared crop audit differs from immutable source crop")
+    _validate_source_rgb(provided.crop_rgb)
+    if (
+        provided.crop_rgb.device.type != "cpu"
+        or provided.crop_rgb.shape != trusted.crop_rgb.shape
+        or tensor_checksum(provided.crop_rgb) != tensor_checksum(trusted.crop_rgb)
+        or not torch.equal(provided.crop_rgb, trusted.crop_rgb)
+    ):
+        raise ValueError("prepared crop RGB differs from immutable source crop")
+
+
 def _validate_crop_visual(
     visual: SourceVisualTensorBundle,
     crop: torch.Tensor,
@@ -428,9 +574,10 @@ def _validate_crop_visual(
             "crop visual features are not bound to the exact decoded crop pixels"
         )
     branch_count = len(request.branch_merger_identities)
-    if len(visual.premerge_deepstack) != branch_count or len(
-        visual.merged_deepstack
-    ) != branch_count:
+    if (
+        len(visual.premerge_deepstack) != branch_count
+        or len(visual.merged_deepstack) != branch_count
+    ):
         raise ValueError("crop visual lacks a model-supported DeepStack branch")
     if visual.spatial_merge_size <= 0 or any(
         value <= 0 for value in visual.image_grid_thw
@@ -461,9 +608,7 @@ def _validate_crop_visual(
     premerge_count = int(premerge[0].shape[0])
     merge_group = visual.spatial_merge_size**2
     if (
-        visual.image_grid_thw[0]
-        * visual.image_grid_thw[1]
-        * visual.image_grid_thw[2]
+        visual.image_grid_thw[0] * visual.image_grid_thw[1] * visual.image_grid_thw[2]
         != premerge_count
         or premerge_count % merge_group
         or int(merged[0].shape[0]) != premerge_count // merge_group
@@ -472,10 +617,13 @@ def _validate_crop_visual(
 
 
 def _validate_adapter_output(
-    output: TGVFAdapterOutput,
+    output: TGVFAdapterOutput | PrecomputedTGVFObservationPayload,
     layout: ReplayLayoutTensors,
 ) -> None:
-    if not isinstance(output, TGVFAdapterOutput):
+    if not isinstance(
+        output,
+        (TGVFAdapterOutput, PrecomputedTGVFObservationPayload),
+    ):
         raise TypeError("TGVF Adapter returned the wrong output type")
     if output.metadata.branch_layers != layout.visual_layout.deepstack_branch_layers:
         raise ValueError("atomic Adapter branches differ from replay layout")
@@ -558,4 +706,5 @@ __all__ = [
     "CropTGVFToolExecutionResult",
     "CropTGVFReplayLayoutBuilder",
     "CropTGVFVisualMaterializer",
+    "PreparedCropTGVFInput",
 ]

@@ -18,6 +18,7 @@ from tgvf_rl.environment.crop_tgvf_tool import (
     CropTGVFToolExecutionRequest,
 )
 from tgvf_rl.environment.focus_tool import (
+    PrecomputedTGVFObservationPayload,
     ReplayLayoutTensors,
     SourceVisualTensorBundle,
 )
@@ -37,6 +38,7 @@ from tgvf_rl.qwen.crop_coordinates import (
 from tgvf_rl.qwen.qwen3_vl import Qwen3VLAdapter
 from tgvf_rl.representation.adapter import TGVFAdapter
 from tgvf_rl.representation.deepstack import FrozenProjectionPort
+from tgvf_rl.representation.deepstack import DDeepStackPayload
 
 
 SHA0 = "0" * 64
@@ -57,14 +59,11 @@ class Merger(nn.Module):
 def _parsed_call(bbox: str = "[-1,1,4,8]"):
     text = (
         '<tool_call>{"name":"tgvf_crop_tool","arguments":'
-        '{"bbox_2d":'
-        + bbox
-        + ',"target":"red label"}}</tool_call>'
+        '{"bbox_2d":' + bbox + ',"target":"red label"}}</tool_call>'
     )
     ids = tuple(ord(char) for char in text)
     spans = tuple(
-        TokenByteSpan(index, token, index, index + 1)
-        for index, token in enumerate(ids)
+        TokenByteSpan(index, token, index, index + 1) for index, token in enumerate(ids)
     )
     return StrictToolCallParser().parse(SampledAssistantTurn(text, ids, spans))
 
@@ -216,11 +215,17 @@ def _fixture(*, record_pixels: bool = True, bbox: str = "[-1,1,4,8]"):
         crop_processor_identity=ArtifactIdentity(
             "qwen", "crop-processor", "fixture", SHA1
         ),
-        crop_layout_identity=ArtifactIdentity(
-            "qwen", "crop-layout", "fixture", SHA2
-        ),
+        crop_layout_identity=ArtifactIdentity("qwen", "crop-layout", "fixture", SHA2),
     )
-    return store, pixels, trajectory_source, materializer, layout_builder, adapter, request
+    return (
+        store,
+        pixels,
+        trajectory_source,
+        materializer,
+        layout_builder,
+        adapter,
+        request,
+    )
 
 
 def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
@@ -298,7 +303,9 @@ def test_atomic_crop_tgvf_materializes_one_complete_exact_record() -> None:
     )
 
     with pytest.raises(ReplayMismatchError, match="exact immutable source pixels"):
-        store.put_replay(replace(replay, source_visual=replace(source, source_pixels=None)))
+        store.put_replay(
+            replace(replay, source_visual=replace(source, source_pixels=None))
+        )
 
 
 def test_atomic_qwen3_crop_converts_before_tgvf_materialization() -> None:
@@ -328,3 +335,59 @@ def test_atomic_crop_tgvf_refuses_external_source_pixel_reconstruction() -> None
             coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
         ).execute(request)
     assert materializer.received == []
+
+
+def test_atomic_crop_tgvf_records_precomputed_worker_payload_against_source() -> None:
+    store, pixels, _, _, _, adapter, request = _fixture()
+    local_tool = AtomicCropTGVFTool(
+        materializer=Materializer(),
+        adapter=adapter,
+        store=store,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+    )
+    local = local_tool.execute(request)
+    recorder = AtomicCropTGVFTool(
+        materializer=None,
+        adapter=None,
+        store=store,
+        coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+    )
+    prepared = recorder.prepare_precomputed_crop(
+        trajectory_id=request.trajectory_id,
+        call_index=request.call_index,
+        parsed_call=request.parsed_call,
+        trajectory_source_visual=request.trajectory_source_visual,
+    )
+    payload = PrecomputedTGVFObservationPayload(
+        main_d=local.adapter_output.main_d.detach().clone(),
+        d_deepstack=DDeepStackPayload(
+            branch_layers=local.adapter_output.d_deepstack.branch_layers,
+            branches=tuple(
+                tensor.detach().clone()
+                for tensor in local.adapter_output.d_deepstack.branches
+            ),
+            projection_identities=("precomputed-branch8",),
+        ),
+        metadata=local.adapter_output.metadata,
+    )
+    recorded = recorder.record_precomputed(
+        request,
+        prepared,
+        local.crop_visual,
+        payload,
+    )
+
+    expected_crop = pixels[1:4, 0:4, :].contiguous()
+    assert recorded.record.source_pixels_sha256 == tensor_checksum(pixels)
+    assert recorded.record.effective_bbox_2d == (0, 1, 4, 4)
+    torch.testing.assert_close(
+        store.resolve_verified(recorded.record.crop_visual.crop_pixels),
+        expected_crop,
+        rtol=0,
+        atol=0,
+    )
+
+    tampered = replace(prepared, crop_rgb=prepared.crop_rgb.clone())
+    tampered.crop_rgb[0, 0, 0] += 1
+    with pytest.raises(ValueError, match="prepared crop RGB differs"):
+        recorder.record_precomputed(request, tampered, local.crop_visual, payload)

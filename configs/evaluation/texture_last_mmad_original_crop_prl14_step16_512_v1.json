@@ -1,0 +1,40 @@
+{
+  "arms": [
+    {
+      "arm_id": "original-qwen3-vl-8b-instruct",
+      "backend": "stock_qwen_vllm",
+      "kind": "original",
+      "model_path": "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+    },
+    {
+      "arm_id": "crop-prl14-cleanfinal-step16",
+      "backend": "policy_benchmark",
+      "evaluation_protocol": "deepeyes_official_visible_native_crop_v1",
+      "expected_optimizer_step": 16,
+      "full_model_materialization_receipt_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/PRL14-A-CoreDev2511-cleanfinal-step0-step8-step16-v1/step16/runtime/frozen-full-model-state/materialization-receipt.json",
+      "full_model_snapshot_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/PRL14-A-CoreDev2511-cleanfinal-step0-step8-step16-v1/step16/runtime/frozen-full-model-state/snapshot-manifest.json",
+      "kind": "crop",
+      "policy_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/PRL14-A-CoreDev2511-cleanfinal-step0-step8-step16-v1/step16/runtime/frozen-policy-config.toml"
+    }
+  ],
+  "gpu_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "matrix_id": "texture-last-paper400-mmad-1shot-random-original-crop-prl14-step16-512-v1",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-ORIGINAL-CROP-PRL14-STEP16-512-V1",
+  "schema_version": "tgvf-texture-benchmark-matrix-v1",
+  "task_count": 42870,
+  "task_manifest_path": "/nvmesv/dredvpn009/datasets/benchmarks/texture_evaluation_v1/suite-last-paper400-mmad-1shot-random/tasks.jsonl",
+  "task_manifest_sha256": "89d1510862c7cde5e0b3dd37b7d5fa345c7ed2c573a31e59a151cba3f9bb1ace",
+  "vision": {
+    "max_pixels": 262144,
+    "min_pixels": 65536,
+    "pre_resize_assets": false,
+    "preserve_aspect_ratio": true,
+    "qwen_merge_size": 2,
+    "qwen_patch_size": 16
+  }
+}

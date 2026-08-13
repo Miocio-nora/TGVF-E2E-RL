@@ -55,6 +55,7 @@ from tgvf_rl.framework.verl.policy_weight_sync import (
 from tgvf_rl.framework.verl.policy_live_runtime import (
     _BRANCH_LAYERS,
     _RemoteCropVisualMaterializer,
+    _RemoteCropTGVFToolRuntime,
     _RemoteTGVFFocusToolRuntime,
     _VisualTokenCountResolver,
     _artifact_identity,
@@ -62,9 +63,12 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _source_visual_positions,
 )
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
+    TGVFCropTGVFMaterializationResult,
     TGVF_VLLM_WORKER_EXTENSION_FQN,
     TGVFFocusMaterializationResult,
     _adapter_owned_state_to_utility_wire,
+    _crop_tgvf_from_utility_wire,
     _focus_from_utility_wire,
     _source_from_utility_wire,
     _tensor_to_utility_wire,
@@ -255,6 +259,7 @@ class PolicyCoreDevConfig:
     max_num_batched_tokens: int = 16384
     enable_chunked_prefill: bool = True
     gpu_memory_utilization: float = 0.90
+    image_max_pixels: int | None = None
     task_manifest_path: Path | None = None
     task_manifest_sha256: str | None = None
     expected_task_count: int = _LEGACY_COREDEV_TASK_COUNT
@@ -347,6 +352,10 @@ class PolicyCoreDevConfig:
             raise ValueError("enable_chunked_prefill must be boolean")
         if not 0.0 < self.gpu_memory_utilization <= 1.0:
             raise ValueError("gpu_memory_utilization must be in (0,1]")
+        if self.image_max_pixels is not None and (
+            type(self.image_max_pixels) is not int or self.image_max_pixels <= 0
+        ):
+            raise ValueError("image_max_pixels must be a positive integer or null")
         if type(self.expected_task_count) is not int or self.expected_task_count <= 0:
             raise ValueError("expected_task_count must be a positive integer")
         if (
@@ -503,6 +512,18 @@ class PolicyCoreDevConfig:
     def uses_legacy_coredev_manifest(self) -> bool:
         return self.task_manifest_path is None
 
+    def effective_image_max_pixels(self, run: PolicyE2ESmokeRunConfig | object) -> int:
+        """Resolve an explicit evaluation cap without mutating the train contract."""
+
+        configured = self.image_max_pixels
+        if configured is not None:
+            return configured
+        policy = getattr(run, "policy", None)
+        value = getattr(policy, "image_max_pixels", None)
+        if type(value) is not int or value <= 0:
+            raise ValueError("policy run image_max_pixels is invalid")
+        return value
+
 
 def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -518,6 +539,7 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "gpu_memory_utilization",
     }
     optional = {
+        "image_max_pixels",
         "task_manifest_path",
         "task_manifest_sha256",
         "expected_task_count",
@@ -1705,6 +1727,7 @@ def _evaluation_protocol_identity(
             "enabled_tool_names": list(protocol.enabled_tool_names),
             "maximum_tool_calls": protocol.maximum_tool_calls,
             "native_pixels": False,
+            "image_max_pixels": config.effective_image_max_pixels(snapshot.run),
         }
     if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
         raise ValueError("unsupported policy evaluation protocol")
@@ -1756,7 +1779,7 @@ def _evaluation_protocol_identity(
         "crop_source": "immutable_original_image",
         "native_pixels": True,
         "precomputed_image_embeds": False,
-        "image_max_pixels": snapshot.run.policy.image_max_pixels,
+        "image_max_pixels": config.effective_image_max_pixels(snapshot.run),
         "native_image_limit_per_prompt": DEEPEYES_MAX_ACTIVE_PERCEPTION + 1,
         "observation_role": "user",
         "observation_envelope": (
@@ -1827,6 +1850,7 @@ def policy_evaluation_identity(
             "max_num_batched_tokens": config.max_num_batched_tokens,
             "enable_chunked_prefill": config.enable_chunked_prefill,
             "inference_concurrency_per_gpu": config.inference_concurrency_per_gpu,
+            "image_max_pixels": config.effective_image_max_pixels(snapshot.run),
         },
     }
     if (
@@ -2094,6 +2118,59 @@ class StandaloneTGVFVLLMManager:
             _single_collective(result, operation="crop materialization")
         )
 
+    async def materialize_crop_tgvf(
+        self,
+        *,
+        request_id: str,
+        expected_step: int,
+        sampled_output_ids: tuple[int, ...],
+        call_index: int,
+        pixel_values: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        source_image_sha256: str,
+        crop_rgb_sha256: str,
+        source_width: int,
+        source_height: int,
+        crop_bbox: tuple[int, int, int, int],
+        crop_width: int,
+        crop_height: int,
+        target_start: int,
+        target_end: int,
+        expected_target_token_ids: tuple[int, ...],
+        provider: str,
+    ) -> TGVFCropTGVFMaterializationResult:
+        turn = self._validated_turn(request_id, expected_step, sampled_output_ids)
+        if turn.output_ids[target_start:target_end] != expected_target_token_ids:
+            raise RuntimeError("crop+TGVF target differs from sampled output")
+        result = await self.engine.collective_rpc(
+            "tgvf_materialize_crop_tgvf",
+            kwargs={
+                "trajectory_id": request_id,
+                "call_index": call_index,
+                "pixel_values_wire": _tensor_to_utility_wire(pixel_values),
+                "image_grid_thw": tuple(int(v) for v in image_grid_thw[0].tolist()),
+                "source_image_sha256": source_image_sha256,
+                "crop_rgb_sha256": crop_rgb_sha256,
+                "source_width": source_width,
+                "source_height": source_height,
+                "crop_bbox": crop_bbox,
+                "crop_width": crop_width,
+                "crop_height": crop_height,
+                "preprocessing_boundary": TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
+                "backend_request_id": turn.backend_request_id,
+                "target_start": target_start,
+                "target_end": target_end,
+                "expected_target_token_ids": expected_target_token_ids,
+                "provider": provider,
+            },
+        )
+        typed = _crop_tgvf_from_utility_wire(
+            _single_collective(result, operation="crop+TGVF materialization")
+        )
+        if not isinstance(typed, TGVFCropTGVFMaterializationResult):
+            raise TypeError("crop+TGVF RPC returned an invalid result")
+        return typed
+
     def _validated_turn(
         self, request_id: str, expected_step: int, output_ids: tuple[int, ...]
     ) -> _TurnRoute:
@@ -2164,7 +2241,11 @@ async def build_standalone_manager(
         lora,
         capture_hidden=(
             config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL
-            and run.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
+            and run.protocol.tool_profile
+            in {
+                NativeToolCapabilityProfile.TGVF_ONLY,
+                NativeToolCapabilityProfile.CROP_TGVF,
+            }
         ),
         native_pixels=(
             config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
@@ -2379,7 +2460,7 @@ class PolicyCoreDevEvaluator:
             processor=self.processor,
             canonical_token_ids=rendered.token_ids,
             prompt_text=rendered.text,
-            image_max_pixels=self.run.policy.image_max_pixels,
+            image_max_pixels=self.config.effective_image_max_pixels(self.run),
             source_rgb=source_rgb,
         )
 
@@ -2403,7 +2484,7 @@ class PolicyCoreDevEvaluator:
         pixel_values, image_grid_thw = preprocess_qwen3_rgb(
             processor=self.processor,
             rgb=source_rgb,
-            image_max_pixels=self.run.policy.image_max_pixels,
+            image_max_pixels=self.config.effective_image_max_pixels(self.run),
         )
         source = await self.manager.materialize_source(
             request_id=trajectory_id,
@@ -2438,7 +2519,7 @@ class PolicyCoreDevEvaluator:
                 initial_prompt_token_ids=prompt_ids,
                 image_token_id=self.layout_builder.image_pad_id,
                 source=source,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.config.effective_image_max_pixels(self.run),
             ),
         )
         appender = QwenNativeToolObservationAppender(
@@ -2471,7 +2552,7 @@ class PolicyCoreDevEvaluator:
                 self.config.schema_version,
                 {
                     "model": self.run.model.revision_or_path,
-                    "max_pixels": self.run.policy.image_max_pixels,
+                    "max_pixels": self.config.effective_image_max_pixels(self.run),
                 },
             )
             layout_identity = _artifact_identity(
@@ -2485,7 +2566,7 @@ class PolicyCoreDevEvaluator:
                 server_client=self.manager,
                 processor=self.processor,
                 model_identity=self.run.model,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.config.effective_image_max_pixels(self.run),
                 trajectory_id=trajectory_id,
                 behavior_policy=self.policy_version,
             )
@@ -2499,8 +2580,39 @@ class PolicyCoreDevEvaluator:
                 execution_ledger=self.crop_ledger,
                 coordinate_mapper=Qwen3VLAdapter(),
             )
+        elif self.run.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
+            processor_identity = _artifact_identity(
+                "policy-evaluation",
+                "qwen3-shared-vllm-crop-tgvf-processor",
+                self.config.schema_version,
+                {
+                    "model": self.run.model.revision_or_path,
+                    "max_pixels": self.config.effective_image_max_pixels(self.run),
+                },
+            )
+            layout_identity = _artifact_identity(
+                "policy-evaluation",
+                "qwen3-native-crop-tgvf-layout",
+                self.config.schema_version,
+                {"model": self.run.model.revision_or_path},
+            )
+            tool_runtime = _RemoteCropTGVFToolRuntime(
+                event_loop=asyncio.get_running_loop(),
+                server_client=self.manager,
+                processor=self.processor,
+                config=self.run,
+                image_max_pixels=self.config.effective_image_max_pixels(self.run),
+                layout_builder=self.layout_builder,
+                observation_store=self.store,
+                execution_ledger=self.focus_ledger,
+                contextual_forward_identity=self.contextual_identity,
+                branch_merger_identities=self.branch_identities,
+                crop_processor_identity=processor_identity,
+                crop_layout_identity=layout_identity,
+                coordinate_mapper=Qwen3VLAdapter(),
+            )
         else:
-            raise RuntimeError("policy CoreDev supports the two trained atomic arms")
+            raise RuntimeError("policy evaluator received an unsupported tool profile")
 
         decoding = _decoding_contract()
         client = VerlAsyncServerPolicyTurnClient(

@@ -430,9 +430,7 @@ class OfficialVisiblePolicyEvaluator:
         # Keep a tiny runtime-only guard band; ordinary response budgets are
         # unchanged, while near-limit trajectories stop as context_limit.
         available = (
-            self.config.max_model_len
-            - len(prompt_ids)
-            - _VLLM_CONTEXT_SAFETY_TOKENS
+            self.config.max_model_len - len(prompt_ids) - _VLLM_CONTEXT_SAFETY_TOKENS
         )
         maximum = min(remaining, available)
         if maximum <= 0:
@@ -454,7 +452,9 @@ class OfficialVisiblePolicyEvaluator:
             prompt_ids=list(prompt_ids),
             sampling_params=parameters,
             image_data=list(images),
-            mm_processor_kwargs={"max_pixels": self.run.policy.image_max_pixels},
+            mm_processor_kwargs={
+                "max_pixels": self.config.effective_image_max_pixels(self.run)
+            },
             tgvf_expected_step=self.policy_version.optimizer_step,
         )
         token_ids = tuple(getattr(output, "token_ids", ()))
@@ -507,7 +507,7 @@ class OfficialVisiblePolicyEvaluator:
                     self.processor,
                     messages,
                     images=images,
-                    image_max_pixels=self.run.policy.image_max_pixels,
+                    image_max_pixels=self.config.effective_image_max_pixels(self.run),
                 )
                 try:
                     text, token_ids, _logprobs, stop_reason = await self._sample_turn(

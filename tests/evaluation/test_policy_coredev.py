@@ -1,17 +1,36 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import torch
 
 from tgvf_rl.evaluation.policy_coredev import (
     CoreDevTask,
+    PolicyCoreDevEvaluator,
+    StandaloneTGVFVLLMManager,
+    _TurnRoute,
     _termination_contract,
     load_coredev_tasks,
     load_policy_coredev_config,
     policy_version_from_pointer,
 )
+from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    TGVFCropTGVFMaterializationResult,
+    _crop_tgvf_to_utility_wire,
+)
 from tgvf_rl.framework.vllm import VLLMTerminationOutcome
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
+from tgvf_rl.protocol import (
+    NativeAssistantDialect,
+    NativeProtocolRenderer,
+    NativeToolCapabilityProfile,
+    build_native_tool_schemas,
+)
+from tests.framework.test_verl_smoke_dataset_prompt import _SourceImageProcessor
+from tests.framework.test_vllm_tool_runtime import _crop_tgvf_result
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -51,7 +70,9 @@ def test_policy_evaluation_accepts_native_vllm_eos_identity() -> None:
     assert VLLMTerminationOutcome("stop", 151_644) not in outcomes
 
 
-def test_coredev_task_loader_keeps_order_and_single_image_boundary(tmp_path: Path) -> None:
+def test_coredev_task_loader_keeps_order_and_single_image_boundary(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "tasks.jsonl"
     rows = [
         {
@@ -73,3 +94,90 @@ def test_coredev_task_loader_keeps_order_and_single_image_boundary(tmp_path: Pat
     assert tasks[0].single_image is True
     assert tasks[3].single_image is False
     assert tasks[-1].ordinal == 2510
+
+
+def test_standalone_manager_forwards_atomic_crop_tgvf_as_one_collective() -> None:
+    captured: dict[str, object] = {}
+
+    class Engine:
+        async def collective_rpc(self, method, *, kwargs):
+            captured["method"] = method
+            captured["kwargs"] = kwargs
+            return [_crop_tgvf_to_utility_wire(_crop_tgvf_result())]
+
+    manager = StandaloneTGVFVLLMManager(
+        Engine(),
+        None,
+        capture_hidden=True,
+    )
+    manager.turns["trajectory-0"] = _TurnRoute(
+        backend_request_id="backend-0",
+        output_ids=(11, 12, 13),
+        optimizer_step=5,
+    )
+
+    result = asyncio.run(
+        manager.materialize_crop_tgvf(
+            request_id="trajectory-0",
+            expected_step=5,
+            sampled_output_ids=(11, 12, 13),
+            call_index=2,
+            pixel_values=torch.ones((4, 6)),
+            image_grid_thw=torch.tensor(((1, 2, 2),)),
+            source_image_sha256="a" * 64,
+            crop_rgb_sha256="c" * 64,
+            source_width=100,
+            source_height=80,
+            crop_bbox=(10, 20, 42, 68),
+            crop_width=32,
+            crop_height=48,
+            target_start=0,
+            target_end=2,
+            expected_target_token_ids=(11, 12),
+            provider="contextual_hidden_state",
+        )
+    )
+
+    assert isinstance(result, TGVFCropTGVFMaterializationResult)
+    assert captured["method"] == "tgvf_materialize_crop_tgvf"
+    kwargs = captured["kwargs"]
+    assert kwargs["backend_request_id"] == "backend-0"
+    assert kwargs["crop_bbox"] == (10, 20, 42, 68)
+    assert kwargs["source_image_sha256"] == "a" * 64
+    assert kwargs["crop_rgb_sha256"] == "c" * 64
+
+
+def test_generic_evaluator_renders_from_the_verified_rgb_snapshot() -> None:
+    processor = _SourceImageProcessor()
+    profile = NativeToolCapabilityProfile.TGVF_ONLY
+    dialect = NativeAssistantDialect.QWEN3_VL_THINKING
+    evaluator = object.__new__(PolicyCoreDevEvaluator)
+    evaluator.processor = processor
+    evaluator.run = SimpleNamespace(protocol=SimpleNamespace(tool_profile=profile))
+    evaluator.config = SimpleNamespace(
+        effective_image_max_pixels=lambda _run: 512 * 512
+    )
+    evaluator.assistant_dialect = dialect
+    evaluator.renderer = NativeProtocolRenderer(
+        processor,
+        expected_tokenizer_length=len(processor.tokenizer),
+        tool_names=profile.tool_names,
+        tool_schemas=build_native_tool_schemas(profile.tool_names),
+        assistant_dialect=dialect,
+    )
+    task = CoreDevTask(
+        ordinal=0,
+        dataset="fixture",
+        row_number=0,
+        index="sample-0",
+        sample_id="sample-0",
+        question="What texture is shown?",
+        image_paths=("/not-read-by-render.png",),
+    )
+
+    prompt_ids = evaluator.render_initial_prompt(
+        task,
+        source_rgb=torch.zeros((8, 16, 3), dtype=torch.uint8),
+    )
+
+    assert prompt_ids.count(processor.tokenizer.image_token_id) == 4

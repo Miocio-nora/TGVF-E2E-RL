@@ -418,6 +418,7 @@ def test_official_visible_constructor_accepts_only_adapter_free_full_snapshot(
         max_num_batched_tokens=32768,
         enable_chunked_prefill=False,
         inference_concurrency_per_gpu=1,
+        effective_image_max_pixels=lambda _run: 1_003_520,
     )
     identity = full_model_policy_evaluation_identity(config, snapshot)
     processor = SimpleNamespace(tokenizer=SimpleNamespace(decode=lambda *_a, **_k: ""))

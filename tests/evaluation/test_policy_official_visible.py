@@ -247,6 +247,7 @@ def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> Non
         evaluation_id="eval",
         max_model_len=32768,
         uses_legacy_coredev_manifest=False,
+        effective_image_max_pixels=lambda _run: 1_003_520,
     )
     evaluator.run = SimpleNamespace(
         model=ModelIdentity(

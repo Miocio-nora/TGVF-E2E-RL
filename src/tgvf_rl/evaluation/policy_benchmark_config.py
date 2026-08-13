@@ -80,6 +80,8 @@ def materialize_policy_benchmark_config(
     max_num_batched_tokens: int = 32768,
     enable_chunked_prefill: bool = False,
     gpu_memory_utilization: float = 0.9,
+    image_max_pixels: int | None = None,
+    gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
     evaluation_protocol: str = TRAINING_RUN_EVALUATION_PROTOCOL,
 ) -> dict[str, Any]:
     """Strictly inspect one pointer closure and write a resumable config.
@@ -133,7 +135,7 @@ def materialize_policy_benchmark_config(
         "expected_optimizer_step": snapshot.policy_version.optimizer_step,
         "expected_policy_weights_sha256": snapshot.policy_version.weights_sha256,
         "output_root": str(evaluation_output),
-        "gpu_ids": [0, 1, 2, 3],
+        "gpu_ids": list(gpu_ids),
         "inference_concurrency_per_gpu": inference_concurrency_per_gpu,
         "max_model_len": max_model_len,
         "max_num_batched_tokens": max_num_batched_tokens,
@@ -145,6 +147,8 @@ def materialize_policy_benchmark_config(
         "expected_task_count": expected_task_count,
         "expected_single_image_count": expected_single_image_count,
     }
+    if image_max_pixels is not None:
+        payload["image_max_pixels"] = image_max_pixels
     PolicyCoreDevConfig(**payload)
     encoded = (
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -170,6 +174,7 @@ def materialize_full_model_policy_benchmark_config(
     max_num_batched_tokens: int = 32768,
     enable_chunked_prefill: bool = False,
     gpu_memory_utilization: float = 0.9,
+    image_max_pixels: int | None = None,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
 ) -> dict[str, Any]:
     """Bind an official-visible suite to one exact standalone full model.
@@ -237,6 +242,8 @@ def materialize_full_model_policy_benchmark_config(
         "expected_task_count": expected_task_count,
         "expected_single_image_count": expected_single_image_count,
     }
+    if image_max_pixels is not None:
+        payload["image_max_pixels"] = image_max_pixels
     PolicyCoreDevConfig(**payload)
     _write_immutable(frozen_policy_config, policy_config.read_bytes())
     encoded = (
@@ -264,6 +271,7 @@ def materialize_paired_tgvf_policy_benchmark_config(
     max_num_batched_tokens: int = 32768,
     enable_chunked_prefill: bool = False,
     gpu_memory_utilization: float = 0.9,
+    image_max_pixels: int | None = None,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
     paired_seed_namespace: str | None = None,
 ) -> dict[str, Any]:
@@ -319,6 +327,8 @@ def materialize_paired_tgvf_policy_benchmark_config(
         "expected_task_count": expected_task_count,
         "expected_single_image_count": expected_single_image_count,
     }
+    if image_max_pixels is not None:
+        payload["image_max_pixels"] = image_max_pixels
     if paired_seed_namespace is not None:
         payload["paired_seed_namespace"] = paired_seed_namespace
     PolicyCoreDevConfig(**payload)

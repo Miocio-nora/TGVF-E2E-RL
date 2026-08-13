@@ -296,6 +296,7 @@ be inherited silently from a library default.
 - [Representation parity and open scientific gates](docs/REPRESENTATION_PARITY_INVENTORY.md)
 - [Controlled external references](docs/EXTERNAL_REFERENCES.md)
 - [VLMEvalKit deployment and direct-baseline example](docs/VLMEVALKIT.md)
+- [LAS&T/MMAD benchmark guide and completed Original/Crop step-16 report](docs/texture_benchmarks.md)
 - [Experiment ledger](docs/EXPERIMENT_LEDGER.md)
 - [Compatibility environment setup](docs/SETUP.md)
 - [Framework implementation report](docs/IMPLEMENTATION_REPORT.md)

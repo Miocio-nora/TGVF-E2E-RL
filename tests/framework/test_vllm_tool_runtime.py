@@ -14,14 +14,19 @@ from tgvf_rl.environment.focus_tool import (
 )
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVF_ADAPTER_UPDATE_ACK_SCHEMA,
+    TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
+    TGVFCropTGVFMaterializationResult,
     TGVFFocusMaterializationResult,
     TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA,
     TGVF_VLLM_FINISH_REASON_FIELD,
     TGVF_VLLM_STOP_REASON_FIELD,
     TGVFVLLMWorkerExtension,
     _BehaviorTraceBuffer,
+    _TurnRoute,
     _adapter_owned_state_from_utility_wire,
     _adapter_owned_state_to_utility_wire,
+    _crop_tgvf_from_utility_wire,
+    _crop_tgvf_to_utility_wire,
     _focus_from_utility_wire,
     _focus_to_utility_wire,
     _runtime_classes,
@@ -76,6 +81,70 @@ def _adapter_ack(
         "cleared_source_count": 0,
         "cleared_trace_count": 0,
     }
+
+
+def _visual(sha256: str) -> SourceVisualTensorBundle:
+    return SourceVisualTensorBundle(
+        image_sha256=sha256,
+        premerge_main=torch.ones((4, 2), dtype=torch.bfloat16),
+        premerge_deepstack=tuple(
+            torch.full((4, 2), float(i), dtype=torch.bfloat16) for i in range(3)
+        ),
+        merged_main=torch.ones((1, 8), dtype=torch.bfloat16),
+        merged_deepstack=tuple(
+            torch.full((1, 8), float(i), dtype=torch.bfloat16) for i in range(3)
+        ),
+        image_grid_thw=(1, 2, 2),
+        spatial_merge_size=2,
+        decoded_rgb_sha256=sha256,
+    )
+
+
+def _focus_result() -> TGVFFocusMaterializationResult:
+    layers = (8, 16, 24)
+    identities = ("deep-8", "deep-16", "deep-24")
+    return TGVFFocusMaterializationResult(
+        hq=torch.arange(12, dtype=torch.bfloat16).reshape(3, 4),
+        observation=PrecomputedTGVFObservationPayload(
+            main_d=torch.ones((2, 8), dtype=torch.bfloat16),
+            d_deepstack=DDeepStackPayload(
+                branch_layers=layers,
+                branches=tuple(
+                    torch.full((2, 8), float(i), dtype=torch.bfloat16) for i in range(3)
+                ),
+                projection_identities=identities,
+            ),
+            metadata=TGVFAdapterMetadata(
+                branch_layers=layers,
+                main_projection_identity="main",
+                deepstack_projection_identities=identities,
+                batched=False,
+                batch_size=1,
+                target_token_count=3,
+                pre_merge_visual_token_count=8,
+                d_token_count=2,
+                condition_provenance=None,
+            ),
+        ),
+    )
+
+
+def _crop_tgvf_result() -> TGVFCropTGVFMaterializationResult:
+    focus = _focus_result()
+    return TGVFCropTGVFMaterializationResult(
+        crop_visual=_visual("c" * 64),
+        hq=focus.hq,
+        observation=focus.observation,
+        trajectory_id="trajectory-0",
+        call_index=2,
+        source_image_sha256="a" * 64,
+        crop_rgb_sha256="c" * 64,
+        source_width=100,
+        source_height=80,
+        crop_bbox=(10, 20, 42, 68),
+        crop_width=32,
+        crop_height=48,
+    )
 
 
 def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
@@ -294,6 +363,218 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
     torch.testing.assert_close(
         transported.observation.main_d, result.observation.main_d
     )
+
+
+def test_crop_tgvf_wire_preserves_visual_focus_and_complete_audit() -> None:
+    result = _crop_tgvf_result()
+    transported_wire = pickle.loads(pickle.dumps(_crop_tgvf_to_utility_wire(result)))
+    transported = _crop_tgvf_from_utility_wire(transported_wire)
+
+    assert isinstance(transported, TGVFCropTGVFMaterializationResult)
+    assert transported.trajectory_id == "trajectory-0"
+    assert transported.call_index == 2
+    assert transported.source_image_sha256 == "a" * 64
+    assert transported.crop_rgb_sha256 == "c" * 64
+    assert transported.crop_bbox == (10, 20, 42, 68)
+    assert transported.source_width == 100
+    assert transported.source_height == 80
+    assert transported.crop_width == 32
+    assert transported.crop_height == 48
+    assert transported.preprocessing_boundary == TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY
+    torch.testing.assert_close(
+        transported.crop_visual.premerge_main,
+        torch.ones((4, 2), dtype=torch.bfloat16),
+    )
+    torch.testing.assert_close(transported.hq, result.hq)
+    torch.testing.assert_close(
+        transported.observation.main_d, result.observation.main_d
+    )
+
+
+def test_atomic_crop_tgvf_worker_uses_new_crop_visual_for_adapter() -> None:
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    extension._tgvf_source_cache = {"trajectory-0": _visual("a" * 64)}
+    crop_visual = _visual("c" * 64)
+    focus = _focus_result()
+    calls: list[tuple[str, object]] = []
+
+    def materialize_visual(**kwargs):
+        calls.append(("visual", kwargs))
+        return crop_visual
+
+    def materialize_focus_for_source(**kwargs):
+        calls.append(("focus", kwargs))
+        return focus
+
+    extension._tgvf_materialize_visual = materialize_visual
+    extension._tgvf_materialize_focus_for_source = materialize_focus_for_source
+    wire = extension.tgvf_materialize_crop_tgvf(
+        trajectory_id="trajectory-0",
+        call_index=2,
+        pixel_values_wire=_tensor_to_utility_wire(torch.ones((4, 6))),
+        image_grid_thw=(1, 2, 2),
+        source_image_sha256="a" * 64,
+        crop_rgb_sha256="c" * 64,
+        source_width=100,
+        source_height=80,
+        crop_bbox=(10, 20, 42, 68),
+        crop_width=32,
+        crop_height=48,
+        preprocessing_boundary=TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
+        backend_request_id="backend-0",
+        target_start=1,
+        target_end=4,
+        expected_target_token_ids=(11, 12, 13),
+        provider="contextual_hidden_state",
+    )
+
+    restored = _crop_tgvf_from_utility_wire(wire)
+    assert [name for name, _kwargs in calls] == ["visual", "focus"]
+    visual_kwargs = calls[0][1]
+    focus_kwargs = calls[1][1]
+    assert visual_kwargs["image_sha256"] == "c" * 64
+    assert focus_kwargs["source"] is crop_visual
+    assert focus_kwargs["backend_request_id"] == "backend-0"
+    assert restored.crop_visual.image_sha256 == "c" * 64
+    assert restored.crop_bbox == (10, 20, 42, 68)
+
+
+def test_crop_tgvf_worker_rejects_geometry_before_vision_forward() -> None:
+    extension = object.__new__(TGVFVLLMWorkerExtension)
+    extension._tgvf_source_cache = {"trajectory-0": _visual("a" * 64)}
+    extension._tgvf_materialize_visual = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("vision forward must not run")
+    )
+
+    try:
+        extension.tgvf_materialize_crop_tgvf(
+            trajectory_id="trajectory-0",
+            call_index=0,
+            pixel_values_wire=_tensor_to_utility_wire(torch.ones((4, 6))),
+            image_grid_thw=(1, 2, 2),
+            source_image_sha256="a" * 64,
+            crop_rgb_sha256="c" * 64,
+            source_width=100,
+            source_height=80,
+            crop_bbox=(10, 20, 42, 68),
+            crop_width=31,
+            crop_height=48,
+            preprocessing_boundary=TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
+            backend_request_id="backend-0",
+            target_start=1,
+            target_end=2,
+            expected_target_token_ids=(11,),
+            provider="target_token_embedding",
+        )
+    except ValueError as error:
+        assert "crop width differs" in str(error)
+    else:  # pragma: no cover - assertion branch
+        raise AssertionError("invalid crop geometry was accepted")
+
+
+def test_crop_tgvf_http_server_encodes_processor_tensors_and_restores_type() -> None:
+    pytest.importorskip("ray")
+    pytest.importorskip("verl")
+    pytest.importorskip("vllm")
+    captured: dict[str, object] = {}
+
+    class Engine:
+        async def collective_rpc(self, *, method, kwargs):
+            captured["method"] = method
+            captured["kwargs"] = kwargs
+            return [_crop_tgvf_to_utility_wire(_crop_tgvf_result())]
+
+    async def exercise() -> TGVFCropTGVFMaterializationResult:
+        server_cls = _runtime_classes()[3]
+        server = object.__new__(server_cls)
+        server.global_steps = 5
+        server.engine = Engine()
+        return await server.tgvf_materialize_crop_tgvf(
+            expected_step=5,
+            trajectory_id="trajectory-0",
+            call_index=2,
+            pixel_values=torch.ones((4, 6)),
+            image_grid_thw=torch.tensor(((1, 2, 2),)),
+            source_image_sha256="a" * 64,
+            crop_rgb_sha256="c" * 64,
+            source_width=100,
+            source_height=80,
+            crop_bbox=(10, 20, 42, 68),
+            crop_width=32,
+            crop_height=48,
+            preprocessing_boundary=TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
+            backend_request_id="backend-0",
+            target_start=0,
+            target_end=3,
+            expected_target_token_ids=(1, 2, 3),
+            provider="target_token_embedding",
+        )
+
+    result = asyncio.run(exercise())
+    assert isinstance(result, TGVFCropTGVFMaterializationResult)
+    assert captured["method"] == "tgvf_materialize_crop_tgvf"
+    kwargs = captured["kwargs"]
+    assert "pixel_values" not in kwargs
+    assert kwargs["image_grid_thw"] == (1, 2, 2)
+    torch.testing.assert_close(
+        _tensor_from_utility_wire(kwargs["pixel_values_wire"]), torch.ones((4, 6))
+    )
+
+
+def test_crop_tgvf_client_binds_call_to_last_sampled_turn() -> None:
+    pytest.importorskip("ray")
+    pytest.importorskip("verl")
+    pytest.importorskip("vllm")
+    captured: dict[str, object] = {}
+
+    class RemoteCall:
+        async def remote(self, **kwargs):
+            captured.update(kwargs)
+            return _crop_tgvf_result()
+
+    async def exercise() -> TGVFCropTGVFMaterializationResult:
+        client_cls = _runtime_classes()[1]
+        client = object.__new__(client_cls)
+        client._tgvf_routes = {
+            "trajectory-0": (
+                "server-0",
+                SimpleNamespace(tgvf_materialize_crop_tgvf=RemoteCall()),
+            )
+        }
+        client._tgvf_turns = {
+            "trajectory-0": _TurnRoute(
+                backend_request_id="backend-0",
+                prompt_ids=(101,),
+                output_ids=(11, 12, 13),
+                global_step=5,
+            )
+        }
+        return await client.materialize_crop_tgvf(
+            request_id="trajectory-0",
+            expected_step=5,
+            sampled_output_ids=(11, 12, 13),
+            call_index=2,
+            pixel_values=torch.ones((4, 6)),
+            image_grid_thw=torch.tensor(((1, 2, 2),)),
+            source_image_sha256="a" * 64,
+            crop_rgb_sha256="c" * 64,
+            source_width=100,
+            source_height=80,
+            crop_bbox=(10, 20, 42, 68),
+            crop_width=32,
+            crop_height=48,
+            target_start=0,
+            target_end=2,
+            expected_target_token_ids=(11, 12),
+            provider="contextual_hidden_state",
+        )
+
+    result = asyncio.run(exercise())
+    assert isinstance(result, TGVFCropTGVFMaterializationResult)
+    assert captured["backend_request_id"] == "backend-0"
+    assert captured["trajectory_id"] == "trajectory-0"
+    assert captured["crop_bbox"] == (10, 20, 42, 68)
+    assert captured["preprocessing_boundary"] == TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY
 
 
 def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases() -> (

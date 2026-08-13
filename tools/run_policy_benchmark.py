@@ -310,7 +310,7 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
             validate_official_visible_processor(
                 processor,
                 tokenizer_length=snapshot.run.model.tokenizer_length,
-                image_max_pixels=snapshot.run.policy.image_max_pixels,
+                image_max_pixels=config.effective_image_max_pixels(snapshot.run),
             )
         )
     print(json.dumps(result, indent=2, sort_keys=True))
