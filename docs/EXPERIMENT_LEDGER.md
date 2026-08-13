@@ -9884,6 +9884,11 @@ than inferred from a script name or prior conversation.
   failure. The exact matched smoke accepts sample-local degradation only when
   aggregate visual coverage is at least 99%, rather than aborting on one bad
   provider response.
+- Runtime commit `9e3c6f74a44762b90e3a138f440246b1df5dff8c` also makes the
+  multi-call judgement non-overlapping: F receives every ordered successful
+  target, while G receives only assistant reasoning after the final successful
+  tool call. Later tool-call JSON/target text is therefore not duplicated into
+  the grounding channel.
 - Lifecycle: first run a console-only BS4 x n2 world4 functional canary, then
   one exact world8/BS16/n16 matched smoke. After both gates pass, a tmux-owned
   fresh formal run proceeds Step 0 -> 8, binds an immutable horizon extension,

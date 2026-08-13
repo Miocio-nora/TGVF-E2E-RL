@@ -48,7 +48,7 @@ def test_two_arm_plan_reuses_common_step0_rng_without_rerunning_it() -> None:
     _MODULE._validate_plan_run(plan, run)
 
     assert hashlib.sha256(_RUN.read_bytes()).hexdigest() == (
-        "e8f1d45d7568b86d522dd2fa70a622bc23c695c3e8bb9107c04531da256721ff"
+        "e762f0794c342bb4979651323393a0a6c30892945c8d634dd85673c24b794cc5"
     )
     assert [(arm["name"], arm["optimizer_step"]) for arm in plan["arms"]] == [
         ("step8", 8),
@@ -81,6 +81,7 @@ def test_supervisors_chain_smoke_train_continue_and_two_arm_evaluation() -> None
     assert "--target-step 8" in training
     assert "--target-step 16" in training
     assert "materialize_policy_horizon_extension.py" in training
+    assert 'if [[ ! -f "$extension" ]]' in training
     assert "WANDB_RUN_ID=prl19r0v" in training
     assert "tracker < step" in training
     assert "coverage < 0.99" in training

@@ -4,7 +4,7 @@ run_id = "PRL-19-R0-C0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS4-N2-TFREE-VISUAL-API-C
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "1d193dce846d5f2eeb78499bec7bad1d873f6a96"
+commit = "9e3c6f74a44762b90e3a138f440246b1df5dff8c"
 dirty = false
 
 [model]

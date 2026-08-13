@@ -161,12 +161,17 @@ if ! checkpoint_is_complete "$training_root" 8; then
 fi
 touch "$control_root/step8-accepted"
 
-"$python_bin" "$repo_root/tools/materialize_policy_horizon_extension.py" \
-  --run-config "$config" \
-  --output "$extension" \
-  --extension-id PRL-19-R0-FROZEN-RP67-TFREE-VISUAL-API-STEP8-TO16 \
-  --target-step 16 \
-  --repository "$repo_root"
+# Create the immutable Step-8 boundary once. On an interrupted Step9--16
+# continuation, retain and revalidate that original extension rather than
+# attempting to rebind it to the latest checkpoint.
+if [[ ! -f "$extension" ]]; then
+  "$python_bin" "$repo_root/tools/materialize_policy_horizon_extension.py" \
+    --run-config "$config" \
+    --output "$extension" \
+    --extension-id PRL-19-R0-FROZEN-RP67-TFREE-VISUAL-API-STEP8-TO16 \
+    --target-step 16 \
+    --repository "$repo_root"
+fi
 export TGVF_POLICY_HORIZON_EXTENSION_PATH="$extension"
 export TGVF_POLICY_HORIZON_EXTENSION_SHA256
 TGVF_POLICY_HORIZON_EXTENSION_SHA256=$(sha256sum "$extension" | awk '{print $1}')

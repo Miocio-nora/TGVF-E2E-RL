@@ -3,7 +3,7 @@
   "evaluation_id": "PRL19-R0-FROZEN-RP67-TFREE-VISUAL-API-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1",
   "status": "ready",
   "policy_config": "configs/policy/runs/prl_19_r0_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_visual_api_8step_ws8.toml",
-  "policy_config_sha256": "e8f1d45d7568b86d522dd2fa70a622bc23c695c3e8bb9107c04531da256721ff",
+  "policy_config_sha256": "e762f0794c342bb4979651323393a0a6c30892945c8d634dd85673c24b794cc5",
   "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "expected_task_count": 2511,
