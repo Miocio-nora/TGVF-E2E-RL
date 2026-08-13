@@ -9988,3 +9988,29 @@ than inferred from a script name or prior conversation.
   only after one successful atomic D observation and finite update may the
   exact world8 BS16 x n16 eight-step pilot start. Formal W&B is enabled;
   canary/smoke W&B is disabled.
+- The first canary attempt on 2026-08-13 completed all eight rollout
+  trajectories in 31--37 seconds, then entered actor replay at 23:29:09 JST
+  and made no progress for 14 minutes 47 seconds. All four actor ranks stayed
+  in NCCL-like 100% SM/low-memory-activity kernels; no optimizer update,
+  Step-1 metric, or Step-1 checkpoint was produced. It was stopped manually
+  at 23:43:56 JST. Unequal per-rank replay payloads plus code inspection
+  identified the cause: current replay called independently FSDP-sharded Qwen
+  vision blocks once per sampled crop, so ranks with different tool-call
+  counts issued different child-collective schedules.
+- Recovery makes one trajectory the bounded live-vision execution unit. A
+  typed replay plan packs its immutable source plus all sampled crops into
+  Qwen3-VL's native multi-image input, executes the vision tower exactly once,
+  then splits the main/DeepStack pre-merge and merged tensors by the exact
+  grid-derived token counts before applying frozen RP67 and the unchanged
+  decoder replay. Qwen's grid-derived cumulative sequence boundaries keep
+  images attention-independent. This bounds activations to at most one source
+  plus six crops instead of packing the formal 32-trajectory local actor
+  micro-batch, while every rank executes the same one-vision-call-per-row
+  schedule. Fixed actor micro-batching remains part of the immutable matched
+  Crop-16 launcher controls (`actor.use_dynamic_bsz=false`).
+- Sequential-versus-packed CPU tests prove main/DeepStack values, pixel
+  gradients and every vision-parameter gradient agree for unequal image grids.
+  A real four-rank NCCL/FSDP2 regression uses 0/1/2/3 crops across ranks,
+  independently shards a vision child, and completes finite nonzero backward
+  on every rank. This recovery must pass a fresh console-only canary before any
+  formal PRL20 run starts.
