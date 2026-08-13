@@ -182,6 +182,7 @@ def materialize_policy_coredev_scoring_views(
     created_at = datetime.now().astimezone().isoformat()
     slices: list[dict[str, Any]] = []
     observed_total = 0
+    sample_local_failure_total = 0
     for dataset in DATASETS:
         fields, source_rows = _read_tsv(source / f"{dataset}.tsv")
         if "prediction" in fields or "extra_records" in fields:
@@ -189,6 +190,7 @@ def materialize_policy_coredev_scoring_views(
         raw_fields = fields + ["prediction", "extra_records"]
         raw_rows: list[dict[str, str]] = []
         observed = 0
+        sample_local_failures = 0
         for row in source_rows:
             trajectory = trajectories.get((dataset, row["index"]))
             materialized = dict(row)
@@ -202,21 +204,43 @@ def materialize_policy_coredev_scoring_views(
             else:
                 observed += 1
                 answer = normalize_policy_final_answer(trajectory.get("final_answer"))
-                extra = {
-                    "schema_version": POLICY_SCORING_VIEW_SCHEMA,
-                    "evaluation_id": evaluation_id,
-                    "coverage": "single_image_evaluated",
-                    "ordinal": trajectory["ordinal"],
-                    "trajectory_id": trajectory["trajectory_id"],
-                    "trajectory_sha256": trajectory["trajectory_sha256"],
-                    "policy_run_id": trajectory["policy_run_id"],
-                    "policy_weights_sha256": trajectory["policy_weights_sha256"],
-                    "stop": trajectory["stop"],
-                    "tool_call_count": len(trajectory["tool_calls"]),
-                    "successful_observation_count": trajectory[
-                        "successful_observation_count"
-                    ],
-                }
+                if trajectory.get("result_kind") == "sample_local_failure":
+                    sample_local_failures += 1
+                    extra = {
+                        "schema_version": POLICY_SCORING_VIEW_SCHEMA,
+                        "evaluation_id": evaluation_id,
+                        "coverage": "single_image_policy_output_contract_failure",
+                        "ordinal": trajectory["ordinal"],
+                        "result_kind": "sample_local_failure",
+                        "result_identity_sha256": trajectory["result_identity_sha256"],
+                        "trajectory_id": trajectory["trajectory_id"],
+                        "trajectory_available": False,
+                        "failure_record_sha256": trajectory["failure_record_sha256"],
+                        "failure": trajectory["failure"],
+                        "policy_run_id": trajectory["policy_run_id"],
+                        "policy_weights_sha256": trajectory["policy_weights_sha256"],
+                        "stop": trajectory["stop"],
+                        "tool_call_count": 0,
+                        "successful_observation_count": 0,
+                    }
+                else:
+                    extra = {
+                        "schema_version": POLICY_SCORING_VIEW_SCHEMA,
+                        "evaluation_id": evaluation_id,
+                        "coverage": "single_image_evaluated",
+                        "ordinal": trajectory["ordinal"],
+                        "result_kind": "trajectory",
+                        "result_identity_sha256": trajectory["result_identity_sha256"],
+                        "trajectory_id": trajectory["trajectory_id"],
+                        "trajectory_sha256": trajectory["trajectory_sha256"],
+                        "policy_run_id": trajectory["policy_run_id"],
+                        "policy_weights_sha256": trajectory["policy_weights_sha256"],
+                        "stop": trajectory["stop"],
+                        "tool_call_count": len(trajectory["tool_calls"]),
+                        "successful_observation_count": trajectory[
+                            "successful_observation_count"
+                        ],
+                    }
             # Reuse the audited final-answer view's fail-closed invalid-row
             # handling by presenting the already-separated answer as a native
             # suffix. Empty/unsupported rows deliberately lack the closer.
@@ -226,6 +250,7 @@ def materialize_policy_coredev_scoring_views(
             )
             raw_rows.append(materialized)
         observed_total += observed
+        sample_local_failure_total += sample_local_failures
         work_dir = output / dataset
         run_dir = work_dir / MODEL_NAME / run_id
         raw_path = output / "raw" / f"{dataset}.tsv"
@@ -257,6 +282,7 @@ def materialize_policy_coredev_scoring_views(
                     "skip_reason": "mode_infer",
                     "scoring_view_contract": POLICY_SCORING_VIEW_SCHEMA,
                     "observed_single_image_count": observed,
+                    "sample_local_failure_count": sample_local_failures,
                     "unsupported_multi_image_count": len(source_rows) - observed,
                 }
             },
@@ -279,6 +305,7 @@ def materialize_policy_coredev_scoring_views(
                 "dataset": dataset,
                 "official_row_count": len(source_rows),
                 "observed_single_image_count": observed,
+                "sample_local_failure_count": sample_local_failures,
                 "unsupported_multi_image_count": len(source_rows) - observed,
                 "work_dir": str(work_dir),
                 "prediction_file": str(derived_path),
@@ -292,6 +319,7 @@ def materialize_policy_coredev_scoring_views(
         "evaluation_id": evaluation_id,
         "run_id": run_id,
         "observed_single_image_count": observed_total,
+        "sample_local_failure_count": sample_local_failure_total,
         "unsupported_multi_image_count": unsupported_count,
         "official_row_count": observed_total + unsupported_count,
         "slices": slices,

@@ -157,8 +157,11 @@ def _tsv_bytes(rows: list[dict[str, object]]) -> bytes:
         "extraction_method",
         "category",
         "cycle_category",
+        "result_kind",
+        "result_identity_sha256",
         "trajectory_id",
         "trajectory_sha256",
+        "failure_record_sha256",
     )
     output = io.StringIO(newline="")
     writer = csv.DictWriter(
@@ -243,8 +246,13 @@ def materialize_policy_benchmark_mcq_scoring(
                 f"MCQ task {task.bound_sample_id} lacks retained gold answer/options"
             )
         result = records[task.ordinal]
+        result_kind = str(result.get("result_kind", "trajectory"))
         options = dict(task.options)
-        extracted, method = infer_mcq_option(result.get("final_answer"), options)
+        extracted, method = (
+            (None, "policy_output_contract_failure")
+            if result_kind == "sample_local_failure"
+            else infer_mcq_option(result.get("final_answer"), options)
+        )
         metadata = dict(task.metadata)
         row: dict[str, object] = {
             "ordinal": task.ordinal,
@@ -259,8 +267,11 @@ def materialize_policy_benchmark_mcq_scoring(
             "extraction_method": method,
             "category": metadata.get("category", ""),
             "cycle_category": metadata.get("cycle_category", ""),
+            "result_kind": result_kind,
+            "result_identity_sha256": result["result_identity_sha256"],
             "trajectory_id": result["trajectory_id"],
-            "trajectory_sha256": result["trajectory_sha256"],
+            "trajectory_sha256": result.get("trajectory_sha256", ""),
+            "failure_record_sha256": result.get("failure_record_sha256", ""),
         }
         scored.append(row)
         dataset_rows[task.dataset].append(row)
@@ -272,6 +283,9 @@ def materialize_policy_benchmark_mcq_scoring(
             "sample_count": len(rows),
             "correct_count": correct_count,
             "accuracy": correct_count / len(rows),
+            "sample_local_failure_count": sum(
+                row["result_kind"] == "sample_local_failure" for row in rows
+            ),
         }
         categories: dict[str, dict[str, object]] = {}
         for category in sorted(
@@ -306,6 +320,9 @@ def materialize_policy_benchmark_mcq_scoring(
             "inference": inference_identity,
         },
         "sample_count": len(scored),
+        "sample_local_failure_count": sum(
+            row["result_kind"] == "sample_local_failure" for row in scored
+        ),
         "correct_count": total_correct,
         "micro_accuracy": total_correct / len(scored),
         "macro_dataset_accuracy": sum(

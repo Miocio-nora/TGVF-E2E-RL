@@ -293,6 +293,87 @@ def test_gpu_release_wait_requires_two_stable_free_polls(monkeypatch) -> None:
     assert sleeps == [3, 3]
 
 
+def test_policy_workers_launch_in_isolated_process_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = SimpleNamespace(gpu_ids=(0, 1, 2, 3), output_root=tmp_path)
+    launches: list[dict[str, object]] = []
+
+    class Process:
+        pass
+
+    def popen(command, **kwargs):
+        launches.append({"command": command, **kwargs})
+        return Process()
+
+    monkeypatch.setattr(_MODULE, "load_policy_coredev_config", lambda _: config)
+    monkeypatch.setattr(_MODULE.subprocess, "Popen", popen)
+
+    processes = _MODULE._launch_workers(tmp_path / "benchmark-config.json")
+
+    assert len(processes) == len(launches) == 4
+    assert all(launch["start_new_session"] is True for launch in launches)
+    assert [
+        launch["command"][launch["command"].index("--rank") + 1]
+        for launch in launches
+    ] == ["0", "1", "2", "3"]
+
+
+def test_failed_policy_worker_drains_all_isolated_groups_before_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Process:
+        def __init__(self, code: int | None) -> None:
+            self.code = code
+
+        def poll(self) -> int | None:
+            return self.code
+
+        def wait(self) -> int:
+            assert self.code is not None
+            return self.code
+
+    processes = [Process(1), Process(None)]
+    drained: list[object] = []
+    monkeypatch.setattr(
+        _MODULE,
+        "_terminate_worker_groups",
+        lambda observed: drained.extend(observed),
+    )
+
+    with pytest.raises(RuntimeError, match="worker 0 exited with 1"):
+        _MODULE._wait_workers(processes, owner="step8 + step16")
+
+    assert drained == processes
+
+
+def test_already_exited_failed_workers_still_drain_orphan_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Process:
+        def __init__(self, code: int) -> None:
+            self.code = code
+
+        def poll(self) -> int:
+            return self.code
+
+        def wait(self) -> int:
+            return self.code
+
+    processes = [Process(0), Process(1)]
+    drained: list[object] = []
+    monkeypatch.setattr(
+        _MODULE,
+        "_terminate_worker_groups",
+        lambda observed: drained.extend(observed),
+    )
+
+    with pytest.raises(RuntimeError, match=r"workers failed: \[0, 1\]"):
+        _MODULE._wait_workers(processes)
+
+    assert drained == processes
+
+
 def test_step8_wait_binds_complete_fsdp_shards_without_assuming_embedded_hf(
     tmp_path: Path,
 ) -> None:

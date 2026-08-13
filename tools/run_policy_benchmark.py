@@ -17,6 +17,7 @@ import time
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
+from tgvf_rl.contracts.errors import PolicyOutputContractError  # noqa: E402
 from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
     CoreDevTask,
@@ -31,6 +32,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     load_policy_coredev_config,
     load_policy_evaluation_snapshot,
     materialize_vllm_lora_adapter,
+    policy_output_contract_failure_audit_payload,
     prepare_policy_benchmark_tasks,
     trajectory_audit_payload,
     validate_policy_benchmark_runtime_interfaces,
@@ -172,25 +174,41 @@ async def _worker(args: argparse.Namespace, config: PolicyCoreDevConfig) -> int:
 
         async def evaluate_one(local_index: int, task: CoreDevTask) -> None:
             row_started = time.time()
-            trajectory = await evaluator.evaluate(task)
-            payload = (
-                official_visible_trajectory_audit_payload(
+            try:
+                trajectory = await evaluator.evaluate(task)
+            except PolicyOutputContractError as error:
+                if (
+                    config.evaluation_protocol
+                    == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                ):
+                    raise
+                trajectory = None
+                payload = policy_output_contract_failure_audit_payload(
                     task,
-                    trajectory,
+                    error,
                     evaluation_identity=evaluation_identity,
                     rank=args.rank,
                     world_size=world_size,
                 )
-                if config.evaluation_protocol
-                == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
-                else trajectory_audit_payload(
-                    task,
-                    trajectory,
-                    evaluation_identity=evaluation_identity,
-                    rank=args.rank,
-                    world_size=world_size,
+            else:
+                payload = (
+                    official_visible_trajectory_audit_payload(
+                        task,
+                        trajectory,
+                        evaluation_identity=evaluation_identity,
+                        rank=args.rank,
+                        world_size=world_size,
+                    )
+                    if config.evaluation_protocol
+                    == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                    else trajectory_audit_payload(
+                        task,
+                        trajectory,
+                        evaluation_identity=evaluation_identity,
+                        rank=args.rank,
+                        world_size=world_size,
+                    )
                 )
-            )
             payload["wall_seconds"] = time.time() - row_started
             _append_durable(result_path, payload)
             print(
@@ -201,8 +219,15 @@ async def _worker(args: argparse.Namespace, config: PolicyCoreDevConfig) -> int:
                         "selected": len(selected),
                         "ordinal": task.ordinal,
                         "dataset": task.dataset,
-                        "tool_calls": len(trajectory.tool_calls),
-                        "stop": getattr(trajectory.stop, "value", trajectory.stop),
+                        "tool_calls": (
+                            len(trajectory.tool_calls) if trajectory is not None else 0
+                        ),
+                        "stop": (
+                            getattr(trajectory.stop, "value", trajectory.stop)
+                            if trajectory is not None
+                            else "invalid_format"
+                        ),
+                        "result_kind": payload.get("result_kind", "trajectory"),
                         "wall_seconds": payload["wall_seconds"],
                     },
                     sort_keys=True,

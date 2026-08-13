@@ -31,6 +31,7 @@ import torch
 from PIL import Image
 
 from tgvf_rl.conditioning import TargetConditioningProviderKind
+from tgvf_rl.contracts.errors import PolicyOutputContractError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.environment import (
     CropExecutionLedger,
@@ -136,6 +137,7 @@ POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v1"
 POLICY_BENCHMARK_SCHEMA = "tgvf-policy-benchmark-evaluation-v1"
 POLICY_EVALUATION_IDENTITY_SCHEMA = "tgvf-policy-evaluation-identity-v1"
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
+POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA = "tgvf-policy-output-contract-failure-v1"
 PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-rng-v1"
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
@@ -2577,6 +2579,111 @@ class PolicyCoreDevEvaluator:
                 self.store.release_trajectories(trajectory_ids)
 
 
+def _policy_result_identity_fields(
+    task: CoreDevTask,
+    *,
+    evaluation_identity: Mapping[str, object],
+    rank: int,
+    world_size: int,
+) -> dict[str, object]:
+    """Build the common immutable identity for trajectory and failure rows."""
+
+    identity_sha256 = evaluation_identity.get("identity_sha256")
+    if not isinstance(identity_sha256, str):
+        raise ValueError("evaluation identity SHA256 is missing")
+    _require_sha256(identity_sha256, name="evaluation identity SHA256")
+    execution = evaluation_identity.get("execution")
+    policy_snapshot = evaluation_identity.get("policy_snapshot")
+    task_manifest = evaluation_identity.get("task_manifest")
+    model_identity = evaluation_identity.get("model_identity")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (execution, policy_snapshot, task_manifest, model_identity)
+    ):
+        raise ValueError("evaluation identity sub-bindings are malformed")
+    assert isinstance(execution, Mapping)
+    assert isinstance(policy_snapshot, Mapping)
+    assert isinstance(task_manifest, Mapping)
+    assert isinstance(model_identity, Mapping)
+    if type(rank) is not int or type(world_size) is not int or world_size <= 0:
+        raise ValueError("result rank/world_size identity is invalid")
+    if execution.get("world_size") != world_size or not 0 <= rank < world_size:
+        raise ValueError("result rank/world_size differs from evaluation identity")
+    if task.ordinal % world_size != rank:
+        raise ValueError("task ordinal is assigned to another evaluator rank")
+    snapshot_backend = policy_snapshot.get(
+        "snapshot_backend", LORA_ADAPTER_EVALUATION_BACKEND
+    )
+    if snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
+        snapshot_fields = {
+            "policy_snapshot_backend": PAIRED_TGVF_EVALUATION_BACKEND,
+            "policy_paired_snapshot_identity_sha256": policy_snapshot[
+                "snapshot_identity_sha256"
+            ],
+            "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
+            "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
+            "policy_rp66_storage_sha256": policy_snapshot["rp66_storage_sha256"],
+        }
+    elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
+        snapshot_fields = {
+            "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
+            "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
+            "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
+        }
+    else:
+        raise ValueError("training-run result snapshot backend differs")
+    group_uid = (
+        f"coredev:{task.ordinal}"
+        if evaluation_identity["evaluation_schema_version"] == POLICY_COREDEV_SCHEMA
+        else f"benchmark:{task.ordinal}"
+    )
+    trajectory_identity = TrajectoryIdentity(
+        str(evaluation_identity["evaluation_id"]),
+        task.bound_sample_id,
+        0,
+        group_uid,
+    )
+    payload: dict[str, object] = {
+        "schema_version": POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA,
+        "selection_reasons": ["representative_rollout_zero"],
+        "evaluation_identity_sha256": identity_sha256,
+        "policy_run_identity_sha256": policy_snapshot["run_identity_sha256"],
+        **snapshot_fields,
+        "policy_config_identity_sha256": evaluation_identity[
+            "policy_run_config_identity_sha256"
+        ],
+        "task_manifest_sha256": task_manifest["sha256"],
+        "model_identity": dict(model_identity),
+        "rank": rank,
+        "world_size": world_size,
+        "evaluation_id": trajectory_identity.run_id,
+        "sample_id": trajectory_identity.sample_id,
+        "group_uid": trajectory_identity.group_id,
+        "rollout_index": trajectory_identity.rollout_index,
+        "ordinal": task.ordinal,
+        "dataset": task.dataset,
+        "row_number": task.row_number,
+        "index": task.index,
+        "question": task.question,
+        "image_paths": list(task.image_paths),
+        "image_sha256s": list(task.image_sha256s),
+        "image_dimensions": [list(item) for item in task.image_dimensions],
+        "trajectory_id": trajectory_identity.canonical_id,
+        "policy_run_id": policy_snapshot["run_id"],
+        "optimizer_step": policy_snapshot["optimizer_step"],
+        "policy_weights_sha256": policy_snapshot["weights_sha256"],
+    }
+    if "sampling_rng" in evaluation_identity:
+        rng = paired_evaluation_rng_for_task(
+            evaluation_identity,
+            sample_id=trajectory_identity.sample_id,
+            rollout_index=trajectory_identity.rollout_index,
+        )
+        payload["sampling_rng"] = dict(evaluation_identity["sampling_rng"])
+        payload["paired_rng_stream_identity_sha256"] = rng.stream_identity_sha256
+    return payload
+
+
 def trajectory_audit_payload(
     task: CoreDevTask,
     trajectory: TrajectoryRecord,
@@ -2603,29 +2710,12 @@ def trajectory_audit_payload(
             **common,
         }
 
-    identity_sha256 = evaluation_identity.get("identity_sha256")
-    if not isinstance(identity_sha256, str):
-        raise ValueError("evaluation identity SHA256 is missing")
-    _require_sha256(identity_sha256, name="evaluation identity SHA256")
-    execution = evaluation_identity.get("execution")
     policy_snapshot = evaluation_identity.get("policy_snapshot")
-    task_manifest = evaluation_identity.get("task_manifest")
     model_identity = evaluation_identity.get("model_identity")
-    if not all(
-        isinstance(value, Mapping)
-        for value in (execution, policy_snapshot, task_manifest, model_identity)
+    if not isinstance(policy_snapshot, Mapping) or not isinstance(
+        model_identity, Mapping
     ):
         raise ValueError("evaluation identity sub-bindings are malformed")
-    assert isinstance(execution, Mapping)
-    assert isinstance(policy_snapshot, Mapping)
-    assert isinstance(task_manifest, Mapping)
-    assert isinstance(model_identity, Mapping)
-    if type(rank) is not int or type(world_size) is not int or world_size <= 0:
-        raise ValueError("result rank/world_size identity is invalid")
-    if execution.get("world_size") != world_size or not 0 <= rank < world_size:
-        raise ValueError("result rank/world_size differs from evaluation identity")
-    if task.ordinal % world_size != rank:
-        raise ValueError("task ordinal is assigned to another evaluator rank")
     if asdict(trajectory.model) != dict(model_identity):
         raise ValueError("trajectory model differs from evaluation identity")
     if trajectory.behavior_policy != PolicyVersion(
@@ -2634,91 +2724,136 @@ def trajectory_audit_payload(
         weights_sha256=str(policy_snapshot.get("weights_sha256")),
     ):
         raise ValueError("trajectory policy differs from evaluation identity")
-    snapshot_backend = policy_snapshot.get(
-        "snapshot_backend", LORA_ADAPTER_EVALUATION_BACKEND
+    payload = _policy_result_identity_fields(
+        task,
+        evaluation_identity=evaluation_identity,
+        rank=rank,
+        world_size=world_size,
     )
-    if snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
-        snapshot_fields = {
-            "policy_snapshot_backend": PAIRED_TGVF_EVALUATION_BACKEND,
-            "policy_paired_snapshot_identity_sha256": policy_snapshot[
-                "snapshot_identity_sha256"
+    if payload["trajectory_id"] != trajectory.identity.canonical_id:
+        raise ValueError("trajectory identity differs from evaluation task identity")
+    payload.update(
+        {
+            "trajectory_sha256": trajectory_checksum(trajectory),
+            "stop": trajectory.stop.value,
+            "final_answer": trajectory.final_answer,
+            "assistant_turns": [
+                {
+                    "turn_index": turn.turn_index,
+                    "raw_text": turn.raw_text,
+                    "sampled_token_count": len(turn.tokens.token_ids),
+                    "is_tool_call": turn.is_tool_call,
+                    "stop_reason": turn.stop_reason,
+                }
+                for turn in trajectory.assistant_turns
             ],
-            "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
-            "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
-            "policy_rp66_storage_sha256": policy_snapshot["rp66_storage_sha256"],
+            "tool_calls": [call_payload(call) for call in trajectory.tool_calls],
+            "tool_errors": [
+                {
+                    "attempt_index": error.attempt_index,
+                    "assistant_turn_index": error.assistant_turn_index,
+                    "function_name": error.function_name,
+                    "code": error.code,
+                    "payload_json": error.payload_json,
+                    "recoverable": error.recoverable,
+                }
+                for error in trajectory.tool_errors
+            ],
+            "successful_observation_count": len(trajectory.observations),
         }
-    elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
-        snapshot_fields = {
-            "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
-            "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
-            "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
-        }
-    else:
-        raise ValueError("training-run trajectory snapshot backend differs")
-    payload = {
-        "schema_version": POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA,
-        "selection_reasons": ["representative_rollout_zero"],
-        "evaluation_identity_sha256": identity_sha256,
-        "policy_run_identity_sha256": policy_snapshot["run_identity_sha256"],
-        **snapshot_fields,
-        "policy_config_identity_sha256": evaluation_identity[
-            "policy_run_config_identity_sha256"
-        ],
-        "task_manifest_sha256": task_manifest["sha256"],
-        "model_identity": dict(model_identity),
-        "rank": rank,
-        "world_size": world_size,
-        "evaluation_id": trajectory.identity.run_id,
-        "sample_id": trajectory.identity.sample_id,
-        "group_uid": trajectory.identity.group_id,
-        "rollout_index": trajectory.identity.rollout_index,
-        "ordinal": task.ordinal,
-        "dataset": task.dataset,
-        "row_number": task.row_number,
-        "index": task.index,
-        "question": task.question,
-        "image_paths": list(task.image_paths),
-        "image_sha256s": list(task.image_sha256s),
-        "image_dimensions": [list(item) for item in task.image_dimensions],
-        "trajectory_id": trajectory.identity.canonical_id,
-        "trajectory_sha256": trajectory_checksum(trajectory),
-        "policy_run_id": trajectory.behavior_policy.run_id,
-        "optimizer_step": trajectory.behavior_policy.optimizer_step,
-        "policy_weights_sha256": trajectory.behavior_policy.weights_sha256,
-        "stop": trajectory.stop.value,
-        "final_answer": trajectory.final_answer,
-        "assistant_turns": [
-            {
-                "turn_index": turn.turn_index,
-                "raw_text": turn.raw_text,
-                "sampled_token_count": len(turn.tokens.token_ids),
-                "is_tool_call": turn.is_tool_call,
-                "stop_reason": turn.stop_reason,
-            }
-            for turn in trajectory.assistant_turns
-        ],
-        "tool_calls": [call_payload(call) for call in trajectory.tool_calls],
-        "tool_errors": [
-            {
-                "attempt_index": error.attempt_index,
-                "assistant_turn_index": error.assistant_turn_index,
-                "function_name": error.function_name,
-                "code": error.code,
-                "payload_json": error.payload_json,
-                "recoverable": error.recoverable,
-            }
-            for error in trajectory.tool_errors
-        ],
-        "successful_observation_count": len(trajectory.observations),
+    )
+    payload["result_identity_sha256"] = _canonical_json_sha256(payload)
+    return payload
+
+
+def policy_output_contract_failure_audit_payload(
+    task: CoreDevTask,
+    error: PolicyOutputContractError,
+    *,
+    evaluation_identity: Mapping[str, object],
+    rank: int,
+    world_size: int,
+) -> dict[str, object]:
+    """Materialize one scored, identity-bound sample-local output failure.
+
+    The row is intentionally not a fabricated :class:`TrajectoryRecord`: the
+    sampler rejected the response before a legal assistant turn existed.  It
+    remains a completed benchmark row with a null answer, so scoring keeps the
+    task in the denominator and deterministically marks it wrong.
+    """
+
+    if not isinstance(error, PolicyOutputContractError):
+        raise TypeError("sample-local failure requires PolicyOutputContractError")
+    if error.code != "tool_call_terminal_suffix":
+        raise ValueError("unsupported sample-local policy-output failure code")
+    diagnostic = dict(error.diagnostic)
+    expected_diagnostic_fields = {
+        "response_text_sha256",
+        "suffix_sha256",
+        "suffix_char_count",
+        "suffix_utf8_byte_count",
+        "finish_reason",
+        "stop_reason",
+        "backend_request_sha256",
+        "backend_response_sha256",
     }
-    if "sampling_rng" in evaluation_identity:
-        rng = paired_evaluation_rng_for_task(
-            evaluation_identity,
-            sample_id=trajectory.identity.sample_id,
-            rollout_index=trajectory.identity.rollout_index,
-        )
-        payload["sampling_rng"] = dict(evaluation_identity["sampling_rng"])
-        payload["paired_rng_stream_identity_sha256"] = rng.stream_identity_sha256
+    if set(diagnostic) != expected_diagnostic_fields:
+        raise ValueError("policy-output failure diagnostic fields differ")
+    for field in (
+        "response_text_sha256",
+        "suffix_sha256",
+        "backend_request_sha256",
+        "backend_response_sha256",
+    ):
+        _require_sha256(diagnostic[field], name=f"policy-output {field}")
+    for field in ("suffix_char_count", "suffix_utf8_byte_count"):
+        value = diagnostic[field]
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"policy-output {field} must be a positive integer")
+    if (
+        not isinstance(diagnostic["finish_reason"], str)
+        or not diagnostic["finish_reason"]
+    ):
+        raise ValueError("policy-output finish_reason must be non-empty")
+    if diagnostic["stop_reason"] is not None and (
+        isinstance(diagnostic["stop_reason"], bool)
+        or not isinstance(diagnostic["stop_reason"], (int, str))
+    ):
+        raise TypeError("policy-output stop_reason must be int, str, or null")
+    failure = {
+        "schema_version": POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA,
+        "kind": "policy_output_contract",
+        "code": error.code,
+        "exception_type": type(error).__name__,
+        "message": str(error),
+        "diagnostic": diagnostic,
+        "diagnostic_sha256": _canonical_json_sha256(diagnostic),
+    }
+    payload = _policy_result_identity_fields(
+        task,
+        evaluation_identity=evaluation_identity,
+        rank=rank,
+        world_size=world_size,
+    )
+    failure_record = {
+        "schema_version": POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA,
+        "trajectory_id": payload["trajectory_id"],
+        "failure": failure,
+    }
+    payload.update(
+        {
+            "result_kind": "sample_local_failure",
+            "trajectory_available": False,
+            "stop": "invalid_format",
+            "final_answer": None,
+            "assistant_turns": [],
+            "tool_calls": [],
+            "tool_errors": [],
+            "successful_observation_count": 0,
+            "failure": failure,
+            "failure_record_sha256": _canonical_json_sha256(failure_record),
+        }
+    )
     payload["result_identity_sha256"] = _canonical_json_sha256(payload)
     return payload
 
@@ -2836,6 +2971,95 @@ def validate_policy_benchmark_result(
         raise RuntimeError("policy benchmark result trajectory_id differs")
     if task.ordinal % world_size != rank:
         raise RuntimeError("policy benchmark result is stored under the wrong rank")
+    result_kind = payload.get("result_kind", "trajectory")
+    if result_kind == "trajectory":
+        _require_sha256(
+            payload.get("trajectory_sha256"), name="trajectory result SHA256"
+        )
+        return
+    if result_kind != "sample_local_failure":
+        raise RuntimeError("policy benchmark result kind is unsupported")
+    if payload.get("trajectory_available") is not False:
+        raise RuntimeError("sample-local failure claims a trajectory")
+    if "trajectory_sha256" in payload:
+        raise RuntimeError("sample-local failure must not claim a trajectory SHA256")
+    expected_failure_fields = {
+        "schema_version",
+        "kind",
+        "code",
+        "exception_type",
+        "message",
+        "diagnostic",
+        "diagnostic_sha256",
+    }
+    failure = payload.get("failure")
+    if not isinstance(failure, Mapping) or set(failure) != expected_failure_fields:
+        raise RuntimeError("sample-local failure envelope is malformed")
+    if (
+        failure.get("schema_version") != POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA
+        or failure.get("kind") != "policy_output_contract"
+        or failure.get("code") != "tool_call_terminal_suffix"
+        or failure.get("exception_type") != "PolicyOutputContractError"
+        or failure.get("message")
+        != "vLLM emitted a tool-call suffix outside the run-bound contract"
+    ):
+        raise RuntimeError("sample-local policy-output failure identity differs")
+    diagnostic = failure.get("diagnostic")
+    expected_diagnostic_fields = {
+        "response_text_sha256",
+        "suffix_sha256",
+        "suffix_char_count",
+        "suffix_utf8_byte_count",
+        "finish_reason",
+        "stop_reason",
+        "backend_request_sha256",
+        "backend_response_sha256",
+    }
+    if not isinstance(diagnostic, Mapping) or set(diagnostic) != (
+        expected_diagnostic_fields
+    ):
+        raise RuntimeError("sample-local failure diagnostic fields differ")
+    if failure.get("diagnostic_sha256") != _canonical_json_sha256(diagnostic):
+        raise RuntimeError("sample-local failure diagnostic digest differs")
+    for field in (
+        "response_text_sha256",
+        "suffix_sha256",
+        "backend_request_sha256",
+        "backend_response_sha256",
+    ):
+        _require_sha256(diagnostic.get(field), name=f"policy-output {field}")
+    if any(
+        type(diagnostic.get(field)) is not int or diagnostic[field] <= 0
+        for field in ("suffix_char_count", "suffix_utf8_byte_count")
+    ):
+        raise RuntimeError("sample-local suffix lengths are malformed")
+    if not isinstance(diagnostic.get("finish_reason"), str) or not diagnostic.get(
+        "finish_reason"
+    ):
+        raise RuntimeError("sample-local finish reason is malformed")
+    if diagnostic.get("stop_reason") is not None and (
+        isinstance(diagnostic.get("stop_reason"), bool)
+        or not isinstance(diagnostic.get("stop_reason"), (int, str))
+    ):
+        raise RuntimeError("sample-local stop reason is malformed")
+    if (
+        payload.get("stop") != "invalid_format"
+        or payload.get("final_answer") is not None
+        or payload.get("assistant_turns") != []
+        or payload.get("tool_calls") != []
+        or payload.get("tool_errors") != []
+        or payload.get("successful_observation_count") != 0
+    ):
+        raise RuntimeError("sample-local failure scoring fields differ")
+    failure_record = {
+        "schema_version": POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA,
+        "trajectory_id": expected_trajectory_id,
+        "failure": dict(failure),
+    }
+    expected_failure_sha256 = payload.get("failure_record_sha256")
+    _require_sha256(expected_failure_sha256, name="failure record SHA256")
+    if expected_failure_sha256 != _canonical_json_sha256(failure_record):
+        raise RuntimeError("sample-local failure record digest differs")
 
 
 def load_policy_benchmark_results(
@@ -2913,6 +3137,7 @@ __all__ = [
     "POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA",
     "POLICY_COREDEV_SCHEMA",
     "POLICY_EVALUATION_IDENTITY_SCHEMA",
+    "POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA",
     "PAIRED_POLICY_EVALUATION_RNG_SCHEMA",
     "PairedEvaluationVLLMTurnRNG",
     "PolicyCoreDevConfig",
@@ -2937,6 +3162,7 @@ __all__ = [
     "policy_benchmark_task_path",
     "policy_evaluation_identity",
     "policy_lora_request_name",
+    "policy_output_contract_failure_audit_payload",
     "policy_version_from_pointer",
     "paired_evaluation_rng_for_task",
     "prepare_policy_benchmark_tasks",

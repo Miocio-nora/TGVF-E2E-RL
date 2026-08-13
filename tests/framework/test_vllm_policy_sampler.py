@@ -11,6 +11,7 @@ import pytest
 from tgvf_rl.contracts.errors import (
     ContractUnsetError,
     IdentityMismatchError,
+    PolicyOutputContractError,
     ReplayMismatchError,
 )
 from tgvf_rl.contracts.identity import PolicyVersion
@@ -504,6 +505,25 @@ def test_backend_must_enforce_one_complete_tool_call_turn_boundary(
 
     with pytest.raises(ReplayMismatchError, match=message):
         _sampler(client).sample((1,), _parameters(), turn_index=0)
+
+
+def test_illegal_tool_suffix_is_a_structured_sample_local_output_failure() -> None:
+    text = "r</think><tool_call>{}</tool_call>trailing"
+    client = _Client(text, finish_reason="stop", stop_reason="</tool_call>")
+
+    with pytest.raises(PolicyOutputContractError) as captured:
+        _sampler(client).sample((1,), _parameters(), turn_index=0)
+
+    error = captured.value
+    assert error.code == "tool_call_terminal_suffix"
+    assert error.diagnostic["suffix_char_count"] == len("trailing")
+    assert error.diagnostic["suffix_utf8_byte_count"] == len(b"trailing")
+    assert error.diagnostic["response_text_sha256"] == sha256(
+        text.encode("utf-8")
+    ).hexdigest()
+    assert error.diagnostic["suffix_sha256"] == sha256(b"trailing").hexdigest()
+    assert "trailing" not in str(error)
+    assert "trailing" not in str(error.diagnostic)
 
 
 def test_run_bound_suffix_may_include_native_eos_when_golden_selects_it() -> None:

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Mapping, Protocol
 from tgvf_rl.contracts.errors import (
     ContractUnsetError,
     IdentityMismatchError,
+    PolicyOutputContractError,
     ReplayMismatchError,
 )
 from tgvf_rl.contracts.identity import PolicyVersion, _validate_sha256
@@ -704,8 +705,23 @@ class VLLMPolicySampler:
             close_end = response.text.index(TOOL_CALL_CLOSE) + len(TOOL_CALL_CLOSE)
             suffix = response.text[close_end:]
             if suffix not in self.termination.tool_call_terminal_suffixes:
-                raise ReplayMismatchError(
-                    "vLLM emitted a tool-call suffix outside the run-bound contract"
+                raise PolicyOutputContractError(
+                    "vLLM emitted a tool-call suffix outside the run-bound contract",
+                    code="tool_call_terminal_suffix",
+                    diagnostic={
+                        "response_text_sha256": hashlib.sha256(
+                            response.text.encode("utf-8")
+                        ).hexdigest(),
+                        "suffix_sha256": hashlib.sha256(
+                            suffix.encode("utf-8")
+                        ).hexdigest(),
+                        "suffix_char_count": len(suffix),
+                        "suffix_utf8_byte_count": len(suffix.encode("utf-8")),
+                        "finish_reason": response.finish_reason,
+                        "stop_reason": response.stop_reason,
+                        "backend_request_sha256": request.backend_request_sha256,
+                        "backend_response_sha256": response.backend_response_sha256,
+                    },
                 )
             outcome = VLLMTerminationOutcome(
                 response.finish_reason, response.stop_reason
