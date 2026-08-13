@@ -295,18 +295,32 @@ def install_deterministic_mcq_answer_policy(module: Any) -> None:
 
 
 def _read_tsv(path: Path) -> tuple[list[str], list[str]]:
-    with path.open(encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        if reader.fieldnames is None or not {"index", "prediction"}.issubset(
-            reader.fieldnames
-        ):
-            raise RuntimeError(f"prediction TSV schema is incomplete: {path}")
-        indices: list[str] = []
-        predictions: list[str] = []
-        for row in reader:
-            indices.append(str(row["index"]))
-            predictions.append(str(row["prediction"] or ""))
-    return indices, predictions
+    # ``csv`` defaults to an arbitrary 128 KiB field ceiling.  A valid policy
+    # response (or its structured trajectory metadata) can exceed that ceiling,
+    # while still being bounded by the already-materialized TSV artifact.  Raise
+    # the parser ceiling only for this read and restore the process-global value
+    # afterwards so unrelated CSV consumers retain their own contract.
+    previous_field_limit = csv.field_size_limit()
+    artifact_bound = max(previous_field_limit, path.stat().st_size)
+    field_limit_changed = artifact_bound != previous_field_limit
+    if field_limit_changed:
+        csv.field_size_limit(artifact_bound)
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            if reader.fieldnames is None or not {"index", "prediction"}.issubset(
+                reader.fieldnames
+            ):
+                raise RuntimeError(f"prediction TSV schema is incomplete: {path}")
+            indices: list[str] = []
+            predictions: list[str] = []
+            for row in reader:
+                indices.append(str(row["index"]))
+                predictions.append(str(row["prediction"] or ""))
+        return indices, predictions
+    finally:
+        if field_limit_changed:
+            csv.field_size_limit(previous_field_limit)
 
 
 def _resolve_prediction_path(

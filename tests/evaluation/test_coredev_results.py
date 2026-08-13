@@ -1,3 +1,4 @@
+import csv
 import json
 import pickle
 from pathlib import Path
@@ -6,6 +7,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from tgvf_rl.evaluation import coredev_results
 from tgvf_rl.evaluation.coredev_materialize import (
     COREDEV_JUDGE_CONTRACTS,
     COREDEV_LLM_JUDGE_MODEL,
@@ -23,6 +25,30 @@ from tgvf_rl.evaluation.vlmevalkit import COREDEV_2511
 
 
 JUDGE_BASE_URL = "http://127.0.0.1:8012/v1"
+
+
+def test_prediction_tsv_reader_accepts_artifact_bounded_large_fields(
+    tmp_path: Path,
+) -> None:
+    original_field_limit = csv.field_size_limit()
+    prediction = "long-policy-output-" * ((original_field_limit // 19) + 2)
+    path = tmp_path / "predictions.tsv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=("index", "prediction", "extra_records"),
+            delimiter="\t",
+        )
+        writer.writeheader()
+        writer.writerow(
+            {"index": "sample-0", "prediction": prediction, "extra_records": "{}"}
+        )
+
+    indices, predictions = coredev_results._read_tsv(path)
+
+    assert indices == ["sample-0"]
+    assert predictions == [prediction]
+    assert csv.field_size_limit() == original_field_limit
 
 
 class _Response:
