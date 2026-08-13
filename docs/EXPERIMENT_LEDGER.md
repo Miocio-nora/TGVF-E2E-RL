@@ -9902,6 +9902,23 @@ than inferred from a script name or prior conversation.
   Step 16 under the same paired CoreDev-2511 seven-suite protocol and RNG
   namespace as PRL17-R2. The already measured paired PRL17-R2 Step 0 is the
   common initialization reference and is not rerun.
+- Formal training completed all 16 optimizer steps on 2026-08-13. The first
+  paired-evaluation attempt durably completed 1,953/4,480 single-image rows
+  (Step 8: 1,015/2,240; Step 16: 938/2,240) before one Step-16 sample emitted
+  text after a complete `</tool_call>`. The sampler correctly rejected that
+  response, but the benchmark worker incorrectly promoted this model-output
+  event to an eight-worker failure; seven orphan vLLM process groups then held
+  the supervisor log pipe and GPUs open.
+- Recovery runtime commit `22b2c28` introduces a narrow, structured
+  `PolicyOutputContractError` only for this illegal suffix. The benchmark now
+  persists that task as an identity-bound `sample_local_failure` with null
+  answer and `invalid_format`, retains it in the scoring denominator as
+  incorrect, and continues its siblings. Generic replay, identity, transport,
+  artifact and unknown failures remain fail-closed. Evaluator ranks now launch
+  in isolated process groups and a worker-level failure drains every vLLM
+  descendant before the supervisor retries. Seventy-three focused CPU tests
+  passed; all 1,953 prior rows passed strict resume validation unchanged. The
+  paired evaluator resumed from those rows at 17:42 JST without retraining.
 - The committed supervisor enforces API-key preflight, frozen-Adapter SHA at
   smoke, complete permanent checkpoint receipts at Steps 8/16, bounded resume
   for operational interruptions, one W&B identity, and automatic handoff to
