@@ -15,12 +15,18 @@ def test_handoff_waits_for_source_exit_then_continues_exact_step8_boundary() -> 
     assert 'tmux has-session -t "$source_session"' in source
     assert "#{pane_dead}" in source
     assert "while source_training_is_running" in source
-    assert "checkpoint_is_closed 8" in source
+    assert "permanent_checkpoint_is_closed 8" in source
+    assert "source training exited without" in source
     assert "materialize_policy_horizon_extension.py" in source
     assert "--target-step 16" in source
     assert "TGVF_POLICY_HORIZON_EXTENSION_PATH" in source
     assert "WANDB_RUN_ID=prl20r0" in source
     assert "WANDB_RESUME=must" in source
+    assert "trainable_tgvf_supervisor" in source
+    assert "read_committed_policy_checkpoint_pair" in source
+    assert "pair_integrity_sha256" in source
+    assert "project_state_sha256" in source
+    assert "data.pt" in source
 
 
 def test_handoff_defers_evaluation_until_step16_and_requires_it() -> None:
