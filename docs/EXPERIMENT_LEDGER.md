@@ -9889,6 +9889,10 @@ than inferred from a script name or prior conversation.
   target, while G receives only assistant reasoning after the final successful
   tool call. Later tool-call JSON/target text is therefore not duplicated into
   the grounding channel.
+- Launch descendant `f22650e2bf6b2d849756a2be9fbc2290a675248c`
+  removes the now-dead local left by the malformed-output retry recovery. This
+  is a behavior-preserving static cleanup; the configured executable identity
+  remains the preceding `9e3c6f7` runtime commit.
 - Lifecycle: first run a console-only BS4 x n2 world4 functional canary, then
   one exact world8/BS16/n16 matched smoke. After both gates pass, a tmux-owned
   fresh formal run proceeds Step 0 -> 8, binds an immutable horizon extension,
