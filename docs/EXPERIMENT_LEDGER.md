@@ -10014,3 +10014,15 @@ than inferred from a script name or prior conversation.
   independently shards a vision child, and completes finite nonzero backward
   on every rank. This recovery must pass a fresh console-only canary before any
   formal PRL20 run starts.
+- Recovery commit `d5d77a2` passed that fresh world4 canary on 2026-08-14.
+  The run started at 00:30:16 JST and exited normally at about 00:39:34 JST.
+  Its one optimizer step contained four prompts and eight trajectories, made
+  six successful atomic Crop+TGVF observations with no tool errors, completed
+  actor backward/update with finite `actor/grad_norm=8.4691`, synchronized the
+  updated policy, and wrote a complete Step-1 model/optimizer/extra-state pair
+  plus tracker and metrics. The measured training-step time was 250.47 seconds,
+  including 81.23 seconds of checkpoint I/O and 6.82 seconds of weight sync;
+  peak actor allocation was 40.97 GiB. This closes the collective-mismatch
+  engineering gate only; its eight sampled trajectories are not an accuracy
+  comparison. The matched world8 BS16 x n16 formal pilot remains unstarted
+  pending the explicit post-canary launch decision.
