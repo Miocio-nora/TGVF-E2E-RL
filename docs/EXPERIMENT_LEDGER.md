@@ -9923,3 +9923,26 @@ than inferred from a script name or prior conversation.
   smoke, complete permanent checkpoint receipts at Steps 8/16, bounded resume
   for operational interruptions, one W&B identity, and automatic handoff to
   the two-arm paired evaluator. Smoke/canary runs remain console-only.
+- Paired CoreDev-2511 evaluation completed on 2026-08-13 with `2,240/2,240`
+  supported single-image rows per arm and an explicit 271-row multi-image hold.
+  Canonical Macro* is `57.8849` at Step 8 and `57.5422` at Step 16. Against the
+  same paired PRL17-R2 no-visual control (`56.1964`, `58.1996`), the visual
+  treatment is `+1.6885 pp` at Step 8 and `-0.6573 pp` at Step 16. Against the
+  common Step 0 (`57.0320`), visual Steps 8/16 are respectively `+0.8529` and
+  `+0.5102 pp`. The accepted interpretation is an early visual-shaping benefit
+  without sustained scaling; PRL19 Step 8 is the selected treatment checkpoint.
+- Step-16 output health is worse in the extreme tail. OCR prediction mean/P99
+  grows from `1,979.3/47,296.2` chars at Step 8 to `2,829.6/80,924.2` at Step
+  16, while the no-visual Step-16 P99 is `31,473.8`. Max-token stops remain
+  `26/2,240` in both PRL19 arms, so the finding is heavier stochastic
+  repetition rather than a larger capped-response count. This is recorded as
+  a health warning against scaling the current F/G scalar unchanged.
+- The Step-16 official OCR metric completed successfully, but one
+  `134,775`-character prediction exceeded Python `csv`'s historical 128-KiB
+  per-field default during local result summarization. The reader now raises
+  the limit only to the already materialized artifact bound and restores the
+  global setting afterward in commit `c40030e`. Twenty-two focused tests, Ruff
+  and the real artifact summary pass. This changes no prediction, denominator,
+  scorer or metric.
+- Full results, reward analysis, output-health audit and artifact hashes are in
+  `docs/PRL19_RP67_FROZEN_TFREE_VISUAL_REWARD_PAIRED_RESULTS_20260813.md`.
