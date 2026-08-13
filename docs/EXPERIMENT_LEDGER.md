@@ -9872,6 +9872,18 @@ than inferred from a script name or prior conversation.
   irrelevant target/hallucinated statement and an answer shortcut
   `(F=0,G=0)`. Observed API latency was about 1.1--2.1 seconds and cost about
   `$0.000085` per combined judgement.
+- The first world4 BS4 x n2 functional training canary completed one optimizer
+  step in 150.97 seconds with frozen RP67 SHA
+  `3f60f36589a3c0f3549c12b949eaabb140f6edfac849aa2b25a623bbcde53a14`,
+  finite `grad_norm=6.98`, and both F/G components present. It exposed one
+  malformed visual-judge completion among six applicable trajectories
+  (5/6 covered). Runtime commit
+  `1d193dce846d5f2eeb78499bec7bad1d873f6a96` therefore gives every malformed
+  completion the same four-attempt bounded retry budget as transient transport
+  failures; a persistent served-model identity mismatch remains a global
+  failure. The exact matched smoke accepts sample-local degradation only when
+  aggregate visual coverage is at least 99%, rather than aborting on one bad
+  provider response.
 - Lifecycle: first run a console-only BS4 x n2 world4 functional canary, then
   one exact world8/BS16/n16 matched smoke. After both gates pass, a tmux-owned
   fresh formal run proceeds Step 0 -> 8, binds an immutable horizon extension,
@@ -9881,3 +9893,7 @@ than inferred from a script name or prior conversation.
   Step 16 under the same paired CoreDev-2511 seven-suite protocol and RNG
   namespace as PRL17-R2. The already measured paired PRL17-R2 Step 0 is the
   common initialization reference and is not rerun.
+- The committed supervisor enforces API-key preflight, frozen-Adapter SHA at
+  smoke, complete permanent checkpoint receipts at Steps 8/16, bounded resume
+  for operational interruptions, one W&B identity, and automatic handoff to
+  the two-arm paired evaluator. Smoke/canary runs remain console-only.
