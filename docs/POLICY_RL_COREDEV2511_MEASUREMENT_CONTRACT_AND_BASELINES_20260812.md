@@ -17,7 +17,38 @@ Contract ID：`POLICY-RL-COREDEV2511-MEASUREMENT-20260812-v1`
 
 本文只替代旧文档中的 headline 聚合值，不否定旧文档记录的模型、prompt、checkpoint、训练配置与 artifact 身份。特别是 `docs/POLICY_RL_PRIMARY_BASELINE_20260810.md` 中使用 HRBench cycle 0 和 OCR Chinese-only 得到的旧均值，不再作为主汇报值。
 
-RP67 T-free Step 0/8/16 `paired-seed-v1` 结果详记在第 7 节，joint/unfrozen RP67 Step 8/16 结果详记在第 8 节；两者的横向 paired 总表位于第 3.2 节。这些结果不修改本文件冻结的 benchmark、scorer、prompt、sampling 或聚合契约；第 3.1 节的 legacy-RNG 结果与第 3.2 节的 paired-seed-v1 结果必须按 RNG 身份分别引用。
+Crop Step 0/8/16 的同标准 `legacy-RNG` 结果位于第 3.1 节；RP67 T-free Step 0/8/16 `paired-seed-v1` 结果详记在第 7 节，joint/unfrozen RP67 Step 8/16 结果详记在第 8 节；两种 RP67 Adapter 更新方式的横向 paired 总表位于第 3.2 节。这些结果不修改本文件冻结的 benchmark、scorer、prompt、sampling 或聚合契约；第 3.1 节的 legacy-RNG 结果与第 3.2 节的 paired-seed-v1 结果必须按 RNG 身份分别引用。
+
+## 0. 当前决策摘要
+
+在已完成的对照范围内，后续 TGVF policy-RL 的默认配方定为：
+
+```text
+Stage 1 Adapter = RP67
+Adapter during RL = frozen
+policy during RL = full Qwen3-VL-8B-Instruct
+                   (vision encoder + merger + language model all trainable)
+reward = T-free
+         answer correctness + protocol/tool-error penalty
+         + repeated-call penalty
+disabled reward = T/tool-utility, focus, grounding
+```
+
+三条主要轨迹的一页摘要如下。Delta 只在同一行、同一 RNG block 内计算；Crop 与 RP67 之间不做严格 paired delta。
+
+| 线路 / RNG block | Step 0 | Step 8 | Step 16 | Step 16 − Step 0 |
+|---|---:|---:|---:|---:|
+| Crop clean → clean-final / legacy | 55.5742 | **59.7161** | 59.5502 | **+3.9760 pp** |
+| RP67 T-free Frozen / paired | 57.0320 | 56.1964 | **58.1996** | **+1.1675 pp** |
+| RP67 T-free Joint / paired | 57.0320 | 56.2035 | 56.5283 | -0.5038 pp |
+
+| 决策 | 当前证据 | 证据边界 |
+|---|---|---|
+| **Frozen Adapter** | 严格 paired 下，Frozen S16 `58.1996`，Joint S16 `56.5283`，Frozen 高 **`1.6713 pp`**；Joint S16 还低于 common S0 `57.0320` | 这是目前最强、最直接的因果对照；支持 RL 时冻结 RP67，只更新 full Qwen policy |
+| **T-free reward** | legacy 筛选中，`+T` 为 `57.38 → 56.30`，T-free 为 `56.37 → 57.28`；随后 T-free paired S16 相对 common S0 为 **`+1.1675 pp`** | `+T` 与 T-free 尚不是共享随机流的严格 reward ablation；因此 T-free 是当前最受支持的默认，不写成已经统计证明的独立因果结论 |
+| **RP67** | RP67 是当前进入 paired policy-RL 主线并取得最佳 TGVF checkpoint 的 Stage 1 版本；其 image-axis 目标提供结构动机 | 本文没有提供 RP66 vs RP67 同 `paired-seed` 严格结果；因此 RP67 是当前工程默认，不是本表已单独证明优于 RP66 的结论 |
+
+因此，本文后续出现“当前 TGVF 默认线”时，均指 **RP67 + T-free + Frozen Adapter**。解冻 Adapter 不再作为默认设定；若再测，必须作为显式 ablation。
 
 ## 1. 今后的 headline 口径
 
@@ -50,7 +81,7 @@ RP67 T-free Step 0/8/16 `paired-seed-v1` 结果详记在第 7 节，joint/unfroz
 | 3 | BLINK | 共同单图支持集，`n=180` |
 | 4 | OCRBench v2 | `(English Overall + Chinese Overall) / 2`；EN、CN 必须同时展示，但在 Macro 中合计只占一个分量 |
 | 5 | MMMU-Pro-10c | 共同单图支持集，`n=269` |
-| 6 | MathVista MINI | `Task&Skill=Overall|acc` |
+| 6 | MathVista MINI | `Task&Skill=Overall\|acc` |
 | 7 | MathVerse MINI | Text Dominant、Text Lite、Vision Dominant、Vision Intensive、Vision Only 五个 `Overall` 的等权均值 |
 
 统一诊断均值定义为：
@@ -101,20 +132,20 @@ Original arm 是 raw direct 端到端参考，历史配置使用 `temperature=1`
 
 ### 2.2 `temperature=1` 的随机性与 paired seed
 
-当前 content-addressed RNG 把 `evaluation_id` 纳入了 `trajectory_id`。因此即使权重、prompt 与 task 完全相同，只要换 evaluation ID，就会换采样随机流。
+旧版 content-addressed RNG 把 `evaluation_id` 纳入 `trajectory_id`。因此即使权重、prompt 与 task 完全相同，只要换 evaluation ID，就会换采样随机流。Crop S0/S8/S16 和第 3.1 节的 RP67 历史评测都属于这个 `legacy-RNG` 区块。
 
 这不是可以忽略的理论问题：RP67 R1 与 R2 的 Step 0 权重完全相同，但 Macro* 分别为 `57.38` 和 `56.37`，观测差为 `1.01 pp`。
 
-从下一组新正式对比开始，优先使用共享的 paired RNG namespace：
+`paired-seed-v1` 已在 RP67 Frozen/Joint 正式评测中实现并验证。它使用共享 RNG namespace：
 
 ```text
 seed = H(master_seed, task_manifest_sha, protocol_sha,
          sample_id, rollout_index, assistant_turn_index)
 ```
 
-seed 身份必须排除 `evaluation_id`、arm 名、optimizer step 和 checkpoint hash，使同一题在 Step 0 / Step 8 / Step 16 使用同一随机流。该功能在实现并通过 CPU/GPU smoke 前不得宣称已经生效。
+seed 身份必须排除 `evaluation_id`、arm 名、optimizer step 和 checkpoint hash，使同一题在 Step 0 / Step 8 / Step 16 使用同一初始随机流。后续新的正式 checkpoint/reward/Adapter 对照必须默认使用该 paired 协议，除非明确标记为 stress/diagnostic。
 
-在 paired RNG 正式落地前，继续使用现有 `temperature=1` 协议，但小于或约等于 `1.01 pp` 的单次变化一律只写作“趋势”，不得写作“已确认提升/退化”。
+已有 legacy artifact 不会因新功能落地而追溯变成 paired。在 legacy 区块内，小于或约等于 `1.01 pp` 的单次变化一律只写作“趋势”。Paired 结果可以计算同块 delta，但仍只有一个 seed、每题一次采样，不能据此宣称已经统计确认。
 
 ### 2.3 `temperature=0` 的定位
 
@@ -141,30 +172,30 @@ ABORTED / GREEDY-STABILITY STRESS DIAGNOSTIC / NOT ACCURACY EVIDENCE
 
 所有数字单位为 `%`。OCR mean 是 EN/CN 的均值；Macro* 只把 OCR mean 计入一次。
 
-注意：本节 RP67 T-free 的 `56.37 / 57.28` 来自历史 `legacy-RNG` 评测，其 seed 会随 evaluation ID 改变。它们保留为历史 canonical 记录，不能被无标签地替换为第 7 节的 `paired-seed-v1` 数值，也不能和 paired Step 16 跨块计算 delta。
+注意：本节所有工具 arm 都保留自历史 `legacy-RNG` 评测，seed 会随 evaluation ID 改变。它们共享本文的 benchmark/scorer/Macro* 测量标准，但不共享 paired 随机流。它们不能被无标签地替换为第 7 节的 `paired-seed-v1` 数值，也不能与 paired 结果跨块计算 delta。Original 还使用 direct prompt，只是端到端参考。
 
-| benchmark | Original | Crop clean S0 | Crop clean-final S8 | RP67 +T S0 | RP67 +T S8 | RP67 T-free S0 | RP67 T-free S8 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| VStarBench Overall | 50.79 | 78.01 | 76.96 | 66.49 | 58.64 | 64.92 | 65.45 |
-| HRBench Average / all | 59.00 | 53.50 | 62.50 | 59.50 | 60.00 | 58.00 | 62.50 |
-| BLINK single-image（180） | 65.56 | 57.22 | 60.00 | 59.44 | 63.89 | 63.33 | 64.44 |
-| OCRBench v2 English | 49.89 | 40.46 | 47.39 | 46.12 | 44.99 | 45.47 | 44.54 |
-| OCRBench v2 Chinese | 46.48 | 37.45 | 51.21 | 34.19 | 37.66 | 36.35 | 37.83 |
-| OCR EN/CN mean | 48.19 | 38.96 | 49.30 | 40.16 | 41.33 | 40.91 | 41.19 |
-| MMMU-Pro single-image（269） | 39.03 | 43.87 | 47.58 | 48.33 | 47.58 | 45.35 | 48.33 |
-| MathVista MINI | 74.33 | 62.67 | 67.67 | 73.33 | 65.67 | 68.67 | 65.67 |
-| MathVerse five-version macro | 50.60 | 54.80 | 54.00 | 54.40 | 57.00 | 53.40 | 53.40 |
-| **Macro\*** | **55.36** | **55.57** | **59.72** | **57.38** | **56.30** | **56.37** | **57.28** |
+| benchmark | Original | Crop clean S0 | Crop clean-final S8 | Crop clean-final S16 | RP67 +T S0 | RP67 +T S8 | RP67 T-free S0 | RP67 T-free S8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| VStarBench Overall | 50.79 | 78.01 | 76.96 | 79.06 | 66.49 | 58.64 | 64.92 | 65.45 |
+| HRBench Average / all | 59.00 | 53.50 | 62.50 | 60.00 | 59.50 | 60.00 | 58.00 | 62.50 |
+| BLINK single-image（180） | 65.56 | 57.22 | 60.00 | 57.78 | 59.44 | 63.89 | 63.33 | 64.44 |
+| OCRBench v2 English | 49.89 | 40.46 | 47.39 | 46.80 | 46.12 | 44.99 | 45.47 | 44.54 |
+| OCRBench v2 Chinese | 46.48 | 37.45 | 51.21 | 51.11 | 34.19 | 37.66 | 36.35 | 37.83 |
+| OCR EN/CN mean | 48.19 | 38.95 | 49.30 | 48.95 | 40.16 | 41.33 | 40.91 | 41.19 |
+| MMMU-Pro single-image（269） | 39.03 | 43.87 | 47.58 | 50.93 | 48.33 | 47.58 | 45.35 | 48.33 |
+| MathVista MINI | 74.33 | 62.67 | 67.67 | 65.33 | 73.33 | 65.67 | 68.67 | 65.67 |
+| MathVerse five-version macro | 50.60 | 54.80 | 54.00 | 54.80 | 54.40 | 57.00 | 53.40 | 53.40 |
+| **Macro\*** | **55.36** | **55.5742** | **59.7161** | **59.5502** | **57.38** | **56.30** | **56.37** | **57.28** |
 
 对应的 RL delta：
 
-| 线路 | Step 0 | Step 8 | Delta | 当前结论 |
-|---|---:|---:|---:|---|
-| Crop clean-final | 55.57 | 59.72 | **+4.14 pp** | 大于已观察采样波动；当前最可靠的正向 pilot |
-| RP67 +T | 57.38 | 56.30 | -1.08 pp | 单次负向趋势；幅度接近随机波动，不能单独定性 |
-| RP67 T-free | 56.37 | 57.28 | +0.91 pp | 单次正向趋势；小于相同 Step 0 的 1.01 pp 跨评测波动，尚未确认有效 |
+| 线路 | Step 0 | Step 8 | Step 16 | 同 legacy 块的观测变化 | 当前解释 |
+|---|---:|---:|---:|---:|---|
+| Crop clean-final | 55.5742 | 59.7161 | 59.5502 | S8−S0 **`+4.1419 pp`**；S16−S0 **`+3.9760 pp`**；S16−S8 `-0.1659 pp` | 明显正向 pilot；S8/S16 是平台期，不应将 `-0.17 pp` 解读为真实退化 |
+| RP67 +T | 57.38 | 56.30 | — | S8−S0 `-1.08 pp` | 单次负向趋势；幅度接近旧 RNG 波动参照，不能单独定性 |
+| RP67 T-free | 56.37 | 57.28 | — | S8−S0 `+0.91 pp` | 单次正向趋势；本块单独不足以证明 reward 优势，需结合第 3.2 节 paired 结果 |
 
-由此不能声称 RP67 T-free 已经有效。它目前只是最值得继续验证的 RP67 reward 线路。
+Crop S16 的 BLINK 和 MMMU-Pro 分别为 `104/180` 和 `137/269`。Crop 的 S0/S8/S16 共享同一 CoreDev manifest、Crop prompt/runtime、sampling 参数与 scorer 契约，但 evaluation ID 不同，因此仍是 legacy 同标准比较，不是 common-random-numbers 严格 paired 对照。
 
 ### 3.2 Paired-seed-v1 RP67 冻结 / 联合更新总表
 
@@ -189,10 +220,10 @@ ABORTED / GREEDY-STABILITY STRESS DIAGNOSTIC / NOT ACCURACY EVIDENCE
 
 | Adapter 模式 | Step 8 − S0 | Step 16 − S0 | Step 16 − Step 8 | 当前结论 |
 |---|---:|---:|---:|---|
-| Frozen RP67 | -0.8356 pp | **+1.1676 pp** | **+2.0032 pp** | 当前最佳；支持继续验证正向信号 |
-| Joint / unfrozen RP67 | -0.8285 pp | -0.5037 pp | +0.3248 pp | 不支持解冻 Adapter 带来总体增益 |
+| Frozen RP67 | -0.8356 pp | **+1.1675 pp** | **+2.0032 pp** | 当前最佳；支持继续验证正向信号 |
+| Joint / unfrozen RP67 | -0.8286 pp | -0.5038 pp | +0.3248 pp | 不支持解冻 Adapter 带来总体增益 |
 
-Joint S8 与 Frozen S8 几乎相同（`+0.0071 pp`），但 Joint S16 比 Frozen S16 低 `1.6713 pp`。因此当前证据更支持冻结 RP67 Adapter，让 RL 只更新 Qwen policy；Joint S16 的 HR、MathVerse 增长伴随 VStar、OCR 等回落，属于能力重分配而非总体增强。
+Joint S8 与 Frozen S8 几乎相同（`+0.0071 pp`），但 Joint S16 比 Frozen S16 低 `1.6713 pp`。因此当前证据支持冻结 RP67 Adapter，让 RL 只更新 full Qwen policy（包括 vision encoder、merger 和 language model）；Joint S16 的 HR、MathVerse 增长伴随 VStar、OCR 等回落，属于能力重分配而非总体增强。
 
 ## 4. Artifact 来源
 
@@ -211,13 +242,22 @@ artifacts/evaluation/
     step0/scoring/coredev-official-v2/
 ```
 
-### Crop clean-final Step 8
+### Crop clean-final Step 8 / Step 16
 
 ```text
 artifacts/evaluation/
   PRL14-A-CoreDev2511-cleanfinal-step0-step8-step16-v1/
     step8/scoring/coredev-official-v2/
+    step16/scoring/coredev-official-v2/
 ```
+
+该 PRL14 CoreDev artifact 本身只实测 Step 8/16；表中 Step 0 来自上一个 PRL13 clean Step 0 artifact。三者的 policy weights SHA256 分别为：
+
+| checkpoint | policy weights SHA256 |
+|---|---|
+| Crop Step 0 | `ad897b7ec2f8f2c0046346b74c003827defc7847c9c099a26cd8f9c8ee237932` |
+| Crop Step 8 | `54bf8864114b4b2b80c7603349d02425681a584fe7e4c6ea2c2b3d17fd4ae25d` |
+| Crop Step 16 | `50f5d9dd7ecdbf8d9baf46c00c13b1c3719de37b09f5aa91c40aabc758e06beb` |
 
 ### RP67 +T R1 Step 0 / Step 8
 
@@ -248,6 +288,15 @@ artifacts/policy/
 
 该 summary 的 SHA256 为 `bf90a99f52f1943509fa83b8c377c959d32699e5127021ea1b09c49941119176`。
 
+### RP67 T-free Joint Step 8 / Step 16 paired-seed-v1
+
+```text
+artifacts/policy/
+  PRL-18-R0-qwen3-instruct-full-joint-rp67-bs16-n16-tfree-novisual-8step-ws8/
+    evaluation/PRL18-R0-JOINT-RP67-TFREE-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/
+      paired-summary.json
+```
+
 R1/R2 Step 0 的共同身份：
 
 | 字段 | SHA256 |
@@ -272,31 +321,20 @@ R1/R2 Step 0 的共同身份：
 6. 平均/中位 response tokens、tool calls、成功 observation 数；
 7. judge parse failure、judge/API/system failure 分开报告；
 8. 同协议 Step 0 与目标 checkpoint；使用的 paired RNG namespace 或其尚未启用的明确声明；
-9. 小于当前 `1.01 pp` 单次波动参照的变化，只能作为趋势。
+9. legacy-RNG 结果若小于当前 `1.01 pp` 单次波动参照，只能作为趋势；paired 结果也必须报告 seed 数和每题采样数。
 
-## 6. RP67 T-free Step 8 → Step 16 验证计划（执行前记录）
+## 6. RP67 T-free Step 8 → Step 16 实验身份（已完成）
 
-状态：`COMPLETED`。本节保留执行前的设计与时间估计；实际结果见第 7 节。
+本组实验的目的是判断 Step 8 的变化是短暂峰值、随机波动，还是可继续的 RL 信号。执行已完成，实际结果见第 7 节；以前的时间估算、旧 launcher 限制和待实现描述已删除，不再作为当前状态。
 
-继续训练是合理的，因为它能区分三种情况：
+实验保持了以下科学身份：
 
-- Step 16 继续高于 Step 8：支持正向 scaling 趋势；
-- Step 16 回落到 Step 0 附近或更低：Step 8 的 `+0.91 pp` 更可能是采样波动或短暂峰值；
-- Step 16 仍在约 `±1 pp` 内：结论仍是不确定，需要 paired seed 或重复 seed，而不是继续靠单次大表定性。
-
-续训必须满足：
-
-- 从现有 Step 8 的完整 model、optimizer、scheduler、data cursor 和 RNG state 原位恢复；
-- 保持同一 run ID 与科学 identity；不能新建一份伪装成独立训练的 16-step TOML；
-- RP67 Adapter 继续 frozen；full Qwen（包括视觉路径）继续更新；
-- reward 继续为 T-free：answer + protocol + repeated-call penalty；tool utility、focus、grounding 继续关闭；
+- 从 Step 8 的完整 model、optimizer、scheduler、data cursor 和 RNG state 原位恢复；
+- RP67 Adapter 保持 frozen，full Qwen（包括视觉路径）继续更新；
+- reward 保持 T-free：answer correctness + protocol/tool-error penalty + repeated-call penalty；tool utility、focus、grounding 关闭；
 - 保持 BS16 prompts × n16、world8、LR `1e-6`、constant scheduler；
-- 永久保留 Step 8 与 Step 16，rolling checkpoint 每步更新；
-- Step 16 后重新评测 Step 0、Step 8 与 Step 16，三者使用同一 `temperature=1` paired seed namespace；不能把旧 Step 0/8 与一个新随机流的 Step 16 直接当作精确差值。
-
-当前 Step 8 checkpoint 的 optimizer/data/RNG 状态完整。实测前八步纯训练共 `4,924.7 s`，因此 Step 8 → 16 预计训练 `87–95 min`，保守 `1 h 30 min–1 h 45 min`。只做 Step 8/16 两臂的完整 CoreDev temp=1 评测约 `52 min`；推荐的 Step 0/8/16 三臂配对评测约 `75–90 min`，训练加推荐评测合计约 `2 h 45 min–3 h 15 min`。
-
-现有 launcher、supervisor 和 paired evaluator 把目标/arm 写死为 Step 8，不能直接启动。实现时应从实际训练提交 `d4286ca` 建立窄 continuation 分支，只加入 Step 8 → 16 continuation manifest、world8 恢复 gate、Step 16 永久保存和 Step 0/8/16 自动配对评测；不要把 temp=0 evaluator 的共享 sampler 改动带入训练代码。
+- 永久保留 Step 8 与 Step 16；
+- Step 0/8/16 使用同一 `temperature=1` paired seed namespace 重新评测。
 
 ## 7. RP67 T-free Step 0 / Step 8 / Step 16 paired-seed-v1 结果
 
@@ -390,9 +428,9 @@ artifacts/policy/PRL-18-R0-qwen3-instruct-full-joint-rp67-bs16-n16-tfree-novisua
 
 | 对比 | Macro* delta |
 |---|---:|
-| joint Step 8 − common Step 0（57.0320） | -0.8285311 pp |
-| joint Step 16 − common Step 0（57.0320） | -0.5037405 pp |
-| joint Step 8 − frozen Step 8（56.1964） | +0.0071 pp |
-| joint Step 16 − frozen Step 16（58.1996） | -1.6713405 pp |
+| joint Step 8 − common Step 0（57.0320） | -0.8285769 pp |
+| joint Step 16 − common Step 0（57.0320） | -0.5037863 pp |
+| joint Step 8 − frozen Step 8（56.1964） | +0.0070686 pp |
+| joint Step 16 − frozen Step 16（58.1996） | -1.6713050 pp |
 
 结论：当前结果不支持 joint Adapter update。joint Step 16 虽较自身 Step 8 增加 `+0.3248 pp`，但仍低于共同 Step 0，并显著落后 frozen Step 16；frozen Step 16 仍是最佳 checkpoint。分项表现是能力重分配而非一致提升，最明显的是 VStar `-6.81 pp`，同时 HR `+5.50 pp`、MathVerse `+3.40 pp`、MMMU-Pro `+1.49 pp`。`temperature=1` 单次采样的统计边界仍适用。
