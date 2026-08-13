@@ -1,0 +1,99 @@
+{
+  "schema_version": "tgvf.prl15-paired-policy-benchmark-plan.v2",
+  "evaluation_id": "PRL20-R0-FROZEN-RP67-TFREE-CROP-TGVF-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1",
+  "status": "ready",
+  "policy_config": "configs/policy/runs/prl_20_r0_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_crop_tgvf_8step_ws8.toml",
+  "policy_config_sha256": "645690f7d2fc26cd98cd919907ecae3750fceff73b7fae38b3669c421393d3fe",
+  "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
+  "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+  "expected_task_count": 2511,
+  "expected_single_image_count": 2240,
+  "unsupported_multi_image_count": 271,
+  "executor": {
+    "path": "tools/run_prl15_paired_evaluation.py",
+    "supervisor": "tools/supervise_prl20_r0_frozen_rp67_tfree_crop_tgvf_step8_step16_paired_evaluation.sh",
+    "snapshot_backend": "full_model_trainable_rp66",
+    "supports_wait_for_final_arm": true,
+    "waits_for_gpu_release": true,
+    "supports_resume": true,
+    "eight_gpu_schedule": "two_arms_parallel"
+  },
+  "protocol": {
+    "evaluation_protocol": "training_run",
+    "prompt_sha256": "5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69",
+    "tool_profile": "crop_tgvf",
+    "tool_schema_sha256": "0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39",
+    "maximum_tool_calls": 6,
+    "sampling_source": "bound_policy_run_config",
+    "same_tasks_and_rank_partition": true
+  },
+  "paired_rng": {
+    "schema_version": "tgvf.policy-paired-evaluation-rng-plan.v1",
+    "mode": "common_random_numbers_per_task_turn",
+    "seed_namespace": "coredev2511-official-v1/rp67-tfree-crop-tgvf/step8-step16/temp1/seed42/v1",
+    "master_seed": 42,
+    "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+    "protocol_sha256": "576beb9a1b77148249f87ff86c118acb7003efe1012ca651495cf908c536c656",
+    "temperature": 1.0,
+    "do_sample": true,
+    "excluded_arm_components": [
+      "evaluation_id",
+      "arm_name",
+      "optimizer_step",
+      "checkpoint_hash",
+      "policy_weights_sha256",
+      "prompt_token_ids_sha256"
+    ]
+  },
+  "arms": [
+    {
+      "name": "step8",
+      "optimizer_step": 8,
+      "qwen_source": "output.root/permanent-checkpoints/global_step_8",
+      "rp66_source": "output.root/runtime-policy-state/lora-manifests/step-00000008-*.json"
+    },
+    {
+      "name": "step16",
+      "optimizer_step": 16,
+      "qwen_source": "output.root/permanent-checkpoints/global_step_16",
+      "rp66_source": "output.root/runtime-policy-state/lora-manifests/step-00000016-*.json"
+    }
+  ],
+  "required_pairing": {
+    "qwen_and_rp66_optimizer_step_must_match": true,
+    "adapter_manifest_and_tensor_sha256_must_be_frozen": true,
+    "full_qwen_checkpoint_must_be_materialized_without_adapter_keys": true,
+    "do_not_use_crop_native_pixels_backend": true,
+    "do_not_treat_rp66_as_policy_lora": true,
+    "adapter_update_mode": "frozen_adapter",
+    "rp66_state_must_remain_constant": true,
+    "expected_runtime_rp66_weights_sha256": "3f60f36589a3c0f3549c12b949eaabb140f6edfac849aa2b25a623bbcde53a14"
+  },
+  "scoring": {
+    "view_name": "coredev-official-v1",
+    "source_root": "/nvmesv/dredvpn009/datasets/benchmarks/coredev_2511_vlmevalkit_7055d301_v1",
+    "pinned_artifacts_config_path": "configs/evaluation/coredev_2511_vlmevalkit_v1.json",
+    "pinned_artifacts_config_sha256": "eb2a34b3be5b36d9208c887ff657c93d1e222b899741330c45733ffa3951a267",
+    "vlmevalkit_deployment_config_path": "configs/evaluation/vlmevalkit_deployment_v1.json",
+    "vlmevalkit_deployment_config_sha256": "7d7dc8a470f2ec25bdd95bef56f76fa965accb5bf12a840a4db448f1f53b27f8",
+    "mathverse_source_json": "/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json",
+    "mathverse_source_sha256": "f4ce9b18d111b23d5950dcbc8f377c6a05955a458db6a3103aec706fa63b0e9b",
+    "evaluated_model": "Qwen3-VL-8B-Instruct",
+    "run_id_prefix": "T20260814-PRL20-R0-RP67-FROZEN-TFREE-CROP-TGVF-PAIRED-SEED",
+    "datasets": [
+      "VStarBench",
+      "HRBench4K",
+      "BLINK",
+      "OCRBench_v2",
+      "MMMU_Pro_10c",
+      "MathVista_MINI",
+      "MathVerse_MINI"
+    ],
+    "judge_config_path": "configs/evaluation/qwen25_72b_judge_service_v1.json",
+    "judge_config_sha256": "85114f295ba57ec39c98785890e2041de7c756f73e04abee5424ca4eecc5f0e4",
+    "judge_api_nproc": 4,
+    "judge_retry": 6,
+    "judge_timeout_seconds": 600,
+    "gpt_fallback": false
+  }
+}
