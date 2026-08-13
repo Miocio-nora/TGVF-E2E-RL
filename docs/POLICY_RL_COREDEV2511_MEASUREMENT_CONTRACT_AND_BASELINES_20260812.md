@@ -2,6 +2,8 @@
 
 日期：2026-08-12
 
+结果更新：2026-08-13
+
 状态：`PRIMARY MEASUREMENT CONTRACT / FROZEN V1`
 
 Contract ID：`POLICY-RL-COREDEV2511-MEASUREMENT-20260812-v1`
@@ -11,11 +13,11 @@ Contract ID：`POLICY-RL-COREDEV2511-MEASUREMENT-20260812-v1`
 本文冻结两件事：
 
 1. CoreDev-2511 的统一测量与聚合口径；
-2. 截至 2026-08-12 晚上的 canonical 大表。
+2. canonical 大表的汇报结构；实验结果持续按同一契约追加，当前更新至 2026-08-13。
 
 本文只替代旧文档中的 headline 聚合值，不否定旧文档记录的模型、prompt、checkpoint、训练配置与 artifact 身份。特别是 `docs/POLICY_RL_PRIMARY_BASELINE_20260810.md` 中使用 HRBench cycle 0 和 OCR Chinese-only 得到的旧均值，不再作为主汇报值。
 
-2026-08-12 的 RP67 T-free Step 0/8/16 `paired-seed-v1` 结果补记在第 7 节。该结果附录不修改本文件冻结的 benchmark、scorer、prompt、sampling 或聚合契约；第 3 节的历史结果与第 7 节的 paired 结果必须按 RNG 身份分别引用。
+RP67 T-free Step 0/8/16 `paired-seed-v1` 结果详记在第 7 节，joint/unfrozen RP67 Step 8/16 结果详记在第 8 节；两者的横向 paired 总表位于第 3.2 节。这些结果不修改本文件冻结的 benchmark、scorer、prompt、sampling 或聚合契约；第 3.1 节的 legacy-RNG 结果与第 3.2 节的 paired-seed-v1 结果必须按 RNG 身份分别引用。
 
 ## 1. 今后的 headline 口径
 
@@ -133,7 +135,9 @@ ABORTED / GREEDY-STABILITY STRESS DIAGNOSTIC / NOT ACCURACY EVIDENCE
 
 其 partial artifact 可以用于研究 termination pathology，但不得进入本文件主表。
 
-## 3. Canonical 大表（2026-08-12）
+## 3. Canonical 大表（更新至 2026-08-13）
+
+### 3.1 Legacy-RNG 历史总表
 
 所有数字单位为 `%`。OCR mean 是 EN/CN 的均值；Macro* 只把 OCR mean 计入一次。
 
@@ -161,6 +165,34 @@ ABORTED / GREEDY-STABILITY STRESS DIAGNOSTIC / NOT ACCURACY EVIDENCE
 | RP67 T-free | 56.37 | 57.28 | +0.91 pp | 单次正向趋势；小于相同 Step 0 的 1.01 pp 跨评测波动，尚未确认有效 |
 
 由此不能声称 RP67 T-free 已经有效。它目前只是最值得继续验证的 RP67 reward 线路。
+
+### 3.2 Paired-seed-v1 RP67 冻结 / 联合更新总表
+
+下表是当前 RP67 线路唯一允许直接计算 checkpoint delta 的总表。五个 checkpoint 使用相同 CoreDev-2511 manifest、推理协议、`temperature=1`、`master_seed=42` 和 common-random-numbers seed namespace。Joint 实验没有重复评测 Step 0；其初始化与 frozen 实验的 paired Step 0 相同，因此共用 `57.0320` 作为起点。
+
+所有数字单位为 `%`；Macro* 使用未四舍五入的七个分量计算。
+
+| benchmark | Common paired S0 | Frozen S8 | Frozen S16 | Joint S8 | Joint S16 |
+|---|---:|---:|---:|---:|---:|
+| VStarBench Overall | 62.83 | 65.45 | 64.92 | 64.40 | 57.59 |
+| HRBench Average / all | 58.50 | 60.00 | 64.50 | 61.50 | 67.00 |
+| BLINK single-image（180） | 62.78 | 60.56 | 63.33 | 64.44 | 62.22 |
+| OCRBench v2 English | 46.20 | 44.33 | 43.83 | 42.86 | 42.27 |
+| OCRBench v2 Chinese | 40.87 | 34.45 | 37.95 | 29.87 | 30.29 |
+| OCR EN/CN mean | 43.53 | 39.39 | 40.89 | 36.36 | 36.28 |
+| MMMU-Pro single-image（269） | 50.19 | 47.58 | 47.96 | 47.58 | 49.07 |
+| MathVista MINI | 68.00 | 68.00 | 70.00 | 67.33 | 68.33 |
+| MathVerse five-version macro | 53.40 | 52.40 | 55.80 | 51.80 | 55.20 |
+| **Macro\*** | **57.0320** | **56.1964** | **58.1996** | **56.2035** | **56.5283** |
+
+对应的 paired delta：
+
+| Adapter 模式 | Step 8 − S0 | Step 16 − S0 | Step 16 − Step 8 | 当前结论 |
+|---|---:|---:|---:|---|
+| Frozen RP67 | -0.8356 pp | **+1.1676 pp** | **+2.0032 pp** | 当前最佳；支持继续验证正向信号 |
+| Joint / unfrozen RP67 | -0.8285 pp | -0.5037 pp | +0.3248 pp | 不支持解冻 Adapter 带来总体增益 |
+
+Joint S8 与 Frozen S8 几乎相同（`+0.0071 pp`），但 Joint S16 比 Frozen S16 低 `1.6713 pp`。因此当前证据更支持冻结 RP67 Adapter，让 RL 只更新 Qwen policy；Joint S16 的 HR、MathVerse 增长伴随 VStar、OCR 等回落，属于能力重分配而非总体增强。
 
 ## 4. Artifact 来源
 
@@ -326,3 +358,41 @@ seed 由 task/sample/rollout/assistant-turn 身份导出，并明确排除 evalu
 合法的主结论必须来自完整 paired 块 `57.0320 → 56.1964 → 58.1996`。禁止用 legacy Step 8 `57.28` 与 paired Step 16 `58.1996` 相减，也禁止在不写 RNG block 的情况下只报告“RP67 Step 0/8”。
 
 paired common-random-numbers 显著改善了 checkpoint 间 delta 的可比性，但没有把 `temperature=1` 变成确定性评测：每题仍只有一次采样，且不同 checkpoint 的 token 分布会使轨迹逐步分叉。因此 `Step 16 − Step 0 = +1.17 pp` 当前应表述为“正向信号，支持继续验证 RL 有效”，不能表述为已经统计确认的稳定增益。Step 0/8 的 legacy 与 paired 分数分别相差 `+0.66 pp` 和 `-1.08 pp`，也直接说明 temp=1 单次评测仍存在足以影响约 1 pp 结论的波动。
+
+## 8. PRL18-R0 joint/unfrozen RP67 T-free Step 8 / Step 16 paired 结果
+
+PRL18-R0 在 full-Qwen T-free 训练中同时更新 RP67 Adapter。canonical 结果来自：
+
+```text
+artifacts/policy/PRL-18-R0-qwen3-instruct-full-joint-rp67-bs16-n16-tfree-novisual-8step-ws8/
+  evaluation/PRL18-R0-JOINT-RP67-TFREE-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/
+    paired-summary.json
+```
+
+本评测复用第 7 节的 common-random-numbers 协议：`master_seed=42`、`mode=common_random_numbers_per_task_turn`、seed namespace `coredev2511-official-v1/rp67-tfree/step0-step8-step16/temp1/seed42/v1`，protocol SHA256 为 `e82f05a663928df20e5a757c2de14264c990cc04cb9bf4985e23f1e90e257a25`。因此 joint Step 8/16、共同 Step 0 与 frozen Step 8/16 之间是同协议的有效 paired 比较。两臂评测均为 `pass`：每臂实际推理 2,240 条单图，显式 hold 271 条多图，judge parse failure 均为 `0`。
+
+所有数字单位为 `%`；Macro* 使用未四舍五入的七分量计算。
+
+| benchmark | joint Step 8 | joint Step 16 | Step 16 − Step 8 |
+|---|---:|---:|---:|
+| VStarBench Overall | 64.3979058 | 57.5916230 | -6.8062828 |
+| HRBench Average / all | 61.5000000 | 67.0000000 | +5.5000000 |
+| BLINK single-image（180） | 64.4444444（116/180） | 62.2222222（112/180） | -2.2222222 |
+| OCRBench v2 English | 42.8649092 | 42.2652333 | -0.5996759 |
+| OCRBench v2 Chinese | 29.8650025 | 30.2947793 | +0.4297768 |
+| OCR EN/CN mean | 36.3649558 | 36.2800063 | -0.0849495 |
+| MMMU-Pro single-image（269） | 47.5836431（128/269） | 49.0706320（132/269） | +1.4869889 |
+| MathVista MINI | 67.3333333 | 68.3333333 | +1.0000000 |
+| MathVerse five-version macro | 51.8000000 | 55.2000000 | +3.4000000 |
+| **Macro\*** | **56.2034689** | **56.5282595** | **+0.3247906** |
+
+同一 paired block 下的关键对照为：
+
+| 对比 | Macro* delta |
+|---|---:|
+| joint Step 8 − common Step 0（57.0320） | -0.8285311 pp |
+| joint Step 16 − common Step 0（57.0320） | -0.5037405 pp |
+| joint Step 8 − frozen Step 8（56.1964） | +0.0071 pp |
+| joint Step 16 − frozen Step 16（58.1996） | -1.6713405 pp |
+
+结论：当前结果不支持 joint Adapter update。joint Step 16 虽较自身 Step 8 增加 `+0.3248 pp`，但仍低于共同 Step 0，并显著落后 frozen Step 16；frozen Step 16 仍是最佳 checkpoint。分项表现是能力重分配而非一致提升，最明显的是 VStar `-6.81 pp`，同时 HR `+5.50 pp`、MathVerse `+3.40 pp`、MMMU-Pro `+1.49 pp`。`temperature=1` 单次采样的统计边界仍适用。
