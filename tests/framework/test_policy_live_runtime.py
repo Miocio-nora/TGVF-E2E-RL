@@ -30,6 +30,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _rp66_matched_source_route,
     _rp66_response_budget_controls,
     _trainable_rp66_launch_mode,
+    _visual_quality_provider_request,
 )
 from tgvf_rl.framework.verl.policy_runtime import PolicyAgentLoopWorkerPlacement
 from tgvf_rl.framework.verl.native_deepeyes_runtime import (
@@ -38,6 +39,7 @@ from tgvf_rl.framework.verl.native_deepeyes_runtime import (
 from tgvf_rl.judges import (
     TGVFVisualQualityJudgeConfig,
     TGVFVisualQualityJudgeProvider,
+    TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION,
     tgvf_visual_quality_prompt_identity,
 )
 from tgvf_rl.policy.run_config import (
@@ -544,6 +546,37 @@ def test_live_visual_quality_adapter_consumes_typed_provider_result(
 
     assert result.focus_score is QualityJudgeScore.PASS
     assert result.grounding_score is QualityJudgeScore.PARTIAL
+
+
+def test_live_visual_quality_request_preserves_all_successful_target_order(
+    tmp_path: Path,
+) -> None:
+    trajectory = _record(tool_call_count=2).trajectory_payload
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="Which label is lower?",
+        expected_answer="lower label",
+        task_kind=AnswerTaskKind.OPEN_VQA,
+    )
+    image_path = (tmp_path / "source.png").resolve()
+    image_bytes = b"\x89PNG\r\n\x1a\nsequence-runtime-test"
+    image_path.write_bytes(image_bytes)
+    prompt = tgvf_visual_quality_prompt_identity(
+        TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION
+    )
+
+    provider_request, successful_count = _visual_quality_provider_request(
+        request=SimpleNamespace(identity=trajectory.identity),
+        trajectory=trajectory,
+        context=context,
+        image_path=image_path,
+        image_sha256=__import__("hashlib").sha256(image_bytes).hexdigest(),
+        prompt_identity=prompt,
+    )
+
+    assert successful_count == 2
+    assert provider_request.tool_target is None
+    assert provider_request.tool_targets == ("red label", "lower label")
 
 
 class _NativeTokenizer:

@@ -105,8 +105,11 @@ from tgvf_rl.rewards.schema import (
     pilot_reward_weight_profile_name,
 )
 from tgvf_rl.judges import (
+    AsyncTGVFVisualQualityJudgeProvider,
     DisabledJudgeProvider,
+    TGVF_VISUAL_QUALITY_JUDGE_PROMPT_VERSION,
     TGVFVisualQualityFailureKind,
+    TGVFVisualQualityJudgeConfig,
     TGVFVisualQualityJudgeProvider,
     TGVFVisualQualityJudgeRequest,
     TGVFVisualQualityJudgeResult,
@@ -431,6 +434,7 @@ class _Qwen3PolicyTrajectoryComponents:
         self.sample_index = sample_index
         self.launch_mode = launch_mode
         self.official_deepeyes_judge = None
+        self.async_visual_quality_provider = None
         self.async_stage3_spec = None
         if (
             self.config.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
@@ -464,27 +468,75 @@ class _Qwen3PolicyTrajectoryComponents:
                     "tool_utility_reward_enabled",
                     reward.tool_utility is not None,
                 )
+                quality_enabled = reward.focus_reward_enabled
                 if (
                     type(utility_enabled) is not bool
                     or utility_enabled != (reward.tool_utility is not None)
-                    or reward.focus_reward_enabled is not False
-                    or reward.grounding_reward_enabled is not False
-                    or reward.visual_quality_judge_identity is not None
+                    or type(quality_enabled) is not bool
+                    or reward.grounding_reward_enabled is not quality_enabled
+                    or (reward.visual_quality_judge_identity is not None)
+                    != quality_enabled
                 ):
                     raise ValueError(
                         "matched RP66 shaped reward controls are incomplete"
+                    )
+                if quality_enabled:
+                    if (
+                        reward.visual_quality_judge_config_path is None
+                        or reward.visual_quality_judge_config_sha256 is None
+                    ):
+                        raise ValueError(
+                            "matched visual-quality judge binding is incomplete"
+                        )
+                    bound_visual = load_tgvf_visual_quality_judge(
+                        reward.visual_quality_judge_config_path,
+                        expected_file_sha256=(
+                            reward.visual_quality_judge_config_sha256
+                        ),
+                    )
+                    if (
+                        bound_visual.config_identity
+                        != reward.visual_quality_judge_identity
+                    ):
+                        raise IdentityMismatchError(
+                            "matched visual-quality judge identity changed"
+                        )
+                    bound_visual.provider.validate_credentials()
+                    transport = bound_visual.config.async_transport
+                    if transport is None:
+                        raise ValueError(
+                            "matched visual-quality judge requires async transport"
+                        )
+                    local_visual_concurrency = process_local_judge_concurrency(
+                        transport.maximum_concurrency,
+                        worker_index=context.placement.worker_index,
+                        worker_count=context.placement.world_size,
+                    )
+                    self.async_visual_quality_provider = (
+                        AsyncTGVFVisualQualityJudgeProvider(
+                            bound_visual.provider,
+                            local_maximum_concurrency=local_visual_concurrency,
+                        )
                     )
                 identity_fields: dict[str, object] = {
                     "run": self.config.identity_sha256,
                     "answer": DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY.sha256,
                     "answer_judge_config": reward.judge_config_sha256,
                     "tool_utility_reward_enabled": utility_enabled,
-                    "focus_reward_enabled": False,
-                    "grounding_reward_enabled": False,
+                    "focus_reward_enabled": quality_enabled,
+                    "grounding_reward_enabled": quality_enabled,
                     "equation": (
-                        "2*A_gated+T+R_repeat+P"
+                        (
+                            "2*A_gated+T+R_repeat+F+G+P"
+                            if quality_enabled
+                            else "2*A_gated+T+R_repeat+P"
+                        )
                         if utility_enabled
-                        else "2*A+R_repeat+P"
+                        else (
+                            "2*A+R_repeat+F+G+P"
+                            if quality_enabled
+                            else "2*A+R_repeat+P"
+                        )
                     ),
                 }
                 if reward.tool_utility is not None:
@@ -498,9 +550,17 @@ class _Qwen3PolicyTrajectoryComponents:
                             ),
                         }
                     )
+                if quality_enabled:
+                    identity_fields["visual_quality_judge_config"] = (
+                        reward.visual_quality_judge_identity.sha256
+                    )
                 pipeline_identity = _artifact_identity(
                     "policy-reward",
-                    "rp66-stage3-shaped-no-visual",
+                    (
+                        "rp66-stage3-shaped-visual"
+                        if quality_enabled
+                        else "rp66-stage3-shaped-no-visual"
+                    ),
                     "stage3-shaped-v1",
                     identity_fields,
                 )
@@ -509,7 +569,11 @@ class _Qwen3PolicyTrajectoryComponents:
                     answer_verifier_identity=(
                         DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY
                     ),
-                    visual_judge_identity=None,
+                    visual_judge_identity=(
+                        reward.visual_quality_judge_identity
+                        if quality_enabled
+                        else None
+                    ),
                     tool_utility_sidecar_sha256=(
                         None
                         if reward.tool_utility is None
@@ -520,7 +584,7 @@ class _Qwen3PolicyTrajectoryComponents:
                         if reward.tool_utility is None
                         else reward.tool_utility.manifest_sha256
                     ),
-                    visual_quality_enabled=False,
+                    visual_quality_enabled=quality_enabled,
                     tool_utility_reward_enabled=utility_enabled,
                 )
             self.reward_pipeline = None
@@ -719,6 +783,19 @@ class _Qwen3PolicyTrajectoryComponents:
                         answer_scorer=answer_scorer,
                         spec=self.async_stage3_spec,
                         tool_utility=tool_utility,
+                        visual_quality_judge=(
+                            None
+                            if self.async_visual_quality_provider is None
+                            else _BoundAsyncTGVFVisualQualityRuntimeJudge(
+                                provider=self.async_visual_quality_provider,
+                                image_path=Path(
+                                    _scalar(sample_fields["source_image_path"])
+                                ),
+                                image_sha256=str(
+                                    _scalar(sample_fields["source_image_sha256"])
+                                ),
+                            )
+                        ),
                     )
                 )
             else:
@@ -1174,67 +1251,188 @@ class _BoundTGVFVisualQualityRuntimeJudge:
             raise IdentityMismatchError(
                 "visual-quality request and trajectory identities differ"
             )
-        if context.successful_tgvf_observation_count != 1:
-            raise ValueError(
-                "Stage3 one-call arm requires exactly one successful observation"
-            )
-        observation = trajectory.observations[0]
+        provider_config = self.provider.config
+        provider_request, successful_count = _visual_quality_provider_request(
+            request=request,
+            trajectory=trajectory,
+            context=context,
+            image_path=self.image_path,
+            image_sha256=self.image_sha256,
+            prompt_identity=provider_config.prompt_identity,
+        )
+        result = self.provider.judge(provider_request)
+        return _stage3_visual_quality_judgement(
+            provider_request=provider_request,
+            provider_config=provider_config,
+            result=result,
+            trajectory=trajectory,
+            context=context,
+            successful_count=successful_count,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundAsyncTGVFVisualQualityRuntimeJudge:
+    """Bind one source image to the shared bounded async API provider."""
+
+    provider: AsyncTGVFVisualQualityJudgeProvider
+    image_path: Path
+    image_sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, AsyncTGVFVisualQualityJudgeProvider):
+            raise TypeError("async visual-quality runtime requires bound provider")
+        if not self.image_path.is_absolute() or not self.image_path.is_file():
+            raise ValueError("async visual-quality runtime image path is invalid")
+        if len(self.image_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.image_sha256
+        ):
+            raise ValueError("async visual-quality runtime image SHA256 is invalid")
+
+    async def judge_async(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+        context: object,
+    ) -> Stage3VisualQualityJudgement:
+        provider_config = self.provider.config
+        provider_request, successful_count = _visual_quality_provider_request(
+            request=request,
+            trajectory=trajectory,
+            context=context,
+            image_path=self.image_path,
+            image_sha256=self.image_sha256,
+            prompt_identity=provider_config.prompt_identity,
+        )
+        outcome = await self.provider.judge(provider_request)
+        return _stage3_visual_quality_judgement(
+            provider_request=provider_request,
+            provider_config=provider_config,
+            result=outcome.result,
+            trajectory=trajectory,
+            context=context,
+            successful_count=successful_count,
+        )
+
+
+def _visual_quality_provider_request(
+    *,
+    request: object,
+    trajectory: TrajectoryRecord,
+    context: object,
+    image_path: Path,
+    image_sha256: str,
+    prompt_identity: ArtifactIdentity,
+) -> tuple[TGVFVisualQualityJudgeRequest, int]:
+    """Build one gold-free request from all ordered successful tool targets."""
+
+    from tgvf_rl.rewards.schema import RewardContext
+
+    if not isinstance(context, RewardContext):
+        raise TypeError("visual-quality runtime context has the wrong type")
+    if getattr(request, "identity", None) != trajectory.identity:
+        raise IdentityMismatchError(
+            "visual-quality request and trajectory identities differ"
+        )
+    successful_count = context.successful_tgvf_observation_count
+    observations = tuple(trajectory.observations)
+    if successful_count < 1 or len(observations) != successful_count:
+        raise IdentityMismatchError(
+            "visual-quality successful observation count differs from trajectory"
+        )
+    call_indices = tuple(observation.call_index for observation in observations)
+    if call_indices != tuple(sorted(set(call_indices))):
+        raise IdentityMismatchError(
+            "visual-quality observation call indices are not strictly ordered"
+        )
+    successful_calls: list[ToolCallRecord] = []
+    for call_index in call_indices:
         matching_calls = tuple(
             call
             for call in trajectory.tool_calls
-            if isinstance(call, ToolCallRecord)
-            and call.call_index == observation.call_index
+            if isinstance(call, ToolCallRecord) and call.call_index == call_index
         )
         if len(matching_calls) != 1:
             raise IdentityMismatchError(
                 "visual-quality observation has no unique TGVF tool call"
             )
-        tool_call = matching_calls[0]
-        post_tool_reasoning = "\n".join(
-            turn.raw_text
-            for turn in trajectory.assistant_turns
-            if turn.turn_index > tool_call.assistant_turn_index
-        )
-        provider_config = self.provider.config
-        provider_request = TGVFVisualQualityJudgeRequest(
+        successful_calls.append(matching_calls[0])
+    first_successful_call = successful_calls[0]
+    post_tool_reasoning = "\n".join(
+        turn.raw_text
+        for turn in trajectory.assistant_turns
+        if turn.turn_index > first_successful_call.assistant_turn_index
+    )
+    targets = tuple(call.target for call in successful_calls)
+    if prompt_identity.version == TGVF_VISUAL_QUALITY_JUDGE_PROMPT_VERSION:
+        if len(targets) != 1:
+            raise ValueError(
+                "legacy visual-quality prompt supports one successful target only"
+            )
+        tool_target: str | None = targets[0]
+        tool_targets: tuple[str, ...] = ()
+    else:
+        tool_target = None
+        tool_targets = targets
+    return (
+        TGVFVisualQualityJudgeRequest(
             request_id=trajectory.identity.canonical_id,
-            image_path=self.image_path,
-            image_sha256=self.image_sha256,
+            image_path=image_path,
+            image_sha256=image_sha256,
             question=context.question,
-            tool_target=tool_call.target,
+            tool_target=tool_target,
+            tool_targets=tool_targets,
             post_tool_reasoning=post_tool_reasoning,
             final_answer=context.candidate_answer,
-            prompt_identity=provider_config.prompt_identity,
-        )
-        result = self.provider.judge(provider_request)
-        if not isinstance(result, TGVFVisualQualityJudgeResult):
-            raise TypeError("visual-quality provider returned the wrong result type")
-        if (
-            result.request_id != provider_request.request_id
-            or result.prompt_identity != provider_config.prompt_identity
-            or result.service_identity != provider_config.service_identity
-            or result.model_identity != provider_config.model_identity
-            or result.sampling_identity != provider_config.sampling_identity
-            or result.config_identity != provider_config.config_identity
-        ):
-            raise IdentityMismatchError("visual-quality provider identity differs")
-        if not result.ok:
-            failure = result.failure_kind
-            if type(failure) is not TGVFVisualQualityFailureKind:
-                raise TypeError("visual-quality sample failure kind is invalid")
-            raise Stage3VisualJudgeSampleFailure(
-                failure.value,
-                usage=result.usage,
-            )
-        return Stage3VisualQualityJudgement(
-            trajectory_id=trajectory.identity.canonical_id,
-            sample_id=trajectory.identity.sample_id,
-            successful_observation_count=1,
-            focus_score=QualityJudgeScore(result.focus_score),
-            grounding_score=QualityJudgeScore(result.grounding_score),
-            judge_identity=provider_config.config_identity,
+            prompt_identity=prompt_identity,
+        ),
+        successful_count,
+    )
+
+
+def _stage3_visual_quality_judgement(
+    *,
+    provider_request: TGVFVisualQualityJudgeRequest,
+    provider_config: TGVFVisualQualityJudgeConfig,
+    result: object,
+    trajectory: TrajectoryRecord,
+    context: object,
+    successful_count: int,
+) -> Stage3VisualQualityJudgement:
+    from tgvf_rl.rewards.schema import RewardContext
+
+    if not isinstance(context, RewardContext):
+        raise TypeError("visual-quality runtime context has the wrong type")
+    if not isinstance(result, TGVFVisualQualityJudgeResult):
+        raise TypeError("visual-quality provider returned the wrong result type")
+    config = provider_config
+    if (
+        result.request_id != provider_request.request_id
+        or result.prompt_identity != config.prompt_identity
+        or result.service_identity != config.service_identity
+        or result.model_identity != config.model_identity
+        or result.sampling_identity != config.sampling_identity
+        or result.config_identity != config.config_identity
+    ):
+        raise IdentityMismatchError("visual-quality provider identity differs")
+    if not result.ok:
+        failure = result.failure_kind
+        if type(failure) is not TGVFVisualQualityFailureKind:
+            raise TypeError("visual-quality sample failure kind is invalid")
+        raise Stage3VisualJudgeSampleFailure(
+            failure.value,
             usage=result.usage,
         )
+    return Stage3VisualQualityJudgement(
+        trajectory_id=trajectory.identity.canonical_id,
+        sample_id=trajectory.identity.sample_id,
+        successful_observation_count=successful_count,
+        focus_score=QualityJudgeScore(result.focus_score),
+        grounding_score=QualityJudgeScore(result.grounding_score),
+        judge_identity=config.config_identity,
+        usage=result.usage,
+    )
 
 
 class _VisualTokenCountResolver:

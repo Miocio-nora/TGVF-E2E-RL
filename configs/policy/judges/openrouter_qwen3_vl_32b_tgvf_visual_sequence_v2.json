@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "identity": "openrouter-qwen3-vl-32b-instruct-tgvf-visual-sequence-v2",
+  "role": "policy_rl_tgvf_visual_quality_judge_only",
+  "model": {
+    "repository": "Qwen/Qwen3-VL-32B-Instruct",
+    "revision": "0cfaf48183f594c314753d30a4c4974bc75f3ccb",
+    "served_name": "qwen/qwen3-vl-32b-instruct"
+  },
+  "prompt": {
+    "version": "tgvf-visual-quality-sequence-judge-v2",
+    "sha256": "48c773d9942659d28c8ffa8cc3d7a8c5e5597d979103f20ca0791d0e2a43d79c",
+    "output_schema": {
+      "exact_keys": [
+        "focus_score",
+        "grounding_score"
+      ],
+      "score_type": "integer",
+      "allowed_values": [
+        0,
+        1,
+        2
+      ]
+    },
+    "input_contract": {
+      "original_image": "absolute_path_plus_sha256",
+      "gold_or_reference_answer": "forbidden",
+      "ordered_successful_tool_targets": "required_1_to_6"
+    }
+  },
+  "sampling": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "max_tokens": 64,
+    "seed": 42,
+    "response_format": "json_object"
+  },
+  "service": {
+    "base_url": "https://openrouter.ai/api/v1",
+    "timeout_seconds": 120.0,
+    "deployment": "openrouter-alibaba-qwen3-vl-32b-instruct",
+    "api_key_env": "OPENROUTER_API_KEY",
+    "expected_response_model": "qwen/qwen3-vl-32b-instruct",
+    "require_usage": true,
+    "application_title": "TGVF PRL19 visual reward",
+    "send_json_response_format": true
+  },
+  "routing": {
+    "only": [
+      "Alibaba"
+    ],
+    "allow_fallbacks": false
+  },
+  "async_transport": {
+    "maximum_concurrency": 16,
+    "maximum_attempts": 4,
+    "retry_backoff_seconds": 0.25,
+    "retry_maximum_seconds": 2.0,
+    "cache_max_entries": 8192,
+    "transient_failure_window_size": 64,
+    "maximum_transient_failure_fraction": 0.25,
+    "retryable_http_statuses": [
+      408,
+      425,
+      429,
+      500,
+      502,
+      503,
+      504
+    ]
+  },
+  "failure_policy": {
+    "transport": "zero_current_sample_after_audit",
+    "malformed_output": "zero_current_sample_after_audit",
+    "input_or_identity_error": "raise_and_abort_reward_batch"
+  },
+  "scope": {
+    "allows_policy_rl_reward": true,
+    "allows_answer_correctness_judging": false,
+    "accepts_gold_or_reference_answer": false,
+    "sample_local_provider_failure": true,
+    "formal_pilot_accepted": true
+  }
+}

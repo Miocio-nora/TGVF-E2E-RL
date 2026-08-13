@@ -1234,6 +1234,17 @@ def load_policy_e2e_smoke_run_config(
                     "visual_quality_judge_mode",
                 }
             )
+            raw_reward = payload.get("reward")
+            if (
+                isinstance(raw_reward, Mapping)
+                and raw_reward.get("focus_reward_enabled") is True
+            ):
+                reward_fields.update(
+                    {
+                        "visual_quality_judge_config_path",
+                        "visual_quality_judge_config_sha256",
+                    }
+                )
         else:
             reward_fields.update(
                 {
@@ -1373,18 +1384,51 @@ def load_policy_e2e_smoke_run_config(
                 reward_table["grounding_reward_enabled"],
                 name="reward.grounding_reward_enabled",
             )
-            _require_exact(
-                (
-                    focus_reward_enabled,
-                    grounding_reward_enabled,
+            if focus_reward_enabled != grounding_reward_enabled:
+                raise ValueError(
+                    "RP66 shaped Focus/Grounding reward switches must agree"
+                )
+            if focus_reward_enabled:
+                _require_exact(
                     reward_table["visual_quality_judge_mode"],
-                ),
-                (False, False, "disabled"),
-                "RP66 shaped visual-quality reward controls",
-            )
-            visual_quality_config_path = None
-            visual_quality_config_sha256 = None
-            visual_quality_judge_identity = None
+                    "api",
+                    "RP66 shaped visual-quality judge mode",
+                )
+                visual_quality_config_path = _existing_file(
+                    reward_table["visual_quality_judge_config_path"],
+                    name="reward.visual_quality_judge_config_path",
+                )
+                visual_quality_config_sha256 = _sha256(
+                    reward_table["visual_quality_judge_config_sha256"],
+                    name="reward.visual_quality_judge_config_sha256",
+                )
+                if (
+                    _sha256_file(visual_quality_config_path)
+                    != visual_quality_config_sha256
+                ):
+                    raise ValueError(
+                        "reward visual-quality judge config SHA256 mismatch"
+                    )
+                bound_visual_quality_judge = load_tgvf_visual_quality_judge(
+                    visual_quality_config_path,
+                    expected_file_sha256=visual_quality_config_sha256,
+                )
+                if not bound_visual_quality_judge.formal_pilot_accepted:
+                    raise ValueError(
+                        "visual-quality API judge is not accepted for Policy RL"
+                    )
+                visual_quality_judge_identity = (
+                    bound_visual_quality_judge.config_identity
+                )
+            else:
+                _require_exact(
+                    reward_table["visual_quality_judge_mode"],
+                    "disabled",
+                    "RP66 shaped visual-quality judge mode",
+                )
+                visual_quality_config_path = None
+                visual_quality_config_sha256 = None
+                visual_quality_judge_identity = None
         else:
             # Historical Stage3 configs predate component switches.  Keep the
             # sentinel values absent so their serialized runtime/run identity
@@ -2073,8 +2117,6 @@ def load_policy_e2e_smoke_run_config(
                     reward.format_weight,
                     reward.conditional_tool_weight,
                     reward.tool_utility_reward_enabled,
-                    reward.focus_reward_enabled,
-                    reward.grounding_reward_enabled,
                 ),
                 (
                     STAGE3_SHAPED_REWARD_VERSION,
@@ -2082,11 +2124,17 @@ def load_policy_e2e_smoke_run_config(
                     None,
                     None,
                     not tfree_reward_run,
-                    False,
-                    False,
                 ),
                 "RP66 shaped reward controls",
             )
+            if (
+                type(reward.focus_reward_enabled) is not bool
+                or reward.grounding_reward_enabled
+                is not reward.focus_reward_enabled
+            ):
+                raise ValueError(
+                    "RP66 shaped visual-quality reward controls differ"
+                )
         else:
             _require_exact(
                 (
