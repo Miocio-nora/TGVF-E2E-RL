@@ -7,14 +7,15 @@ config="$repo_root/configs/policy/runs/prl_20_r0_qwen3_instruct_full_frozen_rp67
 training_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8
 control_root="$training_root/runtime/step16-handoff"
 log_root="$training_root/logs/step16-handoff"
-extension="$control_root/prl20-r0-step8-to16.json"
+extension_root="$repo_root/artifacts/policy-horizon-extensions/PRL-20-R0"
+extension="$extension_root/prl20-r0-step8-to16.json"
 source_session=${PRL20_R0_SOURCE_TMUX_SESSION:-prl20_r0_formal}
 post_train_eval=${PRL20_R0_POST_TRAIN_EVAL:-$repo_root/tools/supervise_prl20_r0_frozen_rp67_tfree_crop_tgvf_step8_step16_paired_evaluation.sh}
 poll_seconds=${PRL20_R0_HANDOFF_POLL_SECONDS:-15}
 maximum_restarts=${PRL20_R0_STEP16_MAX_RESTARTS:-8}
 cooldown_seconds=${PRL20_R0_STEP16_RESTART_COOLDOWN_SECONDS:-10}
 
-mkdir -p "$control_root" "$log_root"
+mkdir -p "$control_root" "$log_root" "$extension_root"
 exec 9>"$control_root/handoff.lock"
 if ! flock -n 9; then
   echo "another PRL20 Step-16 handoff supervisor is active" >&2
@@ -66,13 +67,16 @@ state, pair = read_committed_policy_checkpoint_pair(
 expected_hashes = {
     "run_config": config.identity_sha256,
     "run_config_file": config.source_sha256,
-    "dataset_content": config.dataset.content_sha256,
+    "dataset_content": config.dataset.runtime_binding.content_sha256,
+    "dataset_samples": config.dataset.samples_sha256,
     "dataset_iteration": config.dataset.iteration_identity_sha256,
     "prompt": config.protocol.prompt_sha256,
     "tool_schema": config.protocol.tool_schema_sha256,
     "representation_artifact_file": config.representation.artifact_file_sha256,
 }
-observed_hashes = dict(state.run_identity.hashes)
+observed_hashes = {
+    item.name: item.sha256 for item in state.run_identity.hashes
+}
 identity_sha256 = hashlib.sha256(
     json.dumps(
         state.run_identity.to_checkpoint_mapping(),

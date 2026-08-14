@@ -10037,3 +10037,13 @@ than inferred from a script name or prior conversation.
   paired CoreDev-2511 evaluator assigns Step 8 to GPUs 0--3 and Step 16 to
   GPUs 4--7 under one Crop+TGVF-specific paired-RNG protocol. Both endpoints
   are permanent checkpoints; Steps 9--16 remain rolling recovery boundaries.
+- Step-8 closed normally at 03:45 JST with contiguous metrics 1--8 and a
+  complete permanent model/optimizer/data checkpoint. The first automatic
+  handoff then rejected that healthy checkpoint before continuation because
+  its shell-side reader used two stale Python interfaces
+  (`dataset.content_sha256` and tuple coercion of typed identity hashes).
+  Recovery uses the runtime-binding content hash and typed hash fields, adds
+  the dataset-samples identity, and stores the horizon-extension manifest
+  inside the launch worktree as required by launch provenance. This recovery
+  changes no model, data, optimizer, reward, prompt, tool, RNG or scheduler
+  setting; continuation remains the exact Step-8-to-16 run.
