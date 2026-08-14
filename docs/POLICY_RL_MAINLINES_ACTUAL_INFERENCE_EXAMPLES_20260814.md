@@ -36,6 +36,9 @@ trajectory SHA 都来自归档 artifact；它们不是手写 prompt 示例，也
 - TGVF 两条路径的 evaluation JSONL **没有把 latent observation 序列化成自然语言**。
   因而下文只写“`[latent D + D-DeepStack; audit 中无可读文本]`”，随后展示真实的
   post-tool decode。任何更具体的“D 说了什么”都将是杜撰。
+- 纯 TGVF 与 visual-reward TGVF 只生成 `target`，没有离散 spatial bbox；因此不能
+  像 Crop 一样在原图上画出一个“真实截图框”。下文的红/蓝框只对应 Crop 与
+  Atomic Crop+TGVF 的实际 crop action。
 
 ### 2.2 Visual reward 在测试时不调用 judge
 
@@ -75,6 +78,11 @@ C. kevlar
 D. leather
 Please select the correct answer from the options above.
 ```
+
+红框是 Crop clean-final 的实际 RGB observation；蓝框是 Atomic Crop+TGVF 进入
+视觉编码器的 crop。右侧展示对应 source-pixel 区域，图中仅为显示而缩放：
+
+![VStar ordinal 0 original image with Crop and Atomic regions](../reports/policy_trajectory_examples/mainlines_20260814/images/vstar_000000_crop_regions.jpg)
 
 ### 3.2 Crop clean-final Step 8
 
@@ -315,6 +323,11 @@ B. right
 Please select the correct answer from the options above.
 ```
 
+这里可以直接看到 Crop 的错误先验来自哪里：红框只覆盖房屋左下区域；Atomic 的
+蓝框覆盖了房屋主体和更大的周边区域。右侧为两个 action 对应的真实像素区域：
+
+![VStar ordinal 148 original image with Crop and Atomic regions](../reports/policy_trajectory_examples/mainlines_20260814/images/vstar_000148_crop_regions.jpg)
+
 ### 5.1 四条实际 trajectory
 
 #### Crop clean-final Step 8
@@ -418,6 +431,11 @@ tool schema、prompt 和 RNG block 不相同，而且当前没有 Atomic Step 0�
 **Options：** `A green / B blue / C yellow / D red`
 **Gold：** `D. red`
 
+红框和蓝框都落在牙椅附近，但实际 crop 内容主要是牙科器械与软管；这解释了为什么
+“调用成功且区域相关”仍不等于目标物体已经清晰可辨：
+
+![VStar ordinal 44 original image with Crop and Atomic regions](../reports/policy_trajectory_examples/mainlines_20260814/images/vstar_000044_crop_regions.jpg)
+
 | 线路 | 实际 action | 实际 final | hit | trajectory SHA256 |
 |---|---|---|---:|---|
 | Crop clean-final S8 | bbox `[432,587,500,706]`；label `dental equipment around the chair` | `A. green` | 0 | `d6404fceabfae6b2fadcae284bf83e9803fd13ee523c993b8260ecfe0c77eae5` |
@@ -505,3 +523,7 @@ Aggregate 数值、跨 block 比较规则和完整结论见：
 
 - `docs/POLICY_RL_COREDEV2511_MEASUREMENT_CONTRACT_AND_BASELINES_20260812.md`
 - `docs/POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md`
+
+三张可视化的 source image SHA、坐标重建规则和 panel SHA 见：
+
+- [crop-region figure provenance](../reports/policy_trajectory_examples/mainlines_20260814/PROVENANCE.md)
