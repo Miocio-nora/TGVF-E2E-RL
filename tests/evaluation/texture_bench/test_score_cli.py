@@ -73,3 +73,5 @@ def test_score_paths_binds_inputs_and_scores_last(tmp_path: Path) -> None:
     assert report["task_manifest"]["task_count"] == 1
     assert report["score"]["micro"]["accuracy"] == 1.0
     assert report["score"]["last"]["four_condition_macro_accuracy"] == 1.0
+    assert report["score"]["parser_contract"]["mmad_parser"] == "strict"
+    assert report["score"]["parser_contract"]["drop_invalid_rows"] is False

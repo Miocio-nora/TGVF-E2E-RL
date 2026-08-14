@@ -16,13 +16,15 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from tgvf_rl.evaluation.texture_bench.io import write_json_idempotent  # noqa: E402
 from tgvf_rl.evaluation.texture_bench.schema import file_sha256  # noqa: E402
 from tgvf_rl.evaluation.texture_bench.scoring import (  # noqa: E402
+    MMAD_PARSERS,
+    MMAD_PARSER_STRICT,
     load_result_rows,
     score_texture_benchmark,
 )
 from tgvf_rl.evaluation.texture_bench.task import load_texture_tasks  # noqa: E402
 
 
-SCORED_ARTIFACT_SCHEMA = "tgvf-texture-benchmark-scored-artifact-v1"
+SCORED_ARTIFACT_SCHEMA = "tgvf-texture-benchmark-scored-artifact-v2"
 
 
 def score_paths(
@@ -30,6 +32,7 @@ def score_paths(
     tasks_path: str | Path,
     result_paths: Sequence[str | Path],
     verify_images: bool = True,
+    mmad_parser: str = MMAD_PARSER_STRICT,
 ) -> dict[str, object]:
     """Load an exact complete result set and return its provenance-bound score."""
 
@@ -46,6 +49,7 @@ def score_paths(
         tasks,
         records,
         task_manifest_sha256=task_manifest_sha256,
+        mmad_parser=mmad_parser,
     )
     return {
         "schema_version": SCORED_ARTIFACT_SCHEMA,
@@ -67,6 +71,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--results", type=Path, nargs="+", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument(
+        "--mmad-parser",
+        choices=MMAD_PARSERS,
+        default=MMAD_PARSER_STRICT,
+        help=(
+            "MMAD answer extraction. The permissive option remains on the fixed "
+            "complete-manifest denominator and is not an exact upstream evaluation."
+        ),
+    )
+    parser.add_argument(
         "--verify-images",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -81,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tasks_path=args.tasks,
         result_paths=args.results,
         verify_images=args.verify_images,
+        mmad_parser=args.mmad_parser,
     )
     if args.output is not None:
         write_json_idempotent(args.output.expanduser().resolve(), report)
