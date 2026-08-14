@@ -11,11 +11,14 @@ import re
 import unicodedata
 from typing import Iterable, Mapping, Sequence
 
-from .schema import require_sha256
+from .schema import canonical_json_sha256, require_sha256
 from .task import TextureTask
 
 
-TEXTURE_SCORING_SCHEMA = "tgvf-texture-benchmark-scoring-v1"
+TEXTURE_SCORING_SCHEMA = "tgvf-texture-benchmark-scoring-v2"
+MMAD_PARSER_STRICT = "strict"
+MMAD_PARSER_UPSTREAM_LIKE_PERMISSIVE = "upstream-like-permissive"
+MMAD_PARSERS = (MMAD_PARSER_STRICT, MMAD_PARSER_UPSTREAM_LIKE_PERMISSIVE)
 LAST_DATASET = "LAST_2D_Texture_Retrieval"
 MMAD_DATASET = "MMAD"
 MMAD_TASK_ORDER = (
@@ -116,6 +119,28 @@ def parse_mmad_official_legacy(
     return ParsedChoice(None, "invalid", "official_unmatched")
 
 
+def scoring_parser_contract(mmad_parser: str) -> dict[str, object]:
+    """Return the immutable answer-parser and denominator contract."""
+
+    if mmad_parser not in MMAD_PARSERS:
+        raise ValueError(f"unknown MMAD parser: {mmad_parser}")
+    payload: dict[str, object] = {
+        "schema_version": "tgvf-texture-parser-contract-v1",
+        "last_answer_extraction": "strict_explicit_choice_v1",
+        "mmad_answer_extraction": (
+            "strict_explicit_choice_v1"
+            if mmad_parser == MMAD_PARSER_STRICT
+            else "upstream_like_last_letter_fuzzy_v1"
+        ),
+        "mmad_parser": mmad_parser,
+        "denominator": "fixed_complete_task_manifest",
+        "invalid_answer_policy": "count_as_incorrect",
+        "drop_invalid_rows": False,
+        "exact_upstream_evaluator": False,
+    }
+    return {**payload, "identity_sha256": canonical_json_sha256(payload)}
+
+
 def load_result_rows(paths: Iterable[str | Path]) -> dict[int, dict[str, object]]:
     """Load one or more JSONLs and reject incomplete/ambiguous row identities."""
 
@@ -153,8 +178,10 @@ def _score_rows(
     records: Mapping[int, Mapping[str, object]],
     *,
     task_manifest_sha256: str,
+    mmad_parser: str,
 ) -> list[dict[str, object]]:
     require_sha256(task_manifest_sha256, name="task manifest SHA256")
+    scoring_parser_contract(mmad_parser)
     expected = {task.ordinal for task in tasks}
     observed = set(records)
     if observed != expected:
@@ -180,7 +207,14 @@ def _score_rows(
                 f"result task manifest identity differs at ordinal {task.ordinal}"
             )
         options = dict(task.options)
-        parsed = parse_strict_choice(result.get("final_answer"), allowed=tuple(options))
+        parsed = (
+            parse_mmad_official_legacy(result.get("final_answer"), options)
+            if task.dataset == MMAD_DATASET
+            and mmad_parser == MMAD_PARSER_UPSTREAM_LIKE_PERMISSIVE
+            else parse_strict_choice(
+                result.get("final_answer"), allowed=tuple(options)
+            )
+        )
         rows.append(
             {
                 "ordinal": task.ordinal,
@@ -380,16 +414,20 @@ def score_texture_benchmark(
     records: Mapping[int, Mapping[str, object]],
     *,
     task_manifest_sha256: str,
+    mmad_parser: str = MMAD_PARSER_STRICT,
 ) -> dict[str, object]:
+    parser_contract = scoring_parser_contract(mmad_parser)
     rows = _score_rows(
         tasks,
         records,
         task_manifest_sha256=task_manifest_sha256,
+        mmad_parser=mmad_parser,
     )
     datasets = {str(row["dataset"]) for row in rows}
     summary: dict[str, object] = {
         "schema_version": TEXTURE_SCORING_SCHEMA,
         "task_count": len(rows),
+        "parser_contract": parser_contract,
         "micro": _accuracy(rows),
     }
     if LAST_DATASET in datasets:
@@ -405,12 +443,16 @@ def score_texture_benchmark(
 __all__ = [
     "LAST_DATASET",
     "MMAD_DATASET",
+    "MMAD_PARSERS",
+    "MMAD_PARSER_STRICT",
+    "MMAD_PARSER_UPSTREAM_LIKE_PERMISSIVE",
     "MMAD_TASK_ORDER",
     "ParsedChoice",
     "TEXTURE_SCORING_SCHEMA",
     "load_result_rows",
     "parse_mmad_official_legacy",
     "parse_strict_choice",
+    "scoring_parser_contract",
     "score_last",
     "score_mmad",
     "score_texture_benchmark",
