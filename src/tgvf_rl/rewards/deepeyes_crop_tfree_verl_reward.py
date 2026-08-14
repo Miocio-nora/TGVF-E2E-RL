@@ -111,6 +111,11 @@ def _protocol_errors(result: Mapping[str, object]) -> tuple[str, ...]:
     tool_attempt_count = _tool_attempt_count(result)
     if tool_attempt_count > crop_call_count:
         errors.append("tool_parse_or_dispatch_error")
+    overflow = _strict_binary_integer(
+        result.get("decoder_context_overflow"), name="decoder_context_overflow"
+    )
+    if overflow:
+        errors.append("decoder_context_overflow")
     return tuple(errors)
 
 
@@ -205,7 +210,29 @@ class DeepEyesCropTFreeRewardManager(DeepEyesOfficialRewardManager):
         self.stage3_kernel = Stage3ShapedRewardKernel()
 
     async def _score_visual(self, **value: object) -> dict[str, object]:
-        historical = await super()._score_visual(**value)
+        audit = value.get("audit")
+        if not isinstance(audit, Mapping):
+            raise TypeError("native Crop T-free trajectory audit must be a mapping")
+        overflow = _strict_binary_integer(
+            audit.get("decoder_context_overflow"), name="decoder_context_overflow"
+        )
+        if overflow:
+            historical = self._result(
+                score=-1.0,
+                accuracy=0,
+                format_penalty=-1,
+                conditional_tool=0,
+                answer="",
+                crop_count=int(value["crop_count"]),
+                trajectory_id=str(value["trajectory_id"]),
+                judge=None,
+                visual_requested=0,
+                thinklite_requested=0,
+                route="decoder_context_overflow_no_answer",
+                audit=audit,
+            )
+        else:
+            historical = await super()._score_visual(**value)
         return _compose_tfree_reward(historical, kernel=self.stage3_kernel)
 
     async def _score_thinklite(self, **value: object) -> dict[str, object]:

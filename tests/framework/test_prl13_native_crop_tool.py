@@ -15,6 +15,7 @@ from tgvf_rl.framework.verl.native_crop_tool import (
     ensure_native_crop_audit_fields,
     normalize_native_crop_box,
 )
+from tgvf_rl.rewards.deepeyes_official import extract_visual_answer
 
 
 def test_visual_crop_audit_defaults_cover_direct_no_call() -> None:
@@ -25,6 +26,9 @@ def test_visual_crop_audit_defaults_cover_direct_no_call() -> None:
     assert fields["crop_boxes"] == []
     assert fields["crop_area_fractions"] == []
     assert fields["crop_observation_token_spans"] == []
+    assert fields["decoder_context_overflow"] == 0
+    assert fields["decoder_prompt_length_at_overflow"] == 0
+    assert fields["decoder_max_model_length_at_overflow"] == 0
 
 
 def test_crop_maps_qwen3_grid_and_reports_grounding_metrics() -> None:
@@ -329,6 +333,232 @@ def test_upstream_tool_agent_loop_appends_crop_pixels_and_masks_observation(
         )
 
     asyncio.run(exercise_loop())
+
+
+def test_native_loop_contains_only_multiturn_vllm_context_overflow(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("verl")
+    import torch
+    from verl.experimental.agent_loop.tool_parser import HermesToolParser
+    from verl.tools.schemas import OpenAIFunctionToolSchema
+    from verl.workers.rollout.replica import TokenOutput
+
+    from tgvf_rl.framework.verl.native_deepeyes_agent_loop import (
+        NativeDeepEyesAgentLoop,
+    )
+
+    class FakeTokenizer:
+        eos_token_id = 0
+
+        def __init__(self) -> None:
+            self.values: dict[int, str] = {}
+            self.next_id = 1
+
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            del add_special_tokens
+            result: list[int] = []
+            for character in text:
+                token_id = self.next_id
+                self.next_id += 1
+                self.values[token_id] = character
+                result.append(token_id)
+            return result
+
+        def decode(self, ids: list[int], **_kwargs: object) -> str:
+            text = "".join(self.values[int(token_id)] for token_id in ids)
+            if _kwargs.get("skip_special_tokens"):
+                text = text.replace("<|im_start|>", "").replace("<|im_end|>", "")
+            return text
+
+    class FakeProcessor:
+        def __init__(self, tokenizer: FakeTokenizer) -> None:
+            self.tokenizer = tokenizer
+            self.image_processor = SimpleNamespace(patch_size=14)
+
+        def apply_chat_template(
+            self,
+            messages: list[dict[str, object]],
+            *,
+            tokenize: bool,
+            **_kwargs: object,
+        ) -> str | list[int]:
+            parts: list[str] = []
+            for message in messages:
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    parts.extend(
+                        "<image>"
+                        if item.get("type") == "image"
+                        else str(item.get("text", ""))
+                        for item in content
+                    )
+                else:
+                    parts.append(str(content))
+            text = "".join(parts) + "<|im_end|>\n<|im_start|>assistant\n"
+            return self.tokenizer.encode(text) if tokenize else text
+
+        def __call__(
+            self,
+            *,
+            text: list[str],
+            images: list[Image.Image] | None = None,
+            **_kwargs: object,
+        ) -> dict[str, torch.Tensor]:
+            del images
+            return {"input_ids": torch.tensor([self.tokenizer.encode(text[0])])}
+
+    class OverflowAfterCropServer:
+        def __init__(self, tokenizer: FakeTokenizer) -> None:
+            self.tokenizer = tokenizer
+            self.calls = 0
+
+        async def generate(self, **_kwargs: object) -> TokenOutput:
+            self.calls += 1
+            if self.calls == 1:
+                text = (
+                    '<think>zoom</think><tool_call>{"name":"image_zoom_in_tool",'
+                    '"arguments":{"bbox_2d":[100,100,800,800]}}</tool_call>'
+                )
+                return TokenOutput(
+                    token_ids=self.tokenizer.encode(text),
+                    extra_fields={"global_steps": 3},
+                )
+            raise ValueError(
+                "The decoder prompt (length 33379) is longer than the maximum "
+                "model length of 32768. Make sure that `max_model_len` is no "
+                "smaller than the number of text tokens plus multimodal tokens. "
+                "For image inputs, the number of image tokens depends on the "
+                "number of images, and possibly their aspect ratios as well."
+            )
+
+    async def exercise() -> None:
+        schema = OpenAIFunctionToolSchema.model_validate(
+            {
+                "type": "function",
+                "function": {
+                    "name": NATIVE_CROP_TOOL_NAME,
+                    "description": "crop original pixels",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"bbox_2d": {"type": "array"}},
+                        "required": ["bbox_2d"],
+                    },
+                },
+            }
+        )
+        tool = NativeDeepEyesCropTool(
+            config={"type": "native", "max_crops": 6}, tool_schema=schema
+        )
+        tokenizer = FakeTokenizer()
+        processor = FakeProcessor(tokenizer)
+        image_path = tmp_path / "overflow-source.png"
+        Image.new("RGB", (96, 96), color="green").save(image_path)
+        server = OverflowAfterCropServer(tokenizer)
+        loop = NativeDeepEyesAgentLoop.__new__(NativeDeepEyesAgentLoop)
+        loop.max_user_turns = 6
+        loop.max_assistant_turns = 7
+        loop.max_parallel_calls = 1
+        loop.max_tool_response_length = 4096
+        loop.tool_response_truncate_side = "right"
+        loop.tools = {tool.name: tool}
+        loop.tool_schemas = [schema.model_dump(exclude_none=True)]
+        loop.tool_parser = HermesToolParser(tokenizer)
+        loop.tool_parser_name = "hermes"
+        loop.prompt_length = 4096
+        loop.response_length = 4096
+        loop.rollout_config = SimpleNamespace(
+            prompt_length=4096, response_length=4096, max_model_len=32768
+        )
+        loop.enable_continuous_token = False
+        loop.processor = processor
+        loop.tokenizer = tokenizer
+        loop.dataset_cls = object
+        loop.data_config = {}
+        loop.apply_chat_template_kwargs = {}
+        loop.mm_processor_kwargs = {}
+        loop.server_manager = server
+        loop.loop = asyncio.get_running_loop()
+        loop.turn_separator = []
+        loop.system_prompt = []
+
+        output = await loop.run(
+            {},
+            raw_prompt=[
+                {"role": "system", "content": "official schema is visible"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": str(image_path.resolve())},
+                        {"type": "text", "text": "What color?"},
+                    ],
+                },
+            ],
+            data_source="vstar",
+            tools_kwargs={NATIVE_CROP_TOOL_NAME: {"create_kwargs": {"gt_regions": []}}},
+        )
+        assert server.calls == 2
+        assert output.extra_fields["global_steps"] == 3
+        assert output.extra_fields["decoder_context_overflow"] == 1
+        assert output.extra_fields["decoder_prompt_length_at_overflow"] == 33379
+        assert output.extra_fields["decoder_max_model_length_at_overflow"] == 32768
+        assert output.extra_fields["crop_action_count"] == 1
+        assert output.extra_fields["native_crop_image_count"] == 1
+        assert len(output.extra_fields["crop_observation_token_spans"]) == 1
+        decoded = tokenizer.decode(output.response_ids, skip_special_tokens=True)
+        extraction = extract_visual_answer(decoded)
+        assert extraction.answer == ""
+        assert extraction.format_penalty == -1
+        assert extraction.reason == "missing_direct_answer"
+
+    asyncio.run(exercise())
+
+
+def test_native_loop_does_not_hide_unrelated_generation_errors() -> None:
+    from tgvf_rl.framework.verl.native_deepeyes_agent_loop import (
+        _decoder_prompt_overflow_limits,
+    )
+
+    assert _decoder_prompt_overflow_limits(ValueError("CUDA out of memory")) is None
+    assert (
+        _decoder_prompt_overflow_limits(
+            ValueError(
+                "The decoder prompt (length 32768) is longer than the maximum "
+                "model length of 32768. Make sure that `max_model_len` is no "
+                "smaller than the number of text tokens plus multimodal tokens. "
+                "For image inputs, the number of image tokens depends on the "
+                "number of images, and possibly their aspect ratios as well."
+            )
+        )
+        is None
+    )
+    quoted = (
+        "worker failed after ValueError: The decoder prompt (length 33379) is "
+        "longer than the maximum model length of 32768. Make sure that "
+        "`max_model_len` is no smaller than the number of text tokens plus "
+        "multimodal tokens. For image inputs, the number of image tokens "
+        "depends on the number of images, and possibly their aspect ratios as "
+        "well."
+    )
+    assert _decoder_prompt_overflow_limits(RuntimeError(quoted)) is None
+
+
+def test_native_loop_recognizes_ray_decoder_overflow_leaf() -> None:
+    from ray.exceptions import RayTaskError
+
+    from tgvf_rl.framework.verl.native_deepeyes_agent_loop import (
+        _decoder_prompt_overflow_limits,
+    )
+
+    leaf = ValueError(
+        "The decoder prompt (length 33379) is longer than the maximum model "
+        "length of 32768. Make sure that `max_model_len` is no smaller than "
+        "the number of text tokens plus multimodal tokens. For image inputs, "
+        "the number of image tokens depends on the number of images, and "
+        "possibly their aspect ratios as well."
+    )
+    remote = RayTaskError("generate", "rendered remote traceback", leaf)
+    assert _decoder_prompt_overflow_limits(remote) == (33379, 32768)
 
 
 def test_real_hydra_qwen_processor_preserves_source_pixels_and_replays_crops(

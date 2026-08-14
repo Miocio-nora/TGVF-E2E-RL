@@ -144,14 +144,17 @@ def test_run_global_concurrency_sums_exactly_across_eight_workers() -> None:
 
     assert permits == (2,) * 8
     assert sum(permits) == 16
-    assert tuple(
-        process_local_judge_concurrency(
-            16,
-            worker_index=index,
-            worker_count=4,
+    assert (
+        tuple(
+            process_local_judge_concurrency(
+                16,
+                worker_index=index,
+                worker_count=4,
+            )
+            for index in range(4)
         )
-        for index in range(4)
-    ) == (4,) * 4
+        == (4,) * 4
+    )
 
     with pytest.raises(ValueError, match="at least one permit"):
         process_local_judge_concurrency(4, worker_index=0, worker_count=8)
@@ -160,12 +163,15 @@ def test_run_global_concurrency_sums_exactly_across_eight_workers() -> None:
 def test_runtime_cap_only_reduces_run_global_concurrency() -> None:
     name = "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP"
 
-    assert effective_run_global_judge_concurrency(
-        16, worker_count=8, environment={}
-    ) == 16
-    assert effective_run_global_judge_concurrency(
-        16, worker_count=8, environment={name: "8"}
-    ) == 8
+    assert (
+        effective_run_global_judge_concurrency(16, worker_count=8, environment={}) == 16
+    )
+    assert (
+        effective_run_global_judge_concurrency(
+            16, worker_count=8, environment={name: "8"}
+        )
+        == 8
+    )
     with pytest.raises(ValueError, match="exceeds the serialized maximum"):
         effective_run_global_judge_concurrency(
             16, worker_count=8, environment={name: "17"}
@@ -201,9 +207,10 @@ def test_runtime_retry_hardening_only_increases_patience() -> None:
     assert effective.retry_maximum_seconds == 30.0
     assert effective.maximum_transient_failure_fraction == 0.0
     assert effective.file_sha256 == configured.file_sha256
-    assert effective_deepeyes_judge_transport_config(
-        configured, environment={}
-    ) is configured
+    assert (
+        effective_deepeyes_judge_transport_config(configured, environment={})
+        is configured
+    )
 
     invalid = dict(environment)
     invalid["TGVF_DEEPEYES_JUDGE_MAXIMUM_ATTEMPTS"] = "3"
@@ -234,7 +241,9 @@ def test_transient_retry_uses_equal_jitter_and_respects_retry_after() -> None:
         for attempt in range(1, 8)
     ]
     maxima = [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
-    assert all(maximum / 2 <= delay <= maximum for delay, maximum in zip(delays, maxima))
+    assert all(
+        maximum / 2 <= delay <= maximum for delay, maximum in zip(delays, maxima)
+    )
     assert delays == [
         reward_module._transient_retry_delay_seconds(
             configured,
@@ -245,15 +254,16 @@ def test_transient_retry_uses_equal_jitter_and_respects_retry_after() -> None:
         for attempt in range(1, 8)
     ]
 
-    retry_after = reward_module._JudgeTransientHTTPError(
-        429, retry_after_seconds=17.0
+    retry_after = reward_module._JudgeTransientHTTPError(429, retry_after_seconds=17.0)
+    assert (
+        reward_module._transient_retry_delay_seconds(
+            configured,
+            completed_attempts=1,
+            error=retry_after,
+            request_id=request_id,
+        )
+        == 17.0
     )
-    assert reward_module._transient_retry_delay_seconds(
-        configured,
-        completed_attempts=1,
-        error=retry_after,
-        request_id=request_id,
-    ) == 17.0
 
 
 def test_hardened_transport_recovers_on_eighth_attempt() -> None:
@@ -343,9 +353,7 @@ def test_async_transport_isolates_completed_output_and_retries_model_mismatch() 
     recovered = asyncio.run(
         AsyncDeepEyesOpenRouterJudge(
             _service(), request_json=transient_wrong_model
-        ).judge(
-            _request("transient-identity-mismatch")
-        )
+        ).judge(_request("transient-identity-mismatch"))
     )
     assert recovered.verdict is True
     assert recovered.calls == 2
@@ -444,6 +452,9 @@ def _data(
     call_count: int | None = None,
     error_count: int = 0,
     observation_spans: list[list[int]] | None = None,
+    decoder_context_overflow: int = 0,
+    decoder_prompt_length_at_overflow: int = 0,
+    decoder_max_model_length_at_overflow: int = 0,
 ) -> DataProto:
     call_count = crop_count if call_count is None else call_count
     if observation_spans is None:
@@ -483,6 +494,13 @@ def _data(
                         "crop_best_gt_coverage": 0.75 if crop_count else None,
                         "crop_error_count": error_count,
                         "crop_observation_token_spans": observation_spans,
+                        "decoder_context_overflow": decoder_context_overflow,
+                        "decoder_prompt_length_at_overflow": (
+                            decoder_prompt_length_at_overflow
+                        ),
+                        "decoder_max_model_length_at_overflow": (
+                            decoder_max_model_length_at_overflow
+                        ),
                         "native_original_image_count": 1,
                         "native_crop_image_count": crop_count,
                         "native_total_image_count": 1 + crop_count,

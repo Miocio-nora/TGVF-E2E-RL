@@ -130,6 +130,35 @@ def test_parser_or_dispatch_error_is_not_lost_from_native_crop_audit() -> None:
     ]
 
 
+def test_decoder_context_overflow_is_sample_local_wrong_without_judge() -> None:
+    manager = _manager("<think>partial after crop</think>", verdict="1")
+    data = _data(
+        source="vstar",
+        crop_count=1,
+        call_count=1,
+        observation_spans=[[0, 1]],
+        decoder_context_overflow=1,
+        decoder_prompt_length_at_overflow=33379,
+        decoder_max_model_length_at_overflow=32768,
+    )
+
+    result = asyncio.run(manager.run_single(data))
+    extra = result["reward_extra_info"]
+
+    assert result["reward_score"] == pytest.approx(-1.0)
+    assert extra["acc"] == 0
+    assert extra["format_penalty"] == -1
+    assert extra["judge_requested"] == 0
+    assert extra["judge_calls"] == 0
+    assert extra["judge_route"] == "decoder_context_overflow_no_answer"
+    assert extra["decoder_context_overflow"] == 1
+    assert json.loads(str(extra["stage3_protocol_errors"])) == [
+        "protocol_invalid",
+        "decoder_context_overflow",
+    ]
+    assert _components(extra)["protocol"] == pytest.approx(-1.0)
+
+
 def test_thinklite_keeps_math_verifier_route_and_uses_same_tfree_kernel() -> None:
     manager = _manager(
         "<think>done</think>\\boxed{blue}",
