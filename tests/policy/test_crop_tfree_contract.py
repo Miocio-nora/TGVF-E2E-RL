@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -25,7 +26,7 @@ def test_prl21_overlay_records_only_the_matched_tfree_treatment() -> None:
     )
 
     assert contract.payload["schema_version"] == CROP_TFREE_RUN_SCHEMA
-    assert contract.code_commit == CROP_TFREE_CODE_PLACEHOLDER
+    assert re.fullmatch(r"[0-9a-f]{40}", contract.code_commit)
     assert contract.reward_manager_class.endswith("DeepEyesCropTFreeRewardManager")
     reward = contract.payload["reward"]
     assert reward == {
@@ -65,10 +66,18 @@ def test_prl21_overlay_matches_the_intended_formal_shape() -> None:
     assert matched["maximum_optimizer_steps"] == 16
 
 
-def test_placeholder_cannot_be_used_for_a_launchable_contract() -> None:
+def test_placeholder_cannot_be_used_for_a_launchable_contract(tmp_path: Path) -> None:
+    placeholder = tmp_path / _CONFIG.name
+    placeholder.write_text(
+        _CONFIG.read_text(encoding="utf-8").replace(
+            'commit = "46586bf7685e4a58240458e94905e0bf69dbc843"',
+            f'commit = "{CROP_TFREE_CODE_PLACEHOLDER}"',
+        ),
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="bound code.commit"):
         load_crop_tfree_run_contract(
-            _CONFIG,
+            placeholder,
             repository_root=_ROOT,
             allow_placeholder=False,
         )

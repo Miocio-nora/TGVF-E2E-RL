@@ -3,7 +3,7 @@ run_id = "PRL-21-R0-QWEN3-INSTRUCT-FULL-CROP-BS16-N16-TFREE-16STEP-WS8"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "CORE_COMMIT_REQUIRED"
+commit = "46586bf7685e4a58240458e94905e0bf69dbc843"
 dirty = false
 
 [base]
