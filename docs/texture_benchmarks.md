@@ -3,7 +3,8 @@
 This is the canonical project document for the LAS&T 2D Texture Retrieval and
 MMAD benchmarks. It explains what each benchmark measures, records the exact
 local dataset and evaluation protocol, reports the completed 2026-08-13
-Original-versus-Crop step-16 experiment, and provides the commands and artifact
+Original-versus-Crop step-16 baseline, tracks the in-progress 2026-08-14 TGVF
+and atomic Crop+TGVF step-16 extension, and provides the commands and artifact
 identities needed to reproduce or extend it.
 
 The project can evaluate the same immutable task manifest with four model
@@ -144,7 +145,7 @@ matters for the 1024 x 1024 LAS&T composites and the 1048 x 560 MMAD one-shot
 canvases. The pinned Qwen3-VL processor contract records `patch_size = 16`,
 `merge_size = 2`, and therefore a spatial smart-resize factor of 32.
 
-## Completed evaluation: Original versus Crop step 16
+## Four-arm evaluation: completed baseline and in-progress extension
 
 ### Scope and immutable configuration
 
@@ -153,13 +154,43 @@ finished at 08:18:06 and Crop finished at 11:34:58. It compared stock
 Qwen3-VL-8B-Instruct with the PRL14 clean-final Crop policy at optimizer step
 16 on every task in the combined suite.
 
-| Setting | Bound value |
+On 2026-08-14, two additional optimizer-step-16 policy arms were bound to the
+same immutable 42,870-task manifest and visual-processing contract: PRL17-R2
+TGVF-only and PRL20-R0 atomic Crop+TGVF. Their four-rank evaluations are in
+progress. All cells marked `pending run completion` below are intentional and
+must be replaced only after complete rank coverage, scoring, and final identity
+audit; they do not denote zero accuracy or a failed run.
+
+| Common setting | Bound value |
 | --- | --- |
-| Matrix | `configs/evaluation/texture_last_mmad_original_crop_prl14_step16_512_v1.json` |
-| Matrix identity | `a76be7017ae38dd34a738bafca114d60bf2ea4bb4cb7f2b72cd7c457fd500533` |
 | Task count | 42,870: 3,200 LAS&T + 39,670 MMAD |
 | Task-manifest SHA-256 | `89d1510862c7cde5e0b3dd37b7d5fa345c7ed2c573a31e59a151cba3f9bb1ace` |
 | Visual processing | `min_pixels=65536`, `max_pixels=262144`, preserve aspect ratio, no asset pre-resize |
+| Qwen processor geometry | `patch_size=16`, `merge_size=2`; 262,144 is a total-area cap, not a forced square resize |
+
+The arms are split across three immutable matrices because the completed
+baseline predates the two RL-policy runs. The exact task-manifest SHA and visual
+contract above are identical in all three, so results remain paired by task.
+
+| Evaluation slice | Matrix | Matrix identity | GPU assignment | State |
+| --- | --- | --- | --- | --- |
+| Original + Crop step 16 | `configs/evaluation/texture_last_mmad_original_crop_prl14_step16_512_v1.json` | `a76be7017ae38dd34a738bafca114d60bf2ea4bb4cb7f2b72cd7c457fd500533` | Crop: B200 0-3; Original: B200 4-7 | Complete |
+| PRL17-R2 TGVF step 16 | `configs/evaluation/texture_last_mmad_current_3arm_512_v1.json` | `23f2a9850518e6a0774b8767c221f102b62c1321f43e9618335a8875d9ada156` | B200 0-3 | In progress |
+| PRL20-R0 Crop+TGVF step 16 | `configs/evaluation/texture_last_mmad_prl20_crop_tgvf_step16_512_v1.json` | `25afd59c8602b1bd00751513fd6acb4ae79bd8571fa78fda2b68ec4203751ca1` | B200 4-7 | In progress |
+
+Arm closures:
+
+| Arm | Exact closure | Evaluation protocol and tool boundary |
+| --- | --- | --- |
+| Original | `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct`; model-tree SHA-256 `d4c62edf0fa6622ca511a6baa3b75b6314b8d702004f92556c46ca59dbaf8d73` | Stock one-pass generation; temperature 0; batch 8; at most 2,048 output tokens; content-addressed per-sample seeds |
+| Crop step 16 | PRL14 clean-final full-model snapshot; policy-weights SHA-256 `50f5d9dd7ecdbf8d9baf46c00c13b1c3719de37b09f5aa91c40aabc758e06beb`; snapshot identity `d813b7511a35751380469516d58d2b55b1b1a933d86229210e92d95b6d7a928d` | `deepeyes_official_visible_native_crop_v1`; Crop-only; at most 6 calls; concurrency 8 per GPU |
+| TGVF PRL17-R2 step 16 | Paired full-Qwen/RP66 closure under `artifacts/policy/PRL-17-R2-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-novisual-8step-ws8/evaluation/PRL17-R2-FROZEN-RP67-TFREE-COREDEV2511-STEP0-STEP8-STEP16-PAIRED-SEED-V1/step16/runtime/`; run identity `9c64b840e540fccd98bab30e2f05783b15f43dddcc0e926a1778e713a1f74746`; destination snapshot identity `71e5866848dfd17cd74527cf7929adfaf8089a6e948567677a6849277ebe8b6f` | `training_run`; tool profile `tgvf_only`; only `tgvf_focus_tool`; at most 6 calls; concurrency 8 per GPU |
+| Crop+TGVF PRL20-R0 step 16 | Paired full-Qwen/RP66 closure under `artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/evaluation/PRL20-R0-FROZEN-RP67-TFREE-CROP-TGVF-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/step16/runtime/`; run identity `190c3db105c5e35d8d8aab4ad837409b4b39b8ce7f22e7b2393249a5e1898457`; destination snapshot identity `6467170e1c01ce1d03357270913ed10e5ddcfb63c1ea3226557c04b8871c6345` | `training_run`; tool profile `crop_tgvf`; only atomic `tgvf_crop_tool`; at most 6 calls; concurrency 8 per GPU |
+
+The Original/Crop-specific immutable details remain:
+
+| Setting | Bound value |
+| --- | --- |
 | Original model | `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct` |
 | Original model-tree SHA-256 | `d4c62edf0fa6622ca511a6baa3b75b6314b8d702004f92556c46ca59dbaf8d73` |
 | Original generation | temperature 0; batch 8; max 2,048 output tokens; content-addressed per-sample seeds |
@@ -170,11 +201,11 @@ Qwen3-VL-8B-Instruct with the PRL14 clean-final Crop policy at optimizer step
 | Crop protocol | `deepeyes_official_visible_native_crop_v1`; at most 6 crop calls; concurrency 8 per GPU |
 | GPU assignment | Crop on B200 GPUs 0-3; Original on B200 GPUs 4-7; `ordinal % 4` sharding |
 
-The four rank files in each arm contain exactly 10,718, 10,718, 10,717, and
-10,717 rows. All eight successful-v2 workers completed on attempt 1 with exit
-code 0. There were no retries, OOMs, CUDA failures, engine failures, malformed
-JSON rows, duplicate ordinals, missing ordinals, or identity drift in that
-accepted run.
+In the completed Original/Crop run, the four rank files in each of those two
+arms contain exactly 10,718, 10,718, 10,717, and 10,717 rows. All eight
+successful-v2 workers completed on attempt 1 with exit code 0. There were no
+retries, OOMs, CUDA failures, engine failures, malformed JSON rows, duplicate
+ordinals, missing ordinals, or identity drift in that accepted run.
 
 ### Main comparison
 
@@ -182,40 +213,49 @@ For scientific interpretation, this report leads with MMAD's upstream-like
 permissive last-letter/fuzzy answer extraction. It correctly recovers choices
 from outputs such as `B. Yes.` that the project's strict explicit-answer
 parser rejects. The main permissive view keeps the same fixed 39,670-question
-denominator for both arms, so the 107 Crop rows with no final answer still
-count as wrong. LAS&T retains the project's predeclared four-condition metric
-and strict parser; no post-hoc permissive LAS&T metric is promoted.
+denominator for every arm, so the 107 completed Crop rows with no final answer
+still count as wrong. LAS&T retains the project's predeclared four-condition
+metric and strict parser; no post-hoc permissive LAS&T metric is promoted.
 
-| Metric | Original | Crop step 16 | Crop - Original |
-| --- | ---: | ---: | ---: |
-| LAS&T four-condition macro | **72.4167%** | **68.2708%** | -4.1458 pp |
-| LAS&T micro | 71.2500% | 65.6562% | -5.5938 pp |
-| MMAD official aggregation structure, permissive fixed-denominator reparse | **69.2635%** | **67.9939%** | -1.2696 pp |
-| MMAD micro, permissive fixed-denominator reparse | 69.4404% | 68.0691% | -1.3713 pp |
-| MMAD still unparsed | 0 / 39,670 | 107 / 39,670 | +107 |
+The saved permissive score contract has identity
+`9653cc6c0d2d09a667f983ca1dc3118083fd7e1beda1d7fd49064ffb19167f60`.
+Its schema is `tgvf-texture-parser-contract-v1`; it records
+`last_answer_extraction=strict_explicit_choice_v1`,
+`mmad_parser=upstream-like-permissive`,
+`denominator=fixed_complete_task_manifest`, invalid answers counted as
+incorrect, `drop_invalid_rows=false`, and `exact_upstream_evaluator=false`.
 
-The main result is therefore much closer than the strict artifact initially
-suggests: Crop trails Original by 1.2696 percentage points on the MMAD macro
-after permissive answer extraction. The larger remaining degradation is on
-LAS&T, where Crop trails by 4.1458 points on the four-condition macro.
+| Metric | Original | Crop step 16 | TGVF PRL17 step 16 | Crop+TGVF PRL20 step 16 | Crop - Original |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| LAS&T four-condition macro | **72.4167%** | **68.2708%** | pending run completion | pending run completion | -4.1458 pp |
+| LAS&T micro | 71.2500% | 65.6562% | pending run completion | pending run completion | -5.5938 pp |
+| MMAD official aggregation structure, permissive fixed-denominator reparse | **69.2635%** | **67.9939%** | pending run completion | pending run completion | -1.2696 pp |
+| MMAD micro, permissive fixed-denominator reparse | 69.4404% | 68.0691% | pending run completion | pending run completion | -1.3713 pp |
+| MMAD still unparsed | 0 / 39,670 | 107 / 39,670 | pending run completion | pending run completion | +107 |
+
+The completed baseline result is therefore much closer than the strict artifact
+initially suggests: Crop trails Original by 1.2696 percentage points on the
+MMAD macro after permissive answer extraction. The larger remaining degradation
+is on LAS&T, where Crop trails by 4.1458 points on the four-condition macro. No
+four-way conclusion is made until both in-progress arms are complete.
 
 LAS&T condition breakdown:
 
-| Canonical condition | Samples | Original | Crop step 16 | Original invalid | Crop invalid |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Different shape, black background | 400 | 75.5000% | 77.2500% | 3 | 30 |
-| Different shape, textured background | 800 | 60.0000% | 47.1250% | 11 | 186 |
-| Same shape, black background | 800 | 88.0000% | 92.3750% | 2 | 20 |
-| Same shape, textured background | 1,200 | 66.1667% | 56.3333% | 13 | 248 |
+| Canonical condition | Samples | Original | Crop step 16 | TGVF PRL17 step 16 | Crop+TGVF PRL20 step 16 | Original invalid | Crop invalid | TGVF invalid | Crop+TGVF invalid |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Different shape, black background | 400 | 75.5000% | 77.2500% | pending run completion | pending run completion | 3 | 30 | pending run completion | pending run completion |
+| Different shape, textured background | 800 | 60.0000% | 47.1250% | pending run completion | pending run completion | 11 | 186 | pending run completion | pending run completion |
+| Same shape, black background | 800 | 88.0000% | 92.3750% | pending run completion | pending run completion | 2 | 20 | pending run completion | pending run completion |
+| Same shape, textured background | 1,200 | 66.1667% | 56.3333% | pending run completion | pending run completion | 13 | 248 | pending run completion | pending run completion |
 
 MMAD per-dataset task macro under the permissive fixed-denominator reparse:
 
-| MMAD dataset | Original | Crop step 16 |
-| --- | ---: | ---: |
-| GoodsAD | 64.9218% | 64.7045% |
-| MVTec-AD (including DS-MVTec) | 80.8414% | 75.1589% |
-| MVTec-LOCO | 62.9856% | 63.4273% |
-| VisA | 68.3052% | 68.6847% |
+| MMAD dataset | Original | Crop step 16 | TGVF PRL17 step 16 | Crop+TGVF PRL20 step 16 |
+| --- | ---: | ---: | ---: | ---: |
+| GoodsAD | 64.9218% | 64.7045% | pending run completion | pending run completion |
+| MVTec-AD (including DS-MVTec) | 80.8414% | 75.1589% | pending run completion | pending run completion |
+| MVTec-LOCO | 62.9856% | 63.4273% | pending run completion | pending run completion |
+| VisA | 68.3052% | 68.6847% | pending run completion | pending run completion |
 
 ### Strict-parser compliance diagnostic
 
@@ -223,16 +263,16 @@ The immutable `score.json` artifacts use the project's predeclared strict
 parser. Those numbers remain useful as a protocol-compliance diagnostic, but
 they are not the main accuracy view in this report:
 
-| Strict diagnostic | Original | Crop step 16 | Crop - Original |
-| --- | ---: | ---: | ---: |
-| LAS&T invalid | 29 / 3,200 | 484 / 3,200 | +455 |
-| LAS&T valid-only micro | 71.9016% | 77.3564% | +5.4548 pp |
-| MMAD official aggregation structure | 69.2624% | 32.7951% | -36.4673 pp |
-| MMAD micro | 69.4379% | 31.4898% | -37.9481 pp |
-| MMAD invalid | 4 / 39,670 | 21,600 / 39,670 | +21,596 |
-| MMAD valid-only micro | 69.4449% | 69.1312% | -0.3137 pp |
-| Overall strict micro | 69.5731% | 34.0401% | -35.5330 pp |
-| Overall invalid | 33 / 42,870 | 22,084 / 42,870 | +22,051 |
+| Strict diagnostic | Original | Crop step 16 | TGVF PRL17 step 16 | Crop+TGVF PRL20 step 16 | Crop - Original |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| LAS&T invalid | 29 / 3,200 | 484 / 3,200 | pending run completion | pending run completion | +455 |
+| LAS&T valid-only micro | 71.9016% | 77.3564% | pending run completion | pending run completion | +5.4548 pp |
+| MMAD official aggregation structure | 69.2624% | 32.7951% | pending run completion | pending run completion | -36.4673 pp |
+| MMAD micro | 69.4379% | 31.4898% | pending run completion | pending run completion | -37.9481 pp |
+| MMAD invalid | 4 / 39,670 | 21,600 / 39,670 | pending run completion | pending run completion | +21,596 |
+| MMAD valid-only micro | 69.4449% | 69.1312% | pending run completion | pending run completion | -0.3137 pp |
+| Overall strict micro | 69.5731% | 34.0401% | pending run completion | pending run completion | -35.5330 pp |
+| Overall invalid | 33 / 42,870 | 22,084 / 42,870 | pending run completion | pending run completion | +22,051 |
 
 The 32.7951% Crop strict value is dominated by answer-format noncompliance, not by
 42,870 missing or failed inferences. The policy commonly returns a choice plus
@@ -266,12 +306,12 @@ the permissive view.
 
 ### Runtime and agent behavior
 
-| Runtime observation | Original | Crop step 16 |
-| --- | ---: | ---: |
-| Four-GPU wall time through last rank | 1 h 25 min 30 s | 4 h 42 min 22 s |
-| Model interaction | One pass | Multi-turn agent loop |
-| Mean tool calls per task | 0 | 1.3077 overall |
-| Mean assistant turns per task | 1 | 2.3103 overall |
+| Runtime observation | Original | Crop step 16 | TGVF PRL17 step 16 | Crop+TGVF PRL20 step 16 |
+| --- | ---: | ---: | ---: | ---: |
+| Four-GPU wall time through last rank | 1 h 25 min 30 s | 4 h 42 min 22 s | pending run completion | pending run completion |
+| Model interaction | One pass | Multi-turn agent loop | Multi-turn agent loop | Multi-turn atomic-tool agent loop |
+| Mean tool calls per task | 0 | 1.3077 overall | pending run completion | pending run completion |
+| Mean assistant turns per task | 1 | 2.3103 overall | pending run completion | pending run completion |
 
 LAS&T was the expensive part of Crop inference: it averaged 3.5775 crop calls
 and 4.5913 assistant turns per question, with median per-row wall time 45.94 s
@@ -295,8 +335,23 @@ Durable output root:
 | --- | --- |
 | Original merged `results.jsonl` | `6063bc0b2852863726cc83bdf64e6b7bffb413302211731431a80cebb356d63f` |
 | Original `score.json` | `7eec5eb382b1b9bbaea21ceef1d707602bfcaf50153393e1e4cd81a285a5a779` |
+| Original `score-permissive.json` | `f7404060a8e3d967eaace0237ef495af3b80e66b21fdf0a80ce5b5e6ab01489c` |
 | Crop `score.json` | `71453305d4abeb1df4caf6c83adb4ae3a4d843ae41f8e6c8ee8b5ca9380d920e` |
+| Crop `score-permissive.json` | `ada6f178f8d0d26babd33b7eb56bcd54de62feaab8506ff91745c31cbe0b9f4e` |
 | Final `supervisor-summary.json` | `5c3730b5abd64d06729f831456b5e2974e751d87177de514c3eb439f40399ca4` |
+
+The two completed permissive artifacts are, respectively:
+
+```text
+/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-ORIGINAL-CROP-PRL14-STEP16-512-V1/original-qwen3-vl-8b-instruct/score-permissive.json
+/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-ORIGINAL-CROP-PRL14-STEP16-512-V1/crop-prl14-cleanfinal-step16/score-permissive.json
+```
+
+They are schema-v2, provenance-bound reparses of the immutable result rows and
+both carry the permissive parser-contract identity listed above. The original
+strict `score.json` files remain immutable schema-v1 evidence. The TGVF and
+Crop+TGVF result, score, rank-file, and completion hashes remain pending until
+their runs finish; no partial hash is promoted here.
 
 The completion summary is at
 `runtime/original-crop-step16-supervisor-v2/final/supervisor-summary.json`
@@ -315,19 +370,21 @@ merged Crop result file.
 An earlier v1 launch wrote zero result rows and stopped during vLLM startup
 because its durable temporary directory made the ZeroMQ Unix-socket path
 longer than Linux's 107-byte limit. No output from that attempt was accepted.
-The supervisor now uses short private `/tmp/t2a-*` paths; all results in this
-document come from the successful v2 run described above.
+The supervisor now uses short private `/tmp/t2a-*` paths; all numeric
+Original/Crop results in this document come from the successful v2 run
+described above.
 
-The relevant targeted CPU regression is `107 passed, 1 deselected, 0 failed`
-with two deprecation warnings. The one deselected test requires retired
-external step-80 snapshot directories and is unrelated to this benchmark.
-Ruff lint, Ruff formatting, shell syntax, JSON syntax, and `git diff --check`
-pass.
+For that completed baseline, the relevant targeted CPU regression was
+`107 passed, 1 deselected, 0 failed` with two deprecation warnings. The one
+deselected test requires retired external step-80 snapshot directories and is
+unrelated to this benchmark. Ruff lint, Ruff formatting, shell syntax, JSON
+syntax, and `git diff --check` passed for that accepted baseline revision.
 
 ### Interpretation and limitations
 
-- This is a complete **Original versus Crop step-16** comparison. TGVF was not
-  launched, and no trained atomic Crop+TGVF snapshot is locally available.
+- Original versus Crop step 16 is complete. The exact trained PRL17 TGVF-only
+  and PRL20 atomic Crop+TGVF step-16 closures are available and their full-suite
+  evaluations are in progress; pending cells are not yet scientific results.
 - LAS&T uses a deterministic project-derived population and metric, not a
   byte-for-byte reproduction of the upstream API evaluator or paper table.
 - MMAD uses the official dataset/task aggregation, but the one-shot pair is a
@@ -335,7 +392,7 @@ pass.
   permissive reparse while retaining the predeclared strict score artifact as
   a compliance diagnostic.
 - The 262,144-pixel setting is a processor area cap, not a literal square
-  resize. It is shared across both arms and all images.
+  resize. It is shared across all four arms and all images.
 - Strict valid-only scores diagnose formatting but cannot be interpreted as
   unbiased full-set accuracy. The main permissive MMAD view instead keeps the
   complete fixed denominator.
@@ -425,8 +482,10 @@ step-zero/required-nonzero `paired_rp66_pointer_path`, and a destination
 
 ### Evaluated and staged model closures
 
-As of 2026-08-13, three pipeline kinds on this host have passed full (not
-lightweight) integrity validation:
+As of 2026-08-14, exact closures exist for all four pipeline kinds. Original and
+Crop have complete texture results; PRL17 TGVF and PRL20 atomic Crop+TGVF are
+materialized against the same task and 512-area-cap contract and are being
+evaluated:
 
 - `original`: `/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct` (34 files,
   17,545,917,781 bytes, tree SHA-256
@@ -443,31 +502,43 @@ lightweight) integrity validation:
   `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-17-R2-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-novisual-8step-ws8/evaluation/PRL17-R2-FROZEN-RP67-TFREE-COREDEV2511-STEP0-STEP8-STEP16-PAIRED-SEED-V1/step16/runtime/`.
   Use `frozen-policy-config.toml`, `qwen-only-bundle/model`, and
   `rp66-state/step-00000016-pointer.json`; set optimizer step 16 and protocol
-  `training_run`. The paired receipt path is a new destination beneath the
-  matrix output rather than a pre-existing input.
+  `training_run`. Its `tgvf_only` profile exposes only `tgvf_focus_tool`, with
+  at most six calls. The source run identity is
+  `9c64b840e540fccd98bab30e2f05783b15f43dddcc0e926a1778e713a1f74746`.
+  The paired receipt path is a destination beneath the matrix output rather
+  than a pre-existing input.
+- `tgvf_crop`: PRL20-R0 RP67 T-free paired-seed step 16 under
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/evaluation/PRL20-R0-FROZEN-RP67-TFREE-CROP-TGVF-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/step16/runtime/`.
+  Use `frozen-policy-config.toml`, `qwen-only-bundle/model`, and
+  `rp66-state/step-00000016-pointer.json`; set optimizer step 16 and protocol
+  `training_run`. Its `crop_tgvf` profile exposes only the atomic
+  `tgvf_crop_tool`, with at most six calls. The source run identity is
+  `190c3db105c5e35d8d8aab4ad837409b4b39b8ce7f22e7b2393249a5e1898457`.
+  Its paired summary and `evaluation-complete` marker close the source CoreDev
+  evaluation; the texture run uses a new destination receipt and identity.
 
 The PRL14 step-8 Crop closure under the corresponding `step8/runtime/`
-directory is also staged and is what the general-purpose three-arm matrix
-below currently selects; it was not part of the completed result table. The
-step-16 snapshot's frozen base contract retains a historical PRL13 `run_id`.
+directory remains staged in the general-purpose three-arm matrix but is not
+part of the completed result table. Only that matrix's PRL17 TGVF arm is used
+for the in-progress TGVF row. The step-16 Crop snapshot's frozen base contract
+retains a historical PRL13 `run_id`.
 This is a non-blocking provenance label mismatch: the source checkpoint path,
 optimizer step, snapshot and weight identities, materialization receipt,
 model tree, and evaluation identity all bind the PRL14 step-16 closure used in
 the run.
 
-There is currently no trained policy config or snapshot with the atomic
-`crop_tgvf` tool profile anywhere in the local config/artifact inventory. The
-runtime supports that arm, but the complete-four-arm readiness gate
-intentionally fails until such a closure exists. The staged three-arm matrix
-can run now; a crop-only or TGVF-only snapshot must not be relabelled as
-`tgvf_crop`.
-
-The ready-to-run staged matrix is
-`configs/evaluation/texture_last_mmad_current_3arm_512_v1.json`. Its full
-42,870-image/task validation passes with matrix identity
-`23f2a9850518e6a0774b8767c221f102b62c1321f43e9618335a8875d9ada156`; it
-reports only `tgvf_crop` as missing. Outputs are rooted at
-`/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-CURRENT-3ARM-512-V1`.
+The PRL17 execution matrix is
+`configs/evaluation/texture_last_mmad_current_3arm_512_v1.json`, with identity
+`23f2a9850518e6a0774b8767c221f102b62c1321f43e9618335a8875d9ada156`.
+Its TGVF outputs are rooted at
+`/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-CURRENT-3ARM-512-V1/tgvf-prl17-r2-rp67-step16`.
+The PRL20 one-arm matrix is
+`configs/evaluation/texture_last_mmad_prl20_crop_tgvf_step16_512_v1.json`, with
+identity
+`25afd59c8602b1bd00751513fd6acb4ae79bd8571fa78fda2b68ec4203751ca1`.
+Its outputs are rooted at
+`/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-PRL20-CROP-TGVF-STEP16-512-V1/tgvf-crop-prl20-r0-rp67-step16`.
+Both matrices bind the full 42,870-task manifest and `max_pixels=262144`.
 
 Set the full evaluation environment once per shell:
 
@@ -570,17 +641,31 @@ PYTHONPATH="$TEXTURE_EVAL_PYTHONPATH" "$TEXTURE_EVAL_PY" \
   --output /absolute/path/to/score.json
 ```
 
-The saved scorer's strict parser counts missing or ambiguous answers as wrong. LAS&T
-uses the project-defined `four_condition_macro_accuracy`, plus physical-directory
-and micro diagnostics; the upstream paper does not define this aggregate as an
-official headline metric. MMAD merges `DS-MVTec` into `MVTec-AD`,
+Publish the report's main MMAD view as a separate, provenance-bound artifact:
+
+```bash
+PYTHONPATH="$TEXTURE_EVAL_PYTHONPATH" "$TEXTURE_EVAL_PY" \
+  tools/score_texture_benchmark.py \
+  --tasks /absolute/path/to/tasks.jsonl \
+  --results /absolute/path/to/results.jsonl \
+  --mmad-parser upstream-like-permissive \
+  --output /absolute/path/to/score-permissive.json
+```
+
+The default strict parser counts missing or ambiguous answers as wrong. LAS&T
+uses the project-defined `four_condition_macro_accuracy`, plus
+physical-directory and micro diagnostics; the upstream paper does not define
+this aggregate as an official headline metric. MMAD merges `DS-MVTec` into
+`MVTec-AD`,
 merges Object Structure/Details into Object Analysis, uses balanced accuracy
 for anomaly detection, macros over its seven tasks within each dataset, and
 then macros over the four datasets. The upstream-like permissive/fuzzy parser
-is available as a read-only reparse helper and is the main MMAD interpretation
-used in this report; it does not mutate the saved strict score. Every result row
-must bind both the exact `sample_id` and task-manifest SHA-256; ordinal-only or
-cross-manifest result files are rejected.
+is an explicit read-only reparse and is the main MMAD interpretation used in
+this report. It writes a separate `score-permissive.json` and never mutates the
+saved strict score or result rows. The score embeds the parser contract and its
+identity; a report must not infer that contract from the filename alone. Every
+result row must bind both the exact `sample_id` and task-manifest SHA-256;
+ordinal-only or cross-manifest result files are rejected.
 
 MMAD is pinned to the annotation SHA listed above. A newer local Git checkout
 has the same 8,366 images and 39,670 questions but changes 23 question records,
