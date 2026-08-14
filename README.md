@@ -286,6 +286,8 @@ be inherited silently from a library default.
 
 ## Documentation
 
+- [Policy RL small-batch Pilot 收官：Crop、TGVF 与组合工具](docs/POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md)
+- [Policy RL CoreDev-2511 统一测量标准与 canonical 主表](docs/POLICY_RL_COREDEV2511_MEASUREMENT_CONTRACT_AND_BASELINES_20260812.md)
 - [Policy RL primary baseline: Original / Crop / TGVF, Step 0 / Step 8](docs/POLICY_RL_PRIMARY_BASELINE_20260810.md)
 - [Project task and architectural baseline](docs/PROJECT_TASK.md)
 - [Open implementation contracts and promotion gates](docs/OPEN_IMPLEMENTATION_CONTRACTS.md)

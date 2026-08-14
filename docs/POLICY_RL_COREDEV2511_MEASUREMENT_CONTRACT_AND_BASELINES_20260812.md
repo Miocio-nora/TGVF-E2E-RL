@@ -2,7 +2,7 @@
 
 日期：2026-08-12
 
-结果更新：2026-08-13
+结果更新：2026-08-14
 
 状态：`PRIMARY MEASUREMENT CONTRACT / FROZEN V1`
 
@@ -13,11 +13,19 @@ Contract ID：`POLICY-RL-COREDEV2511-MEASUREMENT-20260812-v1`
 本文冻结两件事：
 
 1. CoreDev-2511 的统一测量与聚合口径；
-2. canonical 大表的汇报结构；实验结果持续按同一契约追加，当前更新至 2026-08-13。
+2. canonical 大表的汇报结构；实验结果持续按同一契约追加，当前更新至 2026-08-14。
 
 本文只替代旧文档中的 headline 聚合值，不否定旧文档记录的模型、prompt、checkpoint、训练配置与 artifact 身份。特别是 `docs/POLICY_RL_PRIMARY_BASELINE_20260810.md` 中使用 HRBench cycle 0 和 OCR Chinese-only 得到的旧均值，不再作为主汇报值。
 
-Crop Step 0/8/16 的同标准 `legacy-RNG` 结果位于第 3.1 节；RP67 T-free Step 0/8/16 `paired-seed-v1` 结果详记在第 7 节，joint/unfrozen RP67 Step 8/16 结果详记在第 8 节；两种 RP67 Adapter 更新方式的横向 paired 总表位于第 3.2 节。这些结果不修改本文件冻结的 benchmark、scorer、prompt、sampling 或聚合契约；第 3.1 节的 legacy-RNG 结果与第 3.2 节的 paired-seed-v1 结果必须按 RNG 身份分别引用。
+PRL13--PRL20 small-batch 阶段的统一结论、证据强度与后续边界，见
+[`POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md`](POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md)。
+
+Crop Step 0/8/16 的同标准 `legacy-RNG` 结果位于第 3.1 节；RP67 T-free
+Step 0/8/16 `paired-seed-v1` 结果详记在第 7 节，joint/unfrozen RP67 结果在第 8 节，
+Focus/Grounding 与 Atomic Crop+TGVF 分别在第 9、10 节；Frozen/Joint 横向 paired
+总表位于第 3.2 节。这些结果不修改本文件冻结的 benchmark、scorer、prompt、sampling
+或聚合契约；legacy-RNG、不同 paired namespace 与不同 prompt/tool schema 必须按身份
+分别引用。
 
 ## 0. 当前决策摘要
 
@@ -34,19 +42,23 @@ reward = T-free
 disabled reward = T/tool-utility, focus, grounding
 ```
 
-三条主要轨迹的一页摘要如下。Delta 只在同一行、同一 RNG block 内计算；Crop 与 RP67 之间不做严格 paired delta。
+五条主要轨迹的一页摘要如下。Delta 只在同一行、同一 RNG/protocol block 内计算；
+Crop、纯 TGVF 与 Crop+TGVF 之间不做严格 paired delta。
 
-| 线路 / RNG block | Step 0 | Step 8 | Step 16 | Step 16 − Step 0 |
+| 线路 / RNG block | Step 0 | Step 8 | Step 16 | 同块主要 delta |
 |---|---:|---:|---:|---:|
-| Crop clean → clean-final / legacy | 55.5742 | **59.7161** | 59.5502 | **+3.9760 pp** |
-| RP67 T-free Frozen / paired | 57.0320 | 56.1964 | **58.1996** | **+1.1675 pp** |
-| RP67 T-free Joint / paired | 57.0320 | 56.2035 | 56.5283 | -0.5038 pp |
+| Crop clean → clean-final / legacy | 55.5742 | **59.7161** | 59.5502 | S16−S0 **+3.9760 pp** |
+| RP67 T-free Frozen / paired | 57.0320 | 56.1964 | **58.1996** | S16−S0 **+1.1675 pp** |
+| RP67 T-free Joint / paired | 57.0320 | 56.2035 | 56.5283 | S16−S0 -0.5038 pp |
+| RP67 Frozen + F/G / paired | 57.0320 | **57.8849** | 57.5422 | S16−S0 +0.5102 pp |
+| RP67 Frozen T-free Crop+TGVF / own paired | — | **62.1168** | 60.9539 | S16−S8 -1.1629 pp |
 
 | 决策 | 当前证据 | 证据边界 |
 |---|---|---|
-| **Frozen Adapter** | 严格 paired 下，Frozen S16 `58.1996`，Joint S16 `56.5283`，Frozen 高 **`1.6713 pp`**；Joint S16 还低于 common S0 `57.0320` | 这是目前最强、最直接的因果对照；支持 RL 时冻结 RP67，只更新 full Qwen policy |
+| **Frozen Adapter** | 当前 single-seed matched control 下，Frozen S16 `58.1996`，Joint S16 `56.5283`，Frozen 高 **`1.6713 pp`**；Joint S16 还低于 common S0 `57.0320` | 这是目前最强、最直接的 control evidence；支持当前 RL 默认冻结 RP67、只更新 full Qwen policy，但不是多 seed 统计确认 |
 | **T-free reward** | legacy 筛选中，`+T` 为 `57.38 → 56.30`，T-free 为 `56.37 → 57.28`；随后 T-free paired S16 相对 common S0 为 **`+1.1675 pp`** | `+T` 与 T-free 尚不是共享随机流的严格 reward ablation；因此 T-free 是当前最受支持的默认，不写成已经统计证明的独立因果结论 |
 | **RP67** | RP67 是当前进入 paired policy-RL 主线并取得最佳 TGVF checkpoint 的 Stage 1 版本；其 image-axis 目标提供结构动机 | 本文没有提供 RP66 vs RP67 同 `paired-seed` 严格结果；因此 RP67 是当前工程默认，不是本表已单独证明优于 RP66 的结论 |
+| **Crop+TGVF** | Atomic 组合在自己的 paired block 中完成 S8/S16，S8 Macro* `62.1168`，证明组合协议兼容且具有很强 pilot 表现 | 没有组合 S0；Crop、纯 TGVF 与组合工具的 prompt/tool/RNG block 不同，不能把跨线路差值称为严格 synergy |
 
 因此，本文后续出现“当前 TGVF 默认线”时，均指 **RP67 + T-free + Frozen Adapter**。解冻 Adapter 不再作为默认设定；若再测，必须作为显式 ablation。
 
@@ -166,7 +178,7 @@ ABORTED / GREEDY-STABILITY STRESS DIAGNOSTIC / NOT ACCURACY EVIDENCE
 
 其 partial artifact 可以用于研究 termination pathology，但不得进入本文件主表。
 
-## 3. Canonical 大表（更新至 2026-08-13）
+## 3. Canonical 大表（更新至 2026-08-14）
 
 ### 3.1 Legacy-RNG 历史总表
 
@@ -433,4 +445,71 @@ artifacts/policy/PRL-18-R0-qwen3-instruct-full-joint-rp67-bs16-n16-tfree-novisua
 | joint Step 8 − frozen Step 8（56.1964） | +0.0070686 pp |
 | joint Step 16 − frozen Step 16（58.1996） | -1.6713050 pp |
 
-结论：当前结果不支持 joint Adapter update。joint Step 16 虽较自身 Step 8 增加 `+0.3248 pp`，但仍低于共同 Step 0，并显著落后 frozen Step 16；frozen Step 16 仍是最佳 checkpoint。分项表现是能力重分配而非一致提升，最明显的是 VStar `-6.81 pp`，同时 HR `+5.50 pp`、MathVerse `+3.40 pp`、MMMU-Pro `+1.49 pp`。`temperature=1` 单次采样的统计边界仍适用。
+结论：当前结果不支持 joint Adapter update。joint Step 16 虽较自身 Step 8 增加
+`+0.3248 pp`，但仍低于共同 Step 0，并显著落后 frozen Step 16；在这个纯 TGVF
+Frozen/Joint control block 中，frozen Step 16 仍是最佳 checkpoint。分项表现是能力
+重分配而非一致提升，最明显的是 VStar `-6.81 pp`，同时 HR `+5.50 pp`、
+MathVerse `+3.40 pp`、MMMU-Pro `+1.49 pp`。`temperature=1` 单次采样的统计边界
+仍适用。
+
+## 9. PRL19 Focus/Target + Grounding visual reward
+
+PRL19 保持 RP67、Frozen、T-free、BS16 × n16、world8、LR `1e-6` 与 policy/tool
+协议不变，只开启 gold-free Focus/Target 和 Grounding reward。其 matched paired
+Macro* 为：
+
+| checkpoint | Common S0 | No-visual | Visual | Visual − No-visual |
+|---|---:|---:|---:|---:|
+| Step 8 | 57.0320 | 56.1964 | **57.8849** | **+1.6885 pp** |
+| Step 16 | 57.0320 | **58.1996** | 57.5422 | `−0.6573 pp` |
+
+该结果不支持从 accuracy 单独判定 visual reward：Step 8 正向、Step 16 反向，且
+accuracy 不能直接测量 target 是否更依赖图像或 hallucination 是否降低。默认配方继续
+关闭 F/G；它们保留为需要独立 held-out foveation/grounding audit 的研究方向。
+
+Canonical artifact：
+
+```text
+artifacts/policy/
+  PRL-19-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-visual-api-8step-ws8/
+    evaluation/
+      PRL19-R0-FROZEN-RP67-TFREE-VISUAL-API-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/
+        paired-summary.json
+```
+
+summary SHA256：`581c37c8e68d1dbe30e7be715e4dfd53fa8cf983b2b266b379fc1db16aaee156`。
+
+## 10. PRL20 Atomic Crop+TGVF paired 结果
+
+PRL20 使用 `tgvf_crop_tool(bbox_2d,target)`：从不可变原图取得 crop，经 Qwen vision
+与 frozen RP67 生成 `D`，policy 只收到 `D`，不收到 crop RGB。T-free reward、
+BS16 × n16、world8 和 full-Qwen update 保持不变。Step 8/16 在组合工具自己的
+paired namespace 内完成 2,240 条单图推理；271 条多图显式 hold。
+
+| benchmark | Combo Step 8 | Combo Step 16 |
+|---|---:|---:|
+| VStarBench Overall | 70.1571 | 71.7277 |
+| HRBench Average / all | 73.0000 | 68.0000 |
+| BLINK single-image（180） | 65.0000 | 61.6667 |
+| OCR EN/CN mean | 53.4388 | 52.4690 |
+| MMMU-Pro single-image（269） | 47.9554 | 49.8141 |
+| MathVista MINI | 69.6667 | 67.0000 |
+| MathVerse five-version macro | 55.6000 | 56.0000 |
+| **Macro\*** | **62.1168** | **60.9539** |
+
+组合内部的有效 paired delta 为 Step 16 − Step 8 `−1.1629 pp`；Step 8 是当前
+观察到的最高 Macro* checkpoint。PRL20 没有组合工具 Step 0，且其 prompt/tool/RNG
+block 不同于纯 TGVF，Crop 历史值又属于 legacy-RNG。因此可以据此确认 Crop+TGVF
+兼容并具有很强 pilot 表现，但不能把跨线路差值称为严格 synergy。
+
+Canonical artifact：
+
+```text
+artifacts/policy/
+  PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/
+    evaluation/
+      PRL20-R0-FROZEN-RP67-TFREE-CROP-TGVF-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/
+        paired-summary.json
+```
+
+summary SHA256：`e45fa6876facc994b212ed6d7b63eaae221732b4d6a0ede6cb93add88e56fe57`。
