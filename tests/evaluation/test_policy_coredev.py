@@ -5,14 +5,17 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
+import tgvf_rl.evaluation.policy_coredev as policy_coredev
 from tgvf_rl.evaluation.policy_coredev import (
     CoreDevTask,
     PolicyCoreDevEvaluator,
     StandaloneTGVFVLLMManager,
     _TurnRoute,
     _termination_contract,
+    load_benchmark_tasks,
     load_coredev_tasks,
     load_policy_coredev_config,
     policy_version_from_pointer,
@@ -94,6 +97,63 @@ def test_coredev_task_loader_keeps_order_and_single_image_boundary(
     assert tasks[0].single_image is True
     assert tasks[3].single_image is False
     assert tasks[-1].ordinal == 2510
+
+
+def test_benchmark_loader_verifies_each_unique_bound_canvas_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = tmp_path / "shared.png"
+    image_path.write_bytes(b"verification is patched")
+    identities = (
+        ("a" * 64, [32, 24]),
+        ("a" * 64, [32, 24]),
+        ("b" * 64, [32, 24]),
+    )
+    rows = [
+        {
+            "ordinal": ordinal,
+            "dataset": "fixture",
+            "row_number": ordinal,
+            "index": f"sample-{ordinal}",
+            "sample_id": f"sample-{ordinal}",
+            "question": "question",
+            "image_paths": [str(image_path)],
+            "image_sha256s": [digest],
+            "image_dimensions": [dimensions],
+        }
+        for ordinal, (digest, dimensions) in enumerate(identities)
+    ]
+    manifest = tmp_path / "tasks.jsonl"
+    manifest.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    verified: list[tuple[Path, str, tuple[int, int]]] = []
+
+    def verify(task: CoreDevTask, image_index: int = 0) -> torch.Tensor:
+        verified.append(
+            (
+                Path(task.image_paths[image_index]),
+                task.image_sha256s[image_index],
+                task.image_dimensions[image_index],
+            )
+        )
+        return torch.zeros((24, 32, 3), dtype=torch.uint8)
+
+    monkeypatch.setattr(policy_coredev, "load_verified_task_image", verify)
+
+    tasks = load_benchmark_tasks(
+        manifest,
+        expected_task_count=3,
+        expected_single_image_count=3,
+    )
+
+    assert len(tasks) == 3
+    assert verified == [
+        (image_path, "a" * 64, (32, 24)),
+        (image_path, "b" * 64, (32, 24)),
+    ]
 
 
 def test_standalone_manager_forwards_atomic_crop_tgvf_as_one_collective() -> None:

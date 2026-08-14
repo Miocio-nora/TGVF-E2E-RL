@@ -1,16 +1,17 @@
 # 当前 TGVF / Crop Protocol 与实例
 
-更新日期：2026-08-08。
+更新日期：2026-08-13。
 
 本文记录当前实验实际使用的视觉工具交互方式，并给出可以直接用于
-人工检查 trajectory 的实例。这里的“当前”包含两条相互独立的线：
+人工检查 trajectory 的实例。这里的“当前”包含三条控制变量线：
 
 | 实验线 | 工具 | 当前协议 | 工具观测 |
 |---|---|---|---|
-| TGVF | `tgvf_focus_tool(target)` | Qwen3-Instruct visual-tool prompt v4；当前 shaped run 的 runtime cap 为 1 | target-conditioned latent `D`（含 D-DeepStack） |
+| TGVF | `tgvf_focus_tool(target)` | DeepEyes-matched clean-final；最多 6 次 | 原图条件的 latent `D`（含 D-DeepStack） |
 | Crop | `image_zoom_in_tool(bbox_2d, label?)` | PRL13 DeepEyes visible protocol，clean plain-final 版本 | 从不可变原图裁出的真实 RGB 图像 |
+| TGVF+Crop | `tgvf_crop_tool(bbox_2d, target)` | DeepEyes-matched clean-final；最多 6 次 | crop 条件的 latent `D`；不回传 RGB crop |
 
-这两条线共享“原图与问题 → 可选工具调用 → 工具观测 → 同一个 policy
+这三条线共享“原图与问题 → 可选工具调用 → 工具观测 → 同一个 policy
 继续回答”的总体结构，但不是同一个 prompt bundle。特别是，当前 Crop
 对照线使用 DeepEyes 的可见工具格式，而不是旧的项目自定义 Crop prompt。
 
@@ -18,8 +19,8 @@
 
 用户输入由一个原生 image content item 和问题文本组成。模型可以直接作答，
 也可以先调用视觉工具。一次 assistant action 至多包含一个工具调用；收到
-观测后由同一个 policy 继续生成。当前 TGVF shaped run 整条 trajectory 最多
-成功调用一次，PRL13 Crop 最多调用六次。
+观测后由同一个 policy 继续生成。当前 matched TGVF、Crop 与 TGVF+Crop
+整条 trajectory 均最多成功调用六次。
 
 当前 clean-final 约定如下：
 
@@ -83,28 +84,18 @@ assistant: <think>原图已经提供了足够证据。</think>
 | 不合适 | `answer the question carefully` | 没有可执行的视觉目标 |
 
 工具执行时，TGVF Adapter 使用原图视觉特征和该 target 的条件表示生成主
-`D` 与 D-DeepStack 分支。当前 Qwen3-Instruct v4 工具响应可以概念化为：
+`D` 与 D-DeepStack 分支。当前 matched 工具响应可以概念化为：
 
 ```text
 user/tool observation:
-Focused visual observation for target:
-"the text written above the logo on the jacket sleeve"
 [native image item whose visual embeddings are D + D-DeepStack]
-
-Think first, call an available visual tool if needed, then answer.
-[post-tool reasoning-format reminder]
+[same DeepEyes-matched post-tool instruction]
 ```
 
 方括号中的 latent payload 不是一段会显示给人的 description，也不会把
 识别出的答案写进响应文本。真正新增的视觉证据位于 embedding / DeepStack
-通道；响应文字只用于绑定 target 与本次观测。因此，不能把响应中的 target
-原样回显误认为 TGVF 已经给出了答案。
-
-需要额外注意一个当前实现事实：通用 TGVF system literal 仍写着“up to four
-times”，但 PRL09 stage3-shaped run 的冻结配置明确设置
-`maximum_tool_calls = 1`。本文件以实际 runtime cap 为准；第二次调用会触发
-cap error，而不是获得第二个 `D`。未来若恢复多次 TGVF 调用，必须建立新的
-prompt/config identity，不能把当前结果直接解释为四次调用协议。
+通道；响应文字不回显 target 或答案。target 与观测的精确绑定保存在 runtime
+identity 中，而不是泄露给 policy 的可见文本。
 
 ### 2.2 规范实例：读取小字
 
@@ -126,9 +117,8 @@ target-conditioned evidence for that exact text region.</think>
 </tool_call>
 
 user/tool observation:
-Focused visual observation for target:
-"the text written above the logo on the jacket sleeve"
 [latent D + D-DeepStack]
+[same DeepEyes-matched post-tool instruction]
 
 assistant:
 <think>The focused observation supports “epoc MIX”, which is option C.</think>
@@ -154,18 +144,19 @@ assistant:
 </tool_call>
 
 user/tool observation:
-Focused visual observation for target:
-"the blue backpack's position relative to the umbrella"
 [latent D + D-DeepStack]
+[same DeepEyes-matched post-tool instruction]
 
 assistant:
 <think>The backpack is below and to the right of the umbrella.</think>
 B
 ```
 
-这两个问题与 target 均来自现有 PRL09 step-80 CoreDev trajectory；上面的
-消息排版和短答案经过规范化，便于说明协议。真实 artifact 中模型有时会在
-最终答案前附加解释，或漏写 `<think>`，那是 compliance 现象，不是协议要求。
+这两个问题与 target 源于历史 PRL09 step-80 CoreDev trajectory，但上面的
+工具观测已经按当前 matched runtime 规范化：可见文本不再回显 target，视觉
+证据只存在于 D/D-DeepStack。消息排版和短答案也经过规范化，便于说明协议。
+真实 artifact 中模型有时会在最终答案前附加解释，或漏写 `<think>`，那是
+compliance 现象，不是协议要求。
 
 ## 3. Crop protocol
 
@@ -281,23 +272,63 @@ A
 这类两次调用不是“在第一次 crop 上再 crop”。两个 bbox 都映射回不可变
 原图；后续 assistant turn 只是能同时看到原图、第一次 crop 和第二次 crop。
 
-## 4. TGVF 与 Crop 的关键区别
+## 4. TGVF+Crop 原子协议
 
-| 维度 | TGVF | Crop |
-|---|---|---|
-| policy 决定什么 | `target`：看什么、提取什么 | `bbox_2d`：去哪里看 |
-| 新增观测 | target-conditioned latent `D` | 原图局部的真实 RGB pixels |
-| 是否必须定位框 | 否 | 是 |
-| 工具文本是否包含识别结果 | 否，只回显 target | 否，只附带 crop image |
-| 视觉信息的来源约束 | Adapter 应从原图视觉特征生成 `D` | 像素严格来自不可变原图 |
-| 当前调用上限 | PRL09 shaped runtime 为一次 | PRL13 DeepEyes 为六次 |
-| 最终答案格式 | plain text，无 `<answer>` | plain text，无 `<answer>` |
+组合线不是先调用 Crop、再调用 TGVF，而是一个原子工具：
+
+```json
+{
+  "name": "tgvf_crop_tool",
+  "arguments": {
+    "bbox_2d": [191, 766, 250, 816],
+    "target": "the woman's shirt color"
+  }
+}
+```
+
+一次执行严格按以下顺序进行：
+
+1. 从 trajectory 绑定的不可变原图按 `0..1000` bbox 裁图；
+2. 用同一 Qwen3-VL 视觉塔编码 crop；
+3. 用 sampled target hidden state 与 frozen RP67 从 crop 视觉特征生成 D；
+4. policy 只接收 D/D-DeepStack，不接收 RGB crop 或 raw crop features。
+
+相对纯 TGVF，唯一科学变量是 RP67 的视觉输入由原图变为 bbox crop。该线
+与当前 RP67 T-free frozen TGVF 保持同一 T1 数据、BS16 x n16、world8、
+LR `1e-6`、temperature 1、8-step 预算与 reward；Focus、Grounding、视觉
+API judge 和 tool-utility T 均关闭。
+
+```text
+assistant:
+<think>The woman is small; I need evidence from her shirt region.</think>
+<tool_call>
+{"name":"tgvf_crop_tool","arguments":{"bbox_2d":[191,766,250,816],"target":"the woman's shirt color"}}
+</tool_call>
+
+user/tool observation:
+[crop-conditioned latent D + D-DeepStack; no RGB crop, bbox, or target text]
+
+assistant:
+<think>The latent evidence supports purple.</think>
+B
+```
+
+## 5. 三条线的关键区别
+
+| 维度 | TGVF | Crop | TGVF+Crop |
+|---|---|---|---|
+| policy 决定什么 | `target` | `bbox_2d` | `bbox_2d + target` |
+| 新增观测 | 原图条件 latent D | RGB crop | crop 条件 latent D |
+| policy 可见 RGB crop | 否 | 是 | 否 |
+| 工具文本含识别结果 | 否 | 否 | 否 |
+| 当前调用上限 | 6 | 6 | 6 |
+| 最终答案格式 | plain text | plain text | plain text |
 
 最重要的解释差异是：Crop 的工具效果可以直接通过返回像素检查；TGVF 的
 效果必须通过 latent intervention、same-target/different-image 对照、D norm
 与最终答题效用共同验证，不能仅看 tool-call JSON 是否“像一个好 target”。
 
-## 5. 常见错误实例
+## 6. 常见错误实例
 
 ### 在 target 中泄露答案
 
@@ -342,23 +373,20 @@ B
 tool: The shirt is pink, therefore the answer is B.
 ```
 
-当前工具不会生成这段文字。正确的可见部分只绑定 target，答案相关视觉信息
-存在于 latent `D` 中。
+当前工具不会生成这段文字。答案相关视觉信息存在于 latent `D` 中，target
+与 bbox 只保存在不可见的执行绑定中。
 
-## 6. 实现与实例来源
+## 7. 实现与实例来源
 
 - 历史 Thinking/v3 prompt identity 与 Crop 坐标约定：[`TGVF_VISUAL_TOOL_PROMPTS_V3.md`](TGVF_VISUAL_TOOL_PROMPTS_V3.md)
-- TGVF prompt/schema 实现：[`src/tgvf_rl/protocol/tool_prompts.py`](../src/tgvf_rl/protocol/tool_prompts.py)
-- 当前 Instruct prompt identity：`tgvf-visual-tool-prompts-v4-instruct`，
-  TGVF-only bundle SHA-256 为
-  `04b575554c80a08b7db081ea87cd113e09396ab576479b01493acbcfa06a932d`。
-- 当前 TGVF shaped runtime cap：
-  [`configs/policy/runs/prl_09_r2_qwen3_instruct_grpo_bs16_tgvf_shaped_t1mixed_v2_80step_gpu0123.toml`](../configs/policy/runs/prl_09_r2_qwen3_instruct_grpo_bs16_tgvf_shaped_t1mixed_v2_80step_gpu0123.toml)
+- 当前 matched TGVF prompt：[`src/tgvf_rl/policy/tgvf_deepeyes_matched_protocol.py`](../src/tgvf_rl/policy/tgvf_deepeyes_matched_protocol.py)，bundle SHA-256 为
+  `e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633`。
+- 当前 matched TGVF+Crop prompt：[`src/tgvf_rl/policy/crop_tgvf_deepeyes_matched_protocol.py`](../src/tgvf_rl/policy/crop_tgvf_deepeyes_matched_protocol.py)，bundle SHA-256 为
+  `5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69`。
 - TGVF observation/runtime：[`src/tgvf_rl/environment/focus_tool.py`](../src/tgvf_rl/environment/focus_tool.py)
 - Crop 坐标修复说明：[`TGVF_VISUAL_TOOL_PROMPTS_V3.md`](TGVF_VISUAL_TOOL_PROMPTS_V3.md)
-- PRL13 Crop 的 DeepEyes clean-final 协议当前位于独立 integration checkout 的
-  `src/tgvf_rl/policy/deepeyes_official_protocol.py`；合并回主线时必须保持
-  `plain final answer`，不能恢复 `<answer>` wrapper。
+- Crop 的 DeepEyes clean-final 协议位于
+  [`src/tgvf_rl/policy/deepeyes_official_protocol.py`](../src/tgvf_rl/policy/deepeyes_official_protocol.py)。
 - 当前 Crop protocol identity 为 `deepeyes-system-v2-clean-final-v1`，bundle
   SHA-256 为
   `2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2`。

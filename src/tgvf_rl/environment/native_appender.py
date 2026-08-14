@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Protocol
 
 from tgvf_rl.observations.store import ObservationHandle
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_TOOL_NAME,
+    CROP_TGVF_DEEPEYES_MATCHED_USER_PROMPT,
+)
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_TOOL_NAME,
     TGVF_DEEPEYES_MATCHED_USER_PROMPT,
@@ -292,15 +296,59 @@ def render_qwen_native_matched_tgvf_success_environment_text(
     in; no accepted-call status, target echo, or answer wrapper is added.
     """
 
-    if not isinstance(parsed_call, ParsedToolCall):
-        raise TypeError("matched TGVF response requires a parsed TGVF call")
-    if parsed_call.name != TGVF_DEEPEYES_MATCHED_TOOL_NAME:
-        raise ValueError("matched TGVF response received another tool")
+    return _render_qwen_native_matched_latent_success_environment_text(
+        parsed_call,
+        assistant_dialect=assistant_dialect,
+        parsed_call_type=ParsedToolCall,
+        expected_tool_name=TGVF_DEEPEYES_MATCHED_TOOL_NAME,
+        user_prompt=TGVF_DEEPEYES_MATCHED_USER_PROMPT,
+        contract_label="TGVF",
+    )
+
+
+def render_qwen_native_matched_crop_tgvf_success_environment_text(
+    parsed_call: NativeToolCall,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    ),
+) -> str:
+    """Render one atomic Crop+TGVF ``D`` without echoing bbox or target."""
+
+    return _render_qwen_native_matched_latent_success_environment_text(
+        parsed_call,
+        assistant_dialect=assistant_dialect,
+        parsed_call_type=ParsedCropTGVFCall,
+        expected_tool_name=CROP_TGVF_DEEPEYES_MATCHED_TOOL_NAME,
+        user_prompt=CROP_TGVF_DEEPEYES_MATCHED_USER_PROMPT,
+        contract_label="Crop+TGVF",
+    )
+
+
+def _render_qwen_native_matched_latent_success_environment_text(
+    parsed_call: NativeToolCall,
+    *,
+    assistant_dialect: NativeAssistantDialect,
+    parsed_call_type: type[ParsedToolCall] | type[ParsedCropTGVFCall],
+    expected_tool_name: str,
+    user_prompt: str,
+    contract_label: str,
+) -> str:
+    if not isinstance(parsed_call, parsed_call_type):
+        raise TypeError(
+            f"matched {contract_label} response requires a parsed {contract_label} call"
+        )
+    if parsed_call.name != expected_tool_name:
+        raise ValueError(f"matched {contract_label} response received another tool")
     if assistant_dialect is not NativeAssistantDialect.QWEN3_VL_INSTRUCT:
-        raise ValueError("matched TGVF response requires Qwen3-VL Instruct")
-    payload = QWEN_NATIVE_IMAGE_PLACEHOLDER + TGVF_DEEPEYES_MATCHED_USER_PROMPT
-    if "<answer>" in payload:
-        raise RuntimeError("matched TGVF observation introduced an answer wrapper")
+        raise ValueError(
+            f"matched {contract_label} response requires Qwen3-VL Instruct"
+        )
+    payload = QWEN_NATIVE_IMAGE_PLACEHOLDER + user_prompt
+    if "<answer>" in payload or "</answer>" in payload:
+        raise RuntimeError(
+            f"matched {contract_label} observation introduced an answer wrapper"
+        )
     return (
         QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
         + payload
@@ -340,6 +388,7 @@ __all__ = [
     "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
     "QwenNativeToolObservationAppender",
     "qwen_native_response_suffix",
+    "render_qwen_native_matched_crop_tgvf_success_environment_text",
     "render_qwen_native_matched_tgvf_success_environment_text",
     "render_qwen_native_success_environment_text",
     "render_qwen_native_success_payload",

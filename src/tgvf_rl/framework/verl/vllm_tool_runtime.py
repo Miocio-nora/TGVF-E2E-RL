@@ -61,11 +61,16 @@ TGVF_ADAPTER_UPDATE_ACK_SCHEMA = "tgvf-vllm-adapter-owned-state-ack-v1"
 TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA = "tgvf-vllm-phase-boundary-quiesce-v1"
 TGVF_VLLM_FINISH_REASON_FIELD = "tgvf_vllm_finish_reason"
 TGVF_VLLM_STOP_REASON_FIELD = "tgvf_vllm_stop_reason"
+TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY = (
+    "agentloop_exact_rgb_then_qwen3_processor_then_colocated_vision_adapter-v1"
+)
 _SOURCE_WIRE_SCHEMA = "tgvf-source-visual-utility-wire-v1"
 _FOCUS_WIRE_SCHEMA = "tgvf-focus-utility-wire-v1"
+_CROP_TGVF_WIRE_SCHEMA = "tgvf-crop-focus-utility-wire-v1"
 _ADAPTER_OWNED_STATE_WIRE_SCHEMA = "tgvf-adapter-owned-state-utility-wire-v1"
-_CROP_TGVF_WIRE_SCHEMA = "tgvf-crop-tgvf-utility-wire-v1"
-TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY = "client-immutable-rgb-crop-qwen3-processor-v1"
+QWEN3_PREPROCESSED_VISUAL_IDENTITY_SCHEMA = (
+    "qwen3-preprocessed-visual-identity-v1"
+)
 
 
 logger = logging.getLogger(__name__)
@@ -226,6 +231,40 @@ def _tensor_from_utility_wire(value: Mapping[str, object]) -> torch.Tensor:
     if tensor.numel() != expected:
         raise ValueError("TGVF utility tensor byte length differs from shape")
     return tensor.reshape(normalized_shape)
+
+
+def preprocessed_visual_identity_sha256(
+    pixel_values: torch.Tensor,
+    image_grid_thw: torch.Tensor | Sequence[int],
+) -> str:
+    """Bind the exact Qwen visual input tensor and its token geometry.
+
+    The decoded RGB digest alone cannot prove which preprocessed tensor crossed
+    the two vLLM utility hops.  This identity is recomputed at every boundary,
+    so a stale/swapped tensor cannot borrow the crop's RGB digest.
+    """
+
+    if not isinstance(pixel_values, torch.Tensor) or pixel_values.ndim != 2:
+        raise ValueError("visual pixel_values must have shape [N,patch]")
+    if isinstance(image_grid_thw, torch.Tensor):
+        if image_grid_thw.shape != (1, 3):
+            raise ValueError("visual image_grid_thw must have shape [1,3]")
+        grid = tuple(int(value) for value in image_grid_thw[0].tolist())
+    else:
+        if isinstance(image_grid_thw, (str, bytes)):
+            raise TypeError("visual image_grid_thw must be a three-value sequence")
+        grid = tuple(image_grid_thw)
+        if len(grid) != 3 or any(type(value) is not int for value in grid):
+            raise ValueError("visual image_grid_thw must contain three integers")
+    if any(value <= 0 for value in grid):
+        raise ValueError("visual image_grid_thw values must be positive")
+    return state_digest(
+        {
+            "schema_version": QWEN3_PREPROCESSED_VISUAL_IDENTITY_SCHEMA,
+            "pixel_values": pixel_values,
+            "image_grid_thw": grid,
+        }
+    )
 
 
 def _normalized_adapter_owned_state(
@@ -465,10 +504,45 @@ def _focus_from_utility_wire(
 
 
 def _crop_tgvf_to_utility_wire(
-    value: TGVFCropTGVFMaterializationResult,
+    value: TGVFCropMaterializationResult | TGVFCropTGVFMaterializationResult,
 ) -> dict[str, object]:
+    if isinstance(value, TGVFCropTGVFMaterializationResult):
+        return {
+            "schema": _CROP_TGVF_WIRE_SCHEMA,
+            "crop_visual": _source_to_utility_wire(value.crop_visual),
+            "focus": _focus_to_utility_wire(
+                TGVFFocusMaterializationResult(
+                    hq=value.hq,
+                    observation=value.observation,
+                )
+            ),
+            "audit": {
+                "trajectory_id": value.trajectory_id,
+                "call_index": value.call_index,
+                "source_image_sha256": value.source_image_sha256,
+                "crop_rgb_sha256": value.crop_rgb_sha256,
+                "source_width": value.source_width,
+                "source_height": value.source_height,
+                "crop_bbox": list(value.crop_bbox),
+                "crop_width": value.crop_width,
+                "crop_height": value.crop_height,
+                "preprocessing_boundary": value.preprocessing_boundary,
+            },
+        }
+    if not isinstance(value, TGVFCropMaterializationResult):
+        raise TypeError("crop+TGVF utility wire requires a typed result")
     return {
         "schema": _CROP_TGVF_WIRE_SCHEMA,
+        "source_image_sha256": value.source_image_sha256,
+        "crop_sha256": value.crop_sha256,
+        "preprocessed_visual_sha256": value.preprocessed_visual_sha256,
+        "image_grid_thw": list(value.image_grid_thw),
+        "call_index": value.call_index,
+        "model_bbox_2d": list(value.model_bbox_2d),
+        "target_start": value.target_start,
+        "target_end": value.target_end,
+        "target_token_ids": list(value.target_token_ids),
+        "provider": value.provider,
         "crop_visual": _source_to_utility_wire(value.crop_visual),
         "focus": _focus_to_utility_wire(
             TGVFFocusMaterializationResult(
@@ -476,58 +550,109 @@ def _crop_tgvf_to_utility_wire(
                 observation=value.observation,
             )
         ),
-        "audit": {
-            "trajectory_id": value.trajectory_id,
-            "call_index": value.call_index,
-            "source_image_sha256": value.source_image_sha256,
-            "crop_rgb_sha256": value.crop_rgb_sha256,
-            "source_width": value.source_width,
-            "source_height": value.source_height,
-            "crop_bbox": list(value.crop_bbox),
-            "crop_width": value.crop_width,
-            "crop_height": value.crop_height,
-            "preprocessing_boundary": value.preprocessing_boundary,
-        },
     }
 
 
 def _crop_tgvf_from_utility_wire(
     value: Mapping[str, object],
-) -> TGVFCropTGVFMaterializationResult:
+) -> TGVFCropMaterializationResult | TGVFCropTGVFMaterializationResult:
     if value.get("schema") != _CROP_TGVF_WIRE_SCHEMA:
         raise ValueError("vLLM crop+TGVF utility wire schema differs")
+    if "audit" in value:
+        expected_keys = {"schema", "crop_visual", "focus", "audit"}
+        if set(value) != expected_keys:
+            raise ValueError("geometry-bound crop+TGVF utility wire keys differ")
+        focus = _focus_from_utility_wire(
+            _wire_mapping(value.get("focus"), owner="crop+TGVF focus")
+        )
+        audit = _wire_mapping(value.get("audit"), owner="crop+TGVF audit")
+        crop_bbox = _wire_integer_tuple(
+            audit.get("crop_bbox"), owner="crop+TGVF bbox"
+        )
+        if len(crop_bbox) != 4:
+            raise ValueError("crop+TGVF bbox must contain four values")
+        return TGVFCropTGVFMaterializationResult(
+            crop_visual=_source_from_utility_wire(
+                _wire_mapping(value.get("crop_visual"), owner="crop+TGVF visual")
+            ),
+            hq=focus.hq,
+            observation=focus.observation,
+            trajectory_id=_wire_string(
+                audit.get("trajectory_id"), owner="crop+TGVF trajectory"
+            ),
+            call_index=_wire_integer(
+                audit.get("call_index"), owner="crop+TGVF call index"
+            ),
+            source_image_sha256=_wire_string(
+                audit.get("source_image_sha256"), owner="source image SHA256"
+            ),
+            crop_rgb_sha256=_wire_string(
+                audit.get("crop_rgb_sha256"), owner="crop RGB SHA256"
+            ),
+            source_width=_wire_integer(
+                audit.get("source_width"), owner="source width"
+            ),
+            source_height=_wire_integer(
+                audit.get("source_height"), owner="source height"
+            ),
+            crop_bbox=(crop_bbox[0], crop_bbox[1], crop_bbox[2], crop_bbox[3]),
+            crop_width=_wire_integer(audit.get("crop_width"), owner="crop width"),
+            crop_height=_wire_integer(
+                audit.get("crop_height"), owner="crop height"
+            ),
+            preprocessing_boundary=_wire_string(
+                audit.get("preprocessing_boundary"),
+                owner="crop+TGVF preprocessing boundary",
+            ),
+        )
+    expected_keys = {
+        "schema",
+        "source_image_sha256",
+        "crop_sha256",
+        "preprocessed_visual_sha256",
+        "image_grid_thw",
+        "call_index",
+        "model_bbox_2d",
+        "target_start",
+        "target_end",
+        "target_token_ids",
+        "provider",
+        "crop_visual",
+        "focus",
+    }
+    if set(value) != expected_keys:
+        raise ValueError("vLLM crop+TGVF utility wire keys differ")
     focus = _focus_from_utility_wire(
         _wire_mapping(value.get("focus"), owner="crop+TGVF focus")
     )
-    audit = _wire_mapping(value.get("audit"), owner="crop+TGVF audit")
-    crop_bbox = _wire_integer_tuple(audit.get("crop_bbox"), owner="crop+TGVF bbox")
-    if len(crop_bbox) != 4:
-        raise ValueError("crop+TGVF bbox must contain four values")
-    return TGVFCropTGVFMaterializationResult(
-        crop_visual=_source_from_utility_wire(
-            _wire_mapping(value.get("crop_visual"), owner="crop+TGVF visual")
-        ),
-        hq=focus.hq,
-        observation=focus.observation,
-        trajectory_id=_wire_string(
-            audit.get("trajectory_id"), owner="crop+TGVF trajectory"
-        ),
-        call_index=_wire_integer(audit.get("call_index"), owner="crop+TGVF call index"),
+    bbox = _wire_integer_tuple(value.get("model_bbox_2d"), owner="model bbox")
+    if len(bbox) != 4:
+        raise ValueError("vLLM crop+TGVF model bbox must contain four values")
+    return TGVFCropMaterializationResult(
         source_image_sha256=_wire_string(
-            audit.get("source_image_sha256"), owner="source image SHA256"
+            value.get("source_image_sha256"), owner="source image SHA256"
         ),
-        crop_rgb_sha256=_wire_string(
-            audit.get("crop_rgb_sha256"), owner="crop RGB SHA256"
+        crop_sha256=_wire_string(value.get("crop_sha256"), owner="crop SHA256"),
+        preprocessed_visual_sha256=_wire_string(
+            value.get("preprocessed_visual_sha256"),
+            owner="preprocessed visual SHA256",
         ),
-        source_width=_wire_integer(audit.get("source_width"), owner="source width"),
-        source_height=_wire_integer(audit.get("source_height"), owner="source height"),
-        crop_bbox=(crop_bbox[0], crop_bbox[1], crop_bbox[2], crop_bbox[3]),
-        crop_width=_wire_integer(audit.get("crop_width"), owner="crop width"),
-        crop_height=_wire_integer(audit.get("crop_height"), owner="crop height"),
-        preprocessing_boundary=_wire_string(
-            audit.get("preprocessing_boundary"),
-            owner="crop+TGVF preprocessing boundary",
+        image_grid_thw=tuple(
+            _wire_integer_tuple(value.get("image_grid_thw"), owner="image grid THW")
         ),
+        call_index=_wire_integer(value.get("call_index"), owner="call index"),
+        model_bbox_2d=(bbox[0], bbox[1], bbox[2], bbox[3]),
+        target_start=_wire_integer(value.get("target_start"), owner="target start"),
+        target_end=_wire_integer(value.get("target_end"), owner="target end"),
+        target_token_ids=_wire_integer_tuple(
+            value.get("target_token_ids"), owner="target token IDs"
+        ),
+        provider=_wire_string(value.get("provider"), owner="conditioning provider"),
+        hq=focus.hq,
+        crop_visual=_source_from_utility_wire(
+            _wire_mapping(value.get("crop_visual"), owner="crop visual")
+        ),
+        observation=focus.observation,
     )
 
 
@@ -676,6 +801,73 @@ class TGVFFocusMaterializationResult:
             raise ValueError("TGVF focus Hq must be a rank-two tensor")
         if not isinstance(self.observation, PrecomputedTGVFObservationPayload):
             raise TypeError("TGVF focus result requires a typed observation payload")
+
+
+@dataclass(frozen=True, slots=True)
+class TGVFCropMaterializationResult:
+    """Exact atomic crop/target/result binding returned by one vLLM RPC."""
+
+    source_image_sha256: str
+    crop_sha256: str
+    preprocessed_visual_sha256: str
+    image_grid_thw: tuple[int, int, int]
+    call_index: int
+    model_bbox_2d: tuple[int, int, int, int]
+    target_start: int
+    target_end: int
+    target_token_ids: tuple[int, ...]
+    provider: str
+    hq: torch.Tensor
+    crop_visual: SourceVisualTensorBundle
+    observation: PrecomputedTGVFObservationPayload
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.source_image_sha256, owner="source image SHA256")
+        _require_sha256(self.crop_sha256, owner="crop SHA256")
+        _require_sha256(
+            self.preprocessed_visual_sha256,
+            owner="preprocessed visual SHA256",
+        )
+        if len(self.image_grid_thw) != 3 or any(
+            type(value) is not int or value <= 0 for value in self.image_grid_thw
+        ):
+            raise ValueError("crop+TGVF image grid THW is invalid")
+        if type(self.call_index) is not int or self.call_index < 0:
+            raise ValueError("crop+TGVF call index must be non-negative")
+        if (
+            len(self.model_bbox_2d) != 4
+            or any(type(value) is not int for value in self.model_bbox_2d)
+            or not all(0 <= value <= 1000 for value in self.model_bbox_2d)
+            or self.model_bbox_2d[0] >= self.model_bbox_2d[2]
+            or self.model_bbox_2d[1] >= self.model_bbox_2d[3]
+        ):
+            raise ValueError("crop+TGVF model bbox is invalid")
+        if (
+            type(self.target_start) is not int
+            or type(self.target_end) is not int
+            or self.target_start < 0
+            or self.target_end <= self.target_start
+            or len(self.target_token_ids) != self.target_end - self.target_start
+            or any(type(value) is not int for value in self.target_token_ids)
+        ):
+            raise ValueError("crop+TGVF target binding is invalid")
+        if self.provider not in {
+            "contextual_hidden_state",
+            "target_token_embedding",
+        }:
+            raise ValueError("crop+TGVF conditioning provider is invalid")
+        if not isinstance(self.hq, torch.Tensor) or self.hq.ndim != 2:
+            raise ValueError("crop+TGVF Hq must be a rank-two tensor")
+        if not isinstance(self.crop_visual, SourceVisualTensorBundle):
+            raise TypeError("crop+TGVF result requires a typed crop visual")
+        if self.crop_visual.image_sha256 != self.crop_sha256 or (
+            self.crop_visual.decoded_rgb_sha256 != self.crop_sha256
+        ):
+            raise IdentityMismatchError("crop visual differs from exact crop identity")
+        if self.crop_visual.image_grid_thw != self.image_grid_thw:
+            raise IdentityMismatchError("crop visual differs from preprocessed geometry")
+        if not isinstance(self.observation, PrecomputedTGVFObservationPayload):
+            raise TypeError("crop+TGVF result requires a typed D payload")
 
 
 def _logical_tensor_bytes(value: object) -> int:
@@ -977,78 +1169,103 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
     def tgvf_materialize_crop_tgvf(
         self,
         trajectory_id: str,
+        backend_request_id: str,
         call_index: int,
         pixel_values_wire: Mapping[str, object],
         image_grid_thw: Sequence[int],
         source_image_sha256: str,
-        crop_rgb_sha256: str,
-        source_width: int,
-        source_height: int,
-        crop_bbox: Sequence[int],
-        crop_width: int,
-        crop_height: int,
-        preprocessing_boundary: str,
-        backend_request_id: str,
+        crop_sha256: str,
+        preprocessed_visual_sha256: str,
+        model_bbox_2d: Sequence[int],
         target_start: int,
         target_end: int,
         expected_target_token_ids: tuple[int, ...],
         provider: str,
     ) -> dict[str, object]:
-        """Materialize crop vision and TGVF in one colocated worker RPC.
+        """Materialize crop vision and frozen RP67 as one bound operation."""
 
-        The caller owns immutable-source cropping and Qwen preprocessing.  The
-        worker verifies the accompanying audit identity, forwards those exact
-        processor tensors through its resident vision tower, and consumes the
-        resulting crop pre-merge tensors in the Adapter before returning.
-        """
-
-        _validate_crop_tgvf_audit(
-            trajectory_id=trajectory_id,
-            call_index=call_index,
-            source_image_sha256=source_image_sha256,
-            crop_rgb_sha256=crop_rgb_sha256,
-            source_width=source_width,
-            source_height=source_height,
-            crop_bbox=crop_bbox,
-            crop_width=crop_width,
-            crop_height=crop_height,
-            preprocessing_boundary=preprocessing_boundary,
-        )
+        if not trajectory_id:
+            raise ValueError("crop+TGVF trajectory_id must be non-empty")
+        if type(call_index) is not int or call_index < 0:
+            raise ValueError("crop+TGVF call_index must be non-negative")
         source = self._tgvf_sources().get(trajectory_id)
         if source is None:
-            raise RuntimeError("crop+TGVF source was not materialized on this worker")
-        if source.image_sha256 != source_image_sha256:
-            raise RuntimeError("crop+TGVF immutable source image identity changed")
-        crop_visual = self._tgvf_materialize_visual(
-            pixel_values=_tensor_from_utility_wire(pixel_values_wire),
-            image_grid_thw=torch.tensor((tuple(image_grid_thw),), dtype=torch.long),
-            image_sha256=crop_rgb_sha256,
+            raise RuntimeError(
+                "crop+TGVF source was not materialized on this vLLM worker"
+            )
+        expected_source_sha256 = _require_sha256(
+            source_image_sha256, owner="crop+TGVF source image SHA256"
         )
-        focus = self._tgvf_materialize_focus_for_source(
-            source=crop_visual,
+        if source.image_sha256 != expected_source_sha256:
+            raise IdentityMismatchError("crop+TGVF immutable source identity changed")
+        bbox = tuple(model_bbox_2d)
+        if (
+            len(bbox) != 4
+            or any(type(value) is not int for value in bbox)
+            or not all(0 <= value <= 1000 for value in bbox)
+            or bbox[0] >= bbox[2]
+            or bbox[1] >= bbox[3]
+        ):
+            raise ValueError("crop+TGVF model bbox is invalid")
+        crop_digest = _require_sha256(crop_sha256, owner="crop+TGVF crop SHA256")
+        pixel_values = _tensor_from_utility_wire(pixel_values_wire)
+        grid = torch.tensor((tuple(image_grid_thw),), dtype=torch.long)
+        expected_preprocessed_visual_sha256 = _require_sha256(
+            preprocessed_visual_sha256,
+            owner="crop+TGVF preprocessed visual SHA256",
+        )
+        observed_preprocessed_visual_sha256 = preprocessed_visual_identity_sha256(
+            pixel_values,
+            grid,
+        )
+        if (
+            observed_preprocessed_visual_sha256
+            != expected_preprocessed_visual_sha256
+        ):
+            raise IdentityMismatchError(
+                "crop+TGVF preprocessed visual content changed across RPC"
+            )
+        crop_visual = self._tgvf_materialize_visual(
+            pixel_values=pixel_values,
+            image_grid_thw=grid,
+            image_sha256=crop_digest,
+        )
+        expected_tokens = tuple(expected_target_token_ids)
+        hq = self._tgvf_target_hidden_states(
             backend_request_id=backend_request_id,
             target_start=target_start,
             target_end=target_end,
-            expected_target_token_ids=expected_target_token_ids,
+            expected_target_token_ids=expected_tokens,
             provider=provider,
         )
-        return _crop_tgvf_to_utility_wire(
-            TGVFCropTGVFMaterializationResult(
-                crop_visual=crop_visual,
-                hq=focus.hq,
-                observation=focus.observation,
-                trajectory_id=trajectory_id,
-                call_index=call_index,
-                source_image_sha256=source_image_sha256,
-                crop_rgb_sha256=crop_rgb_sha256,
-                source_width=source_width,
-                source_height=source_height,
-                crop_bbox=tuple(crop_bbox),
-                crop_width=crop_width,
-                crop_height=crop_height,
-                preprocessing_boundary=preprocessing_boundary,
+        adapter = self._tgvf_adapter()
+        with torch.inference_mode():
+            output = adapter(
+                TGVFAdapterInput(
+                    target_hidden_states=hq,
+                    pre_merge_visual_tokens=crop_visual.premerge_main,
+                    deepstack_pre_merge_visual_tokens=(
+                        crop_visual.premerge_deepstack
+                    ),
+                )
             )
+        self._tgvf_traces().pop(backend_request_id, None)
+        result = TGVFCropMaterializationResult(
+            source_image_sha256=expected_source_sha256,
+            crop_sha256=crop_digest,
+            preprocessed_visual_sha256=expected_preprocessed_visual_sha256,
+            image_grid_thw=tuple(int(value) for value in grid[0].tolist()),
+            call_index=call_index,
+            model_bbox_2d=(bbox[0], bbox[1], bbox[2], bbox[3]),
+            target_start=target_start,
+            target_end=target_end,
+            target_token_ids=expected_tokens,
+            provider=provider,
+            hq=hq.detach().cpu(),
+            crop_visual=_source_to_cpu(crop_visual),
+            observation=_adapter_payload_to_cpu(output),
         )
+        return _crop_tgvf_to_utility_wire(result)
 
     def _tgvf_materialize_visual(
         self,
@@ -1184,6 +1401,42 @@ class TGVFVLLMWorkerExtension(_VerlVLLMWorkerExtension):
             hq=hq.detach().cpu(),
             observation=_adapter_payload_to_cpu(output),
         )
+
+    def _tgvf_target_hidden_states(
+        self,
+        *,
+        backend_request_id: str,
+        target_start: int,
+        target_end: int,
+        expected_target_token_ids: tuple[int, ...],
+        provider: str,
+    ) -> torch.Tensor:
+        if target_start < 0 or target_end <= target_start:
+            raise ValueError("target span must be non-empty")
+        expected = tuple(expected_target_token_ids)
+        if len(expected) != target_end - target_start:
+            raise ValueError("target token IDs do not cover target span")
+        model = self._tgvf_model()
+        if provider == "contextual_hidden_state":
+            trace = self._tgvf_traces().get(backend_request_id)
+            if trace is None:
+                raise RuntimeError("behavior trace is unavailable for the tool turn")
+            if target_end > trace.capacity or not all(
+                trace.covered[target_start:target_end]
+            ):
+                raise RuntimeError(
+                    "behavior forward did not cover every sampled target token"
+                )
+            return trace.hidden[target_start:target_end].detach().clone()
+        if provider == "target_token_embedding":
+            token_ids = torch.tensor(
+                expected,
+                device=next(model.language_model.parameters()).device,
+                dtype=torch.long,
+            )
+            with torch.inference_mode():
+                return model.language_model.embed_input_ids(token_ids).detach()
+        raise ValueError("unknown target-conditioning provider")
 
     def tgvf_release_trajectory(
         self,
@@ -1757,6 +2010,19 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
                 3,
             ):
                 raise TypeError("crop+TGVF image_grid_thw must be a [1,3] tensor")
+            expected_preprocessed_visual_sha256 = kwargs.get(
+                "preprocessed_visual_sha256"
+            )
+            if (
+                expected_preprocessed_visual_sha256
+                != preprocessed_visual_identity_sha256(
+                    pixel_values,
+                    image_grid_thw,
+                )
+            ):
+                raise IdentityMismatchError(
+                    "crop+TGVF HTTP boundary received different preprocessed content"
+                )
             kwargs["pixel_values_wire"] = _tensor_to_utility_wire(pixel_values)
             kwargs["image_grid_thw"] = tuple(
                 int(value) for value in image_grid_thw[0].tolist()
@@ -1965,51 +2231,81 @@ def _runtime_classes() -> tuple[type[Any], type[Any], type[Any], type[Any]]:
             pixel_values: torch.Tensor,
             image_grid_thw: torch.Tensor,
             source_image_sha256: str,
-            crop_rgb_sha256: str,
-            source_width: int,
-            source_height: int,
-            crop_bbox: tuple[int, int, int, int],
-            crop_width: int,
-            crop_height: int,
+            crop_sha256: str,
+            preprocessed_visual_sha256: str,
+            model_bbox_2d: tuple[int, int, int, int],
             target_start: int,
             target_end: int,
             expected_target_token_ids: tuple[int, ...],
             provider: str,
-        ) -> TGVFCropTGVFMaterializationResult:
-            """Run crop vision plus Adapter after client-side crop preprocessing."""
-
+        ) -> TGVFCropMaterializationResult:
             turn = self._tgvf_turns.get(request_id)
             if turn is None or turn.output_ids != tuple(sampled_output_ids):
-                raise RuntimeError("crop+TGVF call differs from the last vLLM turn")
+                raise RuntimeError(
+                    "crop+TGVF tool call differs from the last vLLM turn"
+                )
             if turn.global_step != expected_step:
-                raise RuntimeError("crop+TGVF call policy step changed")
+                raise RuntimeError("crop+TGVF tool call policy step changed")
             if turn.output_ids[target_start:target_end] != tuple(
                 expected_target_token_ids
             ):
-                raise RuntimeError("crop+TGVF target tokens differ from sampled output")
+                raise RuntimeError(
+                    "crop+TGVF target tokens differ from sampled output"
+                )
+            if preprocessed_visual_sha256 != preprocessed_visual_identity_sha256(
+                pixel_values,
+                image_grid_thw,
+            ):
+                raise IdentityMismatchError(
+                    "crop+TGVF manager received different preprocessed content"
+                )
             _server_id, server = await self._route(request_id)
             result = await server.tgvf_materialize_crop_tgvf.remote(
                 expected_step=expected_step,
                 trajectory_id=request_id,
+                backend_request_id=turn.backend_request_id,
                 call_index=call_index,
                 pixel_values=pixel_values,
                 image_grid_thw=image_grid_thw,
                 source_image_sha256=source_image_sha256,
-                crop_rgb_sha256=crop_rgb_sha256,
-                source_width=source_width,
-                source_height=source_height,
-                crop_bbox=crop_bbox,
-                crop_width=crop_width,
-                crop_height=crop_height,
-                preprocessing_boundary=TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
-                backend_request_id=turn.backend_request_id,
+                crop_sha256=crop_sha256,
+                preprocessed_visual_sha256=preprocessed_visual_sha256,
+                model_bbox_2d=model_bbox_2d,
                 target_start=target_start,
                 target_end=target_end,
                 expected_target_token_ids=tuple(expected_target_token_ids),
                 provider=provider,
             )
-            if not isinstance(result, TGVFCropTGVFMaterializationResult):
+            if not isinstance(result, TGVFCropMaterializationResult):
                 raise TypeError("vLLM crop+TGVF RPC returned an untyped result")
+            expected_binding = (
+                source_image_sha256,
+                crop_sha256,
+                preprocessed_visual_sha256,
+                tuple(int(value) for value in image_grid_thw[0].tolist()),
+                call_index,
+                tuple(model_bbox_2d),
+                target_start,
+                target_end,
+                tuple(expected_target_token_ids),
+                provider,
+            )
+            actual_binding = (
+                result.source_image_sha256,
+                result.crop_sha256,
+                result.preprocessed_visual_sha256,
+                result.image_grid_thw,
+                result.call_index,
+                result.model_bbox_2d,
+                result.target_start,
+                result.target_end,
+                result.target_token_ids,
+                result.provider,
+            )
+            if actual_binding != expected_binding:
+                raise IdentityMismatchError(
+                    "vLLM crop+TGVF result identity differs from sampled call"
+                )
             return result
 
         async def generate(
@@ -2225,15 +2521,18 @@ def bind_tgvf_adapter_state_update_manager(
 
 
 __all__ = [
+    "QWEN3_PREPROCESSED_VISUAL_IDENTITY_SCHEMA",
     "TGVF_ADAPTER_UPDATE_ACK_SCHEMA",
     "TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY",
     "TGVF_PHASE_BOUNDARY_QUIESCE_SCHEMA",
     "TGVF_TWO_MODEL_RUNTIME_SCHEMA",
     "TGVFCropTGVFMaterializationResult",
     "TGVFFocusMaterializationResult",
+    "TGVFCropMaterializationResult",
     "TGVF_VLLM_WORKER_EXTENSION_FQN",
     "TGVFVLLMWorkerExtension",
     "adapter_owned_state_sha256",
     "bind_tgvf_adapter_state_update_manager",
+    "preprocessed_visual_identity_sha256",
     "tgvf_llm_server_manager_class",
 ]

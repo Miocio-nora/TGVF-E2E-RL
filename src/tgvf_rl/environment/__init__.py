@@ -54,6 +54,7 @@ from .crop_tgvf_tool import (
     CropTGVFReplayLayoutBuilder,
     CropTGVFToolExecutionRequest,
     CropTGVFToolExecutionResult,
+    CropTGVFVisualMaterialization,
     CropTGVFVisualMaterializer,
 )
 from .crop_tgvf_runtime import AtomicCropTGVFToolRuntime
@@ -94,6 +95,7 @@ __all__ = [
     "CropTGVFReplayLayoutBuilder",
     "CropTGVFToolExecutionRequest",
     "CropTGVFToolExecutionResult",
+    "CropTGVFVisualMaterialization",
     "CropTGVFVisualMaterializer",
     "ImageZoomInTool",
     "ImageZoomInToolRuntime",

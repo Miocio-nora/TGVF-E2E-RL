@@ -3,6 +3,7 @@
 from .errors import (
     ContractUnsetError,
     IdentityMismatchError,
+    PolicyOutputContractError,
     ReplayMismatchError,
     UnsupportedSupportLevelError,
 )
@@ -16,6 +17,7 @@ from .sampling import (
 __all__ = [
     "ContractUnsetError",
     "IdentityMismatchError",
+    "PolicyOutputContractError",
     "ReplayMismatchError",
     "UnsupportedVLLMSamplingTransformError",
     "UnsupportedSupportLevelError",

@@ -1,10 +1,11 @@
-"""Async Stage3-shaped scoring over the proven DeepEyes answer transport.
+"""Async Stage3-shaped scoring over the proven DeepEyes/API transports.
 
 This adapter changes only the scalar composition.  It delegates answer
 extraction and Qwen2.5-72B API judging to the same asynchronous scorer used by
 the matched Crop/TGVF baseline, then combines that verified answer fact with
-the immutable tool-utility label and the Stage3-shaped kernel.  Visual
-Focus/Grounding rewards are intentionally disabled for this execution path.
+the immutable tool-utility label and the Stage3-shaped kernel.  An optional
+gold-free asynchronous visual seam supplies Focus/Grounding without changing
+the answer-verification path.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from tgvf_rl.data.tgvf_tool_utility import TGVFToolUtilityRuntimeBinding
 from tgvf_rl.trajectories.schema import TrajectoryRecord
 
 from .stage3_shaped import (
+    QualityJudgeScore,
     Stage3ShapedRewardFacts,
     Stage3ShapedRewardKernel,
     ToolNecessityLabel,
@@ -23,6 +25,8 @@ from .stage3_shaped import (
 from .stage3_verl_adapter import (
     Stage3ShapedRewardSpec,
     Stage3VerlTrajectoryReward,
+    Stage3VisualJudgeSampleFailure,
+    Stage3VisualQualityJudgement,
 )
 from .verl_adapter import PilotVerlTrajectoryReward
 
@@ -38,8 +42,20 @@ class AsyncAnswerTrajectoryScorer(Protocol):
     ) -> PilotVerlTrajectoryReward: ...
 
 
+class AsyncStage3VisualQualityJudge(Protocol):
+    """Gold-free visual-quality boundary for one completed trajectory."""
+
+    async def judge_async(
+        self,
+        *,
+        request: object,
+        trajectory: TrajectoryRecord,
+        context: object,
+    ) -> Stage3VisualQualityJudgement: ...
+
+
 class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
-    """Compose Answer/Tool/Protocol rewards without a visual judge call."""
+    """Compose Stage3 components while retaining the async answer path."""
 
     def __init__(
         self,
@@ -47,6 +63,7 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         answer_scorer: AsyncAnswerTrajectoryScorer,
         spec: Stage3ShapedRewardSpec,
         tool_utility: TGVFToolUtilityRuntimeBinding | None,
+        visual_quality_judge: AsyncStage3VisualQualityJudge | None = None,
         kernel: Stage3ShapedRewardKernel | None = None,
     ) -> None:
         if not callable(getattr(answer_scorer, "score_async", None)):
@@ -54,7 +71,14 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         if not isinstance(spec, Stage3ShapedRewardSpec):
             raise TypeError("spec must be Stage3ShapedRewardSpec")
         if spec.visual_quality_enabled:
-            raise ValueError("async no-visual scorer requires disabled visual quality")
+            if not callable(getattr(visual_quality_judge, "judge_async", None)):
+                raise TypeError(
+                    "enabled async visual quality requires judge_async()"
+                )
+        elif visual_quality_judge is not None:
+            raise ValueError(
+                "disabled async visual quality cannot bind a visual judge"
+            )
         if spec.tool_utility_reward_enabled:
             if not isinstance(tool_utility, TGVFToolUtilityRuntimeBinding):
                 raise TypeError(
@@ -72,6 +96,7 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         self.answer_scorer = answer_scorer
         self.spec = spec
         self.tool_utility = tool_utility
+        self.visual_quality_judge = visual_quality_judge
         self.kernel = kernel or Stage3ShapedRewardKernel()
 
     async def score_async(
@@ -107,6 +132,43 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
                 )
             )
         )
+        focus_score: QualityJudgeScore | None = None
+        grounding_score: QualityJudgeScore | None = None
+        quality_judge_failure: str | None = None
+        visual_judge_usage = None
+        if (
+            self.spec.visual_quality_enabled
+            and context.successful_tgvf_observation_count >= 1
+        ):
+            assert self.visual_quality_judge is not None
+            try:
+                judgement = await self.visual_quality_judge.judge_async(
+                    request=request,
+                    trajectory=trajectory,
+                    context=context,
+                )
+            except Stage3VisualJudgeSampleFailure as error:
+                quality_judge_failure = error.code
+                visual_judge_usage = error.usage
+            else:
+                if not isinstance(judgement, Stage3VisualQualityJudgement):
+                    raise TypeError(
+                        "async visual_quality_judge returned the wrong result type"
+                    )
+                if (
+                    judgement.trajectory_id != trajectory.identity.canonical_id
+                    or judgement.sample_id != context.sample_id
+                    or judgement.successful_observation_count
+                    != context.successful_tgvf_observation_count
+                    or judgement.judge_identity
+                    != self.spec.visual_judge_identity
+                ):
+                    raise IdentityMismatchError(
+                        "async visual-quality judgement identity differs"
+                    )
+                focus_score = judgement.focus_score
+                grounding_score = judgement.grounding_score
+                visual_judge_usage = judgement.usage
         result = self.kernel.score(
             Stage3ShapedRewardFacts(
                 answer_correct=verification.correct,
@@ -119,7 +181,10 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
                 successful_tgvf_observation_count=(
                     context.successful_tgvf_observation_count
                 ),
-                quality_rewards_enabled=False,
+                focus_score=focus_score,
+                grounding_score=grounding_score,
+                quality_judge_failure=quality_judge_failure,
+                quality_rewards_enabled=self.spec.visual_quality_enabled,
                 label_confidence=None if label is None else label.confidence,
                 tool_utility_reward_enabled=(
                     self.spec.tool_utility_reward_enabled
@@ -136,10 +201,12 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
             tool_label=label,
             spec=self.spec,
             result=result,
+            visual_judge_usage=visual_judge_usage,
         )
 
 
 __all__ = [
     "AsyncAnswerTrajectoryScorer",
+    "AsyncStage3VisualQualityJudge",
     "AsyncStage3ShapedTGVFTrajectoryRewardScorer",
 ]

@@ -868,8 +868,53 @@ def _launch_workers(config_path: Path) -> list[subprocess.Popen[bytes]]:
             "--world-size",
             "4",
         ]
-        processes.append(subprocess.Popen(command, env=environment))
+        # vLLM starts EngineCore/resource-tracker descendants.  Give each rank
+        # its own process group so a failed sibling cannot leave those children
+        # holding the supervisor's stdout pipe and all remaining GPUs forever.
+        processes.append(
+            subprocess.Popen(command, env=environment, start_new_session=True)
+        )
     return processes
+
+
+def _worker_group_exists(process: subprocess.Popen[bytes]) -> bool:
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _terminate_worker_groups(
+    processes: list[subprocess.Popen[bytes]], *, grace_seconds: float = 30.0
+) -> None:
+    """Drain every rank process group, including reparented vLLM children."""
+
+    for process in processes:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + grace_seconds
+    while time.monotonic() < deadline:
+        for process in processes:
+            process.poll()
+        if not any(_worker_group_exists(process) for process in processes):
+            break
+        time.sleep(0.2)
+    for process in processes:
+        if _worker_group_exists(process):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    for process in processes:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                "policy evaluator process group did not drain"
+            ) from error
 
 
 def _wait_workers(
@@ -886,14 +931,11 @@ def _wait_workers(
             break
         time.sleep(5)
     if failure is not None:
-        for process in processes:
-            if process.poll() is None:
-                process.terminate()
-        for process in processes:
-            process.wait()
+        _terminate_worker_groups(processes)
         raise RuntimeError(f"{owner} worker {failure[0]} exited with {failure[1]}")
     codes = [process.wait() for process in processes]
     if any(code != 0 for code in codes):
+        _terminate_worker_groups(processes)
         raise RuntimeError(f"{owner} workers failed: {codes}")
 
 

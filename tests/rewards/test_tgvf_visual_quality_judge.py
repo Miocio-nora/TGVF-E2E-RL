@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import fields, replace
 from hashlib import sha256
 from io import BytesIO
@@ -11,13 +12,17 @@ import pytest
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.judges import (
+    AsyncTGVFVisualQualityJudgeProvider,
     BoundTGVFVisualQualityJudge,
     TGVFVisualQualityFailureKind,
+    TGVFVisualQualityAsyncTransportPolicy,
+    TGVFVisualQualityGlobalFailure,
     TGVFVisualQualityJudgeConfig,
     TGVFVisualQualityJudgeProvider,
     TGVFVisualQualityJudgeRequest,
     load_tgvf_visual_quality_judge,
     tgvf_visual_quality_prompt_identity,
+    TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION,
 )
 
 
@@ -39,6 +44,21 @@ def _config(**changes: object) -> TGVFVisualQualityJudgeConfig:
         expected_response_model="vision-judge-pinned",
     )
     return replace(config, **changes)
+
+
+def _async_policy(**changes: object) -> TGVFVisualQualityAsyncTransportPolicy:
+    values: dict[str, object] = {
+        "maximum_concurrency": 2,
+        "maximum_attempts": 4,
+        "retry_backoff_seconds": 0.0,
+        "retry_maximum_seconds": 0.0,
+        "cache_max_entries": 16,
+        "transient_failure_window_size": 8,
+        "maximum_transient_failure_fraction": 0.25,
+        "retryable_http_statuses": (408, 425, 429, 500, 502, 503, 504),
+    }
+    values.update(changes)
+    return TGVFVisualQualityAsyncTransportPolicy(**values)
 
 
 def _image(tmp_path: Path, *, contents: bytes = _PNG_BYTES) -> tuple[Path, str]:
@@ -199,6 +219,191 @@ def test_combined_judge_sends_one_gold_free_multimodal_request(tmp_path: Path) -
     }
     assert wire_inputs["image_sha256"] == request.image_sha256
     assert str(request.image_path) not in json.dumps(payload)
+
+
+def test_sequence_prompt_sends_all_ordered_targets_in_one_request(
+    tmp_path: Path,
+) -> None:
+    captured: list[dict[str, object]] = []
+    prompt = tgvf_visual_quality_prompt_identity(
+        TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION
+    )
+
+    def opener(request, *, timeout):
+        captured.append(json.loads(request.data))
+        return _Response(
+            {
+                "model": "vision-judge-pinned",
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"focus_score":1,"grounding_score":2}'
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 10,
+                    "total_tokens": 110,
+                },
+            }
+        )
+
+    request = _request(
+        tmp_path,
+        tool_target=None,
+        tool_targets=("first visual region", "second visual region"),
+        prompt_identity=prompt,
+    )
+    result = TGVFVisualQualityJudgeProvider(
+        _config(prompt_identity=prompt), opener=opener
+    ).judge(request)
+
+    assert result.ok is True
+    assert len(captured) == 1
+    user_text = captured[0]["messages"][1]["content"][1]["text"]
+    inputs = json.loads(user_text)
+    assert inputs["tool_targets"] == [
+        "first visual region",
+        "second visual region",
+    ]
+    assert "tool_target" not in inputs
+
+
+def test_async_provider_retries_429_then_caches_success(tmp_path: Path) -> None:
+    calls = 0
+
+    def opener(request, *, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError(request.full_url, 429, "limited", {}, BytesIO())
+        return _Response(
+            {
+                "model": "vision-judge-pinned",
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"focus_score":2,"grounding_score":2}'
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "cost": 0.001,
+                },
+            }
+        )
+
+    strict = TGVFVisualQualityJudgeProvider(
+        _config(async_transport=_async_policy()), opener=opener
+    )
+    provider = AsyncTGVFVisualQualityJudgeProvider(
+        strict, local_maximum_concurrency=2
+    )
+    request = _request(tmp_path)
+
+    async def exercise():
+        first = await provider.judge(request)
+        second = await provider.judge(request)
+        return first, second
+
+    first, second = asyncio.run(exercise())
+
+    assert first.result.ok is True
+    assert (first.attempts, first.retries, first.cache_hit) == (2, 1, False)
+    assert second.result.ok is True
+    assert (second.attempts, second.retries, second.cache_hit) == (0, 0, True)
+    assert second.result.usage is None
+    assert calls == 2
+
+
+def test_async_provider_retries_malformed_completion_then_succeeds(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def opener(_request, *, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _Response(
+                {
+                    "model": "vision-judge-pinned",
+                    "choices": [{"message": {"content": "not json"}}],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 2,
+                        "total_tokens": 12,
+                        "cost": 0.001,
+                    },
+                }
+            )
+        return _Response(
+            {
+                "model": "vision-judge-pinned",
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"focus_score":2,"grounding_score":1}'
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 3,
+                    "total_tokens": 14,
+                    "cost": 0.002,
+                },
+            }
+        )
+
+    provider = AsyncTGVFVisualQualityJudgeProvider(
+        TGVFVisualQualityJudgeProvider(
+            _config(async_transport=_async_policy()), opener=opener
+        ),
+        local_maximum_concurrency=2,
+    )
+
+    outcome = asyncio.run(provider.judge(_request(tmp_path)))
+
+    assert outcome.result.ok is True
+    assert (outcome.result.focus_score, outcome.result.grounding_score) == (2, 1)
+    assert (outcome.attempts, outcome.retries) == (2, 1)
+    assert outcome.result.usage is not None
+    assert outcome.result.usage.total_tokens == 26
+    assert outcome.result.usage.cost_usd == pytest.approx(0.003)
+    assert calls == 2
+
+
+def test_async_provider_rejects_request_id_content_collision(tmp_path: Path) -> None:
+    strict = TGVFVisualQualityJudgeProvider(
+        _config(async_transport=_async_policy()),
+        opener=lambda *_args, **_kwargs: _Response(
+            {
+                "model": "vision-judge-pinned",
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"focus_score":2,"grounding_score":2}'
+                        }
+                    }
+                ],
+            }
+        ),
+    )
+    provider = AsyncTGVFVisualQualityJudgeProvider(
+        strict, local_maximum_concurrency=1
+    )
+    request = _request(tmp_path)
+    async def exercise() -> None:
+        await provider.judge(request)
+        with pytest.raises(TGVFVisualQualityGlobalFailure, match="reused"):
+            await provider.judge(replace(request, question="A changed question"))
+
+    asyncio.run(exercise())
 
 
 def test_request_type_cannot_accept_any_gold_or_reference_answer(tmp_path: Path) -> None:
@@ -434,6 +639,44 @@ def test_strict_sha_bound_loader_constructs_config_and_provider(
     assert bound.formal_pilot_accepted is True
     assert bound.config.model_name == "vision-judge-pinned"
     assert bound.config.require_usage is True
+
+
+def test_loader_binds_sequence_prompt_and_async_transport(tmp_path: Path) -> None:
+    document = _config_document()
+    prompt = tgvf_visual_quality_prompt_identity(
+        TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION
+    )
+    document["prompt"]["version"] = prompt.version
+    document["prompt"]["sha256"] = prompt.sha256
+    document["prompt"]["input_contract"][
+        "ordered_successful_tool_targets"
+    ] = "required_1_to_6"
+    document["async_transport"] = {
+        "maximum_concurrency": 16,
+        "maximum_attempts": 4,
+        "retry_backoff_seconds": 0.25,
+        "retry_maximum_seconds": 2.0,
+        "cache_max_entries": 8192,
+        "transient_failure_window_size": 64,
+        "maximum_transient_failure_fraction": 0.25,
+        "retryable_http_statuses": [408, 425, 429, 500, 502, 503, 504],
+    }
+    path, digest = _write_config(tmp_path, document)
+
+    bound = load_tgvf_visual_quality_judge(path, expected_file_sha256=digest)
+
+    assert bound.config.prompt_identity == prompt
+    assert bound.config.async_transport is not None
+    assert bound.config.async_transport.maximum_concurrency == 16
+    assert bound.config.async_transport.retryable_http_statuses == (
+        408,
+        425,
+        429,
+        500,
+        502,
+        503,
+        504,
+    )
 
 
 def test_loader_rejects_file_sha_before_decoding(tmp_path: Path) -> None:

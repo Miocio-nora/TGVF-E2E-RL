@@ -20,20 +20,26 @@ from torch import nn
 
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ComponentRole
+from tgvf_rl.contracts.tensors import TensorArtifactRef
 from tgvf_rl.contracts.tokens import (
     OwnedTokenSequence,
     SamplingIdentity,
     TokenOwnership,
 )
-from tgvf_rl.observations.schema import FocusedObservationRecord
+from tgvf_rl.observations.schema import (
+    CropTGVFObservationRecord,
+    FocusedObservationRecord,
+)
 from tgvf_rl.observations.store import (
     ObservationStore,
     TrajectoryReplayBundle,
+    TrajectoryReplayRecord,
     validate_replay_bundle,
 )
 from tgvf_rl.qwen.base import (
     InjectedForwardRequest,
     InjectedVisualBlock,
+    RecordedVisualBlock,
     ReplayConsumer,
     gather_behavior_measure_logprobs,
     resolve_lm_head,
@@ -73,6 +79,130 @@ class LiveQwen3VisionFeatures:
                 for value in values[1:]
             ):
                 raise ValueError(f"live {name} feature branches differ")
+
+
+@dataclass(frozen=True, slots=True)
+class LiveQwen3VisionImageSpec:
+    """One content-addressed image in a trajectory-local vision replay plan."""
+
+    kind: str
+    pixel_values: TensorArtifactRef
+    image_grid_thw: tuple[int, int, int]
+    observation_index: int | None
+    call_index: int | None
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"source_image", "crop_image"}:
+            raise ValueError("live vision image kind must be source_image/crop_image")
+        if not isinstance(self.pixel_values, TensorArtifactRef):
+            raise TypeError("live vision image requires a tensor artifact reference")
+        if len(self.image_grid_thw) != 3 or any(
+            type(value) is not int or value <= 0 for value in self.image_grid_thw
+        ):
+            raise ValueError("live vision image grid must contain three positive ints")
+        descriptor = self.pixel_values.descriptor
+        expected_rows = (
+            self.image_grid_thw[0] * self.image_grid_thw[1] * self.image_grid_thw[2]
+        )
+        if (
+            len(descriptor.shape) != 2
+            or descriptor.shape[0] != expected_rows
+            or descriptor.shape[1] <= 0
+        ):
+            raise ValueError("live vision pixel artifact rows differ from its grid")
+        descriptor_dtype = getattr(torch, descriptor.dtype, None)
+        if (
+            not isinstance(descriptor_dtype, torch.dtype)
+            or not torch.empty((), dtype=descriptor_dtype).is_floating_point()
+        ):
+            raise TypeError("live vision pixel artifact must use a floating dtype")
+        if self.kind == "source_image":
+            if self.observation_index is not None or self.call_index is not None:
+                raise ValueError("source image cannot carry a tool-call identity")
+        elif (
+            type(self.observation_index) is not int
+            or self.observation_index < 0
+            or type(self.call_index) is not int
+            or self.call_index < 0
+        ):
+            raise ValueError("crop image requires observation and call identities")
+
+
+@dataclass(frozen=True, slots=True)
+class LiveQwen3VisionReplayPlan:
+    """Immutable source/crop packing and observation placement for one row.
+
+    A trajectory is the bounded distributed execution unit: source plus every
+    crop is one native Qwen multi-image call, while a plain TGVF observation
+    points back to the source image.  Keeping this plan trajectory-local bounds
+    activation memory independently of the actor micro-batch size.
+    """
+
+    replay_id: str
+    trajectory_id: str
+    images: tuple[LiveQwen3VisionImageSpec, ...]
+    observation_image_indices: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "images", tuple(self.images))
+        object.__setattr__(
+            self,
+            "observation_image_indices",
+            tuple(self.observation_image_indices),
+        )
+        if not self.replay_id or not self.trajectory_id:
+            raise ValueError("live vision replay identities must be non-empty")
+        if not self.images or self.images[0].kind != "source_image":
+            raise ValueError("live vision replay must begin with one source image")
+        if any(image.kind != "crop_image" for image in self.images[1:]):
+            raise ValueError("only crop images may follow the source image")
+        if any(
+            type(index) is not int or index < 0 or index >= len(self.images)
+            for index in self.observation_image_indices
+        ):
+            raise ValueError("observation image placement lies outside the plan")
+        crop_observations = tuple(image.observation_index for image in self.images[1:])
+        if len(set(crop_observations)) != len(crop_observations):
+            raise ValueError("crop observation placements must be unique")
+        for observation_index, packed_index in enumerate(
+            self.observation_image_indices
+        ):
+            if packed_index and (
+                self.images[packed_index].observation_index != observation_index
+            ):
+                raise ValueError("observation placement aliases another crop image")
+        for packed_index, image in enumerate(self.images[1:], start=1):
+            assert image.observation_index is not None
+            if (
+                image.observation_index >= len(self.observation_image_indices)
+                or self.observation_image_indices[image.observation_index]
+                != packed_index
+            ):
+                raise ValueError("crop image and observation placement differ")
+
+
+@dataclass(frozen=True, slots=True)
+class LiveQwen3VisionReplayResult:
+    """Differentiable features split according to one verified replay plan."""
+
+    plan: LiveQwen3VisionReplayPlan
+    features: tuple[LiveQwen3VisionFeatures, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "features", tuple(self.features))
+        if len(self.features) != len(self.plan.images):
+            raise ValueError("live vision plan/result image counts differ")
+
+    @property
+    def source(self) -> LiveQwen3VisionFeatures:
+        return self.features[0]
+
+    def for_observation(self, index: int) -> LiveQwen3VisionFeatures:
+        if type(index) is not int or not 0 <= index < len(
+            self.plan.observation_image_indices
+        ):
+            raise IndexError("live vision observation index lies outside the plan")
+        return self.features[self.plan.observation_image_indices[index]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,16 +386,25 @@ def build_trainable_tgvf_current_request(
         raise ReplayMismatchError(
             "joint RP66 replay requires trajectory-source-visual-v2 pixel_values"
         )
-    pixel_values = store.resolve_verified(pixel_ref)
-    vision = extract_live_qwen3_vision_features(
-        model,
-        pixel_values=pixel_values,
-        image_grid_thw=source.state.image_grid_thw,
-    )
-
     recorded_blocks = recorded.visual_blocks
     if not recorded_blocks or recorded_blocks[0].kind != "source_image":
         raise ReplayMismatchError("recorded replay lost its leading source image")
+    observations = tuple(
+        store.resolve_record(handle) for handle in replay.observation_handles
+    )
+    if len(observations) != len(recorded_blocks) - 1:
+        raise ReplayMismatchError("recorded observation/block counts differ")
+    plan = build_live_qwen3_vision_replay_plan(
+        replay=replay,
+        observations=observations,
+        recorded_blocks=recorded_blocks,
+    )
+    live_vision = execute_live_qwen3_vision_replay_plan(
+        model,
+        store=store,
+        plan=plan,
+    )
+    vision = live_vision.source
     source_block = InjectedVisualBlock(
         kind="source_image",
         positions=recorded_blocks[0].positions,
@@ -274,31 +413,28 @@ def build_trainable_tgvf_current_request(
         deepstack_positions=recorded_blocks[0].deepstack_positions,
     )
 
-    observations = tuple(
-        store.resolve_record(handle) for handle in replay.observation_handles
-    )
-    if len(observations) != len(recorded_blocks) - 1:
-        raise ReplayMismatchError("recorded observation/block counts differ")
     live_blocks: list[InjectedVisualBlock] = [source_block]
-    for record, block in zip(observations, recorded_blocks[1:], strict=True):
-        if not isinstance(record, FocusedObservationRecord):
-            raise ValueError(
-                "trainable RP66 pilot accepts original-image TGVF observations only"
-            )
-        if block.kind != "focused_d" or block.call_index != record.call_index:
-            raise ReplayMismatchError("focused observation and replay block differ")
-        if record.condition_hq is None:
-            raise ReplayMismatchError(
-                "joint RP66 replay requires focused-observation-v2 condition Hq"
-            )
+    for index, (record, block) in enumerate(
+        zip(observations, recorded_blocks[1:], strict=True)
+    ):
+        if isinstance(record, CropTGVFObservationRecord):
+            observation_vision = live_vision.for_observation(index)
+            output_kind = "crop_focused_d"
+        elif isinstance(record, FocusedObservationRecord):
+            observation_vision = live_vision.for_observation(index)
+            output_kind = "focused_d"
+        else:
+            raise AssertionError("observation type changed after replay validation")
         hq = store.resolve_verified(record.condition_hq)
         owner = next(adapter.parameters())
         owner_device = tensor_compute_device(owner)
         output = adapter(
             TGVFAdapterInput(
                 target_hidden_states=hq.to(device=owner_device, dtype=owner.dtype),
-                pre_merge_visual_tokens=vision.premerge_main,
-                deepstack_pre_merge_visual_tokens=vision.premerge_deepstack,
+                pre_merge_visual_tokens=observation_vision.premerge_main,
+                deepstack_pre_merge_visual_tokens=(
+                    observation_vision.premerge_deepstack
+                ),
             )
         )
         if tuple(output.metadata.branch_layers) != tuple(
@@ -307,7 +443,7 @@ def build_trainable_tgvf_current_request(
             raise ReplayMismatchError("current RP66 branch layout changed")
         live_blocks.append(
             InjectedVisualBlock(
-                kind="focused_d",
+                kind=output_kind,
                 positions=block.positions,
                 embeddings=_batched(output.main_d),
                 deepstack=tuple(
@@ -328,6 +464,105 @@ def build_trainable_tgvf_current_request(
     return request
 
 
+def build_live_qwen3_vision_replay_plan(
+    *,
+    replay: TrajectoryReplayRecord,
+    observations: tuple[CropTGVFObservationRecord | FocusedObservationRecord, ...],
+    recorded_blocks: tuple[RecordedVisualBlock, ...],
+) -> LiveQwen3VisionReplayPlan:
+    """Build a trajectory-local, identity-preserving source/crop replay plan."""
+
+    if not isinstance(replay, TrajectoryReplayRecord):
+        raise TypeError("live vision replay requires a TrajectoryReplayRecord")
+    source_ref = replay.source_visual.preprocessed_pixel_values
+    if source_ref is None:
+        raise ReplayMismatchError(
+            "joint RP66 replay requires trajectory-source-visual-v2 pixel_values"
+        )
+    if not recorded_blocks or recorded_blocks[0].kind != "source_image":
+        raise ReplayMismatchError("recorded replay lost its leading source image")
+    if len(observations) != len(recorded_blocks) - 1:
+        raise ReplayMismatchError("recorded observation/block counts differ")
+
+    images = [
+        LiveQwen3VisionImageSpec(
+            kind="source_image",
+            pixel_values=source_ref,
+            image_grid_thw=replay.source_visual.state.image_grid_thw,
+            observation_index=None,
+            call_index=None,
+        )
+    ]
+    placements: list[int] = []
+    for observation_index, (record, block) in enumerate(
+        zip(observations, recorded_blocks[1:], strict=True)
+    ):
+        if not isinstance(
+            record, (CropTGVFObservationRecord, FocusedObservationRecord)
+        ):
+            raise ValueError(
+                "trainable RP66 replay accepts TGVF or atomic Crop+TGVF "
+                "observations only"
+            )
+        if block.call_index != record.call_index:
+            raise ReplayMismatchError("TGVF observation and replay call index differ")
+        if isinstance(record, CropTGVFObservationRecord):
+            if block.kind != "crop_focused_d":
+                raise ReplayMismatchError(
+                    "atomic Crop+TGVF observation and replay block differ"
+                )
+            placements.append(len(images))
+            images.append(
+                LiveQwen3VisionImageSpec(
+                    kind="crop_image",
+                    pixel_values=record.crop_visual.preprocessed_pixel_values,
+                    image_grid_thw=record.crop_visual.source.image_grid_thw,
+                    observation_index=observation_index,
+                    call_index=record.call_index,
+                )
+            )
+        else:
+            if block.kind != "focused_d":
+                raise ReplayMismatchError("focused observation and replay block differ")
+            if record.condition_hq is None:
+                raise ReplayMismatchError(
+                    "joint RP66 replay requires focused-observation-v2 condition Hq"
+                )
+            placements.append(0)
+    return LiveQwen3VisionReplayPlan(
+        replay_id=replay.replay_id,
+        trajectory_id=replay.trajectory_id,
+        images=tuple(images),
+        observation_image_indices=tuple(placements),
+    )
+
+
+def execute_live_qwen3_vision_replay_plan(
+    model: nn.Module,
+    *,
+    store: ObservationStore,
+    plan: LiveQwen3VisionReplayPlan,
+) -> LiveQwen3VisionReplayResult:
+    """Execute one bounded multi-image call for one verified trajectory plan."""
+
+    if not isinstance(store, ObservationStore):
+        raise TypeError("live vision replay requires an ObservationStore")
+    if not isinstance(plan, LiveQwen3VisionReplayPlan):
+        raise TypeError("plan must be LiveQwen3VisionReplayPlan")
+    features = extract_live_qwen3_vision_feature_batch(
+        model,
+        pixel_values=tuple(
+            store.resolve_verified_for_trajectory(
+                image.pixel_values,
+                trajectory_id=plan.trajectory_id,
+            )
+            for image in plan.images
+        ),
+        image_grid_thw=tuple(image.image_grid_thw for image in plan.images),
+    )
+    return LiveQwen3VisionReplayResult(plan=plan, features=features)
+
+
 def extract_live_qwen3_vision_features(
     model: nn.Module,
     *,
@@ -336,7 +571,64 @@ def extract_live_qwen3_vision_features(
 ) -> LiveQwen3VisionFeatures:
     """Run current Qwen vision once and retain every merger autograd edge."""
 
+    return extract_live_qwen3_vision_feature_batch(
+        model,
+        pixel_values=(pixel_values,),
+        image_grid_thw=(image_grid_thw,),
+    )[0]
+
+
+def extract_live_qwen3_vision_feature_batch(
+    model: nn.Module,
+    *,
+    pixel_values: tuple[torch.Tensor, ...],
+    image_grid_thw: tuple[tuple[int, int, int], ...],
+) -> tuple[LiveQwen3VisionFeatures, ...]:
+    """Run one native Qwen multi-image vision pass and split exact features.
+
+    Every image remains an independent attention sequence because Qwen derives
+    its cumulative sequence boundaries from the rows of ``grid_thw``.  The
+    packed call is thus mathematically equivalent to one vision call per image,
+    while keeping child-FSDP collective counts identical across actor ranks.
+    """
+
+    if not pixel_values or len(pixel_values) != len(image_grid_thw):
+        raise ValueError("live Qwen vision inputs must contain matching images/grids")
+
     visual = _resolve_visual(model)
+    spatial_merge_size = getattr(visual, "spatial_merge_size", None)
+    if type(spatial_merge_size) is not int or spatial_merge_size <= 0:
+        raise ValueError("Qwen3 visual must expose a positive spatial_merge_size")
+    merge_group_size = spatial_merge_size**2
+    premerge_counts: list[int] = []
+    for index, (pixels, grid) in enumerate(
+        zip(pixel_values, image_grid_thw, strict=True)
+    ):
+        if not isinstance(pixels, torch.Tensor) or pixels.ndim != 2:
+            raise ValueError(f"live Qwen image {index} pixels must have shape [N,D]")
+        if not pixels.is_floating_point():
+            raise TypeError(f"live Qwen image {index} pixels must be floating")
+        if len(grid) != 3 or any(
+            type(value) is not int or value <= 0 for value in grid
+        ):
+            raise ValueError(
+                f"live Qwen image {index} grid must be three positive ints"
+            )
+        if grid[1] % spatial_merge_size or grid[2] % spatial_merge_size:
+            raise ValueError(
+                f"live Qwen image {index} grid is not spatial-merge aligned"
+            )
+        expected_rows = grid[0] * grid[1] * grid[2]
+        if int(pixels.shape[0]) != expected_rows:
+            raise ValueError(
+                f"live Qwen image {index} pixel rows differ from grid: "
+                f"{pixels.shape[0]} vs {expected_rows}"
+            )
+        premerge_counts.append(expected_rows)
+    pixel_widths = {int(value.shape[1]) for value in pixel_values}
+    if len(pixel_widths) != 1:
+        raise ValueError("packed live Qwen images must share a patch feature width")
+
     mergers = (
         visual.merger,
         *tuple(visual.deepstack_merger_list),
@@ -352,24 +644,37 @@ def extract_live_qwen3_vision_features(
     )
     owner = next(visual.parameters())
     owner_device = tensor_compute_device(owner)
-    grid = torch.tensor((image_grid_thw,), dtype=torch.long, device=owner_device)
+    grid = torch.tensor(image_grid_thw, dtype=torch.long, device=owner_device)
+    packed_pixels = torch.cat(
+        tuple(
+            value.to(device=owner_device, dtype=owner.dtype) for value in pixel_values
+        ),
+        dim=0,
+    )
     try:
-        visual(
-            pixel_values.to(device=owner_device, dtype=owner.dtype),
-            grid_thw=grid,
-        )
+        visual(packed_pixels, grid_thw=grid)
     finally:
         for handle in handles:
             handle.remove()
     if any(len(rows) != 1 for rows in captures):
         raise RuntimeError("Qwen3 live vision did not execute every merger once")
-    premerge = tuple(rows[0][0] for rows in captures)
-    merged = tuple(rows[0][1] for rows in captures)
-    return LiveQwen3VisionFeatures(
-        premerge_main=premerge[0],
-        premerge_deepstack=premerge[1:],
-        merged_main=merged[0],
-        merged_deepstack=merged[1:],
+    packed_premerge = tuple(rows[0][0] for rows in captures)
+    packed_merged = tuple(rows[0][1] for rows in captures)
+    merged_counts = tuple(value // merge_group_size for value in premerge_counts)
+    premerge_splits = tuple(
+        torch.split(value, tuple(premerge_counts), dim=0) for value in packed_premerge
+    )
+    merged_splits = tuple(
+        torch.split(value, merged_counts, dim=0) for value in packed_merged
+    )
+    return tuple(
+        LiveQwen3VisionFeatures(
+            premerge_main=premerge_splits[0][index],
+            premerge_deepstack=tuple(branch[index] for branch in premerge_splits[1:]),
+            merged_main=merged_splits[0][index],
+            merged_deepstack=tuple(branch[index] for branch in merged_splits[1:]),
+        )
+        for index in range(len(pixel_values))
     )
 
 
@@ -450,9 +755,15 @@ def _batched(value: torch.Tensor) -> torch.Tensor:
 __all__ = [
     "TRAINABLE_TGVF_ADAPTER_ATTRIBUTE",
     "LiveQwen3VisionFeatures",
+    "LiveQwen3VisionImageSpec",
+    "LiveQwen3VisionReplayPlan",
+    "LiveQwen3VisionReplayResult",
     "TrainableTGVFCurrentReplayPort",
     "TrainableTGVFRoleReplay",
+    "build_live_qwen3_vision_replay_plan",
     "build_trainable_tgvf_current_request",
+    "execute_live_qwen3_vision_replay_plan",
+    "extract_live_qwen3_vision_feature_batch",
     "extract_live_qwen3_vision_features",
     "trainable_parameter_zero_anchor",
 ]

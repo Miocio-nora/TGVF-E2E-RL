@@ -36,6 +36,7 @@ class _OffloadedMerger(nn.Module):
 class _OffloadedVisual(nn.Module):
     def __init__(self) -> None:
         super().__init__()
+        self.spatial_merge_size = 2
         self.stem = nn.Linear(4, 4, bias=False)
         self.merger = _OffloadedMerger()
         self.deepstack_merger_list = nn.ModuleList(

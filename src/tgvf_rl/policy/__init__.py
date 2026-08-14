@@ -26,6 +26,7 @@ from .checkpoint import (
     validate_pilot_project_checkpoint_restore,
 )
 from .config import (
+    POLICY_CROP_TGVF_MATCHED_EXPERIMENT_CONFIG_SCHEMA,
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_CONFIG_SCHEMA,
     POLICY_PILOT_V1_MODEL_FAMILY,
@@ -41,6 +42,7 @@ from .config import (
     PilotGRPOConfig,
     PilotSamplingConfig,
     PolicyPilotV1Config,
+    PolicyCropTGVFMatchedExperimentConfig,
     PolicyTGVFStage3ExperimentConfig,
     PolicyVisualToolExperimentConfig,
 )
@@ -105,6 +107,7 @@ from .runtime import (
     TrajectoryReplayFinalizerPort,
 )
 from .run_config import (
+    POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_SMOKE_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
@@ -137,7 +140,9 @@ __all__ = [
     "PILOT_EXACT_REWARD_FIELD",
     "PILOT_GROUP_BATCH_SCHEMA_FIELD",
     "POLICY_DEEPEYES_DATASET_BINDING_SCHEMA",
+    "POLICY_CROP_TGVF_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_E2E_SMOKE_CONFIG_SCHEMA",
+    "POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA",
     "POLICY_EXECUTION_GROUP_UID_PREFIX",
     "POLICY_EXECUTION_GROUP_UID_SCHEMA",
@@ -197,6 +202,7 @@ __all__ = [
     "PolicyBatchReleaseReport",
     "PolicyBatchState",
     "PolicyBatchTransientState",
+    "PolicyCropTGVFMatchedExperimentConfig",
     "PolicyExecutionGroupIdentity",
     "PolicyE2ESmokeRunConfig",
     "PolicyPilotScopeAudit",

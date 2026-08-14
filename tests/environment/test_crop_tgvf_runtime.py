@@ -20,7 +20,10 @@ from tgvf_rl.contracts.tokens import LogProbMeasurement, SamplingIdentity, Token
 from tgvf_rl.environment.agent_loop import SampledPolicyTurn, ToolExecutionContext
 from tgvf_rl.environment.adapter_runtime import load_frozen_tgvf_adapter
 from tgvf_rl.environment.crop_tgvf_runtime import AtomicCropTGVFToolRuntime
-from tgvf_rl.environment.crop_tgvf_tool import AtomicCropTGVFTool
+from tgvf_rl.environment.crop_tgvf_tool import (
+    AtomicCropTGVFTool,
+    CropTGVFVisualMaterialization,
+)
 from tgvf_rl.environment.focus_runtime import (
     BehaviorHiddenStateCapture,
     FocusExecutionLedger,
@@ -32,6 +35,7 @@ from tgvf_rl.environment.native_appender import (
 )
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
+from tgvf_rl.framework.verl.policy_live_runtime import _VisualTokenCountResolver
 from tgvf_rl.observations.schema import CropTGVFObservationRecord
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.protocol.parser import StrictToolCallParser
@@ -101,6 +105,21 @@ class _Materializer:
             image_grid_thw=(1, 2, 2),
             spatial_merge_size=2,
             decoded_rgb_sha256=tensor_checksum(crop_rgb),
+        )
+
+    def materialize_crop_tgvf_visual(
+        self, crop_rgb, *, parsed_call, call_index
+    ):
+        source = self.materialize_source_visual(
+            crop_rgb,
+            parsed_call=parsed_call,
+            call_index=call_index,
+        )
+        return CropTGVFVisualMaterialization(
+            preprocessed_pixel_values=torch.arange(
+                12, dtype=torch.float32
+            ).view(4, 3),
+            source_visual=source,
         )
 
 
@@ -330,6 +349,9 @@ def test_embedding_runtime_executes_atomic_crop_and_tgvf_once(
     )
     assert record.layout.original_image_positions == (1,)
     assert len(record.layout.d_positions) == 1
+    assert _VisualTokenCountResolver(store).resolve_visual_token_count(handle) == len(
+        record.layout.d_positions
+    )
     assert record.layout.deepstack_branch_layers == BRANCH_LAYERS
     tokenizer = runtime.layout_builder.tokenizer
     expected_environment_ids = tuple(

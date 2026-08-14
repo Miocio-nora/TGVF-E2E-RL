@@ -326,3 +326,36 @@ seed 由 task/sample/rollout/assistant-turn 身份导出，并明确排除 evalu
 合法的主结论必须来自完整 paired 块 `57.0320 → 56.1964 → 58.1996`。禁止用 legacy Step 8 `57.28` 与 paired Step 16 `58.1996` 相减，也禁止在不写 RNG block 的情况下只报告“RP67 Step 0/8”。
 
 paired common-random-numbers 显著改善了 checkpoint 间 delta 的可比性，但没有把 `temperature=1` 变成确定性评测：每题仍只有一次采样，且不同 checkpoint 的 token 分布会使轨迹逐步分叉。因此 `Step 16 − Step 0 = +1.17 pp` 当前应表述为“正向信号，支持继续验证 RL 有效”，不能表述为已经统计确认的稳定增益。Step 0/8 的 legacy 与 paired 分数分别相差 `+0.66 pp` 和 `-1.08 pp`，也直接说明 temp=1 单次评测仍存在足以影响约 1 pp 结论的波动。
+
+## 8. PRL19 Frozen RP67 T-free Visual API paired 结果
+
+PRL19 在 PRL17-R2 frozen RP67 T-free 的基础上只开启 gold-free
+Focus/Target 与 Grounding visual reward；工具效用 `T` 仍关闭。两者共享
+同一 paired-seed-v1 manifest、prompt、tool runtime、sampling 和 scorer，
+所以同 step 列可以直接计算 treatment delta。
+
+| benchmark | Common S0 | No-visual S8 | Visual S8 | No-visual S16 | Visual S16 |
+|---|---:|---:|---:|---:|---:|
+| VStarBench Overall | 62.83 | 65.45 | 68.06 | 64.92 | 66.49 |
+| HRBench Average / all | 58.50 | 60.00 | 63.50 | 64.50 | 60.00 |
+| BLINK single-image（180） | 62.78 | 60.56 | 63.33 | 63.33 | 60.56 |
+| OCRBench v2 English | 46.20 | 44.33 | 45.20 | 43.83 | 45.55 |
+| OCRBench v2 Chinese | 40.87 | 34.45 | 38.77 | 37.95 | 41.75 |
+| OCR EN/CN mean | 43.53 | 39.39 | 41.98 | 40.89 | 43.65 |
+| MMMU-Pro single-image（269） | 50.19 | 47.58 | 44.98 | 47.96 | 48.70 |
+| MathVista MINI | 68.00 | 68.00 | 67.33 | 70.00 | 69.00 |
+| MathVerse five-version macro | 53.40 | 52.40 | 56.00 | 55.80 | 54.40 |
+| **Macro\*** | **57.0320** | **56.1964** | **57.8849** | **58.1996** | **57.5422** |
+
+辅助 accuracy delta：Visual S8 相对同 step no-visual 为 **`+1.6885 pp`**，相对
+共同 S0 为 `+0.8529 pp`；Visual S16 相对自身 S8 为 `-0.3427 pp`，相对
+no-visual S16 为 `-0.6573 pp`。这些数值只测最终答案，不能直接证明
+target 更依赖图像或视觉幻觉更少，因此不能据此宣称 visual shaping 已起效，
+也不能仅据此选择 PRL19 Step 8。主结论等待同一 held-out trajectory 上的
+paired Focus/Target、Grounding 与 wrong-image calibration 审计。
+
+Step 16 还出现了明显更重的 OCR 极端重复尾部：P99 从 Step 8 的
+`47,296` chars 升至 `80,924`，而 no-visual Step 16 为 `31,474`。完整配置、
+reward 分解、训练 telemetry、输出健康度与 artifact SHA 见下述报告；
+该尾部是健康度旁证，不等价于直接的 hallucination measurement：
+`docs/PRL19_RP67_FROZEN_TFREE_VISUAL_REWARD_PAIRED_RESULTS_20260813.md`。

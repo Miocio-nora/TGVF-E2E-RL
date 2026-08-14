@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from tgvf_rl.contracts.errors import ReplayMismatchError
+from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ModelIdentity
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.data.tgvf_tool_utility import (
@@ -17,12 +18,17 @@ from tgvf_rl.data.tgvf_tool_utility import (
     TGVFToolUtilityRuntimeBinding,
 )
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
+from tgvf_rl.environment.focus_tool import PrecomputedTGVFObservationPayload
+from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_crop_tgvf_success_environment_text,
+)
 from tgvf_rl.environment.agent_loop import ResponseBudgetScope
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.framework.verl.policy_live_runtime import (
     Qwen3PolicyE2ELiveRuntimeBuilder,
     _BoundTGVFVisualQualityRuntimeJudge,
+    _RemoteAtomicCropTGVFToolRuntime,
     _Qwen3PolicyTrajectoryComponents,
     _build_reward_pipeline,
     _default_metrics_factory,
@@ -30,6 +36,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _rp66_matched_source_route,
     _rp66_response_budget_controls,
     _trainable_rp66_launch_mode,
+    _visual_quality_provider_request,
 )
 from tgvf_rl.framework.verl.policy_runtime import PolicyAgentLoopWorkerPlacement
 from tgvf_rl.framework.verl.native_deepeyes_runtime import (
@@ -38,6 +45,7 @@ from tgvf_rl.framework.verl.native_deepeyes_runtime import (
 from tgvf_rl.judges import (
     TGVFVisualQualityJudgeConfig,
     TGVFVisualQualityJudgeProvider,
+    TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION,
     tgvf_visual_quality_prompt_identity,
 )
 from tgvf_rl.policy.run_config import (
@@ -50,11 +58,19 @@ from tgvf_rl.policy.run_config import (
 from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.schema import AnswerTaskKind
 from tgvf_rl.rewards.stage3_shaped import QualityJudgeScore
-from tgvf_rl.trajectories.schema import TrajectoryStop
+from tgvf_rl.trajectories.schema import CropTGVFToolCallRecord, TrajectoryStop
 from tests.framework.test_verl_bridges import _record
 from tgvf_rl.observations.store import ObservationStore
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.protocol.schema import SampledAssistantTurn, TokenByteSpan
+from tgvf_rl.protocol.schema import NativeToolCapabilityProfile
+from tgvf_rl.protocol.native import NativeAssistantDialect
+from tgvf_rl.framework.verl.vllm_tool_runtime import TGVFCropMaterializationResult
+from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    preprocessed_visual_identity_sha256,
+)
+from tgvf_rl.representation.adapter import TGVFAdapterMetadata
+from tgvf_rl.representation.deepstack import DDeepStackPayload
 
 
 SHA = "7" * 64
@@ -71,6 +87,176 @@ def test_live_builder_has_no_agent_loop_model_loader_surface() -> None:
     signature = inspect.signature(Qwen3PolicyE2ELiveRuntimeBuilder.__init__)
 
     assert "model_loader" not in signature.parameters
+
+
+@pytest.mark.parametrize(
+    ("profile", "required_method"),
+    (
+        (NativeToolCapabilityProfile.TGVF_ONLY, "materialize_focus"),
+        (NativeToolCapabilityProfile.CROP_ONLY, "materialize_crop"),
+        (NativeToolCapabilityProfile.CROP_TGVF, "materialize_crop_tgvf"),
+    ),
+)
+def test_live_builder_requires_only_the_profile_specific_remote_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+    profile: NativeToolCapabilityProfile,
+    required_method: str,
+) -> None:
+    server = SimpleNamespace(
+        materialize_source=lambda **kwargs: None,
+        generate=lambda **kwargs: None,
+    )
+    config = SimpleNamespace(
+        model=SimpleNamespace(family="qwen3_vl"),
+        protocol=SimpleNamespace(tool_profile=profile),
+    )
+    context = SimpleNamespace(config=config, server_manager=server)
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.PolicyE2ERuntimeBuildContext",
+        SimpleNamespace,
+    )
+
+    with pytest.raises(TypeError, match=required_method):
+        Qwen3PolicyE2ELiveRuntimeBuilder().build(context)
+
+
+def test_remote_atomic_runtime_records_only_bound_crop_conditioned_d(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.environment.test_crop_tgvf_runtime import _fixture
+
+    local, materializer, store, pixels, _embedding, context, parsed = _fixture(
+        tmp_path,
+        bbox=(0, 250, 800, 1000),
+    )
+    source_ref = context.trajectory_source_visual.source_pixels
+    assert source_ref is not None
+    source_state = context.trajectory_source_visual.state
+    source_visual = SourceVisualTensorBundle(
+        image_sha256=source_ref.address.digest,
+        premerge_main=store.resolve_verified(source_state.premerge_main),
+        premerge_deepstack=tuple(
+            store.resolve_verified(ref) for ref in source_state.premerge_deepstack
+        ),
+        merged_main=store.resolve_verified(source_state.merged_main),
+        merged_deepstack=tuple(
+            store.resolve_verified(ref) for ref in source_state.merged_deepstack
+        ),
+        image_grid_thw=source_state.image_grid_thw,
+        spatial_merge_size=source_state.spatial_merge_size,
+        decoded_rgb_sha256=source_ref.address.digest,
+    )
+    crop = pixels[1:4, 0:4, :].contiguous()
+    crop_visual = materializer.materialize_source_visual(
+        crop,
+        parsed_call=parsed,
+        call_index=0,
+    )
+    target_count = len(parsed.target_span.token_ids)
+    branch_layers = local.loaded_adapter.binding.adapter_contract.deepstack_branch_layers
+    projection_ids = (
+        local.loaded_adapter.binding.adapter_contract.deepstack_projection_identities
+    )
+    d = torch.full((1, 8), 9.0)
+    observation = PrecomputedTGVFObservationPayload(
+        main_d=d,
+        d_deepstack=DDeepStackPayload(
+            branch_layers=branch_layers,
+            branches=tuple(d.add(index + 1) for index in range(3)),
+            projection_identities=projection_ids,
+        ),
+        metadata=TGVFAdapterMetadata(
+            branch_layers=branch_layers,
+            main_projection_identity=(
+                local.loaded_adapter.binding.adapter_contract.main_projection_identity
+            ),
+            deepstack_projection_identities=projection_ids,
+            batched=False,
+            batch_size=1,
+            target_token_count=target_count,
+            pre_merge_visual_token_count=4,
+            d_token_count=1,
+            condition_provenance=None,
+        ),
+    )
+    hq = torch.arange(target_count * 8, dtype=torch.float32).reshape(target_count, 8)
+    calls: list[dict[str, object]] = []
+
+    class Server:
+        async def materialize_crop_tgvf(self, **kwargs: object):
+            calls.append(dict(kwargs))
+            return TGVFCropMaterializationResult(
+                source_image_sha256=str(kwargs["source_image_sha256"]),
+                crop_sha256=str(kwargs["crop_sha256"]),
+                preprocessed_visual_sha256=str(
+                    kwargs["preprocessed_visual_sha256"]
+                ),
+                image_grid_thw=tuple(
+                    int(value) for value in kwargs["image_grid_thw"][0].tolist()
+                ),
+                call_index=int(kwargs["call_index"]),
+                model_bbox_2d=tuple(kwargs["model_bbox_2d"]),
+                target_start=int(kwargs["target_start"]),
+                target_end=int(kwargs["target_end"]),
+                target_token_ids=tuple(kwargs["expected_target_token_ids"]),
+                provider=str(kwargs["provider"]),
+                hq=hq,
+                crop_visual=crop_visual,
+                observation=observation,
+            )
+
+    monkeypatch.setattr(
+        "tgvf_rl.framework.verl.policy_live_runtime.preprocess_qwen3_rgb",
+        lambda **kwargs: (torch.ones((4, 6)), torch.tensor([[1, 2, 2]])),
+    )
+    config = SimpleNamespace(
+        representation=SimpleNamespace(
+            conditioning=local.loaded_adapter.binding.conditioning,
+            artifact=local.loaded_adapter.binding.artifact,
+        )
+    )
+
+    async def exercise():
+        remote = _RemoteAtomicCropTGVFToolRuntime(
+            event_loop=asyncio.get_running_loop(),
+            server_client=Server(),
+            config=config,
+            source_visual=source_visual,
+            layout_builder=local.layout_builder,
+            observation_store=store,
+            execution_ledger=local.execution_ledger,
+            contextual_forward_identity=None,
+            branch_merger_identities=local.branch_merger_identities,
+            crop_processor_identity=local.crop_processor_identity,
+            crop_layout_identity=local.crop_layout_identity,
+            processor=object(),
+            image_max_pixels=1_003_520,
+            success_environment_text_renderer=(
+                render_qwen_native_matched_crop_tgvf_success_environment_text
+            ),
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+        )
+        first = await asyncio.to_thread(remote.execute, parsed, context)
+        second = await asyncio.to_thread(remote.execute, parsed, context)
+        return first, second
+
+    first, second = asyncio.run(exercise())
+    assert first == second
+    assert len(calls) == 1
+    assert calls[0]["preprocessed_visual_sha256"] == (
+        preprocessed_visual_identity_sha256(
+            calls[0]["pixel_values"],
+            calls[0]["image_grid_thw"],
+        )
+    )
+    record = store.resolve_record(first)
+    assert record.__class__.__name__ == "CropTGVFObservationRecord"
+    torch.testing.assert_close(store.resolve_verified(record.payload.main_d), d)
+    assert not torch.equal(
+        store.resolve_verified(record.payload.main_d),
+        store.resolve_verified(record.crop_visual.source.merged_main),
+    )
 
 
 def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
@@ -544,6 +730,144 @@ def test_live_visual_quality_adapter_consumes_typed_provider_result(
 
     assert result.focus_score is QualityJudgeScore.PASS
     assert result.grounding_score is QualityJudgeScore.PARTIAL
+
+
+def test_live_visual_quality_request_preserves_all_successful_target_order(
+    tmp_path: Path,
+) -> None:
+    trajectory = _record(tool_call_count=2).trajectory_payload
+    final_turn = replace(
+        trajectory.assistant_turns[-1],
+        turn_index=2,
+        raw_text="The lower label is visibly below the red label.",
+        is_tool_call=False,
+    )
+    trajectory = replace(
+        trajectory,
+        assistant_turns=(*trajectory.assistant_turns, final_turn),
+        final_answer="lower label",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="Which label is lower?",
+        expected_answer="lower label",
+        task_kind=AnswerTaskKind.OPEN_VQA,
+    )
+    image_path = (tmp_path / "source.png").resolve()
+    image_bytes = b"\x89PNG\r\n\x1a\nsequence-runtime-test"
+    image_path.write_bytes(image_bytes)
+    prompt = tgvf_visual_quality_prompt_identity(
+        TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION
+    )
+
+    provider_request, successful_count = _visual_quality_provider_request(
+        request=SimpleNamespace(identity=trajectory.identity),
+        trajectory=trajectory,
+        context=context,
+        image_path=image_path,
+        image_sha256=__import__("hashlib").sha256(image_bytes).hexdigest(),
+        prompt_identity=prompt,
+    )
+
+    assert successful_count == 2
+    assert provider_request.tool_target is None
+    assert provider_request.tool_targets == ("red label", "lower label")
+    assert provider_request.post_tool_reasoning == final_turn.raw_text
+    assert "<tool_call>" not in provider_request.post_tool_reasoning
+
+
+def _as_atomic_crop_tgvf_call(call):
+    return CropTGVFToolCallRecord(
+        call_index=call.call_index,
+        assistant_turn_index=call.assistant_turn_index,
+        function_name="tgvf_crop_tool",
+        bbox_2d=(10, 20, 110, 120),
+        target=call.target,
+        target_token_span=call.target_token_span,
+        target_char_span=call.target_char_span,
+        raw_call_text=call.raw_call_text,
+        attempt_index=call.attempt_index,
+    )
+
+
+def test_live_visual_quality_request_accepts_atomic_crop_tgvf_targets(
+    tmp_path: Path,
+) -> None:
+    trajectory = _record(tool_call_count=2).trajectory_payload
+    final_turn = replace(
+        trajectory.assistant_turns[-1],
+        turn_index=2,
+        raw_text="The lower label is visibly below the red label.",
+        is_tool_call=False,
+    )
+    trajectory = replace(
+        trajectory,
+        assistant_turns=(*trajectory.assistant_turns, final_turn),
+        tool_calls=tuple(_as_atomic_crop_tgvf_call(call) for call in trajectory.tool_calls),
+        final_answer="lower label",
+        stop=TrajectoryStop.FINAL_ANSWER,
+    )
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="Which label is lower?",
+        expected_answer="lower label",
+        task_kind=AnswerTaskKind.OPEN_VQA,
+    )
+    image_path = (tmp_path / "source.png").resolve()
+    image_bytes = b"\x89PNG\r\n\x1a\natomic-sequence-runtime-test"
+    image_path.write_bytes(image_bytes)
+
+    provider_request, successful_count = _visual_quality_provider_request(
+        request=SimpleNamespace(identity=trajectory.identity),
+        trajectory=trajectory,
+        context=context,
+        image_path=image_path,
+        image_sha256=__import__("hashlib").sha256(image_bytes).hexdigest(),
+        prompt_identity=tgvf_visual_quality_prompt_identity(
+            TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION
+        ),
+    )
+
+    assert successful_count == 2
+    assert provider_request.tool_target is None
+    assert provider_request.tool_targets == ("red label", "lower label")
+    assert provider_request.post_tool_reasoning == final_turn.raw_text
+
+
+def test_live_visual_quality_request_rejects_ambiguous_target_call_type(
+    tmp_path: Path,
+) -> None:
+    trajectory = _record(tool_call_count=1).trajectory_payload
+    focus_call = trajectory.tool_calls[0]
+    trajectory = replace(
+        trajectory,
+        tool_calls=(focus_call, _as_atomic_crop_tgvf_call(focus_call)),
+    )
+    context = reward_context_from_trajectory(
+        trajectory,
+        question="Which label is red?",
+        expected_answer="red label",
+        task_kind=AnswerTaskKind.OPEN_VQA,
+    )
+    image_path = (tmp_path / "source.png").resolve()
+    image_bytes = b"\x89PNG\r\n\x1a\nambiguous-runtime-test"
+    image_path.write_bytes(image_bytes)
+
+    with pytest.raises(
+        IdentityMismatchError,
+        match="no unique TGVF tool call",
+    ):
+        _visual_quality_provider_request(
+            request=SimpleNamespace(identity=trajectory.identity),
+            trajectory=trajectory,
+            context=context,
+            image_path=image_path,
+            image_sha256=__import__("hashlib").sha256(image_bytes).hexdigest(),
+            prompt_identity=tgvf_visual_quality_prompt_identity(
+                TGVF_VISUAL_QUALITY_SEQUENCE_JUDGE_PROMPT_VERSION
+            ),
+        )
 
 
 class _NativeTokenizer:

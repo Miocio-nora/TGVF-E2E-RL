@@ -43,6 +43,11 @@ from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_MODEL_NAME,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
 )
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
+    build_crop_tgvf_visual_messages,
+)
 from tgvf_rl.policy.deepeyes_official_protocol import (
     THINKLITE_PROMPT_IDENTITY,
     build_thinklite_messages,
@@ -60,6 +65,14 @@ TGVF_DEEPEYES_MATCHED_DATASET_CLASS = (
     "tgvf_rl.framework.verl.tgvf_deepeyes_matched_dataset.TGVFDeepEyesMatchedDataset"
 )
 TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME = "prl15_tgvf_deepeyes_matched_visual"
+CROP_TGVF_DEEPEYES_MATCHED_DATASET_SCHEMA = (
+    "tgvf.verl-crop-tgvf-deepeyes-matched-dataset.v1"
+)
+CROP_TGVF_DEEPEYES_MATCHED_DATASET_CLASS = (
+    "tgvf_rl.framework.verl.tgvf_deepeyes_matched_dataset."
+    "CropTGVFDeepEyesMatchedDataset"
+)
+CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME = "prl20_crop_tgvf_deepeyes_matched_visual"
 
 DatasetSplit = Literal["train", "probe", "smoke"]
 
@@ -142,8 +155,62 @@ class DeepEyesTGVFMatchedDatasetBinding:
         return cls(**mapping)
 
 
+@dataclass(frozen=True, slots=True)
+class DeepEyesCropTGVFMatchedDatasetBinding(DeepEyesTGVFMatchedDatasetBinding):
+    """Bind PRL20 atomic Crop+TGVF to the unchanged PRL13 schedule."""
+
+    schema_version: str = CROP_TGVF_DEEPEYES_MATCHED_DATASET_SCHEMA
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "root", Path(self.root))
+        object.__setattr__(
+            self, "candidate_sidecar_path", Path(self.candidate_sidecar_path)
+        )
+        expected = {
+            "root": DEEPEYES_T1_ROOT,
+            "candidate_sidecar_path": DEEPEYES_CANDIDATE_SIDECAR,
+            "manifest_file_sha256": DEEPEYES_T1_MANIFEST_FILE_SHA256,
+            "content_sha256": DEEPEYES_T1_CONTENT_SHA256,
+            "samples_sha256": DEEPEYES_T1_SAMPLES_SHA256,
+            "candidate_sidecar_sha256": DEEPEYES_CANDIDATE_SHA256,
+            "expected_sample_count": DEEPEYES_T1_SAMPLE_COUNT,
+            "schedule_seed": DEEPEYES_TRAIN_SEED,
+            "probe_seed": DEEPEYES_PROBE_SEED,
+            "visual_prompt_bundle_sha256": (
+                CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+            ),
+            "thinklite_prompt_bundle_sha256": (THINKLITE_PROMPT_IDENTITY.bundle_sha256),
+            "model_name": POLICY_PILOT_V1_MODEL_NAME,
+            "tokenizer_length": POLICY_PILOT_V1_TOKENIZER_LENGTH,
+            "chat_template_sha256": POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+            "schema_version": CROP_TGVF_DEEPEYES_MATCHED_DATASET_SCHEMA,
+        }
+        for name, value in expected.items():
+            if getattr(self, name) != value:
+                raise ValueError(f"matched Crop+TGVF dataset {name} differs")
+        if self.schedule_mode not in {"stratified", "natural"}:
+            raise ValueError("matched Crop+TGVF dataset schedule_mode differs")
+
+    @classmethod
+    def from_config(cls, value: object) -> "DeepEyesCropTGVFMatchedDatasetBinding":
+        mapping = dict(_plain_mapping(value, "data.deepeyes_crop_tgvf_matched"))
+        if set(mapping) != _CONFIG_FIELDS:
+            raise ValueError("data.deepeyes_crop_tgvf_matched fields differ")
+        return cls(**mapping)
+
+
 class TGVFDeepEyesMatchedDataset(TGVFDeepEyesOfficialDataset):
     """Change only the visual policy protocol over the exact PRL13 schedule."""
+
+    _binding_type = DeepEyesTGVFMatchedDatasetBinding
+    _binding_config_name = "deepeyes_tgvf_matched"
+    _visual_prompt_identity = TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+    _visual_prompt_version = TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+    _visual_message_builder = staticmethod(build_tgvf_visual_messages)
+    _visual_agent_name = TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+    _visual_source_route = "matched_tgvf_visual_tool"
+    _visual_smoke_expectation = "tgvf_possible"
+    _dataset_label = "matched TGVF"
 
     def __init__(
         self,
@@ -158,12 +225,13 @@ class TGVFDeepEyesMatchedDataset(TGVFDeepEyesOfficialDataset):
             raise TypeError("matched TGVF dataset requires a Qwen processor")
         if max_samples != -1:
             raise ValueError("matched TGVF schedule forbids max_samples filtering")
-        binding = DeepEyesTGVFMatchedDatasetBinding.from_config(
-            _config_value(config, "deepeyes_tgvf_matched")
+        binding = self._binding_type.from_config(
+            _config_value(config, self._binding_config_name)
         )
         if binding.schedule_mode != "stratified":
             raise ValueError(
-                "matched TGVF schedule index currently binds only the stratified arm"
+                f"{self._dataset_label} schedule index currently binds only "
+                "the stratified arm"
             )
         _assert_bound_qwen3_instruct_processor(processor, binding)
         split: DatasetSplit = _split_from_files(data_files)
@@ -210,14 +278,14 @@ class TGVFDeepEyesMatchedDataset(TGVFDeepEyesOfficialDataset):
         else:
             raw_prompt = [
                 _copy_message(message)
-                for message in build_tgvf_visual_messages(
+                for message in self._visual_message_builder(
                     sample.question, image=str(sample.image_path)
                 )
             ]
-            prompt_bundle_sha256 = TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
-            prompt_version = TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+            prompt_bundle_sha256 = self._visual_prompt_identity.bundle_sha256
+            prompt_version = self._visual_prompt_version
             need_tools_kwargs = True
-            source_route = "matched_tgvf_visual_tool"
+            source_route = self._visual_source_route
 
         rendered_text, canonical_token_ids = _render_native_instruct_prompt(
             processor=self.processor,
@@ -250,7 +318,7 @@ class TGVFDeepEyesMatchedDataset(TGVFDeepEyesOfficialDataset):
         }
         if self.split == "smoke":
             extra_info["smoke_expectation"] = (
-                "tgvf_possible"
+                self._visual_smoke_expectation
                 if sample.data_source == "vstar"
                 else "direct_no_call"
                 if sample.data_source == "arxivqa"
@@ -276,11 +344,25 @@ class TGVFDeepEyesMatchedDataset(TGVFDeepEyesOfficialDataset):
             "candidate_sha256": sample.candidate_sha256,
             # Every row must produce an exact replay bundle.  The matched loop
             # dispatches ThinkLite to its own strict single-turn/no-tool path.
-            "agent_name": TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+            "agent_name": self._visual_agent_name,
             "tools_kwargs": tools_kwargs,
             "index": index,
             "dummy_tensor": torch.tensor([0], dtype=torch.uint8),
         }
+
+
+class CropTGVFDeepEyesMatchedDataset(TGVFDeepEyesMatchedDataset):
+    """PRL20 atomic Crop+TGVF over the exact matched T1 schedule."""
+
+    _binding_type = DeepEyesCropTGVFMatchedDatasetBinding
+    _binding_config_name = "deepeyes_crop_tgvf_matched"
+    _visual_prompt_identity = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+    _visual_prompt_version = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+    _visual_message_builder = staticmethod(build_crop_tgvf_visual_messages)
+    _visual_agent_name = CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+    _visual_source_route = "matched_crop_tgvf_visual_tool"
+    _visual_smoke_expectation = "crop_tgvf_possible"
+    _dataset_label = "matched Crop+TGVF"
 
 
 def _assert_bound_qwen3_instruct_processor(
@@ -340,9 +422,14 @@ def _render_native_instruct_prompt(
 
 
 __all__ = [
+    "CROP_TGVF_DEEPEYES_MATCHED_DATASET_CLASS",
+    "CROP_TGVF_DEEPEYES_MATCHED_DATASET_SCHEMA",
+    "CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME",
+    "CropTGVFDeepEyesMatchedDataset",
     "DEEPEYES_PROBE_SENTINEL",
     "DEEPEYES_SMOKE_SENTINEL",
     "DEEPEYES_TRAIN_SENTINEL",
+    "DeepEyesCropTGVFMatchedDatasetBinding",
     "DeepEyesTGVFMatchedDatasetBinding",
     "TGVF_DEEPEYES_MATCHED_DATASET_CLASS",
     "TGVF_DEEPEYES_MATCHED_DATASET_SCHEMA",

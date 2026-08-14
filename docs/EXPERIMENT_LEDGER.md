@@ -9846,3 +9846,183 @@ than inferred from a script name or prior conversation.
   W&B is enabled only for formal training under run ID `prl18r0u`; smoke is
   console-only. Expected wall time is roughly 2 h 45 min--3 h for 16 training
   steps plus 50--65 min for the two-arm evaluation.
+
+### PRL-19-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-VISUAL-API
+
+- Authorized 2026-08-13 as the visual-reward treatment against the frozen
+  PRL17-R2 RP67 T-free control. Qwen3-VL-8B-Instruct, the RP67 Step-2000
+  Adapter, frozen-Adapter mode, retained T1 data/order, policy prompt and tool
+  protocol, BS16 x n16, world8/micro2/GA1, temperature 1, constant `1e-6`
+  learning rate, answer judge and all rollout limits remain fixed.
+- The only scientific treatment enables Focus/Target and Grounding. Tool
+  utility `T` remains disabled. The executed scalar is
+  `2*A - 0.05*max(0, tool_calls-1) + F + G + P`, with the existing F mapping
+  `2/1/0 -> 1/0.5/0`, G mapping `2/1/0 -> 1/0.5/-1`, and protocol/tool errors
+  contributing `P=-1`.
+- One gold-free OpenRouter request to pinned
+  `qwen/qwen3-vl-32b-instruct` returns both F and G. The request contains the
+  original image, question, all successful tool targets in call order,
+  post-tool reasoning and final answer; it cannot contain any gold/reference
+  answer. The run-global visual concurrency is 16 (two permits per AgentLoop
+  worker), with four bounded attempts, exponential backoff, exact-request
+  cache, explicit coverage/failure accounting and a 25% rolling provider
+  failure circuit breaker.
+- A real-image API canary passed exact model/schema/usage checks and separated
+  a specific valid target and grounded statement `(F=2,G=2)` from an
+  irrelevant target/hallucinated statement and an answer shortcut
+  `(F=0,G=0)`. Observed API latency was about 1.1--2.1 seconds and cost about
+  `$0.000085` per combined judgement.
+- The first world4 BS4 x n2 functional training canary completed one optimizer
+  step in 150.97 seconds with frozen RP67 SHA
+  `3f60f36589a3c0f3549c12b949eaabb140f6edfac849aa2b25a623bbcde53a14`,
+  finite `grad_norm=6.98`, and both F/G components present. It exposed one
+  malformed visual-judge completion among six applicable trajectories
+  (5/6 covered). Runtime commit
+  `1d193dce846d5f2eeb78499bec7bad1d873f6a96` therefore gives every malformed
+  completion the same four-attempt bounded retry budget as transient transport
+  failures; a persistent served-model identity mismatch remains a global
+  failure. The exact matched smoke accepts sample-local degradation only when
+  aggregate visual coverage is at least 99%, rather than aborting on one bad
+  provider response.
+- Runtime commit `9e3c6f74a44762b90e3a138f440246b1df5dff8c` also makes the
+  multi-call judgement non-overlapping: F receives every ordered successful
+  target, while G receives only assistant reasoning after the final successful
+  tool call. Later tool-call JSON/target text is therefore not duplicated into
+  the grounding channel.
+- Launch descendant `f22650e2bf6b2d849756a2be9fbc2290a675248c`
+  removes the now-dead local left by the malformed-output retry recovery. This
+  is a behavior-preserving static cleanup; the configured executable identity
+  remains the preceding `9e3c6f7` runtime commit.
+- Lifecycle: first run a console-only BS4 x n2 world4 functional canary, then
+  one exact world8/BS16/n16 matched smoke. After both gates pass, a tmux-owned
+  fresh formal run proceeds Step 0 -> 8, binds an immutable horizon extension,
+  and automatically continues Step 8 -> 16. The RP67 Adapter must remain
+  byte-identical; Step 8 and Step 16 are permanent checkpoints.
+- Evaluation starts automatically after Step 16 and runs only Step 8 and
+  Step 16 under the same paired CoreDev-2511 seven-suite protocol and RNG
+  namespace as PRL17-R2. The already measured paired PRL17-R2 Step 0 is the
+  common initialization reference and is not rerun.
+- Formal training completed all 16 optimizer steps on 2026-08-13. The first
+  paired-evaluation attempt durably completed 1,953/4,480 single-image rows
+  (Step 8: 1,015/2,240; Step 16: 938/2,240) before one Step-16 sample emitted
+  text after a complete `</tool_call>`. The sampler correctly rejected that
+  response, but the benchmark worker incorrectly promoted this model-output
+  event to an eight-worker failure; seven orphan vLLM process groups then held
+  the supervisor log pipe and GPUs open.
+- Recovery runtime commit `22b2c28` introduces a narrow, structured
+  `PolicyOutputContractError` only for this illegal suffix. The benchmark now
+  persists that task as an identity-bound `sample_local_failure` with null
+  answer and `invalid_format`, retains it in the scoring denominator as
+  incorrect, and continues its siblings. Generic replay, identity, transport,
+  artifact and unknown failures remain fail-closed. Evaluator ranks now launch
+  in isolated process groups and a worker-level failure drains every vLLM
+  descendant before the supervisor retries. Seventy-three focused CPU tests
+  passed; all 1,953 prior rows passed strict resume validation unchanged. The
+  paired evaluator resumed from those rows at 17:42 JST without retraining.
+- The committed supervisor enforces API-key preflight, frozen-Adapter SHA at
+  smoke, complete permanent checkpoint receipts at Steps 8/16, bounded resume
+  for operational interruptions, one W&B identity, and automatic handoff to
+  the two-arm paired evaluator. Smoke/canary runs remain console-only.
+- Paired CoreDev-2511 evaluation completed on 2026-08-13 with `2,240/2,240`
+  supported single-image rows per arm and an explicit 271-row multi-image hold.
+  Canonical Macro* is `57.8849` at Step 8 and `57.5422` at Step 16. Against the
+  same paired PRL17-R2 no-visual control (`56.1964`, `58.1996`), the visual
+  treatment is `+1.6885 pp` at Step 8 and `-0.6573 pp` at Step 16. Against the
+  common Step 0 (`57.0320`), visual Steps 8/16 are respectively `+0.8529` and
+  `+0.5102 pp`. These are auxiliary answer-accuracy observations, not direct
+  measurements of image-dependent target quality or visual hallucination.
+  The earlier early-shaping/Step-8-selection interpretation is withdrawn until
+  a paired held-out Focus/Grounding and wrong-image calibration audit completes.
+- Step-16 output health is worse in the extreme tail. OCR prediction mean/P99
+  grows from `1,979.3/47,296.2` chars at Step 8 to `2,829.6/80,924.2` at Step
+  16, while the no-visual Step-16 P99 is `31,473.8`. Max-token stops remain
+  `26/2,240` in both PRL19 arms, so the finding is heavier stochastic
+  repetition rather than a larger capped-response count. This is recorded as
+  an output-health warning, not as direct evidence that hallucination increased.
+- The Step-16 official OCR metric completed successfully, but one
+  `134,775`-character prediction exceeded Python `csv`'s historical 128-KiB
+  per-field default during local result summarization. The reader now raises
+  the limit only to the already materialized artifact bound and restores the
+  global setting afterward in commit `c40030e`. Twenty-two focused tests, Ruff
+  and the real artifact summary pass. This changes no prediction, denominator,
+  scorer or metric.
+- Full results, reward analysis, output-health audit and artifact hashes are in
+  `docs/PRL19_RP67_FROZEN_TFREE_VISUAL_REWARD_PAIRED_RESULTS_20260813.md`.
+
+### PRL-20-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-CROP-TGVF
+
+- Authorized 2026-08-13 as the atomic TGVF+Crop treatment. The direct control
+  is PRL17-R2 frozen-RP67 T-free. Model, retained mixed-T1 data/order, full
+  policy update, frozen RP67 Step-2000 artifact, BS16 x n16, world8,
+  micro2/GA1, temperature 1, constant `1e-6` learning rate, answer judge,
+  eight optimizer steps, six-call cap and clean plain-final dialect are fixed.
+- The sole intended scientific treatment replaces `tgvf_focus_tool(target)`
+  with one atomic `tgvf_crop_tool(bbox_2d,target)`. Runtime crops the immutable
+  original RGB, runs crop vision and frozen RP67 on the sticky rollout replica,
+  and returns only D/D-DeepStack. The policy never receives RGB crop or raw
+  crop-vision features. Tool utility T, Focus, Grounding and visual API judges
+  remain disabled.
+- Prompt identity is
+  `5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69`;
+  tool-schema identity is
+  `0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39`.
+  ThinkLite stays direct-only/no-tool.
+- RPC identity binds immutable source RGB SHA, exact crop RGB SHA, the complete
+  preprocessed Qwen visual tensor plus grid, bbox, call index, sampled target
+  span/token IDs, conditioning provider and returned D payload. A swapped
+  preprocessed tensor is rejected before visual/Adapter execution.
+- Actor replay uses the explicit `crop-tgvf-observation-v3` boundary. Each
+  observation persists the exact crop processor tensor and sampled Hq; the
+  current policy recomputes crop vision differentiably, applies frozen RP67,
+  and injects only the resulting D/D-DeepStack. Historical v2 observations are
+  not valid resume inputs for this run, and the reference remains bound to the
+  rollout-recorded visual features.
+- The training-run benchmark path is corrected at the same boundary: matched
+  TGVF uses `build_tgvf_visual_messages(...), tools=[]`, atomic TGVF+Crop uses
+  `build_crop_tgvf_visual_messages(...), tools=[]`, and the prompt materializer
+  is part of evaluation identity. Legacy generic and official-visible Crop
+  routes are unchanged. Historical matched-TGVF benchmark rows rendered with
+  the generic prompt cannot be mixed with corrected rows and must be rerun for
+  a fair PRL20 comparison.
+- Lifecycle gate: console-only world4 BS4 x n2 one-step functional canary first;
+  only after one successful atomic D observation and finite update may the
+  exact world8 BS16 x n16 eight-step pilot start. Formal W&B is enabled;
+  canary/smoke W&B is disabled.
+- The first canary attempt on 2026-08-13 completed all eight rollout
+  trajectories in 31--37 seconds, then entered actor replay at 23:29:09 JST
+  and made no progress for 14 minutes 47 seconds. All four actor ranks stayed
+  in NCCL-like 100% SM/low-memory-activity kernels; no optimizer update,
+  Step-1 metric, or Step-1 checkpoint was produced. It was stopped manually
+  at 23:43:56 JST. Unequal per-rank replay payloads plus code inspection
+  identified the cause: current replay called independently FSDP-sharded Qwen
+  vision blocks once per sampled crop, so ranks with different tool-call
+  counts issued different child-collective schedules.
+- Recovery makes one trajectory the bounded live-vision execution unit. A
+  typed replay plan packs its immutable source plus all sampled crops into
+  Qwen3-VL's native multi-image input, executes the vision tower exactly once,
+  then splits the main/DeepStack pre-merge and merged tensors by the exact
+  grid-derived token counts before applying frozen RP67 and the unchanged
+  decoder replay. Qwen's grid-derived cumulative sequence boundaries keep
+  images attention-independent. This bounds activations to at most one source
+  plus six crops instead of packing the formal 32-trajectory local actor
+  micro-batch, while every rank executes the same one-vision-call-per-row
+  schedule. Fixed actor micro-batching remains part of the immutable matched
+  Crop-16 launcher controls (`actor.use_dynamic_bsz=false`).
+- Sequential-versus-packed CPU tests prove main/DeepStack values, pixel
+  gradients and every vision-parameter gradient agree for unequal image grids.
+  A real four-rank NCCL/FSDP2 regression uses 0/1/2/3 crops across ranks,
+  independently shards a vision child, and completes finite nonzero backward
+  on every rank. This recovery must pass a fresh console-only canary before any
+  formal PRL20 run starts.
+- Recovery commit `d5d77a2` passed that fresh world4 canary on 2026-08-14.
+  The run started at 00:30:16 JST and exited normally at about 00:39:34 JST.
+  Its one optimizer step contained four prompts and eight trajectories, made
+  six successful atomic Crop+TGVF observations with no tool errors, completed
+  actor backward/update with finite `actor/grad_norm=8.4691`, synchronized the
+  updated policy, and wrote a complete Step-1 model/optimizer/extra-state pair
+  plus tracker and metrics. The measured training-step time was 250.47 seconds,
+  including 81.23 seconds of checkpoint I/O and 6.82 seconds of weight sync;
+  peak actor allocation was 40.97 GiB. This closes the collective-mismatch
+  engineering gate only; its eight sampled trajectories are not an accuracy
+  comparison. The matched world8 BS16 x n16 formal pilot remains unstarted
+  pending the explicit post-canary launch decision.

@@ -31,6 +31,7 @@ import torch
 from PIL import Image
 
 from tgvf_rl.conditioning import TargetConditioningProviderKind
+from tgvf_rl.contracts.errors import IdentityMismatchError, PolicyOutputContractError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.environment import (
     CropExecutionLedger,
@@ -42,9 +43,11 @@ from tgvf_rl.environment import (
     record_trajectory_source_visual,
 )
 from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_environment_text,
 )
+from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.qwen3_crop_materializer import preprocess_qwen3_rgb
 from tgvf_rl.framework.verl.native_agent_loop import VerlAsyncServerPolicyTurnClient
 from tgvf_rl.framework.verl.policy_weight_sync import (
@@ -54,8 +57,8 @@ from tgvf_rl.framework.verl.policy_weight_sync import (
 )
 from tgvf_rl.framework.verl.policy_live_runtime import (
     _BRANCH_LAYERS,
+    _RemoteAtomicCropTGVFToolRuntime,
     _RemoteCropVisualMaterializer,
-    _RemoteCropTGVFToolRuntime,
     _RemoteTGVFFocusToolRuntime,
     _VisualTokenCountResolver,
     _artifact_identity,
@@ -67,6 +70,7 @@ from tgvf_rl.framework.verl.vllm_tool_runtime import (
     TGVFCropTGVFMaterializationResult,
     TGVF_VLLM_WORKER_EXTENSION_FQN,
     TGVFFocusMaterializationResult,
+    TGVFCropMaterializationResult,
     _adapter_owned_state_to_utility_wire,
     _crop_tgvf_from_utility_wire,
     _focus_from_utility_wire,
@@ -94,9 +98,20 @@ from tgvf_rl.framework.vllm.registration import (
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
+)
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
+    build_crop_tgvf_visual_messages,
+)
+from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
+    TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+    TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
+    build_tgvf_visual_messages,
 )
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
@@ -139,7 +154,14 @@ from .policy_paired_tgvf_snapshot import (
 POLICY_COREDEV_SCHEMA = "tgvf-policy-coredev-evaluation-v1"
 POLICY_BENCHMARK_SCHEMA = "tgvf-policy-benchmark-evaluation-v1"
 POLICY_EVALUATION_IDENTITY_SCHEMA = "tgvf-policy-evaluation-identity-v1"
+POLICY_MATCHED_PROMPT_MATERIALIZER_SCHEMA = (
+    "tgvf-policy-evaluation-matched-prompt-materializer-v1"
+)
+POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION = (
+    "qwen3-native-chat-template-explicit-empty-tools-v1"
+)
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
+POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA = "tgvf-policy-output-contract-failure-v1"
 PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-rng-v1"
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
@@ -166,11 +188,116 @@ POLICY_EVALUATION_BACKENDS = frozenset(
 
 
 def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
+    if (
+        run.schema_version
+        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    ):
+        return render_qwen_native_matched_crop_tgvf_success_environment_text
     return (
         render_qwen_native_matched_tgvf_success_environment_text
         if run.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
         else render_qwen_native_success_environment_text
     )
+
+
+def _matched_prompt_materializer_identity(
+    run: PolicyE2ESmokeRunConfig,
+) -> dict[str, object] | None:
+    """Bind the corrected training-matched prompt path without legacy drift."""
+
+    schema_version = getattr(run, "schema_version", None)
+    if schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS:
+        if run.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
+            raise ValueError("matched TGVF run has a non-TGVF tool profile")
+        builder = "build_tgvf_visual_messages"
+        prompt_version = TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+        prompt_sha256 = TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    elif (
+        schema_version
+        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    ):
+        if run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_TGVF:
+            raise ValueError("matched Crop+TGVF run has a non-combined tool profile")
+        builder = "build_crop_tgvf_visual_messages"
+        prompt_version = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+        prompt_sha256 = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    else:
+        # Existing generic native and official-visible evaluations retain their
+        # historical rendering and identity bytes.
+        return None
+    return {
+        "schema_version": POLICY_MATCHED_PROMPT_MATERIALIZER_SCHEMA,
+        "version": POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION,
+        "message_builder": builder,
+        "prompt_version": prompt_version,
+        "prompt_bundle_sha256": prompt_sha256,
+        "template_tools_argument": [],
+    }
+
+
+def _evaluation_prompt_materializer_identity(
+    config: PolicyCoreDevConfig,
+    run: PolicyE2ESmokeRunConfig,
+) -> dict[str, object] | None:
+    """Keep official-visible and legacy identity envelopes byte-compatible."""
+
+    if config.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL:
+        return None
+    return _matched_prompt_materializer_identity(run)
+
+
+def _render_training_run_visual_prompt(
+    *,
+    run: PolicyE2ESmokeRunConfig,
+    processor: object,
+    renderer: NativeProtocolRenderer,
+    question: str,
+) -> tuple[str, tuple[int, ...]]:
+    """Render one training-run prompt, preserving all historical routes."""
+
+    materializer = _matched_prompt_materializer_identity(run)
+    if materializer is None:
+        messages = build_visual_tool_prompt_messages(
+            question,
+            tool_profile=run.protocol.tool_profile,
+            assistant_dialect=renderer.assistant_dialect,
+        )
+        rendered = renderer.render(messages, add_generation_prompt=True)
+        renderer.assert_generation_prefill(rendered, renderer.tokenizer)
+        return rendered.text, rendered.token_ids
+
+    messages = (
+        build_crop_tgvf_visual_messages(question)
+        if run.schema_version
+        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+        else build_tgvf_visual_messages(question)
+    )
+    renderer.assert_tokenizer_length()
+    renderer.assert_chat_template_identity()
+    renderer.assert_tool_schema_identity()
+    text = processor.apply_chat_template(
+        list(messages),
+        tools=[],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    renderer.assert_tokenizer_length()
+    renderer.assert_chat_template_identity()
+    renderer.assert_tool_schema_identity()
+    if not isinstance(text, str):
+        raise TypeError("matched evaluation chat template did not return text")
+    if "<answer>" in text or "</answer>" in text:
+        raise ValueError("matched evaluation prompt contains an answer wrapper")
+    token_ids = tuple(renderer.tokenizer.encode(text, add_special_tokens=False))
+    if not token_ids or any(type(token_id) is not int or token_id < 0 for token_id in token_ids):
+        raise TypeError("matched evaluation tokenizer returned invalid prompt IDs")
+    renderer.assert_tokenizer_length()
+    renderer.assert_chat_template_identity()
+    renderer.assert_tool_schema_identity()
+    renderer.assert_generation_prefill(
+        SimpleNamespace(text=text, token_ids=token_ids), renderer.tokenizer
+    )
+    return text, token_ids
 
 
 def _build_remote_tgvf_focus_tool_runtime(
@@ -222,29 +349,95 @@ def validate_policy_benchmark_runtime_interfaces(
     )
     dialect = native_assistant_dialect_for_model(run.model.model_name)
     renderer = _success_environment_text_renderer(run)
+    profile = run.protocol.tool_profile
+    manager_method = {
+        NativeToolCapabilityProfile.TGVF_ONLY: "materialize_focus",
+        NativeToolCapabilityProfile.CROP_ONLY: "materialize_crop",
+        NativeToolCapabilityProfile.CROP_TGVF: "materialize_crop_tgvf",
+    }.get(profile)
+    if manager_method is None:
+        raise ValueError("policy benchmark has an unsupported tool profile")
+    if not callable(getattr(StandaloneTGVFVLLMManager, manager_method, None)):
+        raise TypeError(f"standalone evaluator lacks {manager_method}()")
+
     event_loop = asyncio.new_event_loop()
     try:
-        runtime = _build_remote_tgvf_focus_tool_runtime(
-            event_loop=event_loop,
-            server_client=object(),
-            config=run,
-            source_visual=object(),
-            layout_builder=object(),
-            observation_store=ObservationStore(),
-            execution_ledger=FocusExecutionLedger(),
-            contextual_forward_identity=None,
-            branch_merger_identities=(),
-            success_environment_text_renderer=renderer,
-            assistant_dialect=dialect,
-        )
+        if profile is NativeToolCapabilityProfile.TGVF_ONLY:
+            runtime = _build_remote_tgvf_focus_tool_runtime(
+                event_loop=event_loop,
+                server_client=object(),
+                config=run,
+                source_visual=object(),
+                layout_builder=object(),
+                observation_store=ObservationStore(),
+                execution_ledger=FocusExecutionLedger(),
+                contextual_forward_identity=None,
+                branch_merger_identities=(),
+                success_environment_text_renderer=renderer,
+                assistant_dialect=dialect,
+            )
+        elif profile is NativeToolCapabilityProfile.CROP_ONLY:
+            runtime = _RemoteCropVisualMaterializer(
+                event_loop=event_loop,
+                server_client=object(),
+                processor=object(),
+                model_identity=run.model,
+                image_max_pixels=run.policy.image_max_pixels,
+                trajectory_id="cpu-preflight",
+                behavior_policy=PolicyVersion("cpu-preflight", 0, "0" * 64),
+            )
+        else:
+            zero = torch.zeros((1, 1), dtype=torch.bfloat16)
+            source = SourceVisualTensorBundle(
+                image_sha256="0" * 64,
+                premerge_main=zero,
+                premerge_deepstack=(),
+                merged_main=zero,
+                merged_deepstack=(),
+                image_grid_thw=(1, 1, 1),
+                spatial_merge_size=1,
+                decoded_rgb_sha256="0" * 64,
+            )
+            runtime = _RemoteAtomicCropTGVFToolRuntime(
+                event_loop=event_loop,
+                server_client=object(),
+                config=run,
+                source_visual=source,
+                layout_builder=object(),
+                observation_store=ObservationStore(),
+                execution_ledger=FocusExecutionLedger(),
+                contextual_forward_identity=None,
+                branch_merger_identities=(),
+                crop_processor_identity=_artifact_identity(
+                    "policy-evaluation-preflight",
+                    "crop-processor",
+                    "v1",
+                    {"profile": profile.value},
+                ),
+                crop_layout_identity=_artifact_identity(
+                    "policy-evaluation-preflight",
+                    "crop-layout",
+                    "v1",
+                    {"profile": profile.value},
+                ),
+                processor=object(),
+                image_max_pixels=run.policy.image_max_pixels,
+                success_environment_text_renderer=renderer,
+                assistant_dialect=dialect,
+            )
     finally:
         event_loop.close()
-    return {
+    result = {
         "source_rgb_prompt_materializer": True,
-        "remote_tgvf_focus_runtime": type(runtime).__name__,
+        "tool_profile": profile.value,
+        "standalone_manager_method": manager_method,
+        "remote_tool_runtime": type(runtime).__name__,
         "success_environment_renderer": renderer.__name__,
         "assistant_dialect": dialect.value,
     }
+    if profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        result["remote_tgvf_focus_runtime"] = type(runtime).__name__
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -1352,10 +1545,21 @@ def load_benchmark_tasks(
                 "policy benchmark task manifest contains a relative or missing image_path"
             )
     if verify_image_contents:
+        verified_images: set[
+            tuple[Path, str, tuple[int, int]]
+        ] = set()
         for task in tasks:
             if task.has_bound_images:
                 for image_index in range(len(task.image_paths)):
+                    image_identity = (
+                        Path(task.image_paths[image_index]),
+                        task.image_sha256s[image_index],
+                        task.image_dimensions[image_index],
+                    )
+                    if image_identity in verified_images:
+                        continue
                     load_verified_task_image(task, image_index)
+                    verified_images.add(image_identity)
     single_image_count = sum(task.single_image for task in tasks)
     if (
         expected_single_image_count is not None
@@ -1853,6 +2057,15 @@ def policy_evaluation_identity(
             "image_max_pixels": config.effective_image_max_pixels(snapshot.run),
         },
     }
+    prompt_materializer = _evaluation_prompt_materializer_identity(
+        config, snapshot.run
+    )
+    if prompt_materializer is not None:
+        # This top-level binding intentionally does not enter
+        # _evaluation_protocol_identity(): paired common-random-number
+        # streams keep their established protocol partition while resume
+        # identity rejects outputs from the formerly mismatched renderer.
+        content["prompt_materializer"] = prompt_materializer
     if (
         config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
         or isinstance(snapshot, PairedTGVFEvaluationSnapshot)
@@ -2128,47 +2341,139 @@ class StandaloneTGVFVLLMManager:
         pixel_values: torch.Tensor,
         image_grid_thw: torch.Tensor,
         source_image_sha256: str,
-        crop_rgb_sha256: str,
-        source_width: int,
-        source_height: int,
-        crop_bbox: tuple[int, int, int, int],
-        crop_width: int,
-        crop_height: int,
         target_start: int,
         target_end: int,
         expected_target_token_ids: tuple[int, ...],
         provider: str,
-    ) -> TGVFCropTGVFMaterializationResult:
+        crop_sha256: str | None = None,
+        preprocessed_visual_sha256: str | None = None,
+        model_bbox_2d: tuple[int, int, int, int] | None = None,
+        crop_rgb_sha256: str | None = None,
+        source_width: int | None = None,
+        source_height: int | None = None,
+        crop_bbox: tuple[int, int, int, int] | None = None,
+        crop_width: int | None = None,
+        crop_height: int | None = None,
+    ) -> TGVFCropMaterializationResult | TGVFCropTGVFMaterializationResult:
+        """Materialize one atomic crop-conditioned D with exact call binding.
+
+        PRL20 uses the preprocessed-visual identity contract.  The geometry-rich
+        texture evaluation contract remains accepted for frozen historical
+        closures, and is routed to the same worker operation without weakening
+        either result type's validation.
+        """
+
         turn = self._validated_turn(request_id, expected_step, sampled_output_ids)
-        if turn.output_ids[target_start:target_end] != expected_target_token_ids:
+        target_token_ids = tuple(expected_target_token_ids)
+        if (
+            type(target_start) is not int
+            or type(target_end) is not int
+            or target_start < 0
+            or target_end <= target_start
+            or turn.output_ids[target_start:target_end] != target_token_ids
+        ):
             raise RuntimeError("crop+TGVF target differs from sampled output")
+        if not isinstance(image_grid_thw, torch.Tensor) or image_grid_thw.shape != (
+            1,
+            3,
+        ):
+            raise TypeError("crop+TGVF image_grid_thw must have shape [1,3]")
+        image_grid = tuple(int(value) for value in image_grid_thw[0].tolist())
+        uses_preprocessed_binding = crop_sha256 is not None
+        uses_geometry_binding = crop_rgb_sha256 is not None
+        if uses_preprocessed_binding == uses_geometry_binding:
+            raise ValueError("crop+TGVF requires exactly one RPC binding schema")
+        rpc_kwargs: dict[str, object] = {
+            "trajectory_id": request_id,
+            "backend_request_id": turn.backend_request_id,
+            "call_index": call_index,
+            "pixel_values_wire": _tensor_to_utility_wire(pixel_values),
+            "image_grid_thw": image_grid,
+            "source_image_sha256": source_image_sha256,
+            "target_start": target_start,
+            "target_end": target_end,
+            "expected_target_token_ids": target_token_ids,
+            "provider": provider,
+        }
+        bbox: tuple[int, int, int, int] | None = None
+        if uses_preprocessed_binding:
+            if preprocessed_visual_sha256 is None or model_bbox_2d is None:
+                raise ValueError("crop+TGVF preprocessed binding is incomplete")
+            bbox = tuple(model_bbox_2d)
+            rpc_kwargs.update(
+                {
+                    "crop_sha256": crop_sha256,
+                    "preprocessed_visual_sha256": preprocessed_visual_sha256,
+                    "model_bbox_2d": bbox,
+                }
+            )
+        else:
+            geometry = (
+                source_width,
+                source_height,
+                crop_bbox,
+                crop_width,
+                crop_height,
+            )
+            if any(value is None for value in geometry):
+                raise ValueError("crop+TGVF geometry binding is incomplete")
+            rpc_kwargs.update(
+                {
+                    "crop_rgb_sha256": crop_rgb_sha256,
+                    "source_width": source_width,
+                    "source_height": source_height,
+                    "crop_bbox": crop_bbox,
+                    "crop_width": crop_width,
+                    "crop_height": crop_height,
+                    "preprocessing_boundary": (
+                        TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY
+                    ),
+                }
+            )
         result = await self.engine.collective_rpc(
             "tgvf_materialize_crop_tgvf",
-            kwargs={
-                "trajectory_id": request_id,
-                "call_index": call_index,
-                "pixel_values_wire": _tensor_to_utility_wire(pixel_values),
-                "image_grid_thw": tuple(int(v) for v in image_grid_thw[0].tolist()),
-                "source_image_sha256": source_image_sha256,
-                "crop_rgb_sha256": crop_rgb_sha256,
-                "source_width": source_width,
-                "source_height": source_height,
-                "crop_bbox": crop_bbox,
-                "crop_width": crop_width,
-                "crop_height": crop_height,
-                "preprocessing_boundary": TGVF_CROP_TGVF_PREPROCESSING_BOUNDARY,
-                "backend_request_id": turn.backend_request_id,
-                "target_start": target_start,
-                "target_end": target_end,
-                "expected_target_token_ids": expected_target_token_ids,
-                "provider": provider,
-            },
+            kwargs=rpc_kwargs,
         )
         typed = _crop_tgvf_from_utility_wire(
             _single_collective(result, operation="crop+TGVF materialization")
         )
-        if not isinstance(typed, TGVFCropTGVFMaterializationResult):
+        if uses_geometry_binding:
+            if not isinstance(typed, TGVFCropTGVFMaterializationResult):
+                raise TypeError("geometry-bound crop+TGVF RPC returned an invalid result")
+            return typed
+        if not isinstance(typed, TGVFCropMaterializationResult):
             raise TypeError("crop+TGVF RPC returned an invalid result")
+        assert crop_sha256 is not None
+        assert preprocessed_visual_sha256 is not None
+        assert bbox is not None
+        expected_binding = (
+            source_image_sha256,
+            crop_sha256,
+            preprocessed_visual_sha256,
+            image_grid,
+            call_index,
+            bbox,
+            target_start,
+            target_end,
+            target_token_ids,
+            provider,
+        )
+        actual_binding = (
+            typed.source_image_sha256,
+            typed.crop_sha256,
+            typed.preprocessed_visual_sha256,
+            typed.image_grid_thw,
+            typed.call_index,
+            typed.model_bbox_2d,
+            typed.target_start,
+            typed.target_end,
+            typed.target_token_ids,
+            typed.provider,
+        )
+        if actual_binding != expected_binding:
+            raise IdentityMismatchError(
+                "crop+TGVF RPC result differs from requested binding"
+            )
         return typed
 
     def _validated_turn(
@@ -2239,19 +2544,26 @@ async def build_standalone_manager(
     manager = StandaloneTGVFVLLMManager(
         engine,
         lora,
-        capture_hidden=(
-            config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL
-            and run.protocol.tool_profile
-            in {
-                NativeToolCapabilityProfile.TGVF_ONLY,
-                NativeToolCapabilityProfile.CROP_TGVF,
-            }
-        ),
+        capture_hidden=_evaluation_requires_hidden_capture(config, run),
         native_pixels=(
             config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
         ),
     )
     return manager, engine, run
+
+
+def _evaluation_requires_hidden_capture(
+    config: PolicyCoreDevConfig,
+    run: PolicyE2ESmokeRunConfig,
+) -> bool:
+    return (
+        config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL
+        and run.protocol.tool_profile
+        in {
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            NativeToolCapabilityProfile.CROP_TGVF,
+        }
+    )
 
 
 def _paired_tgvf_engine_kwargs(
@@ -2365,7 +2677,7 @@ class PolicyCoreDevEvaluator:
         run: PolicyE2ESmokeRunConfig,
         manager: StandaloneTGVFVLLMManager,
         processor: object,
-        snapshot: PolicyEvaluationSnapshot,
+        snapshot: PolicyEvaluationSubject,
         evaluation_identity: Mapping[str, object],
     ) -> None:
         self.config = config
@@ -2445,21 +2757,20 @@ class PolicyCoreDevEvaluator:
     ) -> tuple[int, ...]:
         if not task.single_image:
             raise ValueError("current visual-tool protocol has no multi-image selector")
-        messages = build_visual_tool_prompt_messages(
-            task.question,
-            tool_profile=self.run.protocol.tool_profile,
-            assistant_dialect=self.assistant_dialect,
+        prompt_text, canonical_token_ids = _render_training_run_visual_prompt(
+            run=self.run,
+            processor=self.processor,
+            renderer=self.renderer,
+            question=task.question,
         )
-        rendered = self.renderer.render(messages, add_generation_prompt=True)
-        self.renderer.assert_generation_prefill(rendered, self.renderer.tokenizer)
         from tgvf_rl.framework.verl.smoke_dataset import (
             _materialize_source_image_prompt_token_ids,
         )
 
         return _materialize_source_image_prompt_token_ids(
             processor=self.processor,
-            canonical_token_ids=rendered.token_ids,
-            prompt_text=rendered.text,
+            canonical_token_ids=canonical_token_ids,
+            prompt_text=prompt_text,
             image_max_pixels=self.config.effective_image_max_pixels(self.run),
             source_rgb=source_rgb,
         )
@@ -2596,12 +2907,11 @@ class PolicyCoreDevEvaluator:
                 self.config.schema_version,
                 {"model": self.run.model.revision_or_path},
             )
-            tool_runtime = _RemoteCropTGVFToolRuntime(
+            tool_runtime = _RemoteAtomicCropTGVFToolRuntime(
                 event_loop=asyncio.get_running_loop(),
                 server_client=self.manager,
-                processor=self.processor,
                 config=self.run,
-                image_max_pixels=self.config.effective_image_max_pixels(self.run),
+                source_visual=source,
                 layout_builder=self.layout_builder,
                 observation_store=self.store,
                 execution_ledger=self.focus_ledger,
@@ -2609,10 +2919,15 @@ class PolicyCoreDevEvaluator:
                 branch_merger_identities=self.branch_identities,
                 crop_processor_identity=processor_identity,
                 crop_layout_identity=layout_identity,
-                coordinate_mapper=Qwen3VLAdapter(),
+                processor=self.processor,
+                image_max_pixels=self.config.effective_image_max_pixels(self.run),
+                success_environment_text_renderer=(
+                    self.success_environment_text_renderer
+                ),
+                assistant_dialect=self.assistant_dialect,
             )
         else:
-            raise RuntimeError("policy evaluator received an unsupported tool profile")
+            raise RuntimeError("policy CoreDev has an unsupported visual-tool profile")
 
         decoding = _decoding_contract()
         client = VerlAsyncServerPolicyTurnClient(
@@ -2689,6 +3004,111 @@ class PolicyCoreDevEvaluator:
                 self.store.release_trajectories(trajectory_ids)
 
 
+def _policy_result_identity_fields(
+    task: CoreDevTask,
+    *,
+    evaluation_identity: Mapping[str, object],
+    rank: int,
+    world_size: int,
+) -> dict[str, object]:
+    """Build the common immutable identity for trajectory and failure rows."""
+
+    identity_sha256 = evaluation_identity.get("identity_sha256")
+    if not isinstance(identity_sha256, str):
+        raise ValueError("evaluation identity SHA256 is missing")
+    _require_sha256(identity_sha256, name="evaluation identity SHA256")
+    execution = evaluation_identity.get("execution")
+    policy_snapshot = evaluation_identity.get("policy_snapshot")
+    task_manifest = evaluation_identity.get("task_manifest")
+    model_identity = evaluation_identity.get("model_identity")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (execution, policy_snapshot, task_manifest, model_identity)
+    ):
+        raise ValueError("evaluation identity sub-bindings are malformed")
+    assert isinstance(execution, Mapping)
+    assert isinstance(policy_snapshot, Mapping)
+    assert isinstance(task_manifest, Mapping)
+    assert isinstance(model_identity, Mapping)
+    if type(rank) is not int or type(world_size) is not int or world_size <= 0:
+        raise ValueError("result rank/world_size identity is invalid")
+    if execution.get("world_size") != world_size or not 0 <= rank < world_size:
+        raise ValueError("result rank/world_size differs from evaluation identity")
+    if task.ordinal % world_size != rank:
+        raise ValueError("task ordinal is assigned to another evaluator rank")
+    snapshot_backend = policy_snapshot.get(
+        "snapshot_backend", LORA_ADAPTER_EVALUATION_BACKEND
+    )
+    if snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
+        snapshot_fields = {
+            "policy_snapshot_backend": PAIRED_TGVF_EVALUATION_BACKEND,
+            "policy_paired_snapshot_identity_sha256": policy_snapshot[
+                "snapshot_identity_sha256"
+            ],
+            "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
+            "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
+            "policy_rp66_storage_sha256": policy_snapshot["rp66_storage_sha256"],
+        }
+    elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
+        snapshot_fields = {
+            "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
+            "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
+            "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
+        }
+    else:
+        raise ValueError("training-run result snapshot backend differs")
+    group_uid = (
+        f"coredev:{task.ordinal}"
+        if evaluation_identity["evaluation_schema_version"] == POLICY_COREDEV_SCHEMA
+        else f"benchmark:{task.ordinal}"
+    )
+    trajectory_identity = TrajectoryIdentity(
+        str(evaluation_identity["evaluation_id"]),
+        task.bound_sample_id,
+        0,
+        group_uid,
+    )
+    payload: dict[str, object] = {
+        "schema_version": POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA,
+        "selection_reasons": ["representative_rollout_zero"],
+        "evaluation_identity_sha256": identity_sha256,
+        "policy_run_identity_sha256": policy_snapshot["run_identity_sha256"],
+        **snapshot_fields,
+        "policy_config_identity_sha256": evaluation_identity[
+            "policy_run_config_identity_sha256"
+        ],
+        "task_manifest_sha256": task_manifest["sha256"],
+        "model_identity": dict(model_identity),
+        "rank": rank,
+        "world_size": world_size,
+        "evaluation_id": trajectory_identity.run_id,
+        "sample_id": trajectory_identity.sample_id,
+        "group_uid": trajectory_identity.group_id,
+        "rollout_index": trajectory_identity.rollout_index,
+        "ordinal": task.ordinal,
+        "dataset": task.dataset,
+        "row_number": task.row_number,
+        "index": task.index,
+        "question": task.question,
+        "image_paths": list(task.image_paths),
+        "image_sha256s": list(task.image_sha256s),
+        "image_dimensions": [list(item) for item in task.image_dimensions],
+        "trajectory_id": trajectory_identity.canonical_id,
+        "policy_run_id": policy_snapshot["run_id"],
+        "optimizer_step": policy_snapshot["optimizer_step"],
+        "policy_weights_sha256": policy_snapshot["weights_sha256"],
+    }
+    if "sampling_rng" in evaluation_identity:
+        rng = paired_evaluation_rng_for_task(
+            evaluation_identity,
+            sample_id=trajectory_identity.sample_id,
+            rollout_index=trajectory_identity.rollout_index,
+        )
+        payload["sampling_rng"] = dict(evaluation_identity["sampling_rng"])
+        payload["paired_rng_stream_identity_sha256"] = rng.stream_identity_sha256
+    return payload
+
+
 def trajectory_audit_payload(
     task: CoreDevTask,
     trajectory: TrajectoryRecord,
@@ -2715,29 +3135,12 @@ def trajectory_audit_payload(
             **common,
         }
 
-    identity_sha256 = evaluation_identity.get("identity_sha256")
-    if not isinstance(identity_sha256, str):
-        raise ValueError("evaluation identity SHA256 is missing")
-    _require_sha256(identity_sha256, name="evaluation identity SHA256")
-    execution = evaluation_identity.get("execution")
     policy_snapshot = evaluation_identity.get("policy_snapshot")
-    task_manifest = evaluation_identity.get("task_manifest")
     model_identity = evaluation_identity.get("model_identity")
-    if not all(
-        isinstance(value, Mapping)
-        for value in (execution, policy_snapshot, task_manifest, model_identity)
+    if not isinstance(policy_snapshot, Mapping) or not isinstance(
+        model_identity, Mapping
     ):
         raise ValueError("evaluation identity sub-bindings are malformed")
-    assert isinstance(execution, Mapping)
-    assert isinstance(policy_snapshot, Mapping)
-    assert isinstance(task_manifest, Mapping)
-    assert isinstance(model_identity, Mapping)
-    if type(rank) is not int or type(world_size) is not int or world_size <= 0:
-        raise ValueError("result rank/world_size identity is invalid")
-    if execution.get("world_size") != world_size or not 0 <= rank < world_size:
-        raise ValueError("result rank/world_size differs from evaluation identity")
-    if task.ordinal % world_size != rank:
-        raise ValueError("task ordinal is assigned to another evaluator rank")
     if asdict(trajectory.model) != dict(model_identity):
         raise ValueError("trajectory model differs from evaluation identity")
     if trajectory.behavior_policy != PolicyVersion(
@@ -2746,91 +3149,136 @@ def trajectory_audit_payload(
         weights_sha256=str(policy_snapshot.get("weights_sha256")),
     ):
         raise ValueError("trajectory policy differs from evaluation identity")
-    snapshot_backend = policy_snapshot.get(
-        "snapshot_backend", LORA_ADAPTER_EVALUATION_BACKEND
+    payload = _policy_result_identity_fields(
+        task,
+        evaluation_identity=evaluation_identity,
+        rank=rank,
+        world_size=world_size,
     )
-    if snapshot_backend == PAIRED_TGVF_EVALUATION_BACKEND:
-        snapshot_fields = {
-            "policy_snapshot_backend": PAIRED_TGVF_EVALUATION_BACKEND,
-            "policy_paired_snapshot_identity_sha256": policy_snapshot[
-                "snapshot_identity_sha256"
+    if payload["trajectory_id"] != trajectory.identity.canonical_id:
+        raise ValueError("trajectory identity differs from evaluation task identity")
+    payload.update(
+        {
+            "trajectory_sha256": trajectory_checksum(trajectory),
+            "stop": trajectory.stop.value,
+            "final_answer": trajectory.final_answer,
+            "assistant_turns": [
+                {
+                    "turn_index": turn.turn_index,
+                    "raw_text": turn.raw_text,
+                    "sampled_token_count": len(turn.tokens.token_ids),
+                    "is_tool_call": turn.is_tool_call,
+                    "stop_reason": turn.stop_reason,
+                }
+                for turn in trajectory.assistant_turns
             ],
-            "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
-            "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
-            "policy_rp66_storage_sha256": policy_snapshot["rp66_storage_sha256"],
+            "tool_calls": [call_payload(call) for call in trajectory.tool_calls],
+            "tool_errors": [
+                {
+                    "attempt_index": error.attempt_index,
+                    "assistant_turn_index": error.assistant_turn_index,
+                    "function_name": error.function_name,
+                    "code": error.code,
+                    "payload_json": error.payload_json,
+                    "recoverable": error.recoverable,
+                }
+                for error in trajectory.tool_errors
+            ],
+            "successful_observation_count": len(trajectory.observations),
         }
-    elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
-        snapshot_fields = {
-            "policy_pointer_file_sha256": policy_snapshot["pointer_file_sha256"],
-            "policy_manifest_file_sha256": policy_snapshot["manifest_file_sha256"],
-            "policy_tensor_file_sha256": policy_snapshot["tensor_file_sha256"],
-        }
-    else:
-        raise ValueError("training-run trajectory snapshot backend differs")
-    payload = {
-        "schema_version": POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA,
-        "selection_reasons": ["representative_rollout_zero"],
-        "evaluation_identity_sha256": identity_sha256,
-        "policy_run_identity_sha256": policy_snapshot["run_identity_sha256"],
-        **snapshot_fields,
-        "policy_config_identity_sha256": evaluation_identity[
-            "policy_run_config_identity_sha256"
-        ],
-        "task_manifest_sha256": task_manifest["sha256"],
-        "model_identity": dict(model_identity),
-        "rank": rank,
-        "world_size": world_size,
-        "evaluation_id": trajectory.identity.run_id,
-        "sample_id": trajectory.identity.sample_id,
-        "group_uid": trajectory.identity.group_id,
-        "rollout_index": trajectory.identity.rollout_index,
-        "ordinal": task.ordinal,
-        "dataset": task.dataset,
-        "row_number": task.row_number,
-        "index": task.index,
-        "question": task.question,
-        "image_paths": list(task.image_paths),
-        "image_sha256s": list(task.image_sha256s),
-        "image_dimensions": [list(item) for item in task.image_dimensions],
-        "trajectory_id": trajectory.identity.canonical_id,
-        "trajectory_sha256": trajectory_checksum(trajectory),
-        "policy_run_id": trajectory.behavior_policy.run_id,
-        "optimizer_step": trajectory.behavior_policy.optimizer_step,
-        "policy_weights_sha256": trajectory.behavior_policy.weights_sha256,
-        "stop": trajectory.stop.value,
-        "final_answer": trajectory.final_answer,
-        "assistant_turns": [
-            {
-                "turn_index": turn.turn_index,
-                "raw_text": turn.raw_text,
-                "sampled_token_count": len(turn.tokens.token_ids),
-                "is_tool_call": turn.is_tool_call,
-                "stop_reason": turn.stop_reason,
-            }
-            for turn in trajectory.assistant_turns
-        ],
-        "tool_calls": [call_payload(call) for call in trajectory.tool_calls],
-        "tool_errors": [
-            {
-                "attempt_index": error.attempt_index,
-                "assistant_turn_index": error.assistant_turn_index,
-                "function_name": error.function_name,
-                "code": error.code,
-                "payload_json": error.payload_json,
-                "recoverable": error.recoverable,
-            }
-            for error in trajectory.tool_errors
-        ],
-        "successful_observation_count": len(trajectory.observations),
+    )
+    payload["result_identity_sha256"] = _canonical_json_sha256(payload)
+    return payload
+
+
+def policy_output_contract_failure_audit_payload(
+    task: CoreDevTask,
+    error: PolicyOutputContractError,
+    *,
+    evaluation_identity: Mapping[str, object],
+    rank: int,
+    world_size: int,
+) -> dict[str, object]:
+    """Materialize one scored, identity-bound sample-local output failure.
+
+    The row is intentionally not a fabricated :class:`TrajectoryRecord`: the
+    sampler rejected the response before a legal assistant turn existed.  It
+    remains a completed benchmark row with a null answer, so scoring keeps the
+    task in the denominator and deterministically marks it wrong.
+    """
+
+    if not isinstance(error, PolicyOutputContractError):
+        raise TypeError("sample-local failure requires PolicyOutputContractError")
+    if error.code != "tool_call_terminal_suffix":
+        raise ValueError("unsupported sample-local policy-output failure code")
+    diagnostic = dict(error.diagnostic)
+    expected_diagnostic_fields = {
+        "response_text_sha256",
+        "suffix_sha256",
+        "suffix_char_count",
+        "suffix_utf8_byte_count",
+        "finish_reason",
+        "stop_reason",
+        "backend_request_sha256",
+        "backend_response_sha256",
     }
-    if "sampling_rng" in evaluation_identity:
-        rng = paired_evaluation_rng_for_task(
-            evaluation_identity,
-            sample_id=trajectory.identity.sample_id,
-            rollout_index=trajectory.identity.rollout_index,
-        )
-        payload["sampling_rng"] = dict(evaluation_identity["sampling_rng"])
-        payload["paired_rng_stream_identity_sha256"] = rng.stream_identity_sha256
+    if set(diagnostic) != expected_diagnostic_fields:
+        raise ValueError("policy-output failure diagnostic fields differ")
+    for field in (
+        "response_text_sha256",
+        "suffix_sha256",
+        "backend_request_sha256",
+        "backend_response_sha256",
+    ):
+        _require_sha256(diagnostic[field], name=f"policy-output {field}")
+    for field in ("suffix_char_count", "suffix_utf8_byte_count"):
+        value = diagnostic[field]
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"policy-output {field} must be a positive integer")
+    if (
+        not isinstance(diagnostic["finish_reason"], str)
+        or not diagnostic["finish_reason"]
+    ):
+        raise ValueError("policy-output finish_reason must be non-empty")
+    if diagnostic["stop_reason"] is not None and (
+        isinstance(diagnostic["stop_reason"], bool)
+        or not isinstance(diagnostic["stop_reason"], (int, str))
+    ):
+        raise TypeError("policy-output stop_reason must be int, str, or null")
+    failure = {
+        "schema_version": POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA,
+        "kind": "policy_output_contract",
+        "code": error.code,
+        "exception_type": type(error).__name__,
+        "message": str(error),
+        "diagnostic": diagnostic,
+        "diagnostic_sha256": _canonical_json_sha256(diagnostic),
+    }
+    payload = _policy_result_identity_fields(
+        task,
+        evaluation_identity=evaluation_identity,
+        rank=rank,
+        world_size=world_size,
+    )
+    failure_record = {
+        "schema_version": POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA,
+        "trajectory_id": payload["trajectory_id"],
+        "failure": failure,
+    }
+    payload.update(
+        {
+            "result_kind": "sample_local_failure",
+            "trajectory_available": False,
+            "stop": "invalid_format",
+            "final_answer": None,
+            "assistant_turns": [],
+            "tool_calls": [],
+            "tool_errors": [],
+            "successful_observation_count": 0,
+            "failure": failure,
+            "failure_record_sha256": _canonical_json_sha256(failure_record),
+        }
+    )
     payload["result_identity_sha256"] = _canonical_json_sha256(payload)
     return payload
 
@@ -2948,6 +3396,95 @@ def validate_policy_benchmark_result(
         raise RuntimeError("policy benchmark result trajectory_id differs")
     if task.ordinal % world_size != rank:
         raise RuntimeError("policy benchmark result is stored under the wrong rank")
+    result_kind = payload.get("result_kind", "trajectory")
+    if result_kind == "trajectory":
+        _require_sha256(
+            payload.get("trajectory_sha256"), name="trajectory result SHA256"
+        )
+        return
+    if result_kind != "sample_local_failure":
+        raise RuntimeError("policy benchmark result kind is unsupported")
+    if payload.get("trajectory_available") is not False:
+        raise RuntimeError("sample-local failure claims a trajectory")
+    if "trajectory_sha256" in payload:
+        raise RuntimeError("sample-local failure must not claim a trajectory SHA256")
+    expected_failure_fields = {
+        "schema_version",
+        "kind",
+        "code",
+        "exception_type",
+        "message",
+        "diagnostic",
+        "diagnostic_sha256",
+    }
+    failure = payload.get("failure")
+    if not isinstance(failure, Mapping) or set(failure) != expected_failure_fields:
+        raise RuntimeError("sample-local failure envelope is malformed")
+    if (
+        failure.get("schema_version") != POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA
+        or failure.get("kind") != "policy_output_contract"
+        or failure.get("code") != "tool_call_terminal_suffix"
+        or failure.get("exception_type") != "PolicyOutputContractError"
+        or failure.get("message")
+        != "vLLM emitted a tool-call suffix outside the run-bound contract"
+    ):
+        raise RuntimeError("sample-local policy-output failure identity differs")
+    diagnostic = failure.get("diagnostic")
+    expected_diagnostic_fields = {
+        "response_text_sha256",
+        "suffix_sha256",
+        "suffix_char_count",
+        "suffix_utf8_byte_count",
+        "finish_reason",
+        "stop_reason",
+        "backend_request_sha256",
+        "backend_response_sha256",
+    }
+    if not isinstance(diagnostic, Mapping) or set(diagnostic) != (
+        expected_diagnostic_fields
+    ):
+        raise RuntimeError("sample-local failure diagnostic fields differ")
+    if failure.get("diagnostic_sha256") != _canonical_json_sha256(diagnostic):
+        raise RuntimeError("sample-local failure diagnostic digest differs")
+    for field in (
+        "response_text_sha256",
+        "suffix_sha256",
+        "backend_request_sha256",
+        "backend_response_sha256",
+    ):
+        _require_sha256(diagnostic.get(field), name=f"policy-output {field}")
+    if any(
+        type(diagnostic.get(field)) is not int or diagnostic[field] <= 0
+        for field in ("suffix_char_count", "suffix_utf8_byte_count")
+    ):
+        raise RuntimeError("sample-local suffix lengths are malformed")
+    if not isinstance(diagnostic.get("finish_reason"), str) or not diagnostic.get(
+        "finish_reason"
+    ):
+        raise RuntimeError("sample-local finish reason is malformed")
+    if diagnostic.get("stop_reason") is not None and (
+        isinstance(diagnostic.get("stop_reason"), bool)
+        or not isinstance(diagnostic.get("stop_reason"), (int, str))
+    ):
+        raise RuntimeError("sample-local stop reason is malformed")
+    if (
+        payload.get("stop") != "invalid_format"
+        or payload.get("final_answer") is not None
+        or payload.get("assistant_turns") != []
+        or payload.get("tool_calls") != []
+        or payload.get("tool_errors") != []
+        or payload.get("successful_observation_count") != 0
+    ):
+        raise RuntimeError("sample-local failure scoring fields differ")
+    failure_record = {
+        "schema_version": POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA,
+        "trajectory_id": expected_trajectory_id,
+        "failure": dict(failure),
+    }
+    expected_failure_sha256 = payload.get("failure_record_sha256")
+    _require_sha256(expected_failure_sha256, name="failure record SHA256")
+    if expected_failure_sha256 != _canonical_json_sha256(failure_record):
+        raise RuntimeError("sample-local failure record digest differs")
 
 
 def load_policy_benchmark_results(
@@ -3025,6 +3562,9 @@ __all__ = [
     "POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA",
     "POLICY_COREDEV_SCHEMA",
     "POLICY_EVALUATION_IDENTITY_SCHEMA",
+    "POLICY_MATCHED_PROMPT_MATERIALIZER_SCHEMA",
+    "POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION",
+    "POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA",
     "PAIRED_POLICY_EVALUATION_RNG_SCHEMA",
     "PairedEvaluationVLLMTurnRNG",
     "PolicyCoreDevConfig",
@@ -3049,6 +3589,7 @@ __all__ = [
     "policy_benchmark_task_path",
     "policy_evaluation_identity",
     "policy_lora_request_name",
+    "policy_output_contract_failure_audit_payload",
     "policy_version_from_pointer",
     "paired_evaluation_rng_for_task",
     "prepare_policy_benchmark_tasks",

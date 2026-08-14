@@ -54,9 +54,11 @@ class BoundQwen3CropTGVFLayoutBuilder:
         self,
         owner: "Qwen3NativeToolLayoutBuilder",
         context: ToolExecutionContext,
+        environment_success_text: str | None = None,
     ) -> None:
         self.owner = owner
         self.context = context
+        self.environment_success_text = environment_success_text
 
     def build(
         self,
@@ -77,7 +79,12 @@ class BoundQwen3CropTGVFLayoutBuilder:
         _validate_parsed_call_context(parsed_call, context)
         if trajectory_source_visual != context.trajectory_source_visual:
             raise IdentityMismatchError("bound atomic layout source visual changed")
-        return self.owner.build_crop_tgvf(context, crop_visual, parsed_call)
+        return self.owner.build_crop_tgvf(
+            context,
+            crop_visual,
+            parsed_call,
+            environment_success_text=self.environment_success_text,
+        )
 
 
 class Qwen3NativeToolLayoutBuilder:
@@ -185,18 +192,27 @@ class Qwen3NativeToolLayoutBuilder:
         )
 
     def bind_crop_tgvf(
-        self, context: ToolExecutionContext
+        self,
+        context: ToolExecutionContext,
+        *,
+        environment_success_text: str | None = None,
     ) -> BoundQwen3CropTGVFLayoutBuilder:
         if not isinstance(context, ToolExecutionContext):
             raise TypeError("atomic layout binding requires ToolExecutionContext")
         self._validate_context(context)
-        return BoundQwen3CropTGVFLayoutBuilder(self, context)
+        return BoundQwen3CropTGVFLayoutBuilder(
+            self,
+            context,
+            environment_success_text=environment_success_text,
+        )
 
     def build_crop_tgvf(
         self,
         context: ToolExecutionContext,
         crop_visual: SourceVisualTensorBundle,
         parsed_call: ParsedCropTGVFCall,
+        *,
+        environment_success_text: str | None = None,
     ) -> ReplayLayoutTensors:
         if not isinstance(crop_visual, SourceVisualTensorBundle):
             raise TypeError("atomic layout requires crop SourceVisualTensorBundle")
@@ -208,6 +224,7 @@ class Qwen3NativeToolLayoutBuilder:
             new_grid=crop_visual.image_grid_thw,
             new_merge_size=crop_visual.spatial_merge_size,
             parsed_call=parsed_call,
+            environment_success_text=environment_success_text,
         )
         branch_count = len(crop_visual.merged_deepstack)
         if branch_count != len(QWEN3_DEEPSTACK_BRANCH_LAYERS):
@@ -455,6 +472,7 @@ class Qwen3NativeToolLayoutBuilder:
         new_grid: tuple[int, int, int],
         new_merge_size: int,
         parsed_call: NativeToolCall,
+        environment_success_text: str | None = None,
     ) -> _ExpandedNativeVisualLayout:
         self._validate_context(context)
         _validate_parsed_call_context(parsed_call, context)
@@ -473,9 +491,16 @@ class Qwen3NativeToolLayoutBuilder:
             expected.append((grid, merge_size, positions))
         expected.append((new_grid, new_merge_size, None))
 
+        rendered_environment = (
+            render_qwen_native_success_environment_text(parsed_call)
+            if environment_success_text is None
+            else environment_success_text
+        )
+        if not isinstance(rendered_environment, str) or not rendered_environment:
+            raise ValueError("Qwen3 native success response must be non-empty text")
         environment_success_token_ids = tuple(
             self.tokenizer.encode(
-                render_qwen_native_success_environment_text(parsed_call),
+                rendered_environment,
                 add_special_tokens=False,
             )
         )

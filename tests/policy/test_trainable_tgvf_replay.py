@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 
 import pytest
 import torch
 from torch import nn
 
+from tests.environment.test_crop_tgvf_runtime import _fixture as _atomic_fixture
 from tests.policy.test_exact_replay import _payload
 from tgvf_rl.contracts.tokens import (
     LogProbMeasurement,
@@ -16,9 +18,20 @@ from tgvf_rl.contracts.tokens import (
 from tgvf_rl.policy import trainable_tgvf_replay as replay_module
 from tgvf_rl.policy.trainable_tgvf_replay import (
     TRAINABLE_TGVF_ADAPTER_ATTRIBUTE,
+    LiveQwen3VisionFeatures,
+    LiveQwen3VisionImageSpec,
+    LiveQwen3VisionReplayPlan,
+    LiveQwen3VisionReplayResult,
     TrainableTGVFCurrentReplayPort,
+    build_trainable_tgvf_current_request,
+    extract_live_qwen3_vision_feature_batch,
     extract_live_qwen3_vision_features,
     trainable_parameter_zero_anchor,
+)
+from tgvf_rl.observations.store import (
+    ObservationStore,
+    TrajectoryReplayRecord,
+    TrajectoryReplayTensorRefs,
 )
 from tgvf_rl.qwen.base import (
     ReplayConsumer,
@@ -26,6 +39,7 @@ from tgvf_rl.qwen.base import (
     resolve_replay_request,
 )
 from tgvf_rl.representation import FrozenProjectionPort, TGVFAdapter
+from tgvf_rl.representation.deepstack import TrainableBorrowedProjectionPort
 
 
 class _ToyMerger(nn.Module):
@@ -41,12 +55,15 @@ class _ToyMerger(nn.Module):
 class _ToyVisual(nn.Module):
     def __init__(self) -> None:
         super().__init__()
+        self.spatial_merge_size = 2
         self.stem = nn.Linear(3, 3, bias=False)
         self.merger = _ToyMerger()
         self.deepstack_merger_list = nn.ModuleList(_ToyMerger() for _ in range(3))
 
     def forward(self, pixel_values: torch.Tensor, *, grid_thw: torch.Tensor):
-        assert tuple(grid_thw.shape) == (1, 3)
+        assert grid_thw.ndim == 2 and grid_thw.shape[1] == 3
+        assert int(torch.prod(grid_thw, dim=1).sum().item()) == len(pixel_values)
+        assert bool((grid_thw[:, 1:] % self.spatial_merge_size == 0).all())
         hidden = self.stem(pixel_values)
         outputs = [self.merger(hidden)]
         outputs.extend(
@@ -61,6 +78,72 @@ class _ToyQwen(nn.Module):
         super().__init__()
         self.model = nn.Module()
         self.model.visual = _ToyVisual()
+
+
+class _AtomicToyMerger(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.projection = nn.Linear(4, 8, bias=False)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        grouped = hidden_states.reshape(-1, 4, 4).mean(dim=1)
+        return self.projection(grouped)
+
+
+class _AtomicToyVisual(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.spatial_merge_size = 2
+        self.stem = nn.Linear(3, 4, bias=False)
+        self.merger = _AtomicToyMerger()
+        self.deepstack_merger_list = nn.ModuleList(_AtomicToyMerger() for _ in range(3))
+        self.seen_pixel_values: list[torch.Tensor] = []
+        self.seen_grid_thw: list[torch.Tensor] = []
+
+    def forward(self, pixel_values: torch.Tensor, *, grid_thw: torch.Tensor):
+        assert grid_thw.ndim == 2 and grid_thw.shape[1] == 3
+        assert int(torch.prod(grid_thw, dim=1).sum().item()) == len(pixel_values)
+        assert bool((grid_thw[:, 1:] % self.spatial_merge_size == 0).all())
+        self.seen_pixel_values.append(pixel_values.detach().cpu().clone())
+        self.seen_grid_thw.append(grid_thw.detach().cpu().clone())
+        hidden = self.stem(pixel_values)
+        outputs = [self.merger(hidden)]
+        outputs.extend(
+            merger(hidden * (index + 2))
+            for index, merger in enumerate(self.deepstack_merger_list)
+        )
+        return outputs[0], tuple(outputs[1:])
+
+
+class _AtomicToyQwen(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Module()
+        self.model.visual = _AtomicToyVisual()
+        mergers = (
+            self.model.visual.merger,
+            *tuple(self.model.visual.deepstack_merger_list),
+        )
+        ports = tuple(
+            TrainableBorrowedProjectionPort(
+                merger,
+                identity=f"atomic-current-merger-{index}",
+                input_dim=4,
+                output_dim=8,
+                spatial_merge_size=2,
+            )
+            for index, merger in enumerate(mergers)
+        )
+        adapter = TGVFAdapter(
+            d_lm=8,
+            d_v=4,
+            attn_dim=4,
+            main_projection=ports[0],
+            deepstack_projections=ports[1:],
+            branch_layers=(8, 16, 24),
+        )
+        adapter.requires_grad_(False).train(True)
+        self.add_module(TRAINABLE_TGVF_ADAPTER_ATTRIBUTE, adapter)
 
 
 def _trainable_adapter() -> TGVFAdapter:
@@ -116,6 +199,150 @@ def test_live_vision_capture_keeps_pixel_stem_and_merger_autograd() -> None:
     )
 
 
+def test_packed_live_vision_matches_sequential_values_and_gradients() -> None:
+    """Native multi-image packing preserves each independent vision graph."""
+
+    torch.manual_seed(113)
+    sequential_model = _ToyQwen()
+    packed_model = copy.deepcopy(sequential_model)
+    grids = ((1, 2, 4), (1, 4, 4))
+    sequential_pixels = (
+        torch.randn(8, 3, requires_grad=True),
+        torch.randn(16, 3, requires_grad=True),
+    )
+    packed_pixels = tuple(
+        value.detach().clone().requires_grad_(True) for value in sequential_pixels
+    )
+
+    sequential = tuple(
+        extract_live_qwen3_vision_features(
+            sequential_model,
+            pixel_values=pixels,
+            image_grid_thw=grid,
+        )
+        for pixels, grid in zip(sequential_pixels, grids, strict=True)
+    )
+    packed = extract_live_qwen3_vision_feature_batch(
+        packed_model,
+        pixel_values=packed_pixels,
+        image_grid_thw=grids,
+    )
+
+    def branches(features):
+        return (
+            features.premerge_main,
+            *features.premerge_deepstack,
+            features.merged_main,
+            *features.merged_deepstack,
+        )
+
+    for sequential_image, packed_image in zip(sequential, packed, strict=True):
+        for expected, actual in zip(
+            branches(sequential_image), branches(packed_image), strict=True
+        ):
+            torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-6)
+
+    sequential_loss = sum(
+        value.square().sum() for features in sequential for value in branches(features)
+    )
+    packed_loss = sum(
+        value.square().sum() for features in packed for value in branches(features)
+    )
+    sequential_loss.backward()
+    packed_loss.backward()
+
+    for expected, actual in zip(sequential_pixels, packed_pixels, strict=True):
+        assert expected.grad is not None and actual.grad is not None
+        torch.testing.assert_close(actual.grad, expected.grad, rtol=1e-5, atol=1e-5)
+    sequential_parameters = dict(sequential_model.named_parameters())
+    packed_parameters = dict(packed_model.named_parameters())
+    assert sequential_parameters.keys() == packed_parameters.keys()
+    for name, expected in sequential_parameters.items():
+        actual = packed_parameters[name]
+        assert expected.grad is not None and actual.grad is not None
+        torch.testing.assert_close(
+            actual.grad,
+            expected.grad,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+
+def test_live_vision_replay_plan_rejects_observation_crop_aliasing() -> None:
+    """Every crop belongs to exactly one observation in both directions."""
+
+    trajectory_id = "plan-alias-trajectory"
+    store = ObservationStore()
+    source = store.put_tensor(
+        "plan-alias.source",
+        torch.randn(4, 3),
+        trajectory_id=trajectory_id,
+    )
+    crop = store.put_tensor(
+        "plan-alias.crop",
+        torch.randn(4, 3),
+        trajectory_id=trajectory_id,
+    )
+
+    with pytest.raises(ValueError, match="aliases another crop"):
+        LiveQwen3VisionReplayPlan(
+            replay_id="plan-alias-replay",
+            trajectory_id=trajectory_id,
+            images=(
+                LiveQwen3VisionImageSpec(
+                    kind="source_image",
+                    pixel_values=source,
+                    image_grid_thw=(1, 2, 2),
+                    observation_index=None,
+                    call_index=None,
+                ),
+                LiveQwen3VisionImageSpec(
+                    kind="crop_image",
+                    pixel_values=crop,
+                    image_grid_thw=(1, 2, 2),
+                    observation_index=0,
+                    call_index=0,
+                ),
+            ),
+            observation_image_indices=(1, 1),
+        )
+
+
+def test_plain_tgvf_observations_explicitly_share_source_features() -> None:
+    """Plain TGVF calls reuse source vision without extra child-FSDP calls."""
+
+    trajectory_id = "plain-tgvf-plan-trajectory"
+    store = ObservationStore()
+    source_ref = store.put_tensor(
+        "plain-tgvf-plan.source",
+        torch.randn(4, 3),
+        trajectory_id=trajectory_id,
+    )
+    plan = LiveQwen3VisionReplayPlan(
+        replay_id="plain-tgvf-plan-replay",
+        trajectory_id=trajectory_id,
+        images=(
+            LiveQwen3VisionImageSpec(
+                kind="source_image",
+                pixel_values=source_ref,
+                image_grid_thw=(1, 2, 2),
+                observation_index=None,
+                call_index=None,
+            ),
+        ),
+        observation_image_indices=(0, 0, 0),
+    )
+    source_features = LiveQwen3VisionFeatures(
+        premerge_main=torch.randn(4, 3),
+        premerge_deepstack=tuple(torch.randn(4, 3) for _ in range(3)),
+        merged_main=torch.randn(1, 5),
+        merged_deepstack=tuple(torch.randn(1, 5) for _ in range(3)),
+    )
+    result = LiveQwen3VisionReplayResult(plan=plan, features=(source_features,))
+
+    assert all(result.for_observation(index) is source_features for index in range(3))
+
+
 def test_zero_anchor_materializes_exact_zero_gradient_for_every_parameter() -> None:
     module = nn.Sequential(
         nn.Linear(5, 7),
@@ -159,6 +386,146 @@ def test_frozen_adapter_keeps_autograd_to_visual_and_target_inputs() -> None:
     assert torch.count_nonzero(visual.grad).item() > 0
     assert all(branch.grad is not None for branch in branches)
     assert all(parameter.grad is None for parameter in adapter.parameters())
+
+
+def test_atomic_crop_tgvf_current_replay_reruns_crop_vision_and_injects_only_live_d(
+    tmp_path,
+) -> None:
+    """Current actor uses exact crop pixels, not rollout D or raw crop features."""
+
+    runtime, _materializer, store, _pixels, _capture, context, parsed = _atomic_fixture(
+        tmp_path, provider_kind="contextual_hidden_state"
+    )
+    observation_handle = runtime.execute(parsed, context)
+    record = store.resolve_record(observation_handle)
+    sequence = record.layout.sequence_length
+    replay = TrajectoryReplayRecord(
+        schema_version="trajectory-replay-v1",
+        replay_id="atomic-current-replay",
+        trajectory_id=context.trajectory_identity.canonical_id,
+        model=context.model,
+        behavior_policy=context.behavior_policy,
+        source_visual=context.trajectory_source_visual,
+        observation_handles=(observation_handle,),
+        tensors=TrajectoryReplayTensorRefs(
+            input_ids=store.put_tensor(
+                "atomic-current.input_ids",
+                torch.arange(sequence, dtype=torch.long).view(1, sequence),
+                trajectory_id=context.trajectory_identity.canonical_id,
+            ),
+            position_ids=record.payload.position_ids,
+            attention_mask=record.payload.attention_mask,
+            policy_attention_mask=record.masks.policy_visible,
+            reference_attention_mask=record.masks.reference_visible,
+            teacher_attention_mask=record.masks.teacher_visible,
+        ),
+        crop_vision_replay_mode="current_live_reference_recorded_features",
+    )
+    replay_handle = store.put_replay(replay)
+    recorded_d = store.resolve_verified(record.payload.main_d)
+    source_pixels = store.resolve_verified(
+        context.trajectory_source_visual.preprocessed_pixel_values
+    )
+    crop_pixels = store.resolve_verified(record.crop_visual.preprocessed_pixel_values)
+
+    torch.manual_seed(91)
+    model = _AtomicToyQwen()
+    adapter = model.tgvf_adapter
+    request = build_trainable_tgvf_current_request(
+        model=model,
+        adapter=adapter,
+        store=store,
+        replay_handle=replay_handle,
+    )
+
+    assert tuple(block.kind for block in request.visual_blocks) == (
+        "source_image",
+        "crop_focused_d",
+    )
+    assert len(model.model.visual.seen_pixel_values) == 1
+    torch.testing.assert_close(
+        model.model.visual.seen_pixel_values[0],
+        torch.cat((source_pixels, crop_pixels), dim=0),
+        rtol=0,
+        atol=0,
+    )
+    assert len(model.model.visual.seen_grid_thw) == 1
+    assert model.model.visual.seen_grid_thw[0].tolist() == [[1, 2, 2], [1, 2, 2]]
+    assert not torch.allclose(
+        request.visual_blocks[1].embeddings.squeeze(0), recorded_d
+    )
+
+    loss = sum(
+        block.embeddings.square().sum()
+        + sum(branch.square().sum() for branch in block.deepstack)
+        for block in request.visual_blocks
+    )
+    loss.backward()
+
+    assert model.model.visual.stem.weight.grad is not None
+    assert torch.count_nonzero(model.model.visual.stem.weight.grad).item() > 0
+    assert model.model.visual.merger.projection.weight.grad is not None
+    assert all(
+        merger.projection.weight.grad is not None
+        for merger in model.model.visual.deepstack_merger_list
+    )
+    assert all(
+        parameter.grad is None
+        for parameter in adapter.artifact_state_dict(keep_vars=True).values()
+    )
+
+
+def test_direct_answer_current_replay_runs_live_vision_exactly_once(tmp_path) -> None:
+    """A zero-tool row keeps the same one-vision-call FSDP schedule."""
+
+    runtime, _materializer, store, _pixels, _capture, context, parsed = _atomic_fixture(
+        tmp_path, provider_kind="contextual_hidden_state"
+    )
+    observation_handle = runtime.execute(parsed, context)
+    record = store.resolve_record(observation_handle)
+    sequence = record.layout.sequence_length
+    replay = TrajectoryReplayRecord(
+        schema_version="trajectory-replay-v1",
+        replay_id="atomic-direct-current-replay",
+        trajectory_id=context.trajectory_identity.canonical_id,
+        model=context.model,
+        behavior_policy=context.behavior_policy,
+        source_visual=context.trajectory_source_visual,
+        observation_handles=(),
+        tensors=TrajectoryReplayTensorRefs(
+            input_ids=store.put_tensor(
+                "atomic-direct-current.input_ids",
+                torch.arange(sequence, dtype=torch.long).view(1, sequence),
+                trajectory_id=context.trajectory_identity.canonical_id,
+            ),
+            position_ids=record.payload.position_ids,
+            attention_mask=record.payload.attention_mask,
+            policy_attention_mask=record.masks.policy_visible,
+            reference_attention_mask=record.masks.reference_visible,
+            teacher_attention_mask=record.masks.teacher_visible,
+        ),
+        crop_vision_replay_mode="no_crop",
+    )
+    replay_handle = store.put_replay(replay)
+    source_pixels = store.resolve_verified(
+        context.trajectory_source_visual.preprocessed_pixel_values
+    )
+    model = _AtomicToyQwen()
+
+    request = build_trainable_tgvf_current_request(
+        model=model,
+        adapter=model.tgvf_adapter,
+        store=store,
+        replay_handle=replay_handle,
+    )
+
+    assert tuple(block.kind for block in request.visual_blocks) == ("source_image",)
+    assert len(model.model.visual.seen_pixel_values) == 1
+    torch.testing.assert_close(
+        model.model.visual.seen_pixel_values[0], source_pixels, rtol=0, atol=0
+    )
+    assert len(model.model.visual.seen_grid_thw) == 1
+    assert model.model.visual.seen_grid_thw[0].tolist() == [[1, 2, 2]]
 
 
 def test_current_replay_accepts_fully_frozen_adapter() -> None:
