@@ -541,6 +541,12 @@ def test_native_loop_does_not_hide_unrelated_generation_errors() -> None:
         "well."
     )
     assert _decoder_prompt_overflow_limits(RuntimeError(quoted)) is None
+    try:
+        raise ValueError(quoted.removeprefix("worker failed after ValueError: "))
+    except ValueError as leaf:
+        wrapped = RuntimeError("ordinary local worker failure")
+        wrapped.__cause__ = leaf
+    assert _decoder_prompt_overflow_limits(wrapped) is None
 
 
 def test_native_loop_recognizes_ray_decoder_overflow_leaf() -> None:

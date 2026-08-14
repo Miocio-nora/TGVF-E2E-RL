@@ -46,23 +46,19 @@ def _decoder_prompt_overflow_limits(error: Exception) -> tuple[int, int] | None:
     from being mistaken for a sample-local rejection.
     """
 
-    current: BaseException | None = error
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if type(current) is ValueError:
-            match = _VLLM_DECODER_PROMPT_OVERFLOW.fullmatch(str(current))
-            if match is not None:
-                prompt = int(match.group("prompt"))
-                limit = int(match.group("limit"))
-                if prompt > limit:
-                    return prompt, limit
-                return None
-        ray_cause = getattr(current, "cause", None)
-        current = (
-            ray_cause if isinstance(ray_cause, BaseException) else current.__cause__
-        )
-    return None
+    leaf: BaseException | None = error if type(error) is ValueError else None
+    if leaf is None and type(error).__module__ == "ray.exceptions":
+        ray_cause = getattr(error, "cause", None)
+        if type(ray_cause) is ValueError:
+            leaf = ray_cause
+    if leaf is None:
+        return None
+    match = _VLLM_DECODER_PROMPT_OVERFLOW.fullmatch(str(leaf))
+    if match is None:
+        return None
+    prompt = int(match.group("prompt"))
+    limit = int(match.group("limit"))
+    return (prompt, limit) if prompt > limit else None
 
 
 def deepeyes_user_observation_messages(
