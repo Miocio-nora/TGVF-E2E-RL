@@ -1352,10 +1352,19 @@ def load_benchmark_tasks(
                 "policy benchmark task manifest contains a relative or missing image_path"
             )
     if verify_image_contents:
+        verified_images: set[tuple[Path, str, tuple[int, int]]] = set()
         for task in tasks:
             if task.has_bound_images:
                 for image_index in range(len(task.image_paths)):
+                    identity = (
+                        Path(task.image_paths[image_index]),
+                        task.image_sha256s[image_index],
+                        task.image_dimensions[image_index],
+                    )
+                    if identity in verified_images:
+                        continue
                     load_verified_task_image(task, image_index)
+                    verified_images.add(identity)
     single_image_count = sum(task.single_image for task in tasks)
     if (
         expected_single_image_count is not None
