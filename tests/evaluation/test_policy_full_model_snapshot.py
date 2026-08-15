@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,7 +9,11 @@ import pytest
 import torch
 
 import tgvf_rl.evaluation.policy_full_model_snapshot as full_model_snapshot
+from tgvf_rl.contracts.errors import PolicyOutputContractError
+from tgvf_rl.trajectories.schema import TrajectoryIdentity
 from tgvf_rl.evaluation.policy_full_model_snapshot import (
+    FULL_MODEL_SNAPSHOT_SCHEMA_V2,
+    FullModelCheckpointOwner,
     FullModelMaterializationMode,
     FullModelSourceKind,
     build_full_model_snapshot_manifest,
@@ -22,9 +27,17 @@ from tgvf_rl.evaluation.policy_full_model_snapshot import (
     write_full_model_snapshot_manifest,
 )
 from tgvf_rl.evaluation.policy_coredev import (
+    CoreDevTask,
     DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+    load_policy_benchmark_results,
+    policy_output_contract_failure_audit_payload,
+    validate_policy_benchmark_result,
 )
-from tgvf_rl.evaluation.policy_official_visible import OfficialVisiblePolicyEvaluator
+from tgvf_rl.evaluation.policy_official_visible import (
+    OfficialVisiblePolicyEvaluator,
+    OfficialVisibleTrajectory,
+    official_visible_trajectory_audit_payload,
+)
 from tgvf_rl.policy.deepeyes_native_contract import (
     load_deepeyes_native_run_contract,
 )
@@ -35,6 +48,23 @@ _TEMPLATE = (
     REPOSITORY_ROOT / "configs/policy/runs/"
     "prl_13_a_qwen3_instruct_grpo_bs256_n16_native_crop_t1_stratified_80step_gpu0123.template.toml"
 )
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _rehash_evaluation_identity(value: dict[str, object]) -> None:
+    value.pop("identity_sha256", None)
+    value["identity_sha256"] = _canonical_sha256(value)
 
 
 def _write_hf_model(path: Path, *, scale: float = 1.0) -> None:
@@ -146,10 +176,309 @@ def test_step_zero_full_model_snapshot_round_trip_and_tamper(tmp_path: Path) -> 
     identity = full_model_snapshot_identity_record(snapshot)
     assert identity["snapshot_backend"] == "full_model"
     assert identity["lora_request"] is None
+    assert "protocol_run_id" not in identity
     assert snapshot.model_path == base.resolve()
 
     torch.save({"changed": torch.ones(1)}, base / "pytorch_model.bin")
     with pytest.raises(ValueError, match="full-model"):
+        load_full_model_evaluation_snapshot(
+            manifest_path, receipt_path, require_launchable_run=False
+        )
+
+
+def test_v1_full_model_result_writer_does_not_require_v2_protocol_fields(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base-model"
+    _write_hf_model(base)
+    config_path = _write_run_contract(tmp_path, base)
+    contract = load_deepeyes_native_run_contract(config_path, allow_template=True)
+    manifest = build_full_model_snapshot_manifest(
+        contract, source_path=base, optimizer_step=0
+    )
+    receipt = materialize_full_model_snapshot(manifest)
+    manifest_path = tmp_path / "snapshot.json"
+    receipt_path = tmp_path / "receipt.json"
+    write_full_model_snapshot_manifest(manifest_path, manifest)
+    write_full_model_materialization_receipt(receipt_path, receipt)
+    snapshot = load_full_model_evaluation_snapshot(
+        manifest_path, receipt_path, require_launchable_run=False
+    )
+
+    output_root = tmp_path / "evaluation"
+    task_path = output_root / "runtime/policy-benchmark-tasks.jsonl"
+    task_path.parent.mkdir(parents=True)
+    task_path.write_text('{"sample_id":"fixture"}\n', encoding="utf-8")
+    config = SimpleNamespace(
+        evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+        evaluation_id="V1-FULL-STEP0",
+        schema_version="fixture-evaluation-v1",
+        policy_config_path=config_path.resolve(),
+        output_root=output_root,
+        uses_legacy_coredev_manifest=False,
+        task_manifest_sha256=None,
+        expected_task_count=1,
+        expected_single_image_count=1,
+        gpu_ids=(0,),
+        max_model_len=32768,
+        max_num_batched_tokens=32768,
+        enable_chunked_prefill=False,
+        inference_concurrency_per_gpu=1,
+    )
+    evaluation_identity = full_model_policy_evaluation_identity(config, snapshot)
+    assert "protocol_contract" not in evaluation_identity
+    assert "protocol_run_id" not in evaluation_identity["policy_snapshot"]
+    assert "sampling_rng" not in evaluation_identity
+
+    task = CoreDevTask(
+        ordinal=0,
+        dataset="fixture",
+        row_number=0,
+        index="row-0",
+        sample_id="sample-0",
+        question="Which option is correct?",
+        image_paths=("/immutable/image.png",),
+    )
+    trajectory = OfficialVisibleTrajectory(
+        identity=TrajectoryIdentity(
+            config.evaluation_id, task.bound_sample_id, 0, "benchmark:0"
+        ),
+        model=snapshot.run.model,
+        behavior_policy=snapshot.policy_version,
+        stop="final_answer",
+        final_answer="A",
+        assistant_turns=(),
+        tool_calls=(),
+        tool_errors=(),
+        native_image_sha256s=("6" * 64,),
+    )
+    result = official_visible_trajectory_audit_payload(
+        task,
+        trajectory,
+        evaluation_identity=evaluation_identity,
+        rank=0,
+        world_size=1,
+    )
+    assert result["policy_snapshot_backend"] == "full_model"
+    assert "protocol_run_id" not in result
+    assert "sampling_rng" not in result
+    validate_policy_benchmark_result(
+        result,
+        task=task,
+        evaluation_identity=evaluation_identity,
+        rank=0,
+        world_size=1,
+    )
+
+
+def test_v2_snapshot_binds_distinct_checkpoint_owner_and_protocol(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base-model"
+    _write_hf_model(base)
+    contract = _contract(tmp_path, base)
+    owner_config = tmp_path / "crop-owner.toml"
+    owner_config.write_text("run_id = 'PRL21-OWNER'\n", encoding="utf-8")
+    owner_completion = tmp_path / "completion.json"
+    owner_completion.write_text('{"status":"complete"}\n', encoding="utf-8")
+    owner = FullModelCheckpointOwner(
+        run_id="PRL21-OWNER",
+        run_identity_sha256="1" * 64,
+        config_path=str(owner_config.resolve()),
+        config_file_sha256=hashlib.sha256(owner_config.read_bytes()).hexdigest(),
+        completion_path=str(owner_completion.resolve()),
+        completion_file_sha256=hashlib.sha256(
+            owner_completion.read_bytes()
+        ).hexdigest(),
+    )
+    manifest = build_full_model_snapshot_manifest(
+        contract,
+        source_path=base,
+        optimizer_step=0,
+        checkpoint_owner=owner,
+    )
+    receipt = materialize_full_model_snapshot(manifest)
+    manifest_path = tmp_path / "snapshot-v2.json"
+    receipt_path = tmp_path / "receipt-v2.json"
+    write_full_model_snapshot_manifest(manifest_path, manifest)
+    write_full_model_materialization_receipt(receipt_path, receipt)
+
+    snapshot = load_full_model_evaluation_snapshot(
+        manifest_path, receipt_path, require_launchable_run=False
+    )
+    identity_record = full_model_snapshot_identity_record(snapshot)
+    assert manifest.schema_version == FULL_MODEL_SNAPSHOT_SCHEMA_V2
+    assert snapshot.policy_version.run_id == "PRL21-OWNER"
+    assert snapshot.run_identity_sha256 == "1" * 64
+    assert snapshot.run.run_id == "PRL21-OWNER"
+    assert snapshot.run.protocol_run_id == contract.run_id
+    assert identity_record["run_id"] == "PRL21-OWNER"
+    assert identity_record["protocol_run_id"] == contract.run_id
+    assert identity_record["checkpoint_owner_config_path"] == str(
+        owner_config.resolve()
+    )
+
+    output_root = tmp_path / "evaluation-v2"
+    task_path = output_root / "runtime/policy-benchmark-tasks.jsonl"
+    task_path.parent.mkdir(parents=True)
+    task_path.write_text('{"sample_id":"fixture"}\n', encoding="utf-8")
+    config = SimpleNamespace(
+        evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+        evaluation_id="PRL21-FULL-STEP0",
+        schema_version="fixture-evaluation-v1",
+        policy_config_path=owner_config.resolve(),
+        output_root=output_root,
+        uses_legacy_coredev_manifest=False,
+        task_manifest_sha256=None,
+        expected_task_count=1,
+        expected_single_image_count=1,
+        gpu_ids=(0,),
+        max_model_len=32768,
+        max_num_batched_tokens=32768,
+        enable_chunked_prefill=False,
+        inference_concurrency_per_gpu=1,
+        paired_seed_namespace="fixture/full-model/step0/temp1/seed42/v1",
+    )
+    evaluation_identity = full_model_policy_evaluation_identity(config, snapshot)
+    assert evaluation_identity["policy_snapshot"]["run_id"] == "PRL21-OWNER"
+    assert evaluation_identity["protocol_contract"]["run_id"] == contract.run_id
+    assert evaluation_identity["sampling_rng"]["seed_namespace"] == (
+        "fixture/full-model/step0/temp1/seed42/v1"
+    )
+    rng_protocol = dict(evaluation_identity["protocol"])
+    assert "base_equivalence" in rng_protocol
+    rng_protocol.pop("base_equivalence")
+    assert evaluation_identity["sampling_rng"]["protocol_sha256"] == (
+        _canonical_sha256(rng_protocol)
+    )
+
+    task = CoreDevTask(
+        ordinal=0,
+        dataset="fixture",
+        row_number=0,
+        index="row-0",
+        sample_id="sample-0",
+        question="Which option is correct?",
+        image_paths=("/immutable/image.png",),
+    )
+    trajectory = OfficialVisibleTrajectory(
+        identity=TrajectoryIdentity(
+            config.evaluation_id, task.bound_sample_id, 0, "benchmark:0"
+        ),
+        model=snapshot.run.model,
+        behavior_policy=snapshot.policy_version,
+        stop="final_answer",
+        final_answer="A",
+        assistant_turns=(),
+        tool_calls=(),
+        tool_errors=(),
+        native_image_sha256s=("6" * 64,),
+    )
+    official_result = official_visible_trajectory_audit_payload(
+        task,
+        trajectory,
+        evaluation_identity=evaluation_identity,
+        rank=0,
+        world_size=1,
+    )
+    assert official_result["policy_run_id"] == "PRL21-OWNER"
+    assert official_result["protocol_run_id"] == contract.run_id
+    assert official_result["sampling_rng"] == evaluation_identity["sampling_rng"]
+    assert len(official_result["paired_rng_stream_identity_sha256"]) == 64
+    validate_policy_benchmark_result(
+        official_result,
+        task=task,
+        evaluation_identity=evaluation_identity,
+        rank=0,
+        world_size=1,
+    )
+
+    missing_protocol = json.loads(json.dumps(evaluation_identity))
+    del missing_protocol["policy_snapshot"]["protocol_run_id"]
+    del missing_protocol["policy_snapshot"]["protocol_run_identity_sha256"]
+    _rehash_evaluation_identity(missing_protocol)
+    with pytest.raises(ValueError, match="v2 protocol snapshot binding differs"):
+        official_visible_trajectory_audit_payload(
+            task,
+            trajectory,
+            evaluation_identity=missing_protocol,
+            rank=0,
+            world_size=1,
+        )
+
+    wrong_protocol = json.loads(json.dumps(evaluation_identity))
+    wrong_protocol["policy_snapshot"]["protocol_run_id"] = "WRONG-PROTOCOL"
+    wrong_protocol["policy_snapshot"]["protocol_run_identity_sha256"] = "9" * 64
+    _rehash_evaluation_identity(wrong_protocol)
+    with pytest.raises(ValueError, match="v2 protocol snapshot binding differs"):
+        official_visible_trajectory_audit_payload(
+            task,
+            trajectory,
+            evaluation_identity=wrong_protocol,
+            rank=0,
+            world_size=1,
+        )
+    wrong_result = dict(official_result)
+    wrong_result["evaluation_identity_sha256"] = wrong_protocol["identity_sha256"]
+    wrong_result["protocol_run_id"] = "WRONG-PROTOCOL"
+    wrong_result["protocol_run_identity_sha256"] = "9" * 64
+    wrong_result.pop("result_identity_sha256")
+    wrong_result["result_identity_sha256"] = _canonical_sha256(wrong_result)
+    with pytest.raises(ValueError, match="v2 protocol snapshot binding differs"):
+        validate_policy_benchmark_result(
+            wrong_result,
+            task=task,
+            evaluation_identity=wrong_protocol,
+            rank=0,
+            world_size=1,
+        )
+
+    error = PolicyOutputContractError(
+        "vLLM emitted a tool-call suffix outside the run-bound contract",
+        code="tool_call_terminal_suffix",
+        diagnostic={
+            "response_text_sha256": "2" * 64,
+            "suffix_sha256": "3" * 64,
+            "suffix_char_count": 1,
+            "suffix_utf8_byte_count": 1,
+            "finish_reason": "stop",
+            "stop_reason": "</tool_call>",
+            "backend_request_sha256": "4" * 64,
+            "backend_response_sha256": "5" * 64,
+        },
+    )
+    result = policy_output_contract_failure_audit_payload(
+        task,
+        error,
+        evaluation_identity=evaluation_identity,
+        rank=0,
+        world_size=1,
+    )
+    assert result["policy_run_id"] == "PRL21-OWNER"
+    assert result["protocol_run_id"] == contract.run_id
+    validate_policy_benchmark_result(
+        result,
+        task=task,
+        evaluation_identity=evaluation_identity,
+        rank=0,
+        world_size=1,
+    )
+    inference = output_root / "inference"
+    inference.mkdir()
+    (inference / "rank-0.jsonl").write_text(
+        json.dumps(result, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    loaded = load_policy_benchmark_results(
+        inference,
+        tasks=(task,),
+        evaluation_identity=evaluation_identity,
+        require_complete=True,
+    )
+    assert loaded[0]["policy_run_id"] == "PRL21-OWNER"
+    assert loaded[0]["protocol_run_id"] == contract.run_id
+
+    owner_config.write_text("run_id = 'TAMPERED'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="owner config bytes changed"):
         load_full_model_evaluation_snapshot(
             manifest_path, receipt_path, require_launchable_run=False
         )
@@ -438,6 +767,8 @@ def test_official_visible_constructor_accepts_only_adapter_free_full_snapshot(
     assert evaluator.policy_version == snapshot.policy_version
     assert evaluator.full_model is True
     assert identity["policy_snapshot"]["snapshot_backend"] == "full_model"
+    assert "checkpoint_owner" not in identity
+    assert "protocol_contract" not in identity
 
     manager.lora_request = object()
     with pytest.raises(ValueError, match="forbids LoRARequest"):

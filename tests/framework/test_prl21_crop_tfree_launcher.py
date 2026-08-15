@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 
 
 _ROOT = Path(__file__).parents[2]
@@ -71,16 +72,21 @@ def test_smoke_uses_the_same_reward_but_never_logs_to_wandb() -> None:
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
 
 
-def test_evaluator_can_resume_scoring_from_a_discoverable_inference_view() -> None:
+def test_evaluator_has_one_generic_execution_path_and_rejects_extra_arguments() -> None:
     script = _EVALUATOR.read_text(encoding="utf-8")
 
-    assert "--resume-scoring) resume_scoring_only=true" in script
-    assert "--mode eval --reuse --reuse-aux infer" in script
-    assert "run_id=T20260815_G" in script
-    assert "materialize_scoring_views" in script
-    assert "validate_scoring_inputs" in script
-    assert 'eval_repo="$repo_root"' in script
-    assert "tgvf-e2e-rl-prl13-integration" not in script
-    assert "CUDA_VISIBLE_DEVICES=0,1" not in script
-    assert 'judge_seed=$(jq -er \'.server.seed\'' in script
-    assert '--max-num-seqs "$judge_max_num_seqs" --seed "$judge_seed"' in script
+    assert 'evaluator="$repo_root/tools/run_paired_policy_evaluation.py"' in script
+    assert "--mode run" in script
+    assert "--resume-scoring" not in script
+    assert "run_prl15_paired_evaluation.py" not in script
+    assert "materialize_scoring_views" not in script
+
+    completed = subprocess.run(
+        ["bash", str(_EVALUATOR), "unexpected-argument"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr.startswith("usage: ")

@@ -139,7 +139,9 @@ def _load_trajectories(
         path = inference_root / f"rank-{rank}.jsonl"
         if not path.is_file():
             raise FileNotFoundError(f"missing policy inference rank: {path}")
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), 1
+        ):
             raw = json.loads(line)
             ordinal = raw.get("ordinal")
             if type(ordinal) is not int or ordinal in records:
@@ -148,10 +150,14 @@ def _load_trajectories(
             if task is None or not task.single_image:
                 raise RuntimeError("policy result is outside the single-image tranche")
             if raw.get("dataset") != task.dataset or raw.get("index") != task.index:
-                raise RuntimeError("policy result identity differs from task materialization")
+                raise RuntimeError(
+                    "policy result identity differs from task materialization"
+                )
             records[ordinal] = raw
     if set(records) != expected:
-        raise RuntimeError("policy scoring requires all 2,240 single-image trajectories")
+        raise RuntimeError(
+            "policy scoring requires all 2,240 single-image trajectories"
+        )
     by_index = {
         (task_by_ordinal[ordinal].dataset, task_by_ordinal[ordinal].index): raw
         for ordinal, raw in records.items()
@@ -168,13 +174,22 @@ def materialize_policy_coredev_scoring_views(
     evaluation_id: str,
     run_id: str,
     mathverse_source_json: str | Path,
+    logical_output_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Build seven full-count scoring TSVs with unsupported rows fail-closed."""
+    """Build seven full-count scoring TSVs with unsupported rows fail-closed.
+
+    ``output_root`` owns the physical writes.  ``logical_output_root`` may name
+    the eventual atomic-publish location, so manifests never expose temporary
+    staging paths.
+    """
 
     inference = Path(inference_root).resolve()
     tasks = Path(tasks_path).resolve()
     source = Path(source_root).resolve()
     output = Path(output_root).resolve()
+    logical_output = (
+        output if logical_output_root is None else Path(logical_output_root).resolve()
+    )
     if not evaluation_id:
         raise ValueError("evaluation_id must be non-empty")
     run_id = validate_vlmevalkit_eval_id(run_id)
@@ -253,9 +268,14 @@ def materialize_policy_coredev_scoring_views(
         sample_local_failure_total += sample_local_failures
         work_dir = output / dataset
         run_dir = work_dir / MODEL_NAME / run_id
+        logical_work_dir = logical_output / dataset
+        logical_run_dir = logical_work_dir / MODEL_NAME / run_id
         raw_path = output / "raw" / f"{dataset}.tsv"
         derived_path = run_dir / f"{MODEL_NAME}_{dataset}.tsv"
         manifest_path = run_dir / "final-answer-view-manifest.json"
+        logical_raw_path = logical_output / "raw" / f"{dataset}.tsv"
+        logical_derived_path = logical_run_dir / f"{MODEL_NAME}_{dataset}.tsv"
+        logical_manifest_path = logical_run_dir / "final-answer-view-manifest.json"
         _write_tsv_exclusive(raw_path, raw_fields, raw_rows)
         materialized = materialize_final_answer_view(
             source_tsv=raw_path,
@@ -266,6 +286,8 @@ def materialize_policy_coredev_scoring_views(
                 if dataset == "MathVerse_MINI"
                 else None
             ),
+            recorded_source_tsv=logical_raw_path,
+            recorded_derived_tsv=logical_derived_path,
         )
         status = {
             "schema_version": "1.0",
@@ -274,7 +296,7 @@ def materialize_policy_coredev_scoring_views(
             "datasets": {
                 dataset: {
                     "status": "done",
-                    "prediction_file": str(derived_path),
+                    "prediction_file": str(logical_derived_path),
                     "updated_at": created_at,
                     "judge_model": "Qwen2.5-72B-Instruct",
                     "source_run": evaluation_id,
@@ -307,9 +329,9 @@ def materialize_policy_coredev_scoring_views(
                 "observed_single_image_count": observed,
                 "sample_local_failure_count": sample_local_failures,
                 "unsupported_multi_image_count": len(source_rows) - observed,
-                "work_dir": str(work_dir),
-                "prediction_file": str(derived_path),
-                "manifest": str(manifest_path),
+                "work_dir": str(logical_work_dir),
+                "prediction_file": str(logical_derived_path),
+                "manifest": str(logical_manifest_path),
             }
         )
     if observed_total != 2240 or unsupported_count != 271:

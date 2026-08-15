@@ -46,7 +46,9 @@ def _read_tsv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
                 raise ValueError(f"TSV has duplicate columns: {path}")
             missing = _REQUIRED_COLUMNS.difference(fields)
             if missing:
-                raise ValueError(f"TSV lacks required columns {sorted(missing)}: {path}")
+                raise ValueError(
+                    f"TSV lacks required columns {sorted(missing)}: {path}"
+                )
             rows: list[dict[str, str]] = []
             for row_number, raw_row in enumerate(reader, start=1):
                 if None in raw_row:
@@ -66,7 +68,9 @@ def _read_tsv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     return list(fields), rows
 
 
-def _write_tsv(path: Path, fields: Sequence[str], rows: Sequence[Mapping[str, str]]) -> None:
+def _write_tsv(
+    path: Path, fields: Sequence[str], rows: Sequence[Mapping[str, str]]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
@@ -84,7 +88,9 @@ def _publish_bytes_exclusive(path: Path, payload: bytes) -> None:
     """Publish bytes without allowing a pre-existing artifact to be replaced."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -123,7 +129,9 @@ def _unused_option_label(
     for label in _OPTION_LABELS:
         if label not in source_fields and label != normalized_answer:
             return label
-    raise ValueError("no unused uppercase option label can force an invalid MCQ row wrong")
+    raise ValueError(
+        "no unused uppercase option label can force an invalid MCQ row wrong"
+    )
 
 
 def _unique_sentinel(
@@ -175,7 +183,9 @@ def _enrich_mathverse_metadata(
             )
         source_row = source_rows[source_row_index]
         if not isinstance(source_row, Mapping):
-            raise ValueError(f"MathVerse source row {source_row_index} is not an object")
+            raise ValueError(
+                f"MathVerse source row {source_row_index} is not an object"
+            )
         problem_version = source_row.get("problem_version")
         if not isinstance(problem_version, str) or not problem_version.strip():
             raise ValueError(
@@ -239,8 +249,15 @@ def materialize_final_answer_view(
     derived_tsv: str | Path,
     manifest_path: str | Path | None = None,
     mathverse_source_json: str | Path | None = None,
+    recorded_source_tsv: str | Path | None = None,
+    recorded_derived_tsv: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Create an immutable final-answer scoring TSV and its identity manifest."""
+    """Create an immutable final-answer scoring TSV and its identity manifest.
+
+    ``recorded_*`` paths let a caller build the bytes in a sibling staging
+    directory while recording the paths they will have after atomic publish.
+    The default remains the physical path for backwards compatibility.
+    """
 
     source = Path(source_tsv).resolve()
     derived = Path(derived_tsv).resolve()
@@ -249,12 +266,22 @@ def materialize_final_answer_view(
         if manifest_path is not None
         else derived.with_suffix(derived.suffix + ".manifest.json")
     )
+    recorded_source = (
+        source if recorded_source_tsv is None else Path(recorded_source_tsv).resolve()
+    )
+    recorded_derived = (
+        derived
+        if recorded_derived_tsv is None
+        else Path(recorded_derived_tsv).resolve()
+    )
     if not source.is_file():
         raise FileNotFoundError(f"source prediction TSV does not exist: {source}")
     if source == derived:
         raise ValueError("source and derived TSV paths must differ")
     if derived.exists() or manifest.exists():
-        raise FileExistsError("derived TSV and manifest are immutable and must not exist")
+        raise FileExistsError(
+            "derived TSV and manifest are immutable and must not exist"
+        )
 
     source_fields, source_rows = _read_tsv(source)
     source_hash = _sha256_file(source)
@@ -263,7 +290,9 @@ def materialize_final_answer_view(
     if mathverse_source_json is not None:
         mathverse_path = Path(mathverse_source_json).resolve()
         if not mathverse_path.is_file():
-            raise FileNotFoundError(f"MathVerse source JSON does not exist: {mathverse_path}")
+            raise FileNotFoundError(
+                f"MathVerse source JSON does not exist: {mathverse_path}"
+            )
         metadata_enrichment = _enrich_mathverse_metadata(
             rows,
             source_json=mathverse_path,
@@ -342,13 +371,13 @@ def materialize_final_answer_view(
         "schema_version": 1,
         "contract": SCORING_VIEW_CONTRACT,
         "source": {
-            "path": str(source),
+            "path": str(recorded_source),
             "sha256": source_hash,
             "row_count": len(source_rows),
             "columns": source_fields,
         },
         "derived": {
-            "path": str(derived),
+            "path": str(recorded_derived),
             "sha256": derived_hash,
             "row_count": len(verified_rows),
             "columns": verified_fields,

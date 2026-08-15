@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 from hashlib import sha256
 import csv
 import json
 import math
+import os
 from pathlib import Path
 import re
+import tempfile
 import time
 from typing import Any, Literal
 from urllib import request
@@ -30,6 +33,28 @@ DETERMINISTIC_JUDGE_PARSE_FAILURE_MARKER = (
 )
 MAX_JUDGE_PARSE_FAILURE_RATE = 0.05
 MIN_JUDGE_PARSE_FAILURE_LIMIT = 3
+COREDEV_MACRO_STAR_SCHEMA = "tgvf.coredev-2511-macro-star.v1"
+COREDEV_ACCEPTED_SUITE = "coredev-2511-vlmevalkit-7055d301-v1"
+COREDEV_MACRO_STAR_COMPONENTS = (
+    "vstar",
+    "hr_average_all",
+    "blink_single_180",
+    "ocr_mean",
+    "mmmu_single_269",
+    "mathvista",
+    "mathverse_five_version_macro",
+)
+_SINGLE_IMAGE_HEADLINE_COUNTS = {
+    "BLINK": 180,
+    "MMMU_Pro_10c": 269,
+}
+_MATHVERSE_VERSIONS = (
+    "Text Dominant",
+    "Vision Only",
+    "Text Lite",
+    "Vision Intensive",
+    "Vision Dominant",
+)
 JUDGE_FAILURE_MARKERS = (
     "Failed to obtain answer via API",
     "Failed in Prefetch, no GPT-based answer matching",
@@ -159,12 +184,21 @@ def check_qwen25_72b_judge(
 
 def write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-        encoding="utf-8",
+    encoded = (
+        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
     )
-    temporary.replace(path)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class FailClosedJudge:
@@ -218,7 +252,9 @@ def install_fail_closed_judge_builders(modules: Iterable[Any]) -> None:
             continue
 
         @wraps(original)
-        def build_fail_closed(*args: Any, _original: Any = original, **kwargs: Any) -> Any:
+        def build_fail_closed(
+            *args: Any, _original: Any = original, **kwargs: Any
+        ) -> Any:
             return FailClosedJudge(_original(*args, **kwargs))
 
         build_fail_closed._tgvf_fail_closed = True  # type: ignore[attr-defined]
@@ -323,6 +359,404 @@ def _read_tsv(path: Path) -> tuple[list[str], list[str]]:
             csv.field_size_limit(previous_field_limit)
 
 
+def _read_dict_rows(
+    path: Path, *, delimiter: str
+) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    """Read one scorer table without imposing Python's small CSV field cap."""
+
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"CoreDev metric artifact is not a regular file: {path}")
+    previous_field_limit = csv.field_size_limit()
+    artifact_bound = max(previous_field_limit, path.stat().st_size)
+    field_limit_changed = artifact_bound != previous_field_limit
+    if field_limit_changed:
+        csv.field_size_limit(artifact_bound)
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter=delimiter)
+            if reader.fieldnames is None:
+                raise RuntimeError(f"CoreDev metric artifact has no header: {path}")
+            fields = tuple(reader.fieldnames)
+            if any(not field.strip() for field in fields) or len(set(fields)) != len(
+                fields
+            ):
+                raise RuntimeError(
+                    f"CoreDev metric artifact has blank/duplicate headers: {path}"
+                )
+            rows = []
+            for row in reader:
+                if None in row or any(row.get(field) is None for field in fields):
+                    raise RuntimeError(
+                        f"CoreDev metric artifact has a ragged row: {path}"
+                    )
+                rows.append(dict(row))
+        return fields, rows
+    finally:
+        if field_limit_changed:
+            csv.field_size_limit(previous_field_limit)
+
+
+def _finite_decimal(value: object, *, name: str) -> Decimal:
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise RuntimeError(f"CoreDev headline {name} is not numeric") from error
+    if not result.is_finite():
+        raise RuntimeError(f"CoreDev headline {name} is not finite")
+    return result
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise RuntimeError("CoreDev headline JSON artifact has duplicate keys")
+        result[key] = value
+    return result
+
+
+def _one_metric_artifact(run_dir: Path, pattern: str) -> Path:
+    matches = tuple(sorted(run_dir.glob(pattern)))
+    if len(matches) != 1 or matches[0].is_symlink() or not matches[0].is_file():
+        raise RuntimeError(
+            f"CoreDev headline requires exactly one {pattern} artifact in {run_dir}"
+        )
+    return matches[0]
+
+
+def _slice_run_dirs(
+    summary: Mapping[str, Any],
+) -> tuple[dict[str, Path], dict[str, frozenset[str]]]:
+    if (
+        summary.get("schema_version") != 1
+        or summary.get("suite") != COREDEV_ACCEPTED_SUITE
+        or summary.get("status") != "pass"
+        or summary.get("phase") != "eval"
+        or summary.get("vlmevalkit_commit") != VLMEVALKIT_REVIEW_COMMIT
+        or summary.get("sample_count") != COREDEV_2511.sample_count
+        or summary.get("slice_count") != len(COREDEV_2511.slices)
+    ):
+        raise RuntimeError("CoreDev headline requires an accepted eval summary")
+    slices = summary.get("slices")
+    if not isinstance(slices, list) or len(slices) != len(COREDEV_2511.slices):
+        raise RuntimeError("CoreDev headline summary lacks slices")
+    expected = tuple(spec.vlmeval_dataset for spec in COREDEV_2511.slices)
+    if (
+        tuple(item.get("dataset") for item in slices if isinstance(item, Mapping))
+        != expected
+    ):
+        raise RuntimeError("CoreDev headline slice order differs")
+    result: dict[str, Path] = {}
+    expected_indices: dict[str, frozenset[str]] = {}
+    status_paths: set[Path] = set()
+    for item, spec in zip(slices, COREDEV_2511.slices, strict=True):
+        assert isinstance(item, Mapping)
+        if (
+            item.get("sample_count") != spec.sample_count
+            or item.get("judge_contract")
+            != COREDEV_JUDGE_CONTRACTS[spec.vlmeval_dataset]
+        ):
+            raise RuntimeError(
+                f"CoreDev headline {spec.vlmeval_dataset} slice identity differs"
+            )
+        status_path = Path(str(item.get("status_path", "")))
+        if status_path.name != "status.json" or not status_path.is_file():
+            raise RuntimeError(
+                f"CoreDev headline status artifact is absent: {status_path}"
+            )
+        status_path = status_path.resolve()
+        if status_path in status_paths:
+            raise RuntimeError("CoreDev headline status paths are not unique")
+        status_paths.add(status_path)
+        prediction_path = Path(str(item.get("prediction_file", "")))
+        if prediction_path.is_symlink() or not prediction_path.is_file():
+            raise RuntimeError(
+                f"CoreDev headline prediction artifact is absent: {prediction_path}"
+            )
+        prediction_indices, _ = _read_tsv(prediction_path)
+        if (
+            len(prediction_indices) != spec.sample_count
+            or any(not index.strip() for index in prediction_indices)
+            or len(set(prediction_indices)) != spec.sample_count
+        ):
+            raise RuntimeError(
+                f"CoreDev headline {spec.vlmeval_dataset} prediction identity differs"
+            )
+        result[str(item["dataset"])] = status_path.parent
+        expected_indices[spec.vlmeval_dataset] = frozenset(prediction_indices)
+    return result, expected_indices
+
+
+def _fraction_csv_value(
+    path: Path,
+    *,
+    row_selector: Mapping[str, str],
+    value_column: str,
+    name: str,
+) -> Decimal:
+    fields, rows = _read_dict_rows(path, delimiter=",")
+    required = {*row_selector, value_column}
+    if not required.issubset(fields):
+        raise RuntimeError(f"CoreDev headline {name} CSV schema differs")
+    selected = [
+        row
+        for row in rows
+        if all(str(row.get(key, "")) == value for key, value in row_selector.items())
+    ]
+    if len(selected) != 1:
+        raise RuntimeError(f"CoreDev headline {name} row is not unique")
+    fraction = _finite_decimal(selected[0][value_column], name=name)
+    if not Decimal(0) <= fraction <= Decimal(1):
+        raise RuntimeError(f"CoreDev headline {name} fraction lies outside [0,1]")
+    return fraction * Decimal(100)
+
+
+def _single_image_mcq_accuracy(
+    path: Path, *, dataset: str, expected_indices: frozenset[str]
+) -> tuple[Decimal, dict[str, int]]:
+    fields, rows = _read_dict_rows(path, delimiter="\t")
+    if not {"index", "extra_records", "hit"}.issubset(fields):
+        raise RuntimeError(f"CoreDev headline {dataset} result schema differs")
+    expected_total = next(
+        spec.sample_count
+        for spec in COREDEV_2511.slices
+        if spec.vlmeval_dataset == dataset
+    )
+    observed_indices = tuple(str(row["index"]).strip() for row in rows)
+    if (
+        len(rows) != expected_total
+        or any(not index for index in observed_indices)
+        or len(set(observed_indices)) != expected_total
+        or frozenset(observed_indices) != expected_indices
+    ):
+        raise RuntimeError(f"CoreDev headline {dataset} result coverage differs")
+    single_hits: list[int] = []
+    coverage_counts: dict[str, int] = {}
+    for row in rows:
+        try:
+            extra = json.loads(
+                row["extra_records"], object_pairs_hook=_reject_duplicate_json_pairs
+            )
+        except (json.JSONDecodeError, TypeError) as error:
+            raise RuntimeError(
+                f"CoreDev headline {dataset} coverage metadata is malformed"
+            ) from error
+        if not isinstance(extra, Mapping):
+            raise RuntimeError(
+                f"CoreDev headline {dataset} coverage metadata is not an object"
+            )
+        coverage = extra.get("coverage")
+        if coverage not in {
+            "single_image_evaluated",
+            "single_image_policy_output_contract_failure",
+            "unsupported_multi_image",
+        }:
+            raise RuntimeError(f"CoreDev headline {dataset} coverage label differs")
+        coverage_counts[str(coverage)] = coverage_counts.get(str(coverage), 0) + 1
+        hit = _finite_decimal(row["hit"], name=f"{dataset} hit")
+        if hit not in {Decimal(0), Decimal(1)}:
+            raise RuntimeError(f"CoreDev headline {dataset} hit is not binary")
+        if coverage == "unsupported_multi_image":
+            if hit != 0:
+                raise RuntimeError(
+                    f"CoreDev headline {dataset} unsupported sample scored correct"
+                )
+            continue
+        if coverage == "single_image_policy_output_contract_failure" and hit != 0:
+            raise RuntimeError(
+                f"CoreDev headline {dataset} contract failure scored correct"
+            )
+        single_hits.append(int(hit))
+    expected_single = _SINGLE_IMAGE_HEADLINE_COUNTS[dataset]
+    if len(single_hits) != expected_single:
+        raise RuntimeError(
+            f"CoreDev headline {dataset} single-image coverage differs: "
+            f"{len(single_hits)} != {expected_single}"
+        )
+    if sum(coverage_counts.values()) != expected_total:
+        raise RuntimeError(f"CoreDev headline {dataset} coverage total differs")
+    correct = sum(single_hits)
+    return (
+        Decimal(100) * Decimal(correct) / Decimal(expected_single),
+        {"correct": correct, "count": expected_single},
+    )
+
+
+def extract_coredev_macro_star(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract the frozen seven-component CoreDev headline from scorer files.
+
+    This intentionally does not consume ``status.primary_metric``.  In
+    particular, HRBench4K's status primary is cycle 0, while the frozen
+    headline is the ``cycle=Average,type=all`` row.  BLINK and MMMU are scored
+    over their explicitly evaluated single-image populations only.
+    """
+
+    run_dirs, expected_indices = _slice_run_dirs(summary)
+    model = summary.get("model")
+    if not isinstance(model, str) or not model:
+        raise RuntimeError("CoreDev headline model identity is absent")
+
+    vstar_path = _one_metric_artifact(
+        run_dirs["VStarBench"], f"{model}_VStarBench_acc.csv"
+    )
+    vstar_fields, vstar_rows = _read_dict_rows(vstar_path, delimiter=",")
+    if len(vstar_rows) != 1 or set(vstar_fields) != {
+        "split",
+        "Overall",
+        "direct_attributes",
+        "relative_position",
+    }:
+        raise RuntimeError("CoreDev headline VStarBench score schema differs")
+    vstar = _fraction_csv_value(
+        vstar_path,
+        row_selector={"split": "none"},
+        value_column="Overall",
+        name="VStarBench Overall",
+    )
+    hr_path = _one_metric_artifact(run_dirs["HRBench4K"], f"{model}_HRBench4K_acc.csv")
+    hr_fields, hr_rows = _read_dict_rows(hr_path, delimiter=",")
+    expected_hr_selectors = {
+        (cycle, row_type)
+        for cycle in ("0", "1", "2", "3", "Average")
+        for row_type in ("all", "cross", "single")
+    }
+    if (
+        set(hr_fields) != {"cycle", "type", "accuracy"}
+        or {(row.get("cycle"), row.get("type")) for row in hr_rows}
+        != expected_hr_selectors
+        or len(hr_rows) != len(expected_hr_selectors)
+    ):
+        raise RuntimeError("CoreDev headline HRBench4K score rows differ")
+    hr = _fraction_csv_value(
+        hr_path,
+        row_selector={"cycle": "Average", "type": "all"},
+        value_column="accuracy",
+        name="HRBench4K Average/all",
+    )
+    blink, blink_counts = _single_image_mcq_accuracy(
+        _one_metric_artifact(run_dirs["BLINK"], f"{model}_BLINK_*_result.tsv"),
+        dataset="BLINK",
+        expected_indices=expected_indices["BLINK"],
+    )
+
+    ocr_path = _one_metric_artifact(
+        run_dirs["OCRBench_v2"], f"{model}_OCRBench_v2_score.json"
+    )
+    ocr = json.loads(
+        ocr_path.read_text(encoding="utf-8"),
+        object_pairs_hook=_reject_duplicate_json_pairs,
+    )
+    if not isinstance(ocr, Mapping):
+        raise RuntimeError("CoreDev headline OCR score is not an object")
+    ocr_english = Decimal(100) * _finite_decimal(
+        ocr.get("English Overall Score"), name="OCR English Overall"
+    )
+    ocr_chinese = Decimal(100) * _finite_decimal(
+        ocr.get("Chinese Overall Score"), name="OCR Chinese Overall"
+    )
+    if any(
+        not Decimal(0) <= value <= Decimal(100) for value in (ocr_english, ocr_chinese)
+    ):
+        raise RuntimeError("CoreDev headline OCR score lies outside [0,100]")
+    ocr_mean = (ocr_english + ocr_chinese) / Decimal(2)
+
+    mmmu, mmmu_counts = _single_image_mcq_accuracy(
+        _one_metric_artifact(
+            run_dirs["MMMU_Pro_10c"], f"{model}_MMMU_Pro_10c_*_result.tsv"
+        ),
+        dataset="MMMU_Pro_10c",
+        expected_indices=expected_indices["MMMU_Pro_10c"],
+    )
+
+    mathvista_path = _one_metric_artifact(
+        run_dirs["MathVista_MINI"], f"{model}_MathVista_MINI_*_score.csv"
+    )
+    mathvista_fields, mathvista_rows = _read_dict_rows(mathvista_path, delimiter=",")
+    if not {"Task&Skill", "acc"}.issubset(mathvista_fields):
+        raise RuntimeError("CoreDev headline MathVista score schema differs")
+    expected_mathvista_rows = {
+        "Overall",
+        "geometry reasoning",
+        "scientific reasoning",
+        "textbook question answering",
+        "algebraic reasoning",
+        "statistical reasoning",
+        "figure question answering",
+        "numeric commonsense",
+        "arithmetic reasoning",
+        "visual question answering",
+        "geometry problem solving",
+        "math word problem",
+        "logical reasoning",
+    }
+    if (
+        len(mathvista_rows) != len(expected_mathvista_rows)
+        or {row.get("Task&Skill") for row in mathvista_rows} != expected_mathvista_rows
+    ):
+        raise RuntimeError("CoreDev headline MathVista score rows differ")
+    mathvista_selected = [
+        row for row in mathvista_rows if row.get("Task&Skill") == "Overall"
+    ]
+    if len(mathvista_selected) != 1:
+        raise RuntimeError("CoreDev headline MathVista Overall row is not unique")
+    mathvista = _finite_decimal(mathvista_selected[0]["acc"], name="MathVista Overall")
+    if not Decimal(0) <= mathvista <= Decimal(100):
+        raise RuntimeError("CoreDev headline MathVista score lies outside [0,100]")
+
+    mathverse_path = _one_metric_artifact(
+        run_dirs["MathVerse_MINI"], f"{model}_MathVerse_MINI_*_score.csv"
+    )
+    mathverse_fields, mathverse_rows = _read_dict_rows(mathverse_path, delimiter=",")
+    if not {"split", "Overall"}.issubset(mathverse_fields):
+        raise RuntimeError("CoreDev headline MathVerse score schema differs")
+    by_split = {row.get("split"): row for row in mathverse_rows}
+    if len(by_split) != len(mathverse_rows) or set(by_split) != set(
+        _MATHVERSE_VERSIONS
+    ):
+        raise RuntimeError("CoreDev headline MathVerse five-version rows differ")
+    mathverse_values = [
+        _finite_decimal(by_split[version]["Overall"], name=f"MathVerse {version}")
+        for version in _MATHVERSE_VERSIONS
+    ]
+    if any(not Decimal(0) <= value <= Decimal(100) for value in mathverse_values):
+        raise RuntimeError("CoreDev headline MathVerse score lies outside [0,100]")
+    mathverse = sum(mathverse_values, Decimal(0)) / Decimal(len(mathverse_values))
+
+    components = {
+        "vstar": vstar,
+        "hr_average_all": hr,
+        "blink_single_180": blink,
+        "ocr_mean": ocr_mean,
+        "mmmu_single_269": mmmu,
+        "mathvista": mathvista,
+        "mathverse_five_version_macro": mathverse,
+    }
+    if tuple(components) != COREDEV_MACRO_STAR_COMPONENTS:
+        raise AssertionError("CoreDev Macro* component order changed")
+    return {
+        "schema_version": COREDEV_MACRO_STAR_SCHEMA,
+        "aggregation": "unweighted_mean_of_seven_percent_components",
+        "components_percent": {key: float(value) for key, value in components.items()},
+        "ocr_language_components_percent": {
+            "english": float(ocr_english),
+            "chinese": float(ocr_chinese),
+        },
+        "mathverse_version_components_percent": {
+            version: float(value)
+            for version, value in zip(
+                _MATHVERSE_VERSIONS, mathverse_values, strict=True
+            )
+        },
+        "single_image_counts": {
+            "blink": blink_counts,
+            "mmmu": mmmu_counts,
+        },
+        "macro_star_percent": float(
+            sum(components.values(), Decimal(0)) / Decimal(len(components))
+        ),
+    }
+
+
 def _resolve_prediction_path(
     raw_path: object,
     *,
@@ -363,12 +797,31 @@ def _latest_status(
     dataset_name: str,
     phase: Literal["infer", "eval"],
     expected_model: str,
+    expected_eval_id: str | None = None,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    status_paths = sorted(
-        (dataset_root / expected_model).glob("T*/status.json"), reverse=True
-    )
+    if expected_eval_id is not None:
+        if (
+            not isinstance(expected_eval_id, str)
+            or not expected_eval_id
+            or Path(expected_eval_id).name != expected_eval_id
+        ):
+            raise ValueError("expected_eval_id must be one safe run-directory name")
+        status_paths = [
+            dataset_root / expected_model / expected_eval_id / "status.json"
+        ]
+    else:
+        status_paths = sorted(
+            (dataset_root / expected_model).glob("T*/status.json"), reverse=True
+        )
     for status_path in status_paths:
+        if not status_path.is_file() or status_path.is_symlink():
+            continue
         payload = _load_status(status_path)
+        if expected_eval_id is not None and payload.get("eval_id") != expected_eval_id:
+            raise RuntimeError(
+                f"exact {phase} status eval_id differs for {dataset_name}: "
+                f"{status_path}"
+            )
         if not _status_matches_phase(payload, phase):
             continue
         datasets = payload.get("datasets")
@@ -439,9 +892,7 @@ def _reject_judge_failure_markers(paths: Iterable[Path]) -> None:
     encoded = tuple(marker.encode("utf-8") for marker in JUDGE_FAILURE_MARKERS)
     for path in paths:
         payload = path.read_bytes()
-        matches = [
-            marker.decode("utf-8") for marker in encoded if marker in payload
-        ]
+        matches = [marker.decode("utf-8") for marker in encoded if marker in payload]
         if matches:
             raise RuntimeError(
                 f"judge fallback/failure marker in {path.name}: {matches[0]}"
@@ -529,6 +980,7 @@ def summarize_coredev_results(
     datasets: tuple[str, ...] | None = None,
     expected_judge_base_url: str | None = None,
     expected_model: str = COREDEV_BASELINE_MODEL,
+    expected_eval_ids: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Validate statuses, exact row counts, judge evidence, and aggregate metrics."""
 
@@ -544,6 +996,8 @@ def summarize_coredev_results(
         raise ValueError("CoreDev results contain an unknown dataset")
     if tuple(name for name in canonical if name in selected) != selected:
         raise ValueError("CoreDev result datasets must follow canonical order")
+    if expected_eval_ids is not None and set(expected_eval_ids) != set(selected):
+        raise ValueError("expected_eval_ids must exactly bind every selected dataset")
 
     expected_counts = {
         spec.vlmeval_dataset: spec.sample_count for spec in COREDEV_2511.slices
@@ -560,11 +1014,16 @@ def summarize_coredev_results(
             dataset_name=dataset_name,
             phase=phase,
             expected_model=expected_model,
+            expected_eval_id=(
+                None if expected_eval_ids is None else expected_eval_ids[dataset_name]
+            ),
         )
         if status.get("model_name") != expected_model:
             raise RuntimeError(f"evaluated model identity mismatch: {dataset_name}")
         commit = status.get("commit")
-        if not isinstance(commit, str) or not VLMEVALKIT_REVIEW_COMMIT.startswith(commit):
+        if not isinstance(commit, str) or not VLMEVALKIT_REVIEW_COMMIT.startswith(
+            commit
+        ):
             raise RuntimeError(f"VLMEvalKit commit mismatch: {dataset_name}")
         prediction_path = _resolve_prediction_path(
             entry.get("prediction_file"),

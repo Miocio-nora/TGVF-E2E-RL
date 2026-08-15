@@ -186,10 +186,7 @@ POLICY_EVALUATION_BACKENDS = frozenset(
 
 
 def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
-    if (
-        run.schema_version
-        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
-    ):
+    if run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
         return render_qwen_native_matched_crop_tgvf_success_environment_text
     return (
         render_qwen_native_matched_tgvf_success_environment_text
@@ -209,10 +206,7 @@ def _matched_prompt_materializer_identity(
         builder = "build_tgvf_visual_messages"
         prompt_version = TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
         prompt_sha256 = TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
-    elif (
-        run.schema_version
-        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
-    ):
+    elif run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
         if run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_TGVF:
             raise ValueError("matched Crop+TGVF run has a non-combined tool profile")
         builder = "build_crop_tgvf_visual_messages"
@@ -265,8 +259,7 @@ def _render_training_run_visual_prompt(
 
     messages = (
         build_crop_tgvf_visual_messages(question)
-        if run.schema_version
-        == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+        if run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
         else build_tgvf_visual_messages(question)
     )
     renderer.assert_tokenizer_length()
@@ -286,7 +279,9 @@ def _render_training_run_visual_prompt(
     if "<answer>" in text or "</answer>" in text:
         raise ValueError("matched evaluation prompt contains an answer wrapper")
     token_ids = tuple(renderer.tokenizer.encode(text, add_special_tokens=False))
-    if not token_ids or any(type(token_id) is not int or token_id < 0 for token_id in token_ids):
+    if not token_ids or any(
+        type(token_id) is not int or token_id < 0 for token_id in token_ids
+    ):
         raise TypeError("matched evaluation tokenizer returned invalid prompt IDs")
     renderer.assert_tokenizer_length()
     renderer.assert_chat_template_identity()
@@ -511,9 +506,16 @@ class PolicyCoreDevConfig:
                 raise ValueError(
                     "paired evaluation RNG requires the generic benchmark schema"
                 )
-            if self.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL:
+            if self.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
+                pass
+            elif not (
+                self.evaluation_protocol
+                == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                and self.snapshot_backend == FULL_MODEL_EVALUATION_BACKEND
+            ):
                 raise ValueError(
-                    "paired evaluation RNG is supported only by training-run evaluation"
+                    "paired evaluation RNG requires training-run evaluation or "
+                    "official-visible full-model evaluation"
                 )
             if self.task_manifest_sha256 is None:
                 raise ValueError(
@@ -827,10 +829,13 @@ def _assert_policy_snapshot_binding(
             raise ValueError(
                 f"{owner} full-model identity differs from evaluation binding"
             )
-        if _sha256_file(config.policy_config_path) != (
+        expected_config_sha256 = (
             snapshot.manifest.run_contract_file_sha256
-        ):
-            raise ValueError(f"{owner} full-model run contract bytes differ")
+            if snapshot.manifest.checkpoint_owner is None
+            else snapshot.manifest.checkpoint_owner.config_file_sha256
+        )
+        if _sha256_file(config.policy_config_path) != expected_config_sha256:
+            raise ValueError(f"{owner} full-model owner config bytes differ")
     if isinstance(snapshot, PairedTGVFEvaluationSnapshot):
         if config.required_snapshot_identity_sha256 is not None:
             raise ValueError("paired snapshot must not use Crop snapshot identity")
@@ -1752,9 +1757,13 @@ def _paired_evaluation_rng_contract(
     namespace = getattr(config, "paired_seed_namespace", None)
     if namespace is None:
         return None
-    protocol_sha256 = _canonical_json_sha256(
-        _evaluation_protocol_identity(config, snapshot)
-    )
+    # Step-zero base equivalence is a checkpoint proof, not a sampling-protocol
+    # component.  Keeping it out of this hash lets Step0 and trained checkpoints
+    # share common random numbers while the full evaluation identity still binds
+    # and audits the proof itself.
+    rng_protocol = dict(_evaluation_protocol_identity(config, snapshot))
+    rng_protocol.pop("base_equivalence", None)
+    protocol_sha256 = _canonical_json_sha256(rng_protocol)
     return {
         "schema_version": PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
         "mode": "common_random_numbers_per_task_turn",
@@ -1780,6 +1789,21 @@ def _paired_evaluation_rng_contract(
             "prompt_token_ids_sha256",
         ],
     }
+
+
+def paired_evaluation_rng_contract(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+    *,
+    task_manifest_sha256: str,
+) -> dict[str, object] | None:
+    """Expose the exact immutable RNG contract used by evaluation identities."""
+
+    return _paired_evaluation_rng_contract(
+        config,
+        snapshot,
+        task_manifest_sha256=task_manifest_sha256,
+    )
 
 
 def paired_evaluation_rng_for_task(
@@ -2023,9 +2047,41 @@ def policy_evaluation_identity(
             "inference_concurrency_per_gpu": config.inference_concurrency_per_gpu,
         },
     }
-    prompt_materializer = _evaluation_prompt_materializer_identity(
-        config, snapshot.run
-    )
+    if (
+        isinstance(snapshot, FullModelEvaluationSnapshot)
+        and snapshot.manifest.checkpoint_owner is not None
+    ):
+        content["checkpoint_owner"] = {
+            "run_id": snapshot.policy_version.run_id,
+            "run_identity_sha256": snapshot.run_identity_sha256,
+            "config_path": (
+                snapshot.manifest.checkpoint_owner.config_path
+                if snapshot.manifest.checkpoint_owner is not None
+                else snapshot.manifest.run_contract_path
+            ),
+            "config_file_sha256": (
+                snapshot.manifest.checkpoint_owner.config_file_sha256
+                if snapshot.manifest.checkpoint_owner is not None
+                else snapshot.manifest.run_contract_file_sha256
+            ),
+            "completion_path": (
+                snapshot.manifest.checkpoint_owner.completion_path
+                if snapshot.manifest.checkpoint_owner is not None
+                else None
+            ),
+            "completion_file_sha256": (
+                snapshot.manifest.checkpoint_owner.completion_file_sha256
+                if snapshot.manifest.checkpoint_owner is not None
+                else None
+            ),
+        }
+        content["protocol_contract"] = {
+            "run_id": snapshot.manifest.run_id,
+            "run_identity_sha256": snapshot.manifest.run_identity_sha256,
+            "path": snapshot.manifest.run_contract_path,
+            "file_sha256": snapshot.manifest.run_contract_file_sha256,
+        }
+    prompt_materializer = _evaluation_prompt_materializer_identity(config, snapshot.run)
     if prompt_materializer is not None:
         # This top-level binding intentionally does not enter
         # _evaluation_protocol_identity(): paired common-random-number
@@ -2915,6 +2971,53 @@ class PolicyCoreDevEvaluator:
                 self.store.release_trajectories(trajectory_ids)
 
 
+def full_model_protocol_audit_fields(
+    evaluation_identity: Mapping[str, object],
+    policy_snapshot: Mapping[str, object],
+) -> dict[str, object]:
+    """Return v2 owner/protocol result fields while keeping v1 field-free.
+
+    The schema generation is selected by the independent top-level owner and
+    protocol bindings, never by the optional fields being validated.
+    """
+
+    has_owner = "checkpoint_owner" in evaluation_identity
+    has_protocol = "protocol_contract" in evaluation_identity
+    snapshot_protocol_fields = {
+        "protocol_run_id",
+        "protocol_run_identity_sha256",
+    }.intersection(policy_snapshot)
+    if has_owner != has_protocol:
+        raise ValueError("full-model v2 owner/protocol bindings are incomplete")
+    if not has_owner:
+        if snapshot_protocol_fields:
+            raise ValueError("full-model v1 snapshot has unexpected protocol fields")
+        return {}
+    owner = evaluation_identity["checkpoint_owner"]
+    protocol = evaluation_identity["protocol_contract"]
+    if not isinstance(owner, Mapping) or not isinstance(protocol, Mapping):
+        raise ValueError("full-model v2 owner/protocol bindings are malformed")
+    protocol_run_id = protocol.get("run_id")
+    protocol_run_identity_sha256 = protocol.get("run_identity_sha256")
+    if not isinstance(protocol_run_id, str) or not protocol_run_id:
+        raise ValueError("full-model v2 protocol run ID is malformed")
+    _require_sha256(
+        protocol_run_identity_sha256,
+        name="full-model v2 protocol run identity SHA256",
+    )
+    if policy_snapshot.get("run_id") != owner.get("run_id") or policy_snapshot.get(
+        "run_identity_sha256"
+    ) != owner.get("run_identity_sha256"):
+        raise ValueError("full-model v2 checkpoint owner binding differs")
+    expected = {
+        "protocol_run_id": protocol_run_id,
+        "protocol_run_identity_sha256": protocol_run_identity_sha256,
+    }
+    if any(policy_snapshot.get(field) != value for field, value in expected.items()):
+        raise ValueError("full-model v2 protocol snapshot binding differs")
+    return expected
+
+
 def _policy_result_identity_fields(
     task: CoreDevTask,
     *,
@@ -2959,6 +3062,21 @@ def _policy_result_identity_fields(
             "policy_qwen_tree_sha256": policy_snapshot["qwen_tree_sha256"],
             "policy_rp66_state_sha256": policy_snapshot["rp66_state_sha256"],
             "policy_rp66_storage_sha256": policy_snapshot["rp66_storage_sha256"],
+        }
+    elif snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
+        snapshot_fields = {
+            "policy_snapshot_backend": FULL_MODEL_EVALUATION_BACKEND,
+            "policy_full_snapshot_identity_sha256": policy_snapshot[
+                "snapshot_identity_sha256"
+            ],
+            "policy_checkpoint_sha256": policy_snapshot["checkpoint_sha256"],
+            "policy_source_tree_sha256": policy_snapshot["source_tree_sha256"],
+            "policy_materialization_identity_sha256": policy_snapshot[
+                "materialization_identity_sha256"
+            ],
+            "policy_materialized_model_tree_sha256": policy_snapshot[
+                "materialized_model_tree_sha256"
+            ],
         }
     elif snapshot_backend in {LORA_ADAPTER_EVALUATION_BACKEND, "lora"}:
         snapshot_fields = {
@@ -3009,6 +3127,10 @@ def _policy_result_identity_fields(
         "optimizer_step": policy_snapshot["optimizer_step"],
         "policy_weights_sha256": policy_snapshot["weights_sha256"],
     }
+    if snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
+        payload.update(
+            full_model_protocol_audit_fields(evaluation_identity, policy_snapshot)
+        )
     if "sampling_rng" in evaluation_identity:
         rng = paired_evaluation_rng_for_task(
             evaluation_identity,
@@ -3286,6 +3408,10 @@ def validate_policy_benchmark_result(
         "optimizer_step": policy_snapshot["optimizer_step"],
         "policy_weights_sha256": policy_snapshot["weights_sha256"],
     }
+    if snapshot_backend == FULL_MODEL_EVALUATION_BACKEND:
+        expected.update(
+            full_model_protocol_audit_fields(evaluation_identity, policy_snapshot)
+        )
     if "sampling_rng" in evaluation_identity:
         rng = paired_evaluation_rng_for_task(
             evaluation_identity,
@@ -3503,6 +3629,7 @@ __all__ = [
     "policy_output_contract_failure_audit_payload",
     "policy_version_from_pointer",
     "paired_evaluation_rng_for_task",
+    "paired_evaluation_rng_contract",
     "prepare_policy_benchmark_tasks",
     "trajectory_audit_payload",
     "validate_policy_benchmark_runtime_interfaces",

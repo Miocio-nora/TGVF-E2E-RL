@@ -47,7 +47,9 @@ from .policy_coredev import (
     PolicyCoreDevConfig,
     PolicyEvaluationSnapshot,
     StandaloneTGVFVLLMManager,
+    full_model_protocol_audit_fields,
     load_verified_task_image,
+    paired_evaluation_rng_for_task,
     policy_evaluation_identity,
 )
 
@@ -423,6 +425,8 @@ class OfficialVisiblePolicyEvaluator:
         images: Sequence[Image.Image],
         turn_index: int,
         consumed_tokens: int,
+        sample_id: str,
+        rollout_index: int,
     ) -> tuple[str, tuple[int, ...], tuple[float, ...], str]:
         remaining = self.run.policy.sampling.remaining_response_tokens(consumed_tokens)
         # vLLM 0.12 can sample one token beyond max_model_len when a request
@@ -430,9 +434,7 @@ class OfficialVisiblePolicyEvaluator:
         # Keep a tiny runtime-only guard band; ordinary response budgets are
         # unchanged, while near-limit trajectories stop as context_limit.
         available = (
-            self.config.max_model_len
-            - len(prompt_ids)
-            - _VLLM_CONTEXT_SAFETY_TOKENS
+            self.config.max_model_len - len(prompt_ids) - _VLLM_CONTEXT_SAFETY_TOKENS
         )
         maximum = min(remaining, available)
         if maximum <= 0:
@@ -440,10 +442,19 @@ class OfficialVisiblePolicyEvaluator:
         parameters = dict(
             self.run.policy.sampling.as_vllm_parameters(max_tokens=maximum)
         )
-        rng = ContentAddressedVLLMTurnRNG(
-            master_seed=self.run.rollout_rng.master_seed,
-            stream_identity=trajectory_id,
-        ).for_turn(
+        rng_port = (
+            paired_evaluation_rng_for_task(
+                self.evaluation_identity,
+                sample_id=sample_id,
+                rollout_index=rollout_index,
+            )
+            if getattr(self.config, "paired_seed_namespace", None) is not None
+            else ContentAddressedVLLMTurnRNG(
+                master_seed=self.run.rollout_rng.master_seed,
+                stream_identity=trajectory_id,
+            )
+        )
+        rng = rng_port.for_turn(
             prompt_ids,
             turn_index=turn_index,
             behavior_policy=self.policy_version,
@@ -516,6 +527,8 @@ class OfficialVisiblePolicyEvaluator:
                         images=images,
                         turn_index=turn_index,
                         consumed_tokens=consumed_tokens,
+                        sample_id=identity.sample_id,
+                        rollout_index=identity.rollout_index,
                     )
                 except ValueError as error:
                     # Native image tokens are accounted for inside vLLM, so a
@@ -810,6 +823,18 @@ def official_visible_trajectory_audit_payload(
         "observation_envelope": protocol["observation_envelope"],
         "prompt_bundle_sha256": protocol["prompt_bundle_sha256"],
     }
+    if snapshot_backend == "full_model":
+        payload.update(
+            full_model_protocol_audit_fields(evaluation_identity, policy_snapshot)
+        )
+    if "sampling_rng" in evaluation_identity:
+        rng = paired_evaluation_rng_for_task(
+            evaluation_identity,
+            sample_id=trajectory.identity.sample_id,
+            rollout_index=trajectory.identity.rollout_index,
+        )
+        payload["sampling_rng"] = dict(evaluation_identity["sampling_rng"])
+        payload["paired_rng_stream_identity_sha256"] = rng.stream_identity_sha256
     payload["result_identity_sha256"] = _canonical_sha256(payload)
     return payload
 

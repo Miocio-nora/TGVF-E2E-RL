@@ -83,6 +83,30 @@ def test_extracts_nonempty_suffix_after_last_think_closer(tmp_path: Path) -> Non
     }
 
 
+def test_manifest_can_record_atomic_publish_paths(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    source = staging / "raw.tsv"
+    derived = staging / "answers.tsv"
+    published = tmp_path / "published"
+    staging.mkdir()
+    _write_tsv(
+        source,
+        ["index", "prediction"],
+        [{"index": "one", "prediction": "reasoning</think>answer"}],
+    )
+
+    manifest = materialize_final_answer_view(
+        source_tsv=source,
+        derived_tsv=derived,
+        recorded_source_tsv=published / "raw.tsv",
+        recorded_derived_tsv=published / "answers.tsv",
+    )
+
+    assert derived.is_file()
+    assert manifest["source"]["path"] == str((published / "raw.tsv").resolve())
+    assert manifest["derived"]["path"] == str((published / "answers.tsv").resolve())
+
+
 def test_missing_or_empty_final_answer_is_deterministically_invalid(
     tmp_path: Path,
 ) -> None:
@@ -241,7 +265,9 @@ def test_mathverse_problem_version_is_exactly_joined_into_metadata(
                 assert after[field] == before[field]
     enrichment = manifest["mathverse_metadata_enrichment"]
     assert enrichment["joined_row_count"] == 2
-    assert enrichment["source_json_sha256"] == sha256(mathverse.read_bytes()).hexdigest()
+    assert (
+        enrichment["source_json_sha256"] == sha256(mathverse.read_bytes()).hexdigest()
+    )
 
 
 def test_materializer_rejects_overwrite_duplicate_indices_and_bad_mathverse_join(
@@ -279,13 +305,21 @@ def test_materializer_rejects_overwrite_duplicate_indices_and_bad_mathverse_join
             mathverse_source_json=mathverse,
         )
 
-    _write_tsv(tmp_path / "ok.tsv", ["index", "prediction"], [{
-        "index": "1",
-        "prediction": "work</think>ok",
-    }])
+    _write_tsv(
+        tmp_path / "ok.tsv",
+        ["index", "prediction"],
+        [
+            {
+                "index": "1",
+                "prediction": "work</think>ok",
+            }
+        ],
+    )
     materialize_final_answer_view(source_tsv=tmp_path / "ok.tsv", derived_tsv=derived)
     with pytest.raises(FileExistsError, match="immutable"):
-        materialize_final_answer_view(source_tsv=tmp_path / "ok.tsv", derived_tsv=derived)
+        materialize_final_answer_view(
+            source_tsv=tmp_path / "ok.tsv", derived_tsv=derived
+        )
 
 
 def test_cli_writes_requested_manifest_and_reports_hashes(tmp_path: Path) -> None:

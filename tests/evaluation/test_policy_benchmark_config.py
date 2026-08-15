@@ -67,7 +67,9 @@ def test_config_materializer_binds_exact_pointer_and_task_manifest(
     )
     assert observed_task_binding["verify_image_contents"] is True
     assert json.loads(destination.read_text()) == payload
-    frozen_policy_config = tmp_path / "evaluation-step8/runtime/frozen-policy-config.toml"
+    frozen_policy_config = (
+        tmp_path / "evaluation-step8/runtime/frozen-policy-config.toml"
+    )
     assert payload["policy_config_path"] == str(frozen_policy_config)
     assert frozen_policy_config.read_bytes() == policy_config.read_bytes()
 
@@ -140,18 +142,39 @@ def test_full_model_config_materializer_binds_manifest_receipt_and_identity(
     assert payload["expected_policy_run_id"] == "PRL-13-A"
     assert payload["required_snapshot_identity_sha256"] == "d" * 64
     assert payload["gpu_ids"] == [4, 5, 6, 7]
-    assert payload["full_model_snapshot_manifest_sha256"] == hashlib.sha256(
-        snapshot_manifest.read_bytes()
-    ).hexdigest()
-    assert payload["full_model_materialization_receipt_sha256"] == hashlib.sha256(
-        receipt.read_bytes()
-    ).hexdigest()
+    assert "paired_seed_namespace" not in payload
+    assert (
+        payload["full_model_snapshot_manifest_sha256"]
+        == hashlib.sha256(snapshot_manifest.read_bytes()).hexdigest()
+    )
+    assert (
+        payload["full_model_materialization_receipt_sha256"]
+        == hashlib.sha256(receipt.read_bytes()).hexdigest()
+    )
     assert observed_task_binding["require_explicit_sample_ids"] is True
     assert observed_task_binding["require_image_identities"] is True
     assert json.loads(destination.read_text(encoding="utf-8")) == payload
     assert (
         output_root / "runtime/frozen-policy-config.toml"
     ).read_bytes() == policy_config.read_bytes()
+
+    paired_payload = implementation.materialize_full_model_policy_benchmark_config(
+        evaluation_id="PRL13-A-COREDEV-STEP8-PAIRED",
+        policy_config_path=policy_config,
+        snapshot_manifest_path=snapshot_manifest,
+        materialization_receipt_path=receipt,
+        expected_optimizer_step=8,
+        task_manifest_path=tasks,
+        expected_task_count=2511,
+        expected_single_image_count=2240,
+        output_root=tmp_path / "evaluation-step8-paired",
+        config_path=tmp_path / "configs/step8-paired.json",
+        gpu_ids=(4, 5, 6, 7),
+        paired_seed_namespace="coredev2511/crop/step8-step16/temp1/seed42/v1",
+    )
+    assert paired_payload["paired_seed_namespace"] == (
+        "coredev2511/crop/step8-step16/temp1/seed42/v1"
+    )
 
     with pytest.raises(ValueError, match="optimizer step"):
         implementation.materialize_full_model_policy_benchmark_config(

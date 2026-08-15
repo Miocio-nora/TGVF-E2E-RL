@@ -35,8 +35,10 @@ from tgvf_rl.policy.deepeyes_native_contract import (
 
 
 FULL_MODEL_SNAPSHOT_SCHEMA = "tgvf-prl13-full-model-snapshot-v1"
+FULL_MODEL_SNAPSHOT_SCHEMA_V2 = "tgvf-full-model-snapshot-v2"
 FULL_MODEL_MATERIALIZATION_SCHEMA = "tgvf-prl13-full-model-materialization-v1"
 FULL_MODEL_EVALUATION_BACKEND = "full_model"
+FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS = 1_003_520
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _FSDP_STEP = re.compile(r"^global_step_([0-9]+)$")
@@ -261,6 +263,35 @@ class FullModelSourceKind(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class FullModelCheckpointOwner:
+    """Identity of the run that owns checkpoint bytes, not its eval protocol."""
+
+    run_id: str
+    run_identity_sha256: str
+    config_path: str
+    config_file_sha256: str
+    completion_path: str
+    completion_file_sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.run_id, str) or not self.run_id:
+            raise ValueError("full-model checkpoint owner run_id must be non-empty")
+        if (
+            not Path(self.config_path).is_absolute()
+            or not Path(self.completion_path).is_absolute()
+        ):
+            raise ValueError("full-model checkpoint owner paths must be absolute")
+        _require_sha256(self.run_identity_sha256, name="checkpoint owner run identity")
+        _require_sha256(self.config_file_sha256, name="checkpoint owner config file")
+        _require_sha256(
+            self.completion_file_sha256, name="checkpoint owner completion file"
+        )
+
+    def as_record(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class FullModelSnapshotManifest:
     run_id: str
     run_contract_path: str
@@ -280,11 +311,26 @@ class FullModelSnapshotManifest:
     vision_parameter_key_count: int
     language_parameter_key_count: int
     embedded_hf_model_path: str | None = None
+    checkpoint_owner: FullModelCheckpointOwner | None = None
     schema_version: str = FULL_MODEL_SNAPSHOT_SCHEMA
 
     def __post_init__(self) -> None:
-        if self.schema_version != FULL_MODEL_SNAPSHOT_SCHEMA:
+        if self.schema_version not in {
+            FULL_MODEL_SNAPSHOT_SCHEMA,
+            FULL_MODEL_SNAPSHOT_SCHEMA_V2,
+        }:
             raise ValueError("full-model snapshot schema differs")
+        if (
+            self.schema_version == FULL_MODEL_SNAPSHOT_SCHEMA
+            and self.checkpoint_owner is not None
+        ):
+            raise ValueError("v1 full-model snapshot forbids checkpoint owner fields")
+        if self.schema_version == FULL_MODEL_SNAPSHOT_SCHEMA_V2 and not isinstance(
+            self.checkpoint_owner, FullModelCheckpointOwner
+        ):
+            raise ValueError(
+                "v2 full-model snapshot requires checkpoint owner identity"
+            )
         if not self.run_id:
             raise ValueError("full-model snapshot run_id must be non-empty")
         if (
@@ -346,7 +392,20 @@ class FullModelSnapshotManifest:
 
     @property
     def policy_version(self) -> PolicyVersion:
-        return PolicyVersion(self.run_id, self.optimizer_step, self.weights_sha256)
+        run_id = (
+            self.run_id
+            if self.checkpoint_owner is None
+            else self.checkpoint_owner.run_id
+        )
+        return PolicyVersion(run_id, self.optimizer_step, self.weights_sha256)
+
+    @property
+    def owner_run_identity_sha256(self) -> str:
+        return (
+            self.run_identity_sha256
+            if self.checkpoint_owner is None
+            else self.checkpoint_owner.run_identity_sha256
+        )
 
     def as_record(self, *, include_identity: bool = True) -> dict[str, object]:
         record: dict[str, object] = {
@@ -370,6 +429,9 @@ class FullModelSnapshotManifest:
             "language_parameter_key_count": self.language_parameter_key_count,
             "embedded_hf_model_path": self.embedded_hf_model_path,
         }
+        if self.schema_version == FULL_MODEL_SNAPSHOT_SCHEMA_V2:
+            assert self.checkpoint_owner is not None
+            record["checkpoint_owner"] = self.checkpoint_owner.as_record()
         if include_identity:
             record["identity_sha256"] = _canonical_sha256(record)
         return record
@@ -546,6 +608,7 @@ def build_full_model_snapshot_manifest(
     source_path: str | Path,
     optimizer_step: int,
     runtime_fsdp_world_size: int | None = None,
+    checkpoint_owner: FullModelCheckpointOwner | None = None,
 ) -> FullModelSnapshotManifest:
     """Hash and validate one base-HF or complete upstream veRL FSDP closure."""
 
@@ -556,6 +619,28 @@ def build_full_model_snapshot_manifest(
     source = Path(source_path).resolve(strict=True)
     run_file_sha = _sha256_file(contract.source_path)
     model_identity = _model_identity(contract)
+    if checkpoint_owner is not None:
+        for name, path, expected_sha256 in (
+            (
+                "config",
+                Path(checkpoint_owner.config_path),
+                checkpoint_owner.config_file_sha256,
+            ),
+            (
+                "completion",
+                Path(checkpoint_owner.completion_path),
+                checkpoint_owner.completion_file_sha256,
+            ),
+        ):
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"checkpoint owner {name} must be a regular file")
+            if _sha256_file(path) != expected_sha256:
+                raise ValueError(f"checkpoint owner {name} bytes changed")
+    schema_version = (
+        FULL_MODEL_SNAPSHOT_SCHEMA
+        if checkpoint_owner is None
+        else FULL_MODEL_SNAPSHOT_SCHEMA_V2
+    )
 
     if optimizer_step == 0:
         if runtime_fsdp_world_size is not None:
@@ -589,6 +674,8 @@ def build_full_model_snapshot_manifest(
             vision_parameter_key_count=vision_count,
             language_parameter_key_count=language_count,
             embedded_hf_model_path=str(source),
+            checkpoint_owner=checkpoint_owner,
+            schema_version=schema_version,
         )
 
     match = _FSDP_STEP.fullmatch(source.name)
@@ -666,6 +753,8 @@ def build_full_model_snapshot_manifest(
             vision_parameter_key_count=vision_count,
             language_parameter_key_count=language_count,
             embedded_hf_model_path=embedded_path,
+            checkpoint_owner=checkpoint_owner,
+            schema_version=schema_version,
         )
 
     # Config/tokenizer-only embedded trees still require an upstream FSDP merge.
@@ -707,6 +796,8 @@ def build_full_model_snapshot_manifest(
         vision_parameter_key_count=vision_count,
         language_parameter_key_count=language_count,
         embedded_hf_model_path=None,
+        checkpoint_owner=checkpoint_owner,
+        schema_version=schema_version,
     )
 
 
@@ -956,7 +1047,7 @@ def load_full_model_snapshot_manifest(path: str | Path) -> FullModelSnapshotMani
     if source.is_symlink() or not source.is_file():
         raise ValueError("full-model manifest must be a regular file")
     value = json.loads(source.read_text(encoding="utf-8"))
-    expected = {
+    common = {
         "schema_version",
         "run_id",
         "run_contract_path",
@@ -978,7 +1069,16 @@ def load_full_model_snapshot_manifest(path: str | Path) -> FullModelSnapshotMani
         "embedded_hf_model_path",
         "identity_sha256",
     }
-    if not isinstance(value, Mapping) or set(value) != expected:
+    if not isinstance(value, Mapping):
+        raise ValueError("full-model manifest must be a JSON object")
+    schema_version = value.get("schema_version")
+    if schema_version == FULL_MODEL_SNAPSHOT_SCHEMA:
+        expected = common
+    elif schema_version == FULL_MODEL_SNAPSHOT_SCHEMA_V2:
+        expected = {*common, "checkpoint_owner"}
+    else:
+        raise ValueError("full-model manifest schema differs")
+    if set(value) != expected:
         raise ValueError("full-model manifest fields differ")
     identity = value["identity_sha256"]
     payload = {key: nested for key, nested in value.items() if key != "identity_sha256"}
@@ -993,9 +1093,28 @@ def load_full_model_snapshot_manifest(path: str | Path) -> FullModelSnapshotMani
         "chat_template_sha256",
     }:
         raise ValueError("full-model manifest model identity fields differ")
+    owner = payload.get("checkpoint_owner")
+    if schema_version == FULL_MODEL_SNAPSHOT_SCHEMA_V2:
+        if not isinstance(owner, Mapping) or set(owner) != {
+            "run_id",
+            "run_identity_sha256",
+            "config_path",
+            "config_file_sha256",
+            "completion_path",
+            "completion_file_sha256",
+        }:
+            raise ValueError("full-model checkpoint owner fields differ")
+        checkpoint_owner = FullModelCheckpointOwner(**owner)
+    else:
+        checkpoint_owner = None
     return FullModelSnapshotManifest(
         **{
             **payload,
+            **(
+                {"checkpoint_owner": checkpoint_owner}
+                if schema_version == FULL_MODEL_SNAPSHOT_SCHEMA_V2
+                else {}
+            ),
             "model_identity": ModelIdentity(**model),
             "source_kind": FullModelSourceKind(payload["source_kind"]),
             "source_files": _parse_file_records(
@@ -1100,7 +1219,7 @@ class FullModelEvaluationSnapshot:
 
     @property
     def run_identity_sha256(self) -> str:
-        return self.manifest.run_identity_sha256
+        return self.manifest.owner_run_identity_sha256
 
     @property
     def model_path(self) -> Path:
@@ -1114,13 +1233,17 @@ def _native_evaluation_run_view(
     dataset = contract.payload["dataset"]
     assert isinstance(rollout, Mapping) and isinstance(dataset, Mapping)
     return SimpleNamespace(
-        run_id=contract.run_id,
-        identity_sha256=contract.identity_sha256,
+        run_id=manifest.policy_version.run_id,
+        identity_sha256=manifest.owner_run_identity_sha256,
+        protocol_run_id=contract.run_id,
+        protocol_run_identity_sha256=contract.identity_sha256,
+        protocol_contract_path=str(contract.source_path),
+        protocol_contract_file_sha256=manifest.run_contract_file_sha256,
         model=manifest.model_identity,
         policy=SimpleNamespace(
             # This is the already accepted Qwen3-VL evaluation processor cap.
             # It is included in the full evaluation identity by the caller.
-            image_max_pixels=1_003_520,
+            image_max_pixels=FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS,
             sampling=_NativeEvaluationSampling(
                 max_response_length=int(rollout["max_response_length"]),
                 temperature=float(rollout["temperature"]),
@@ -1270,6 +1393,23 @@ def load_full_model_evaluation_snapshot(
         or _model_identity(contract) != manifest.model_identity
     ):
         raise ValueError("full-model run/model identity changed")
+    if manifest.checkpoint_owner is not None:
+        for name, path, expected_sha256 in (
+            (
+                "config",
+                Path(manifest.checkpoint_owner.config_path),
+                manifest.checkpoint_owner.config_file_sha256,
+            ),
+            (
+                "completion",
+                Path(manifest.checkpoint_owner.completion_path),
+                manifest.checkpoint_owner.completion_file_sha256,
+            ),
+        ):
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"full-model checkpoint owner {name} changed")
+            if _sha256_file(path) != expected_sha256:
+                raise ValueError(f"full-model checkpoint owner {name} bytes changed")
     if receipt.snapshot_identity_sha256 != manifest.identity_sha256:
         raise ValueError("full-model materialization belongs to another snapshot")
     model_path = Path(receipt.model_path).resolve(strict=True)
@@ -1294,6 +1434,7 @@ def load_full_model_evaluation_snapshot(
                 if manifest.source_kind is FullModelSourceKind.VERL_FSDP
                 else None
             ),
+            checkpoint_owner=manifest.checkpoint_owner,
         )
         if rebuilt != manifest:
             raise ValueError("full-model checkpoint closure changed")
@@ -1317,7 +1458,7 @@ def full_model_snapshot_identity_record(
 ) -> dict[str, object]:
     if not isinstance(snapshot, FullModelEvaluationSnapshot):
         raise TypeError("snapshot must be a FullModelEvaluationSnapshot")
-    return {
+    record: dict[str, object] = {
         "snapshot_backend": FULL_MODEL_EVALUATION_BACKEND,
         "run_id": snapshot.policy_version.run_id,
         "run_identity_sha256": snapshot.run_identity_sha256,
@@ -1333,6 +1474,26 @@ def full_model_snapshot_identity_record(
         "materialization_mode": snapshot.receipt.mode.value,
         "lora_request": None,
     }
+    if snapshot.manifest.checkpoint_owner is not None:
+        record["protocol_run_id"] = snapshot.manifest.run_id
+        record["protocol_run_identity_sha256"] = snapshot.manifest.run_identity_sha256
+        record["protocol_contract_path"] = snapshot.manifest.run_contract_path
+        record["protocol_contract_file_sha256"] = (
+            snapshot.manifest.run_contract_file_sha256
+        )
+        record["checkpoint_owner_config_path"] = (
+            snapshot.manifest.checkpoint_owner.config_path
+        )
+        record["checkpoint_owner_config_file_sha256"] = (
+            snapshot.manifest.checkpoint_owner.config_file_sha256
+        )
+        record["checkpoint_owner_completion_path"] = (
+            snapshot.manifest.checkpoint_owner.completion_path
+        )
+        record["checkpoint_owner_completion_file_sha256"] = (
+            snapshot.manifest.checkpoint_owner.completion_file_sha256
+        )
+    return record
 
 
 def full_model_policy_evaluation_identity(
@@ -1448,8 +1609,11 @@ async def build_full_model_standalone_manager(
 
 __all__ = [
     "FULL_MODEL_EVALUATION_BACKEND",
+    "FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS",
     "FULL_MODEL_MATERIALIZATION_SCHEMA",
     "FULL_MODEL_SNAPSHOT_SCHEMA",
+    "FULL_MODEL_SNAPSHOT_SCHEMA_V2",
+    "FullModelCheckpointOwner",
     "FullModelEvaluationSnapshot",
     "FullModelFileDigest",
     "FullModelMaterializationMode",

@@ -10,7 +10,10 @@ import pytest
 import torch
 
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
-from tgvf_rl.evaluation.policy_coredev import CoreDevTask
+from tgvf_rl.evaluation.policy_coredev import (
+    PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+    CoreDevTask,
+)
 from tgvf_rl.evaluation.policy_official_visible import (
     OfficialVisiblePolicyEvaluator,
     normalize_official_visible_crop_box,
@@ -19,6 +22,7 @@ from tgvf_rl.evaluation.policy_official_visible import (
     validate_official_visible_processor,
 )
 from tgvf_rl.framework.verl.native_crop_tool import normalize_native_crop_box
+from tgvf_rl.framework.vllm import ContentAddressedVLLMTurnRNG
 from tgvf_rl.policy.deepeyes_official_protocol import USER_PROMPT_V2
 
 
@@ -190,6 +194,107 @@ def test_static_processor_proof_includes_native_visual_expansion() -> None:
         proof["continuation_expanded_prompt_token_count"]
         > proof["continuation_prompt_token_count"]
     )
+
+
+def test_official_visible_uses_paired_rng_and_preserves_legacy_seed_path() -> None:
+    class _Manager:
+        def __init__(self) -> None:
+            self.seeds: list[int] = []
+
+        async def generate(self, **kwargs: object) -> object:
+            self.seeds.append(kwargs["sampling_params"]["seed"])
+            return SimpleNamespace(
+                token_ids=[201],
+                log_probs=[-0.1],
+                extra_fields={"tgvf_vllm_finish_reason": "stop"},
+            )
+
+    def evaluator(
+        *, step: int, namespace: str | None
+    ) -> tuple[OfficialVisiblePolicyEvaluator, _Manager]:
+        manager = _Manager()
+        instance = OfficialVisiblePolicyEvaluator.__new__(
+            OfficialVisiblePolicyEvaluator
+        )
+        instance.config = SimpleNamespace(
+            max_model_len=32768,
+            paired_seed_namespace=namespace,
+        )
+        instance.run = SimpleNamespace(
+            policy=SimpleNamespace(
+                image_max_pixels=1_003_520,
+                sampling=SimpleNamespace(
+                    remaining_response_tokens=lambda consumed: 100 - consumed,
+                    as_vllm_parameters=lambda max_tokens: {"max_tokens": max_tokens},
+                ),
+            ),
+            rollout_rng=SimpleNamespace(master_seed=42),
+        )
+        instance.manager = manager
+        instance.policy_version = PolicyVersion("run", step, str(step % 10) * 64)
+        instance.tokenizer = SimpleNamespace(decode=lambda *_args, **_kwargs: "A")
+        instance.evaluation_identity = {
+            "sampling_rng": {
+                "schema_version": PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+                "mode": "common_random_numbers_per_task_turn",
+                "seed_namespace": namespace,
+                "master_seed": 42,
+                "task_manifest_sha256": "a" * 64,
+                "protocol_sha256": "b" * 64,
+            }
+        }
+        return instance, manager
+
+    namespace = "coredev2511/crop/step8-step16/temp1/seed42/v1"
+    step8, manager8 = evaluator(step=8, namespace=namespace)
+    step16, manager16 = evaluator(step=16, namespace=namespace)
+    asyncio.run(
+        step8._sample_turn(
+            trajectory_id="different-step8-trajectory",
+            prompt_ids=(1, 2, 3),
+            images=(),
+            turn_index=2,
+            consumed_tokens=0,
+            sample_id="sample-7",
+            rollout_index=0,
+        )
+    )
+    asyncio.run(
+        step16._sample_turn(
+            trajectory_id="different-step16-trajectory",
+            prompt_ids=(9, 8),
+            images=(),
+            turn_index=2,
+            consumed_tokens=0,
+            sample_id="sample-7",
+            rollout_index=0,
+        )
+    )
+    assert manager8.seeds == manager16.seeds
+
+    legacy, legacy_manager = evaluator(step=8, namespace=None)
+    legacy_prompt = (4, 5, 6)
+    legacy_policy = legacy.policy_version
+    asyncio.run(
+        legacy._sample_turn(
+            trajectory_id="legacy-trajectory",
+            prompt_ids=legacy_prompt,
+            images=(),
+            turn_index=1,
+            consumed_tokens=0,
+            sample_id="sample-7",
+            rollout_index=0,
+        )
+    )
+    expected = ContentAddressedVLLMTurnRNG(
+        master_seed=42,
+        stream_identity="legacy-trajectory",
+    ).for_turn(
+        legacy_prompt,
+        turn_index=1,
+        behavior_policy=legacy_policy,
+    )
+    assert legacy_manager.seeds == [expected.seed]
 
 
 def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> None:
