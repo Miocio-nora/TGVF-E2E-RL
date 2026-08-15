@@ -10047,3 +10047,50 @@ than inferred from a script name or prior conversation.
   inside the launch worktree as required by launch provenance. This recovery
   changes no model, data, optimizer, reward, prompt, tool, RNG or scheduler
   setting; continuation remains the exact Step-8-to-16 run.
+
+### PRL-22-C-QWEN3-INSTRUCT-FULL-CROP-TEACHER25
+
+- Planned and deployed on 2026-08-16 as the independent native-Crop arm of the
+  shared PRL22 Teacher25 data option.  It starts fresh from Step 0; it does not
+  resume any PRL21 optimizer, scheduler, data cursor, or RNG state because the
+  training population is part of experiment identity.
+- The sole scientific treatment relative to the accepted PRL21 Crop T-free
+  clean-final control is the immutable prompt schedule.  The schedule contains
+  20,480 prompts: 15,360 accepted PRL13 prompts and 5,120 supplementary teacher
+  prompts.  Every aligned BS16 batch is exactly 12 old plus four teacher rows;
+  every 256-row macro is 90 VStar, 58 ArxivQA, 44 ThinkLite, and 64 teacher
+  rows.  Selection/order are deterministic at seed 42 without replacement.
+- Dataset root is
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/PRL22-TEACHER25-MIXED-SCHEDULE-v1`.
+  Manifest/content/samples/iteration SHA-256 identities are respectively
+  `48244271b9537700b22bc6f6bbe3322caa1f17ddeccb7dfc43c02729288b5662`,
+  `b5be9adfbd5ca7228a4d303aa900d0aec5ef877ceb7a7c328a15386ed2e3eab4`,
+  `040cb0f48ba5821b435e408024a81b9c90265d76a1fd5df1ecf73185c7e8439c`,
+  and `ab47dca43fc669066629b1d94f5f34ec2147f3b7fc000226c88cd23907709e0b`.
+  Teacher remains an explicit visual source and carries no VStar GT region;
+  the audit source is `vstar_candidate_regions_teacher_none`.  The validation
+  probe remains the accepted PRL13 `T1-PROBE256` schedule.
+- All non-data controls remain PRL21: Qwen3-VL-8B-Instruct full-model update,
+  trainable vision/projector/language paths, native visible Crop prompt/tool,
+  clean plain final answer, T-free Stage3 reward
+  `2*A - 0.05*max(0,N_attempt-1) - 1[protocol_or_tool_error]`, no tool-utility,
+  Focus, Grounding, or positive-crop bonus, BS16 x n16, world8, actor micro32,
+  GA1, constant LR `1e-6`, temperature 1, no KL, and 16 optimizer steps.
+- Shared code identity is
+  `37b99e2b01f9459e0ee65f6b86e2950bf60d4417`.  Native base config is
+  `configs/policy/runs/prl_22_c_base_qwen3_instruct_full_crop_teacher25_native_prl13.toml`
+  with SHA-256
+  `a9621027ed47878449cf8c21bf02ac27bbd5de7ff56dcfaede8ec7338a778297`.
+  Overlay config is
+  `configs/policy/runs/prl_22_c_qwen3_instruct_full_crop_bs16_n16_tfree_teacher25_16step_ws8.toml`
+  with SHA-256
+  `b60be182a1e2250f9b550551dc01308f5d72387fc15e68a6ac552e991352824e`.
+  Output root is independently named
+  `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-22-C-qwen3-instruct-full-crop-bs16-n16-tfree-teacher25-16step-ws8`.
+- CPU-only contract loading and
+  `tools/launch_prl21_crop_tfree16.py --run-config ... --mode preflight`
+  passed.  Composition resolved the Teacher25 Dataset, native heterogeneous
+  agent-loop manager, Crop T-free reward manager, no critic/reference policy,
+  and `deepeyes_official_micro_token_mean` loss.  No GPU process was launched.
+  Formal retention remains every step with permanent Steps 8/16 and matched
+  unified CoreDev-2511 evaluation at Steps 8/16 after training.

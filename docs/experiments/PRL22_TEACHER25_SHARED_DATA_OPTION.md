@@ -84,6 +84,28 @@ and bind the same immutable mixture artifact:
 2. RP67 T-free Frozen Atomic Crop+TGVF;
 3. Crop T-free.
 
+### PRL22-C native Crop child
+
+The Crop child keeps the accepted PRL21 clean-final control intact and owns
+only its Teacher25 data treatment and run/output identity.  Its native base is
+`configs/policy/runs/prl_22_c_base_qwen3_instruct_full_crop_teacher25_native_prl13.toml`
+(SHA-256 `a9621027ed47878449cf8c21bf02ac27bbd5de7ff56dcfaede8ec7338a778297`),
+and its experiment overlay is
+`configs/policy/runs/prl_22_c_qwen3_instruct_full_crop_bs16_n16_tfree_teacher25_16step_ws8.toml`
+(SHA-256 `b60be182a1e2250f9b550551dc01308f5d72387fc15e68a6ac552e991352824e`).
+Both bind shared implementation commit
+`37b99e2b01f9459e0ee65f6b86e2950bf60d4417`.
+
+The base binds the 20,480-row Teacher25 artifact and the unchanged historical
+PRL13 probe.  It declares teacher rows as visual, with no GT-region semantics.
+The overlay keeps the PRL21 reward, clean final-answer dialect, full-model
+update, world8, BS16 x n16, actor micro-batch 32, constant `1e-6` learning
+rate, and 16-step horizon.  Checkpoints 8 and 16 remain permanent.  A CPU-only
+native-contract load and compose preflight passed with the Teacher25 Dataset,
+native heterogeneous agent-loop manager, Crop T-free reward manager, and
+official micro-token-mean policy loss resolved exactly; no GPU work was
+started.
+
 Only the TGVF project is scheduled for the first launch.  It starts from step
 0 because changing the dataset changes the training identity.  The initial
 pilot is BS16 x 16 rollouts for 16 optimizer steps, with durable checkpoints

@@ -1,0 +1,56 @@
+schema_version = "policy-e2e-native-crop-tfree-run-config-v1"
+run_id = "PRL-22-C-QWEN3-INSTRUCT-FULL-CROP-BS16-N16-TFREE-TEACHER25-16STEP-WS8"
+
+[code]
+repository = "Miocio-nora/TGVF-E2E-RL"
+commit = "37b99e2b01f9459e0ee65f6b86e2950bf60d4417"
+dirty = false
+
+[base]
+contract_path = "configs/policy/runs/prl_22_c_base_qwen3_instruct_full_crop_teacher25_native_prl13.toml"
+contract_sha256 = "a9621027ed47878449cf8c21bf02ac27bbd5de7ff56dcfaede8ec7338a778297"
+
+[reward]
+profile = "stage3-shaped-v1-tfree"
+manager_class = "tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward.DeepEyesCropTFreeRewardManager"
+answer_weight = 2.0
+repeated_call_penalty = 0.05
+protocol_error_penalty = 1.0
+tool_utility_reward_enabled = false
+focus_reward_enabled = false
+grounding_reward_enabled = false
+positive_crop_bonus_enabled = false
+answer_verifier = "deepeyes_extraction_qwen25_72b_text"
+
+[matched_training]
+model_name = "Qwen3-VL-8B-Instruct"
+training_mode = "full"
+vision_trainable = true
+projector_trainable = true
+language_trainable = true
+global_prompt_batch_size = 16
+trajectories_per_prompt = 16
+world_size = 8
+actor_micro_batch_size_per_gpu = 32
+gradient_accumulation_steps = 1
+learning_rate = 0.000001
+temperature = 1.0
+maximum_response_length = 20480
+maximum_optimizer_steps = 16
+kl_coefficient = 0.0
+shuffle_seed = 42
+
+[retention]
+save_every_step = true
+permanent_checkpoint_steps = [8, 16]
+maximum_rolling_checkpoints = 2
+
+[evaluation]
+benchmark = "CoreDev-2511-unified-temp1-seed42"
+temperature = 1.0
+seed = 42
+checkpoint_steps = [8, 16]
+reuse_step0 = true
+
+[output]
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-22-C-qwen3-instruct-full-crop-bs16-n16-tfree-teacher25-16step-ws8"
