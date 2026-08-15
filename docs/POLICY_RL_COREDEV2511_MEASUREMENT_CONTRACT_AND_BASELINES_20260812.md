@@ -2,7 +2,7 @@
 
 日期：2026-08-12
 
-结果更新：2026-08-14
+结果更新：2026-08-15
 
 状态：`PRIMARY MEASUREMENT CONTRACT / FROZEN V1`
 
@@ -13,14 +13,14 @@ Contract ID：`POLICY-RL-COREDEV2511-MEASUREMENT-20260812-v1`
 本文冻结两件事：
 
 1. CoreDev-2511 的统一测量与聚合口径；
-2. canonical 大表的汇报结构；实验结果持续按同一契约追加，当前更新至 2026-08-14。
+2. canonical 大表的汇报结构；实验结果持续按同一契约追加，当前更新至 2026-08-15。
 
 本文只替代旧文档中的 headline 聚合值，不否定旧文档记录的模型、prompt、checkpoint、训练配置与 artifact 身份。特别是 `docs/POLICY_RL_PRIMARY_BASELINE_20260810.md` 中使用 HRBench cycle 0 和 OCR Chinese-only 得到的旧均值，不再作为主汇报值。
 
 PRL13--PRL20 small-batch 阶段的统一结论、证据强度与后续边界，见
 [`POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md`](POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md)。
 
-Crop Step 0/8/16 的同标准 `legacy-RNG` 结果位于第 3.1 节；RP67 T-free
+Crop Step 0/8/16 与 PRL21 Crop T-free Step 8/16 的同标准 `legacy-RNG` 结果位于第 3.1 节；RP67 T-free
 Step 0/8/16 `paired-seed-v1` 结果详记在第 7 节，joint/unfrozen RP67 结果在第 8 节，
 Focus/Grounding 与 Atomic Crop+TGVF 分别在第 9、10 节；Frozen/Joint 横向 paired
 总表位于第 3.2 节。这些结果不修改本文件冻结的 benchmark、scorer、prompt、sampling
@@ -42,16 +42,21 @@ reward = T-free
 disabled reward = T/tool-utility, focus, grounding
 ```
 
-五条主要轨迹的一页摘要如下。Delta 只在同一行、同一 RNG/protocol block 内计算；
+六条主要轨迹的一页摘要如下。Delta 只在同一行、同一 RNG/protocol block 内计算；
 Crop、纯 TGVF 与 Crop+TGVF 之间不做严格 paired delta。
 
 | 线路 / RNG block | Step 0 | Step 8 | Step 16 | 同块主要 delta |
 |---|---:|---:|---:|---:|
 | Crop clean → clean-final / legacy | 55.5742 | **59.7161** | 59.5502 | S16−S0 **+3.9760 pp** |
+| Crop T-free PRL21 / legacy† | 55.5742‡ | **61.1032** | 61.0862 | S16−S8 -0.0170 pp；平台 |
 | RP67 T-free Frozen / paired | 57.0320 | 56.1964 | **58.1996** | S16−S0 **+1.1675 pp** |
 | RP67 T-free Joint / paired | 57.0320 | 56.2035 | 56.5283 | S16−S0 -0.5038 pp |
 | RP67 Frozen + F/G / paired | 57.0320 | **57.8849** | 57.5422 | S16−S0 +0.5102 pp |
 | RP67 Frozen T-free Crop+TGVF / own paired | — | **62.1168** | 60.9539 | S16−S8 -1.1629 pp |
+
+† PRL21 的实际 checkpoint path 与 weights SHA256 已核验正确，但旧 full-model evaluator 把 PRL13 protocol 身份同时写成了 checkpoint owner；因此它是 `pass_with_legacy_owner_binding`，不能称为 clean owner-bound canonical artifact。
+
+‡ PRL21 没有重新推理 Step 0；这里仅复用协议相同的历史 Crop clean Step 0 作为 pilot 上下文，不是 paired 起点。
 
 | 决策 | 当前证据 | 证据边界 |
 |---|---|---|
@@ -178,36 +183,41 @@ ABORTED / GREEDY-STABILITY STRESS DIAGNOSTIC / NOT ACCURACY EVIDENCE
 
 其 partial artifact 可以用于研究 termination pathology，但不得进入本文件主表。
 
-## 3. Canonical 大表（更新至 2026-08-14）
+## 3. Canonical 大表（更新至 2026-08-15）
 
 ### 3.1 Legacy-RNG 历史总表
 
 所有数字单位为 `%`。OCR mean 是 EN/CN 的均值；Macro* 只把 OCR mean 计入一次。
 
-注意：本节所有工具 arm 都保留自历史 `legacy-RNG` 评测，seed 会随 evaluation ID 改变。它们共享本文的 benchmark/scorer/Macro* 测量标准，但不共享 paired 随机流。它们不能被无标签地替换为第 7 节的 `paired-seed-v1` 数值，也不能与 paired 结果跨块计算 delta。Original 还使用 direct prompt，只是端到端参考。
+注意：本节所有工具 arm 都保留自历史 `legacy-RNG` 评测，seed 会随 evaluation ID 改变。它们共享本文的 benchmark/scorer/Macro* 测量标准，但不共享 paired 随机流。它们不能被无标签地替换为第 7 节的 `paired-seed-v1` 数值，也不能与 paired 结果跨块计算 delta。Original 还使用 direct prompt，只是端到端参考。PRL21 两列另带 `legacy owner-binding` 限制，实际权重正确，但 owner provenance 不完整。
 
-| benchmark | Original | Crop clean S0 | Crop clean-final S8 | Crop clean-final S16 | RP67 +T S0 | RP67 +T S8 | RP67 T-free S0 | RP67 T-free S8 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| VStarBench Overall | 50.79 | 78.01 | 76.96 | 79.06 | 66.49 | 58.64 | 64.92 | 65.45 |
-| HRBench Average / all | 59.00 | 53.50 | 62.50 | 60.00 | 59.50 | 60.00 | 58.00 | 62.50 |
-| BLINK single-image（180） | 65.56 | 57.22 | 60.00 | 57.78 | 59.44 | 63.89 | 63.33 | 64.44 |
-| OCRBench v2 English | 49.89 | 40.46 | 47.39 | 46.80 | 46.12 | 44.99 | 45.47 | 44.54 |
-| OCRBench v2 Chinese | 46.48 | 37.45 | 51.21 | 51.11 | 34.19 | 37.66 | 36.35 | 37.83 |
-| OCR EN/CN mean | 48.19 | 38.95 | 49.30 | 48.95 | 40.16 | 41.33 | 40.91 | 41.19 |
-| MMMU-Pro single-image（269） | 39.03 | 43.87 | 47.58 | 50.93 | 48.33 | 47.58 | 45.35 | 48.33 |
-| MathVista MINI | 74.33 | 62.67 | 67.67 | 65.33 | 73.33 | 65.67 | 68.67 | 65.67 |
-| MathVerse five-version macro | 50.60 | 54.80 | 54.00 | 54.80 | 54.40 | 57.00 | 53.40 | 53.40 |
-| **Macro\*** | **55.36** | **55.5742** | **59.7161** | **59.5502** | **57.38** | **56.30** | **56.37** | **57.28** |
+| benchmark | Original | Crop clean S0 | Crop clean-final S8 | Crop clean-final S16 | Crop T-free S8† | Crop T-free S16† | RP67 +T S0 | RP67 +T S8 | RP67 T-free S0 | RP67 T-free S8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| VStarBench Overall | 50.79 | 78.01 | 76.96 | 79.06 | 75.39 | 75.92 | 66.49 | 58.64 | 64.92 | 65.45 |
+| HRBench Average / all | 59.00 | 53.50 | 62.50 | 60.00 | 71.00 | 73.50 | 59.50 | 60.00 | 58.00 | 62.50 |
+| BLINK single-image（180） | 65.56 | 57.22 | 60.00 | 57.78 | 62.78 | 62.78 | 59.44 | 63.89 | 63.33 | 64.44 |
+| OCRBench v2 English | 49.89 | 40.46 | 47.39 | 46.80 | 49.17 | 49.79 | 46.12 | 44.99 | 45.47 | 44.54 |
+| OCRBench v2 Chinese | 46.48 | 37.45 | 51.21 | 51.11 | 53.59 | 57.66 | 34.19 | 37.66 | 36.35 | 37.83 |
+| OCR EN/CN mean | 48.19 | 38.95 | 49.30 | 48.95 | 51.38 | 53.72 | 40.16 | 41.33 | 40.91 | 41.19 |
+| MMMU-Pro single-image（269） | 39.03 | 43.87 | 47.58 | 50.93 | 46.84 | 45.35 | 48.33 | 47.58 | 45.35 | 48.33 |
+| MathVista MINI | 74.33 | 62.67 | 67.67 | 65.33 | 65.33 | 65.33 | 73.33 | 65.67 | 68.67 | 65.67 |
+| MathVerse five-version macro | 50.60 | 54.80 | 54.00 | 54.80 | 55.00 | 51.00 | 54.40 | 57.00 | 53.40 | 53.40 |
+| **Macro\*** | **55.36** | **55.5742** | **59.7161** | **59.5502** | **61.1032** | **61.0862** | **57.38** | **56.30** | **56.37** | **57.28** |
+
+† PRL21 Crop T-free 是 `temperature=1 / legacy-RNG / pass_with_legacy_owner_binding`。该标记限制 provenance 声明，不表示评分失败。
 
 对应的 RL delta：
 
 | 线路 | Step 0 | Step 8 | Step 16 | 同 legacy 块的观测变化 | 当前解释 |
 |---|---:|---:|---:|---:|---|
 | Crop clean-final | 55.5742 | 59.7161 | 59.5502 | S8−S0 **`+4.1419 pp`**；S16−S0 **`+3.9760 pp`**；S16−S8 `-0.1659 pp` | 明显正向 pilot；S8/S16 是平台期，不应将 `-0.17 pp` 解读为真实退化 |
+| Crop T-free PRL21† | 55.5742‡ | 61.1032 | 61.0862 | S8−S0 **`+5.5290 pp`**；S16−S0 **`+5.5120 pp`**；S16−S8 `-0.0170 pp` | 明显正向 pilot；S8/S16 完全平台，但历史 S0 复用与 legacy-RNG 不允许严格因果解释 |
 | RP67 +T | 57.38 | 56.30 | — | S8−S0 `-1.08 pp` | 单次负向趋势；幅度接近旧 RNG 波动参照，不能单独定性 |
 | RP67 T-free | 56.37 | 57.28 | — | S8−S0 `+0.91 pp` | 单次正向趋势；本块单独不足以证明 reward 优势，需结合第 3.2 节 paired 结果 |
 
 Crop S16 的 BLINK 和 MMMU-Pro 分别为 `104/180` 和 `137/269`。Crop 的 S0/S8/S16 共享同一 CoreDev manifest、Crop prompt/runtime、sampling 参数与 scorer 契约，但 evaluation ID 不同，因此仍是 legacy 同标准比较，不是 common-random-numbers 严格 paired 对照。
+
+‡ PRL21 未重新推理 Step 0；表中 `55.5742` 只复用协议相同的历史 Crop clean Step 0 作为 pilot 上下文。
 
 ### 3.2 Paired-seed-v1 RP67 冻结 / 联合更新总表
 
@@ -270,6 +280,27 @@ artifacts/evaluation/
 | Crop Step 0 | `ad897b7ec2f8f2c0046346b74c003827defc7847c9c099a26cd8f9c8ee237932` |
 | Crop Step 8 | `54bf8864114b4b2b80c7603349d02425681a584fe7e4c6ea2c2b3d17fd4ae25d` |
 | Crop Step 16 | `50f5d9dd7ecdbf8d9baf46c00c13b1c3719de37b09f5aa91c40aabc758e06beb` |
+
+### Crop T-free PRL21 Step 8 / Step 16
+
+```text
+artifacts/policy/
+  PRL-21-R0-qwen3-instruct-full-crop-bs16-n16-tfree-16step-ws8/
+    evaluation/
+      PRL21-R0-CROP-TFREE-COREDEV2511-STEP8-STEP16-TEMP1-SEED42-V1/
+        evaluation-summary.json
+        step8/scoring/coredev-official-v1-recovery2/
+          coredev-2511-eval-summary.json
+        step16/scoring/coredev-official-v1-recovery2/
+          coredev-2511-eval-summary.json
+```
+
+该 `evaluation-summary.json` 的状态为 `pass_with_legacy_owner_binding`。实际 checkpoint weights SHA256 为：
+
+| checkpoint | policy weights SHA256 |
+|---|---|
+| PRL21 Crop T-free Step 8 | `a74e460e2a4ace4a2e7dfbc22530e4dc46a542df399c2e8e659fe764680d66cc` |
+| PRL21 Crop T-free Step 16 | `7f5012a9e4346adda801d4a0fd94a9b3cfc05e05c30a18095e51210c2c7407db` |
 
 ### RP67 +T R1 Step 0 / Step 8
 
