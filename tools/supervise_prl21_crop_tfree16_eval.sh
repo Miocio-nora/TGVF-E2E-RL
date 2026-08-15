@@ -36,7 +36,22 @@ overlay="$repo_root/configs/policy/runs/prl_21_r0_qwen3_instruct_full_crop_bs16_
 # The suffix is sha256(evaluation identity + scoring-view identity).  VLMEvalKit
 # only discovers timestamp or legacy TYYYYMMDD_G<hex> run directories for reuse.
 run_id=T20260815_Gc2f1cd6d5d93579e517ad6a7dd97fd43782ad9a2a67645bbc73fb7967b5daf8a
-judge_url=http://127.0.0.1:8012/v1
+judge_config="$repo_root/configs/evaluation/qwen25_72b_judge_service_v1.json"
+judge_devices=$(jq -er '.devices.physical | map(tostring) | join(",")' "$judge_config")
+judge_model_path=$(jq -er '.model.local_path' "$judge_config")
+judge_model_name=$(jq -er '.model.served_name' "$judge_config")
+judge_host=$(jq -er '.server.host' "$judge_config")
+judge_port=$(jq -er '.server.port' "$judge_config")
+judge_url=$(jq -er '.server.base_url' "$judge_config")
+judge_dtype=$(jq -er '.server.dtype' "$judge_config")
+judge_tp=$(jq -er '.devices.tensor_parallel_size' "$judge_config")
+judge_max_model_len=$(jq -er '.server.max_model_len' "$judge_config")
+judge_gpu_memory_utilization=$(jq -er '.server.gpu_memory_utilization' "$judge_config")
+judge_max_num_seqs=$(jq -er '.server.max_num_seqs' "$judge_config")
+judge_seed=$(jq -er '.server.seed' "$judge_config")
+judge_generation_config=$(jq -er '.server.generation_config' "$judge_config")
+judge_attention_backend=$(jq -er '.server.attention_backend' "$judge_config")
+judge_cpath=$(jq -er '.runtime.cpath' "$judge_config")
 judge_pid=
 
 mkdir -p "$eval_root/logs" "$eval_root/runtime"
@@ -270,14 +285,16 @@ for step in 8 16; do
   validate_scoring_inputs "$step"
 done
 
-env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1 \
-  VLLM_ATTENTION_BACKEND=TRITON_ATTN \
-  "$vllm_bin" serve /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct \
-  --served-model-name Qwen2.5-72B-Instruct \
-  --host 127.0.0.1 --port 8012 \
-  --dtype bfloat16 --tensor-parallel-size 2 \
-  --max-model-len 32768 --gpu-memory-utilization 0.85 \
-  --max-num-seqs 64 --generation-config vllm --enable-prefix-caching \
+env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES="$judge_devices" \
+  VLLM_ATTENTION_BACKEND="$judge_attention_backend" CPATH="$judge_cpath" \
+  "$vllm_bin" serve "$judge_model_path" \
+  --served-model-name "$judge_model_name" \
+  --host "$judge_host" --port "$judge_port" \
+  --dtype "$judge_dtype" --tensor-parallel-size "$judge_tp" \
+  --max-model-len "$judge_max_model_len" \
+  --gpu-memory-utilization "$judge_gpu_memory_utilization" \
+  --max-num-seqs "$judge_max_num_seqs" --seed "$judge_seed" \
+  --generation-config "$judge_generation_config" --enable-prefix-caching \
   > "$eval_root/logs/judge-qwen25-72b.log" 2>&1 &
 judge_pid=$!
 
@@ -302,7 +319,7 @@ for step in 8 16; do
       "$python_bin" "$eval_repo/tools/run_coredev_2511_vlmevalkit.py" \
       --data "$dataset" --model Qwen3-VL-8B-Instruct \
       --work-dir "$work_dir" --mode eval --reuse --reuse-aux infer \
-      --judge Qwen2.5-72B-Instruct --judge-base-url "$judge_url" \
+      --judge "$judge_model_name" --judge-base-url "$judge_url" \
       --judge-key EMPTY --judge-api-nproc 4 --judge-retry 6 \
       --judge-timeout 600 \
       > "$eval_root/logs/score-step${step}-${dataset}.log" 2>&1 &

@@ -81,3 +81,6 @@ def test_evaluator_can_resume_scoring_from_a_discoverable_inference_view() -> No
     assert "validate_scoring_inputs" in script
     assert 'eval_repo="$repo_root"' in script
     assert "tgvf-e2e-rl-prl13-integration" not in script
+    assert "CUDA_VISIBLE_DEVICES=0,1" not in script
+    assert 'judge_seed=$(jq -er \'.server.seed\'' in script
+    assert '--max-num-seqs "$judge_max_num_seqs" --seed "$judge_seed"' in script
