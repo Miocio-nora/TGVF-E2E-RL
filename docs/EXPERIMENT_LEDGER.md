@@ -10047,3 +10047,33 @@ than inferred from a script name or prior conversation.
   inside the launch worktree as required by launch provenance. This recovery
   changes no model, data, optimizer, reward, prompt, tool, RNG or scheduler
   setting; continuation remains the exact Step-8-to-16 run.
+
+### PRL-22-B-R0-RP67-TFREE-FROZEN-CROP-TGVF-TEACHER25
+
+- Prepared 2026-08-15 as the isolated Atomic Crop+TGVF arm of the PRL22
+  teacher-data experiment.  Its direct control is PRL20-R0.  The only
+  scientific variable is the policy prompt population: the accepted retained
+  T1 schedule is replaced by the immutable PRL22 teacher-quarter schedule.
+- The dataset contains 20,480 prompts at deterministic seed 42.  Every aligned
+  BS16 group contains 12 accepted old prompts and four teacher prompts; every
+  256-prompt macro contains 90 VStar, 58 ArxivQA, 44 ThinkLite, and 64 teacher
+  prompts.  Manifest/content/samples/iteration identities are respectively
+  `48244271b9537700b22bc6f6bbe3322caa1f17ddeccb7dfc43c02729288b5662`,
+  `b5be9adfbd5ca7228a4d303aa900d0aec5ef877ceb7a7c328a15386ed2e3eab4`,
+  `040cb0f48ba5821b435e408024a81b9c90265d76a1fd5df1ecf73185c7e8439c`,
+  and `ab47dca43fc669066629b1d94f5f34ec2147f3b7fc000226c88cd23907709e0b`.
+- Qwen3-VL-8B-Instruct, the frozen RP67 Step-2000 Adapter, Crop+TGVF prompt and
+  tool protocol, T-free reward, answer judge, temperature-1 rollout sampling,
+  world8 BS16 x n16, micro2/GA1, constant `1e-6` AdamW, response limits, and
+  checkpoint policy are byte-for-byte inherited from PRL20-R0.  Operational
+  run/output identities are independently named; executable code is bound to
+  `37b99e2b01f9459e0ee65f6b86e2950bf60d4417`.
+- The immutable base config stops at Step 8.  A later experiment-owned horizon
+  extension may continue the exact Step-8 state to Step 16 while preserving
+  both endpoints; it must not rewrite the base config or restart from Step 0.
+- Config:
+  `configs/policy/runs/prl_22_b_r0_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_crop_tgvf_teacher25_8step_ws8.toml`.
+  Config identity is
+  `d87f7666f7d519f579ba06976de9afe35668223f51bcbfdd8afa169caab8c074`.
+  Strict CPU config loading and formal Step-8 compose-only preflight passed;
+  no GPU process was started.  Status: launch-ready, not launched.

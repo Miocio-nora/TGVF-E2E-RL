@@ -84,6 +84,22 @@ and bind the same immutable mixture artifact:
 2. RP67 T-free Frozen Atomic Crop+TGVF;
 3. Crop T-free.
 
+PRL22-B is the isolated Atomic Crop+TGVF arm.  Its launch-ready 8-step
+configuration is:
+
+```text
+configs/policy/runs/
+  prl_22_b_r0_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_crop_tgvf_teacher25_8step_ws8.toml
+```
+
+It is a one-variable derivative of PRL20-R0: only the immutable teacher25
+dataset binding, run identity, code binding, and output paths differ.  The
+prompt/tool protocol, RP67 frozen Adapter, T-free reward, optimizer, world8
+BS16 x n16 sampling, and capacity settings are unchanged.  Step 8 is the base
+pilot boundary.  A later 8-to-16 continuation must use an experiment-owned
+horizon-extension config and retain step 8 and step 16 as durable checkpoints;
+it must not mutate this 8-step base config.
+
 Only the TGVF project is scheduled for the first launch.  It starts from step
 0 because changing the dataset changes the training identity.  The initial
 pilot is BS16 x 16 rollouts for 16 optimizer steps, with durable checkpoints
