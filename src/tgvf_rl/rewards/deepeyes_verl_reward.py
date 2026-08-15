@@ -23,6 +23,7 @@ from typing import Any
 from uuid import uuid4
 
 from tgvf_rl.judges.base import JudgeUsage
+from tgvf_rl.policy.deepeyes_official_protocol import validate_source_task_kind
 from tgvf_rl.rewards.deepeyes_batch import (
     JudgeGlobalFailure,
     JudgeSampleOutputError,
@@ -1142,6 +1143,7 @@ class DeepEyesOfficialRewardManager(RewardManagerBase):
         question = _required_text(combined.get("question"), "question")
         sample_id = _required_text(combined.get("sample_id"), "sample_id")
         task_kind = _required_text(combined.get("task_kind"), "task_kind")
+        source_family = validate_source_task_kind(source, task_kind)
         trajectory_id = combined.get("trajectory_id")
         if not isinstance(trajectory_id, str) or not trajectory_id.strip():
             # Pinned veRL does not forward rollout_n to RewardLoop.  A fresh
@@ -1149,9 +1151,7 @@ class DeepEyesOfficialRewardManager(RewardManagerBase):
             # reward_extra_info so the retained rollout can bind it later.
             trajectory_id = f"{sample_id}/{self.trajectory_id_factory()}"
 
-        visual = source in {"vstar", "arxivqa"}
-        if not visual and source != "thinklite":
-            raise ValueError("DeepEyes reward source is unsupported")
+        visual = source_family == "visual"
         crop_count = _crop_count(combined, visual=visual)
         audit = _trajectory_audit_fields(
             combined,

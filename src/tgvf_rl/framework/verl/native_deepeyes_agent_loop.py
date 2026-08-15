@@ -13,7 +13,11 @@ from typing import Any
 from PIL import Image
 
 from tgvf_rl.policy.deepeyes_official_protocol import (
+    DEEPEYES_TEACHER_SOURCE,
+    VISUAL_SOURCES,
     direct_answer_after_last_tool_call,
+    validate_source_task_kind,
+    validate_tools_kwargs_for_source,
 )
 
 from .native_crop_tool import ensure_native_crop_audit_fields
@@ -365,8 +369,11 @@ def _build_native_deepeyes_agent_loop_class() -> type[Any]:
 
         async def run(self, sampling_params: dict[str, Any], **kwargs: Any) -> Any:
             source = kwargs.get("data_source")
-            if source not in {"vstar", "arxivqa"}:
+            if source not in VISUAL_SOURCES:
                 raise ValueError("native Crop agent may only execute visual PRL13 rows")
+            if source == DEEPEYES_TEACHER_SOURCE:
+                validate_source_task_kind(source, kwargs.get("task_kind"))
+                validate_tools_kwargs_for_source(source, kwargs.get("tools_kwargs"))
             # This catches image_embeds, exact-replay fields, bad agent routing,
             # and a missing native source-image message before vLLM is invoked.
             assert_native_pixel_row(

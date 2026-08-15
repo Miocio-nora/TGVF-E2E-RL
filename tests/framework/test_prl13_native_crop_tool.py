@@ -135,6 +135,38 @@ def test_native_tool_invalid_call_is_a_call_but_not_an_action() -> None:
     asyncio.run(exercise())
 
 
+def test_native_agent_loop_rejects_invalid_teacher_task_or_gold_regions() -> None:
+    pytest.importorskip("verl")
+    from tgvf_rl.framework.verl.native_deepeyes_agent_loop import (
+        NativeDeepEyesAgentLoop,
+    )
+
+    loop = NativeDeepEyesAgentLoop.__new__(NativeDeepEyesAgentLoop)
+    empty_tools = {"image_zoom_in_tool": {"create_kwargs": {"gt_regions": ()}}}
+    with pytest.raises(ValueError, match="mcq.*open"):
+        asyncio.run(
+            loop.run(
+                {},
+                data_source="teacher",
+                task_kind="math",
+                tools_kwargs=empty_tools,
+            )
+        )
+    with pytest.raises(ValueError, match="cannot carry gt_regions"):
+        asyncio.run(
+            loop.run(
+                {},
+                data_source="teacher",
+                task_kind="open",
+                tools_kwargs={
+                    "image_zoom_in_tool": {
+                        "create_kwargs": {"gt_regions": ((1, 2, 10, 20),)}
+                    }
+                },
+            )
+        )
+
+
 def test_upstream_tool_agent_loop_appends_crop_pixels_and_masks_observation(
     tmp_path: Path,
 ) -> None:

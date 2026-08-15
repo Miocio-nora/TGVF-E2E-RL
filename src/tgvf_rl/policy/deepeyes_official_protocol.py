@@ -30,6 +30,10 @@ DEEPEYES_TOOL_PARSER = "hermes"
 DEEPEYES_MAX_ACTIVE_PERCEPTION = 6
 DEEPEYES_VISUAL_AGENT_NAME = "prl13_native_deepeyes_visual"
 DEEPEYES_THINKLITE_AGENT_NAME = "single_turn_agent"
+DEEPEYES_VSTAR_SOURCE = "vstar"
+DEEPEYES_ARXIVQA_SOURCE = "arxivqa"
+DEEPEYES_TEACHER_SOURCE = "teacher"
+DEEPEYES_THINKLITE_SOURCE = "thinklite"
 
 # Keep whitespace, newlines, the public example, and even the public schema's
 # ``required=[\"bbox\"]`` typo intact.  The executable call contract below is
@@ -65,10 +69,26 @@ THINKLITE_BOXED_INSTRUCTION = (
     "Let's think step by step and output the final answer within \\boxed{}."
 )
 
-VISUAL_SOURCES = frozenset({"vstar", "arxivqa"})
-THINKLITE_SOURCE = "thinklite"
+VISUAL_SOURCES = frozenset(
+    {
+        DEEPEYES_VSTAR_SOURCE,
+        DEEPEYES_ARXIVQA_SOURCE,
+        DEEPEYES_TEACHER_SOURCE,
+    }
+)
+VISUAL_SOURCES_WITH_GT_REGIONS = frozenset({DEEPEYES_VSTAR_SOURCE})
+VISUAL_SOURCES_WITHOUT_GT_REGIONS = VISUAL_SOURCES - VISUAL_SOURCES_WITH_GT_REGIONS
+TEACHER_TASK_KINDS = frozenset({"mcq", "open"})
+THINKLITE_SOURCE = DEEPEYES_THINKLITE_SOURCE
 OFFICIAL_SOURCE_ALIASES: Mapping[str, str] = MappingProxyType(
-    {"vstar": "vstar", "arxivqa": "chart", "thinklite": "thinklite_eureka"}
+    {
+        DEEPEYES_VSTAR_SOURCE: "vstar",
+        DEEPEYES_ARXIVQA_SOURCE: "chart",
+        # Preserve the project-owned teacher identity in metrics and retained
+        # trajectories; visual routing must never disguise it as ArxivQA.
+        DEEPEYES_TEACHER_SOURCE: DEEPEYES_TEACHER_SOURCE,
+        DEEPEYES_THINKLITE_SOURCE: "thinklite_eureka",
+    }
 )
 
 _TOOL_CALL = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
@@ -151,6 +171,22 @@ def source_family(data_source: object) -> str:
     raise ValueError(f"unsupported DeepEyes source: {data_source!r}")
 
 
+def validate_source_task_kind(data_source: object, task_kind: object) -> str:
+    """Return the family after enforcing source-specific task support.
+
+    The historical three sources retain their existing task behavior.  The
+    teacher supplement is intentionally narrower: every retained teacher row
+    is a visual MCQ or open-VQA example, never a ThinkLite-style math task.
+    """
+
+    family = source_family(data_source)
+    if data_source == DEEPEYES_TEACHER_SOURCE and task_kind not in TEACHER_TASK_KINDS:
+        raise ValueError(
+            f"teacher DeepEyes rows require task_kind='mcq' or 'open': {task_kind!r}"
+        )
+    return family
+
+
 def prompt_identity_for_source(data_source: object) -> DeepEyesPromptIdentity:
     return (
         VISUAL_PROMPT_IDENTITY
@@ -195,6 +231,68 @@ def tools_kwargs_for_visual_row(
             "create_kwargs": {"gt_regions": tuple(normalized)},
         }
     }
+
+
+def normalize_gt_regions_for_source(
+    data_source: object, gt_regions: object
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Validate source-specific grounding regions without source aliasing.
+
+    VStar keeps its required grounding boxes.  ArxivQA and teacher are visual
+    and tool-capable but have no gold regions.  ThinkLite remains no-tool.
+    """
+
+    family = source_family(data_source)
+    if gt_regions is None:
+        normalized_input: list[object] | tuple[object, ...] = ()
+    elif isinstance(gt_regions, (list, tuple)):
+        normalized_input = gt_regions
+    else:
+        raise TypeError("gt_regions must be a list/tuple or None")
+    if family != "visual":
+        if normalized_input:
+            raise ValueError("ThinkLite rows cannot carry gt_regions")
+        return ()
+    if data_source in VISUAL_SOURCES_WITH_GT_REGIONS:
+        if not normalized_input:
+            raise ValueError("VStar rows require non-empty gt_regions")
+    elif normalized_input:
+        raise ValueError(f"{data_source} rows cannot carry gt_regions")
+    canonical = tools_kwargs_for_visual_row(normalized_input)
+    return canonical[DEEPEYES_TOOL_NAME]["create_kwargs"]["gt_regions"]
+
+
+def tools_kwargs_for_source(
+    data_source: object, gt_regions: object = None
+) -> dict[str, object]:
+    """Build source-routed tool state while retaining the source identity."""
+
+    family = source_family(data_source)
+    normalized = normalize_gt_regions_for_source(data_source, gt_regions)
+    if family != "visual":
+        return {}
+    return tools_kwargs_for_visual_row(normalized)
+
+
+def validate_tools_kwargs_for_source(data_source: object, tools_kwargs: object) -> None:
+    """Validate the exact tool-state envelope consumed by native AgentLoop."""
+
+    family = source_family(data_source)
+    if family != "visual":
+        if tools_kwargs not in (None, {}):
+            raise ValueError("ThinkLite rows cannot carry tool kwargs")
+        return
+    if not isinstance(tools_kwargs, Mapping) or set(tools_kwargs) != {
+        DEEPEYES_TOOL_NAME
+    }:
+        raise ValueError("visual rows require the exact DeepEyes tool kwargs")
+    tool = tools_kwargs[DEEPEYES_TOOL_NAME]
+    if not isinstance(tool, Mapping) or set(tool) != {"create_kwargs"}:
+        raise ValueError("visual DeepEyes tool kwargs differ")
+    create_kwargs = tool["create_kwargs"]
+    if not isinstance(create_kwargs, Mapping) or set(create_kwargs) != {"gt_regions"}:
+        raise ValueError("visual DeepEyes create kwargs differ")
+    normalize_gt_regions_for_source(data_source, create_kwargs["gt_regions"])
 
 
 def build_visual_messages(
@@ -325,28 +423,40 @@ def parse_hermes_crop_call(text: str) -> dict[str, object]:
 
 
 __all__ = [
+    "DEEPEYES_ARXIVQA_SOURCE",
     "DEEPEYES_MAX_ACTIVE_PERCEPTION",
     "DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA",
+    "DEEPEYES_TEACHER_SOURCE",
+    "DEEPEYES_THINKLITE_SOURCE",
     "DEEPEYES_TOOL_NAME",
     "DEEPEYES_TOOL_PARSER",
     "DEEPEYES_THINKLITE_AGENT_NAME",
     "DEEPEYES_VISUAL_AGENT_NAME",
+    "DEEPEYES_VSTAR_SOURCE",
     "OFFICIAL_SOURCE_ALIASES",
     "SYSTEM_PROMPT_V2",
     "SYSTEM_PROMPT_V2_SHA256",
     "THINKLITE_BOXED_INSTRUCTION",
     "THINKLITE_BOXED_INSTRUCTION_SHA256",
     "THINKLITE_PROMPT_IDENTITY",
+    "TEACHER_TASK_KINDS",
     "USER_PROMPT_V2",
     "USER_PROMPT_V2_SHA256",
+    "VISUAL_SOURCES",
+    "VISUAL_SOURCES_WITH_GT_REGIONS",
+    "VISUAL_SOURCES_WITHOUT_GT_REGIONS",
     "VISUAL_PROMPT_IDENTITY",
     "agent_name_for_source",
     "build_thinklite_messages",
     "build_visual_messages",
     "build_visual_tool_response_message",
     "direct_answer_after_last_tool_call",
+    "normalize_gt_regions_for_source",
     "parse_hermes_crop_call",
     "prompt_identity_for_source",
     "source_family",
+    "tools_kwargs_for_source",
     "tools_kwargs_for_visual_row",
+    "validate_source_task_kind",
+    "validate_tools_kwargs_for_source",
 ]

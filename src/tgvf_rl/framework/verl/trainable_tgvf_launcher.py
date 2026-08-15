@@ -26,6 +26,9 @@ from tgvf_rl.data.deepeyes_official_schedule import (
     DEEPEYES_T1_SAMPLES_SHA256,
     DEEPEYES_TRAIN_SEED,
 )
+from tgvf_rl.data.policy_teacher_quarter_mix import (
+    PolicyTeacherQuarterMixRuntimeBinding,
+)
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
@@ -90,6 +93,12 @@ from .tgvf_deepeyes_matched_dataset import (
     DeepEyesTGVFMatchedDatasetBinding,
     TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
     TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+)
+from .policy_teacher_quarter_mix_dataset import (
+    POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
+    PolicyTeacherQuarterMixDatasetBinding,
 )
 from .trainable_tgvf_checkpoint_manager import (
     TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN,
@@ -341,7 +350,10 @@ def _assert_functional_canary_config(config: PolicyE2ESmokeRunConfig) -> None:
     _functional_canary_dataset(config)
 
 
-def _plain_binding(binding: DeepEyesTGVFMatchedDatasetBinding) -> dict[str, object]:
+def _plain_binding(
+    binding: DeepEyesTGVFMatchedDatasetBinding
+    | PolicyTeacherQuarterMixDatasetBinding,
+) -> dict[str, object]:
     return {
         name: str(value) if isinstance(value, Path) else value
         for name, value in asdict(binding).items()
@@ -350,7 +362,7 @@ def _plain_binding(binding: DeepEyesTGVFMatchedDatasetBinding) -> dict[str, obje
 
 def _matched_dataset_binding(
     config: PolicyE2ESmokeRunConfig,
-) -> DeepEyesTGVFMatchedDatasetBinding:
+) -> DeepEyesTGVFMatchedDatasetBinding | PolicyTeacherQuarterMixDatasetBinding:
     crop_tgvf = (
         config.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
     )
@@ -364,6 +376,25 @@ def _matched_dataset_binding(
         if crop_tgvf
         else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
     )
+    if isinstance(
+        config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+    ):
+        runtime_binding = config.dataset.runtime_binding
+        return PolicyTeacherQuarterMixDatasetBinding(
+            root=config.dataset.root,
+            manifest_file_sha256=runtime_binding.manifest_file_sha256,
+            content_sha256=runtime_binding.content_sha256,
+            samples_sha256=config.dataset.samples_sha256,
+            iteration_identity_sha256=config.dataset.iteration_identity_sha256,
+            schedule_seed=runtime_binding.schedule_seed,
+            expected_sample_count=runtime_binding.expected_sample_count,
+            tool_profile=config.protocol.tool_profile,
+            visual_prompt_bundle_sha256=prompt_identity.bundle_sha256,
+            thinklite_prompt_bundle_sha256=THINKLITE_PROMPT_IDENTITY.bundle_sha256,
+            model_name=config.model.model_name,
+            tokenizer_length=config.model.tokenizer_length,
+            chat_template_sha256=config.model.chat_template_sha256,
+        )
     return binding_type(
         root=DEEPEYES_T1_ROOT,
         candidate_sidecar_path=DEEPEYES_CANDIDATE_SIDECAR,
@@ -386,10 +417,18 @@ def _matched_dataset_binding(
 def _legacy_base_plan(config: PolicyE2ESmokeRunConfig):
     """Build e003's complete base map with its historical prompt binding only."""
 
-    legacy_prompt = visual_tool_prompt_identity(
-        config.protocol.tool_profile,
-        assistant_dialect=native_assistant_dialect_for_model(config.model.model_name),
-    ).bundle_sha256
+    legacy_prompt = (
+        config.protocol.prompt_sha256
+        if isinstance(
+            config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+        )
+        else visual_tool_prompt_identity(
+            config.protocol.tool_profile,
+            assistant_dialect=native_assistant_dialect_for_model(
+                config.model.model_name
+            ),
+        ).bundle_sha256
+    )
     compatible = replace(
         config,
         # The generic e003 launcher uses the historical v1 schema to select
@@ -405,6 +444,21 @@ def _legacy_base_plan(config: PolicyE2ESmokeRunConfig):
 def _matched_dataset_runtime_identity(
     config: PolicyE2ESmokeRunConfig,
 ) -> tuple[str, str, str, str]:
+    if isinstance(
+        config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+    ):
+        visual_agent_name = (
+            CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+            if config.schema_version
+            == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+            else TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+        )
+        return (
+            POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
+            POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS.rsplit(".", 1)[-1],
+            POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
+            visual_agent_name,
+        )
     if config.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
         return (
             CROP_TGVF_DEEPEYES_MATCHED_DATASET_CLASS,
@@ -418,6 +472,30 @@ def _matched_dataset_runtime_identity(
         "deepeyes_tgvf_matched",
         TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
     )
+
+
+def _matched_dataset_module_path(config: PolicyE2ESmokeRunConfig) -> str:
+    return (
+        POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH
+        if isinstance(
+            config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+        )
+        else TRAINABLE_TGVF_DATASET_MODULE_PATH
+    )
+
+
+def _matched_dataset_files(
+    config: PolicyE2ESmokeRunConfig,
+) -> tuple[Path, Path, int]:
+    if isinstance(
+        config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+    ):
+        return (
+            config.dataset.root / "samples.jsonl",
+            DEEPEYES_PROBE_SENTINEL,
+            config.dataset.runtime_binding.schedule_seed,
+        )
+    return DEEPEYES_TRAIN_SENTINEL, DEEPEYES_PROBE_SENTINEL, DEEPEYES_TRAIN_SEED
 
 
 def _adapter_weight_sync_payload(config: PolicyE2ESmokeRunConfig) -> str:
@@ -587,6 +665,7 @@ class TrainableTGVFVerlLaunchPlan:
             dataset_config_name,
             visual_agent_name,
         ) = _matched_dataset_runtime_identity(self.config)
+        dataset_module_path = _matched_dataset_module_path(self.config)
         if (
             self.config.schema_version
             not in TRAINABLE_TGVF_SUPPORTED_RUN_CONFIG_SCHEMAS
@@ -667,7 +746,7 @@ class TrainableTGVFVerlLaunchPlan:
                 NATIVE_DEEPEYES_POLICY_LOSS_MODE
             ),
             "actor_rollout_ref.actor.loss_agg_mode": NATIVE_DEEPEYES_LOSS_AGG_MODE,
-            "data.custom_cls.path": TRAINABLE_TGVF_DATASET_MODULE_PATH,
+            "data.custom_cls.path": dataset_module_path,
             "data.custom_cls.name": dataset_class_name,
             "data.train_batch_size": (
                 TRAINABLE_TGVF_CANARY_PROMPTS if self.mode == "canary" else 16
@@ -829,15 +908,18 @@ def build_trainable_tgvf_verl_launch_plan(
         dataset_config_name,
         visual_agent_name,
     ) = _matched_dataset_runtime_identity(config)
+    dataset_module_path = _matched_dataset_module_path(config)
+    train_file, probe_file, dataset_seed = _matched_dataset_files(config)
     values.pop("data.tgvf_policy_t1_mixed", None)
+    values.pop(f"data.{POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME}", None)
     values.update(
         {
-            "data.train_files": [str(DEEPEYES_TRAIN_SENTINEL)],
-            "data.val_files": [str(DEEPEYES_PROBE_SENTINEL)],
-            "data.custom_cls.path": TRAINABLE_TGVF_DATASET_MODULE_PATH,
+            "data.train_files": [str(train_file)],
+            "data.val_files": [str(probe_file)],
+            "data.custom_cls.path": dataset_module_path,
             "data.custom_cls.name": dataset_class_name,
             f"data.{dataset_config_name}": _plain_binding(binding),
-            "data.seed": DEEPEYES_TRAIN_SEED,
+            "data.seed": dataset_seed,
             "actor_rollout_ref.model.external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,
             "actor_rollout_ref.model.model_type": TRAINABLE_TGVF_MODEL_TYPE,
             "actor_rollout_ref.model.lora_rank": 0,

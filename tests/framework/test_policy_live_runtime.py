@@ -33,6 +33,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _build_reward_pipeline,
     _default_metrics_factory,
     _final_token_materialization,
+    _reward_source_from_sample_fields,
     _rp66_matched_source_route,
     _rp66_response_budget_controls,
     _trainable_rp66_launch_mode,
@@ -154,7 +155,9 @@ def test_remote_atomic_runtime_records_only_bound_crop_conditioned_d(
         call_index=0,
     )
     target_count = len(parsed.target_span.token_ids)
-    branch_layers = local.loaded_adapter.binding.adapter_contract.deepstack_branch_layers
+    branch_layers = (
+        local.loaded_adapter.binding.adapter_contract.deepstack_branch_layers
+    )
     projection_ids = (
         local.loaded_adapter.binding.adapter_contract.deepstack_projection_identities
     )
@@ -189,9 +192,7 @@ def test_remote_atomic_runtime_records_only_bound_crop_conditioned_d(
             return TGVFCropMaterializationResult(
                 source_image_sha256=str(kwargs["source_image_sha256"]),
                 crop_sha256=str(kwargs["crop_sha256"]),
-                preprocessed_visual_sha256=str(
-                    kwargs["preprocessed_visual_sha256"]
-                ),
+                preprocessed_visual_sha256=str(kwargs["preprocessed_visual_sha256"]),
                 image_grid_thw=tuple(
                     int(value) for value in kwargs["image_grid_thw"][0].tolist()
                 ),
@@ -325,7 +326,7 @@ def test_live_reward_pipeline_binds_configured_named_weight_profile() -> None:
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     ),
 )
-@pytest.mark.parametrize("data_source", ("vstar", "arxivqa"))
+@pytest.mark.parametrize("data_source", ("vstar", "arxivqa", "teacher"))
 def test_trainable_rp66_visual_rows_select_matched_observation_renderer(
     schema_version: str,
     data_source: str,
@@ -356,12 +357,51 @@ def test_trainable_rp66_thinklite_rows_are_direct_only(schema_version: str) -> N
 
 
 def test_trainable_rp66_runtime_rejects_unknown_source() -> None:
-    config = SimpleNamespace(
-        schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA
-    )
+    config = SimpleNamespace(schema_version=POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA)
 
     with pytest.raises(ValueError, match="unsupported data_source"):
         _rp66_matched_source_route(config, {"data_source": "unknown"})
+
+
+@pytest.mark.parametrize("task_kind", ("mcq", "open"))
+def test_teacher_reward_source_uses_visual_answer_task_kinds(task_kind: str) -> None:
+    result = _reward_source_from_sample_fields(
+        {
+            "question": "What is shown?",
+            "data_source": "teacher",
+            "task_kind": task_kind,
+            "reward_model": {"ground_truth": "A"},
+        }
+    )
+    assert result["data_source"] == "teacher"
+    assert (
+        result["task_kind"]
+        is {
+            "mcq": AnswerTaskKind.MULTIPLE_CHOICE,
+            "open": AnswerTaskKind.OPEN_VQA,
+        }[task_kind]
+    )
+
+
+def test_teacher_reward_source_rejects_math_without_affecting_thinklite() -> None:
+    with pytest.raises(ValueError, match="mcq.*open"):
+        _reward_source_from_sample_fields(
+            {
+                "question": "1+1?",
+                "data_source": "teacher",
+                "task_kind": "math",
+                "reward_model": {"ground_truth": "2"},
+            }
+        )
+    result = _reward_source_from_sample_fields(
+        {
+            "question": "1+1?",
+            "data_source": "thinklite",
+            "task_kind": "math",
+            "reward_model": {"ground_truth": "2"},
+        }
+    )
+    assert result["task_kind"] is AnswerTaskKind.MATH
 
 
 @pytest.mark.parametrize("launch_mode", ("formal", "smoke"))
@@ -406,11 +446,7 @@ def test_trainable_rp66_launch_mode_comes_from_live_trainer_config(
     schema_version: str,
 ) -> None:
     config = SimpleNamespace(schema_version=schema_version)
-    trainer = {
-        "actor_rollout_ref": {
-            "rollout": {"custom": {"launch_mode": "smoke"}}
-        }
-    }
+    trainer = {"actor_rollout_ref": {"rollout": {"custom": {"launch_mode": "smoke"}}}}
 
     assert _trainable_rp66_launch_mode(config, trainer) == "smoke"
 
@@ -418,9 +454,7 @@ def test_trainable_rp66_launch_mode_comes_from_live_trainer_config(
 def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv(
-        "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP", raising=False
-    )
+    monkeypatch.delenv("TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP", raising=False)
     judge_path = Path("/fixture/deepeyes-judge.json")
     judge_sha256 = "9" * 64
     loaded_service = SimpleNamespace(maximum_concurrency=16)
@@ -431,8 +465,7 @@ def test_rp66_control_v2_uses_official_deepeyes_judge_loader(
         return loaded_service
 
     monkeypatch.setattr(
-        "tgvf_rl.framework.verl.policy_live_runtime."
-        "load_deepeyes_judge_service_config",
+        "tgvf_rl.framework.verl.policy_live_runtime.load_deepeyes_judge_service_config",
         load_service,
     )
     judge_calls: list[tuple[object, int]] = []
@@ -491,8 +524,7 @@ def test_rp66_control_applies_launch_scoped_run_global_judge_cap(
     monkeypatch.setenv("TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP", "8")
     loaded_service = SimpleNamespace(maximum_concurrency=16)
     monkeypatch.setattr(
-        "tgvf_rl.framework.verl.policy_live_runtime."
-        "load_deepeyes_judge_service_config",
+        "tgvf_rl.framework.verl.policy_live_runtime.load_deepeyes_judge_service_config",
         lambda *_args, **_kwargs: loaded_service,
     )
     monkeypatch.setattr(
@@ -537,8 +569,7 @@ def test_rp66_shaped_control_reuses_answer_judge_and_disables_visual_judge(
 ) -> None:
     loaded_service = SimpleNamespace(maximum_concurrency=16)
     monkeypatch.setattr(
-        "tgvf_rl.framework.verl.policy_live_runtime."
-        "load_deepeyes_judge_service_config",
+        "tgvf_rl.framework.verl.policy_live_runtime.load_deepeyes_judge_service_config",
         lambda *_args, **_kwargs: loaded_service,
     )
     monkeypatch.setattr(
@@ -612,8 +643,7 @@ def test_rp66_tfree_control_builds_async_scorer_without_utility_sidecar(
 ) -> None:
     loaded_service = SimpleNamespace(maximum_concurrency=16)
     monkeypatch.setattr(
-        "tgvf_rl.framework.verl.policy_live_runtime."
-        "load_deepeyes_judge_service_config",
+        "tgvf_rl.framework.verl.policy_live_runtime.load_deepeyes_judge_service_config",
         lambda *_args, **_kwargs: loaded_service,
     )
     monkeypatch.setattr(
@@ -804,7 +834,9 @@ def test_live_visual_quality_request_accepts_atomic_crop_tgvf_targets(
     trajectory = replace(
         trajectory,
         assistant_turns=(*trajectory.assistant_turns, final_turn),
-        tool_calls=tuple(_as_atomic_crop_tgvf_call(call) for call in trajectory.tool_calls),
+        tool_calls=tuple(
+            _as_atomic_crop_tgvf_call(call) for call in trajectory.tool_calls
+        ),
         final_answer="lower label",
         stop=TrajectoryStop.FINAL_ANSWER,
     )

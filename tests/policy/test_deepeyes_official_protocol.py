@@ -3,8 +3,10 @@ from __future__ import annotations
 import pytest
 
 from tgvf_rl.policy.deepeyes_official_protocol import (
+    DEEPEYES_TEACHER_SOURCE,
     DEEPEYES_THINKLITE_AGENT_NAME,
     DEEPEYES_VISUAL_AGENT_NAME,
+    OFFICIAL_SOURCE_ALIASES,
     SYSTEM_PROMPT_V2,
     SYSTEM_PROMPT_V2_SHA256,
     THINKLITE_BOXED_INSTRUCTION,
@@ -18,7 +20,11 @@ from tgvf_rl.policy.deepeyes_official_protocol import (
     build_visual_tool_response_message,
     direct_answer_after_last_tool_call,
     parse_hermes_crop_call,
+    source_family,
+    tools_kwargs_for_source,
     tools_kwargs_for_visual_row,
+    validate_source_task_kind,
+    validate_tools_kwargs_for_source,
 )
 
 
@@ -82,6 +88,33 @@ def test_thinklite_is_image_bearing_single_turn_task_routed_and_has_no_tool() ->
     assert agent_name_for_source("thinklite") == DEEPEYES_THINKLITE_AGENT_NAME
     assert agent_name_for_source("vstar") == DEEPEYES_VISUAL_AGENT_NAME
     assert agent_name_for_source("arxivqa") == DEEPEYES_VISUAL_AGENT_NAME
+
+
+def test_teacher_is_an_explicit_visual_source_with_mcq_or_open_tasks() -> None:
+    assert source_family(DEEPEYES_TEACHER_SOURCE) == "visual"
+    assert agent_name_for_source(DEEPEYES_TEACHER_SOURCE) == DEEPEYES_VISUAL_AGENT_NAME
+    assert OFFICIAL_SOURCE_ALIASES[DEEPEYES_TEACHER_SOURCE] == "teacher"
+    assert validate_source_task_kind(DEEPEYES_TEACHER_SOURCE, "mcq") == "visual"
+    assert validate_source_task_kind(DEEPEYES_TEACHER_SOURCE, "open") == "visual"
+    with pytest.raises(ValueError, match="mcq.*open"):
+        validate_source_task_kind(DEEPEYES_TEACHER_SOURCE, "math")
+
+
+def test_teacher_visual_tool_state_forbids_gold_regions() -> None:
+    expected = {"image_zoom_in_tool": {"create_kwargs": {"gt_regions": ()}}}
+    assert tools_kwargs_for_source(DEEPEYES_TEACHER_SOURCE) == expected
+    validate_tools_kwargs_for_source(DEEPEYES_TEACHER_SOURCE, expected)
+    with pytest.raises(ValueError, match="cannot carry gt_regions"):
+        tools_kwargs_for_source(DEEPEYES_TEACHER_SOURCE, [[1, 2, 10, 20]])
+
+    # The historical source semantics remain unchanged.
+    assert tools_kwargs_for_source("arxivqa") == expected
+    assert tools_kwargs_for_source("vstar", [[1, 2, 10, 20]]) == {
+        "image_zoom_in_tool": {"create_kwargs": {"gt_regions": ((1, 2, 10, 20),)}}
+    }
+    with pytest.raises(ValueError, match="require non-empty"):
+        tools_kwargs_for_source("vstar")
+    assert tools_kwargs_for_source("thinklite") == {}
 
 
 def test_hermes_json_contract_accepts_bbox_2d_and_rejects_qwen3_coder_shape() -> None:

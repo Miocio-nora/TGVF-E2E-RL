@@ -15,6 +15,14 @@ from typing import Any
 
 from PIL import Image
 
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    DEEPEYES_TEACHER_SOURCE,
+    THINKLITE_SOURCE,
+    VISUAL_SOURCES,
+    validate_source_task_kind,
+    validate_tools_kwargs_for_source,
+)
+
 
 NATIVE_DEEPEYES_RUNTIME_SCHEMA = "tgvf.prl13-native-runtime.v1"
 NATIVE_DEEPEYES_VISUAL_AGENT = "prl13_native_deepeyes_visual"
@@ -22,13 +30,11 @@ NATIVE_DEEPEYES_THINKLITE_AGENT = "single_turn_agent"
 NATIVE_DEEPEYES_MAX_CROPS = 6
 NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS = 10_240
 NATIVE_DEEPEYES_POLICY_LOSS_MODE = "deepeyes_official_micro_token_mean"
-NATIVE_DEEPEYES_POLICY_LOSS_MODULE = (
-    "tgvf_rl.framework.verl.deepeyes_actor_loss"
-)
+NATIVE_DEEPEYES_POLICY_LOSS_MODULE = "tgvf_rl.framework.verl.deepeyes_actor_loss"
 NATIVE_DEEPEYES_LOSS_AGG_MODE = "token-mean"
 
-_VISUAL_SOURCES = frozenset({"vstar", "arxivqa"})
-_MATH_SOURCE = "thinklite"
+_VISUAL_SOURCES = VISUAL_SOURCES
+_MATH_SOURCE = THINKLITE_SOURCE
 _FORBIDDEN_ROW_KEYS = frozenset(
     {
         "image_embeds",
@@ -160,6 +166,9 @@ def assert_native_pixel_row(row: Mapping[str, object]) -> None:
     expected_agent = native_deepeyes_agent_name(str(source))
     if row.get("agent_name") != expected_agent:
         raise ValueError("PRL13 row agent routing differs")
+    if source == DEEPEYES_TEACHER_SOURCE:
+        validate_source_task_kind(source, row.get("task_kind"))
+        validate_tools_kwargs_for_source(source, row.get("tools_kwargs"))
     if source in _VISUAL_SOURCES and image_items != 1:
         raise ValueError("visual PRL13 rows require exactly one original image")
     if source == _MATH_SOURCE and image_items != 0:

@@ -87,7 +87,12 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
 )
-from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    THINKLITE_PROMPT_IDENTITY,
+    THINKLITE_SOURCE,
+    VISUAL_SOURCES,
+    validate_source_task_kind,
+)
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
 )
@@ -180,8 +185,8 @@ from tgvf_rl.rewards.stage3_verl_adapter import (
 
 QWEN3_POLICY_E2E_LIVE_RUNTIME_SCHEMA = "tgvf-qwen3-policy-e2e-live-runtime-v1"
 _BRANCH_LAYERS = (8, 16, 24)
-_RP66_MATCHED_VISUAL_SOURCES = frozenset({"vstar", "arxivqa"})
-_RP66_MATCHED_DIRECT_ONLY_SOURCE = "thinklite"
+_RP66_MATCHED_VISUAL_SOURCES = VISUAL_SOURCES
+_RP66_MATCHED_DIRECT_ONLY_SOURCE = THINKLITE_SOURCE
 _RP66_MATCHED_TOTAL_HORIZON_MODES = frozenset({"formal", "smoke"})
 _RP66_LAUNCH_MODES = _RP66_MATCHED_TOTAL_HORIZON_MODES | {"canary"}
 
@@ -203,8 +208,7 @@ def _rp66_matched_source_route(
     if data_source in _RP66_MATCHED_VISUAL_SOURCES:
         return False, True
     raise ValueError(
-        "trainable RP66 runtime received an unsupported data_source: "
-        f"{data_source!r}"
+        f"trainable RP66 runtime received an unsupported data_source: {data_source!r}"
     )
 
 
@@ -232,9 +236,7 @@ def _trainable_rp66_launch_mode(config: object, trainer_config: object) -> str |
                 )
             value = getattr(value, name)
     if value not in _RP66_LAUNCH_MODES:
-        raise IdentityMismatchError(
-            f"trainable RP66 launch mode is invalid: {value!r}"
-        )
+        raise IdentityMismatchError(f"trainable RP66 launch mode is invalid: {value!r}")
     return str(value)
 
 
@@ -250,10 +252,7 @@ def _rp66_response_budget_controls(
         raise ValueError("one RP66 row cannot be direct-only and visual-tool routed")
     if launch_mode not in _RP66_LAUNCH_MODES | {None}:
         raise ValueError(f"unsupported RP66 launch mode: {launch_mode!r}")
-    if (
-        launch_mode in _RP66_MATCHED_TOTAL_HORIZON_MODES
-        and matched_visual_observation
-    ):
+    if launch_mode in _RP66_MATCHED_TOTAL_HORIZON_MODES and matched_visual_observation:
         return (
             ResponseBudgetScope.TOTAL_RESPONSE,
             NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS,
@@ -468,11 +467,9 @@ class _Qwen3PolicyTrajectoryComponents:
                 expected_file_sha256=reward.judge_config_sha256,
             )
             transport_service = effective_deepeyes_judge_transport_config(service)
-            effective_global_judge_concurrency = (
-                effective_run_global_judge_concurrency(
-                    service.maximum_concurrency,
-                    worker_count=context.placement.world_size,
-                )
+            effective_global_judge_concurrency = effective_run_global_judge_concurrency(
+                service.maximum_concurrency,
+                worker_count=context.placement.world_size,
             )
             local_judge_concurrency = process_local_judge_concurrency(
                 effective_global_judge_concurrency,
@@ -587,9 +584,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 )
                 self.async_stage3_spec = Stage3ShapedRewardSpec(
                     pipeline_identity=pipeline_identity,
-                    answer_verifier_identity=(
-                        DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY
-                    ),
+                    answer_verifier_identity=(DEEPEYES_ASYNC_ANSWER_VERIFIER_IDENTITY),
                     visual_judge_identity=(
                         reward.visual_quality_judge_identity
                         if quality_enabled
@@ -698,10 +693,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 matched_visual_observation=matched_visual_observation,
             )
         )
-        if (
-            self.config.protocol.tool_profile
-            is NativeToolCapabilityProfile.CROP_TGVF
-        ):
+        if self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
             success_environment_text_renderer = (
                 render_qwen_native_matched_crop_tgvf_success_environment_text
             )
@@ -734,9 +726,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 execution_ledger=self.focus_execution_ledger,
                 contextual_forward_identity=self.contextual_forward_identity,
                 branch_merger_identities=self.branch_merger_identities,
-                success_environment_text_renderer=(
-                    success_environment_text_renderer
-                ),
+                success_environment_text_renderer=(success_environment_text_renderer),
                 assistant_dialect=assistant_dialect,
             )
         elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
@@ -804,9 +794,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 crop_layout_identity=crop_layout_identity,
                 processor=self.context.processor,
                 image_max_pixels=self.config.policy.image_max_pixels,
-                success_environment_text_renderer=(
-                    success_environment_text_renderer
-                ),
+                success_environment_text_renderer=(success_environment_text_renderer),
                 assistant_dialect=assistant_dialect,
             )
         else:  # guarded by the builder
@@ -844,25 +832,23 @@ class _Qwen3PolicyTrajectoryComponents:
             )
             if self.async_stage3_spec is not None:
                 tool_utility = self.config.reward.tool_utility
-                official_deepeyes_scorer = (
-                    AsyncStage3ShapedTGVFTrajectoryRewardScorer(
-                        answer_scorer=answer_scorer,
-                        spec=self.async_stage3_spec,
-                        tool_utility=tool_utility,
-                        visual_quality_judge=(
-                            None
-                            if self.async_visual_quality_provider is None
-                            else _BoundAsyncTGVFVisualQualityRuntimeJudge(
-                                provider=self.async_visual_quality_provider,
-                                image_path=Path(
-                                    _scalar(sample_fields["source_image_path"])
-                                ),
-                                image_sha256=str(
-                                    _scalar(sample_fields["source_image_sha256"])
-                                ),
-                            )
-                        ),
-                    )
+                official_deepeyes_scorer = AsyncStage3ShapedTGVFTrajectoryRewardScorer(
+                    answer_scorer=answer_scorer,
+                    spec=self.async_stage3_spec,
+                    tool_utility=tool_utility,
+                    visual_quality_judge=(
+                        None
+                        if self.async_visual_quality_provider is None
+                        else _BoundAsyncTGVFVisualQualityRuntimeJudge(
+                            provider=self.async_visual_quality_provider,
+                            image_path=Path(
+                                _scalar(sample_fields["source_image_path"])
+                            ),
+                            image_sha256=str(
+                                _scalar(sample_fields["source_image_sha256"])
+                            ),
+                        )
+                    ),
                 )
             else:
                 official_deepeyes_scorer = answer_scorer
@@ -1145,9 +1131,7 @@ class _RemoteAtomicCropTGVFToolRuntime:
             or parsed_call.sampled_token_byte_spans
             != context.sampled_turn.token_byte_spans
         ):
-            raise ReplayMismatchError(
-                "parsed crop+TGVF call differs from sampled turn"
-            )
+            raise ReplayMismatchError("parsed crop+TGVF call differs from sampled turn")
         conditioning = self.config.representation.conditioning
         fingerprint = _crop_tgvf_call_fingerprint(
             parsed_call=parsed_call,
@@ -2047,9 +2031,7 @@ def _build_stage3_reward_runtime(
         "tool_utility_reward_enabled": utility_enabled,
         "visual_quality_judge_config": bound_visual.config_identity.sha256,
         "equation": (
-            "2*A_gated+T+R_repeat+F+G+P"
-            if utility_enabled
-            else "2*A+R_repeat+F+G+P"
+            "2*A_gated+T+R_repeat+F+G+P" if utility_enabled else "2*A+R_repeat+F+G+P"
         ),
     }
     if reward.tool_utility is not None:
@@ -2070,14 +2052,10 @@ def _build_stage3_reward_runtime(
         answer_verifier_identity=answer_identity,
         visual_judge_identity=bound_visual.config_identity,
         tool_utility_sidecar_sha256=(
-            None
-            if reward.tool_utility is None
-            else reward.tool_utility.sidecar_sha256
+            None if reward.tool_utility is None else reward.tool_utility.sidecar_sha256
         ),
         tool_utility_manifest_sha256=(
-            None
-            if reward.tool_utility is None
-            else reward.tool_utility.manifest_sha256
+            None if reward.tool_utility is None else reward.tool_utility.manifest_sha256
         ),
         tool_utility_reward_enabled=utility_enabled,
     )
@@ -2215,6 +2193,12 @@ def _reward_source_from_sample_fields(
         resolved_kind = task_kinds[task_kind]
     except (KeyError, TypeError) as error:
         raise ValueError("sample task_kind is not mcq, math, or open") from error
+    # This live-runtime helper is also used by older, non-DeepEyes datasets
+    # whose source labels are intentionally broader than the PRL13 protocol.
+    # The PRL22 addition only owns the new explicit ``teacher`` route, so do
+    # not turn its source validator into a repository-wide admission gate.
+    if data_source == "teacher":
+        validate_source_task_kind(data_source, task_kind)
     return {
         "question": question,
         "expected_answer": expected_answer,

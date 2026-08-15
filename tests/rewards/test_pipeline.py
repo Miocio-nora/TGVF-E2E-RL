@@ -121,7 +121,7 @@ def test_answer_primary_reward_profile_lowers_only_the_tool_bonus() -> None:
     )
 
 
-@pytest.mark.parametrize("data_source", ("vstar", "arxivqa"))
+@pytest.mark.parametrize("data_source", ("vstar", "arxivqa", "teacher"))
 def test_deepeyes_source_aware_reward_routes_visual_sources(
     data_source: str,
 ) -> None:

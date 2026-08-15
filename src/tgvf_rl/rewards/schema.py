@@ -10,6 +10,7 @@ from typing import Protocol
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
 from tgvf_rl.judges.base import JudgeUsage
+from tgvf_rl.policy.deepeyes_official_protocol import VISUAL_SOURCES
 
 
 PILOT_REWARD_LEGACY_WEIGHTS = (0.8, 0.2, 1.2)
@@ -34,7 +35,7 @@ PILOT_REWARD_WEIGHTS_BY_EQUATION = MappingProxyType(
     }
 )
 
-_DEEPEYES_VISUAL_DATA_SOURCES = frozenset({"vstar", "vl_agent", "chart", "arxivqa"})
+_DEEPEYES_VISUAL_DATA_SOURCES = VISUAL_SOURCES | frozenset({"vl_agent", "chart"})
 _DEEPEYES_MATH_DATA_SOURCES = frozenset({"thinklite", "thinklite_eureka", "xince"})
 
 

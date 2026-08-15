@@ -19,6 +19,12 @@ import threading
 import time
 from typing import Protocol
 
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    THINKLITE_SOURCE,
+    VISUAL_SOURCES,
+    validate_source_task_kind,
+)
+
 from .deepeyes_official import (
     DEEPEYES_THINKLITE_ANSWER_WEIGHT,
     DEEPEYES_THINKLITE_FORMAT_WEIGHT,
@@ -335,14 +341,13 @@ class DeepEyesTrajectoryRewardInput:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"trajectory {name} must be non-empty text")
-        if self.data_source not in {"vstar", "arxivqa", "thinklite"}:
-            raise ValueError("trajectory source is unsupported")
+        validate_source_task_kind(self.data_source, self.task_kind)
         if (
             type(self.successful_crop_count) is not int
             or self.successful_crop_count < 0
         ):
             raise ValueError("successful_crop_count must be non-negative")
-        if self.data_source == "thinklite" and self.successful_crop_count:
+        if self.data_source == THINKLITE_SOURCE and self.successful_crop_count:
             raise ValueError("ThinkLite trajectory cannot have a successful crop")
 
 
@@ -375,7 +380,7 @@ def score_deepeyes_trajectory_batch(
     prepared: list[_PreparedTrajectory] = []
     judge_requests: list[DeepEyesBinaryJudgeRequest] = []
     for item in inputs:
-        if item.data_source in {"vstar", "arxivqa"}:
+        if item.data_source in VISUAL_SOURCES:
             extraction = extract_visual_answer(item.response)
             candidate = extraction.answer or "[NO VALID FINAL ANSWER]"
             judge_index = len(judge_requests)
@@ -462,7 +467,7 @@ def score_deepeyes_trajectory_batch(
     rewards: list[DeepEyesRewardResult] = []
     for item in prepared:
         source = item.input.data_source
-        if source in {"vstar", "arxivqa"}:
+        if source in VISUAL_SOURCES:
             assert item.judge_index is not None
             sample_failure = judged.failure_kinds[item.judge_index]
             too_long = len(item.answer) >= DEEPEYES_VISUAL_ANSWER_LIMIT

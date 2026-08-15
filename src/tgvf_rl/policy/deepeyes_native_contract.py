@@ -31,10 +31,20 @@ from tgvf_rl.data.deepeyes_official_schedule import (
     DEEPEYES_T1_SAMPLES_SHA256,
     DEEPEYES_TOTAL_STEPS,
 )
+from tgvf_rl.data.policy_teacher_quarter_mix import (
+    POLICY_TEACHER_QUARTER_MIX_DATASET_KIND,
+    POLICY_TEACHER_QUARTER_MIX_SAMPLES_FILE,
+    PolicyTeacherQuarterMixRuntimeBinding,
+    policy_teacher_quarter_mix_iteration_identity_sha256,
+)
 from tgvf_rl.framework.verl.deepeyes_official_dataset import (
     DEEPEYES_OFFICIAL_DATASET_CLASS,
     DEEPEYES_PROBE_SENTINEL,
     DEEPEYES_TRAIN_SENTINEL,
+)
+from tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset import (
+    POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
+    POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
 )
 from tgvf_rl.policy.deepeyes_official_protocol import (
     DEEPEYES_MAX_ACTIVE_PERCEPTION,
@@ -298,6 +308,53 @@ _SECTION_FIELDS: Mapping[str, set[str]] = {
     "output": {"root", "checkpoint_directory", "metrics_path"},
 }
 
+# The teacher-quarter variant retains every runtime/optimizer field from
+# PRL13, but its immutable schedule is self-contained and therefore must not
+# pretend to be bound to the historical single candidate sidecar.
+_TEACHER_QUARTER_DATASET_FIELDS = {
+    "kind",
+    "root",
+    "sample_count",
+    "manifest_file_sha256",
+    "content_sha256",
+    "samples_sha256",
+    "iteration_identity_sha256",
+    "selection_policy",
+    "new_filtering",
+    "dataloader_shuffle",
+    "return_raw_chat",
+    "filter_overlong_prompts",
+    "length_filter_tool_schema",
+    "schedule_mode",
+    "schedule_seed",
+    "batch_size",
+    "vstar_per_batch",
+    "arxivqa_per_batch",
+    "thinklite_per_batch",
+    "teacher_per_batch",
+    "micro_batch_size",
+    "teacher_per_micro_batch",
+    "steps",
+    "without_replacement",
+    "probe_name",
+    "probe_seed",
+    "probe_size",
+    "probe_excluded_from_training",
+    "verl_dataset_module_path",
+    "verl_dataset_class_name",
+    "train_files",
+    "probe_files",
+}
+DEEPEYES_TEACHER_QUARTER_SAMPLE_COUNT = 20_480
+DEEPEYES_TEACHER_QUARTER_BATCH_COUNTS: Mapping[str, int] = {
+    "vstar": 90,
+    "arxivqa": 58,
+    "thinklite": 44,
+    "teacher": 64,
+}
+DEEPEYES_TEACHER_QUARTER_MICRO_BATCH_SIZE = 16
+DEEPEYES_TEACHER_QUARTER_PER_MICRO_BATCH = 4
+
 _EXACT_VALUES: Mapping[str, object] = {
     "code.repository": "Miocio-nora/TGVF-E2E-RL",
     "code.dirty": False,
@@ -487,6 +544,43 @@ _EXACT_VALUES: Mapping[str, object] = {
     ],
 }
 
+_TEACHER_QUARTER_DATASET_EXACT_VALUES: Mapping[str, object] = {
+    "dataset.kind": POLICY_TEACHER_QUARTER_MIX_DATASET_KIND,
+    "dataset.sample_count": DEEPEYES_TEACHER_QUARTER_SAMPLE_COUNT,
+    "dataset.selection_policy": "prl13_schedule_plus_teacher_quarter_v1",
+    "dataset.new_filtering": True,
+    "dataset.dataloader_shuffle": False,
+    "dataset.return_raw_chat": True,
+    "dataset.filter_overlong_prompts": True,
+    "dataset.length_filter_tool_schema": "none",
+    "dataset.schedule_mode": "stratified",
+    "dataset.schedule_seed": 42,
+    "dataset.batch_size": DEEPEYES_PROMPTS_PER_STEP,
+    "dataset.vstar_per_batch": 90,
+    "dataset.arxivqa_per_batch": 58,
+    "dataset.thinklite_per_batch": 44,
+    "dataset.teacher_per_batch": 64,
+    "dataset.micro_batch_size": DEEPEYES_TEACHER_QUARTER_MICRO_BATCH_SIZE,
+    "dataset.teacher_per_micro_batch": DEEPEYES_TEACHER_QUARTER_PER_MICRO_BATCH,
+    "dataset.steps": DEEPEYES_TOTAL_STEPS,
+    "dataset.without_replacement": True,
+    "dataset.probe_name": DEEPEYES_PROBE_NAME,
+    "dataset.probe_seed": DEEPEYES_PROBE_SEED,
+    "dataset.probe_size": DEEPEYES_PROMPTS_PER_STEP,
+    "dataset.probe_excluded_from_training": True,
+    "dataset.verl_dataset_module_path": (
+        POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH
+    ),
+    "dataset.verl_dataset_class_name": (
+        POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS.rsplit(".", 1)[-1]
+    ),
+    "dataset.probe_files": [str(DEEPEYES_PROBE_SENTINEL)],
+    # Teacher rows are visual and tool-capable, but unlike VStar they carry no
+    # gold region.  Keep both facts explicit in the native-Crop run ledger.
+    "protocol.visual_sources": ["vstar", "arxivqa", "teacher"],
+    "audit.grounding_source": "vstar_candidate_regions_teacher_none",
+}
+
 # Historical step-0/8 snapshots were trained under the wrapper-bearing prompt
 # identities below.  Loading those immutable run contracts must remain
 # possible for paired evaluation, while all newly rendered prompts use the
@@ -542,6 +636,14 @@ def _walk(value: object, prefix: str = "") -> list[tuple[str, object]]:
     return rows
 
 
+def _is_teacher_quarter_dataset(payload: Mapping[str, Any]) -> bool:
+    dataset = payload.get("dataset")
+    return (
+        isinstance(dataset, Mapping)
+        and dataset.get("kind") == POLICY_TEACHER_QUARTER_MIX_DATASET_KIND
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DeepEyesNativeRunContract:
     source_path: Path
@@ -563,6 +665,28 @@ class DeepEyesNativeRunContract:
     @property
     def launch_enabled(self) -> bool:
         return bool(self.payload["launch_enabled"])
+
+    @property
+    def dataset_kind(self) -> str:
+        return (
+            POLICY_TEACHER_QUARTER_MIX_DATASET_KIND
+            if _is_teacher_quarter_dataset(self.payload)
+            else "deepeyes_prl13_schedule"
+        )
+
+    @property
+    def teacher_quarter_runtime_binding(
+        self,
+    ) -> PolicyTeacherQuarterMixRuntimeBinding | None:
+        if not _is_teacher_quarter_dataset(self.payload):
+            return None
+        dataset = self.payload["dataset"]
+        return PolicyTeacherQuarterMixRuntimeBinding(
+            manifest_file_sha256=str(dataset["manifest_file_sha256"]),
+            content_sha256=str(dataset["content_sha256"]),
+            schedule_seed=int(dataset["schedule_seed"]),
+            expected_sample_count=int(dataset["sample_count"]),
+        )
 
     @property
     def identity_sha256(self) -> str:
@@ -622,9 +746,15 @@ def load_deepeyes_native_run_contract(
     arm = payload.get("arm")
     if arm not in {"stratified", "natural"}:
         raise ValueError("PRL13 arm must be stratified or natural")
+    teacher_quarter_dataset = _is_teacher_quarter_dataset(payload)
     for section, fields in _SECTION_FIELDS.items():
         table = payload.get(section)
-        if not isinstance(table, Mapping) or set(table) != fields:
+        expected_fields = (
+            _TEACHER_QUARTER_DATASET_FIELDS
+            if section == "dataset" and teacher_quarter_dataset
+            else fields
+        )
+        if not isinstance(table, Mapping) or set(table) != expected_fields:
             raise ValueError(f"PRL13 [{section}] fields differ")
     if _nested(payload, "dataset.schedule_mode") != arm:
         raise ValueError("arm and dataset.schedule_mode differ")
@@ -632,23 +762,76 @@ def load_deepeyes_native_run_contract(
         "vstar": _nested(payload, "dataset.vstar_per_batch"),
         "arxivqa": _nested(payload, "dataset.arxivqa_per_batch"),
         "thinklite": _nested(payload, "dataset.thinklite_per_batch"),
+        **(
+            {"teacher": _nested(payload, "dataset.teacher_per_batch")}
+            if teacher_quarter_dataset
+            else {}
+        ),
     }
-    expected_mix = (
-        dict(DEEPEYES_BATCH_COUNTS)
-        if arm == "stratified"
-        else {
-            "vstar": 0,
-            "arxivqa": 0,
-            "thinklite": 0,
-        }
-    )
+    if teacher_quarter_dataset:
+        if arm != "stratified":
+            raise ValueError("teacher-quarter schedule requires stratified arm")
+        expected_mix = dict(DEEPEYES_TEACHER_QUARTER_BATCH_COUNTS)
+    else:
+        expected_mix = (
+            dict(DEEPEYES_BATCH_COUNTS)
+            if arm == "stratified"
+            else {
+                "vstar": 0,
+                "arxivqa": 0,
+                "thinklite": 0,
+            }
+        )
     if observed_mix != expected_mix:
         raise ValueError("PRL13 schedule arm source-count contract differs")
-    for path_name, expected in _EXACT_VALUES.items():
+    exact_values = (
+        {
+            **{
+                path_name: expected
+                for path_name, expected in _EXACT_VALUES.items()
+                if not path_name.startswith("dataset.")
+            },
+            **_TEACHER_QUARTER_DATASET_EXACT_VALUES,
+        }
+        if teacher_quarter_dataset
+        else _EXACT_VALUES
+    )
+    for path_name, expected in exact_values.items():
         observed = _nested(payload, path_name)
         accepted_historical = _HISTORICAL_PROMPT_BUNDLE_SHA256S.get(path_name, ())
         if observed != expected and observed not in accepted_historical:
             raise ValueError(f"PRL13 fixed field differs: {path_name}")
+    if teacher_quarter_dataset:
+        dataset = payload["dataset"]
+        for field_name in (
+            "manifest_file_sha256",
+            "content_sha256",
+            "samples_sha256",
+            "iteration_identity_sha256",
+        ):
+            value = dataset[field_name]
+            if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+                raise ValueError(
+                    f"teacher-quarter dataset {field_name} must be a SHA-256"
+                )
+        teacher_binding = PolicyTeacherQuarterMixRuntimeBinding(
+            manifest_file_sha256=dataset["manifest_file_sha256"],
+            content_sha256=dataset["content_sha256"],
+            schedule_seed=dataset["schedule_seed"],
+            expected_sample_count=dataset["sample_count"],
+        )
+        if dataset["iteration_identity_sha256"] != (
+            policy_teacher_quarter_mix_iteration_identity_sha256(
+                teacher_binding,
+                samples_sha256=dataset["samples_sha256"],
+            )
+        ):
+            raise ValueError("teacher-quarter dataset iteration identity differs")
+        expected_train_file = str(
+            Path(dataset["root"]) / POLICY_TEACHER_QUARTER_MIX_SAMPLES_FILE
+        )
+        if dataset["train_files"] != [expected_train_file]:
+            raise ValueError("teacher-quarter train file differs from artifact root")
     judge_service_sha256 = _nested(payload, "reward.judge_service_config_sha256")
     if (
         not isinstance(judge_service_sha256, str)
@@ -682,17 +865,19 @@ def load_deepeyes_native_run_contract(
             for fragment in ("rp66", "image_embeds", "losslessreplay")
         ):
             raise ValueError(f"forbidden legacy PRL13 value: {field_path}")
-    for path_name in (
+    path_names = [
         "model.path",
         "dataset.root",
-        "dataset.candidate_sidecar_path",
         "reward.judge_service_config_path",
         "framework.agent_loop_config_path",
         "framework.tool_config_path",
         "output.root",
         "output.checkpoint_directory",
         "output.metrics_path",
-    ):
+    ]
+    if not teacher_quarter_dataset:
+        path_names.append("dataset.candidate_sidecar_path")
+    for path_name in path_names:
         value = _nested(payload, path_name)
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise ValueError(f"PRL13 path must be absolute: {path_name}")

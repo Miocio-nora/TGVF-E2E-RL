@@ -31,6 +31,11 @@ from tgvf_rl.data.tgvf_tool_utility import (
     TGVFToolUtilityLabelBinding,
     TGVFToolUtilityRuntimeBinding,
 )
+from tgvf_rl.data.policy_teacher_quarter_mix import (
+    POLICY_TEACHER_QUARTER_MIX_DATASET_KIND,
+    PolicyTeacherQuarterMixRuntimeBinding,
+    policy_teacher_quarter_mix_iteration_identity_sha256,
+)
 from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_MODEL_FAMILY,
@@ -566,6 +571,82 @@ visual_quality_judge_mode = "disabled"
     assert reward_override["focus_reward_enabled"] is False
     assert reward_override["grounding_reward_enabled"] is False
     assert "visual_quality_judge_config_path" not in reward_override
+
+
+def test_teacher_quarter_dataset_rejects_historical_tool_utility_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = PRL16_F2_CONFIG.read_text(encoding="utf-8").replace(
+        POLICY_E2E_RP66_EXACT_CONTROL_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
+        1,
+    )
+    parsed = tomllib.loads(text)
+    dataset_root = tmp_path / "teacher-quarter"
+    dataset_root.mkdir()
+    binding = PolicyTeacherQuarterMixRuntimeBinding(
+        manifest_file_sha256="1" * 64,
+        content_sha256="2" * 64,
+        schedule_seed=42,
+        expected_sample_count=20_480,
+    )
+    samples_sha256 = "3" * 64
+    iteration_identity = policy_teacher_quarter_mix_iteration_identity_sha256(
+        binding, samples_sha256=samples_sha256
+    )
+    dataset_start = text.index("[dataset]")
+    representation_start = text.index("[representation]")
+    dataset_text = f'''[dataset]
+kind = "{POLICY_TEACHER_QUARTER_MIX_DATASET_KIND}"
+root = {_q(dataset_root)}
+decision_stage = "final"
+sample_count = 20480
+manifest_file_sha256 = "{binding.manifest_file_sha256}"
+content_sha256 = "{binding.content_sha256}"
+samples_sha256 = "{samples_sha256}"
+iteration_identity_sha256 = "{iteration_identity}"
+shuffle_seed = 42
+
+'''
+    text = text[:dataset_start] + dataset_text + text[representation_start:]
+
+    old_reward = parsed["reward"]
+    reward_text = f'''[reward]
+profile = "stage3-shaped-v1"
+task_kind = "{old_reward["task_kind"]}"
+answer_verifier = "{old_reward["answer_verifier"]}"
+answer_verifier_sha256 = "{old_reward["answer_verifier_sha256"]}"
+judge_mode = "{old_reward["judge_mode"]}"
+judge_reason = "teacher-quarter must be T-free"
+judge_config_path = {_q(old_reward["judge_config_path"])}
+judge_config_sha256 = "{old_reward["judge_config_sha256"]}"
+tool_utility_sidecar_path = {_q(tmp_path / "unsupported-utility.jsonl")}
+tool_utility_sidecar_sha256 = "{"4" * 64}"
+tool_utility_manifest_path = {_q(tmp_path / "unsupported-utility.json")}
+tool_utility_manifest_sha256 = "{"5" * 64}"
+focus_reward_enabled = false
+grounding_reward_enabled = false
+visual_quality_judge_mode = "disabled"
+
+'''
+    reward_start = text.index("[reward]")
+    optimizer_start = text.index("[optimizer]")
+    text = text[:reward_start] + reward_text + text[optimizer_start:]
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.verify_policy_teacher_quarter_mix_artifact_binding",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "tgvf_rl.policy.run_config.load_tgvf_tool_utility_runtime_binding",
+        lambda *_args, **_kwargs: pytest.fail(
+            "teacher-quarter config attempted to load the historical utility sidecar"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="teacher-quarter.*T-free"):
+        load_policy_e2e_smoke_run_config(
+            _write_prl16_mode_config(tmp_path, text)
+        )
 
 
 def test_rp66_tfree_control_does_not_load_or_emit_tool_utility(

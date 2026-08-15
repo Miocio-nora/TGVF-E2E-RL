@@ -68,6 +68,27 @@ def test_correct_direct_crop_row_gets_answer_only_without_positive_tool_bonus() 
     assert extra["visual_judge_requested"] == 1
 
 
+def test_teacher_row_keeps_identity_and_uses_the_same_visual_tfree_equation() -> None:
+    manager = _manager("<think>done</think>blue")
+
+    result = asyncio.run(
+        manager.run_single(_data(source="teacher", crop_count=0, task_kind="mcq"))
+    )
+    extra = result["reward_extra_info"]
+
+    assert result["reward_score"] == pytest.approx(2.0)
+    assert extra["source"] == "teacher"
+    assert extra["judge_route"] == "qwen2.5_72b_every_visual_trajectory"
+    assert extra["visual_judge_requested"] == 1
+    assert _components(extra) == {
+        "answer": 2.0,
+        "tool": 0.0,
+        "focus": 0.0,
+        "grounding": 0.0,
+        "protocol": 0.0,
+    }
+
+
 def test_repeated_calls_and_crop_error_use_exact_tfree_equation() -> None:
     manager = _manager("<think>done</think>blue")
     data = _data(

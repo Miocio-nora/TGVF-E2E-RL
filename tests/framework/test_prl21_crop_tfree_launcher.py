@@ -31,6 +31,24 @@ def _contract(module):
     )
 
 
+def test_run_config_cli_defaults_to_prl21_and_accepts_explicit_child() -> None:
+    module = _module()
+
+    default = module._parser().parse_args([])
+    assert default.run_config == _CONFIG
+
+    relative = Path("configs/policy/runs/child-teacher25.toml")
+    explicit_relative = module._parser().parse_args(
+        ["--run-config", str(relative)]
+    )
+    assert explicit_relative.run_config == _ROOT / relative
+
+    explicit_absolute = module._parser().parse_args(
+        ["--run-config", str(_CONFIG)]
+    )
+    assert explicit_absolute.run_config == _CONFIG
+
+
 def test_formal_plan_is_prl14_matched_except_for_reward_manager_and_horizon() -> None:
     module = _module()
     plan = module._build_plan(_contract(module), mode="formal")

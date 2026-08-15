@@ -40,9 +40,33 @@ def _visual_row() -> dict[str, object]:
 def test_native_source_routing_is_visual_crop_or_thinklite_no_tool() -> None:
     assert native_deepeyes_agent_name("vstar") == NATIVE_DEEPEYES_VISUAL_AGENT
     assert native_deepeyes_agent_name("arxivqa") == NATIVE_DEEPEYES_VISUAL_AGENT
+    assert native_deepeyes_agent_name("teacher") == NATIVE_DEEPEYES_VISUAL_AGENT
     assert native_deepeyes_agent_name("thinklite") == NATIVE_DEEPEYES_THINKLITE_AGENT
     with pytest.raises(ValueError, match="unsupported"):
         native_deepeyes_agent_name("unknown")
+
+
+def test_teacher_native_pixel_row_is_visual_without_gold_regions() -> None:
+    row = {
+        **_visual_row(),
+        "data_source": "teacher",
+        "task_kind": "mcq",
+        "tools_kwargs": {"image_zoom_in_tool": {"create_kwargs": {"gt_regions": ()}}},
+    }
+    assert_native_pixel_row(row)
+    with pytest.raises(ValueError, match="mcq.*open"):
+        assert_native_pixel_row({**row, "task_kind": "math"})
+    with pytest.raises(ValueError, match="cannot carry gt_regions"):
+        assert_native_pixel_row(
+            {
+                **row,
+                "tools_kwargs": {
+                    "image_zoom_in_tool": {
+                        "create_kwargs": {"gt_regions": ((1, 2, 10, 20),)}
+                    }
+                },
+            }
+        )
 
 
 def test_native_pixel_row_rejects_embeds_replay_and_wrong_routing() -> None:

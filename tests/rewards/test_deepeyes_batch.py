@@ -64,6 +64,49 @@ def test_batch_routes_every_visual_and_only_thinklite_fallback() -> None:
     assert [reward.accuracy for reward in result.rewards] == [1, 1, 1, 1]
 
 
+@pytest.mark.parametrize("task_kind", ("mcq", "open"))
+def test_teacher_batch_route_is_visual_and_keeps_teacher_identity(
+    task_kind: str,
+) -> None:
+    calls: list[object] = []
+    teacher = DeepEyesTrajectoryRewardInput(
+        trajectory_id=f"teacher-{task_kind}/0",
+        sample_id=f"teacher-{task_kind}",
+        data_source="teacher",
+        task_kind=task_kind,
+        question="What is visible?",
+        reference_answer="blue",
+        response="blue",
+        successful_crop_count=0,
+    )
+    result = score_deepeyes_trajectory_batch(
+        (teacher,),
+        math_verify=lambda _expected, _candidate: False,
+        judge=BoundedBatchSemanticJudge(
+            lambda request: calls.append(request) is None or True
+        ),
+    )
+    assert len(calls) == 1
+    assert calls[0].task_kind == task_kind
+    assert result.judge_metrics.visual_requested == 1
+    assert result.judge_metrics.thinklite_fallback_requested == 0
+    assert result.rewards[0].accuracy == 1
+
+
+def test_teacher_batch_route_rejects_math() -> None:
+    with pytest.raises(ValueError, match="mcq.*open"):
+        DeepEyesTrajectoryRewardInput(
+            trajectory_id="teacher/0",
+            sample_id="teacher",
+            data_source="teacher",
+            task_kind="math",
+            question="1+1?",
+            reference_answer="2",
+            response="2",
+            successful_crop_count=0,
+        )
+
+
 def test_equal_answers_in_different_trajectories_are_never_deduplicated() -> None:
     calls: list[str] = []
     judge = BoundedBatchSemanticJudge(

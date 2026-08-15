@@ -449,6 +449,7 @@ def _data(
     *,
     source: str,
     crop_count: int,
+    task_kind: str = "open",
     call_count: int | None = None,
     error_count: int = 0,
     observation_spans: list[list[int]] | None = None,
@@ -477,7 +478,7 @@ def _data(
                     {
                         "sample_id": "sample",
                         "question": "What color?",
-                        "task_kind": "open",
+                        "task_kind": task_kind,
                     }
                 ],
                 dtype=object,
@@ -544,6 +545,46 @@ def test_real_dataproto_manager_keeps_accuracy_independent_of_format() -> None:
     assert json.loads(extra["crop_area"]) == [0.16]
     assert extra["audit_sequence_encoding"] == DEEPEYES_VERL_AUDIT_SEQUENCE_ENCODING
     assert extra["action_count"] == 1
+
+
+@pytest.mark.parametrize("task_kind", ("mcq", "open"))
+def test_teacher_verl_reward_uses_visual_judge_route(task_kind: str) -> None:
+    seen: list[DeepEyesBinaryJudgeRequest] = []
+
+    async def correct(request: DeepEyesBinaryJudgeRequest, _payload: object) -> object:
+        seen.append(request)
+        return _response()
+
+    manager = DeepEyesOfficialRewardManager(
+        OmegaConf.create({"reward": {}}),
+        _Tokenizer("blue"),
+        judge_transport=AsyncDeepEyesOpenRouterJudge(_service(), request_json=correct),
+        trajectory_id_factory=lambda: f"teacher-{task_kind}",
+    )
+    result = asyncio.run(
+        manager.run_single(_data(source="teacher", crop_count=0, task_kind=task_kind))
+    )
+    assert result["reward_score"] == pytest.approx(0.8)
+    assert result["reward_extra_info"]["source"] == "teacher"
+    assert result["reward_extra_info"]["visual_judge_requested"] == 1
+    assert result["reward_extra_info"]["thinklite_fallback_judge_requested"] == 0
+    assert len(seen) == 1
+    assert seen[0].task_kind == task_kind
+
+
+def test_teacher_verl_reward_rejects_math() -> None:
+    manager = DeepEyesOfficialRewardManager(
+        OmegaConf.create({"reward": {}}),
+        _Tokenizer("2"),
+        judge_transport=AsyncDeepEyesOpenRouterJudge(
+            _service(), request_json=lambda _request, _payload: _response()
+        ),
+        trajectory_id_factory=lambda: "teacher-math",
+    )
+    with pytest.raises(ValueError, match="mcq.*open"):
+        asyncio.run(
+            manager.run_single(_data(source="teacher", crop_count=0, task_kind="math"))
+        )
 
 
 @pytest.mark.parametrize(

@@ -59,6 +59,15 @@ from tgvf_rl.policy.crop_tfree_contract import (  # noqa: E402
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--run-config",
+        type=_run_config_argument,
+        default=CONFIG,
+        help=(
+            "Crop T-free overlay TOML. Relative paths are resolved from the "
+            "repository root; the default remains the accepted PRL21 control."
+        ),
+    )
+    parser.add_argument(
         "--mode",
         choices=("preflight", "smoke", "formal"),
         default="preflight",
@@ -69,6 +78,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Start Ray/GPU/API work; preflight never starts GPU work.",
     )
     return parser
+
+
+def _run_config_argument(value: str) -> Path:
+    """Resolve an explicit experiment overlay without changing the default."""
+
+    path = Path(value)
+    return path if path.is_absolute() else ROOT / path
 
 
 def _checkpoint_complete(path: Path, *, world_size: int) -> bool:
@@ -245,7 +261,7 @@ def _record(
 def main() -> int:
     args = _parser().parse_args()
     contract = load_crop_tfree_run_contract(
-        CONFIG,
+        args.run_config,
         repository_root=ROOT,
         allow_placeholder=not args.launch,
     )

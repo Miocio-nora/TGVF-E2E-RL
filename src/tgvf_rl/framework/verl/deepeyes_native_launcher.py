@@ -28,6 +28,10 @@ from tgvf_rl.framework.verl.deepeyes_official_dataset import (
     DEEPEYES_OFFICIAL_DATASET_SCHEMA,
     DEEPEYES_SMOKE_SENTINEL,
 )
+from tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset import (
+    POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
+    PolicyTeacherQuarterMixDatasetBinding,
+)
 from tgvf_rl.framework.verl.native_deepeyes_manager import (
     PRL13_AGENT_LOOP_MANAGER_FQN,
 )
@@ -39,6 +43,16 @@ from tgvf_rl.policy.deepeyes_native_contract import (
     DEEPEYES_NATIVE_CHECKPOINT_GATES,
     DeepEyesNativeRunContract,
 )
+from tgvf_rl.policy.config import (
+    POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+    POLICY_PILOT_V1_MODEL_NAME,
+    POLICY_PILOT_V1_TOKENIZER_LENGTH,
+)
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    THINKLITE_PROMPT_IDENTITY,
+    VISUAL_PROMPT_IDENTITY,
+)
+from tgvf_rl.protocol import NativeToolCapabilityProfile
 
 
 DEEPEYES_NATIVE_LAUNCH_SCHEMA = "tgvf.deepeyes-native-verl-launch.v1"
@@ -123,6 +137,42 @@ def _official_dataset_binding(contract: DeepEyesNativeRunContract) -> dict[str, 
     }
 
 
+def _teacher_quarter_dataset_binding(
+    contract: DeepEyesNativeRunContract,
+) -> dict[str, object]:
+    runtime_binding = contract.teacher_quarter_runtime_binding
+    if runtime_binding is None:
+        raise ValueError("native Crop teacher-quarter binding is missing")
+    dataset = contract.payload["dataset"]
+    return PolicyTeacherQuarterMixDatasetBinding(
+        root=Path(dataset["root"]),
+        manifest_file_sha256=runtime_binding.manifest_file_sha256,
+        content_sha256=runtime_binding.content_sha256,
+        samples_sha256=str(dataset["samples_sha256"]),
+        iteration_identity_sha256=str(dataset["iteration_identity_sha256"]),
+        schedule_seed=runtime_binding.schedule_seed,
+        expected_sample_count=runtime_binding.expected_sample_count,
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        visual_prompt_bundle_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
+        thinklite_prompt_bundle_sha256=THINKLITE_PROMPT_IDENTITY.bundle_sha256,
+        tokenizer_length=POLICY_PILOT_V1_TOKENIZER_LENGTH,
+        model_name=POLICY_PILOT_V1_MODEL_NAME,
+        chat_template_sha256=POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+    ).as_config()
+
+
+def _dataset_binding_overrides(
+    contract: DeepEyesNativeRunContract,
+) -> dict[str, object]:
+    if contract.teacher_quarter_runtime_binding is None:
+        return {"data.deepeyes_official": _official_dataset_binding(contract)}
+    return {
+        f"data.{POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME}": (
+            _teacher_quarter_dataset_binding(contract)
+        )
+    }
+
+
 def _formal_overrides(
     contract: DeepEyesNativeRunContract, *, target_step: int
 ) -> dict[str, object]:
@@ -177,7 +227,7 @@ def _formal_overrides(
         "data.function_tool_path": None,
         "data.custom_cls.path": data["verl_dataset_module_path"],
         "data.custom_cls.name": data["verl_dataset_class_name"],
-        "data.deepeyes_official": _official_dataset_binding(contract),
+        **_dataset_binding_overrides(contract),
         # Qwen3-VL-8B full model; vision, projector and language stay trainable.
         "actor_rollout_ref.model.path": model["path"],
         # The external module registers the exact DeepEyes actor reduction;
