@@ -19,6 +19,9 @@ from typing import Any
 import torch
 from PIL import Image
 from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
+from tgvf_rl.data.policy_teacher_quarter_mix import (
+    PolicyTeacherQuarterMixRuntimeBinding,
+)
 
 from tgvf_rl.checkpoint.coordinator import state_digest
 from tgvf_rl.conditioning import (
@@ -2078,25 +2081,43 @@ def _validate_sample_fields(
                 "upstream sample_id is absent from the bound dataset"
             ) from error
         image = record.get("image")
-        extra_info = record.get("extra_info")
-        bound_reward = record.get("reward_model")
-        if (
-            not isinstance(image, Mapping)
-            or not isinstance(extra_info, Mapping)
-            or not isinstance(bound_reward, Mapping)
-        ):
+        if not isinstance(image, Mapping):
             raise IdentityMismatchError("bound Policy sample schema differs")
         bound_image_path = image.get("path")
         if not isinstance(bound_image_path, str):
             raise IdentityMismatchError("bound Policy image path differs")
         if isinstance(
             config.dataset.runtime_binding,
-            (PolicyT1RLRuntimeBinding, PolicyT1MixedRuntimeBinding),
+            (
+                PolicyT1RLRuntimeBinding,
+                PolicyT1MixedRuntimeBinding,
+                PolicyTeacherQuarterMixRuntimeBinding,
+            ),
         ):
             source_image_path = Path(bound_image_path).resolve()
         else:
             source_image_path = (config.dataset.root / bound_image_path).resolve()
         bound_data_source = record.get("data_source")
+        if isinstance(
+            config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+        ):
+            # PRL22 owns a compact normalized schedule.  Its veRL Dataset
+            # reconstructs ``extra_info`` and ``reward_model`` at runtime, so
+            # bind the live trajectory to the canonical top-level fields in
+            # samples.jsonl rather than requiring the legacy nested row shape.
+            bound_question = record.get("question")
+            bound_task_kind = record.get("task_kind")
+            expected_ground_truth = record.get("ground_truth")
+        else:
+            extra_info = record.get("extra_info")
+            bound_reward = record.get("reward_model")
+            if not isinstance(extra_info, Mapping) or not isinstance(
+                bound_reward, Mapping
+            ):
+                raise IdentityMismatchError("bound Policy sample schema differs")
+            bound_question = extra_info.get("question")
+            bound_task_kind = record.get("task_kind")
+            expected_ground_truth = bound_reward.get("ground_truth")
         expected_prompt_sha256 = config.protocol.prompt_sha256
         if (
             getattr(config, "schema_version", None)
@@ -2109,9 +2130,9 @@ def _validate_sample_fields(
             "prompt_bundle_sha256": expected_prompt_sha256,
             "source_image_path": str(source_image_path),
             "source_image_sha256": image.get("sha256"),
-            "question": extra_info.get("question"),
+            "question": bound_question,
             "data_source": bound_data_source,
-            "task_kind": record.get("task_kind"),
+            "task_kind": bound_task_kind,
         }
         if (
             getattr(config, "schema_version", None)
@@ -2120,7 +2141,6 @@ def _validate_sample_fields(
             expected["dataset_iteration_identity_sha256"] = (
                 config.dataset.iteration_identity_sha256
             )
-        expected_ground_truth = bound_reward.get("ground_truth")
     else:
         expected = {
             "sample_id": sample_id,
