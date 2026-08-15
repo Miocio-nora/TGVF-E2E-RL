@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+resume_scoring_only=false
+case "${1:-}" in
+  "") ;;
+  --resume-scoring) resume_scoring_only=true ;;
+  *)
+    echo "usage: $0 [--resume-scoring]" >&2
+    exit 2
+    ;;
+esac
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
 eval_repo=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration
@@ -14,7 +24,9 @@ source_root=/nvmesv/dredvpn009/datasets/benchmarks/coredev_2511_vlmevalkit_7055d
 mathverse_json=/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json
 contract="$repo_root/configs/policy/runs/prl_13_a_qwen3_instruct_grpo_bs256_n16_native_crop_t1_stratified_80step_gpu0123.toml"
 overlay="$repo_root/configs/policy/runs/prl_21_r0_qwen3_instruct_full_crop_bs16_n16_tfree_16step_ws8.toml"
-run_id=T20260814-PRL21-crop-tfree16
+# The suffix is sha256(evaluation identity + scoring-view identity).  VLMEvalKit
+# only discovers timestamp or legacy TYYYYMMDD_G<hex> run directories for reuse.
+run_id=T20260815_Gc2f1cd6d5d93579e517ad6a7dd97fd43782ad9a2a67645bbc73fb7967b5daf8a
 judge_url=http://127.0.0.1:8012/v1
 judge_pid=
 
@@ -38,8 +50,105 @@ if [[ ! -s "$train_root/completion.json" ]]; then
   echo "PRL21 training completion is absent" >&2
   exit 1
 fi
-cp "$overlay" "$eval_root/runtime/training-overlay.toml"
-cat > "$eval_root/runtime/step0-reuse.json" <<'JSON'
+
+validate_scoring_inputs() {
+  local step=$1
+  local status="$eval_root/logs/status-step${step}.json"
+  local summary="$eval_root/logs/scoring-materialize-step${step}.json"
+
+  [[ -s "$status" ]] || {
+    echo "step${step} inference status is absent" >&2
+    return 1
+  }
+  "$python_bin" - "$status" "$summary" "$run_id" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+status_path = pathlib.Path(sys.argv[1])
+summary_path = pathlib.Path(sys.argv[2])
+expected_run_id = sys.argv[3]
+status = json.loads(status_path.read_text())
+if status.get("completed_single_image") != 2240 or status.get("remaining_single_image") != 0:
+    raise SystemExit(f"incomplete inference status: {status_path}")
+if status.get("multi_image_pending_protocol_decision") != 271:
+    raise SystemExit(f"unexpected multi-image count: {status_path}")
+
+if not summary_path.is_file():
+    raise SystemExit(f"scoring materialization summary is absent: {summary_path}")
+summary = json.loads(summary_path.read_text())
+if summary.get("official_row_count") != 2511:
+    raise SystemExit(f"unexpected official row count: {summary_path}")
+if summary.get("observed_single_image_count") != 2240:
+    raise SystemExit(f"unexpected single-image count: {summary_path}")
+if summary.get("unsupported_multi_image_count") != 271:
+    raise SystemExit(f"unexpected unsupported multi-image count: {summary_path}")
+if summary.get("run_id") != expected_run_id:
+    raise SystemExit(f"unexpected scoring run identity: {summary_path}")
+slices = summary.get("slices", [])
+expected_counts = {
+    "VStarBench": (191, 191, 0),
+    "HRBench4K": (200, 200, 0),
+    "BLINK": (420, 180, 240),
+    "OCRBench_v2": (600, 600, 0),
+    "MMMU_Pro_10c": (300, 269, 31),
+    "MathVista_MINI": (300, 300, 0),
+    "MathVerse_MINI": (500, 500, 0),
+}
+if {item.get("dataset") for item in slices} != set(expected_counts):
+    raise SystemExit(f"unexpected scoring slices: {summary_path}")
+for item in slices:
+    counts = (
+        item.get("official_row_count"),
+        item.get("observed_single_image_count"),
+        item.get("unsupported_multi_image_count"),
+    )
+    if counts != expected_counts[item["dataset"]]:
+        raise SystemExit(f"unexpected slice counts for {item['dataset']}: {counts}")
+    prediction = pathlib.Path(item["prediction_file"])
+    if not prediction.is_file() or prediction.stat().st_size == 0:
+        raise SystemExit(f"prediction file is absent or empty: {prediction}")
+    manifest_path = pathlib.Path(item["manifest"])
+    manifest = json.loads(manifest_path.read_text())
+    derived = manifest.get("derived", {})
+    verification = manifest.get("verification", {})
+    if pathlib.Path(derived.get("path", "")) != prediction:
+        raise SystemExit(f"manifest prediction path mismatch: {manifest_path}")
+    if derived.get("row_count") != item["official_row_count"]:
+        raise SystemExit(f"manifest prediction row count mismatch: {manifest_path}")
+    digest = hashlib.sha256(prediction.read_bytes()).hexdigest()
+    if derived.get("sha256") != digest:
+        raise SystemExit(f"manifest prediction hash mismatch: {manifest_path}")
+    required_verification = (
+        "index_order_and_values_identical",
+        "non_prediction_source_fields_verified",
+        "unchanged_non_prediction_source_fields_identical",
+    )
+    if not all(verification.get(key) is True for key in required_verification):
+        raise SystemExit(f"non-prediction field verification failed: {manifest_path}")
+PY
+}
+
+materialize_scoring_views() {
+  local step scoring_root
+  for step in 8 16; do
+    scoring_root="$eval_root/step${step}/scoring/coredev-official-v1"
+    "$python_bin" "$eval_repo/tools/materialize_policy_coredev_scoring.py" \
+      --inference-root "$eval_root/step${step}/inference" \
+      --tasks "$task_manifest" \
+      --source-root "$source_root" \
+      --output-root "$scoring_root" \
+      --evaluation-id "PRL21-R0-CROP-TFREE-COREDEV2511-STEP${step}-TEMP1-SEED42-V1" \
+      --run-id "$run_id" \
+      --mathverse-source-json "$mathverse_json" \
+      > "$eval_root/logs/scoring-materialize-step${step}.json"
+  done
+}
+
+if [[ "$resume_scoring_only" == false ]]; then
+  cp "$overlay" "$eval_root/runtime/training-overlay.toml"
+  cat > "$eval_root/runtime/step0-reuse.json" <<'JSON'
 {
   "schema_version": "tgvf.policy-step0-reuse.v1",
   "source": "PRL14 clean-final Crop Step0 / original Qwen3-VL-8B-Instruct",
@@ -136,17 +245,11 @@ step16_pid=$!
 wait "$step8_pid"
 wait "$step16_pid"
 
+fi
+
+materialize_scoring_views
 for step in 8 16; do
-  scoring_root="$eval_root/step${step}/scoring/coredev-official-v1"
-  "$python_bin" "$eval_repo/tools/materialize_policy_coredev_scoring.py" \
-    --inference-root "$eval_root/step${step}/inference" \
-    --tasks "$task_manifest" \
-    --source-root "$source_root" \
-    --output-root "$scoring_root" \
-    --evaluation-id "PRL21-R0-CROP-TFREE-COREDEV2511-STEP${step}-TEMP1-SEED42-V1" \
-    --run-id "$run_id" \
-    --mathverse-source-json "$mathverse_json" \
-    > "$eval_root/logs/scoring-materialize-step${step}.json"
+  validate_scoring_inputs "$step"
 done
 
 env CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1 \
@@ -180,7 +283,7 @@ for step in 8 16; do
     env OPENAI_API_KEY=EMPTY \
       "$python_bin" "$eval_repo/tools/run_coredev_2511_vlmevalkit.py" \
       --data "$dataset" --model Qwen3-VL-8B-Instruct \
-      --work-dir "$work_dir" --mode eval --reuse \
+      --work-dir "$work_dir" --mode eval --reuse --reuse-aux infer \
       --judge Qwen2.5-72B-Instruct --judge-base-url "$judge_url" \
       --judge-key EMPTY --judge-api-nproc 4 --judge-retry 6 \
       --judge-timeout 600 \

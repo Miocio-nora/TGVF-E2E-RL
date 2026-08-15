@@ -6,6 +6,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).parents[2]
 _LAUNCHER = _ROOT / "tools/launch_prl21_crop_tfree16.py"
+_EVALUATOR = _ROOT / "tools/supervise_prl21_crop_tfree16_eval.sh"
 _CONFIG = (
     _ROOT / "configs/policy/runs/"
     "prl_21_r0_qwen3_instruct_full_crop_bs16_n16_tfree_16step_ws8.toml"
@@ -68,3 +69,13 @@ def test_smoke_uses_the_same_reward_but_never_logs_to_wandb() -> None:
     assert values["trainer.total_training_steps"] == 1
     assert values["trainer.n_gpus_per_node"] == 4
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
+
+
+def test_evaluator_can_resume_scoring_from_a_discoverable_inference_view() -> None:
+    script = _EVALUATOR.read_text(encoding="utf-8")
+
+    assert "--resume-scoring) resume_scoring_only=true" in script
+    assert "--mode eval --reuse --reuse-aux infer" in script
+    assert "run_id=T20260815_G" in script
+    assert "materialize_scoring_views" in script
+    assert "validate_scoring_inputs" in script
