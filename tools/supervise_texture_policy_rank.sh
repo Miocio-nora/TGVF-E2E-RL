@@ -65,8 +65,14 @@ if payload.get("expected_single_image_count") != expected_task_count:
     raise SystemExit("texture policy config does not bind an all-single-image suite")
 if payload.get("image_max_pixels") != 262144:
     raise SystemExit("texture policy config does not bind max_pixels=262144")
-if payload.get("evaluation_protocol") != "training_run":
-    raise SystemExit("texture TGVF policy config must use training_run")
+accepted_protocols = {
+    "training_run",
+    "deepeyes_official_visible_native_crop_v1",
+}
+if payload.get("evaluation_protocol") not in accepted_protocols:
+    raise SystemExit(
+        "texture policy config must use an accepted TGVF or Crop protocol"
+    )
 PY
 
 rank_root="$control_root/workers/$label/rank-$rank"
