@@ -17,6 +17,9 @@ from tgvf_rl.data.tgvf_tool_utility import (
     TGVFToolUtilityLabelBinding,
     TGVFToolUtilityRuntimeBinding,
 )
+from tgvf_rl.data.policy_teacher_quarter_mix import (
+    PolicyTeacherQuarterMixRuntimeBinding,
+)
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.focus_tool import PrecomputedTGVFObservationPayload
 from tgvf_rl.environment.native_appender import (
@@ -37,6 +40,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _rp66_matched_source_route,
     _rp66_response_budget_controls,
     _trainable_rp66_launch_mode,
+    _validate_sample_fields,
     _visual_quality_provider_request,
 )
 from tgvf_rl.framework.verl.policy_runtime import PolicyAgentLoopWorkerPlacement
@@ -56,6 +60,7 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
 )
+from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.rewards.context import reward_context_from_trajectory
 from tgvf_rl.rewards.schema import AnswerTaskKind
 from tgvf_rl.rewards.stage3_shaped import QualityJudgeScore
@@ -76,6 +81,138 @@ from tgvf_rl.representation.deepstack import DDeepStackPayload
 
 SHA = "7" * 64
 BRANCH_LAYERS = (8, 16, 24)
+
+
+def _teacher_quarter_live_identity_fixture(
+    tmp_path: Path,
+    data_source: str,
+    task_kind: str,
+) -> tuple[SimpleNamespace, str, dict[str, object], dict[str, object]]:
+    sample_id = f"teacher-quarter:{data_source}"
+    image_path = (tmp_path / f"{data_source}.png").resolve()
+    record = {
+        "sample_id": sample_id,
+        "candidate_sha256": "1" * 64,
+        "data_source": data_source,
+        "source_dataset": "chartqa" if data_source == "teacher" else data_source,
+        "task_kind": task_kind,
+        "question": "What is shown?",
+        "ground_truth": "A",
+        "image": {
+            "path": str(image_path),
+            "sha256": "2" * 64,
+            "width": 10,
+            "height": 10,
+        },
+        "gt_regions": None,
+        "mixture_role": "teacher" if data_source == "teacher" else "base",
+        "parent": {
+            "dataset_kind": "fixture",
+            "row_index": 0,
+            "row_sha256": "3" * 64,
+        },
+        "schedule_index": 0,
+        "schema_version": "fixture",
+    }
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+        protocol=SimpleNamespace(prompt_sha256="8" * 64),
+        dataset=SimpleNamespace(
+            selected_sample=None,
+            root=tmp_path,
+            iteration_identity_sha256="9" * 64,
+            runtime_binding=PolicyTeacherQuarterMixRuntimeBinding(
+                manifest_file_sha256="4" * 64,
+                content_sha256="5" * 64,
+                schedule_seed=42,
+                expected_sample_count=1,
+            ),
+        ),
+    )
+    expected_prompt_sha256 = (
+        THINKLITE_PROMPT_IDENTITY.bundle_sha256
+        if data_source == "thinklite"
+        else "8" * 64
+    )
+    fields: dict[str, object] = {
+        "sample_id": sample_id,
+        "prompt_bundle_sha256": expected_prompt_sha256,
+        "source_image_path": str(image_path),
+        "source_image_sha256": "2" * 64,
+        "question": "What is shown?",
+        "data_source": data_source,
+        "task_kind": task_kind,
+        "reward_model": {"ground_truth": "A"},
+    }
+    return config, sample_id, record, fields
+
+
+@pytest.mark.parametrize(
+    ("data_source", "task_kind"),
+    (("teacher", "mcq"), ("vstar", "open"), ("thinklite", "math")),
+)
+def test_teacher_quarter_live_sample_identity_uses_normalized_schedule_fields(
+    tmp_path: Path,
+    data_source: str,
+    task_kind: str,
+) -> None:
+    config, sample_id, record, fields = _teacher_quarter_live_identity_fixture(
+        tmp_path, data_source, task_kind
+    )
+
+    _validate_sample_fields(
+        config,
+        sample_id,
+        fields,
+        sample_index={sample_id: record},
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value", "error_pattern"),
+    (
+        ("prompt_bundle_sha256", "0" * 64, "prompt_bundle_sha256"),
+        ("source_image_path", "/changed/image.png", "source_image_path"),
+        ("source_image_sha256", "0" * 64, "source_image_sha256"),
+        ("question", "Changed question", "question"),
+        ("task_kind", "open", "task_kind"),
+    ),
+)
+def test_teacher_quarter_live_sample_identity_rejects_changed_runtime_fields(
+    tmp_path: Path,
+    field: str,
+    changed_value: object,
+    error_pattern: str,
+) -> None:
+    config, sample_id, record, fields = _teacher_quarter_live_identity_fixture(
+        tmp_path, "teacher", "mcq"
+    )
+    fields[field] = changed_value
+
+    with pytest.raises(IdentityMismatchError, match=error_pattern):
+        _validate_sample_fields(
+            config,
+            sample_id,
+            fields,
+            sample_index={sample_id: record},
+        )
+
+
+def test_teacher_quarter_live_sample_identity_rejects_changed_ground_truth(
+    tmp_path: Path,
+) -> None:
+    config, sample_id, record, fields = _teacher_quarter_live_identity_fixture(
+        tmp_path, "teacher", "mcq"
+    )
+    fields["reward_model"] = {"ground_truth": "B"}
+
+    with pytest.raises(IdentityMismatchError, match="ground truth"):
+        _validate_sample_fields(
+            config,
+            sample_id,
+            fields,
+            sample_index={sample_id: record},
+        )
 
 
 def test_default_live_metrics_factory_uses_the_pinned_verl_public_model() -> None:
