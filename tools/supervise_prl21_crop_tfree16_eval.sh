@@ -11,6 +11,12 @@ case "${1:-}" in
     ;;
 esac
 
+if [[ "$resume_scoring_only" == true ]]; then
+  scoring_view=coredev-official-v1-recovery1
+else
+  scoring_view=coredev-official-v1
+fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
 eval_repo=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration
@@ -54,7 +60,7 @@ fi
 validate_scoring_inputs() {
   local step=$1
   local status="$eval_root/logs/status-step${step}.json"
-  local summary="$eval_root/logs/scoring-materialize-step${step}.json"
+  local summary="$eval_root/logs/scoring-materialize-${scoring_view}-step${step}.json"
 
   [[ -s "$status" ]] || {
     echo "step${step} inference status is absent" >&2
@@ -131,9 +137,18 @@ PY
 }
 
 materialize_scoring_views() {
-  local step scoring_root
+  local step scoring_root summary
   for step in 8 16; do
-    scoring_root="$eval_root/step${step}/scoring/coredev-official-v1"
+    scoring_root="$eval_root/step${step}/scoring/$scoring_view"
+    summary="$eval_root/logs/scoring-materialize-${scoring_view}-step${step}.json"
+    if [[ -s "$summary" ]] && validate_scoring_inputs "$step"; then
+      echo "step${step} immutable scoring view already validated; reusing it"
+      continue
+    fi
+    if [[ -e "$scoring_root" ]] && [[ -n "$(find "$scoring_root" -mindepth 1 -print -quit)" ]]; then
+      echo "partial immutable step${step} scoring view requires a new recovery identity: $scoring_root" >&2
+      return 1
+    fi
     "$python_bin" "$eval_repo/tools/materialize_policy_coredev_scoring.py" \
       --inference-root "$eval_root/step${step}/inference" \
       --tasks "$task_manifest" \
@@ -142,7 +157,7 @@ materialize_scoring_views() {
       --evaluation-id "PRL21-R0-CROP-TFREE-COREDEV2511-STEP${step}-TEMP1-SEED42-V1" \
       --run-id "$run_id" \
       --mathverse-source-json "$mathverse_json" \
-      > "$eval_root/logs/scoring-materialize-step${step}.json"
+      > "$summary"
   done
 }
 
@@ -279,7 +294,7 @@ datasets=(VStarBench HRBench4K BLINK OCRBench_v2 MMMU_Pro_10c MathVista_MINI Mat
 for step in 8 16; do
   score_pids=()
   for dataset in "${datasets[@]}"; do
-    work_dir="$eval_root/step${step}/scoring/coredev-official-v1/$dataset"
+    work_dir="$eval_root/step${step}/scoring/$scoring_view/$dataset"
     env OPENAI_API_KEY=EMPTY \
       "$python_bin" "$eval_repo/tools/run_coredev_2511_vlmevalkit.py" \
       --data "$dataset" --model Qwen3-VL-8B-Instruct \
