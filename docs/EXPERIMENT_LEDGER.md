@@ -10078,3 +10078,17 @@ than inferred from a script name or prior conversation.
   Executable shared-data identity is commit
   `37b99e2b01f9459e0ee65f6b86e2950bf60d4417`; this descendant adds only the
   arm-specific immutable config and this experiment ledger before launch.
+- The first formal launch on 2026-08-16 failed before any rollout completed or
+  optimizer update was applied. The live identity validator still assumed the
+  historical T1 JSONL shape with nested `extra_info.question` and
+  `reward_model.ground_truth`, whereas all 20,480 rows of the immutable PRL22
+  schedule intentionally store `question` and `ground_truth` as canonical
+  top-level fields and let the veRL Dataset reconstruct the nested runtime
+  values. Recovery commit `fa0ea3a` selects the bound-row normalization by
+  `PolicyTeacherQuarterMixRuntimeBinding`, preserves every existing equality
+  check (sample, prompt, image path/SHA, question, source, task kind and ground
+  truth), and leaves the artifact and its hashes unchanged. The real first 256
+  ordered rows covering all four source routes passed the live validator; 73
+  focused runtime/dataset/launcher tests plus explicit changed-field rejection
+  tests passed before formal restart. No checkpoint, metric row or model update
+  exists from the rejected attempt.
