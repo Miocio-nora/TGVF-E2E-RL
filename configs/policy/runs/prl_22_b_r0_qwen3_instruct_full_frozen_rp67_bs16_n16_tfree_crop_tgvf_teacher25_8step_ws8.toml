@@ -161,7 +161,7 @@ validation_frequency = -1
 resume_mode = "auto"
 resume_from_path = ""
 maximum_actor_checkpoints_to_keep = 2
-permanent_checkpoint_steps = [4, 5, 6, 8]
+permanent_checkpoint_steps = [8]
 
 [output]
 root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-22-B-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-teacher25-8step-ws8"

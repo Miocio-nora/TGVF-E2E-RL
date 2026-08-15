@@ -10065,8 +10065,9 @@ than inferred from a script name or prior conversation.
 - Qwen3-VL-8B-Instruct, the frozen RP67 Step-2000 Adapter, Crop+TGVF prompt and
   tool protocol, T-free reward, answer judge, temperature-1 rollout sampling,
   world8 BS16 x n16, micro2/GA1, constant `1e-6` AdamW, response limits, and
-  checkpoint policy are byte-for-byte inherited from PRL20-R0.  Operational
-  run/output identities are independently named; executable code is bound to
+  all mathematical training settings are byte-for-byte inherited from
+  PRL20-R0. Operational run/output identities are independently named;
+  executable code is bound to
   `37b99e2b01f9459e0ee65f6b86e2950bf60d4417`.
 - The immutable base config stops at Step 8.  A later experiment-owned horizon
   extension may continue the exact Step-8 state to Step 16 while preserving
@@ -10074,6 +10075,37 @@ than inferred from a script name or prior conversation.
 - Config:
   `configs/policy/runs/prl_22_b_r0_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_crop_tgvf_teacher25_8step_ws8.toml`.
   Config identity is
-  `d87f7666f7d519f579ba06976de9afe35668223f51bcbfdd8afa169caab8c074`.
-  Strict CPU config loading and formal Step-8 compose-only preflight passed;
-  no GPU process was started.  Status: launch-ready, not launched.
+  `29b3a9d4d9337e160f47d184b14c63b1a818ce9385d7f6c83d61764d8b4a667d`;
+  the config-file SHA256 is
+  `4ef4eba5b46704b19b5a727263f9d7a448a207ff207f581dc8692ebd560bd312`.
+
+#### PRL-22-B automatic Step-16 relay (2026-08-16)
+
+- The user requested that this arm automatically follow the complete PRL-22-A
+  TGVF Teacher25 pipeline. The relay is isolated from the already-running A
+  worktree and process. It accepts A only from the canonical atomic
+  `tgvf.paired-coredev-evaluation-complete.v1` receipt, verifies the evaluation
+  identity and paired-summary SHA256, waits for the A process boundary, and
+  observes two consecutive all-GPU-quiescent polls. A source exit without that
+  receipt fails closed and never starts B.
+- The B supervisor performs a CPU-only formal compose, fresh/auto-resumable
+  Step 0 to Step 8, strict permanent-checkpoint closure, an experiment-owned
+  horizon extension from the exact Step-8 state to Step 16, a second strict
+  closure, then paired CoreDev-2511 evaluation of Steps 8 and 16 on all eight
+  GPUs. W&B identity is `prl22bt25`; operational interruptions have bounded
+  retries, while deterministic identity/schema, OOM, non-finite, credential,
+  and model failures are not blindly retried.
+- The Teacher25 flat sample schema is accepted through the typed
+  `PolicyTeacherQuarterMixRuntimeBinding`; historical nested T1 samples retain
+  their prior validation, and all dataset/sample/source/ground-truth identity
+  checks remain fail-closed. This is the same tested recovery used by PRL-22-A
+  and changes no optimization target or sample content.
+- Only Step 8 is permanent in the immutable base config; the horizon extension
+  makes Step 16 permanent. Historical PRL20 diagnostic permanent Steps 4/5/6
+  were deliberately removed because they are not measured endpoints and would
+  consume about 288 GiB. Rolling checkpoints still provide interruption
+  recovery, so this changes storage policy rather than training mathematics.
+- The paired evaluator reuses PRL20's exact Crop+TGVF common-random-number
+  namespace and protocol SHA, allowing a paired Teacher25-versus-original-data
+  comparison. Its distinct evaluation and output identities prevent artifact
+  collision with PRL20 or PRL22-A.
