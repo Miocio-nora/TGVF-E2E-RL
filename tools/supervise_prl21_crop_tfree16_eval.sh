@@ -12,14 +12,17 @@ case "${1:-}" in
 esac
 
 if [[ "$resume_scoring_only" == true ]]; then
-  scoring_view=coredev-official-v1-recovery1
+  scoring_view=coredev-official-v1-recovery2
 else
   scoring_view=coredev-official-v1
 fi
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
-eval_repo=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-prl13-integration
+# Evaluation code must come from the same immutable checkout as this supervisor.
+# A historical integration checkout lacks the current Instruct-model status and
+# deterministic judge contracts.
+eval_repo="$repo_root"
 python_bin="$main_root/.venv312/bin/python"
 vllm_bin="$main_root/.venv312/bin/vllm"
 train_root="$main_root/artifacts/policy/PRL-21-R0-qwen3-instruct-full-crop-bs16-n16-tfree-16step-ws8"

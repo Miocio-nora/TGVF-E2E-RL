@@ -79,3 +79,5 @@ def test_evaluator_can_resume_scoring_from_a_discoverable_inference_view() -> No
     assert "run_id=T20260815_G" in script
     assert "materialize_scoring_views" in script
     assert "validate_scoring_inputs" in script
+    assert 'eval_repo="$repo_root"' in script
+    assert "tgvf-e2e-rl-prl13-integration" not in script
