@@ -10047,3 +10047,34 @@ than inferred from a script name or prior conversation.
   inside the launch worktree as required by launch provenance. This recovery
   changes no model, data, optimizer, reward, prompt, tool, RNG or scheduler
   setting; continuation remains the exact Step-8-to-16 run.
+
+### PRL-22-A-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-TEACHER25
+
+- Authorized 2026-08-15 as the TGVF arm of the shared teacher-quarter data
+  treatment. The scientific control is PRL17-R2: Qwen3-VL-8B-Instruct, full
+  Qwen policy update, frozen RP67 Step-2000 Adapter, T-free shaped reward,
+  TGVF-only prompt/tool protocol, temperature 1, BS16 x n16, world8/micro2,
+  constant `1e-6` learning rate and all rollout/capacity settings are fixed.
+- The sole intended treatment is the immutable
+  `policy_t1_teacher_quarter_mix` schedule at
+  `artifacts/data/policy_rl/PRL22-TEACHER25-MIXED-SCHEDULE-v1`: 20,480 ordered
+  prompts with exactly 15,360 retained-T1 rows and 5,120 teacher rows. Every
+  contiguous BS16 batch is 12 old + 4 teacher, and each 256-row macro is
+  90 VStar + 58 ArxivQA + 44 ThinkLite + 64 teacher. Dataset content, samples
+  and iteration identities are bound in the run config.
+- The immutable base run stops at Step 8 and permanently retains that endpoint.
+  After its exact checkpoint pair closes, the supervisor materializes a
+  `policy-horizon-extension-v1` receipt and resumes the same optimizer,
+  scheduler, data cursor, RNG and W&B identity through Step 16. The extension
+  makes both Step 8 and Step 16 permanent while keeping intermediate steps as
+  rolling recovery checkpoints.
+- Only formal training is uploaded to W&B under the independent run identity
+  `prl22at25`; engineering compose/smoke checks remain local. After Step 16,
+  Step 8 and Step 16 are evaluated under the existing paired-temperature-1
+  CoreDev-2511 seven-suite protocol; Step 0 is not rerun because data mixing
+  does not change the common frozen-RP67 initialization.
+- Config:
+  `configs/policy/runs/prl_22_a_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_teacher25_8step_ws8.toml`.
+  Executable shared-data identity is commit
+  `37b99e2b01f9459e0ee65f6b86e2950bf60d4417`; this descendant adds only the
+  arm-specific immutable config and this experiment ledger before launch.
