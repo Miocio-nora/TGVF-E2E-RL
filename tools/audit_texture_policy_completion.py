@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed completion audit for the 42,870-row texture policy suite."""
+"""Fail-closed completion audit for a config-bound texture policy suite."""
 
 from __future__ import annotations
 
@@ -47,12 +47,17 @@ TEXTURE_POLICY_WORLD_SIZE = 4
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Audit exact completion of one 42,870-row texture policy benchmark. "
+            "Audit exact completion of one config-bound texture policy benchmark. "
             "This command is read-only unless --output is supplied."
         )
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--world-size", type=int, default=TEXTURE_POLICY_WORLD_SIZE)
+    parser.add_argument(
+        "--expected-task-count",
+        type=int,
+        help="Expected count; defaults to the immutable config value.",
+    )
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -532,8 +537,17 @@ def materialize_texture_policy_completion_audit(
 
 def main() -> int:
     args = _parser().parse_args()
+    config = load_policy_coredev_config(args.config.expanduser().resolve(strict=True))
+    expected_task_count = (
+        config.expected_task_count
+        if args.expected_task_count is None
+        else args.expected_task_count
+    )
     report = materialize_texture_policy_completion_audit(
-        args.config, output=args.output, world_size=args.world_size
+        args.config,
+        output=args.output,
+        world_size=args.world_size,
+        expected_task_count=expected_task_count,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

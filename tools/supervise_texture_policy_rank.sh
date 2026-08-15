@@ -58,8 +58,11 @@ if gpu_ids is None or len(gpu_ids) != 4 or gpu_ids[rank] != gpu:
     raise SystemExit(
         f"rank/GPU differs from immutable config: rank={rank} gpu={gpu} gpu_ids={gpu_ids}"
     )
-if payload.get("expected_task_count") != 42870:
-    raise SystemExit("texture policy config does not bind the full 42,870-task suite")
+expected_task_count = payload.get("expected_task_count")
+if type(expected_task_count) is not int or expected_task_count <= 0:
+    raise SystemExit("texture policy config has an invalid expected task count")
+if payload.get("expected_single_image_count") != expected_task_count:
+    raise SystemExit("texture policy config does not bind an all-single-image suite")
 if payload.get("image_max_pixels") != 262144:
     raise SystemExit("texture policy config does not bind max_pixels=262144")
 if payload.get("evaluation_protocol") != "training_run":

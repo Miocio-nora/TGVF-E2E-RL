@@ -1,0 +1,35 @@
+{
+  "arms": [
+    {
+      "arm_id": "tgvf-prl17-r2-rp67-step16-corrected-prompt",
+      "backend": "policy_benchmark",
+      "evaluation_protocol": "training_run",
+      "expected_optimizer_step": 16,
+      "kind": "tgvf",
+      "paired_qwen_model_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-17-R2-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-novisual-8step-ws8/evaluation/PRL17-R2-FROZEN-RP67-TFREE-COREDEV2511-STEP0-STEP8-STEP16-PAIRED-SEED-V1/step16/runtime/qwen-only-bundle/model",
+      "paired_rp66_pointer_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-17-R2-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-novisual-8step-ws8/evaluation/PRL17-R2-FROZEN-RP67-TFREE-COREDEV2511-STEP0-STEP8-STEP16-PAIRED-SEED-V1/step16/runtime/rp66-state/step-00000016-pointer.json",
+      "paired_snapshot_receipt_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-PRL17-TGVF-STEP16-CORRECTED-PROMPT-512-V1/tgvf-prl17-r2-rp67-step16-corrected-prompt/evaluation/runtime/paired-snapshot-receipt.json",
+      "policy_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-17-R2-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-novisual-8step-ws8/evaluation/PRL17-R2-FROZEN-RP67-TFREE-COREDEV2511-STEP0-STEP8-STEP16-PAIRED-SEED-V1/step16/runtime/frozen-policy-config.toml"
+    }
+  ],
+  "gpu_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "matrix_id": "texture-last-paper400-mmad-1shot-random-prl17-tgvf-step16-corrected-prompt-512-v1",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-PRL17-TGVF-STEP16-CORRECTED-PROMPT-512-V1",
+  "schema_version": "tgvf-texture-benchmark-matrix-v1",
+  "task_count": 42870,
+  "task_manifest_path": "/nvmesv/dredvpn009/datasets/benchmarks/texture_evaluation_v1/suite-last-paper400-mmad-1shot-random/tasks.jsonl",
+  "task_manifest_sha256": "89d1510862c7cde5e0b3dd37b7d5fa345c7ed2c573a31e59a151cba3f9bb1ace",
+  "vision": {
+    "max_pixels": 262144,
+    "min_pixels": 65536,
+    "pre_resize_assets": false,
+    "preserve_aspect_ratio": true,
+    "qwen_merge_size": 2,
+    "qwen_patch_size": 16
+  }
+}

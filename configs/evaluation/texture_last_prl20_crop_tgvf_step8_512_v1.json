@@ -1,0 +1,35 @@
+{
+  "arms": [
+    {
+      "arm_id": "tgvf-crop-prl20-r0-rp67-step8",
+      "backend": "policy_benchmark",
+      "evaluation_protocol": "training_run",
+      "expected_optimizer_step": 8,
+      "kind": "tgvf_crop",
+      "paired_qwen_model_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/evaluation/PRL20-R0-FROZEN-RP67-TFREE-CROP-TGVF-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/step8/runtime/qwen-only-bundle/model",
+      "paired_rp66_pointer_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/evaluation/PRL20-R0-FROZEN-RP67-TFREE-CROP-TGVF-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/step8/runtime/rp66-state/step-00000008-pointer.json",
+      "paired_snapshot_receipt_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-PRL20-CROP-TGVF-STEP8-512-V1/tgvf-crop-prl20-r0-rp67-step8/evaluation/runtime/paired-snapshot-receipt.json",
+      "policy_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-20-R0-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-8step-ws8/evaluation/PRL20-R0-FROZEN-RP67-TFREE-CROP-TGVF-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1/step8/runtime/frozen-policy-config.toml"
+    }
+  ],
+  "gpu_ids": [
+    4,
+    5,
+    6,
+    7
+  ],
+  "matrix_id": "texture-last-paper400-neutral-prl20-crop-tgvf-step8-512-v1",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-PRL20-CROP-TGVF-STEP8-512-V1",
+  "schema_version": "tgvf-texture-benchmark-matrix-v1",
+  "task_count": 3200,
+  "task_manifest_path": "/nvmesv/dredvpn009/datasets/benchmarks/texture_evaluation_v1/last-paper400-neutral-v1/tasks.jsonl",
+  "task_manifest_sha256": "9f2d76585569e7c9892d6752af6b2e356d481b7d149e17107af5314f9c352ccd",
+  "vision": {
+    "max_pixels": 262144,
+    "min_pixels": 65536,
+    "pre_resize_assets": false,
+    "preserve_aspect_ratio": true,
+    "qwen_merge_size": 2,
+    "qwen_patch_size": 16
+  }
+}
