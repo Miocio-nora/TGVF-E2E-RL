@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+import logging
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 from PIL import Image
@@ -22,6 +24,41 @@ from .native_deepeyes_runtime import (
     assert_native_pixel_row,
     assert_observation_mask,
 )
+
+
+logger = logging.getLogger(__name__)
+
+_VLLM_DECODER_PROMPT_OVERFLOW = re.compile(
+    r"The decoder prompt \(length (?P<prompt>[1-9][0-9]*)\) is longer than "
+    r"the maximum model length of (?P<limit>[1-9][0-9]*)\. Make sure that "
+    r"`max_model_len` is no smaller than the number of text tokens plus "
+    r"multimodal tokens\. For image inputs, the number of image tokens depends "
+    r"on the number of images, and possibly their aspect ratios as well\."
+)
+
+
+def _decoder_prompt_overflow_limits(error: Exception) -> tuple[int, int] | None:
+    """Recognize only vLLM's explicit per-request context-limit rejection.
+
+    Ray preserves the underlying ``ValueError`` in ``RayTaskError.cause``.
+    Inspecting that exception chain, rather than the rendered remote traceback,
+    prevents an unrelated outer worker error that merely quotes this message
+    from being mistaken for a sample-local rejection.
+    """
+
+    leaf: BaseException | None = error if type(error) is ValueError else None
+    if leaf is None and type(error).__module__ == "ray.exceptions":
+        ray_cause = getattr(error, "cause", None)
+        if type(ray_cause) is ValueError:
+            leaf = ray_cause
+    if leaf is None:
+        return None
+    match = _VLLM_DECODER_PROMPT_OVERFLOW.fullmatch(str(leaf))
+    if match is None:
+        return None
+    prompt = int(match.group("prompt"))
+    limit = int(match.group("limit"))
+    return (prompt, limit) if prompt > limit else None
 
 
 def deepeyes_user_observation_messages(
@@ -252,11 +289,53 @@ def _build_native_deepeyes_agent_loop_class() -> type[Any]:
                     remaining_response_tokens,
                 ),
             }
-            state = await super()._handle_generating_state(
-                agent_data,
-                turn_sampling_params,
-                ignore_termination=ignore_termination,
-            )
+            try:
+                state = await super()._handle_generating_state(
+                    agent_data,
+                    turn_sampling_params,
+                    ignore_termination=ignore_termination,
+                )
+            except Exception as error:
+                overflow = _decoder_prompt_overflow_limits(error)
+                if overflow is None:
+                    raise
+
+                # A source prompt that is already too large is a data/config
+                # error and must still stop the run.  Only a trajectory that
+                # grew past vLLM's limit after a rendered Crop observation is
+                # a legitimate sample-local outcome.  Terminating here keeps
+                # all prior assistant tokens and masks intact; the absent
+                # direct final answer is then scored by the unchanged T-free
+                # reward as protocol-invalid instead of killing the batch.
+                audit = ensure_native_crop_audit_fields(agent_data.extra_fields)
+                spans = audit["crop_observation_token_spans"]
+                if (
+                    not agent_data.response_mask
+                    or 1 not in agent_data.response_mask
+                    or not spans
+                    or "global_steps" not in agent_data.extra_fields
+                ):
+                    raise
+                prompt_tokens, model_limit = overflow
+                configured_limit = getattr(self.rollout_config, "max_model_len", None)
+                if configured_limit != model_limit:
+                    raise
+                agent_data.extra_fields.update(
+                    {
+                        "decoder_context_overflow": 1,
+                        "decoder_prompt_length_at_overflow": prompt_tokens,
+                        "decoder_max_model_length_at_overflow": model_limit,
+                    }
+                )
+                logger.warning(
+                    "Terminating one native Crop trajectory after context "
+                    "overflow: decoder prompt %d > model limit %d after %d "
+                    "rendered tool observations",
+                    prompt_tokens,
+                    model_limit,
+                    len(spans),
+                )
+                return AgentState.TERMINATED
             if state is not AgentState.PROCESSING_TOOLS:
                 return state
 

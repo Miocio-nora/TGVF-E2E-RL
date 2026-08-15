@@ -228,3 +228,63 @@ def test_full_model_arm_cannot_silently_ignore_declared_protocol(
             expected_optimizer_step=8,
             evaluation_protocol="training_run",
         )
+
+
+def test_full_model_v2_validates_owner_and_protocol_configs_separately(
+    tmp_path: Path,
+) -> None:
+    tasks = (tmp_path / "tasks.jsonl").resolve()
+    owner = (tmp_path / "owner.toml").resolve()
+    protocol = (tmp_path / "protocol.toml").resolve()
+    manifest = (tmp_path / "snapshot.json").resolve()
+    receipt = (tmp_path / "receipt.json").resolve()
+    tasks.write_text("{}\n", encoding="utf-8")
+    owner.write_text("run_id='PRL21'\n", encoding="utf-8")
+    protocol.write_text(
+        "[protocol]\ntool_name='image_zoom_in_tool'\n", encoding="utf-8"
+    )
+    receipt.write_text("{}\n", encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "tgvf-full-model-snapshot-v2",
+                "run_contract_path": str(protocol),
+                "run_contract_file_sha256": hashlib.sha256(
+                    protocol.read_bytes()
+                ).hexdigest(),
+                "checkpoint_owner": {
+                    "config_path": str(owner),
+                    "config_file_sha256": hashlib.sha256(
+                        owner.read_bytes()
+                    ).hexdigest(),
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    matrix = TextureBenchmarkMatrix(
+        matrix_id="owner-aware-full-model",
+        task_manifest_path=tasks,
+        task_manifest_sha256=hashlib.sha256(tasks.read_bytes()).hexdigest(),
+        task_count=1,
+        output_root=(tmp_path / "out").resolve(),
+        arms=(
+            PipelineArm(
+                "crop-prl21-step16",
+                PipelineKind.CROP,
+                PipelineBackend.POLICY_BENCHMARK,
+                policy_config_path=owner,
+                full_model_snapshot_manifest_path=manifest,
+                full_model_materialization_receipt_path=receipt,
+                expected_optimizer_step=16,
+                evaluation_protocol="deepeyes_official_visible_native_crop_v1",
+            ),
+        ),
+    )
+
+    matrix.validate_files()
+
+    owner.write_text("run_id='TAMPERED'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint owner config differs"):
+        matrix.validate_files()

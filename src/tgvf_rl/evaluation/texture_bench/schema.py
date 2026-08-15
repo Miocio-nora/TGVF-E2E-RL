@@ -356,7 +356,13 @@ class TextureBenchmarkMatrix:
                     raise FileNotFoundError(path)
             if arm.backend is PipelineBackend.POLICY_BENCHMARK:
                 assert arm.policy_config_path is not None
-                observed = _policy_tool_profile(arm.policy_config_path)
+                profile_config = arm.policy_config_path
+                if arm.full_model_snapshot_manifest_path is not None:
+                    profile_config = _full_model_protocol_config_path(
+                        arm.full_model_snapshot_manifest_path,
+                        owner_config_path=arm.policy_config_path,
+                    )
+                observed = _policy_tool_profile(profile_config)
                 if observed != arm.kind.policy_tool_profile:
                     raise ValueError(
                         f"pipeline {arm.kind.value} policy tool profile differs: "
@@ -429,6 +435,55 @@ def _policy_tool_profile(path: Path) -> str:
     if isinstance(tool_name, str) and tool_name in legacy:
         return legacy[tool_name]
     raise ValueError("pipeline policy config has no recognized visual-tool profile")
+
+
+def _full_model_protocol_config_path(
+    manifest_path: Path,
+    *,
+    owner_config_path: Path,
+) -> Path:
+    """Resolve Crop protocol identity separately from a v2 checkpoint owner."""
+
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"pipeline full-model manifest is unreadable: {manifest_path}"
+        ) from error
+    if not isinstance(payload, Mapping):
+        raise ValueError("pipeline full-model manifest must be a JSON object")
+    protocol_path_value = payload.get("run_contract_path")
+    protocol_sha256 = payload.get("run_contract_file_sha256")
+    if not isinstance(protocol_path_value, str) or not protocol_path_value:
+        raise ValueError("pipeline full-model manifest lacks its protocol contract")
+    protocol_path = Path(protocol_path_value)
+    if not protocol_path.is_absolute() or not protocol_path.is_file():
+        raise ValueError("pipeline full-model protocol contract is unavailable")
+    require_sha256(protocol_sha256, name="full-model protocol contract SHA256")
+    if file_sha256(protocol_path) != protocol_sha256:
+        raise ValueError("pipeline full-model protocol contract SHA256 differs")
+
+    owner = payload.get("checkpoint_owner")
+    if owner is None:
+        if file_sha256(owner_config_path) != protocol_sha256:
+            raise ValueError("pipeline v1 full-model policy config differs")
+        return protocol_path
+    if not isinstance(owner, Mapping):
+        raise ValueError("pipeline full-model checkpoint owner is malformed")
+    owner_path_value = owner.get("config_path")
+    owner_sha256 = owner.get("config_file_sha256")
+    if not isinstance(owner_path_value, str) or not owner_path_value:
+        raise ValueError("pipeline full-model checkpoint owner lacks its config")
+    owner_path = Path(owner_path_value)
+    require_sha256(owner_sha256, name="full-model checkpoint owner config SHA256")
+    if (
+        not owner_path.is_absolute()
+        or owner_path.resolve() != owner_config_path.resolve()
+        or not owner_path.is_file()
+        or file_sha256(owner_path) != owner_sha256
+    ):
+        raise ValueError("pipeline full-model checkpoint owner config differs")
+    return protocol_path
 
 
 def _mapping(value: object, *, owner: str) -> Mapping[str, Any]:

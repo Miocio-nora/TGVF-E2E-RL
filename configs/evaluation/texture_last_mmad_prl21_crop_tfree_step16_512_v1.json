@@ -1,0 +1,34 @@
+{
+  "arms": [
+    {
+      "arm_id": "crop-prl21-r0-tfree-step16",
+      "backend": "policy_benchmark",
+      "evaluation_protocol": "deepeyes_official_visible_native_crop_v1",
+      "expected_optimizer_step": 16,
+      "full_model_materialization_receipt_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-21-R0-qwen3-instruct-full-crop-bs16-n16-tfree-16step-ws8/evaluation/PRL21-R0-CROP-TFREE-COREDEV2511-STEP8-STEP16-TEMP1-SEED42-UNIFIED-V1/step16/runtime/full-model-materialization.json",
+      "full_model_snapshot_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-21-R0-qwen3-instruct-full-crop-bs16-n16-tfree-16step-ws8/evaluation/PRL21-R0-CROP-TFREE-COREDEV2511-STEP8-STEP16-TEMP1-SEED42-UNIFIED-V1/step16/runtime/full-model-snapshot.json",
+      "kind": "crop",
+      "policy_config_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.worktrees/texture-prl21-step16/configs/policy/runs/prl_21_r0_qwen3_instruct_full_crop_bs16_n16_tfree_16step_ws8.toml"
+    }
+  ],
+  "gpu_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "matrix_id": "texture-last-paper400-mmad-1shot-random-prl21-crop-tfree-step16-512-v1",
+  "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/TEXTURE-LAST-MMAD-PRL21-CROP-TFREE-STEP16-512-V1",
+  "schema_version": "tgvf-texture-benchmark-matrix-v1",
+  "task_count": 42870,
+  "task_manifest_path": "/nvmesv/dredvpn009/datasets/benchmarks/texture_evaluation_v1/suite-last-paper400-mmad-1shot-random/tasks.jsonl",
+  "task_manifest_sha256": "89d1510862c7cde5e0b3dd37b7d5fa345c7ed2c573a31e59a151cba3f9bb1ace",
+  "vision": {
+    "max_pixels": 262144,
+    "min_pixels": 65536,
+    "pre_resize_assets": false,
+    "preserve_aspect_ratio": true,
+    "qwen_merge_size": 2,
+    "qwen_patch_size": 16
+  }
+}

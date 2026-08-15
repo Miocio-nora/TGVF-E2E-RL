@@ -10026,3 +10026,24 @@ than inferred from a script name or prior conversation.
   engineering gate only; its eight sampled trajectories are not an accuracy
   comparison. The matched world8 BS16 x n16 formal pilot remains unstarted
   pending the explicit post-canary launch decision.
+- Horizon correction on 2026-08-14: the user clarified that the primary
+  comparison is sixteen optimizer steps and that Step 8 is an intermediate
+  endpoint, not the terminal horizon. The already-running immutable eight-step
+  config remains unchanged through its exact Step-8 boundary. A separately
+  committed `policy-horizon-extension-v1` handoff then resumes the same Qwen,
+  frozen RP67, optimizer, constant scheduler, data cursor, RNG namespace and
+  W&B run from Step 8 through Step 16. No Step-8 evaluation may contend with
+  continuation training: all eight GPUs first reach Step 16, after which the
+  paired CoreDev-2511 evaluator assigns Step 8 to GPUs 0--3 and Step 16 to
+  GPUs 4--7 under one Crop+TGVF-specific paired-RNG protocol. Both endpoints
+  are permanent checkpoints; Steps 9--16 remain rolling recovery boundaries.
+- Step-8 closed normally at 03:45 JST with contiguous metrics 1--8 and a
+  complete permanent model/optimizer/data checkpoint. The first automatic
+  handoff then rejected that healthy checkpoint before continuation because
+  its shell-side reader used two stale Python interfaces
+  (`dataset.content_sha256` and tuple coercion of typed identity hashes).
+  Recovery uses the runtime-binding content hash and typed hash fields, adds
+  the dataset-samples identity, and stores the horizon-extension manifest
+  inside the launch worktree as required by launch provenance. This recovery
+  changes no model, data, optimizer, reward, prompt, tool, RNG or scheduler
+  setting; continuation remains the exact Step-8-to-16 run.

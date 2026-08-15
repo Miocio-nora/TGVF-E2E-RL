@@ -57,9 +57,7 @@ def _internal_output(*, visual: bool, source: str) -> SimpleNamespace:
                 "native_pixels_proven": True,
                 "legacy_adapter_loaded": False,
                 "observation_role": "user",
-                "observation_envelope": (
-                    "<tool_response><image>...</tool_response>"
-                ),
+                "observation_envelope": ("<tool_response><image>...</tool_response>"),
             }
         )
         multi_modal_inputs = {
@@ -141,6 +139,9 @@ def test_exact_four_worker_smoke_schema_is_rectangularized_losslessly() -> None:
         "crop_best_gt_coverage",
         "crop_error_count",
         "crop_observation_token_spans",
+        "decoder_context_overflow",
+        "decoder_prompt_length_at_overflow",
+        "decoder_max_model_length_at_overflow",
         "crop_coordinate_space",
         "crop_coordinate_conversion_version",
         "crop_coordinate_reference_size",
@@ -219,18 +220,13 @@ def test_exact_four_worker_smoke_schema_is_rectangularized_losslessly() -> None:
             "reward": reward_extra["reward"].tolist(),
         },
     )
-    assert math.isnan(
-        collision_metrics["visual"]["crop_best_call_iou"]["mean@8"]
-    )
+    assert math.isnan(collision_metrics["visual"]["crop_best_call_iou"]["mean@8"])
 
     # Real text-only Qwen preprocessing is retained as an empty mapping.  No
     # dummy pixel/grid tensors are introduced by schema normalization.
     multimodal = combined.non_tensor_batch["multi_modal_inputs"].tolist()
     assert multimodal[4:6] == [{}, {}]
-    assert all(
-        isinstance(multimodal[index], dict)
-        for index in (0, 1, 2, 3, 6, 7)
-    )
+    assert all(isinstance(multimodal[index], dict) for index in (0, 1, 2, 3, 6, 7))
     assert combined.non_tensor_batch["native_pixels_proven"].tolist()[4:6] == [
         None,
         None,
@@ -246,9 +242,7 @@ def test_policy_version_columns_remain_fail_closed() -> None:
 
 def test_policy_version_disagreement_is_not_normalized() -> None:
     chunks = _exact_smoke_worker_chunks()
-    chunks[1].non_tensor_batch["max_global_steps"] = np.array(
-        [2, 2], dtype=object
-    )
+    chunks[1].non_tensor_batch["max_global_steps"] = np.array([2, 2], dtype=object)
     with pytest.raises(RuntimeError, match="policy-version columns disagree"):
         normalize_prl13_worker_output_columns(chunks)
 
@@ -262,9 +256,7 @@ def test_reward_metadata_missing_named_column_remains_fail_closed() -> None:
 
 def test_reward_manager_null_metric_is_rejected_before_validation() -> None:
     chunks = _exact_smoke_worker_chunks()
-    chunks[0].non_tensor_batch["reward_extra_info"][0][
-        "crop_best_call_iou"
-    ] = None
+    chunks[0].non_tensor_batch["reward_extra_info"][0]["crop_best_call_iou"] = None
     with pytest.raises(RuntimeError, match="optional numeric metrics must use NaN"):
         normalize_prl13_worker_output_columns(chunks)
 

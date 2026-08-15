@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from datetime import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -15,7 +16,9 @@ import signal
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -23,20 +26,24 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from tgvf_rl.evaluation.policy_benchmark_config import (  # noqa: E402
+    materialize_full_model_policy_benchmark_config,
     materialize_paired_tgvf_policy_benchmark_config,
 )
 from tgvf_rl.evaluation.coredev_results import (  # noqa: E402
     check_qwen25_72b_judge,
+    extract_coredev_macro_star,
     summarize_coredev_results,
     write_json_atomic,
 )
 from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
+    DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
     PolicyEvaluationSnapshot,
     freeze_policy_evaluation_snapshot,
     load_benchmark_tasks,
     load_policy_coredev_config,
     load_policy_evaluation_snapshot,
     materialize_vllm_lora_adapter,
+    paired_evaluation_rng_contract,
     policy_benchmark_task_path,
     write_policy_evaluation_identity,
 )
@@ -49,6 +56,25 @@ from tgvf_rl.evaluation.policy_coredev_scoring import (  # noqa: E402
 from tgvf_rl.evaluation.policy_paired_qwen_materialization import (  # noqa: E402
     materialize_qwen_only_policy_checkpoint,
 )
+from tgvf_rl.evaluation.policy_full_model_snapshot import (  # noqa: E402
+    FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS,
+    FullModelCheckpointOwner,
+    FullModelEvaluationSnapshot,
+    build_full_model_snapshot_manifest,
+    load_full_model_evaluation_snapshot,
+    load_full_model_snapshot_manifest,
+    materialize_full_model_snapshot,
+    write_full_model_materialization_receipt,
+    write_full_model_snapshot_manifest,
+)
+from tgvf_rl.policy.crop_tfree_contract import (  # noqa: E402
+    CropTFreeRunContract,
+    load_crop_tfree_run_contract,
+)
+from tgvf_rl.policy.deepeyes_native_contract import (  # noqa: E402
+    DeepEyesNativeRunContract,
+    load_deepeyes_native_run_contract,
+)
 from tgvf_rl.policy.run_config import (  # noqa: E402
     load_policy_e2e_smoke_run_config,
 )
@@ -60,8 +86,23 @@ DEFAULT_PLAN = (
 )
 RUNNER = REPOSITORY_ROOT / "tools/run_policy_benchmark.py"
 COREDEV_RUNNER = REPOSITORY_ROOT / "tools/run_coredev_2511_vlmevalkit.py"
-PLAN_SCHEMA = "tgvf.prl15-paired-policy-benchmark-plan.v2"
+COREDEV_PINNED_ARTIFACTS = (
+    REPOSITORY_ROOT / "configs/evaluation/coredev_2511_vlmevalkit_v1.json"
+)
+VLMEVALKIT_DEPLOYMENT = (
+    REPOSITORY_ROOT / "configs/evaluation/vlmevalkit_deployment_v1.json"
+)
+JUDGE_SERVICE_CONFIG = (
+    REPOSITORY_ROOT / "configs/evaluation/qwen25_72b_judge_service_v1.json"
+)
+PLAN_SCHEMA_V2 = "tgvf.prl15-paired-policy-benchmark-plan.v2"
+PLAN_SCHEMA_V3 = "tgvf.paired-policy-benchmark-plan.v3"
+# Historical tests and downstream imports use this name for the v2 ABI.
+PLAN_SCHEMA = PLAN_SCHEMA_V2
+PAIRED_TGVF_BACKEND = "paired_tgvf"
+FULL_MODEL_BACKEND = "full_model"
 PAIR_SUMMARY_SCHEMA = "tgvf.prl15-paired-coredev-summary.v1"
+GENERIC_PAIR_SUMMARY_SCHEMA = "tgvf.paired-coredev-summary.v2"
 PAIRED_RNG_PLAN_SCHEMA = "tgvf.policy-paired-evaluation-rng-plan.v1"
 _PAIRED_RNG_EXCLUSIONS = (
     "evaluation_id",
@@ -72,6 +113,104 @@ _PAIRED_RNG_EXCLUSIONS = (
     "prompt_token_ids_sha256",
 )
 _SCORING_RUN_PREFIX = re.compile(r"T(?P<date>\d{8})-[A-Za-z0-9][A-Za-z0-9._-]*")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_SCORING_SLICE_COUNTS = {
+    "VStarBench": (191, 0, 191),
+    "HRBench4K": (200, 0, 200),
+    "BLINK": (180, 240, 420),
+    "OCRBench_v2": (600, 0, 600),
+    "MMMU_Pro_10c": (269, 31, 300),
+    "MathVista_MINI": (300, 0, 300),
+    "MathVerse_MINI": (500, 0, 500),
+}
+_ACTIVE_PROCESS_GROUPS: dict[int, subprocess.Popen[bytes]] = {}
+_EVALUATION_LOCK_HANDLES: list[Any] = []
+_CHILD_SPAWN_SIGNALS = frozenset(
+    candidate
+    for name in ("SIGINT", "SIGTERM", "SIGHUP")
+    if (candidate := getattr(signal, name, None)) is not None
+)
+_SPAWN_CRITICAL_SECTION_ACTIVE = False
+_DEFERRED_INTERRUPT_SIGNAL: int | None = None
+
+
+class _EvaluationInterrupted(BaseException):
+    """Controlled process-lifecycle interruption that broad Exception cannot eat."""
+
+
+def _controlled_interrupt(signum: int, _frame: object) -> None:
+    """Defer termination only across the Popen-to-registration critical section."""
+
+    global _DEFERRED_INTERRUPT_SIGNAL
+    if _SPAWN_CRITICAL_SECTION_ACTIVE:
+        if _DEFERRED_INTERRUPT_SIGNAL is None:
+            _DEFERRED_INTERRUPT_SIGNAL = signum
+        return
+    raise _EvaluationInterrupted(f"paired evaluator received signal {signum}")
+
+
+def _spawn_registered_process(
+    command: list[str], **kwargs: Any
+) -> subprocess.Popen[bytes]:
+    """Create and register one process group without a signal race window.
+
+    Blocking signals around ``Popen`` is unsafe here because the child inherits
+    the parent's thread signal mask across fork/exec.  Instead the installed
+    handler records an interrupt during this tiny critical section.  The child
+    is registered first, then the deferred interrupt is raised so normal
+    process-group cleanup can always find it.
+    """
+
+    global _DEFERRED_INTERRUPT_SIGNAL, _SPAWN_CRITICAL_SECTION_ACTIVE
+    if "start_new_session" in kwargs:
+        raise ValueError("registered process groups own start_new_session")
+    if _SPAWN_CRITICAL_SECTION_ACTIVE:
+        raise RuntimeError("nested registered-process spawn is unsupported")
+    process: subprocess.Popen[bytes] | None = None
+    spawn_error: BaseException | None = None
+    _SPAWN_CRITICAL_SECTION_ACTIVE = True
+    try:
+        process = subprocess.Popen(command, start_new_session=True, **kwargs)
+        _ACTIVE_PROCESS_GROUPS[process.pid] = process
+    except BaseException as error:
+        spawn_error = error
+    finally:
+        _SPAWN_CRITICAL_SECTION_ACTIVE = False
+    deferred_signal = _DEFERRED_INTERRUPT_SIGNAL
+    _DEFERRED_INTERRUPT_SIGNAL = None
+    if deferred_signal is not None:
+        raise _EvaluationInterrupted(
+            f"paired evaluator received signal {deferred_signal} during child spawn"
+        ) from spawn_error
+    if spawn_error is not None:
+        raise spawn_error
+    assert process is not None
+    return process
+
+
+class _EvaluationRuntime:
+    __slots__ = (
+        "backend",
+        "checkpoint_owner",
+        "protocol_contract",
+        "output_root",
+        "checkpoint_world_size",
+    )
+
+    def __init__(
+        self,
+        *,
+        backend: str,
+        checkpoint_owner: object,
+        protocol_contract: object,
+        output_root: Path,
+        checkpoint_world_size: int,
+    ) -> None:
+        self.backend = backend
+        self.checkpoint_owner = checkpoint_owner
+        self.protocol_contract = protocol_contract
+        self.output_root = output_root
+        self.checkpoint_world_size = checkpoint_world_size
 
 
 def _vlmevalkit_scoring_run_id(
@@ -127,10 +266,182 @@ def _paired_seed_namespace(plan: dict[str, Any]) -> str | None:
     return None if contract is None else str(contract["seed_namespace"])
 
 
+def _require_sha256(value: object, *, name: str) -> str:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a lowercase SHA256")
+    return value
+
+
+def _arm_evaluation_id(plan: dict[str, Any], arm_name: str) -> str:
+    arm = next(
+        (item for item in plan.get("arms", ()) if item["name"] == arm_name), None
+    )
+    explicit = None if arm is None else arm.get("evaluation_id")
+    if explicit is not None:
+        if not isinstance(explicit, str) or not explicit:
+            raise ValueError("arm evaluation_id must be non-empty text")
+        return explicit
+    return f"{plan['evaluation_id']}-{arm_name.upper()}"
+
+
+def _validate_v3_static_plan(payload: dict[str, Any]) -> None:
+    required_top_level = {
+        "schema_version",
+        "evaluation_id",
+        "status",
+        "checkpoint_owner",
+        "protocol_contract",
+        "snapshot",
+        "task_manifest_path",
+        "task_manifest_sha256",
+        "expected_task_count",
+        "expected_single_image_count",
+        "unsupported_multi_image_count",
+        "paired_rng",
+        "arms",
+        "protocol",
+        "scoring",
+    }
+    if set(payload) != required_top_level or payload.get("status") != "ready":
+        raise ValueError("v3 paired evaluation plan fields/status differ")
+
+    owner = payload.get("checkpoint_owner")
+    owner_fields = {
+        "contract_type",
+        "config_path",
+        "config_sha256",
+        "run_id",
+        "run_identity_sha256",
+        "output_root",
+        "checkpoint_world_size",
+        "completion_path",
+        "completion_sha256",
+    }
+    if not isinstance(owner, dict) or set(owner) != owner_fields:
+        raise ValueError("v3 checkpoint owner fields differ")
+    if owner["contract_type"] != "crop_tfree_run_contract_v1":
+        raise ValueError("v3 checkpoint owner contract type differs")
+    _require_sha256(owner["config_sha256"], name="checkpoint owner config")
+    _require_sha256(owner["run_identity_sha256"], name="checkpoint owner identity")
+    _require_sha256(owner["completion_sha256"], name="checkpoint owner completion")
+    if not isinstance(owner["run_id"], str) or not owner["run_id"]:
+        raise ValueError("v3 checkpoint owner run ID must be non-empty")
+    owner_root = Path(str(owner["output_root"]))
+    if not owner_root.is_absolute():
+        raise ValueError("v3 checkpoint owner output root must be absolute")
+    completion_path = Path(str(owner["completion_path"]))
+    if not completion_path.is_absolute() or not completion_path.is_relative_to(
+        owner_root
+    ):
+        raise ValueError("v3 checkpoint owner completion path differs")
+    if (
+        type(owner["checkpoint_world_size"]) is not int
+        or owner["checkpoint_world_size"] <= 0
+    ):
+        raise ValueError("v3 checkpoint owner world size must be positive")
+
+    protocol = payload.get("protocol_contract")
+    protocol_fields = {
+        "contract_type",
+        "config_path",
+        "config_sha256",
+        "run_id",
+        "run_identity_sha256",
+    }
+    if not isinstance(protocol, dict) or set(protocol) != protocol_fields:
+        raise ValueError("v3 protocol contract fields differ")
+    if protocol["contract_type"] != "deepeyes_native_crop_v1":
+        raise ValueError("v3 protocol contract type differs")
+    _require_sha256(protocol["config_sha256"], name="protocol contract config")
+    _require_sha256(protocol["run_identity_sha256"], name="protocol contract identity")
+    if not isinstance(protocol["run_id"], str) or not protocol["run_id"]:
+        raise ValueError("v3 protocol contract run ID must be non-empty")
+
+    snapshot = payload.get("snapshot")
+    snapshot_fields = {
+        "backend",
+        "inference_concurrency_per_gpu",
+        "max_model_len",
+        "max_num_batched_tokens",
+        "enable_chunked_prefill",
+        "gpu_memory_utilization",
+    }
+    if not isinstance(snapshot, dict) or set(snapshot) != snapshot_fields:
+        raise ValueError("v3 full-model snapshot fields differ")
+    if snapshot["backend"] != FULL_MODEL_BACKEND:
+        raise ValueError("v3 snapshot backend must be full_model")
+    paired_rng = payload["paired_rng"]
+    if not isinstance(paired_rng, dict):
+        raise ValueError("v3 full-model plan requires paired RNG")
+    _require_sha256(
+        paired_rng.get("protocol_sha256"),
+        name="v3 paired RNG protocol identity",
+    )
+    for field in (
+        "inference_concurrency_per_gpu",
+        "max_model_len",
+        "max_num_batched_tokens",
+    ):
+        if type(snapshot[field]) is not int or snapshot[field] <= 0:
+            raise ValueError(f"v3 snapshot {field} must be positive")
+    if type(snapshot["enable_chunked_prefill"]) is not bool:
+        raise ValueError("v3 chunked-prefill flag must be boolean")
+    utilization = snapshot["gpu_memory_utilization"]
+    if (
+        isinstance(utilization, bool)
+        or not isinstance(utilization, (int, float))
+        or not 0.0 < float(utilization) < 1.0
+    ):
+        raise ValueError("v3 GPU memory utilization must lie in (0,1)")
+
+    for arm in payload["arms"]:
+        if not isinstance(arm, dict) or set(arm) != {
+            "name",
+            "optimizer_step",
+            "source",
+            "evaluation_id",
+        }:
+            raise ValueError("v3 full-model arm fields differ")
+        if not isinstance(arm["evaluation_id"], str) or not arm["evaluation_id"]:
+            raise ValueError("v3 full-model arm evaluation ID must be non-empty")
+        source = arm["source"]
+        if not isinstance(source, dict) or source.get("kind") not in {
+            "protocol_base_model",
+            "owner_checkpoint",
+        }:
+            raise ValueError("v3 full-model arm source kind differs")
+        if source["kind"] == "protocol_base_model":
+            if set(source) != {"kind"} or arm["optimizer_step"] != 0:
+                raise ValueError("v3 base-model source is valid only for step0")
+        else:
+            if set(source) != {"kind", "relative_path"}:
+                raise ValueError("v3 owner-checkpoint source fields differ")
+            relative = Path(str(source["relative_path"]))
+            if (
+                arm["optimizer_step"] <= 0
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or relative.name != f"global_step_{arm['optimizer_step']}"
+            ):
+                raise ValueError("v3 owner-checkpoint source path is unsafe")
+
+    scoring = payload["scoring"]
+    execution = scoring.get("execution")
+    if execution != {"mode": "eval", "reuse": True, "reuse_aux": "infer"}:
+        raise ValueError(
+            "v3 score-only contract must be mode=eval,reuse=true,reuse_aux=infer"
+        )
+
+
 def _load_plan(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("schema_version") != PLAN_SCHEMA:
+    if not isinstance(payload, dict) or payload.get("schema_version") not in {
+        PLAN_SCHEMA_V2,
+        PLAN_SCHEMA_V3,
+    }:
         raise ValueError("PRL15 paired evaluation plan schema differs")
+    if payload["schema_version"] == PLAN_SCHEMA_V3:
+        _validate_v3_static_plan(payload)
     arms = payload.get("arms")
     if not isinstance(arms, list) or not arms:
         raise ValueError("paired evaluation plan must contain at least one arm")
@@ -165,12 +476,17 @@ def _load_plan(path: Path) -> dict[str, Any]:
     generated_run_ids = {
         _vlmevalkit_scoring_run_id(
             run_id_prefix=scoring.get("run_id_prefix"),
-            arm_evaluation_id=f"{evaluation_id}-{arm['name'].upper()}",
+            arm_evaluation_id=_arm_evaluation_id(payload, arm["name"]),
         )
         for arm in payload["arms"]
     }
     if len(generated_run_ids) != len(payload["arms"]):
         raise ValueError("PRL15 VLMEvalKit arm run IDs must be distinct")
+    arm_evaluation_ids = tuple(
+        _arm_evaluation_id(payload, arm["name"]) for arm in payload["arms"]
+    )
+    if len(set(arm_evaluation_ids)) != len(arm_evaluation_ids):
+        raise ValueError("paired evaluation arm IDs must be distinct")
     paired_rng = payload.get("paired_rng")
     if paired_rng is not None:
         expected_fields = {
@@ -212,31 +528,65 @@ def _load_plan(path: Path) -> dict[str, Any]:
     source_root = Path(scoring["source_root"])
     if not source_root.is_absolute() or not source_root.is_dir():
         raise RuntimeError("PRL15 pinned CoreDev source root is unavailable")
-    for path_field, digest_field in (
-        ("policy_config", "policy_config_sha256"),
-        ("task_manifest_path", "task_manifest_sha256"),
-    ):
+    plan_paths = [("task_manifest_path", "task_manifest_sha256")]
+    if payload["schema_version"] == PLAN_SCHEMA_V2:
+        plan_paths.append(("policy_config", "policy_config_sha256"))
+    else:
+        for section in ("checkpoint_owner", "protocol_contract"):
+            resolved = _resolve_repo_path(payload[section]["config_path"])
+            if (
+                not resolved.is_file()
+                or _sha256_file(resolved) != payload[section]["config_sha256"]
+            ):
+                raise RuntimeError(f"v3 {section} config identity differs")
+        completion = Path(payload["checkpoint_owner"]["completion_path"])
+        if (
+            completion.is_symlink()
+            or not completion.is_file()
+            or _sha256_file(completion)
+            != payload["checkpoint_owner"]["completion_sha256"]
+        ):
+            raise RuntimeError("v3 checkpoint owner completion identity differs")
+    for path_field, digest_field in plan_paths:
         resolved = _resolve_repo_path(payload[path_field])
         if not resolved.is_file() or _sha256_file(resolved) != payload[digest_field]:
             raise RuntimeError(f"PRL15 plan {path_field} identity differs")
     judge_path = _resolve_repo_path(scoring["judge_config_path"])
     if (
-        not judge_path.is_file()
+        judge_path != JUDGE_SERVICE_CONFIG.resolve()
+        or not judge_path.is_file()
         or _sha256_file(judge_path) != scoring["judge_config_sha256"]
     ):
         raise RuntimeError("PRL15 benchmark judge config identity differs")
-    for path_field, digest_field in (
-        ("pinned_artifacts_config_path", "pinned_artifacts_config_sha256"),
-        ("vlmevalkit_deployment_config_path", "vlmevalkit_deployment_config_sha256"),
-        ("mathverse_source_json", "mathverse_source_sha256"),
+    for path_field, digest_field, canonical in (
+        (
+            "pinned_artifacts_config_path",
+            "pinned_artifacts_config_sha256",
+            COREDEV_PINNED_ARTIFACTS,
+        ),
+        (
+            "vlmevalkit_deployment_config_path",
+            "vlmevalkit_deployment_config_sha256",
+            VLMEVALKIT_DEPLOYMENT,
+        ),
+        ("mathverse_source_json", "mathverse_source_sha256", None),
     ):
         resolved = _resolve_repo_path(scoring[path_field])
-        if not resolved.is_file() or _sha256_file(resolved) != scoring[digest_field]:
+        if (
+            (canonical is not None and resolved != canonical.resolve())
+            or not resolved.is_file()
+            or _sha256_file(resolved) != scoring[digest_field]
+        ):
             raise RuntimeError(f"PRL15 scoring {path_field} identity differs")
+    pinned = json.loads(COREDEV_PINNED_ARTIFACTS.read_text(encoding="utf-8"))
+    if source_root.resolve() != Path(str(pinned.get("artifact_root", ""))).resolve():
+        raise RuntimeError("PRL15 CoreDev source root differs from pinned runner")
     return payload
 
 
 def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
+    if plan["schema_version"] != PLAN_SCHEMA_V2:
+        raise ValueError("training-run validator accepts only v2 TGVF plans")
     protocol = plan.get("protocol")
     if not isinstance(protocol, dict):
         raise ValueError("PRL15 plan protocol is missing")
@@ -295,6 +645,168 @@ def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
             )
         ):
             raise ValueError("constant RP66 pairing requires a lowercase SHA256")
+
+
+def _validate_v3_runtime(
+    plan: dict[str, Any],
+    owner: CropTFreeRunContract,
+    protocol: DeepEyesNativeRunContract,
+) -> None:
+    owner_plan = plan["checkpoint_owner"]
+    protocol_plan = plan["protocol_contract"]
+    if (
+        owner.source_sha256 != owner_plan["config_sha256"]
+        or owner.run_id != owner_plan["run_id"]
+        or owner.identity_sha256 != owner_plan["run_identity_sha256"]
+        or owner.output_root.resolve() != Path(owner_plan["output_root"]).resolve()
+    ):
+        raise RuntimeError("v3 checkpoint owner identity differs")
+    owner_world_size = owner.payload["matched_training"]["world_size"]
+    if owner_world_size != owner_plan["checkpoint_world_size"]:
+        raise RuntimeError("v3 checkpoint owner world size differs")
+    completion_path = Path(owner_plan["completion_path"])
+    completion = json.loads(completion_path.read_text(encoding="utf-8"))
+    if not isinstance(completion, dict):
+        raise RuntimeError("v3 checkpoint owner completion is malformed")
+    if (
+        completion.get("schema_version") != "tgvf.prl21-crop-tfree-launch-provenance.v1"
+        or completion.get("status") != "target_checkpoint_complete"
+        or completion.get("run_id") != owner.run_id
+        or completion.get("overlay_config_sha256") != owner.source_sha256
+        or completion.get("overlay_identity_sha256") != owner.identity_sha256
+        or completion.get("base_contract_sha256") != protocol.source_sha256
+        or completion.get("contract_sha256") != protocol.identity_sha256
+    ):
+        raise RuntimeError("v3 checkpoint owner completion contract differs")
+    if (
+        protocol.source_sha256 != protocol_plan["config_sha256"]
+        or protocol.run_id != protocol_plan["run_id"]
+        or protocol.identity_sha256 != protocol_plan["run_identity_sha256"]
+    ):
+        raise RuntimeError("v3 protocol contract identity differs")
+    if (
+        owner.base_contract.source_sha256 != protocol.source_sha256
+        or owner.base_contract.run_id != protocol.run_id
+        or owner.base_contract.identity_sha256 != protocol.identity_sha256
+    ):
+        raise RuntimeError(
+            "v3 checkpoint owner does not inherit the bound protocol contract"
+        )
+
+    protocol_payload = protocol.payload["protocol"]
+    expected_protocol = {
+        "evaluation_protocol": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+        "visual_prompt_bundle_sha256": protocol_payload["visual_prompt_bundle_sha256"],
+        "tool_name": protocol_payload["tool_name"],
+        "tool_parser": protocol_payload["tool_parser"],
+        "maximum_tool_calls": protocol_payload["max_active_perception"],
+        "native_pixels": True,
+        "sampling_source": "bound_protocol_contract",
+        "same_tasks_and_rank_partition": True,
+    }
+    if plan.get("protocol") != expected_protocol:
+        raise RuntimeError("v3 protocol contract differs from its native Crop run")
+    if protocol.payload["model"]["native_pixels"] is not True:
+        raise RuntimeError("v3 native Crop protocol no longer uses native pixels")
+    if (
+        protocol.payload["rollout"]["temperature"] != 1.0
+        or protocol.payload["dataset"]["schedule_seed"] != 42
+    ):
+        raise RuntimeError("v3 native Crop sampling differs from temp1/seed42")
+    paired_rng = plan["paired_rng"]
+    if (
+        paired_rng["master_seed"] != protocol.payload["dataset"]["schedule_seed"]
+        or paired_rng["temperature"] != protocol.payload["rollout"]["temperature"]
+        or paired_rng["do_sample"] is not True
+        or paired_rng["task_manifest_sha256"] != plan["task_manifest_sha256"]
+    ):
+        raise RuntimeError("v3 paired RNG task/seed identity differs")
+    protocol_probe_step = next(
+        (arm["optimizer_step"] for arm in plan["arms"] if arm["optimizer_step"] > 0),
+        None,
+    )
+    if protocol_probe_step is not None:
+        protocol_probe = SimpleNamespace(
+            run=SimpleNamespace(
+                model=SimpleNamespace(model_name=protocol.payload["model"]["name"]),
+                policy=SimpleNamespace(
+                    image_max_pixels=FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS,
+                    sampling=SimpleNamespace(
+                        temperature=float(protocol.payload["rollout"]["temperature"]),
+                        do_sample=True,
+                    ),
+                ),
+                rollout_rng=SimpleNamespace(
+                    master_seed=int(protocol.payload["dataset"]["schedule_seed"])
+                ),
+            ),
+            policy_version=SimpleNamespace(optimizer_step=protocol_probe_step),
+        )
+        protocol_probe_config = SimpleNamespace(
+            evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+            paired_seed_namespace=paired_rng["seed_namespace"],
+            effective_image_max_pixels=lambda run: run.policy.image_max_pixels,
+        )
+        _validate_runtime_paired_rng(
+            plan,
+            protocol_probe_config,
+            protocol_probe,
+        )
+
+    configured_steps = tuple(owner.payload["evaluation"]["checkpoint_steps"])
+    requested_steps = tuple(
+        arm["optimizer_step"]
+        for arm in plan["arms"]
+        if arm["source"]["kind"] == "owner_checkpoint"
+    )
+    if any(step not in configured_steps for step in requested_steps):
+        raise RuntimeError("v3 evaluation arm is not retained by checkpoint owner")
+    for arm in plan["arms"]:
+        step = arm["optimizer_step"]
+        source = arm["source"]
+        if source["kind"] != "owner_checkpoint":
+            continue
+        expected = (owner.output_root / Path(source["relative_path"])).resolve()
+        if (
+            Path(str(completion.get(f"retained_step{step}_checkpoint", ""))).resolve()
+            != expected
+        ):
+            raise RuntimeError(
+                f"v3 checkpoint owner completion does not retain step {step}"
+            )
+
+
+def _load_evaluation_runtime(plan: dict[str, Any]) -> _EvaluationRuntime:
+    if plan["schema_version"] == PLAN_SCHEMA_V2:
+        policy_config = _resolve_repo_path(plan["policy_config"])
+        run = load_policy_e2e_smoke_run_config(
+            policy_config, allow_external_agent_loop_config=True
+        )
+        _validate_plan_run(plan, run)
+        return _EvaluationRuntime(
+            backend=PAIRED_TGVF_BACKEND,
+            checkpoint_owner=run,
+            protocol_contract=run,
+            output_root=run.output.root.resolve(),
+            checkpoint_world_size=run.distributed.world_size,
+        )
+
+    owner_path = _resolve_repo_path(plan["checkpoint_owner"]["config_path"])
+    protocol_path = _resolve_repo_path(plan["protocol_contract"]["config_path"])
+    owner = load_crop_tfree_run_contract(
+        owner_path,
+        repository_root=REPOSITORY_ROOT,
+        allow_placeholder=False,
+    )
+    protocol = load_deepeyes_native_run_contract(protocol_path)
+    _validate_v3_runtime(plan, owner, protocol)
+    return _EvaluationRuntime(
+        backend=FULL_MODEL_BACKEND,
+        checkpoint_owner=owner,
+        protocol_contract=protocol,
+        output_root=owner.output_root.resolve(),
+        checkpoint_world_size=plan["checkpoint_owner"]["checkpoint_world_size"],
+    )
 
 
 def _validate_materialized_frozen_pairing(
@@ -596,6 +1108,66 @@ def _wait_for_step8(run: Any, *, timeout_seconds: int, poll_seconds: int) -> Non
     )
 
 
+def _full_model_checkpoint_structurally_complete(
+    source: Path, *, step: int, world_size: int
+) -> bool:
+    if step == 0:
+        return source.is_dir() and (source / "config.json").is_file()
+    actor = source / "actor"
+    fsdp_config = actor / "fsdp_config.json"
+    if (
+        not source.is_dir()
+        or not actor.is_dir()
+        or not (source / "data.pt").is_file()
+        or not fsdp_config.is_file()
+    ):
+        return False
+    try:
+        payload = json.loads(fsdp_config.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if payload != {"FSDP_version": 2, "world_size": world_size}:
+        return False
+    required = [source / "data.pt", fsdp_config]
+    for prefix in ("model", "optim", "extra_state"):
+        required.extend(
+            actor / f"{prefix}_world_size_{world_size}_rank_{rank}.pt"
+            for rank in range(world_size)
+        )
+    huggingface = actor / "huggingface"
+    weights = tuple(huggingface.glob("*.safetensors")) + tuple(
+        huggingface.glob("*.bin")
+    )
+    required.extend((huggingface / "config.json", *weights))
+    return bool(weights) and all(
+        path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+        for path in required
+    )
+
+
+def _wait_for_full_model_arm(
+    plan: dict[str, Any],
+    runtime: _EvaluationRuntime,
+    *,
+    arm: str,
+    optimizer_step: int,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    source = _full_model_source_path(plan, runtime, arm=arm, step=optimizer_step)
+    while not _full_model_checkpoint_structurally_complete(
+        source,
+        step=optimizer_step,
+        world_size=runtime.checkpoint_world_size,
+    ):
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"timed out waiting for complete {arm} full-model checkpoint"
+            )
+        time.sleep(poll_seconds)
+
+
 def _gpu_memory_mib() -> dict[int, int]:
     completed = subprocess.run(
         [
@@ -654,26 +1226,274 @@ def _arm_paths(base: Path, arm: str) -> dict[str, Path]:
         "root": root,
         "config": root / "benchmark-config.json",
         "receipt": root / "runtime/source-paired-snapshot.json",
+        "full_model_snapshot": root / "runtime/full-model-snapshot.json",
+        "full_model_receipt": root / "runtime/full-model-materialization.json",
+        "full_model_merge": root / "runtime/full-model-hf",
     }
+
+
+def _full_model_source_path(
+    plan: dict[str, Any],
+    runtime: _EvaluationRuntime,
+    *,
+    arm: str,
+    step: int,
+) -> Path:
+    arm_plan = next(item for item in plan["arms"] if item["name"] == arm)
+    source = arm_plan["source"]
+    if source["kind"] == "protocol_base_model":
+        if step != 0 or not isinstance(
+            runtime.protocol_contract, DeepEyesNativeRunContract
+        ):
+            raise RuntimeError("full-model base source identity differs")
+        return Path(runtime.protocol_contract.payload["model"]["path"]).resolve()
+    relative = Path(source["relative_path"])
+    candidate = (runtime.output_root / relative).resolve()
+    if not candidate.is_relative_to(runtime.output_root.resolve()):
+        raise RuntimeError("full-model checkpoint source escapes its owner root")
+    if candidate.name != f"global_step_{step}":
+        raise RuntimeError("full-model checkpoint source step differs")
+    return candidate
+
+
+def _full_model_checkpoint_owner(plan: dict[str, Any]) -> FullModelCheckpointOwner:
+    owner = plan["checkpoint_owner"]
+    return FullModelCheckpointOwner(
+        run_id=owner["run_id"],
+        run_identity_sha256=owner["run_identity_sha256"],
+        config_path=str(_resolve_repo_path(owner["config_path"])),
+        config_file_sha256=owner["config_sha256"],
+        completion_path=owner["completion_path"],
+        completion_file_sha256=owner["completion_sha256"],
+    )
+
+
+def _expected_arm_runtime_settings(
+    plan: dict[str, Any], runtime: _EvaluationRuntime | None
+) -> dict[str, object]:
+    if runtime is not None and runtime.backend == FULL_MODEL_BACKEND:
+        snapshot = plan["snapshot"]
+        return {
+            "snapshot_backend": FULL_MODEL_BACKEND,
+            "inference_concurrency_per_gpu": snapshot["inference_concurrency_per_gpu"],
+            "max_model_len": snapshot["max_model_len"],
+            "max_num_batched_tokens": snapshot["max_num_batched_tokens"],
+            "enable_chunked_prefill": snapshot["enable_chunked_prefill"],
+            "gpu_memory_utilization": snapshot["gpu_memory_utilization"],
+        }
+    return {
+        "snapshot_backend": PAIRED_TGVF_BACKEND,
+        "inference_concurrency_per_gpu": 8,
+        "max_model_len": 32768,
+        "max_num_batched_tokens": 32768,
+        "enable_chunked_prefill": False,
+        "gpu_memory_utilization": 0.9,
+    }
+
+
+def _validate_existing_arm_config(
+    config: Any,
+    *,
+    plan: dict[str, Any],
+    runtime: _EvaluationRuntime | None,
+    paths: dict[str, Path],
+    arm: str,
+    gpu_ids: tuple[int, int, int, int] | None,
+) -> None:
+    expected: dict[str, object] = {
+        **_expected_arm_runtime_settings(plan, runtime),
+        "evaluation_id": _arm_evaluation_id(plan, arm),
+        "evaluation_protocol": plan["protocol"]["evaluation_protocol"],
+        "output_root": paths["root"].resolve(),
+        "task_manifest_path": _resolve_repo_path(plan["task_manifest_path"]),
+        "task_manifest_sha256": plan["task_manifest_sha256"],
+        "expected_task_count": plan["expected_task_count"],
+        "expected_single_image_count": plan["expected_single_image_count"],
+    }
+    if gpu_ids is not None:
+        expected["gpu_ids"] = gpu_ids
+    observed = {
+        field: (value.resolve() if isinstance(value, Path) else value)
+        for field in expected
+        if (value := getattr(config, field, None)) is not None
+    }
+    differing = [
+        field for field, value in expected.items() if observed.get(field) != value
+    ]
+    if differing:
+        raise RuntimeError(
+            f"existing {arm} evaluator capacity/identity differs: "
+            + ", ".join(sorted(differing))
+        )
+    if config.paired_seed_namespace != _paired_seed_namespace(plan):
+        raise RuntimeError(f"existing {arm} paired_seed_namespace differs from plan")
+
+
+def _validate_runtime_paired_rng(
+    plan: dict[str, Any], config: Any, snapshot: Any
+) -> None:
+    planned = plan.get("paired_rng")
+    observed = paired_evaluation_rng_contract(
+        config,
+        snapshot,
+        task_manifest_sha256=plan["task_manifest_sha256"],
+    )
+    if planned is None:
+        if observed is not None:
+            raise RuntimeError("unplanned paired RNG contract was materialized")
+        return
+    if observed is None:
+        raise RuntimeError("planned paired RNG contract was not materialized")
+    for field in (
+        "mode",
+        "seed_namespace",
+        "master_seed",
+        "task_manifest_sha256",
+        "protocol_sha256",
+        "excluded_arm_components",
+    ):
+        if observed.get(field) != planned.get(field):
+            raise RuntimeError(f"paired RNG runtime {field} differs from plan")
+    sampling = snapshot.run.policy.sampling
+    temperature = float(sampling.temperature)
+    do_sample = getattr(sampling, "do_sample", temperature > 0.0)
+    if temperature != planned["temperature"] or do_sample is not planned["do_sample"]:
+        raise RuntimeError("paired RNG runtime sampling differs from plan")
+
+
+def _materialize_full_model_arm(
+    *,
+    plan: dict[str, Any],
+    runtime: _EvaluationRuntime,
+    arm: str,
+    step: int,
+    output_base: Path,
+    gpu_ids: tuple[int, int, int, int],
+) -> Path:
+    if not isinstance(runtime.protocol_contract, DeepEyesNativeRunContract):
+        raise TypeError("full-model backend requires a native Crop protocol contract")
+    paths = _arm_paths(output_base, arm)
+    source = _full_model_source_path(plan, runtime, arm=arm, step=step)
+    checkpoint_owner = _full_model_checkpoint_owner(plan)
+    complete = (
+        paths["config"].is_file()
+        and paths["full_model_snapshot"].is_file()
+        and paths["full_model_receipt"].is_file()
+    )
+    if complete:
+        config = load_policy_coredev_config(paths["config"])
+        _validate_existing_arm_config(
+            config,
+            plan=plan,
+            runtime=runtime,
+            paths=paths,
+            arm=arm,
+            gpu_ids=gpu_ids,
+        )
+        snapshot = load_full_model_evaluation_snapshot(
+            paths["full_model_snapshot"],
+            paths["full_model_receipt"],
+            runtime_lightweight=True,
+        )
+        _validate_runtime_paired_rng(plan, config, snapshot)
+        if (
+            config.evaluation_id != _arm_evaluation_id(plan, arm)
+            or snapshot.policy_version.optimizer_step != step
+            or snapshot.manifest.checkpoint_owner != checkpoint_owner
+            or Path(snapshot.manifest.source_path).resolve() != source
+            or snapshot.manifest.run_id != plan["protocol_contract"]["run_id"]
+            or snapshot.manifest.run_identity_sha256
+            != plan["protocol_contract"]["run_identity_sha256"]
+        ):
+            raise RuntimeError(f"existing {arm} full-model identity differs")
+        return paths["config"]
+    manifest = build_full_model_snapshot_manifest(
+        runtime.protocol_contract,
+        source_path=source,
+        optimizer_step=step,
+        runtime_fsdp_world_size=(runtime.checkpoint_world_size if step > 0 else None),
+        checkpoint_owner=checkpoint_owner,
+    )
+    if paths["full_model_snapshot"].is_file():
+        if load_full_model_snapshot_manifest(paths["full_model_snapshot"]) != manifest:
+            raise RuntimeError(f"partial {arm} full-model snapshot differs")
+    else:
+        write_full_model_snapshot_manifest(paths["full_model_snapshot"], manifest)
+    if paths["full_model_receipt"].is_file():
+        snapshot = load_full_model_evaluation_snapshot(
+            paths["full_model_snapshot"],
+            paths["full_model_receipt"],
+            runtime_lightweight=True,
+        )
+        receipt = snapshot.receipt
+    else:
+        receipt = materialize_full_model_snapshot(
+            manifest,
+            target_dir=paths["full_model_merge"],
+        )
+        write_full_model_materialization_receipt(paths["full_model_receipt"], receipt)
+    snapshot_plan = plan["snapshot"]
+    materialize_full_model_policy_benchmark_config(
+        evaluation_id=_arm_evaluation_id(plan, arm),
+        policy_config_path=_resolve_repo_path(plan["checkpoint_owner"]["config_path"]),
+        snapshot_manifest_path=paths["full_model_snapshot"],
+        materialization_receipt_path=paths["full_model_receipt"],
+        expected_optimizer_step=step,
+        task_manifest_path=plan["task_manifest_path"],
+        expected_task_count=plan["expected_task_count"],
+        expected_single_image_count=plan["expected_single_image_count"],
+        output_root=paths["root"],
+        config_path=paths["config"],
+        gpu_ids=gpu_ids,
+        inference_concurrency_per_gpu=snapshot_plan["inference_concurrency_per_gpu"],
+        max_model_len=snapshot_plan["max_model_len"],
+        max_num_batched_tokens=snapshot_plan["max_num_batched_tokens"],
+        enable_chunked_prefill=snapshot_plan["enable_chunked_prefill"],
+        gpu_memory_utilization=snapshot_plan["gpu_memory_utilization"],
+        paired_seed_namespace=_paired_seed_namespace(plan),
+    )
+    config = load_policy_coredev_config(paths["config"])
+    snapshot = load_full_model_evaluation_snapshot(
+        paths["full_model_snapshot"],
+        paths["full_model_receipt"],
+        runtime_lightweight=True,
+    )
+    _validate_runtime_paired_rng(plan, config, snapshot)
+    return paths["config"]
 
 
 def _materialize_arm(
     *,
     plan: dict[str, Any],
+    runtime: _EvaluationRuntime | None = None,
     run: Any,
     arm: str,
     step: int,
     output_base: Path,
     gpu_ids: tuple[int, int, int, int],
 ) -> Path:
+    if runtime is not None and runtime.backend == FULL_MODEL_BACKEND:
+        return _materialize_full_model_arm(
+            plan=plan,
+            runtime=runtime,
+            arm=arm,
+            step=step,
+            output_base=output_base,
+            gpu_ids=gpu_ids,
+        )
     paths = _arm_paths(output_base, arm)
     if paths["config"].is_file() and paths["receipt"].is_file():
         config = load_policy_coredev_config(paths["config"])
-        if config.paired_seed_namespace != _paired_seed_namespace(plan):
-            raise RuntimeError(
-                f"existing {arm} paired seed namespace differs from plan"
-            )
-        load_policy_evaluation_snapshot(config)
+        _validate_existing_arm_config(
+            config,
+            plan=plan,
+            runtime=runtime,
+            paths=paths,
+            arm=arm,
+            gpu_ids=gpu_ids,
+        )
+        snapshot = load_policy_evaluation_snapshot(config)
+        _validate_runtime_paired_rng(plan, config, snapshot)
         return paths["config"]
     if step == 0:
         qwen_model = Path(run.model.revision_or_path)
@@ -693,7 +1513,7 @@ def _materialize_arm(
             bundle_path=paths["root"] / "runtime/qwen-only-bundle",
         )
     materialize_paired_tgvf_policy_benchmark_config(
-        evaluation_id=f"{plan['evaluation_id']}-{arm.upper()}",
+        evaluation_id=_arm_evaluation_id(plan, arm),
         policy_config_path=_resolve_repo_path(plan["policy_config"]),
         optimizer_step=step,
         qwen_model_path=qwen_model,
@@ -718,28 +1538,54 @@ def _materialize_arm(
 def _load_existing_arm(
     *,
     plan: dict[str, Any],
+    runtime: _EvaluationRuntime | None = None,
     output_base: Path,
     arm: str,
     step: int,
+    gpu_ids: tuple[int, int, int, int] | None = None,
 ) -> Path:
     """Load one completed arm without preparing or mutating it."""
 
     paths = _arm_paths(output_base, arm)
-    if not paths["config"].is_file() or not paths["receipt"].is_file():
+    required_receipt = (
+        paths["full_model_receipt"]
+        if runtime is not None and runtime.backend == FULL_MODEL_BACKEND
+        else paths["receipt"]
+    )
+    if not paths["config"].is_file() or not required_receipt.is_file():
         raise FileNotFoundError(
             f"score mode requires existing {arm} config and receipt"
         )
     config = load_policy_coredev_config(paths["config"])
-    if config.paired_seed_namespace != _paired_seed_namespace(plan):
-        raise RuntimeError(f"existing {arm} paired seed namespace differs from plan")
+    _validate_existing_arm_config(
+        config,
+        plan=plan,
+        runtime=runtime,
+        paths=paths,
+        arm=arm,
+        gpu_ids=gpu_ids,
+    )
     snapshot = load_policy_evaluation_snapshot(config)
-    if config.evaluation_id != f"{plan['evaluation_id']}-{arm.upper()}":
-        raise RuntimeError(f"existing {arm} evaluation ID differs from plan")
-    if config.output_root.resolve() != paths["root"].resolve():
-        raise RuntimeError(f"existing {arm} output root differs from plan")
+    _validate_runtime_paired_rng(plan, config, snapshot)
     if snapshot.policy_version.optimizer_step != step:
         raise RuntimeError(f"existing {arm} optimizer step differs from plan")
-    for rank in range(4):
+    if runtime is not None and runtime.backend == FULL_MODEL_BACKEND:
+        if not paths["full_model_snapshot"].is_file():
+            raise RuntimeError(f"score mode requires complete {arm} snapshot manifest")
+        if not isinstance(snapshot, FullModelEvaluationSnapshot):
+            raise RuntimeError(f"existing {arm} snapshot backend differs")
+        full_snapshot = snapshot
+        source = _full_model_source_path(plan, runtime, arm=arm, step=step)
+        manifest = full_snapshot.manifest
+        if (
+            manifest.checkpoint_owner != _full_model_checkpoint_owner(plan)
+            or Path(manifest.source_path).resolve() != source
+            or manifest.run_id != plan["protocol_contract"]["run_id"]
+            or manifest.run_identity_sha256
+            != plan["protocol_contract"]["run_identity_sha256"]
+        ):
+            raise RuntimeError(f"existing {arm} full-model snapshot binding differs")
+    for rank in range(len(config.gpu_ids)):
         inference = config.output_root / "inference" / f"rank-{rank}.jsonl"
         if not inference.is_file() or inference.stat().st_size == 0:
             raise RuntimeError(f"score mode requires complete {arm} inference ranks")
@@ -821,59 +1667,64 @@ def _validate(config_path: Path) -> None:
 def _launch_workers(config_path: Path) -> list[subprocess.Popen[bytes]]:
     config = load_policy_coredev_config(config_path)
     processes: list[subprocess.Popen[bytes]] = []
-    for rank, gpu_id in enumerate(config.gpu_ids):
-        environment = dict(os.environ)
-        environment["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        environment["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-        dependency_root = Path(sys.prefix).parent
-        header_root = dependency_root / ".deps/python312-dev/root/usr/include"
-        python_headers = header_root / "python3.12"
-        required_headers = (
-            python_headers / "Python.h",
-            python_headers / "pyconfig.h",
-            header_root / "x86_64-linux-gnu/python3.12/pyconfig.h",
-        )
-        if any(not path.is_file() for path in required_headers):
-            raise RuntimeError("policy evaluator Python development headers are absent")
-        triton_cache = config.output_root / "runtime/cache/triton" / f"rank-{rank}"
-        inductor_cache = (
-            config.output_root / "runtime/cache/torchinductor" / f"rank-{rank}"
-        )
-        triton_cache.mkdir(parents=True, exist_ok=True)
-        inductor_cache.mkdir(parents=True, exist_ok=True)
-        environment.update(
-            {
-                "VLLM_USE_V1": "1",
-                "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
-                "TOKENIZERS_PARALLELISM": "false",
-                "PYTHONHASHSEED": "42",
-                "TORCH_DEVICE_BACKEND_AUTOLOAD": "0",
-                "CC": "/usr/bin/gcc",
-                "CXX": "/usr/bin/g++",
-                "CPATH": os.pathsep.join((str(header_root), str(python_headers))),
-                "LIBRARY_PATH": str(Path(sys.prefix) / "lib"),
-                "TRITON_CACHE_DIR": str(triton_cache),
-                "TORCHINDUCTOR_CACHE_DIR": str(inductor_cache),
-            }
-        )
-        command = [
-            sys.executable,
-            str(RUNNER),
-            "--config",
-            str(config_path),
-            "--mode",
-            "worker",
-            "--rank",
-            str(rank),
-            "--world-size",
-            "4",
-        ]
-        # vLLM starts EngineCore/resource-tracker descendants.  Give each rank
-        # its own process group so a failed sibling cannot leave those children
-        # holding the supervisor's stdout pipe and all remaining GPUs forever.
-        processes.append(
-            subprocess.Popen(command, env=environment, start_new_session=True)
-        )
+    try:
+        for rank, gpu_id in enumerate(config.gpu_ids):
+            environment = dict(os.environ)
+            environment["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+            environment["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            dependency_root = Path(sys.prefix).parent
+            header_root = dependency_root / ".deps/python312-dev/root/usr/include"
+            python_headers = header_root / "python3.12"
+            required_headers = (
+                python_headers / "Python.h",
+                python_headers / "pyconfig.h",
+                header_root / "x86_64-linux-gnu/python3.12/pyconfig.h",
+            )
+            if any(not path.is_file() for path in required_headers):
+                raise RuntimeError(
+                    "policy evaluator Python development headers are absent"
+                )
+            triton_cache = config.output_root / "runtime/cache/triton" / f"rank-{rank}"
+            inductor_cache = (
+                config.output_root / "runtime/cache/torchinductor" / f"rank-{rank}"
+            )
+            triton_cache.mkdir(parents=True, exist_ok=True)
+            inductor_cache.mkdir(parents=True, exist_ok=True)
+            environment.update(
+                {
+                    "VLLM_USE_V1": "1",
+                    "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+                    "TOKENIZERS_PARALLELISM": "false",
+                    "PYTHONHASHSEED": "42",
+                    "TORCH_DEVICE_BACKEND_AUTOLOAD": "0",
+                    "CC": "/usr/bin/gcc",
+                    "CXX": "/usr/bin/g++",
+                    "CPATH": os.pathsep.join((str(header_root), str(python_headers))),
+                    "LIBRARY_PATH": str(Path(sys.prefix) / "lib"),
+                    "TRITON_CACHE_DIR": str(triton_cache),
+                    "TORCHINDUCTOR_CACHE_DIR": str(inductor_cache),
+                }
+            )
+            command = [
+                sys.executable,
+                str(RUNNER),
+                "--config",
+                str(config_path),
+                "--mode",
+                "worker",
+                "--rank",
+                str(rank),
+                "--world-size",
+                "4",
+            ]
+            # vLLM starts EngineCore/resource-tracker descendants. Give each rank
+            # its own process group and register it before another launch.
+            process = _spawn_registered_process(command, env=environment)
+            processes.append(process)
+    except BaseException:
+        if processes:
+            _terminate_worker_groups(processes)
+        raise
     return processes
 
 
@@ -915,31 +1766,42 @@ def _terminate_worker_groups(
             raise RuntimeError(
                 "policy evaluator process group did not drain"
             ) from error
+        finally:
+            _ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
 
 
 def _wait_workers(
     processes: list[subprocess.Popen[bytes]], *, owner: str = "paired evaluation"
 ) -> None:
-    failure: tuple[int, int] | None = None
-    while any(process.poll() is None for process in processes):
-        for index, process in enumerate(processes):
-            code = process.poll()
-            if code not in {None, 0}:
-                failure = (index, code)
+    try:
+        failure: tuple[int, int] | None = None
+        while any(process.poll() is None for process in processes):
+            for index, process in enumerate(processes):
+                code = process.poll()
+                if code not in {None, 0}:
+                    failure = (index, code)
+                    break
+            if failure is not None:
                 break
+            time.sleep(5)
         if failure is not None:
-            break
-        time.sleep(5)
-    if failure is not None:
+            raise RuntimeError(f"{owner} worker {failure[0]} exited with {failure[1]}")
+        codes = [process.wait() for process in processes]
+        if any(code != 0 for code in codes):
+            raise RuntimeError(f"{owner} workers failed: {codes}")
+    except BaseException:
         _terminate_worker_groups(processes)
-        raise RuntimeError(f"{owner} worker {failure[0]} exited with {failure[1]}")
-    codes = [process.wait() for process in processes]
-    if any(code != 0 for code in codes):
+        raise
+    if any(_worker_group_exists(process) for process in processes):
         _terminate_worker_groups(processes)
-        raise RuntimeError(f"{owner} workers failed: {codes}")
+    else:
+        for process in processes:
+            _ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
 
 
-def _load_judge_config(plan: dict[str, Any]) -> dict[str, Any]:
+def _load_judge_config(
+    plan: dict[str, Any], *, require_local_model: bool = True
+) -> dict[str, Any]:
     scoring = plan["scoring"]
     path = _resolve_repo_path(scoring["judge_config_path"])
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -955,7 +1817,7 @@ def _load_judge_config(plan: dict[str, Any]) -> dict[str, Any]:
     assert isinstance(devices, dict) and isinstance(scope, dict)
     if model.get("served_name") != "Qwen2.5-72B-Instruct":
         raise RuntimeError("benchmark judge served model differs")
-    if not Path(str(model.get("local_path"))).is_dir():
+    if require_local_model and not Path(str(model.get("local_path"))).is_dir():
         raise RuntimeError("benchmark judge local model is unavailable")
     if devices.get("tensor_parallel_size") != 2:
         raise RuntimeError("benchmark judge must remain tensor-parallel two")
@@ -964,6 +1826,11 @@ def _load_judge_config(plan: dict[str, Any]) -> dict[str, Any]:
     if scope.get("allows_gpt_fallback") is not False:
         raise RuntimeError("GPT fallback must remain disabled")
     return payload
+
+
+def _require_local_judge_runtime(judge: dict[str, Any]) -> None:
+    if not Path(str(judge["model"].get("local_path"))).is_dir():
+        raise RuntimeError("benchmark judge local model is unavailable")
 
 
 def _judge_command(judge: dict[str, Any]) -> list[str]:
@@ -1065,12 +1932,11 @@ def _local_judge_service(
         raise RuntimeError("benchmark judge endpoint is already occupied")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab", buffering=0) as log_handle:
-        process = subprocess.Popen(
+        process = _spawn_registered_process(
             _judge_command(judge),
             env=_judge_environment(judge),
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
         )
     try:
         _wait_for_judge(
@@ -1081,19 +1947,11 @@ def _local_judge_service(
         )
         yield
     finally:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
+        if _worker_group_exists(process):
+            _terminate_worker_groups([process], grace_seconds=60.0)
+        else:
+            process.wait()
+            _ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
 
 
 def _scoring_root(config_path: Path, plan: dict[str, Any]) -> Path:
@@ -1112,32 +1970,34 @@ def _materialize_official_scoring_view(
         arm_evaluation_id=config.evaluation_id,
     )
     if summary_path.is_file():
-        result = json.loads(summary_path.read_text(encoding="utf-8"))
-        expected = {
-            "evaluation_id": config.evaluation_id,
-            "run_id": run_id,
-            "observed_single_image_count": 2240,
-            "unsupported_multi_image_count": 271,
-            "official_row_count": 2511,
-        }
-        if not isinstance(result, dict) or any(
-            result.get(key) != value for key, value in expected.items()
-        ):
-            raise RuntimeError(f"existing {arm} scoring view identity differs")
-        return result
+        return _load_existing_official_scoring_view(config_path, plan, arm=arm)
     if root.exists() and any(root.iterdir()):
         raise RuntimeError(
             f"partial immutable {arm} scoring view exists without its summary"
         )
-    return materialize_policy_coredev_scoring_views(
-        inference_root=config.output_root / "inference",
-        tasks_path=plan["task_manifest_path"],
-        source_root=plan["scoring"]["source_root"],
-        output_root=root,
-        evaluation_id=config.evaluation_id,
-        run_id=run_id,
-        mathverse_source_json=plan["scoring"]["mathverse_source_json"],
-    )
+    root.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{root.name}.staging-", dir=root.parent))
+    try:
+        materialize_policy_coredev_scoring_views(
+            inference_root=config.output_root / "inference",
+            tasks_path=plan["task_manifest_path"],
+            source_root=plan["scoring"]["source_root"],
+            output_root=staging,
+            logical_output_root=root,
+            evaluation_id=config.evaluation_id,
+            run_id=run_id,
+            mathverse_source_json=plan["scoring"]["mathverse_source_json"],
+        )
+        staging.rename(root)
+        directory = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return _load_existing_official_scoring_view(config_path, plan, arm=arm)
 
 
 def _load_existing_official_scoring_view(
@@ -1151,8 +2011,14 @@ def _load_existing_official_scoring_view(
     if not summary_path.is_file():
         raise FileNotFoundError(f"score mode requires existing {arm} materialization")
     result = json.loads(summary_path.read_text(encoding="utf-8"))
+    run_id = _vlmevalkit_scoring_run_id(
+        run_id_prefix=plan["scoring"]["run_id_prefix"],
+        arm_evaluation_id=config.evaluation_id,
+    )
     expected = {
+        "schema_version": "tgvf-policy-coredev-scoring-view-v1",
         "evaluation_id": config.evaluation_id,
+        "run_id": run_id,
         "observed_single_image_count": 2240,
         "unsupported_multi_image_count": 271,
         "official_row_count": 2511,
@@ -1170,15 +2036,103 @@ def _load_existing_official_scoring_view(
     for item in slices:
         dataset = item["dataset"]
         work_dir = (root / dataset).resolve()
-        prediction = Path(str(item.get("prediction_file", "")))
-        manifest = Path(str(item.get("manifest", "")))
+        run_dir = work_dir / EVALUATED_MODEL / run_id
+        prediction = run_dir / f"{EVALUATED_MODEL}_{dataset}.tsv"
+        manifest = run_dir / "final-answer-view-manifest.json"
+        expected_slice_fields = {
+            "dataset",
+            "official_row_count",
+            "observed_single_image_count",
+            "sample_local_failure_count",
+            "unsupported_multi_image_count",
+            "work_dir",
+            "prediction_file",
+            "manifest",
+        }
+        expected_counts = _SCORING_SLICE_COUNTS[dataset]
         if (
-            Path(str(item.get("work_dir", ""))).resolve() != work_dir
+            set(item) != expected_slice_fields
+            or Path(str(item.get("work_dir", ""))).resolve() != work_dir
+            or Path(str(item.get("prediction_file", ""))).resolve()
+            != prediction.resolve()
+            or Path(str(item.get("manifest", ""))).resolve() != manifest.resolve()
+            or prediction.is_symlink()
             or not prediction.is_file()
+            or manifest.is_symlink()
             or not manifest.is_file()
-            or prediction.parent.parent.name != EVALUATED_MODEL
+            or not prediction.resolve().is_relative_to(work_dir)
+            or not manifest.resolve().is_relative_to(work_dir)
         ):
             raise RuntimeError(f"existing {arm} {dataset} materialization differs")
+        counts = (
+            item.get("observed_single_image_count"),
+            item.get("unsupported_multi_image_count"),
+            item.get("official_row_count"),
+        )
+        if counts != expected_counts:
+            raise RuntimeError(f"existing {arm} {dataset} fixed counts differ")
+        sample_failures = item.get("sample_local_failure_count")
+        if (
+            type(sample_failures) is not int
+            or not 0 <= sample_failures <= expected_counts[0]
+        ):
+            raise RuntimeError(f"existing {arm} {dataset} failure count differs")
+
+        manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        source_record = manifest_payload.get("source")
+        derived_record = manifest_payload.get("derived")
+        verification = manifest_payload.get("verification")
+        raw_path = (root / "raw" / f"{dataset}.tsv").resolve()
+        if not all(
+            isinstance(value, dict)
+            for value in (source_record, derived_record, verification)
+        ):
+            raise RuntimeError(f"existing {arm} {dataset} view manifest is malformed")
+        assert isinstance(source_record, dict)
+        assert isinstance(derived_record, dict)
+        assert isinstance(verification, dict)
+        if (
+            Path(str(source_record.get("path", ""))).resolve() != raw_path
+            or Path(str(derived_record.get("path", ""))).resolve()
+            != prediction.resolve()
+            or not raw_path.is_file()
+            or source_record.get("sha256") != _sha256_file(raw_path)
+            or derived_record.get("sha256") != _sha256_file(prediction)
+            or source_record.get("row_count") != expected_counts[2]
+            or derived_record.get("row_count") != expected_counts[2]
+            or manifest_payload.get("counts", {}).get("row_count") != expected_counts[2]
+            or any(
+                verification.get(field) is not True
+                for field in (
+                    "index_order_and_values_identical",
+                    "non_prediction_source_fields_verified",
+                    "unchanged_non_prediction_source_fields_identical",
+                )
+            )
+        ):
+            raise RuntimeError(f"existing {arm} {dataset} view proof differs")
+        materializer_output = run_dir / "materializer-output.json"
+        status_path = run_dir / "status.json"
+        if (
+            materializer_output.is_symlink()
+            or not materializer_output.is_file()
+            or json.loads(materializer_output.read_text(encoding="utf-8"))
+            != manifest_payload
+            or status_path.is_symlink()
+            or not status_path.is_file()
+        ):
+            raise RuntimeError(f"existing {arm} {dataset} view records differ")
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        status_entry = status.get("datasets", {}).get(dataset, {})
+        if (
+            status.get("eval_id") != run_id
+            or status.get("mode") != "infer"
+            or status.get("reuse_aux") != "infer"
+            or Path(str(status_entry.get("prediction_file", ""))).resolve()
+            != prediction.resolve()
+        ):
+            raise RuntimeError(f"existing {arm} {dataset} status identity differs")
+
         run_dir = prediction.parent.resolve()
         discoverable = False
         for candidate in prediction.parent.parent.iterdir():
@@ -1194,16 +2148,6 @@ def _load_existing_official_scoring_view(
             raise RuntimeError(
                 f"existing {arm} {dataset} prediction is not discoverable by VLMEvalKit"
             )
-        counts = tuple(
-            item.get(field)
-            for field in (
-                "observed_single_image_count",
-                "unsupported_multi_image_count",
-                "official_row_count",
-            )
-        )
-        if any(type(value) is not int or value < 0 for value in counts):
-            raise RuntimeError(f"existing {arm} {dataset} counts are invalid")
         observed_total += counts[0]
         unsupported_total += counts[1]
         official_total += counts[2]
@@ -1213,9 +2157,21 @@ def _load_existing_official_scoring_view(
 
 
 def _official_score_command(
-    *, dataset: str, scoring_root: Path, judge: dict[str, Any], plan: dict[str, Any]
+    *,
+    dataset: str,
+    scoring_root: Path,
+    source_run_id: str,
+    judge: dict[str, Any],
+    plan: dict[str, Any],
 ) -> list[str]:
     scoring = plan["scoring"]
+    source_manifest = (
+        scoring_root
+        / dataset
+        / EVALUATED_MODEL
+        / source_run_id
+        / "final-answer-view-manifest.json"
+    )
     return [
         sys.executable,
         str(COREDEV_RUNNER),
@@ -1230,6 +2186,10 @@ def _official_score_command(
         "--reuse",
         "--reuse-aux",
         "infer",
+        "--tgvf-reuse-source-run-id",
+        source_run_id,
+        "--tgvf-reuse-manifest",
+        str(source_manifest),
         "--judge",
         str(judge["model"]["served_name"]),
         "--judge-base-url",
@@ -1245,21 +2205,188 @@ def _official_score_command(
     ]
 
 
+def _status_prediction_path(value: object, *, run_dir: Path) -> Path:
+    if not isinstance(value, str) or not value:
+        raise RuntimeError("pinned scorer status has no prediction_file")
+    path = Path(value)
+    return (path if path.is_absolute() else run_dir / path).resolve()
+
+
+def _load_pinned_scoring_receipts(
+    scoring_root: Path,
+    *,
+    source_run_id: str,
+    source_evaluation_id: str,
+) -> dict[str, str]:
+    """Revalidate exact scorer destinations rather than selecting latest T*."""
+
+    validate_vlmevalkit_eval_id(source_run_id)
+    expected_fields = {
+        "schema_version",
+        "dataset",
+        "model",
+        "source_evaluation_id",
+        "source_run_id",
+        "source_manifest_path",
+        "source_manifest_sha256",
+        "source_prediction_path",
+        "source_prediction_sha256",
+        "destination_run_id",
+        "destination_status_path",
+        "destination_status_sha256",
+        "destination_prediction_path",
+        "destination_prediction_sha256",
+    }
+    eval_ids: dict[str, str] = {}
+    for dataset in COREDEV_DATASETS:
+        dataset_root = (scoring_root / dataset).resolve()
+        source_run_dir = dataset_root / EVALUATED_MODEL / source_run_id
+        source_manifest = source_run_dir / "final-answer-view-manifest.json"
+        source_prediction = source_run_dir / f"{EVALUATED_MODEL}_{dataset}.tsv"
+        source_status_path = source_run_dir / "status.json"
+        receipt_path = dataset_root / "pinned-reuse-receipt.json"
+        if receipt_path.is_symlink() or not receipt_path.is_file():
+            raise RuntimeError(f"missing pinned scorer receipt for {dataset}")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt) != expected_fields
+            or receipt.get("schema_version")
+            != "tgvf.vlmevalkit-pinned-reuse-receipt.v1"
+            or receipt.get("dataset") != dataset
+            or receipt.get("model") != EVALUATED_MODEL
+            or receipt.get("source_evaluation_id") != source_evaluation_id
+            or receipt.get("source_run_id") != source_run_id
+            or Path(str(receipt.get("source_manifest_path", ""))).resolve()
+            != source_manifest.resolve()
+            or Path(str(receipt.get("source_prediction_path", ""))).resolve()
+            != source_prediction.resolve()
+        ):
+            raise RuntimeError(f"pinned scorer receipt identity differs for {dataset}")
+        source_manifest_sha256 = receipt.get("source_manifest_sha256")
+        source_prediction_sha256 = receipt.get("source_prediction_sha256")
+        if (
+            source_manifest.is_symlink()
+            or not source_manifest.is_file()
+            or source_prediction.is_symlink()
+            or not source_prediction.is_file()
+            or source_status_path.is_symlink()
+            or not source_status_path.is_file()
+            or not isinstance(source_manifest_sha256, str)
+            or _SHA256.fullmatch(source_manifest_sha256) is None
+            or not isinstance(source_prediction_sha256, str)
+            or _SHA256.fullmatch(source_prediction_sha256) is None
+            or _sha256_file(source_manifest) != source_manifest_sha256
+            or _sha256_file(source_prediction) != source_prediction_sha256
+        ):
+            raise RuntimeError(f"pinned scorer source bytes differ for {dataset}")
+        manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+        derived = manifest.get("derived") if isinstance(manifest, dict) else None
+        source_status = json.loads(source_status_path.read_text(encoding="utf-8"))
+        source_entry = (
+            source_status.get("datasets", {}).get(dataset)
+            if isinstance(source_status, dict)
+            else None
+        )
+        if (
+            not isinstance(derived, dict)
+            or derived.get("sha256") != source_prediction_sha256
+            or Path(str(derived.get("path", ""))).resolve()
+            != source_prediction.resolve()
+            or not isinstance(source_entry, dict)
+            or source_status.get("eval_id") != source_run_id
+            or source_status.get("mode") != "infer"
+            or source_status.get("reuse_aux") != "infer"
+            or source_entry.get("status") != "done"
+            or source_entry.get("source_run") != source_evaluation_id
+            or _status_prediction_path(
+                source_entry.get("prediction_file"), run_dir=source_run_dir
+            )
+            != source_prediction.resolve()
+        ):
+            raise RuntimeError(f"pinned scorer source proof differs for {dataset}")
+
+        destination_run_id = receipt.get("destination_run_id")
+        validate_vlmevalkit_eval_id(destination_run_id)
+        destination_run_dir = dataset_root / EVALUATED_MODEL / destination_run_id
+        destination_status = destination_run_dir / "status.json"
+        destination_prediction = (
+            destination_run_dir / f"{EVALUATED_MODEL}_{dataset}.tsv"
+        )
+        if (
+            Path(str(receipt.get("destination_status_path", ""))).resolve()
+            != destination_status.resolve()
+            or Path(str(receipt.get("destination_prediction_path", ""))).resolve()
+            != destination_prediction.resolve()
+            or destination_run_dir.is_symlink()
+            or not destination_run_dir.is_dir()
+            or destination_status.is_symlink()
+            or not destination_status.is_file()
+            or destination_prediction.is_symlink()
+            or not destination_prediction.is_file()
+            or receipt.get("destination_status_sha256")
+            != _sha256_file(destination_status)
+            or receipt.get("destination_prediction_sha256") != source_prediction_sha256
+            or _sha256_file(destination_prediction) != source_prediction_sha256
+        ):
+            raise RuntimeError(f"pinned scorer destination bytes differ for {dataset}")
+        status = json.loads(destination_status.read_text(encoding="utf-8"))
+        entry = (
+            status.get("datasets", {}).get(dataset)
+            if isinstance(status, dict)
+            else None
+        )
+        if (
+            not isinstance(entry, dict)
+            or status.get("eval_id") != destination_run_id
+            or status.get("mode") != "eval"
+            or status.get("reuse") is not True
+            or status.get("reuse_aux") != "infer"
+            or entry.get("status") != "done"
+            or entry.get("source_run") != source_run_id
+            or _status_prediction_path(
+                entry.get("prediction_file"), run_dir=destination_run_dir
+            )
+            != destination_prediction.resolve()
+        ):
+            raise RuntimeError(f"pinned scorer destination proof differs for {dataset}")
+        eval_ids[dataset] = destination_run_id
+    return eval_ids
+
+
 def _accepted_official_summary(
-    scoring_root: Path, judge: dict[str, Any]
+    scoring_root: Path,
+    judge: dict[str, Any],
+    *,
+    include_headline: bool = False,
+    source_run_id: str | None = None,
+    source_evaluation_id: str | None = None,
 ) -> dict[str, Any] | None:
     path = scoring_root / "coredev-2511-eval-summary.json"
     if not path.is_file():
         return None
+    expected_eval_ids = None
+    if (source_run_id is None) != (source_evaluation_id is None):
+        raise ValueError("pinned scorer summary requires both source identities")
+    if source_run_id is not None:
+        assert source_evaluation_id is not None
+        expected_eval_ids = _load_pinned_scoring_receipts(
+            scoring_root,
+            source_run_id=source_run_id,
+            source_evaluation_id=source_evaluation_id,
+        )
     result = summarize_coredev_results(
         work_dir=scoring_root.resolve(),
         repository_root=REPOSITORY_ROOT,
         phase="eval",
         expected_judge_base_url=str(judge["server"]["base_url"]),
         expected_model=EVALUATED_MODEL,
+        expected_eval_ids=expected_eval_ids,
     )
     if result.get("status") != "pass" or result.get("sample_count") != 2511:
         raise RuntimeError("existing official CoreDev summary is not accepted")
+    if include_headline:
+        result["headline"] = extract_coredev_macro_star(result)
     return result
 
 
@@ -1271,8 +2398,7 @@ def _score_arm(
     arm: str,
     log_root: Path,
 ) -> dict[str, Any]:
-    scoring_root = _scoring_root(config_path, plan)
-    accepted = _accepted_official_summary(scoring_root, judge)
+    accepted = _accepted_scored_arm(config_path, plan, judge)
     if accepted is not None:
         return accepted
     workers = _launch_score_arm(
@@ -1282,10 +2408,42 @@ def _score_arm(
         arm=arm,
         log_root=log_root,
     )
-    failures = [dataset for dataset, process in workers if process.wait() != 0]
+    try:
+        failures = [dataset for dataset, process in workers if process.wait() != 0]
+    except BaseException:
+        _terminate_worker_groups([process for _dataset, process in workers])
+        raise
+    residual = [
+        process for _dataset, process in workers if _worker_group_exists(process)
+    ]
+    if residual:
+        _terminate_worker_groups(residual)
+    for _dataset, process in workers:
+        _ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
     if failures:
         raise RuntimeError(f"{arm} official scorers failed after drain: {failures}")
     return _summarize_scored_arm(config_path, plan, judge)
+
+
+def _accepted_scored_arm(
+    config_path: Path,
+    plan: dict[str, Any],
+    judge: dict[str, Any],
+) -> dict[str, Any] | None:
+    config = load_policy_coredev_config(config_path)
+    scoring_root = _scoring_root(config_path, plan)
+    source_run_id = _vlmevalkit_scoring_run_id(
+        run_id_prefix=plan["scoring"]["run_id_prefix"],
+        arm_evaluation_id=config.evaluation_id,
+    )
+    require_pinned_receipts = plan.get("schema_version") == PLAN_SCHEMA_V3
+    return _accepted_official_summary(
+        scoring_root,
+        judge,
+        include_headline=require_pinned_receipts,
+        source_run_id=source_run_id if require_pinned_receipts else None,
+        source_evaluation_id=config.evaluation_id if require_pinned_receipts else None,
+    )
 
 
 def _launch_score_arm(
@@ -1296,30 +2454,37 @@ def _launch_score_arm(
     arm: str,
     log_root: Path,
 ) -> list[tuple[str, subprocess.Popen[bytes]]]:
+    config = load_policy_coredev_config(config_path)
     scoring_root = _scoring_root(config_path, plan)
+    source_run_id = _vlmevalkit_scoring_run_id(
+        run_id_prefix=plan["scoring"]["run_id_prefix"],
+        arm_evaluation_id=config.evaluation_id,
+    )
     workers: list[tuple[str, subprocess.Popen[bytes]]] = []
-    for dataset in COREDEV_DATASETS:
-        log_path = log_root / f"score-{arm}-{dataset}.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("ab", buffering=0) as log_handle:
-            environment = dict(os.environ)
-            environment["OPENAI_API_KEY"] = "EMPTY"
-            workers.append(
-                (
-                    dataset,
-                    subprocess.Popen(
-                        _official_score_command(
-                            dataset=dataset,
-                            scoring_root=scoring_root,
-                            judge=judge,
-                            plan=plan,
-                        ),
-                        env=environment,
-                        stdout=log_handle,
-                        stderr=subprocess.STDOUT,
+    try:
+        for dataset in COREDEV_DATASETS:
+            log_path = log_root / f"score-{arm}-{dataset}.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("ab", buffering=0) as log_handle:
+                environment = dict(os.environ)
+                environment["OPENAI_API_KEY"] = "EMPTY"
+                process = _spawn_registered_process(
+                    _official_score_command(
+                        dataset=dataset,
+                        scoring_root=scoring_root,
+                        source_run_id=source_run_id,
+                        judge=judge,
+                        plan=plan,
                     ),
+                    env=environment,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
                 )
-            )
+                workers.append((dataset, process))
+    except BaseException:
+        if workers:
+            _terminate_worker_groups([process for _dataset, process in workers])
+        raise
     return workers
 
 
@@ -1328,14 +2493,27 @@ def _summarize_scored_arm(
     plan: dict[str, Any],
     judge: dict[str, Any],
 ) -> dict[str, Any]:
+    config = load_policy_coredev_config(config_path)
     scoring_root = _scoring_root(config_path, plan)
+    source_run_id = _vlmevalkit_scoring_run_id(
+        run_id_prefix=plan["scoring"]["run_id_prefix"],
+        arm_evaluation_id=config.evaluation_id,
+    )
+    expected_eval_ids = _load_pinned_scoring_receipts(
+        scoring_root,
+        source_run_id=source_run_id,
+        source_evaluation_id=config.evaluation_id,
+    )
     result = summarize_coredev_results(
         work_dir=scoring_root.resolve(),
         repository_root=REPOSITORY_ROOT,
         phase="eval",
         expected_judge_base_url=str(judge["server"]["base_url"]),
         expected_model=EVALUATED_MODEL,
+        expected_eval_ids=expected_eval_ids,
     )
+    if plan.get("schema_version") == PLAN_SCHEMA_V3:
+        result["headline"] = extract_coredev_macro_star(result)
     write_json_atomic(scoring_root / "coredev-2511-eval-summary.json", result)
     return result
 
@@ -1353,20 +2531,32 @@ def _score_missing_arms(
     launched: list[tuple[str, str, subprocess.Popen[bytes]]] = []
     arm_names = [arm["name"] for arm in plan.get("arms", ())] or list(configs)
     pending = [arm for arm in arm_names if existing[arm] is None]
-    for arm in pending:
-        launched.extend(
-            (arm, dataset, process)
-            for dataset, process in _launch_score_arm(
-                configs[arm], plan, judge, arm=arm, log_root=log_root
+    try:
+        for arm in pending:
+            launched.extend(
+                (arm, dataset, process)
+                for dataset, process in _launch_score_arm(
+                    configs[arm], plan, judge, arm=arm, log_root=log_root
+                )
             )
-        )
-    failures: list[str] = []
-    arm_failed: set[str] = set()
-    for arm, dataset, process in launched:
-        code = process.wait()
-        if code != 0:
-            arm_failed.add(arm)
-            failures.append(f"{arm}/{dataset}={code}")
+        failures: list[str] = []
+        arm_failed: set[str] = set()
+        for arm, dataset, process in launched:
+            code = process.wait()
+            if code != 0:
+                arm_failed.add(arm)
+                failures.append(f"{arm}/{dataset}={code}")
+    except BaseException:
+        if launched:
+            _terminate_worker_groups([process for _arm, _dataset, process in launched])
+        raise
+    residual = [
+        process for _arm, _dataset, process in launched if _worker_group_exists(process)
+    ]
+    if residual:
+        _terminate_worker_groups(residual)
+    for _arm, _dataset, process in launched:
+        _ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
     for arm in pending:
         if arm in arm_failed:
             continue
@@ -1411,20 +2601,154 @@ def _arm_evaluation_identity_sha256(config_path: Path) -> str:
     return identity_sha256
 
 
-def _sampling_report(plan: dict[str, Any], run: Any) -> dict[str, object]:
-    sampling = run.policy.sampling
+def _sampling_report(
+    plan: dict[str, Any], runtime: _EvaluationRuntime
+) -> dict[str, object]:
+    if runtime.backend == PAIRED_TGVF_BACKEND:
+        sampling = runtime.protocol_contract.policy.sampling
+        return {
+            "source": "bound_policy_run_config",
+            "temperature": sampling.temperature,
+            "top_p": sampling.top_p,
+            "top_k": sampling.top_k,
+            "min_p": sampling.min_p,
+            "do_sample": sampling.do_sample,
+            "paired_rng": plan.get("paired_rng"),
+        }
+    if not isinstance(runtime.protocol_contract, DeepEyesNativeRunContract):
+        raise TypeError("full-model sampling requires a native Crop contract")
+    rollout = runtime.protocol_contract.payload["rollout"]
     return {
-        "source": "bound_policy_run_config",
-        "temperature": sampling.temperature,
-        "top_p": sampling.top_p,
-        "top_k": sampling.top_k,
-        "min_p": sampling.min_p,
-        "do_sample": sampling.do_sample,
+        "source": "bound_protocol_contract",
+        "temperature": rollout["temperature"],
+        "top_p": rollout["top_p"],
+        "top_k": -1,
+        "do_sample": rollout["temperature"] > 0,
+        "master_seed": runtime.protocol_contract.payload["dataset"]["schedule_seed"],
         "paired_rng": plan.get("paired_rng"),
     }
 
 
-def main() -> int:
+def _identity_contract_report(
+    plan: dict[str, Any], runtime: _EvaluationRuntime
+) -> dict[str, object]:
+    if runtime.backend == PAIRED_TGVF_BACKEND:
+        return {
+            "backend": PAIRED_TGVF_BACKEND,
+            "checkpoint_owner_and_protocol_contract_are_same": True,
+            "policy_config_path": str(_resolve_repo_path(plan["policy_config"])),
+            "policy_config_sha256": plan["policy_config_sha256"],
+            "run_id": runtime.checkpoint_owner.run_id,
+            "run_identity_sha256": runtime.checkpoint_owner.identity_sha256,
+        }
+    return {
+        "backend": FULL_MODEL_BACKEND,
+        "checkpoint_owner_and_protocol_contract_are_same": False,
+        "checkpoint_owner": dict(plan["checkpoint_owner"]),
+        "protocol_contract": dict(plan["protocol_contract"]),
+    }
+
+
+def _build_paired_report(
+    *,
+    plan: dict[str, Any],
+    runtime: _EvaluationRuntime,
+    configs: dict[str, Path],
+    materialization: dict[str, Any],
+    official_summaries: dict[str, dict[str, Any] | None],
+    arms: tuple[tuple[str, int], ...],
+) -> dict[str, Any]:
+    """Build v2 byte-compatible or v3 owner-aware paired reports."""
+
+    is_v3 = plan.get("schema_version") == PLAN_SCHEMA_V3
+    arm_reports: dict[str, dict[str, Any]] = {}
+    for arm, step in arms:
+        arm_report: dict[str, Any] = {
+            "optimizer_step": step,
+            "evaluation_identity_sha256": _arm_evaluation_identity_sha256(configs[arm]),
+            "official_summary": official_summaries[arm],
+        }
+        if is_v3:
+            arm_report["evaluation_id"] = _arm_evaluation_id(plan, arm)
+        arm_reports[arm] = arm_report
+
+    report: dict[str, Any] = {
+        "schema_version": GENERIC_PAIR_SUMMARY_SCHEMA if is_v3 else PAIR_SUMMARY_SCHEMA,
+        "evaluation_id": plan["evaluation_id"],
+        "coverage": {
+            "official_manifest_rows": 2511,
+            "evaluated_single_image_rows": 2240,
+            "held_multi_image_rows": 271,
+            "multi_image_policy": "unsupported_explicit_hold",
+        },
+        "materialization": materialization,
+        "sampling": _sampling_report(plan, runtime),
+        "arms": arm_reports,
+    }
+    if is_v3:
+        report["identity_contracts"] = _identity_contract_report(plan, runtime)
+    for arm, _step in arms:
+        report[arm] = official_summaries[arm]
+    return report
+
+
+def _acquire_evaluation_process_lock(output_base: Path) -> None:
+    """Hold one host-local lock for the canonical output identity."""
+
+    identity = hashlib.sha256(str(output_base.resolve()).encode("utf-8")).hexdigest()
+    lock_path = Path(tempfile.gettempdir()) / f"tgvf-paired-eval-{identity}.lock"
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        handle.close()
+        raise RuntimeError(
+            f"another paired evaluator owns {output_base.resolve()}"
+        ) from error
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"pid={os.getpid()}\noutput={output_base.resolve()}\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+    _EVALUATION_LOCK_HANDLES.append(handle)
+
+
+def _cleanup_evaluation_runtime(previous_handlers: dict[signal.Signals, Any]) -> None:
+    """Drain children and locks while repeat termination signals stay blocked."""
+
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, _CHILD_SPAWN_SIGNALS)
+    cleanup_error: BaseException | None = None
+    try:
+        try:
+            if _ACTIVE_PROCESS_GROUPS:
+                _terminate_worker_groups(list(_ACTIVE_PROCESS_GROUPS.values()))
+        except BaseException as error:
+            cleanup_error = error
+        while _EVALUATION_LOCK_HANDLES:
+            handle = _EVALUATION_LOCK_HANDLES.pop()
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except BaseException as error:
+                cleanup_error = cleanup_error or error
+            finally:
+                try:
+                    handle.close()
+                except BaseException as error:
+                    cleanup_error = cleanup_error or error
+        for candidate, previous in previous_handlers.items():
+            try:
+                signal.signal(candidate, previous)
+            except BaseException as error:
+                cleanup_error = cleanup_error or error
+    finally:
+        # Restore the caller's handlers before unblocking, so a pending repeated
+        # signal cannot re-enter controlled cleanup after all resources drain.
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+    if cleanup_error is not None:
+        raise cleanup_error
+
+
+def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
     parser.add_argument(
@@ -1449,19 +2773,19 @@ def main() -> int:
         <= 0
     ):
         raise ValueError("evaluation wait durations must be positive")
-    if len(args.gpu_ids) not in {4, 8} or len(set(args.gpu_ids)) != len(args.gpu_ids):
-        raise ValueError("paired evaluator requires four or eight distinct GPU IDs")
     if args.wait_for_step8 and args.wait_for_final_arm:
         raise ValueError("select only one checkpoint-wait mode")
-    if args.mode == "score" and (args.wait_for_step8 or args.wait_for_final_arm):
-        raise ValueError("score mode cannot wait on a training checkpoint")
+    if args.mode == "score" and (
+        args.wait_for_step8 or args.wait_for_final_arm or args.wait_for_gpus
+    ):
+        raise ValueError("score mode cannot wait on checkpoints or GPUs")
+    if args.mode != "score" and (
+        len(args.gpu_ids) not in {4, 8} or len(set(args.gpu_ids)) != len(args.gpu_ids)
+    ):
+        raise ValueError("paired evaluator requires four or eight distinct GPU IDs")
     plan = _load_plan(args.plan.resolve())
-    policy_config = _resolve_repo_path(plan["policy_config"])
-    run = load_policy_e2e_smoke_run_config(
-        policy_config, allow_external_agent_loop_config=True
-    )
-    _validate_plan_run(plan, run)
-    judge = _load_judge_config(plan)
+    runtime = _load_evaluation_runtime(plan)
+    judge = _load_judge_config(plan, require_local_model=args.mode != "score")
     judge_gpus = tuple(judge["devices"]["physical"])
     if (
         len(judge_gpus) != 2
@@ -1469,36 +2793,53 @@ def main() -> int:
         or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in judge_gpus)
     ):
         raise RuntimeError("pinned benchmark judge GPU binding is malformed")
-    if any(gpu_id not in args.gpu_ids for gpu_id in judge_gpus):
+    if args.mode != "score" and any(
+        gpu_id not in args.gpu_ids for gpu_id in judge_gpus
+    ):
         raise ValueError("evaluation GPU set must include pinned judge GPUs")
-    if args.wait_for_step8:
-        _wait_for_step8(
-            run,
-            timeout_seconds=args.wait_timeout_seconds,
-            poll_seconds=args.poll_seconds,
-        )
-    if args.wait_for_final_arm:
-        final_step = max(arm["optimizer_step"] for arm in plan["arms"])
-        if final_step <= 0:
-            raise ValueError("final-arm wait requires a positive checkpoint arm")
-        _wait_for_optimizer_step(
-            run,
-            optimizer_step=final_step,
-            timeout_seconds=args.wait_timeout_seconds,
-            poll_seconds=args.poll_seconds,
-        )
-    if args.wait_for_gpus:
-        _wait_for_gpus(
-            tuple(args.gpu_ids),
-            timeout_seconds=args.wait_timeout_seconds,
-            poll_seconds=args.poll_seconds,
-            free_threshold_mib=args.gpu_free_threshold_mib,
-        )
     output_base = (
         args.output_root.resolve()
         if args.output_root is not None
-        else run.output.root / "evaluation" / plan["evaluation_id"]
+        else runtime.output_root / "evaluation" / plan["evaluation_id"]
     )
+    _acquire_evaluation_process_lock(output_base)
+    if args.wait_for_step8:
+        if runtime.backend == FULL_MODEL_BACKEND:
+            _wait_for_full_model_arm(
+                plan,
+                runtime,
+                arm="step8",
+                optimizer_step=8,
+                timeout_seconds=args.wait_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
+        else:
+            _wait_for_step8(
+                runtime.checkpoint_owner,
+                timeout_seconds=args.wait_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
+    if args.wait_for_final_arm:
+        final_arm = max(plan["arms"], key=lambda item: item["optimizer_step"])
+        final_step = final_arm["optimizer_step"]
+        if final_step <= 0:
+            raise ValueError("final-arm wait requires a positive checkpoint arm")
+        if runtime.backend == FULL_MODEL_BACKEND:
+            _wait_for_full_model_arm(
+                plan,
+                runtime,
+                arm=final_arm["name"],
+                optimizer_step=final_step,
+                timeout_seconds=args.wait_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
+        else:
+            _wait_for_optimizer_step(
+                runtime.checkpoint_owner,
+                optimizer_step=final_step,
+                timeout_seconds=args.wait_timeout_seconds,
+                poll_seconds=args.poll_seconds,
+            )
     gpu_groups = [tuple(args.gpu_ids[:4])]
     if len(args.gpu_ids) == 8:
         gpu_groups.append(tuple(args.gpu_ids[4:]))
@@ -1510,7 +2851,12 @@ def main() -> int:
     if args.mode == "score":
         configs = {
             arm: _load_existing_arm(
-                plan=plan, output_base=output_base, arm=arm, step=step
+                plan=plan,
+                runtime=runtime,
+                output_base=output_base,
+                arm=arm,
+                step=step,
+                gpu_ids=None,
             )
             for arm, step in arms
         }
@@ -1518,7 +2864,8 @@ def main() -> int:
         configs = {
             arm: _materialize_arm(
                 plan=plan,
-                run=run,
+                runtime=runtime,
+                run=runtime.checkpoint_owner,
                 arm=arm,
                 step=step,
                 output_base=output_base,
@@ -1527,6 +2874,13 @@ def main() -> int:
             for index, (arm, step) in enumerate(arms)
         }
     _validate_materialized_frozen_pairing(plan, configs)
+    if args.wait_for_gpus:
+        _wait_for_gpus(
+            tuple(args.gpu_ids),
+            timeout_seconds=args.wait_timeout_seconds,
+            poll_seconds=args.poll_seconds,
+            free_threshold_mib=args.gpu_free_threshold_mib,
+        )
     if args.mode == "status":
         for config in configs.values():
             _run_checked(
@@ -1541,8 +2895,6 @@ def main() -> int:
             )
         return 0
     if args.mode == "score":
-        for arm, _step in arms:
-            _materialize_official_scoring_view(configs[arm], plan, arm=arm)
         materialization = {
             arm: _load_existing_official_scoring_view(configs[arm], plan, arm=arm)
             for arm, _step in arms
@@ -1588,10 +2940,10 @@ def main() -> int:
         }
     log_root = output_base / "logs"
     existing = {
-        arm: _accepted_official_summary(_scoring_root(configs[arm], plan), judge)
-        for arm, _step in arms
+        arm: _accepted_scored_arm(configs[arm], plan, judge) for arm, _step in arms
     }
     if any(value is None for value in existing.values()):
+        _require_local_judge_runtime(judge)
         with _local_judge_service(
             judge,
             log_path=log_root / "judge-qwen25-72b.log",
@@ -1605,30 +2957,14 @@ def main() -> int:
                 judge,
                 log_root=log_root,
             )
-    report = {
-        "schema_version": PAIR_SUMMARY_SCHEMA,
-        "evaluation_id": plan["evaluation_id"],
-        "coverage": {
-            "official_manifest_rows": 2511,
-            "evaluated_single_image_rows": 2240,
-            "held_multi_image_rows": 271,
-            "multi_image_policy": "unsupported_explicit_hold",
-        },
-        "materialization": materialization,
-        "sampling": _sampling_report(plan, run),
-        "arms": {
-            arm: {
-                "optimizer_step": step,
-                "evaluation_identity_sha256": _arm_evaluation_identity_sha256(
-                    configs[arm]
-                ),
-                "official_summary": existing[arm],
-            }
-            for arm, step in arms
-        },
-    }
-    for arm, _step in arms:
-        report[arm] = existing[arm]
+    report = _build_paired_report(
+        plan=plan,
+        runtime=runtime,
+        configs=configs,
+        materialization=materialization,
+        official_summaries=existing,
+        arms=arms,
+    )
     report_path = output_base / "paired-summary.json"
     write_json_atomic(report_path, report)
     _write_evaluation_complete(
@@ -1636,6 +2972,26 @@ def main() -> int:
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
+
+
+def main() -> int:
+    """Run the evaluator with signal-safe child and lock cleanup."""
+
+    previous_handlers: dict[signal.Signals, Any] = {}
+
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        candidate = getattr(signal, name, None)
+        if candidate is None:
+            continue
+        try:
+            previous_handlers[candidate] = signal.getsignal(candidate)
+            signal.signal(candidate, _controlled_interrupt)
+        except ValueError:
+            break
+    try:
+        return _main()
+    finally:
+        _cleanup_evaluation_runtime(previous_handlers)
 
 
 if __name__ == "__main__":

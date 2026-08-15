@@ -236,7 +236,9 @@ def _materialize_eval_fixture(
         prediction.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
         judge_contract = COREDEV_JUDGE_CONTRACTS[spec.vlmeval_dataset]
-        judge_model = "" if judge_contract == "none_rule_based" else COREDEV_LLM_JUDGE_MODEL
+        judge_model = (
+            "" if judge_contract == "none_rule_based" else COREDEV_LLM_JUDGE_MODEL
+        )
         entry = {
             "status": "done",
             "prediction_file": str(prediction),
@@ -252,9 +254,7 @@ def _materialize_eval_fixture(
             "mode": "eval",
             "datasets": {spec.vlmeval_dataset: entry},
         }
-        (run_dir / "status.json").write_text(
-            json.dumps(status), encoding="utf-8"
-        )
+        (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
         if judge_contract != "none_rule_based":
             _write_health(dataset_root / "judge-health-pre.json")
             _write_health(dataset_root / "judge-health-post.json")
@@ -423,12 +423,7 @@ def test_aggregate_never_falls_back_to_an_older_success_after_new_failure(
     tmp_path: Path,
 ) -> None:
     _materialize_eval_fixture(tmp_path)
-    failed_dir = (
-        tmp_path
-        / "VStarBench"
-        / COREDEV_BASELINE_MODEL
-        / "T20260721-160000"
-    )
+    failed_dir = tmp_path / "VStarBench" / COREDEV_BASELINE_MODEL / "T20260721-160000"
     failed_dir.mkdir()
     (failed_dir / "status.json").write_text(
         json.dumps(
@@ -454,4 +449,50 @@ def test_aggregate_never_falls_back_to_an_older_success_after_new_failure(
             repository_root=tmp_path,
             phase="eval",
             expected_judge_base_url=JUDGE_BASE_URL,
+        )
+
+
+def test_exact_eval_ids_ignore_a_newer_poisoned_sibling(tmp_path: Path) -> None:
+    _materialize_eval_fixture(tmp_path)
+    failed_dir = tmp_path / "VStarBench" / COREDEV_BASELINE_MODEL / "T20260721-160000"
+    failed_dir.mkdir()
+    (failed_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "eval_id": "T20260721-160000",
+                "model_name": COREDEV_BASELINE_MODEL,
+                "commit": "7055d301",
+                "mode": "eval",
+                "datasets": {
+                    "VStarBench": {
+                        "status": "done",
+                        "error_message": "poisoned sibling",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    expected_eval_ids = {
+        spec.vlmeval_dataset: "T20260721-150000" for spec in COREDEV_2511.slices
+    }
+
+    result = summarize_coredev_results(
+        work_dir=tmp_path,
+        repository_root=tmp_path,
+        phase="eval",
+        expected_judge_base_url=JUDGE_BASE_URL,
+        expected_eval_ids=expected_eval_ids,
+    )
+
+    assert {item["eval_id"] for item in result["slices"]} == {"T20260721-150000"}
+
+
+def test_exact_eval_ids_must_bind_every_selected_dataset(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="exactly bind"):
+        summarize_coredev_results(
+            work_dir=tmp_path.resolve(),
+            repository_root=tmp_path.resolve(),
+            phase="eval",
+            expected_eval_ids={"VStarBench": "T20260721-150000"},
         )

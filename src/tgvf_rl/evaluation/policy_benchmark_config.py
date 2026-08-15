@@ -176,6 +176,7 @@ def materialize_full_model_policy_benchmark_config(
     gpu_memory_utilization: float = 0.9,
     image_max_pixels: int | None = None,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
+    paired_seed_namespace: str | None = None,
 ) -> dict[str, Any]:
     """Bind an official-visible suite to one exact standalone full model.
 
@@ -200,8 +201,13 @@ def materialize_full_model_policy_benchmark_config(
     )
     if snapshot.policy_version.optimizer_step != expected_optimizer_step:
         raise ValueError("full-model optimizer step differs from requested step")
-    if _sha256_file(policy_config) != snapshot.manifest.run_contract_file_sha256:
-        raise ValueError("policy config bytes differ from full-model run contract")
+    expected_policy_config_sha256 = (
+        snapshot.manifest.run_contract_file_sha256
+        if getattr(snapshot.manifest, "checkpoint_owner", None) is None
+        else snapshot.manifest.checkpoint_owner.config_file_sha256
+    )
+    if _sha256_file(policy_config) != expected_policy_config_sha256:
+        raise ValueError("policy config bytes differ from full-model checkpoint owner")
 
     task_sha256 = _sha256_file(task_manifest)
     load_benchmark_tasks(
@@ -244,6 +250,8 @@ def materialize_full_model_policy_benchmark_config(
     }
     if image_max_pixels is not None:
         payload["image_max_pixels"] = image_max_pixels
+    if paired_seed_namespace is not None:
+        payload["paired_seed_namespace"] = paired_seed_namespace
     PolicyCoreDevConfig(**payload)
     _write_immutable(frozen_policy_config, policy_config.read_bytes())
     encoded = (

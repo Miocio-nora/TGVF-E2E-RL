@@ -56,12 +56,8 @@ DEEPEYES_RUN_GLOBAL_CONCURRENCY_CAP_ENV = (
     "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP"
 )
 DEEPEYES_MAXIMUM_ATTEMPTS_ENV = "TGVF_DEEPEYES_JUDGE_MAXIMUM_ATTEMPTS"
-DEEPEYES_RETRY_BACKOFF_SECONDS_ENV = (
-    "TGVF_DEEPEYES_JUDGE_RETRY_BACKOFF_SECONDS"
-)
-DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV = (
-    "TGVF_DEEPEYES_JUDGE_RETRY_MAXIMUM_SECONDS"
-)
+DEEPEYES_RETRY_BACKOFF_SECONDS_ENV = "TGVF_DEEPEYES_JUDGE_RETRY_BACKOFF_SECONDS"
+DEEPEYES_RETRY_MAXIMUM_SECONDS_ENV = "TGVF_DEEPEYES_JUDGE_RETRY_MAXIMUM_SECONDS"
 DEEPEYES_TRANSIENT_FAILURE_FRACTION_ENV = (
     "TGVF_DEEPEYES_JUDGE_MAXIMUM_TRANSIENT_FAILURE_FRACTION"
 )
@@ -305,7 +301,9 @@ def effective_deepeyes_judge_transport_config(
     if backoff < configured.retry_backoff_seconds:
         raise ValueError("judge runtime backoff cannot reduce the serialized value")
     if maximum < configured.retry_maximum_seconds:
-        raise ValueError("judge runtime retry maximum cannot reduce the serialized value")
+        raise ValueError(
+            "judge runtime retry maximum cannot reduce the serialized value"
+        )
     if failure_fraction > configured.maximum_transient_failure_fraction:
         raise ValueError(
             "judge runtime failure fraction cannot exceed the serialized value"
@@ -514,8 +512,7 @@ class AsyncDeepEyesOpenRouterJudge:
                             ) from error
                         delay = min(
                             self.config.retry_maximum_seconds,
-                            self.config.retry_backoff_seconds
-                            * (2 ** (attempts - 1)),
+                            self.config.retry_backoff_seconds * (2 ** (attempts - 1)),
                         )
                         await self._sleeper(delay)
                         continue
@@ -872,6 +869,9 @@ _VISUAL_AUDIT_FIELDS = (
     "crop_best_gt_coverage",
     "crop_error_count",
     "crop_observation_token_spans",
+    "decoder_context_overflow",
+    "decoder_prompt_length_at_overflow",
+    "decoder_max_model_length_at_overflow",
     "native_original_image_count",
     "native_crop_image_count",
     "native_total_image_count",
@@ -940,6 +940,9 @@ def _trajectory_audit_fields(
             "gt_coverage": None,
             "crop_error_count": 0,
             "crop_observation_token_spans": [],
+            "decoder_context_overflow": 0,
+            "decoder_prompt_length_at_overflow": 0,
+            "decoder_max_model_length_at_overflow": 0,
             "native_original_image_count": 0,
             "native_crop_image_count": 0,
             "native_total_image_count": 0,
@@ -962,6 +965,9 @@ def _trajectory_audit_fields(
         "crop_call_count",
         "crop_action_count",
         "crop_error_count",
+        "decoder_context_overflow",
+        "decoder_prompt_length_at_overflow",
+        "decoder_max_model_length_at_overflow",
         "native_original_image_count",
         "native_crop_image_count",
         "native_total_image_count",
@@ -970,6 +976,15 @@ def _trajectory_audit_fields(
     integers = {name: _plain(combined[name]) for name in integer_names}
     if any(type(value) is not int or value < 0 for value in integers.values()):
         raise ValueError("native trajectory audit counters are invalid")
+    overflow = integers["decoder_context_overflow"]
+    prompt_at_overflow = integers["decoder_prompt_length_at_overflow"]
+    limit_at_overflow = integers["decoder_max_model_length_at_overflow"]
+    if overflow not in {0, 1}:
+        raise ValueError("native decoder context overflow flag must be binary")
+    if overflow == 0 and (prompt_at_overflow != 0 or limit_at_overflow != 0):
+        raise ValueError("native decoder overflow lengths exist without overflow")
+    if overflow == 1 and not prompt_at_overflow > limit_at_overflow > 0:
+        raise ValueError("native decoder overflow lengths are invalid")
     if integers["response_token_count"] != response_length:
         raise ValueError("native/core response token counts disagree")
     if integers["native_original_image_count"] != 1:
