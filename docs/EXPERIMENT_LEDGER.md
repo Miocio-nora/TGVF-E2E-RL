@@ -10166,6 +10166,11 @@ than inferred from a script name or prior conversation.
   this ledger entry had not yet accompanied the config-only descendant. No
   rollout, optimizer mutation, checkpoint or W&B run was produced by that
   rejected invocation. Adding this record changes no training variable.
+- The next canary invocation also made no optimizer update: it exposed that
+  the canary override selected the historical PRL13 smoke schedule while the
+  live runtime was bound to the Teacher25 schedule. Runtime commit `8c3ab4e`
+  now takes the canary prefix from the dataset bound by the run config; it
+  does not relax live image/sample identity validation.
 - Because the scaling arm required launcher parameterization rather than a
   pure TOML overlay, historical PRL22-A is an informative anchor but not yet
   a same-commit causal batch control. PRL24-A may run first as authorized; a
