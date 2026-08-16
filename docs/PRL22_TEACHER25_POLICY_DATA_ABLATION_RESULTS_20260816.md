@@ -76,11 +76,11 @@ Both Teacher25 arms inherit their corresponding accepted no-Teacher control:
 | Endpoints | optimizer Steps 8 and 16 |
 
 The intended scientific variable is only the immutable Teacher25 prompt
-schedule.  PRL17-R2 and PRL20-R0 were executed at historical control commit
-`2c1039e`, while the shared Teacher25 implementation is bound to `37b99e2`.
-The recipe and measurement protocol are matched, but this commit difference
-means the comparison should be described as a matched-recipe A/B rather than a
-byte-identical-code causal proof.
+schedule.  PRL17-R2 was executed at historical control commit `2c1039e`,
+PRL20-R0 at `eadae55`, and the shared Teacher25 implementation is bound to
+`37b99e2`.  The recipe and measurement protocol are matched, but these commit
+differences mean the comparison should be described as a matched-recipe A/B
+rather than a byte-identical-code causal proof.
 
 ### 2.2 CoreDev-2511 contract
 
