@@ -129,16 +129,10 @@ if any(observed_hashes.get(name) != value for name, value in expected_hashes.ite
 if state.progress.optimizer_step != step or pair.optimizer_step != step:
     raise SystemExit(1)
 
-try:
-    rows = [
-        json.loads(line)
-        for line in config.output.metrics_path.read_text(encoding="utf-8").splitlines()
-        if line
-    ]
-except (OSError, json.JSONDecodeError):
-    raise SystemExit(1)
-if [row.get("optimizer_step") for row in rows[:step]] != list(range(1, step + 1)):
-    raise SystemExit(1)
+# The committed state/pair receipt is the recovery authority.  metrics.jsonl is
+# observational telemetry: a retry may legitimately append duplicate rows or
+# flush it after the checkpoint receipt.  Never reject a valid checkpoint on
+# telemetry shape; metrics continuity is audited separately.
 if (
     receipt.get("schema_version")
     != "tgvf.prl15-permanent-checkpoint-receipt.v1"
@@ -167,7 +161,7 @@ run_with_resume() {
   local stage=$1
   shift
   local attempt=0
-  local deterministic_error_pattern='ValueError:|AssertionError:|SyntaxError:|ImportError:|ModuleNotFoundError:|FileNotFoundError:|identity differs|SHA256 differs|schema differs|immutable .*collision|adapter update mode differs|frozen .*changed|CUDA out of memory|OutOfMemoryError|non-finite|NaN|401 Unauthorized|402 Payment Required|403 Forbidden|invalid_api_key|model_not_found'
+  local deterministic_error_pattern='AssertionError:|SyntaxError:|ImportError:|ModuleNotFoundError:|FileNotFoundError:|identity differs|SHA256 differs|schema differs|immutable .*collision|adapter update mode differs|frozen .*changed|CUDA out of memory|OutOfMemoryError|non-finite|NaN|401 Unauthorized|402 Payment Required|403 Forbidden|invalid_api_key|model_not_found'
   while true; do
     attempt=$((attempt + 1))
     local attempt_log="$log_root/${stage}-attempt-$(printf '%02d' "$attempt").log"

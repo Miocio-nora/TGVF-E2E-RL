@@ -6,7 +6,7 @@ run_id = "PRL-23-B-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-TEACHER100-8ST
 repository = "Miocio-nora/TGVF-E2E-RL"
 # Bound once to the accepted shared ratio implementation by
 # tools/bind_prl23_teacher_ratio_launchers.py.
-commit = "0000000000000000000000000000000000000000"
+commit = "6567677fa45ec38db05aa6c30863c83e1bf6dcb2"
 dirty = false
 
 [model]
@@ -24,10 +24,10 @@ teacher_percentage = 100
 root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/data/policy_rl/PRL23-TEACHER100-MIXED-SCHEDULE-v1"
 decision_stage = "final"
 sample_count = 20480
-manifest_file_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-content_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-samples_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-iteration_identity_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+manifest_file_sha256 = "5d1ba2ce7811cbefa05d2a66d54c13f43fbd39efda9326b3ba1ac1995d49b5bf"
+content_sha256 = "89bc5d5b15558db9b9bba1c80adfcc9404cb0fdb4036276604a4405d66f49a5c"
+samples_sha256 = "3a624fe54e1922ac9695b9d1ca2eb088608cbdf537b7a6adc3bc6acaf06efee5"
+iteration_identity_sha256 = "426fa00fd2fab63b98a3dc7bf168fa98195248395bd8f650761aa6a5e9675fc9"
 shuffle_seed = 42
 
 [representation]

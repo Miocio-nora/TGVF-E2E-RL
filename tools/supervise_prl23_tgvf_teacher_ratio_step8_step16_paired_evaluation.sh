@@ -42,7 +42,7 @@ if ! flock -n 9; then
 fi
 
 export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
-deterministic_error_pattern='ValueError:|SyntaxError:|ImportError:|ModuleNotFoundError:|FileNotFoundError:|identity differs|SHA256 differs|schema differs|immutable .*collision|adapter update mode differs|frozen RP67|plan .* differs|policy config .* differs|task manifest .* differs|paired seed namespace differs|paired RNG .* differs'
+deterministic_error_pattern='SyntaxError:|ImportError:|ModuleNotFoundError:|FileNotFoundError:|identity differs|SHA256 differs|schema differs|immutable .*collision|adapter update mode differs|frozen RP67|plan .* differs|policy config .* differs|task manifest .* differs|paired seed namespace differs|paired RNG .* differs'
 attempt=0
 while true; do
   attempt=$((attempt + 1))

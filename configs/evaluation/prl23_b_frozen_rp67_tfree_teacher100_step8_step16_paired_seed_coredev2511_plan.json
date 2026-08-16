@@ -3,7 +3,7 @@
   "evaluation_id": "PRL23-B-FROZEN-RP67-TFREE-TEACHER100-COREDEV2511-STEP8-STEP16-PAIRED-SEED-V1",
   "status": "ready",
   "policy_config": "configs/policy/runs/prl_23_b_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_teacher100_8step_ws8.toml",
-  "policy_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "policy_config_sha256": "5e54e154e6b3724f5e699724bc884fb3948efe61fc7efc3ce22190d7717d6e0e",
   "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "expected_task_count": 2511,

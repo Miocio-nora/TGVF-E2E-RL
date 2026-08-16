@@ -2,7 +2,7 @@
 
 Date: 2026-08-16
 
-Status: launcher implementation prepared; data identities must be bound before launch
+Status: immutable data and launch identities bound; ready for tmux execution
 
 ## 1. Question
 
@@ -40,26 +40,34 @@ rows plus 128 teacher rows; odd-numbered macros contain 60/38/30 plus 128.
 Every BS16 follows `[base, teacher] x 8`. Its teacher-source totals are 909
 ChartQA, 1,728 DocVQA, 1,633 TextOCR, 1,680 TextVQA, and 4,290 Visual Genome.
 
-Teacher100 has no existing rows. Its teacher-source totals are 1,818 ChartQA,
-3,456 DocVQA, 3,266 TextOCR, 3,360 TextVQA, and 8,580 Visual Genome; every
+Teacher100 has no existing rows. It means that 100% of the fixed 20,480-row
+schedule is teacher data: 20,480 rows are selected without replacement from
+the 24,779-row teacher parent (82.65% of that parent), rather than consuming
+all 24,779 parent rows. Its teacher-source totals are 1,818 ChartQA, 3,456
+DocVQA, 3,266 TextOCR, 3,360 TextVQA, and 8,580 Visual Genome; every
 BS16 and every 256-row macro are entirely teacher data. The selector retains
 the PRL22 hash namespace, and materialization verifies the strict selected-set
 nesting `Teacher25 subset Teacher50 subset Teacher100`, with successive set
 differences of 5,120 and 10,240 rows.
 
-Planned immutable artifact roots are:
+Immutable artifact roots are:
 
 ```text
 artifacts/data/policy_rl/PRL23-TEACHER50-MIXED-SCHEDULE-v1
 artifacts/data/policy_rl/PRL23-TEACHER100-MIXED-SCHEDULE-v1
 ```
 
-Manifest, content, samples, and iteration hashes remain explicit zero-valued
-launch blockers in the templates until the two artifacts have been
-materialized. `tools/bind_prl23_teacher_ratio_launchers.py` validates each
-manifest and samples file, writes the four identities and shared code commit
-into the run config, and refreshes the bound policy-config hash in its paired
-evaluation plan.
+The materialized identities are:
+
+| Arm | Manifest | Content | Samples | Iteration |
+|---|---|---|---|---|
+| Teacher50 | `0addf4741080dc922fbff84b85c01c4d2fd19f3669f84a7752e5524a8972cd97` | `2a80ee2d3cfb293e4eec5711964e9ab70dfc4620240f1e78fd1b5cc70a8a368a` | `33c77cdbc44a9f4a23bef2c1c885e32cb81c54f916c4e26bf9cb805987c65ae4` | `b9aa3b2187fd462cf86bb76e95a1a89c9c84f24eab818c18db706a9696e0a600` |
+| Teacher100 | `5d1ba2ce7811cbefa05d2a66d54c13f43fbd39efda9326b3ba1ac1995d49b5bf` | `89bc5d5b15558db9b9bba1c80adfcc9404cb0fdb4036276604a4405d66f49a5c` | `3a624fe54e1922ac9695b9d1ca2eb088608cbdf537b7a6adc3bc6acaf06efee5` | `426fa00fd2fab63b98a3dc7bf168fa98195248395bd8f650761aa6a5e9675fc9` |
+
+`tools/bind_prl23_teacher_ratio_launchers.py` validated each manifest and
+samples file, wrote these identities plus shared code commit `6567677` into
+the run configs, and refreshed each paired evaluation plan's policy-config
+hash. No zero-valued launch blocker remains.
 
 ## 3. Fixed experimental contract
 
@@ -71,9 +79,9 @@ Relative to PRL22-A, the following are held exactly fixed:
 - tool protocol: TGVF-only prompt and `tgvf_focus_tool`, at most six calls;
 - sampling: 16 rollouts per prompt, temperature 1, common master seed 42,
   maximum response length 20,480;
-- reward: rule-first plus Qwen2.5-72B semantic fallback, answer reward,
-  protocol penalty, and repeated-call penalty; T-free with focus and grounding
-  rewards disabled;
+- reward: rule-first plus OpenRouter/DeepInfra Qwen2.5-72B text-only semantic
+  fallback, answer reward, protocol penalty, and repeated-call penalty;
+  T-free with focus and grounding rewards disabled;
 - optimizer: AdamW, constant LR `1e-6`, weight decay `0.01`, grad norm `1.0`;
 - update geometry: BS16 x n16, world size 8, micro batch 2 per rank, GA1;
 - full-model Qwen policy update with FSDP2; RP67 remains frozen;
@@ -81,8 +89,8 @@ Relative to PRL22-A, the following are held exactly fixed:
   boundary;
 - evaluation: CoreDev-2511 official visible view, 2,240 supported single-image
   tasks plus 271 held multi-image tasks, Step 8 and Step 16 in parallel on four
-  GPUs each, temperature 1, seed 42, common random numbers, and the local
-  Qwen2.5-72B judge.
+  GPUs each, temperature 1, seed 42, common random numbers, and the pinned local
+  Qwen2.5-72B benchmark judge.
 
 The static test `tests/framework/test_prl23_teacher_ratio_launchers.py`
 normalizes away only code, dataset, run/output, and evaluation identities and
@@ -119,7 +127,9 @@ attempts and six evaluation attempts. The following stop rather than blindly
 retry: identity/schema/hash mismatches, incomplete distributed checkpoints,
 non-finite values, OOM, frozen-Adapter drift, and API authentication, billing,
 or model-availability failures. Sample-local evaluation failures remain
-contained by the existing evaluator.
+contained by the existing evaluator. `metrics.jsonl` is telemetry rather than
+a recovery authority: duplicate or late-flushed rows cannot reject a valid,
+identity-bound checkpoint receipt.
 
 ## 6. Time and resource estimate
 
@@ -135,7 +145,15 @@ change the accepted world-size-8 update geometry. Each completed arm is
 expected to occupy approximately 320 GB before optional post-verification
 cleanup; both fit within the currently available storage.
 
-## 7. Decision rule
+## 7. Current scope boundary
+
+The two formal launch configs in this plan are pure-TGVF arms only. The shared
+ratio artifact and veRL renderer are profile-driven, but plain native Crop and
+Atomic Crop+TGVF still require their own matched configs and compose tests
+before they can be called formal-ready at Teacher50/100. This document does
+not claim that those additional arms have already been deployed.
+
+## 8. Decision rule
 
 The primary comparison is Macro* under the unchanged CoreDev measurement
 contract at Steps 8 and 16, reported together with all seven components. The
