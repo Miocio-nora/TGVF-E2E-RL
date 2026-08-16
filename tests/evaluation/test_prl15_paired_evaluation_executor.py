@@ -189,6 +189,68 @@ def test_v3_protocol_base_step_zero_is_not_an_owner_retained_checkpoint() -> Non
     )
 
 
+def test_existing_paired_tgvf_arm_accepts_its_serialized_snapshot_backend(
+    tmp_path: Path,
+) -> None:
+    plan = _MODULE._load_plan(_PLAN)
+    runtime = SimpleNamespace(backend=_MODULE.PAIRED_TGVF_BACKEND)
+    paths = _MODULE._arm_paths(tmp_path, "step8")
+    values = {
+        **_MODULE._expected_arm_runtime_settings(plan, runtime),
+        "evaluation_id": _MODULE._arm_evaluation_id(plan, "step8"),
+        "evaluation_protocol": plan["protocol"]["evaluation_protocol"],
+        "output_root": paths["root"].resolve(),
+        "gpu_ids": (0, 1, 2, 3),
+        "task_manifest_path": _MODULE._resolve_repo_path(plan["task_manifest_path"]),
+        "task_manifest_sha256": plan["task_manifest_sha256"],
+        "expected_task_count": plan["expected_task_count"],
+        "expected_single_image_count": plan["expected_single_image_count"],
+        "paired_seed_namespace": _MODULE._paired_seed_namespace(plan),
+    }
+
+    assert _MODULE.PAIRED_TGVF_BACKEND == "paired_tgvf"
+    assert values["snapshot_backend"] == "full_model_trainable_rp66"
+    _MODULE._validate_existing_arm_config(
+        SimpleNamespace(**values),
+        plan=plan,
+        runtime=runtime,
+        paths=paths,
+        arm="step8",
+        gpu_ids=(0, 1, 2, 3),
+    )
+
+
+def test_existing_paired_tgvf_arm_rejects_runtime_selector_as_snapshot_backend(
+    tmp_path: Path,
+) -> None:
+    plan = _MODULE._load_plan(_PLAN)
+    runtime = SimpleNamespace(backend=_MODULE.PAIRED_TGVF_BACKEND)
+    paths = _MODULE._arm_paths(tmp_path, "step8")
+    values = {
+        **_MODULE._expected_arm_runtime_settings(plan, runtime),
+        "evaluation_id": _MODULE._arm_evaluation_id(plan, "step8"),
+        "evaluation_protocol": plan["protocol"]["evaluation_protocol"],
+        "output_root": paths["root"].resolve(),
+        "gpu_ids": (0, 1, 2, 3),
+        "task_manifest_path": _MODULE._resolve_repo_path(plan["task_manifest_path"]),
+        "task_manifest_sha256": plan["task_manifest_sha256"],
+        "expected_task_count": plan["expected_task_count"],
+        "expected_single_image_count": plan["expected_single_image_count"],
+        "paired_seed_namespace": _MODULE._paired_seed_namespace(plan),
+        "snapshot_backend": _MODULE.PAIRED_TGVF_BACKEND,
+    }
+
+    with pytest.raises(RuntimeError, match="snapshot_backend"):
+        _MODULE._validate_existing_arm_config(
+            SimpleNamespace(**values),
+            plan=plan,
+            runtime=runtime,
+            paths=paths,
+            arm="step8",
+            gpu_ids=(0, 1, 2, 3),
+        )
+
+
 def test_v3_owner_completion_tamper_fails_before_runtime_launch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

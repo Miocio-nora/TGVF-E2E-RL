@@ -10109,3 +10109,19 @@ than inferred from a script name or prior conversation.
   namespace and protocol SHA, allowing a paired Teacher25-versus-original-data
   comparison. Its distinct evaluation and output identities prevent artifact
   collision with PRL20 or PRL22-A.
+- Training completed through permanent Steps 8 and 16 on 2026-08-16 with all
+  sixteen metric rows contiguous, finite updates, and accepted checkpoint
+  receipts. The cumulative answer reward was `0.7114258`; `4,037/4,096`
+  trajectories returned successful TGVF observations, and the cumulative
+  format-error rate was `0.03809`.
+- The first automatic paired-evaluation attempt reached vLLM worker startup but
+  one worker hit a transient TCP `EADDRINUSE` collision. The automatic retry
+  then exposed a resume-only validator defect: it compared the runtime route
+  selector `paired_tgvf` with the serialized snapshot format
+  `full_model_trainable_rp66`. These are intentionally different namespaces.
+  The evaluator now validates against the backend constants emitted by each
+  snapshot materializer. Regression coverage proves that an existing paired
+  TGVF arm is accepted with `full_model_trainable_rp66`, rejects the route
+  selector in that field, and preserves the full-model path. Existing Step-8
+  and Step-16 materializations remain valid and are resumed in place; neither
+  training checkpoint is regenerated.
