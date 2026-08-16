@@ -57,6 +57,7 @@ from tgvf_rl.evaluation.policy_paired_qwen_materialization import (  # noqa: E40
     materialize_qwen_only_policy_checkpoint,
 )
 from tgvf_rl.evaluation.policy_full_model_snapshot import (  # noqa: E402
+    FULL_MODEL_EVALUATION_BACKEND,
     FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS,
     FullModelCheckpointOwner,
     FullModelEvaluationSnapshot,
@@ -66,6 +67,9 @@ from tgvf_rl.evaluation.policy_full_model_snapshot import (  # noqa: E402
     materialize_full_model_snapshot,
     write_full_model_materialization_receipt,
     write_full_model_snapshot_manifest,
+)
+from tgvf_rl.evaluation.policy_paired_tgvf_snapshot import (  # noqa: E402
+    PAIRED_TGVF_EVALUATION_BACKEND,
 )
 from tgvf_rl.policy.crop_tfree_contract import (  # noqa: E402
     CropTFreeRunContract,
@@ -1273,7 +1277,7 @@ def _expected_arm_runtime_settings(
     if runtime is not None and runtime.backend == FULL_MODEL_BACKEND:
         snapshot = plan["snapshot"]
         return {
-            "snapshot_backend": FULL_MODEL_BACKEND,
+            "snapshot_backend": FULL_MODEL_EVALUATION_BACKEND,
             "inference_concurrency_per_gpu": snapshot["inference_concurrency_per_gpu"],
             "max_model_len": snapshot["max_model_len"],
             "max_num_batched_tokens": snapshot["max_num_batched_tokens"],
@@ -1281,7 +1285,7 @@ def _expected_arm_runtime_settings(
             "gpu_memory_utilization": snapshot["gpu_memory_utilization"],
         }
     return {
-        "snapshot_backend": PAIRED_TGVF_BACKEND,
+        "snapshot_backend": PAIRED_TGVF_EVALUATION_BACKEND,
         "inference_concurrency_per_gpu": 8,
         "max_model_len": 32768,
         "max_num_batched_tokens": 32768,
