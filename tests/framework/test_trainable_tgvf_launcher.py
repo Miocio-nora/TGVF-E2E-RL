@@ -74,6 +74,12 @@ _CONFIG_EXACT = (
     "prl_16_f1_qwen3_instruct_full_frozen_rp66_bs16_n16_t1_"
     "crop16_exact_matched_8step_ws8.toml"
 )
+_CONFIG_BS64 = (
+    _ROOT
+    / "configs/policy/runs/"
+    "prl_24_a_qwen3_instruct_full_frozen_rp67_bs64_n16_"
+    "tfree_teacher25_16step_ws8.toml"
+)
 
 
 def _config():
@@ -90,6 +96,10 @@ def _config_canary():
 
 def _config_shaped_canary():
     return load_policy_e2e_smoke_run_config(_CONFIG_SHAPED_CANARY)
+
+
+def _config_bs64():
+    return load_policy_e2e_smoke_run_config(_CONFIG_BS64)
 
 
 def _exact_config(tmp_path: Path):
@@ -431,6 +441,69 @@ def test_world4_smoke_preserves_crop16_equal_micro_objective() -> None:
         "derived_gradient_accumulation_steps": 2,
         "optimizer_steps_per_trainer_step": 1,
     }
+
+
+def test_bs64_uses_configured_batch_geometry_and_one_optimizer_update() -> None:
+    config = _config_bs64()
+    plan = build_trainable_tgvf_verl_launch_plan(config, mode="formal")
+    values = plan.overrides
+
+    assert plan.target_step == 16
+    assert values["trainer.total_training_steps"] == 16
+    assert values["data.train_batch_size"] == 64
+    assert values["data.gen_batch_size"] == 64
+    assert values["actor_rollout_ref.actor.ppo_mini_batch_size"] == 64
+    assert values["actor_rollout_ref.rollout.n"] == 16
+    # BS64 adds four local micros; it does not enlarge the proven micro32.
+    assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 32
+    assert values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"] == 32
+    assert values["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] == 32
+    assert values["actor_rollout_ref.model.use_fused_kernels"] is True
+
+    actor_batch = values["actor_rollout_ref.rollout.custom"][
+        "actor_batch_contract"
+    ]
+    assert actor_batch == {
+        "global_prompt_batch_size": 64,
+        "rollouts_per_prompt": 16,
+        "fsdp_data_parallel_size": 8,
+        "prompt_micro_batch_size_per_rank": 2,
+        "configured_gradient_accumulation_steps": 4,
+        "upstream_ppo_mini_batch_size_prompts": 64,
+        "upstream_internal_mini_batch_size_trajectories": 1024,
+        "upstream_ppo_micro_batch_size_per_gpu_trajectories": 32,
+        "upstream_inference_micro_batch_size_per_gpu_trajectories": 32,
+        "derived_actor_forward_backward_microbatches": 4,
+        "derived_gradient_accumulation_steps": 4,
+        "optimizer_steps_per_trainer_step": 1,
+    }
+    lifecycle = values["actor_rollout_ref.rollout.custom"]["checkpoint_lifecycle"]
+    assert lifecycle["checkpoint_steps"] == list(range(17))
+    assert lifecycle["permanent_steps"] == [2, 4, 8, 16]
+
+    composed = compose_trainable_tgvf_verl_config(plan)
+    assert composed.data.train_batch_size == 64
+    assert composed.data.gen_batch_size == 64
+    assert composed.actor_rollout_ref.actor.ppo_mini_batch_size == 64
+    assert composed.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu == 32
+    assert composed.actor_rollout_ref.rollout.n == 16
+    assert composed.actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu == 32
+    assert composed.actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu == 32
+    assert composed.trainer.total_training_steps == 16
+
+
+def test_bs16_geometry_remains_identical_after_config_driven_scaling() -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(_config(), mode="formal")
+    values = plan.overrides
+
+    assert plan.target_step == 8
+    assert values["data.train_batch_size"] == 16
+    assert values["data.gen_batch_size"] == 16
+    assert values["actor_rollout_ref.actor.ppo_mini_batch_size"] == 16
+    assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 32
+    assert values["actor_rollout_ref.rollout.n"] == 16
+    assert values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"] == 32
+    assert values["actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu"] == 32
 
 
 def test_functional_canary_is_an_isolated_low_cost_full_path_launch() -> None:

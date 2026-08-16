@@ -124,7 +124,6 @@ TRAINABLE_TGVF_EXTERNAL_MODULE = "tgvf_rl.framework.verl.trainable_tgvf_external
 TRAINABLE_TGVF_DATASET_MODULE_PATH = (
     "pkg://tgvf_rl.framework.verl.tgvf_deepeyes_matched_dataset"
 )
-TRAINABLE_TGVF_FORMAL_TARGET = 8
 TRAINABLE_TGVF_SMOKE_TARGET = 1
 TRAINABLE_TGVF_CANARY_TARGET = 1
 TRAINABLE_TGVF_CANARY_PROMPTS = 4
@@ -185,18 +184,55 @@ _WORLD4_TOPOLOGY_OVERRIDES = MappingProxyType(
 )
 
 
-def _apply_crop16_mathematical_controls(
+def _matched_batch_overrides(
+    config: PolicyE2ESmokeRunConfig,
+) -> dict[str, int]:
+    """Map serialized prompt geometry to pinned-veRL batch fields.
+
+    Scaling independent prompts changes the global mini-batch and local
+    accumulation count, but does not silently enlarge the proven per-rank
+    trajectory micro-batch.  That micro-batch remains ``prompt_micro * n``.
+    """
+
+    prompts = config.accumulation.global_prompt_batch_size
+    prompt_micro = config.accumulation.prompt_micro_batch_size_per_rank
+    rollout_prompt_micro = (
+        config.accumulation.rollout_prompt_micro_batch_size_per_engine
+    )
+    rollouts = config.policy.sampling.trajectories_per_prompt
+    return {
+        "data.train_batch_size": prompts,
+        "data.gen_batch_size": prompts,
+        "actor_rollout_ref.actor.ppo_mini_batch_size": prompts,
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu": (
+            prompt_micro * rollouts
+        ),
+        "actor_rollout_ref.rollout.n": rollouts,
+        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu": (
+            rollout_prompt_micro * rollouts
+        ),
+        "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu": (
+            prompt_micro * rollouts
+        ),
+    }
+
+
+def _apply_matched_mathematical_controls(
     values: dict[str, object],
     *,
-    world_size: int,
+    config: PolicyE2ESmokeRunConfig,
     optimizer_horizon: int,
-    actor_optimizer_offload: bool,
 ) -> None:
+    world_size = config.distributed.world_size
     if world_size not in TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES:
         raise ValueError("trainable TGVF topology must use world4 or world8")
     if type(optimizer_horizon) is not int or optimizer_horizon <= 0:
         raise ValueError("trainable TGVF optimizer horizon must be positive")
     apply_prl14_crop16_common_controls(values)
+    # Preserve every accepted Crop-16 control except the batch geometry that
+    # is an explicit run-config variable in this scaling series.  For legacy
+    # BS16 configs these values are identical to the PRL14 constants.
+    values.update(_matched_batch_overrides(config))
     # PRL14's serialized completion contains -1 because its upstream trainer
     # filled the scheduler horizon later.  The project TaskRunner deliberately
     # preserves an explicit run-bound horizon before upstream construction.
@@ -205,30 +241,31 @@ def _apply_crop16_mathematical_controls(
         TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
     )
     values["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] = (
-        actor_optimizer_offload
+        config.distributed.actor_optimizer_offload
     )
     if world_size == 4:
         values.update(_WORLD4_TOPOLOGY_OVERRIDES)
 
 
-def _assert_crop16_mathematical_controls(
+def _assert_matched_mathematical_controls(
     values: Mapping[str, object],
     *,
-    world_size: int,
+    config: PolicyE2ESmokeRunConfig,
     optimizer_horizon: int,
-    actor_optimizer_offload: bool,
 ) -> None:
+    world_size = config.distributed.world_size
     if world_size not in TRAINABLE_TGVF_SUPPORTED_WORLD_SIZES:
         raise ValueError("trainable TGVF topology must use world4 or world8")
     if type(optimizer_horizon) is not int or optimizer_horizon <= 0:
         raise ValueError("trainable TGVF optimizer horizon must be positive")
     expected = dict(PRL14_CROP16_COMMON_OVERRIDES)
+    expected.update(_matched_batch_overrides(config))
     expected["actor_rollout_ref.actor.optim.total_training_steps"] = optimizer_horizon
     expected["actor_rollout_ref.rollout.cudagraph_capture_sizes"] = list(
         TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES
     )
     expected["actor_rollout_ref.actor.fsdp_config.optimizer_offload"] = (
-        actor_optimizer_offload
+        config.distributed.actor_optimizer_offload
     )
     if world_size == 4:
         expected.update(_WORLD4_TOPOLOGY_OVERRIDES)
@@ -242,7 +279,7 @@ def _assert_crop16_mathematical_controls(
     }
     if mismatches or unexpected:
         raise ValueError(
-            "trainable TGVF differs from the Crop-16 mathematical controls: "
+            "trainable TGVF differs from the matched mathematical controls: "
             f"mismatches={mismatches!r}, unexpected={unexpected!r}"
         )
 
@@ -699,7 +736,10 @@ class TrainableTGVFVerlLaunchPlan:
             self.horizon_extension.target_optimizer_step
             if self.mode == "formal" and self.horizon_extension is not None
             else self.target_step
-            if self.mode == "formal" and 0 < self.target_step <= TRAINABLE_TGVF_FORMAL_TARGET
+            if self.mode == "formal"
+            and 0
+            < self.target_step
+            <= self.config.training.maximum_optimizer_steps
             else TRAINABLE_TGVF_SMOKE_TARGET
             if self.mode == "smoke"
             else TRAINABLE_TGVF_CANARY_TARGET
@@ -768,13 +808,10 @@ class TrainableTGVFVerlLaunchPlan:
                     f"functional canary controls differ: mismatches={mismatches!r}"
                 )
         else:
-            _assert_crop16_mathematical_controls(
+            _assert_matched_mathematical_controls(
                 values,
-                world_size=self.config.distributed.world_size,
+                config=self.config,
                 optimizer_horizon=self.config.scheduler.total_steps,
-                actor_optimizer_offload=(
-                    self.config.distributed.actor_optimizer_offload
-                ),
             )
         required = {
             "actor_rollout_ref.model.lora_rank": 0,
@@ -804,12 +841,14 @@ class TrainableTGVFVerlLaunchPlan:
             "data.custom_cls.path": dataset_module_path,
             "data.custom_cls.name": dataset_class_name,
             "data.train_batch_size": (
-                TRAINABLE_TGVF_CANARY_PROMPTS if self.mode == "canary" else 16
+                TRAINABLE_TGVF_CANARY_PROMPTS
+                if self.mode == "canary"
+                else self.config.accumulation.global_prompt_batch_size
             ),
             "actor_rollout_ref.rollout.n": (
                 TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT
                 if self.mode == "canary"
-                else 16
+                else self.config.policy.sampling.trajectories_per_prompt
             ),
             "trainer.total_training_steps": self.target_step,
         }
@@ -938,7 +977,7 @@ def build_trainable_tgvf_verl_launch_plan(
         horizon_extension.target_optimizer_step
         if horizon_extension is not None
         else
-        target_step or TRAINABLE_TGVF_FORMAL_TARGET
+        target_step or config.training.maximum_optimizer_steps
         if mode == "formal"
         else TRAINABLE_TGVF_SMOKE_TARGET
         if mode == "smoke"
@@ -947,10 +986,11 @@ def build_trainable_tgvf_verl_launch_plan(
         else -1
     )
     if mode == "formal" and horizon_extension is None and not (
-        0 < resolved_target <= TRAINABLE_TGVF_FORMAL_TARGET
+        0 < resolved_target <= config.training.maximum_optimizer_steps
     ):
         raise ValueError(
-            f"formal target must be between 1 and {TRAINABLE_TGVF_FORMAL_TARGET}"
+            "formal target must be between 1 and the run-config maximum "
+            f"({config.training.maximum_optimizer_steps})"
         )
     if mode != "formal" and target_step is not None and target_step != resolved_target:
         raise ValueError(f"{mode} target must be step {resolved_target}")
@@ -1008,11 +1048,10 @@ def build_trainable_tgvf_verl_launch_plan(
             "trainer.save_freq": 1,
         }
     )
-    _apply_crop16_mathematical_controls(
+    _apply_matched_mathematical_controls(
         values,
-        world_size=config.distributed.world_size,
+        config=config,
         optimizer_horizon=config.scheduler.total_steps,
-        actor_optimizer_offload=config.distributed.actor_optimizer_offload,
     )
     if mode == "canary":
         _assert_functional_canary_config(config)
@@ -1031,7 +1070,7 @@ def build_trainable_tgvf_verl_launch_plan(
                 "trainer.experiment_name": config.run_id + "-SMOKE",
                 # One-step engineering canaries belong in the local console
                 # log only.  Keep the run config's W&B backend unchanged for
-                # the formal eight-step experiment.
+                # the formal experiment.
                 "trainer.logger": ["console"],
                 "trainer.default_local_dir": str(output_root / "checkpoints"),
                 "trainer.max_actor_ckpt_to_keep": 2,
@@ -1354,7 +1393,6 @@ __all__ = [
     "TRAINABLE_TGVF_CANARY_RESPONSE_TRANSPORT_LENGTH",
     "TRAINABLE_TGVF_CANARY_ROLLOUTS_PER_PROMPT",
     "TRAINABLE_TGVF_CANARY_TARGET",
-    "TRAINABLE_TGVF_FORMAL_TARGET",
     "TRAINABLE_TGVF_LAUNCH_SCHEMA",
     "TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD",
     "TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES",

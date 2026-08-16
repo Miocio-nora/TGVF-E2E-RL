@@ -2344,46 +2344,57 @@ def load_policy_e2e_smoke_run_config(
         functional_canary = (
             sampling_scale == POLICY_PILOT_FUNCTIONAL_CANARY_SAMPLING_SCALE
         )
-        expected_accumulation = (
-            (4, 1, 1, 1)
-            if functional_canary
-            else (16, 2, 2, 1)
-            if distributed.world_size == 8
-            else (16, 2, 2, 2)
-        )
-        _require_exact(
-            (
-                accumulation.global_prompt_batch_size,
-                accumulation.prompt_micro_batch_size_per_rank,
-                accumulation.rollout_prompt_micro_batch_size_per_engine,
-                accumulation.gradient_accumulation_steps,
-            ),
-            expected_accumulation,
-            "trainable RP66 world-size-matched accumulation contract",
-        )
-        expected_horizon = 1 if functional_canary else 8
-        _require_exact(
-            (
-                scheduler.name,
-                scheduler.warmup_steps,
-                scheduler.total_steps,
-                scheduler.minimum_learning_rate_ratio,
-                training.maximum_optimizer_steps,
-            ),
-            (
-                "constant",
-                0,
-                expected_horizon,
-                0.0,
-                expected_horizon,
-            ),
-            "trainable RP66 pilot optimization horizon",
-        )
-        _require_exact(
-            training.checkpoint_steps,
-            (0, 1) if functional_canary else (0, 1, 4, 8),
-            "trainable RP66 checkpoint plan",
-        )
+        if functional_canary:
+            _require_exact(
+                (
+                    accumulation.global_prompt_batch_size,
+                    accumulation.prompt_micro_batch_size_per_rank,
+                    accumulation.rollout_prompt_micro_batch_size_per_engine,
+                    accumulation.gradient_accumulation_steps,
+                ),
+                (4, 1, 1, 1),
+                "trainable RP66 functional-canary accumulation contract",
+            )
+            _require_exact(
+                (
+                    scheduler.name,
+                    scheduler.warmup_steps,
+                    scheduler.total_steps,
+                    scheduler.minimum_learning_rate_ratio,
+                    training.maximum_optimizer_steps,
+                ),
+                ("constant", 0, 1, 0.0, 1),
+                "trainable RP66 functional-canary optimization horizon",
+            )
+            _require_exact(
+                training.checkpoint_steps,
+                (0, 1),
+                "trainable RP66 functional-canary checkpoint plan",
+            )
+        else:
+            # Batch, accumulation, horizon and checkpoint endpoints are
+            # scientific run variables.  Their structural relationships were
+            # validated above; do not collapse every formal run back to the
+            # historical BS16/eight-step pilot constants.
+            _require_exact(
+                (
+                    scheduler.name,
+                    scheduler.warmup_steps,
+                    scheduler.minimum_learning_rate_ratio,
+                ),
+                ("constant", 0, 0.0),
+                "trainable RP66 scheduler shape",
+            )
+            if scheduler.total_steps != training.maximum_optimizer_steps:
+                raise ValueError(
+                    "trainable RP66 scheduler horizon differs from the configured "
+                    "optimizer horizon"
+                )
+            if training.checkpoint_steps[-1] != training.maximum_optimizer_steps:
+                raise ValueError(
+                    "trainable RP66 checkpoint plan must include the configured "
+                    "final optimizer step"
+                )
         if functional_canary and training.logger != ("console",):
             raise ValueError("trainable RP66 functional canary must be console-only")
         if not functional_canary and "wandb" not in training.logger:

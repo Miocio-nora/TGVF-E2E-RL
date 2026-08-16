@@ -191,6 +191,54 @@ def test_formal_shape_scales_each_micro_by_one_over_256() -> None:
     assert metrics["actor/deepeyes_local_micro_batches"] == 256.0
 
 
+def test_bs64_ga4_value_and_gradient_are_not_multiplied_by_four() -> None:
+    # PRL24-A has 1,024 trajectories globally, DP8 and trajectory micro32.
+    # One rank therefore accumulates exactly four local micros.  The sum of
+    # their returned losses must be their mean, not four times that mean.
+    config = _actor_config(
+        dp_size=8,
+        global_batch_size=1024,
+        micro_batch_size=32,
+    )
+    width = 2
+    old_log_prob = torch.zeros((128, width), dtype=torch.float64)
+    log_prob = torch.linspace(
+        -0.05, 0.05, 128 * width, dtype=torch.float64
+    ).reshape(128, width)
+    log_prob.requires_grad_(True)
+    advantages = torch.linspace(
+        -1.0, 1.0, 128 * width, dtype=torch.float64
+    ).reshape(128, width)
+    mask = torch.ones_like(log_prob, dtype=torch.bool)
+
+    returned = []
+    raw_micro_means = []
+    per_token = _official_per_token_loss(old_log_prob, log_prob, advantages)
+    for start in range(0, 128, 32):
+        loss, metrics = compute_deepeyes_official_micro_token_mean_loss(
+            old_log_prob[start : start + 32],
+            log_prob[start : start + 32],
+            advantages[start : start + 32],
+            mask[start : start + 32],
+            config=config,
+        )
+        returned.append(loss)
+        raw_micro_means.append(per_token[start : start + 32].mean())
+        assert metrics["actor/deepeyes_local_micro_batches"] == 4.0
+
+    actual = torch.stack(returned).sum()
+    oracle = torch.stack(raw_micro_means).mean()
+    multiplied_by_four = torch.stack(raw_micro_means).sum()
+    actual_gradient = torch.autograd.grad(actual, log_prob, retain_graph=True)[0]
+    oracle_gradient = torch.autograd.grad(oracle, log_prob)[0]
+
+    torch.testing.assert_close(actual, oracle, rtol=0, atol=1e-12)
+    torch.testing.assert_close(
+        actual_gradient, oracle_gradient, rtol=0, atol=1e-12
+    )
+    assert not torch.isclose(actual, multiplied_by_four, rtol=0, atol=1e-8)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     (
