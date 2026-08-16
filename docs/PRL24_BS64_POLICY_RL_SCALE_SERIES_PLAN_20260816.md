@@ -4,7 +4,7 @@
 
 状态：`PLANNED / NOT YET LAUNCHED`
 
-Decision ID：`POLICY-RL-BS64-SCALE-SERIES-20260816-v1`
+Decision ID：`POLICY-RL-BS64-SCALE-SERIES-20260816-v2`
 
 本计划承接已经收官的
 [BS16 small-batch pilot](POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md)，并使用
@@ -161,7 +161,8 @@ Step 8→16 外评基本持平，但 tool-call rate 从 `0.7422` 降至 `0.3008`
 | rollout sampling | temperature 1 |
 | final dialect | plain final；不使用 `<answer>...</answer>` |
 | tool-call / response cap | 所有工具线路最多 6 次调用；response cap 20,480 tokens |
-| primary endpoints | optimizer Step 2、4、8 |
+| evaluation endpoints | matched diagnostic：Step 2、4；intermediate：Step 8；primary final：Step 16 |
+| formal run length | 所有正式 arm 统一训练至 Step 16 |
 
 关键原则：**第一轮不随 batch 线性放大 LR。** 否则观察到的差异无法归因于 batch。
 `world8 / micro2 / GA4` 的数学含义是每卡每个 micro-block 处理 2 个 prompt groups，8 卡
@@ -262,21 +263,28 @@ Crop 实现中，与 D 做单变量比较。
 | BS64 Step 2 | 128 | 2,048 | BS16 Step 8 | 第一组等 prompt-exposure 比较 |
 | BS64 Step 4 | 256 | 4,096 | BS16 Step 16 | 第二组等 prompt-exposure 比较 |
 | BS64 Step 8 | 512 | 8,192 | 无现成 BS16 Step 32 | 判断大 batch 在更多暴露后能否继续增强 |
+| BS64 Step 16 | 1,024 | 16,384 | 无现成 BS16 Step 64 | 正式终点；检验后半程平台、回落与持续收益 |
 
 因此：
 
 - **S2/S4 回答 batch 本身是否改善同等数据预算下的学习；**
-- **S4→S8 回答 BS64 是否仍快速平台；**
-- 不能用 S8 相对 BS16-S16 的差值单独证明 batch 优势，因为它多看了一倍 prompts；
+- **S4→S8→S16 回答 BS64 是否仍快速平台，以及后半程收益能否持续；**
+- 不能用 S8/S16 相对 BS16-S16 的差值单独证明 batch 优势，因为它们分别多看一倍/三倍
+  prompts；
 - BS64-S8 与 BS16-S8 的相同 update-count 对照可作为工程 scaling 视角，但因前者多看
   四倍数据，不能替代 matched-exposure 结论；
-- 只有通过首轮 gate 的 winner 才从 S8 续训到 S16，不能默认把六个 arm 全部延长。
+- **所有正式 arm 均运行至 S16**；不再把 S16 定义为仅 winner 才进行的可选延长。
 
 正式任务每 step 可做 rolling recovery save，但 **S2 必须临时 pin**，不能被后续 rolling
-retention 淘汰；S4、S8 永久保留。S2 在三 checkpoint 评测、receipt 与结果表完成后可
+retention 淘汰；S4、S8、S16 永久保留。S2 在四 checkpoint 评测、receipt 与结果表完成后可
 删除大体积权重，仅保留 metrics、evaluation 和 provenance。各工具协议的 Step 0 只需
 评测一次：A/B/C 共享 pure-TGVF S0，D/E 共享 Crop S0，F 使用自己的 Crop+TGVF S0。
 若已存在完全相同协议与执行身份的可信 S0，可直接复用，不机械重测。
+
+正式训练启动后不因 S2/S4/S8 的暂时性能高低提前结束；只有数值爆炸、协议失效、不可恢复
+运行错误或资源安全问题才允许在 S16 前停止。为避免中途评测抢占训练 GPU，默认连续训练
+并保存至 S16，再自动依次评测 S2/S4/S8/S16；若有完全独立的评测资源，可在不影响训练的
+前提下并行评测。
 
 ## 7. 统一评测与健康度指标
 
@@ -323,7 +331,7 @@ Teacher rows与 RP67 Stage1 数据同分布，因此 teacher training reward 更
 
 ### 7.3 Joint RP67 的 representation-health gate
 
-PRL24-B 在 S4/S8 增加固定的 D-health audit：
+PRL24-B 在 S4/S8/S16 增加固定的 D-health audit：
 
 - `D` norm/RMS 与训练前 RP67 的偏移；
 - correct-image vs donor-image、same-target separation；
@@ -332,6 +340,8 @@ PRL24-B 在 S4/S8 增加固定的 D-health audit：
 - answer-channel shortcut 与“由文本指令直接控制 decoder”的风险。
 
 first-200 用作快速 gate；只有外评和表示健康度都通过的 checkpoint 才做 full-867。
+默认对 S4/S8/S16 做 first-200，full-867 至少覆盖统一主终点 S16；其他 endpoint 仅在
+通过快速 gate 且确有比较价值时补做。
 如果 Joint 与 Frozen 的 Macro* 差异不超过噪声，默认仍保留更稳妥的 Frozen，而不是仅因
 “没明显变差”就解冻。
 
@@ -353,7 +363,7 @@ PRL24-D/E 除 Macro* 外还比较：
 
 - crop call 与 crop success；
 - `P(correct | successful crop)` 与 answer-only bypass；
-- Step 4→8 的工具使用是否坍塌；
+- Step 4→8→16 的工具使用是否坍塌；
 - 重复调用、invalid bbox、长度与 protocol error。
 
 conditional reward 如果只提高调用率、但没有保持或提高外评，不算成功。
@@ -367,7 +377,7 @@ evaluation dry-run。该阶段不产生可汇报的科学结果。
 
 ### Phase I：先跑 PRL24-A，验证 BS64 总假设
 
-训练 Frozen RP67 T-free TGVF 至 S8，并评测 S2/S4/S8。若出现明确外评退化、梯度 scale
+训练 Frozen RP67 T-free TGVF 至 S16，并评测 S2/S4/S8/S16。若出现明确外评退化、梯度 scale
 错误、长度/工具 pathology 或无法稳定恢复，先诊断 BS64/LR/GA，不把同一问题复制到其他
 五个 arm。
 
@@ -375,7 +385,7 @@ H1 的支持条件是：
 
 1. 先确认历史 PRL22-A 满足执行身份等价；否则先完成条件 arm A0；
 2. S2/S4 的 matched-exposure 结果相对有效 BS16 control 同向改善，且改善超过采样噪声；
-3. S4→S8 没有重现明显平台/回落；
+3. S4→S8→S16 没有重现不可接受的后期回落，并明确记录是否仍存在平台；
 4. 至少 4/7 Macro* components 同向，且无关键 benchmark collapse；
 5. 训练与工具行为健康。
 
@@ -386,13 +396,14 @@ H1 的支持条件是：
 ### Phase II：Adapter 与 visual reward
 
 以 A 为复用 control，依次运行 B（Joint）和 C（F/G）。不另跑重复的 Frozen/no-FG
-control。B 由外评 + D-health 双 gate 决定；C 由外评 + foveation/hallucination 双 gate
-决定。
+control。B/C 一旦作为正式 arm 启动，均完整训练至 S16；B 由外评 + D-health 双 gate
+决定，C 由外评 + foveation/hallucination 双 gate 决定。
 
 ### Phase III：Crop、conditional reward 与组合工具
 
 先成对运行 D/E，建立当前 Teacher25/BS64 下的 pure Crop baseline 与严格 reward A/B；
-再运行 F，评估 Atomic Crop+TGVF 的继续性。A/D/F 的横向总表作为工程能力地图，不把
+再运行 F，评估 Atomic Crop+TGVF 的继续性。D/E/F 的正式训练同样统一到 S16。A/D/F 的
+横向总表作为工程能力地图，不把
 不同工具协议间的差值称为严格协同增益。
 
 ### Phase IV：决定 BS128 或 BS256
@@ -415,27 +426,29 @@ BS64 结束后再做一次明确决策：
 | 项目 | 规划估计 |
 |---|---:|
 | BS64 单 step | 约 38--45 min |
-| 8-step training | 约 5--6 h |
-| S2/S4/S8 三个 CoreDev evaluation | 约 1--1.5 h，首个 arm 实测后校准 |
-| 单 arm 总 wall time | 约 6--7.5 h；Joint/F-G/Crop/Combo 可到 7--9 h |
-| 六 arm 全串行 | 约 42--50 h |
+| 16-step training | 约 10--12 h |
+| S2/S4/S8/S16 四个 CoreDev evaluation | 约 1.3--2 h，首个 arm 实测后校准 |
+| 单 arm 总 wall time | 约 11.5--14 h；Joint/F-G/Combo 等较慢 arm 可到 13--17 h |
+| 六 arm 全串行 | 约 75--95 h |
 
 因此不一次性启动六个 arm。A 是总 gate；B/C 复用 A；D/E 成对；F 最后进入。正式
-ETA 在 PRL24-A 第一个完整 step 和 S2 evaluation 后用实测吞吐重估。
+ETA 在 PRL24-A 第一个完整 step 和 S2 evaluation 后用实测吞吐重估。这里的正式完成
+统一指训练到 S16 且 S2/S4/S8/S16 评测 receipt 齐全，不再用 S8 代表 arm 完成。
 
-存储采用 rolling checkpoint：只永久保留关键 endpoint 和 winner。落选 arm 完成评测、
-结果 receipt 与必要轨迹抽样后，可删除非关键权重，避免六条线累积占满磁盘。
+存储采用 rolling checkpoint：所有 arm 至少保留 S2/S4/S8/S16 到评测、结果 receipt 与
+必要轨迹抽样完成；随后每个 arm 的指标与 provenance 永久保留，大体积权重只长期保留
+S16、关键 endpoint 和 winner，避免六条线累积占满磁盘。
 
 ## 10. 预期产出与结论模板
 
 PRL24 完成后必须形成：
 
 1. BS16/BS64 matched-exposure 总表；
-2. BS64 S2/S4/S8 继续性曲线；
+2. BS64 S2/S4/S8/S16 继续性曲线；
 3. Frozen vs Joint paired 表与 D-health 审计；
 4. F/G off/on paired 表、成本和 foveation/hallucination 审计；
 5. Crop T-free vs conditional reward paired 表；
-6. TGVF、Crop、Crop+TGVF 的协议内 S0→Sx 表；
+6. TGVF、Crop、Crop+TGVF 的协议内 S0→S2/S4/S8/S16 表；
 7. 是否进入 BS128/BS256 的明确 decision record。
 
 最终只允许使用以下层级的措辞：
@@ -443,7 +456,7 @@ PRL24 完成后必须形成：
 - **“BS64 更强”**：matched-exposure 外评超过噪声、分项广泛同向、继续性和健康度均
   通过；
 - **“BS64 更稳定但未证明更强”**：梯度/reward 更平滑，但外评差异不明确；
-- **“BS64 仅靠更多 exposure 获益”**：S2/S4 不优于 BS16，只有 S8 在额外数据后提高；
+- **“BS64 仅靠更多 exposure 获益”**：S2/S4 不优于 BS16，只有 S8/S16 在额外数据后提高；
 - **“BS64 未改善当前 recipe”**：matched 与 continuation 均无收益或出现 pathology。
 
 ## 11. 来源与证据索引
