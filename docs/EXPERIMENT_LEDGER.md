@@ -10092,3 +10092,39 @@ than inferred from a script name or prior conversation.
   focused runtime/dataset/launcher tests plus explicit changed-field rejection
   tests passed before formal restart. No checkpoint, metric row or model update
   exists from the rejected attempt.
+
+### PRL-23-A/B-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-TEACHER-RATIO
+
+- Authorized 2026-08-16 as the pure-TGVF Teacher-ratio ablation that follows
+  PRL22-A. PRL23-A uses 50% teacher rows and PRL23-B uses 100% teacher rows;
+  all other scientific controls remain matched to PRL22-A: Qwen3-VL-8B-
+  Instruct, full Qwen policy update, frozen RP67 Step-2000 Adapter, T-free
+  reward, TGVF-only protocol, temperature 1, BS16 x n16, world8/micro2,
+  constant `1e-6` learning rate, Step 8/16 horizons and paired CoreDev-2511
+  evaluation.
+- Shared implementation commit `6567677` introduces the explicit
+  `policy_t1_teacher_ratio_mix` runtime. The run config must bind
+  `teacher_percentage = 50` or `100`; neither the run ID nor artifact path is
+  allowed to infer the treatment. The legacy Teacher25 materializer remains
+  byte-identical. With seed 42 and no replacement, selected teacher rows are
+  strictly nested: Teacher25 is a subset of Teacher50, which is a subset of
+  Teacher100.
+- PRL23-A binds the immutable 20,480-row
+  `PRL23-TEACHER50-MIXED-SCHEDULE-v1` artifact: 10,240 retained-T1 plus 10,240
+  teacher rows, alternating BS16 cadence `[base, teacher] x 8`, manifest SHA
+  `0addf4741080dc922fbff84b85c01c4d2fd19f3669f84a7752e5524a8972cd97`
+  and iteration identity
+  `b9aa3b2187fd462cf86bb76e95a1a89c9c84f24eab818c18db706a9696e0a600`.
+- PRL23-B binds the immutable 20,480-row
+  `PRL23-TEACHER100-MIXED-SCHEDULE-v1` artifact: all rows are teacher rows,
+  manifest SHA
+  `5d1ba2ce7811cbefa05d2a66d54c13f43fbd39efda9326b3ba1ac1995d49b5bf`
+  and iteration identity
+  `426fa00fd2fab63b98a3dc7bf168fa98195248395bd8f650761aa6a5e9675fc9`.
+- Launcher preparation commit `0faa20c` and immutable binding commit `9eadeab`
+  provide independent output/W&B identities, Step-8-to-16 recovery,
+  Step-8/16 paired evaluation, and a receipt-gated serial relay: PRL23-B may
+  start only after PRL23-A training and evaluation have closed successfully.
+  Both real run configs pass load, generic launcher, trainable launcher and
+  pinned Hydra compose. Formal execution remains unstarted at ledger entry
+  time.
