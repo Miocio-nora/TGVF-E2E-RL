@@ -80,6 +80,12 @@ _CONFIG_BS64 = (
     "prl_24_a_qwen3_instruct_full_frozen_rp67_bs64_n16_"
     "tfree_teacher25_16step_ws8.toml"
 )
+_CONFIG_BS64_CANARY = (
+    _ROOT
+    / "configs/policy/runs/"
+    "prl_24_a_c0_qwen3_instruct_full_frozen_rp67_bs4_n2_"
+    "tfree_teacher25_1step_ws4.toml"
+)
 
 
 def _config():
@@ -100,6 +106,10 @@ def _config_shaped_canary():
 
 def _config_bs64():
     return load_policy_e2e_smoke_run_config(_CONFIG_BS64)
+
+
+def _config_bs64_canary():
+    return load_policy_e2e_smoke_run_config(_CONFIG_BS64_CANARY)
 
 
 def _exact_config(tmp_path: Path):
@@ -591,6 +601,21 @@ def test_shaped_canary_uses_only_utility_labeled_formal_prefix() -> None:
         config.reward.tool_utility.label_for_sample(sample.sample_id).training_index
         for sample in selected
     ] == [0, 1, 2, 3]
+
+
+def test_teacher_mix_canary_uses_its_bound_train_prefix() -> None:
+    config = _config_bs64_canary()
+    plan = build_trainable_tgvf_verl_launch_plan(config, mode="canary")
+    values = plan.overrides
+    samples_path = config.dataset.root / "samples.jsonl"
+
+    assert values["data.train_files"] == [str(samples_path)]
+    assert values["data.val_files"] == [str(samples_path)]
+    assert values["actor_rollout_ref.rollout.custom"]["functional_canary"] == {
+        "minimum_successful_tgvf_observations": 1,
+        "failure_boundary": "before_optimizer_mutation",
+        "dataset_split": "bound_train_prefix",
+    }
 
 
 def test_composed_formal_lifecycle_is_every_step_and_permanently_keeps_step8() -> None:

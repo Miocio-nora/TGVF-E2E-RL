@@ -296,6 +296,21 @@ def _functional_canary_dataset(
     retain the source-covering smoke split for rewards without a sidecar.
     """
 
+    # A canary must draw rows from the same immutable dataset bound by the run
+    # config.  The teacher-mixture artifacts own a different ordered schedule
+    # from the historical PRL13 train/smoke sentinels; selecting either legacy
+    # sentinel here makes veRL emit sample ids that cannot exist in the bound
+    # teacher-mixture index.  Use the mixture's own train file and let the
+    # one-step trainer consume its prefix.
+    if isinstance(
+        config.dataset.runtime_binding,
+        (
+            PolicyTeacherQuarterMixRuntimeBinding,
+            PolicyTeacherRatioMixRuntimeBinding,
+        ),
+    ):
+        return config.dataset.root / "samples.jsonl", "bound_train_prefix"
+
     tool_utility = config.reward.tool_utility
     if tool_utility is None:
         return DEEPEYES_SMOKE_SENTINEL, "smoke"
