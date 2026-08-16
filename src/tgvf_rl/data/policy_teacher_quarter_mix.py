@@ -887,7 +887,12 @@ def verify_policy_teacher_quarter_mix_artifact_binding(
         )
 
 
-def _runtime_sample(record: Mapping[str, Any], *, expected_index: int):
+def _runtime_sample(
+    record: Mapping[str, Any],
+    *,
+    expected_index: int,
+    expected_schema: str = POLICY_TEACHER_QUARTER_MIX_SAMPLE_SCHEMA,
+):
     # Keep the data contract importable while the policy package initializes.
     from tgvf_rl.policy.deepeyes_official_protocol import tools_kwargs_for_source
 
@@ -911,7 +916,7 @@ def _runtime_sample(record: Mapping[str, Any], *, expected_index: int):
             "mixture sample row schema differs"
         )
     if (
-        record.get("schema_version") != POLICY_TEACHER_QUARTER_MIX_SAMPLE_SCHEMA
+        record.get("schema_version") != expected_schema
         or record.get("schedule_index") != expected_index
     ):
         raise PolicyTeacherQuarterMixRuntimeValidationError(

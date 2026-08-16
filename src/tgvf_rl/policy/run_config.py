@@ -50,6 +50,12 @@ from tgvf_rl.data.policy_teacher_quarter_mix import (
     policy_teacher_quarter_mix_iteration_identity_sha256,
     verify_policy_teacher_quarter_mix_artifact_binding,
 )
+from tgvf_rl.data.policy_teacher_ratio_mix import (
+    POLICY_TEACHER_RATIO_MIX_DATASET_KIND,
+    PolicyTeacherRatioMixRuntimeBinding,
+    policy_teacher_ratio_mix_iteration_identity_sha256,
+    verify_policy_teacher_ratio_mix_artifact_binding,
+)
 from tgvf_rl.data.tgvf_tool_utility import (
     TGVFToolUtilityRuntimeBinding,
     load_tgvf_tool_utility_runtime_binding,
@@ -384,6 +390,7 @@ class SmokeDatasetSelection:
         | PolicyT1RLRuntimeBinding
         | PolicyT1MixedRuntimeBinding
         | PolicyTeacherQuarterMixRuntimeBinding
+        | PolicyTeacherRatioMixRuntimeBinding
     )
     samples_sha256: str
     iteration_identity_sha256: str
@@ -786,27 +793,35 @@ def load_policy_e2e_smoke_run_config(
         isinstance(raw_dataset, Mapping)
         and raw_dataset.get("kind") == POLICY_TEACHER_QUARTER_MIX_DATASET_KIND
     )
+    policy_teacher_ratio_mix_dataset = (
+        isinstance(raw_dataset, Mapping)
+        and raw_dataset.get("kind") == POLICY_TEACHER_RATIO_MIX_DATASET_KIND
+    )
     if (
         policy_t1_arxivqa_dataset
         or policy_t1_mixed_dataset
         or policy_teacher_quarter_mix_dataset
+        or policy_teacher_ratio_mix_dataset
     ):
         if not mixed_run:
             raise ValueError("Policy T1 retained data requires a mixed/formal run")
+        dataset_fields = {
+            "kind",
+            "root",
+            "decision_stage",
+            "sample_count",
+            "manifest_file_sha256",
+            "content_sha256",
+            "samples_sha256",
+            "iteration_identity_sha256",
+            "shuffle_seed",
+        }
+        if policy_teacher_ratio_mix_dataset:
+            dataset_fields.add("teacher_percentage")
         dataset_table = _table(
             payload,
             "dataset",
-            {
-                "kind",
-                "root",
-                "decision_stage",
-                "sample_count",
-                "manifest_file_sha256",
-                "content_sha256",
-                "samples_sha256",
-                "iteration_identity_sha256",
-                "shuffle_seed",
-            },
+            dataset_fields,
         )
         dataset_kind = str(dataset_table["kind"])
         dataset_root = _existing_directory(dataset_table["root"], name="dataset.root")
@@ -830,7 +845,38 @@ def load_policy_e2e_smoke_run_config(
             dataset_table["iteration_identity_sha256"],
             name="dataset.iteration_identity_sha256",
         )
-        if policy_teacher_quarter_mix_dataset:
+        if policy_teacher_ratio_mix_dataset:
+            _require_exact(
+                dataset_table["decision_stage"],
+                "final",
+                "dataset.decision_stage",
+            )
+            teacher_percentage = _positive_int(
+                dataset_table["teacher_percentage"],
+                name="dataset.teacher_percentage",
+            )
+            runtime_binding = PolicyTeacherRatioMixRuntimeBinding(
+                manifest_file_sha256=manifest_file_sha256,
+                content_sha256=content_sha256,
+                schedule_seed=shuffle_seed,
+                expected_sample_count=expected_sample_count,
+                teacher_percentage=teacher_percentage,
+            )
+            if iteration_sha256 != (
+                policy_teacher_ratio_mix_iteration_identity_sha256(
+                    runtime_binding, samples_sha256=samples_sha256
+                )
+            ):
+                raise ValueError(
+                    "dataset iteration identity differs from its teacher-ratio "
+                    "mixture binding"
+                )
+            verify_policy_teacher_ratio_mix_artifact_binding(
+                dataset_root,
+                binding=runtime_binding,
+                samples_sha256=samples_sha256,
+            )
+        elif policy_teacher_quarter_mix_dataset:
             _require_exact(
                 dataset_table["decision_stage"],
                 "final",
@@ -1421,13 +1467,23 @@ def load_policy_e2e_smoke_run_config(
         )
         if not isinstance(
             runtime_binding,
-            (PolicyT1MixedRuntimeBinding, PolicyTeacherQuarterMixRuntimeBinding),
+            (
+                PolicyT1MixedRuntimeBinding,
+                PolicyTeacherQuarterMixRuntimeBinding,
+                PolicyTeacherRatioMixRuntimeBinding,
+            ),
         ):
             raise ValueError(
                 "Stage3-shaped reward requires a retained mixed T1 dataset"
             )
         if (
-            isinstance(runtime_binding, PolicyTeacherQuarterMixRuntimeBinding)
+            isinstance(
+                runtime_binding,
+                (
+                    PolicyTeacherQuarterMixRuntimeBinding,
+                    PolicyTeacherRatioMixRuntimeBinding,
+                ),
+            )
             and not tfree_reward_run
         ):
             raise ValueError(
@@ -2094,7 +2150,11 @@ def load_policy_e2e_smoke_run_config(
     if deepeyes_scaled_crop_run:
         if not isinstance(
             runtime_binding,
-            (PolicyT1MixedRuntimeBinding, PolicyTeacherQuarterMixRuntimeBinding),
+            (
+                PolicyT1MixedRuntimeBinding,
+                PolicyTeacherQuarterMixRuntimeBinding,
+                PolicyTeacherRatioMixRuntimeBinding,
+            ),
         ):
             raise ValueError(
                 "DeepEyes-scaled Crop reference requires the retained mixed-T1 dataset"
@@ -2204,7 +2264,11 @@ def load_policy_e2e_smoke_run_config(
     if tgvf_backed_matched_run:
         if not isinstance(
             runtime_binding,
-            (PolicyT1MixedRuntimeBinding, PolicyTeacherQuarterMixRuntimeBinding),
+            (
+                PolicyT1MixedRuntimeBinding,
+                PolicyTeacherQuarterMixRuntimeBinding,
+                PolicyTeacherRatioMixRuntimeBinding,
+            ),
         ):
             raise ValueError(
                 "trainable RP66 pilot requires the retained mixed-T1 dataset"

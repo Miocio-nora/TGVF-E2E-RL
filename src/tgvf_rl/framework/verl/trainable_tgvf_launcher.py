@@ -29,6 +29,9 @@ from tgvf_rl.data.deepeyes_official_schedule import (
 from tgvf_rl.data.policy_teacher_quarter_mix import (
     PolicyTeacherQuarterMixRuntimeBinding,
 )
+from tgvf_rl.data.policy_teacher_ratio_mix import (
+    PolicyTeacherRatioMixRuntimeBinding,
+)
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
@@ -99,6 +102,12 @@ from .policy_teacher_quarter_mix_dataset import (
     POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
     POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
     PolicyTeacherQuarterMixDatasetBinding,
+)
+from .policy_teacher_ratio_mix_dataset import (
+    POLICY_TEACHER_RATIO_MIX_CONFIG_NAME,
+    POLICY_TEACHER_RATIO_MIX_DATASET_CLASS,
+    POLICY_TEACHER_RATIO_MIX_DATASET_MODULE_PATH,
+    PolicyTeacherRatioMixDatasetBinding,
 )
 from .trainable_tgvf_checkpoint_manager import (
     TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN,
@@ -352,7 +361,8 @@ def _assert_functional_canary_config(config: PolicyE2ESmokeRunConfig) -> None:
 
 def _plain_binding(
     binding: DeepEyesTGVFMatchedDatasetBinding
-    | PolicyTeacherQuarterMixDatasetBinding,
+    | PolicyTeacherQuarterMixDatasetBinding
+    | PolicyTeacherRatioMixDatasetBinding,
 ) -> dict[str, object]:
     return {
         name: str(value) if isinstance(value, Path) else value
@@ -362,7 +372,11 @@ def _plain_binding(
 
 def _matched_dataset_binding(
     config: PolicyE2ESmokeRunConfig,
-) -> DeepEyesTGVFMatchedDatasetBinding | PolicyTeacherQuarterMixDatasetBinding:
+) -> (
+    DeepEyesTGVFMatchedDatasetBinding
+    | PolicyTeacherQuarterMixDatasetBinding
+    | PolicyTeacherRatioMixDatasetBinding
+):
     crop_tgvf = (
         config.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
     )
@@ -376,6 +390,24 @@ def _matched_dataset_binding(
         if crop_tgvf
         else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
     )
+    if isinstance(config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding):
+        runtime_binding = config.dataset.runtime_binding
+        return PolicyTeacherRatioMixDatasetBinding(
+            root=config.dataset.root,
+            manifest_file_sha256=runtime_binding.manifest_file_sha256,
+            content_sha256=runtime_binding.content_sha256,
+            samples_sha256=config.dataset.samples_sha256,
+            iteration_identity_sha256=config.dataset.iteration_identity_sha256,
+            schedule_seed=runtime_binding.schedule_seed,
+            expected_sample_count=runtime_binding.expected_sample_count,
+            teacher_percentage=runtime_binding.teacher_percentage,
+            tool_profile=config.protocol.tool_profile,
+            visual_prompt_bundle_sha256=prompt_identity.bundle_sha256,
+            thinklite_prompt_bundle_sha256=THINKLITE_PROMPT_IDENTITY.bundle_sha256,
+            model_name=config.model.model_name,
+            tokenizer_length=config.model.tokenizer_length,
+            chat_template_sha256=config.model.chat_template_sha256,
+        )
     if isinstance(
         config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
     ):
@@ -420,7 +452,11 @@ def _legacy_base_plan(config: PolicyE2ESmokeRunConfig):
     legacy_prompt = (
         config.protocol.prompt_sha256
         if isinstance(
-            config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+            config.dataset.runtime_binding,
+            (
+                PolicyTeacherQuarterMixRuntimeBinding,
+                PolicyTeacherRatioMixRuntimeBinding,
+            ),
         )
         else visual_tool_prompt_identity(
             config.protocol.tool_profile,
@@ -444,6 +480,19 @@ def _legacy_base_plan(config: PolicyE2ESmokeRunConfig):
 def _matched_dataset_runtime_identity(
     config: PolicyE2ESmokeRunConfig,
 ) -> tuple[str, str, str, str]:
+    if isinstance(config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding):
+        visual_agent_name = (
+            CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+            if config.schema_version
+            == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+            else TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
+        )
+        return (
+            POLICY_TEACHER_RATIO_MIX_DATASET_CLASS,
+            POLICY_TEACHER_RATIO_MIX_DATASET_CLASS.rsplit(".", 1)[-1],
+            POLICY_TEACHER_RATIO_MIX_CONFIG_NAME,
+            visual_agent_name,
+        )
     if isinstance(
         config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
     ):
@@ -475,6 +524,8 @@ def _matched_dataset_runtime_identity(
 
 
 def _matched_dataset_module_path(config: PolicyE2ESmokeRunConfig) -> str:
+    if isinstance(config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding):
+        return POLICY_TEACHER_RATIO_MIX_DATASET_MODULE_PATH
     return (
         POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH
         if isinstance(
@@ -488,7 +539,11 @@ def _matched_dataset_files(
     config: PolicyE2ESmokeRunConfig,
 ) -> tuple[Path, Path, int]:
     if isinstance(
-        config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+        config.dataset.runtime_binding,
+        (
+            PolicyTeacherQuarterMixRuntimeBinding,
+            PolicyTeacherRatioMixRuntimeBinding,
+        ),
     ):
         return (
             config.dataset.root / "samples.jsonl",
@@ -912,6 +967,7 @@ def build_trainable_tgvf_verl_launch_plan(
     train_file, probe_file, dataset_seed = _matched_dataset_files(config)
     values.pop("data.tgvf_policy_t1_mixed", None)
     values.pop(f"data.{POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME}", None)
+    values.pop(f"data.{POLICY_TEACHER_RATIO_MIX_CONFIG_NAME}", None)
     values.update(
         {
             "data.train_files": [str(train_file)],

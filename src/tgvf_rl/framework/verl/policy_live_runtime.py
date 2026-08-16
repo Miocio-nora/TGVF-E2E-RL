@@ -22,6 +22,9 @@ from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
 from tgvf_rl.data.policy_teacher_quarter_mix import (
     PolicyTeacherQuarterMixRuntimeBinding,
 )
+from tgvf_rl.data.policy_teacher_ratio_mix import (
+    PolicyTeacherRatioMixRuntimeBinding,
+)
 
 from tgvf_rl.checkpoint.coordinator import state_digest
 from tgvf_rl.conditioning import (
@@ -2092,6 +2095,7 @@ def _validate_sample_fields(
                 PolicyT1RLRuntimeBinding,
                 PolicyT1MixedRuntimeBinding,
                 PolicyTeacherQuarterMixRuntimeBinding,
+                PolicyTeacherRatioMixRuntimeBinding,
             ),
         ):
             source_image_path = Path(bound_image_path).resolve()
@@ -2099,7 +2103,11 @@ def _validate_sample_fields(
             source_image_path = (config.dataset.root / bound_image_path).resolve()
         bound_data_source = record.get("data_source")
         if isinstance(
-            config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
+            config.dataset.runtime_binding,
+            (
+                PolicyTeacherQuarterMixRuntimeBinding,
+                PolicyTeacherRatioMixRuntimeBinding,
+            ),
         ):
             # PRL22 owns a compact normalized schedule.  Its veRL Dataset
             # reconstructs ``extra_info`` and ``reward_model`` at runtime, so

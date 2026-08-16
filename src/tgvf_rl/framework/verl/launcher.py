@@ -26,6 +26,9 @@ from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
 from tgvf_rl.data.policy_teacher_quarter_mix import (
     PolicyTeacherQuarterMixRuntimeBinding,
 )
+from tgvf_rl.data.policy_teacher_ratio_mix import (
+    PolicyTeacherRatioMixRuntimeBinding,
+)
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
 
@@ -45,6 +48,12 @@ from .policy_teacher_quarter_mix_dataset import (
     POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
     POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
     PolicyTeacherQuarterMixDatasetBinding,
+)
+from .policy_teacher_ratio_mix_dataset import (
+    POLICY_TEACHER_RATIO_MIX_CONFIG_NAME,
+    POLICY_TEACHER_RATIO_MIX_DATASET_CLASS,
+    POLICY_TEACHER_RATIO_MIX_DATASET_MODULE_PATH,
+    PolicyTeacherRatioMixDatasetBinding,
 )
 
 
@@ -457,8 +466,29 @@ def build_policy_e2e_smoke_verl_plan(
     t1_binding = None
     t1_mixed_binding = None
     teacher_quarter_binding = None
+    teacher_ratio_binding = None
     if config.dataset.selected_sample is None:
-        if isinstance(
+        if isinstance(config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding):
+            teacher_typed_binding = config.dataset.runtime_binding
+            teacher_ratio_binding = PolicyTeacherRatioMixDatasetBinding(
+                root=config.dataset.root,
+                manifest_file_sha256=teacher_typed_binding.manifest_file_sha256,
+                content_sha256=teacher_typed_binding.content_sha256,
+                samples_sha256=config.dataset.samples_sha256,
+                iteration_identity_sha256=config.dataset.iteration_identity_sha256,
+                schedule_seed=teacher_typed_binding.schedule_seed,
+                expected_sample_count=teacher_typed_binding.expected_sample_count,
+                teacher_percentage=teacher_typed_binding.teacher_percentage,
+                tool_profile=config.protocol.tool_profile,
+                visual_prompt_bundle_sha256=config.protocol.prompt_sha256,
+                thinklite_prompt_bundle_sha256=(
+                    THINKLITE_PROMPT_IDENTITY.bundle_sha256
+                ),
+                tokenizer_length=config.model.tokenizer_length,
+                model_name=config.model.model_name,
+                chat_template_sha256=config.model.chat_template_sha256,
+            )
+        elif isinstance(
             config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
         ):
             teacher_typed_binding = config.dataset.runtime_binding
@@ -533,6 +563,7 @@ def build_policy_e2e_smoke_verl_plan(
         selected_binding = VerlSelectedSampleDatasetBinding.from_run_config(config)
     dataset_binding = (
         selected_binding
+        or teacher_ratio_binding
         or teacher_quarter_binding
         or t1_mixed_binding
         or t1_binding
@@ -545,6 +576,15 @@ def build_policy_e2e_smoke_verl_plan(
         dataset_class_name = SELECTED_SAMPLE_DATASET_CLASS_NAME
         dataset_config = {"data.tgvf_selected_sample": selected_binding.as_config()}
         dataset_samples_path = selected_binding.samples_path
+    elif teacher_ratio_binding is not None:
+        dataset_module_path = POLICY_TEACHER_RATIO_MIX_DATASET_MODULE_PATH
+        dataset_class_name = POLICY_TEACHER_RATIO_MIX_DATASET_CLASS.rsplit(".", 1)[-1]
+        dataset_config = {
+            f"data.{POLICY_TEACHER_RATIO_MIX_CONFIG_NAME}": (
+                teacher_ratio_binding.as_config()
+            )
+        }
+        dataset_samples_path = teacher_ratio_binding.samples_path
     elif teacher_quarter_binding is not None:
         dataset_module_path = POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH
         dataset_class_name = POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS.rsplit(
@@ -625,7 +665,10 @@ def build_policy_e2e_smoke_verl_plan(
                 config.dataset.runtime_binding.schedule_seed
                 if isinstance(
                     config.dataset.runtime_binding,
-                    PolicyTeacherQuarterMixRuntimeBinding,
+                    (
+                        PolicyTeacherQuarterMixRuntimeBinding,
+                        PolicyTeacherRatioMixRuntimeBinding,
+                    ),
                 )
                 else config.dataset.runtime_binding.shuffle_seed
             ),
