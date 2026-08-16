@@ -10128,3 +10128,46 @@ than inferred from a script name or prior conversation.
   Both real run configs pass load, generic launcher, trainable launcher and
   pinned Hydra compose. Formal execution remains unstarted at ledger entry
   time.
+
+### PRL-24-A-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS64-TFREE-TEACHER25
+
+- Authorized 2026-08-16 as the first large-prompt-batch arm after the BS16
+  pilot. Fixed scientific controls are Qwen3-VL-8B-Instruct full-policy
+  update, frozen RP67 Step-2000 Adapter, T-free answer/protocol/repeated-call
+  reward, Teacher25 canonical schedule, TGVF-only protocol, n16,
+  temperature 1, AdamW constant `1e-6`, world8 and micro2/rank. The treatment
+  changes global prompt batch from 16 to 64 by GA1 -> GA4.
+- Runtime implementation commit `86f312c` removes the legacy launcher
+  constants that forced every matched run back to BS16 and Step 8. Batch,
+  accumulation, horizon and checkpoint endpoints now come from the immutable
+  run config, while the remaining accepted Crop-16 execution/scientific
+  controls stay fixed. Existing BS16 configs compose to their prior exact
+  geometry.
+- The formal batch contains 64 independent prompts and 1,024 trajectories.
+  Actor and replay micro-batches remain 32 trajectories/rank; each rank
+  accumulates four micros and the project-owned DeepEyes reduction divides
+  each micro loss by four before backward. CPU value/gradient tests prove the
+  accumulated objective is the equal mean, not four times that mean, and each
+  trainer step still performs one optimizer update.
+- The immutable Teacher25 schedule is reused without rematerialization. Every
+  consecutive 64-row batch concatenates four canonical BS16 slices and
+  therefore contains exactly 48 retained-T1 plus 16 teacher rows. Dataloader
+  shuffle remains disabled.
+- Formal training runs directly to Step 16 and saves rolling recovery state
+  every step. S2/S4/S8/S16 are permanent evaluation endpoints. After S16, one
+  automatic paired-temperature-1 CoreDev-2511 evaluation runs four arms in
+  two parallel GPU waves; the common RP67 T-free RNG namespace is reused so
+  comparison with the accepted BS16 table remains paired.
+- A console-only world4 BS4 x n2 functional canary precedes formal W&B. It
+  validates rollout, a successful TGVF observation, reward, backward,
+  optimizer mutation and checkpoint save; it is not a scientific result.
+  Formal W&B identity is `prl24at25bs64s16`; smoke/canary is never uploaded.
+- The first canary invocation was rejected before GPU initialization because
+  this ledger entry had not yet accompanied the config-only descendant. No
+  rollout, optimizer mutation, checkpoint or W&B run was produced by that
+  rejected invocation. Adding this record changes no training variable.
+- Because the scaling arm required launcher parameterization rather than a
+  pure TOML overlay, historical PRL22-A is an informative anchor but not yet
+  a same-commit causal batch control. PRL24-A may run first as authorized; a
+  same-implementation BS16 A0 is required before claiming a strict BS64 batch
+  effect.
