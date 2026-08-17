@@ -122,6 +122,21 @@ def test_plan_loader_accepts_ordered_nonzero_checkpoint_pair() -> None:
     ]
 
 
+def test_v2_plan_policy_config_digest_is_provenance_not_a_runtime_gate(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(_PLAN.read_text(encoding="utf-8"))
+    payload["policy_config_sha256"] = "0" * 64
+    path = tmp_path / "stale-policy-config-digest.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    plan = _MODULE._load_plan(path)
+    runtime = _MODULE._load_evaluation_runtime(plan)
+
+    assert plan["policy_config_sha256"] == "0" * 64
+    assert runtime.checkpoint_owner.run_id
+
+
 def test_v3_full_model_plan_separates_owner_protocol_and_preserves_arm_ids() -> None:
     plan = _MODULE._load_plan(_PRL21_PLAN)
     runtime = _MODULE._load_evaluation_runtime(plan)

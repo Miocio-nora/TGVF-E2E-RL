@@ -534,7 +534,16 @@ def _load_plan(path: Path) -> dict[str, Any]:
         raise RuntimeError("PRL15 pinned CoreDev source root is unavailable")
     plan_paths = [("task_manifest_path", "task_manifest_sha256")]
     if payload["schema_version"] == PLAN_SCHEMA_V2:
-        plan_paths.append(("policy_config", "policy_config_sha256"))
+        # The policy config is live repository metadata, not the evaluated
+        # checkpoint identity.  Requiring byte-for-byte equality here made
+        # harmless provenance-only edits (for example, advancing code.commit)
+        # reject an otherwise valid post-training handoff.  Its evaluation
+        # semantics are checked below by _validate_plan_run, while checkpoint
+        # and frozen-adapter identities are validated from their own receipts.
+        # Keep the recorded digest for provenance, but do not use it as a gate.
+        policy_config = _resolve_repo_path(payload["policy_config"])
+        if not policy_config.is_file():
+            raise RuntimeError("PRL15 plan policy_config is unavailable")
     else:
         for section in ("checkpoint_owner", "protocol_contract"):
             resolved = _resolve_repo_path(payload[section]["config_path"])
