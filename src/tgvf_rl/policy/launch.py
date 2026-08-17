@@ -193,13 +193,14 @@ def _assert_code_commit_or_ledger_only_descendant(
     config_source_path: Path | None = None,
     additional_allowed_paths: tuple[Path, ...] = (),
 ) -> None:
-    """Require descendant implementation recovery to be committed with its ledger.
+    """Allow config-only descendants; ledger-bind implementation recovery.
 
     A tracked run config cannot name the hash of the commit that contains its
     own bytes.  The executable code identity is therefore committed first; a
-    descendant commit may add that exact run-config path and the experiment
-    ledger. A later committed bug fix is allowed only when the observed commit
-    also updates the experiment ledger, keeping recovery provenance explicit.
+    descendant commit may add that exact run-config path without pretending it
+    is an implementation change. A later committed bug fix is allowed only
+    when the observed commit also updates the experiment ledger, keeping
+    recovery provenance explicit.
     Uncommitted work remains forbidden by the surrounding launch validation.
     """
 
@@ -251,11 +252,9 @@ def _assert_code_commit_or_ledger_only_descendant(
                 "policy launch extension must be inside the launch repository"
             ) from error
         allowed.add(relative.as_posix())
-    if _EXPERIMENT_LEDGER_PATH not in changed:
-        raise RuntimeError(
-            "policy launch descendant lacks its planned experiment ledger"
-        )
     unexpected = changed.difference(allowed)
+    if not unexpected:
+        return
     if unexpected:
         latest_changed = frozenset(
             line

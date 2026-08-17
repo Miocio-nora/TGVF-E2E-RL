@@ -101,3 +101,24 @@ def test_launch_commit_allows_the_tracked_config_and_ledger_descendant(
         observed_commit=manifest_commit,
         config_source_path=config_path,
     )
+
+
+def test_launch_commit_allows_the_tracked_config_only_descendant(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "runtime.py").write_text("VERSION = 1\n", encoding="utf-8")
+    code_commit = _commit(tmp_path, "code identity")
+
+    config_path = tmp_path / "configs" / "policy" / "run.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(f'commit = "{code_commit}"\n', encoding="utf-8")
+    config_commit = _commit(tmp_path, "bind experiment config")
+
+    _assert_code_commit_or_ledger_only_descendant(
+        tmp_path,
+        configured_commit=code_commit,
+        observed_commit=config_commit,
+        config_source_path=config_path,
+    )
