@@ -192,9 +192,7 @@ def test_policy_reference_diagnostic_can_be_disabled_for_zero_kl_control(
     assert set(runner.role_worker_mapping) == {Role.ActorRollout}
     assert runner.mapping == {Role.ActorRollout: "global_pool"}
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        _policy_reference_diagnostic_enabled(
-            {POLICY_REFERENCE_DIAGNOSTIC_ENV: "false"}
-        )
+        _policy_reference_diagnostic_enabled({POLICY_REFERENCE_DIAGNOSTIC_ENV: "false"})
 
 
 @pytest.mark.parametrize(
@@ -466,9 +464,7 @@ def test_checkpoint_lifecycle_wraps_upstream_save_in_prepare_finalize_order(
             events.append(("upstream_save", self.global_steps))
             return "saved"
 
-    monkeypatch.setattr(
-        policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle
-    )
+    monkeypatch.setattr(policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle)
     trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
     trainer = object.__new__(trainer_cls)
     trainer.global_steps = 3
@@ -522,9 +518,7 @@ def test_resumed_formal_step2_uses_runtime_lifecycle_checkpoint_schedule(
             events.append(("upstream_save", self.global_steps))
             return "saved"
 
-    monkeypatch.setattr(
-        policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle
-    )
+    monkeypatch.setattr(policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle)
     trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
     trainer = object.__new__(trainer_cls)
     trainer.global_steps = 2
@@ -647,24 +641,35 @@ def test_policy_metrics_path_separates_formal_and_smoke_roots(tmp_path) -> None:
         tmp_path / "metrics.jsonl"
     )
     smoke = tmp_path / "smoke/metrics.jsonl"
-    assert _resolved_policy_metrics_path(
-        config,
-        environment={POLICY_METRICS_PATH_ENV: str(smoke)},
-    ) == smoke
+    assert (
+        _resolved_policy_metrics_path(
+            config,
+            environment={POLICY_METRICS_PATH_ENV: str(smoke)},
+        )
+        == smoke
+    )
     labeled_smoke = tmp_path / "smoke/actor-rollout-only-v1/metrics.jsonl"
-    assert _resolved_policy_metrics_path(
-        config,
-        environment={POLICY_METRICS_PATH_ENV: str(labeled_smoke)},
-    ) == labeled_smoke
+    assert (
+        _resolved_policy_metrics_path(
+            config,
+            environment={POLICY_METRICS_PATH_ENV: str(labeled_smoke)},
+        )
+        == labeled_smoke
+    )
     canary = tmp_path / "canary/metrics.jsonl"
-    assert _resolved_policy_metrics_path(
-        config,
-        environment={POLICY_METRICS_PATH_ENV: str(canary)},
-    ) == canary
+    assert (
+        _resolved_policy_metrics_path(
+            config,
+            environment={POLICY_METRICS_PATH_ENV: str(canary)},
+        )
+        == canary
+    )
     with pytest.raises(ValueError, match="inside output.root"):
         _resolved_policy_metrics_path(
             config,
-            environment={POLICY_METRICS_PATH_ENV: str(tmp_path.parent / "metrics.jsonl")},
+            environment={
+                POLICY_METRICS_PATH_ENV: str(tmp_path.parent / "metrics.jsonl")
+            },
         )
     with pytest.raises(ValueError, match="formal, smoke, or canary"):
         _resolved_policy_metrics_path(
@@ -696,16 +701,12 @@ def test_functional_canary_requires_tgvf_replay_before_optimizer_mutation() -> N
         )
 
     gate = {POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV: "1"}
-    _require_successful_tgvf_observation_for_canary(
-        observation(0), environment={}
-    )
+    _require_successful_tgvf_observation_for_canary(observation(0), environment={})
     with pytest.raises(RuntimeError, match="optimizer was not mutated"):
         _require_successful_tgvf_observation_for_canary(
             observation(0), environment=gate
         )
-    _require_successful_tgvf_observation_for_canary(
-        observation(1), environment=gate
-    )
+    _require_successful_tgvf_observation_for_canary(observation(1), environment=gate)
     with pytest.raises(ValueError, match="must be 1 when set"):
         _require_successful_tgvf_observation_for_canary(
             observation(1),
@@ -758,6 +759,11 @@ def test_stage3_metrics_publish_five_components_and_judge_coverage() -> None:
     assert flat["policy_pilot/mean_stage3_focus_reward"] == 0.5
     assert flat["policy_pilot/mean_stage3_grounding_reward"] == 0.5
     assert flat["policy_pilot/mean_stage3_protocol_reward"] == 0.0
+    assert flat["policy_pilot/group_reward_variance_mean"] == pytest.approx(8 / 7)
+    assert flat["policy_pilot/group_reward_std_mean"] == pytest.approx((8 / 7) ** 0.5)
+    assert flat["policy_pilot/zero_reward_variance_group_rate"] == 0.0
+    assert flat["policy_pilot/format_mixed_group_rate"] == 0.0
+    assert flat["policy_pilot/group_format_reward_std_mean"] == 0.0
     assert flat["policy_pilot/stage3_quality_judge_applicable"] == 8
     assert flat["policy_pilot/stage3_quality_judge_covered"] == 4
     assert flat["policy_pilot/stage3_quality_judge_failures"] == 4
@@ -891,9 +897,7 @@ def test_post_commit_metrics_and_cleanup_failures_do_not_reject_the_update(
 
     class State:
         config = SimpleNamespace(
-            policy=SimpleNamespace(
-                sampling=SimpleNamespace(trajectories_per_prompt=16)
-            )
+            policy=SimpleNamespace(sampling=SimpleNamespace(trajectories_per_prompt=16))
         )
 
         def prepare_optimizer_step(self, _batch):
@@ -912,7 +916,9 @@ def test_post_commit_metrics_and_cleanup_failures_do_not_reject_the_update(
     trainer._policy_step_started_at = None
     trainer._policy_metrics_pending = None
     trainer._policy_actor_update_inflight = False
-    monkeypatch.setattr(policy_task_runner, "validate_data_proto_integrity", lambda _: None)
+    monkeypatch.setattr(
+        policy_task_runner, "validate_data_proto_integrity", lambda _: None
+    )
     monkeypatch.setattr(
         policy_task_runner,
         "validate_policy_pilot_reward_data_proto",
@@ -1127,9 +1133,7 @@ def test_completed_resume_checkpoint_exits_without_an_extra_update(
         def finalize_saved_checkpoint(self, step):
             events.append(("finalize", step))
 
-    monkeypatch.setattr(
-        policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle
-    )
+    monkeypatch.setattr(policy_task_runner, "PolicyCheckpointLifecycle", FakeLifecycle)
 
     trainer_cls = make_policy_pilot_ray_trainer_class(UpstreamTrainer)
     trainer = object.__new__(trainer_cls)

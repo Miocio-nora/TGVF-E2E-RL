@@ -68,6 +68,7 @@ class Stage3ShapedRewardSpec:
     tool_utility_manifest_sha256: str | None
     visual_quality_enabled: bool = True
     tool_utility_reward_enabled: bool = True
+    protocol_error_penalty: float = 1.0
     profile: str = STAGE3_SHAPED_REWARD_VERSION
 
     def __post_init__(self) -> None:
@@ -80,11 +81,16 @@ class Stage3ShapedRewardSpec:
             raise TypeError("visual_quality_enabled must be bool")
         if type(self.tool_utility_reward_enabled) is not bool:
             raise TypeError("tool_utility_reward_enabled must be bool")
+        if type(self.protocol_error_penalty) is not float:
+            raise TypeError("protocol_error_penalty must be float")
+        if (
+            not math.isfinite(self.protocol_error_penalty)
+            or self.protocol_error_penalty <= 0.0
+        ):
+            raise ValueError("protocol_error_penalty must be finite and positive")
         if self.visual_quality_enabled:
             if not isinstance(self.visual_judge_identity, ArtifactIdentity):
-                raise TypeError(
-                    "enabled visual quality requires an ArtifactIdentity"
-                )
+                raise TypeError("enabled visual quality requires an ArtifactIdentity")
         elif self.visual_judge_identity is not None:
             raise ValueError(
                 "disabled visual quality cannot bind a visual judge identity"
@@ -105,9 +111,7 @@ class Stage3ShapedRewardSpec:
                 if (
                     not isinstance(value, str)
                     or len(value) != 64
-                    or any(
-                        character not in "0123456789abcdef" for character in value
-                    )
+                    or any(character not in "0123456789abcdef" for character in value)
                 ):
                     raise ValueError(f"{field_name} must be a lowercase SHA-256")
         elif utility_hashes != (None, None):
@@ -380,7 +384,13 @@ class Stage3VerlTrajectoryRewardScorer:
         self.context_provider = context_provider
         self.tool_utility = tool_utility
         self.visual_quality_judge = visual_quality_judge
-        self.kernel = kernel or Stage3ShapedRewardKernel()
+        self.kernel = kernel or Stage3ShapedRewardKernel(
+            protocol_error_penalty=spec.protocol_error_penalty
+        )
+        if self.kernel.protocol_error_penalty != spec.protocol_error_penalty:
+            raise IdentityMismatchError(
+                "Stage3 kernel protocol penalty differs from its reward spec"
+            )
         self.audit_sink = audit_sink
 
     def score(
@@ -479,9 +489,7 @@ class Stage3VerlTrajectoryRewardScorer:
             Stage3ShapedRewardFacts(
                 answer_correct=verification.correct,
                 tool_label=(
-                    None
-                    if label is None
-                    else ToolNecessityLabel(label.utility_label)
+                    None if label is None else ToolNecessityLabel(label.utility_label)
                 ),
                 tool_call_count=context.tool_call_count,
                 successful_tgvf_observation_count=(
@@ -492,9 +500,7 @@ class Stage3VerlTrajectoryRewardScorer:
                 quality_judge_failure=quality_judge_failure,
                 quality_rewards_enabled=self.spec.visual_quality_enabled,
                 label_confidence=None if label is None else label.confidence,
-                tool_utility_reward_enabled=(
-                    self.spec.tool_utility_reward_enabled
-                ),
+                tool_utility_reward_enabled=(self.spec.tool_utility_reward_enabled),
                 protocol_errors=protocol_errors,
             )
         )

@@ -72,13 +72,9 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
             raise TypeError("spec must be Stage3ShapedRewardSpec")
         if spec.visual_quality_enabled:
             if not callable(getattr(visual_quality_judge, "judge_async", None)):
-                raise TypeError(
-                    "enabled async visual quality requires judge_async()"
-                )
+                raise TypeError("enabled async visual quality requires judge_async()")
         elif visual_quality_judge is not None:
-            raise ValueError(
-                "disabled async visual quality cannot bind a visual judge"
-            )
+            raise ValueError("disabled async visual quality cannot bind a visual judge")
         if spec.tool_utility_reward_enabled:
             if not isinstance(tool_utility, TGVFToolUtilityRuntimeBinding):
                 raise TypeError(
@@ -97,7 +93,13 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         self.spec = spec
         self.tool_utility = tool_utility
         self.visual_quality_judge = visual_quality_judge
-        self.kernel = kernel or Stage3ShapedRewardKernel()
+        self.kernel = kernel or Stage3ShapedRewardKernel(
+            protocol_error_penalty=spec.protocol_error_penalty
+        )
+        if self.kernel.protocol_error_penalty != spec.protocol_error_penalty:
+            raise IdentityMismatchError(
+                "Stage3 kernel protocol penalty differs from its reward spec"
+            )
 
     async def score_async(
         self,
@@ -127,7 +129,7 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
         protocol_errors = tuple(
             dict.fromkeys(
                 (
-                    *(('protocol_invalid',) if not context.protocol_valid else ()),
+                    *(("protocol_invalid",) if not context.protocol_valid else ()),
                     *context.tool_error_codes,
                 )
             )
@@ -160,8 +162,7 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
                     or judgement.sample_id != context.sample_id
                     or judgement.successful_observation_count
                     != context.successful_tgvf_observation_count
-                    or judgement.judge_identity
-                    != self.spec.visual_judge_identity
+                    or judgement.judge_identity != self.spec.visual_judge_identity
                 ):
                     raise IdentityMismatchError(
                         "async visual-quality judgement identity differs"
@@ -173,9 +174,7 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
             Stage3ShapedRewardFacts(
                 answer_correct=verification.correct,
                 tool_label=(
-                    None
-                    if label is None
-                    else ToolNecessityLabel(label.utility_label)
+                    None if label is None else ToolNecessityLabel(label.utility_label)
                 ),
                 tool_call_count=context.tool_call_count,
                 successful_tgvf_observation_count=(
@@ -186,9 +185,7 @@ class AsyncStage3ShapedTGVFTrajectoryRewardScorer:
                 quality_judge_failure=quality_judge_failure,
                 quality_rewards_enabled=self.spec.visual_quality_enabled,
                 label_confidence=None if label is None else label.confidence,
-                tool_utility_reward_enabled=(
-                    self.spec.tool_utility_reward_enabled
-                ),
+                tool_utility_reward_enabled=(self.spec.tool_utility_reward_enabled),
                 protocol_errors=protocol_errors,
             )
         )

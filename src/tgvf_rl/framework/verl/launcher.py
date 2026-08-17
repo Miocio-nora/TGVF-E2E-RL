@@ -114,8 +114,7 @@ def _shared_dependency_repository_root(repository_root: Path) -> Path:
     """
 
     local_headers = (
-        repository_root
-        / ".deps/python312-dev/root/usr/include/python3.12/Python.h"
+        repository_root / ".deps/python312-dev/root/usr/include/python3.12/Python.h"
     )
     if local_headers.is_file():
         return repository_root
@@ -136,9 +135,7 @@ def _shared_dependency_repository_root(repository_root: Path) -> Path:
     return repository_root
 
 
-_POLICY_DEPENDENCY_ROOT = _shared_dependency_repository_root(
-    _POLICY_REPOSITORY_ROOT
-)
+_POLICY_DEPENDENCY_ROOT = _shared_dependency_repository_root(_POLICY_REPOSITORY_ROOT)
 _PYTHON312_DEV_INCLUDE_ROOT = (
     _POLICY_DEPENDENCY_ROOT / ".deps/python312-dev/root/usr/include"
 )
@@ -468,7 +465,9 @@ def build_policy_e2e_smoke_verl_plan(
     teacher_quarter_binding = None
     teacher_ratio_binding = None
     if config.dataset.selected_sample is None:
-        if isinstance(config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding):
+        if isinstance(
+            config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding
+        ):
             teacher_typed_binding = config.dataset.runtime_binding
             teacher_ratio_binding = PolicyTeacherRatioMixDatasetBinding(
                 root=config.dataset.root,
@@ -587,9 +586,7 @@ def build_policy_e2e_smoke_verl_plan(
         dataset_samples_path = teacher_ratio_binding.samples_path
     elif teacher_quarter_binding is not None:
         dataset_module_path = POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH
-        dataset_class_name = POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS.rsplit(
-            ".", 1
-        )[-1]
+        dataset_class_name = POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS.rsplit(".", 1)[-1]
         dataset_config = {
             f"data.{POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME}": (
                 teacher_quarter_binding.as_config()
@@ -921,9 +918,7 @@ def build_policy_e2e_smoke_verl_plan(
             # /tmp/ray/session_latest. Each run owns a local control plane and
             # session directory under its output root.
             "ray_kwargs.ray_init.address": "local",
-            "ray_kwargs.ray_init._temp_dir": str(
-                _ray_temp_dir(config.output.root)
-            ),
+            "ray_kwargs.ray_init._temp_dir": str(_ray_temp_dir(config.output.root)),
         }
     )
 
@@ -1074,6 +1069,7 @@ def _reward_custom_config(config: PolicyE2ESmokeRunConfig) -> dict[str, object]:
         "tool_utility_reward_enabled": utility_enabled,
         "focus_reward_enabled": quality_enabled,
         "grounding_reward_enabled": quality_enabled,
+        "protocol_error_penalty": reward.protocol_error_penalty,
     }
     if utility_enabled:
         assert reward.tool_utility is not None
@@ -1147,9 +1143,7 @@ def _actor_batch_contract(
         )
     actor_forward_backward_microbatches = trajectory_mini // denominator
     configured_accumulation = config.accumulation.gradient_accumulation_steps
-    expected_actor_microbatches = configured_accumulation * (
-        1 if crop16_matched else n
-    )
+    expected_actor_microbatches = configured_accumulation * (1 if crop16_matched else n)
     if actor_forward_backward_microbatches != expected_actor_microbatches:
         raise ValueError(
             "pinned veRL actor microbatches differ from prompt accumulation times n"

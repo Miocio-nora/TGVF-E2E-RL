@@ -449,6 +449,7 @@ class SmokeRewardBinding:
     answer_weight: float | None
     format_weight: float | None
     conditional_tool_weight: float | None
+    protocol_error_penalty: float | None = None
     judge_config_path: Path | None = None
     judge_config_sha256: str | None = None
     tool_utility: TGVFToolUtilityRuntimeBinding | None = None
@@ -763,9 +764,7 @@ def load_policy_e2e_smoke_run_config(
         model_table["native_deepstack_enabled"], True, "model.native_deepstack_enabled"
     )
     expected_image_max_pixels = (
-        1_003_520
-        if deepeyes_scaled_crop_run or tgvf_backed_matched_run
-        else 512 * 512
+        1_003_520 if deepeyes_scaled_crop_run or tgvf_backed_matched_run else 512 * 512
     )
     _require_exact(
         model_table["image_max_pixels"],
@@ -1150,11 +1149,7 @@ def load_policy_e2e_smoke_run_config(
         "protocol.tool_schema_sha256",
     )
     expected_maximum_tool_calls = (
-        6
-        if tgvf_backed_matched_run
-        else 1
-        if stage3_shaped_run
-        else 4
+        6 if tgvf_backed_matched_run else 1 if stage3_shaped_run else 4
     )
     _require_exact(
         protocol_table["maximum_tool_calls"],
@@ -1345,6 +1340,9 @@ def load_policy_e2e_smoke_run_config(
         reward_fields.update({"judge_config_path", "judge_config_sha256"})
     if stage3_shaped_run:
         reward_fields.add("profile")
+        raw_reward = payload.get("reward")
+        if isinstance(raw_reward, Mapping) and "protocol_error_penalty" in raw_reward:
+            reward_fields.add("protocol_error_penalty")
         if tfree_reward_run:
             reward_fields.add("tool_utility_reward_enabled")
         else:
@@ -1464,6 +1462,10 @@ def load_policy_e2e_smoke_run_config(
             reward_table["profile"],
             STAGE3_SHAPED_REWARD_VERSION,
             "reward.profile",
+        )
+        protocol_error_penalty = _positive_real(
+            reward_table.get("protocol_error_penalty", 1.0),
+            name="reward.protocol_error_penalty",
         )
         if not isinstance(
             runtime_binding,
@@ -1604,18 +1606,13 @@ def load_policy_e2e_smoke_run_config(
                 reward_table["visual_quality_judge_config_sha256"],
                 name="reward.visual_quality_judge_config_sha256",
             )
-            if (
-                _sha256_file(visual_quality_config_path)
-                != visual_quality_config_sha256
-            ):
+            if _sha256_file(visual_quality_config_path) != visual_quality_config_sha256:
                 raise ValueError("reward visual-quality judge config SHA256 mismatch")
             bound_visual_quality_judge = load_tgvf_visual_quality_judge(
                 visual_quality_config_path,
                 expected_file_sha256=visual_quality_config_sha256,
             )
-            visual_quality_judge_identity = (
-                bound_visual_quality_judge.config_identity
-            )
+            visual_quality_judge_identity = bound_visual_quality_judge.config_identity
         reward_profile = STAGE3_SHAPED_REWARD_VERSION
         reward_weights: tuple[float, float, float] | None = None
     else:
@@ -1636,6 +1633,7 @@ def load_policy_e2e_smoke_run_config(
         visual_quality_config_path = None
         visual_quality_config_sha256 = None
         visual_quality_judge_identity = None
+        protocol_error_penalty = None
     reward = SmokeRewardBinding(
         profile=reward_profile,
         task_kind=reward_table["task_kind"],
@@ -1646,6 +1644,7 @@ def load_policy_e2e_smoke_run_config(
         answer_weight=None if reward_weights is None else reward_weights[0],
         format_weight=None if reward_weights is None else reward_weights[1],
         conditional_tool_weight=None if reward_weights is None else reward_weights[2],
+        protocol_error_penalty=protocol_error_penalty,
         judge_config_path=judge_config_path,
         judge_config_sha256=judge_config_sha256,
         tool_utility=tool_utility,
@@ -2312,12 +2311,9 @@ def load_policy_e2e_smoke_run_config(
             )
             if (
                 type(reward.focus_reward_enabled) is not bool
-                or reward.grounding_reward_enabled
-                is not reward.focus_reward_enabled
+                or reward.grounding_reward_enabled is not reward.focus_reward_enabled
             ):
-                raise ValueError(
-                    "RP66 shaped visual-quality reward controls differ"
-                )
+                raise ValueError("RP66 shaped visual-quality reward controls differ")
         else:
             _require_exact(
                 (

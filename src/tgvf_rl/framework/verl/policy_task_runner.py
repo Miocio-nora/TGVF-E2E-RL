@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
+import statistics
 from time import perf_counter
 from typing import Any
 import warnings
@@ -138,6 +139,11 @@ POLICY_TRACKING_METRIC_NAMES = frozenset(
         "policy_pilot/mean_stage3_focus_reward",
         "policy_pilot/mean_stage3_grounding_reward",
         "policy_pilot/mean_stage3_protocol_reward",
+        "policy_pilot/group_reward_std_mean",
+        "policy_pilot/group_reward_variance_mean",
+        "policy_pilot/zero_reward_variance_group_rate",
+        "policy_pilot/format_mixed_group_rate",
+        "policy_pilot/group_format_reward_std_mean",
         "policy_pilot/stage3_quality_judge_applicable",
         "policy_pilot/stage3_quality_judge_covered",
         "policy_pilot/stage3_quality_judge_failures",
@@ -264,6 +270,45 @@ def _pilot_metrics_event(
                 ),
                 trajectories,
             )
+        grouped_rows: dict[str, list[PilotTrajectoryMetricsObservation]] = {}
+        for row in stage3_rows:
+            grouped_rows.setdefault(row.prompt_id, []).append(row)
+        reward_variances: list[float] = []
+        format_stds: list[float] = []
+        format_mixed_groups = 0
+        for group in grouped_rows.values():
+            totals = [
+                float(sum(row.stage3_reward_components))
+                for row in group
+                if row.stage3_reward_components is not None
+            ]
+            protocols = [
+                float(row.stage3_reward_components[4])
+                for row in group
+                if row.stage3_reward_components is not None
+            ]
+            reward_variances.append(statistics.variance(totals))
+            format_stds.append(statistics.stdev(protocols))
+            format_mixed_groups += int(
+                any(value < 0.0 for value in protocols)
+                and any(value == 0.0 for value in protocols)
+            )
+        step.update(
+            {
+                "group_reward_std_mean": statistics.fmean(
+                    variance**0.5 for variance in reward_variances
+                ),
+                "group_reward_variance_mean": statistics.fmean(reward_variances),
+                "zero_reward_variance_group_rate": _zero_safe_mean(
+                    sum(variance <= 1e-12 for variance in reward_variances),
+                    len(reward_variances),
+                ),
+                "format_mixed_group_rate": _zero_safe_mean(
+                    format_mixed_groups, len(grouped_rows)
+                ),
+                "group_format_reward_std_mean": statistics.fmean(format_stds),
+            }
+        )
         applicable = sum(row.stage3_quality_judge_applicable for row in stage3_rows)
         covered = sum(row.stage3_quality_judge_covered for row in stage3_rows)
         step.update(
@@ -395,15 +440,18 @@ def _resolved_policy_metrics_path(
     labeled_smoke = (
         len(relative.parts) == 3
         and relative.parts[0] == "smoke"
-        and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", relative.parts[1])
-        is not None
+        and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", relative.parts[1]) is not None
         and relative.parts[2] == "metrics.jsonl"
     )
-    if relative not in {
-        Path("metrics.jsonl"),
-        Path("smoke/metrics.jsonl"),
-        Path("canary/metrics.jsonl"),
-    } and not labeled_smoke:
+    if (
+        relative
+        not in {
+            Path("metrics.jsonl"),
+            Path("smoke/metrics.jsonl"),
+            Path("canary/metrics.jsonl"),
+        }
+        and not labeled_smoke
+    ):
         raise ValueError(
             f"{POLICY_METRICS_PATH_ENV} must select formal, smoke, or canary metrics"
         )
@@ -571,6 +619,9 @@ def _run_identity(config: PolicyE2ESmokeRunConfig) -> PilotRunIdentityHashes:
             raise ValueError("Stage3 tool-utility identity differs from its switch")
         hashes["reward_tool_utility_enabled"] = hashlib.sha256(
             str(utility_enabled).encode("ascii")
+        ).hexdigest()
+        hashes["reward_protocol_error_penalty"] = hashlib.sha256(
+            str(config.reward.protocol_error_penalty).encode("ascii")
         ).hexdigest()
         if tool_utility is not None:
             hashes.update(
@@ -1187,9 +1238,7 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                             "paired Policy resume step differs from veRL"
                         )
                     self.checkpoint_manager.update_weights(self.global_steps)
-                    lifecycle = getattr(
-                        self, "_policy_checkpoint_lifecycle", None
-                    )
+                    lifecycle = getattr(self, "_policy_checkpoint_lifecycle", None)
                     if isinstance(lifecycle, PolicyCheckpointLifecycle):
                         lifecycle.finalize_saved_checkpoint(completed_step)
                     self._shutdown_dump_executor()
@@ -1364,11 +1413,12 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                 if getattr(self, "_policy_metrics_pending", None) is not None:
                     raise RuntimeError(
                         "a Policy metrics publication is already pending"
-                )
+                    )
                 prepared = self._policy_checkpoint_state.prepare_optimizer_step(batch)
-                if os.environ.get(
-                    POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV
-                ) is not None:
+                if (
+                    os.environ.get(POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV)
+                    is not None
+                ):
                     _require_successful_tgvf_observation_for_canary(
                         prepared.observation
                     )
@@ -1470,12 +1520,8 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                         metrics[name] = [value]
                 persisted = dict(event)
                 persisted["timing"] = {
-                    "weight_sync_seconds": timings[
-                        "policy_timing/weight_sync_seconds"
-                    ],
-                    "checkpoint_seconds": timings[
-                        "policy_timing/checkpoint_seconds"
-                    ],
+                    "weight_sync_seconds": timings["policy_timing/weight_sync_seconds"],
+                    "checkpoint_seconds": timings["policy_timing/checkpoint_seconds"],
                     "end_to_end_step_seconds": timings[
                         "policy_timing/end_to_end_step_seconds"
                     ],
@@ -1692,7 +1738,7 @@ def policy_metrics_observation_from_data_proto(
                 raise ValueError("Stage3 metric reward components differ")
             stage3_components = tuple(reward.values())
             compatibility_answer_reward = reward["answer"] / 2.0
-            compatibility_format_error = reward["protocol"] == -1.0
+            compatibility_format_error = reward["protocol"] < 0.0
             compatibility_conditional_tool_reward = 0.0
             if (
                 type(raw_quality_applicable) is not bool
@@ -1812,9 +1858,7 @@ def _validate_metric_tool_attempt_contract(
         raise ValueError("one trajectory cannot contain multiple cap errors")
     for error in trajectory.tool_errors:
         expected_upper = (
-            maximum_tool_calls
-            if error.code == cap_code
-            else maximum_tool_calls - 1
+            maximum_tool_calls if error.code == cap_code else maximum_tool_calls - 1
         )
         if (
             type(error.attempt_index) is not int
@@ -1827,10 +1871,7 @@ def _validate_metric_tool_attempt_contract(
     cap_error = cap_errors[0]
     if cap_error.attempt_index != maximum_tool_calls:
         raise ValueError("cap error does not follow all admitted attempts")
-    if (
-        cap_error_sha256 is not None
-        and cap_error.payload_sha256 != cap_error_sha256
-    ):
+    if cap_error_sha256 is not None and cap_error.payload_sha256 != cap_error_sha256:
         raise ValueError("cap-error payload identity differs from the run config")
 
 

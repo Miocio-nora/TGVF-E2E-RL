@@ -246,6 +246,7 @@ class Stage3ShapedRewardResult:
         return self.components[tuple(Stage3ShapedComponentName).index(name)]
 
 
+@dataclass(frozen=True, slots=True)
 class Stage3ShapedRewardKernel:
     """Implement the configured Stage3-shaped component equation exactly.
 
@@ -270,6 +271,16 @@ class Stage3ShapedRewardKernel:
         QualityJudgeScore.PARTIAL: 0.5,
         QualityJudgeScore.FAIL: -1.0,
     }
+
+    protocol_error_penalty: float = 1.0
+
+    def __post_init__(self) -> None:
+        if type(self.protocol_error_penalty) is not float:
+            raise TypeError("protocol_error_penalty must be float")
+        if not math.isfinite(self.protocol_error_penalty):
+            raise ValueError("protocol_error_penalty must be finite")
+        if self.protocol_error_penalty <= 0.0:
+            raise ValueError("protocol_error_penalty must be positive")
 
     def score(self, facts: Stage3ShapedRewardFacts) -> Stage3ShapedRewardResult:
         if type(facts) is not Stage3ShapedRewardFacts:
@@ -339,7 +350,7 @@ class Stage3ShapedRewardKernel:
             grounding_evidence = "not_applicable=no_successful_tgvf_observation"
             quality_judge_covered = False
 
-        protocol_score = -1.0 if facts.protocol_errors else 0.0
+        protocol_score = -self.protocol_error_penalty if facts.protocol_errors else 0.0
         error_summary = ",".join(facts.protocol_errors) or "none"
         components = (
             Stage3ShapedRewardComponent(
@@ -374,16 +385,18 @@ class Stage3ShapedRewardKernel:
             Stage3ShapedRewardComponent(
                 Stage3ShapedComponentName.PROTOCOL,
                 protocol_score,
-                f"protocol_errors={error_summary}; any_error={bool(facts.protocol_errors)}",
+                (
+                    f"protocol_errors={error_summary}; "
+                    f"any_error={bool(facts.protocol_errors)}; "
+                    f"penalty={self.protocol_error_penalty}"
+                ),
             ),
         )
         return Stage3ShapedRewardResult(
             total=float(math.fsum(component.score for component in components)),
             components=components,
             answer_gated=answer_gated,
-            quality_judge_applicable=(
-                tool_succeeded and facts.quality_rewards_enabled
-            ),
+            quality_judge_applicable=(tool_succeeded and facts.quality_rewards_enabled),
             quality_judge_covered=quality_judge_covered,
             quality_judge_failure=facts.quality_judge_failure,
         )

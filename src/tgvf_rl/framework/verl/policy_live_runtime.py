@@ -549,6 +549,7 @@ class _Qwen3PolicyTrajectoryComponents:
                     "tool_utility_reward_enabled": utility_enabled,
                     "focus_reward_enabled": quality_enabled,
                     "grounding_reward_enabled": quality_enabled,
+                    "protocol_error_penalty": reward.protocol_error_penalty,
                     "equation": (
                         (
                             "2*A_gated+T+R_repeat+F+G+P"
@@ -608,6 +609,7 @@ class _Qwen3PolicyTrajectoryComponents:
                     ),
                     visual_quality_enabled=quality_enabled,
                     tool_utility_reward_enabled=utility_enabled,
+                    protocol_error_penalty=reward.protocol_error_penalty,
                 )
             self.reward_pipeline = None
             self.stage3_reward_runtime = None
@@ -2036,6 +2038,7 @@ def _build_stage3_reward_runtime(
         "answer_judge_config": reward.judge_config_sha256,
         "tool_utility_reward_enabled": utility_enabled,
         "visual_quality_judge_config": bound_visual.config_identity.sha256,
+        "protocol_error_penalty": reward.protocol_error_penalty,
         "equation": (
             "2*A_gated+T+R_repeat+F+G+P" if utility_enabled else "2*A+R_repeat+F+G+P"
         ),
@@ -2064,6 +2067,7 @@ def _build_stage3_reward_runtime(
             None if reward.tool_utility is None else reward.tool_utility.manifest_sha256
         ),
         tool_utility_reward_enabled=utility_enabled,
+        protocol_error_penalty=reward.protocol_error_penalty,
     )
     return spec, answer_verifier, bound_visual.provider
 

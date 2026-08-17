@@ -176,9 +176,10 @@ def test_tfree_correct_answer_is_independent_of_tool_use(tool_calls: int) -> Non
     assert result.answer_gated is False
     assert result.component(Stage3ShapedComponentName.ANSWER).score == 2.0
     assert result.component(Stage3ShapedComponentName.TOOL).score == 0.0
-    assert "tool_utility_reward=disabled" in result.component(
-        Stage3ShapedComponentName.TOOL
-    ).evidence
+    assert (
+        "tool_utility_reward=disabled"
+        in result.component(Stage3ShapedComponentName.TOOL).evidence
+    )
 
 
 def test_tfree_keeps_repeat_and_protocol_penalties_without_answer_gate() -> None:
@@ -321,6 +322,24 @@ def test_any_number_of_protocol_errors_produces_one_protocol_penalty() -> None:
     assert protocol.score == -1.0
     assert "invalid_json,missing_final_answer" in protocol.evidence
     assert result.total == -1.0
+
+
+def test_protocol_penalty_is_configurable_without_multiplying_error_count() -> None:
+    result = Stage3ShapedRewardKernel(protocol_error_penalty=2.0).score(
+        Stage3ShapedRewardFacts(
+            answer_correct=False,
+            tool_label=None,
+            quality_rewards_enabled=False,
+            label_confidence=None,
+            tool_utility_reward_enabled=False,
+            protocol_errors=("invalid_json", "missing_final_answer"),
+        )
+    )
+
+    protocol = result.component(Stage3ShapedComponentName.PROTOCOL)
+    assert protocol.score == -2.0
+    assert result.total == -2.0
+    assert "penalty=2.0" in protocol.evidence
 
 
 @pytest.mark.parametrize(
