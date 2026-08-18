@@ -209,6 +209,12 @@ def _zero_safe_mean(numerator: int, denominator: int) -> float:
     return 0.0 if denominator == 0 else numerator / denominator
 
 
+def _configured_stage3_protocol_error_penalty(config: object) -> float:
+    reward = getattr(config, "reward", None)
+    penalty = getattr(reward, "protocol_error_penalty", None)
+    return 1.0 if penalty is None else float(penalty)
+
+
 def _pilot_metrics_event(
     observation: PilotOptimizerStepMetricsObservation,
     summary: PilotMetricsSummary,
@@ -756,6 +762,9 @@ class PolicyPilotTrainerCheckpointState:
             ),
             maximum_tool_calls=self.config.protocol.maximum_tool_calls,
             cap_error_sha256=self.config.protocol.cap_error_sha256,
+            stage3_protocol_error_penalty=(
+                _configured_stage3_protocol_error_penalty(self.config)
+            ),
         )
         # Exercise the complete reducer against a copy.  No data-derived
         # metrics failure is allowed to appear after optimizer mutation.
@@ -1409,6 +1418,11 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
                     expected_group_size=(
                         self._policy_checkpoint_state.config.policy.sampling.trajectories_per_prompt
                     ),
+                    expected_stage3_protocol_error_penalty=(
+                        _configured_stage3_protocol_error_penalty(
+                            self._policy_checkpoint_state.config
+                        )
+                    ),
                 )
                 if getattr(self, "_policy_metrics_pending", None) is not None:
                     raise RuntimeError(
@@ -1642,12 +1656,14 @@ def policy_metrics_observation_from_data_proto(
     trajectories_per_prompt: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
     maximum_tool_calls: int | None = None,
     cap_error_sha256: str | None = None,
+    stage3_protocol_error_penalty: float = 1.0,
 ) -> PilotOptimizerStepMetricsObservation:
     """Recover the checkpointed raw Pilot metrics from one exact update batch."""
 
     reward_view = validate_policy_pilot_reward_data_proto(
         data,
         expected_group_size=trajectories_per_prompt,
+        expected_stage3_protocol_error_penalty=stage3_protocol_error_penalty,
     )
     stage3_profile = (
         reward_view.reward_bridge_schema_version

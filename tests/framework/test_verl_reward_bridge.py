@@ -409,6 +409,47 @@ def test_stage3_five_component_reward_crosses_dataproto_sidecar_gate() -> None:
     assert view.rewards[3] == pytest.approx(4.5)
 
 
+def test_stage3_configured_protocol_penalty_crosses_dataproto_gate() -> None:
+    data = _real_data_proto()
+    batch_size = data.batch["rm_scores"].shape[0]
+    components = [
+        (
+            ("answer", 0.0),
+            ("tool", 0.0),
+            ("focus", 0.0),
+            ("grounding", 0.0),
+            ("protocol", -2.0),
+        )
+    ] * batch_size
+    rewards = [-2.0] * batch_size
+    data.non_tensor_batch[PILOT_VERL_REWARD_BRIDGE_SCHEMA_FIELD] = [
+        STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION
+    ] * batch_size
+    data.non_tensor_batch[PILOT_VERL_REWARD_COMPONENTS_FIELD] = components
+    data.non_tensor_batch[PILOT_EXACT_REWARD_FIELD] = rewards
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_FIELD] = ["optional"] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_CONFIDENCE_FIELD] = [0.5] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_TOOL_LABEL_ROW_SHA256_FIELD] = [
+        "b" * 64
+    ] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_TOOL_SIDECAR_SHA256_FIELD] = [
+        "c" * 64
+    ] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_APPLICABLE_FIELD] = [False] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_COVERED_FIELD] = [False] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_QUALITY_FAILURE_FIELD] = [None] * batch_size
+    data.non_tensor_batch[STAGE3_VERL_VISUAL_JUDGE_USAGE_FIELD] = [None] * batch_size
+    data.batch["rm_scores"].zero_()
+    data.batch["rm_scores"][:, -1] = torch.tensor(rewards)
+
+    with pytest.raises(ValueError, match="invalid values"):
+        validate_policy_pilot_reward_data_proto(data)
+    view = validate_policy_pilot_reward_data_proto(
+        data, expected_stage3_protocol_error_penalty=2.0
+    )
+    assert view.rewards == tuple(rewards)
+
+
 def test_stage3_tfree_reward_crosses_dataproto_without_utility_identity() -> None:
     data = _real_data_proto()
     batch_size = data.batch["rm_scores"].shape[0]

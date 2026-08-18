@@ -262,6 +262,7 @@ def validate_policy_pilot_reward_data_proto(
     data: object,
     *,
     expected_group_size: int = POLICY_PILOT_V1_TRAJECTORIES_PER_PROMPT,
+    expected_stage3_protocol_error_penalty: float = 1.0,
 ) -> VerlPilotRewardBatchView:
     """Prove upstream used exact rewards and retained every configured group."""
 
@@ -273,6 +274,13 @@ def validate_policy_pilot_reward_data_proto(
             "unsupported reward group size; accepted="
             f"{POLICY_SUPPORTED_TRAJECTORIES_PER_PROMPT!r}"
         )
+    if (
+        isinstance(expected_stage3_protocol_error_penalty, bool)
+        or not isinstance(expected_stage3_protocol_error_penalty, (int, float))
+        or not math.isfinite(float(expected_stage3_protocol_error_penalty))
+        or float(expected_stage3_protocol_error_penalty) <= 0.0
+    ):
+        raise ValueError("Stage3 protocol error penalty must be finite and positive")
 
     batch, non_tensors = _data_parts(data)
     required_tensors = {
@@ -448,6 +456,9 @@ def validate_policy_pilot_reward_data_proto(
                 fields["data_source"][row_index]
                 if bridge_schema == PILOT_VERL_REWARD_BRIDGE_SCHEMA_VERSION
                 else None
+            ),
+            expected_stage3_protocol_error_penalty=float(
+                expected_stage3_protocol_error_penalty
             ),
         )
         if stage3_fields:
@@ -658,13 +669,18 @@ def _validate_component_sidecar(
     equation_route: object = None,
     applied_weights: object = None,
     data_source: object = None,
+    expected_stage3_protocol_error_penalty: float = 1.0,
 ) -> None:
     try:
         components = tuple(value)  # type: ignore[arg-type]
     except TypeError as error:
         raise TypeError("reward component sidecar must be iterable") from error
     if bridge_schema == STAGE3_VERL_REWARD_BRIDGE_SCHEMA_VERSION:
-        _validate_stage3_component_sidecar(components, expected_total=expected_total)
+        _validate_stage3_component_sidecar(
+            components,
+            expected_total=expected_total,
+            expected_protocol_error_penalty=expected_stage3_protocol_error_penalty,
+        )
         return
     names = ("answer_reward", "format_reward", "conditional_tool_reward")
     if len(components) != 3 or tuple(item[0] for item in components) != names:
@@ -705,7 +721,10 @@ def _validate_component_sidecar(
 
 
 def _validate_stage3_component_sidecar(
-    components: tuple[object, ...], *, expected_total: float
+    components: tuple[object, ...],
+    *,
+    expected_total: float,
+    expected_protocol_error_penalty: float,
 ) -> None:
     names = ("answer", "tool", "focus", "grounding", "protocol")
     try:
@@ -722,7 +741,7 @@ def _validate_stage3_component_sidecar(
         answer not in {0.0, 2.0}
         or focus not in {0.0, 0.5, 1.0}
         or grounding not in {-1.0, 0.0, 0.5, 1.0}
-        or protocol not in {-1.0, 0.0}
+        or protocol not in {-expected_protocol_error_penalty, 0.0}
     ):
         raise ValueError("Stage3 reward component sidecar has invalid values")
     if not math.isclose(
