@@ -74,6 +74,7 @@ def _extension(config: MagicMock, tmp_path: Path, **changes) -> PolicyHorizonExt
         "target_optimizer_step": 80,
         "scheduler_total_steps": 80,
         "effective_checkpoint_steps": (0, 1, 5, 10, 20, 30, 40, 60, 80),
+        "permanent_checkpoint_steps": (20, 40, 80),
         "metrics_prefix_sha256": SHA,
         "checkpoint_pair_file_sha256": SHA,
         "project_state_file_sha256": SHA,
@@ -112,6 +113,7 @@ def test_manifest_integrity_is_checked_before_artifacts(tmp_path: Path) -> None:
         "target_optimizer_step": 80,
         "scheduler_total_steps": 80,
         "effective_checkpoint_steps": [0, 1, 5, 10, 20, 30, 40, 60, 80],
+        "permanent_checkpoint_steps": [20, 40, 80],
         "metrics_prefix_sha256": SHA,
         "checkpoint_pair_file_sha256": SHA,
         "project_state_file_sha256": SHA,
@@ -129,6 +131,37 @@ def test_manifest_integrity_is_checked_before_artifacts(tmp_path: Path) -> None:
     _write_json(path, broken)
     with pytest.raises(ValueError, match="integrity differs"):
         load_policy_horizon_extension(path, config, validate_artifacts=False)
+
+
+def test_legacy_manifest_defaults_permanent_checkpoints_to_source_and_target(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    payload = {
+        "schema_version": POLICY_HORIZON_EXTENSION_SCHEMA,
+        "extension_id": "step20-to80-legacy",
+        "run_id": config.run_id,
+        "base_config_path": str(config.source_path),
+        "base_config_source_sha256": config.source_sha256,
+        "base_run_identity_sha256": config.identity_sha256,
+        "output_root": str(config.output.root),
+        "source_optimizer_step": 20,
+        "target_optimizer_step": 80,
+        "scheduler_total_steps": 80,
+        "effective_checkpoint_steps": [0, 1, 5, 10, 20, 30, 40, 60, 80],
+        "metrics_prefix_sha256": SHA,
+        "checkpoint_pair_file_sha256": SHA,
+        "project_state_file_sha256": SHA,
+        "latest_lora_pointer_file_sha256": SHA,
+        "source_weights_sha256": SHA,
+        "code_commit": COMMIT,
+    }
+    path = tmp_path / "legacy-extension.json"
+    _write_json(path, _integrity(payload))
+
+    loaded = load_policy_horizon_extension(path, config, validate_artifacts=False)
+
+    assert loaded.permanent_checkpoint_steps == (20, 80)
 
 
 @pytest.mark.parametrize("current_step", [20, 21, 80])

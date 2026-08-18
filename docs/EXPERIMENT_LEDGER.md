@@ -10176,3 +10176,24 @@ than inferred from a script name or prior conversation.
   a same-commit causal batch control. PRL24-A may run first as authorized; a
   same-implementation BS16 A0 is required before claiming a strict BS64 batch
   effect.
+## 2026-08-18 — PRL24 FMT2 overnight continuation and Joint BS64 handoff
+
+- The accepted `PRL-24-A-FMT2` Frozen-RP67 Teacher25 BS64 run is continued
+  in place from optimizer Step 8 to Step 16 with its constant `1e-6`
+  scheduler and all scientific settings unchanged.
+- The horizon extension permanently retains Steps 8, 12 and 16.  Step 12 and
+  Step 16 are evaluated together under the existing CoreDev-2511
+  `paired-seed-v1` contract after training releases all eight GPUs.
+- The horizon-extension contract now supports an explicit ordered list of
+  permanent checkpoints while remaining backward compatible with historical
+  manifests, which default to source and target only.
+- After the Step-12/16 evaluation completes, the supervisor hands all eight
+  GPUs to `PRL-24-B-FMT2-JOINT`, whose only scientific change from the Frozen
+  FMT2 arm is `representation.adapter_update_mode = "joint"`.  It retains
+  BS64, n16, Teacher25, RP67 initialization, full-Qwen policy training,
+  protocol penalty 2.0, LR and RNG controls.
+- Before the unattended handoff, a separate four-GPU BS4/n2 functional canary
+  must show a successful optimizer step and a changed RP67 Adapter digest.
+- Training supervisors retry operational interruptions and transient judge
+  failures, but preserve fail-closed behavior for deterministic code,
+  identity, non-finite and OOM failures.

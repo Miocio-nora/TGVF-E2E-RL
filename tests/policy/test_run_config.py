@@ -776,6 +776,7 @@ def test_horizon_extension_plan_changes_only_stopping_and_checkpoint_boundaries(
         target_optimizer_step=4,
         scheduler_total_steps=4,
         effective_checkpoint_steps=(0, 1, 2, 3, 4),
+        permanent_checkpoint_steps=(2, 3, 4),
         metrics_prefix_sha256="e" * 64,
         checkpoint_pair_file_sha256="f" * 64,
         project_state_file_sha256="1" * 64,

@@ -85,6 +85,17 @@ def _checkpoint_steps(value: object) -> tuple[int, ...]:
     return steps
 
 
+def _permanent_checkpoint_steps(value: object) -> tuple[int, ...]:
+    if not isinstance(value, list) or any(type(item) is not int for item in value):
+        raise ValueError("permanent_checkpoint_steps must be an integer list")
+    steps = tuple(value)
+    if not steps or any(step <= 0 for step in steps):
+        raise ValueError("permanent_checkpoint_steps must be positive")
+    if tuple(sorted(set(steps))) != steps:
+        raise ValueError("permanent_checkpoint_steps must increase strictly")
+    return steps
+
+
 def _read_json(path: Path, *, owner: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -120,6 +131,7 @@ class PolicyHorizonExtension:
     target_optimizer_step: int
     scheduler_total_steps: int
     effective_checkpoint_steps: tuple[int, ...]
+    permanent_checkpoint_steps: tuple[int, ...]
     metrics_prefix_sha256: str
     checkpoint_pair_file_sha256: str
     project_state_file_sha256: str
@@ -174,6 +186,12 @@ class PolicyHorizonExtension:
         added = self.effective_checkpoint_steps[len(base_steps) :]
         if not added or any(step <= self.source_optimizer_step for step in added):
             raise ValueError("horizon extension adds a checkpoint at/before its source")
+        if self.permanent_checkpoint_steps[0] != self.source_optimizer_step:
+            raise ValueError("horizon extension permanent checkpoints must keep its source")
+        if self.permanent_checkpoint_steps[-1] != self.target_optimizer_step:
+            raise ValueError("horizon extension permanent checkpoints must keep its target")
+        if any(step not in self.effective_checkpoint_steps for step in self.permanent_checkpoint_steps):
+            raise ValueError("horizon extension permanent checkpoint is not scheduled")
 
     @property
     def environment(self) -> dict[str, str]:
@@ -208,6 +226,7 @@ def load_policy_horizon_extension(
         "target_optimizer_step",
         "scheduler_total_steps",
         "effective_checkpoint_steps",
+        "permanent_checkpoint_steps",
         "metrics_prefix_sha256",
         "checkpoint_pair_file_sha256",
         "project_state_file_sha256",
@@ -216,10 +235,11 @@ def load_policy_horizon_extension(
         "code_commit",
         "integrity_sha256",
     }
-    if set(payload) != allowed:
+    legacy_allowed = allowed.difference({"permanent_checkpoint_steps"})
+    if set(payload) not in {frozenset(allowed), frozenset(legacy_allowed)}:
         raise ValueError(
             "Policy horizon extension fields differ: "
-            f"missing={sorted(allowed.difference(payload))}, "
+            f"missing={sorted(legacy_allowed.difference(payload))}, "
             f"extra={sorted(set(payload).difference(allowed))}"
         )
     extension_id = payload["extension_id"]
@@ -252,6 +272,12 @@ def load_policy_horizon_extension(
         ),
         effective_checkpoint_steps=_checkpoint_steps(
             payload["effective_checkpoint_steps"]
+        ),
+        permanent_checkpoint_steps=_permanent_checkpoint_steps(
+            payload.get(
+                "permanent_checkpoint_steps",
+                [payload["source_optimizer_step"], payload["target_optimizer_step"]],
+            )
         ),
         metrics_prefix_sha256=_sha256(
             payload["metrics_prefix_sha256"], name="metrics prefix"

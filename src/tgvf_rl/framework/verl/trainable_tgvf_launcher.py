@@ -623,10 +623,7 @@ def _permanent_checkpoint_steps(
     if mode != "formal":
         return []
     if horizon_extension is not None:
-        return [
-            horizon_extension.source_optimizer_step,
-            horizon_extension.target_optimizer_step,
-        ]
+        return list(horizon_extension.permanent_checkpoint_steps)
     configured = list(config.training.permanent_checkpoint_steps)
     if configured:
         return [step for step in configured if step <= target_step]

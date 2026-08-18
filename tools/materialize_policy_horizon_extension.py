@@ -82,6 +82,7 @@ def materialize(
     output_path: Path,
     extension_id: str,
     target_step: int,
+    permanent_checkpoint_steps: tuple[int, ...] | None,
     repository: Path,
 ) -> dict[str, object]:
     run_config_path = run_config_path.resolve()
@@ -136,6 +137,14 @@ def materialize(
 
     base_steps = tuple(config.training.checkpoint_steps)
     effective_steps = (*base_steps, *range(source_step + 1, target_step + 1))
+    permanent_steps = permanent_checkpoint_steps or (source_step, target_step)
+    if permanent_steps[0] != source_step or permanent_steps[-1] != target_step:
+        raise ValueError("permanent checkpoints must start at source and end at target")
+    if tuple(sorted(set(permanent_steps))) != permanent_steps:
+        raise ValueError("permanent checkpoints must increase strictly")
+    if any(step < source_step or step > target_step for step in permanent_steps):
+        raise ValueError("permanent checkpoint is outside the continuation interval")
+
     content: dict[str, object] = {
         "schema_version": "policy-horizon-extension-v1",
         "extension_id": extension_id,
@@ -148,6 +157,7 @@ def materialize(
         "target_optimizer_step": target_step,
         "scheduler_total_steps": config.scheduler.total_steps,
         "effective_checkpoint_steps": list(effective_steps),
+        "permanent_checkpoint_steps": list(permanent_steps),
         "metrics_prefix_sha256": _metrics_prefix_sha256(
             config.output.metrics_path, source_step=source_step
         ),
@@ -175,6 +185,13 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--extension-id", required=True)
     parser.add_argument("--target-step", type=int, required=True)
+    parser.add_argument(
+        "--permanent-step",
+        type=int,
+        action="append",
+        dest="permanent_steps",
+        help="Permanent checkpoint boundary; repeat in increasing order",
+    )
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     args = parser.parse_args()
     result = materialize(
@@ -182,6 +199,9 @@ def main() -> int:
         output_path=args.output,
         extension_id=args.extension_id,
         target_step=args.target_step,
+        permanent_checkpoint_steps=(
+            tuple(args.permanent_steps) if args.permanent_steps else None
+        ),
         repository=args.repository,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
