@@ -7,6 +7,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "configs/policy/runs"
+JOINT_SUPERVISOR = ROOT / "tools/supervise_prl24_b_fmt2_joint_bs64_8step.sh"
 
 
 def _load(name: str) -> dict[str, object]:
@@ -55,3 +56,16 @@ def test_prl24_b_joint_canary_is_small_and_uses_fmt2() -> None:
     assert canary["distributed"]["world_size"] == 4
     assert canary["training"]["logger"] == ["console"]
 
+
+def test_prl24_b_joint_supervisor_checks_canary_mode_artifacts() -> None:
+    script = JOINT_SUPERVISOR.read_text(encoding="utf-8")
+
+    assert 'canary_mode_root="$canary_root/canary"' in script
+    assert (
+        'local pointer="$canary_mode_root/runtime-policy-state/'
+        'latest-lora-snapshot.json"' in script
+    )
+    assert (
+        'local tracker="$canary_mode_root/checkpoints/'
+        'latest_checkpointed_iteration.txt"' in script
+    )

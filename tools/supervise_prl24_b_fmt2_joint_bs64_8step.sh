@@ -7,6 +7,7 @@ config="$repo_root/configs/policy/runs/prl_24_b_fmt2_joint_qwen3_instruct_full_r
 canary_config="$repo_root/configs/policy/runs/prl_24_b_fmt2_joint_c0_qwen3_instruct_full_rp67_bs4_n2_tfree_teacher25_1step_ws4.toml"
 training_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-24-B-FMT2-JOINT-qwen3-instruct-full-joint-rp67-bs64-n16-tfree-teacher25-8step-ws8
 canary_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-24-B-FMT2-JOINT-C0-qwen3-instruct-full-joint-rp67-bs4-n2-tfree-teacher25-1step-ws4
+canary_mode_root="$canary_root/canary"
 control_root="$training_root/runtime/supervisor"
 log_root="$training_root/logs"
 initial_adapter_sha256=3f60f36589a3c0f3549c12b949eaabb140f6edfac849aa2b25a623bbcde53a14
@@ -58,8 +59,8 @@ PY
 }
 
 canary_is_complete() {
-  local pointer="$canary_root/runtime-policy-state/latest-lora-snapshot.json"
-  local tracker="$canary_root/checkpoints/latest_checkpointed_iteration.txt"
+  local pointer="$canary_mode_root/runtime-policy-state/latest-lora-snapshot.json"
+  local tracker="$canary_mode_root/checkpoints/latest_checkpointed_iteration.txt"
   [[ -s "$pointer" && -s "$tracker" ]] || return 1
   "$python_bin" - "$pointer" "$tracker" "$initial_adapter_sha256" <<'PY'
 import json
@@ -129,4 +130,3 @@ if ! checkpoint_is_complete "$training_root" 8; then
   exit 1
 fi
 touch "$control_root/step8-accepted"
-

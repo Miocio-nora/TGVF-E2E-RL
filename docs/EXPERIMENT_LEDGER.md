@@ -10197,3 +10197,11 @@ than inferred from a script name or prior conversation.
 - Training supervisors retry operational interruptions and transient judge
   failures, but preserve fail-closed behavior for deterministic code,
   identity, non-finite and OOM failures.
+- The Step-12/16 evaluation closed successfully on 2026-08-19.  Its first
+  Joint handoff exposed an orchestration-only path error: the completed
+  canary artifacts live below the launcher's `canary/` mode directory, while
+  the supervisor initially inspected the experiment root.  The supervisor
+  now verifies the actual mode directory before deciding whether to launch or
+  accept the canary.  No scientific config, checkpoint or training state was
+  changed, and recovery begins at the pending Joint handoff rather than
+  repeating Frozen training or evaluation.
