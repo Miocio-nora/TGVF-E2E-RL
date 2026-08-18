@@ -4,7 +4,7 @@ run_id = "PRL-24-A-FMT2-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS64-N16-TFREE-TEACHER25
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "6b9818dc86d90997512ed428a5d0ceb905175cc1"
+commit = "4bc5bd9223e092c4a3fbfbfbc1a6af437b72e4c4"
 dirty = false
 
 [model]
