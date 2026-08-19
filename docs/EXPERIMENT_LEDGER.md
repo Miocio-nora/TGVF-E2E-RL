@@ -10212,3 +10212,21 @@ than inferred from a script name or prior conversation.
   seven-suite order and pinned Qwen2.5-72B judge as the accepted Frozen
   Step-8 evaluation.  This closes the missing benchmark comparison without
   rerunning or relabeling the Frozen arm.
+
+## 2026-08-19 — PRL24-C Focus/Grounding BS64 control
+
+- `PRL-24-C-FMT2-FG` is the single-variable visual-reward treatment for the
+  accepted PRL24-A FMT2 control. It keeps RP67 frozen, T-free reward,
+  Teacher25, BS64, n16, world8, full-Qwen update, temperature 1, constant
+  `1e-6` learning rate, prompt/tool protocol and protocol-error penalty 2.0.
+- The only scientific treatment is enabling Focus/Target and Grounding
+  reward through the pinned OpenRouter `Qwen3-VL-32B-Instruct` visual judge.
+  The established bounded API retry and sample-local fallback behavior is
+  retained; one transient sample failure does not invalidate the batch.
+- Training runs from Step 0 to Step 8, permanently retains Steps 4 and 8,
+  then automatically evaluates both checkpoints in parallel on the pinned
+  temperature-1 CoreDev-2511 seven-suite protocol and common RP67 T-free RNG
+  namespace. Formal W&B identity is `prl24cfmt2fgt25bs64s8`.
+- Implementation/config/evaluation preparation is locked at commit
+  `9db4d3a631e56bbaac0d15c1f3338487ac92d3cb`; this ledger-bound descendant
+  only rebinds that immutable code identity and its derived config digest.
