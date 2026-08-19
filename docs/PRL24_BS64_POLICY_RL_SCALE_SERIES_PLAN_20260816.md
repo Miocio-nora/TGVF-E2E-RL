@@ -477,3 +477,6 @@ PRL24 完成后必须形成：
 本文件是预注册计划，不表示 PRL24 配置、代码、smoke 或正式训练已经完成。任何正式
 启动都应在独立实验身份下记录实际 commit、配置、数据 schedule、训练 receipt、checkpoint
 和 evaluation receipt；不得在运行中无记录地改变 LR、reward、batch、prompt 或工具协议。
+
+当前 A/B/C 阶段性实测结果见
+[PRL24 A/B/C 阶段性结果](PRL24_ABC_INTERIM_RESULTS_20260819.md)。
