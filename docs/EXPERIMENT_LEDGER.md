@@ -10205,3 +10205,10 @@ than inferred from a script name or prior conversation.
   accept the canary.  No scientific config, checkpoint or training state was
   changed, and recovery begins at the pending Joint handoff rather than
   repeating Frozen training or evaluation.
+- `PRL-24-B-FMT2-JOINT` completed all eight optimizer steps and published a
+  changed RP67 Adapter at every step.  Its Step-8 external evaluation is a
+  separate single-arm CoreDev-2511 run, bound to the same canonical
+  temperature-1 paired RNG namespace, task manifest, prompt/tool protocol,
+  seven-suite order and pinned Qwen2.5-72B judge as the accepted Frozen
+  Step-8 evaluation.  This closes the missing benchmark comparison without
+  rerunning or relabeling the Frozen arm.

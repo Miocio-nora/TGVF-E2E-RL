@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 from pathlib import Path
 import tomllib
 
@@ -8,6 +10,14 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "configs/policy/runs"
 JOINT_SUPERVISOR = ROOT / "tools/supervise_prl24_b_fmt2_joint_bs64_8step.sh"
+JOINT_EVAL_PLAN = (
+    ROOT
+    / "configs/evaluation/prl24_b_fmt2_joint_rp67_tfree_teacher25_bs64_step8_paired_seed_coredev2511_plan.json"
+)
+FROZEN_EVAL_PLAN = (
+    ROOT
+    / "configs/evaluation/prl24_a_fmt2_frozen_rp67_tfree_teacher25_bs64_step4_step8_paired_seed_coredev2511_plan.json"
+)
 
 
 def _load(name: str) -> dict[str, object]:
@@ -69,3 +79,32 @@ def test_prl24_b_joint_supervisor_checks_canary_mode_artifacts() -> None:
         'local tracker="$canary_mode_root/checkpoints/'
         'latest_checkpointed_iteration.txt"' in script
     )
+
+
+def test_prl24_b_joint_step8_eval_is_paired_with_frozen_step8() -> None:
+    joint = json.loads(JOINT_EVAL_PLAN.read_text(encoding="utf-8"))
+    frozen = json.loads(FROZEN_EVAL_PLAN.read_text(encoding="utf-8"))
+    policy_config = ROOT / joint["policy_config"]
+
+    assert hashlib.sha256(policy_config.read_bytes()).hexdigest() == joint[
+        "policy_config_sha256"
+    ]
+    assert joint["arms"] == [
+        {
+            "name": "step8",
+            "optimizer_step": 8,
+            "qwen_source": "output.root/permanent-checkpoints/global_step_8",
+            "rp66_source": (
+                "output.root/runtime-policy-state/lora-manifests/"
+                "step-00000008-*.json"
+            ),
+        }
+    ]
+    assert joint["required_pairing"]["adapter_update_mode"] == "joint"
+    assert joint["required_pairing"]["rp66_state_must_remain_constant"] is False
+    assert joint["protocol"] == frozen["protocol"]
+    assert joint["paired_rng"] == frozen["paired_rng"]
+    assert joint["scoring"]["datasets"] == frozen["scoring"]["datasets"]
+    assert joint["scoring"]["judge_config_sha256"] == frozen["scoring"][
+        "judge_config_sha256"
+    ]
