@@ -433,6 +433,11 @@ class CropVisualState:
     positions: tuple[int, ...]
     deepstack_branch_layers: tuple[int, ...]
     deepstack_injection_positions: tuple[tuple[int, ...], ...]
+    # Legacy Crop records predate full-Qwen differentiable replay and retain
+    # ``None`` here.  Aligned full-model Crop runs must record the exact Qwen
+    # processor output so the current actor can rebuild the live vision graph
+    # without reprocessing or trusting rollout-time merged features.
+    preprocessed_pixel_values: TensorArtifactRef | None = None
 
     def __post_init__(self) -> None:
         if self.crop_pixels.descriptor.dtype != "uint8" or (
@@ -462,6 +467,24 @@ class CropVisualState:
             raise ValueError("crop merged features and positions differ")
         if len(set(self.positions)) != len(self.positions):
             raise ValueError("crop positions must be unique")
+        if self.preprocessed_pixel_values is not None:
+            pixels = self.preprocessed_pixel_values.descriptor
+            if (
+                len(pixels.shape) != 2
+                or pixels.shape[0] <= 0
+                or pixels.shape[1] <= 0
+            ):
+                raise ValueError(
+                    "crop preprocessed pixel_values must have shape [N, patch_dim]"
+                )
+            if not _is_floating_dtype(pixels.dtype):
+                raise TypeError(
+                    "crop preprocessed pixel_values must use a floating dtype"
+                )
+            if pixels.shape[0] != _grid_token_count(self.image_grid_thw):
+                raise ValueError(
+                    "crop preprocessed pixel_values rows differ from image_grid_thw"
+                )
         for index, (ref, positions) in enumerate(
             zip(
                 self.merged_deepstack,

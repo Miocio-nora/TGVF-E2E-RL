@@ -1,0 +1,9 @@
+- name: prl25_crop_exact_deepeyes_matched_visual
+  _target_: tgvf_rl.framework.verl.native_agent_loop.VerlFrameworkNeutralAgentLoop
+  invocation_factory:
+    _target_: tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory
+    _partial_: true
+    run_config_path: ${oc.env:TGVF_POLICY_RUN_CONFIG_PATH}
+    expected_run_identity_sha256: ${oc.env:TGVF_POLICY_RUN_IDENTITY_SHA256}
+  logprobs_mode: processed_logprobs
+  server_timeout_seconds: ${oc.decode:${oc.env:TGVF_POLICY_SERVER_TIMEOUT_SECONDS}}

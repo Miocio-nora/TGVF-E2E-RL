@@ -79,6 +79,13 @@ POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS = (
     "tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset."
     "PolicyTeacherQuarterMixDataset"
 )
+POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS = (
+    "tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset."
+    "AlignedCropPolicyTeacherQuarterMixDataset"
+)
+POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME = (
+    "prl25_crop_exact_deepeyes_matched_visual"
+)
 POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH = (
     "pkg://tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset"
 )
@@ -373,8 +380,14 @@ class PolicyTeacherQuarterMixDataset(TGVFDeepEyesOfficialDataset):
             prompt_bundle_sha256 = prompt_identity.bundle_sha256
             need_tools_kwargs = True
 
-        if self.binding.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
+        aligned_crop = isinstance(self, AlignedCropPolicyTeacherQuarterMixDataset)
+        if (
+            self.binding.tool_profile is NativeToolCapabilityProfile.CROP_ONLY
+            and not aligned_crop
+        ):
             agent_name = agent_name_for_source(sample.data_source)
+        elif aligned_crop:
+            agent_name = POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME
         else:
             agent_name = str(matched_agent)
         extra_info = {
@@ -433,7 +446,10 @@ class PolicyTeacherQuarterMixDataset(TGVFDeepEyesOfficialDataset):
             "index": index,
             "dummy_tensor": torch.tensor([0], dtype=torch.uint8),
         }
-        if self.binding.tool_profile is not NativeToolCapabilityProfile.CROP_ONLY:
+        if (
+            self.binding.tool_profile is not NativeToolCapabilityProfile.CROP_ONLY
+            or aligned_crop
+        ):
             rendered_text, canonical_token_ids = _render_native_instruct_prompt(
                 processor=self.processor,
                 raw_prompt=raw_prompt,
@@ -463,8 +479,20 @@ class PolicyTeacherQuarterMixDataset(TGVFDeepEyesOfficialDataset):
         return result
 
 
+class AlignedCropPolicyTeacherQuarterMixDataset(PolicyTeacherQuarterMixDataset):
+    """Teacher25 Crop rows routed through project-native exact replay."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        if self.binding.tool_profile is not NativeToolCapabilityProfile.CROP_ONLY:
+            raise ValueError("aligned Crop Teacher25 requires the crop_only profile")
+
+
 __all__ = [
+    "AlignedCropPolicyTeacherQuarterMixDataset",
     "POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME",
+    "POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME",
+    "POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS",
     "POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS",
     "POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH",
     "POLICY_TEACHER_QUARTER_MIX_VERL_DATASET_SCHEMA",

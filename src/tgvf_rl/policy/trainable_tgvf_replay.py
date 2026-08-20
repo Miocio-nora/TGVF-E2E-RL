@@ -27,6 +27,7 @@ from tgvf_rl.contracts.tokens import (
     TokenOwnership,
 )
 from tgvf_rl.observations.schema import (
+    CropObservationRecord,
     CropTGVFObservationRecord,
     FocusedObservationRecord,
 )
@@ -467,7 +468,10 @@ def build_trainable_tgvf_current_request(
 def build_live_qwen3_vision_replay_plan(
     *,
     replay: TrajectoryReplayRecord,
-    observations: tuple[CropTGVFObservationRecord | FocusedObservationRecord, ...],
+    observations: tuple[
+        CropObservationRecord | CropTGVFObservationRecord | FocusedObservationRecord,
+        ...,
+    ],
     recorded_blocks: tuple[RecordedVisualBlock, ...],
 ) -> LiveQwen3VisionReplayPlan:
     """Build a trajectory-local, identity-preserving source/crop replay plan."""
@@ -498,25 +502,47 @@ def build_live_qwen3_vision_replay_plan(
         zip(observations, recorded_blocks[1:], strict=True)
     ):
         if not isinstance(
-            record, (CropTGVFObservationRecord, FocusedObservationRecord)
+            record,
+            (
+                CropObservationRecord,
+                CropTGVFObservationRecord,
+                FocusedObservationRecord,
+            ),
         ):
             raise ValueError(
-                "trainable RP66 replay accepts TGVF or atomic Crop+TGVF "
-                "observations only"
+                "live Qwen vision replay accepts Crop, TGVF, or atomic "
+                "Crop+TGVF observations only"
             )
         if block.call_index != record.call_index:
-            raise ReplayMismatchError("TGVF observation and replay call index differ")
-        if isinstance(record, CropTGVFObservationRecord):
-            if block.kind != "crop_focused_d":
+            raise ReplayMismatchError(
+                "visual observation and replay call index differ"
+            )
+        if isinstance(record, (CropObservationRecord, CropTGVFObservationRecord)):
+            expected_kind = (
+                "crop_image"
+                if isinstance(record, CropObservationRecord)
+                else "crop_focused_d"
+            )
+            if block.kind != expected_kind:
                 raise ReplayMismatchError(
-                    "atomic Crop+TGVF observation and replay block differ"
+                    "crop observation and replay block differ"
                 )
+            pixel_ref = record.crop_visual.preprocessed_pixel_values
+            if pixel_ref is None:
+                raise ReplayMismatchError(
+                    "differentiable Crop replay requires recorded crop pixel_values"
+                )
+            image_grid_thw = (
+                record.crop_visual.image_grid_thw
+                if isinstance(record, CropObservationRecord)
+                else record.crop_visual.source.image_grid_thw
+            )
             placements.append(len(images))
             images.append(
                 LiveQwen3VisionImageSpec(
                     kind="crop_image",
-                    pixel_values=record.crop_visual.preprocessed_pixel_values,
-                    image_grid_thw=record.crop_visual.source.image_grid_thw,
+                    pixel_values=pixel_ref,
+                    image_grid_thw=image_grid_thw,
                     observation_index=observation_index,
                     call_index=record.call_index,
                 )

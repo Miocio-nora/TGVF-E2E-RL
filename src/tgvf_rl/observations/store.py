@@ -567,7 +567,15 @@ class ObservationStore:
                 "one trajectory cannot mix plain Crop and atomic Crop+TGVF"
             )
         expected_crop_mode = (
-            "shared_frozen_recorded_features"
+            (
+                "current_live_reference_recorded_features"
+                if all(
+                    not isinstance(record, CropObservationRecord)
+                    or record.crop_visual.preprocessed_pixel_values is not None
+                    for record in observations
+                )
+                else "shared_frozen_recorded_features"
+            )
             if has_plain_crop
             else "current_live_reference_recorded_features"
             if has_crop_tgvf

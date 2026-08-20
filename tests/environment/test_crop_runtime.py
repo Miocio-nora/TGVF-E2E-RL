@@ -55,6 +55,7 @@ class _Materializer:
             image_grid_thw=(1, 2, 2),
             spatial_merge_size=2,
             deepstack_branch_layers=BRANCH_LAYERS,
+            preprocessed_pixel_values=torch.full((4, 3), 2.0),
         )
 
 
@@ -274,6 +275,13 @@ def test_plain_crop_runtime_materializes_once_then_late_binds_layout() -> None:
     torch.testing.assert_close(
         store.resolve_verified(record.crop_visual.crop_pixels),
         expected_crop,
+        rtol=0,
+        atol=0,
+    )
+    assert record.crop_visual.preprocessed_pixel_values is not None
+    torch.testing.assert_close(
+        store.resolve_verified(record.crop_visual.preprocessed_pixel_values),
+        torch.full((4, 3), 2.0),
         rtol=0,
         atol=0,
     )

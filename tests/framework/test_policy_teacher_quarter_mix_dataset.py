@@ -8,7 +8,9 @@ import pytest
 
 from tgvf_rl.framework.verl import policy_teacher_quarter_mix_dataset as module
 from tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset import (
+    POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME,
     POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
+    AlignedCropPolicyTeacherQuarterMixDataset,
     PolicyTeacherQuarterMixDataset,
     PolicyTeacherQuarterMixDatasetBinding,
 )
@@ -61,22 +63,31 @@ def _binding(
 
 
 @pytest.mark.parametrize(
-    ("profile", "prompt_sha256", "visual_agent"),
+    ("profile", "prompt_sha256", "visual_agent", "dataset_type"),
     (
         (
             NativeToolCapabilityProfile.CROP_ONLY,
             VISUAL_PROMPT_IDENTITY.bundle_sha256,
             DEEPEYES_VISUAL_AGENT_NAME,
+            PolicyTeacherQuarterMixDataset,
+        ),
+        (
+            NativeToolCapabilityProfile.CROP_ONLY,
+            VISUAL_PROMPT_IDENTITY.bundle_sha256,
+            POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME,
+            AlignedCropPolicyTeacherQuarterMixDataset,
         ),
         (
             NativeToolCapabilityProfile.TGVF_ONLY,
             TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
             module.TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+            PolicyTeacherQuarterMixDataset,
         ),
         (
             NativeToolCapabilityProfile.CROP_TGVF,
             CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
             module.CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+            PolicyTeacherQuarterMixDataset,
         ),
     ),
 )
@@ -86,6 +97,7 @@ def test_one_schedule_dispatches_without_changing_rows(
     profile: NativeToolCapabilityProfile,
     prompt_sha256: str,
     visual_agent: str,
+    dataset_type: type[PolicyTeacherQuarterMixDataset],
 ) -> None:
     image_module = __import__("PIL.Image", fromlist=["Image"])
     image_path = tmp_path / "source.png"
@@ -147,7 +159,7 @@ def test_one_schedule_dispatches_without_changing_rows(
         POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME: binding.as_config(),
         "mm_processor_kwargs": {"max_pixels": 512 * 512},
     }
-    dataset = PolicyTeacherQuarterMixDataset(
+    dataset = dataset_type(
         str(binding.samples_path),
         tokenizer=processor.tokenizer,
         processor=processor,
@@ -164,6 +176,7 @@ def test_one_schedule_dispatches_without_changing_rows(
     expected_thinklite_agent = (
         DEEPEYES_THINKLITE_AGENT_NAME
         if profile is NativeToolCapabilityProfile.CROP_ONLY
+        and dataset_type is PolicyTeacherQuarterMixDataset
         else visual_agent
     )
     assert rows[2]["agent_name"] == expected_thinklite_agent
@@ -175,7 +188,10 @@ def test_one_schedule_dispatches_without_changing_rows(
     assert rows[2]["prompt_bundle_sha256"] == (
         THINKLITE_PROMPT_IDENTITY.bundle_sha256
     )
-    if profile is NativeToolCapabilityProfile.CROP_ONLY:
+    if (
+        profile is NativeToolCapabilityProfile.CROP_ONLY
+        and dataset_type is PolicyTeacherQuarterMixDataset
+    ):
         assert "initial_prompt_token_ids" not in rows[0]
     else:
         assert "initial_prompt_token_ids" in rows[0]

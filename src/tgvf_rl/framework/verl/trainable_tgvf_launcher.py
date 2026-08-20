@@ -34,6 +34,7 @@ from tgvf_rl.data.policy_teacher_ratio_mix import (
 )
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
@@ -98,6 +99,8 @@ from .tgvf_deepeyes_matched_dataset import (
     TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
 )
 from .policy_teacher_quarter_mix_dataset import (
+    POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME,
+    POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS,
     POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
     POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
     POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
@@ -117,10 +120,12 @@ from .trainable_tgvf_engine import (
     TRAINABLE_TGVF_MODEL_TYPE,
     preflight_trainable_rp66_artifact,
 )
+from .trainable_crop_engine import TRAINABLE_CROP_MODEL_TYPE
 
 
 TRAINABLE_TGVF_LAUNCH_SCHEMA = "tgvf.trainable-rp66-verl-launch.v1"
 TRAINABLE_TGVF_EXTERNAL_MODULE = "tgvf_rl.framework.verl.trainable_tgvf_external"
+TRAINABLE_CROP_EXTERNAL_MODULE = "tgvf_rl.framework.verl.trainable_crop_external"
 TRAINABLE_TGVF_DATASET_MODULE_PATH = (
     "pkg://tgvf_rl.framework.verl.tgvf_deepeyes_matched_dataset"
 )
@@ -168,6 +173,25 @@ _OPTIONAL_PARENT_LAUNCH_ENV = frozenset(
         POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV,
     }
 )
+
+
+def _is_exact_crop(config: PolicyE2ESmokeRunConfig) -> bool:
+    return (
+        config.schema_version
+        == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+    )
+
+
+def _actor_external_module(config: PolicyE2ESmokeRunConfig) -> str:
+    return TRAINABLE_CROP_EXTERNAL_MODULE if _is_exact_crop(config) else (
+        TRAINABLE_TGVF_EXTERNAL_MODULE
+    )
+
+
+def _actor_model_type(config: PolicyE2ESmokeRunConfig) -> str:
+    return TRAINABLE_CROP_MODEL_TYPE if _is_exact_crop(config) else (
+        TRAINABLE_TGVF_MODEL_TYPE
+    )
 
 
 # World4 keeps Crop-16's global BS16, n16 and fixed actor trajectory micro32.
@@ -437,12 +461,16 @@ def _matched_dataset_binding(
         if crop_tgvf
         else DeepEyesTGVFMatchedDatasetBinding
     )
-    prompt_identity = (
-        CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+    visual_prompt_bundle_sha256 = (
+        config.protocol.prompt_sha256
+        if _is_exact_crop(config)
+        else CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
         if crop_tgvf
-        else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+        else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
     )
     if isinstance(config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding):
+        if _is_exact_crop(config):
+            raise ValueError("matched exact Crop currently requires Teacher25 data")
         runtime_binding = config.dataset.runtime_binding
         return PolicyTeacherRatioMixDatasetBinding(
             root=config.dataset.root,
@@ -454,7 +482,7 @@ def _matched_dataset_binding(
             expected_sample_count=runtime_binding.expected_sample_count,
             teacher_percentage=runtime_binding.teacher_percentage,
             tool_profile=config.protocol.tool_profile,
-            visual_prompt_bundle_sha256=prompt_identity.bundle_sha256,
+            visual_prompt_bundle_sha256=visual_prompt_bundle_sha256,
             thinklite_prompt_bundle_sha256=THINKLITE_PROMPT_IDENTITY.bundle_sha256,
             model_name=config.model.model_name,
             tokenizer_length=config.model.tokenizer_length,
@@ -473,12 +501,14 @@ def _matched_dataset_binding(
             schedule_seed=runtime_binding.schedule_seed,
             expected_sample_count=runtime_binding.expected_sample_count,
             tool_profile=config.protocol.tool_profile,
-            visual_prompt_bundle_sha256=prompt_identity.bundle_sha256,
+            visual_prompt_bundle_sha256=visual_prompt_bundle_sha256,
             thinklite_prompt_bundle_sha256=THINKLITE_PROMPT_IDENTITY.bundle_sha256,
             model_name=config.model.model_name,
             tokenizer_length=config.model.tokenizer_length,
             chat_template_sha256=config.model.chat_template_sha256,
         )
+    if _is_exact_crop(config):
+        raise ValueError("matched exact Crop currently requires Teacher25 data")
     return binding_type(
         root=DEEPEYES_T1_ROOT,
         candidate_sidecar_path=DEEPEYES_CANDIDATE_SIDECAR,
@@ -490,7 +520,7 @@ def _matched_dataset_binding(
         schedule_mode="stratified",
         schedule_seed=DEEPEYES_TRAIN_SEED,
         probe_seed=DEEPEYES_PROBE_SEED,
-        visual_prompt_bundle_sha256=prompt_identity.bundle_sha256,
+        visual_prompt_bundle_sha256=visual_prompt_bundle_sha256,
         thinklite_prompt_bundle_sha256=THINKLITE_PROMPT_IDENTITY.bundle_sha256,
         model_name=config.model.model_name,
         tokenizer_length=config.model.tokenizer_length,
@@ -548,6 +578,15 @@ def _matched_dataset_runtime_identity(
     if isinstance(
         config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
     ):
+        if _is_exact_crop(config):
+            return (
+                POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS,
+                POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS.rsplit(
+                    ".", 1
+                )[-1],
+                POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
+                POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME,
+            )
         visual_agent_name = (
             CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME
             if config.schema_version
@@ -661,11 +700,24 @@ def _replace_custom_record(
         target_step=checkpoint_steps[-1],
         horizon_extension=horizon_extension,
     )
-    custom.update(
-        {
-            "schema_version": TRAINABLE_TGVF_LAUNCH_SCHEMA,
-            "protocol": protocol,
-            "reward": reward,
+    if _is_exact_crop(config):
+        trainable_component = {
+            "trainable_crop": {
+                "external_module": TRAINABLE_CROP_EXTERNAL_MODULE,
+                "model_type": TRAINABLE_CROP_MODEL_TYPE,
+                "checkpoint_manager": "upstream_verl",
+                "policy_lora": False,
+                "vision_trainable": True,
+                "representation_used": False,
+                "actual_behavior_logprobs": True,
+                "current_vision_replay": "live_preprocessed_pixels",
+                "reference_vision_replay": "recorded_features",
+                "sync_every_optimizer_step": True,
+            }
+        }
+        weight_payload = "full_qwen"
+    else:
+        trainable_component = {
             "trainable_tgvf": {
                 "external_module": TRAINABLE_TGVF_EXTERNAL_MODULE,
                 "model_type": TRAINABLE_TGVF_MODEL_TYPE,
@@ -679,11 +731,19 @@ def _replace_custom_record(
                 ),
                 "adapter_trainable": config.representation.adapter_trainable,
                 "sync_every_optimizer_step": True,
-            },
+            }
+        }
+        weight_payload = _adapter_weight_sync_payload(config)
+    custom.update(
+        {
+            "schema_version": TRAINABLE_TGVF_LAUNCH_SCHEMA,
+            "protocol": protocol,
+            "reward": reward,
+            **trainable_component,
             "weight_sync": {
                 "mode": config.distributed.weight_sync_mode,
                 "interval_optimizer_steps": 1,
-                "payload": _adapter_weight_sync_payload(config),
+                "payload": weight_payload,
             },
             "reference_diagnostic": {
                 "enabled": False,
@@ -831,18 +891,10 @@ class TrainableTGVFVerlLaunchPlan:
             "actor_rollout_ref.model.lora.freeze_vision_model": False,
             "actor_rollout_ref.model.lora.freeze_vision_projection": False,
             "actor_rollout_ref.actor.freeze_vision_tower": False,
-            "actor_rollout_ref.model.external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,
-            "actor_rollout_ref.model.model_type": TRAINABLE_TGVF_MODEL_TYPE,
-            "actor_rollout_ref.rollout.checkpoint_manager_class": (
-                TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
+            "actor_rollout_ref.model.external_lib": _actor_external_module(
+                self.config
             ),
-            "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs": {
-                TGVF_CHECKPOINT_ENGINE_CONTROL_KEY: {
-                    "adapter_update_mode": (
-                        self.config.representation.adapter_update_mode.value
-                    )
-                }
-            },
+            "actor_rollout_ref.model.model_type": _actor_model_type(self.config),
             "actor_rollout_ref.rollout.agent.default_agent_loop": (
                 visual_agent_name
             ),
@@ -864,6 +916,26 @@ class TrainableTGVFVerlLaunchPlan:
             ),
             "trainer.total_training_steps": self.target_step,
         }
+        if _is_exact_crop(self.config):
+            if "actor_rollout_ref.rollout.checkpoint_manager_class" in values:
+                raise ValueError("matched exact Crop must retain upstream weight sync")
+            if "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs" in values:
+                raise ValueError("matched exact Crop has no RP66 checkpoint controls")
+        else:
+            required.update(
+                {
+                    "actor_rollout_ref.rollout.checkpoint_manager_class": (
+                        TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
+                    ),
+                    "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs": {
+                        TGVF_CHECKPOINT_ENGINE_CONTROL_KEY: {
+                            "adapter_update_mode": (
+                                self.config.representation.adapter_update_mode.value
+                            )
+                        }
+                    },
+                }
+            )
         for path, expected in required.items():
             if values.get(path) != expected:
                 raise ValueError(f"trainable TGVF override differs at {path}")
@@ -875,24 +947,44 @@ class TrainableTGVFVerlLaunchPlan:
         custom = values.get("actor_rollout_ref.rollout.custom")
         if not isinstance(custom, Mapping):
             raise ValueError("trainable TGVF custom record is missing")
-        expected_trainable_tgvf = {
-            "external_module": TRAINABLE_TGVF_EXTERNAL_MODULE,
-            "model_type": TRAINABLE_TGVF_MODEL_TYPE,
-            "checkpoint_manager_fqn": (TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN),
-            "policy_lora": False,
-            "vision_trainable": True,
-            "adapter_update_mode": (
-                self.config.representation.adapter_update_mode.value
-            ),
-            "adapter_trainable": self.config.representation.adapter_trainable,
-            "sync_every_optimizer_step": True,
-        }
-        if custom.get("trainable_tgvf") != expected_trainable_tgvf:
-            raise ValueError("trainable TGVF adapter identity differs")
+        if _is_exact_crop(self.config):
+            expected_component = {
+                "external_module": TRAINABLE_CROP_EXTERNAL_MODULE,
+                "model_type": TRAINABLE_CROP_MODEL_TYPE,
+                "checkpoint_manager": "upstream_verl",
+                "policy_lora": False,
+                "vision_trainable": True,
+                "representation_used": False,
+                "actual_behavior_logprobs": True,
+                "current_vision_replay": "live_preprocessed_pixels",
+                "reference_vision_replay": "recorded_features",
+                "sync_every_optimizer_step": True,
+            }
+            component_name = "trainable_crop"
+            weight_payload = "full_qwen"
+        else:
+            expected_component = {
+                "external_module": TRAINABLE_TGVF_EXTERNAL_MODULE,
+                "model_type": TRAINABLE_TGVF_MODEL_TYPE,
+                "checkpoint_manager_fqn": (
+                    TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
+                ),
+                "policy_lora": False,
+                "vision_trainable": True,
+                "adapter_update_mode": (
+                    self.config.representation.adapter_update_mode.value
+                ),
+                "adapter_trainable": self.config.representation.adapter_trainable,
+                "sync_every_optimizer_step": True,
+            }
+            component_name = "trainable_tgvf"
+            weight_payload = _adapter_weight_sync_payload(self.config)
+        if custom.get(component_name) != expected_component:
+            raise ValueError("trainable actor identity differs")
         if custom.get("weight_sync") != {
             "mode": self.config.distributed.weight_sync_mode,
             "interval_optimizer_steps": 1,
-            "payload": _adapter_weight_sync_payload(self.config),
+            "payload": weight_payload,
         }:
             raise ValueError("trainable TGVF sync identity differs")
         reward = custom.get("reward")
@@ -1028,8 +1120,8 @@ def build_trainable_tgvf_verl_launch_plan(
             "data.custom_cls.name": dataset_class_name,
             f"data.{dataset_config_name}": _plain_binding(binding),
             "data.seed": dataset_seed,
-            "actor_rollout_ref.model.external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,
-            "actor_rollout_ref.model.model_type": TRAINABLE_TGVF_MODEL_TYPE,
+            "actor_rollout_ref.model.external_lib": _actor_external_module(config),
+            "actor_rollout_ref.model.model_type": _actor_model_type(config),
             "actor_rollout_ref.model.lora_rank": 0,
             "actor_rollout_ref.model.lora.rank": 0,
             "actor_rollout_ref.model.lora.freeze_vision_model": False,
@@ -1060,6 +1152,9 @@ def build_trainable_tgvf_verl_launch_plan(
             "trainer.save_freq": 1,
         }
     )
+    if _is_exact_crop(config):
+        values.pop("actor_rollout_ref.rollout.checkpoint_manager_class", None)
+        values.pop("actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs", None)
     _apply_matched_mathematical_controls(
         values,
         config=config,
@@ -1120,9 +1215,13 @@ def build_trainable_tgvf_verl_launch_plan(
             "control_run": PRL14_CROP16_RUN_NAME,
             "control_completion_sha256": PRL14_CROP16_COMPLETION_SHA256,
             "dataset": dataset_class,
-            "actor_engine": TRAINABLE_TGVF_MODEL_TYPE,
-            "actor_external_lib": TRAINABLE_TGVF_EXTERNAL_MODULE,
-            "checkpoint_engine_manager": (TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN),
+            "actor_engine": _actor_model_type(config),
+            "actor_external_lib": _actor_external_module(config),
+            "checkpoint_engine_manager": (
+                "upstream_verl"
+                if _is_exact_crop(config)
+                else TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
+            ),
         }
     )
     return TrainableTGVFVerlLaunchPlan(
@@ -1236,7 +1335,8 @@ def preflight_trainable_tgvf_verl_runtime(
     configured_path = os.environ.get("TGVF_POLICY_RUN_CONFIG_PATH")
     if configured_path is None or Path(configured_path).resolve() != config.source_path:
         raise RuntimeError("Policy preflight run-config path differs")
-    preflight_trainable_rp66_artifact(config)
+    if not _is_exact_crop(config):
+        preflight_trainable_rp66_artifact(config)
     _verified_schedule_index()
     if (
         config.reward.judge_config_path is None

@@ -91,6 +91,7 @@ from .config import (
     DecoderLoRAConfig,
     PilotGRPOConfig,
     PilotSamplingConfig,
+    PolicyCropExactMatchedExperimentConfig,
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
     PolicyTrainableRP66ExperimentConfig,
@@ -100,6 +101,7 @@ from .config import (
 from .crop_tgvf_deepeyes_matched_protocol import (
     CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
+from .deepeyes_official_protocol import VISUAL_PROMPT_IDENTITY
 from .tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
@@ -130,6 +132,9 @@ POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA = (
     "policy-e2e-crop-tgvf-tfree-deepeyes-matched-run-config-v1"
 )
+POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-crop-tfree-exact-deepeyes-matched-run-config-v1"
+)
 POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
@@ -148,6 +153,7 @@ POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
     {
         *POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     }
 )
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
@@ -323,6 +329,13 @@ POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH = (
     / "policy"
     / "agent_loops"
     / "prl20_crop_tgvf_deepeyes_matched.yaml"
+)
+POLICY_E2E_CROP_EXACT_MATCHED_AGENT_LOOP_CONFIG_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "configs"
+    / "policy"
+    / "agent_loops"
+    / "prl25_crop_exact_deepeyes_matched.yaml"
 )
 POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN = (
     "tgvf_rl.framework.verl.policy_runtime.PolicyE2ERuntimeInvocationFactory"
@@ -606,6 +619,7 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -684,6 +698,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -695,15 +710,18 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     }
     rp66_shaped_run = schema_version in {
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     }
     tfree_reward_run = schema_version in {
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     }
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
@@ -711,6 +729,9 @@ def load_policy_e2e_smoke_run_config(
     rp66_matched_run = schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
     crop_tgvf_matched_run = (
         schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    )
+    crop_exact_matched_run = (
+        schema_version == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
     )
     tgvf_backed_matched_run = (
         schema_version in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
@@ -1187,7 +1208,9 @@ def load_policy_e2e_smoke_run_config(
                 assistant_dialect=assistant_dialect,
             ).bundle_sha256
         }
-        if crop_tgvf_matched_run:
+        if crop_exact_matched_run:
+            accepted_prompt_hashes = {VISUAL_PROMPT_IDENTITY.bundle_sha256}
+        elif crop_tgvf_matched_run:
             accepted_prompt_hashes = {
                 CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
             }
@@ -1495,6 +1518,8 @@ def load_policy_e2e_smoke_run_config(
         expected_shaped_profile = (
             NativeToolCapabilityProfile.CROP_TGVF
             if crop_tgvf_matched_run
+            else NativeToolCapabilityProfile.CROP_ONLY
+            if crop_exact_matched_run
             else NativeToolCapabilityProfile.TGVF_ONLY
         )
         if tool_profile is not expected_shaped_profile:
@@ -1805,6 +1830,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     }
     if lifecycle_control_run:
         distributed_fields.add("actor_optimizer_offload")
@@ -1962,7 +1988,9 @@ def load_policy_e2e_smoke_run_config(
         name="framework.agent_loop_config_path",
     )
     expected_agent_loop_config_path = (
-        POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH
+        POLICY_E2E_CROP_EXACT_MATCHED_AGENT_LOOP_CONFIG_PATH
+        if crop_exact_matched_run
+        else POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH
         if crop_tgvf_matched_run
         else POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH
         if rp66_matched_run
@@ -2122,7 +2150,9 @@ def load_policy_e2e_smoke_run_config(
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
-    if crop_tgvf_matched_run:
+    if crop_exact_matched_run:
+        policy_type = PolicyCropExactMatchedExperimentConfig
+    elif crop_tgvf_matched_run:
         policy_type = PolicyCropTGVFMatchedExperimentConfig
     elif rp66_matched_run:
         policy_type = PolicyTrainableRP66ExperimentConfig
@@ -2287,6 +2317,8 @@ def load_policy_e2e_smoke_run_config(
             (
                 NativeToolCapabilityProfile.CROP_TGVF
                 if crop_tgvf_matched_run
+                else NativeToolCapabilityProfile.CROP_ONLY
+                if crop_exact_matched_run
                 else NativeToolCapabilityProfile.TGVF_ONLY
             ),
             "matched TGVF-backed tool profile",
@@ -2917,6 +2949,8 @@ def _normalize_json(value: object) -> object:
 
 __all__ = [
     "POLICY_E2E_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_CROP_EXACT_MATCHED_AGENT_LOOP_CONFIG_PATH",
+    "POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH",
     "POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",

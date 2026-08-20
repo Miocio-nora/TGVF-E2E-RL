@@ -27,7 +27,9 @@ from tgvf_rl.framework.verl.trainable_tgvf_checkpoint_manager import (
     TGVF_CHECKPOINT_ENGINE_CONTROL_KEY,
 )
 from tgvf_rl.framework.verl.trainable_tgvf_engine import TRAINABLE_TGVF_MODEL_TYPE
+from tgvf_rl.framework.verl.trainable_crop_engine import TRAINABLE_CROP_MODEL_TYPE
 from tgvf_rl.framework.verl.trainable_tgvf_launcher import (
+    TRAINABLE_CROP_EXTERNAL_MODULE,
     TRAINABLE_TGVF_ACTOR_OPTIMIZER_OFFLOAD,
     TRAINABLE_TGVF_EXTERNAL_MODULE,
     TRAINABLE_TGVF_ROLLOUT_CUDAGRAPH_CAPTURE_SIZES,
@@ -86,6 +88,12 @@ _CONFIG_BS64_CANARY = (
     "prl_24_a_c0_qwen3_instruct_full_frozen_rp67_bs4_n2_"
     "tfree_teacher25_1step_ws4.toml"
 )
+_CONFIG_CROP_EXACT_CANARY = (
+    _ROOT
+    / "configs/policy/runs/"
+    "prl_25_b_c0_qwen3_instruct_full_crop_exact_bs4_n2_"
+    "tfree_teacher25_1step_ws4.toml"
+)
 
 
 def _config():
@@ -110,6 +118,10 @@ def _config_bs64():
 
 def _config_bs64_canary():
     return load_policy_e2e_smoke_run_config(_CONFIG_BS64_CANARY)
+
+
+def _config_crop_exact_canary():
+    return load_policy_e2e_smoke_run_config(_CONFIG_CROP_EXACT_CANARY)
 
 
 def _exact_config(tmp_path: Path):
@@ -616,6 +628,45 @@ def test_teacher_mix_canary_uses_its_bound_train_prefix() -> None:
         "failure_boundary": "before_optimizer_mutation",
         "dataset_split": "bound_train_prefix",
     }
+
+
+def test_exact_crop_canary_uses_live_vision_replay_without_rp66_manager() -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(
+        _config_crop_exact_canary(), mode="canary"
+    )
+    values = plan.overrides
+
+    assert values["actor_rollout_ref.model.model_type"] == TRAINABLE_CROP_MODEL_TYPE
+    assert values["actor_rollout_ref.model.external_lib"] == (
+        TRAINABLE_CROP_EXTERNAL_MODULE
+    )
+    assert values["data.custom_cls.name"] == (
+        "AlignedCropPolicyTeacherQuarterMixDataset"
+    )
+    assert "actor_rollout_ref.rollout.checkpoint_manager_class" not in values
+    assert "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs" not in values
+    custom = values["actor_rollout_ref.rollout.custom"]
+    assert "trainable_tgvf" not in custom
+    assert custom["trainable_crop"] == {
+        "external_module": TRAINABLE_CROP_EXTERNAL_MODULE,
+        "model_type": TRAINABLE_CROP_MODEL_TYPE,
+        "checkpoint_manager": "upstream_verl",
+        "policy_lora": False,
+        "vision_trainable": True,
+        "representation_used": False,
+        "actual_behavior_logprobs": True,
+        "current_vision_replay": "live_preprocessed_pixels",
+        "reference_vision_replay": "recorded_features",
+        "sync_every_optimizer_step": True,
+    }
+    assert custom["weight_sync"] == {
+        "mode": "nccl_full_qwen_v1",
+        "interval_optimizer_steps": 1,
+        "payload": "full_qwen",
+    }
+
+    composed = compose_trainable_tgvf_verl_config(plan)
+    assert composed.actor_rollout_ref.model.model_type == TRAINABLE_CROP_MODEL_TYPE
 
 
 def test_composed_formal_lifecycle_is_every_step_and_permanently_keeps_step8() -> None:

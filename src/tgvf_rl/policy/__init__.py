@@ -26,6 +26,7 @@ from .checkpoint import (
     validate_pilot_project_checkpoint_restore,
 )
 from .config import (
+    POLICY_CROP_EXACT_MATCHED_EXPERIMENT_CONFIG_SCHEMA,
     POLICY_CROP_TGVF_MATCHED_EXPERIMENT_CONFIG_SCHEMA,
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_CONFIG_SCHEMA,
@@ -41,6 +42,7 @@ from .config import (
     DecoderLoRAConfig,
     PilotGRPOConfig,
     PilotSamplingConfig,
+    PolicyCropExactMatchedExperimentConfig,
     PolicyPilotV1Config,
     PolicyCropTGVFMatchedExperimentConfig,
     PolicyTGVFStage3ExperimentConfig,
@@ -107,6 +109,7 @@ from .runtime import (
     TrajectoryReplayFinalizerPort,
 )
 from .run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_STAGE3_SHAPED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_SMOKE_CONFIG_SCHEMA,
@@ -136,6 +139,8 @@ from .qwen_replay import (
 
 __all__ = [
     "DATA_CURSOR_OWNER",
+    "POLICY_CROP_EXACT_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
+    "POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA",
     "PILOT_EXACT_GROUP_UID_FIELD",
     "PILOT_EXACT_REWARD_FIELD",
     "PILOT_GROUP_BATCH_SCHEMA_FIELD",
@@ -202,6 +207,7 @@ __all__ = [
     "PolicyBatchReleaseReport",
     "PolicyBatchState",
     "PolicyBatchTransientState",
+    "PolicyCropExactMatchedExperimentConfig",
     "PolicyCropTGVFMatchedExperimentConfig",
     "PolicyExecutionGroupIdentity",
     "PolicyE2ESmokeRunConfig",

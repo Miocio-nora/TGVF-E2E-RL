@@ -1380,6 +1380,7 @@ class _RemoteCropVisualMaterializer:
             image_grid_thw=source.image_grid_thw,
             spatial_merge_size=source.spatial_merge_size,
             deepstack_branch_layers=_BRANCH_LAYERS,
+            preprocessed_pixel_values=pixel_values.detach(),
         )
 
 
@@ -1447,7 +1448,15 @@ class _ExactQwen3RewardedTrajectoryFinalizer(RewardedTrajectoryFinalizerPort):
                 "one trajectory cannot mix plain Crop and atomic Crop+TGVF"
             )
         crop_vision_replay_mode = (
-            "shared_frozen_recorded_features"
+            (
+                "current_live_reference_recorded_features"
+                if all(
+                    not isinstance(record, CropObservationRecord)
+                    or record.crop_visual.preprocessed_pixel_values is not None
+                    for record in records
+                )
+                else "shared_frozen_recorded_features"
+            )
             if has_plain_crop
             else "current_live_reference_recorded_features"
             if has_crop_tgvf
