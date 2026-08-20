@@ -438,6 +438,51 @@ def test_tgvf_checkpoint_resyncs_discarded_weights_instead_of_bare_wake() -> Non
     assert events[4][0] == "metrics"
 
 
+def test_full_qwen_crop_checkpoint_resyncs_without_custom_manager_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+
+    class UpstreamManager:
+        def update_weights(self, step):
+            events.append(("sync", step))
+            return {"synced": step}
+
+        def sleep_replicas(self):
+            events.append("sleep")
+
+        def wake_up_replicas(self):
+            events.append("wake")
+
+    class Trainer:
+        _policy_checkpoint_pending = True
+
+        def _commit_policy_checkpoint_after_weight_sync(self, step):
+            events.append(("checkpoint", step))
+            self._policy_checkpoint_pending = False
+
+        def _complete_policy_metric_publication(self, **timings):
+            events.append(("metrics", timings))
+
+    monkeypatch.setattr(
+        policy_task_runner,
+        "_publish_full_qwen_version_if_required",
+        lambda _trainer, _step: object(),
+    )
+    manager = CheckpointAfterWeightSyncManager(UpstreamManager(), Trainer())
+
+    assert manager.update_weights(1) == {"synced": 1}
+    assert events[:4] == [
+        ("sync", 1),
+        "sleep",
+        ("checkpoint", 1),
+        ("sync", 1),
+    ]
+    assert "wake" not in events
+    assert manager._replicas_sleeping is False
+    assert events[4][0] == "metrics"
+
+
 def test_checkpoint_lifecycle_wraps_upstream_save_in_prepare_finalize_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -600,8 +600,7 @@ def _reference_weights_sha256(config: PolicyE2ESmokeRunConfig) -> str:
 
 def _uses_full_qwen_sync_receipts(config: PolicyE2ESmokeRunConfig) -> bool:
     return (
-        config.schema_version
-        == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+        config.schema_version == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
     )
 
 
@@ -1042,8 +1041,11 @@ class CheckpointAfterWeightSyncManager:
         sync_started = perf_counter()
         result = self.upstream.update_weights(global_steps)
         self._replicas_sleeping = False
+        full_qwen_version = None
         if type(global_steps) is int:
-            _publish_full_qwen_version_if_required(self.trainer, global_steps)
+            full_qwen_version = _publish_full_qwen_version_if_required(
+                self.trainer, global_steps
+            )
         sync_seconds = perf_counter() - sync_started
         checkpoint_seconds = 0.0
         if getattr(self.trainer, "_policy_checkpoint_pending", False):
@@ -1056,17 +1058,23 @@ class CheckpointAfterWeightSyncManager:
                 # itself fails: make the replica callable before propagating.
                 self.wake_up_replicas()
                 raise
-            if bool(
-                getattr(
-                    self.upstream,
-                    "requires_post_checkpoint_weight_resync",
-                    False,
+            requires_post_checkpoint_weight_resync = (
+                bool(
+                    getattr(
+                        self.upstream,
+                        "requires_post_checkpoint_weight_resync",
+                        False,
+                    )
                 )
-            ):
+                or full_qwen_version is not None
+            )
+            if requires_post_checkpoint_weight_resync:
                 # A full-model level-2 sleep discards the just-published Qwen
-                # weights.  Re-run the normal Qwen + RP66 publication instead
-                # of waking an incomplete TGVF runtime.  Calling the upstream
-                # manager directly avoids recursively committing a checkpoint.
+                # weights.  This applies both to TGVF's custom manager and to
+                # exact Crop, whose upstream veRL manager has no project-owned
+                # resync marker.  Re-run the normal publication instead of
+                # waking an incomplete runtime.  Calling the upstream manager
+                # directly avoids recursively committing a checkpoint.
                 try:
                     self.upstream.update_weights(global_steps)
                 finally:
