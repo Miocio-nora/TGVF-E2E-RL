@@ -9538,695 +9538,253 @@ than inferred from a script name or prior conversation.
   trajectories, at least one successful TGVF observation, positive visual
   judge applicability, complete visual coverage with zero visual failures,
   finite five-component metrics and a complete four-rank step-1 checkpoint.
+- R1 runtime recovery on `2026-08-06`: the first true rollout attempt reached
+  the production local visual judge and completed 12 new requests with HTTP
+  200, but the shaped adapter then rejected a legitimate answer semantic
+  fallback identity before optimizer step 1.  `RuleFirstAnswerVerifier`
+  intentionally reports the deterministic rule identity on rule routes and
+  the configured Qwen2.5-72B model identity on semantic-fallback routes; the
+  new adapter had incorrectly required the rule identity on every route.
+  Main commit `9a8db49c040064c1f3188529ba0cc3e920b28801` and isolated-runtime
+  commit `9276a4fc1f3308084d8c142401bbae304fb0248d` now bind each route to
+  its exact preconfigured identity while preserving fail-closed rejection of
+  unbound identities.  The related 46-test reward suite and Ruff passed.  The
+  vLLM `sampled_token_ids` exception appeared only during the resulting
+  SIGTERM teardown and is recorded as a secondary cleanup symptom, not the
+  rollout failure cause.
+- R1 accepted result at `2026-08-06 02:52 JST`: the repaired fresh smoke
+  exited zero after one optimizer step over exactly 16 prompts / 128
+  trajectories.  All 128 trajectories produced successful TGVF observations;
+  the local visual judge was applicable and covered on all 128 with zero
+  failures and `128` recorded visual-judge calls.  The complete four-rank
+  step-1 checkpoint passed the paired project/upstream identity gate.  Mean
+  reward components were answer `1.03125`, tool `.200390625`, focus
+  `.88671875`, grounding `.21484375`, and protocol `-.0546875`; mean base
+  answer reward was `.515625`, tool-attempt rate was `1.0`, and format-error
+  rate was `.0546875`.  End-to-end step time was `441.963 s`, including
+  `395.663 s` before publication, `30.054 s` checkpointing, and `16.222 s`
+  weight sync.  W&B run ID is `zld3wutx`; the archived effective config has
+  SHA-256
+  `65ada35235de374b650d7d100ba8f51adfb1f752d4bf3e4d47b1b4c6c6ced761`.
+- R2 judge placement and promotion gate: GPU4-7 have an external release
+  boundary, while an uninterrupted 80-step run is expected to outlive it.
+  Therefore the same pinned Qwen3-VL-32B-Thinking judge is colocated with the
+  policy on physical GPU0 at vLLM memory utilization `.42`, maximum batched
+  tokens `16,384`, and maximum sequences `32`; rollout remains `.45` on all
+  four policy GPUs.  Before R2, a separate fresh one-step `R1C` must reproduce
+  complete `128/128`, zero-failure visual coverage while sampling GPU0 memory
+  every second and retaining at least 8 GiB free at the observed peak.  The
+  formal controller fails closed on any per-step visual-judge coverage loss,
+  watches optimizer steps `1/2/3/5/10/20/40/60/80`, and writes the durable
+  step-80 training marker before the judge wrapper shuts down.  All eight
+  planned checkpoint boundaries `0/1/5/10/20/40/60/80` are retained for
+  diagnosis.  CoreDev ACC-VAL may start only after that exact wrapper reports
+  a successful stop and all GPU0-3 compute processes have exited.
+- R2 full utility gate accepted at `2026-08-06 05:24 JST`: run identity
+  `893b5202c4d866b2020cf345aa53c585b78b056407775cb928f9c6fded5fa892`
+  completed all eight shards with exactly `1,280` attempts each, totaling
+  `10,240` attempts over the sequential `1,280`-sample prefix.  Strict final
+  verification reported zero failed shards and `9` conservatively scored
+  4,096-token length caps.  The materialized labels are needed/optional/
+  unnecessary = `291/515/474`.  Runtime sidecar SHA-256 is
+  `1344a279f2709e84d1819e783ff78af8e0fc09771a59d9c3f713d9303d1877d2`;
+  its canonical manifest identity SHA-256 is
+  `edaecee046724ac51355b43544e02dbf5dff6d14b56a7c31b9a607333da1445b`.
+- R1C empirical recovery at `2026-08-06 05:54 JST`: the `.42` colocated
+  judge attempt completed its optimizer step, exact `128/128` visual-judge
+  HTTP-200 coverage, zero visual failures, and a complete four-rank step-1
+  checkpoint, but it was correctly withheld from promotion.  The one-second
+  GPU0 ledger observed only `6,972 MiB` minimum free memory, below the
+  `8,192 MiB` safety floor; independently, the sampler inherited a shutdown
+  signal and stopped `11 s` before the training wrapper exited, so its strict
+  end-coverage assertion also failed.  The recovery changes only deployment
+  capacity: the identical local Qwen3-VL-32B-Thinking judge uses `.39` rather
+  than `.42` GPU memory utilization, and the sampler starts a separate session
+  so training teardown cannot terminate it.  Model, reward, data, RP-66,
+  policy rollout `.45`, and every optimizer hyperparameter remain unchanged.
+  The withheld diagnostic W&B run ID is `vtw1qdr7`.
 
-### PRL-15-R0-QWEN3-INSTRUCT-FULL-RP66-MATCHED
+## POLICY-RL PRL24 FMT version and A/B/C/D execution decision (2026-08-20)
 
-- Lifecycle correction (2026-08-09): the first implementation incorrectly
-  treated world4/micro1/GA4 as the control. That shape was derived from the
-  TGVF plan rather than the completed Crop experiment and is scientifically
-  invalid for the requested comparison. No formal run was started. The
-  one-step `actor-rollout-only-v1` GPU0-3 closure is retained only as
-  engineering evidence that joint Qwen/RP66 update and recovery execute.
-- Correct control: the external source of truth is the completed PRL14 Crop-16
-  record, SHA-256 `3907b310...f70f1`, and its permanent step-8 checkpoint.
-  PRL15 now matches world8, actor/log-prob micro32, BS16, n16 (256
-  trajectories), full Qwen vision/language training, one PPO epoch, constant
-  LR `1e-6`, token/capacity settings, FlexAttention/SDPA, FSDP compile/reshard,
-  DeepEyes token-mean loss, zero KL, and the official source-aware reward.
-- Intended treatment: native Crop prompt/tool/observation is replaced by the
-  matched TGVF prompt/tool and jointly trainable RP66 state. Dataset/AgentLoop,
-  weight-publication and paired-checkpoint differences are permitted only as
-  the plumbing needed to realize that treatment.
-- Control direction: `configs/policy/controls/prl15_crop_rp66_matched.json`
-  checks PRL15 against the hash-verified PRL14 record; it never copies TGVF
-  settings into a synthesized Crop run. The audit entry point is
-  `tools/audit_prl15_against_prl14_crop16.py`, and relaunching Crop from that
-  tool is forbidden.
-- Reward identity: both arms use `.8/.2/1.2` on visual samples and
-  `1.2/.4/0` on ThinkLite, with the same Qwen2.5-72B judge config SHA
-  `fff705c5...3021`. TGVF uses an asynchronous trajectory adapter around the
-  same official answer extractors, judge prompts and failure semantics.
-- Current gate: the corrected formal plan composes and the matched core fields
-  pass CPU tests. A new world8/micro32 one-step GPU smoke is still required;
-  until it passes, formal eight-step training is not authorized.
-- Runtime isolation: smoke uses console-only logging and an isolated
-  `output.root/smoke/<smoke-id>/` closure; formal metrics/W&B remain untouched.
-- External ACC-VAL: step0 and step8 are paired states, respectively base Qwen
-  plus stage1 RP66 and step8 Qwen plus step8 RP66. The dedicated
-  `full_model_trainable_rp66` backend binds both members, requires the RP66
-  vLLM update ACK, and writes their combined identity into every trajectory.
-  `tools/run_prl15_paired_evaluation.py --wait-for-step8` can be started before
-  training and will automatically prepare, resume, run and score both arms.
-- Detailed protocol and commands:
-  `docs/experiments/prl15_controlled_rl_preflight.md`.
-- Historical engineering smoke evidence: 16 prompts produced 256 trajectories and 194
-  successful TGVF observations, with answer reward `0.6328125`, conditional
-  tool reward `0.453125`, tool-attempt rate `0.75`, and format-error rate
-  `0.0078125`. The Qwen update had `actor/grad_norm=7.09375`; RP66 changed from
-  step-0 state `05778a43...0318` to step-1 state `697d2a27...f25`; the four
-  Qwen model shards, four optimizer shards, project state and Qwen/RP66 pair
-  receipt were all saved. End-to-end update time was `689.29 s`, including
-  `40.95 s` checkpointing and `6.46 s` RP66 publication. These measurements
-  must not be used to estimate or authorize the corrected world8/micro32 run.
-- Isolation evidence: this smoke wrote only below
-  `output.root/smoke/actor-rollout-only-v1`, used console logging, created no
-  W&B run, did not create formal `output.root/metrics.jsonl`, and did not
-  modify the pre-existing legacy `output.root/smoke/metrics.jsonl`.
-- Matched R1 gate (2026-08-10): the corrected world4 mathematical-equivalent
-  execution of the Crop world8/micro32 control passed one complete optimizer
-  step over BS16 x n16. It produced 256 trajectories and 192 successful TGVF
-  observations, changed both the Qwen and RP66 states, and completed in
-  `809.16 s` including a `65.16 s` paired checkpoint. This is the accepted
-  scientific one-step gate, not the low-cost functionality canary.
-- Formal recovery (2026-08-10): formal step 1 completed and was durably saved;
-  step 2 then stopped before its optimizer update because pinned veRL had
-  collapsed a normal vLLM native-EOS termination into `completed` while
-  discarding the raw finish/stop pair. The project-owned vLLM server boundary
-  now transports the exact pair and the live termination contract accepts
-  vLLM's documented `stop + null` native-EOS outcome. It does not infer or
-  forgive aborted, unknown, or malformed generations. Focused transport,
-  recovery, and sampler tests cover native EOS, length, and tool-string stops.
-- Checkpoint recovery correction (2026-08-10): the remaining formal horizon
-  physically saves every completed optimizer step, retains the newest two
-  exact paired checkpoints across restarts, and hard-links step 8 into a
-  separately validated permanent checkpoint. The original run TOML and its
-  run identity remain unchanged: its `0/1/4/8` list continues to identify the
-  scientific milestone gates, while the formal runtime owns the denser
-  recovery-save lifecycle. The corrected process therefore resumes from the
-  already committed step-1 Qwen/RP66 pair rather than replaying step 1.
-- Low-cost functionality gate (2026-08-10): before the formal resume, a
-  console-only canary used 4 prompts x 2 trajectories and one real joint
-  Qwen/RP66 optimizer update. It completed without termination/replay errors,
-  produced 6 successful TGVF observations, and saved a complete paired
-  checkpoint. The update itself took `164.28 s`; cold startup plus the update
-  was about six minutes. This canary is engineering evidence only and is not
-  a matched scientific result.
-- Formal steps 2--3 and recovery (2026-08-10): the formal run resumed the
-  exact step-1 model, optimizer, scheduler, RNG and data cursor under the same
-  W&B run `ja23wygu`. Step 2 re-executed the batch that had previously exposed
-  the hidden native-EOS bug and completed without any termination or tool
-  error. Step 3 also completed. Their respective end-to-end times were
-  `934.47 s` and `942.33 s`; answer rewards were `.6875` and `.71875`, and
-  conditional-tool rewards were `.5234375` and `.546875`.
-- Runtime checkpoint schedule correction (2026-08-10): step 2 revealed that
-  the trainer save gate still read the identity-preserving TOML milestone list
-  `0/1/4/8`, even though the formal lifecycle owned the recovery schedule
-  `0..8`. The gate now consumes the same runtime lifecycle schedule as
-  prepare/finalize/rotation. Failure recovery durably saved the last complete
-  boundary as paired `global_step_3` with tracker `3`; no step-4 optimizer
-  mutation occurred.
-- Tool-attempt metrics correction (2026-08-10): the next step-4 batch exposed
-  a metrics-only legacy bound of four admitted calls/fifth cap attempt. PRL15's
-  locked live protocol permits six executed calls and records a seventh call
-  only as the unexecuted cap error. Metrics validation now receives that bound
-  from the run config, preserves all counts without clamping or dropping
-  trajectories, and retains conservation, cap position/count, payload identity
-  and replay-integrity checks. Legacy Pilot `M=4` and Stage3-shaped `M=1`
-  remain separately covered. The v1 checkpoint mapping and the existing
-  step-3 project-state bytes are unchanged.
-- Formal step 4 (2026-08-10): exact recovery from step 3 completed the full
-  matched batch in `1348.86 s`, including `58.82 s` checkpointing and `9.41 s`
-  RP66 weight publication. The batch produced answer reward `.7734375`,
-  conditional-tool reward `.578125`, format-error rate `.03515625`, 213
-  successful observations, and exactly one legal unexecuted seventh cap
-  attempt. The complete four-rank Qwen/RP66 pair is committed at step 4; the
-  tracker is `4` and the rolling generations are steps 3 and 4.
-- Policy visual-control containment (2026-08-10): step 5 stopped before its
-  optimizer update because one policy response sampled Qwen's reserved
-  `<|vision_start|>` token without a native image placeholder body. The old
-  layout scanner misclassified every such policy-owned token as an
-  environment image and killed the whole batch. The corrected agent loop
-  retains the exact action IDs and behavior logprobs, marks only that
-  trajectory invalid-format, and excludes it from further tool turns. Exact
-  replay identifies visual content solely through recorded source/tool-image
-  positions; its temporary M-RoPE view treats only the policy-owned opener as
-  text, while actual replay IDs remain byte-for-byte unchanged. Recorded
-  source and tool visual blocks remain strict, so genuine replay corruption is
-  still fatal. The official reward extraction and weights are unchanged.
-- Recovery gate for that correction: a low-cost targeted replay milestone ran
-  before another matched batch. It reproduces the failure with Qwen's real
-  visual token IDs and covers all three policy-owned visual controls through
-  the current and frozen-reference injected-forward paths. The active tree
-  passed 64 focused CPU/integration tests plus Ruff and diff checks. A formal
-  preflight then re-read the exact step-3/step-4 committed pairs, their metrics
-  and policy steps, the step-4 tracker, and the runtime `0..8` save schedule.
-  No step-5 optimizer mutation occurred in the failed process; formal resume
-  therefore starts at the exact step-4 boundary.
-- Formal step 5 and native EOS correction (2026-08-10): the corrected visual
-  containment path completed the next full matched batch and its paired
-  checkpoint in `874.23 s`, including `63.21 s` checkpointing and `8.18 s`
-  RP66 publication. Tracker `5`, project/metrics/policy step `5`, and rolling
-  generations 4/5 agree. The following step-6 rollout then stopped before any
-  optimizer update because the termination contract omitted Qwen3-VL's
-  secondary native EOS token `151643` (`<|endoftext|>`). The request's explicit
-  extra stop remains `151645`, but the pinned model generation config (SHA-256
-  `8469742d...fc4d44`) declares effective native EOS IDs `151645/151643`, as
-  did the preceding T1 selection contract.
-- The training and CoreDev evaluator now share one exact Qwen3-VL final-turn
-  outcome builder: both native EOS IDs, vLLM's hidden-native-EOS `stop/null`,
-  and an exact length stop are accepted; an unrelated token such as `151644`
-  remains rejected. Future mismatch errors include the exact finish/stop pair
-  without response text. A CPU fixture reproduced the step-6 failure with
-  `stop/151643` and verified the corrected behavior; 62 focused tests, Ruff,
-  and diff checks pass. The run TOML and reward are unchanged, and preflight
-  revalidated the exact step-4/step-5 recovery pair before resume.
-- Formal step 6 (2026-08-10): exact recovery from step 5 replayed the batch
-  that had exposed the secondary-EOS omission and completed it without a
-  termination error. The update took `1100.39 s`, with answer reward
-  `.5390625`, conditional-tool reward `.40625`, format-error rate `.03125`,
-  and 192 successful TGVF observations. Its four-rank paired checkpoint is
-  complete; tracker, project state and metrics all remain at the safe step-6
-  boundary.
-- Step-7 memory diagnosis (2026-08-10): the next batch stopped before its
-  optimizer mutation in exact replay. This was not allocator fragmentation:
-  a 32-row actor microbatch called `DTensor.full_tensor()` independently for
-  every row, and every fused-logprob autograd context retained its own full
-  BF16 LM-head copy until the single microbatch backward. Up to 32 copies
-  (about `37.1 GiB`) accumulated on top of the row graphs; the long step-7
-  batch reached 169--171 GiB allocated and then failed on the next 2.32-GiB
-  FP32 gather. The unknown-commit guard correctly refused a step-7 checkpoint,
-  so no partial optimizer state was admitted.
-- Low-cost memory correction gate: a microbatch-scoped fused materializer now
-  gathers/casts the LM head once and shares that differentiable tensor across
-  all replay rows. A new materializer is created for every actor/reference
-  microbatch and cannot cross an LM head, device or dtype boundary; it never
-  survives an optimizer step. This preserves the intended real-valued loss
-  and gradient sum and matches Crop's one-shared-weight-per-microbatch design.
-  It intentionally does not claim bitwise equivalence with the buggy per-row
-  BF16-cast accumulation: finite-precision LM-head gradients can differ in
-  rounding order. CPU value/gradient tests pass, and a two-rank real-DTensor
-  test completes in seconds with exactly one `full_tensor()` call per rank and
-  local-shard gradient error below `2.4e-7`. The formal batch must not be used
-  as the next debugger: a separate 4-prompt x 2-trajectory functional canary
-  is required before resuming from step 6.
-- LM-head-cache functional canary (2026-08-10): commit `8a6dd1b` completed an
-  isolated console-only 4-prompt x 2-trajectory joint Qwen/RP66 step. It
-  exercised rollout, exact replay, backward, optimizer, weight publication
-  and all four checkpoint shards without the repeated-head OOM; peak actor
-  allocation was `41.24 GiB` and end-to-end time was `175.69 s`. This sampled
-  group had zero policy advantage (`pg_loss=0`, `grad_norm=0`), so it is only
-  a code/lifecycle milestone; nonzero value and gradient equivalence is owned
-  by the CPU and two-rank DTensor tests, and no learning claim is made from
-  this canary.
-- PRL16 F2 live-sync lifecycle correction (2026-08-11): F1 isolated its first
-  same-process boundary as the failure: step 1 was healthy from a fresh
-  process, while step 2 produced 90.23% format errors, zero observations and
-  12,133.6 mean response tokens immediately after the first save/sync cycle.
-  The project checkpoint bridge had synchronized and awakened the new Qwen +
-  RP66 state, then performed another full-model vLLM level-2 sleep for the
-  paired checkpoint and used a bare wake. Level-2 sleep discards the newly
-  published full weights, so the custom TGVF runtime did not have a valid
-  current-policy restore boundary. Commit `2dbdf85` makes only the trainable
-  TGVF manager publish the same current-step Qwen + RP66 state again after the
-  checkpoint sleep; the Crop lifecycle remains unchanged. F2 is a clean,
-  separate output identity and will run a bounded two-continuous-step formal
-  diagnostic before any longer scientific continuation.
-- F2 result (2026-08-11): the exact world8, BS16 x n16 matched diagnostic
-  completed two steps in one process and exited normally. Step 1/2 respectively
-  produced answer reward `.48046875/.47265625`, format-error rate
-  `.03125/.01953125`, `193/192` successful TGVF observations, and response
-  length mean `575.15/736.59`. Step 2 therefore no longer reproduces F1's
-  answer `0`, format error `.90234375`, zero observations, or response mean
-  `12133.62`. The step-1 and step-2 state directories each contain two
-  request-distinct RP66 manifests, proving that the post-checkpoint corrective
-  publication ran at both boundaries. The paired step-2 checkpoint, all eight
-  model/optimizer shards, project state, pair marker and tracker `2` are
-  complete. Peak actor allocation at step 2 was `61.23 GiB`, not F1's
-  `167.39 GiB`; all GPU processes shut down cleanly after completion. This
-  confirms the checkpoint level-2 sleep/bare-wake boundary as the cause of the
-  observed same-process live-sync collapse and validates commit `2dbdf85` as
-  the scoped runtime fix.
+- Scope: this record resolves the reward-version ambiguity and supersedes any
+  stale PRL24 status text. The original FMT1 T-free recipe used a `-1`
+  protocol/format/tool-error penalty. Format errors were observed to rise with
+  training step, so FMT2 was created with the otherwise identical equation and
+  a `-2` error penalty. FMT1 A remains a separate historical identity; no
+  checkpoint or result is relabelled, resumed into, or mixed with FMT2.
+- Current recipe decision: the comparable A/B/C results use FMT2. All later
+  PRL24 runs, starting with D and including planned E/F, use FMT2 unless a new
+  explicit reward-ablation identity is registered.
+- PRL24-A FMT2 CoreDev Macro* at S4/S8/S12/S16 is
+  `58.3983/60.7348/59.8701/59.4007`. The current peak is S8 and the later
+  checkpoints show that BS64 did not eliminate endpoint plateau/regression.
+- PRL24-B FMT2 Joint Macro* is `57.4834` at S8, `-3.2514 pp` versus matched
+  A-S8, with six of seven components lower. This agrees with the direction of
+  the earlier BS16 Joint pilot, so B was intentionally stopped at S8 and the
+  operational conclusion is to keep RP67 Frozen. This is a documented
+  pre-registration/resource exception, not a claim that B reached S16.
+- PRL24-C FMT2 F/G completed through S16. Macro* at S4/S8/S12/S16 is
+  `60.1777/60.6036/60.1754/59.4924`; C-A is
+  `+1.7794/-0.1312/+0.3053/+0.0917 pp`. F/G therefore has an early positive
+  signal but no sustained endpoint accuracy gain and is not promoted to the
+  default reward from these data alone.
+- A0 is optional and has no completed result. Its only purpose is a strict
+  batch-only causal claim: if that wording is required, run same-commit FMT2
+  BS16. Historical PRL22 BS16 remains an informative recipe-level anchor but
+  is not fully matched in reward/commit identity. A0 does not block D/E/F.
+- PRL24-D launch identity: native Crop, Teacher25, BS64 independent prompts,
+  n16, world8, full Qwen, constant LR `1e-6`, FMT2, S0→S16, with permanent
+  S2/S4/S8/S12/S16 checkpoints. The versioned FMT2 reward implementation is
+  bound to commit `c74002b31e24d11c48e6dfa0b780cf80d4ce991b`; the clean launch
+  config/supervisor is commit `0102b3a53d8fd3a76b2cb96da60bdd24d6e1edf2` on branch
+  `prl24-d-crop-bs64-fmt2`. The first smoke attempt stopped before model load,
+  optimizer work, or checkpoint creation because the Teacher25 dataset now
+  requires an explicit positive image-pixel cap. Commit
+  `03ed86292bf9b3de62ec5fecdf00fec0402e3408` binds the same `1,003,520`
+  pixel cap used by current A/B/C while leaving legacy native-Crop contracts
+  unchanged. The next smoke attempt reached model/FSDP initialization but
+  stopped before rollout, optimizer work, or checkpoint creation because an
+  isolated reward worker exposed an import-order cycle. Commit
+  `f58dc48be455fe02f1eb431fc1659425a21465a5` moves the shared visual-source
+  constants to a framework-neutral module; the isolated worker import and the
+  62-test focused suite then passed. The third four-GPU smoke completed one
+  real rollout and actor update and wrote a complete four-rank step-1 model,
+  optimizer, extra-state, and trainer checkpoint. Its machine-readable status
+  is `smoke_checkpoint_complete` (2026-08-20 13:43 JST).
+- The first eight-GPU handoff was rejected before GPU/model initialization
+  because the native launcher resolved ignored Python 3.12 headers relative
+  to the clean Git worktree instead of the primary repository. Commit
+  `7f7492e0f56dc82642b0f8193fe62dbedac18498` adds the same shared-dependency
+  resolution already used by the general launcher, with a worktree regression
+  test; 35 focused tests and Ruff passed. The clean tmux supervisor
+  `prl24_d_fmt2_crop` restarted at 2026-08-20 13:48 JST, accepted the smoke,
+  and launched a fresh eight-GPU formal Ray session at 13:49 JST. All eight
+  formal FSDP and vLLM ranks initialized, the W&B run
+  `prl24dfmt2cropt25bs64s16` was accepted, and the formal loop reached
+  `Training Progress: 0/16` at 13:55 JST. At that status cut Step 1 rollout was
+  active and no formal optimizer step or checkpoint existed; the later closeout
+  is recorded immediately below.
 
-### PRL-17-R1-QWEN3-INSTRUCT-FULL-FROZEN-RP67-SHAPED
+### PRL24-D S1 closeout and BS64 pause supersession (2026-08-20)
 
-- Planned 2026-08-12 as the representation-only follow-up to the successful
-  PRL17-R0 frozen-RP66 shaped-reward pilot. The sole scientific treatment is
-  RP66 step 2000 to RP67 step 2000; RP67 remains frozen during RL.
-- RP67 artifact SHA-256 is `13332865...f0f68`, manifest SHA-256 is
-  `2ea09896...33b1`, semantic state SHA-256 is `f223d1f0...0256`, and frozen
-  runtime storage SHA-256 is `3f60f365...53a14`. RP66 and RP67 have identical
-  104-tensor, 72,055,808-parameter BF16 Adapter structures.
-- Model, T1 schedule, prompt, BS16 x n16, world8/micro2/GA1, constant `1e-6`
-  learning rate, eight-step horizon, answer judge, checkpoint lifecycle, and
-  executed reward `2*A_gated + T + P` are held fixed against R0. Focus and
-  Grounding remain disabled.
-- The RP66-derived 128-row utility sidecar is intentionally fixed. Recomputing
-  RP67-dependent labels would introduce a second reward variable and belongs
-  in a later experiment.
-- Required sequence: console-only 4-prompt x 2-trajectory functional canary;
-  then the tmux-owned eight-GPU formal run; then automatic paired step0/step8
-  CoreDev-2511 evaluation. Detailed protocol:
-  `docs/experiments/prl17_r1_rp67_shaped_reward_control.md`.
-- Canary attempt 1 stopped before any optimizer mutation because the generic
-  source-covering smoke split is intentionally disjoint from formal training,
-  while the shaped reward sidecar intentionally covers only the 128 formal
-  rows consumed by eight steps. The corrected shaped-reward canary uses the
-  exact first four formal rows and validates all four immutable utility labels
-  before Ray or GPU initialization. Missing labels remain fatal; no default or
-  fallback label was introduced. Formal training data and reward are unchanged.
-- Corrected canary result (2026-08-12): the exact four labeled prefix rows
-  produced eight trajectories and six successful TGVF observations. The one
-  optimizer step completed in `131.51 s` with total reward mean `1.375`,
-  policy loss `0.01898`, gradient norm `3.7118`, and no judge transport error.
-  All four model/optimizer/extra-state shards and the frozen-RP67 step-1 pair
-  were saved, the tracker is `1`, all GPUs shut down cleanly, and no W&B run
-  was created. This is an engineering gate only; formal R1 is now authorized.
+- This closeout supersedes the live status cut immediately above. The optimized
+  formal identity is
+  `PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1`;
+  its W&B run ID is `prl24dfmt2cropt25bs64s16sp1` and its artifact root is
+  `artifacts/policy/PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1/`.
+- One BS64 × n16 native-Crop optimizer update completed. The watcher observed a
+  complete and stable `global_step_1` checkpoint at `2026-08-20 21:52:25 JST`
+  and stopped the process group before any Step-2 optimizer update. The complete
+  checkpoint is `140,300,076,980` bytes (about `140.3 GB`). From formal rollout
+  start to checkpoint publication this step took about `2 h 32 min`; this
+  invalidates the pre-launch 38--45 min/step estimate for this tool line.
+- The stop watcher necessarily terminated after checkpoint stability but before
+  final training-metric and trajectory publication. There is no formal S1
+  metrics/trajectory artifact, and the S1 rollout was sampled from the common S0
+  policy before its first update. Therefore this run is valid runtime and
+  checkpoint evidence only; it gives **no efficacy result** for whether Crop
+  improved or regressed.
+- PRL24 BS64 is paused after A/C completion, recorded B-S8 early stop and this
+  D-S1 closeout. E/F were never launched and A0 is no longer a near-term
+  priority. The pause is resource-scientific: pure-TGVF recipe-level comparisons
+  show no clear BS64 gain, while native Crop costs about 2.5 hours per BS64 step.
+  The decision and existing results remain documented in
+  `docs/PRL24_BS64_POLICY_RL_SCALE_SERIES_PLAN_20260816.md` and
+  `docs/PRL24_ABC_INTERIM_RESULTS_20260819.md`.
 
-### PRL-17-R2-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE
+### PRL25 Phase III BS16 Teacher25 80-step matrix (planned 2026-08-20)
 
-- Planned 2026-08-12 as the reward-only follow-up to PRL17-R1. RP67 remains
-  frozen and model, retained T1 schedule, prompt, BS16 x n16, world8/micro2,
-  constant `1e-6` learning rate, eight-step horizon, answer judge, seeds and
-  checkpoint lifecycle remain matched to R1.
-- The sole scientific treatment removes counterfactual tool-utility `T`: both
-  its needed/optional/unnecessary decision score and its needed-without-tool
-  answer gate are disabled. The executed no-visual equation is
-  `2*A - 0.05*max(0, tool_calls-1) + P`, where `P=-1` for any protocol or
-  tool-execution error. Focus and Grounding remain implemented but disabled.
-- This is a real sidecar-free treatment: the RP66 or partial RP67 utility
-  sidecars are neither loaded nor included in run/checkpoint identity. The
-  historical T-enabled schema and runtime remain backward compatible.
-- Required sequence: console-only 4-prompt x 2-trajectory functional canary;
-  then the tmux-owned eight-GPU formal run; then automatic paired step0/step8
-  CoreDev-2511 evaluation. Smoke outputs are isolated and never sent to W&B.
+- Decision ID: `POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`. This phase
+  tests the hypothesis that earlier S8/S16 plateaus may reflect an insufficient
+  optimization horizon. The primary endpoint is S80; S16 is diagnostic and is
+  no longer a stop boundary.
+- Five fresh arms are registered: (A) native Crop with the DeepEyes-style
+  conditional Crop reward, (B) native Crop with the project T-free reward,
+  (C) pure Frozen-RP67 TGVF with T-free reward, (D) Atomic Crop+TGVF with
+  Frozen RP67 and T-free reward, and (E) pure Frozen-RP67 TGVF with T-free plus
+  the existing Focus/Target + Grounding visual reward. The user's “target ground
+  reward” name is bound to this existing F/G profile, not a newly invented
+  target-only or grounding-only formula.
+- All arms use Qwen3-VL-8B-Instruct full-policy update, BS16 × n16, world8,
+  constant LR `1e-6`, FMT2 protocol/format/tool-error penalty `-2`, and the same
+  canonical Teacher25 seed-42 schedule. Each BS16 slice contains 12 retained T1
+  and 4 teacher prompts. Eighty steps equal 1,280 prompts and 20,480 trajectories
+  per arm.
+- Every arm starts from the same S0 policy with fresh optimizer, data cursor,
+  output and W&B identity. No PRL21/22 or PRL24-D checkpoint is continued. The
+  exact data identity/order is shared; prompt/tool schema is rendered for each
+  arm's actual tool protocol and is not misrepresented as byte-identical input.
+- Strict reward A/B claims are limited to Crop A versus B and pure-TGVF C versus
+  E. Comparisons across native Crop, pure TGVF and Atomic Crop+TGVF remain
+  protocol capability comparisons rather than strict synergy claims. Full
+  checkpoint, metric, evaluation, success and capacity contracts are in
+  `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`.
+- Priority revision on `2026-08-20`: the first formal queue is PRL25-B Crop
+  T-free, PRL25-C pure-TGVF T-free, then PRL25-D Atomic Crop+TGVF T-free.
+  PRL25-A conditional Crop and PRL25-E F/G must not occupy a formal training
+  slot until B/C/D complete. Every optimizer step writes a full recovery
+  checkpoint while only the latest two roll; every eighth step from S8 through
+  S80 is permanent, with S0 evaluated separately. Before Crop execution
+  alignment, historical 80-step training-only projections were 52 h 54 min,
+  13 h 55 min and 18 h 42 min respectively. The first number and the resulting
+  85 h 31 min serial total are now retired for PRL25-B capacity planning; the
+  exact-Crop formal S1 measurement below is the required replacement.
 
-### PRL-18-R0-QWEN3-INSTRUCT-FULL-JOINT-RP67-TFREE
+### PRL25-B exact-Crop replay gate and formal launch (2026-08-21)
 
-- Authorized 2026-08-13 as the trainable-Adapter control following the
-  completed PRL17-R2 paired Step 0/8/16 result. It starts fresh from the same
-  Qwen3-VL-8B-Instruct and RP67 Stage1 artifacts; it does not resume the
-  frozen PRL17 model.
-- The sole scientific treatment is
-  `representation.adapter_update_mode=frozen_adapter -> joint`. Consequently
-  the 72,055,808 RP67-owned parameters enter the same AdamW optimizer at
-  `1e-6` and are republished to every rollout worker after each optimizer
-  step. Full Qwen parameters, including the visual path, remain trainable as
-  in PRL17-R2.
-- Data, order and seed, TGVF prompt/schema, BS16 x n16, world8/micro2/GA1,
-  `temperature=1`, constant LR, maximum response/tool-call limits and T-free
-  reward are fixed. The executed reward remains answer correctness plus
-  protocol and repeated-call penalties; tool utility `T`, focus and grounding
-  remain disabled. Operational run/output/provenance paths and permanent-copy
-  retention are separately named and are not scientific variables.
-- Lifecycle: a console-only exact world8/BS16/n16 one-step smoke must prove a
-  changed RP67 state and complete paired checkpoint. The formal run then stops
-  at Step 8, binds its exact model/optimizer/scheduler/data/RNG/Adapter state
-  into a runtime continuation manifest, and resumes in place to Step 16.
-  Step 8 and Step 16 are permanent; rolling recovery checkpoints are saved
-  every step. The outer supervisor is tmux-owned and retries only recoverable
-  process/API interruptions.
-- Evaluation: after Step 16 closes, evaluate only Step 8 and Step 16 in
-  parallel on eight GPUs. Both arms use the frozen CoreDev-2511 headline
-  contract and the same paired RNG namespace as PRL17-R2:
-  `coredev2511-official-v1/rp67-tfree/step0-step8-step16/temp1/seed42/v1`.
-  Step 0 is intentionally not rerun; the already measured PRL17-R2 paired
-  Step 0 is the common initialization reference.
-- Config:
-  `configs/policy/runs/prl_18_r0_qwen3_instruct_full_joint_rp67_bs16_n16_tfree_novisual_8step_ws8.toml`.
-  W&B is enabled only for formal training under run ID `prl18r0u`; smoke is
-  console-only. Expected wall time is roughly 2 h 45 min--3 h for 16 training
-  steps plus 50--65 min for the two-arm evaluation.
+- PRL25-B pure Crop is aligned at the execution-contract level with the accepted
+  exact-replay path: rollout transports actual behavior logprobs; the actor uses
+  live preprocessed pixels for differentiable current-Qwen vision replay and
+  recorded features for frozen-reference replay; full Qwen vision, merger and
+  language weights update; RP67, TGVF and policy LoRA are absent. A successful
+  upstream full-model sync publishes a run/step-bound immutable receipt before
+  the next rollout may consume that policy version.
+- The one-step functional gate is
+  `PRL-25-B-C0-QWEN3-INSTRUCT-FULL-CROP-EXACT-BS4-N2-TFREE-TEACHER25-1STEP-WS4`.
+  It completed at `2026-08-21 00:28 JST` with exit code zero, 4 prompts, 8
+  trajectories, 1,404 generated policy tokens, 9 successful Crop observations,
+  `grad_norm=24.2336`, and complete step-1 checkpoint/full-Qwen receipt. Timing
+  was `262.2705 s`: `162.0390 s` before publication, `4.0854 s` weight sync and
+  `96.1445 s` checkpoint. Shutdown-only vLLM `pure virtual method called`
+  warnings occurred after final metrics and did not change the successful exit.
+- This BS4 × n2 gate is non-scientific and cannot be used as a quality result or
+  linearly scaled into the BS16 × n16 ETA. It does retire the PRL21 old-path
+  `39.68 min/step` number as a capacity estimate for the new implementation.
+- The implementation branch is `prl25-crop-exact-replay-alignment`. Formal
+  config commit `e5344b36501d36a8aff612cb18477d37a221b61a` binds code identity
+  `2ae994a7cd71fefb9a4dc2c92dd52fc59865e7f4`. The admitted formal identity is
+  `PRL-25-B-QWEN3-INSTRUCT-FULL-CROP-EXACT-BS16-N16-TFREE-TEACHER25-80STEP-WS8`
+  with run identity SHA-256
+  `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`.
+  It launched from a clean worktree at `2026-08-21 00:32:18 JST`; every step is
+  a rolling recovery boundary, every eighth step through S80 is permanent, and
+  the first complete formal step will replace all provisional PRL25-B ETA.
 
-### PRL-19-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-VISUAL-API
+### PRL25-B checkpoint wake failure and full-Qwen resync repair (2026-08-21)
 
-- Authorized 2026-08-13 as the visual-reward treatment against the frozen
-  PRL17-R2 RP67 T-free control. Qwen3-VL-8B-Instruct, the RP67 Step-2000
-  Adapter, frozen-Adapter mode, retained T1 data/order, policy prompt and tool
-  protocol, BS16 x n16, world8/micro2/GA1, temperature 1, constant `1e-6`
-  learning rate, answer judge and all rollout limits remain fixed.
-- The only scientific treatment enables Focus/Target and Grounding. Tool
-  utility `T` remains disabled. The executed scalar is
-  `2*A - 0.05*max(0, tool_calls-1) + F + G + P`, with the existing F mapping
-  `2/1/0 -> 1/0.5/0`, G mapping `2/1/0 -> 1/0.5/-1`, and protocol/tool errors
-  contributing `P=-1`.
-- One gold-free OpenRouter request to pinned
-  `qwen/qwen3-vl-32b-instruct` returns both F and G. The request contains the
-  original image, question, all successful tool targets in call order,
-  post-tool reasoning and final answer; it cannot contain any gold/reference
-  answer. The run-global visual concurrency is 16 (two permits per AgentLoop
-  worker), with four bounded attempts, exponential backoff, exact-request
-  cache, explicit coverage/failure accounting and a 25% rolling provider
-  failure circuit breaker.
-- A real-image API canary passed exact model/schema/usage checks and separated
-  a specific valid target and grounded statement `(F=2,G=2)` from an
-  irrelevant target/hallucinated statement and an answer shortcut
-  `(F=0,G=0)`. Observed API latency was about 1.1--2.1 seconds and cost about
-  `$0.000085` per combined judgement.
-- The first world4 BS4 x n2 functional training canary completed one optimizer
-  step in 150.97 seconds with frozen RP67 SHA
-  `3f60f36589a3c0f3549c12b949eaabb140f6edfac849aa2b25a623bbcde53a14`,
-  finite `grad_norm=6.98`, and both F/G components present. It exposed one
-  malformed visual-judge completion among six applicable trajectories
-  (5/6 covered). Runtime commit
-  `1d193dce846d5f2eeb78499bec7bad1d873f6a96` therefore gives every malformed
-  completion the same four-attempt bounded retry budget as transient transport
-  failures; a persistent served-model identity mismatch remains a global
-  failure. The exact matched smoke accepts sample-local degradation only when
-  aggregate visual coverage is at least 99%, rather than aborting on one bad
-  provider response.
-- Runtime commit `9e3c6f74a44762b90e3a138f440246b1df5dff8c` also makes the
-  multi-call judgement non-overlapping: F receives every ordered successful
-  target, while G receives only assistant reasoning after the final successful
-  tool call. Later tool-call JSON/target text is therefore not duplicated into
-  the grounding channel.
-- Launch descendant `f22650e2bf6b2d849756a2be9fbc2290a675248c`
-  removes the now-dead local left by the malformed-output retry recovery. This
-  is a behavior-preserving static cleanup; the configured executable identity
-  remains the preceding `9e3c6f7` runtime commit.
-- Lifecycle: first run a console-only BS4 x n2 world4 functional canary, then
-  one exact world8/BS16/n16 matched smoke. After both gates pass, a tmux-owned
-  fresh formal run proceeds Step 0 -> 8, binds an immutable horizon extension,
-  and automatically continues Step 8 -> 16. The RP67 Adapter must remain
-  byte-identical; Step 8 and Step 16 are permanent checkpoints.
-- Evaluation starts automatically after Step 16 and runs only Step 8 and
-  Step 16 under the same paired CoreDev-2511 seven-suite protocol and RNG
-  namespace as PRL17-R2. The already measured paired PRL17-R2 Step 0 is the
-  common initialization reference and is not rerun.
-- Formal training completed all 16 optimizer steps on 2026-08-13. The first
-  paired-evaluation attempt durably completed 1,953/4,480 single-image rows
-  (Step 8: 1,015/2,240; Step 16: 938/2,240) before one Step-16 sample emitted
-  text after a complete `</tool_call>`. The sampler correctly rejected that
-  response, but the benchmark worker incorrectly promoted this model-output
-  event to an eight-worker failure; seven orphan vLLM process groups then held
-  the supervisor log pipe and GPUs open.
-- Recovery runtime commit `22b2c28` introduces a narrow, structured
-  `PolicyOutputContractError` only for this illegal suffix. The benchmark now
-  persists that task as an identity-bound `sample_local_failure` with null
-  answer and `invalid_format`, retains it in the scoring denominator as
-  incorrect, and continues its siblings. Generic replay, identity, transport,
-  artifact and unknown failures remain fail-closed. Evaluator ranks now launch
-  in isolated process groups and a worker-level failure drains every vLLM
-  descendant before the supervisor retries. Seventy-three focused CPU tests
-  passed; all 1,953 prior rows passed strict resume validation unchanged. The
-  paired evaluator resumed from those rows at 17:42 JST without retraining.
-- The committed supervisor enforces API-key preflight, frozen-Adapter SHA at
-  smoke, complete permanent checkpoint receipts at Steps 8/16, bounded resume
-  for operational interruptions, one W&B identity, and automatic handoff to
-  the two-arm paired evaluator. Smoke/canary runs remain console-only.
-- Paired CoreDev-2511 evaluation completed on 2026-08-13 with `2,240/2,240`
-  supported single-image rows per arm and an explicit 271-row multi-image hold.
-  Canonical Macro* is `57.8849` at Step 8 and `57.5422` at Step 16. Against the
-  same paired PRL17-R2 no-visual control (`56.1964`, `58.1996`), the visual
-  treatment is `+1.6885 pp` at Step 8 and `-0.6573 pp` at Step 16. Against the
-  common Step 0 (`57.0320`), visual Steps 8/16 are respectively `+0.8529` and
-  `+0.5102 pp`. These are auxiliary answer-accuracy observations, not direct
-  measurements of image-dependent target quality or visual hallucination.
-  The earlier early-shaping/Step-8-selection interpretation is withdrawn until
-  a paired held-out Focus/Grounding and wrong-image calibration audit completes.
-- Step-16 output health is worse in the extreme tail. OCR prediction mean/P99
-  grows from `1,979.3/47,296.2` chars at Step 8 to `2,829.6/80,924.2` at Step
-  16, while the no-visual Step-16 P99 is `31,473.8`. Max-token stops remain
-  `26/2,240` in both PRL19 arms, so the finding is heavier stochastic
-  repetition rather than a larger capped-response count. This is recorded as
-  an output-health warning, not as direct evidence that hallucination increased.
-- The Step-16 official OCR metric completed successfully, but one
-  `134,775`-character prediction exceeded Python `csv`'s historical 128-KiB
-  per-field default during local result summarization. The reader now raises
-  the limit only to the already materialized artifact bound and restores the
-  global setting afterward in commit `c40030e`. Twenty-two focused tests, Ruff
-  and the real artifact summary pass. This changes no prediction, denominator,
-  scorer or metric.
-- Full results, reward analysis, output-health audit and artifact hashes are in
-  `docs/PRL19_RP67_FROZEN_TFREE_VISUAL_REWARD_PAIRED_RESULTS_20260813.md`.
-
-### PRL-20-R0-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-CROP-TGVF
-
-- Authorized 2026-08-13 as the atomic TGVF+Crop treatment. The direct control
-  is PRL17-R2 frozen-RP67 T-free. Model, retained mixed-T1 data/order, full
-  policy update, frozen RP67 Step-2000 artifact, BS16 x n16, world8,
-  micro2/GA1, temperature 1, constant `1e-6` learning rate, answer judge,
-  eight optimizer steps, six-call cap and clean plain-final dialect are fixed.
-- The sole intended scientific treatment replaces `tgvf_focus_tool(target)`
-  with one atomic `tgvf_crop_tool(bbox_2d,target)`. Runtime crops the immutable
-  original RGB, runs crop vision and frozen RP67 on the sticky rollout replica,
-  and returns only D/D-DeepStack. The policy never receives RGB crop or raw
-  crop-vision features. Tool utility T, Focus, Grounding and visual API judges
-  remain disabled.
-- Prompt identity is
-  `5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69`;
-  tool-schema identity is
-  `0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39`.
-  ThinkLite stays direct-only/no-tool.
-- RPC identity binds immutable source RGB SHA, exact crop RGB SHA, the complete
-  preprocessed Qwen visual tensor plus grid, bbox, call index, sampled target
-  span/token IDs, conditioning provider and returned D payload. A swapped
-  preprocessed tensor is rejected before visual/Adapter execution.
-- Actor replay uses the explicit `crop-tgvf-observation-v3` boundary. Each
-  observation persists the exact crop processor tensor and sampled Hq; the
-  current policy recomputes crop vision differentiably, applies frozen RP67,
-  and injects only the resulting D/D-DeepStack. Historical v2 observations are
-  not valid resume inputs for this run, and the reference remains bound to the
-  rollout-recorded visual features.
-- The training-run benchmark path is corrected at the same boundary: matched
-  TGVF uses `build_tgvf_visual_messages(...), tools=[]`, atomic TGVF+Crop uses
-  `build_crop_tgvf_visual_messages(...), tools=[]`, and the prompt materializer
-  is part of evaluation identity. Legacy generic and official-visible Crop
-  routes are unchanged. Historical matched-TGVF benchmark rows rendered with
-  the generic prompt cannot be mixed with corrected rows and must be rerun for
-  a fair PRL20 comparison.
-- Lifecycle gate: console-only world4 BS4 x n2 one-step functional canary first;
-  only after one successful atomic D observation and finite update may the
-  exact world8 BS16 x n16 eight-step pilot start. Formal W&B is enabled;
-  canary/smoke W&B is disabled.
-- The first canary attempt on 2026-08-13 completed all eight rollout
-  trajectories in 31--37 seconds, then entered actor replay at 23:29:09 JST
-  and made no progress for 14 minutes 47 seconds. All four actor ranks stayed
-  in NCCL-like 100% SM/low-memory-activity kernels; no optimizer update,
-  Step-1 metric, or Step-1 checkpoint was produced. It was stopped manually
-  at 23:43:56 JST. Unequal per-rank replay payloads plus code inspection
-  identified the cause: current replay called independently FSDP-sharded Qwen
-  vision blocks once per sampled crop, so ranks with different tool-call
-  counts issued different child-collective schedules.
-- Recovery makes one trajectory the bounded live-vision execution unit. A
-  typed replay plan packs its immutable source plus all sampled crops into
-  Qwen3-VL's native multi-image input, executes the vision tower exactly once,
-  then splits the main/DeepStack pre-merge and merged tensors by the exact
-  grid-derived token counts before applying frozen RP67 and the unchanged
-  decoder replay. Qwen's grid-derived cumulative sequence boundaries keep
-  images attention-independent. This bounds activations to at most one source
-  plus six crops instead of packing the formal 32-trajectory local actor
-  micro-batch, while every rank executes the same one-vision-call-per-row
-  schedule. Fixed actor micro-batching remains part of the immutable matched
-  Crop-16 launcher controls (`actor.use_dynamic_bsz=false`).
-- Sequential-versus-packed CPU tests prove main/DeepStack values, pixel
-  gradients and every vision-parameter gradient agree for unequal image grids.
-  A real four-rank NCCL/FSDP2 regression uses 0/1/2/3 crops across ranks,
-  independently shards a vision child, and completes finite nonzero backward
-  on every rank. This recovery must pass a fresh console-only canary before any
-  formal PRL20 run starts.
-- Recovery commit `d5d77a2` passed that fresh world4 canary on 2026-08-14.
-  The run started at 00:30:16 JST and exited normally at about 00:39:34 JST.
-  Its one optimizer step contained four prompts and eight trajectories, made
-  six successful atomic Crop+TGVF observations with no tool errors, completed
-  actor backward/update with finite `actor/grad_norm=8.4691`, synchronized the
-  updated policy, and wrote a complete Step-1 model/optimizer/extra-state pair
-  plus tracker and metrics. The measured training-step time was 250.47 seconds,
-  including 81.23 seconds of checkpoint I/O and 6.82 seconds of weight sync;
-  peak actor allocation was 40.97 GiB. This closes the collective-mismatch
-  engineering gate only; its eight sampled trajectories are not an accuracy
-  comparison. The matched world8 BS16 x n16 formal pilot remains unstarted
-  pending the explicit post-canary launch decision.
-- Horizon correction on 2026-08-14: the user clarified that the primary
-  comparison is sixteen optimizer steps and that Step 8 is an intermediate
-  endpoint, not the terminal horizon. The already-running immutable eight-step
-  config remains unchanged through its exact Step-8 boundary. A separately
-  committed `policy-horizon-extension-v1` handoff then resumes the same Qwen,
-  frozen RP67, optimizer, constant scheduler, data cursor, RNG namespace and
-  W&B run from Step 8 through Step 16. No Step-8 evaluation may contend with
-  continuation training: all eight GPUs first reach Step 16, after which the
-  paired CoreDev-2511 evaluator assigns Step 8 to GPUs 0--3 and Step 16 to
-  GPUs 4--7 under one Crop+TGVF-specific paired-RNG protocol. Both endpoints
-  are permanent checkpoints; Steps 9--16 remain rolling recovery boundaries.
-- Step-8 closed normally at 03:45 JST with contiguous metrics 1--8 and a
-  complete permanent model/optimizer/data checkpoint. The first automatic
-  handoff then rejected that healthy checkpoint before continuation because
-  its shell-side reader used two stale Python interfaces
-  (`dataset.content_sha256` and tuple coercion of typed identity hashes).
-  Recovery uses the runtime-binding content hash and typed hash fields, adds
-  the dataset-samples identity, and stores the horizon-extension manifest
-  inside the launch worktree as required by launch provenance. This recovery
-  changes no model, data, optimizer, reward, prompt, tool, RNG or scheduler
-  setting; continuation remains the exact Step-8-to-16 run.
-
-### PRL-22-A-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-TEACHER25
-
-- Authorized 2026-08-15 as the TGVF arm of the shared teacher-quarter data
-  treatment. The scientific control is PRL17-R2: Qwen3-VL-8B-Instruct, full
-  Qwen policy update, frozen RP67 Step-2000 Adapter, T-free shaped reward,
-  TGVF-only prompt/tool protocol, temperature 1, BS16 x n16, world8/micro2,
-  constant `1e-6` learning rate and all rollout/capacity settings are fixed.
-- The sole intended treatment is the immutable
-  `policy_t1_teacher_quarter_mix` schedule at
-  `artifacts/data/policy_rl/PRL22-TEACHER25-MIXED-SCHEDULE-v1`: 20,480 ordered
-  prompts with exactly 15,360 retained-T1 rows and 5,120 teacher rows. Every
-  contiguous BS16 batch is 12 old + 4 teacher, and each 256-row macro is
-  90 VStar + 58 ArxivQA + 44 ThinkLite + 64 teacher. Dataset content, samples
-  and iteration identities are bound in the run config.
-- The immutable base run stops at Step 8 and permanently retains that endpoint.
-  After its exact checkpoint pair closes, the supervisor materializes a
-  `policy-horizon-extension-v1` receipt and resumes the same optimizer,
-  scheduler, data cursor, RNG and W&B identity through Step 16. The extension
-  makes both Step 8 and Step 16 permanent while keeping intermediate steps as
-  rolling recovery checkpoints.
-- Only formal training is uploaded to W&B under the independent run identity
-  `prl22at25`; engineering compose/smoke checks remain local. After Step 16,
-  Step 8 and Step 16 are evaluated under the existing paired-temperature-1
-  CoreDev-2511 seven-suite protocol; Step 0 is not rerun because data mixing
-  does not change the common frozen-RP67 initialization.
-- Config:
-  `configs/policy/runs/prl_22_a_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_teacher25_8step_ws8.toml`.
-  Executable shared-data identity is commit
-  `37b99e2b01f9459e0ee65f6b86e2950bf60d4417`; this descendant adds only the
-  arm-specific immutable config and this experiment ledger before launch.
-- The first formal launch on 2026-08-16 failed before any rollout completed or
-  optimizer update was applied. The live identity validator still assumed the
-  historical T1 JSONL shape with nested `extra_info.question` and
-  `reward_model.ground_truth`, whereas all 20,480 rows of the immutable PRL22
-  schedule intentionally store `question` and `ground_truth` as canonical
-  top-level fields and let the veRL Dataset reconstruct the nested runtime
-  values. Recovery commit `fa0ea3a` selects the bound-row normalization by
-  `PolicyTeacherQuarterMixRuntimeBinding`, preserves every existing equality
-  check (sample, prompt, image path/SHA, question, source, task kind and ground
-  truth), and leaves the artifact and its hashes unchanged. The real first 256
-  ordered rows covering all four source routes passed the live validator; 73
-  focused runtime/dataset/launcher tests plus explicit changed-field rejection
-  tests passed before formal restart. No checkpoint, metric row or model update
-  exists from the rejected attempt.
-
-### PRL-23-A/B-QWEN3-INSTRUCT-FULL-FROZEN-RP67-TFREE-TEACHER-RATIO
-
-- Authorized 2026-08-16 as the pure-TGVF Teacher-ratio ablation that follows
-  PRL22-A. PRL23-A uses 50% teacher rows and PRL23-B uses 100% teacher rows;
-  all other scientific controls remain matched to PRL22-A: Qwen3-VL-8B-
-  Instruct, full Qwen policy update, frozen RP67 Step-2000 Adapter, T-free
-  reward, TGVF-only protocol, temperature 1, BS16 x n16, world8/micro2,
-  constant `1e-6` learning rate, Step 8/16 horizons and paired CoreDev-2511
-  evaluation.
-- Shared implementation commit `6567677` introduces the explicit
-  `policy_t1_teacher_ratio_mix` runtime. The run config must bind
-  `teacher_percentage = 50` or `100`; neither the run ID nor artifact path is
-  allowed to infer the treatment. The legacy Teacher25 materializer remains
-  byte-identical. With seed 42 and no replacement, selected teacher rows are
-  strictly nested: Teacher25 is a subset of Teacher50, which is a subset of
-  Teacher100.
-- PRL23-A binds the immutable 20,480-row
-  `PRL23-TEACHER50-MIXED-SCHEDULE-v1` artifact: 10,240 retained-T1 plus 10,240
-  teacher rows, alternating BS16 cadence `[base, teacher] x 8`, manifest SHA
-  `0addf4741080dc922fbff84b85c01c4d2fd19f3669f84a7752e5524a8972cd97`
-  and iteration identity
-  `b9aa3b2187fd462cf86bb76e95a1a89c9c84f24eab818c18db706a9696e0a600`.
-- PRL23-B binds the immutable 20,480-row
-  `PRL23-TEACHER100-MIXED-SCHEDULE-v1` artifact: all rows are teacher rows,
-  manifest SHA
-  `5d1ba2ce7811cbefa05d2a66d54c13f43fbd39efda9326b3ba1ac1995d49b5bf`
-  and iteration identity
-  `426fa00fd2fab63b98a3dc7bf168fa98195248395bd8f650761aa6a5e9675fc9`.
-- Launcher preparation commit `0faa20c` and immutable binding commit `9eadeab`
-  provide independent output/W&B identities, Step-8-to-16 recovery,
-  Step-8/16 paired evaluation, and a receipt-gated serial relay: PRL23-B may
-  start only after PRL23-A training and evaluation have closed successfully.
-  Both real run configs pass load, generic launcher, trainable launcher and
-  pinned Hydra compose. Formal execution remains unstarted at ledger entry
-  time.
-
-### PRL-24-A-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS64-TFREE-TEACHER25
-
-- Authorized 2026-08-16 as the first large-prompt-batch arm after the BS16
-  pilot. Fixed scientific controls are Qwen3-VL-8B-Instruct full-policy
-  update, frozen RP67 Step-2000 Adapter, T-free answer/protocol/repeated-call
-  reward, Teacher25 canonical schedule, TGVF-only protocol, n16,
-  temperature 1, AdamW constant `1e-6`, world8 and micro2/rank. The treatment
-  changes global prompt batch from 16 to 64 by GA1 -> GA4.
-- Runtime implementation commit `86f312c` removes the legacy launcher
-  constants that forced every matched run back to BS16 and Step 8. Batch,
-  accumulation, horizon and checkpoint endpoints now come from the immutable
-  run config, while the remaining accepted Crop-16 execution/scientific
-  controls stay fixed. Existing BS16 configs compose to their prior exact
-  geometry.
-- The formal batch contains 64 independent prompts and 1,024 trajectories.
-  Actor and replay micro-batches remain 32 trajectories/rank; each rank
-  accumulates four micros and the project-owned DeepEyes reduction divides
-  each micro loss by four before backward. CPU value/gradient tests prove the
-  accumulated objective is the equal mean, not four times that mean, and each
-  trainer step still performs one optimizer update.
-- The immutable Teacher25 schedule is reused without rematerialization. Every
-  consecutive 64-row batch concatenates four canonical BS16 slices and
-  therefore contains exactly 48 retained-T1 plus 16 teacher rows. Dataloader
-  shuffle remains disabled.
-- Formal training runs directly to Step 16 and saves rolling recovery state
-  every step. S2/S4/S8/S16 are permanent evaluation endpoints. After S16, one
-  automatic paired-temperature-1 CoreDev-2511 evaluation runs four arms in
-  two parallel GPU waves; the common RP67 T-free RNG namespace is reused so
-  comparison with the accepted BS16 table remains paired.
-- A console-only world4 BS4 x n2 functional canary precedes formal W&B. It
-  validates rollout, a successful TGVF observation, reward, backward,
-  optimizer mutation and checkpoint save; it is not a scientific result.
-  Formal W&B identity is `prl24at25bs64s16`; smoke/canary is never uploaded.
-- The first canary invocation was rejected before GPU initialization because
-  this ledger entry had not yet accompanied the config-only descendant. No
-  rollout, optimizer mutation, checkpoint or W&B run was produced by that
-  rejected invocation. Adding this record changes no training variable.
-- The next canary invocation also made no optimizer update: it exposed that
-  the canary override selected the historical PRL13 smoke schedule while the
-  live runtime was bound to the Teacher25 schedule. Runtime commit `8c3ab4e`
-  now takes the canary prefix from the dataset bound by the run config; it
-  does not relax live image/sample identity validation.
-- Because the scaling arm required launcher parameterization rather than a
-  pure TOML overlay, historical PRL22-A is an informative anchor but not yet
-  a same-commit causal batch control. PRL24-A may run first as authorized; a
-  same-implementation BS16 A0 is required before claiming a strict BS64 batch
-  effect.
-## 2026-08-18 — PRL24 FMT2 overnight continuation and Joint BS64 handoff
-
-- The accepted `PRL-24-A-FMT2` Frozen-RP67 Teacher25 BS64 run is continued
-  in place from optimizer Step 8 to Step 16 with its constant `1e-6`
-  scheduler and all scientific settings unchanged.
-- The horizon extension permanently retains Steps 8, 12 and 16.  Step 12 and
-  Step 16 are evaluated together under the existing CoreDev-2511
-  `paired-seed-v1` contract after training releases all eight GPUs.
-- The horizon-extension contract now supports an explicit ordered list of
-  permanent checkpoints while remaining backward compatible with historical
-  manifests, which default to source and target only.
-- After the Step-12/16 evaluation completes, the supervisor hands all eight
-  GPUs to `PRL-24-B-FMT2-JOINT`, whose only scientific change from the Frozen
-  FMT2 arm is `representation.adapter_update_mode = "joint"`.  It retains
-  BS64, n16, Teacher25, RP67 initialization, full-Qwen policy training,
-  protocol penalty 2.0, LR and RNG controls.
-- Before the unattended handoff, a separate four-GPU BS4/n2 functional canary
-  must show a successful optimizer step and a changed RP67 Adapter digest.
-- Training supervisors retry operational interruptions and transient judge
-  failures, but preserve fail-closed behavior for deterministic code,
-  identity, non-finite and OOM failures.
-- The Step-12/16 evaluation closed successfully on 2026-08-19.  Its first
-  Joint handoff exposed an orchestration-only path error: the completed
-  canary artifacts live below the launcher's `canary/` mode directory, while
-  the supervisor initially inspected the experiment root.  The supervisor
-  now verifies the actual mode directory before deciding whether to launch or
-  accept the canary.  No scientific config, checkpoint or training state was
-  changed, and recovery begins at the pending Joint handoff rather than
-  repeating Frozen training or evaluation.
-- `PRL-24-B-FMT2-JOINT` completed all eight optimizer steps and published a
-  changed RP67 Adapter at every step.  Its Step-8 external evaluation is a
-  separate single-arm CoreDev-2511 run, bound to the same canonical
-  temperature-1 paired RNG namespace, task manifest, prompt/tool protocol,
-  seven-suite order and pinned Qwen2.5-72B judge as the accepted Frozen
-  Step-8 evaluation.  This closes the missing benchmark comparison without
-  rerunning or relabeling the Frozen arm.
-
-## 2026-08-19 — PRL24-C Focus/Grounding BS64 control
-
-- `PRL-24-C-FMT2-FG` is the single-variable visual-reward treatment for the
-  accepted PRL24-A FMT2 control. It keeps RP67 frozen, T-free reward,
-  Teacher25, BS64, n16, world8, full-Qwen update, temperature 1, constant
-  `1e-6` learning rate, prompt/tool protocol and protocol-error penalty 2.0.
-- The only scientific treatment is enabling Focus/Target and Grounding
-  reward through the pinned OpenRouter `Qwen3-VL-32B-Instruct` visual judge.
-  The established bounded API retry and sample-local fallback behavior is
-  retained; one transient sample failure does not invalidate the batch.
-- Training runs from Step 0 to Step 8, permanently retains Steps 4 and 8,
-  then automatically evaluates both checkpoints in parallel on the pinned
-  temperature-1 CoreDev-2511 seven-suite protocol and common RP67 T-free RNG
-  namespace. Formal W&B identity is `prl24cfmt2fgt25bs64s8`.
-- Implementation/config/evaluation preparation is locked at commit
-  `9db4d3a631e56bbaac0d15c1f3338487ac92d3cb`; this ledger-bound descendant
-  only rebinds that immutable code identity and its derived config digest.
+- The first formal attempt is invalid beyond its S1 rollout and has been
+  stopped. S1 completed in `2,297.5835 s` with format-error rate `.125`, mean
+  answer reward `.6953125`, 489 successful Crop observations and 84,491 policy
+  tokens. Immediately after the S1 checkpoint, S2 and S3 both reached format-
+  error rate `1.0`, mean answer reward `0`, zero successful Crop observations
+  and multi-million-token malformed rollouts. Their shorter wall times are not
+  valid throughput measurements because they skipped Crop execution.
+- The saved actor was not corrupted: an independently merged S2 Hugging Face
+  checkpoint generated valid native Crop tool calls. The failure was confined
+  to the colocated vLLM lifecycle. Full-model, non-LoRA vLLM checkpoint sleep
+  uses level 2 and discards the just-synchronized Qwen weights. Exact Crop uses
+  the upstream veRL checkpoint manager, which lacked the TGVF manager's explicit
+  post-checkpoint resynchronization marker, so a bare wake exposed an invalid
+  rollout model for S2.
+- Repair commit `9332fd771b954c6445fffa75c902c2f27659bdea` makes the shared
+  checkpoint wrapper treat an exact-Crop full-Qwen sync receipt as a mandatory
+  post-checkpoint resync signal. It republishes the actor weights after every
+  level-2 checkpoint sleep before another rollout can begin. A regression test
+  covers the exact-Crop path without a custom checkpoint-manager marker; 93
+  checkpoint, weight-sync and launcher tests passed.
+- The failed run's S1--S3 artifacts remain audit-only and must not be resumed.
+  Admission now requires a fresh two-step canary that crosses the S1 checkpoint
+  and proves valid S2 formatting and live Crop observations. Only after that
+  gate passes may the same 80-step formal identity restart from S0. The repair
+  adds one measured approximately five-second full-Qwen synchronization per
+  checkpoint; the current valid-step estimate remains about 38.4 minutes.
