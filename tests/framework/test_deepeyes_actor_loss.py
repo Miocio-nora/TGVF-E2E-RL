@@ -8,7 +8,9 @@ from verl.trainer.ppo.core_algos import get_policy_loss_fn
 
 from tgvf_rl.framework.verl.deepeyes_actor_loss import (
     DEEPEYES_OFFICIAL_POLICY_LOSS_MODE,
+    PRL24_SINGLE_PASS_POLICY_LOSS_MODE,
     compute_deepeyes_official_micro_token_mean_loss,
+    compute_deepeyes_single_pass_micro_token_mean_loss,
 )
 
 
@@ -17,11 +19,10 @@ def _actor_config(
     dp_size: int = 2,
     global_batch_size: int = 16,
     micro_batch_size: int = 4,
+    loss_mode: str = DEEPEYES_OFFICIAL_POLICY_LOSS_MODE,
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        policy_loss=SimpleNamespace(
-            loss_mode=DEEPEYES_OFFICIAL_POLICY_LOSS_MODE
-        ),
+        policy_loss=SimpleNamespace(loss_mode=loss_mode),
         use_dynamic_bsz=False,
         ppo_epochs=1,
         entropy_coeff=0.0,
@@ -71,6 +72,50 @@ def test_registry_selects_only_the_project_owned_deepeyes_loss() -> None:
     assert get_policy_loss_fn(DEEPEYES_OFFICIAL_POLICY_LOSS_MODE) is (
         compute_deepeyes_official_micro_token_mean_loss
     )
+    assert get_policy_loss_fn(PRL24_SINGLE_PASS_POLICY_LOSS_MODE) is (
+        compute_deepeyes_single_pass_micro_token_mean_loss
+    )
+
+
+def test_single_pass_value_and_gradient_match_same_model_old_policy() -> None:
+    shape = (4, 7)
+    old_placeholder = torch.linspace(
+        -4.0, 3.0, shape[0] * shape[1], dtype=torch.float64
+    ).reshape(shape)
+    advantages = torch.linspace(
+        -1.5, 1.5, shape[0] * shape[1], dtype=torch.float64
+    ).reshape(shape)
+    mask = _response_mask([7, 5, 3, 1], shape[1])
+
+    official_log_prob = torch.linspace(
+        -0.2, 0.2, shape[0] * shape[1], dtype=torch.float64
+    ).reshape(shape)
+    official_log_prob.requires_grad_(True)
+    official_loss, official_metrics = compute_deepeyes_official_micro_token_mean_loss(
+        official_log_prob.detach().clone(),
+        official_log_prob,
+        advantages,
+        mask,
+        config=_actor_config(),
+    )
+    official_gradient = torch.autograd.grad(official_loss, official_log_prob)[0]
+
+    single_log_prob = official_log_prob.detach().clone().requires_grad_(True)
+    single_loss, single_metrics = compute_deepeyes_single_pass_micro_token_mean_loss(
+        old_placeholder,
+        single_log_prob,
+        advantages,
+        mask,
+        config=_actor_config(loss_mode=PRL24_SINGLE_PASS_POLICY_LOSS_MODE),
+    )
+    single_gradient = torch.autograd.grad(single_loss, single_log_prob)[0]
+
+    torch.testing.assert_close(single_loss, official_loss, rtol=0, atol=0)
+    torch.testing.assert_close(single_gradient, official_gradient, rtol=0, atol=0)
+    assert "actor/deepeyes_single_pass_self_anchor" not in official_metrics
+    assert single_metrics["actor/deepeyes_single_pass_self_anchor"] == 1.0
+    assert single_metrics["actor/ppo_kl"] == 0.0
+    assert single_metrics["actor/pg_clipfrac"] == 0.0
 
 
 def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> None:
@@ -81,13 +126,12 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
     width = 6
     response_mask = _response_mask(lengths, width)
     old_log_prob = torch.zeros((16, width), dtype=torch.float64)
-    log_prob = torch.linspace(
-        -0.08, 0.08, 16 * width, dtype=torch.float64
-    ).reshape(16, width)
+    log_prob = torch.linspace(-0.08, 0.08, 16 * width, dtype=torch.float64).reshape(
+        16, width
+    )
     log_prob.requires_grad_(True)
     advantages = (
-        torch.arange(1, 16 * width + 1, dtype=torch.float64).reshape(16, width)
-        / 17.0
+        torch.arange(1, 16 * width + 1, dtype=torch.float64).reshape(16, width) / 17.0
     )
     advantages[::3] *= -1
     config = _actor_config()
@@ -106,9 +150,7 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
     # averages the two rank-local accumulated gradients.
     actual = torch.stack(micro_losses).sum() / 2
 
-    per_token = _official_per_token_loss(
-        old_log_prob, log_prob, advantages
-    )
+    per_token = _official_per_token_loss(old_log_prob, log_prob, advantages)
     official_oracle = torch.stack(
         [
             per_token[start : start + 4]
@@ -125,9 +167,7 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
         ]
     ).mean()
 
-    actual_gradient = torch.autograd.grad(
-        actual, log_prob, retain_graph=True
-    )[0]
+    actual_gradient = torch.autograd.grad(actual, log_prob, retain_graph=True)[0]
     official_gradient = torch.autograd.grad(
         official_oracle, log_prob, retain_graph=True
     )[0]
@@ -137,25 +177,16 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
     sequence_gradient = torch.autograd.grad(sequence_mean, log_prob)[0]
 
     torch.testing.assert_close(actual, official_oracle, rtol=0, atol=1e-12)
-    torch.testing.assert_close(
-        actual_gradient, official_gradient, rtol=0, atol=1e-12
-    )
+    torch.testing.assert_close(actual_gradient, official_gradient, rtol=0, atol=1e-12)
     assert not torch.isclose(actual, global_token_mean, rtol=0, atol=1e-8)
     assert not torch.isclose(actual, sequence_mean, rtol=0, atol=1e-8)
-    assert not torch.allclose(
-        actual_gradient, global_token_gradient, rtol=0, atol=1e-8
-    )
-    assert not torch.allclose(
-        actual_gradient, sequence_gradient, rtol=0, atol=1e-8
-    )
+    assert not torch.allclose(actual_gradient, global_token_gradient, rtol=0, atol=1e-8)
+    assert not torch.allclose(actual_gradient, sequence_gradient, rtol=0, atol=1e-8)
     assert [
-        int(response_mask[start : start + 4].sum())
-        for start in range(0, 16, 4)
+        int(response_mask[start : start + 4].sum()) for start in range(0, 16, 4)
     ] == [4, 18, 10, 24]
     assert actual.detach().item() == pytest.approx(-0.8464697448242664)
-    assert global_token_mean.detach().item() == pytest.approx(
-        -0.7438512345090551
-    )
+    assert global_token_mean.detach().item() == pytest.approx(-0.7438512345090551)
     assert sequence_mean.detach().item() == pytest.approx(-0.7028142003424558)
     assert (actual_gradient - global_token_gradient).abs().max().item() == (
         pytest.approx(0.04747654239317267)
@@ -202,13 +233,13 @@ def test_bs64_ga4_value_and_gradient_are_not_multiplied_by_four() -> None:
     )
     width = 2
     old_log_prob = torch.zeros((128, width), dtype=torch.float64)
-    log_prob = torch.linspace(
-        -0.05, 0.05, 128 * width, dtype=torch.float64
-    ).reshape(128, width)
+    log_prob = torch.linspace(-0.05, 0.05, 128 * width, dtype=torch.float64).reshape(
+        128, width
+    )
     log_prob.requires_grad_(True)
-    advantages = torch.linspace(
-        -1.0, 1.0, 128 * width, dtype=torch.float64
-    ).reshape(128, width)
+    advantages = torch.linspace(-1.0, 1.0, 128 * width, dtype=torch.float64).reshape(
+        128, width
+    )
     mask = torch.ones_like(log_prob, dtype=torch.bool)
 
     returned = []
@@ -233,9 +264,7 @@ def test_bs64_ga4_value_and_gradient_are_not_multiplied_by_four() -> None:
     oracle_gradient = torch.autograd.grad(oracle, log_prob)[0]
 
     torch.testing.assert_close(actual, oracle, rtol=0, atol=1e-12)
-    torch.testing.assert_close(
-        actual_gradient, oracle_gradient, rtol=0, atol=1e-12
-    )
+    torch.testing.assert_close(actual_gradient, oracle_gradient, rtol=0, atol=1e-12)
     assert not torch.isclose(actual, multiplied_by_four, rtol=0, atol=1e-8)
 
 
@@ -249,9 +278,7 @@ def test_bs64_ga4_value_and_gradient_are_not_multiplied_by_four() -> None:
         ("rollout_weights", "disables rollout importance weights"),
     ),
 )
-def test_loss_fails_closed_on_reduction_drift(
-    mutation: str, message: str
-) -> None:
+def test_loss_fails_closed_on_reduction_drift(mutation: str, message: str) -> None:
     config = _actor_config()
     shape = (4, 3)
     if mutation == "partial_micro":

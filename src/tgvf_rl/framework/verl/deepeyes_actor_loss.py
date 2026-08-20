@@ -30,6 +30,10 @@ from .native_deepeyes_runtime import (
 from .qwen3_flex_attention_compat import (
     install_qwen3_vl_text_flex_attention_compat,
 )
+from .prl24_single_pass_execution import (
+    PRL24_SINGLE_PASS_POLICY_LOSS_MODE,
+    maybe_install_prl24_single_pass_model_optimizations,
+)
 from .torch_bert_padding import install_prl13_torch_bert_padding
 
 
@@ -65,6 +69,7 @@ def _require_deepeyes_config(
     *,
     loss_agg_mode: str,
     observed_micro_batch_size: int,
+    policy_loss_mode: str = DEEPEYES_OFFICIAL_POLICY_LOSS_MODE,
 ) -> int:
     """Return the number of fixed-size local micros accumulated per update."""
 
@@ -73,7 +78,7 @@ def _require_deepeyes_config(
     if loss_agg_mode != DEEPEYES_OFFICIAL_LOSS_AGG_MODE:
         raise ValueError("DeepEyes actor loss requires token-mean input semantics")
     policy_loss = _value(config, "policy_loss")
-    if _value(policy_loss, "loss_mode") != DEEPEYES_OFFICIAL_POLICY_LOSS_MODE:
+    if _value(policy_loss, "loss_mode") != policy_loss_mode:
         raise ValueError("DeepEyes actor policy-loss registry identity differs")
     if _value(config, "use_dynamic_bsz") is not False:
         raise ValueError("DeepEyes equal-micro reduction forbids dynamic batching")
@@ -146,8 +151,7 @@ def _validate_inputs(
     return response_mask.bool()
 
 
-@register_policy_loss(DEEPEYES_OFFICIAL_POLICY_LOSS_MODE)
-def compute_deepeyes_official_micro_token_mean_loss(
+def _compute_deepeyes_micro_token_mean_loss(
     old_log_prob: torch.Tensor,
     log_prob: torch.Tensor,
     advantages: torch.Tensor,
@@ -155,6 +159,8 @@ def compute_deepeyes_official_micro_token_mean_loss(
     loss_agg_mode: str = DEEPEYES_OFFICIAL_LOSS_AGG_MODE,
     config: object = None,
     rollout_is_weights: torch.Tensor | None = None,
+    *,
+    self_anchor: bool,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute DeepEyes dual-clip PPO with its released reduction order.
 
@@ -166,27 +172,29 @@ def compute_deepeyes_official_micro_token_mean_loss(
 
     if rollout_is_weights is not None:
         raise ValueError("DeepEyes control disables rollout importance weights")
-    mask = _validate_inputs(
-        old_log_prob, log_prob, advantages, response_mask
-    )
+    mask = _validate_inputs(old_log_prob, log_prob, advantages, response_mask)
     local_micro_batch_count = _require_deepeyes_config(
         config,
         loss_agg_mode=loss_agg_mode,
         observed_micro_batch_size=int(log_prob.shape[0]),
+        policy_loss_mode=(
+            PRL24_SINGLE_PASS_POLICY_LOSS_MODE
+            if self_anchor
+            else DEEPEYES_OFFICIAL_POLICY_LOSS_MODE
+        ),
     )
 
     # These lines intentionally mirror DeepEyes@11d20c6 core_algos.py.  In
     # particular, the published path does not clamp the log ratio before exp.
-    log_ratio = log_prob - old_log_prob
+    effective_old_log_prob = log_prob.detach() if self_anchor else old_log_prob
+    log_ratio = log_prob - effective_old_log_prob
     ratio = torch.exp(log_ratio)
     pg_losses1 = -advantages * ratio
     pg_losses2 = -advantages * ratio.clamp(min=0.8, max=1.2)
     clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
     pg_losses3 = -advantages * 3.0
     clip_pg_losses2 = torch.minimum(pg_losses3, clip_pg_losses1)
-    per_token_loss = torch.where(
-        advantages < 0, clip_pg_losses2, clip_pg_losses1
-    )
+    per_token_loss = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
 
     micro_policy_token_count = mask.sum()
     loss = (
@@ -198,17 +206,22 @@ def compute_deepeyes_official_micro_token_mean_loss(
     # Keep numerical fail-closed checks without introducing a series of GPU
     # synchronization points in every micro-batch.  One compact host transfer
     # validates all tensor predicates before metrics trigger their usual sync.
-    checks = torch.stack(
-        (
-            ((response_mask == 0) | (response_mask == 1)).all(),
-            torch.isfinite(old_log_prob).all(),
-            torch.isfinite(log_prob).all(),
-            torch.isfinite(advantages).all(),
-            mask.any(),
-            torch.isfinite(ratio).all(),
-            torch.isfinite(loss),
+    checks = (
+        torch.stack(
+            (
+                ((response_mask == 0) | (response_mask == 1)).all(),
+                torch.isfinite(old_log_prob).all(),
+                torch.isfinite(log_prob).all(),
+                torch.isfinite(advantages).all(),
+                mask.any(),
+                torch.isfinite(ratio).all(),
+                torch.isfinite(loss),
+            )
         )
-    ).detach().cpu().tolist()
+        .detach()
+        .cpu()
+        .tolist()
+    )
     if not checks[0]:
         raise ValueError("response_mask must be binary")
     for name, valid in zip(
@@ -225,9 +238,9 @@ def compute_deepeyes_official_micro_token_mean_loss(
 
     selected_log_ratio = log_ratio.masked_select(mask)
     clipped = (pg_losses2 > pg_losses1).masked_select(mask)
-    lower_clipped = (
-        (clip_pg_losses1 > pg_losses3) & (advantages < 0)
-    ).masked_select(mask)
+    lower_clipped = ((clip_pg_losses1 > pg_losses3) & (advantages < 0)).masked_select(
+        mask
+    )
     metrics = {
         "actor/pg_clipfrac": clipped.to(torch.float32).mean().item(),
         "actor/ppo_kl": (-selected_log_ratio).mean().detach().item(),
@@ -237,12 +250,70 @@ def compute_deepeyes_official_micro_token_mean_loss(
         ),
         "actor/deepeyes_local_micro_batches": float(local_micro_batch_count),
     }
+    if self_anchor:
+        metrics["actor/deepeyes_single_pass_self_anchor"] = 1.0
     return loss, metrics
+
+
+@register_policy_loss(DEEPEYES_OFFICIAL_POLICY_LOSS_MODE)
+def compute_deepeyes_official_micro_token_mean_loss(
+    old_log_prob: torch.Tensor,
+    log_prob: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    loss_agg_mode: str = DEEPEYES_OFFICIAL_LOSS_AGG_MODE,
+    config: object = None,
+    rollout_is_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Compute the released DeepEyes dual-clip loss from a stored old policy."""
+
+    return _compute_deepeyes_micro_token_mean_loss(
+        old_log_prob,
+        log_prob,
+        advantages,
+        response_mask,
+        loss_agg_mode,
+        config,
+        rollout_is_weights,
+        self_anchor=False,
+    )
+
+
+@register_policy_loss(PRL24_SINGLE_PASS_POLICY_LOSS_MODE)
+def compute_deepeyes_single_pass_micro_token_mean_loss(
+    old_log_prob: torch.Tensor,
+    log_prob: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    loss_agg_mode: str = DEEPEYES_OFFICIAL_LOSS_AGG_MODE,
+    config: object = None,
+    rollout_is_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Compute the same one-update loss with ``log_prob.detach()`` as anchor."""
+
+    return _compute_deepeyes_micro_token_mean_loss(
+        old_log_prob,
+        log_prob,
+        advantages,
+        response_mask,
+        loss_agg_mode,
+        config,
+        rollout_is_weights,
+        self_anchor=True,
+    )
+
+
+# Model workers import this module through ``ModelConfig.external_lib`` after
+# inheriting the launch environment.  The opt-in guard leaves every historical
+# PRL13 execution untouched.
+maybe_install_prl24_single_pass_model_optimizations()
 
 
 __all__ = [
     "DEEPEYES_OFFICIAL_LOSS_AGG_MODE",
     "DEEPEYES_OFFICIAL_POLICY_LOSS_MODE",
     "DEEPEYES_OFFICIAL_POLICY_LOSS_MODULE",
+    "PRL24_SINGLE_PASS_POLICY_LOSS_MODE",
     "compute_deepeyes_official_micro_token_mean_loss",
+    "compute_deepeyes_single_pass_micro_token_mean_loss",
 ]

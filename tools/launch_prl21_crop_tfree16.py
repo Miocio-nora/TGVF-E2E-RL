@@ -46,6 +46,10 @@ from tgvf_rl.framework.verl.prl13_main import (  # noqa: E402
     preflight_pinned_deepeyes_config,
     run_pinned_deepeyes_config,
 )
+from tgvf_rl.framework.verl.prl24_single_pass_execution import (  # noqa: E402
+    PRL24_SINGLE_PASS_ENV,
+    PRL24_SINGLE_PASS_POLICY_LOSS_MODE,
+)
 from tgvf_rl.policy.crop_tfree_contract import (  # noqa: E402
     CropTFreeRunContract,
     load_crop_tfree_run_contract,
@@ -162,6 +166,27 @@ def _current_data_overrides(contract: CropTFreeRunContract) -> dict[str, object]
     return {"data.mm_processor_kwargs.max_pixels": contract.image_max_pixels}
 
 
+def _execution_overrides(contract: CropTFreeRunContract) -> dict[str, object]:
+    if not contract.single_pass_execution:
+        return {}
+    return {
+        "actor_rollout_ref.actor.policy_loss.loss_mode": (
+            PRL24_SINGLE_PASS_POLICY_LOSS_MODE
+        ),
+        "actor_rollout_ref.actor.calculate_entropy": False,
+        "actor_rollout_ref.rollout.calculate_log_probs": True,
+        "algorithm.rollout_correction.bypass_mode": True,
+        "algorithm.rollout_correction.rollout_is": None,
+        "algorithm.rollout_correction.rollout_rs": None,
+        "algorithm.rollout_correction.loss_type": "ppo_clip",
+        "algorithm.rollout_correction.rollout_is_batch_normalize": False,
+    }
+
+
+def _execution_environment(contract: CropTFreeRunContract) -> dict[str, str]:
+    return {PRL24_SINGLE_PASS_ENV: "1" if contract.single_pass_execution else "0"}
+
+
 def _build_plan(contract: CropTFreeRunContract, *, mode: str):
     if mode == "smoke":
         base = build_deepeyes_native_verl_launch_plan(
@@ -174,13 +199,18 @@ def _build_plan(contract: CropTFreeRunContract, *, mode: str):
             **base.overrides,
             **_common_reward_overrides(contract),
             **_current_data_overrides(contract),
+            **_execution_overrides(contract),
             "trainer.experiment_name": contract.run_id + "-SMOKE",
             "trainer.default_local_dir": str(output_root / "checkpoints"),
             "trainer.rollout_data_dir": str(output_root / "trajectories"),
             "trainer.validation_data_dir": str(output_root / "validation"),
             "trainer.logger": ["console"],
         }
-        environment = {**base.environment, "CUDA_VISIBLE_DEVICES": "0,1,2,3"}
+        environment = {
+            **base.environment,
+            **_execution_environment(contract),
+            "CUDA_VISIBLE_DEVICES": "0,1,2,3",
+        }
         return replace(base, overrides=overrides, environment=environment)
 
     if mode != "formal":
@@ -197,6 +227,7 @@ def _build_plan(contract: CropTFreeRunContract, *, mode: str):
         **base.overrides,
         **_common_reward_overrides(contract),
         **_current_data_overrides(contract),
+        **_execution_overrides(contract),
         "trainer.experiment_name": contract.run_id,
         "trainer.default_local_dir": str(output_root / "checkpoints"),
         "trainer.rollout_data_dir": str(output_root / "trajectories"),
@@ -235,6 +266,7 @@ def _build_plan(contract: CropTFreeRunContract, *, mode: str):
     }
     environment = {
         **base.environment,
+        **_execution_environment(contract),
         "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
         "TGVF_DEEPEYES_RUN_GLOBAL_JUDGE_CONCURRENCY_CAP": "8",
         "TGVF_DEEPEYES_JUDGE_MAXIMUM_ATTEMPTS": "8",
@@ -269,6 +301,12 @@ def _record(
         ),
         "global_prompt_batch_size": contract.global_prompt_batch_size,
         "gradient_accumulation_steps": contract.gradient_accumulation_steps,
+        "execution": {
+            "single_pass_self_anchor": contract.single_pass_execution,
+            "old_logprob_recompute": not contract.single_pass_execution,
+            "target_only_actor_lm_head": contract.single_pass_execution,
+            "cached_vision_position_interpolation": (contract.single_pass_execution),
+        },
         "permanent_checkpoint_steps": list(contract.permanent_checkpoint_steps),
         "compose_preflight": preflight,
         "created_at_unix_seconds": time.time(),

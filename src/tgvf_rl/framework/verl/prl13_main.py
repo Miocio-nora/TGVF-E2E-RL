@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 from importlib.util import find_spec
 import io
+import json
 from pathlib import Path
 import sys
 from typing import Sequence
@@ -38,6 +39,73 @@ def compose_pinned_deepeyes_config(
         return compose(config_name="ppo_trainer", overrides=list(overrides))
 
 
+def _require_prl24_single_pass_config(config: object) -> None:
+    """Prove that one stored old-policy forward is mathematically redundant."""
+
+    actor = config.actor_rollout_ref.actor
+    rollout = config.actor_rollout_ref.rollout
+    correction = config.algorithm.rollout_correction
+    expected = {
+        "actor.ppo_epochs": (actor.ppo_epochs, 1),
+        "actor.shuffle": (actor.shuffle, False),
+        "actor.use_dynamic_bsz": (actor.use_dynamic_bsz, False),
+        "actor.entropy_coeff": (actor.entropy_coeff, 0.0),
+        "actor.calculate_entropy": (actor.calculate_entropy, False),
+        "actor.use_kl_loss": (actor.use_kl_loss, False),
+        "data.shuffle": (config.data.shuffle, False),
+        "algorithm.adv_estimator": (config.algorithm.adv_estimator, "grpo"),
+        "algorithm.use_kl_in_reward": (
+            config.algorithm.use_kl_in_reward,
+            False,
+        ),
+        "rollout.calculate_log_probs": (rollout.calculate_log_probs, True),
+        "rollout_correction.bypass_mode": (
+            correction.bypass_mode,
+            True,
+        ),
+        "rollout_correction.rollout_is": (correction.rollout_is, None),
+        "rollout_correction.rollout_rs": (correction.rollout_rs, None),
+    }
+    mismatches = {
+        name: (observed, required)
+        for name, (observed, required) in expected.items()
+        if observed != required
+    }
+    if mismatches:
+        raise ValueError(
+            f"PRL24 single-pass execution preconditions differ: {mismatches!r}"
+        )
+    if actor.ppo_mini_batch_size != config.data.train_batch_size:
+        raise ValueError("PRL24 single-pass requires one complete PPO mini-batch")
+
+    model_config_path = (
+        Path(str(config.actor_rollout_ref.model.path)) / "config.json"
+    ).resolve(strict=True)
+    payload = json.loads(model_config_path.read_text(encoding="utf-8"))
+    text_config = payload.get("text_config")
+    if not isinstance(text_config, dict) or text_config.get("attention_dropout") != 0.0:
+        raise ValueError("PRL24 single-pass requires zero Qwen3 attention dropout")
+
+    def dropout_values(value: object, prefix: str = ""):
+        if not isinstance(value, dict):
+            return
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if "dropout" in str(key).casefold():
+                yield path, item
+            yield from dropout_values(item, path)
+
+    nonzero_dropout = {
+        name: value
+        for name, value in dropout_values(payload)
+        if not isinstance(value, int | float) or float(value) != 0.0
+    }
+    if nonzero_dropout:
+        raise ValueError(
+            f"PRL24 single-pass model dropout differs: {nonzero_dropout!r}"
+        )
+
+
 def preflight_pinned_deepeyes_config(config: object) -> dict[str, object]:
     """Validate config and resolve custom Dataset/Reward classes without I/O."""
 
@@ -68,7 +136,9 @@ def preflight_pinned_deepeyes_config(config: object) -> dict[str, object]:
     from .deepeyes_actor_loss import (
         DEEPEYES_OFFICIAL_POLICY_LOSS_MODE,
         DEEPEYES_OFFICIAL_POLICY_LOSS_MODULE,
+        PRL24_SINGLE_PASS_POLICY_LOSS_MODE,
         compute_deepeyes_official_micro_token_mean_loss,
+        compute_deepeyes_single_pass_micro_token_mean_loss,
     )
     from .torch_bert_padding import (
         require_prl13_torch_bert_padding,
@@ -99,9 +169,7 @@ def preflight_pinned_deepeyes_config(config: object) -> dict[str, object]:
         raise TypeError("PRL13 reward manager did not resolve to a class")
     if config.actor_rollout_ref.rollout.get("checkpoint_manager_class") is not None:
         raise ValueError("PRL13 must use the upstream checkpoint manager")
-    manager_fqn = config.actor_rollout_ref.rollout.agent.get(
-        "agent_loop_manager_class"
-    )
+    manager_fqn = config.actor_rollout_ref.rollout.agent.get("agent_loop_manager_class")
     if manager_fqn != PRL13_AGENT_LOOP_MANAGER_FQN:
         raise ValueError("PRL13 heterogeneous manager identity differs")
     manager_cls = load_class_from_fqn(manager_fqn, "PRL13 AgentLoopManager")
@@ -111,15 +179,24 @@ def preflight_pinned_deepeyes_config(config: object) -> dict[str, object]:
     if external_lib != DEEPEYES_OFFICIAL_POLICY_LOSS_MODULE:
         raise ValueError("PRL13 actor-loss external module identity differs")
     loss_mode = config.actor_rollout_ref.actor.policy_loss.get("loss_mode")
-    if loss_mode != DEEPEYES_OFFICIAL_POLICY_LOSS_MODE:
+    supported_losses = {
+        DEEPEYES_OFFICIAL_POLICY_LOSS_MODE: (
+            compute_deepeyes_official_micro_token_mean_loss
+        ),
+        PRL24_SINGLE_PASS_POLICY_LOSS_MODE: (
+            compute_deepeyes_single_pass_micro_token_mean_loss
+        ),
+    }
+    if loss_mode not in supported_losses:
         raise ValueError("PRL13 actor policy-loss mode identity differs")
     import_external_libs(external_lib)
-    if get_policy_loss_fn(loss_mode) is not (
-        compute_deepeyes_official_micro_token_mean_loss
-    ):
+    if get_policy_loss_fn(loss_mode) is not supported_losses[loss_mode]:
         raise RuntimeError("PRL13 actor-loss registry binding differs")
+    single_pass = loss_mode == PRL24_SINGLE_PASS_POLICY_LOSS_MODE
+    if single_pass:
+        _require_prl24_single_pass_config(config)
     padding_backend = require_prl13_torch_bert_padding()
-    return {
+    result = {
         "need_reference_policy": use_reference,
         "need_critic": use_critic,
         "dataset_class": f"{dataset_cls.__module__}.{dataset_cls.__name__}",
@@ -128,6 +205,9 @@ def preflight_pinned_deepeyes_config(config: object) -> dict[str, object]:
         "padding_backend": padding_backend,
         "policy_loss_mode": loss_mode,
     }
+    if single_pass:
+        result["single_pass_self_anchor"] = True
+    return result
 
 
 def run_prl13_task_runner(
@@ -150,6 +230,18 @@ def run_prl13_task_runner(
 
     install_prl13_torch_bert_padding()
     require_prl13_torch_bert_padding()
+    from .prl24_single_pass_execution import (
+        PRL24_SINGLE_PASS_POLICY_LOSS_MODE,
+        install_prl24_single_pass_rollout_bypass,
+    )
+
+    actor_rollout_ref = getattr(config, "actor_rollout_ref", None)
+    actor = getattr(actor_rollout_ref, "actor", None)
+    policy_loss = getattr(actor, "policy_loss", None)
+    getter = getattr(policy_loss, "get", None)
+    loss_mode = getter("loss_mode", None) if callable(getter) else None
+    if loss_mode == PRL24_SINGLE_PASS_POLICY_LOSS_MODE:
+        install_prl24_single_pass_rollout_bypass()
     return upstream_run(runner, config)
 
 
