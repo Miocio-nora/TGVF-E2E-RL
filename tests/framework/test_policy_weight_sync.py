@@ -12,14 +12,18 @@ import torch
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.framework.verl.policy_weight_sync import (
+    POLICY_FULL_QWEN_LATEST_FILENAME,
     POLICY_LORA_LATEST_FILENAME,
     PolicyWeightSyncState,
     TGVFPolicyCheckpointEngineManager,
+    full_qwen_operational_weights_sha256,
+    load_latest_full_qwen_sync_receipt,
     load_latest_lora_snapshot,
     load_latest_policy_version,
     load_lora_snapshot_pointer,
     load_policy_weight_sync_request,
     lora_parameter_mapping_sha256,
+    publish_full_qwen_sync_receipt,
     publish_policy_weight_sync_request,
     wrap_lora_parameter_stream_for_snapshot,
 )
@@ -49,6 +53,37 @@ def _stream(step: int = 0) -> list[tuple[str, torch.Tensor]]:
             torch.tensor([[3.0], [4.0 + step]], dtype=torch.bfloat16),
         ),
     ]
+
+
+def test_full_qwen_sync_receipt_tracks_only_successful_operational_boundaries(
+    tmp_path: Path,
+) -> None:
+    state = PolicyWeightSyncState.from_environment(_environment(tmp_path))
+    base = "3" * 64
+
+    initial = publish_full_qwen_sync_receipt(
+        state, optimizer_step=0, base_weights_sha256=base
+    )
+    assert initial.policy_version == PolicyVersion(state.run_id, 0, base)
+    assert initial.pointer_file.name == POLICY_FULL_QWEN_LATEST_FILENAME
+
+    updated = publish_full_qwen_sync_receipt(
+        state, optimizer_step=1, base_weights_sha256=base
+    )
+    expected = full_qwen_operational_weights_sha256(
+        state, optimizer_step=1, base_weights_sha256=base
+    )
+    assert updated.policy_version == PolicyVersion(state.run_id, 1, expected)
+    assert load_latest_full_qwen_sync_receipt(
+        state,
+        expected_optimizer_step=1,
+        expected_base_weights_sha256=base,
+    ) == updated
+
+    with pytest.raises(IdentityMismatchError, match="base weights"):
+        load_latest_full_qwen_sync_receipt(
+            state, expected_base_weights_sha256="4" * 64
+        )
 
 
 def _publish(

@@ -48,6 +48,8 @@ POLICY_WEIGHT_SYNC_REQUEST_FILENAME = "weight-sync-request.json"
 POLICY_LORA_LATEST_FILENAME = "latest-lora-snapshot.json"
 POLICY_LORA_SNAPSHOT_DIRECTORY = "lora-snapshots"
 POLICY_LORA_MANIFEST_DIRECTORY = "lora-manifests"
+POLICY_FULL_QWEN_LATEST_SCHEMA = "tgvf-policy-full-qwen-latest-v1"
+POLICY_FULL_QWEN_LATEST_FILENAME = "latest-full-qwen-version.json"
 POLICY_REQUIRED_WORLD_SIZE = 4
 
 _T = TypeVar("_T")
@@ -98,6 +100,10 @@ class PolicyWeightSyncState:
     @property
     def latest_path(self) -> Path:
         return self.directory / POLICY_LORA_LATEST_FILENAME
+
+    @property
+    def full_qwen_latest_path(self) -> Path:
+        return self.directory / POLICY_FULL_QWEN_LATEST_FILENAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +179,34 @@ class PolicyLoRASnapshot:
             for path in (self.pointer_file, self.tensor_file, self.manifest_file)
         ):
             raise ValueError("LoRA snapshot paths must be absolute")
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyFullQwenSyncReceipt:
+    """Committed operational identity of one completed full-Qwen vLLM sync.
+
+    Upstream veRL streams the complete actor state directly to the colocated
+    rollout replicas and does not expose a second tensor iterator that can be
+    hashed without duplicating the full model.  The receipt therefore binds
+    the run identity, immutable base-model identity, and optimizer boundary.
+    It is published only after upstream reports a successful weight sync.
+    """
+
+    policy_version: PolicyVersion
+    run_identity_sha256: str
+    base_weights_sha256: str
+    pointer_file: Path
+    pointer_file_sha256: str
+    pointer_bytes: bytes
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.run_identity_sha256, "run identity")
+        _require_sha256(self.base_weights_sha256, "base weights identity")
+        _require_sha256(self.pointer_file_sha256, "full-Qwen pointer digest")
+        if not self.pointer_file.is_absolute():
+            raise ValueError("full-Qwen pointer path must be absolute")
+        if not isinstance(self.pointer_bytes, bytes) or not self.pointer_bytes:
+            raise ValueError("full-Qwen pointer bytes must be non-empty")
 
 
 def publish_policy_weight_sync_request(
@@ -439,6 +473,129 @@ def load_latest_policy_version(
         expected_optimizer_step=expected_optimizer_step,
         expected_request_sha256=expected_request_sha256,
     ).policy_version
+
+
+def full_qwen_operational_weights_sha256(
+    state: PolicyWeightSyncState,
+    *,
+    optimizer_step: int,
+    base_weights_sha256: str,
+) -> str:
+    """Name the synchronized full-model boundary without copying 8.8B tensors."""
+
+    if not isinstance(state, PolicyWeightSyncState):
+        raise TypeError("state must be PolicyWeightSyncState")
+    _nonnegative_step(optimizer_step)
+    _require_sha256(base_weights_sha256, "base weights identity")
+    if optimizer_step == 0:
+        return base_weights_sha256
+    content = {
+        "schema_version": POLICY_FULL_QWEN_LATEST_SCHEMA,
+        "run_id": state.run_id,
+        "run_identity_sha256": state.run_identity_sha256,
+        "base_weights_sha256": base_weights_sha256,
+        "optimizer_step": optimizer_step,
+        "identity_kind": "successful-upstream-full-model-sync-boundary",
+    }
+    return _sha256_bytes(_canonical_json_bytes(content))
+
+
+def publish_full_qwen_sync_receipt(
+    state: PolicyWeightSyncState,
+    *,
+    optimizer_step: int,
+    base_weights_sha256: str,
+) -> PolicyFullQwenSyncReceipt:
+    """Commit a full-Qwen policy version after a successful upstream sync."""
+
+    weights_sha256 = full_qwen_operational_weights_sha256(
+        state,
+        optimizer_step=optimizer_step,
+        base_weights_sha256=base_weights_sha256,
+    )
+    content = {
+        "schema_version": POLICY_FULL_QWEN_LATEST_SCHEMA,
+        "run_id": state.run_id,
+        "run_identity_sha256": state.run_identity_sha256,
+        "optimizer_step": optimizer_step,
+        "base_weights_sha256": base_weights_sha256,
+        "weights_sha256": weights_sha256,
+        "identity_kind": "successful-upstream-full-model-sync-boundary",
+    }
+    pointer_bytes = _canonical_json_bytes(_with_integrity(content)) + b"\n"
+    _atomic_replace_bytes(state.full_qwen_latest_path, pointer_bytes)
+    return load_latest_full_qwen_sync_receipt(
+        state,
+        expected_optimizer_step=optimizer_step,
+        expected_base_weights_sha256=base_weights_sha256,
+    )
+
+
+def load_latest_full_qwen_sync_receipt(
+    state: PolicyWeightSyncState,
+    *,
+    expected_optimizer_step: int | None = None,
+    expected_base_weights_sha256: str | None = None,
+) -> PolicyFullQwenSyncReceipt:
+    """Load and verify the latest completed full-Qwen synchronization boundary."""
+
+    if not isinstance(state, PolicyWeightSyncState):
+        raise TypeError("state must be PolicyWeightSyncState")
+    if expected_optimizer_step is not None:
+        _nonnegative_step(expected_optimizer_step)
+    if expected_base_weights_sha256 is not None:
+        _require_sha256(expected_base_weights_sha256, "expected base weights identity")
+    pointer = state.full_qwen_latest_path
+    pointer_bytes = _read_bytes(pointer, "latest full-Qwen version pointer")
+    pointer_file_sha256 = _sha256_bytes(pointer_bytes)
+    latest = _strict_json_bytes_mapping(
+        pointer_bytes,
+        {
+            "schema_version",
+            "run_id",
+            "run_identity_sha256",
+            "optimizer_step",
+            "base_weights_sha256",
+            "weights_sha256",
+            "identity_kind",
+            "integrity_sha256",
+        },
+        "full-Qwen version pointer",
+    )
+    _verify_integrity_field(latest, "integrity_sha256", "full-Qwen version pointer")
+    if latest["schema_version"] != POLICY_FULL_QWEN_LATEST_SCHEMA:
+        raise ReplayMismatchError("full-Qwen version pointer schema differs")
+    if latest["identity_kind"] != "successful-upstream-full-model-sync-boundary":
+        raise ReplayMismatchError("full-Qwen version identity kind differs")
+    _require_run_identity(
+        state,
+        _required_text(latest, "run_id"),
+        _required_sha(latest, "run_identity_sha256"),
+    )
+    optimizer_step = _required_step(latest, "optimizer_step")
+    base_weights_sha256 = _required_sha(latest, "base_weights_sha256")
+    weights_sha256 = _required_sha(latest, "weights_sha256")
+    if expected_optimizer_step is not None and optimizer_step != expected_optimizer_step:
+        raise IdentityMismatchError("full-Qwen optimizer step differs")
+    if expected_base_weights_sha256 is not None and not hmac.compare_digest(
+        base_weights_sha256, expected_base_weights_sha256
+    ):
+        raise IdentityMismatchError("full-Qwen base weights identity differs")
+    expected_weights = full_qwen_operational_weights_sha256(
+        state,
+        optimizer_step=optimizer_step,
+        base_weights_sha256=base_weights_sha256,
+    )
+    if not hmac.compare_digest(weights_sha256, expected_weights):
+        raise ReplayMismatchError("full-Qwen operational weights identity differs")
+    return PolicyFullQwenSyncReceipt(
+        policy_version=PolicyVersion(state.run_id, optimizer_step, weights_sha256),
+        run_identity_sha256=state.run_identity_sha256,
+        base_weights_sha256=base_weights_sha256,
+        pointer_file=pointer,
+        pointer_file_sha256=pointer_file_sha256,
+        pointer_bytes=pointer_bytes,
+    )
 
 
 def lora_parameter_mapping_sha256(
@@ -918,6 +1075,8 @@ def _canonical_json_bytes(value: object) -> bytes:
 
 
 __all__ = [
+    "POLICY_FULL_QWEN_LATEST_FILENAME",
+    "POLICY_FULL_QWEN_LATEST_SCHEMA",
     "POLICY_LORA_LATEST_FILENAME",
     "POLICY_LORA_LATEST_SCHEMA",
     "POLICY_LORA_MANIFEST_DIRECTORY",
@@ -927,14 +1086,18 @@ __all__ = [
     "POLICY_WEIGHT_SYNC_REQUEST_FILENAME",
     "POLICY_WEIGHT_SYNC_REQUEST_SCHEMA",
     "PolicyLoRASnapshot",
+    "PolicyFullQwenSyncReceipt",
     "PolicyWeightSyncRequest",
     "PolicyWeightSyncState",
     "TGVFPolicyCheckpointEngineManager",
+    "full_qwen_operational_weights_sha256",
+    "load_latest_full_qwen_sync_receipt",
     "load_latest_lora_snapshot",
     "load_latest_policy_version",
     "load_lora_snapshot_pointer",
     "load_policy_weight_sync_request",
     "lora_parameter_mapping_sha256",
+    "publish_full_qwen_sync_receipt",
     "publish_policy_weight_sync_request",
     "wrap_lora_parameter_stream_for_snapshot",
 ]

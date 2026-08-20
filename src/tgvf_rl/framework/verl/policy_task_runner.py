@@ -52,6 +52,7 @@ from tgvf_rl.policy.metrics import (
     PilotTrajectoryMetricsObservation,
 )
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -79,7 +80,9 @@ from .policy_checkpoint_lifecycle import (
 )
 from .policy_weight_sync import (
     PolicyWeightSyncState,
+    load_latest_full_qwen_sync_receipt,
     load_latest_policy_version,
+    publish_full_qwen_sync_receipt,
 )
 from .reward_bridge import validate_policy_pilot_reward_data_proto
 from tgvf_rl.rewards.verl_adapter import (
@@ -595,6 +598,33 @@ def _reference_weights_sha256(config: PolicyE2ESmokeRunConfig) -> str:
     return _operational_base_identity_sha256(config.model)
 
 
+def _uses_full_qwen_sync_receipts(config: PolicyE2ESmokeRunConfig) -> bool:
+    return (
+        config.schema_version
+        == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+    )
+
+
+def _publish_full_qwen_version_if_required(
+    trainer: object, optimizer_step: int
+) -> PolicyVersion | None:
+    state = getattr(trainer, "_policy_checkpoint_state", None)
+    config = getattr(state, "config", None)
+    weight_state = getattr(state, "_weight_state", None)
+    if not isinstance(config, PolicyE2ESmokeRunConfig) or not isinstance(
+        weight_state, PolicyWeightSyncState
+    ):
+        return None
+    if not _uses_full_qwen_sync_receipts(config):
+        return None
+    receipt = publish_full_qwen_sync_receipt(
+        weight_state,
+        optimizer_step=optimizer_step,
+        base_weights_sha256=_operational_base_identity_sha256(config.model),
+    )
+    return receipt.policy_version
+
+
 def _run_identity(config: PolicyE2ESmokeRunConfig) -> PilotRunIdentityHashes:
     hashes = {
         "agent_loop_config": config.framework.agent_loop_config_sha256,
@@ -729,9 +759,8 @@ class PolicyPilotTrainerCheckpointState:
             raise RuntimeError(
                 "Policy metrics do not reach the checkpoint optimizer step"
             )
-        policy = load_latest_policy_version(
-            self._weight_state,
-            expected_optimizer_step=optimizer_step,
+        policy = self._load_latest_policy_version(
+            expected_optimizer_step=optimizer_step
         )
         self._progress = PilotOptimizerDataCursor(
             optimizer_step,
@@ -845,7 +874,23 @@ class PolicyPilotTrainerCheckpointState:
         # Clean-process resume is intentionally latest-checkpoint-only in this
         # first executable slice.  The strict pair subsequently verifies the
         # loaded optimizer step against this content-addressed snapshot.
-        return load_latest_policy_version(self._weight_state)
+        return self._load_latest_policy_version()
+
+    def _load_latest_policy_version(
+        self, *, expected_optimizer_step: int | None = None
+    ) -> PolicyVersion:
+        if _uses_full_qwen_sync_receipts(self.config):
+            return load_latest_full_qwen_sync_receipt(
+                self._weight_state,
+                expected_optimizer_step=expected_optimizer_step,
+                expected_base_weights_sha256=(
+                    _operational_base_identity_sha256(self.config.model)
+                ),
+            ).policy_version
+        return load_latest_policy_version(
+            self._weight_state,
+            expected_optimizer_step=expected_optimizer_step,
+        )
 
     def reference_policy_version(self) -> PolicyVersion:
         model_slug = Path(self.config.model.model_name).name.casefold()
@@ -997,6 +1042,8 @@ class CheckpointAfterWeightSyncManager:
         sync_started = perf_counter()
         result = self.upstream.update_weights(global_steps)
         self._replicas_sleeping = False
+        if type(global_steps) is int:
+            _publish_full_qwen_version_if_required(self.trainer, global_steps)
         sync_seconds = perf_counter() - sync_started
         checkpoint_seconds = 0.0
         if getattr(self.trainer, "_policy_checkpoint_pending", False):
@@ -1188,6 +1235,11 @@ def make_policy_pilot_ray_trainer_class(upstream_trainer_cls: type[Any]) -> type
             original_actor_wg = self.actor_rollout_wg
             self._policy_checkpoint_state = state
             self._policy_checkpoint_lifecycle = checkpoint_lifecycle
+            # Upstream completed the initial full-model actor-to-vLLM sync
+            # before returning from init_workers().  Publish that boundary for
+            # exact-Crop AgentLoop workers, which intentionally have no LoRA
+            # snapshot stream to consume.
+            _publish_full_qwen_version_if_required(self, 0)
             self.actor_rollout_wg = PairedActorWorkerGroup(original_actor_wg, state)
             if getattr(self, "ref_policy_wg", None) is original_actor_wg:
                 self.ref_policy_wg = self.actor_rollout_wg

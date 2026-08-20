@@ -37,6 +37,7 @@ from tgvf_rl.framework.vllm import (
     qwen3_vl_final_turn_outcomes,
 )
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -49,6 +50,7 @@ from .native_agent_loop import (
 
 if TYPE_CHECKING:
     from tgvf_rl.framework.verl.policy_weight_sync import (
+        PolicyFullQwenSyncReceipt,
         PolicyLoRASnapshot,
         PolicyWeightSyncState,
     )
@@ -105,7 +107,7 @@ class PolicyE2ERuntimeBuildContext:
 
     config: PolicyE2ESmokeRunConfig
     placement: PolicyAgentLoopWorkerPlacement
-    initial_snapshot: "PolicyLoRASnapshot"
+    initial_snapshot: "PolicyLoRASnapshot | PolicyFullQwenSyncReceipt"
     weight_sync_state: "PolicyWeightSyncState"
     trainer_config: object
     server_manager: object
@@ -121,7 +123,7 @@ class PolicyE2ERuntimeBuildContext:
             raise TypeError("runtime context requires a worker placement")
         if self.initial_snapshot.policy_version.run_id != self.config.run_id:
             raise IdentityMismatchError(
-                "initial local LoRA snapshot belongs to another run"
+                "initial local policy version belongs to another run"
             )
 
 
@@ -301,6 +303,66 @@ class ExactLoRASnapshotPolicyVersionPort:
         return installed
 
 
+class ExactFullQwenSyncPolicyVersionPort:
+    """Follow only completed upstream full-model synchronization receipts."""
+
+    def __init__(
+        self,
+        *,
+        state: "PolicyWeightSyncState",
+        initial_receipt: "PolicyFullQwenSyncReceipt",
+        receipt_loader: Callable[..., "PolicyFullQwenSyncReceipt"] | None = None,
+    ) -> None:
+        _require_full_qwen_sync_receipt(initial_receipt)
+        if initial_receipt.policy_version.run_id != state.run_id:
+            raise IdentityMismatchError("initial full-Qwen receipt and run differ")
+        if initial_receipt.run_identity_sha256 != state.run_identity_sha256:
+            raise IdentityMismatchError(
+                "initial full-Qwen receipt run identity differs"
+            )
+        self.state = state
+        self.receipt_loader = receipt_loader or _load_latest_full_qwen_receipt
+        self.base_weights_sha256 = initial_receipt.base_weights_sha256
+        self._lock = RLock()
+        self._current = initial_receipt.policy_version
+        self._latest_pointer_signature = _latest_full_qwen_pointer_signature(state)
+
+    def current_policy_version(self) -> PolicyVersion:
+        with self._lock:
+            pointer_signature = _latest_full_qwen_pointer_signature(self.state)
+            if (
+                pointer_signature is not None
+                and pointer_signature == self._latest_pointer_signature
+            ):
+                return self._current
+            receipt = self.receipt_loader(
+                self.state,
+                expected_base_weights_sha256=self.base_weights_sha256,
+            )
+            _require_full_qwen_sync_receipt(receipt)
+            candidate = receipt.policy_version
+            if candidate.run_id != self.state.run_id:
+                raise IdentityMismatchError(
+                    "latest full-Qwen receipt belongs to another run"
+                )
+            if receipt.run_identity_sha256 != self.state.run_identity_sha256:
+                raise IdentityMismatchError(
+                    "latest full-Qwen receipt run identity changed"
+                )
+            if candidate.optimizer_step < self._current.optimizer_step:
+                raise ReplayMismatchError(
+                    "latest full-Qwen receipt regressed in optimizer step"
+                )
+            if candidate != self._current:
+                if candidate.optimizer_step == self._current.optimizer_step:
+                    raise ReplayMismatchError(
+                        "one optimizer step published two full-Qwen identities"
+                    )
+                self._current = candidate
+            self._latest_pointer_signature = pointer_signature
+            return self._current
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyE2ERuntimeIdentity:
     schema_version: str
@@ -314,7 +376,7 @@ class PolicyE2ERuntimeIdentity:
 class _ProcessRuntimeCore:
     identity: PolicyE2ERuntimeIdentity
     bound_factory: BoundVerlNativeAgentLoopInvocationFactory
-    policy_version: ExactLoRASnapshotPolicyVersionPort
+    policy_version: ExactLoRASnapshotPolicyVersionPort | ExactFullQwenSyncPolicyVersionPort
     construction_fingerprint: tuple[int, ...]
 
 
@@ -362,6 +424,8 @@ class PolicyE2ERuntimeInvocationFactory:
             load_policy_e2e_smoke_run_config
         ),
         snapshot_loader: Callable[..., "PolicyLoRASnapshot"] | None = None,
+        full_qwen_receipt_loader: Callable[..., "PolicyFullQwenSyncReceipt"]
+        | None = None,
     ) -> None:
         if not callable(config_loader):
             raise TypeError("config_loader must be callable")
@@ -407,8 +471,30 @@ class PolicyE2ERuntimeInvocationFactory:
         with _PROCESS_RUNTIME_LOCK:
             core = _PROCESS_RUNTIMES.get(key)
             if core is None:
-                initial_snapshot = (snapshot_loader or _load_latest_snapshot)(state)
-                _require_policy_lora_snapshot(initial_snapshot)
+                full_qwen = (
+                    config.schema_version
+                    == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+                )
+                if full_qwen:
+                    from .exact_replay_engine import (
+                        _operational_base_identity_sha256,
+                    )
+
+                    initial_snapshot = (
+                        full_qwen_receipt_loader
+                        or _load_latest_full_qwen_receipt
+                    )(
+                        state,
+                        expected_base_weights_sha256=(
+                            _operational_base_identity_sha256(config.model)
+                        ),
+                    )
+                    _require_full_qwen_sync_receipt(initial_snapshot)
+                else:
+                    initial_snapshot = (snapshot_loader or _load_latest_snapshot)(
+                        state
+                    )
+                    _require_policy_lora_snapshot(initial_snapshot)
                 context = PolicyE2ERuntimeBuildContext(
                     config=config,
                     placement=placement,
@@ -424,12 +510,19 @@ class PolicyE2ERuntimeInvocationFactory:
                 product = selected_builder.build(context)
                 if not isinstance(product, PolicyE2ERuntimeProduct):
                     raise TypeError("live runtime builder must return PolicyE2ERuntimeProduct")
-                policy_version = ExactLoRASnapshotPolicyVersionPort(
-                    state=state,
-                    consumer=product.snapshot_consumer,
-                    initial_snapshot=initial_snapshot,
-                    snapshot_loader=snapshot_loader,
-                )
+                if full_qwen:
+                    policy_version = ExactFullQwenSyncPolicyVersionPort(
+                        state=state,
+                        initial_receipt=initial_snapshot,
+                        receipt_loader=full_qwen_receipt_loader,
+                    )
+                else:
+                    policy_version = ExactLoRASnapshotPolicyVersionPort(
+                        state=state,
+                        consumer=product.snapshot_consumer,
+                        initial_snapshot=initial_snapshot,
+                        snapshot_loader=snapshot_loader,
+                    )
                 bound = BoundVerlNativeAgentLoopInvocationFactory(
                     run_id=config.run_id,
                     model=config.model,
@@ -625,11 +718,29 @@ def _load_latest_snapshot(state: "PolicyWeightSyncState") -> "PolicyLoRASnapshot
     return load_latest_lora_snapshot(state)
 
 
+def _load_latest_full_qwen_receipt(
+    state: "PolicyWeightSyncState", **kwargs: object
+) -> "PolicyFullQwenSyncReceipt":
+    from .policy_weight_sync import load_latest_full_qwen_sync_receipt
+
+    return load_latest_full_qwen_sync_receipt(state, **kwargs)
+
+
 def _latest_pointer_signature(state: "PolicyWeightSyncState") -> str | None:
     """Cheaply avoid reloading the same LoRA tensors for every n-way rollout."""
 
     try:
         payload = state.latest_path.read_bytes()
+    except FileNotFoundError:
+        return None
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _latest_full_qwen_pointer_signature(
+    state: "PolicyWeightSyncState",
+) -> str | None:
+    try:
+        payload = state.full_qwen_latest_path.read_bytes()
     except FileNotFoundError:
         return None
     return hashlib.sha256(payload).hexdigest()
@@ -652,6 +763,15 @@ def _require_policy_lora_snapshot(value: object) -> None:
 
     if not isinstance(value, PolicyLoRASnapshot):
         raise TypeError("snapshot loader must return PolicyLoRASnapshot")
+
+
+def _require_full_qwen_sync_receipt(value: object) -> None:
+    from .policy_weight_sync import PolicyFullQwenSyncReceipt
+
+    if not isinstance(value, PolicyFullQwenSyncReceipt):
+        raise TypeError(
+            "full-Qwen receipt loader must return PolicyFullQwenSyncReceipt"
+        )
 
 
 def _ray_actor_name() -> str:
@@ -687,6 +807,7 @@ def _reset_policy_e2e_runtime_singletons_for_tests() -> None:
 
 
 __all__ = [
+    "ExactFullQwenSyncPolicyVersionPort",
     "ExactLoRASnapshotPolicyVersionPort",
     "POLICY_AGENT_LOOP_WORKER_INDEX_ENV",
     "POLICY_E2E_RUNTIME_SCHEMA",

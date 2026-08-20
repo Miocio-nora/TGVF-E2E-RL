@@ -8,6 +8,7 @@ import torch
 from tgvf_rl.contracts.errors import IdentityMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.framework.verl.policy_runtime import (
+    ExactFullQwenSyncPolicyVersionPort,
     ExactLoRASnapshotPolicyVersionPort,
     PolicyE2ERuntimeInvocationFactory,
     PolicyE2ERuntimeProduct,
@@ -17,6 +18,7 @@ from tgvf_rl.framework.verl.policy_runtime import (
 from tgvf_rl.framework.verl.policy_weight_sync import (
     PolicyLoRASnapshot,
     PolicyWeightSyncState,
+    publish_full_qwen_sync_receipt,
     publish_policy_weight_sync_request,
     wrap_lora_parameter_stream_for_snapshot,
 )
@@ -174,6 +176,30 @@ def test_exact_snapshot_port_installs_initial_and_each_new_committed_version(
     updated = _publish_snapshot(environment, step=1)
     assert port.current_policy_version() == updated.policy_version
     assert consumer.applied == [initial.policy_version, updated.policy_version]
+
+
+def test_full_qwen_version_port_follows_completed_sync_receipts(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(
+        tmp_path,
+        run_id="full-qwen-runtime-test",
+        run_identity="c" * 64,
+    )
+    state = PolicyWeightSyncState.from_environment(environment)
+    base = "d" * 64
+    initial = publish_full_qwen_sync_receipt(
+        state, optimizer_step=0, base_weights_sha256=base
+    )
+    port = ExactFullQwenSyncPolicyVersionPort(
+        state=state, initial_receipt=initial
+    )
+
+    assert port.current_policy_version() == initial.policy_version
+    updated = publish_full_qwen_sync_receipt(
+        state, optimizer_step=1, base_weights_sha256=base
+    )
+    assert port.current_policy_version() == updated.policy_version
 
 
 def test_snapshot_port_rejects_consumer_that_does_not_prove_exact_weights(
