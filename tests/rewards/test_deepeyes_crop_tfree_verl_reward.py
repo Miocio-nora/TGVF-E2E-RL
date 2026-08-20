@@ -14,7 +14,9 @@ from tests.rewards.test_deepeyes_verl_reward import (
     _service,
 )
 from tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward import (
+    DEEPEYES_CROP_TFREE_FMT2_VERL_REWARD_SCHEMA,
     DEEPEYES_CROP_TFREE_VERL_REWARD_SCHEMA,
+    DeepEyesCropTFreeFMT2RewardManager,
     DeepEyesCropTFreeRewardManager,
 )
 from tgvf_rl.rewards.deepeyes_verl_reward import AsyncDeepEyesOpenRouterJudge
@@ -26,11 +28,14 @@ def _manager(
     *,
     verdict: str = "1",
     math_verify=lambda _reference, _answer: False,
+    manager_type: type[DeepEyesCropTFreeRewardManager] = (
+        DeepEyesCropTFreeRewardManager
+    ),
 ) -> DeepEyesCropTFreeRewardManager:
     async def judge(_request: object, _payload: object) -> object:
         return _response(verdict)
 
-    return DeepEyesCropTFreeRewardManager(
+    return manager_type(
         OmegaConf.create({"reward": {}}),
         _Tokenizer(response),
         judge_transport=AsyncDeepEyesOpenRouterJudge(_service(), request_json=judge),
@@ -239,3 +244,53 @@ def test_importlib_resolves_crop_tfree_reward_manager() -> None:
     )
 
     assert resolve_reward_manager_cls(config) is DeepEyesCropTFreeRewardManager
+
+
+def test_fmt2_doubles_only_the_protocol_error_penalty() -> None:
+    manager = _manager(
+        "<think>done</think>blue",
+        manager_type=DeepEyesCropTFreeFMT2RewardManager,
+    )
+    data = _data(
+        source="vstar",
+        crop_count=1,
+        call_count=3,
+        error_count=1,
+        observation_spans=[[0, 1], [1, 2], [2, 3]],
+    )
+
+    result = asyncio.run(manager.run_single(data))
+    extra = result["reward_extra_info"]
+
+    assert result["reward_score"] == pytest.approx(-0.1)
+    assert extra["stage3_reward_schema"] == (
+        DEEPEYES_CROP_TFREE_FMT2_VERL_REWARD_SCHEMA
+    )
+    assert _components(extra) == {
+        "answer": 2.0,
+        "tool": -0.1,
+        "focus": 0.0,
+        "grounding": 0.0,
+        "protocol": -2.0,
+    }
+
+
+def test_importlib_resolves_crop_tfree_fmt2_reward_manager() -> None:
+    config = OmegaConf.create(
+        {
+            "reward": {
+                "reward_manager": {
+                    "source": "importlib",
+                    "name": "DeepEyesCropTFreeFMT2RewardManager",
+                    "module": {
+                        "path": (
+                            "pkg://tgvf_rl.rewards."
+                            "deepeyes_crop_tfree_verl_reward"
+                        )
+                    },
+                }
+            }
+        }
+    )
+
+    assert resolve_reward_manager_cls(config) is DeepEyesCropTFreeFMT2RewardManager

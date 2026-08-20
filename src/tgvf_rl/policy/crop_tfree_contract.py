@@ -27,6 +27,9 @@ from tgvf_rl.policy.deepeyes_native_contract import (
 
 
 CROP_TFREE_RUN_SCHEMA = "policy-e2e-native-crop-tfree-run-config-v1"
+CROP_TFREE_BS64_FMT2_RUN_SCHEMA = (
+    "policy-e2e-native-crop-tfree-bs64-fmt2-run-config-v1"
+)
 CROP_TFREE_CODE_PLACEHOLDER = "CORE_COMMIT_REQUIRED"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -91,16 +94,11 @@ _FIELDS: Mapping[str, set[str]] = {
     "output": {"root"},
 }
 
-_EXACT: Mapping[str, object] = {
+_COMMON_EXACT: Mapping[str, object] = {
     "code.repository": "Miocio-nora/TGVF-E2E-RL",
     "code.dirty": False,
-    "reward.profile": "stage3-shaped-v1-tfree",
-    "reward.manager_class": (
-        "tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward.DeepEyesCropTFreeRewardManager"
-    ),
     "reward.answer_weight": 2.0,
     "reward.repeated_call_penalty": 0.05,
-    "reward.protocol_error_penalty": 1.0,
     "reward.tool_utility_reward_enabled": False,
     "reward.focus_reward_enabled": False,
     "reward.grounding_reward_enabled": False,
@@ -111,11 +109,9 @@ _EXACT: Mapping[str, object] = {
     "matched_training.vision_trainable": True,
     "matched_training.projector_trainable": True,
     "matched_training.language_trainable": True,
-    "matched_training.global_prompt_batch_size": 16,
     "matched_training.trajectories_per_prompt": 16,
     "matched_training.world_size": 8,
     "matched_training.actor_micro_batch_size_per_gpu": 32,
-    "matched_training.gradient_accumulation_steps": 1,
     "matched_training.learning_rate": 0.000001,
     "matched_training.temperature": 1.0,
     "matched_training.maximum_response_length": 20480,
@@ -123,13 +119,40 @@ _EXACT: Mapping[str, object] = {
     "matched_training.kl_coefficient": 0.0,
     "matched_training.shuffle_seed": 42,
     "retention.save_every_step": True,
-    "retention.permanent_checkpoint_steps": [8, 16],
     "retention.maximum_rolling_checkpoints": 2,
     "evaluation.benchmark": "CoreDev-2511-unified-temp1-seed42",
     "evaluation.temperature": 1.0,
     "evaluation.seed": 42,
-    "evaluation.checkpoint_steps": [8, 16],
     "evaluation.reuse_step0": True,
+}
+
+_EXACT_BY_SCHEMA: Mapping[str, Mapping[str, object]] = {
+    CROP_TFREE_RUN_SCHEMA: {
+        **_COMMON_EXACT,
+        "reward.profile": "stage3-shaped-v1-tfree",
+        "reward.manager_class": (
+            "tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward."
+            "DeepEyesCropTFreeRewardManager"
+        ),
+        "reward.protocol_error_penalty": 1.0,
+        "matched_training.global_prompt_batch_size": 16,
+        "matched_training.gradient_accumulation_steps": 1,
+        "retention.permanent_checkpoint_steps": [8, 16],
+        "evaluation.checkpoint_steps": [8, 16],
+    },
+    CROP_TFREE_BS64_FMT2_RUN_SCHEMA: {
+        **_COMMON_EXACT,
+        "reward.profile": "stage3-shaped-v1-tfree-fmt2",
+        "reward.manager_class": (
+            "tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward."
+            "DeepEyesCropTFreeFMT2RewardManager"
+        ),
+        "reward.protocol_error_penalty": 2.0,
+        "matched_training.global_prompt_batch_size": 64,
+        "matched_training.gradient_accumulation_steps": 4,
+        "retention.permanent_checkpoint_steps": [2, 4, 8, 12, 16],
+        "evaluation.checkpoint_steps": [2, 4, 8, 12, 16],
+    },
 }
 
 
@@ -183,6 +206,34 @@ class CropTFreeRunContract:
     def reward_manager_module_path(self) -> str:
         return "pkg://" + self.reward_manager_class.rsplit(".", 1)[0]
 
+    @property
+    def reward_profile(self) -> str:
+        return str(_nested(self.payload, "reward.profile"))
+
+    @property
+    def protocol_error_penalty(self) -> float:
+        return float(_nested(self.payload, "reward.protocol_error_penalty"))
+
+    @property
+    def global_prompt_batch_size(self) -> int:
+        return int(_nested(self.payload, "matched_training.global_prompt_batch_size"))
+
+    @property
+    def gradient_accumulation_steps(self) -> int:
+        return int(_nested(self.payload, "matched_training.gradient_accumulation_steps"))
+
+    @property
+    def maximum_optimizer_steps(self) -> int:
+        return int(_nested(self.payload, "matched_training.maximum_optimizer_steps"))
+
+    @property
+    def permanent_checkpoint_steps(self) -> tuple[int, ...]:
+        return tuple(int(step) for step in _nested(self.payload, "retention.permanent_checkpoint_steps"))
+
+    @property
+    def maximum_rolling_checkpoints(self) -> int:
+        return int(_nested(self.payload, "retention.maximum_rolling_checkpoints"))
+
     def assert_launchable(self, repository_root: Path) -> None:
         if _COMMIT.fullmatch(self.code_commit) is None:
             raise RuntimeError("Crop T-free code.commit is not bound")
@@ -227,7 +278,8 @@ def load_crop_tfree_run_contract(
         raise ValueError("Crop T-free config must be strict UTF-8 TOML") from error
     if set(payload) != _TOP_LEVEL:
         raise ValueError("Crop T-free top-level fields differ")
-    if payload.get("schema_version") != CROP_TFREE_RUN_SCHEMA:
+    schema = payload.get("schema_version")
+    if schema not in _EXACT_BY_SCHEMA:
         raise ValueError("Crop T-free schema differs")
     run_id = payload.get("run_id")
     if not isinstance(run_id, str) or _RUN_ID.fullmatch(run_id) is None:
@@ -236,7 +288,7 @@ def load_crop_tfree_run_contract(
         table = payload.get(section)
         if not isinstance(table, Mapping) or set(table) != fields:
             raise ValueError(f"Crop T-free [{section}] fields differ")
-    for field, expected in _EXACT.items():
+    for field, expected in _EXACT_BY_SCHEMA[str(schema)].items():
         if _nested(payload, field) != expected:
             raise ValueError(f"Crop T-free fixed field differs: {field}")
 
@@ -274,6 +326,7 @@ def load_crop_tfree_run_contract(
 
 
 __all__ = [
+    "CROP_TFREE_BS64_FMT2_RUN_SCHEMA",
     "CROP_TFREE_CODE_PLACEHOLDER",
     "CROP_TFREE_RUN_SCHEMA",
     "CropTFreeRunContract",

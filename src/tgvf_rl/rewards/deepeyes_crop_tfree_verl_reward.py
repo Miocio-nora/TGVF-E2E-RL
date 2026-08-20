@@ -36,6 +36,13 @@ DEEPEYES_CROP_TFREE_VERL_REWARD_SCHEMA = (
 DEEPEYES_CROP_TFREE_VERL_REWARD_MANAGER_CLASS = (
     "tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward.DeepEyesCropTFreeRewardManager"
 )
+DEEPEYES_CROP_TFREE_FMT2_VERL_REWARD_SCHEMA = (
+    "tgvf.deepeyes-crop-tfree-verl-reward-manager.v2"
+)
+DEEPEYES_CROP_TFREE_FMT2_VERL_REWARD_MANAGER_CLASS = (
+    "tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward."
+    "DeepEyesCropTFreeFMT2RewardManager"
+)
 
 _STAGE3_COMPONENT_FIELD_NAMES = (
     "stage3_answer_reward",
@@ -123,6 +130,7 @@ def _compose_tfree_reward(
     historical: Mapping[str, object],
     *,
     kernel: Stage3ShapedRewardKernel,
+    reward_schema: str = DEEPEYES_CROP_TFREE_VERL_REWARD_SCHEMA,
 ) -> dict[str, object]:
     """Replace only the historical scalar with the exact T-free composition."""
 
@@ -130,6 +138,8 @@ def _compose_tfree_reward(
         raise TypeError("native Crop answer scorer result must be a mapping")
     if not isinstance(kernel, Stage3ShapedRewardKernel):
         raise TypeError("native Crop T-free kernel has the wrong type")
+    if not isinstance(reward_schema, str) or not reward_schema:
+        raise TypeError("native Crop T-free reward schema must be non-empty text")
 
     accuracy = _strict_binary_integer(historical.get("acc"), name="acc")
     crop_call_count = _strict_nonnegative_integer(
@@ -167,7 +177,7 @@ def _compose_tfree_reward(
             # explicit that this equation contains no conditional tool bonus.
             "conditional_tool": 0,
             "reward_profile": STAGE3_SHAPED_REWARD_VERSION,
-            "stage3_reward_schema": DEEPEYES_CROP_TFREE_VERL_REWARD_SCHEMA,
+            "stage3_reward_schema": reward_schema,
             "stage3_answer_gated": int(shaped.answer_gated),
             "stage3_tool_attempt_count": tool_attempt_count,
             "stage3_quality_judge_applicable": int(shaped.quality_judge_applicable),
@@ -205,9 +215,14 @@ def _compose_tfree_reward(
 class DeepEyesCropTFreeRewardManager(DeepEyesOfficialRewardManager):
     """Hydra-importable native Crop manager with current T-free composition."""
 
+    protocol_error_penalty = 1.0
+    stage3_reward_schema = DEEPEYES_CROP_TFREE_VERL_REWARD_SCHEMA
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
-        self.stage3_kernel = Stage3ShapedRewardKernel()
+        self.stage3_kernel = Stage3ShapedRewardKernel(
+            protocol_error_penalty=self.protocol_error_penalty
+        )
 
     async def _score_visual(self, **value: object) -> dict[str, object]:
         audit = value.get("audit")
@@ -233,15 +248,33 @@ class DeepEyesCropTFreeRewardManager(DeepEyesOfficialRewardManager):
             )
         else:
             historical = await super()._score_visual(**value)
-        return _compose_tfree_reward(historical, kernel=self.stage3_kernel)
+        return _compose_tfree_reward(
+            historical,
+            kernel=self.stage3_kernel,
+            reward_schema=self.stage3_reward_schema,
+        )
 
     async def _score_thinklite(self, **value: object) -> dict[str, object]:
         historical = await super()._score_thinklite(**value)
-        return _compose_tfree_reward(historical, kernel=self.stage3_kernel)
+        return _compose_tfree_reward(
+            historical,
+            kernel=self.stage3_kernel,
+            reward_schema=self.stage3_reward_schema,
+        )
+
+
+class DeepEyesCropTFreeFMT2RewardManager(DeepEyesCropTFreeRewardManager):
+    """FMT2 native-Crop reward with a two-point protocol-error penalty."""
+
+    protocol_error_penalty = 2.0
+    stage3_reward_schema = DEEPEYES_CROP_TFREE_FMT2_VERL_REWARD_SCHEMA
 
 
 __all__ = [
+    "DEEPEYES_CROP_TFREE_FMT2_VERL_REWARD_MANAGER_CLASS",
+    "DEEPEYES_CROP_TFREE_FMT2_VERL_REWARD_SCHEMA",
     "DEEPEYES_CROP_TFREE_VERL_REWARD_MANAGER_CLASS",
     "DEEPEYES_CROP_TFREE_VERL_REWARD_SCHEMA",
+    "DeepEyesCropTFreeFMT2RewardManager",
     "DeepEyesCropTFreeRewardManager",
 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the matched PRL21 native-Crop T-free 16-step control.
+"""Launch a versioned native-Crop T-free control.
 
 The rollout, full-model update, data schedule, prompt, Crop tool and policy
 loss are inherited unchanged from the proven PRL14 native-Crop path.  The sole
@@ -32,10 +32,6 @@ CONFIG = (
     ROOT / "configs/policy/runs/"
     "prl_21_r0_qwen3_instruct_full_crop_bs16_n16_tfree_16step_ws8.toml"
 )
-TARGET_STEP = 16
-PERMANENT_STEP = 8
-
-
 sys.path[:0] = [str(SOURCE), str(VERL)]
 os.environ["PYTHONPATH"] = os.pathsep.join(
     [str(SOURCE), str(VERL), os.environ.get("PYTHONPATH", "")]
@@ -124,22 +120,25 @@ def _retain_checkpoint(
     return destination
 
 
-def _retain_step8_when_ready(
+def _retain_permanent_steps_when_ready(
     checkpoint_root: Path,
     output_root: Path,
+    permanent_steps: tuple[int, ...],
     stop: threading.Event,
 ) -> None:
-    source = checkpoint_root / f"global_step_{PERMANENT_STEP}"
-    while not stop.wait(2.0):
-        if not _checkpoint_complete(source, world_size=8):
-            continue
-        _retain_checkpoint(
-            checkpoint_root=checkpoint_root,
-            output_root=output_root,
-            step=PERMANENT_STEP,
-            world_size=8,
-        )
-        return
+    pending = set(permanent_steps)
+    while pending and not stop.wait(2.0):
+        for step in tuple(sorted(pending)):
+            source = checkpoint_root / f"global_step_{step}"
+            if not _checkpoint_complete(source, world_size=8):
+                continue
+            _retain_checkpoint(
+                checkpoint_root=checkpoint_root,
+                output_root=output_root,
+                step=step,
+                world_size=8,
+            )
+            pending.remove(step)
 
 
 def _common_reward_overrides(contract: CropTFreeRunContract) -> dict[str, object]:
@@ -182,7 +181,9 @@ def _build_plan(contract: CropTFreeRunContract, *, mode: str):
     base = build_deepeyes_native_verl_launch_plan(
         contract.base_contract,
         mode="formal",
-        target_step=PERMANENT_STEP,
+        # Eight is the proven PRL13/14 native-launch horizon gate. The
+        # versioned Crop T-free overlay below owns the actual training horizon.
+        target_step=8,
     )
     output_root = contract.output_root
     overrides = {
@@ -192,14 +193,16 @@ def _build_plan(contract: CropTFreeRunContract, *, mode: str):
         "trainer.default_local_dir": str(output_root / "checkpoints"),
         "trainer.rollout_data_dir": str(output_root / "trajectories"),
         "trainer.validation_data_dir": str(output_root / "validation"),
-        "trainer.total_training_steps": TARGET_STEP,
+        "trainer.total_training_steps": contract.maximum_optimizer_steps,
         "trainer.save_freq": 1,
-        "trainer.max_actor_ckpt_to_keep": 2,
+        "trainer.max_actor_ckpt_to_keep": contract.maximum_rolling_checkpoints,
         "trainer.test_freq": 0,
         "trainer.resume_mode": "auto",
-        "data.train_batch_size": 16,
-        "data.gen_batch_size": 16,
-        "actor_rollout_ref.actor.ppo_mini_batch_size": 16,
+        "data.train_batch_size": contract.global_prompt_batch_size,
+        "data.gen_batch_size": contract.global_prompt_batch_size,
+        "actor_rollout_ref.actor.ppo_mini_batch_size": (
+            contract.global_prompt_batch_size
+        ),
         "trainer.n_gpus_per_node": 8,
         "actor_rollout_ref.actor.fsdp_config.fsdp_size": 8,
         "actor_rollout_ref.ref.fsdp_config.fsdp_size": 8,
@@ -243,7 +246,7 @@ def _record(
 ) -> dict[str, object]:
     return {
         **plan.as_record(),
-        "schema_version": "tgvf.prl21-crop-tfree-launch-provenance.v1",
+        "schema_version": "tgvf.crop-tfree-launch-provenance.v2",
         "run_id": contract.run_id,
         "mode": mode,
         "overlay_config_path": str(contract.source_path),
@@ -251,8 +254,14 @@ def _record(
         "overlay_identity_sha256": contract.identity_sha256,
         "base_contract_path": str(contract.base_contract.source_path),
         "base_contract_sha256": contract.base_contract.source_sha256,
-        "reward_profile": "stage3-shaped-v1-tfree",
-        "reward_equation": "2*A-0.05*max(0,N_attempt-1)-1[protocol_or_tool_error]",
+        "reward_profile": contract.reward_profile,
+        "reward_equation": (
+            "2*A-0.05*max(0,N_attempt-1)-"
+            f"{contract.protocol_error_penalty:g}[protocol_or_tool_error]"
+        ),
+        "global_prompt_batch_size": contract.global_prompt_batch_size,
+        "gradient_accumulation_steps": contract.gradient_accumulation_steps,
+        "permanent_checkpoint_steps": list(contract.permanent_checkpoint_steps),
         "compose_preflight": preflight,
         "created_at_unix_seconds": time.time(),
     }
@@ -301,9 +310,14 @@ def main() -> int:
     keeper: threading.Thread | None = None
     if args.mode == "formal":
         keeper = threading.Thread(
-            target=_retain_step8_when_ready,
-            args=(checkpoint_root, output_root, stop),
-            name="retain-step8",
+            target=_retain_permanent_steps_when_ready,
+            args=(
+                checkpoint_root,
+                output_root,
+                contract.permanent_checkpoint_steps,
+                stop,
+            ),
+            name="retain-permanent-steps",
             daemon=True,
         )
         keeper.start()
@@ -315,33 +329,31 @@ def main() -> int:
         if keeper is not None:
             keeper.join(timeout=10.0)
 
-    target = 1 if args.mode == "smoke" else TARGET_STEP
+    target = 1 if args.mode == "smoke" else contract.maximum_optimizer_steps
     world_size = 4 if args.mode == "smoke" else 8
     final_checkpoint = checkpoint_root / f"global_step_{target}"
     if not _checkpoint_complete(final_checkpoint, world_size=world_size):
         raise RuntimeError(f"step-{target} checkpoint is incomplete")
     if args.mode == "formal":
-        retained8 = _retain_checkpoint(
-            checkpoint_root=checkpoint_root,
-            output_root=output_root,
-            step=8,
-            world_size=8,
-        )
-        retained16 = _retain_checkpoint(
-            checkpoint_root=checkpoint_root,
-            output_root=output_root,
-            step=16,
-            world_size=8,
-        )
-        penultimate = checkpoint_root / "global_step_15"
+        retained = {
+            step: _retain_checkpoint(
+                checkpoint_root=checkpoint_root,
+                output_root=output_root,
+                step=step,
+                world_size=8,
+            )
+            for step in contract.permanent_checkpoint_steps
+        }
+        penultimate = checkpoint_root / f"global_step_{target - 1}"
         if penultimate.is_dir():
             shutil.rmtree(penultimate)
         record.update(
             {
                 "status": "target_checkpoint_complete",
                 "final_checkpoint": str(final_checkpoint),
-                "retained_step8_checkpoint": str(retained8),
-                "retained_step16_checkpoint": str(retained16),
+                "retained_checkpoints": {
+                    str(step): str(path) for step, path in retained.items()
+                },
             }
         )
     else:

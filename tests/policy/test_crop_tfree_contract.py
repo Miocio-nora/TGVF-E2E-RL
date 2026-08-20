@@ -6,6 +6,7 @@ import re
 import pytest
 
 from tgvf_rl.policy.crop_tfree_contract import (
+    CROP_TFREE_BS64_FMT2_RUN_SCHEMA,
     CROP_TFREE_CODE_PLACEHOLDER,
     CROP_TFREE_RUN_SCHEMA,
     load_crop_tfree_run_contract,
@@ -81,3 +82,42 @@ def test_placeholder_cannot_be_used_for_a_launchable_contract(tmp_path: Path) ->
             repository_root=_ROOT,
             allow_placeholder=False,
         )
+
+
+def test_prl24_fmt2_schema_binds_bs64_ga4_and_all_endpoints(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "prl24-d.toml"
+    text = _CONFIG.read_text(encoding="utf-8")
+    replacements = {
+        CROP_TFREE_RUN_SCHEMA: CROP_TFREE_BS64_FMT2_RUN_SCHEMA,
+        'profile = "stage3-shaped-v1-tfree"': (
+            'profile = "stage3-shaped-v1-tfree-fmt2"'
+        ),
+        "DeepEyesCropTFreeRewardManager": "DeepEyesCropTFreeFMT2RewardManager",
+        "protocol_error_penalty = 1.0": "protocol_error_penalty = 2.0",
+        "global_prompt_batch_size = 16": "global_prompt_batch_size = 64",
+        "gradient_accumulation_steps = 1": "gradient_accumulation_steps = 4",
+        "permanent_checkpoint_steps = [8, 16]": (
+            "permanent_checkpoint_steps = [2, 4, 8, 12, 16]"
+        ),
+        "checkpoint_steps = [8, 16]": (
+            "checkpoint_steps = [2, 4, 8, 12, 16]"
+        ),
+    }
+    for source, target in replacements.items():
+        assert source in text
+        text = text.replace(source, target)
+    path.write_text(text, encoding="utf-8")
+
+    contract = load_crop_tfree_run_contract(path, repository_root=_ROOT)
+
+    assert contract.reward_profile == "stage3-shaped-v1-tfree-fmt2"
+    assert contract.reward_manager_class.endswith(
+        "DeepEyesCropTFreeFMT2RewardManager"
+    )
+    assert contract.protocol_error_penalty == 2.0
+    assert contract.global_prompt_batch_size == 64
+    assert contract.gradient_accumulation_steps == 4
+    assert contract.maximum_optimizer_steps == 16
+    assert contract.permanent_checkpoint_steps == (2, 4, 8, 12, 16)
