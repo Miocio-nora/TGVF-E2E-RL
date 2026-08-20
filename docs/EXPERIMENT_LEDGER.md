@@ -9723,7 +9723,39 @@ than inferred from a script name or prior conversation.
   T-free, PRL25-C pure-TGVF T-free, then PRL25-D Atomic Crop+TGVF T-free.
   PRL25-A conditional Crop and PRL25-E F/G must not occupy a formal training
   slot until B/C/D complete. Every optimizer step writes a full recovery
-  checkpoint while only the latest two roll; permanent evaluation endpoints
-  are S0/S8/S16/S24/S32/S48/S64/S80. Historical 80-step training-only baselines
-  are about 52 h 54 min, 13 h 55 min and 18 h 42 min respectively; the three-arm
-  serial baseline is about 85 h 31 min before smoke, recovery and evaluation.
+  checkpoint while only the latest two roll; every eighth step from S8 through
+  S80 is permanent, with S0 evaluated separately. Before Crop execution
+  alignment, historical 80-step training-only projections were 52 h 54 min,
+  13 h 55 min and 18 h 42 min respectively. The first number and the resulting
+  85 h 31 min serial total are now retired for PRL25-B capacity planning; the
+  exact-Crop formal S1 measurement below is the required replacement.
+
+### PRL25-B exact-Crop replay gate and formal launch (2026-08-21)
+
+- PRL25-B pure Crop is aligned at the execution-contract level with the accepted
+  exact-replay path: rollout transports actual behavior logprobs; the actor uses
+  live preprocessed pixels for differentiable current-Qwen vision replay and
+  recorded features for frozen-reference replay; full Qwen vision, merger and
+  language weights update; RP67, TGVF and policy LoRA are absent. A successful
+  upstream full-model sync publishes a run/step-bound immutable receipt before
+  the next rollout may consume that policy version.
+- The one-step functional gate is
+  `PRL-25-B-C0-QWEN3-INSTRUCT-FULL-CROP-EXACT-BS4-N2-TFREE-TEACHER25-1STEP-WS4`.
+  It completed at `2026-08-21 00:28 JST` with exit code zero, 4 prompts, 8
+  trajectories, 1,404 generated policy tokens, 9 successful Crop observations,
+  `grad_norm=24.2336`, and complete step-1 checkpoint/full-Qwen receipt. Timing
+  was `262.2705 s`: `162.0390 s` before publication, `4.0854 s` weight sync and
+  `96.1445 s` checkpoint. Shutdown-only vLLM `pure virtual method called`
+  warnings occurred after final metrics and did not change the successful exit.
+- This BS4 × n2 gate is non-scientific and cannot be used as a quality result or
+  linearly scaled into the BS16 × n16 ETA. It does retire the PRL21 old-path
+  `39.68 min/step` number as a capacity estimate for the new implementation.
+- The implementation branch is `prl25-crop-exact-replay-alignment`. Formal
+  config commit `e5344b36501d36a8aff612cb18477d37a221b61a` binds code identity
+  `2ae994a7cd71fefb9a4dc2c92dd52fc59865e7f4`. The admitted formal identity is
+  `PRL-25-B-QWEN3-INSTRUCT-FULL-CROP-EXACT-BS16-N16-TFREE-TEACHER25-80STEP-WS8`
+  with run identity SHA-256
+  `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`.
+  It launched from a clean worktree at `2026-08-21 00:32:18 JST`; every step is
+  a rolling recovery boundary, every eighth step through S80 is permanent, and
+  the first complete formal step will replace all provisional PRL25-B ETA.

@@ -484,6 +484,12 @@ Crop conditional/T-free、Atomic Crop+TGVF 等问题迁移到 PRL25 的 BS16/Tea
 实际执行只完成 A/B/C 及 D-S1；E/F 未启动。PRL24 不再追求六臂 S16 完成，后续资源转入
 PRL25。任何未来恢复 BS64 的 ETA 都必须从同一工具线的实测完整 step 重新校准。
 
+2026-08-21 补充：PRL25 已把 pure Crop 对齐到与 Atomic 路径相同原则的 actual behavior
+logprobs、exact replay、live current-vision/recorded-reference replay 和 full-Qwen 版本同步。
+BS4 × n2 canary 以 `262.27 s` 完成一个含 checkpoint 的真实 optimizer step。该结果说明
+PRL24-D 的 `2 h 32 min` 不能解释为 Crop 算法的固有速度，但它也不改写已经发生的 BS64
+历史 wall time，更不能替代 BS64 × n16 benchmark；PRL24 仍保持暂停。
+
 存储采用 rolling checkpoint：除已停止的 B 外，其余 arm 至少保留 S2/S4/S8/S12/S16 到评测、结果 receipt 与
 必要轨迹抽样完成；随后每个 arm 的指标与 provenance 永久保留，大体积权重只长期保留
 S16、关键 endpoint 和 winner，避免六条线累积占满磁盘。

@@ -125,7 +125,13 @@ matched control。
 PRL21 Crop 经多次恢复完成。完整训练成本必须按各次成功 step 的计时求和；从最终
 `completion.json` 的 created/completed 时间相减所得 8 h 45 min 51 s 漏掉了早期成功
 step，今后的容量规划不得再引用该值。按当前历史均值线性外推，单条 BS16 Crop 80-step
-约需 52 h 54 min；这只是排期基线，正式 ETA 要在第三期首个完整 step 后重新校准。
+约需 52 h 54 min；这只描述 PRL21 旧执行体，不再作为 PRL25 exact-Crop ETA。
+
+2026-08-21 的 PRL25-B 对齐版 1-step canary（BS4 × n2、world4）完整通过，端到端
+`262.27 s`，其中 publication 前 `162.04 s`、full-Qwen sync `4.09 s`、checkpoint
+`96.14 s`。它确认旧纯 Crop 的额外 logprob/replay 与存盘路径不是方法本身不可避免的
+成本，但样本规模只有正式 BS16 × n16 的 1/32，因此只能作为功能与成本分解证据；正式
+80-step ETA 必须等待 PRL25-B 的首个 BS16 × n16 step 完整发布。
 
 ## 6. 简短分析
 

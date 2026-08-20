@@ -1,8 +1,8 @@
 # 第三期（PRL25）：BS16 Teacher25 80-step 统一实验计划
 
-日期：2026-08-20（Asia/Tokyo）
+日期：2026-08-20；执行状态更新：2026-08-21（Asia/Tokyo）
 
-状态：`PLANNED / 尚未启动训练`
+状态：`RUNNING / PRL25-B Crop T-free 已通过 1-step canary 并启动正式 S0→S80`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -92,6 +92,22 @@ teacher 比例与 supervision 来源一致，不伪称不同工具协议的输�
 Fresh start 的含义是：新的 run/output/W&B identity、新 optimizer、新 dataloader cursor、
 新训练轨迹，从相同 S0 权重开始。PRL24-D S1 以及历史 PRL21/22 权重不得作为初始化。
 
+### 4.1 PRL25-B Crop 执行对齐与准入结果（2026-08-21）
+
+PRL25-B 不复用 PRL21 的旧纯 Crop 执行路径。当前 exact-Crop 路径传输 rollout 时真实的
+behavior logprobs，在 actor update 中以原始预处理 pixels 对当前可训练 Qwen vision 做
+live differentiable replay，并以 rollout 时记录的 features 做 frozen-reference replay。
+vision encoder、merger/projector 与 language model 均沿 Crop 路径更新；本 arm 不加载 RP67、
+TGVF 或 policy LoRA。每次成功的 full-Qwen upstream sync 都发布绑定 run identity 与
+optimizer step 的版本 receipt，下一轮 rollout 只消费已发布版本。
+
+实现分支为 `prl25-crop-exact-replay-alignment`；正式配置提交为
+`e5344b36501d36a8aff612cb18477d37a221b61a`，其代码身份绑定
+`2ae994a7cd71fefb9a4dc2c92dd52fc59865e7f4`。BS4 × n2、world4 的非科学
+1-step canary 在 2026-08-21 00:28 JST 正常退出：4 prompts、8 trajectories、9 次成功
+Crop observation，`grad_norm=24.2336`，step-1 full-Qwen receipt 与 checkpoint 均完整。
+这只证明功能、梯度、同步和恢复链路，不是质量结果，也不是 BS16 × n16 的吞吐 benchmark。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
@@ -129,11 +145,11 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
   tool call/success/error、重复调用、response length、zero-advantage group、loss、gradient norm、
   clip/ratio/KL diagnostics。轨迹审计数据必须在允许人工停止前完成 publication，避免重现
   PRL24-D “checkpoint 有效但 S1 metrics 未落盘”的信息缺口。
-- **每 1 step** 写一次完整 optimizer recovery checkpoint，rolling 只保留最近 2 个；长期
-  固定保留/转存的评测 endpoint 为
-  `S0/S8/S16/S24/S32/S48/S64/S80`。中间 endpoint 评测/审计完成后可只保留 model-only
-  snapshot 与 receipt；S80 和最终 winner 保留完整 optimizer state，控制约 140 GB/完整
-  checkpoint 的存储压力。
+- **每 1 step** 写一次完整 optimizer recovery checkpoint，rolling 只保留最近 2 个；
+  `S8/S16/S24/S32/S40/S48/S56/S64/S72/S80` 每 8 step 固定长期保留，S0 另做共享
+  evaluation，S1 作为早期恢复/速度校准点。中间 endpoint 评测/审计完成后可只保留
+  model-only snapshot 与 receipt；S80 和最终 winner 保留完整 optimizer state，控制约
+  140 GB/完整 checkpoint 的存储压力。
 - 全部 endpoint 使用冻结 CoreDev-2511 `paired-seed-v1`、master seed 42、temperature 1
   合同，同时报告七项 Macro* 分量。A/B 共享 exact Crop S0；C/E 共享 exact pure-TGVF S0；
   D 使用自己的 Atomic Crop+TGVF S0。共享 S0 evaluation 不等于共享训练 lineage。
@@ -160,19 +176,20 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
 conditional reward ablation。顺序不改变五臂均从 S0 开始的要求，也不改变 A/B、C/E 的
 matched 比较定义。
 
-历史 BS16 实测仅用于容量规划，不作为保证。下列时间包含历史配方当时的 step checkpoint
-成本，不包含第三期 CoreDev endpoint 推理/评分：
+历史 BS16 实测只保留为旧 recipe 的资源背景，不作为新 exact-Crop 路径的保证：
 
-| 第一批 arm | 历史均值 | 80-step 线性基线 | 排期预留 |
-|---|---:|---:|---:|
-| PRL25-B Crop T-free | `39.68 min/step` | `52 h 54 min` | `53--60 h` |
-| PRL25-C pure TGVF T-free | `10.43 min/step` | `13 h 55 min` | `15--17 h` |
-| PRL25-D Atomic Crop+TGVF T-free | `14.03 min/step` | `18 h 42 min` | `20--22 h` |
+| 执行体 | 实测 | 当前解释 |
+|---|---:|---|
+| PRL21 旧 pure Crop，BS16 × n16 | `39.68 min/step` | 含旧 logprob/replay 与 checkpoint 路径；不再用作 PRL25-B ETA |
+| PRL25-B exact-Crop canary，BS4 × n2 | `262.27 s/step` | publication 前 `162.04 s`、full-Qwen sync `4.09 s`、checkpoint `96.14 s`；仅功能 gate |
+| PRL22 pure TGVF，BS16 × n16 | `10.43 min/step` | PRL25-C 的历史 recipe-level 容量锚点 |
+| PRL22 Atomic Crop+TGVF，BS16 × n16 | `14.03 min/step` | PRL25-D 的历史 recipe-level 容量锚点 |
 
-三条纯训练串行线性基线共约 `85 h 31 min`（3 d 13 h 31 min），实际排期预留约
-`88--99 h`（3.7--4.1 天），另加 smoke、失败恢复与 endpoint 评测。每条首个完整 step
-结束后只使用本线路实测值更新 ETA，不再从其他工具线做窄区间外推。五臂全部串行的旧
-6--7 天估计仍只可作为粗略下限；F/G 还需另外计入 visual judge。
+PRL25-B 正式 run 于 2026-08-21 00:32:18 JST 启动，run identity 为
+`8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`。正式首个
+BS16 × n16 step 完整发布前，不给出 80-step 窄区间 ETA；canary 与正式 step 的 trajectory
+数量相差 32 倍，GPU batching、序列长度和固定 checkpoint 成本又非线性，不能直接乘 32。
+PRL25-C/D 也仍在各自首个正式 step 后重新校准；F/G 另计 visual judge 成本。
 
 ## 9. 与既有文档的关系
 
