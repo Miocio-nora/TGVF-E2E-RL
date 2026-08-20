@@ -9538,3 +9538,128 @@ than inferred from a script name or prior conversation.
   trajectories, at least one successful TGVF observation, positive visual
   judge applicability, complete visual coverage with zero visual failures,
   finite five-component metrics and a complete four-rank step-1 checkpoint.
+- R1 runtime recovery on `2026-08-06`: the first true rollout attempt reached
+  the production local visual judge and completed 12 new requests with HTTP
+  200, but the shaped adapter then rejected a legitimate answer semantic
+  fallback identity before optimizer step 1.  `RuleFirstAnswerVerifier`
+  intentionally reports the deterministic rule identity on rule routes and
+  the configured Qwen2.5-72B model identity on semantic-fallback routes; the
+  new adapter had incorrectly required the rule identity on every route.
+  Main commit `9a8db49c040064c1f3188529ba0cc3e920b28801` and isolated-runtime
+  commit `9276a4fc1f3308084d8c142401bbae304fb0248d` now bind each route to
+  its exact preconfigured identity while preserving fail-closed rejection of
+  unbound identities.  The related 46-test reward suite and Ruff passed.  The
+  vLLM `sampled_token_ids` exception appeared only during the resulting
+  SIGTERM teardown and is recorded as a secondary cleanup symptom, not the
+  rollout failure cause.
+- R1 accepted result at `2026-08-06 02:52 JST`: the repaired fresh smoke
+  exited zero after one optimizer step over exactly 16 prompts / 128
+  trajectories.  All 128 trajectories produced successful TGVF observations;
+  the local visual judge was applicable and covered on all 128 with zero
+  failures and `128` recorded visual-judge calls.  The complete four-rank
+  step-1 checkpoint passed the paired project/upstream identity gate.  Mean
+  reward components were answer `1.03125`, tool `.200390625`, focus
+  `.88671875`, grounding `.21484375`, and protocol `-.0546875`; mean base
+  answer reward was `.515625`, tool-attempt rate was `1.0`, and format-error
+  rate was `.0546875`.  End-to-end step time was `441.963 s`, including
+  `395.663 s` before publication, `30.054 s` checkpointing, and `16.222 s`
+  weight sync.  W&B run ID is `zld3wutx`; the archived effective config has
+  SHA-256
+  `65ada35235de374b650d7d100ba8f51adfb1f752d4bf3e4d47b1b4c6c6ced761`.
+- R2 judge placement and promotion gate: GPU4-7 have an external release
+  boundary, while an uninterrupted 80-step run is expected to outlive it.
+  Therefore the same pinned Qwen3-VL-32B-Thinking judge is colocated with the
+  policy on physical GPU0 at vLLM memory utilization `.42`, maximum batched
+  tokens `16,384`, and maximum sequences `32`; rollout remains `.45` on all
+  four policy GPUs.  Before R2, a separate fresh one-step `R1C` must reproduce
+  complete `128/128`, zero-failure visual coverage while sampling GPU0 memory
+  every second and retaining at least 8 GiB free at the observed peak.  The
+  formal controller fails closed on any per-step visual-judge coverage loss,
+  watches optimizer steps `1/2/3/5/10/20/40/60/80`, and writes the durable
+  step-80 training marker before the judge wrapper shuts down.  All eight
+  planned checkpoint boundaries `0/1/5/10/20/40/60/80` are retained for
+  diagnosis.  CoreDev ACC-VAL may start only after that exact wrapper reports
+  a successful stop and all GPU0-3 compute processes have exited.
+- R2 full utility gate accepted at `2026-08-06 05:24 JST`: run identity
+  `893b5202c4d866b2020cf345aa53c585b78b056407775cb928f9c6fded5fa892`
+  completed all eight shards with exactly `1,280` attempts each, totaling
+  `10,240` attempts over the sequential `1,280`-sample prefix.  Strict final
+  verification reported zero failed shards and `9` conservatively scored
+  4,096-token length caps.  The materialized labels are needed/optional/
+  unnecessary = `291/515/474`.  Runtime sidecar SHA-256 is
+  `1344a279f2709e84d1819e783ff78af8e0fc09771a59d9c3f713d9303d1877d2`;
+  its canonical manifest identity SHA-256 is
+  `edaecee046724ac51355b43544e02dbf5dff6d14b56a7c31b9a607333da1445b`.
+- R1C empirical recovery at `2026-08-06 05:54 JST`: the `.42` colocated
+  judge attempt completed its optimizer step, exact `128/128` visual-judge
+  HTTP-200 coverage, zero visual failures, and a complete four-rank step-1
+  checkpoint, but it was correctly withheld from promotion.  The one-second
+  GPU0 ledger observed only `6,972 MiB` minimum free memory, below the
+  `8,192 MiB` safety floor; independently, the sampler inherited a shutdown
+  signal and stopped `11 s` before the training wrapper exited, so its strict
+  end-coverage assertion also failed.  The recovery changes only deployment
+  capacity: the identical local Qwen3-VL-32B-Thinking judge uses `.39` rather
+  than `.42` GPU memory utilization, and the sampler starts a separate session
+  so training teardown cannot terminate it.  Model, reward, data, RP-66,
+  policy rollout `.45`, and every optimizer hyperparameter remain unchanged.
+  The withheld diagnostic W&B run ID is `vtw1qdr7`.
+
+## POLICY-RL PRL24 FMT version and A/B/C/D execution decision (2026-08-20)
+
+- Scope: this record resolves the reward-version ambiguity and supersedes any
+  stale PRL24 status text. The original FMT1 T-free recipe used a `-1`
+  protocol/format/tool-error penalty. Format errors were observed to rise with
+  training step, so FMT2 was created with the otherwise identical equation and
+  a `-2` error penalty. FMT1 A remains a separate historical identity; no
+  checkpoint or result is relabelled, resumed into, or mixed with FMT2.
+- Current recipe decision: the comparable A/B/C results use FMT2. All later
+  PRL24 runs, starting with D and including planned E/F, use FMT2 unless a new
+  explicit reward-ablation identity is registered.
+- PRL24-A FMT2 CoreDev Macro* at S4/S8/S12/S16 is
+  `58.3983/60.7348/59.8701/59.4007`. The current peak is S8 and the later
+  checkpoints show that BS64 did not eliminate endpoint plateau/regression.
+- PRL24-B FMT2 Joint Macro* is `57.4834` at S8, `-3.2514 pp` versus matched
+  A-S8, with six of seven components lower. This agrees with the direction of
+  the earlier BS16 Joint pilot, so B was intentionally stopped at S8 and the
+  operational conclusion is to keep RP67 Frozen. This is a documented
+  pre-registration/resource exception, not a claim that B reached S16.
+- PRL24-C FMT2 F/G completed through S16. Macro* at S4/S8/S12/S16 is
+  `60.1777/60.6036/60.1754/59.4924`; C-A is
+  `+1.7794/-0.1312/+0.3053/+0.0917 pp`. F/G therefore has an early positive
+  signal but no sustained endpoint accuracy gain and is not promoted to the
+  default reward from these data alone.
+- A0 is optional and has no completed result. Its only purpose is a strict
+  batch-only causal claim: if that wording is required, run same-commit FMT2
+  BS16. Historical PRL22 BS16 remains an informative recipe-level anchor but
+  is not fully matched in reward/commit identity. A0 does not block D/E/F.
+- PRL24-D launch identity: native Crop, Teacher25, BS64 independent prompts,
+  n16, world8, full Qwen, constant LR `1e-6`, FMT2, S0→S16, with permanent
+  S2/S4/S8/S12/S16 checkpoints. The versioned FMT2 reward implementation is
+  bound to commit `c74002b31e24d11c48e6dfa0b780cf80d4ce991b`; the clean launch
+  config/supervisor is commit `0102b3a53d8fd3a76b2cb96da60bdd24d6e1edf2` on branch
+  `prl24-d-crop-bs64-fmt2`. The first smoke attempt stopped before model load,
+  optimizer work, or checkpoint creation because the Teacher25 dataset now
+  requires an explicit positive image-pixel cap. Commit
+  `03ed86292bf9b3de62ec5fecdf00fec0402e3408` binds the same `1,003,520`
+  pixel cap used by current A/B/C while leaving legacy native-Crop contracts
+  unchanged. The next smoke attempt reached model/FSDP initialization but
+  stopped before rollout, optimizer work, or checkpoint creation because an
+  isolated reward worker exposed an import-order cycle. Commit
+  `f58dc48be455fe02f1eb431fc1659425a21465a5` moves the shared visual-source
+  constants to a framework-neutral module; the isolated worker import and the
+  62-test focused suite then passed. The third four-GPU smoke completed one
+  real rollout and actor update and wrote a complete four-rank step-1 model,
+  optimizer, extra-state, and trainer checkpoint. Its machine-readable status
+  is `smoke_checkpoint_complete` (2026-08-20 13:43 JST).
+- The first eight-GPU handoff was rejected before GPU/model initialization
+  because the native launcher resolved ignored Python 3.12 headers relative
+  to the clean Git worktree instead of the primary repository. Commit
+  `7f7492e0f56dc82642b0f8193fe62dbedac18498` adds the same shared-dependency
+  resolution already used by the general launcher, with a worktree regression
+  test; 35 focused tests and Ruff passed. The clean tmux supervisor
+  `prl24_d_fmt2_crop` restarted at 2026-08-20 13:48 JST, accepted the smoke,
+  and launched a fresh eight-GPU formal Ray session at 13:49 JST. All eight
+  formal FSDP and vLLM ranks initialized, the W&B run
+  `prl24dfmt2cropt25bs64s16` was accepted, and the formal loop reached
+  `Training Progress: 0/16` at 13:55 JST. Step 1 rollout was active; no formal
+  optimizer step or checkpoint existed at this status cut.
