@@ -9759,3 +9759,32 @@ than inferred from a script name or prior conversation.
   It launched from a clean worktree at `2026-08-21 00:32:18 JST`; every step is
   a rolling recovery boundary, every eighth step through S80 is permanent, and
   the first complete formal step will replace all provisional PRL25-B ETA.
+
+### PRL25-B checkpoint wake failure and full-Qwen resync repair (2026-08-21)
+
+- The first formal attempt is invalid beyond its S1 rollout and has been
+  stopped. S1 completed in `2,297.5835 s` with format-error rate `.125`, mean
+  answer reward `.6953125`, 489 successful Crop observations and 84,491 policy
+  tokens. Immediately after the S1 checkpoint, S2 and S3 both reached format-
+  error rate `1.0`, mean answer reward `0`, zero successful Crop observations
+  and multi-million-token malformed rollouts. Their shorter wall times are not
+  valid throughput measurements because they skipped Crop execution.
+- The saved actor was not corrupted: an independently merged S2 Hugging Face
+  checkpoint generated valid native Crop tool calls. The failure was confined
+  to the colocated vLLM lifecycle. Full-model, non-LoRA vLLM checkpoint sleep
+  uses level 2 and discards the just-synchronized Qwen weights. Exact Crop uses
+  the upstream veRL checkpoint manager, which lacked the TGVF manager's explicit
+  post-checkpoint resynchronization marker, so a bare wake exposed an invalid
+  rollout model for S2.
+- Repair commit `9332fd771b954c6445fffa75c902c2f27659bdea` makes the shared
+  checkpoint wrapper treat an exact-Crop full-Qwen sync receipt as a mandatory
+  post-checkpoint resync signal. It republishes the actor weights after every
+  level-2 checkpoint sleep before another rollout can begin. A regression test
+  covers the exact-Crop path without a custom checkpoint-manager marker; 93
+  checkpoint, weight-sync and launcher tests passed.
+- The failed run's S1--S3 artifacts remain audit-only and must not be resumed.
+  Admission now requires a fresh two-step canary that crosses the S1 checkpoint
+  and proves valid S2 formatting and live Crop observations. Only after that
+  gate passes may the same 80-step formal identity restart from S0. The repair
+  adds one measured approximately five-second full-Qwen synchronization per
+  checkpoint; the current valid-step estimate remains about 38.4 minutes.
