@@ -114,13 +114,18 @@ matched control。
 | Run | 训练日期/时间（JST） | 已记录训练时间 | 说明 |
 |---|---|---:|---|
 | Crop clean-final PRL14-A | 2026-08-09 13:49:35 完成 | 未记录可靠连续 wall time | `completion.json` 只有完成时间；中间存在恢复，不能从文件时间反推纯训练耗时 |
-| Crop T-free PRL21-R0 | 2026-08-14 21:39:59 → 2026-08-15 06:25:50 | **8 h 45 min 51 s** | 来自 completion lifecycle 的 created/completed timestamps，包含启动、训练与 checkpoint publication |
+| Crop T-free PRL21-R0 | 2026-08-14 21:39:59 → 2026-08-15 06:25:50 | **10 h 34 min 50 s** | 16 个成功 optimizer step 的 `timing_s/step` 合计 `38,090.230 s`；平均 **39 min 41 s/step**。completion 的 8 h 45 min 51 s 只覆盖最终 resume lifecycle，不能当成完整 16-step wall time |
 | TGVF PRL22-A Teacher25 | 2026-08-16 00:20:08 主运行 → 03:16:11 最终 metrics | **2 h 46 min 55 s** | 16 步 `end_to_end_step_seconds` 合计；平均 10 min 26 s/step；artifact 时间跨度约 2 h 56 min |
 | Crop+TGVF PRL22-B Teacher25 | 2026-08-16 04:08:09 → 08:01:49 最终 metrics | **3 h 44 min 24 s** | 16 步 `end_to_end_step_seconds` 合计；平均 14 min 02 s/step；artifact 时间跨度约 3 h 54 min |
 
 在相同 BS16 × n16、world8、16-step 配置下，Atomic Crop+TGVF 比 pure TGVF 的
 累计 end-to-end step 时间多约 `3,449 s`，即 **57 min 29 s**（约 `34.4%`）。这是
 工具执行与序列形态共同作用下的系统成本观察，不应解释为方法准确率差异的原因。
+
+PRL21 Crop 经多次恢复完成。完整训练成本必须按各次成功 step 的计时求和；从最终
+`completion.json` 的 created/completed 时间相减所得 8 h 45 min 51 s 漏掉了早期成功
+step，今后的容量规划不得再引用该值。按当前历史均值线性外推，单条 BS16 Crop 80-step
+约需 52 h 54 min；这只是排期基线，正式 ETA 要在第三期首个完整 step 后重新校准。
 
 ## 6. 简短分析
 
@@ -158,13 +163,30 @@ matched control。
 - “这些结果验证了 FMT2”：PRL21/PRL22 T-free 使用 `-1` 错误罚分，Crop clean-final
   使用另一套原 DeepEyes-style 公式；它们都不是当前 PRL24 FMT2 `-2`。
 
-## 8. 来源
+## 8. 第三期（PRL25）如何使用这些历史结果
+
+历史结果显示 Crop clean、Crop T-free 和 Crop+TGVF 都在 S8→S16 附近接近平台，但
+16-step 曲线不足以区分“已经达到能力上限”和“需要更长优化期”。因此第三期把主终点
+延长到 S80，而不是继续从单个 S16 横向差值下结论。
+
+第三期统一采用 `BS16 × n16`、Teacher25、FMT2 `-2`、相同 S0 和 80-step horizon，五条
+fresh arm 为：DeepEyes-style conditional Crop、自研 T-free Crop、T-free TGVF、T-free
+Atomic Crop+TGVF，以及 T-free + Focus/Target + Grounding 的 TGVF。每条都重新训练；
+PRL21/22 checkpoint 和 PRL24-D S1 均不作为初始化。
+
+本页的历史数值仍可作为能力与运行时间锚点，但 PRL21/22 使用 FMT1 `-1`，Crop
+clean-final 的 reward/data 又不同，不能直接作为第三期的 matched FMT2 对照。正式矩阵、
+比较边界、checkpoint 和评测规则见
+[PRL25 第三期 BS16 Teacher25 80-step 计划](PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md)。
+
+## 9. 来源
 
 - [CoreDev-2511 measurement contract 与 canonical 总表](POLICY_RL_COREDEV2511_MEASUREMENT_CONTRACT_AND_BASELINES_20260812.md)
 - [BS16 small-batch pilot closeout](POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md)
 - [PRL21 Crop T-free 结果与评测事件](PRL21_CROP_TFREE_16STEP_RESULTS_AND_EVALUATION_INCIDENT_20260815.md)
 - [PRL22 Teacher25 policy-data ablation](PRL22_TEACHER25_POLICY_DATA_ABLATION_RESULTS_20260816.md)
 - [PRL14/历史 Crop 配置对照](POLICY_RL_PRIMARY_BASELINE_20260810.md)
+- [PRL25 第三期 BS16 Teacher25 80-step 计划](PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md)
 
 对应训练 artifact：
 

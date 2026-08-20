@@ -9661,5 +9661,61 @@ than inferred from a script name or prior conversation.
   and launched a fresh eight-GPU formal Ray session at 13:49 JST. All eight
   formal FSDP and vLLM ranks initialized, the W&B run
   `prl24dfmt2cropt25bs64s16` was accepted, and the formal loop reached
-  `Training Progress: 0/16` at 13:55 JST. Step 1 rollout was active; no formal
-  optimizer step or checkpoint existed at this status cut.
+  `Training Progress: 0/16` at 13:55 JST. At that status cut Step 1 rollout was
+  active and no formal optimizer step or checkpoint existed; the later closeout
+  is recorded immediately below.
+
+### PRL24-D S1 closeout and BS64 pause supersession (2026-08-20)
+
+- This closeout supersedes the live status cut immediately above. The optimized
+  formal identity is
+  `PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1`;
+  its W&B run ID is `prl24dfmt2cropt25bs64s16sp1` and its artifact root is
+  `artifacts/policy/PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1/`.
+- One BS64 × n16 native-Crop optimizer update completed. The watcher observed a
+  complete and stable `global_step_1` checkpoint at `2026-08-20 21:52:25 JST`
+  and stopped the process group before any Step-2 optimizer update. The complete
+  checkpoint is `140,300,076,980` bytes (about `140.3 GB`). From formal rollout
+  start to checkpoint publication this step took about `2 h 32 min`; this
+  invalidates the pre-launch 38--45 min/step estimate for this tool line.
+- The stop watcher necessarily terminated after checkpoint stability but before
+  final training-metric and trajectory publication. There is no formal S1
+  metrics/trajectory artifact, and the S1 rollout was sampled from the common S0
+  policy before its first update. Therefore this run is valid runtime and
+  checkpoint evidence only; it gives **no efficacy result** for whether Crop
+  improved or regressed.
+- PRL24 BS64 is paused after A/C completion, recorded B-S8 early stop and this
+  D-S1 closeout. E/F were never launched and A0 is no longer a near-term
+  priority. The pause is resource-scientific: pure-TGVF recipe-level comparisons
+  show no clear BS64 gain, while native Crop costs about 2.5 hours per BS64 step.
+  The decision and existing results remain documented in
+  `docs/PRL24_BS64_POLICY_RL_SCALE_SERIES_PLAN_20260816.md` and
+  `docs/PRL24_ABC_INTERIM_RESULTS_20260819.md`.
+
+### PRL25 Phase III BS16 Teacher25 80-step matrix (planned 2026-08-20)
+
+- Decision ID: `POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`. This phase
+  tests the hypothesis that earlier S8/S16 plateaus may reflect an insufficient
+  optimization horizon. The primary endpoint is S80; S16 is diagnostic and is
+  no longer a stop boundary.
+- Five fresh arms are registered: (A) native Crop with the DeepEyes-style
+  conditional Crop reward, (B) native Crop with the project T-free reward,
+  (C) pure Frozen-RP67 TGVF with T-free reward, (D) Atomic Crop+TGVF with
+  Frozen RP67 and T-free reward, and (E) pure Frozen-RP67 TGVF with T-free plus
+  the existing Focus/Target + Grounding visual reward. The user's “target ground
+  reward” name is bound to this existing F/G profile, not a newly invented
+  target-only or grounding-only formula.
+- All arms use Qwen3-VL-8B-Instruct full-policy update, BS16 × n16, world8,
+  constant LR `1e-6`, FMT2 protocol/format/tool-error penalty `-2`, and the same
+  canonical Teacher25 seed-42 schedule. Each BS16 slice contains 12 retained T1
+  and 4 teacher prompts. Eighty steps equal 1,280 prompts and 20,480 trajectories
+  per arm.
+- Every arm starts from the same S0 policy with fresh optimizer, data cursor,
+  output and W&B identity. No PRL21/22 or PRL24-D checkpoint is continued. The
+  exact data identity/order is shared; prompt/tool schema is rendered for each
+  arm's actual tool protocol and is not misrepresented as byte-identical input.
+- Strict reward A/B claims are limited to Crop A versus B and pure-TGVF C versus
+  E. Comparisons across native Crop, pure TGVF and Atomic Crop+TGVF remain
+  protocol capability comparisons rather than strict synergy claims. Full
+  checkpoint, metric, evaluation, success and capacity contracts are in
+  `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`.

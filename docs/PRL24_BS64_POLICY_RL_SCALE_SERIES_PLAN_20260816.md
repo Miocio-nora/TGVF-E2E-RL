@@ -2,11 +2,13 @@
 
 日期：2026-08-16
 
-状态：`ACTIVE / A、C 已完成；B 在 S8 有记录停止；D 已启动`
+状态：`PAUSED / A、C 已完成；B 在 S8 有记录停止；D 在 S1 后停止；E/F 未启动`
 
 Decision ID：`POLICY-RL-BS64-SCALE-SERIES-20260816-v2`
 
 执行修订 ID：`POLICY-RL-BS64-SCALE-SERIES-20260820-FMT2-v1`
+
+暂停决策 ID：`POLICY-RL-BS64-PAUSE-TO-PHASE3-BS16-S80-20260820-v1`
 
 本计划承接已经收官的
 [BS16 small-batch pilot](POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md)，并使用
@@ -34,7 +36,17 @@ Decision ID：`POLICY-RL-BS64-SCALE-SERIES-20260816-v2`
    `+1.7794/-0.1312/+0.3053/+0.0917 pp`：早期有正信号，但无持续 endpoint
    accuracy 增益，F/G 暂不成为默认 reward。
 5. D 使用 native Crop、Teacher25、BS64 × n16、world8、full Qwen、LR `1e-6`、
-   FMT2，训练至 S16；S2/S4/S8/S12/S16 均保留。D 已于 2026-08-20 启动。
+   FMT2 启动，但实际只完成 S1 optimizer checkpoint，并在 S2 update 前按资源决策停止。
+   S1 从 rollout 开始到 checkpoint 完整落盘约 `2 h 32 min`，其中 actor update 约
+   `2 h 22 min`；完整 checkpoint 约 `140.3 GB`。停止发生在最终 step metrics/trajectory
+   publication 前，因此 D-S1 不是 efficacy 结果，不能声称 Crop 已改善或退化。
+6. 现有 pure-TGVF recipe-level scaling evidence 没有显示明确 BS64 质量增益：等 exposure
+   的 BS64-S4 相对历史 BS16-S16 为 `-1.5607 pp`；BS64 最佳点只高 `+0.7758 pp`，
+   BS64-S16 低 `-0.5583 pp`。由于 FMT/commit 不完全 matched，这不是严格 batch-only
+   因果结论，但不足以支持继续把 GPU 优先投入 BS64。
+7. PRL24 从本修订起暂停。E/F 未启动，A0 不再是近期优先项；后续统一转入
+   [第三期 PRL25 BS16 Teacher25 80-step 计划](PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md)，
+   五个 arm 全部从 S0 新训，不续接任何 PRL24 checkpoint。
 
 ## 1. 执行摘要
 
@@ -58,10 +70,10 @@ BS64 × n16 = 1,024 trajectories / optimizer update
 4. **TGVF、Crop、Atomic Crop+TGVF 在 BS64 下各自能否继续增强；旧的
    answer-gated conditional Crop reward 是否比当前 T-free Crop reward 更适合大 batch？**
 
-当前决策是：**先完成 BS64，不预先承诺 BS128 或 BS256。** BS64 通过后，再根据收益、
-稳定性、吞吐和显存决定下一步采用 BS128 作为中间档，还是直接到 BS256。训练 reward、
-format 合法率或 W&B 曲线变平滑本身都不能证明“大 BS 更强”；正式判断必须由统一外部
-benchmark 和相应的视觉健康度审计共同给出。
+本段以下内容保留为 2026-08-16 的原始预注册逻辑。2026-08-20 的当前决策已经改为：
+**暂停 BS64，不进入 BS128/BS256；先回到 BS16，把统一 Teacher25/FMT2 配方从 S0
+训练至 S80。** 训练 reward、format 合法率或 W&B 曲线变平滑本身都不能证明“大 BS
+更强”；正式判断仍必须由统一外部 benchmark 和相应的视觉健康度审计共同给出。
 
 ## 2. 为什么需要新的 scaling 系列
 
@@ -246,8 +258,8 @@ R_tfree = 2 × AnswerCorrect
 ProtocolOrToolErrorPenalty = -2 if an error occurred, otherwise 0  # FMT2
 ```
 
-FMT1 的对应值为 `-1`，只属于早期历史 A。FMT2 是 A/B/C 正式比较及后续 D/E/F 的
-当前统一 recipe；不得把两种 penalty 的 checkpoint 接续训练或放入同一 matched 表。
+FMT1 的对应值为 `-1`，只属于早期历史 A。FMT2 是 A/B/C、已执行的 D-S1，以及原计划
+E/F 的统一 recipe；不得把两种 penalty 的 checkpoint 接续训练或放入同一 matched 表。
 
 PRL24-C 只在同一主体上增加现有 gold-free visual rewards：
 
@@ -433,16 +445,16 @@ H1 的支持条件是：
 control。实际执行中 B 按第 0 节在 S8 有意停止并保留 Frozen；C 已完成至 S16，F/G
 未形成持续 endpoint accuracy 增益，仍需以 foveation/hallucination audit 判断其专项价值。
 
-### Phase III：Crop、conditional reward 与组合工具（D 已启动）
+### Phase III：Crop、conditional reward 与组合工具（暂停）
 
-先运行 D，再与 E 成对比较，建立当前 Teacher25/BS64 下的 pure Crop baseline 与严格 reward A/B；
-再运行 F，评估 Atomic Crop+TGVF 的继续性。D/E/F 的正式训练同样统一到 S16。A/D/F 的
-横向总表作为工程能力地图，不把
-不同工具协议间的差值称为严格协同增益。
+原计划先运行 D，再与 E 成对比较，最后运行 F。实际 D 因 native Crop 在 BS64 下单步约
+`2 h 32 min`，在完整 S1 checkpoint 后停止；E/F 未启动。本阶段不再在 BS64 身份下继续。
+Crop conditional/T-free、Atomic Crop+TGVF 等问题迁移到 PRL25 的 BS16/Teacher25/S80
+统一新训矩阵，仍保留 reward A/B 与跨协议措辞边界。
 
-### Phase IV：决定 BS128 或 BS256
+### Phase IV：决定 BS128 或 BS256（暂停，不执行）
 
-BS64 结束后再做一次明确决策：
+下表保留为原预注册决策树；当前不会进入 BS128/BS256：
 
 | BS64 结果 | 下一步 |
 |---|---|
@@ -455,7 +467,11 @@ BS64 结束后再做一次明确决策：
 
 ## 9. 时间与资源预算
 
-按当前 BS16 TGVF 约 `10.4 min/step` 的历史吞吐做线性规划，BS64 初始估计为：
+以下表格是启动前的历史规划，已被实测推翻，不能再作为运行 ETA。PRL24-D 实测 S1
+约 `2 h 32 min`，而不是表中的 `38--45 min/step`；原样 S16 约需 `40 h`。这与前述
+质量增益不明确共同构成暂停 BS64 的资源理由。
+
+原始估计为：
 
 | 项目 | 规划估计 |
 |---|---:|
@@ -465,9 +481,8 @@ BS64 结束后再做一次明确决策：
 | 单 arm 总 wall time | 约 11.5--14 h；Joint/F-G/Combo 等较慢 arm 可到 13--17 h |
 | 六 arm 全串行 | 约 75--95 h |
 
-因此不一次性启动六个 arm。A 是总 gate；B/C 复用 A；D/E 成对；F 最后进入。正式
-ETA 在每条工具线的第一个完整 step 后用实测吞吐重估。除第 0 节记录的 B 早停外，正式
-完成统一指训练到 S16 且 S2/S4/S8/S12/S16 评测 receipt 齐全，不再用 S8 代表 arm 完成。
+实际执行只完成 A/B/C 及 D-S1；E/F 未启动。PRL24 不再追求六臂 S16 完成，后续资源转入
+PRL25。任何未来恢复 BS64 的 ETA 都必须从同一工具线的实测完整 step 重新校准。
 
 存储采用 rolling checkpoint：除已停止的 B 外，其余 arm 至少保留 S2/S4/S8/S12/S16 到评测、结果 receipt 与
 必要轨迹抽样完成；随后每个 arm 的指标与 provenance 永久保留，大体积权重只长期保留
@@ -475,7 +490,8 @@ S16、关键 endpoint 和 winner，避免六条线累积占满磁盘。
 
 ## 10. 预期产出与结论模板
 
-PRL24 完成后必须形成：
+原计划要求 PRL24 完成后形成以下产出；由于系列暂停，未完成项迁移到 PRL25，不得把它们
+写成已经存在：
 
 1. BS16/BS64 matched-exposure 总表；
 2. BS64 S2/S4/S8/S12/S16 继续性曲线；
