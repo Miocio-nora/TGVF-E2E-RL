@@ -1,5 +1,5 @@
-schema_version = "policy-e2e-native-crop-tfree-bs64-fmt2-single-pass-run-config-v2"
-run_id = "PRL-24-D-FMT2-QWEN3-INSTRUCT-FULL-CROP-BS64-N16-TFREE-TEACHER25-16STEP-WS8-SP1"
+schema_version = "policy-e2e-native-crop-tfree-bs64-fmt2-single-pass-crop-aware-run-config-v3"
+run_id = "PRL-24-D-FMT2-QWEN3-INSTRUCT-FULL-CROP-BS64-N16-TFREE-TEACHER25-16STEP-WS8-SP1-CA1"
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
@@ -53,4 +53,4 @@ checkpoint_steps = [2, 4, 8, 12, 16]
 reuse_step0 = true
 
 [output]
-root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1"
+root = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1-ca1"

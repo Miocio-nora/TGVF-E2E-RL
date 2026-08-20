@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from importlib.util import find_spec
 import io
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Sequence
@@ -231,7 +232,9 @@ def run_prl13_task_runner(
     install_prl13_torch_bert_padding()
     require_prl13_torch_bert_padding()
     from .prl24_single_pass_execution import (
+        PRL24_CROP_AWARE_BATCHING_ENV,
         PRL24_SINGLE_PASS_POLICY_LOSS_MODE,
+        install_prl24_crop_aware_batching,
         install_prl24_single_pass_rollout_bypass,
     )
 
@@ -242,6 +245,8 @@ def run_prl13_task_runner(
     loss_mode = getter("loss_mode", None) if callable(getter) else None
     if loss_mode == PRL24_SINGLE_PASS_POLICY_LOSS_MODE:
         install_prl24_single_pass_rollout_bypass()
+        if os.environ.get(PRL24_CROP_AWARE_BATCHING_ENV) == "1":
+            install_prl24_crop_aware_batching()
     return upstream_run(runner, config)
 
 
