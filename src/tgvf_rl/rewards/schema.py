@@ -9,8 +9,8 @@ from types import MappingProxyType
 from typing import Protocol
 
 from tgvf_rl.contracts.identity import ArtifactIdentity
+from tgvf_rl.deepeyes_sources import VISUAL_SOURCES
 from tgvf_rl.judges.base import JudgeUsage
-from tgvf_rl.policy.deepeyes_official_protocol import VISUAL_SOURCES
 
 
 PILOT_REWARD_LEGACY_WEIGHTS = (0.8, 0.2, 1.2)

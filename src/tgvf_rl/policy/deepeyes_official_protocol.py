@@ -19,6 +19,16 @@ import re
 from types import MappingProxyType
 from typing import Any
 
+from tgvf_rl.deepeyes_sources import (
+    DEEPEYES_ARXIVQA_SOURCE,
+    DEEPEYES_TEACHER_SOURCE,
+    DEEPEYES_THINKLITE_SOURCE,
+    DEEPEYES_VSTAR_SOURCE,
+    VISUAL_SOURCES,
+    VISUAL_SOURCES_WITH_GT_REGIONS,
+    VISUAL_SOURCES_WITHOUT_GT_REGIONS,
+)
+
 
 DEEPEYES_OFFICIAL_PROTOCOL_SCHEMA = "tgvf.deepeyes-native-clean-final-protocol.v2"
 DEEPEYES_VISUAL_PROMPT_VERSION = "deepeyes-system-v2-clean-final-v1"
@@ -30,11 +40,6 @@ DEEPEYES_TOOL_PARSER = "hermes"
 DEEPEYES_MAX_ACTIVE_PERCEPTION = 6
 DEEPEYES_VISUAL_AGENT_NAME = "prl13_native_deepeyes_visual"
 DEEPEYES_THINKLITE_AGENT_NAME = "single_turn_agent"
-DEEPEYES_VSTAR_SOURCE = "vstar"
-DEEPEYES_ARXIVQA_SOURCE = "arxivqa"
-DEEPEYES_TEACHER_SOURCE = "teacher"
-DEEPEYES_THINKLITE_SOURCE = "thinklite"
-
 # Keep whitespace, newlines, the public example, and even the public schema's
 # ``required=[\"bbox\"]`` typo intact.  The executable call contract below is
 # explicit that the actual argument is ``bbox_2d``; changing the visible
@@ -69,15 +74,6 @@ THINKLITE_BOXED_INSTRUCTION = (
     "Let's think step by step and output the final answer within \\boxed{}."
 )
 
-VISUAL_SOURCES = frozenset(
-    {
-        DEEPEYES_VSTAR_SOURCE,
-        DEEPEYES_ARXIVQA_SOURCE,
-        DEEPEYES_TEACHER_SOURCE,
-    }
-)
-VISUAL_SOURCES_WITH_GT_REGIONS = frozenset({DEEPEYES_VSTAR_SOURCE})
-VISUAL_SOURCES_WITHOUT_GT_REGIONS = VISUAL_SOURCES - VISUAL_SOURCES_WITH_GT_REGIONS
 TEACHER_TASK_KINDS = frozenset({"mcq", "open"})
 THINKLITE_SOURCE = DEEPEYES_THINKLITE_SOURCE
 OFFICIAL_SOURCE_ALIASES: Mapping[str, str] = MappingProxyType(
