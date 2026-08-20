@@ -24,6 +24,8 @@ from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.focus_tool import PrecomputedTGVFObservationPayload
 from tgvf_rl.environment.native_appender import (
     render_qwen_native_matched_crop_tgvf_success_environment_text,
+    render_qwen_native_matched_tgvf_success_environment_text,
+    render_qwen_native_success_environment_text,
 )
 from tgvf_rl.environment.agent_loop import ResponseBudgetScope
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
@@ -39,6 +41,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _reward_source_from_sample_fields,
     _rp66_matched_source_route,
     _rp66_response_budget_controls,
+    _success_environment_text_renderer,
     _trainable_rp66_launch_mode,
     _validate_sample_fields,
     _visual_quality_provider_request,
@@ -473,6 +476,40 @@ def test_trainable_rp66_visual_rows_select_matched_observation_renderer(
     assert _rp66_matched_source_route(config, {"data_source": data_source}) == (
         False,
         True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "matched", "expected"),
+    (
+        (
+            NativeToolCapabilityProfile.CROP_ONLY,
+            True,
+            render_qwen_native_success_environment_text,
+        ),
+        (
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            True,
+            render_qwen_native_matched_tgvf_success_environment_text,
+        ),
+        (
+            NativeToolCapabilityProfile.CROP_TGVF,
+            True,
+            render_qwen_native_matched_crop_tgvf_success_environment_text,
+        ),
+    ),
+)
+def test_matched_environment_renderer_follows_actual_tool_profile(
+    profile: NativeToolCapabilityProfile,
+    matched: bool,
+    expected: object,
+) -> None:
+    assert (
+        _success_environment_text_renderer(
+            tool_profile=profile,
+            matched_visual_observation=matched,
+        )
+        is expected
     )
 
 

@@ -266,6 +266,23 @@ def _rp66_response_budget_controls(
     return ResponseBudgetScope.POLICY_SAMPLED, None
 
 
+def _success_environment_text_renderer(
+    *,
+    tool_profile: NativeToolCapabilityProfile,
+    matched_visual_observation: bool,
+) -> Callable[..., str]:
+    """Bind environment syntax to the actual tool payload, not run family."""
+
+    if tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
+        return render_qwen_native_matched_crop_tgvf_success_environment_text
+    if (
+        tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
+        and matched_visual_observation
+    ):
+        return render_qwen_native_matched_tgvf_success_environment_text
+    return render_qwen_native_success_environment_text
+
+
 class Qwen3PolicyE2ELiveRuntimeBuilder:
     """Build CPU AgentLoop state bound to the existing vLLM rollout client."""
 
@@ -701,18 +718,10 @@ class _Qwen3PolicyTrajectoryComponents:
                 matched_visual_observation=matched_visual_observation,
             )
         )
-        if self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
-            success_environment_text_renderer = (
-                render_qwen_native_matched_crop_tgvf_success_environment_text
-            )
-        elif matched_visual_observation:
-            success_environment_text_renderer = (
-                render_qwen_native_matched_tgvf_success_environment_text
-            )
-        else:
-            success_environment_text_renderer = (
-                render_qwen_native_success_environment_text
-            )
+        success_environment_text_renderer = _success_environment_text_renderer(
+            tool_profile=self.config.protocol.tool_profile,
+            matched_visual_observation=matched_visual_observation,
+        )
         appender = QwenNativeToolObservationAppender(
             tokenizer=self.layout_builder.tokenizer,
             registrar=registry,
