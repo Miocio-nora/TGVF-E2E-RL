@@ -9783,8 +9783,17 @@ than inferred from a script name or prior conversation.
   covers the exact-Crop path without a custom checkpoint-manager marker; 93
   checkpoint, weight-sync and launcher tests passed.
 - The failed run's S1--S3 artifacts remain audit-only and must not be resumed.
-  Admission now requires a fresh two-step canary that crosses the S1 checkpoint
-  and proves valid S2 formatting and live Crop observations. Only after that
-  gate passes may the same 80-step formal identity restart from S0. The repair
-  adds one measured approximately five-second full-Qwen synchronization per
-  checkpoint; the current valid-step estimate remains about 38.4 minutes.
+  The fresh full-size lifecycle gate
+  `PRL-25-B-F2-QWEN3-INSTRUCT-FULL-CROP-EXACT-BS16-N16-TFREE-TEACHER25-2STEP-WS8`
+  crossed the S1 checkpoint in one process and completed normally. S1/S2
+  format-error rates were `.11328125/.05078125`, successful Crop observations
+  were `489/442`, mean answer rewards were `.7109375/.72265625`, and generated
+  policy tokens were `81,636/72,812`. Both paired checkpoints are complete and
+  the latest tracker is `2`; there was no traceback.
+- Gate S1/S2 end-to-end times were `2,304.7600/1,250.0919 s` (38 min 24.8 s
+  and 20 min 50.1 s). Checkpoint time was `73.4580/85.5686 s` and initial
+  weight-sync time was `5.7200/4.9066 s`. The repaired S2 therefore does not
+  reproduce the invalid attempt's 100% format errors, zero Crop observations
+  or multi-million-token output. The 80-step formal identity is admitted to
+  restart from S0; observed valid-step time is data-dependent rather than a
+  fixed 38.4-minute constant.
