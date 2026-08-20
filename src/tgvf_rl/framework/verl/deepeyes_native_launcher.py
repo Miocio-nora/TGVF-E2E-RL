@@ -71,8 +71,32 @@ DEEPEYES_NATIVE_STRESS_SCOPE = (
     "not_maximum_visual_token_selection"
 )
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _shared_dependency_repository_root(repository_root: Path) -> Path:
+    """Resolve ignored runtime dependencies shared by Git worktrees."""
+
+    relative_header = Path(
+        ".deps/python312-dev/root/usr/include/python3.12/Python.h"
+    )
+    if (repository_root / relative_header).is_file():
+        return repository_root
+    marker = repository_root / ".git"
+    if marker.is_file():
+        prefix = "gitdir: "
+        contents = marker.read_text(encoding="utf-8").strip()
+        if contents.startswith(prefix):
+            git_dir = Path(contents[len(prefix) :]).resolve()
+            if git_dir.parent.name == "worktrees" and len(git_dir.parents) >= 3:
+                shared_root = git_dir.parents[2]
+                if (shared_root / relative_header).is_file():
+                    return shared_root
+    return repository_root
+
+
+_DEPENDENCY_REPOSITORY_ROOT = _shared_dependency_repository_root(_REPOSITORY_ROOT)
 _PYTHON312_DEV_ROOT = (
-    _REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
+    _DEPENDENCY_REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
 )
 
 LaunchMode = Literal[

@@ -390,6 +390,27 @@ def test_resident_flex_launch_prepends_local_python_headers(
     ]
 
 
+def test_native_launcher_resolves_shared_worktree_dependencies(tmp_path: Path) -> None:
+    from tgvf_rl.framework.verl import deepeyes_native_launcher as launcher
+
+    shared_root = tmp_path / "main"
+    worktree_root = tmp_path / "worktree"
+    git_dir = shared_root / ".git/worktrees/prl24-d"
+    header = (
+        shared_root
+        / ".deps/python312-dev/root/usr/include/python3.12/Python.h"
+    )
+    git_dir.mkdir(parents=True)
+    header.parent.mkdir(parents=True)
+    header.write_text("/* test */\n", encoding="utf-8")
+    worktree_root.mkdir()
+    (worktree_root / ".git").write_text(
+        f"gitdir: {git_dir}\n", encoding="utf-8"
+    )
+
+    assert launcher._shared_dependency_repository_root(worktree_root) == shared_root
+
+
 @pytest.mark.parametrize(
     "mode",
     [
