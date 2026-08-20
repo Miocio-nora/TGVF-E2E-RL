@@ -4,7 +4,7 @@ run_id = "PRL-25-B-F2-QWEN3-INSTRUCT-FULL-CROP-EXACT-BS16-N16-TFREE-TEACHER25-2S
 
 [code]
 repository = "Miocio-nora/TGVF-E2E-RL"
-commit = "3725af120453f776289824c011353060126c4a2c"
+commit = "3725af1fd761039fcbc5ef67b0a93d80b1b51973"
 dirty = false
 
 [model]
