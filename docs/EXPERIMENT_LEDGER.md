@@ -9719,3 +9719,11 @@ than inferred from a script name or prior conversation.
   protocol capability comparisons rather than strict synergy claims. Full
   checkpoint, metric, evaluation, success and capacity contracts are in
   `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`.
+- Priority revision on `2026-08-20`: the first formal queue is PRL25-B Crop
+  T-free, PRL25-C pure-TGVF T-free, then PRL25-D Atomic Crop+TGVF T-free.
+  PRL25-A conditional Crop and PRL25-E F/G must not occupy a formal training
+  slot until B/C/D complete. Every optimizer step writes a full recovery
+  checkpoint while only the latest two roll; permanent evaluation endpoints
+  are S0/S8/S16/S24/S32/S48/S64/S80. Historical 80-step training-only baselines
+  are about 52 h 54 min, 13 h 55 min and 18 h 42 min respectively; the three-arm
+  serial baseline is about 85 h 31 min before smoke, recovery and evaluation.

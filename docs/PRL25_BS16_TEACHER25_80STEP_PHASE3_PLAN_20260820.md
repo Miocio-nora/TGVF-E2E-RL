@@ -47,6 +47,11 @@ BS64 不是永久否定；只有当 BS16-S80 先建立可信的长程最佳点�
 | **PRL25-D** | Atomic Crop+TGVF | Frozen RP67 | **FMT2 T-free** | 相对 C 改工具协议 | 组合工具在长训练下是否保持其描述性优势 |
 | **PRL25-E** | pure TGVF | Frozen RP67 | **FMT2 T-free + Focus/Target + Grounding（F+G）** | C/E 只开启 F+G | Target/Ground visual credit 是否需要更多 step 才转化为外评 |
 
+执行优先级修订（2026-08-20）：第一批只排自研 T-free 主线，顺序为
+`PRL25-B Crop → PRL25-C TGVF → PRL25-D Atomic Crop+TGVF`。三条全部完成前，
+PRL25-A conditional Crop 与 PRL25-E F+G 不占用正式训练档；smoke/preflight 不计入
+科学训练，也不得改变每条 arm 从相同 S0 fresh start 的要求。
+
 术语约定：本计划中的 “TGVF Target Ground reward” 指已经在 PRL19/PRL24-C 使用的
 `Focus/Target + Grounding` 两项 gold-free visual reward（F+G），不是新建另一套未定义
 的 reward。若未来只开启 F 或只开启 G，必须另立 arm，不能混入 PRL25-E。
@@ -124,7 +129,8 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
   tool call/success/error、重复调用、response length、zero-advantage group、loss、gradient norm、
   clip/ratio/KL diagnostics。轨迹审计数据必须在允许人工停止前完成 publication，避免重现
   PRL24-D “checkpoint 有效但 S1 metrics 未落盘”的信息缺口。
-- optimizer recovery checkpoint 可每步 rolling 保留最近 2 个；长期评测 endpoint 为
+- **每 1 step** 写一次完整 optimizer recovery checkpoint，rolling 只保留最近 2 个；长期
+  固定保留/转存的评测 endpoint 为
   `S0/S8/S16/S24/S32/S48/S64/S80`。中间 endpoint 评测/审计完成后可只保留 model-only
   snapshot 与 receipt；S80 和最终 winner 保留完整 optimizer state，控制约 140 GB/完整
   checkpoint 的存储压力。
@@ -149,16 +155,24 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
 
 ## 8. 顺序与资源口径
 
-正式启动前先冻结同一实现 commit，并分别做不进入科学结果的一步 smoke。运行时优先让
-matched pair 相邻，建议顺序为 `C → E → D → B → A`：先建立纯 TGVF control 与 F/G
-A/B，再完成组合工具，最后连续完成两条最慢的 Crop reward A/B。顺序不改变五臂均从 S0
-开始的要求。
+正式启动前先冻结同一实现 commit，并分别做不进入科学结果的一步 smoke。按本期最新资源
+优先级，正式顺序为 `B → C → D → E → A`：先完成三条自研 T-free 主线，再进入 F/G 与
+conditional reward ablation。顺序不改变五臂均从 S0 开始的要求，也不改变 A/B、C/E 的
+matched 比较定义。
 
-历史 BS16 实测仅用于容量规划，不作为保证：pure TGVF 约 `10.4 min/step`，Atomic
-Crop+TGVF 约 `14.0 min/step`，native Crop 成功步时间均值约 `39.7 min/step`。因此
-单条 80-step 约为 TGVF `14 h`、组合工具 `19 h`、每条 native Crop `53 h`；F/G 还需
-计入 visual judge。五臂串行训练下限约 6--7 天，另加评测，首个完整 step 后只用实测值
-更新 ETA，不再从其他工具线做窄区间外推。
+历史 BS16 实测仅用于容量规划，不作为保证。下列时间包含历史配方当时的 step checkpoint
+成本，不包含第三期 CoreDev endpoint 推理/评分：
+
+| 第一批 arm | 历史均值 | 80-step 线性基线 | 排期预留 |
+|---|---:|---:|---:|
+| PRL25-B Crop T-free | `39.68 min/step` | `52 h 54 min` | `53--60 h` |
+| PRL25-C pure TGVF T-free | `10.43 min/step` | `13 h 55 min` | `15--17 h` |
+| PRL25-D Atomic Crop+TGVF T-free | `14.03 min/step` | `18 h 42 min` | `20--22 h` |
+
+三条纯训练串行线性基线共约 `85 h 31 min`（3 d 13 h 31 min），实际排期预留约
+`88--99 h`（3.7--4.1 天），另加 smoke、失败恢复与 endpoint 评测。每条首个完整 step
+结束后只使用本线路实测值更新 ETA，不再从其他工具线做窄区间外推。五臂全部串行的旧
+6--7 天估计仍只可作为粗略下限；F/G 还需另外计入 visual judge。
 
 ## 9. 与既有文档的关系
 
