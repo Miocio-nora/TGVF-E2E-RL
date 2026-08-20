@@ -46,6 +46,7 @@ def test_prl24_d_formal_plan_is_bs64_n16_fmt2() -> None:
     )
     assert values["data.train_batch_size"] == 64
     assert values["data.gen_batch_size"] == 64
+    assert values["data.mm_processor_kwargs.max_pixels"] == 1_003_520
     assert values["actor_rollout_ref.rollout.n"] == 16
     assert values["actor_rollout_ref.actor.ppo_mini_batch_size"] == 64
     assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 32
@@ -69,4 +70,5 @@ def test_prl24_d_smoke_keeps_fmt2_without_wandb() -> None:
     )
     assert plan.overrides["trainer.logger"] == ["console"]
     assert plan.overrides["trainer.total_training_steps"] == 1
+    assert plan.overrides["data.mm_processor_kwargs.max_pixels"] == 1_003_520
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"

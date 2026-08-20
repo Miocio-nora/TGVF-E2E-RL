@@ -30,6 +30,7 @@ CROP_TFREE_RUN_SCHEMA = "policy-e2e-native-crop-tfree-run-config-v1"
 CROP_TFREE_BS64_FMT2_RUN_SCHEMA = (
     "policy-e2e-native-crop-tfree-bs64-fmt2-run-config-v1"
 )
+CROP_TFREE_BS64_FMT2_IMAGE_MAX_PIXELS = 1_003_520
 CROP_TFREE_CODE_PLACEHOLDER = "CORE_COMMIT_REQUIRED"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -234,6 +235,14 @@ class CropTFreeRunContract:
     def maximum_rolling_checkpoints(self) -> int:
         return int(_nested(self.payload, "retention.maximum_rolling_checkpoints"))
 
+    @property
+    def image_max_pixels(self) -> int | None:
+        """Return the current Teacher25 pixel cap without changing legacy runs."""
+
+        if self.payload["schema_version"] == CROP_TFREE_BS64_FMT2_RUN_SCHEMA:
+            return CROP_TFREE_BS64_FMT2_IMAGE_MAX_PIXELS
+        return None
+
     def assert_launchable(self, repository_root: Path) -> None:
         if _COMMIT.fullmatch(self.code_commit) is None:
             raise RuntimeError("Crop T-free code.commit is not bound")
@@ -327,6 +336,7 @@ def load_crop_tfree_run_contract(
 
 __all__ = [
     "CROP_TFREE_BS64_FMT2_RUN_SCHEMA",
+    "CROP_TFREE_BS64_FMT2_IMAGE_MAX_PIXELS",
     "CROP_TFREE_CODE_PLACEHOLDER",
     "CROP_TFREE_RUN_SCHEMA",
     "CropTFreeRunContract",

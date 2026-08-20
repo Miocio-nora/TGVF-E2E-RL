@@ -156,6 +156,12 @@ def _common_reward_overrides(contract: CropTFreeRunContract) -> dict[str, object
     }
 
 
+def _current_data_overrides(contract: CropTFreeRunContract) -> dict[str, object]:
+    if contract.image_max_pixels is None:
+        return {}
+    return {"data.mm_processor_kwargs.max_pixels": contract.image_max_pixels}
+
+
 def _build_plan(contract: CropTFreeRunContract, *, mode: str):
     if mode == "smoke":
         base = build_deepeyes_native_verl_launch_plan(
@@ -167,6 +173,7 @@ def _build_plan(contract: CropTFreeRunContract, *, mode: str):
         overrides = {
             **base.overrides,
             **_common_reward_overrides(contract),
+            **_current_data_overrides(contract),
             "trainer.experiment_name": contract.run_id + "-SMOKE",
             "trainer.default_local_dir": str(output_root / "checkpoints"),
             "trainer.rollout_data_dir": str(output_root / "trajectories"),
@@ -189,6 +196,7 @@ def _build_plan(contract: CropTFreeRunContract, *, mode: str):
     overrides = {
         **base.overrides,
         **_common_reward_overrides(contract),
+        **_current_data_overrides(contract),
         "trainer.experiment_name": contract.run_id,
         "trainer.default_local_dir": str(output_root / "checkpoints"),
         "trainer.rollout_data_dir": str(output_root / "trajectories"),

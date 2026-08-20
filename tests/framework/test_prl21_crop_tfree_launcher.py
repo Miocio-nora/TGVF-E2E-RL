@@ -63,6 +63,7 @@ def test_formal_plan_is_prl14_matched_except_for_reward_manager_and_horizon() ->
     )
     assert values["data.train_batch_size"] == 16
     assert values["data.gen_batch_size"] == 16
+    assert "data.mm_processor_kwargs.max_pixels" not in values
     assert values["actor_rollout_ref.rollout.n"] == 16
     assert values["trainer.n_gpus_per_node"] == 8
     assert values["actor_rollout_ref.actor.fsdp_config.fsdp_size"] == 8
