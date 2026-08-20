@@ -10,18 +10,14 @@ runs or the PRL24 reward/sample contract.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from functools import lru_cache
-import json
 import os
-from pathlib import Path
 from typing import Any
 
 import torch
 
 
 PRL24_SINGLE_PASS_ENV = "TGVF_PRL24_SINGLE_PASS_EXECUTION"
-PRL24_CROP_AWARE_BATCHING_ENV = "TGVF_PRL24_CROP_AWARE_BATCHING"
 PRL24_SINGLE_PASS_POLICY_LOSS_MODE = "deepeyes_single_pass_micro_token_mean"
 
 _PATCH_MARKER = "_tgvf_prl24_single_pass_v1"
@@ -244,172 +240,6 @@ def target_only_linear_for_ppo(
     )
 
 
-@lru_cache(maxsize=8)
-def _qwen3_training_cost_coefficients(
-    config_path: str,
-) -> tuple[int, int, int, int]:
-    """Return exact FLOP-model coefficients used for deterministic scheduling."""
-
-    payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
-    text = payload["text_config"]
-    vision = payload["vision_config"]
-
-    hidden = int(text["hidden_size"])
-    heads = int(text["num_attention_heads"])
-    kv_heads = int(text["num_key_value_heads"])
-    layers = int(text["num_hidden_layers"])
-    head_dim = int(text.get("head_dim", hidden // heads))
-    intermediate = int(text["intermediate_size"])
-    vocab = int(text["vocab_size"])
-    q_size = heads * head_dim
-    k_size = kv_heads * head_dim
-    v_size = kv_heads * head_dim
-    text_dense_parameters = (
-        (hidden * intermediate * 3) + hidden * (q_size + k_size + v_size + q_size)
-    ) * layers + vocab * hidden * 2
-
-    vision_hidden = int(vision["hidden_size"])
-    vision_heads = int(vision["num_heads"])
-    vision_depth = int(vision["depth"])
-    vision_head_dim = vision_hidden // vision_heads
-    merge = int(vision["spatial_merge_size"])
-    patch_parameters = (
-        vision_hidden
-        * int(vision["in_channels"])
-        * int(vision["temporal_patch_size"])
-        * int(vision["patch_size"])
-        * int(vision["patch_size"])
-    )
-    vision_mlp = vision_hidden * int(vision["intermediate_size"]) * 2
-    vision_attention = vision_hidden * (4 * vision_hidden)
-    merger = (int(vision["out_hidden_size"]) + vision_hidden * merge**2) * (
-        vision_hidden * merge**2
-    )
-    deepstack_count = len(vision.get("deepstack_visual_indexes", []))
-    vision_dense_parameters = (
-        patch_parameters
-        + (vision_mlp + vision_attention) * vision_depth
-        + merger * (deepstack_count + 1)
-    )
-    return (
-        6 * text_dense_parameters,
-        6 * head_dim * heads * layers,
-        6 * vision_dense_parameters,
-        12 * vision_head_dim * vision_heads * vision_depth,
-    )
-
-
-def _image_sequence_lengths(multi_modal_input: object) -> tuple[int, ...]:
-    if not isinstance(multi_modal_input, Mapping):
-        return (16,)
-    values = multi_modal_input.get("images_seqlens")
-    if isinstance(values, torch.Tensor):
-        result = tuple(int(value) for value in values.reshape(-1).tolist())
-    elif isinstance(values, Sequence) and not isinstance(
-        values, (str, bytes, bytearray)
-    ):
-        result = tuple(int(value) for value in values)
-    else:
-        result = ()
-    # Qwen3-VL deliberately executes one 4x4 dummy image for text-only rows so
-    # every FSDP rank touches the vision parameters.
-    return result or (16,)
-
-
-def estimate_qwen3_training_costs(
-    sequence_lengths: Sequence[int],
-    multi_modal_inputs: Sequence[object],
-    *,
-    model_config_path: str | Path,
-) -> list[int]:
-    """Estimate text+vision train FLOPs per sample using veRL's own formula."""
-
-    if len(sequence_lengths) != len(multi_modal_inputs):
-        raise ValueError("sequence lengths and multimodal inputs must align")
-    coefficients = _qwen3_training_cost_coefficients(
-        str(Path(model_config_path).resolve(strict=True))
-    )
-    text_dense, text_attention, vision_dense, vision_attention = coefficients
-    costs = []
-    for raw_length, multi_modal_input in zip(
-        sequence_lengths, multi_modal_inputs, strict=True
-    ):
-        length = int(raw_length)
-        if length <= 0:
-            raise ValueError("training sequence lengths must be positive")
-        image_lengths = _image_sequence_lengths(multi_modal_input)
-        cost = text_dense * length + text_attention * length * length
-        cost += vision_dense * sum(image_lengths)
-        cost += vision_attention * sum(value * value for value in image_lengths)
-        costs.append(cost)
-    return costs
-
-
-def crop_aware_micro_block_schedule(
-    sample_costs: Sequence[int],
-    *,
-    dp_size: int,
-    micro_batch_size: int,
-) -> tuple[list[int], dict[str, float]]:
-    """Schedule intact loss micros to reduce synchronous visual stragglers.
-
-    The current order is first split into the exact contiguous actor micros that
-    veRL would train.  Only whole micros move between ranks/waves, so the equal
-    mean over fixed micro token-means—and therefore the optimized scalar—is
-    unchanged.
-    """
-
-    if dp_size <= 0 or micro_batch_size <= 0:
-        raise ValueError("DP and micro-batch sizes must be positive")
-    sample_count = len(sample_costs)
-    block_width = dp_size * micro_batch_size
-    if sample_count == 0 or sample_count % block_width:
-        raise ValueError("sample count must contain complete DP micro waves")
-    local_samples = sample_count // dp_size
-    if local_samples % micro_batch_size:
-        raise ValueError("local sample count must contain complete micros")
-    waves = local_samples // micro_batch_size
-    block_count = dp_size * waves
-    blocks = [
-        list(range(index * micro_batch_size, (index + 1) * micro_batch_size))
-        for index in range(block_count)
-    ]
-    block_costs = [sum(int(sample_costs[index]) for index in block) for block in blocks]
-
-    old_wave_maxima = [
-        max(block_costs[rank * waves + wave] for rank in range(dp_size))
-        for wave in range(waves)
-    ]
-    sorted_blocks = sorted(
-        range(block_count), key=lambda index: (-block_costs[index], index)
-    )
-    rank_blocks: list[list[int]] = [[] for _ in range(dp_size)]
-    rank_totals = [0] * dp_size
-    new_wave_maxima = []
-    for wave in range(waves):
-        wave_blocks = sorted_blocks[wave * dp_size : (wave + 1) * dp_size]
-        new_wave_maxima.append(max(block_costs[index] for index in wave_blocks))
-        rank_order = sorted(range(dp_size), key=lambda rank: (rank_totals[rank], rank))
-        for rank, block_index in zip(rank_order, wave_blocks, strict=True):
-            rank_blocks[rank].append(block_index)
-            rank_totals[rank] += block_costs[block_index]
-
-    global_indices = [
-        sample_index
-        for rank in range(dp_size)
-        for block_index in rank_blocks[rank]
-        for sample_index in blocks[block_index]
-    ]
-    old_critical = sum(old_wave_maxima)
-    new_critical = sum(new_wave_maxima)
-    return global_indices, {
-        "actor/crop_aware_block_schedule_old_critical_cost": float(old_critical),
-        "actor/crop_aware_block_schedule_new_critical_cost": float(new_critical),
-        "actor/crop_aware_block_schedule_ratio": float(new_critical / old_critical),
-        "actor/crop_aware_block_count": float(block_count),
-    }
-
-
 def _single_pass_qwen3_torch_forward(
     self: object,
     input_ids: torch.Tensor | None = None,
@@ -528,70 +358,10 @@ def install_prl24_single_pass_rollout_bypass() -> bool:
     return True
 
 
-def install_prl24_crop_aware_batching() -> bool:
-    """Patch the controller balancer with loss-micro-preserving scheduling."""
-
-    from verl.trainer.ppo import ray_trainer
-
-    trainer_class = ray_trainer.RayPPOTrainer
-    marker = _PATCH_MARKER + "_crop_aware"
-    if getattr(trainer_class, marker, False):
-        return True
-    original = trainer_class._balance_batch
-
-    def _balance_batch(
-        self: object,
-        batch: object,
-        metrics: dict[str, object],
-        logging_prefix: str = "global_seqlen",
-        keep_minibatch: bool = False,
-    ) -> None:
-        original(self, batch, metrics, logging_prefix, keep_minibatch)
-        actor = self.config.actor_rollout_ref.actor
-        loss_mode = actor.policy_loss.get("loss_mode")
-        if loss_mode != PRL24_SINGLE_PASS_POLICY_LOSS_MODE:
-            return
-        attention_mask = batch.batch["attention_mask"]
-        sequence_lengths = (
-            attention_mask.view(attention_mask.shape[0], -1).sum(-1).tolist()
-        )
-        multi_modal_inputs = batch.non_tensor_batch.get("multi_modal_inputs")
-        if multi_modal_inputs is None or len(multi_modal_inputs) != len(
-            sequence_lengths
-        ):
-            raise ValueError(
-                "PRL24 Crop-aware batching requires aligned multimodal inputs"
-            )
-        model_config_path = (
-            Path(str(self.config.actor_rollout_ref.model.path)) / "config.json"
-        )
-        sample_costs = estimate_qwen3_training_costs(
-            sequence_lengths,
-            list(multi_modal_inputs),
-            model_config_path=model_config_path,
-        )
-        dp_size = self._get_dp_size(self.actor_rollout_wg, "actor")
-        global_indices, schedule_metrics = crop_aware_micro_block_schedule(
-            sample_costs,
-            dp_size=dp_size,
-            micro_batch_size=int(actor.ppo_micro_batch_size_per_gpu),
-        )
-        batch.reorder(torch.tensor(global_indices, dtype=torch.long))
-        metrics.update(schedule_metrics)
-
-    trainer_class._balance_batch = _balance_batch
-    setattr(trainer_class, marker, True)
-    return True
-
-
 __all__ = [
     "PRL24_SINGLE_PASS_ENV",
-    "PRL24_CROP_AWARE_BATCHING_ENV",
     "PRL24_SINGLE_PASS_POLICY_LOSS_MODE",
     "cached_fast_pos_embed_interpolate",
-    "crop_aware_micro_block_schedule",
-    "estimate_qwen3_training_costs",
-    "install_prl24_crop_aware_batching",
     "install_prl24_single_pass_model_optimizations",
     "install_prl24_single_pass_rollout_bypass",
     "maybe_install_prl24_single_pass_model_optimizations",

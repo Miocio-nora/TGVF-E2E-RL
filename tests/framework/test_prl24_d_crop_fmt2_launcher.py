@@ -38,7 +38,6 @@ def test_prl24_d_formal_plan_is_bs64_n16_fmt2() -> None:
     assert contract.protocol_error_penalty == 2.0
     assert contract.gradient_accumulation_steps == 4
     assert contract.single_pass_execution is True
-    assert contract.crop_aware_batching is True
     assert contract.permanent_checkpoint_steps == (2, 4, 8, 12, 16)
     assert values["reward.reward_manager.name"] == (
         "DeepEyesCropTFreeFMT2RewardManager"
@@ -59,7 +58,6 @@ def test_prl24_d_formal_plan_is_bs64_n16_fmt2() -> None:
     assert values["algorithm.rollout_correction.rollout_is"] is None
     assert values["algorithm.rollout_correction.rollout_rs"] is None
     assert plan.environment["TGVF_PRL24_SINGLE_PASS_EXECUTION"] == "1"
-    assert plan.environment["TGVF_PRL24_CROP_AWARE_BATCHING"] == "1"
 
     # 64 prompts * 16 trajectories / (8 ranks * 32 trajectories/rank)
     # gives the four forward/backward microbatches recorded by the contract.
@@ -81,7 +79,6 @@ def test_prl24_d_smoke_keeps_fmt2_without_wandb() -> None:
     assert plan.overrides["data.mm_processor_kwargs.max_pixels"] == 1_003_520
     assert plan.environment["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
     assert plan.environment["TGVF_PRL24_SINGLE_PASS_EXECUTION"] == "1"
-    assert plan.environment["TGVF_PRL24_CROP_AWARE_BATCHING"] == "1"
 
 
 def test_prl24_d_single_pass_compose_preflight_is_fail_closed() -> None:

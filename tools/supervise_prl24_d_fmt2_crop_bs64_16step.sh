@@ -5,7 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 python_bin=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin/python
 run_config="$repo_root/configs/policy/runs/prl_24_d_fmt2_qwen3_instruct_full_crop_bs64_n16_tfree_teacher25_16step_ws8.toml"
 launcher="$repo_root/tools/launch_prl21_crop_tfree16.py"
-training_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1-ca1
+training_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-24-D-FMT2-qwen3-instruct-full-crop-bs64-n16-tfree-teacher25-16step-ws8-sp1
 smoke_root="$training_root/smoke-integration"
 control_root="$training_root/runtime/supervisor"
 log_root="$training_root/logs"
@@ -32,7 +32,7 @@ export TGVF_DEEPEYES_JUDGE_RETRY_MAXIMUM_SECONDS=30
 export TGVF_DEEPEYES_JUDGE_MAXIMUM_TRANSIENT_FAILURE_FRACTION=0
 export WANDB_ENTITY=mio_nora
 export WANDB_PROJECT=tgvf-policy-rl
-export WANDB_RUN_ID=prl24dfmt2cropt25bs64s16sp1ca1
+export WANDB_RUN_ID=prl24dfmt2cropt25bs64s16sp1
 export WANDB_RESUME=allow
 
 completion_is_valid() {

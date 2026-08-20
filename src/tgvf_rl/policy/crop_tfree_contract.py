@@ -31,9 +31,6 @@ CROP_TFREE_BS64_FMT2_RUN_SCHEMA = "policy-e2e-native-crop-tfree-bs64-fmt2-run-co
 CROP_TFREE_BS64_FMT2_SINGLE_PASS_RUN_SCHEMA = (
     "policy-e2e-native-crop-tfree-bs64-fmt2-single-pass-run-config-v2"
 )
-CROP_TFREE_BS64_FMT2_CROP_AWARE_RUN_SCHEMA = (
-    "policy-e2e-native-crop-tfree-bs64-fmt2-single-pass-crop-aware-run-config-v3"
-)
 CROP_TFREE_BS64_FMT2_IMAGE_MAX_PIXELS = 1_003_520
 CROP_TFREE_CODE_PLACEHOLDER = "CORE_COMMIT_REQUIRED"
 
@@ -171,19 +168,6 @@ _EXACT_BY_SCHEMA: Mapping[str, Mapping[str, object]] = {
         "retention.permanent_checkpoint_steps": [2, 4, 8, 12, 16],
         "evaluation.checkpoint_steps": [2, 4, 8, 12, 16],
     },
-    CROP_TFREE_BS64_FMT2_CROP_AWARE_RUN_SCHEMA: {
-        **_COMMON_EXACT,
-        "reward.profile": "stage3-shaped-v1-tfree-fmt2",
-        "reward.manager_class": (
-            "tgvf_rl.rewards.deepeyes_crop_tfree_verl_reward."
-            "DeepEyesCropTFreeFMT2RewardManager"
-        ),
-        "reward.protocol_error_penalty": 2.0,
-        "matched_training.global_prompt_batch_size": 64,
-        "matched_training.gradient_accumulation_steps": 4,
-        "retention.permanent_checkpoint_steps": [2, 4, 8, 12, 16],
-        "evaluation.checkpoint_steps": [2, 4, 8, 12, 16],
-    },
 }
 
 
@@ -277,22 +261,15 @@ class CropTFreeRunContract:
         if self.payload["schema_version"] in {
             CROP_TFREE_BS64_FMT2_RUN_SCHEMA,
             CROP_TFREE_BS64_FMT2_SINGLE_PASS_RUN_SCHEMA,
-            CROP_TFREE_BS64_FMT2_CROP_AWARE_RUN_SCHEMA,
         }:
             return CROP_TFREE_BS64_FMT2_IMAGE_MAX_PIXELS
         return None
 
     @property
     def single_pass_execution(self) -> bool:
-        return self.payload["schema_version"] in {
-            CROP_TFREE_BS64_FMT2_SINGLE_PASS_RUN_SCHEMA,
-            CROP_TFREE_BS64_FMT2_CROP_AWARE_RUN_SCHEMA,
-        }
-
-    @property
-    def crop_aware_batching(self) -> bool:
         return (
-            self.payload["schema_version"] == CROP_TFREE_BS64_FMT2_CROP_AWARE_RUN_SCHEMA
+            self.payload["schema_version"]
+            == CROP_TFREE_BS64_FMT2_SINGLE_PASS_RUN_SCHEMA
         )
 
     def assert_launchable(self, repository_root: Path) -> None:
@@ -388,7 +365,6 @@ def load_crop_tfree_run_contract(
 
 __all__ = [
     "CROP_TFREE_BS64_FMT2_RUN_SCHEMA",
-    "CROP_TFREE_BS64_FMT2_CROP_AWARE_RUN_SCHEMA",
     "CROP_TFREE_BS64_FMT2_SINGLE_PASS_RUN_SCHEMA",
     "CROP_TFREE_BS64_FMT2_IMAGE_MAX_PIXELS",
     "CROP_TFREE_CODE_PLACEHOLDER",

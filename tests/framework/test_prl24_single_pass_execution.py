@@ -8,8 +8,6 @@ from omegaconf import OmegaConf
 from tgvf_rl.framework.verl.prl24_single_pass_execution import (
     _cpu_bilinear_coefficients,
     cached_fast_pos_embed_interpolate,
-    crop_aware_micro_block_schedule,
-    estimate_qwen3_training_costs,
     install_prl24_single_pass_rollout_bypass,
     target_only_linear_for_ppo,
 )
@@ -20,39 +18,6 @@ class _VisionPositionFixture:
         self.num_grid_per_side = 12
         self.pos_embed = torch.nn.Embedding(12 * 12, 16).to(dtype=dtype)
         self.config = SimpleNamespace(spatial_merge_size=2)
-
-
-def test_crop_aware_schedule_preserves_every_loss_micro() -> None:
-    block_costs = [100, 90, 80, 70, 4, 3, 2, 1]
-    sample_costs = [cost // 2 for cost in block_costs for _ in range(2)]
-    indices, metrics = crop_aware_micro_block_schedule(
-        sample_costs, dp_size=4, micro_batch_size=2
-    )
-
-    original_blocks = {frozenset(range(start, start + 2)) for start in range(0, 16, 2)}
-    scheduled_blocks = {
-        frozenset(indices[start : start + 2]) for start in range(0, 16, 2)
-    }
-    assert scheduled_blocks == original_blocks
-    assert sorted(indices) == list(range(16))
-    assert metrics["actor/crop_aware_block_schedule_old_critical_cost"] == 190.0
-    assert metrics["actor/crop_aware_block_schedule_new_critical_cost"] == 104.0
-    assert metrics["actor/crop_aware_block_schedule_ratio"] == 104 / 190
-
-
-def test_qwen3_cost_model_counts_crop_vision_work() -> None:
-    config = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct/config.json"
-    costs = estimate_qwen3_training_costs(
-        [1000, 1000, 2000],
-        [
-            {"images_seqlens": torch.tensor([400, 900])},
-            {},
-            {},
-        ],
-        model_config_path=config,
-    )
-    assert costs[0] > costs[1]
-    assert costs[2] > costs[1]
 
 
 def test_cached_vision_position_interpolation_is_bitwise_upstream() -> None:

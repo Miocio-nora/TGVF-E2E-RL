@@ -47,7 +47,6 @@ from tgvf_rl.framework.verl.prl13_main import (  # noqa: E402
     run_pinned_deepeyes_config,
 )
 from tgvf_rl.framework.verl.prl24_single_pass_execution import (  # noqa: E402
-    PRL24_CROP_AWARE_BATCHING_ENV,
     PRL24_SINGLE_PASS_ENV,
     PRL24_SINGLE_PASS_POLICY_LOSS_MODE,
 )
@@ -185,10 +184,7 @@ def _execution_overrides(contract: CropTFreeRunContract) -> dict[str, object]:
 
 
 def _execution_environment(contract: CropTFreeRunContract) -> dict[str, str]:
-    return {
-        PRL24_SINGLE_PASS_ENV: "1" if contract.single_pass_execution else "0",
-        PRL24_CROP_AWARE_BATCHING_ENV: ("1" if contract.crop_aware_batching else "0"),
-    }
+    return {PRL24_SINGLE_PASS_ENV: "1" if contract.single_pass_execution else "0"}
 
 
 def _build_plan(contract: CropTFreeRunContract, *, mode: str):
@@ -310,7 +306,6 @@ def _record(
             "old_logprob_recompute": not contract.single_pass_execution,
             "target_only_actor_lm_head": contract.single_pass_execution,
             "cached_vision_position_interpolation": (contract.single_pass_execution),
-            "crop_aware_loss_micro_block_schedule": contract.crop_aware_batching,
         },
         "permanent_checkpoint_steps": list(contract.permanent_checkpoint_steps),
         "compose_preflight": preflight,
