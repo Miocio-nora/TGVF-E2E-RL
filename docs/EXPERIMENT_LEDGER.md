@@ -9797,3 +9797,35 @@ than inferred from a script name or prior conversation.
   or multi-million-token output. The 80-step formal identity is admitted to
   restart from S0; observed valid-step time is data-dependent rather than a
   fixed 38.4-minute constant.
+
+### PRL25-B S39 judge interruption and clean-resume repair (2026-08-21)
+
+- The restarted scientific run completed and durably published S1--S39. The
+  latest tracker and paired model/optimizer/extra/project checkpoint all name
+  optimizer step 39; `metrics.jsonl` contains exactly 39 committed rows. S39
+  took `1,722.74 s` end to end, with answer accuracy `.55859375`, format-error
+  rate `.02734375`, 179 successful Crop observations and 254,707 generated
+  policy tokens. No S40 optimizer update or metric was committed.
+- After the S39 boundary, the next rollout's external DeepEyes answer judge
+  received repeated OpenRouter/DeepInfra HTTP 429 responses. The bounded
+  transient-failure window raised `JudgeGlobalFailure` and stopped the run
+  fail-closed. This is an external judge-rate interruption, not evidence of a
+  policy, Crop replay, GPU or CPU execution failure; S39 remains the sole
+  resume boundary.
+- The first clean-process auto-resume loaded the S39 actor, optimizer, RNG and
+  scheduler on all eight ranks and set the upstream global step to 39, but the
+  project identity gate then rejected it. Exact full-Qwen worker initialization
+  had published its bootstrap S0 operational receipt before checkpoint load,
+  and the bridge incorrectly compared that stale S0 receipt with the loaded S39
+  project identity. The guard prevented rollout or optimizer mutation, so this
+  failed resume did not alter the scientific lineage or checkpoint.
+- Recovery commit `705112574b789ac04ccfc69e4206e1998448ab6f` records the loaded
+  full-Qwen operational version only after a successful upstream checkpoint
+  load and before strict project validation. It independently recomputes and
+  verifies the expected run/step/base identity before replacing the bootstrap
+  receipt; mismatches remain fail-closed, and tensor-backed LoRA validation is
+  unchanged. The focused checkpoint/task-runner/weight-sync suites passed 68
+  tests, the post-format subset passed 46 tests, and Ruff passed. This repair
+  authorizes continuation of the same run from S39 toward the unchanged S80
+  endpoint; it does not create a new arm or alter data, reward or optimizer
+  identity.

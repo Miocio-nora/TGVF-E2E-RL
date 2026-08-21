@@ -2,7 +2,7 @@
 
 日期：2026-08-20；执行状态更新：2026-08-21（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B Crop T-free 已通过 1-step canary 并启动正式 S0→S80`
+状态：`RUNNING / PRL25-B Crop T-free 已完成 S1–S39，外部 judge 429 中断后从 S39 续训`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -107,6 +107,24 @@ optimizer step 的版本 receipt，下一轮 rollout 只消费已发布版本。
 1-step canary 在 2026-08-21 00:28 JST 正常退出：4 prompts、8 trajectories、9 次成功
 Crop observation，`grad_norm=24.2336`，step-1 full-Qwen receipt 与 checkpoint 均完整。
 这只证明功能、梯度、同步和恢复链路，不是质量结果，也不是 BS16 × n16 的吞吐 benchmark。
+
+### 4.2 PRL25-B S39 中断与恢复边界（2026-08-21）
+
+正式 scientific lineage 已连续完成并发布 S1–S39，`metrics.jsonl` 与 latest checkpoint
+tracker 均停在 39；S40 尚未发生 optimizer update。S39 单步用时 `1,722.74 s`，answer
+accuracy 为 `55.8594%`，FMT2 format-error rate 为 `2.7344%`，成功 Crop observations
+为 179。S39 后的下一轮 rollout 因外部 OpenRouter/DeepInfra DeepEyes judge 连续 HTTP 429
+超过 bounded transient window 而 fail-closed 停止；该事件不表示 Crop replay、GPU 或 CPU
+训练路径失败，S39 checkpoint 完整可恢复。
+
+首次 clean-process auto-resume 已在全部八个 rank 成功载入 S39 model、optimizer、RNG 与
+scheduler，但随后暴露 full-Qwen operational receipt 的恢复时序缺口：worker 初始化先发布
+S0 receipt，checkpoint bridge 在载入后仍读取该旧标记，因而把实际 S39 误判为 S0 并退出。
+恢复提交 `705112574b789ac04ccfc69e4206e1998448ab6f` 只在 upstream checkpoint 成功载入
+且重新计算的 run/step/base identity 与 project state 完全一致后，才把 bootstrap receipt
+更新到 checkpoint step；严格 mismatch 保护与 LoRA tensor 校验保持不变。该变更通过 68 个
+focused tests 与 Ruff，允许同一 scientific run 从 S39 继续到原定 S80，不改变 reward、数据、
+优化器或 arm identity。
 
 ## 5. Reward 合同
 
