@@ -23,6 +23,7 @@ import warnings
 
 import torch
 
+from tgvf_rl.contracts.errors import IdentityMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.environment.focus_runtime import FocusExecutionLedger
 from tgvf_rl.observations.schema import (
@@ -80,6 +81,7 @@ from .policy_checkpoint_lifecycle import (
 )
 from .policy_weight_sync import (
     PolicyWeightSyncState,
+    full_qwen_operational_weights_sha256,
     load_latest_full_qwen_sync_receipt,
     load_latest_policy_version,
     publish_full_qwen_sync_receipt,
@@ -874,6 +876,44 @@ class PolicyPilotTrainerCheckpointState:
         # first executable slice.  The strict pair subsequently verifies the
         # loaded optimizer step against this content-addressed snapshot.
         return self._load_latest_policy_version()
+
+    def record_loaded_policy_version(self, value: PolicyVersion) -> None:
+        """Bind a verified full-model receipt after upstream checkpoint load.
+
+        Full-Qwen receipts name successful synchronization boundaries without
+        copying the model tensors.  A clean process publishes S0 during worker
+        initialization, so resume must replace that bootstrap receipt only
+        after the upstream model/optimizer checkpoint has loaded successfully.
+        """
+
+        if not isinstance(value, PolicyVersion):
+            raise TypeError("loaded policy version must be a PolicyVersion")
+        if not _uses_full_qwen_sync_receipts(self.config):
+            return
+        base_weights_sha256 = _operational_base_identity_sha256(self.config.model)
+        expected = PolicyVersion(
+            self.config.run_id,
+            value.optimizer_step,
+            full_qwen_operational_weights_sha256(
+                self._weight_state,
+                optimizer_step=value.optimizer_step,
+                base_weights_sha256=base_weights_sha256,
+            ),
+        )
+        if value != expected:
+            raise IdentityMismatchError(
+                "loaded full-Qwen checkpoint policy_version differs from its "
+                "operational identity"
+            )
+        receipt = publish_full_qwen_sync_receipt(
+            self._weight_state,
+            optimizer_step=value.optimizer_step,
+            base_weights_sha256=base_weights_sha256,
+        )
+        if receipt.policy_version != value:
+            raise IdentityMismatchError(
+                "published full-Qwen resume receipt differs from checkpoint"
+            )
 
     def _load_latest_policy_version(
         self, *, expected_optimizer_step: int | None = None

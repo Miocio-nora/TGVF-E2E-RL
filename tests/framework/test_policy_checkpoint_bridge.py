@@ -286,6 +286,54 @@ def test_clean_process_resume_pairs_upstream_and_project_owned_state(tmp_path) -
     after.abort()
 
 
+def test_resume_records_operational_policy_after_upstream_load(tmp_path) -> None:
+    source_upstream = _UpstreamCheckpoint(initial_value=2.0)
+    source_upstream.update_once()
+    source_values = _project_values(1)
+    checkpoint_dir = (tmp_path / "global_step_1" / "actor").resolve()
+    saved = _bridge(
+        source_upstream,
+        _lifecycle_manager(),
+        _ProjectStatePort(
+            source_upstream,
+            progress=source_values[0],
+            sampler=source_values[1],
+            rng=source_values[2],
+        ),
+        _metrics(1),
+    ).save_checkpoint(checkpoint_dir, global_step=1)
+
+    class OperationalReceiptPort(_ProjectStatePort):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.receipt = PolicyVersion(self._run_identity.run_id, 0, SHA0)
+
+        def record_loaded_policy_version(self, value) -> None:
+            assert self.upstream.global_step == value.optimizer_step
+            self.receipt = value
+
+        def current_policy_version(self):
+            return self.receipt
+
+    target_upstream = _UpstreamCheckpoint(initial_value=-3.0)
+    target_values = _project_values(0)
+    target_port = OperationalReceiptPort(
+        target_upstream,
+        progress=target_values[0],
+        sampler=target_values[1],
+        rng=target_values[2],
+    )
+    result = _bridge(
+        target_upstream,
+        _lifecycle_manager(),
+        target_port,
+        _metrics(0),
+    ).load_checkpoint(checkpoint_dir)
+
+    assert result.optimizer_step == 1
+    assert target_port.receipt == saved.policy_version
+
+
 def test_incomplete_pair_is_rejected_before_upstream_or_project_restore(tmp_path) -> None:
     source_upstream = _UpstreamCheckpoint(initial_value=2.0)
     source_upstream.update_once()

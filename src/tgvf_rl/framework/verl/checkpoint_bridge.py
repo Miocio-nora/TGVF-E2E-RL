@@ -291,6 +291,15 @@ class PairedPolicyPilotVerlCheckpoint:
             self.upstream.load_checkpoint(
                 str(destination), None, bool(del_local_after_load)
             )
+            record_loaded_policy = getattr(
+                self.state_port, "record_loaded_policy_version", None
+            )
+            if callable(record_loaded_policy):
+                # Full-model sync receipts are operational identities rather
+                # than tensor snapshots.  Give that state owner a chance to
+                # bind the successfully loaded upstream checkpoint before the
+                # same strict project identity check used by snapshot paths.
+                record_loaded_policy(state.policy_version)
             loaded_policy = self.state_port.current_policy_version()
             loaded_reference = self.state_port.reference_policy_version()
             from tgvf_rl.policy.checkpoint import (

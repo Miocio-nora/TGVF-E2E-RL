@@ -34,6 +34,14 @@ from tgvf_rl.framework.verl.policy_task_runner import (
     make_policy_pilot_ray_trainer_class,
     policy_worker_logical_cuda_ordinal,
 )
+from tgvf_rl.framework.verl.policy_weight_sync import (
+    PolicyWeightSyncState,
+    full_qwen_operational_weights_sha256,
+    load_latest_full_qwen_sync_receipt,
+    publish_full_qwen_sync_receipt,
+)
+from tgvf_rl.contracts.errors import IdentityMismatchError
+from tgvf_rl.contracts.identity import PolicyVersion
 from tgvf_rl.policy.checkpoint import DATA_CURSOR_OWNER, PilotOptimizerDataCursor
 from tgvf_rl.policy.metrics import (
     PilotMetricsAccumulator,
@@ -361,6 +369,113 @@ def test_extension_checkpoint_schedule_is_used_after_resume() -> None:
     state.horizon_extension = extension
 
     assert state.effective_checkpoint_steps == (0, 1, 5, 10, 20, 30, 40, 60, 80)
+
+
+def test_full_qwen_resume_replaces_bootstrap_receipt_after_upstream_load(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "full-qwen-resume-test"
+    weight_state = PolicyWeightSyncState.from_environment(
+        {
+            "TGVF_POLICY_STATE_DIR": str((tmp_path / "policy-state").resolve()),
+            "TGVF_POLICY_RUN_ID": run_id,
+            "TGVF_POLICY_RUN_IDENTITY_SHA256": "7" * 64,
+            "RANK": "0",
+            "WORLD_SIZE": "8",
+        }
+    )
+    base_weights_sha256 = "3" * 64
+    publish_full_qwen_sync_receipt(
+        weight_state,
+        optimizer_step=0,
+        base_weights_sha256=base_weights_sha256,
+    )
+    monkeypatch.setattr(
+        policy_task_runner,
+        "_operational_base_identity_sha256",
+        lambda _model: base_weights_sha256,
+    )
+    state = object.__new__(PolicyPilotTrainerCheckpointState)
+    state.config = SimpleNamespace(
+        schema_version=(
+            policy_task_runner.POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+        ),
+        run_id=run_id,
+        model=object(),
+    )
+    state._weight_state = weight_state
+    state._prepared_policy = None
+    restored = PolicyVersion(
+        run_id,
+        39,
+        full_qwen_operational_weights_sha256(
+            weight_state,
+            optimizer_step=39,
+            base_weights_sha256=base_weights_sha256,
+        ),
+    )
+
+    state.record_loaded_policy_version(restored)
+
+    assert state.current_policy_version() == restored
+    assert (
+        load_latest_full_qwen_sync_receipt(
+            weight_state,
+            expected_optimizer_step=39,
+            expected_base_weights_sha256=base_weights_sha256,
+        ).policy_version
+        == restored
+    )
+
+
+def test_full_qwen_resume_rejects_mismatched_checkpoint_before_receipt_write(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "full-qwen-resume-test"
+    weight_state = PolicyWeightSyncState.from_environment(
+        {
+            "TGVF_POLICY_STATE_DIR": str((tmp_path / "policy-state").resolve()),
+            "TGVF_POLICY_RUN_ID": run_id,
+            "TGVF_POLICY_RUN_IDENTITY_SHA256": "7" * 64,
+            "RANK": "0",
+            "WORLD_SIZE": "8",
+        }
+    )
+    base_weights_sha256 = "3" * 64
+    publish_full_qwen_sync_receipt(
+        weight_state,
+        optimizer_step=0,
+        base_weights_sha256=base_weights_sha256,
+    )
+    monkeypatch.setattr(
+        policy_task_runner,
+        "_operational_base_identity_sha256",
+        lambda _model: base_weights_sha256,
+    )
+    state = object.__new__(PolicyPilotTrainerCheckpointState)
+    state.config = SimpleNamespace(
+        schema_version=(
+            policy_task_runner.POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+        ),
+        run_id=run_id,
+        model=object(),
+    )
+    state._weight_state = weight_state
+    state._prepared_policy = None
+
+    with pytest.raises(IdentityMismatchError, match="operational identity"):
+        state.record_loaded_policy_version(PolicyVersion(run_id, 39, "4" * 64))
+
+    assert (
+        load_latest_full_qwen_sync_receipt(
+            weight_state,
+            expected_optimizer_step=0,
+            expected_base_weights_sha256=base_weights_sha256,
+        ).policy_version.optimizer_step
+        == 0
+    )
 
 
 def test_pending_checkpoint_commits_after_sync_while_rollout_is_asleep() -> None:
