@@ -22,6 +22,10 @@ _PRL21_PLAN = (
     _ROOT
     / "configs/evaluation/prl21_r0_crop_tfree_step8_step16_full_model_coredev2511_plan.json"
 )
+_PRL25_B_PLAN = (
+    _ROOT
+    / "configs/evaluation/prl25_b_crop_exact_step80_full_model_coredev2511_plan.json"
+)
 _SPEC = importlib.util.spec_from_file_location("prl15_paired_evaluation", _TOOL)
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
@@ -161,6 +165,24 @@ def test_v3_full_model_plan_separates_owner_protocol_and_preserves_arm_ids() -> 
         "03b5cbf38841ab5bb97200eef41234b2a33d064b283df696b1c6ffcce3c9e79d"
     )
     assert _MODULE._sampling_report(plan, runtime)["paired_rng"] == plan["paired_rng"]
+
+
+def test_v3_full_model_plan_accepts_exact_crop_policy_run_owner() -> None:
+    plan = _MODULE._load_plan(_PRL25_B_PLAN)
+    runtime = _MODULE._load_evaluation_runtime(plan)
+
+    assert runtime.backend == _MODULE.FULL_MODEL_BACKEND
+    assert plan["checkpoint_owner"]["contract_type"] == (
+        "policy_e2e_crop_exact_run_config_v1"
+    )
+    assert runtime.checkpoint_owner.run_id == plan["checkpoint_owner"]["run_id"]
+    assert runtime.checkpoint_owner.identity_sha256 == (
+        plan["checkpoint_owner"]["run_identity_sha256"]
+    )
+    assert runtime.protocol_contract.run_id == plan["protocol_contract"]["run_id"]
+    assert [(arm["name"], arm["optimizer_step"]) for arm in plan["arms"]] == [
+        ("step80", 80)
+    ]
 
 
 def test_v3_runtime_rejects_paired_rng_task_seed_and_protocol_drift(

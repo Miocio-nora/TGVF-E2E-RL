@@ -80,6 +80,8 @@ from tgvf_rl.policy.deepeyes_native_contract import (  # noqa: E402
     load_deepeyes_native_run_contract,
 )
 from tgvf_rl.policy.run_config import (  # noqa: E402
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
+    PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
 
@@ -323,7 +325,10 @@ def _validate_v3_static_plan(payload: dict[str, Any]) -> None:
     }
     if not isinstance(owner, dict) or set(owner) != owner_fields:
         raise ValueError("v3 checkpoint owner fields differ")
-    if owner["contract_type"] != "crop_tfree_run_contract_v1":
+    if owner["contract_type"] not in {
+        "crop_tfree_run_contract_v1",
+        "policy_e2e_crop_exact_run_config_v1",
+    }:
         raise ValueError("v3 checkpoint owner contract type differs")
     _require_sha256(owner["config_sha256"], name="checkpoint owner config")
     _require_sha256(owner["run_identity_sha256"], name="checkpoint owner identity")
@@ -788,6 +793,218 @@ def _validate_v3_runtime(
             )
 
 
+def _policy_checkpoint_receipt(
+    owner: PolicyE2ESmokeRunConfig,
+    *,
+    checkpoint: Path,
+    optimizer_step: int,
+) -> tuple[dict[str, Any], Path]:
+    """Validate one permanent Policy-E2E checkpoint against its run config."""
+
+    from tgvf_rl.framework.verl.checkpoint_bridge import (
+        read_committed_policy_checkpoint_pair,
+    )
+    from tgvf_rl.framework.verl.compatibility import FSDP2BridgeConfig
+
+    receipt_path = checkpoint / "tgvf_permanent_checkpoint_receipt.json"
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise RuntimeError(f"step{optimizer_step} permanent receipt is unavailable")
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            f"step{optimizer_step} permanent receipt is malformed"
+        ) from error
+    if not isinstance(receipt, dict):
+        raise RuntimeError(f"step{optimizer_step} permanent receipt is malformed")
+
+    state, pair = read_committed_policy_checkpoint_pair(
+        checkpoint / "actor",
+        fsdp2=FSDP2BridgeConfig(
+            world_size=owner.distributed.world_size,
+            fsdp_size=owner.distributed.world_size,
+        ),
+    )
+    expected_hashes = {
+        "run_config": owner.identity_sha256,
+        "run_config_file": owner.source_sha256,
+        "dataset_content": owner.dataset.runtime_binding.content_sha256,
+        "dataset_samples": owner.dataset.samples_sha256,
+        "dataset_iteration": owner.dataset.iteration_identity_sha256,
+        "prompt": owner.protocol.prompt_sha256,
+        "tool_schema": owner.protocol.tool_schema_sha256,
+        "representation_artifact_file": owner.representation.artifact_file_sha256,
+    }
+    observed_hashes = {item.name: item.sha256 for item in state.run_identity.hashes}
+    checkpoint_run_identity = hashlib.sha256(
+        _canonical_json_bytes(state.run_identity.to_checkpoint_mapping())
+    ).hexdigest()
+    if (
+        state.run_identity.run_id != owner.run_id
+        or any(
+            observed_hashes.get(name) != expected
+            for name, expected in expected_hashes.items()
+        )
+        or state.progress.optimizer_step != optimizer_step
+        or pair.optimizer_step != optimizer_step
+        or receipt.get("schema_version")
+        != "tgvf.prl15-permanent-checkpoint-receipt.v1"
+        or receipt.get("optimizer_step") != optimizer_step
+        or receipt.get("run_identity_sha256") != checkpoint_run_identity
+        or receipt.get("project_state_sha256") != state.integrity_sha256
+        or receipt.get("pair_integrity_sha256") != pair.integrity_sha256
+    ):
+        raise RuntimeError(f"step{optimizer_step} permanent checkpoint identity differs")
+
+    actor = checkpoint / "actor"
+    fsdp_config = actor / "fsdp_config.json"
+    try:
+        fsdp_payload = json.loads(fsdp_config.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"step{optimizer_step} FSDP config is malformed") from error
+    if fsdp_payload != {
+        "FSDP_version": 2,
+        "world_size": owner.distributed.world_size,
+    }:
+        raise RuntimeError(f"step{optimizer_step} FSDP world size differs")
+    required = [checkpoint / "data.pt", fsdp_config]
+    for prefix in ("model", "optim", "extra_state"):
+        required.extend(
+            actor
+            / f"{prefix}_world_size_{owner.distributed.world_size}_rank_{rank}.pt"
+            for rank in range(owner.distributed.world_size)
+        )
+    if any(
+        path.is_symlink() or not path.is_file() or path.stat().st_size <= 0
+        for path in required
+    ):
+        raise RuntimeError(f"step{optimizer_step} permanent checkpoint is incomplete")
+    return receipt, receipt_path.resolve()
+
+
+def _validate_v3_policy_run_runtime(
+    plan: dict[str, Any],
+    owner: PolicyE2ESmokeRunConfig,
+    protocol: DeepEyesNativeRunContract,
+) -> None:
+    """Bind an exact-Crop Policy-E2E owner to the native Crop eval protocol."""
+
+    owner_plan = plan["checkpoint_owner"]
+    protocol_plan = plan["protocol_contract"]
+    if (
+        owner.schema_version
+        != POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+        or owner.source_sha256 != owner_plan["config_sha256"]
+        or owner.run_id != owner_plan["run_id"]
+        or owner.identity_sha256 != owner_plan["run_identity_sha256"]
+        or owner.output.root.resolve() != Path(owner_plan["output_root"]).resolve()
+        or owner.distributed.world_size != owner_plan["checkpoint_world_size"]
+    ):
+        raise RuntimeError("v3 Policy-E2E checkpoint owner identity differs")
+    if (
+        protocol.source_sha256 != protocol_plan["config_sha256"]
+        or protocol.run_id != protocol_plan["run_id"]
+        or protocol.identity_sha256 != protocol_plan["run_identity_sha256"]
+    ):
+        raise RuntimeError("v3 protocol contract identity differs")
+
+    protocol_payload = protocol.payload["protocol"]
+    expected_protocol = {
+        "evaluation_protocol": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+        "visual_prompt_bundle_sha256": protocol_payload["visual_prompt_bundle_sha256"],
+        "tool_name": protocol_payload["tool_name"],
+        "tool_parser": protocol_payload["tool_parser"],
+        "maximum_tool_calls": protocol_payload["max_active_perception"],
+        "native_pixels": True,
+        "sampling_source": "bound_protocol_contract",
+        "same_tasks_and_rank_partition": True,
+    }
+    sampling = owner.policy.sampling
+    if (
+        plan.get("protocol") != expected_protocol
+        or protocol.payload["model"]["native_pixels"] is not True
+        or owner.model.model_name != protocol.payload["model"]["name"]
+        or Path(owner.model.revision_or_path).resolve()
+        != Path(protocol.payload["model"]["path"]).resolve()
+        or owner.protocol.prompt_sha256
+        != protocol_payload["visual_prompt_bundle_sha256"]
+        or owner.protocol.tool_profile.value != "crop_only"
+        or owner.protocol.enabled_tool_names != (protocol_payload["tool_name"],)
+        or owner.protocol.maximum_tool_calls != protocol_payload["max_active_perception"]
+        or owner.policy.image_max_pixels != FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS
+        or sampling.temperature != 1.0
+        or sampling.do_sample is not True
+        or owner.rollout_rng.master_seed != 42
+    ):
+        raise RuntimeError("v3 Policy-E2E owner differs from native Crop protocol")
+
+    paired_rng = plan["paired_rng"]
+    if (
+        protocol.payload["rollout"]["temperature"] != 1.0
+        or protocol.payload["dataset"]["schedule_seed"] != 42
+        or paired_rng["master_seed"] != owner.rollout_rng.master_seed
+        or paired_rng["temperature"] != sampling.temperature
+        or paired_rng["do_sample"] is not sampling.do_sample
+        or paired_rng["task_manifest_sha256"] != plan["task_manifest_sha256"]
+    ):
+        raise RuntimeError("v3 paired RNG task/seed identity differs")
+    probe_step = next(
+        (arm["optimizer_step"] for arm in plan["arms"] if arm["optimizer_step"] > 0),
+        None,
+    )
+    if probe_step is not None:
+        protocol_probe = SimpleNamespace(
+            run=SimpleNamespace(
+                model=owner.model,
+                policy=owner.policy,
+                rollout_rng=owner.rollout_rng,
+            ),
+            policy_version=SimpleNamespace(optimizer_step=probe_step),
+        )
+        _validate_runtime_paired_rng(
+            plan,
+            SimpleNamespace(
+                evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+                paired_seed_namespace=paired_rng["seed_namespace"],
+            ),
+            protocol_probe,
+        )
+
+    requested = [
+        arm for arm in plan["arms"] if arm["source"]["kind"] == "owner_checkpoint"
+    ]
+    if any(
+        arm["optimizer_step"] not in owner.training.permanent_checkpoint_steps
+        for arm in requested
+    ):
+        raise RuntimeError("v3 evaluation arm is not retained by checkpoint owner")
+    receipts: dict[int, Path] = {}
+    for arm in requested:
+        step = arm["optimizer_step"]
+        checkpoint = (
+            owner.output.root / Path(arm["source"]["relative_path"])
+        ).resolve()
+        _receipt, receipts[step] = _policy_checkpoint_receipt(
+            owner, checkpoint=checkpoint, optimizer_step=step
+        )
+    if requested:
+        final_step = max(receipts)
+        if Path(owner_plan["completion_path"]).resolve() != receipts[final_step]:
+            raise RuntimeError(
+                "v3 Policy-E2E completion evidence is not the final arm receipt"
+            )
+    metrics = [
+        json.loads(line)
+        for line in owner.output.metrics_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    required_step = max(receipts, default=0)
+    if [row.get("optimizer_step") for row in metrics[:required_step]] != list(
+        range(1, required_step + 1)
+    ):
+        raise RuntimeError("v3 Policy-E2E metrics are incomplete")
+
+
 def _load_evaluation_runtime(plan: dict[str, Any]) -> _EvaluationRuntime:
     if plan["schema_version"] == PLAN_SCHEMA_V2:
         policy_config = _resolve_repo_path(plan["policy_config"])
@@ -805,18 +1022,29 @@ def _load_evaluation_runtime(plan: dict[str, Any]) -> _EvaluationRuntime:
 
     owner_path = _resolve_repo_path(plan["checkpoint_owner"]["config_path"])
     protocol_path = _resolve_repo_path(plan["protocol_contract"]["config_path"])
-    owner = load_crop_tfree_run_contract(
-        owner_path,
-        repository_root=REPOSITORY_ROOT,
-        allow_placeholder=False,
-    )
     protocol = load_deepeyes_native_run_contract(protocol_path)
-    _validate_v3_runtime(plan, owner, protocol)
+    owner_type = plan["checkpoint_owner"]["contract_type"]
+    if owner_type == "crop_tfree_run_contract_v1":
+        owner = load_crop_tfree_run_contract(
+            owner_path,
+            repository_root=REPOSITORY_ROOT,
+            allow_placeholder=False,
+        )
+        _validate_v3_runtime(plan, owner, protocol)
+        output_root = owner.output_root.resolve()
+    elif owner_type == "policy_e2e_crop_exact_run_config_v1":
+        owner = load_policy_e2e_smoke_run_config(
+            owner_path, allow_external_agent_loop_config=True
+        )
+        _validate_v3_policy_run_runtime(plan, owner, protocol)
+        output_root = owner.output.root.resolve()
+    else:  # pragma: no cover - static plan validation rejects this first
+        raise ValueError("v3 checkpoint owner contract type differs")
     return _EvaluationRuntime(
         backend=FULL_MODEL_BACKEND,
         checkpoint_owner=owner,
         protocol_contract=protocol,
-        output_root=owner.output_root.resolve(),
+        output_root=output_root,
         checkpoint_world_size=plan["checkpoint_owner"]["checkpoint_world_size"],
     )
 
