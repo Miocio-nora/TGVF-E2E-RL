@@ -377,6 +377,32 @@ def test_score_mode_rejects_wait_flags_before_plan_or_process(
     assert touched == []
 
 
+def test_inference_completion_receipt_is_deferred_scoring_handoff(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "benchmark-config.json"
+    config.write_text('{"evaluation_id":"FIXTURE"}\n', encoding="utf-8")
+    materialization = {
+        "step16": {
+            "schema_version": "tgvf-policy-coredev-scoring-view-v1",
+            "official_row_count": 2511,
+        }
+    }
+
+    result = _MODULE._write_inference_complete(
+        tmp_path,
+        evaluation_id="FIXTURE-STEP16",
+        configs={"step16": config},
+        arms=(("step16", 16),),
+        materialization=materialization,
+    )
+
+    assert result["status"] == "inference_complete"
+    assert result["arms"]["step16"]["optimizer_step"] == 16
+    assert result["arms"]["step16"]["materialization"] == materialization["step16"]
+    assert json.loads((tmp_path / "inference-complete").read_text()) == result
+
+
 def test_scoring_materialization_keeps_semantic_and_legacy_ids_separate(
     tmp_path: Path, monkeypatch
 ) -> None:

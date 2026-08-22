@@ -2827,6 +2827,34 @@ def _write_evaluation_complete(
     return record
 
 
+def _write_inference_complete(
+    output_base: Path,
+    *,
+    evaluation_id: str,
+    configs: dict[str, Path],
+    arms: tuple[tuple[str, int], ...],
+    materialization: dict[str, Any],
+) -> dict[str, Any]:
+    """Publish a durable handoff from GPU inference to deferred scoring."""
+
+    record = {
+        "schema_version": "tgvf.paired-coredev-inference-complete.v1",
+        "status": "inference_complete",
+        "evaluation_id": evaluation_id,
+        "arms": {
+            arm: {
+                "optimizer_step": step,
+                "config_path": str(configs[arm].resolve()),
+                "config_sha256": _sha256_file(configs[arm]),
+                "materialization": materialization[arm],
+            }
+            for arm, step in arms
+        },
+    }
+    write_json_atomic(output_base / "inference-complete", record)
+    return record
+
+
 def _arm_evaluation_identity_sha256(config_path: Path) -> str:
     config = load_policy_coredev_config(config_path)
     identity_path = config.output_root / "runtime/evaluation-identity.json"
@@ -2992,7 +3020,9 @@ def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
     parser.add_argument(
-        "--mode", choices=("prepare", "run", "score", "status"), default="run"
+        "--mode",
+        choices=("prepare", "infer", "run", "score", "status"),
+        default="run",
     )
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--gpu-ids", type=int, nargs="+", default=tuple(range(8)))
@@ -3025,7 +3055,9 @@ def _main() -> int:
         raise ValueError("paired evaluator requires four or eight distinct GPU IDs")
     plan = _load_plan(args.plan.resolve())
     runtime = _load_evaluation_runtime(plan)
-    judge = _load_judge_config(plan, require_local_model=args.mode != "score")
+    judge = _load_judge_config(
+        plan, require_local_model=args.mode not in {"infer", "score"}
+    )
     judge_gpus = tuple(judge["devices"]["physical"])
     if (
         len(judge_gpus) != 2
@@ -3033,7 +3065,7 @@ def _main() -> int:
         or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in judge_gpus)
     ):
         raise RuntimeError("pinned benchmark judge GPU binding is malformed")
-    if args.mode != "score" and any(
+    if args.mode not in {"infer", "score"} and any(
         gpu_id not in args.gpu_ids for gpu_id in judge_gpus
     ):
         raise ValueError("evaluation GPU set must include pinned judge GPUs")
@@ -3178,6 +3210,16 @@ def _main() -> int:
             arm: _materialize_official_scoring_view(configs[arm], plan, arm=arm)
             for arm, _step in arms
         }
+        if args.mode == "infer":
+            receipt = _write_inference_complete(
+                output_base,
+                evaluation_id=plan["evaluation_id"],
+                configs=configs,
+                arms=arms,
+                materialization=materialization,
+            )
+            print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
     log_root = output_base / "logs"
     existing = {
         arm: _accepted_scored_arm(configs[arm], plan, judge) for arm, _step in arms
