@@ -9860,3 +9860,21 @@ than inferred from a script name or prior conversation.
   work is full-model materialization before GPU generation. No CoreDev score is
   claimed until the immutable paired summary and evaluation-complete receipt
   exist.
+- Endpoint scheduling amendment: routine PRL25-B external evaluations are
+  `S8/S16/S32/S48/S64/S80`; the other retained eight-step checkpoints are
+  diagnostic-only unless the main curve requires them. S8/S16 are the mandatory
+  same-run early/platform baselines for the long-horizon curve. At `2026-08-22 18:06 JST`,
+  S16 inference was launched on physical GPUs 4--7 while the already-running
+  S80 generation remained on GPUs 0--3. Commit
+  `2bc2886f660880ee4eca87a8b9bfc9d1d12118ff` adds the inference-only durable
+  handoff so S16 can defer the pinned GPU-2/3 judge without weakening the
+  checkpoint, task, prompt, RNG or scoring identity. An inference-complete
+  receipt is not an evaluation-complete receipt and carries no score claim.
+- Before S16 generated any row, review found that its first plan used a
+  step-local seed namespace rather than S80's frozen stream. The preparation
+  was stopped at `0/2,240` and restarted without result loss. Commit
+  `43106f480f282c5854a82be91e6003e984468b36` binds every default endpoint to
+  the exact S80 namespace. Commit
+  `d74b34488b05547443b807311d36e966d4ec98ee` records the executable four-arm
+  plan for the remaining S8/S32/S48/S64 nodes; on eight GPUs it generates two
+  checkpoint arms concurrently per batch.

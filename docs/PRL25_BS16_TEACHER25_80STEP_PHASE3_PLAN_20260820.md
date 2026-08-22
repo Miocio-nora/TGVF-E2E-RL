@@ -145,6 +145,23 @@ seed 42 和七项 Macro* 官方评分。checkpoint owner 由 PRL25-B config、S8
 `9e977c6b6b8a4714e2057ba5fe010afb33995bdb`；当前状态为 full-model materialization / eval
 `RUNNING`，尚无可报告的外评分数。
 
+为避免 10 个永久 checkpoint 全量外评造成不必要的时间开销，PRL25-B 的常规长程曲线固定为
+`S8 / S16 / S32 / S48 / S64 / S80`：S8/S16 提供早期和历史平台基线，S32/S48/S64 是
+长程补充点，S80 保持预注册主终点；S24/S40/S56/S72 仅在主曲线出现异常时按诊断需要补评。物理机器
+实际为 8 张 GPU（编号 0--7）。S80 在 GPU 0--3 继续运行的同时，S16 于
+`2026-08-22 18:06 JST` 以 inference-only / deferred-scoring 模式在 GPU 4--7 启动，避免
+重启 S80 或因共用 GPU 2/3 的 72B judge 产生冲突。该调度模式由提交
+`2bc2886f660880ee4eca87a8b9bfc9d1d12118ff` 记录；S16 生成完成后再进入同一官方 scorer，
+不能把 inference-complete receipt 当作外评完成或结果 receipt。
+
+启动前复核发现初版 S16 计划使用了独立的 `step16` RNG namespace；当时 S16 尚为
+`0/2,240`，因此在没有丢失正式生成的情况下停止准备并修正。提交
+`43106f480f282c5854a82be91e6003e984468b36` 将全部学习曲线节点绑定到 S80 已冻结的
+namespace，使 checkpoint 间真正共享逐题逐 turn 随机流。剩余 S8/S32/S48/S64 的四臂
+执行计划固定在
+`configs/evaluation/prl25_b_crop_exact_step8_step32_step48_step64_full_model_coredev2511_plan.json`，
+提交为 `d74b34488b05547443b807311d36e966d4ec98ee`；8 卡运行时按两臂一批并发生成。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
@@ -187,6 +204,9 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
   evaluation，S1 作为早期恢复/速度校准点。中间 endpoint 评测/审计完成后可只保留
   model-only snapshot 与 receipt；S80 和最终 winner 保留完整 optimizer state，控制约
   140 GB/完整 checkpoint 的存储压力。
+- 永久保留不等于默认全部外评。常规外评节点为 `S8/S16/S32/S48/S64/S80`；其余永久节点
+  用于恢复、异常定位和按需补评。S8/S16 是早期学习与平台基线，不得因已有历史 Crop
+  S8/S16 而跳过本次 same-run、same-protocol 的对应节点。
 - 全部 endpoint 使用冻结 CoreDev-2511 `paired-seed-v1`、master seed 42、temperature 1
   合同，同时报告七项 Macro* 分量。A/B 共享 exact Crop S0；C/E 共享 exact pure-TGVF S0；
   D 使用自己的 Atomic Crop+TGVF S0。共享 S0 evaluation 不等于共享训练 lineage。
