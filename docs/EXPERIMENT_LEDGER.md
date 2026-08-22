@@ -9833,7 +9833,7 @@ than inferred from a script name or prior conversation.
 ### PRL25-B exact-Crop S80 completion and CoreDev primary endpoint (2026-08-22)
 
 - Lifecycle/result: training `COMPLETE` through optimizer step 80; external
-  S80 CoreDev-2511 primary endpoint `RUNNING`. The scientific run retains its
+  S80 CoreDev-2511 primary endpoint `COMPLETE/PASS`. The scientific run retains its
   original ID and config identity
   `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`.
   Metrics contain the exact sequence S1--S80; latest checkpoint state and the
@@ -9857,9 +9857,14 @@ than inferred from a script name or prior conversation.
   full-model owner binding. The preflight verified the exact run config, S80
   permanent receipt, committed FSDP pair, rank-file closure, continuous metrics
   and native-Crop protocol; all 49 evaluator regression tests passed. Current
-  work is full-model materialization before GPU generation. No CoreDev score is
-  claimed until the immutable paired summary and evaluation-complete receipt
-  exist.
+  S80 Macro* is `62.2288`, with VStar/HRBench/BLINK-single/OCR-mean/
+  MMMU-single/MathVista/MathVerse-macro components
+  `81.6754/74.5000/58.8889/55.3358/46.4684/67.3333/51.4000`. Exactly one judge
+  parse failure was deterministically counted incorrect within the frozen
+  limit. The paired-summary SHA256 is
+  `166153c701cabd2684dbc2ffce54de06b58d2fd0014de40fb70e52794cc557ee`;
+  evaluation-complete SHA256 is
+  `50c88724fa67c7fa5f0a2d61471e119f94369520c84d8ba89f97f71e30c5a047`.
 - Endpoint scheduling amendment: routine PRL25-B external evaluations are
   `S8/S16/S32/S48/S64/S80`; the other retained eight-step checkpoints are
   diagnostic-only unless the main curve requires them. S8/S16 are the mandatory
@@ -9875,6 +9880,15 @@ than inferred from a script name or prior conversation.
   was stopped at `0/2,240` and restarted without result loss. Commit
   `43106f480f282c5854a82be91e6003e984468b36` binds every default endpoint to
   the exact S80 namespace. Commit
-  `d74b34488b05547443b807311d36e966d4ec98ee` records the executable four-arm
+  `bd6ad16eb599e52f2c3dab6acf34114a67769f30` records the executable four-arm
   plan for the remaining S8/S32/S48/S64 nodes; on eight GPUs it generates two
-  checkpoint arms concurrently per batch.
+  checkpoint arms concurrently per batch. Its first launch fail-closed before
+  GPU or sample work because the initial owner completion named S80 rather than
+  the plan-final S64 receipt; the cited commit corrects the binding and adds a
+  runtime regression gate.
+- Automatic continuation was launched at `2026-08-22 18:54 JST`. The four-arm
+  process materializes while S16 inference runs, waits for all physical GPUs
+  0--7, generates S8/S32 and then S48/S64 in two-arm batches, and performs their
+  official scoring. A receipt-gated handoff then scores S16. Missing upstream
+  completion or a supervisor exit fails closed instead of silently skipping a
+  target endpoint.

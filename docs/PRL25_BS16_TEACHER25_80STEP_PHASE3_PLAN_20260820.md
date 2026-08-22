@@ -1,8 +1,8 @@
 # 第三期（PRL25）：BS16 Teacher25 80-step 统一实验计划
 
-日期：2026-08-20；执行状态更新：2026-08-21（Asia/Tokyo）
+日期：2026-08-20；执行状态更新：2026-08-22（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B Crop T-free 已完成 S1–S39，外部 judge 429 中断后从 S39 续训`
+状态：`RUNNING / PRL25-B 训练与 S80 主终点评测完成，S8/S16/S32/S48/S64 曲线评测自动续跑`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -142,8 +142,14 @@ visual prompt、`image_zoom_in_tool`、Hermes parser、最多 6 次调用、temp
 seed 42 和七项 Macro* 官方评分。checkpoint owner 由 PRL25-B config、S80 永久 receipt、
 8-rank FSDP pair 与连续 80 行 metrics 联合证明；协议 owner 使用 Teacher25 native-Crop
 合同，prompt 哈希与训练完全一致。接入代码/计划提交为
-`9e977c6b6b8a4714e2057ba5fe010afb33995bdb`；当前状态为 full-model materialization / eval
-`RUNNING`，尚无可报告的外评分数。
+`9e977c6b6b8a4714e2057ba5fe010afb33995bdb`。正式评测已完成并通过：Macro* 为
+`62.2288`，七项分量依次为 VStar `81.6754`、HRBench `74.5000`、BLINK single-image
+`58.8889`、OCR mean `55.3358`、MMMU-Pro single-image `46.4684`、MathVista `67.3333`、
+MathVerse five-version macro `51.4000`。2,511-row summary 仅有 1 次 judge parse failure，
+按预注册规则确定性计错且未超过阈值。`paired-summary.json` SHA256 为
+`166153c701cabd2684dbc2ffce54de06b58d2fd0014de40fb70e52794cc557ee`，
+`evaluation-complete` SHA256 为
+`50c88724fa67c7fa5f0a2d61471e119f94369520c84d8ba89f97f71e30c5a047`。
 
 为避免 10 个永久 checkpoint 全量外评造成不必要的时间开销，PRL25-B 的常规长程曲线固定为
 `S8 / S16 / S32 / S48 / S64 / S80`：S8/S16 提供早期和历史平台基线，S32/S48/S64 是
@@ -160,7 +166,15 @@ seed 42 和七项 Macro* 官方评分。checkpoint owner 由 PRL25-B config、S8
 namespace，使 checkpoint 间真正共享逐题逐 turn 随机流。剩余 S8/S32/S48/S64 的四臂
 执行计划固定在
 `configs/evaluation/prl25_b_crop_exact_step8_step32_step48_step64_full_model_coredev2511_plan.json`，
-提交为 `d74b34488b05547443b807311d36e966d4ec98ee`；8 卡运行时按两臂一批并发生成。
+最终执行提交为 `bd6ad16eb599e52f2c3dab6acf34114a67769f30`；8 卡运行时按两臂一批并发生成。
+初版四臂计划误把 owner completion 指向 S80，而该计划最后 arm 为 S64；运行在 GPU 启动和
+样本生成前 fail-closed。上述提交改为 S64 永久 receipt 并增加 runtime regression test。
+
+`2026-08-22 18:54 JST` 已补齐自动接力：S16 inference-only 保持运行；四臂 supervisor
+并行进行 checkpoint materialization，待 S16 释放 GPU 4--7 后自动以 0--7 执行
+S8/S32、再执行 S48/S64，并完成四臂官方评分；四臂 `evaluation-complete` 发布后，独立
+handoff supervisor 自动对已有 S16 inference 执行正式评分。任一前序进程若退出而没有对应
+completion receipt，接力会 fail-closed，不会静默跳过 checkpoint。
 
 ## 5. Reward 合同
 
