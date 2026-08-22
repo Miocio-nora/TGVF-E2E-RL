@@ -176,6 +176,20 @@ S8/S32、再执行 S48/S64，并完成四臂官方评分；四臂 `evaluation-co
 handoff supervisor 自动对已有 S16 inference 执行正式评分。任一前序进程若退出而没有对应
 completion receipt，接力会 fail-closed，不会静默跳过 checkpoint。
 
+S16 正式评分于 `2026-08-22 19:39 JST` 完成并通过，Macro* 为 `62.0842`；VStar、
+HRBench、BLINK single-image、OCR mean、MMMU-Pro single-image、MathVista、MathVerse
+macro 分别为 `77.4869/77.0000/58.8889/52.8325/44.9814/69.0000/54.4000`。相同逐题
+随机流下，S80−S16 Macro* 仅 `+0.1446 pp`；分量 delta 为
+`+4.1885/-2.5000/0.0000/+2.5034/+1.4870/-1.6667/-3.0000 pp`，因此当前不能把
+延长到 S80 写成整体能力超过 1 pp 的改善。S16 paired-summary SHA256 为
+`45f2082a54eabb64971161046a9650b8f6f536a26742c232661ec88bbb9cfac4`，
+evaluation-complete SHA256 为
+`5a529107c3bd396d6038ca8edd59849ea35e22fdba8a289ba8d83a0f7e9148eb`。
+
+四臂 full-model materialization 与静态验证均已完成；首批 S8（GPU 0--3）与 S32
+（GPU 4--7）的八个正式 worker 于 `2026-08-22 19:56 JST` 启动。该批完成后同一
+supervisor 自动运行 S48+S64，再以单次加载的 TP2 72B judge 并发评分四个 checkpoint。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：

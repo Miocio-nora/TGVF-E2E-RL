@@ -9892,3 +9892,17 @@ than inferred from a script name or prior conversation.
   official scoring. A receipt-gated handoff then scores S16. Missing upstream
   completion or a supervisor exit fails closed instead of silently skipping a
   target endpoint.
+- S16 inference completed all 2,240 supported rows and its official evaluation
+  closed at `2026-08-22 19:39 JST` with Macro* `62.0842`. Components in the
+  canonical order VStar/HRBench/BLINK-single/OCR-mean/MMMU-single/MathVista/
+  MathVerse-macro are
+  `77.4869/77.0000/58.8889/52.8325/44.9814/69.0000/54.4000`. S80−S16 is only
+  `+0.1446 pp` overall, with component deltas
+  `+4.1885/-2.5000/0.0000/+2.5034/+1.4870/-1.6667/-3.0000 pp`. The S16
+  paired-summary/evaluation-complete SHA256 values are respectively
+  `45f2082a54eabb64971161046a9650b8f6f536a26742c232661ec88bbb9cfac4` and
+  `5a529107c3bd396d6038ca8edd59849ea35e22fdba8a289ba8d83a0f7e9148eb`.
+- All four remaining full-model snapshots passed static validation. The first
+  concurrent inference wave, S8 on GPUs 0--3 and S32 on GPUs 4--7, launched
+  eight workers at `2026-08-22 19:56 JST`; S48+S64 and four-arm scoring remain
+  receipt-gated automatic successors in the same supervisor.
