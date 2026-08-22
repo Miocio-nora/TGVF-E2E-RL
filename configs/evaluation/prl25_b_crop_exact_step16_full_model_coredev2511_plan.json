@@ -38,7 +38,7 @@
     "mode": "common_random_numbers_per_task_turn",
     "protocol_sha256": "03b5cbf38841ab5bb97200eef41234b2a33d064b283df696b1c6ffcce3c9e79d",
     "schema_version": "tgvf.policy-paired-evaluation-rng-plan.v1",
-    "seed_namespace": "coredev2511-official-v1/prl25-b-crop-exact/step16/temp1/seed42/v1",
+    "seed_namespace": "coredev2511-official-v1/prl25-b-crop-exact/step80/temp1/seed42/v1",
     "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
     "temperature": 1.0
   },
