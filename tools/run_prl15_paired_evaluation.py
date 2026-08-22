@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from contextlib import contextmanager
 from datetime import datetime
 import fcntl
@@ -20,6 +21,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -847,14 +849,15 @@ def _policy_checkpoint_receipt(
         )
         or state.progress.optimizer_step != optimizer_step
         or pair.optimizer_step != optimizer_step
-        or receipt.get("schema_version")
-        != "tgvf.prl15-permanent-checkpoint-receipt.v1"
+        or receipt.get("schema_version") != "tgvf.prl15-permanent-checkpoint-receipt.v1"
         or receipt.get("optimizer_step") != optimizer_step
         or receipt.get("run_identity_sha256") != checkpoint_run_identity
         or receipt.get("project_state_sha256") != state.integrity_sha256
         or receipt.get("pair_integrity_sha256") != pair.integrity_sha256
     ):
-        raise RuntimeError(f"step{optimizer_step} permanent checkpoint identity differs")
+        raise RuntimeError(
+            f"step{optimizer_step} permanent checkpoint identity differs"
+        )
 
     actor = checkpoint / "actor"
     fsdp_config = actor / "fsdp_config.json"
@@ -870,8 +873,7 @@ def _policy_checkpoint_receipt(
     required = [checkpoint / "data.pt", fsdp_config]
     for prefix in ("model", "optim", "extra_state"):
         required.extend(
-            actor
-            / f"{prefix}_world_size_{owner.distributed.world_size}_rank_{rank}.pt"
+            actor / f"{prefix}_world_size_{owner.distributed.world_size}_rank_{rank}.pt"
             for rank in range(owner.distributed.world_size)
         )
     if any(
@@ -892,8 +894,7 @@ def _validate_v3_policy_run_runtime(
     owner_plan = plan["checkpoint_owner"]
     protocol_plan = plan["protocol_contract"]
     if (
-        owner.schema_version
-        != POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+        owner.schema_version != POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
         or owner.source_sha256 != owner_plan["config_sha256"]
         or owner.run_id != owner_plan["run_id"]
         or owner.identity_sha256 != owner_plan["run_identity_sha256"]
@@ -930,7 +931,8 @@ def _validate_v3_policy_run_runtime(
         != protocol_payload["visual_prompt_bundle_sha256"]
         or owner.protocol.tool_profile.value != "crop_only"
         or owner.protocol.enabled_tool_names != (protocol_payload["tool_name"],)
-        or owner.protocol.maximum_tool_calls != protocol_payload["max_active_perception"]
+        or owner.protocol.maximum_tool_calls
+        != protocol_payload["max_active_perception"]
         or owner.policy.image_max_pixels != FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS
         or sampling.temperature != 1.0
         or sampling.do_sample is not True
@@ -2123,6 +2125,75 @@ def _judge_environment(judge: dict[str, Any]) -> dict[str, str]:
     return environment
 
 
+def _judge_for_gpu_pair(
+    judge: dict[str, Any], *, gpu_pair: tuple[int, int], port: int
+) -> dict[str, Any]:
+    """Create one transient TP=2 judge binding without changing pinned identity."""
+
+    if len(set(gpu_pair)) != 2 or any(
+        type(gpu_id) is not int or gpu_id < 0 for gpu_id in gpu_pair
+    ):
+        raise ValueError("benchmark judge GPU pair must contain two distinct IDs")
+    if type(port) is not int or not 0 < port < 65536:
+        raise ValueError("benchmark judge port is invalid")
+    result = copy.deepcopy(judge)
+    devices = result["devices"]
+    devices["physical"] = list(gpu_pair)
+    devices["logical"] = [0, 1]
+    # UUIDs in the pinned service describe its canonical single-instance binding;
+    # retaining them after a transient physical-device override would be false.
+    devices.pop("uuids", None)
+    server = result["server"]
+    parsed = urlsplit(str(server["base_url"]))
+    hostname = parsed.hostname
+    if not parsed.scheme or hostname is None:
+        raise RuntimeError("benchmark judge base URL is malformed")
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    server["port"] = port
+    server["base_url"] = urlunsplit(
+        (
+            parsed.scheme,
+            f"{hostname}:{port}",
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+    return result
+
+
+def _assign_arm_judges(
+    judge: dict[str, Any],
+    *,
+    arm_names: tuple[str, ...],
+    gpu_ids: tuple[int, ...],
+) -> dict[str, dict[str, Any]]:
+    """Assign up to four disjoint TP=2 judge services to ordered arms."""
+
+    if not arm_names:
+        return {}
+    if len(set(gpu_ids)) != len(gpu_ids) or any(
+        type(gpu_id) is not int or gpu_id < 0 for gpu_id in gpu_ids
+    ):
+        raise ValueError("benchmark judge GPU pool is malformed")
+    service_count = min(4, len(arm_names), len(gpu_ids) // 2)
+    if service_count <= 1:
+        return {arm: judge for arm in arm_names}
+    base_port = judge["server"].get("port")
+    if type(base_port) is not int:
+        raise RuntimeError("benchmark judge base port is malformed")
+    services = tuple(
+        _judge_for_gpu_pair(
+            judge,
+            gpu_pair=(gpu_ids[2 * index], gpu_ids[2 * index + 1]),
+            port=base_port + index,
+        )
+        for index in range(service_count)
+    )
+    return {arm: services[index % service_count] for index, arm in enumerate(arm_names)}
+
+
 def _wait_for_judge(
     process: subprocess.Popen[bytes],
     judge: dict[str, Any],
@@ -2192,6 +2263,71 @@ def _local_judge_service(
         else:
             process.wait()
             _ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
+
+
+@contextmanager
+def _local_judge_services(
+    judges: dict[str, dict[str, Any]],
+    *,
+    log_root: Path,
+    timeout_seconds: int,
+    poll_seconds: int,
+):
+    """Start every distinct local judge concurrently, then drain them together."""
+
+    unique: dict[str, dict[str, Any]] = {}
+    for judge in judges.values():
+        base_url = str(judge["server"]["base_url"])
+        previous = unique.setdefault(base_url, judge)
+        if previous["devices"]["physical"] != judge["devices"]["physical"]:
+            raise RuntimeError("judge endpoint is assigned to multiple GPU pairs")
+    for base_url, judge in unique.items():
+        try:
+            check_qwen25_72b_judge(
+                base_url=base_url,
+                expected_model=str(judge["model"]["served_name"]),
+                timeout=2,
+            )
+        except Exception:
+            pass
+        else:
+            raise RuntimeError(
+                f"benchmark judge endpoint is already occupied: {base_url}"
+            )
+    log_root.mkdir(parents=True, exist_ok=True)
+    processes: list[tuple[subprocess.Popen[bytes], dict[str, Any]]] = []
+    try:
+        multiple = len(unique) > 1
+        for judge in unique.values():
+            port = int(judge["server"]["port"])
+            log_name = (
+                f"judge-qwen25-72b-port{port}.log"
+                if multiple
+                else "judge-qwen25-72b.log"
+            )
+            with (log_root / log_name).open("ab", buffering=0) as log_handle:
+                process = _spawn_registered_process(
+                    _judge_command(judge),
+                    env=_judge_environment(judge),
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                )
+            processes.append((process, judge))
+        # All services are already loading in parallel. Sequential readiness
+        # checks do not serialize model startup.
+        for process, judge in processes:
+            _wait_for_judge(
+                process,
+                judge,
+                timeout_seconds=timeout_seconds,
+                poll_seconds=poll_seconds,
+            )
+        yield
+    finally:
+        if processes:
+            _terminate_worker_groups(
+                [process for process, _judge in processes], grace_seconds=60.0
+            )
 
 
 def _scoring_root(config_path: Path, plan: dict[str, Any]) -> Path:
@@ -2762,7 +2898,7 @@ def _score_missing_arms(
     configs: dict[str, Path],
     existing: dict[str, dict[str, Any] | None],
     plan: dict[str, Any],
-    judge: dict[str, Any],
+    judges: dict[str, dict[str, Any]],
     *,
     log_root: Path,
 ) -> dict[str, dict[str, Any] | None]:
@@ -2776,7 +2912,7 @@ def _score_missing_arms(
             launched.extend(
                 (arm, dataset, process)
                 for dataset, process in _launch_score_arm(
-                    configs[arm], plan, judge, arm=arm, log_root=log_root
+                    configs[arm], plan, judges[arm], arm=arm, log_root=log_root
                 )
             )
         failures: list[str] = []
@@ -2801,7 +2937,7 @@ def _score_missing_arms(
         if arm in arm_failed:
             continue
         try:
-            existing[arm] = _summarize_scored_arm(configs[arm], plan, judge)
+            existing[arm] = _summarize_scored_arm(configs[arm], plan, judges[arm])
         except Exception as error:
             failures.append(f"{arm}/summary={error}")
     if failures:
@@ -3221,14 +3357,34 @@ def _main() -> int:
             print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
     log_root = output_base / "logs"
-    existing = {
-        arm: _accepted_scored_arm(configs[arm], plan, judge) for arm, _step in arms
-    }
+    arm_names = tuple(arm for arm, _step in arms)
+    judges = _assign_arm_judges(
+        judge,
+        arm_names=arm_names,
+        gpu_ids=tuple(args.gpu_ids),
+    )
+    existing: dict[str, dict[str, Any] | None] = {}
+    for arm in arm_names:
+        try:
+            existing[arm] = _accepted_scored_arm(configs[arm], plan, judges[arm])
+        except Exception as assigned_error:
+            # Results written before multi-judge scheduling all used the pinned
+            # canonical endpoint. Accept them only if full legacy validation
+            # succeeds; otherwise preserve the assigned-endpoint failure.
+            if judges[arm]["server"]["base_url"] == judge["server"]["base_url"]:
+                raise
+            try:
+                existing[arm] = _accepted_scored_arm(configs[arm], plan, judge)
+            except Exception:
+                raise assigned_error
     if any(value is None for value in existing.values()):
         _require_local_judge_runtime(judge)
-        with _local_judge_service(
-            judge,
-            log_path=log_root / "judge-qwen25-72b.log",
+        pending_judges = {
+            arm: judges[arm] for arm in arm_names if existing[arm] is None
+        }
+        with _local_judge_services(
+            pending_judges,
+            log_root=log_root,
             timeout_seconds=args.judge_startup_timeout_seconds,
             poll_seconds=max(5, min(args.poll_seconds, 30)),
         ):
@@ -3236,7 +3392,7 @@ def _main() -> int:
                 configs,
                 existing,
                 plan,
-                judge,
+                judges,
                 log_root=log_root,
             )
     report = _build_paired_report(

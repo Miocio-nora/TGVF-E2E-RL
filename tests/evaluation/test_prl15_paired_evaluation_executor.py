@@ -31,8 +31,7 @@ _PRL25_B_STEP16_PLAN = (
     / "configs/evaluation/prl25_b_crop_exact_step16_full_model_coredev2511_plan.json"
 )
 _PRL25_B_REMAINING_CURVE_PLAN = (
-    _ROOT
-    / "configs/evaluation/"
+    _ROOT / "configs/evaluation/"
     "prl25_b_crop_exact_step8_step32_step48_step64_full_model_coredev2511_plan.json"
 )
 _SPEC = importlib.util.spec_from_file_location("prl15_paired_evaluation", _TOOL)
@@ -185,8 +184,9 @@ def test_v3_full_model_plan_accepts_exact_crop_policy_run_owner() -> None:
         "policy_e2e_crop_exact_run_config_v1"
     )
     assert runtime.checkpoint_owner.run_id == plan["checkpoint_owner"]["run_id"]
-    assert runtime.checkpoint_owner.identity_sha256 == (
-        plan["checkpoint_owner"]["run_identity_sha256"]
+    assert (
+        runtime.checkpoint_owner.identity_sha256
+        == (plan["checkpoint_owner"]["run_identity_sha256"])
     )
     assert runtime.protocol_contract.run_id == plan["protocol_contract"]["run_id"]
     assert [(arm["name"], arm["optimizer_step"]) for arm in plan["arms"]] == [
@@ -200,11 +200,13 @@ def test_prl25_learning_curve_endpoints_share_s80_frozen_rng_namespace() -> None
     remaining = _MODULE._load_plan(_PRL25_B_REMAINING_CURVE_PLAN)
     remaining_runtime = _MODULE._load_evaluation_runtime(remaining)
 
-    assert step16["paired_rng"]["seed_namespace"] == (
-        step80["paired_rng"]["seed_namespace"]
+    assert (
+        step16["paired_rng"]["seed_namespace"]
+        == (step80["paired_rng"]["seed_namespace"])
     )
-    assert remaining["paired_rng"]["seed_namespace"] == (
-        step80["paired_rng"]["seed_namespace"]
+    assert (
+        remaining["paired_rng"]["seed_namespace"]
+        == (step80["paired_rng"]["seed_namespace"])
     )
     assert [(arm["name"], arm["optimizer_step"]) for arm in remaining["arms"]] == [
         ("step8", 8),
@@ -530,7 +532,7 @@ def test_score_mode_reuses_existing_arms_without_policy_pipeline(
     )
     judge = {
         "devices": {"physical": [0, 1]},
-        "server": {"base_url": "http://127.0.0.1:8012/v1"},
+        "server": {"base_url": "http://127.0.0.1:8012/v1", "port": 8012},
     }
     configs = {
         "step0": tmp_path / "evaluation/step0/benchmark-config.json",
@@ -777,7 +779,7 @@ def test_missing_arm_scorers_launch_together_and_drain_before_failure(
             {"step0": Path("step0"), "step8": Path("step8")},
             {"step0": None, "step8": None},
             {},
-            {},
+            {"step0": {}, "step8": {}},
             log_root=tmp_path,
         )
 
@@ -788,6 +790,121 @@ def test_missing_arm_scorers_launch_together_and_drain_before_failure(
         "wait:step8",
     ]
     assert summarized == ["step8"]
+
+
+def test_four_arms_receive_four_disjoint_tp2_judges() -> None:
+    judge = _MODULE._load_judge_config(
+        _MODULE._load_plan(_PRL25_B_REMAINING_CURVE_PLAN)
+    )
+    arms = ("step8", "step32", "step48", "step64")
+
+    assigned = _MODULE._assign_arm_judges(
+        judge,
+        arm_names=arms,
+        gpu_ids=tuple(range(8)),
+    )
+
+    assert [assigned[arm]["devices"]["physical"] for arm in arms] == [
+        [0, 1],
+        [2, 3],
+        [4, 5],
+        [6, 7],
+    ]
+    assert [assigned[arm]["server"]["port"] for arm in arms] == [
+        8012,
+        8013,
+        8014,
+        8015,
+    ]
+    assert [assigned[arm]["server"]["base_url"] for arm in arms] == [
+        "http://127.0.0.1:8012/v1",
+        "http://127.0.0.1:8013/v1",
+        "http://127.0.0.1:8014/v1",
+        "http://127.0.0.1:8015/v1",
+    ]
+    assert judge["devices"]["physical"] == [2, 3]
+    assert judge["server"]["port"] == 8012
+
+
+def test_single_arm_retains_pinned_judge_binding() -> None:
+    judge = _MODULE._load_judge_config(_MODULE._load_plan(_PRL25_B_STEP16_PLAN))
+
+    assigned = _MODULE._assign_arm_judges(
+        judge,
+        arm_names=("step16",),
+        gpu_ids=tuple(range(8)),
+    )
+
+    assert assigned == {"step16": judge}
+    assert assigned["step16"] is judge
+
+
+def test_local_judges_all_spawn_before_any_readiness_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    judge = _MODULE._load_judge_config(
+        _MODULE._load_plan(_PRL25_B_REMAINING_CURVE_PLAN)
+    )
+    assigned = _MODULE._assign_arm_judges(
+        judge,
+        arm_names=("step8", "step32", "step48", "step64"),
+        gpu_ids=tuple(range(8)),
+    )
+    events: list[str] = []
+
+    class Process:
+        def __init__(self, port: int) -> None:
+            self.pid = port
+
+    def spawn(command, **_kwargs):
+        port = int(command[command.index("--port") + 1])
+        events.append(f"spawn:{port}")
+        return Process(port)
+
+    def wait(_process, observed, **_kwargs):
+        assert events[:4] == [
+            "spawn:8012",
+            "spawn:8013",
+            "spawn:8014",
+            "spawn:8015",
+        ]
+        events.append(f"ready:{observed['server']['port']}")
+
+    monkeypatch.setattr(
+        _MODULE,
+        "check_qwen25_72b_judge",
+        lambda **_kwargs: (_ for _ in ()).throw(ConnectionError()),
+    )
+    monkeypatch.setattr(_MODULE, "_spawn_registered_process", spawn)
+    monkeypatch.setattr(_MODULE, "_wait_for_judge", wait)
+    monkeypatch.setattr(
+        _MODULE,
+        "_terminate_worker_groups",
+        lambda processes, **_kwargs: events.append(
+            "drain:" + ",".join(str(process.pid) for process in processes)
+        ),
+    )
+
+    with _MODULE._local_judge_services(
+        assigned,
+        log_root=tmp_path,
+        timeout_seconds=60,
+        poll_seconds=5,
+    ):
+        events.append("yield")
+
+    assert events == [
+        "spawn:8012",
+        "spawn:8013",
+        "spawn:8014",
+        "spawn:8015",
+        "ready:8012",
+        "ready:8013",
+        "ready:8014",
+        "ready:8015",
+        "yield",
+        "drain:8012,8013,8014,8015",
+    ]
 
 
 def test_gpu_release_wait_requires_two_stable_free_polls(monkeypatch) -> None:
