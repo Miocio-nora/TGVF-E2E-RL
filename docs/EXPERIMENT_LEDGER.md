@@ -9829,3 +9829,131 @@ than inferred from a script name or prior conversation.
   authorizes continuation of the same run from S39 toward the unchanged S80
   endpoint; it does not create a new arm or alter data, reward or optimizer
   identity.
+
+### PRL25-B exact-Crop S80 completion and CoreDev primary endpoint (2026-08-22)
+
+- Lifecycle/result: training `COMPLETE` through optimizer step 80; external
+  S80 CoreDev-2511 primary endpoint `COMPLETE/PASS`. The scientific run retains its
+  original ID and config identity
+  `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`.
+  Metrics contain the exact sequence S1--S80; latest checkpoint state and the
+  permanent S80 8-rank model/optimizer/extra/project pair are complete.
+- Endpoint/trend: S80 recorded answer `66.80%`, FMT2 format-error `0.39%`,
+  mean reward `1.328`, successful-Crop trajectory rate `81.25%`, and
+  `23.31 min`. S73--S80 averaged answer `71.39%`, format error `0.59%`, mean
+  reward `1.416`, successful-Crop rate `81.98%`, and `25.04 min/step`.
+  S65--S72 had a higher `76.61%` internal answer mean, so S80 remains the
+  preregistered primary endpoint while intermediate checkpoints are only
+  supplemental learning-curve evidence.
+- Evaluation identity: the primary endpoint is
+  `PRL25-B-CROP-EXACT-COREDEV2511-STEP80-TEMP1-SEED42-UNIFIED-V1`, launched
+  at `2026-08-22 17:30 JST` on physical GPUs 0--3. It uses the frozen 2,511-task
+  manifest (2,240 supported single-image plus 271 unsupported multi-image),
+  native-Crop prompt `2b8b6d79...0dd2`, `image_zoom_in_tool`, Hermes parsing,
+  at most six calls, temperature 1, master seed 42, and official seven-suite
+  Macro* scoring with no GPT fallback.
+- Provenance/status: evaluation integration commit
+  `9e977c6b6b8a4714e2057ba5fe010afb33995bdb` adds a fail-closed Policy-E2E
+  full-model owner binding. The preflight verified the exact run config, S80
+  permanent receipt, committed FSDP pair, rank-file closure, continuous metrics
+  and native-Crop protocol; all 49 evaluator regression tests passed. Current
+  S80 Macro* is `62.2288`, with VStar/HRBench/BLINK-single/OCR-mean/
+  MMMU-single/MathVista/MathVerse-macro components
+  `81.6754/74.5000/58.8889/55.3358/46.4684/67.3333/51.4000`. Exactly one judge
+  parse failure was deterministically counted incorrect within the frozen
+  limit. The paired-summary SHA256 is
+  `166153c701cabd2684dbc2ffce54de06b58d2fd0014de40fb70e52794cc557ee`;
+  evaluation-complete SHA256 is
+  `50c88724fa67c7fa5f0a2d61471e119f94369520c84d8ba89f97f71e30c5a047`.
+- Endpoint scheduling amendment: routine PRL25-B external evaluations are
+  `S8/S16/S32/S48/S64/S80`; the other retained eight-step checkpoints are
+  diagnostic-only unless the main curve requires them. S8/S16 are the mandatory
+  same-run early/platform baselines for the long-horizon curve. At `2026-08-22 18:06 JST`,
+  S16 inference was launched on physical GPUs 4--7 while the already-running
+  S80 generation remained on GPUs 0--3. Commit
+  `2bc2886f660880ee4eca87a8b9bfc9d1d12118ff` adds the inference-only durable
+  handoff so S16 can defer the pinned GPU-2/3 judge without weakening the
+  checkpoint, task, prompt, RNG or scoring identity. An inference-complete
+  receipt is not an evaluation-complete receipt and carries no score claim.
+- Before S16 generated any row, review found that its first plan used a
+  step-local seed namespace rather than S80's frozen stream. The preparation
+  was stopped at `0/2,240` and restarted without result loss. Commit
+  `43106f480f282c5854a82be91e6003e984468b36` binds every default endpoint to
+  the exact S80 namespace. Commit
+  `bd6ad16eb599e52f2c3dab6acf34114a67769f30` records the executable four-arm
+  plan for the remaining S8/S32/S48/S64 nodes; on eight GPUs it generates two
+  checkpoint arms concurrently per batch. Its first launch fail-closed before
+  GPU or sample work because the initial owner completion named S80 rather than
+  the plan-final S64 receipt; the cited commit corrects the binding and adds a
+  runtime regression gate.
+- Automatic continuation was launched at `2026-08-22 18:54 JST`. The four-arm
+  process materializes while S16 inference runs, waits for all physical GPUs
+  0--7, generates S8/S32 and then S48/S64 in two-arm batches, and performs their
+  official scoring. A receipt-gated handoff then scores S16. Missing upstream
+  completion or a supervisor exit fails closed instead of silently skipping a
+  target endpoint.
+- S16 inference completed all 2,240 supported rows and its official evaluation
+  closed at `2026-08-22 19:39 JST` with Macro* `62.0842`. Components in the
+  canonical order VStar/HRBench/BLINK-single/OCR-mean/MMMU-single/MathVista/
+  MathVerse-macro are
+  `77.4869/77.0000/58.8889/52.8325/44.9814/69.0000/54.4000`. S80−S16 is only
+  `+0.1446 pp` overall, with component deltas
+  `+4.1885/-2.5000/0.0000/+2.5034/+1.4870/-1.6667/-3.0000 pp`. The S16
+  paired-summary/evaluation-complete SHA256 values are respectively
+  `45f2082a54eabb64971161046a9650b8f6f536a26742c232661ec88bbb9cfac4` and
+  `5a529107c3bd396d6038ca8edd59849ea35e22fdba8a289ba8d83a0f7e9148eb`.
+- All four remaining full-model snapshots passed static validation. The first
+  concurrent inference wave, S8 on GPUs 0--3 and S32 on GPUs 4--7, launched
+  eight workers at `2026-08-22 19:56 JST`; S48+S64 followed automatically.
+- The complete six-point shared-RNG curve is now closed. Macro* at
+  S8/S16/S32/S48/S64/S80 is respectively
+  `59.0269/62.0842/63.5377/61.5559/61.9993/62.2288`. S32 is the post-hoc curve
+  maximum: `+1.4535 pp` over S16 with five of seven components higher, but it
+  falls `0.0465 pp` short of the preregistered `>=1.5 pp` strong-evidence line.
+  S48/S64/S80 do not retain the S32 gain, so the arm shows a bounded mid-horizon
+  improvement rather than monotonic long-horizon scaling. S80 remains the
+  preregistered primary endpoint.
+- The four-arm S8/S32/S48/S64 evaluation closed `COMPLETE/PASS` at
+  `2026-08-22 22:21 JST`. Its paired-summary/evaluation-complete SHA256 values
+  are respectively
+  `0f8287298a4d467cdb52918957cb84e307f76728d75a9249649e7fd1f62451c6` and
+  `2b89fbbc47cf41d0adc5bb9b288e695bb88fe25275cc3b9b4178d9f3d4661eb9`.
+  The full component table is canonical in
+  `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`.
+- This run's four arms shared one TP2 Qwen2.5-72B judge on GPUs 2--3, leaving
+  the other six GPUs idle during scoring; service start through the four-arm
+  completion took about 15 minutes. Commit
+  `2bbb5f9309d6b1d9dca25a81bd1855dbd100859e` corrects future multi-arm
+  scheduling to launch up to four TP2 services concurrently on GPU pairs
+  0--1/2--3/4--5/6--7 and ports 8012--8015, one endpoint per arm. All services
+  spawn before readiness waits, legacy single-endpoint receipts remain strictly
+  acceptable, and 60 focused tests plus Ruff pass. The target eight-minute
+  wall time remains an operational expectation pending the next measured run;
+  this change does not rewrite the completed formal scores.
+
+### PRL25-C pure-TGVF 80-step formal launch and automatic six-point evaluation (2026-08-22)
+
+- Cell/status: `PRL-25-C-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-TEACHER25-80STEP-WS8`
+  / `RUNNING`; fresh S0 formal launch passed the execution-identity gate at
+  `2026-08-22 22:47 JST` and started eight actor/rollout initialization workers
+  on physical GPUs 0--7. No smoke trajectories enter the scientific lineage.
+- Fixed contract: Qwen3-VL-8B-Instruct full-policy update, frozen RP67 Step-2000,
+  pure `tgvf_focus_tool`, BS16 × n16, world8/FSDP2/GA1, canonical Teacher25
+  seed-42 schedule with exactly 4 teacher rows per 16-row step, constant LR
+  `1e-6`, maximum 6 tool calls and FMT2 protocol/tool-error penalty `-2`.
+  Crop, Focus/Target + Grounding reward and policy LoRA are disabled.
+- Provenance: run identity SHA256
+  `272d6209be1247582c8c4b2f616609b55203646c2a4b26a4b075aad3960c9b02`;
+  implementation/supervisor commit
+  `b100d3d462bead2f5f2a0b4a365b4a38e59f5d2d`; config-binding commit
+  `b87126ae291758545f929c4f06ffc098dd4a7886`; final evaluation-plan binding
+  commit `9f4104b78ebcf8ba90c81d401fc591ab8ed3945a`. The remote execution branch is
+  `prl25-c-tgvf-80step`.
+- Recovery/evaluation handoff: every step writes a recovery checkpoint and every
+  eighth step is permanent. Only a complete S80 receipt plus data/FSDP files and
+  all eight model/optimizer/extra-state shards unlocks the post-training
+  evaluator. The evaluator then automatically covers S8/S16/S32/S48/S64/S80
+  under one CoreDev-2511 temp1/seed42 paired-RNG contract. Generation consumes
+  all eight GPUs in two concurrent four-GPU arms; scoring launches up to four
+  TP2 Qwen2.5-72B judges on pairs 0--1, 2--3, 4--5 and 6--7. Missing or mismatched
+  checkpoint, RP67 or completion identity fails closed.

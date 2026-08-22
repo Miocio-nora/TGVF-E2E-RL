@@ -1,8 +1,8 @@
 # 第三期（PRL25）：BS16 Teacher25 80-step 统一实验计划
 
-日期：2026-08-20；执行状态更新：2026-08-21（Asia/Tokyo）
+日期：2026-08-20；执行状态更新：2026-08-22（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B Crop T-free 已完成 S1–S39，外部 judge 429 中断后从 S39 续训`
+状态：`RUNNING / PRL25-B 六点曲线已完成；PRL25-C pure-TGVF 80-step 已正式启动并已绑定自动六节点评测`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -126,6 +126,135 @@ S0 receipt，checkpoint bridge 在载入后仍读取该旧标记，因而把实�
 focused tests 与 Ruff，允许同一 scientific run 从 S39 继续到原定 S80，不改变 reward、数据、
 优化器或 arm identity。
 
+### 4.3 PRL25-B S80 完成与主终点评测（2026-08-22）
+
+PRL25-B 已完成全部 80 个 optimizer steps；`metrics.jsonl` 连续包含 S1–S80，latest tracker、
+runtime policy receipt 和永久 S80 checkpoint 均闭合。S80 单步为 answer `66.80%`、FMT2
+format error `0.39%`、mean reward `1.328`、成功 Crop trajectory 比例 `81.25%`，用时
+`23.31 min`。最后八步 S73–S80 的均值为 answer `71.39%`、format error `0.59%`、
+mean reward `1.416`、成功 Crop trajectory 比例 `81.98%`、`25.04 min/step`。训练内部
+S65–S72 answer 均值 `76.61%` 高于最后八步，因此不能只用训练 reward 宣称长程改善，必须
+以外部 CoreDev 结果判定 S80，并把较早 checkpoint 仅作为预注册主终点之外的补充曲线。
+
+S80 CoreDev-2511 主终点评测于 `2026-08-22 17:30 JST` 启动。评测 ID 为
+`PRL25-B-CROP-EXACT-COREDEV2511-STEP80-TEMP1-SEED42-UNIFIED-V1`，固定 native-Crop
+visual prompt、`image_zoom_in_tool`、Hermes parser、最多 6 次调用、temperature 1、master
+seed 42 和七项 Macro* 官方评分。checkpoint owner 由 PRL25-B config、S80 永久 receipt、
+8-rank FSDP pair 与连续 80 行 metrics 联合证明；协议 owner 使用 Teacher25 native-Crop
+合同，prompt 哈希与训练完全一致。接入代码/计划提交为
+`9e977c6b6b8a4714e2057ba5fe010afb33995bdb`。正式评测已完成并通过：Macro* 为
+`62.2288`，七项分量依次为 VStar `81.6754`、HRBench `74.5000`、BLINK single-image
+`58.8889`、OCR mean `55.3358`、MMMU-Pro single-image `46.4684`、MathVista `67.3333`、
+MathVerse five-version macro `51.4000`。2,511-row summary 仅有 1 次 judge parse failure，
+按预注册规则确定性计错且未超过阈值。`paired-summary.json` SHA256 为
+`166153c701cabd2684dbc2ffce54de06b58d2fd0014de40fb70e52794cc557ee`，
+`evaluation-complete` SHA256 为
+`50c88724fa67c7fa5f0a2d61471e119f94369520c84d8ba89f97f71e30c5a047`。
+
+为避免 10 个永久 checkpoint 全量外评造成不必要的时间开销，PRL25-B 的常规长程曲线固定为
+`S8 / S16 / S32 / S48 / S64 / S80`：S8/S16 提供早期和历史平台基线，S32/S48/S64 是
+长程补充点，S80 保持预注册主终点；S24/S40/S56/S72 仅在主曲线出现异常时按诊断需要补评。物理机器
+实际为 8 张 GPU（编号 0--7）。S80 在 GPU 0--3 继续运行的同时，S16 于
+`2026-08-22 18:06 JST` 以 inference-only / deferred-scoring 模式在 GPU 4--7 启动，避免
+重启 S80 或因共用 GPU 2/3 的 72B judge 产生冲突。该调度模式由提交
+`2bc2886f660880ee4eca87a8b9bfc9d1d12118ff` 记录；S16 生成完成后再进入同一官方 scorer，
+不能把 inference-complete receipt 当作外评完成或结果 receipt。
+
+启动前复核发现初版 S16 计划使用了独立的 `step16` RNG namespace；当时 S16 尚为
+`0/2,240`，因此在没有丢失正式生成的情况下停止准备并修正。提交
+`43106f480f282c5854a82be91e6003e984468b36` 将全部学习曲线节点绑定到 S80 已冻结的
+namespace，使 checkpoint 间真正共享逐题逐 turn 随机流。剩余 S8/S32/S48/S64 的四臂
+执行计划固定在
+`configs/evaluation/prl25_b_crop_exact_step8_step32_step48_step64_full_model_coredev2511_plan.json`，
+最终执行提交为 `bd6ad16eb599e52f2c3dab6acf34114a67769f30`；8 卡运行时按两臂一批并发生成。
+初版四臂计划误把 owner completion 指向 S80，而该计划最后 arm 为 S64；运行在 GPU 启动和
+样本生成前 fail-closed。上述提交改为 S64 永久 receipt 并增加 runtime regression test。
+
+`2026-08-22 18:54 JST` 已补齐自动接力：S16 inference-only 保持运行；四臂 supervisor
+并行进行 checkpoint materialization，待 S16 释放 GPU 4--7 后自动以 0--7 执行
+S8/S32、再执行 S48/S64，并完成四臂官方评分；四臂 `evaluation-complete` 发布后，独立
+handoff supervisor 自动对已有 S16 inference 执行正式评分。任一前序进程若退出而没有对应
+completion receipt，接力会 fail-closed，不会静默跳过 checkpoint。
+
+S16 正式评分于 `2026-08-22 19:39 JST` 完成并通过，Macro* 为 `62.0842`；VStar、
+HRBench、BLINK single-image、OCR mean、MMMU-Pro single-image、MathVista、MathVerse
+macro 分别为 `77.4869/77.0000/58.8889/52.8325/44.9814/69.0000/54.4000`。相同逐题
+随机流下，S80−S16 Macro* 仅 `+0.1446 pp`；分量 delta 为
+`+4.1885/-2.5000/0.0000/+2.5034/+1.4870/-1.6667/-3.0000 pp`，因此当前不能把
+延长到 S80 写成整体能力超过 1 pp 的改善。S16 paired-summary SHA256 为
+`45f2082a54eabb64971161046a9650b8f6f536a26742c232661ec88bbb9cfac4`，
+evaluation-complete SHA256 为
+`5a529107c3bd396d6038ca8edd59849ea35e22fdba8a289ba8d83a0f7e9148eb`。
+
+四臂 full-model materialization 与静态验证均已完成；首批 S8（GPU 0--3）与 S32
+（GPU 4--7）的八个正式 worker 于 `2026-08-22 19:56 JST` 启动。该批完成后同一
+supervisor 自动运行 S48+S64，再以单次加载的 TP2 72B judge 并发评分四个 checkpoint。
+
+### 4.4 PRL25-B 六点学习曲线闭环（2026-08-22）
+
+S8/S32/S48/S64 四臂生成于 `2026-08-22 22:04 JST` 全部完成，每个 checkpoint 均覆盖
+2,240 个支持的单图任务；统一官方评分与四臂 `evaluation-complete` 于 `22:21 JST` 完成。
+至此 PRL25-B 的默认 `S8/S16/S32/S48/S64/S80` 六点曲线全部闭合。各节点使用完全相同的
+CoreDev-2511 任务、native-Crop 协议、temperature 1、master seed 42 和 S80 frozen RNG
+namespace。单位均为 `%`：
+
+| Checkpoint | Macro* | VStar | HRBench | BLINK single | OCR mean | MMMU single | MathVista | MathVerse macro |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| S8 | 59.0269 | 76.4398 | 65.0000 | 60.5556 | 47.4135 | 42.3792 | 67.0000 | **54.4000** |
+| S16 | 62.0842 | 77.4869 | **77.0000** | 58.8889 | 52.8325 | 44.9814 | 69.0000 | **54.4000** |
+| S32 | **63.5377** | 80.1047 | 73.0000 | **64.4444** | 54.8108 | **49.0706** | **71.3333** | 52.0000 |
+| S48 | 61.5559 | 76.4398 | 74.0000 | 59.4444 | 53.7285 | 47.2119 | 68.6667 | 51.4000 |
+| S64 | 61.9993 | 80.1047 | 73.5000 | 61.6667 | **56.2758** | 44.9814 | 65.6667 | 51.8000 |
+| S80 | 62.2288 | **81.6754** | 74.5000 | 58.8889 | 55.3358 | 46.4684 | 67.3333 | 51.4000 |
+
+S32 是六点中的 post-hoc 最佳 checkpoint，Macro* 相对 S16 为 `+1.4535 pp`，七项中
+VStar、BLINK、OCR、MMMU 和 MathVista 五项上升，HRBench 与 MathVerse 两项下降。这超过
+第 7 节的 `1 pp` 中程改善门槛，但比预先定义的 `>=1.5 pp` 强证据线低 `0.0465 pp`。
+此后 S48/S64/S80 相对 S16 分别为 `-0.5283/-0.0849/+0.1446 pp`，没有保持 S32 的
+改善。因此本 arm 支持“更多 step 可在中程产生有限改善”，但不支持“能力随训练长度持续
+单调提高”；S80 仍是预注册主终点，S32 只能作为完整曲线中明确标注的补充最佳点。
+
+四臂评测 ID 为
+`PRL25-B-CROP-EXACT-COREDEV2511-STEP8-STEP32-STEP48-STEP64-TEMP1-SEED42-UNIFIED-V1`。
+`paired-summary.json` SHA256 为
+`0f8287298a4d467cdb52918957cb84e307f76728d75a9249649e7fd1f62451c6`，
+`evaluation-complete` SHA256 为
+`2b89fbbc47cf41d0adc5bb9b288e695bb88fe25275cc3b9b4178d9f3d4661eb9`。
+
+本次评分暴露了资源调度缺口：四个 checkpoint 共用一个位于 GPU 2--3 的 TP2 72B judge，
+其余六张 GPU 在评分阶段空闲；judge 服务从启动到四臂 completion 约 `15 min`。这不影响
+结果身份或数值，但没有利用可并行的四个 TP2 实例。提交
+`2bbb5f9309d6b1d9dca25a81bd1855dbd100859e` 将后续多臂评分改为最多四个并发 judge：
+GPU `0--1/2--3/4--5/6--7` 分别绑定端口 `8012/8013/8014/8015`，各 arm 只访问自己的
+服务；所有实例先并发启动再等待 readiness，历史单端口结果仍可严格恢复验收。Ruff 与 60 个
+focused tests 通过。该修复不重算或改写本轮正式结果；约 8 分钟目标需在下一次多臂评分中
+实测确认。
+
+### 4.5 PRL25-C pure-TGVF 正式启动与自动评测合同（2026-08-22）
+
+PRL25-C 已于 `2026-08-22 22:47 JST` 从 fresh S0 启动。正式 run 为
+`PRL-25-C-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-TEACHER25-80STEP-WS8`，
+run identity SHA256 为
+`272d6209be1247582c8c4b2f616609b55203646c2a4b26a4b075aad3960c9b02`。
+它使用 pure TGVF、Frozen RP67 Step-2000、BS16 × n16、Teacher25、full-Qwen update、
+constant LR `1e-6` 和 FMT2 `protocol_error_penalty=2.0`；没有 Crop、F+G visual reward
+或 policy LoRA。CPU preflight 复核了 GA1、每 step 4/16 teacher 和完整 80-step 调度；
+身份闸门通过后，8 个 actor/rollout worker 已在物理 GPU 0--7 初始化。启动 smoke 不混入
+scientific lineage。
+
+实现与监督器位于分支 `prl25-c-tgvf-80step`；代码/监督器提交为
+`b100d3d462bead2f5f2a0b4a365b4a38e59f5d2d`，正式配置绑定提交为
+`b87126ae291758545f929c4f06ffc098dd4a7886`，最终六点评测计划绑定提交为
+`9f4104b78ebcf8ba90c81d401fc591ab8ed3945a`。训练监督器在中断后只从同一 canonical checkpoint 自动恢复；只有 S80 永久
+checkpoint receipt、data、FSDP config 以及每类 8 个 model/optim/extra-state shard 全部完整，
+才自动交接评测。
+
+自动评测固定覆盖 `S8/S16/S32/S48/S64/S80`，共用同一 CoreDev-2511 任务、TGVF 协议、
+temperature 1、master seed 42 和逐题逐 turn paired RNG namespace。生成阶段使用全部 8 卡，
+每批并发两个四卡 checkpoint arm；评分阶段最多同时启动四个 TP2 Qwen2.5-72B judge，分别
+绑定 GPU `0--1/2--3/4--5/6--7`。任一 checkpoint 身份、冻结 RP67 或 completion receipt
+不匹配均 fail-closed；不会把 inference-complete 当作正式评分完成。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
@@ -168,6 +297,9 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
   evaluation，S1 作为早期恢复/速度校准点。中间 endpoint 评测/审计完成后可只保留
   model-only snapshot 与 receipt；S80 和最终 winner 保留完整 optimizer state，控制约
   140 GB/完整 checkpoint 的存储压力。
+- 永久保留不等于默认全部外评。常规外评节点为 `S8/S16/S32/S48/S64/S80`；其余永久节点
+  用于恢复、异常定位和按需补评。S8/S16 是早期学习与平台基线，不得因已有历史 Crop
+  S8/S16 而跳过本次 same-run、same-protocol 的对应节点。
 - 全部 endpoint 使用冻结 CoreDev-2511 `paired-seed-v1`、master seed 42、temperature 1
   合同，同时报告七项 Macro* 分量。A/B 共享 exact Crop S0；C/E 共享 exact pure-TGVF S0；
   D 使用自己的 Atomic Crop+TGVF S0。共享 S0 evaluation 不等于共享训练 lineage。
