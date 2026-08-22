@@ -9904,5 +9904,29 @@ than inferred from a script name or prior conversation.
   `5a529107c3bd396d6038ca8edd59849ea35e22fdba8a289ba8d83a0f7e9148eb`.
 - All four remaining full-model snapshots passed static validation. The first
   concurrent inference wave, S8 on GPUs 0--3 and S32 on GPUs 4--7, launched
-  eight workers at `2026-08-22 19:56 JST`; S48+S64 and four-arm scoring remain
-  receipt-gated automatic successors in the same supervisor.
+  eight workers at `2026-08-22 19:56 JST`; S48+S64 followed automatically.
+- The complete six-point shared-RNG curve is now closed. Macro* at
+  S8/S16/S32/S48/S64/S80 is respectively
+  `59.0269/62.0842/63.5377/61.5559/61.9993/62.2288`. S32 is the post-hoc curve
+  maximum: `+1.4535 pp` over S16 with five of seven components higher, but it
+  falls `0.0465 pp` short of the preregistered `>=1.5 pp` strong-evidence line.
+  S48/S64/S80 do not retain the S32 gain, so the arm shows a bounded mid-horizon
+  improvement rather than monotonic long-horizon scaling. S80 remains the
+  preregistered primary endpoint.
+- The four-arm S8/S32/S48/S64 evaluation closed `COMPLETE/PASS` at
+  `2026-08-22 22:21 JST`. Its paired-summary/evaluation-complete SHA256 values
+  are respectively
+  `0f8287298a4d467cdb52918957cb84e307f76728d75a9249649e7fd1f62451c6` and
+  `2b89fbbc47cf41d0adc5bb9b288e695bb88fe25275cc3b9b4178d9f3d4661eb9`.
+  The full component table is canonical in
+  `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`.
+- This run's four arms shared one TP2 Qwen2.5-72B judge on GPUs 2--3, leaving
+  the other six GPUs idle during scoring; service start through the four-arm
+  completion took about 15 minutes. Commit
+  `2bbb5f9309d6b1d9dca25a81bd1855dbd100859e` corrects future multi-arm
+  scheduling to launch up to four TP2 services concurrently on GPU pairs
+  0--1/2--3/4--5/6--7 and ports 8012--8015, one endpoint per arm. All services
+  spawn before readiness waits, legacy single-endpoint receipts remain strictly
+  acceptable, and 60 focused tests plus Ruff pass. The target eight-minute
+  wall time remains an operational expectation pending the next measured run;
+  this change does not rewrite the completed formal scores.

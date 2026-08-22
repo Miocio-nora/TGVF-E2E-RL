@@ -2,7 +2,7 @@
 
 日期：2026-08-20；执行状态更新：2026-08-22（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B 训练与 S80 主终点评测完成，S8/S16/S32/S48/S64 曲线评测自动续跑`
+状态：`RUNNING / PRL25-B 训练与 S8/S16/S32/S48/S64/S80 六点曲线全部完成；下一正式 arm 为 PRL25-C`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -189,6 +189,46 @@ evaluation-complete SHA256 为
 四臂 full-model materialization 与静态验证均已完成；首批 S8（GPU 0--3）与 S32
 （GPU 4--7）的八个正式 worker 于 `2026-08-22 19:56 JST` 启动。该批完成后同一
 supervisor 自动运行 S48+S64，再以单次加载的 TP2 72B judge 并发评分四个 checkpoint。
+
+### 4.4 PRL25-B 六点学习曲线闭环（2026-08-22）
+
+S8/S32/S48/S64 四臂生成于 `2026-08-22 22:04 JST` 全部完成，每个 checkpoint 均覆盖
+2,240 个支持的单图任务；统一官方评分与四臂 `evaluation-complete` 于 `22:21 JST` 完成。
+至此 PRL25-B 的默认 `S8/S16/S32/S48/S64/S80` 六点曲线全部闭合。各节点使用完全相同的
+CoreDev-2511 任务、native-Crop 协议、temperature 1、master seed 42 和 S80 frozen RNG
+namespace。单位均为 `%`：
+
+| Checkpoint | Macro* | VStar | HRBench | BLINK single | OCR mean | MMMU single | MathVista | MathVerse macro |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| S8 | 59.0269 | 76.4398 | 65.0000 | 60.5556 | 47.4135 | 42.3792 | 67.0000 | **54.4000** |
+| S16 | 62.0842 | 77.4869 | **77.0000** | 58.8889 | 52.8325 | 44.9814 | 69.0000 | **54.4000** |
+| S32 | **63.5377** | 80.1047 | 73.0000 | **64.4444** | 54.8108 | **49.0706** | **71.3333** | 52.0000 |
+| S48 | 61.5559 | 76.4398 | 74.0000 | 59.4444 | 53.7285 | 47.2119 | 68.6667 | 51.4000 |
+| S64 | 61.9993 | 80.1047 | 73.5000 | 61.6667 | **56.2758** | 44.9814 | 65.6667 | 51.8000 |
+| S80 | 62.2288 | **81.6754** | 74.5000 | 58.8889 | 55.3358 | 46.4684 | 67.3333 | 51.4000 |
+
+S32 是六点中的 post-hoc 最佳 checkpoint，Macro* 相对 S16 为 `+1.4535 pp`，七项中
+VStar、BLINK、OCR、MMMU 和 MathVista 五项上升，HRBench 与 MathVerse 两项下降。这超过
+第 7 节的 `1 pp` 中程改善门槛，但比预先定义的 `>=1.5 pp` 强证据线低 `0.0465 pp`。
+此后 S48/S64/S80 相对 S16 分别为 `-0.5283/-0.0849/+0.1446 pp`，没有保持 S32 的
+改善。因此本 arm 支持“更多 step 可在中程产生有限改善”，但不支持“能力随训练长度持续
+单调提高”；S80 仍是预注册主终点，S32 只能作为完整曲线中明确标注的补充最佳点。
+
+四臂评测 ID 为
+`PRL25-B-CROP-EXACT-COREDEV2511-STEP8-STEP32-STEP48-STEP64-TEMP1-SEED42-UNIFIED-V1`。
+`paired-summary.json` SHA256 为
+`0f8287298a4d467cdb52918957cb84e307f76728d75a9249649e7fd1f62451c6`，
+`evaluation-complete` SHA256 为
+`2b89fbbc47cf41d0adc5bb9b288e695bb88fe25275cc3b9b4178d9f3d4661eb9`。
+
+本次评分暴露了资源调度缺口：四个 checkpoint 共用一个位于 GPU 2--3 的 TP2 72B judge，
+其余六张 GPU 在评分阶段空闲；judge 服务从启动到四臂 completion 约 `15 min`。这不影响
+结果身份或数值，但没有利用可并行的四个 TP2 实例。提交
+`2bbb5f9309d6b1d9dca25a81bd1855dbd100859e` 将后续多臂评分改为最多四个并发 judge：
+GPU `0--1/2--3/4--5/6--7` 分别绑定端口 `8012/8013/8014/8015`，各 arm 只访问自己的
+服务；所有实例先并发启动再等待 readiness，历史单端口结果仍可严格恢复验收。Ruff 与 60 个
+focused tests 通过。该修复不重算或改写本轮正式结果；约 8 分钟目标需在下一次多臂评分中
+实测确认。
 
 ## 5. Reward 合同
 
