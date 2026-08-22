@@ -30,6 +30,11 @@ _PRL25_B_STEP16_PLAN = (
     _ROOT
     / "configs/evaluation/prl25_b_crop_exact_step16_full_model_coredev2511_plan.json"
 )
+_PRL25_B_REMAINING_CURVE_PLAN = (
+    _ROOT
+    / "configs/evaluation/"
+    "prl25_b_crop_exact_step8_step32_step48_step64_full_model_coredev2511_plan.json"
+)
 _SPEC = importlib.util.spec_from_file_location("prl15_paired_evaluation", _TOOL)
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
@@ -192,10 +197,20 @@ def test_v3_full_model_plan_accepts_exact_crop_policy_run_owner() -> None:
 def test_prl25_learning_curve_endpoints_share_s80_frozen_rng_namespace() -> None:
     step16 = _MODULE._load_plan(_PRL25_B_STEP16_PLAN)
     step80 = _MODULE._load_plan(_PRL25_B_PLAN)
+    remaining = _MODULE._load_plan(_PRL25_B_REMAINING_CURVE_PLAN)
 
     assert step16["paired_rng"]["seed_namespace"] == (
         step80["paired_rng"]["seed_namespace"]
     )
+    assert remaining["paired_rng"]["seed_namespace"] == (
+        step80["paired_rng"]["seed_namespace"]
+    )
+    assert [(arm["name"], arm["optimizer_step"]) for arm in remaining["arms"]] == [
+        ("step8", 8),
+        ("step32", 32),
+        ("step48", 48),
+        ("step64", 64),
+    ]
 
 
 def test_v3_runtime_rejects_paired_rng_task_seed_and_protocol_drift(
