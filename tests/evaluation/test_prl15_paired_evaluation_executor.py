@@ -198,6 +198,7 @@ def test_prl25_learning_curve_endpoints_share_s80_frozen_rng_namespace() -> None
     step16 = _MODULE._load_plan(_PRL25_B_STEP16_PLAN)
     step80 = _MODULE._load_plan(_PRL25_B_PLAN)
     remaining = _MODULE._load_plan(_PRL25_B_REMAINING_CURVE_PLAN)
+    remaining_runtime = _MODULE._load_evaluation_runtime(remaining)
 
     assert step16["paired_rng"]["seed_namespace"] == (
         step80["paired_rng"]["seed_namespace"]
@@ -211,6 +212,10 @@ def test_prl25_learning_curve_endpoints_share_s80_frozen_rng_namespace() -> None
         ("step48", 48),
         ("step64", 64),
     ]
+    assert remaining_runtime.backend == _MODULE.FULL_MODEL_BACKEND
+    assert remaining["checkpoint_owner"]["completion_path"].endswith(
+        "global_step_64/tgvf_permanent_checkpoint_receipt.json"
+    )
 
 
 def test_v3_runtime_rejects_paired_rng_task_seed_and_protocol_drift(

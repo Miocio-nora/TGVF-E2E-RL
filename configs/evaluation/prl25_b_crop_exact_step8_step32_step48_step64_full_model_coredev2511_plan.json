@@ -39,8 +39,8 @@
   ],
   "checkpoint_owner": {
     "checkpoint_world_size": 8,
-    "completion_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/permanent-checkpoints/global_step_80/tgvf_permanent_checkpoint_receipt.json",
-    "completion_sha256": "d0d68f006898676bfea0518f3bf419fb70b1ec539b31d3a1b8e6d71c7649878f",
+    "completion_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/permanent-checkpoints/global_step_64/tgvf_permanent_checkpoint_receipt.json",
+    "completion_sha256": "6e608fd91f25908f558f6dc533e557d6882041ec8cbd58d0b5b486718a6d6a53",
     "config_path": "configs/policy/runs/prl_25_b_qwen3_instruct_full_crop_exact_bs16_n16_tfree_teacher25_80step_ws8.toml",
     "config_sha256": "e31780fb47814a28ef39484b614d92ad1a0bf4b4c9c11a6bf9c27a1dd0829094",
     "contract_type": "policy_e2e_crop_exact_run_config_v1",
@@ -132,4 +132,3 @@
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "unsupported_multi_image_count": 271
 }
-
