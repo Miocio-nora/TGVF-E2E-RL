@@ -2,7 +2,7 @@
 
 日期：2026-08-20；执行状态更新：2026-08-22（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B 训练与 S8/S16/S32/S48/S64/S80 六点曲线全部完成；下一正式 arm 为 PRL25-C`
+状态：`RUNNING / PRL25-B 六点曲线已完成；PRL25-C pure-TGVF 80-step 已正式启动并已绑定自动六节点评测`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -229,6 +229,31 @@ GPU `0--1/2--3/4--5/6--7` 分别绑定端口 `8012/8013/8014/8015`，各 arm 只
 服务；所有实例先并发启动再等待 readiness，历史单端口结果仍可严格恢复验收。Ruff 与 60 个
 focused tests 通过。该修复不重算或改写本轮正式结果；约 8 分钟目标需在下一次多臂评分中
 实测确认。
+
+### 4.5 PRL25-C pure-TGVF 正式启动与自动评测合同（2026-08-22）
+
+PRL25-C 已于 `2026-08-22 22:47 JST` 从 fresh S0 启动。正式 run 为
+`PRL-25-C-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-TEACHER25-80STEP-WS8`，
+run identity SHA256 为
+`272d6209be1247582c8c4b2f616609b55203646c2a4b26a4b075aad3960c9b02`。
+它使用 pure TGVF、Frozen RP67 Step-2000、BS16 × n16、Teacher25、full-Qwen update、
+constant LR `1e-6` 和 FMT2 `protocol_error_penalty=2.0`；没有 Crop、F+G visual reward
+或 policy LoRA。CPU preflight 复核了 GA1、每 step 4/16 teacher 和完整 80-step 调度；
+身份闸门通过后，8 个 actor/rollout worker 已在物理 GPU 0--7 初始化。启动 smoke 不混入
+scientific lineage。
+
+实现与监督器位于分支 `prl25-c-tgvf-80step`；代码/监督器提交为
+`b100d3d462bead2f5f2a0b4a365b4a38e59f5d2d`，正式配置绑定提交为
+`b87126ae291758545f929c4f06ffc098dd4a7886`，最终六点评测计划绑定提交为
+`9f4104b78ebcf8ba90c81d401fc591ab8ed3945a`。训练监督器在中断后只从同一 canonical checkpoint 自动恢复；只有 S80 永久
+checkpoint receipt、data、FSDP config 以及每类 8 个 model/optim/extra-state shard 全部完整，
+才自动交接评测。
+
+自动评测固定覆盖 `S8/S16/S32/S48/S64/S80`，共用同一 CoreDev-2511 任务、TGVF 协议、
+temperature 1、master seed 42 和逐题逐 turn paired RNG namespace。生成阶段使用全部 8 卡，
+每批并发两个四卡 checkpoint arm；评分阶段最多同时启动四个 TP2 Qwen2.5-72B judge，分别
+绑定 GPU `0--1/2--3/4--5/6--7`。任一 checkpoint 身份、冻结 RP67 或 completion receipt
+不匹配均 fail-closed；不会把 inference-complete 当作正式评分完成。
 
 ## 5. Reward 合同
 

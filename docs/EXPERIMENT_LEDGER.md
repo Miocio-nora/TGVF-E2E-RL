@@ -9930,3 +9930,30 @@ than inferred from a script name or prior conversation.
   acceptable, and 60 focused tests plus Ruff pass. The target eight-minute
   wall time remains an operational expectation pending the next measured run;
   this change does not rewrite the completed formal scores.
+
+### PRL25-C pure-TGVF 80-step formal launch and automatic six-point evaluation (2026-08-22)
+
+- Cell/status: `PRL-25-C-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-TEACHER25-80STEP-WS8`
+  / `RUNNING`; fresh S0 formal launch passed the execution-identity gate at
+  `2026-08-22 22:47 JST` and started eight actor/rollout initialization workers
+  on physical GPUs 0--7. No smoke trajectories enter the scientific lineage.
+- Fixed contract: Qwen3-VL-8B-Instruct full-policy update, frozen RP67 Step-2000,
+  pure `tgvf_focus_tool`, BS16 × n16, world8/FSDP2/GA1, canonical Teacher25
+  seed-42 schedule with exactly 4 teacher rows per 16-row step, constant LR
+  `1e-6`, maximum 6 tool calls and FMT2 protocol/tool-error penalty `-2`.
+  Crop, Focus/Target + Grounding reward and policy LoRA are disabled.
+- Provenance: run identity SHA256
+  `272d6209be1247582c8c4b2f616609b55203646c2a4b26a4b075aad3960c9b02`;
+  implementation/supervisor commit
+  `b100d3d462bead2f5f2a0b4a365b4a38e59f5d2d`; config-binding commit
+  `b87126ae291758545f929c4f06ffc098dd4a7886`; final evaluation-plan binding
+  commit `9f4104b78ebcf8ba90c81d401fc591ab8ed3945a`. The remote execution branch is
+  `prl25-c-tgvf-80step`.
+- Recovery/evaluation handoff: every step writes a recovery checkpoint and every
+  eighth step is permanent. Only a complete S80 receipt plus data/FSDP files and
+  all eight model/optimizer/extra-state shards unlocks the post-training
+  evaluator. The evaluator then automatically covers S8/S16/S32/S48/S64/S80
+  under one CoreDev-2511 temp1/seed42 paired-RNG contract. Generation consumes
+  all eight GPUs in two concurrent four-GPU arms; scoring launches up to four
+  TP2 Qwen2.5-72B judges on pairs 0--1, 2--3, 4--5 and 6--7. Missing or mismatched
+  checkpoint, RP67 or completion identity fails closed.
