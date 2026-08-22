@@ -3,7 +3,7 @@
   "evaluation_id": "PRL25-C-FROZEN-RP67-TFREE-TEACHER25-COREDEV2511-S8-S16-S32-S48-S64-S80-PAIRED-SEED-V1",
   "status": "ready",
   "policy_config": "configs/policy/runs/prl_25_c_qwen3_instruct_full_frozen_rp67_bs16_n16_tfree_teacher25_80step_ws8.toml",
-  "policy_config_sha256": "83d705cbde0d7ecf2deb508ecf7ca164a74824ea9c148587112fad2c5bae03fc",
+  "policy_config_sha256": "660de24de8e3b28a16a3ef3f70bbc2f6ab90857c3ebc704091a7c1c036b1ff49",
   "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
   "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
   "expected_task_count": 2511,
