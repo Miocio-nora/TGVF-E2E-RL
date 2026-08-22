@@ -9829,3 +9829,34 @@ than inferred from a script name or prior conversation.
   authorizes continuation of the same run from S39 toward the unchanged S80
   endpoint; it does not create a new arm or alter data, reward or optimizer
   identity.
+
+### PRL25-B exact-Crop S80 completion and CoreDev primary endpoint (2026-08-22)
+
+- Lifecycle/result: training `COMPLETE` through optimizer step 80; external
+  S80 CoreDev-2511 primary endpoint `RUNNING`. The scientific run retains its
+  original ID and config identity
+  `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`.
+  Metrics contain the exact sequence S1--S80; latest checkpoint state and the
+  permanent S80 8-rank model/optimizer/extra/project pair are complete.
+- Endpoint/trend: S80 recorded answer `66.80%`, FMT2 format-error `0.39%`,
+  mean reward `1.328`, successful-Crop trajectory rate `81.25%`, and
+  `23.31 min`. S73--S80 averaged answer `71.39%`, format error `0.59%`, mean
+  reward `1.416`, successful-Crop rate `81.98%`, and `25.04 min/step`.
+  S65--S72 had a higher `76.61%` internal answer mean, so S80 remains the
+  preregistered primary endpoint while intermediate checkpoints are only
+  supplemental learning-curve evidence.
+- Evaluation identity: the primary endpoint is
+  `PRL25-B-CROP-EXACT-COREDEV2511-STEP80-TEMP1-SEED42-UNIFIED-V1`, launched
+  at `2026-08-22 17:30 JST` on physical GPUs 0--3. It uses the frozen 2,511-task
+  manifest (2,240 supported single-image plus 271 unsupported multi-image),
+  native-Crop prompt `2b8b6d79...0dd2`, `image_zoom_in_tool`, Hermes parsing,
+  at most six calls, temperature 1, master seed 42, and official seven-suite
+  Macro* scoring with no GPT fallback.
+- Provenance/status: evaluation integration commit
+  `9e977c6b6b8a4714e2057ba5fe010afb33995bdb` adds a fail-closed Policy-E2E
+  full-model owner binding. The preflight verified the exact run config, S80
+  permanent receipt, committed FSDP pair, rank-file closure, continuous metrics
+  and native-Crop protocol; all 49 evaluator regression tests passed. Current
+  work is full-model materialization before GPU generation. No CoreDev score is
+  claimed until the immutable paired summary and evaluation-complete receipt
+  exist.

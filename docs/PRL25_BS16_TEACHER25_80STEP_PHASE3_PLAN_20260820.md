@@ -126,6 +126,25 @@ S0 receipt，checkpoint bridge 在载入后仍读取该旧标记，因而把实�
 focused tests 与 Ruff，允许同一 scientific run 从 S39 继续到原定 S80，不改变 reward、数据、
 优化器或 arm identity。
 
+### 4.3 PRL25-B S80 完成与主终点评测（2026-08-22）
+
+PRL25-B 已完成全部 80 个 optimizer steps；`metrics.jsonl` 连续包含 S1–S80，latest tracker、
+runtime policy receipt 和永久 S80 checkpoint 均闭合。S80 单步为 answer `66.80%`、FMT2
+format error `0.39%`、mean reward `1.328`、成功 Crop trajectory 比例 `81.25%`，用时
+`23.31 min`。最后八步 S73–S80 的均值为 answer `71.39%`、format error `0.59%`、
+mean reward `1.416`、成功 Crop trajectory 比例 `81.98%`、`25.04 min/step`。训练内部
+S65–S72 answer 均值 `76.61%` 高于最后八步，因此不能只用训练 reward 宣称长程改善，必须
+以外部 CoreDev 结果判定 S80，并把较早 checkpoint 仅作为预注册主终点之外的补充曲线。
+
+S80 CoreDev-2511 主终点评测于 `2026-08-22 17:30 JST` 启动。评测 ID 为
+`PRL25-B-CROP-EXACT-COREDEV2511-STEP80-TEMP1-SEED42-UNIFIED-V1`，固定 native-Crop
+visual prompt、`image_zoom_in_tool`、Hermes parser、最多 6 次调用、temperature 1、master
+seed 42 和七项 Macro* 官方评分。checkpoint owner 由 PRL25-B config、S80 永久 receipt、
+8-rank FSDP pair 与连续 80 行 metrics 联合证明；协议 owner 使用 Teacher25 native-Crop
+合同，prompt 哈希与训练完全一致。接入代码/计划提交为
+`9e977c6b6b8a4714e2057ba5fe010afb33995bdb`；当前状态为 full-model materialization / eval
+`RUNNING`，尚无可报告的外评分数。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
