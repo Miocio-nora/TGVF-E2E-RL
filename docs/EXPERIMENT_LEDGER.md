@@ -9962,6 +9962,33 @@ than inferred from a script name or prior conversation.
   the automatic six-point evaluator remains active. Consequently all 11 full
   checkpoint objects in this run remain protected until its evaluation closes.
 
+### PRL25-D Atomic Crop+TGVF 80-step queued handoff (2026-08-24)
+
+- Cell/status: `PRL-25-D-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-CROP-TGVF-TEACHER25-80STEP-WS8`
+  / `QUEUED`; a detached supervisor waits for PRL25-C's formal six-point
+  `evaluation-complete` receipt, then starts D from fresh S0 on physical GPUs
+  0--7. It does not accept inference-only or partial-arm completion as the
+  handoff gate.
+- Fixed contract: Qwen3-VL-8B-Instruct full-policy update, frozen RP67 Step-2000,
+  Atomic `tgvf_crop_tool`, BS16 × n16, world8/FSDP2/GA1, canonical Teacher25
+  seed-42 schedule with exactly 4 teacher rows per step, constant LR `1e-6`,
+  maximum 6 tool calls and FMT2 protocol/tool-error penalty `-2`. Focus/Target
+  and Grounding rewards are disabled; PRL25-E is explicitly deferred until
+  after D and is not part of this automatic handoff.
+- Provenance: run identity SHA256
+  `a0b8183875c38482da476e90a676c9b2ad401b100d452c73361d37b53157990c`;
+  config SHA256
+  `37a4f2bb64821dfcd9918d92432bd1e341020efd15bc936b0704e6570e187b1e`;
+  configuration/supervisor commit `ec0555b` on execution branch
+  `prl25-c-tgvf-80step`. CPU-only compose and contract checks passed; no
+  separate GPU smoke trajectories enter this scientific lineage.
+- Recovery/evaluation handoff: the trainer may resume only within the same run
+  identity and requires a complete permanent S80 checkpoint before automatic
+  evaluation. The evaluator covers S8/S16/S32/S48/S64/S80 with the frozen
+  CoreDev-2511 temp1/seed42 paired-RNG contract, two concurrent four-GPU
+  generation arms and up to four TP2 Qwen2.5-72B judges across GPU pairs
+  0--1/2--3/4--5/6--7.
+
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 
 - Decision: every retained scientific checkpoint identity is permanent as an

@@ -2,7 +2,7 @@
 
 日期：2026-08-20；执行状态更新：2026-08-24（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B 六点曲线已完成；PRL25-C 已完成 S80 训练，自动六节点评测仍在运行`
+状态：`RUNNING / PRL25-B 六点曲线已完成；PRL25-C 六节点评测运行中；PRL25-D 已排入自动交接`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -255,6 +255,30 @@ temperature 1、master seed 42 和逐题逐 turn paired RNG namespace。生成�
 绑定 GPU `0--1/2--3/4--5/6--7`。任一 checkpoint 身份、冻结 RP67 或 completion receipt
 不匹配均 fail-closed；不会把 inference-complete 当作正式评分完成。
 
+### 4.6 PRL25-D Atomic Crop+TGVF 自动交接合同（2026-08-24）
+
+用户于 `2026-08-24 03:37 JST` 冻结下一条正式线路：PRL25-C 六节点评测完成后，立即从
+fresh S0 启动 PRL25-D Atomic Crop+TGVF 80-step；PRL25-E Focus/Target + Grounding 不在
+本次自动队列中，留待 D 完成后另行启动。等待监督器会检查 C 的正式
+`evaluation-complete`，随后把全部物理 GPU `0--7` 交给 D，不以 inference-complete 或部分
+arm 完成作为交接条件。
+
+PRL25-D 正式 run 为
+`PRL-25-D-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-CROP-TGVF-TEACHER25-80STEP-WS8`，
+run identity SHA256 为
+`a0b8183875c38482da476e90a676c9b2ad401b100d452c73361d37b53157990c`。
+固定合同为 full-Qwen update、Frozen RP67 Step-2000、BS16 × n16、Teacher25、constant LR
+`1e-6`、最多 6 次 `tgvf_crop_tool` 调用和 FMT2
+`protocol_error_penalty=2.0`；Focus/Target 与 Grounding reward 均关闭。它使用已验证的
+Atomic 单工具协议，不切换到 native-pixel Crop backend，也不把 RP67 误作 policy LoRA。
+
+配置与监督器提交为 `ec0555b`（执行分支 `prl25-c-tgvf-80step`），配置文件 SHA256 为
+`37a4f2bb64821dfcd9918d92432bd1e341020efd15bc936b0704e6570e187b1e`。CPU-only preflight
+已通过 run-config compose、Atomic protocol、FMT2、GA1 和前 80 个 BS16 slice 的
+Teacher25 `4/16` 检查；不另建独立 GPU smoke lineage，首个 GPU step 即正式 S1。训练监督器
+允许同一身份断点恢复，并在完整 S80 门禁后自动评测
+`S8/S16/S32/S48/S64/S80`；生成与四路 TP2 judge 继续使用全部八张 GPU。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
@@ -324,9 +348,10 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
 ## 8. 顺序与资源口径
 
 正式启动前先冻结同一实现 commit，并分别做不进入科学结果的一步 smoke。按本期最新资源
-优先级，正式顺序为 `B → C → D → E → A`：先完成三条自研 T-free 主线，再进入 F/G 与
-conditional reward ablation。顺序不改变五臂均从 S0 开始的要求，也不改变 A/B、C/E 的
-matched 比较定义。
+优先级，前三条正式顺序为 `B → C → D`：先完成三条自研 T-free 主线，再进入 F/G 与
+conditional reward ablation。2026-08-24 的执行修订明确仅自动续接 D；PRL25-E Grounding
+留待 D 完成后另行启动，不提前占用训练档。该修订不改变五臂均从 S0 开始的要求，也不改变
+A/B、C/E 的 matched 比较定义。
 
 历史 BS16 实测只保留为旧 recipe 的资源背景，不作为新 exact-Crop 路径的保证：
 
