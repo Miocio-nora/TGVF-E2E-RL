@@ -9957,3 +9957,39 @@ than inferred from a script name or prior conversation.
   all eight GPUs in two concurrent four-GPU arms; scoring launches up to four
   TP2 Qwen2.5-72B judges on pairs 0--1, 2--3, 4--5 and 6--7. Missing or mismatched
   checkpoint, RP67 or completion identity fails closed.
+- Lifecycle update at `2026-08-24 02:29 JST`: training has durably completed
+  S80. `metrics.jsonl` contains 80 rows and the permanent S80 receipt exists;
+  the automatic six-point evaluator remains active. Consequently all 11 full
+  checkpoint objects in this run remain protected until its evaluation closes.
+
+### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
+
+- Decision: every retained scientific checkpoint identity is permanent as an
+  evaluation-ready compact object of approximately 16 GiB, not as a full
+  optimizer/FSDP recovery tree. Each completed 80-step arm additionally keeps
+  exactly one full S80 recovery object. S80 therefore has both compact and full
+  forms; intermediate and post-hoc-best steps do not permanently retain full
+  optimizer state after their evaluation/audit closes.
+- Safety boundary: active training may still keep its latest two rolling full
+  checkpoints and scheduled full snapshots. Source full state cannot be
+  released until the compact object has immutable provenance and digests,
+  independently loads through the formal evaluator, passes a deterministic
+  generation smoke, all planned evaluation is closed, and the sole full S80
+  recovery passes shard/optimizer/RNG/data-cursor validation. Smoke/canary
+  deletion is a separate destructive action; no checkpoint was deleted by this
+  documentation update.
+- Inventory at 2026-08-24: inode-deduplicated scanning under
+  `artifacts/policy/` found 125 independent full-training checkpoint objects.
+  103 formal/diagnostic identities (9.918 TiB) are compact candidates; 92 are
+  currently free of an accessing process, while PRL25-C's 11 objects remain
+  protected during its active six-point evaluation. Twenty-two non-scientific
+  smoke/canary/lifecycle/invalid objects (2.114 TiB) are explicit deletion
+  candidates after audit-record preservation and a fresh open-file check.
+- Current PRL25-B/C target: each arm has 11 identities at
+  S8/S16/S24/S32/S40/S48/S56/S64/S72/S79/S80 and already has compact bundles
+  for S8/S16/S32/S48/S64/S80. After materializing the five missing bundles per
+  arm and retaining one full S80 each, their estimated checkpoint footprint is
+  about 540.4 GiB, a net reduction of about 1.71 TiB from the current full-state
+  plus existing-compact layout.
+- Canonical policy, method, per-run compact inventory and deletion-candidate
+  list: `docs/POLICY_CHECKPOINT_STORAGE_COMPACTION_20260824.md`.

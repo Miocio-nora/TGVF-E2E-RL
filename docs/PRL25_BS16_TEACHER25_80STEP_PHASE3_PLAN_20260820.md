@@ -1,8 +1,8 @@
 # 第三期（PRL25）：BS16 Teacher25 80-step 统一实验计划
 
-日期：2026-08-20；执行状态更新：2026-08-22（Asia/Tokyo）
+日期：2026-08-20；执行状态更新：2026-08-24（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B 六点曲线已完成；PRL25-C pure-TGVF 80-step 已正式启动并已绑定自动六节点评测`
+状态：`RUNNING / PRL25-B 六点曲线已完成；PRL25-C 已完成 S80 训练，自动六节点评测仍在运行`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -292,11 +292,13 @@ PRL24-C 身份。F/G 上升但 answer accuracy 或 CoreDev 下降时，按 rewar
   tool call/success/error、重复调用、response length、zero-advantage group、loss、gradient norm、
   clip/ratio/KL diagnostics。轨迹审计数据必须在允许人工停止前完成 publication，避免重现
   PRL24-D “checkpoint 有效但 S1 metrics 未落盘”的信息缺口。
-- **每 1 step** 写一次完整 optimizer recovery checkpoint，rolling 只保留最近 2 个；
-  `S8/S16/S24/S32/S40/S48/S56/S64/S72/S80` 每 8 step 固定长期保留，S0 另做共享
-  evaluation，S1 作为早期恢复/速度校准点。中间 endpoint 评测/审计完成后可只保留
-  model-only snapshot 与 receipt；S80 和最终 winner 保留完整 optimizer state，控制约
-  140 GB/完整 checkpoint 的存储压力。
+- **每 1 step** 写一次完整 optimizer recovery checkpoint，活跃训练期间 rolling 只保留最近
+  2 个；`S8/S16/S24/S32/S40/S48/S56/S64/S72/S80` 每 8 step 暂存完整快照，S0 另做共享
+  evaluation，S1 作为早期恢复/速度校准点。训练与既定评测闭环后，每个保留 step 都转为
+  实测约 `15.89 GiB` 的可独立测评 compact checkpoint；每个完成 S80 的正式 arm 只额外
+  保留一个完整 S80 recovery。S80 同时保留 compact 与 full recovery，不再为 intermediate
+  或 post-hoc winner 永久保留 optimizer/FSDP state。完整门禁与 2026-08-24 现存对象清单见
+  [checkpoint 存储缩减守则](POLICY_CHECKPOINT_STORAGE_COMPACTION_20260824.md)。
 - 永久保留不等于默认全部外评。常规外评节点为 `S8/S16/S32/S48/S64/S80`；其余永久节点
   用于恢复、异常定位和按需补评。S8/S16 是早期学习与平台基线，不得因已有历史 Crop
   S8/S16 而跳过本次 same-run、same-protocol 的对应节点。
