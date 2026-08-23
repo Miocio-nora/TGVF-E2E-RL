@@ -10033,6 +10033,16 @@ than inferred from a script name or prior conversation.
   reward is `0.66015625`; FMT2 remains `6/256 = 0.0234375`, and all `309`
   Atomic calls produced TGVF observations with no tool error. The S1-to-S2
   answer change is not treated as a trend from only two batches.
+- Formal S3: metrics published at `07:40:52 JST` after `1,067.641 s`
+  (`17.79 min`). Generated policy text fell to `41,022` tokens from S2's
+  `70,541`, while mean total visual tokens rose from `417.94` to `914.36`.
+  Together with approximately `86.5%` host CPU idle and active GPUs, the
+  step-time variation is attributed provisionally to Atomic crop visual load,
+  not CPU contention or a stall. The S2--S3 mean is `13.83 min/step`, close to
+  the historical PRL22 Atomic `14.03 min/step`; the current operational ETA is
+  therefore about `2026-08-25 01:25--01:45 JST`, pending S4--S8. S3 answer is
+  `0.8046875`, FMT2 is `9/256 = 0.03515625`, and all `260` Atomic calls
+  succeeded with no tool error.
 
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 
