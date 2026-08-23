@@ -345,6 +345,18 @@ Atomic Crop+TGVF 自身的稳态 CPU 瓶颈。按 S1 含完整 checkpoint 粗算
 `22--24 h`；该区间必须用无冷启动的 S2 与后续窗口重新校准，不把 S1
 单点当作稳态速率。
 
+S2 于 `2026-08-24 07:23:02 JST` 发布，将单步完整耗时降至
+`592.300 s = 9 min 52.3 s`：publication 前 `524.566 s`、weight sync
+`5.528 s`、rolling recovery checkpoint `62.202 s`。因此 S1 的 `22--24 h`
+冷启动粗算已被否定；若机械地以 S2（已经包含每步 checkpoint）外推剩余 78 步，
+训练约还需 `12.83 h`，对应约 `20:13 JST`。这一时间仍是单个稳态候选点，正式运行
+窗口须用 S3--S8 的序列长度与耗时波动再校准。
+
+S2 answer reward 为 `0.66015625`，低于 S1 的 `0.7265625`，但 FMT2 error 保持
+`0.0234375 = 6/256`，没有出现 format 跳升；309 次 Atomic tool call 全部成功产生
+TGVF observation，tool error 为空。两步不足以把 answer 下降解释为训练趋势，后续按
+窗口而非单点判断。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
@@ -428,6 +440,7 @@ A/B、C/E 的 matched 比较定义。
 | PRL22 pure TGVF，BS16 × n16 | `10.43 min/step` | PRL25-C 的历史 recipe-level 容量锚点 |
 | PRL22 Atomic Crop+TGVF，BS16 × n16 | `14.03 min/step` | PRL25-D 的历史 recipe-level 容量锚点 |
 | PRL25-D Atomic Crop+TGVF 正式 S1，BS16 × n16 | `17.63 min/step` | 含 `1.06 min` 完整 checkpoint 和首步冷启动；S2 后再定稳态 ETA |
+| PRL25-D Atomic Crop+TGVF 正式 S2，BS16 × n16 | `9.87 min/step` | 含 `1.04 min` rolling recovery checkpoint；以 S3--S8 窗口确认稳态 |
 
 PRL25-B 正式 run 于 2026-08-21 00:32:18 JST 启动，run identity 为
 `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`。正式首个

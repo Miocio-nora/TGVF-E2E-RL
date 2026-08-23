@@ -10024,6 +10024,15 @@ than inferred from a script name or prior conversation.
   checkpoint time. A complete approximately `96 GiB` S1 recovery tree and
   `latest_checkpointed_iteration.txt=1` are present. The run continues to S80;
   S2 and later windows, not cold-start S1 alone, determine the steady-state ETA.
+- Formal S2: metrics atomically published at `2026-08-24 07:23:02 JST` after
+  `592.300 s` end to end (`524.566 s` before publication, `5.528 s` weight sync
+  and `62.202 s` rolling checkpoint). This `9.87 min/step` candidate steady rate
+  invalidates the S1-only `22--24 h` estimate: a mechanical S2 projection for
+  the remaining 78 already-checkpointed steps is `12.83 h`, or about
+  `20:13 JST`, but S3--S8 must establish the operational window. S2 answer
+  reward is `0.66015625`; FMT2 remains `6/256 = 0.0234375`, and all `309`
+  Atomic calls produced TGVF observations with no tool error. The S1-to-S2
+  answer change is not treated as a trend from only two batches.
 
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 
