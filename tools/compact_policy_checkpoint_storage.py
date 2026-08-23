@@ -33,6 +33,7 @@ WORKSPACE = Path(__file__).resolve().parents[1]
 ARTIFACTS = WORKSPACE / "artifacts/policy"
 BASE_MODEL = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct")
 SCHEMA = "tgvf.policy-checkpoint-compaction.v1"
+POST_VALIDATION_SCHEMA = "tgvf.policy-checkpoint-post-validation.v1"
 DELETION_SCHEMA = "tgvf.non-scientific-checkpoint-deletion.v1"
 EXCLUDED_FAMILIES = ("PRL-25-B", "PRL-25-C")
 ADAPTER_PREFIX = "tgvf_adapter."
@@ -576,8 +577,40 @@ def compact_one(candidate: Candidate, *, prune_source: bool) -> dict[str, object
     bundle = candidate.run / "compact-checkpoints" / f"global_step_{candidate.step}"
     _reject_excluded(bundle)
     if bundle.exists():
-        receipt = _json(bundle / "compaction-receipt.json")
-        _validate_hf_model(bundle / "model")
+        receipt_path = bundle / "compaction-receipt.json"
+        receipt = _json(receipt_path)
+        model_files = _validate_hf_model(bundle / "model")
+        model_tree_sha = _canonical_sha256(model_files)
+        if model_tree_sha != receipt.get("model_tree_sha256"):
+            raise RuntimeError("existing compact model tree differs from its receipt")
+        smoke = receipt.get("generation_smoke")
+        if not isinstance(smoke, Mapping) or smoke.get("repeat_identical") is not True:
+            post_validation_path = bundle / "post-compaction-validation.json"
+            expected = {
+                "schema_version": POST_VALIDATION_SCHEMA,
+                "compaction_receipt_sha256": _sha256(receipt_path),
+                "model_tree_sha256": model_tree_sha,
+            }
+            if post_validation_path.exists():
+                observed = _json(post_validation_path)
+                if any(observed.get(key) != value for key, value in expected.items()):
+                    raise RuntimeError("post-compaction validation identity differs")
+                repeated = observed.get("generation_smoke")
+                if (
+                    not isinstance(repeated, Mapping)
+                    or repeated.get("repeat_identical") is not True
+                ):
+                    raise RuntimeError("post-compaction deterministic smoke is absent")
+            else:
+                repeated = _cpu_generation_smoke(bundle / "model")
+                _write_json(
+                    post_validation_path,
+                    {
+                        **expected,
+                        "validated_at_utc": _utc_now(),
+                        "generation_smoke": repeated,
+                    },
+                )
         if prune_source:
             for alias in candidate.aliases:
                 _reject_excluded(alias)
