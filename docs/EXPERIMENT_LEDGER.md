@@ -10044,5 +10044,17 @@ than inferred from a script name or prior conversation.
   legacy single-generation receipts received separate double-generation
   post-validation receipts. The execution tool and legacy validation hardening
   are main commits `5556e71` and `775b018`.
+- Final execution update at `2026-08-24 05:09 JST`: the non-B/C formal
+  allowlist closed at `81/81` canonical compact objects (10 full-Qwen and 71
+  full-Qwen+TGVF; zero Qwen policy-LoRA), totalling `1,421,573,818,442` model
+  bytes. A four-shard read-only audit recomputed and matched all 81 BF16 model
+  trees and emitted 81 success records. A separate receipt/protocol audit
+  verified all 71 TGVF sidecars, deterministic-generation evidence for every
+  object (including two bound legacy post-validations), and zero surviving
+  source aliases. Reverse scanning confirms PRL25-B/C still have 11 independent
+  full checkpoints each, no compact receipts, all five protected B payloads
+  remain, and the deletion receipt contains zero B/C targets. Shared-filesystem
+  free space was approximately 12 TiB at close; byte-accounting for the
+  destructive subset remains pinned to the immutable deletion receipt.
 - Canonical policy, method, per-run compact inventory and deletion-candidate
   list: `docs/POLICY_CHECKPOINT_STORAGE_COMPACTION_20260824.md`.

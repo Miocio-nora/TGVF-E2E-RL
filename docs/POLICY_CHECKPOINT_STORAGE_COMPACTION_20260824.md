@@ -2,7 +2,7 @@
 
 日期：2026-08-24（Asia/Tokyo）
 
-状态：`EXECUTING / 非 PRL25-B/C：17 个非科学 payload 与 1 个 failed tree 已删除；截至 04:02 JST 已完成 34/81 个 compact 对象`
+状态：`COMPLETE/PASS / 非 PRL25-B/C：81/81 个科学对象已 compact 并通过全量复核；17 个非科学 payload 与 1 个 failed tree 已删除`
 
 ## 1. 最终存储口径
 
@@ -165,3 +165,26 @@ checkpoint，不计入上述 22 个对象；该 failed tree 已与 17 个非 B/C
 
 本文件是当前 storage source of truth；各实验计划只引用本规则，不再各自定义不同的永久
 checkpoint 保留方式。
+
+## 8. 最终执行与复核（2026-08-24 05:09 JST）
+
+本轮非 PRL25-B/C 处理已闭环：
+
+- 显式科学 allowlist 的 `81/81` 个对象均已发布 canonical compact receipt，其中
+  `10` 个为 full-Qwen，`71` 个为 full-Qwen+TGVF，没有将 Qwen policy-LoRA 误展开为
+  full model。compact Qwen 总大小为 `1,421,573,818,442 bytes`。
+- 四分片只读终审对 81 个 bundle 全部重新执行 safetensors index/parameter closure、
+  全 BF16 dtype、config/processor 加载以及实际 model-tree SHA-256 与 receipt 比对；
+  `81/81` 个 success record 且四个 worker 全部以退出码 0 结束。证据在
+  `artifacts/policy/checkpoint-storage-compaction-20260824/final-audit/`。
+- `71/71` 份 TGVF protocol sidecar 的 manifest/tensor SHA-256、tensor bytes、parameter count、
+  optimizer step 和 weights identity 均与 receipt 一致；哈希了 94 个按 inode 去重的实际
+  sidecar 文件。全部 81 个对象均有双次确定性 CPU generation 证据；其中 2 个旧
+  receipt 通过绑定 receipt/model-tree identity 的 `post-compaction-validation.json` 补齐。
+- 81 个对象的 source aliases 剩余数为 `0`。反向扫描确认 PRL25-B 和 PRL25-C 仍各保留
+  11 个独立 full checkpoint（S8/S16/S24/S32/S40/S48/S56/S64/S72/S79/S80），两个 family
+  均没有 compact receipt；PRL25-B 的 5 个受保护 C0/F2/invalid checkpoint 全部存在，删除
+  receipt 中的 B/C target 数为 `0`。
+- 文件系统可用空间从初始盘点的约 `3.2 TiB` 上升到终审时约 `12 TiB`（`85%`
+  used）。这是全共享文件系统的观测值，不将其全部归因于本任务；本任务的可审计删除量
+  仍以第 6 节 receipt 记录的 bytes 为准。
