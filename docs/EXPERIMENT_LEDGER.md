@@ -10010,26 +10010,39 @@ than inferred from a script name or prior conversation.
   exactly one full S80 recovery object. S80 therefore has both compact and full
   forms; intermediate and post-hoc-best steps do not permanently retain full
   optimizer state after their evaluation/audit closes.
+- Representation boundary: the current executable allowlist contains 10
+  full-Qwen and 71 full-Qwen-plus-TGVF objects, with zero Qwen policy-LoRA
+  objects. Historical Qwen-LoRA artifacts remain adapter bundles bound to an
+  immutable base and must not be expanded to 16 GiB merely to match the
+  full-Qwen storage number. A TGVF adapter namespace is distinct from Qwen
+  policy LoRA and is retained as content-addressed protocol state beside the
+  compact full-Qwen model.
 - Safety boundary: active training may still keep its latest two rolling full
   checkpoints and scheduled full snapshots. Source full state cannot be
   released until the compact object has immutable provenance and digests,
   independently loads through the formal evaluator, passes a deterministic
   generation smoke, all planned evaluation is closed, and the sole full S80
-  recovery passes shard/optimizer/RNG/data-cursor validation. Smoke/canary
-  deletion is a separate destructive action; no checkpoint was deleted by this
-  documentation update.
-- Inventory at 2026-08-24: inode-deduplicated scanning under
-  `artifacts/policy/` found 125 independent full-training checkpoint objects.
-  103 formal/diagnostic identities (9.918 TiB) are compact candidates; 92 are
-  currently free of an accessing process, while PRL25-C's 11 objects remain
-  protected during its active six-point evaluation. Twenty-two non-scientific
-  smoke/canary/lifecycle/invalid objects (2.114 TiB) are explicit deletion
-  candidates after audit-record preservation and a fresh open-file check.
+  recovery passes shard/optimizer/RNG/data-cursor validation.
+- Initial inventory at 2026-08-24: inode-deduplicated scanning under
+  `artifacts/policy/` found 125 independent full-training checkpoint objects:
+  103 formal/diagnostic identities (9.918 TiB) plus 22 non-scientific identities
+  (2.114 TiB). The subsequent user scope excludes the entire PRL25-B/C family,
+  leaving an executable compact allowlist of 81 formal objects and a deletion
+  allowlist of 17 non-scientific payloads plus one small failed tree.
 - Current PRL25-B/C target: each arm has 11 identities at
   S8/S16/S24/S32/S40/S48/S56/S64/S72/S79/S80 and already has compact bundles
   for S8/S16/S32/S48/S64/S80. After materializing the five missing bundles per
   arm and retaining one full S80 each, their estimated checkpoint footprint is
   about 540.4 GiB, a net reduction of about 1.71 TiB from the current full-state
   plus existing-compact layout.
+- Execution update at `2026-08-24 04:02 JST`: 17 non-B/C payloads and the failed
+  tree were deleted after a path-exact inventory and process check; the receipt
+  records `1.695879 TiB` apparent and `1.648638 TiB` allocated bytes as
+  irrecoverable. PRL25-B/C were untouched. Two disjoint compact workers are
+  processing the 81-object allowlist; 34 canonical receipts currently exist,
+  all observed bundles pass the BF16/model-index/source-pruned gate, and two
+  legacy single-generation receipts received separate double-generation
+  post-validation receipts. The execution tool and legacy validation hardening
+  are main commits `5556e71` and `775b018`.
 - Canonical policy, method, per-run compact inventory and deletion-candidate
   list: `docs/POLICY_CHECKPOINT_STORAGE_COMPACTION_20260824.md`.

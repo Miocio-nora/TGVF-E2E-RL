@@ -2,7 +2,7 @@
 
 日期：2026-08-24（Asia/Tokyo）
 
-状态：`DECIDED / INVENTORIED / NO DELETION EXECUTED`
+状态：`EXECUTING / 非 PRL25-B/C：17 个非科学 payload 与 1 个 failed tree 已删除；截至 04:02 JST 已完成 34/81 个 compact 对象`
 
 ## 1. 最终存储口径
 
@@ -38,8 +38,9 @@ checkpoint 的科学身份继续永久保留，但永久保留的默认形态改
 
 现有 PRL25-B `runtime/full-model-hf` 与 PRL25-C `runtime/qwen-only-bundle` 都已证明约 16 GiB
 merged Qwen 模型可供 evaluator 加载，但只有补齐上述 provenance、digest 和独立加载 receipt 后，
-才可晋升为 canonical compact checkpoint。删除来源 full state 是后续独立的破坏性步骤，不能和
-materialize 命令合并执行。
+才可晋升为 canonical compact checkpoint。删除来源 full state 是显式的破坏性阶段；执行器可以
+在同一条逐对象命令中完成 materialize 与 prune，但必须先原子发布并复核 compact receipt、完整
+BF16 parameter closure、文件 SHA-256 和双次确定性 CPU generation，任何门禁失败都不得进入 prune。
 
 ## 3. 2026-08-24 全库盘点结论
 
@@ -47,15 +48,17 @@ materialize 命令合并执行。
 `actor/model_world_size_*_rank_0.pt` 识别；rolling/permanent hardlink alias 按 rank-0 model
 shard inode 去重，大小由每个独立 checkpoint 目录的 `du -B1` 统计。因而下列“对象数”不是路径数。
 
-| 类别 | 独立对象 | 当前 full-state 占用 | 当前动作 |
+| 类别 | 独立对象 | 盘点时 full-state 占用 | 当前动作 |
 |---|---:|---:|---|
-| 正式或诊断身份，转 compact | 103 | 9.918 TiB | 92 个可开始；PRL25-C 的 11 个暂缓释放 |
-| smoke/canary/lifecycle/invalid，删除候选 | 22 | 2.114 TiB | 只登记；审批后另行删除 |
+| 正式或诊断身份，转 compact | 103 | 9.918 TiB | 81 个非 B/C 对象执行中；PRL25-B/C 共 22 个严格排除 |
+| smoke/canary/lifecycle/invalid，删除候选 | 22 | 2.114 TiB | 17 个非 B/C payload 已删除；5 个 PRL25-B payload 严格排除 |
 | 合计 | 125 | 12.032 TiB | 不含非 checkpoint 日志、评测结果和数据 |
 
-当前文件系统约 `75 TiB`，已用约 `72 TiB`，可用约 `3.2 TiB`（96% used）。进程核对仅发现
-PRL25-C 六点评测仍在访问本盘点中的 run；因此当前可进入 compact materialization 队列的是
-`103 - 11 = 92` 个对象。这里的“可开始”不等于允许立即删除来源 full state，仍须逐个通过第 2 节门禁。
+初始盘点时文件系统约 `75 TiB`，已用约 `72 TiB`，可用约 `3.2 TiB`（96% used）。用户随后
+要求整个 PRL25-B/C family 暂不处理，因此本次 destructive allowlist 不是旧的 92 个“空闲对象”，
+而是同时排除 B/C 共 22 个正式对象后的 **81 个**。截至 `2026-08-24 04:02 JST`，34 个 compact
+receipt 已落盘；同期文件系统可用空间约 `6.8 TiB`。每个对象仍须逐个通过第 2 节门禁，不能用
+累计数量代替单对象验证。
 
 若 103 个对象全部按当前实测 15.89 GiB 转换，并仅为已完成的 PRL25-B/C 各保留一个 full S80，
 其 checkpoint 主体约为 `1.60 TiB compact + 0.19 TiB recovery`。这是按现存对象计算的容量口径，
@@ -69,16 +72,19 @@ PRL25-C 六点评测仍在访问本盘点中的 run；因此当前可进入 comp
 
 | Arm | full 身份 | 已有约 16 GiB bundle | 尚需 materialize | full state 释放门禁 |
 |---|---:|---:|---:|---|
-| PRL25-B exact Crop | 11 | 6：S8/S16/S32/S48/S64/S80 | 5：S24/S40/S56/S72/S79 | 可实施；最终只留 full S80 |
-| PRL25-C pure TGVF | 11 | 6：S8/S16/S32/S48/S64/S80 | 5：S24/S40/S56/S72/S79 | 六点评测正在运行，暂不释放任何 full state |
+| PRL25-B exact Crop | 11 | 6：S8/S16/S32/S48/S64/S80 | 5：S24/S40/S56/S72/S79 | 本轮整个 family 严格排除，未处理 |
+| PRL25-C pure TGVF | 11 | 6：S8/S16/S32/S48/S64/S80 | 5：S24/S40/S56/S72/S79 | 本轮整个 family 严格排除；六点评测仍在运行 |
 
 两臂完成后目标占用约为 `349.6 GiB` compact checkpoints 加 `190.8 GiB` 两个 full S80，合计
 约 `540.4 GiB`。与当前 full state 加已有 12 个 compact bundle 相比，新增 10 个 compact
 bundle 后，预计净释放约 `1.71 TiB`；删除 20 个非 S80 full state 的毛释放量约 `1.86 TiB`。
 
-## 5. 可缩减对象清单
+## 5. 初始可缩减对象清单与本轮 allowlist
 
-下表共 103 个对象；大小已按 hardlink 去重。除 PRL25-C 外，盘点时未发现进程使用这些 run。
+下表是初始盘点的 103 个对象；大小已按 hardlink 去重。当前执行器的显式 allowlist 只包含前
+22 个 run 的 **81 个**对象，最后两行 PRL25-B/C 共 22 个对象全部不在程序 allowlist 中。
+截至 `2026-08-24 04:02 JST`，81 个目标中已有 34 个写出 canonical compact receipt 并释放
+对应 source aliases；两个分片 worker 正继续处理其余对象。
 
 | Run | 对象数 | Full 占用 | Steps |
 |---|---:|---:|---|
@@ -113,8 +119,9 @@ PRL24-D S1 只有 runtime/checkpoint 证据、没有 efficacy 结论；依照“
 
 ## 6. Smoke/canary 可删除候选
 
-下表只统计 full checkpoint 权重。删除后仍保留小体积的 config、log、metrics、receipt、错误摘要
-与本清单；本轮没有删除任何文件。
+下表是初始的 22 个 full-checkpoint 删除候选。删除后仍保留小体积的 config、log、metrics、
+receipt、错误摘要与本清单。依照“整个 PRL25-B/C 暂不处理”的后续指令，前 14 行共 17 个非 B/C
+payload 已删除，最后 3 行共 5 个 PRL25-B payload 保持原样。
 
 | Run/子目录 | 对象数 | Full 占用 | 理由 |
 |---|---:|---:|---|
@@ -137,20 +144,24 @@ PRL24-D S1 只有 runtime/checkpoint 证据、没有 efficacy 结论；依照“
 | **合计** | **22** | **2.114 TiB** |  |
 
 另有 `PRL-20-R0-C0 ... failed-fsdp-collective-mismatch` 目录约 `0.13 GiB`，没有形成 full
-checkpoint，可作为低优先级失败目录清理项，不计入上述 22 个对象。
+checkpoint，不计入上述 22 个对象；该 failed tree 已与 17 个非 B/C payload 一并删除。不可恢复
+删除 receipt 位于
+`artifacts/policy/checkpoint-storage-compaction-20260824/non-scientific-deletion-receipt.json`，
+记录 18 个 target、apparent `1.695879 TiB`、allocated `1.648638 TiB`，inventory SHA-256 为
+`e78abf39c3ebfd0ea885020afa843ae888c5f2863611fde0b99fcf8a7cbf0ed9`。
 
 ## 7. 实施顺序与删除门禁
 
-1. 先把 PRL25-B 已有六个 merged 目录晋升为 canonical compact，并 materialize
-   S24/S40/S56/S72/S79；独立加载验证全部 11 个对象。
-2. 验证 PRL25-B 唯一 full S80 recovery 后，才释放 S8--S72 与 S79 的 full model/optimizer
-   state；保留 S80 compact 与一个 full recovery。
-3. PRL25-C 六点评测 `evaluation-complete` 前，不 compact-in-place、不删除、不移动任何 full
-   checkpoint。评测闭环后按与 B 相同的 11 compact + 1 full-S80 规则处理。
-4. 旧正式/诊断 run 按第 5 节逐个 materialize、校验，再释放原 full state。一次只处理一个
-   checkpoint，先记录空间和 digest，再删除来源；失败立即停止，不批量越过错误。
-5. 第 6 节删除候选需再次确认没有打开文件或外部依赖，先保存 audit receipt，再单独执行删除。
-   不使用模糊 glob，不删除整个 `artifacts/policy` run root。
+1. 当前只处理第 5 节前 22 个 run 的 81 个非 B/C 正式/诊断对象；逐个 materialize、校验并在
+   immutable receipt 落盘后释放 source aliases。两个 worker 使用互斥分片位置，不处理模糊 glob。
+2. PRL25-B/C 的 22 个正式对象和 5 个非科学对象均不在当前程序 allowlist；即使显式传入相关
+   路径，执行器也按 family 名称 fail-closed。之后是否处理必须另立批次和门禁。
+3. 17 个非 B/C smoke/canary/lifecycle payload 与一个 failed tree 已完成不可恢复删除；删除前
+   保存逐文件 inventory 和 receipt，未删除任何 run root、日志、metrics 或评测结果。
+4. 全部 81 个对象完成后，重新扫描 receipt、BF16 closure、确定性 generation、TGVF sidecar、
+   source-alias 消失和剩余磁盘占用；验证失败的对象必须单独返工，不能用总数掩盖。
+5. PRL25-C 六点评测和 PRL25-D 训练/评测优先；若缩减 worker 尚未在 D 启动前完成，应暂停存储
+   作业，避免其 CPU/I/O 与正式训练竞争。
 
 本文件是当前 storage source of truth；各实验计划只引用本规则，不再各自定义不同的永久
 checkpoint 保留方式。
