@@ -9957,3 +9957,24 @@ than inferred from a script name or prior conversation.
   all eight GPUs in two concurrent four-GPU arms; scoring launches up to four
   TP2 Qwen2.5-72B judges on pairs 0--1, 2--3, 4--5 and 6--7. Missing or mismatched
   checkpoint, RP67 or completion identity fails closed.
+
+### PRL25-D Atomic Crop+TGVF launch-recovery binding (2026-08-24)
+
+- Cell/status: `PRL-25-D-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-CROP-TGVF-TEACHER25-80STEP-WS8`
+  / `RETRYING PRE-S0`. The C-to-D handoff closed PRL25-C's six-point evaluation
+  and admitted D only after two consecutive checks found physical GPUs 0--7
+  idle. The first formal launcher attempt at `2026-08-24 06:04 JST` then
+  stopped at the repository execution-identity gate, before trainer GPU
+  allocation, rollout, optimizer mutation, metrics or checkpoint publication.
+- Recovery code parent `fbf6762` extends the pinned local Qwen2.5-72B scorer
+  endpoint validation from canonical port 8012 to evaluator-owned ports
+  8012--8015 and adds an exclusive, two-poll GPU 0--7 admission gate before
+  every D training attempt. The focused evaluator suites pass 72 tests and
+  Ruff passes. These operational changes do not alter D's policy, data order,
+  optimizer, reward, sampling, model, RP67 or tool-protocol identity.
+- This ledger-binding commit authorizes the clean recovery descendant of the
+  configured D launch commit. The retry remains a fresh S0 run: full Qwen
+  update, frozen RP67 Step-2000, Atomic `tgvf_crop_tool`, BS16 x n16,
+  world8/FSDP2/GA1, Teacher25, LR `1e-6`, maximum six tool calls and FMT2
+  penalty `-2`. Focus/Target and Grounding rewards remain disabled; PRL25-E is
+  deferred and must not be launched by this handoff.
