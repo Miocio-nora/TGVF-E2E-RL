@@ -24,6 +24,36 @@ _SOURCE_RUN = "T20260815_Gdeadbeef"
 _DESTINATION_RUN = "T20260815_G01234567"
 
 
+@pytest.mark.parametrize("port", [8012, 8013, 8014, 8015])
+def test_judge_base_url_accepts_evaluator_owned_local_ports(port: int) -> None:
+    expected = "http://127.0.0.1:8012/v1"
+
+    assert (
+        _MODULE._validate_judge_base_url(f"http://127.0.0.1:{port}/v1/", expected)
+        == f"http://127.0.0.1:{port}/v1"
+    )
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [
+        "http://127.0.0.1:8011/v1",
+        "http://127.0.0.1:8016/v1",
+        "http://localhost:8013/v1",
+        "http://127.0.0.2:8013/v1",
+        "https://127.0.0.1:8013/v1",
+        "http://127.0.0.1:8013/other",
+        "http://user@127.0.0.1:8013/v1",
+    ],
+)
+def test_judge_base_url_rejects_non_pinned_deployment(observed: str) -> None:
+    with pytest.raises(RuntimeError, match="pinned local deployment"):
+        _MODULE._validate_judge_base_url(
+            observed,
+            "http://127.0.0.1:8012/v1",
+        )
+
+
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")

@@ -10,6 +10,9 @@ log_root="$training_root/logs"
 post_train_eval="$repo_root/tools/supervise_prl25_d_atomic_six_point_evaluation.sh"
 max_restarts=${PRL25_D_TRAIN_MAX_RESTARTS:-20}
 cooldown_seconds=${PRL25_D_TRAIN_RESTART_COOLDOWN_SECONDS:-60}
+gpu_wait_poll_seconds=${PRL25_D_GPU_WAIT_POLL_SECONDS:-30}
+gpu_wait_report_polls=${PRL25_D_GPU_WAIT_REPORT_POLLS:-30}
+gpu_idle_memory_limit_mib=${PRL25_D_GPU_IDLE_MEMORY_LIMIT_MIB:-1024}
 
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   echo "OPENROUTER_API_KEY is required for the matched answer judge" >&2
@@ -86,6 +89,39 @@ for stem in ("model", "optim", "extra_state"):
 PY
 }
 
+wait_for_target_gpus() {
+  local stable_polls=0
+  local poll_count=0
+  while (( stable_polls < 2 )); do
+    poll_count=$((poll_count + 1))
+    local busy=()
+    local gpu
+    for gpu in {0..7}; do
+      local used_mib
+      used_mib=$(nvidia-smi -i "$gpu" --query-gpu=memory.used --format=csv,noheader,nounits | tr -d '[:space:]')
+      if [[ ! "$used_mib" =~ ^[0-9]+$ ]]; then
+        echo "could not read GPU $gpu memory occupancy; retrying" >&2
+        busy+=("$gpu:unknown")
+      elif (( used_mib > gpu_idle_memory_limit_mib )); then
+        busy+=("$gpu:${used_mib}MiB")
+      fi
+    done
+    if (( ${#busy[@]} == 0 )); then
+      stable_polls=$((stable_polls + 1))
+      echo "PRL25-D GPU admission check ${stable_polls}/2 passed"
+    else
+      stable_polls=0
+      if (( poll_count == 1 || poll_count % gpu_wait_report_polls == 0 )); then
+        echo "PRL25-D waiting for exclusive GPUs 0-7; busy: ${busy[*]}"
+      fi
+    fi
+    if (( stable_polls < 2 )); then
+      sleep "$gpu_wait_poll_seconds"
+    fi
+  done
+  touch "$control_root/gpus-0-7-admitted"
+}
+
 run_with_resume() {
   local stage=$1
   shift
@@ -94,6 +130,7 @@ run_with_resume() {
   while true; do
     attempt=$((attempt + 1))
     local attempt_log="$log_root/${stage}-attempt-$(printf '%02d' "$attempt").log"
+    wait_for_target_gpus
     set +e
     "$@" 2>&1 | tee -a "$attempt_log"
     local code=${PIPESTATUS[0]}

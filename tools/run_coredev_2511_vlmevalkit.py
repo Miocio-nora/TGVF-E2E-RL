@@ -14,6 +14,7 @@ import runpy
 import sys
 import time
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,32 @@ JUDGE_SERVICE_CONFIG = (
 )
 _EVAL_RUN_ID = re.compile(r"(?:T\d{8}-\d{6}|T\d{8}_G[0-9a-fA-F]+)")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _validate_judge_base_url(observed: str, expected: str) -> str:
+    """Allow only the pinned local deployment's four evaluator-owned ports."""
+
+    normalized = observed.rstrip("/")
+    pinned = expected.rstrip("/")
+    actual_url = urlsplit(normalized)
+    pinned_url = urlsplit(pinned)
+    base_port = pinned_url.port
+    if (
+        base_port is None
+        or actual_url.scheme != pinned_url.scheme
+        or actual_url.hostname != pinned_url.hostname
+        or actual_url.path != pinned_url.path
+        or actual_url.query != pinned_url.query
+        or actual_url.fragment != pinned_url.fragment
+        or actual_url.username is not None
+        or actual_url.password is not None
+        or actual_url.port not in range(base_port, base_port + 4)
+    ):
+        raise RuntimeError(
+            "CoreDev judge service must use the pinned local deployment "
+            f"{pinned} on ports {base_port}--{base_port + 3}"
+        )
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -473,10 +500,7 @@ def main() -> int:
             raise RuntimeError("CoreDev Qwen2.5-72B judge requires --judge-base-url")
         judge_base_url = _required_option("--judge-base-url").rstrip("/")
         expected_base_url = judge_service["server"]["base_url"].rstrip("/")
-        if judge_base_url != expected_base_url:
-            raise RuntimeError(
-                f"CoreDev judge service must use the pinned endpoint {expected_base_url}"
-            )
+        judge_base_url = _validate_judge_base_url(judge_base_url, expected_base_url)
         if judge_service["model"]["served_name"] != COREDEV_LLM_JUDGE_MODEL:
             raise RuntimeError("CoreDev judge service config model mismatch")
         if not judge_service["scope"]["allows_vlmevalkit_benchmark_judging"]:
