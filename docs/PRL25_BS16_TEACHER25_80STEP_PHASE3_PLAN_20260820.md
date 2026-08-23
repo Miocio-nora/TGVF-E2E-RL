@@ -364,10 +364,18 @@ S3 于 `07:40:52 JST` 发布，完整耗时回升至 `1,067.641 s = 17 min 47.6 
 S2--S3 的完整单步均值为 `13 min 50.0 s`，与历史 PRL22 Atomic 的
 `14 min 01.8 s` 接近；按剩余 77 步机械外推约 `17.75 h`，对应
 `2026-08-25 01:26 JST`。因此 S2-only 的 `20:13 JST` 乐观单点估计已被后续数据
-取代，当前运行规划采用约 `01:25--01:45 JST`，再由 S4--S8 窗口收窄。
+取代。
 
 S3 answer reward 回升至 `0.8046875`；FMT2 error 为 `0.03515625 = 9/256`，比
 S1/S2 的 `6/256` 略高但尚无爆发。260 次 Atomic call 全部成功，tool error 仍为空。
+
+S4 于 `07:57:07 JST` 发布，完整耗时 `982.464 s = 16 min 22.5 s`，使 S2--S4
+稳态候选均值更新为 `14 min 40.8 s`。按剩余 76 步机械外推约 `18.59 h`，对应
+`2026-08-25 02:33 JST`；当前运行规划采用约 `02:00--03:00 JST`，由 S5--S8
+窗口继续收窄。S4 answer reward 为 `0.8203125`，FMT2 error 回落至
+`0.015625 = 4/256`，说明 S3 的 9/256 不是连续 format 恶化。241 次调用中 240 次
+产生 TGVF observation，仅 1 次 `tool_parse.incomplete_tool_call`。S2--S4 窗口的
+answer/FMT2 均值分别为 `0.76171875/0.02473958`，tool error 合计 `1` 次。
 
 ## 5. Reward 合同
 
@@ -454,6 +462,7 @@ A/B、C/E 的 matched 比较定义。
 | PRL25-D Atomic Crop+TGVF 正式 S1，BS16 × n16 | `17.63 min/step` | 含 `1.06 min` 完整 checkpoint 和首步冷启动；S2 后再定稳态 ETA |
 | PRL25-D Atomic Crop+TGVF 正式 S2，BS16 × n16 | `9.87 min/step` | 含 `1.04 min` rolling recovery checkpoint；以 S3--S8 窗口确认稳态 |
 | PRL25-D Atomic Crop+TGVF 正式 S3，BS16 × n16 | `17.79 min/step` | 视觉 tokens 较 S2 增至 `2.19×`；S2--S3 均值 `13.83 min/step` |
+| PRL25-D Atomic Crop+TGVF 正式 S4，BS16 × n16 | `16.37 min/step` | S2--S4 均值 `14.68 min/step`；当前 ETA `02:00--03:00 JST` |
 
 PRL25-B 正式 run 于 2026-08-21 00:32:18 JST 启动，run identity 为
 `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`。正式首个

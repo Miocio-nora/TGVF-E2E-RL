@@ -10039,10 +10039,17 @@ than inferred from a script name or prior conversation.
   Together with approximately `86.5%` host CPU idle and active GPUs, the
   step-time variation is attributed provisionally to Atomic crop visual load,
   not CPU contention or a stall. The S2--S3 mean is `13.83 min/step`, close to
-  the historical PRL22 Atomic `14.03 min/step`; the current operational ETA is
-  therefore about `2026-08-25 01:25--01:45 JST`, pending S4--S8. S3 answer is
-  `0.8046875`, FMT2 is `9/256 = 0.03515625`, and all `260` Atomic calls
-  succeeded with no tool error.
+  the historical PRL22 Atomic `14.03 min/step`. S3 answer is `0.8046875`, FMT2
+  is `9/256 = 0.03515625`, and all `260` Atomic calls succeeded with no tool
+  error.
+- Formal S4: metrics published at `07:57:07 JST` after `982.464 s`
+  (`16.37 min`). The S2--S4 candidate steady mean is now `14.68 min/step`,
+  projecting the remaining 76 steps to about `18.59 h` and an operational ETA
+  of `2026-08-25 02:00--03:00 JST`, pending S5--S8. Answer rose to
+  `0.8203125`, while FMT2 fell to `4/256 = 0.015625`; S3's `9/256` therefore
+  did not continue as a format-error rise. Of `241` Atomic calls, `240`
+  produced TGVF observations and one ended as
+  `tool_parse.incomplete_tool_call`.
 
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 
