@@ -255,6 +255,24 @@ temperature 1、master seed 42 和逐题逐 turn paired RNG namespace。生成�
 绑定 GPU `0--1/2--3/4--5/6--7`。任一 checkpoint 身份、冻结 RP67 或 completion receipt
 不匹配均 fail-closed；不会把 inference-complete 当作正式评分完成。
 
+#### 4.5.1 S80 长输出的进行中诊断（2026-08-24）
+
+截至 `2026-08-24 03:51 JST`，六点评测仍在生成最后一批 S64/S80，因此本段不是最终
+CoreDev 分数。S8/S16/S32/S48 已各完成 2,240 个受支持样本；S64/S80 分别完成
+`628/2,240` 与 `108/2,240`。在 S80 已完成的 108 个 sample identity 上做严格配对后，
+S64 仅 `6/108 = 5.56%` 触及 `max_tokens`，平均每条约 `1,213` 个 sampled tokens；S80
+则有 `81/108 = 75.00%` 触及 `max_tokens`，平均约 `15,785` tokens。四个 S80 rank 均持续
+写入，日志无 OOM、traceback 或 runtime error，故当前慢速解释为 policy 长输出退化，而非
+CPU/GPU hang。
+
+训练内指标提供同向证据：S64 batch 为 answer `67.58%`、FMT2 error `1.95%`、平均
+`440.6 tokens/trajectory`；S72 一度达到 answer `84.77%`、FMT2 error `0.78%`；S80
+batch 则为 answer `51.95%`、FMT2 error `23.44%`、平均 `1,337.2 tokens/trajectory`。
+S65--S72 窗口均值为 answer `77.39%`、FMT2 error `2.05%`，S73--S80 为 answer
+`68.21%`、FMT2 error `9.23%`。这些数据支持“晚期退化”的进行中诊断，但不能替代完整
+2,240-sample 生成和七项正式评分；评测不得通过临时截短 response、修改 stop contract 或
+挑选 S72 来掩盖预注册 S80 结果。
+
 ### 4.6 PRL25-D Atomic Crop+TGVF 自动交接合同（2026-08-24）
 
 用户于 `2026-08-24 03:37 JST` 冻结下一条正式线路：PRL25-C 六节点评测完成后，立即从

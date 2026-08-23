@@ -9961,6 +9961,19 @@ than inferred from a script name or prior conversation.
   S80. `metrics.jsonl` contains 80 rows and the permanent S80 receipt exists;
   the automatic six-point evaluator remains active. Consequently all 11 full
   checkpoint objects in this run remain protected until its evaluation closes.
+- In-progress S80 diagnostic at `2026-08-24 03:51 JST`: S8/S16/S32/S48 have
+  each generated all 2,240 supported rows, while S64/S80 are at 628/108 rows.
+  On the exact 108 sample identities already completed by S80, S64 reaches
+  `max_tokens` on `6/108` rows with mean sampled length `1,213`, whereas S80
+  reaches it on `81/108` rows with mean length `15,785`. All four S80 ranks
+  continue to write and no OOM, traceback or runtime failure is present, so
+  this is provisional policy-behavior evidence rather than an infrastructure
+  stall. Training metrics agree: S64/S72/S80 step-local answer rates are
+  `67.58%/84.77%/51.95%`, FMT2 error rates are `1.95%/0.78%/23.44%`, and
+  S65--S72 versus S73--S80 window means move from answer/FMT2
+  `77.39%/2.05%` to `68.21%/9.23%`. This entry is not a final CoreDev score;
+  the original 2,240-row generation and seven-suite scoring contract remains
+  unchanged.
 
 ### PRL25-D Atomic Crop+TGVF 80-step queued handoff (2026-08-24)
 
