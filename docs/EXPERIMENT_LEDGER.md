@@ -9934,7 +9934,7 @@ than inferred from a script name or prior conversation.
 ### PRL25-C pure-TGVF 80-step formal launch and automatic six-point evaluation (2026-08-22)
 
 - Cell/status: `PRL-25-C-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-TEACHER25-80STEP-WS8`
-  / `RUNNING`; fresh S0 formal launch passed the execution-identity gate at
+  / `COMPLETE / PASS`; fresh S0 formal launch passed the execution-identity gate at
   `2026-08-22 22:47 JST` and started eight actor/rollout initialization workers
   on physical GPUs 0--7. No smoke trajectories enter the scientific lineage.
 - Fixed contract: Qwen3-VL-8B-Instruct full-policy update, frozen RP67 Step-2000,
@@ -9974,6 +9974,17 @@ than inferred from a script name or prior conversation.
   `77.39%/2.05%` to `68.21%/9.23%`. This entry is not a final CoreDev score;
   the original 2,240-row generation and seven-suite scoring contract remains
   unchanged.
+- Final six-point closure at `2026-08-24 06:01 JST`: S8/S16/S32/S48/S64/S80
+  each have 2,240 supported generations, 2,511-task official coverage, seven
+  accepted scoring receipts and a `PASS` summary. Macro* is respectively
+  `59.6852/59.1474/59.5262/59.1325/59.8086/57.7907`. S64 is the post-hoc
+  maximum but improves only `0.1235 pp` over S8; preregistered S80 is the
+  minimum and is `2.0180 pp` below S64. The curve therefore does not support a
+  stable long-horizon pure-TGVF gain, and the late training/long-output
+  degeneration remains part of the primary conclusion. Paired-summary and
+  evaluation-complete SHA256 values are
+  `15acd55a77ec1f59b3610806d74ebc0bd5e8ca0717ec859e9c443da7fa2ba83d`
+  and `8ffc749fbb41482f35f6323c305d6b32eb78eea495e3ea60d485c7d92b432534`.
 
 ### PRL25-D Atomic Crop+TGVF 80-step queued handoff (2026-08-24)
 
