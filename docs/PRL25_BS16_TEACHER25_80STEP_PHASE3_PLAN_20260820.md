@@ -2,7 +2,7 @@
 
 日期：2026-08-20；执行状态更新：2026-08-24（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B/C 六点曲线已完成；PRL25-D 正在 fresh-S0 自动准入`
+状态：`RUNNING / PRL25-B/C 六点曲线已完成；PRL25-D 已完成正式 S1，正继续训练至 S80`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -324,6 +324,27 @@ Teacher25 `4/16` 检查；不另建独立 GPU smoke lineage，首个 GPU step �
 允许同一身份断点恢复，并在完整 S80 门禁后自动评测
 `S8/S16/S32/S48/S64/S80`；生成与四路 TP2 judge 继续使用全部八张 GPU。
 
+正式 fresh-S0 重试于 `2026-08-24 06:51:39 JST` 通过两次八卡稳定准入和代码
+身份闸门，8 个 actor/rollout worker、8 个 vLLM server 与 8 个 reward worker 均正常
+启动。S1 于 `07:13:17 JST` 原子发布 metrics 并闭合完整 recovery checkpoint；
+`latest_checkpointed_iteration.txt=1`，S1 八份 model/optimizer/extra-state shard、data cursor、
+FSDP 与 project-state 文件齐全，完整对象约 `96 GiB`。
+
+S1 覆盖 16 prompts / 256 trajectories：answer reward `0.7265625`，FMT2 format-error
+rate `0.0234375 = 6/256`，对应平均 protocol reward `-0.046875`，与 `-2` 合同
+严格一致。共发起 275 次 Atomic tool call，274 次成功产生 TGVF observation，仅
+1 次 `tool_parse.invalid_json`；平均每条轨迹 `1.0742` 次工具调用，总生成
+`62,945` policy tokens。Focus/Target 与 Grounding 指标均为 0，证明 D 没有误开
+PRL25-E reward。未见 format 爆炸、工具链失效或 zero-variance 全批问题。
+
+S1 完整耗时 `1,057.546 s = 17 min 37.5 s`，其中 publication 前训练与评分
+`988.366 s`、weight sync `5.483 s`、checkpoint `63.696 s`。期间外部用户的三个
+CPU 后处理任务曾合计占用约 180 核；它们结束后整机 CPU idle 恢复至约
+`84--85%`，D 八卡生成恢复稳定，故当时的 CPU 峰值是外部争用，不是
+Atomic Crop+TGVF 自身的稳态 CPU 瓶颈。按 S1 含完整 checkpoint 粗算，S80 约
+`22--24 h`；该区间必须用无冷启动的 S2 与后续窗口重新校准，不把 S1
+单点当作稳态速率。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
@@ -406,6 +427,7 @@ A/B、C/E 的 matched 比较定义。
 | PRL25-B exact-Crop canary，BS4 × n2 | `262.27 s/step` | publication 前 `162.04 s`、full-Qwen sync `4.09 s`、checkpoint `96.14 s`；仅功能 gate |
 | PRL22 pure TGVF，BS16 × n16 | `10.43 min/step` | PRL25-C 的历史 recipe-level 容量锚点 |
 | PRL22 Atomic Crop+TGVF，BS16 × n16 | `14.03 min/step` | PRL25-D 的历史 recipe-level 容量锚点 |
+| PRL25-D Atomic Crop+TGVF 正式 S1，BS16 × n16 | `17.63 min/step` | 含 `1.06 min` 完整 checkpoint 和首步冷启动；S2 后再定稳态 ETA |
 
 PRL25-B 正式 run 于 2026-08-21 00:32:18 JST 启动，run identity 为
 `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`。正式首个

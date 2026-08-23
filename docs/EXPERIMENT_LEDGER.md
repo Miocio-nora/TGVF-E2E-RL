@@ -9986,12 +9986,12 @@ than inferred from a script name or prior conversation.
   `15acd55a77ec1f59b3610806d74ebc0bd5e8ca0717ec859e9c443da7fa2ba83d`
   and `8ffc749fbb41482f35f6323c305d6b32eb78eea495e3ea60d485c7d92b432534`.
 
-### PRL25-D Atomic Crop+TGVF 80-step queued handoff (2026-08-24)
+### PRL25-D Atomic Crop+TGVF 80-step formal run (2026-08-24)
 
 - Cell/status: `PRL-25-D-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-CROP-TGVF-TEACHER25-80STEP-WS8`
-  / `QUEUED`; a detached supervisor waits for PRL25-C's formal six-point
-  `evaluation-complete` receipt, then starts D from fresh S0 on physical GPUs
-  0--7. It does not accept inference-only or partial-arm completion as the
+  / `RUNNING`; PRL25-C's formal six-point `evaluation-complete` receipt closed
+  the handoff and a detached supervisor admitted D from fresh S0 on physical
+  GPUs 0--7. It did not accept inference-only or partial-arm completion as the
   handoff gate.
 - Fixed contract: Qwen3-VL-8B-Instruct full-policy update, frozen RP67 Step-2000,
   Atomic `tgvf_crop_tool`, BS16 × n16, world8/FSDP2/GA1, canonical Teacher25
@@ -10012,6 +10012,18 @@ than inferred from a script name or prior conversation.
   CoreDev-2511 temp1/seed42 paired-RNG contract, two concurrent four-GPU
   generation arms and up to four TP2 Qwen2.5-72B judges across GPU pairs
   0--1/2--3/4--5/6--7.
+- Formal execution/S1: attempt 02 passed the two-poll GPU admission and launch
+  identity gates at `2026-08-24 06:51:39 JST`; all eight actor/rollout, vLLM
+  and reward workers initialized. S1 atomically published at `07:13:17 JST`
+  with `256` trajectories, mean answer reward `0.7265625`, FMT2 error rate
+  `0.0234375` (`6/256`), mean protocol reward `-0.046875`, `62,945` generated
+  policy tokens, `275` Atomic calls and `274` successful TGVF observations.
+  The sole tool error was `tool_parse.invalid_json`; Focus/Target and Grounding
+  reward remained zero. End-to-end S1 was `1,057.546 s`, including
+  `988.366 s` before publication, `5.483 s` weight sync and `63.696 s`
+  checkpoint time. A complete approximately `96 GiB` S1 recovery tree and
+  `latest_checkpointed_iteration.txt=1` are present. The run continues to S80;
+  S2 and later windows, not cold-start S1 alone, determine the steady-state ETA.
 
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 
@@ -10073,7 +10085,7 @@ than inferred from a script name or prior conversation.
 ### PRL25-D Atomic Crop+TGVF launch-recovery binding (2026-08-24)
 
 - Cell/status: `PRL-25-D-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-CROP-TGVF-TEACHER25-80STEP-WS8`
-  / `RETRYING PRE-S0`. The C-to-D handoff closed PRL25-C's six-point evaluation
+  / `RECOVERED; SUPERSEDED BY FORMAL S1`. The C-to-D handoff closed PRL25-C's six-point evaluation
   and admitted D only after two consecutive checks found physical GPUs 0--7
   idle. The first formal launcher attempt at `2026-08-24 06:04 JST` then
   stopped at the repository execution-identity gate, before trainer GPU
@@ -10091,3 +10103,8 @@ than inferred from a script name or prior conversation.
   maximum six tool calls and FMT2 penalty `-2`. Focus/Target and Grounding
   rewards remain disabled; PRL25-E is deferred and must not be launched by
   this handoff.
+- Recovery verification: after external GPU users released 0--3, the second
+  attempt passed the same two-poll admission gate at `06:51 JST`, wrote launch
+  provenance, initialized all eight ranks and completed the canonical S1
+  metrics/checkpoint pair. No state from failed attempt 01 entered the
+  scientific lineage.
