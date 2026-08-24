@@ -10050,6 +10050,29 @@ than inferred from a script name or prior conversation.
   did not continue as a format-error rise. Of `241` Atomic calls, `240`
   produced TGVF observations and one ended as
   `tool_parse.incomplete_tool_call`.
+- Formal S8 milestone: metrics published at `2026-08-24 08:58:23 JST` after
+  `813.928 s` (`13.57 min`), bringing the S2--S8 mean to
+  `15.02 min/step`. A mechanical projection for the remaining 72 steps is
+  `18.03 h`, or approximately `2026-08-25 03:00 JST`. Across S1--S8, answer
+  reward averages `0.74316406`, FMT2 averages `0.03369141` (`69/2,048`), and
+  `2,096/2,102` Atomic calls produce TGVF observations (`99.71%`). S8 itself
+  records answer `0.7265625`, FMT2 `13/256 = 0.05078125`, and `238/238`
+  successful calls.
+- Early-drift watch: generated policy tokens rise monotonically over S5--S8 as
+  `61,338/87,675/134,230/197,845`, or roughly `240/342/524/773` tokens per
+  trajectory. Relative to S1--S4, S5--S8 answer mean is `1.9531 pp` lower and
+  FMT2 is `1.8555 pp` higher. Eight steps do not prove terminal degradation,
+  but this direction resembles PRL25-C's later long-output failure and is now a
+  mandatory S9--S16 and every-eight-step monitoring item.
+- S8 recovery gate: the approximately `96 GiB` permanent object has all eight
+  model, optimizer and extra-state shards plus data/FSDP state. Strict loading
+  matches the run ID, eight contract hashes, optimizer step, project integrity
+  and pair integrity. Launch/config identity
+  `a0b8183875c38482da476e90a676c9b2ad401b100d452c73361d37b53157990c`
+  is embedded as `run_config` inside checkpoint identity mapping digest
+  `293e3749c3b44bd3badf1823a2f10ca1b1e100c4682aedf091589451433be1d6`;
+  these are intentionally different identity layers. The paired evaluator
+  repeats the same checkpoint-mapping/receipt checks before accepting an arm.
 
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 

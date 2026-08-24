@@ -2,7 +2,7 @@
 
 日期：2026-08-20；执行状态更新：2026-08-24（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B/C 六点曲线已完成；PRL25-D 已完成正式 S1，正继续训练至 S80`
+状态：`RUNNING / PRL25-B/C 六点曲线已完成；PRL25-D 已闭合正式 S8，正继续训练至 S80`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -377,6 +377,34 @@ S4 于 `07:57:07 JST` 发布，完整耗时 `982.464 s = 16 min 22.5 s`，使 S2
 产生 TGVF observation，仅 1 次 `tool_parse.incomplete_tool_call`。S2--S4 窗口的
 answer/FMT2 均值分别为 `0.76171875/0.02473958`，tool error 合计 `1` 次。
 
+首个正式里程碑 S8 于 `2026-08-24 08:58:23 JST` 发布。S8 单步完整耗时
+`813.928 s = 13 min 33.9 s`，其中 publication 前 `741.683 s`、weight sync
+`5.474 s`、checkpoint `66.769 s`。去除冷启动的 S2--S8 平均为
+`15 min 01.4 s/step`；按剩余 72 步机械外推约 `18.03 h`，当前训练 ETA 为
+`2026-08-25 03:00 JST` 左右。
+
+S1--S8 共 2,048 条 trajectories，窗口 answer reward 均值 `0.74316406`，FMT2
+error 均值 `0.03369141`（合计 `69/2,048`）。工具链共 `2,102` 次调用、`2,096`
+次成功 observation，仅 6 次错误，成功率 `99.71%`。S8 自身 answer 为
+`0.7265625`、FMT2 error `13/256 = 0.05078125`，238/238 次工具调用全部成功。
+因此 Atomic 工具链健康，但 format 尚未形成稳定改善。
+
+需要继续观察的早期漂移是输出长度：S5--S8 generated policy tokens 依次为
+`61,338/87,675/134,230/197,845`，四步连续上升；对应平均每 trajectory 约
+`240/342/524/773` tokens。S5--S8 相对 S1--S4 的 answer 均值下降
+`1.9531 pp`（`0.73339844` vs `0.75292969`），FMT2 均值上升 `1.8555 pp`
+（`0.04296875` vs `0.02441406`）。这尚不是单调 format 爆发，也不能从八步推断
+最终 efficacy，但与 PRL25-C 的晚期长输出退化方向相似，必须在 S9--S16 与后续每八步
+窗口持续报告，不能只看 S8 answer 单点。
+
+S8 permanent recovery 对象约 `96 GiB`，包含 8 份 model、8 份 optimizer、8 份
+extra-state shard、data cursor、FSDP 配置与 receipt。严格读取校验通过 run ID、8 项
+关键合同哈希、project/pair integrity 和 step identity。启动/config identity 为
+`a0b8183875c38482da476e90a676c9b2ad401b100d452c73361d37b53157990c`；receipt 中的
+`293e3749c3b44bd3badf1823a2f10ca1b1e100c4682aedf091589451433be1d6` 是包含 config、
+数据、prompt、tool、RP67 与 reward 哈希的完整 checkpoint-identity mapping digest，
+二者是有意区分的两层身份而非错线。自动 evaluator 对每个节点执行同一严格门禁。
+
 ## 5. Reward 合同
 
 自研 T-free 主体（PRL25-B/C/D）为：
@@ -463,6 +491,7 @@ A/B、C/E 的 matched 比较定义。
 | PRL25-D Atomic Crop+TGVF 正式 S2，BS16 × n16 | `9.87 min/step` | 含 `1.04 min` rolling recovery checkpoint；以 S3--S8 窗口确认稳态 |
 | PRL25-D Atomic Crop+TGVF 正式 S3，BS16 × n16 | `17.79 min/step` | 视觉 tokens 较 S2 增至 `2.19×`；S2--S3 均值 `13.83 min/step` |
 | PRL25-D Atomic Crop+TGVF 正式 S4，BS16 × n16 | `16.37 min/step` | S2--S4 均值 `14.68 min/step`；当前 ETA `02:00--03:00 JST` |
+| PRL25-D Atomic Crop+TGVF 正式 S8，BS16 × n16 | `13.57 min/step` | S2--S8 均值 `15.02 min/step`；当前 ETA 约 `03:00 JST` |
 
 PRL25-B 正式 run 于 2026-08-21 00:32:18 JST 启动，run identity 为
 `8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1`。正式首个
