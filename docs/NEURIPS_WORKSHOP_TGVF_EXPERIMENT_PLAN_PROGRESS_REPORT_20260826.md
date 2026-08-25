@@ -72,34 +72,156 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 2. 对应方法在 Crop/TGVF/Atomic 中形成方法特异性领先；
 3. 是会限制论文主张的重要反例。
 
-不允许在 full-prompt 结果出来后重新挑选切片。主图展示精简面板，补充材料报告同一 family
-的完整官方切片，避免只报有利项。
+当前面板是根据 matched-prompt 结果形成的**探索性解释面板**，不是事前注册的 confirmatory
+endpoint。本文在 target-only 结果揭晓前冻结其 v2 版本；此后不因 target-only 结果重选切片。
+正文展示精简优势面板，补充材料同时报告同一 family 的完整切片，避免只报有利项。
 
-### 4.2 当前候选面板
+### 4.2 正文候选：扩展优势面板 v2
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
-|---|---:|---:|---:|---:|---:|
-| BLINK / Relative Depth | 30 | 83.33 | 83.33 | **86.67** | 80.00 |
-| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** |
-| BLINK / Spatial Relation | 30 | **96.67** | 86.67 | 93.33 | 90.00 |
-| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** |
-| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 |
-| MathVista / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 |
-| MathVista / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 |
-| MathVista / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 |
-| MathVista / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 |
-| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** |
-| OCR CN / text recognition | category | 59.82 | **71.23** | 22.17 | 67.80 |
-| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | **51.00** |
-| MathVerse / Vision Intensive | 100 | **52.00** | 49.00 | 42.00 | 49.00 |
+表中粗体表示四种方法的行最优；最后一列是 `max(TGVF, Atomic) − Original`，因此即使 Crop
+是行最优，也能看清两条 target-conditioned 方法相对 Original 的增益。
+
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | Best TGVF/Atomic Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| VStar / direct attributes | 115 | 48.70 | **83.48** | 70.43 | 69.57 | **+21.74** |
+| VStar / relative position | 76 | 53.95 | 78.95 | **80.26** | 75.00 | **+26.32** |
+| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** | **+9.00** |
+| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 | **+20.00** |
+| BLINK / Counting | 30 | 66.67 | 70.00 | **73.33** | **73.33** | **+6.67** |
+| BLINK / Object Localization | 30 | 56.67 | 56.67 | 70.00 | **73.33** | **+16.67** |
+| BLINK / Relative Depth | 30 | 83.33 | 83.33 | **86.67** | 80.00 | **+3.33** |
+| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** | **+20.00** |
+| MathVista / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 | **+11.11** |
+| MathVista / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 | **+6.73** |
+| MathVista / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 | **+9.52** |
+| MathVista / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 | **+6.35** |
+| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** | **+12.89** |
+| OCR EN / visual text understanding | category | 75.00 | 81.61 | 80.00 | **83.21** | **+8.21** |
+| OCR CN / visual text understanding | category | 35.00 | 60.00 | **65.00** | 55.00 | **+30.00** |
+| MathVerse / Text Lite | 100 | 53.00 | 56.00 | 58.00 | **59.00** | **+6.00** |
+| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | **51.00** | **+23.00** |
 
 建议主图分成三块：
 
-- **TGVF favorable regimes**：Relative Depth、MathVista arithmetic、math word、numeric
-  commonsense、visual QA；
-- **Atomic favorable regimes**：HR cross-image、Relative Reflectance、MathVerse Vision Only；
-- **Boundary cases**：OCR CN text recognition、BLINK Spatial Relation、MathVerse Vision
-  Intensive。
+- **target-conditioned shared gains**：VStar、HR、Counting、Object Localization；
+- **TGVF-concentrated gains**：relative position/depth、MathVista 四项、OCR CN visual text
+  understanding；
+- **Atomic-concentrated gains**：HR cross、Relative Reflectance、OCR EN text recognition、
+  MathVerse Vision Only。
+
+正文同时保留一个小型 boundary companion panel：BLINK IQ Test、Spatial Relation、MathVista
+geometry reasoning、MathVerse Vision Intensive。这样主图可以彰显优势，但不会暗示全面支配。
+
+### 4.3 完整稳定对齐清单：40 项
+
+在不含 MMMU subject 重算的 40 个稳定对齐子项中，TGVF 或 Atomic 在 `22/40` 项上高于
+Original。这个计数只用于清点覆盖面；MathVista skills 等切片彼此重叠，不能把 `22/40`
+当成独立样本上的显著性检验或新的综合指标。
+
+#### 4.3.1 VStar、HRBench 与 BLINK 共同单图切片
+
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
+|---|---:|---:|---:|---:|---:|
+| VStar / direct attributes | 115 | 48.70 | **83.48** | 70.43 | 69.57 |
+| VStar / relative position | 76 | 53.95 | 78.95 | **80.26** | 75.00 |
+| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** |
+| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 |
+| BLINK / Counting | 30 | 66.67 | 70.00 | **73.33** | **73.33** |
+| BLINK / IQ Test | 30 | **40.00** | 26.67 | 23.33 | 10.00 |
+| BLINK / Object Localization | 30 | 56.67 | 56.67 | 70.00 | **73.33** |
+| BLINK / Relative Depth | 30 | 83.33 | 83.33 | **86.67** | 80.00 |
+| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** |
+| BLINK / Spatial Relation | 30 | **96.67** | 86.67 | 93.33 | 90.00 |
+
+BLINK 官方 full-420 中其余 8 个多图类别对工具方法不受支持并被填零，不进入 aligned
+sub-benchmark 比较；这里完整列出共同支持的 6 个单图类别。
+
+#### 4.3.2 MathVista 全部 12 个官方 skill 与 MathVerse 全部 5 个版本
+
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
+|---|---:|---:|---:|---:|---:|
+| MathVista / geometry reasoning | 63 | **87.30** | 73.02 | 79.37 | 79.37 |
+| MathVista / scientific reasoning | 37 | **62.16** | **62.16** | 54.05 | 56.76 |
+| MathVista / textbook question answering | 50 | **70.00** | 64.00 | 56.00 | 56.00 |
+| MathVista / algebraic reasoning | 75 | **84.00** | 70.67 | 74.67 | 76.00 |
+| MathVista / statistical reasoning | 111 | **82.88** | 80.18 | 81.98 | 81.08 |
+| MathVista / figure question answering | 96 | **73.96** | 70.83 | 69.79 | 69.79 |
+| MathVista / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 |
+| MathVista / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 |
+| MathVista / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 |
+| MathVista / geometry problem solving | 49 | **91.84** | 77.55 | 85.71 | 87.76 |
+| MathVista / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 |
+| MathVista / logical reasoning | 12 | **41.67** | 33.33 | 16.67 | 25.00 |
+| MathVerse / Text Dominant | 100 | **69.00** | 64.00 | 64.00 | 66.00 |
+| MathVerse / Text Lite | 100 | 53.00 | 56.00 | 58.00 | **59.00** |
+| MathVerse / Vision Dominant | 100 | **51.00** | 45.00 | 46.00 | 50.00 |
+| MathVerse / Vision Intensive | 100 | **52.00** | 49.00 | 42.00 | 49.00 |
+| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | **51.00** |
+
+#### 4.3.3 OCRBench v2 全部 13 个官方语言类别
+
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
+|---|---:|---:|---:|---:|---:|
+| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** |
+| OCR EN / text detection | category | 29.00 | 24.55 | 28.87 | **36.05** |
+| OCR EN / text spotting | category | 0.00 | 10.00 | 16.50 | **18.90** |
+| OCR EN / relationship extraction | category | 89.05 | **90.55** | 76.63 | 88.14 |
+| OCR EN / element parsing | category | **43.89** | 39.67 | 29.27 | 40.25 |
+| OCR EN / mathematical calculation | category | 39.25 | **43.67** | 34.14 | 32.82 |
+| OCR EN / visual text understanding | category | 75.00 | 81.61 | 80.00 | **83.21** |
+| OCR EN / knowledge reasoning | category | **62.44** | 56.35 | 57.50 | 57.47 |
+| OCR CN / text recognition | category | 59.82 | **71.23** | 22.17 | 67.80 |
+| OCR CN / relationship extraction | category | 49.31 | **77.13** | 55.82 | 58.81 |
+| OCR CN / element parsing | category | 27.75 | 28.94 | 20.69 | **33.14** |
+| OCR CN / visual text understanding | category | 35.00 | 60.00 | **65.00** | 55.00 |
+| OCR CN / knowledge reasoning | category | **60.51** | 55.68 | 45.55 | 59.07 |
+
+OCR 类别分数来自官方 rule-based scorer；各类别的内部样本数和计分尺度不同，因此不对这些
+13 行再做无权平均。
+
+### 4.4 MMMU-Pro 共同 269 单图的完整 subject 审计
+
+MMMU 官方 subject 表混有工具方法不支持的 31 个多图样本，不能直接与 Original 比。下表先以
+三个工具 result TSV 的 `extra_records.coverage` 共同支持标记确定 269 个单图 ID，再与 Original
+result TSV 按相同 `index` 对齐并按 subject 聚合 `hit`。这是由官方逐题判分导出的 aligned
+diagnostic，不是 MMMU 官方 subject headline。
+
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
+|---|---:|---:|---:|---:|---:|
+| MMMU / Accounting | 10 | 20.00 | 50.00 | **60.00** | **60.00** |
+| MMMU / Agriculture | 10 | **40.00** | 30.00 | **40.00** | 30.00 |
+| MMMU / Architecture and Engineering | 10 | 40.00 | 50.00 | 50.00 | **60.00** |
+| MMMU / Art | 10 | **50.00** | 30.00 | 30.00 | 30.00 |
+| MMMU / Art Theory | 7 | **57.14** | **57.14** | **57.14** | **57.14** |
+| MMMU / Basic Medical Science | 10 | 30.00 | 10.00 | 20.00 | **50.00** |
+| MMMU / Biology | 7 | **42.86** | 14.29 | 0.00 | 14.29 |
+| MMMU / Chemistry | 5 | 20.00 | 40.00 | **60.00** | **60.00** |
+| MMMU / Clinical Medicine | 9 | 11.11 | 11.11 | **22.22** | **22.22** |
+| MMMU / Computer Science | 10 | **70.00** | **70.00** | 40.00 | 50.00 |
+| MMMU / Design | 10 | 70.00 | **80.00** | 70.00 | 60.00 |
+| MMMU / Diagnostics and Laboratory Medicine | 10 | **20.00** | 10.00 | 10.00 | **20.00** |
+| MMMU / Economics | 8 | **50.00** | 37.50 | 25.00 | 37.50 |
+| MMMU / Electronics | 10 | 40.00 | 60.00 | 50.00 | **70.00** |
+| MMMU / Energy and Power | 10 | **40.00** | 20.00 | 30.00 | 30.00 |
+| MMMU / Finance | 10 | 10.00 | 60.00 | **70.00** | **70.00** |
+| MMMU / Geography | 8 | **50.00** | 37.50 | 25.00 | 37.50 |
+| MMMU / History | 8 | 50.00 | **62.50** | **62.50** | **62.50** |
+| MMMU / Literature | 8 | 75.00 | **87.50** | 75.00 | 75.00 |
+| MMMU / Manage | 10 | **50.00** | 40.00 | 40.00 | **50.00** |
+| MMMU / Marketing | 9 | 33.33 | 66.67 | 88.89 | **100.00** |
+| MMMU / Materials | 8 | 12.50 | 25.00 | 50.00 | **75.00** |
+| MMMU / Math | 10 | **60.00** | 30.00 | 40.00 | 40.00 |
+| MMMU / Mechanical Engineering | 10 | 0.00 | **50.00** | 40.00 | 40.00 |
+| MMMU / Music | 7 | 42.86 | **71.43** | 42.86 | 42.86 |
+| MMMU / Pharmacy | 7 | 14.29 | 42.86 | 57.14 | **71.43** |
+| MMMU / Physics | 10 | 30.00 | 50.00 | 40.00 | **60.00** |
+| MMMU / Psychology | 8 | 50.00 | **62.50** | 25.00 | **62.50** |
+| MMMU / Public Health | 10 | 40.00 | **90.00** | 80.00 | 60.00 |
+| MMMU / Sociology | 10 | **50.00** | **50.00** | **50.00** | **50.00** |
+
+TGVF 或 Atomic 在 `15/30` 个 subject 上高于 Original；其中 Marketing、Materials、Finance、
+Pharmacy、Accounting 的描述性增益最大。但每个 subject 只有 `n=5–10`，这些结果只能用于
+提出能力假设和挑选案例，不能单独承担论文结论，也不进入 Macro*。
 
 小样本切片（尤其 BLINK `n=30`）只作能力定位，必须同时给置信区间，不能单独承担文章核心结论。
 
