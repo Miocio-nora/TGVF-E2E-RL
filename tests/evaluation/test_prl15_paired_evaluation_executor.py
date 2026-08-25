@@ -839,6 +839,24 @@ def test_single_arm_retains_pinned_judge_binding() -> None:
     assert assigned["step16"] is judge
 
 
+def test_single_arm_rebinds_judge_when_pinned_gpus_are_outside_pool() -> None:
+    judge = _MODULE._load_judge_config(_MODULE._load_plan(_PRL25_B_STEP16_PLAN))
+
+    assigned = _MODULE._assign_arm_judges(
+        judge,
+        arm_names=("step72",),
+        gpu_ids=(4, 5, 6, 7),
+    )
+
+    assert assigned["step72"]["devices"]["physical"] == [4, 5]
+    assert assigned["step72"]["server"]["port"] == 8014
+    assert assigned["step72"]["server"]["base_url"] == (
+        "http://127.0.0.1:8014/v1"
+    )
+    assert judge["devices"]["physical"] == [2, 3]
+    assert judge["server"]["port"] == 8012
+
+
 def test_local_judges_all_spawn_before_any_readiness_wait(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

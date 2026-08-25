@@ -2178,7 +2178,8 @@ def _assign_arm_judges(
     ):
         raise ValueError("benchmark judge GPU pool is malformed")
     service_count = min(4, len(arm_names), len(gpu_ids) // 2)
-    if service_count <= 1:
+    pinned_gpus = tuple(judge["devices"].get("physical", ()))
+    if service_count == 1 and set(pinned_gpus).issubset(gpu_ids):
         return {arm: judge for arm in arm_names}
     base_port = judge["server"].get("port")
     if type(base_port) is not int:
@@ -2187,7 +2188,10 @@ def _assign_arm_judges(
         _judge_for_gpu_pair(
             judge,
             gpu_pair=(gpu_ids[2 * index], gpu_ids[2 * index + 1]),
-            port=base_port + index,
+            # Keep transient services on stable host ports for the physical
+            # GPU pair.  This also lets independent four-GPU evaluators run
+            # concurrently without both claiming the pinned service port.
+            port=base_port + min(gpu_ids[2 * index : 2 * index + 2]) // 2,
         )
         for index in range(service_count)
     )
@@ -3201,10 +3205,6 @@ def _main() -> int:
         or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in judge_gpus)
     ):
         raise RuntimeError("pinned benchmark judge GPU binding is malformed")
-    if args.mode not in {"infer", "score"} and any(
-        gpu_id not in args.gpu_ids for gpu_id in judge_gpus
-    ):
-        raise ValueError("evaluation GPU set must include pinned judge GPUs")
     output_base = (
         args.output_root.resolve()
         if args.output_root is not None
