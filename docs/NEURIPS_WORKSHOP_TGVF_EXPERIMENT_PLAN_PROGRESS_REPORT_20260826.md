@@ -130,6 +130,88 @@ correct-D vs image-only 与 INT-DIAG 是支持证据；first-200 六臂和 nativ
 限制证据；CoreDev 结果负责外部效度。这样既能使用已有验证，也不会把 RP66 数值错归给 RP67，
 或把 teacher-forced readout 误写成 autonomous tool-use 证明。
 
+#### RP67 既有指标详细附录
+
+训练与完成身份：RP67 Step-2000 run ID 为
+`RP-67-QWEN3-INSTRUCT-REP-BALANCED-T1-IMAGE-AXIS-GROUNDED-2000-GPU01`，run identity SHA256
+为 `0b53d04cf8e4c8b665e76279da1df8d1e6ebabee63318c644a3bff5bad099b44`，最终 Adapter
+manifest SHA256 为 `2ea098967ba36671d6975a17e3830778d441149c27f5f80e43e78daf818933b1`。
+训练日志共有 200 个每 10-step 记录，Step 10 与 Step 2000 的同批次训练指标如下；它们用于
+确认优化方向与数值健康，不当作 held-out 泛化结果。
+
+| train metric | Step 10 | Step 2000 |
+|---|---:|---:|
+| image-axis top-1 | 25.00% | 100.00% |
+| image-axis score gap | −0.2649 | 9.9379 |
+| image-axis loss | 0.8818 | 0.00029 |
+| Matrix-CE | 1.3904 | 0.4155 |
+| evidence `L_gen` | 5.0440 | 1.3605 |
+| total loss | 7.3622 | 1.8532 |
+
+Step-2000 周期性 validation snapshot 只有 8 rows / 2 image groups：Matrix-CE `0.2018`、
+`L_gen 1.2983`、Norm `0.7245`、total `1.5726`。小规模 validation 只能作执行 gate；主要
+held-out 表示证据来自下述固定 200-row INT-DIAG。
+
+INT-DIAG 的 teacher-forced NLL 越低越好。correct-D mean NLL 为 `1.2694`；相对每个控制的
+结果为：
+
+| Control | available n | control mean NLL | correct-D win rate | correct-D mean advantage |
+|---|---:|---:|---:|---:|
+| target only | 200 | 4.1035 | 99.50% | 2.8341 |
+| random D | 200 | 3.9661 | 100.00% | 2.6967 |
+| wrong D, same image | 200 | 6.5265 | 95.00% | 5.2571 |
+| wrong D, different image | 184 | 9.9689 | 100.00% | 8.6801 |
+
+同一 INT-DIAG 的 46 个 image group / 200 rows query matrix 达到 top-1 `90.00%`、top-2
+`98.00%`、MRR `94.625%`、mean diagonal gap `3.0327`。184 条具备全部控制的样本中，
+correct-D 同时胜过所有控制为 `174/184 = 94.57%`。main D 与 layer 8/16/24 branches 的
+joint finite rate 均为 100%，near-identical-token collapse rate 均为 0；D/source mean-token-
+norm ratio 分别为 `1.327 / 2.872 / 2.734 / 2.543`。这些 norm 只用来排除崩溃，不把绝对
+scale 大小解释成语义质量。
+
+不同 checkpoint / injection context 的历史 semantic overlay 不能混成一张同质 ablation，
+但并列表明了结论边界：
+
+| checkpoint / context | correct | zero / image-only | matched wrong | 读法 |
+|---|---:|---:|---:|---|
+| S500 first-200, D-only | 48.50% | 35.00% | 47.00% | content `+13.5 pp`，specificity 仅 `+1.5 pp` |
+| S500 first-200, direct replacement | 37.00% | 22.00% | 35.00% | content `+15 pp`，specificity 仅 `+2 pp` |
+| S2000 first-200, D-only | 36.00% | 34.00% | 37.00% | content `+2 pp`，specificity `−1 pp` |
+| S2000 first-200, direct replacement | 35.00% | 21.00% | 32.50% | content `+14 pp`，specificity `+2.5 pp` |
+| S500 full-867, image + D | 85.70% | — | 2.19% wrong-image D | 强 image binding stress；不是 S2000 control |
+| S2000 full-867, image + D / image-only | 85.01% | 74.28% | — | 描述性互补效应 `+10.73 pp` |
+| S2000 full-867, 本次 paired 三臂 | 84.89% | 77.74% zero-D | 63.32% same-image wrong-target D | 当前机制主结果；paired CI 见下表 |
+
+S500 → S2000 并没有在所有 free-generation context 上单调改善：尤其 D-only specificity 从
+微弱正差变成 `−1 pp`。另一方面，S2000 的 teacher-forced retrieval/readout 极强，且原图 + D
+三臂结果支持 content utility 与 specificity。这种不一致本身是重要发现：RP67 学到的 D 更适合
+作为原图上的条件残差，不应描述成独立视觉替代物；teacher-forced 可读性也不能自动推出 native
+free-generation 因果性。
+
+native 诊断保留原始负结果：9 对 counterfactual 的 continuation accuracy `50.00%`、
+expected-direction flip `55.56%`、healthy termination `77.78%`；36 对 target-presence 的
+actual-direction accuracy `0%`、continuation accuracy `2.78%`、healthy termination `93.06%`。
+这些小样本探针不推翻 image+D 主结果，但明确阻止“RP67 已在 native continuation 中稳定控制
+答案方向”的表述。
+
+权威 artifact 索引：
+
+- 训练与 INT-DIAG：
+  `artifacts/representation/RP-67-qwen3-instruct-balanced-t1-image-axis-grounded-2000-gpu01/`
+  下的 `metrics.jsonl` 与 `int-diag-step2000.json`；
+- S2000 全验证闭合 receipt：
+  `artifacts/representation_experiments/image_axis_grounding/evaluation/rp67_step2000_all_validations_complete_v2.json`；
+- S2000 first-200 六臂：
+  `artifacts/representation_experiments/image_axis_grounding/evaluation/rp67_step2000_first200_6arm_semantic_20260801/summary.json`；
+- S2000 full-867 image-only / correct-D：
+  `artifacts/representation_experiments/image_axis_grounding/evaluation/rp67_step2000_full867_acc_main_semantic_v2_20260801/summary.json`；
+- S500 first-200 六臂与 full-867 wrong-image stress：
+  `artifacts/representation_experiments/image_axis_grounding/evaluation/rp67_step0500_first200_6arm_semantic_20260731/summary.json`
+  和 `rp67_step0500_full867_2arm_semantic_20260731/summary.json`。
+
+上述 free-generation accuracy artifact 的固定 `claim_scope` 均为
+`diagnostic_semantic_overlay_not_formal_pilot`；正文或附录不得删去这一标签。
+
 固定三臂：
 
 | Arm | 定义 | 作用 |
