@@ -6,7 +6,7 @@
 matched prompt 两臂均已完成并评分；只增加 target 定义与案例后，TGVF S64 / Atomic S16
 Macro* 仍高于 Original，但相对各自 matched prompt 有温和回退。No-Tool RL 因果对照已冻结
 为 32-step 正式主终点，保留 S0/S8/S16/S32；独立实现、严格配置与 CPU 回归已完成，真实
-1-step canary 正在恢复重跑，正式 S32 尚未启动。下一步并行完成该对照、
+1-step canary 已通过，正式 8 卡 S32 已于 07:18 JST 启动。下一步并行完成该对照、
 正式 Atomic matched/target-only 盲审与调用行为对照。**
 
 进度查看：本报告同步到 main 工作区
@@ -636,27 +636,32 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 - [x] 名称、S32 主终点、训练预算、双评测协议和解释边界已事前冻结；
 - [x] 独立干净分支上的 no-tool prompt/data route、空工具 schema、run config、S32 守护脚本与
   CPU compose/回归测试；
-- [ ] 真实 1-step canary：首轮在 Step 0 前发现共享 termination builder 仍把
-  `</tool_call>` stop 当作全路径硬条件；修复后恢复 canary 已于 2026-08-26 07:10 JST 重启；
-- [ ] 正式 32-step 训练以及 S0/S8/S16/S32 双协议评测；
+- [x] 真实 1-step canary：首轮在 Step 0 前发现共享 termination builder 仍把
+  `</tool_call>` stop 当作全路径硬条件；修复后 canary 已闭合 Step 1 且零工具调用；
+- [ ] 正式 32-step 训练以及 S0/S8/S16/S32 双协议评测：8 卡训练已启动；
 - [ ] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
 
-执行与审计快照（2026-08-26 07:11 JST）：
+执行与审计快照（2026-08-26 07:18 JST）：
 
 - 正式 run ID：
   `PRL-25-F-QWEN3-INSTRUCT-FULL-NO-TOOL-RL-BS16-N16-TFREE-TEACHER25-32STEP-WS8`；
   canary 为独立 `BS4 × n2 / world4 / 1-step` 功能门，不进入正式 lineage。
 - 执行分支 `neurips-notool-rl-s32` 已 push 到远端；当前授权恢复 commit 为
-  `1094c796224469b18833f4672355a87610c173a0`，核心 termination 修复 commit 为
+  `7645fe4a5bb095cb9e0c9cbb9f428abd98ef9aae`，核心 termination 修复 commit 为
   `8140ce05b2fbb6d5c9c9fd0594eb9f5b5984f6aa`。
 - 回归证据：no-tool protocol/launcher/runtime/vLLM 相关测试 `129 passed`，native-agent-loop
   补充测试 `14 passed`；formal 与 canary CPU compose 均通过。
-- 首轮真实 canary 没有生成 rollout、没有 optimizer step 或 checkpoint，因此没有污染待恢复
-  运行。修复把 tool-boundary interpretation 显式关闭于 No-Tool schema：工具样式文本仍完整
-  保留并由 direct-only loop 判为 protocol error，既不解析/执行，也不让单条坏输出击穿整次运行。
-- formal S32 supervisor 只在 canary 形成完整 Step-1 permanent checkpoint，且 metrics 中
-  `successful_tgvf_observations=0`、`tool_call_attempts=0` 后放行；随后保存并逐一验收 S8/S16/S32
-  的 world8 模型、优化器和 extra-state shards。当前 GPUs 尚未被 formal 占用。
+- 首轮失败发生在 rollout 前，因此没有污染恢复 canary。修复把 tool-boundary interpretation
+  显式关闭于 No-Tool schema：工具样式文本仍完整保留并由 direct-only loop 判为 protocol error，
+  既不解析/执行，也不让单条坏输出击穿整次运行。
+- 恢复 canary 在 `137.21 s` 内完成 Step 1：4 prompts、8 trajectories、658 generated policy
+  tokens；`successful_tgvf_observations=0`、`tool_call_attempt_rate=0.0`、
+  `mean_tool_call_attempts=0.0`。world4 rolling checkpoint 的 model/optimizer/extra-state 四组 shards、
+  paired project state、tracker 与 metrics 均已验收。canary 模式按框架合同不生成 permanent 副本。
+- formal S32 supervisor 已通过 canary gate 与最终 CPU preflight，并在 tmux
+  `prl25_f_no_tool_s32` 启动 fresh-S0 训练；正式运行使用 8 卡并保存、逐一验收 S8/S16/S32 的
+  world8 模型、优化器和 extra-state shards。W&B 凭证缺失时只切换为本地 offline telemetry，
+  不改变训练合同。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -713,8 +718,8 @@ Atomic 进入正文核心方法必须同时满足：
 2. [已完成] 广义 full-prompt stress test 及七项官方评分；
 3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
-5. [执行中] No-Tool RL S32：合同、实现、配置和 CPU 回归已闭合；真实 1-step canary 修复后
-   重跑中，验收通过后自动转入正式 S32；
+5. [执行中] No-Tool RL S32：合同、实现、配置、CPU 回归与真实 canary 均已闭合；正式 8 卡
+   fresh-S0 训练已启动，目标固定 S32；
 6. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 7. [待回填] target-only 调用行为对照与正式 audit；
