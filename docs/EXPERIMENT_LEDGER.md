@@ -10020,3 +10020,13 @@ than inferred from a script name or prior conversation.
   fail-closed S32 supervisor; this ledger entry authorizes that clean recovery
   descendant without changing data, prompt, reward, sampling, optimizer,
   checkpoint schedule or the fixed S32 endpoint.
+- Canary closure: the recovered functional run completed optimizer Step 1 with
+  4 prompts, 8 trajectories and 658 generated policy tokens. Its metrics record
+  `successful_tgvf_observations=0`, `tool_call_attempt_rate=0.0` and
+  `mean_tool_call_attempts=0.0`; the complete world4 rolling checkpoint contains
+  all model/optimizer/extra-state shards plus paired project state at Step 1.
+  Canary mode intentionally has no permanent-checkpoint duplicate. The formal
+  supervisor is corrected in this ledger-binding commit to validate that
+  canonical rolling generation and the nested step/cumulative metrics rather
+  than looking for a non-contractual permanent copy. This is an admission-gate
+  correction only and authorizes the clean formal launch descendant.

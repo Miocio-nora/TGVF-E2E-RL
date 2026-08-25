@@ -127,22 +127,45 @@ import sys
 
 root = Path(sys.argv[1])
 tracker = root / "canary/checkpoints/latest_checkpointed_iteration.txt"
-receipt_path = root / "canary/permanent-checkpoints/global_step_1/tgvf_permanent_checkpoint_receipt.json"
+generation = root / "canary/checkpoints/global_step_1"
+actor = generation / "actor"
+pair_path = actor / "tgvf_policy_checkpoint_pair.json"
+state_path = actor / "tgvf_policy_project_state.json"
 metrics_path = root / "canary/metrics.jsonl"
 try:
     observed = int(tracker.read_text(encoding="utf-8").strip())
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    pair = json.loads(pair_path.read_text(encoding="utf-8"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
     metrics = [json.loads(line) for line in metrics_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 except (OSError, ValueError, json.JSONDecodeError) as error:
     raise SystemExit(f"PRL25-F canary is not auditable: {error}")
-if observed < 1 or receipt.get("optimizer_step") != 1:
+if observed < 1 or pair.get("optimizer_step") != 1:
     raise SystemExit("PRL25-F canary Step-1 checkpoint is incomplete")
+if pair.get("schema_version") != "policy-pilot-v1-verl-checkpoint-pair-v1":
+    raise SystemExit("PRL25-F canary checkpoint-pair schema differs")
+if state.get("progress", {}).get("optimizer_step") != 1:
+    raise SystemExit("PRL25-F canary project state is not at Step 1")
+required = (generation / "data.pt", actor / "fsdp_config.json")
+if any(not path.is_file() or path.stat().st_size == 0 for path in required):
+    raise SystemExit("PRL25-F canary checkpoint metadata is incomplete")
+for stem in ("model", "optim", "extra_state"):
+    shards = tuple(actor.glob(f"{stem}_world_size_4_rank_*.pt"))
+    if len(shards) != 4 or any(path.stat().st_size == 0 for path in shards):
+        raise SystemExit(f"PRL25-F canary {stem} shards are incomplete")
 if not metrics:
     raise SystemExit("PRL25-F canary metrics are empty")
-for row in metrics:
-    if row.get("successful_tgvf_observations", 0) != 0:
+last = metrics[-1]
+if last.get("optimizer_step") != 1:
+    raise SystemExit("PRL25-F canary metrics do not close Step 1")
+for scope in ("step", "cumulative"):
+    values = last.get(scope)
+    if not isinstance(values, dict):
+        raise SystemExit(f"PRL25-F canary metrics omitted {scope}")
+    if values.get("successful_tgvf_observations") != 0:
         raise SystemExit("PRL25-F canary unexpectedly used a TGVF observation")
-    if row.get("tool_call_attempts", 0) != 0:
+    attempts = values.get("tool_call_attempts")
+    attempt_rate = values.get("tool_call_attempt_rate")
+    if attempts not in (None, 0) or attempt_rate != 0.0:
         raise SystemExit("PRL25-F canary unexpectedly attempted a tool call")
 PY
 touch "$control_root/canary-accepted"
