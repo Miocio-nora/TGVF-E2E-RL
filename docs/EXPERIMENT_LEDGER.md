@@ -9978,3 +9978,32 @@ than inferred from a script name or prior conversation.
   world8/FSDP2/GA1, Teacher25, LR `1e-6`, maximum six tool calls and FMT2
   penalty `-2`. Focus/Target and Grounding rewards remain disabled; PRL25-E is
   deferred and must not be launched by this handoff.
+
+### PRL25-F No-Tool RL S32 causal control (2026-08-26)
+
+- Cell/status: `PRL-25-F-QWEN3-INSTRUCT-FULL-NO-TOOL-RL-BS16-N16-TFREE-TEACHER25-32STEP-WS8`
+  / `PREREGISTERED`; S32 is the fixed headline endpoint, with S0/S8/S16/S32
+  retained for evaluation. The user explicitly capped this control at 32 steps.
+- Fixed contract: the same Qwen3-VL-8B-Instruct full-model update, first 512
+  Teacher25 prompts, BS16 x n16, world8/FSDP2/GA1, seed42, temperature 1,
+  constant LR `1e-6` and answer verifier used by PRL25. The visual prompt is one
+  image-bearing user message with the canonical question plus the shared
+  `<think>...</think>`/plain-final instruction. Crop, TGVF, RP67 loading, tool
+  schemas, tool observations and tool execution are disabled. Structured tool
+  text terminates direct-only replay as invalid format with the frozen protocol
+  penalty.
+- Provenance: implementation commit
+  `f9dff1fbbdf44ad692ab07ccdfdd39d495d3429c`; formal and one-step canary run
+  configs are respectively
+  `configs/policy/runs/prl_25_f_qwen3_instruct_full_no_tool_rl_bs16_n16_tfree_teacher25_32step_ws8.toml`
+  and
+  `configs/policy/runs/prl_25_f_c0_qwen3_instruct_full_no_tool_rl_bs4_n2_tfree_teacher25_1step_ws4.toml`.
+  The shared historical run-config loader still serializes the RP67 artifact
+  identity for compatibility, but the native-Qwen runtime binds
+  `representation_used=false`, skips artifact preflight/loading and exposes an
+  empty tool set.
+- Launch gate: load both strict configs, compose the pinned veRL plan, verify
+  the empty tool schema and direct-only dataset route, then require the one-step
+  functional canary to complete without any successful tool observation before
+  admitting the fresh S0 formal run. No canary trajectory enters the formal
+  lineage.

@@ -94,6 +94,18 @@ _CONFIG_CROP_EXACT_CANARY = (
     "prl_25_b_c0_qwen3_instruct_full_crop_exact_bs4_n2_"
     "tfree_teacher25_1step_ws4.toml"
 )
+_CONFIG_NO_TOOL_FORMAL = (
+    _ROOT
+    / "configs/policy/runs/"
+    "prl_25_f_qwen3_instruct_full_no_tool_rl_bs16_n16_"
+    "tfree_teacher25_32step_ws8.toml"
+)
+_CONFIG_NO_TOOL_CANARY = (
+    _ROOT
+    / "configs/policy/runs/"
+    "prl_25_f_c0_qwen3_instruct_full_no_tool_rl_bs4_n2_"
+    "tfree_teacher25_1step_ws4.toml"
+)
 
 
 def _config():
@@ -122,6 +134,14 @@ def _config_bs64_canary():
 
 def _config_crop_exact_canary():
     return load_policy_e2e_smoke_run_config(_CONFIG_CROP_EXACT_CANARY)
+
+
+def _config_no_tool_formal():
+    return load_policy_e2e_smoke_run_config(_CONFIG_NO_TOOL_FORMAL)
+
+
+def _config_no_tool_canary():
+    return load_policy_e2e_smoke_run_config(_CONFIG_NO_TOOL_CANARY)
 
 
 def _exact_config(tmp_path: Path):
@@ -667,6 +687,55 @@ def test_exact_crop_canary_uses_live_vision_replay_without_rp66_manager() -> Non
 
     composed = compose_trainable_tgvf_verl_config(plan)
     assert composed.actor_rollout_ref.model.model_type == TRAINABLE_CROP_MODEL_TYPE
+
+
+def test_no_tool_canary_uses_direct_only_full_qwen_without_rp67_manager() -> None:
+    plan = build_trainable_tgvf_verl_launch_plan(
+        _config_no_tool_canary(), mode="canary"
+    )
+    values = plan.overrides
+
+    assert values["actor_rollout_ref.model.model_type"] == TRAINABLE_CROP_MODEL_TYPE
+    assert values["actor_rollout_ref.model.external_lib"] == (
+        TRAINABLE_CROP_EXTERNAL_MODULE
+    )
+    assert values["data.custom_cls.name"] == "PolicyTeacherQuarterMixDataset"
+    assert values["actor_rollout_ref.rollout.agent.default_agent_loop"] == (
+        "prl25_no_tool_rl_matched_visual"
+    )
+    assert "actor_rollout_ref.rollout.checkpoint_manager_class" not in values
+    assert "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs" not in values
+    assert POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV not in plan.environment
+    custom = values["actor_rollout_ref.rollout.custom"]
+    assert custom["functional_canary"] == {
+        "minimum_successful_tgvf_observations": 0,
+        "failure_boundary": "before_optimizer_mutation",
+        "dataset_split": "bound_train_prefix",
+    }
+    assert custom["trainable_no_tool"]["representation_used"] is False
+    assert custom["trainable_no_tool"]["tool_runtime"] == "disabled_direct_only"
+    assert custom["protocol"]["maximum_tool_calls"] == 1
+
+    composed = compose_trainable_tgvf_verl_config(plan)
+    assert composed.actor_rollout_ref.model.model_type == TRAINABLE_CROP_MODEL_TYPE
+
+
+def test_no_tool_formal_freezes_s32_and_retains_s8_s16_s32() -> None:
+    config = _config_no_tool_formal()
+    plan = build_trainable_tgvf_verl_launch_plan(
+        config, mode="formal", target_step=32
+    )
+    custom = plan.overrides["actor_rollout_ref.rollout.custom"]
+
+    assert plan.target_step == 32
+    assert config.training.checkpoint_steps == (0, 8, 16, 32)
+    assert config.training.permanent_checkpoint_steps == (8, 16, 32)
+    assert custom["checkpoint_steps"] == list(range(33))
+    assert custom["checkpoint_lifecycle"]["permanent_steps"] == [8, 16, 32]
+    assert custom["weight_sync"]["payload"] == "full_qwen"
+    assert plan.overrides["actor_rollout_ref.rollout.agent.default_agent_loop"] == (
+        "prl25_no_tool_rl_matched_visual"
+    )
 
 
 def test_composed_formal_lifecycle_is_every_step_and_permanently_keeps_step8() -> None:
