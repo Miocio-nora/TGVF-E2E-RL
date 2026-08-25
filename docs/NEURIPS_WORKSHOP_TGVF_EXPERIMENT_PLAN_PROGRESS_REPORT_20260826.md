@@ -225,6 +225,94 @@ Pharmacy、Accounting 的描述性增益最大。但每个 subject 只有 `n=5�
 
 小样本切片（尤其 BLINK `n=30`）只作能力定位，必须同时给置信区间，不能单独承担文章核心结论。
 
+### 4.5 三种工具方法的调用覆盖率与调用强度
+
+#### 4.5.1 统计口径与整体结果
+
+调用统计来自三个 matched-prompt 最佳 checkpoint 的 `rank-0..3.jsonl` trajectory。三者在完全
+相同的 `2,240` 个受支持单图 ID 上各有一条记录，其中 BLINK 使用共同单图 `n=180`，
+MMMU-Pro 使用共同单图 `n=269`。本文区分以下口径：
+
+- **attempted question**：`tool_calls + tool_errors > 0`，即模型至少生成过一次工具尝试；
+- **successful-use question**：`tool_calls > 0`，即至少一次调用被执行并返回 observation；
+- **executed calls**：trajectory 中 `tool_calls` 的总数；
+- **invalid attempts**：trajectory 中 `tool_errors` 的总数，不计入有效工具调用；
+- **repeat-use question**：有效调用次数至少为 2。
+
+Original 没有工具接口；下表的 Original 行是在同一 `2,240` 个 ID 上按协议定义的零调用参照，
+不是从 Original trajectory 反推的统计。Atomic 的 `tgvf_crop_tool` 是一次调用内联合产生
+Crop 与 TGVF observation 的原子工具，不能拆成两次工具调用。
+
+| Method | Tool function | Attempted questions | Successful-use questions | Executed calls | Invalid attempts | Execution yield | Calls/question | Calls/used question | Repeat-use questions |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Original | none | 0 (0.00%) | 0 (0.00%) | 0 | 0 | — | 0.000 | — | 0 (0.00%) |
+| Crop S80 | `image_zoom_in_tool` | 1,576 (70.36%) | 1,502 (67.05%) | 1,508 | 100 | 93.78% | 0.673 | 1.004 | 3 (0.13%) |
+| TGVF S64 | `tgvf_focus_tool` | **2,012 (89.82%)** | **2,010 (89.73%)** | 2,011 | 3 | **99.85%** | 0.898 | 1.000 | 1 (0.04%) |
+| Atomic S16 | `tgvf_crop_tool` | 1,866 (83.30%) | 1,863 (83.17%) | **2,300** | 36 | 98.46% | **1.027** | **1.235** | **221 (9.87%)** |
+
+`Execution yield = executed calls / (executed calls + invalid attempts)`。三个方法的 `1,508`、
+`2,011`、`2,300` 次 executed calls 均产生了 observation；小于 100% 的 execution yield 来自
+另外记录的无效尝试，而不是已执行工具返回失败。
+
+#### 4.5.2 不同 benchmark set 的调用覆盖率
+
+每格为 `successful-use questions / n (rate)`。该表回答“模型在多少题上实际使用了工具”，不把
+无效尝试算作成功使用。
+
+| Set | n | Crop S80 | TGVF S64 | Atomic S16 |
+|---|---:|---:|---:|---:|
+| VStarBench | 191 | 74/191 (38.74%) | 186/191 (97.38%) | **188/191 (98.43%)** |
+| HRBench4K | 200 | 104/200 (52.00%) | **199/200 (99.50%)** | 198/200 (99.00%) |
+| BLINK single-image | 180 | 144/180 (80.00%) | **178/180 (98.89%)** | **178/180 (98.89%)** |
+| OCRBench v2 | 600 | 444/600 (74.00%) | 556/600 (92.67%) | **560/600 (93.33%)** |
+| MMMU-Pro single-image | 269 | 177/269 (65.80%) | 232/269 (86.25%) | **243/269 (90.33%)** |
+| MathVista MINI | 300 | 233/300 (77.67%) | **268/300 (89.33%)** | 222/300 (74.00%) |
+| MathVerse MINI | 500 | 326/500 (65.20%) | **391/500 (78.20%)** | 274/500 (54.80%) |
+
+#### 4.5.3 不同 benchmark set 的调用次数与频率
+
+每格为 `executed calls / calls per eligible question`。分母始终是该 set 的全部受支持题目，而
+不是只包含工具调用题，因此不同方法可直接比较调用强度。
+
+| Set | Crop S80 | TGVF S64 | Atomic S16 |
+|---|---:|---:|---:|
+| VStarBench | 74 / 0.387 | 186 / 0.974 | **191 / 1.000** |
+| HRBench4K | 104 / 0.520 | 199 / 0.995 | **218 / 1.090** |
+| BLINK single-image | 144 / 0.800 | 178 / 0.989 | **307 / 1.706** |
+| OCRBench v2 | 450 / 0.750 | 556 / 0.927 | **728 / 1.213** |
+| MMMU-Pro single-image | 177 / 0.658 | 232 / 0.862 | **287 / 1.067** |
+| MathVista MINI | 233 / 0.777 | 268 / 0.893 | **281 / 0.937** |
+| MathVerse MINI | 326 / 0.652 | **392 / 0.784** | 288 / 0.576 |
+
+#### 4.5.4 每题有效调用次数分布与无效尝试
+
+| Method | 0 calls | 1 call | 2 calls | 3 calls | 4 calls | 5+ calls |
+|---|---:|---:|---:|---:|---:|---:|
+| Original | 2,240 (100.00%) | 0 | 0 | 0 | 0 | 0 |
+| Crop S80 | 738 (32.95%) | 1,499 (66.92%) | 2 (0.09%) | 0 | 0 | 1 (0.04%) |
+| TGVF S64 | 230 (10.27%) | 2,009 (89.69%) | 1 (0.04%) | 0 | 0 | 0 |
+| Atomic S16 | 377 (16.83%) | 1,642 (73.30%) | 120 (5.36%) | 44 (1.96%) | 23 (1.03%) | 34 (1.52%) |
+
+无效尝试的错误构成也不同：Crop S80 的 100 次包括 `invalid_crop=84`、`context_limit=16`；
+TGVF S64 只有 `tool_parse.invalid_tool_name=3`；Atomic S16 的 36 次包括
+`tool_call_limit_exceeded=21`、`tool_parse.invalid_bbox=8`、
+`tool_parse.incomplete_tool_call=5`、`tool_parse.invalid_tool_name=2`。它们必须与 executed
+calls 分开报告，因为错误尝试没有产生工具 observation。
+
+#### 4.5.5 可写结论与边界
+
+- Crop S80 表现为**选择性、近乎单次**调用：整体成功使用率 `67.05%`，`99.80%` 的工具使用题
+  只有一次有效调用；其覆盖率在 BLINK 和 MathVista 较高，在 VStar 最低。
+- TGVF S64 表现为**高覆盖、近乎固定一次**调用：整体成功使用率 `89.73%`，只有 1 题发生
+  两次有效调用；VStar、HRBench 和 BLINK 的覆盖率均超过 `97%`。
+- Atomic S16 表现为**按 set 改变调用强度**：成功使用率 `83.17%`，但 `9.87%` 的全部题目
+  出现重复调用，使整体达到 `1.027 calls/question`；重复检索主要集中在 BLINK 和 OCR。
+- 调用率和调用次数是行为描述，不是因果 utility。不能由“调用更多”直接推出“工具更有效”；
+  后续应按相同 ID 报告 `0/1/2+` 调用组的正确率与置信区间，并明确其受 policy 自选择混杂。
+
+target-only 版本完成后，必须用同一定义追加一张对照表；在此之前不得把 matched-prompt 与
+target-only 的调用统计合并。
+
 ## 5. 三项必须补齐的验证
 
 ### 5.1 RP67 image + D matched utility
@@ -583,30 +671,34 @@ Atomic 进入正文核心方法必须同时满足：
 | 广义 prompt bundle 下工具总体增益仍存在 | TGVF / Atomic stress-test Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；非 target-only；不是新 benchmark 泛化 | 已支持，带退化边界 |
 | 只补充 target 定义与案例的稳健性 | matched-byte-preserving 新协议、白名单测试与真实预检已通过 | 准确率与 sub-benchmark 尚在生成/评分 | 运行中 |
 | 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；MathVista 等单项仍可能更强 | 可写 |
+| 三种方法形成不同工具调用行为 | Crop/TGVF/Atomic successful-use rate `67.05/89.73/83.17%`；calls/question `0.673/0.898/1.027`；逐 set 表 | matched-prompt 描述性统计；调用更多不等于 utility 更高；policy 自选择混杂 | 已支持 |
 
 ## 8. 论文实验部分建议结构
 
 1. **Comprehensive comparison.** 四方法七套 benchmark 主表，Original 永不缺席。
 2. **Where target-conditioned evidence helps.** 预冻结 sub-benchmark 图，突出 TGVF 的关系、
    深度和视觉数学优势，同时给负面切片。
-3. **Does RP67 carry target-specific answer utility?** 867 样本 correct/zero/wrong 三臂与
+3. **How do the policies use their tools?** 报告整体及逐 set 的调用覆盖率、调用强度、重复调用和
+   无效尝试，并与正确率分析分开。
+4. **Does RP67 carry target-specific answer utility?** 867 样本 correct/zero/wrong 三臂与
    paired effect。
-4. **Robustness to target specification.** 以 target-only matched arm 为主验证；广义 full
+5. **Robustness to target specification.** 以 target-only matched arm 为主验证；广义 full
    prompt 只作 supplementary stress test。
-5. **Exploratory Atomic Crop+TGVF.** target-only 与 target audit 闭合后再决定正文或附录层级。
-6. **Qualitative mechanisms and failures.** 复用已有真实 trajectory 与 bbox 案例，但把机制语言
+6. **Exploratory Atomic Crop+TGVF.** target-only 与 target audit 闭合后再决定正文或附录层级。
+7. **Qualitative mechanisms and failures.** 复用已有真实 trajectory 与 bbox 案例，但把机制语言
    限定为 behavior-level inference。
 
 ## 9. 当前推进顺序
 
 1. [已完成] RP67 semantic overlay 和 CI，机制主张已锁定；
 2. [已完成] 广义 full-prompt stress test 及七项官方评分；
-3. [运行中] 用 8 GPU 并行运行 TGVF S64、Atomic S16 target-only matched prompt；
-4. [待 target-only 闭合后重做] 从 matched/target-only inference JSONL 物化正式 Atomic
+3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；
+4. [运行中] 用 8 GPU 并行运行 TGVF S64、Atomic S16 target-only matched prompt；
+5. [待 target-only 闭合后重做] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
-5. [待回填] target-only 评分与正式 audit；
-6. [待写作] 形成英文 Experiments/Discussion 初稿；
-7. [明确不做] Crop seed43。
+6. [待回填] target-only 评分、调用行为对照与正式 audit；
+7. [待写作] 形成英文 Experiments/Discussion 初稿；
+8. [明确不做] Crop seed43。
 
 ## 10. 证据来源
 
@@ -616,6 +708,8 @@ Atomic 进入正文核心方法必须同时满足：
   `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`
 - 三方法逐题轨迹与失败案例：
   `docs/PRL25_CROP_TGVF_ATOMIC_QUALITATIVE_CASE_ANALYSIS_20260825.md`
+- 工具调用行为：三个 matched 最佳 checkpoint 各自 `step80/step64/step16/inference/rank-0..3.jsonl`
+  的 `tool_calls`、`tool_errors` 与 `successful_observation_count`；三臂均为 2,240 个唯一共同 ID。
 - Crop S80 官方 summary：
   `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP80-TEMP1-SEED42-UNIFIED-V1/step80/scoring/coredev-official-v1/coredev-2511-eval-summary.json`
 - TGVF S64 / Atomic S16：对应 six-point evaluation 的 `step64` / `step16` 官方 summary 与
