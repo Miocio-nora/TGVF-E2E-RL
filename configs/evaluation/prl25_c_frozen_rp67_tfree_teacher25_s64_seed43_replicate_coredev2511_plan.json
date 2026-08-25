@@ -24,7 +24,7 @@
     "tool_profile": "tgvf_only",
     "tool_schema_sha256": "f33f61d48bc4341f88077e90afca941819769b6209eb54893a9ed6b44856aba5",
     "maximum_tool_calls": 6,
-    "sampling_source": "bound_policy_run_config",
+    "sampling_source": "evaluation_replicate_seed_override",
     "same_tasks_and_rank_partition": true
   },
   "paired_rng": {

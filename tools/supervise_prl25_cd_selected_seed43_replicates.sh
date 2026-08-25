@@ -36,6 +36,9 @@ run_with_retries() {
   local code=1
   local attempt_log
 
+  while [[ -e "$evaluation_root/logs/supervisor-attempt-$(printf '%02d' "$((attempt + 1))").log" ]]; do
+    attempt=$((attempt + 1))
+  done
   while true; do
     attempt=$((attempt + 1))
     attempt_log="$evaluation_root/logs/supervisor-attempt-$(printf '%02d' "$attempt").log"

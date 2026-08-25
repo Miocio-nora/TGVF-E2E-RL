@@ -610,13 +610,19 @@ def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
     protocol = plan.get("protocol")
     if not isinstance(protocol, dict):
         raise ValueError("PRL15 plan protocol is missing")
+    sampling_source = protocol.get("sampling_source")
+    if sampling_source not in {
+        "bound_policy_run_config",
+        "evaluation_replicate_seed_override",
+    }:
+        raise RuntimeError("PRL15 plan sampling source differs from its policy run")
     expected = {
         "evaluation_protocol": "training_run",
         "prompt_sha256": run.protocol.prompt_sha256,
         "tool_profile": run.protocol.tool_profile.value,
         "tool_schema_sha256": run.protocol.tool_schema_sha256,
         "maximum_tool_calls": run.protocol.maximum_tool_calls,
-        "sampling_source": "bound_policy_run_config",
+        "sampling_source": sampling_source,
         "same_tasks_and_rank_partition": True,
     }
     if protocol != expected:
@@ -634,8 +640,15 @@ def _validate_plan_run(plan: dict[str, Any], run: Any) -> None:
         }
         if _canonical_json_sha256(runtime_protocol) != paired_rng["protocol_sha256"]:
             raise RuntimeError("paired RNG protocol identity differs from policy run")
-        if run.rollout_rng.master_seed != paired_rng["master_seed"]:
-            raise RuntimeError("paired RNG master seed differs from policy run")
+        run_seed = run.rollout_rng.master_seed
+        evaluation_seed = paired_rng["master_seed"]
+        if sampling_source == "bound_policy_run_config":
+            if run_seed != evaluation_seed:
+                raise RuntimeError("paired RNG master seed differs from policy run")
+        elif run_seed == evaluation_seed:
+            raise RuntimeError(
+                "evaluation replicate seed must differ from policy run master seed"
+            )
         sampling = run.policy.sampling
         if sampling.temperature != 1.0 or sampling.do_sample is not True:
             raise RuntimeError("paired evaluation no longer uses canonical temp=1")

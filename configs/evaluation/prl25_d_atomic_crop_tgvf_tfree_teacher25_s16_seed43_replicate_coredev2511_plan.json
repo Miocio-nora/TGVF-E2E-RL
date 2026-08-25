@@ -24,7 +24,7 @@
     "tool_profile": "crop_tgvf",
     "tool_schema_sha256": "0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39",
     "maximum_tool_calls": 6,
-    "sampling_source": "bound_policy_run_config",
+    "sampling_source": "evaluation_replicate_seed_override",
     "same_tasks_and_rank_partition": true
   },
   "paired_rng": {

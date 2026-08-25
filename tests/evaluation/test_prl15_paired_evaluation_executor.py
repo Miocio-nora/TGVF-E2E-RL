@@ -34,6 +34,12 @@ _PRL25_B_REMAINING_CURVE_PLAN = (
     _ROOT / "configs/evaluation/"
     "prl25_b_crop_exact_step8_step32_step48_step64_full_model_coredev2511_plan.json"
 )
+_PRL25_C_SIX_POINT_PLAN = (
+    _ROOT
+    / "configs/evaluation/"
+    "prl25_c_frozen_rp67_tfree_teacher25_"
+    "s8_s16_s32_s48_s64_s80_paired_seed_coredev2511_plan.json"
+)
 _SPEC = importlib.util.spec_from_file_location("prl15_paired_evaluation", _TOOL)
 assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
@@ -147,6 +153,26 @@ def test_v2_plan_policy_config_digest_is_provenance_not_a_runtime_gate(
 
     assert plan["policy_config_sha256"] == "0" * 64
     assert runtime.checkpoint_owner.run_id
+
+
+def test_v2_evaluation_replicate_seed_override_is_explicit_and_distinct() -> None:
+    plan = _MODULE._load_plan(_PRL25_C_SIX_POINT_PLAN)
+    runtime = _MODULE._load_evaluation_runtime(plan)
+
+    bound_drift = json.loads(json.dumps(plan))
+    bound_drift["paired_rng"]["master_seed"] = 43
+    with pytest.raises(RuntimeError, match="master seed differs"):
+        _MODULE._validate_plan_run(bound_drift, runtime.checkpoint_owner)
+
+    replicate = json.loads(json.dumps(bound_drift))
+    replicate["protocol"]["sampling_source"] = (
+        "evaluation_replicate_seed_override"
+    )
+    _MODULE._validate_plan_run(replicate, runtime.checkpoint_owner)
+
+    replicate["paired_rng"]["master_seed"] = 42
+    with pytest.raises(RuntimeError, match="replicate seed must differ"):
+        _MODULE._validate_plan_run(replicate, runtime.checkpoint_owner)
 
 
 def test_v3_full_model_plan_separates_owner_protocol_and_preserves_arm_ids() -> None:
