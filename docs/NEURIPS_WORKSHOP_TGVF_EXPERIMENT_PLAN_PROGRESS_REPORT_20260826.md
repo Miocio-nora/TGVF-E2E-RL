@@ -2,13 +2,13 @@
 
 更新时间：2026-08-26（Asia/Tokyo）
 
-状态：**实验进行中；RP67 三臂验证已闭合，full-prompt 正式评测运行中，Atomic target
-盲审生成器已通过真实 matched trajectory 校验但双臂盲审尚未闭合。**
+状态：**实验进行中；RP67 三臂验证已闭合；Atomic full-prompt 2,240-row 生成与完整性核验
+已完成，TGVF full-prompt 仍在生成；Atomic 双臂盲审包已就绪但人工标注尚未闭合。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
-审计包生成和文章结论更新等关键节点同步；运行中的计数只作为状态快照，不提前当作结果。同步仅
-更新工作区文件，除非另行明确要求，不自动 commit 或 push。
+审计包生成和文章结论更新等关键节点同步；运行中的计数只作为状态快照，不提前当作结果。按当前
+授权，每个关键节点只提交这一个报告文件并 push 到 `origin/main`，不带入 main 的其他工作区改动。
 
 ## 1. 文章当前主线
 
@@ -107,6 +107,28 @@ raw direct 端到端参考。**Atomic Crop+TGVF** 暂列探索性扩展；只有
 目的：验证 RP67 提供的是 target-specific answer utility，而不只是额外 token 或任意 latent
 扰动。
 
+#### 既有 RP67 验证库存与口径纠正
+
+必须先纠正一个容易混淆的历史口径：`POLICY_RL_SMALL_BATCH_PILOT_CLOSEOUT_20260814.md`
+中 first-200 十臂表的 `image-only 72.5%`、`image + correct-D 83.5%`、zero/wrong
+`76.0% / 77.0%` 来自 **RP66**，不能当作 RP67 结果。RP67 Step-2000 自身此前已经有以下
+互补验证；它们不能简单相加，也不能把重复使用同一 867-row population 的结果当作独立复现。
+
+| 层级 | RP67 既有验证 | 主要结果 | 能支持什么 | 关键边界 |
+|---|---|---|---|---|
+| 训练与表示健康 | 2,000-step 训练记录；main + 3 个 D-DeepStack branch | image-axis train top-1 `25% → 100%`，gap `−0.265 → 9.938`；内部评测全部 finite、collapse rate 0 | 优化闭合，D 没有数值崩溃或 token collapse | train 指标不是 held-out answer utility；S2000 validation 只有 8 rows |
+| teacher-forced target retrieval | S2000 INT-DIAG，200 rows / 46 image groups | query top-1/top-2 `90% / 98%`，MRR `94.63%`；184 个完整控制样本中 correct-D 胜过全部 control `94.57%` | D 在固定 reader/readout 下具有很强的 image/target 可辨识性 | oracle target、teacher-forced NLL；不等价于自由生成或自主 target 选择 |
+| image-conditioned answer utility | S2000 full-867 两臂 | image-only `644/867 = 74.28%`；image + correct-D `737/867 = 85.01%`，描述性差值 `+10.73 pp` | correct-D 在原图上下文上具有互补答题价值 | diagnostic semantic overlay；旧 artifact 未给 paired CI，且未含 zero/wrong-D |
+| standalone / replacement 六臂 | S2000 first-200 | D-only correct/zero/wrong `36% / 34% / 37%`；direct replacement `35% / 21% / 32.5%` | 相对 zero 的 content signal 在 direct replacement 中存在 | D-only specificity 不成立；说明结论强烈依赖原图上下文，不能宣称 D 可替代图像 |
+| earlier checkpoint wrong-image stress | S500 full-867 两臂 | image + correct-D `85.70%`；same-target wrong-image-D `2.19%` | D 明确绑定图像内容，错误图像 D 会强烈干扰 reader | 是 S500 而非所选 S2000；control 过强且主动破坏，只作补充诊断 |
+| native causal/free-continuation | S2000 INT-DIAG | 9 对 continuation accuracy `50%`、expected-direction flip `55.56%`；36 对 target-presence actual-direction accuracy `0%`、continuation accuracy `2.78%` | 暴露 teacher-forced readout 到 native generation 的断层 | **负/未闭合证据**，不能作为 RP67 有效性的正面论据 |
+| downstream external utility | Frozen-RP67 TGVF / Atomic 的 CoreDev-2511 | 已在主表及 sub-benchmark 表与 Original、Crop 同列 | 表示可嵌入端到端 policy 并在若干视觉推理 regime 形成优势 | 与 policy、prompt、训练 recipe 纠缠，不是 RP67 单变量消融 |
+
+文章证据层级据此固定为：本次 full-867 三臂 paired utility 是 RP67 机制主证据；旧 full-867
+correct-D vs image-only 与 INT-DIAG 是支持证据；first-200 六臂和 native continuation 作为
+限制证据；CoreDev 结果负责外部效度。这样既能使用已有验证，也不会把 RP66 数值错归给 RP67，
+或把 teacher-forced readout 误写成 autonomous tool-use 证明。
+
 固定三臂：
 
 | Arm | 定义 | 作用 |
@@ -183,12 +205,15 @@ diagnostic semantic accuracy，并在附录同时给 deterministic lower bound �
 - [x] S64/S16 两份计划通过真实训练配置和冻结 RP67 绑定预检；
 - [x] 相关协议与计划测试 18/18 通过；
 - [x] 修复并回归测试已完成训练中“历史最优 checkpoint + 历史 RP67 manifest”的等待边界；
-- [ ] 正式生成与官方七套 scorer（TGVF S64 与 Atomic S16 已分别在 GPU 0–3 / 4–7
-  并行生成；两臂生成完成后顺序运行官方 scorer）；
+- [x] Atomic S16 full-prompt 生成完成并通过完整性核验：2,240 rows、2,240 个唯一 sample /
+  trajectory / result identity、零重复；
+- [ ] TGVF S64 正式生成与两臂官方七套 scorer（TGVF 仍在 GPU 0–3 生成；两臂生成完成后
+  顺序运行 scorer）；
 - [ ] 与 matched prompt、Original、Crop 同表报告。
 
-运行快照（2026-08-26 01:34 JST）：TGVF `174 / 2,240`，Atomic `380 / 2,240`；
-两路均持续写入且未发现错误。此计数仅表示可恢复的生成进度，不是准确率结果。
+运行快照（2026-08-26 02:05 JST）：TGVF `1,506 / 2,240`；Atomic `2,240 / 2,240`。
+Atomic completion receipt 已生成；其 stop 分布为 2,003 final-answer、225 direct-answer、12
+max-tokens，累计 10 次工具错误但不影响 2,240-row 完整覆盖。此计数不是准确率结果。
 
 计划文件：
 
@@ -223,9 +248,18 @@ diagnostic semantic accuracy，并在附录同时给 deterministic lower bound �
 - [x] 在 matched S16 的 1,863 条工具 trajectory 上实测物化 200 条盲审样本；七个数据集按
   population-proportional quota 覆盖，review view 未泄漏 arm、dataset、sample ID、correct、
   reward、score 或 final answer；
-- [ ] 生成 matched/full 两个 blind audit pack；
+- [x] 生成 matched/full 两个 blind audit pack：每臂 200，共 400 条；review view 仅含 bbox、
+  call index、image path/hash、question、opaque review ID、schema 和 target；400 个 review ID
+  唯一，未出现 arm、dataset、sample ID、correct、reward、score 或 final answer 字段；
 - [ ] 双人盲标、裁决、Wilson CI 与 agreement；
 - [ ] 根据审计结果决定 Atomic 的正文层级。
+
+正式盲审根目录：
+`artifacts/evaluation/neurips-workshop-atomic-target-audit-20260826-v1/`。manifest SHA256 为
+`5af64da18e03d7455ab523e011887baf7d1361e50a59d19914f10380bbd165cc`；状态为
+`ready_for_blind_annotation`。matched/full 可用工具 trajectory population 分别为
+`1,863 / 2,009`，按各自七套数据 population-proportional 抽样 200 条。coordinator key 与
+review view 分离；人工标注完成前不得报告 target 合格率或据此升级 Atomic 的正文地位。
 
 ## 6. Atomic 纳入正文的决策门槛
 
