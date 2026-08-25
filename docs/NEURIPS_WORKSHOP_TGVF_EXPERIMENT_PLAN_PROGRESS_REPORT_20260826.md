@@ -2,8 +2,9 @@
 
 更新时间：2026-08-26（Asia/Tokyo）
 
-状态：**实验进行中；RP67 三臂验证已闭合；Atomic full-prompt 2,240-row 生成与完整性核验
-已完成，TGVF full-prompt 仍在生成；Atomic 双臂盲审包已就绪但人工标注尚未闭合。**
+状态：**实验进行中；RP67 三臂验证已闭合；TGVF/Atomic full-prompt 均已完成
+2,240-row 生成与完整性核验，TGVF 官方评分运行中；Atomic 双臂盲审包已就绪但人工标注
+尚未闭合。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -205,15 +206,16 @@ diagnostic semantic accuracy，并在附录同时给 deterministic lower bound �
 - [x] S64/S16 两份计划通过真实训练配置和冻结 RP67 绑定预检；
 - [x] 相关协议与计划测试 18/18 通过；
 - [x] 修复并回归测试已完成训练中“历史最优 checkpoint + 历史 RP67 manifest”的等待边界；
-- [x] Atomic S16 full-prompt 生成完成并通过完整性核验：2,240 rows、2,240 个唯一 sample /
-  trajectory / result identity、零重复；
-- [ ] TGVF S64 正式生成与两臂官方七套 scorer（TGVF 仍在 GPU 0–3 生成；两臂生成完成后
-  顺序运行 scorer）；
+- [x] TGVF S64 与 Atomic S16 full-prompt 生成均完成并通过完整性核验：每臂 2,240 rows、
+  2,240 个唯一 sample / trajectory / result identity、零重复；
+- [ ] 两臂官方七套 scorer（TGVF 已在 GPU 0–7 启动，完成后顺序评分 Atomic）；
 - [ ] 与 matched prompt、Original、Crop 同表报告。
 
-运行快照（2026-08-26 02:05 JST）：TGVF `1,506 / 2,240`；Atomic `2,240 / 2,240`。
-Atomic completion receipt 已生成；其 stop 分布为 2,003 final-answer、225 direct-answer、12
-max-tokens，累计 10 次工具错误但不影响 2,240-row 完整覆盖。此计数不是准确率结果。
+运行快照（2026-08-26 02:17 JST）：TGVF 与 Atomic 均为 `2,240 / 2,240`，两份
+completion receipt 均已生成。TGVF stop 分布为 2,005 final-answer、156 direct-answer、78
+max-tokens、1 call-cap，累计 41 次工具错误；Atomic 为 2,003 final-answer、225 direct-answer、
+12 max-tokens，累计 10 次工具错误。错误计数保留为质量诊断，但不影响各自 2,240-row 唯一覆盖。
+准确率须等待官方 scorer，不能从 stop/tool-error 计数推断。
 
 计划文件：
 
