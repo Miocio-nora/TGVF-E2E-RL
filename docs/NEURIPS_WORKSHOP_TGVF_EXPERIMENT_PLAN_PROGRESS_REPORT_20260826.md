@@ -30,7 +30,7 @@ Original，但预冻结的 HR cross / Relative Reflectance 两个特异性优势
 | 简称 | 本文固定含义 | checkpoint / run | 解释边界 |
 |---|---|---|---|
 | **Original** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；因 prompt/agent protocol 不同，只是端到端 direct reference，不是严格 paired control |
-| **Crop** | PRL25-B native RGB Crop | S32，seed42 | 当前最强 Macro* 工具基线；不补 seed43 |
+| **Crop** | PRL25-B native RGB Crop | S80，seed42 | 80-step 终点工具基线；不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
 | **matched prompt** | 80-step 训练与既有 CoreDev 评测使用的简化、训练匹配 prompt | 历史结果 | 用于现有主表 |
@@ -46,14 +46,15 @@ Original，但预冻结的 HR cross / Relative Reflectance 两个特异性优势
 
 | Method | Macro* | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Original | 55.3556 | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | 74.3333 | 50.6000 |
-| Crop S32 | **63.5377** | **+8.1821** | **80.1047** | 73.0000 | 64.4444 | **54.8108** | 49.0706 | 71.3333 | 52.0000 |
-| TGVF S64 | 59.8086 | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | **72.3333** | 50.4000 |
-| Atomic S16 | 63.0827 | +7.7271 | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
+| Original | 55.3556 | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | **74.3333** | 50.6000 |
+| Crop S80 | 62.2288 | +6.8732 | **81.6754** | **74.5000** | 58.8889 | **55.3358** | 46.4684 | 67.3333 | 51.4000 |
+| TGVF S64 | 59.8086 | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
+| Atomic S16 | **63.0827** | **+7.7271** | 71.7277 | 73.5000 | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
 
 可直接写入正文的事实边界：
 
-- 三个工具方法的 Macro* 都高于 Original；其中 Crop 的总体优势最大。
+- 三个工具方法的 Macro* 都高于 Original；当前表中 Atomic S16 的 matched-prompt Macro* 最高，
+  Crop S80 是按用户指定报告的 80-step 终点基线，不再使用 post-hoc 最优 S32。
 - TGVF 不是全榜最优方法，因此文章不能写成“通用性能支配”。它相对 Original 的主要整体
   增益在 VStar、HRBench 和 MMMU，并在一组更细的关系/数学任务中形成集中优势。
 - Atomic 与 Crop 的 Macro* 接近，但来源不同；这支持能力分解，不支持“Atomic 已严格优于
@@ -76,21 +77,21 @@ Original，但预冻结的 HR cross / Relative Reflectance 两个特异性优势
 
 ### 4.2 当前候选面板
 
-| Sub-benchmark | n | Original | Crop S32 | TGVF S64 | Atomic S16 |
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
 |---|---:|---:|---:|---:|---:|
-| BLINK / Relative Depth | 30 | 83.33 | 70.00 | **86.67** | 80.00 |
-| BLINK / Relative Reflectance | 30 | 50.00 | 53.33 | 46.67 | **70.00** |
-| BLINK / Spatial Relation | 30 | **96.67** | 90.00 | 93.33 | 90.00 |
+| BLINK / Relative Depth | 30 | 83.33 | 83.33 | **86.67** | 80.00 |
+| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** |
+| BLINK / Spatial Relation | 30 | **96.67** | 86.67 | 93.33 | 90.00 |
 | HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** |
-| HRBench / single-image aggregate | 100 | 59.00 | **85.00** | 69.00 | 79.00 |
-| MathVista / arithmetic reasoning | 104 | 65.38 | 66.35 | **72.12** | 63.46 |
-| MathVista / math word problem | 63 | 77.78 | 74.60 | **84.13** | 79.37 |
-| MathVista / numeric commonsense | 36 | 47.22 | 47.22 | **58.33** | 50.00 |
-| MathVista / visual question answering | 42 | 54.76 | 59.52 | **64.29** | 50.00 |
-| OCR EN / text recognition | category | 60.49 | 68.76 | 55.05 | **73.38** |
-| OCR CN / text recognition | category | 59.82 | **73.99** | 22.17 | 67.80 |
-| MathVerse / Vision Only | 100 | 28.00 | 42.00 | 42.00 | **51.00** |
-| MathVerse / Vision Intensive | 100 | **52.00** | 46.00 | 42.00 | 49.00 |
+| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 |
+| MathVista / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 |
+| MathVista / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 |
+| MathVista / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 |
+| MathVista / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 |
+| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** |
+| OCR CN / text recognition | category | 59.82 | **71.23** | 22.17 | 67.80 |
+| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | **51.00** |
+| MathVerse / Vision Intensive | 100 | **52.00** | 49.00 | 42.00 | 49.00 |
 
 建议主图分成三块：
 
@@ -308,12 +309,12 @@ max-tokens、1 call-cap，累计 41 次工具错误；Atomic 为 2,003 final-ans
 
 | Reference / run | Macro* | Δ vs matched | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Original raw direct | 55.3556 | — | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | 74.3333 | 50.6000 |
-| Crop S32 / matched prompt | **63.5377** | reference | **+8.1821** | **80.1047** | 73.0000 | 64.4444 | **54.8108** | 49.0706 | 71.3333 | 52.0000 |
+| Original raw direct | 55.3556 | — | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | **74.3333** | 50.6000 |
+| Crop S80 / matched prompt | 62.2288 | reference | +6.8732 | **81.6754** | **74.5000** | 58.8889 | **55.3358** | 46.4684 | 67.3333 | 51.4000 |
 | TGVF S64 / matched prompt | 59.8086 | reference | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | TGVF S64 / full prompt | 58.5138 | −1.2949 | +3.1582 | 71.7277 | 64.5000 | 66.1111 | 39.4659 | 45.7249 | 68.6667 | 53.4000 |
-| Atomic S16 / matched prompt | 63.0827 | reference | +7.7271 | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
-| Atomic S16 / full prompt | **60.4684** | **−2.6142** | **+5.1128** | 70.6806 | 67.0000 | 63.3333 | 50.4349 | 46.0967 | 70.3333 | **55.4000** |
+| Atomic S16 / matched prompt | **63.0827** | reference | **+7.7271** | 71.7277 | 73.5000 | **66.1111** | 54.2720 | **51.3011** | 69.6667 | 55.0000 |
+| Atomic S16 / full prompt | 60.4684 | **−2.6142** | +5.1128 | 70.6806 | 67.0000 | 63.3333 | 50.4349 | 46.0967 | 70.3333 | **55.4000** |
 
 full prompt 相对 matched prompt 的七项 delta 依次为 VStar `−2.6178`、HR `−2.0000`、
 BLINK-180 `+0.5556`、OCR mean `−5.0787`、MMMU-269 `+0.7435`、MathVista
@@ -450,8 +451,8 @@ appendix；后续 target audit 无论结果好坏，都只改变该探索性分�
   `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`
 - 三方法逐题轨迹与失败案例：
   `docs/PRL25_CROP_TGVF_ATOMIC_QUALITATIVE_CASE_ANALYSIS_20260825.md`
-- Crop S32 官方 summary：
-  `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP8-STEP32-STEP48-STEP64-TEMP1-SEED42-UNIFIED-V1/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json`
+- Crop S80 官方 summary：
+  `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP80-TEMP1-SEED42-UNIFIED-V1/step80/scoring/coredev-official-v1/coredev-2511-eval-summary.json`
 - TGVF S64 / Atomic S16：对应 six-point evaluation 的 `step64` / `step16` 官方 summary 与
   `paired-summary.json`。
 
