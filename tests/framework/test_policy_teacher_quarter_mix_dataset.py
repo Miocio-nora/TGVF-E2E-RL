@@ -32,6 +32,7 @@ from tgvf_rl.policy.deepeyes_official_protocol import (
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
+from tgvf_rl.policy.no_tool_rl_protocol import NO_TOOL_RL_PROMPT_IDENTITY
 from tgvf_rl.protocol import NativeToolCapabilityProfile
 from tests.framework.test_tgvf_deepeyes_matched_dataset import (
     _FakeInstructProcessor,
@@ -65,6 +66,12 @@ def _binding(
 @pytest.mark.parametrize(
     ("profile", "prompt_sha256", "visual_agent", "dataset_type"),
     (
+        (
+            NativeToolCapabilityProfile.NO_TOOL,
+            NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256,
+            module.POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME,
+            PolicyTeacherQuarterMixDataset,
+        ),
         (
             NativeToolCapabilityProfile.CROP_ONLY,
             VISUAL_PROMPT_IDENTITY.bundle_sha256,
@@ -195,6 +202,14 @@ def test_one_schedule_dispatches_without_changing_rows(
         assert "initial_prompt_token_ids" not in rows[0]
     else:
         assert "initial_prompt_token_ids" in rows[0]
+    if profile is NativeToolCapabilityProfile.NO_TOOL:
+        assert all(row["agent_name"] == visual_agent for row in rows)
+        assert rows[0]["tools_kwargs"] == {}
+        assert rows[1]["tools_kwargs"] == {}
+        assert rows[3]["tools_kwargs"] == {}
+        assert rows[0]["extra_info"]["need_tools_kwargs"] is False
+        assert len(rows[0]["raw_prompt"]) == 1
+        assert rows[0]["raw_prompt"][0]["role"] == "user"
 
 
 def test_binding_rejects_a_renderer_identity_from_another_tool_profile(
@@ -212,6 +227,11 @@ def test_binding_rejects_a_renderer_identity_from_another_tool_profile(
 @pytest.mark.parametrize(
     ("profile", "prompt_sha256", "vstar_expectation"),
     (
+        (
+            NativeToolCapabilityProfile.NO_TOOL,
+            NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256,
+            "direct_no_tool",
+        ),
         (
             NativeToolCapabilityProfile.CROP_ONLY,
             VISUAL_PROMPT_IDENTITY.bundle_sha256,

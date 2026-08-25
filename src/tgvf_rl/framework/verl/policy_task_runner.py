@@ -54,6 +54,7 @@ from tgvf_rl.policy.metrics import (
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -602,7 +603,11 @@ def _reference_weights_sha256(config: PolicyE2ESmokeRunConfig) -> str:
 
 def _uses_full_qwen_sync_receipts(config: PolicyE2ESmokeRunConfig) -> bool:
     return (
-        config.schema_version == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+        config.schema_version
+        in {
+            POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
+            POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        }
     )
 
 

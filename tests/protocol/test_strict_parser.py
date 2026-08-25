@@ -499,3 +499,19 @@ def test_sampled_turn_requires_exact_byte_coverage_without_tokenizer_calls() -> 
             token_ids=(1,),
             token_byte_spans=(TokenByteSpan(0, 1, 0, 2),),
         )
+
+
+def test_empty_tool_surface_requires_explicit_direct_only_binding() -> None:
+    with pytest.raises(ValueError, match="non-empty unless explicitly disabled"):
+        StrictToolCallParser(enabled_tool_names=())
+
+    parser = StrictToolCallParser(
+        enabled_tool_names=(), allow_empty_tool_names=True
+    )
+    with pytest.raises(ToolCallParseError, match=r"expected one of \(\)"):
+        parser.parse(
+            _character_token_turn(
+                '<tool_call>{"name":"tgvf_focus_tool","arguments":'
+                '{"target":"needle"}}</tool_call>'
+            )
+        )

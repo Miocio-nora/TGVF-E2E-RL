@@ -1,9 +1,9 @@
 """Shared veRL Dataset for the immutable T1 plus teacher-quarter schedule.
 
 The materialized artifact owns sample selection and order.  This module only
-adapts those rows to one of the three already-established visual protocols:
-native Crop, matched TGVF, or atomic Crop+TGVF.  Keeping that choice in one
-binding prevents the teacher mixture from acquiring tool-specific copies or
+adapts those rows to one of the established visual protocols: no-tool direct,
+native Crop, matched TGVF, or atomic Crop+TGVF. Keeping that choice in one
+binding prevents the teacher mixture from acquiring method-specific copies or
 silently different schedules.
 """
 
@@ -40,6 +40,11 @@ from tgvf_rl.policy.deepeyes_official_protocol import (
     build_visual_messages,
     validate_source_task_kind,
     validate_tools_kwargs_for_source,
+)
+from tgvf_rl.policy.no_tool_rl_protocol import (
+    NO_TOOL_RL_PROMPT_IDENTITY,
+    NO_TOOL_RL_PROMPT_VERSION,
+    build_no_tool_visual_messages,
 )
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
@@ -86,6 +91,9 @@ POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS = (
 POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME = (
     "prl25_crop_exact_deepeyes_matched_visual"
 )
+POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME = (
+    "prl25_no_tool_rl_matched_visual"
+)
 POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH = (
     "pkg://tgvf_rl.framework.verl.policy_teacher_quarter_mix_dataset"
 )
@@ -114,6 +122,14 @@ def _visual_prompt_contract(
 ) -> tuple[object, str, object, str, str]:
     """Return identity, version, builder, agent, and source route."""
 
+    if profile is NativeToolCapabilityProfile.NO_TOOL:
+        return (
+            NO_TOOL_RL_PROMPT_IDENTITY,
+            NO_TOOL_RL_PROMPT_VERSION,
+            build_no_tool_visual_messages,
+            POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME,
+            "matched_no_tool_visual",
+        )
     if profile is NativeToolCapabilityProfile.CROP_ONLY:
         return (
             VISUAL_PROMPT_IDENTITY,
@@ -146,6 +162,7 @@ def _smoke_expectation(
 ) -> str:
     if data_source == "vstar":
         return {
+            NativeToolCapabilityProfile.NO_TOOL: "direct_no_tool",
             NativeToolCapabilityProfile.CROP_ONLY: "crop_possible",
             NativeToolCapabilityProfile.TGVF_ONLY: "tgvf_possible",
             NativeToolCapabilityProfile.CROP_TGVF: "crop_tgvf_possible",
@@ -378,10 +395,16 @@ class PolicyTeacherQuarterMixDataset(TGVFDeepEyesOfficialDataset):
                 for message in builder(sample.question, image=str(image_path))
             ]
             prompt_bundle_sha256 = prompt_identity.bundle_sha256
-            need_tools_kwargs = True
+            if self.binding.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
+                tools_kwargs = {}
+                need_tools_kwargs = False
+            else:
+                need_tools_kwargs = True
 
         aligned_crop = isinstance(self, AlignedCropPolicyTeacherQuarterMixDataset)
-        if (
+        if self.binding.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
+            agent_name = POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME
+        elif (
             self.binding.tool_profile is NativeToolCapabilityProfile.CROP_ONLY
             and not aligned_crop
         ):
@@ -492,6 +515,7 @@ __all__ = [
     "AlignedCropPolicyTeacherQuarterMixDataset",
     "POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME",
     "POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_AGENT_NAME",
+    "POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME",
     "POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS",
     "POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS",
     "POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH",

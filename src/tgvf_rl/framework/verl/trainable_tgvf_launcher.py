@@ -36,6 +36,7 @@ from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
@@ -104,6 +105,7 @@ from .policy_teacher_quarter_mix_dataset import (
     POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
     POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
     POLICY_TEACHER_QUARTER_MIX_DATASET_MODULE_PATH,
+    POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME,
     PolicyTeacherQuarterMixDatasetBinding,
 )
 from .policy_teacher_ratio_mix_dataset import (
@@ -182,14 +184,22 @@ def _is_exact_crop(config: PolicyE2ESmokeRunConfig) -> bool:
     )
 
 
+def _is_no_tool(config: PolicyE2ESmokeRunConfig) -> bool:
+    return config.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+
+
+def _uses_native_qwen_engine(config: PolicyE2ESmokeRunConfig) -> bool:
+    return _is_exact_crop(config) or _is_no_tool(config)
+
+
 def _actor_external_module(config: PolicyE2ESmokeRunConfig) -> str:
-    return TRAINABLE_CROP_EXTERNAL_MODULE if _is_exact_crop(config) else (
+    return TRAINABLE_CROP_EXTERNAL_MODULE if _uses_native_qwen_engine(config) else (
         TRAINABLE_TGVF_EXTERNAL_MODULE
     )
 
 
 def _actor_model_type(config: PolicyE2ESmokeRunConfig) -> str:
-    return TRAINABLE_CROP_MODEL_TYPE if _is_exact_crop(config) else (
+    return TRAINABLE_CROP_MODEL_TYPE if _uses_native_qwen_engine(config) else (
         TRAINABLE_TGVF_MODEL_TYPE
     )
 
@@ -463,14 +473,16 @@ def _matched_dataset_binding(
     )
     visual_prompt_bundle_sha256 = (
         config.protocol.prompt_sha256
-        if _is_exact_crop(config)
+        if _uses_native_qwen_engine(config)
         else CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
         if crop_tgvf
         else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
     )
     if isinstance(config.dataset.runtime_binding, PolicyTeacherRatioMixRuntimeBinding):
-        if _is_exact_crop(config):
-            raise ValueError("matched exact Crop currently requires Teacher25 data")
+        if _uses_native_qwen_engine(config):
+            raise ValueError(
+                "matched native-Qwen controls currently require Teacher25 data"
+            )
         runtime_binding = config.dataset.runtime_binding
         return PolicyTeacherRatioMixDatasetBinding(
             root=config.dataset.root,
@@ -507,8 +519,10 @@ def _matched_dataset_binding(
             tokenizer_length=config.model.tokenizer_length,
             chat_template_sha256=config.model.chat_template_sha256,
         )
-    if _is_exact_crop(config):
-        raise ValueError("matched exact Crop currently requires Teacher25 data")
+    if _uses_native_qwen_engine(config):
+        raise ValueError(
+            "matched native-Qwen controls currently require Teacher25 data"
+        )
     return binding_type(
         root=DEEPEYES_T1_ROOT,
         candidate_sidecar_path=DEEPEYES_CANDIDATE_SIDECAR,
@@ -578,6 +592,13 @@ def _matched_dataset_runtime_identity(
     if isinstance(
         config.dataset.runtime_binding, PolicyTeacherQuarterMixRuntimeBinding
     ):
+        if _is_no_tool(config):
+            return (
+                POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS,
+                POLICY_TEACHER_QUARTER_MIX_DATASET_CLASS.rsplit(".", 1)[-1],
+                POLICY_TEACHER_QUARTER_MIX_CONFIG_NAME,
+                POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME,
+            )
         if _is_exact_crop(config):
             return (
                 POLICY_TEACHER_QUARTER_MIX_ALIGNED_CROP_DATASET_CLASS,
@@ -683,7 +704,7 @@ def _replace_custom_record(
     protocol.update(
         {
             "prompt_sha256": config.protocol.prompt_sha256,
-            "maximum_tool_calls": 6,
+            "maximum_tool_calls": config.protocol.maximum_tool_calls,
         }
     )
     reward = dict(custom["reward"])  # type: ignore[arg-type]
@@ -700,7 +721,24 @@ def _replace_custom_record(
         target_step=checkpoint_steps[-1],
         horizon_extension=horizon_extension,
     )
-    if _is_exact_crop(config):
+    if _is_no_tool(config):
+        trainable_component = {
+            "trainable_no_tool": {
+                "external_module": TRAINABLE_CROP_EXTERNAL_MODULE,
+                "model_type": TRAINABLE_CROP_MODEL_TYPE,
+                "checkpoint_manager": "upstream_verl",
+                "policy_lora": False,
+                "vision_trainable": True,
+                "representation_used": False,
+                "tool_runtime": "disabled_direct_only",
+                "actual_behavior_logprobs": True,
+                "current_vision_replay": "live_preprocessed_pixels",
+                "reference_vision_replay": "recorded_features",
+                "sync_every_optimizer_step": True,
+            }
+        }
+        weight_payload = "full_qwen"
+    elif _is_exact_crop(config):
         trainable_component = {
             "trainable_crop": {
                 "external_module": TRAINABLE_CROP_EXTERNAL_MODULE,
@@ -773,7 +811,9 @@ def _replace_custom_record(
     if mode == "canary":
         _, canary_split = _functional_canary_dataset(config)
         custom["functional_canary"] = {
-            "minimum_successful_tgvf_observations": 1,
+            "minimum_successful_tgvf_observations": (
+                0 if _is_no_tool(config) else 1
+            ),
             "failure_boundary": "before_optimizer_mutation",
             "dataset_split": canary_split,
         }
@@ -916,11 +956,15 @@ class TrainableTGVFVerlLaunchPlan:
             ),
             "trainer.total_training_steps": self.target_step,
         }
-        if _is_exact_crop(self.config):
+        if _uses_native_qwen_engine(self.config):
             if "actor_rollout_ref.rollout.checkpoint_manager_class" in values:
-                raise ValueError("matched exact Crop must retain upstream weight sync")
+                raise ValueError(
+                    "matched native-Qwen control must retain upstream weight sync"
+                )
             if "actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs" in values:
-                raise ValueError("matched exact Crop has no RP66 checkpoint controls")
+                raise ValueError(
+                    "matched native-Qwen control has no RP66 checkpoint controls"
+                )
         else:
             required.update(
                 {
@@ -947,7 +991,23 @@ class TrainableTGVFVerlLaunchPlan:
         custom = values.get("actor_rollout_ref.rollout.custom")
         if not isinstance(custom, Mapping):
             raise ValueError("trainable TGVF custom record is missing")
-        if _is_exact_crop(self.config):
+        if _is_no_tool(self.config):
+            expected_component = {
+                "external_module": TRAINABLE_CROP_EXTERNAL_MODULE,
+                "model_type": TRAINABLE_CROP_MODEL_TYPE,
+                "checkpoint_manager": "upstream_verl",
+                "policy_lora": False,
+                "vision_trainable": True,
+                "representation_used": False,
+                "tool_runtime": "disabled_direct_only",
+                "actual_behavior_logprobs": True,
+                "current_vision_replay": "live_preprocessed_pixels",
+                "reference_vision_replay": "recorded_features",
+                "sync_every_optimizer_step": True,
+            }
+            component_name = "trainable_no_tool"
+            weight_payload = "full_qwen"
+        elif _is_exact_crop(self.config):
             expected_component = {
                 "external_module": TRAINABLE_CROP_EXTERNAL_MODULE,
                 "model_type": TRAINABLE_CROP_MODEL_TYPE,
@@ -1032,12 +1092,13 @@ class TrainableTGVFVerlLaunchPlan:
             POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV
         )
         if self.mode == "canary":
-            if requires_observation != "1":
-                raise ValueError(
-                    "functional canary must require a successful TGVF observation"
-                )
+            expected_observation_gate = None if _is_no_tool(self.config) else "1"
+            if requires_observation != expected_observation_gate:
+                raise ValueError("functional canary observation gate differs")
             if custom.get("functional_canary") != {
-                "minimum_successful_tgvf_observations": 1,
+                "minimum_successful_tgvf_observations": (
+                    0 if _is_no_tool(self.config) else 1
+                ),
                 "failure_boundary": "before_optimizer_mutation",
                 "dataset_split": canary_split,
             }:
@@ -1152,7 +1213,7 @@ def build_trainable_tgvf_verl_launch_plan(
             "trainer.save_freq": 1,
         }
     )
-    if _is_exact_crop(config):
+    if _uses_native_qwen_engine(config):
         values.pop("actor_rollout_ref.rollout.checkpoint_manager_class", None)
         values.pop("actor_rollout_ref.rollout.checkpoint_engine.engine_kwargs", None)
     _apply_matched_mathematical_controls(
@@ -1195,7 +1256,8 @@ def build_trainable_tgvf_verl_launch_plan(
             }
         )
         environment["TGVF_POLICY_STATE_DIR"] = str(output_root / "runtime-policy-state")
-        environment[POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV] = "1"
+        if not _is_no_tool(config):
+            environment[POLICY_REQUIRE_SUCCESSFUL_TGVF_OBSERVATION_ENV] = "1"
     environment[POLICY_METRICS_PATH_ENV] = str(output_root / "metrics.jsonl")
     environment[POLICY_REFERENCE_DIAGNOSTIC_ENV] = "0"
     values["ray_kwargs.ray_init._temp_dir"] = str(
@@ -1219,7 +1281,7 @@ def build_trainable_tgvf_verl_launch_plan(
             "actor_external_lib": _actor_external_module(config),
             "checkpoint_engine_manager": (
                 "upstream_verl"
-                if _is_exact_crop(config)
+                if _uses_native_qwen_engine(config)
                 else TRAINABLE_TGVF_CHECKPOINT_ENGINE_MANAGER_FQN
             ),
         }
@@ -1335,7 +1397,7 @@ def preflight_trainable_tgvf_verl_runtime(
     configured_path = os.environ.get("TGVF_POLICY_RUN_CONFIG_PATH")
     if configured_path is None or Path(configured_path).resolve() != config.source_path:
         raise RuntimeError("Policy preflight run-config path differs")
-    if not _is_exact_crop(config):
+    if not _uses_native_qwen_engine(config):
         preflight_trainable_rp66_artifact(config)
     _verified_schedule_index()
     if (

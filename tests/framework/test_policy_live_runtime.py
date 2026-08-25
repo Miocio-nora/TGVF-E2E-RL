@@ -58,6 +58,7 @@ from tgvf_rl.judges import (
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
@@ -525,6 +526,18 @@ def test_trainable_rp66_thinklite_rows_are_direct_only(schema_version: str) -> N
     config = SimpleNamespace(schema_version=schema_version)
 
     assert _rp66_matched_source_route(config, {"data_source": "thinklite"}) == (
+        True,
+        False,
+    )
+
+
+@pytest.mark.parametrize("data_source", ("vstar", "arxivqa", "teacher", "thinklite"))
+def test_no_tool_control_routes_every_source_direct_only(data_source: str) -> None:
+    config = SimpleNamespace(
+        schema_version=POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    )
+
+    assert _rp66_matched_source_route(config, {"data_source": data_source}) == (
         True,
         False,
     )

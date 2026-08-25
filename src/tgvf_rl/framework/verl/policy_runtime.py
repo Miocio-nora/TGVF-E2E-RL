@@ -38,6 +38,7 @@ from tgvf_rl.framework.vllm import (
 )
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -473,7 +474,10 @@ class PolicyE2ERuntimeInvocationFactory:
             if core is None:
                 full_qwen = (
                     config.schema_version
-                    == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+                    in {
+                        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
+                        POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+                    }
                 )
                 if full_qwen:
                     from .exact_replay_engine import (

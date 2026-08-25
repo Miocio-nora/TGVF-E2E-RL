@@ -232,6 +232,7 @@ class FrameworkNeutralAgentLoop:
         ),
         single_response_max_tokens: int | None = None,
         forbidden_policy_token_ids: tuple[int, ...] = (),
+        allow_no_tools: bool = False,
     ) -> None:
         self.sampler = sampler
         self.tool_runtime = tool_runtime
@@ -242,6 +243,10 @@ class FrameworkNeutralAgentLoop:
             raise TypeError("assistant_dialect must be NativeAssistantDialect")
         if type(direct_only) is not bool:
             raise TypeError("direct_only must be a bool")
+        if type(allow_no_tools) is not bool:
+            raise TypeError("allow_no_tools must be a bool")
+        if allow_no_tools and not direct_only:
+            raise ValueError("an empty tool surface requires direct_only mode")
         if not isinstance(response_budget_scope, ResponseBudgetScope):
             raise TypeError("response_budget_scope must be ResponseBudgetScope")
         if single_response_max_tokens is not None and (
@@ -262,8 +267,10 @@ class FrameworkNeutralAgentLoop:
             raise ValueError("forbidden policy token IDs must be unique")
         self.forbidden_policy_token_ids = frozenset(forbidden)
         names = tuple(enabled_tool_names)
-        if not names or len(names) != len(set(names)):
-            raise ValueError("enabled tool names must be non-empty and unique")
+        if (not names and not allow_no_tools) or len(names) != len(set(names)):
+            raise ValueError(
+                "enabled tool names must be unique and non-empty unless tools are disabled"
+            )
         unknown = set(names) - set(POLICY_RL_TOOL_NAMES)
         if unknown:
             raise ValueError(f"unknown enabled tools: {sorted(unknown)!r}")

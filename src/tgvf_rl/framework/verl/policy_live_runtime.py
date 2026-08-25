@@ -91,6 +91,7 @@ from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.trajectory_audit import PolicyTrajectoryAuditWriter
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
 )
 from tgvf_rl.policy.deepeyes_official_protocol import (
@@ -208,6 +209,11 @@ def _rp66_matched_source_route(
         not in POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS
     ):
         return False, False
+    if (
+        getattr(config, "schema_version", None)
+        == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    ):
+        return True, False
     data_source = _scalar(sample_fields.get("data_source"))
     if data_source == _RP66_MATCHED_DIRECT_ONLY_SOURCE:
         return True, False
@@ -315,7 +321,9 @@ class Qwen3PolicyE2ELiveRuntimeBuilder:
             raise ValueError("Policy Pilot live runtime requires qwen3_vl")
         server_client = context.server_manager
         required_methods = ["materialize_source", "generate"]
-        if config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        if config.protocol.tool_profile is NativeToolCapabilityProfile.NO_TOOL:
+            pass
+        elif config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             required_methods.append("materialize_focus")
         elif config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY:
             required_methods.append("materialize_crop")
@@ -510,6 +518,9 @@ class _Qwen3PolicyTrajectoryComponents:
                     reward.tool_utility is not None,
                 )
                 quality_enabled = reward.focus_reward_enabled
+                protocol_error_penalty = getattr(
+                    reward, "protocol_error_penalty", 1.0
+                )
                 if (
                     type(utility_enabled) is not bool
                     or utility_enabled != (reward.tool_utility is not None)
@@ -566,7 +577,7 @@ class _Qwen3PolicyTrajectoryComponents:
                     "tool_utility_reward_enabled": utility_enabled,
                     "focus_reward_enabled": quality_enabled,
                     "grounding_reward_enabled": quality_enabled,
-                    "protocol_error_penalty": reward.protocol_error_penalty,
+                    "protocol_error_penalty": protocol_error_penalty,
                     "equation": (
                         (
                             "2*A_gated+T+R_repeat+F+G+P"
@@ -626,7 +637,7 @@ class _Qwen3PolicyTrajectoryComponents:
                     ),
                     visual_quality_enabled=quality_enabled,
                     tool_utility_reward_enabled=utility_enabled,
-                    protocol_error_penalty=reward.protocol_error_penalty,
+                    protocol_error_penalty=protocol_error_penalty,
                 )
             self.reward_pipeline = None
             self.stage3_reward_runtime = None
@@ -729,10 +740,16 @@ class _Qwen3PolicyTrajectoryComponents:
             success_environment_text_renderer=success_environment_text_renderer,
             assistant_dialect=assistant_dialect,
         )
-        parser = StrictToolCallParser(
-            enabled_tool_names=self.config.protocol.enabled_tool_names
+        no_tool = (
+            self.config.protocol.tool_profile is NativeToolCapabilityProfile.NO_TOOL
         )
-        if self.config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        parser = StrictToolCallParser(
+            enabled_tool_names=self.config.protocol.enabled_tool_names,
+            allow_empty_tool_names=no_tool,
+        )
+        if no_tool:
+            tool_runtime = _DisabledNoToolRuntime()
+        elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY:
             tool_runtime = _RemoteTGVFFocusToolRuntime(
                 event_loop=asyncio.get_running_loop(),
                 server_client=self.server_client,
@@ -834,6 +851,7 @@ class _Qwen3PolicyTrajectoryComponents:
                 forbidden_policy_token_ids=(
                     self.layout_builder.forbidden_policy_visual_token_ids
                 ),
+                allow_no_tools=no_tool,
             )
 
         reward_source = _reward_source_from_sample_fields(sample_fields)
@@ -945,6 +963,14 @@ class _IdentityOnlyLoRASnapshotConsumer:
         if digest != snapshot.policy_version.weights_sha256:
             raise ReplayMismatchError("LoRA snapshot tensor identity differs")
         return snapshot.policy_version
+
+
+class _DisabledNoToolRuntime:
+    """Unreachable fail-closed runtime for a direct-only no-tool trajectory."""
+
+    def execute(self, parsed_call: object, context: object) -> object:
+        del parsed_call, context
+        raise RuntimeError("No-Tool RL cannot execute a visual tool")
 
 
 class _RemoteTGVFFocusToolRuntime:
