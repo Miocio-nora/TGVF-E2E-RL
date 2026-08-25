@@ -10101,6 +10101,49 @@ than inferred from a script name or prior conversation.
   evaluation-complete SHA256
   `e801e9300d7a16079d4b84caea3b22b32d9f83fa4e12bd77958452c416adede4`.
 
+### PRL25 C/D selected-best independent seed43 evaluation replicate (2026-08-25)
+
+- Cell/status: PRL25-C pure-TGVF S64 and PRL25-D Atomic Crop+TGVF S16 /
+  `COMPLETE / PASS`. These checkpoints were selected as the post-hoc maxima of
+  their respective seed42 six-point curves before the replicate was launched;
+  seed43 was not used to search the remaining checkpoints.
+- Replicate contract: training identity and checkpoint bytes are unchanged. The
+  replicate changes only the CoreDev temp1 evaluation sampling seed from 42 to
+  43 under explicit `evaluation_replicate_seed_override`; supported sample set,
+  prompt/tool protocol, scorer and Qwen2.5-72B judge remain fixed. Commits
+  `8c10384` and `466576c` bind the two plans and reject both silent seed drift
+  and a nominal override that reuses the training/evaluation seed.
+- PRL25-C S64 result: seed42/seed43 Macro* is `59.8086/60.1807`, a
+  `+0.3721 pp` replicate delta; the two-seed mean is `59.9947` and the best
+  observed value is `60.1807` (seed43). Component seed43-minus-seed42 deltas for
+  VStar/HRBench/BLINK/OCR/MMMU/MathVista/MathVerse are respectively
+  `+0.5236/+1.0000/0.0000/-1.2138/-0.3717/-1.3333/+4.0000 pp`.
+- PRL25-D S16 result: seed42/seed43 Macro* is `63.0827/62.8952`, a
+  `-0.1875 pp` replicate delta; the two-seed mean is `62.9889` and the best
+  observed value is `63.0827` (seed42). The corresponding component deltas are
+  `-3.1414/-3.0000/+2.2222/-1.1063/-1.4870/+2.0000/+3.2000 pp`.
+- Interpretation/reporting decision: aggregate Macro* is stable across these
+  two evaluation seeds, with absolute shifts below `0.4 pp`, although individual
+  suites move by up to `4 pp` and two seeds do not support a formal variance or
+  confidence-interval estimate. Summary comparisons report each arm's best
+  observed value (`60.1807/63.0827`) together with its two-seed mean
+  (`59.9947/62.9889`). Cross-seed maxima must not overwrite the original seed42
+  paired six-point curves. D exceeds C by `2.9019 pp` on best observed values and
+  `2.9942 pp` on two-seed means; because their tool protocols differ, neither is
+  a causal synergy estimate.
+- Artifact closure: D completed at `2026-08-25 20:31 JST` and C at
+  `2026-08-25 20:52 JST`; each has 2,240 supported generations, 2,511 official
+  rows, 7/7 receipts and a final `evaluation-complete`. C's evaluation ID is
+  `PRL25-C-FROZEN-RP67-TFREE-TEACHER25-COREDEV2511-S64-SEED43-REPLICATE-V1`,
+  with summary/completion SHA256
+  `d513729942ed9317116a862156a5020fe3a378b30c7a411e8d4f4f98356b28dc` /
+  `1615b4f9edede500e1579419b77311204f9a16a09fcba4f8b5e3416fc2c453f5`.
+  D's evaluation ID is
+  `PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-COREDEV2511-S16-SEED43-REPLICATE-V1`,
+  with summary/completion SHA256
+  `ba7b670952273119e0a8f35be2f94a84ba7aa259780e242666864fa75bb37228` /
+  `371b52ccf72c95846b1a3edc65977fcc065a099462fbfd61b73efe5ed2a01d8a`.
+
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 
 - Decision: every retained scientific checkpoint identity is permanent as an

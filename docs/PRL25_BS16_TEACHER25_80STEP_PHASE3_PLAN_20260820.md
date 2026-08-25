@@ -444,11 +444,12 @@ S16 是该轨迹的 post-hoc 最佳节点，比 S8 高 `+0.6672 pp`。S32/S48/S6
 MMMU、MathVista 分别下降 `8.5000/5.0000/7.8824/5.9480/0.3333 pp`，MathVerse 仅上升
 `0.4000 pp`。这说明后半程更像能力重新分配并伴随总体退化，而不是稳定学习。
 
-与同一期另外两条已完成 T-free 主线作描述性比较：native Crop 的最佳点为 S32
-`63.5377`，pure TGVF 的最佳点为 S64 `59.8086`，Atomic Crop+TGVF 的最佳点为 S16
-`63.0827`。D 的最佳点比 B 低 `0.4550 pp`、比 C 高 `3.2741 pp`；但三条工具协议不同，
-这些差值不能写成严格 synergy 或单变量因果结论。预注册 S80 仍是主终点，S16 只作为完整
-六点曲线中明确标注的补充最佳点。
+与同一期另外两条已完成 T-free 主线作描述性比较：在共同 seed42 六点曲线内，native Crop
+的最佳点为 S32 `63.5377`，pure TGVF 的最佳点为 S64 `59.8086`，Atomic Crop+TGVF 的
+最佳点为 S16 `63.0827`。D 的 seed42 最佳点比 B 低 `0.4550 pp`、比 C 高
+`3.2741 pp`；但三条工具协议不同，这些差值不能写成严格 synergy 或单变量因果结论。
+预注册 S80 仍是主终点，S16 只作为完整六点曲线中明确标注的补充最佳点。C-S64 与 D-S16
+的独立评测 seed43 复测及最终摘要取值见第 4.7 节。
 
 本 arm 因而复现了 Atomic Crop+TGVF 的早期竞争力，但否定“只需把 S16 延长到 S80 就会
 持续改善外评”的假设。评测 ID 为
@@ -456,6 +457,51 @@ MMMU、MathVista 分别下降 `8.5000/5.0000/7.8824/5.9480/0.3333 pp`，MathVers
 paired-summary 与 evaluation-complete SHA256 分别为
 `9b78159a04a4fe29abdeb8976b7d571973929f3e346b3c625f10dabfb051228f` 和
 `e801e9300d7a16079d4b84caea3b22b32d9f83fa4e12bd77958452c416adede4`。
+
+### 4.7 最优 checkpoint 的独立 seed43 复测与摘要取值（2026-08-25）
+
+根据共同 seed42 六点曲线，pure TGVF 选定 **S64**，Atomic Crop+TGVF 选定 **S16** 作为
+各自的 post-hoc 最优 checkpoint。为检查 temperature-1 生成采样带来的波动，对这两个已选
+checkpoint 追加独立 evaluation seed43 复测。这里改变的只是外评 sampling seed；训练 run、
+checkpoint、CoreDev-2511 支持集、prompt/tool、temperature、scorer 与 72B judge 合同均未
+改变，因此不是重新训练，也不改变 seed42 六点曲线的 paired 身份。
+
+| Arm | 选定 checkpoint | Seed42 Macro* | Seed43 Macro* | Seed43−Seed42 | 双-seed 均值 | 最佳观测值（seed） |
+|---|---:|---:|---:|---:|---:|---:|
+| pure TGVF | S64 | 59.8086 | 60.1807 | +0.3721 | 59.9947 | **60.1807（43）** |
+| Atomic Crop+TGVF | S16 | **63.0827** | 62.8952 | −0.1875 | 62.9889 | **63.0827（42）** |
+
+分量复核如下，单位均为 `%`：
+
+| 指标 | TGVF S64 seed42 | TGVF S64 seed43 | Δ | Crop+TGVF S16 seed42 | Crop+TGVF S16 seed43 | Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| VStar | 74.3455 | 74.8691 | +0.5236 | 71.7277 | 68.5864 | −3.1414 |
+| HRBench | 66.5000 | 67.5000 | +1.0000 | 73.5000 | 70.5000 | −3.0000 |
+| BLINK-single | 65.5556 | 65.5556 | 0.0000 | 66.1111 | 68.3333 | +2.2222 |
+| OCR-mean | 44.5446 | 43.3308 | −1.2138 | 54.2720 | 53.1657 | −1.1063 |
+| MMMU-single | 44.9814 | 44.6097 | −0.3717 | 51.3011 | 49.8141 | −1.4870 |
+| MathVista | 72.3333 | 71.0000 | −1.3333 | 69.6667 | 71.6667 | +2.0000 |
+| MathVerse-macro | 50.4000 | 54.4000 | +4.0000 | 55.0000 | 58.2000 | +3.2000 |
+| **Macro\*** | **59.8086** | **60.1807** | **+0.3721** | **63.0827** | **62.8952** | **−0.1875** |
+
+两条线路的 Macro* 跨 seed 绝对差分别只有 `0.3721 pp` 与 `0.1875 pp`，支持“选定最优
+checkpoint 的总体分数较稳定”的结论。该稳定性限定于七项聚合分数：单项仍有约
+`1--4 pp` 的采样波动，两个 seed 也不足以估计正式标准差或置信区间。按当前摘要规则，分别
+报告每条线路的最佳观测值，即 pure TGVF S64 `60.1807`、Atomic Crop+TGVF S16
+`63.0827`；同时必须伴随双-seed 均值 `59.9947/62.9889`，且不得用这些跨 seed 最大值回填
+或重写原 seed42 六点 paired 曲线。以最佳观测值比较，D 比 C 高 `2.9019 pp`；以双-seed
+均值比较高 `2.9942 pp`。由于工具协议不同，这仍是描述性差异而不是 synergy 因果估计。
+
+两项复测分别于 `2026-08-25 20:52 JST` 和 `20:31 JST` 完成，均覆盖 `2,240` 条受支持生成、
+`2,511` 条正式记分与 7/7 receipt。评测 ID 为
+`PRL25-C-FROZEN-RP67-TFREE-TEACHER25-COREDEV2511-S64-SEED43-REPLICATE-V1` 与
+`PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-COREDEV2511-S16-SEED43-REPLICATE-V1`。
+C 的 summary/completion SHA256 为
+`d513729942ed9317116a862156a5020fe3a378b30c7a411e8d4f4f98356b28dc` /
+`1615b4f9edede500e1579419b77311204f9a16a09fcba4f8b5e3416fc2c453f5`；D 为
+`ba7b670952273119e0a8f35be2f94a84ba7aa259780e242666864fa75bb37228` /
+`371b52ccf72c95846b1a3edc65977fcc065a099462fbfd61b73efe5ed2a01d8a`。复测计划与显式 seed
+override 门禁由执行分支提交 `8c10384`、`466576c` 固定。
 
 ## 5. Reward 合同
 
