@@ -6,7 +6,8 @@
 matched prompt 两臂均已完成并评分；只增加 target 定义与案例后，TGVF S64 / Atomic S16
 Macro* 仍高于 Original，但相对各自 matched prompt 有温和回退。No-Tool RL 因果对照已冻结
 为 32-step 正式主终点，保留 S0/S8/S16/S32；独立实现、严格配置与 CPU 回归已完成，真实
-1-step canary 已通过，正式 8 卡 S32 已于 07:18 JST 启动，并已闭合 Step 2。下一步完成该对照、
+1-step canary 已通过，正式 8 卡 S32 已于 07:18 JST 启动，首个正式保留点 S8 已闭合并验收。
+下一步完成该对照、
 正式 Atomic matched/target-only 盲审与调用行为对照。**
 
 进度查看：本报告同步到 main 工作区
@@ -673,6 +674,14 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   `626.8 / 592.2 s`；Step 2 rolling checkpoint 已验收 8 份 model、8 份 optimizer 与 8 份
   extra-state shard。tmux/supervisor 存活且无 traceback；采样时 GPU 正处于 checkpoint 写盘后的
   短暂空闲窗口。按当前均速粗估，S8 约在 1 小时后、S32 约在 5 小时后到达；该估时不作为实验结果。
+- 2026-08-26 08:52 JST 关键节点：正式训练已提交并验收首个保留点 **S8/32**。累计
+  128 prompts、2,048 trajectories、928,070 generated policy tokens；累计 mean answer reward
+  为 `0.5962`，format error rate 为 `0.2378`，这些是在线训练遥测而非 benchmark 结果。
+  No-Tool 合同持续满足：`successful_tgvf_observations=0`、`tool_call_attempt_rate=0.0`、
+  `mean_tool_call_attempts=0.0`。S8 rolling checkpoint 与 permanent checkpoint 均存在；后者含
+  permanent receipt、8 份 model、8 份 optimizer、8 份 extra-state shard 及配对 project state，
+  共 40 个文件。tmux/supervisor 存活且无 traceback，训练已继续向 S16/S32 推进；按当前约
+  `11.1 min/step` 的运行均速粗估，S16 约还需 1.5 小时、S32 约还需 4.5 小时。
 
 ## 6. Atomic 纳入正文的决策门槛
 
