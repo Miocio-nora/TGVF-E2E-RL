@@ -298,6 +298,34 @@ def test_live_policy_contract_accepts_hidden_native_eos(
     assert '"stop_reason":null' in sampled.stop_reason
 
 
+def test_no_tool_policy_contract_preserves_tool_markers_as_direct_only_output() -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "configs/policy/runs"
+        / "prl_25_f_c0_qwen3_instruct_full_no_tool_rl_bs4_n2_tfree_teacher25_1step_ws4.toml"
+    )
+    run = load_policy_e2e_smoke_run_config(path)
+    termination = _policy_termination_contract(run)
+    assert termination.tool_calls_enabled is False
+    assert termination.required_request_stop_strings == ()
+    assert termination.tool_call_terminal_suffixes == ()
+    assert termination.tool_call_outcomes == ()
+
+    # The sampler retains even malformed tool-like text. The direct-only
+    # native loop then assigns the configured protocol penalty without parsing
+    # or executing it and without turning one bad sample into a run failure.
+    text = "reason</think><tool_call>{}</tool_call>trailing"
+    client = _Client(text, finish_reason="stop", stop_reason=151645)
+    sampled = _sampler(client, termination=termination).sample(
+        (1, 2),
+        run.policy.sampling.as_vllm_parameters(max_tokens=512),
+        turn_index=0,
+    )
+
+    assert sampled.text == text
+    assert sampled.stop_reason is not None
+
+
 def test_live_policy_contract_accepts_secondary_model_native_eos() -> None:
     """Reproduce the rare PRL15 step-6 outcome without starting vLLM/GPU."""
 

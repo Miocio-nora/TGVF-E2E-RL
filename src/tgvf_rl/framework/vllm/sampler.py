@@ -227,6 +227,7 @@ class VLLMTurnTerminationContract:
     tool_call_terminal_suffixes: tuple[str, ...]
     tool_call_outcomes: tuple[VLLMTerminationOutcome, ...]
     final_turn_outcomes: tuple[VLLMTerminationOutcome, ...]
+    tool_calls_enabled: bool = True
 
     def __post_init__(self) -> None:
         for name in (
@@ -254,13 +255,28 @@ class VLLMTurnTerminationContract:
             raise ValueError("required termination stops must be unique")
         if not isinstance(self.include_stop_str_in_output, bool):
             raise TypeError("include_stop_str_in_output must be bool")
-        if not self.tool_call_terminal_suffixes or len(
-            set(self.tool_call_terminal_suffixes)
-        ) != len(self.tool_call_terminal_suffixes):
+        if not isinstance(self.tool_calls_enabled, bool):
+            raise TypeError("tool_calls_enabled must be bool")
+        if self.tool_calls_enabled and (
+            not self.tool_call_terminal_suffixes
+            or len(set(self.tool_call_terminal_suffixes))
+            != len(self.tool_call_terminal_suffixes)
+        ):
             raise ValueError("tool-call terminal suffixes must be non-empty and unique")
+        if not self.tool_calls_enabled and (
+            self.tool_call_terminal_suffixes or self.tool_call_outcomes
+        ):
+            raise ValueError(
+                "disabled tool calls require empty tool-call termination fields"
+            )
         if any(not isinstance(suffix, str) for suffix in self.tool_call_terminal_suffixes):
             raise TypeError("tool-call terminal suffixes must be strings")
-        for name in ("tool_call_outcomes", "final_turn_outcomes"):
+        outcome_names = (
+            ("tool_call_outcomes", "final_turn_outcomes")
+            if self.tool_calls_enabled
+            else ("final_turn_outcomes",)
+        )
+        for name in outcome_names:
             outcomes = getattr(self, name)
             if not outcomes or any(
                 not isinstance(outcome, VLLMTerminationOutcome)
@@ -272,7 +288,7 @@ class VLLMTurnTerminationContract:
 
     @property
     def canonical_payload(self) -> dict[str, object]:
-        return {
+        payload = {
             "schema": "tgvf-vllm-turn-termination-v1",
             "required_request_stop_strings": self.required_request_stop_strings,
             "required_request_stop_token_ids": self.required_request_stop_token_ids,
@@ -285,6 +301,11 @@ class VLLMTurnTerminationContract:
                 outcome.canonical_payload for outcome in self.final_turn_outcomes
             ),
         }
+        # Preserve the established tool-enabled contract identity while making
+        # the new direct-only behavior explicit and content-addressed.
+        if not self.tool_calls_enabled:
+            payload["tool_calls_enabled"] = False
+        return payload
 
     @property
     def sha256(self) -> str:
@@ -697,11 +718,11 @@ class VLLMPolicySampler:
             raise ReplayMismatchError("vLLM response exceeded requested max_tokens")
 
         close_count = response.text.count(TOOL_CALL_CLOSE)
-        if close_count > 1:
+        if self.termination.tool_calls_enabled and close_count > 1:
             raise ReplayMismatchError(
                 "vLLM emitted more than one complete tool-call closing marker"
             )
-        if close_count == 1:
+        if self.termination.tool_calls_enabled and close_count == 1:
             close_end = response.text.index(TOOL_CALL_CLOSE) + len(TOOL_CALL_CLOSE)
             suffix = response.text[close_end:]
             if suffix not in self.termination.tool_call_terminal_suffixes:

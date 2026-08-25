@@ -655,9 +655,19 @@ def _policy_termination_contract(
         raise ValueError("Policy runtime requires a run-bound sampling contract")
     stop_strings = tuple(sampling.stop_strings or ())
     stop_token_ids = tuple(sampling.stop_token_ids or ())
+    final_outcomes = qwen3_vl_final_turn_outcomes(stop_token_ids)
+    if config.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+        return VLLMTurnTerminationContract(
+            required_request_stop_strings=stop_strings,
+            required_request_stop_token_ids=stop_token_ids,
+            include_stop_str_in_output=bool(sampling.include_stop_str_in_output),
+            tool_call_terminal_suffixes=(),
+            tool_call_outcomes=(),
+            final_turn_outcomes=final_outcomes,
+            tool_calls_enabled=False,
+        )
     if "</tool_call>" not in stop_strings:
         raise ValueError("native multi-turn execution requires </tool_call> stop")
-    final_outcomes = qwen3_vl_final_turn_outcomes(stop_token_ids)
     return VLLMTurnTerminationContract(
         required_request_stop_strings=stop_strings,
         required_request_stop_token_ids=stop_token_ids,
