@@ -662,6 +662,10 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   `prl25_f_no_tool_s32` 启动 fresh-S0 训练；正式运行使用 8 卡并保存、逐一验收 S8/S16/S32 的
   world8 模型、优化器和 extra-state shards。W&B 凭证缺失时只切换为本地 offline telemetry，
   不改变训练合同。
+- 2026-08-26 07:23 JST 实时节点：world8 FSDP 与 8 个 vLLM 实例已完成初始化，trainer 显示
+  `Training Progress 0/32`，首个 BS16 × n16 rollout batch 正在执行；tmux 存活，8 卡均已被该
+  正式任务占用，日志中没有 traceback。此时 tracker/metrics 尚未出现是因为 Step 1 仍未提交，
+  不能把 `0/32` 误写成已完成一个 optimizer step。
 
 ## 6. Atomic 纳入正文的决策门槛
 
