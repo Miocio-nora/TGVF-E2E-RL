@@ -45,7 +45,6 @@ run_with_retries() {
       --mode run \
       --output-root "$evaluation_root" \
       --gpu-ids "${gpu_ids[@]}" \
-      --wait-for-final-arm \
       --wait-for-gpus \
       --wait-timeout-seconds 86400 \
       --poll-seconds 30 \
