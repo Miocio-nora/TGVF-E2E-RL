@@ -2,9 +2,9 @@
 
 更新时间：2026-08-26（Asia/Tokyo）
 
-状态：**实验进行中；RP67 三臂验证已闭合；TGVF/Atomic full-prompt 均已完成
-2,240-row 生成与完整性核验；TGVF 与 Atomic full-prompt 七套官方评分均已闭合；
-Atomic 双臂盲审包已就绪但人工标注尚未闭合。**
+状态：**实验进行中；RP67 三臂验证已闭合；广义 full-prompt stress test 已完成并评分；
+协议审计确认它不等于原定的 target-only 改动，现已按 matched 协议只增加 target 定义与案例，
+TGVF S64 / Atomic S16 两臂正在生成；Atomic 正式 target-only 盲审待新推理闭合后物化。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -21,9 +21,9 @@ Atomic 双臂盲审包已就绪但人工标注尚未闭合。**
 > text and pixel-faithful recognition.
 
 正文以 **Pure TGVF** 为机制主线，以 **Native Crop** 为强工具基线，以 **Original** 为
-raw direct 端到端参考。**Atomic Crop+TGVF** 固定列为探索性扩展：full-prompt 下总体仍高于
-Original，但预冻结的 HR cross / Relative Reflectance 两个特异性优势未保留，已不满足正文核心
-方法门槛；无偏 target 合格率审计继续用于界定探索性结果的语义质量，而不是事后恢复核心地位。
+raw direct 端到端参考。**Atomic Crop+TGVF** 目前仍列探索性扩展；其正文层级等待真正的
+target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-prompt stress test 同时改变了
+多项 prompt/observation 合同，不能单独用于决定 Atomic 的正文层级。
 
 ## 2. 固定术语和比较口径
 
@@ -268,11 +268,19 @@ diagnostic semantic accuracy，并在附录同时给 deterministic lower bound �
 语义 overlay：
 `artifacts/representation_experiments/answer_utility/evaluation/rp67_step2000_full867_three_arm_semantic_20260826_v1/`
 
-### 5.2 冻结最佳 checkpoint 的 full-prompt 评测
+### 5.2 冻结最佳 checkpoint 的 prompt 补充评测
 
 目的：检查现有优势是否依赖过度简化的 matched prompt。
 
-固定设计：
+#### 5.2.1 已完成的广义 full-prompt stress test
+
+2026-08-26 的逐字节协议审计发现，matched prompt 本身已经要求 `<think>...</think>`、按需
+tool call 和 plain-text final；已完成的 `full_visual_tool_prompt_v5_instruct_cap6` 不只细化
+target，还改变了逐轮 reasoning/final-only 指令、native schema 注入方式，并在成功 observation
+中回显 target。因此下述结果保留为有效的**广义 prompt bundle stress test**，但不得写成“只增加
+target 定义”的单变量结果，也不得把下降归因于 target 细化。
+
+该 stress test 的固定设计：
 
 - Pure TGVF：S64；
 - Atomic：S16；
@@ -330,11 +338,11 @@ Atomic full prompt 的 Macro* 为 `60.4684`，比自身 matched prompt 低 `2.61
 Original 高 `5.1128 pp`，并比 TGVF full prompt 高 `1.9546 pp`。七项相对自身 matched 的
 delta 为 VStar `−1.0471`、HR `−6.5000`、BLINK-180 `−2.7778`、OCR mean
 `−3.8370`、MMMU-269 `−5.2045`、MathVista `+0.6667`、MathVerse `+0.4000 pp`。
-这说明组合工具在完整 prompt 下仍有总体价值，却不够稳定到成为文章核心：预冻结的 Atomic
+这说明组合工具在广义完整 prompt 下仍有总体价值，但不能由此单独决定其正文层级：预冻结的 Atomic
 favorable regimes 中，HR cross 从 `68.00%` 降到 `56.00%`，Relative Reflectance 从
 `70.00%` 降到 `46.67%`；只有 MathVerse Vision Only 从 `51.00%` 保持到 `52.00%`，而原先的
-负面边界 Vision Intensive 从 `49.00%` 回升到 `53.00%`。根据第 6 节事前门槛，Atomic 应作为
-prompt-sensitive exploratory extension / appendix 结果，不作为主方法，也不声称稳定 synergy。
+负面边界 Vision Intensive 从 `49.00%` 回升到 `53.00%`。这些数值支持 prompt sensitivity，
+但真正的 target-only 稳健性结论等待下一小节的新评测。
 
 OCR 生成行为给出了一个额外的协议边界。600-row OCR 切片上，TGVF full prompt 的答案长度
 p95 / p99 为 `24,324 / 89,469` 字符，Atomic 为 `3,849 / 19,641`；TGVF 的极长输出尾部在
@@ -351,6 +359,38 @@ full-prompt 权威 summary：
 - `configs/evaluation/prl25_c_frozen_rp67_tfree_teacher25_s64_full_prompt_v5_cap6_coredev2511_plan.json`
 - `configs/evaluation/prl25_d_atomic_crop_tgvf_tfree_teacher25_s16_full_prompt_v5_cap6_coredev2511_plan.json`
 
+#### 5.2.2 主要验证：target-only matched prompt
+
+用户原定改动只有一项：补充 target 的详细定义和使用案例。新协议
+`target_detailed_matched_prompt_v1` 因此冻结以下最小差异合同：
+
+- 逐字保留 matched 的 `USER_PROMPT_V2`，包括已有的 `<think>...</think>`、按需 tool call 和
+  plain-text final；不增加逐轮 reasoning 或分类别 final-only 规则；
+- 保留同一 tool name、可执行 schema、Hermes call frame、`tools=[]` chat-template 路径、6 次
+  运行上限和 matched success renderer；observation **不**回显 target；
+- 仅在 matched system prompt 的 `<tools>` 与调用格式说明之间插入一个 target guide：定义
+  target 必须同时包含 referent/entity 与所需视觉证据，并给出 3 个 valid 和 3 个 invalid 示例；
+- checkpoint、CoreDev-2511、official scorer、temperature 1 和 seed42 不变；seed namespace
+  逐字复用原 matched evaluation，使每题每轮随机流与原 matched run 对齐；
+- S64/S16 在查看结果前冻结，不重新选 step。
+
+实现与状态：
+
+- [x] target-only prompt identity、system/user SHA256、protocol SHA256 与差异白名单冻结；
+- [x] 81 项相关测试通过；白名单证明 matched system prompt 只有一个连续 target-guide 插入块，
+  user suffix 完全相同，且不存在 full prompt 新增的逐轮/final-only 文本；
+- [x] 两份真实 snapshot 预检通过：TGVF/Atomic 分别使用 matched 的
+  `render_qwen_native_matched_tgvf_success_environment_text` /
+  `render_qwen_native_matched_crop_tgvf_success_environment_text`；
+- [x] 8 GPU 并行生成已启动；
+- [ ] 每臂 2,240-row 完整性核验与七套官方评分；
+- [ ] 与 matched、广义 stress、Crop S80、Original 同表回填。
+
+计划文件：
+
+- `configs/evaluation/prl25_c_frozen_rp67_tfree_teacher25_s64_target_detailed_matched_v1_coredev2511_plan.json`
+- `configs/evaluation/prl25_d_atomic_crop_tgvf_tfree_teacher25_s16_target_detailed_matched_v1_coredev2511_plan.json`
+
 ### 5.3 Atomic 无偏 target 合格率审计
 
 目的：把“协议可解析”与“语义 target 合格”分开，确定 Atomic 是否能在正文中被描述为稳定地产生
@@ -358,7 +398,8 @@ full-prompt 权威 summary：
 
 固定抽样与盲审设计：
 
-- matched prompt 与 full prompt 各抽取 200 条**实际使用工具**的 trajectory；
+- matched prompt 与 target-only prompt 各抽取 200 条**实际使用工具**的 trajectory；广义
+  full-prompt stress arm 只作附加诊断；
 - 以 `dataset × arm` 分层，层内按 SHA256 排序抽样；每条 trajectory 只审第一次工具调用，防止
   多调用样本过度加权；
 - 标注者不看到 arm 名、checkpoint、最终答案、正确性、reward 或 benchmark score；
@@ -379,9 +420,11 @@ full-prompt 权威 summary：
 - [x] 在 matched S16 的 1,863 条工具 trajectory 上实测物化 200 条盲审样本；七个数据集按
   population-proportional quota 覆盖，review view 未泄漏 arm、dataset、sample ID、correct、
   reward、score 或 final answer；
-- [x] 生成 matched/full 两个 blind audit pack：每臂 200，共 400 条；review view 仅含 bbox、
+- [x] 既有 matched/广义-full blind audit pack 已生成：每臂 200，共 400 条；review view 仅含 bbox、
   call index、image path/hash、question、opaque review ID、schema 和 target；400 个 review ID
   唯一，未出现 arm、dataset、sample ID、correct、reward、score 或 final answer 字段；
+- [ ] target-only inference 闭合后物化新的 matched/target-only 正式盲审包；既有广义-full pack
+  不替代该主要审计；
 - [ ] 双人盲标、裁决、Wilson CI 与 agreement；
 - [ ] 根据审计结果界定 Atomic 探索性分析可使用的 target-quality 表述。
 
@@ -396,7 +439,7 @@ review view 分离；人工标注完成前不得报告 target 合格率或据此
 
 Atomic 进入正文核心方法必须同时满足：
 
-1. full-prompt Macro* 和主要 Atomic favorable sub-benchmark 不发生足以推翻当前定位的崩塌；
+1. target-only Macro* 和主要 Atomic favorable sub-benchmark 不发生足以推翻当前定位的崩塌；
 2. target audit 的 all-pass rate 及逐标准结果可被透明报告；
 3. 文章只声称观察到的任务条件优势，不声称未被单变量消融证明的 synergy；
 4. Original、Crop、TGVF 和 Atomic 四列同时出现，且 MathVerse Vision Intensive 等负面切片保留。
@@ -404,11 +447,9 @@ Atomic 进入正文核心方法必须同时满足：
 如果任一条件不满足，Atomic 降级到 exploratory analysis / appendix。Pure TGVF + RP67 utility
 仍作为主机制线，Crop 作为强基线。
 
-**当前决策：第 1 项已不满足。** Atomic full-prompt Macro* 虽仍为 `60.4684`，但 HR cross 与
-Relative Reflectance 两个预冻结 favorable regimes 分别下降 `12.00 / 23.33 pp`，足以推翻
-“这些特异优势具有 prompt 稳健性”的定位。因此 Atomic 固定降级为 exploratory analysis /
-appendix；后续 target audit 无论结果好坏，都只改变该探索性分析的解释边界，不再事后修改方法
-层级。
+**当前决策：待 target-only 结果。** 广义 full-prompt 的 HR cross / Relative Reflectance
+分别下降 `12.00 / 23.33 pp`，是必须报告的 sensitivity，但该 arm 超出了原定单变量改动，不能
+代替第 1 项。Atomic 暂维持 exploratory，不在 target-only 评分和正式盲审前升级或固定降级。
 
 ## 7. Claim–evidence–boundary 台账
 
@@ -416,8 +457,9 @@ appendix；后续 target audit 无论结果好坏，都只改变该探索性分�
 |---|---|---|---|
 | TGVF 改善一组 target-conditioned reasoning regimes | Relative Depth；MathVista arithmetic、word、numeric、visual QA；逐题案例 | 不是总体最优；OCR 和精细像素读取弱；BLINK 切片小 | 可写，待 CI |
 | RP67 D 具有内容 utility 和 target specificity | correct−zero `+7.15 pp`；correct−wrong `+21.57 pp`；两者 95% CI 不跨零 | diagnostic semantic overlay；oracle target 不测自主工具选择 | 已支持 |
-| Atomic matched prompt 下在跨图、反射率和 Vision Only 上显示优势 | matched HR cross、BLINK reflectance、MathVerse Vision Only | full prompt 仅保留 Vision Only；target 合格率未闭合 | 探索性/附录，核心门槛未通过 |
-| 详细 prompt 下工具总体增益仍存在 | TGVF / Atomic full-prompt Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；同数据 prompt shift，不是新 benchmark 泛化 | 已支持，带退化边界 |
+| Atomic matched prompt 下在跨图、反射率和 Vision Only 上显示优势 | matched HR cross、BLINK reflectance、MathVerse Vision Only | 广义 full prompt 仅保留 Vision Only；target-only 与 target 合格率未闭合 | 探索性，核心门槛待验证 |
+| 广义 prompt bundle 下工具总体增益仍存在 | TGVF / Atomic stress-test Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；非 target-only；不是新 benchmark 泛化 | 已支持，带退化边界 |
+| 只补充 target 定义与案例的稳健性 | matched-byte-preserving 新协议、白名单测试与真实预检已通过 | 准确率与 sub-benchmark 尚在生成/评分 | 运行中 |
 | 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；MathVista 等单项仍可能更强 | 可写 |
 
 ## 8. 论文实验部分建议结构
@@ -427,21 +469,22 @@ appendix；后续 target audit 无论结果好坏，都只改变该探索性分�
    深度和视觉数学优势，同时给负面切片。
 3. **Does RP67 carry target-specific answer utility?** 867 样本 correct/zero/wrong 三臂与
    paired effect。
-4. **Robustness to a complete tool-use prompt.** S64/S16 frozen-checkpoint prompt shift。
-5. **Exploratory Atomic Crop+TGVF.** 固定为附录或正文探索性分析；target audit 决定可报告的
-   target-quality 表述，不改变核心方法层级。
+4. **Robustness to target specification.** 以 target-only matched arm 为主验证；广义 full
+   prompt 只作 supplementary stress test。
+5. **Exploratory Atomic Crop+TGVF.** target-only 与 target audit 闭合后再决定正文或附录层级。
 6. **Qualitative mechanisms and failures.** 复用已有真实 trajectory 与 bbox 案例，但把机制语言
    限定为 behavior-level inference。
 
 ## 9. 当前推进顺序
 
 1. [已完成] RP67 semantic overlay 和 CI，机制主张已锁定；
-2. [已完成] 用 8 GPU 依次运行 TGVF S64、Atomic S16 full prompt，并闭合七项官方评分；
-3. [已完成] full inference 闭合后，从 matched/full inference JSONL 物化正式 Atomic
+2. [已完成] 广义 full-prompt stress test 及七项官方评分；
+3. [运行中] 用 8 GPU 并行运行 TGVF S64、Atomic S16 target-only matched prompt；
+4. [待 target-only 闭合后重做] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
-4. [full prompt 已回填；audit 待人工标注] 将 full-prompt 和 target audit 写回本文件；
-5. [待写作] 形成英文 Experiments/Discussion 初稿；
-6. [明确不做] Crop seed43。
+5. [待回填] target-only 评分与正式 audit；
+6. [待写作] 形成英文 Experiments/Discussion 初稿；
+7. [明确不做] Crop seed43。
 
 ## 10. 证据来源
 
