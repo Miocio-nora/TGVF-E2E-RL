@@ -3,8 +3,8 @@
 更新时间：2026-08-26（Asia/Tokyo）
 
 状态：**实验进行中；RP67 三臂验证已闭合；TGVF/Atomic full-prompt 均已完成
-2,240-row 生成与完整性核验，TGVF 官方评分运行中；Atomic 双臂盲审包已就绪但人工标注
-尚未闭合。**
+2,240-row 生成与完整性核验；TGVF 与 Atomic full-prompt 七套官方评分均已闭合；
+Atomic 双臂盲审包已就绪但人工标注尚未闭合。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -21,8 +21,9 @@
 > text and pixel-faithful recognition.
 
 正文以 **Pure TGVF** 为机制主线，以 **Native Crop** 为强工具基线，以 **Original** 为
-raw direct 端到端参考。**Atomic Crop+TGVF** 暂列探索性扩展；只有 full-prompt 稳健性和
-无偏 target 合格率审计闭合后，才升级为正文核心方法。
+raw direct 端到端参考。**Atomic Crop+TGVF** 固定列为探索性扩展：full-prompt 下总体仍高于
+Original，但预冻结的 HR cross / Relative Reflectance 两个特异性优势未保留，已不满足正文核心
+方法门槛；无偏 target 合格率审计继续用于界定探索性结果的语义质量，而不是事后恢复核心地位。
 
 ## 2. 固定术语和比较口径
 
@@ -290,14 +291,59 @@ diagnostic semantic accuracy，并在附录同时给 deterministic lower bound �
 - [x] 修复并回归测试已完成训练中“历史最优 checkpoint + 历史 RP67 manifest”的等待边界；
 - [x] TGVF S64 与 Atomic S16 full-prompt 生成均完成并通过完整性核验：每臂 2,240 rows、
   2,240 个唯一 sample / trajectory / result identity、零重复；
-- [ ] 两臂官方七套 scorer（TGVF 已在 GPU 0–7 启动，完成后顺序评分 Atomic）；
-- [ ] 与 matched prompt、Original、Crop 同表报告。
+- [x] TGVF S64 七套官方 scorer 全部完成：7/7 slices，summary contract 通过，judge parse
+  failure 为 0；
+- [x] Atomic S16 七套官方 scorer 全部完成：7/7 slices，summary contract 通过，judge parse
+  failure 为 0；
+- [x] 两臂完整结果与 matched prompt、Original、Crop 同表报告。
 
-运行快照（2026-08-26 02:17 JST）：TGVF 与 Atomic 均为 `2,240 / 2,240`，两份
+完成快照（2026-08-26 02:40 JST）：TGVF 与 Atomic 均为 `2,240 / 2,240`，两份
 completion receipt 均已生成。TGVF stop 分布为 2,005 final-answer、156 direct-answer、78
 max-tokens、1 call-cap，累计 41 次工具错误；Atomic 为 2,003 final-answer、225 direct-answer、
 12 max-tokens，累计 10 次工具错误。错误计数保留为质量诊断，但不影响各自 2,240-row 唯一覆盖。
-准确率须等待官方 scorer，不能从 stop/tool-error 计数推断。
+
+两条线路的 full-prompt 文章口径结果如下。Original 仍是 raw direct reference，不把它误写成
+严格 paired prompt control；`Δ vs matched` 才是同 checkpoint、同任务和同 seed 下的 prompt-shift
+稳健性量。
+
+| Reference / run | Macro* | Δ vs matched | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Original raw direct | 55.3556 | — | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | 74.3333 | 50.6000 |
+| Crop S32 / matched prompt | **63.5377** | reference | **+8.1821** | **80.1047** | 73.0000 | 64.4444 | **54.8108** | 49.0706 | 71.3333 | 52.0000 |
+| TGVF S64 / matched prompt | 59.8086 | reference | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
+| TGVF S64 / full prompt | 58.5138 | −1.2949 | +3.1582 | 71.7277 | 64.5000 | 66.1111 | 39.4659 | 45.7249 | 68.6667 | 53.4000 |
+| Atomic S16 / matched prompt | 63.0827 | reference | +7.7271 | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
+| Atomic S16 / full prompt | **60.4684** | **−2.6142** | **+5.1128** | 70.6806 | 67.0000 | 63.3333 | 50.4349 | 46.0967 | 70.3333 | **55.4000** |
+
+full prompt 相对 matched prompt 的七项 delta 依次为 VStar `−2.6178`、HR `−2.0000`、
+BLINK-180 `+0.5556`、OCR mean `−5.0787`、MMMU-269 `+0.7435`、MathVista
+`−3.6667`、MathVerse `+3.0000 pp`。因此当前结论不是“prompt 完全无影响”，而是：TGVF
+总体优势经较完整 prompt 后仍保留，Macro* 仍比 Original 高 `3.1582 pp`，七项中有五项高于
+Original；但 prompt shift 造成 `1.2949 pp` 总体回落，损失主要集中在 OCR、MathVista 和
+VStar。sub-benchmark 上，full prompt 仍保留 Relative Depth `83.33%`、HR cross aggregate
+`62.00%`、MathVista numeric commonsense `55.56%` 和 visual QA `59.52%` 等定位，同时
+Relative Reflectance 从 matched 的 `46.67%` 升至 `66.67%`；原先 arithmetic 和 math-word
+优势分别回落至 `63.46% / 74.60%`。这些变化必须作为能力迁移而不是单一“更强/更弱”报告。
+
+Atomic full prompt 的 Macro* 为 `60.4684`，比自身 matched prompt 低 `2.6142 pp`，但仍比
+Original 高 `5.1128 pp`，并比 TGVF full prompt 高 `1.9546 pp`。七项相对自身 matched 的
+delta 为 VStar `−1.0471`、HR `−6.5000`、BLINK-180 `−2.7778`、OCR mean
+`−3.8370`、MMMU-269 `−5.2045`、MathVista `+0.6667`、MathVerse `+0.4000 pp`。
+这说明组合工具在完整 prompt 下仍有总体价值，却不够稳定到成为文章核心：预冻结的 Atomic
+favorable regimes 中，HR cross 从 `68.00%` 降到 `56.00%`，Relative Reflectance 从
+`70.00%` 降到 `46.67%`；只有 MathVerse Vision Only 从 `51.00%` 保持到 `52.00%`，而原先的
+负面边界 Vision Intensive 从 `49.00%` 回升到 `53.00%`。根据第 6 节事前门槛，Atomic 应作为
+prompt-sensitive exploratory extension / appendix 结果，不作为主方法，也不声称稳定 synergy。
+
+OCR 生成行为给出了一个额外的协议边界。600-row OCR 切片上，TGVF full prompt 的答案长度
+p95 / p99 为 `24,324 / 89,469` 字符，Atomic 为 `3,849 / 19,641`；TGVF 的极长输出尾部在
+完整 prompt 下没有被消除，并与其 OCR mean 下滑同时出现。该相关性只作 termination/verbosity
+诊断，不能据此单独断言准确率下降的因果来源。
+
+full-prompt 权威 summary：
+
+- TGVF：`artifacts/policy/PRL-25-C-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-C-FROZEN-RP67-TFREE-TEACHER25-S64-FULL-PROMPT-V5-CAP6-COREDEV2511-SEED42-V1/step64/scoring/coredev-official-v1/coredev-2511-eval-summary.json`；
+- Atomic：`artifacts/policy/PRL-25-D-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-teacher25-80step-ws8/evaluation/PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-S16-FULL-PROMPT-V5-CAP6-COREDEV2511-SEED42-V1/step16/scoring/coredev-official-v1/coredev-2511-eval-summary.json`。
 
 计划文件：
 
@@ -336,7 +382,7 @@ max-tokens、1 call-cap，累计 41 次工具错误；Atomic 为 2,003 final-ans
   call index、image path/hash、question、opaque review ID、schema 和 target；400 个 review ID
   唯一，未出现 arm、dataset、sample ID、correct、reward、score 或 final answer 字段；
 - [ ] 双人盲标、裁决、Wilson CI 与 agreement；
-- [ ] 根据审计结果决定 Atomic 的正文层级。
+- [ ] 根据审计结果界定 Atomic 探索性分析可使用的 target-quality 表述。
 
 正式盲审根目录：
 `artifacts/evaluation/neurips-workshop-atomic-target-audit-20260826-v1/`。manifest SHA256 为
@@ -357,14 +403,20 @@ Atomic 进入正文核心方法必须同时满足：
 如果任一条件不满足，Atomic 降级到 exploratory analysis / appendix。Pure TGVF + RP67 utility
 仍作为主机制线，Crop 作为强基线。
 
+**当前决策：第 1 项已不满足。** Atomic full-prompt Macro* 虽仍为 `60.4684`，但 HR cross 与
+Relative Reflectance 两个预冻结 favorable regimes 分别下降 `12.00 / 23.33 pp`，足以推翻
+“这些特异优势具有 prompt 稳健性”的定位。因此 Atomic 固定降级为 exploratory analysis /
+appendix；后续 target audit 无论结果好坏，都只改变该探索性分析的解释边界，不再事后修改方法
+层级。
+
 ## 7. Claim–evidence–boundary 台账
 
 | Claim | 当前证据 | 必须保留的边界 | 状态 |
 |---|---|---|---|
 | TGVF 改善一组 target-conditioned reasoning regimes | Relative Depth；MathVista arithmetic、word、numeric、visual QA；逐题案例 | 不是总体最优；OCR 和精细像素读取弱；BLINK 切片小 | 可写，待 CI |
 | RP67 D 具有内容 utility 和 target specificity | correct−zero `+7.15 pp`；correct−wrong `+21.57 pp`；两者 95% CI 不跨零 | diagnostic semantic overlay；oracle target 不测自主工具选择 | 已支持 |
-| Atomic 在跨图、反射率和 Vision Only 上显示优势 | HR cross、BLINK reflectance、MathVerse Vision Only | full prompt 与 target 合格率未闭合；Vision Intensive 低于 Original | 探索性 |
-| 详细 prompt 下优势仍存在 | 新协议和冻结计划已校验 | 同数据 prompt shift，不是新 benchmark 泛化 | 待运行 |
+| Atomic matched prompt 下在跨图、反射率和 Vision Only 上显示优势 | matched HR cross、BLINK reflectance、MathVerse Vision Only | full prompt 仅保留 Vision Only；target 合格率未闭合 | 探索性/附录，核心门槛未通过 |
+| 详细 prompt 下工具总体增益仍存在 | TGVF / Atomic full-prompt Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；同数据 prompt shift，不是新 benchmark 泛化 | 已支持，带退化边界 |
 | 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；MathVista 等单项仍可能更强 | 可写 |
 
 ## 8. 论文实验部分建议结构
@@ -375,17 +427,18 @@ Atomic 进入正文核心方法必须同时满足：
 3. **Does RP67 carry target-specific answer utility?** 867 样本 correct/zero/wrong 三臂与
    paired effect。
 4. **Robustness to a complete tool-use prompt.** S64/S16 frozen-checkpoint prompt shift。
-5. **Exploratory Atomic Crop+TGVF.** 只有 target audit 合格后放正文，否则移附录。
+5. **Exploratory Atomic Crop+TGVF.** 固定为附录或正文探索性分析；target audit 决定可报告的
+   target-quality 表述，不改变核心方法层级。
 6. **Qualitative mechanisms and failures.** 复用已有真实 trajectory 与 bbox 案例，但把机制语言
    限定为 behavior-level inference。
 
 ## 9. 当前推进顺序
 
 1. [已完成] RP67 semantic overlay 和 CI，机制主张已锁定；
-2. [运行中] 用 8 GPU 依次运行 TGVF S64、Atomic S16 full prompt；
-3. [生成器已验证] full inference 闭合后，从 matched/full inference JSONL 物化正式 Atomic
+2. [已完成] 用 8 GPU 依次运行 TGVF S64、Atomic S16 full prompt，并闭合七项官方评分；
+3. [已完成] full inference 闭合后，从 matched/full inference JSONL 物化正式 Atomic
    blind audit pack；
-4. [待回填] 将 full-prompt 和 target audit 写回本文件；
+4. [full prompt 已回填；audit 待人工标注] 将 full-prompt 和 target audit 写回本文件；
 5. [待写作] 形成英文 Experiments/Discussion 初稿；
 6. [明确不做] Crop seed43。
 
