@@ -103,52 +103,69 @@ Crop 与 TGVF 的直接分叉为 Crop 胜 `184`、TGVF 胜 `146`；TGVF 与 Atom
 | MathVista | 11 | **11** | 5 |
 | MathVerse | 21 | 12 | **25** |
 
-## 6. 三类方法的行为特性
+## 6. 三类方法的行为特性与扩充案例
+
+本节中的 bbox 均写作 `[x1, y1, x2, y2]`，坐标空间为 Qwen3 相对坐标 `0--1000`。
+`direct` 表示该方法没有调用视觉工具。每个案例均列出三条 seed42 轨迹中的真实 Crop
+`bbox + label`、TGVF `target`、Atomic `bbox + target`，而不是根据最终答案反推模型看了
+哪里。高分辨率图片的展示预览可能在工具 bbox 外保留少量上下文；精确请求范围以表格为准。
 
 ### 6.1 Crop：局部像素保真与选择性调用
 
 Crop 在 2,240 个样本中的工具使用率为 `47.63%`。当策略判断原图足以回答时，它更常保留
 直接回答路径；需要细节时则返回真实 RGB crop。这一行为与其 VStar 和 OCR 优势一致。
 
-代表性成功案例为 `HRBench4K/0159_0.jpg`。问题询问教堂日晷上刻写的年份，正确答案为
-`1762`。年份只占 4K 原图中的极小区域：
+| C1：日晷小字 | C2：远处帽子颜色 |
+|---|---|
+| <img src="assets/prl25_qualitative_cases/crop_sundial_hr0159.jpg" width="420"><br>`HRBench4K/0159_0.jpg` | <img src="assets/prl25_qualitative_cases/crop_cap_vstar0046.jpg" width="320"><br>`VStarBench/0046_0.jpg` |
+| C3：保留全局左右关系 | C4：Crop context-limit 失败 |
+| <img src="assets/prl25_qualitative_cases/crop_chair_vstar0190.jpg" width="420"><br>`VStarBench/0190_0.jpg` | <img src="assets/prl25_qualitative_cases/crop_bridge_hr0075.jpg" width="420"><br>`HRBench4K/0075_0.jpg` |
 
-- Crop 使用 bbox `[118, 664, 226, 737]` 放大日晷，回答 `1762`；
-- TGVF 以“日晷铭文”为 target，回答 `1782`；
-- Atomic 使用更窄的 bbox，回答 `1768`。
+| 案例与正确答案 | Crop 轨迹与回答 | TGVF 轨迹与回答 | Atomic 轨迹与回答 |
+|---|---|---|---|
+| **C1 日晷年份：1762** | `bbox=[118,664,226,737]`，`label="a close-up of the sundial on the building"`；对应原图约 `[475,2677,911,2971] px`；答 **1762 ✓** | `target="the inscription on the sundial on the left side of the building"`；答 1782 ✗ | `bbox=[119,690,171,743]`，`target="a close-up of the sundial to read the inscribed year"`；答 1768 ✗ |
+| **C2 帽子颜色：white** | `bbox=[10,589,25,644]`，`label="a man wearing a cap"`；对应原图约 `[22,883,56,966] px`；答 **white ✓** | `target="the man in the background wearing a cap and his cap's color"`；答 black ✗ | `bbox=[11,586,33,651]`，`target="a man wearing a cap, to identify the color of the cap"`；答 black ✗ |
+| **C3 白椅位于街道右侧** | **direct**；答 **right ✓** | `target="the white chairs located along the street"`；答 left ✗ | `bbox=[333,744,455,815]`，`target="the white chairs and their position relative to the street"`；答 left ✗ |
+| **C4 前景儿童跑离相机** | `bbox=[292,478,705,727]`，`label="the child in the foreground running on the bridge"`；随后 `context_limit`，无最终答案 ✗ | `target="the child in the foreground on the bridge and their running direction relative to the camera"`；答 **away ✓** | `bbox=[639,497,753,743]`，`target="the child in the foreground on the bridge and their orientation relative to the camera"`；答 **away ✓** |
 
-该案例直接支持 Crop 对小字和细粒度像素的优势。另一个案例
-`VStarBench/0046_0.jpg` 要判断人物帽子颜色，Crop 放大极小区域后正确回答白色，而 TGVF
-与 Atomic 均回答黑色。
+C1 和 C2 直接支持 Crop 对极小文字与颜色细节的优势。C3 则说明 Crop 的优势不只来自调用
+工具：该策略选择 direct 后保留了完整街景和左右关系，另外两种方法在聚焦“白椅”后反而把
+参考方向判断反了。C4 是重要反例，Crop 已选中正确的大区域，却因序列达到 context limit
+没有形成答案。因此，局部像素质量和端到端轨迹可靠性需要分开讨论。
 
-Crop 的主要失效模式是空间选择错误和运行级开销。它出现 42 个多次调用样本、71 个带工具
-错误的轨迹和 8 个 context-limit 停止。`HRBench4K/0075_0.jpg` 中，Crop 因达到上下文上限
-没有形成最终答案，而 TGVF 与 Atomic 均答对。局部 crop 也可能切断跨区域关系，使模型在
-只看到一处细节时无法恢复全局比较。
+Crop 共出现 42 个多次调用样本、71 个带工具错误的轨迹和 8 个 context-limit 停止。它的
+主要风险不是 RGB crop 本身缺少细节，而是 bbox 选择、裁剪协议失败以及局部视图切断全局
+关系。
 
 ### 6.2 TGVF：语义定位与全局关系
 
 TGVF 的工具使用率为 `89.73%`，说明策略几乎把语义 focus 当作默认观察路径。它不要求模型
-先给出精确 bbox，因此在目标隐蔽、目标名称明确或需要整体关系时具有优势。
+先给出精确 bbox，因此在目标名称明确、姿态判别或需要统一处理多个区域时具有优势。
 
-`HRBench4K/0178_0.jpg` 要判断地图上哪些编号位置属于同一个国家，正确答案为位置 1 和 4：
+| T1：姿态识别 | T2：跨区域地图关系 |
+|---|---|
+| <img src="assets/prl25_qualitative_cases/tgvf_pose_vstar0004.jpg" width="360"><br>`VStarBench/0004_0.jpg` | <img src="assets/prl25_qualitative_cases/tgvf_map_hr0178.jpg" width="480"><br>`HRBench4K/0178_0.jpg` |
+| T3：相对深度 | T4：物体空间关系 |
+| <img src="assets/prl25_qualitative_cases/tgvf_depth_blink0064.jpg" width="360"><br>`BLINK/0064_0.jpg` | <img src="assets/prl25_qualitative_cases/tgvf_relation_blink0123.jpg" width="360"><br>`BLINK/0123_0.jpg` |
+| T5：精确颜色与重复生成失败 |  |
+| <img src="assets/prl25_qualitative_cases/tgvf_tissue_vstar0009.jpg" width="480"><br>`VStarBench/0009_0.jpg` |  |
 
-- TGVF 将四个位置作为一个统一语义目标观察，回答 1 和 4；
-- Crop 只放大位置 4，回答错误；
-- Atomic 顺序查看局部区域，但未恢复正确的全局关系。
+| 案例与正确答案 | Crop 轨迹与回答 | TGVF 轨迹与回答 | Atomic 轨迹与回答 |
+|---|---|---|---|
+| **T1 黄色背包女性：squatting** | `bbox=[601,149,652,299]`，`label="woman with yellow backpack"`；答 standing ✗ | `target="the woman wearing a yellow backpack and her body posture"`；答 **squatting ✓** | `bbox=[615,150,680,293]`，`target="the woman with a yellow backpack and her body posture"`；答 standing ✗ |
+| **T2 同属中国：位置 1 和 4** | `bbox=[696,48,863,181]`，`label="Location 4 on a map"`；只检查局部位置 4，答 1 和 2 ✗ | `target="the geographical locations marked by numbers 1, 2, 3, and 4 on the map and their respective countries"`；答 **1 和 4 ✓** | 依次调用 `bbox=[100,540,190,658]`，`target="a red circle labeled '1' on a map, indicating a geographical location"`；`[70,718,160,836]`，`target="a red circle labeled '2' on a map indicating a geographical location"`；`[850,252,950,370]`，`target="a red circle labeled '3' on a map indicating a geographical location"`；`[820,107,920,195]`，`target="a red circle labeled '4' on a map indicating a geographical location"`；答 1 和 2 ✗ |
+| **T3 更靠近相机：B** | `bbox=[480,31,562,194]`，`label="point B"`；答 A ✗ | `target="the relative positions of points A and B in the image, specifically which one appears closer to the camera"`；答 **B ✓** | `bbox=[184,28,334,218]`，`target="a close-up view of point A and its immediate surroundings to assess its distance from the camera"`；`bbox=[578,28,731,218]`，`target="a close-up view of point B and its immediate surroundings to assess its distance from the camera"`；答 A ✗ |
+| **T4 椅子不在马下方** | **direct**；答 yes ✗ | `target="the position of the chair relative to the horse"`；答 **no ✓** | `bbox=[43,516,325,702]`，`target="a chair positioned under the horse"`；答 yes ✗ |
+| **T5 纸巾盒颜色：blue** | **direct**；答 **blue ✓** | `target="the tissue box on the truck bed and its color"`；把棕红色货箱当作目标，答 brownish-red，并重复到 `20,480` tokens ✗ | `bbox=[156,697,265,765]`，`target="a tissue box and its color"`；答 light gray ✗ |
 
-同类案例包括：
+T1 表明相同空间范围并不保证相同观察：Crop 和 Atomic 给出的框与人物位置接近，但只有
+语义 focus 得到正确姿态。T2 更能区分方法结构。TGVF 用一个 target 同时绑定四个位置，
+而 Crop 只看位置 4，Atomic 虽逐个查看四处，仍未恢复正确的国家级关系。T3 与 T4 提供了
+两个不同数据集上的关系判断证据。
 
-- `VStarBench/0004_0.jpg`：TGVF 正确识别背黄色背包的女性正在蹲下，Crop 与 Atomic
-  均判断为站立；
-- `HRBench4K/0093_0.jpg`：TGVF 通过语义 target 找到隐蔽的监控摄像头并判断其颜色，
-  另外两种方法未找到该目标；
-- `BLINK/0064_0.jpg`：TGVF 正确处理相对深度关系，Crop 与 Atomic 错误。
-
-TGVF 的短板集中在精确读取与输出控制。它有 42 个 max-token 样本，远高于正常的单次工具
-调用数量所能解释的范围。`VStarBench/0009_0.jpg` 中，纸巾盒的正确颜色为蓝色；Crop
-回答正确，而 TGVF 将其识别为棕红色并重复生成至 20,480 tokens。该现象同时影响 OCR：
-TGVF 有时能读取局部内容，却将答案扩写成摘要或多次重复，而非按评测要求精确转录。
+T5 则揭示 TGVF 的精确读取与输出控制问题。模型把 target 中的“truck bed”绑定到棕红色
+货箱，而没有选择驾驶室挡风玻璃后的蓝色纸巾盒，并在错误判断后重复生成至上限。pure TGVF
+共有 42 个 max-token 样本，因此该案例不是完全孤立的格式现象。
 
 ### 6.3 Atomic：定位、观察与后续推理的组合
 
@@ -156,20 +173,48 @@ Atomic 的工具使用率为 `83.17%`，平均每个样本 `1.027` 次调用；2
 它同时提供 bbox 和语义 target，使策略能够把“看哪里”和“从该区域提取什么”组合起来，
 并在观察后继续执行比较或计算。
 
-`MathVerse_MINI/0206_0.png` 给出相对北方偏西 `31°` 的射线，并询问方位角。正确答案为
-`329°`：
+| A1：方位角换算 | A2：椭圆中心 |
+|---|---|
+| <img src="assets/prl25_qualitative_cases/atomic_bearing_mathverse0206.jpg" width="300"><br>`MathVerse_MINI/0206_0.png` | <img src="assets/prl25_qualitative_cases/atomic_ellipse_mathverse0178.png" width="360"><br>`MathVerse_MINI/0178_0.png` |
+| A3：双区域反射率比较 | A4：计数四只狗 |
+| <img src="assets/prl25_qualitative_cases/atomic_reflectance_blink0303.jpg" width="420"><br>`BLINK/0303_0.jpg` | <img src="assets/prl25_qualitative_cases/atomic_count_hr0114.jpg" width="420"><br>`HRBench4K/0114_0.jpg` |
+| A5：扇形周长 | A6：三角函数周期 |
+| <img src="assets/prl25_qualitative_cases/atomic_sector_mathverse0426.png" width="360"><br>`MathVerse_MINI/0426_0.png` | <img src="assets/prl25_qualitative_cases/atomic_period_mathverse0204.png" width="300"><br>`MathVerse_MINI/0204_0.png` |
+| A7：九宫格过度分解失败 |  |
+| <img src="assets/prl25_qualitative_cases/atomic_iq_blink0144.jpg" width="300"><br>`BLINK/0144_0.jpg` |  |
 
-- Crop 和 TGVF 均直接返回图中的 `31°`；
-- Atomic 定位方向和角度后完成 `360-31=329`，回答正确。
+| 案例与正确答案 | Crop 轨迹与回答 | TGVF 轨迹与回答 | Atomic 轨迹与回答 |
+|---|---|---|---|
+| **A1 true bearing：329°** | **direct**；只返回图中标注的 31° ✗ | `target="the angle labeled in the diagram between the north direction and the line segment OA"`；返回 31° ✗ | `bbox=[100,100,875,838]`，`target="the diagram showing point A and the angle from the north line to the line OA, which is labeled as 31 degrees"`；识别西偏北并计算 `360-31`，答 **329° ✓** |
+| **A2 椭圆中心：(20,10)** | **direct**；答 `(0,0)` ✗ | `target="the center of the ellipse in the coordinate system"`；答 `(10,15)` ✗ | `bbox=[137,533,866,787]`，`target="the center of the ellipse (cake) and its coordinates (a, b)"`；读取水平/垂直范围后答 **`(20,10)` ✓** |
+| **A3 surface color：B darker** | `bbox=[337,366,400,515]`，`label="point B and its surrounding area"`；只查看 B，答 same ✗ | `target="the color of the surface at point A and the color of the surface at point B"`；答 A darker ✗ | `bbox=[268,404,319,486]`，`target="a close-up of point A to determine its surface color"`；`bbox=[392,430,436,505]`，`target="a close-up of point B to determine its surface color"`；答 **B darker ✓** |
+| **A4 被牵的狗：4** | **direct**；答 3 ✗ | `target="the number of dogs being walked by the person in the image"`；答 3 ✗ | `bbox=[437,835,679,901]`，`target="the dogs being walked by the person in the red jacket"`；答 **4 ✓** |
+| **A5 扇形周长：18.89** | `bbox=[132,134,354,712]`，`label="the sector with labeled radius and angle"`；答 18.94 ✗ | `target="the sector with its radius and central angle labeled"`；答 18.65 ✗ | `bbox=[120,180,880,780]`，`target="the sector with a radius of 7 cm and a central angle of 40 degrees, to calculate its perimeter"`；答 **18.89 ✓** |
+| **A6 三角函数周期：π** | **direct**；误读峰值为 1 和 5，答 4 ✗ | `target="the distance between two consecutive peaks on the graph to determine the period"`；答 `2π` ✗ | `bbox=[1,1,996,991]`，`target="the graph of the trigonometric function to identify two consecutive peaks and calculate the horizontal distance between them as the period"`；答 **`π` ✓** |
+| **A7 IQ Test：选项 C** | `bbox=[10,706,992,996]`，`label="bottom row of the 3x3 grid"`；答 **C ✓** | `target="the pattern of shapes in the 3x3 grid, specifically focusing on the inner shapes of the outer shapes in each cell"`；答 B ✗ | 连续调用 `[100,100,300,300]`、`[325,100,525,300]`、`[650,100,850,300]`、`[100,325,300,525]`、`[325,325,525,525]`、`[650,325,850,525]`；target 依次为 `"the first/second/third column of shapes to identify the pattern based on shape transformation"`，随后对第二行重复 first/second/third；触发 `tool_call_limit_exceeded` 并以 `max_tokens` 结束 ✗ |
 
-`BLINK/0303_0.jpg` 要比较 A、B 两点的反射率。Atomic 分别观察两个局部区域并正确判断
-B 更暗；Crop 判断相同，TGVF 判断 A 更暗。`MathVerse_MINI/0178_0.png` 中，Atomic 也能
-通过定位椭圆范围计算出正确中心 `(20, 10)`，另外两种方法分别回答 `(0, 0)` 和 `(10, 15)`。
+A1、A2、A5 和 A6 的共同点不是单纯“看清数字”，而是从定位后的视觉证据继续完成坐标、
+角度或公式推理。A3 与 A4 则分别展示双区域比较和密集小目标计数。A7 给出相反边界：
+九宫格规律要求保留整体结构，Atomic 把图拆成六个局部后仍未完成组合，并触发调用上限。
 
-Atomic 的主要风险是过度分解。`BLINK/0144_0.jpg` 是需要同时观察整个九宫格规律的 IQ
-题，正确选项为 C。Atomic 连续进行 6 次局部调用，触发工具调用上限并答错；Crop 保留整体
-结构后答对。Atomic 总计出现 21 次 `tool_call_limit_exceeded`。这些案例表明，多步局部观察
-并不自动等价于更强的全局组合能力。
+Atomic 总计出现 21 次 `tool_call_limit_exceeded`。因此，多步局部观察可以帮助分解任务，
+但不自动等价于更强的全局组合能力。
+
+### 6.4 共享 OCR 案例：同一页面的三种信息路径
+
+<img src="assets/prl25_qualitative_cases/shared_ocr0373.png" width="620">
+
+图：`OCRBench_v2/0373_0.jpg`，任务为读取整页中文文本。
+
+| 方法 | 精确工具请求 | 输出表现 |
+|---|---|---|
+| Crop | `bbox=[56,51,945,870]`，`label="the main body of the article containing text"` | 返回约 1,533 字符的连续正文，接近完整逐字转录 |
+| TGVF | `target="all the text content in the image"` | 返回约 751 字符，主要是关键词、摘要式内容和重复片段，未完成逐字转录 |
+| Atomic | `bbox=[69,52,936,941]`，`target="the entire text content of the document"` | 返回约 1,709 字符，覆盖标题、作者介绍和正文主体，接近完整逐字转录 |
+
+该案例把总体 OCR 分项与工具行为直接连接起来。Crop 和 Atomic 都通过大范围空间约束保留了
+页面结构；TGVF 虽请求“全部文本”，返回内容却偏向语义摘要。它与 latent 精确信息损失的
+解释一致，但仍不能排除 policy 输出风格和停止行为的共同影响。
 
 ## 7. OCR 进一步揭示的信息保真差异
 
@@ -198,7 +243,7 @@ OCRBench v2 的官方分项结果显示，Crop 与 Atomic 显著优于 pure TGVF
 | 行为结论 | 直接证据 | 当前解释 | 状态 |
 |---|---|---|---|
 | Crop 更适合小字、颜色和局部属性 | VStar、OCR 聚合优势；日晷与帽子案例 | RGB crop 保留局部像素带宽 | **支持行为结论；机制为推断** |
-| TGVF 更适合语义定位与部分全局关系 | 地图、摄像头、姿态和深度案例 | 语言 target 减少了显式 bbox 定位负担 | **支持行为结论；机制为推断** |
+| TGVF 更适合语义定位与部分全局关系 | 地图、姿态、相对深度与 chair-horse 关系案例 | 语言 target 减少了显式 bbox 定位负担 | **支持行为结论；机制为推断** |
 | Atomic 更适合定位后的比较与计算 | 方位角、椭圆中心、反射率案例 | bbox 与 target 联合约束观察，并触发后续推理 | **支持行为结论；机制为推断** |
 | TGVF 的精确 OCR 较弱 | 官方 OCR 分项与重复生成轨迹 | latent 精确信息损失和 policy 输出退化共同作用 | **现象已支持；原因未分离** |
 | Atomic 可能因过度分解损失全局结构 | IQ Test 多次调用和 tool-call-limit 案例 | 多个局部 observation 难以还原整体规律 | **现象已支持；原因未分离** |
@@ -214,9 +259,11 @@ OCRBench v2 的官方分项结果显示，Crop 与 Atomic 显著优于 pure TGVF
 因果收益；三条线路的最佳 checkpoint 也是根据各自 seed42 曲线 post-hoc 选出，案例分析
 描述的是所选 operating point，不替代预注册 S80 主终点。
 
-## 9. 建议用于论文的案例图
+## 9. 论文主图与补充案例的组织建议
 
-建议将定性图组织为三列，每列包含一个主要成功案例和一个边界案例：
+本页已经保留 `C1--C4`、`T1--T5`、`A1--A7` 和一个共享 OCR 案例，共 17 个带图片的
+案例。论文正文不宜一次放入全部案例，建议正文定性图仍采用三列，每列一个主要成功案例和
+一个边界案例：
 
 | 列 | 成功案例 | 边界或失败案例 | 要表达的信息 |
 |---|---|---|---|
@@ -224,8 +271,9 @@ OCRBench v2 的官方分项结果显示，Crop 与 Atomic 显著优于 pure TGVF
 | TGVF | `HRBench4K/0178_0.jpg` 地图跨区域关系 | `VStarBench/0009_0.jpg` 颜色误判与重复 | 语义定位强，但精确读取和输出控制较弱 |
 | Atomic | `MathVerse_MINI/0206_0.png` 方位角 | `BLINK/0144_0.jpg` 九宫格过度分解 | 定位后推理强，但局部调用可能破坏全局结构 |
 
-可增加一行共享 OCR 案例 `OCRBench_v2/0373_0.jpg`，并列展示三者完整输出。该案例能直观
-连接 qualitative trace 与 OCR 分项统计，而不是只展示偶然的选择题胜负。
+共享 OCR 案例 `OCRBench_v2/0373_0.jpg` 可作为第四行，并列展示三者完整输出。其余
+C2/C3、T1/T3/T4、A2--A6 适合放入补充材料，提供跨数据集复现，而不是只依赖正文中的单个
+成功案例。
 
 ## 10. 可安全使用的论文表述
 
@@ -267,3 +315,15 @@ artifacts/policy/PRL-25-D-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tg
 - [PRL25 第三期 BS16 Teacher25 80-step 计划](PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md)
 - [BS16 Crop、TGVF 与 Crop+TGVF 历史对比资料页](BS16_CROP_TGVF_REWARD_ALIGNED_ANALYSIS_20260820.md)
 - [实验账本](EXPERIMENT_LEDGER.md)
+
+图片资产位于：
+
+```text
+docs/assets/prl25_qualitative_cases/
+```
+
+该目录共 17 张图。图片均来自上述 CoreDev-2511 benchmark 原图；高分辨率局部预览使用
+`jpegtran` 做无损裁剪和熵编码优化，其他图片为原文件副本或无损 JPEG 优化，没有进行
+生成式增删、重绘或内容修复。展示 crop 只用于让人类读者看清证据，模型实际请求的 bbox
+仍以第 6 节轨迹表为准。正式公开仓库或论文前仍需按各上游 benchmark 的许可核对图片再分发
+条件与署名要求。
