@@ -269,12 +269,71 @@ Atomic 总计出现 21 次 `tool_call_limit_exceeded`。因此，多步局部观
 
 ### 6.4 Atomic target 质量审计
 
-项目中 Atomic `target` 的正式语义要求是：
+#### 6.4.1 PRL25-C/D 实际进入模型的 prompt
+
+项目中同时存在两层容易混淆的 prompt：一层是 `tool_prompts.py` 与
+`TGVF_VISUAL_TOOL_PROMPTS_V1.md` 记录的较完整通用 TGVF 协议；另一层是为了与成功的
+DeepEyes Crop 控制组对齐而建立的 `DeepEyes-matched clean-final` 协议。**PRL25-C/D 训练和
+本文 eval 实际使用的是后者**，不是前者那段更完整的自然语言说明。
+
+| 线路 | 实际 prompt version | Prompt bundle SHA256 | Tool schema SHA256 |
+|---|---|---|---|
+| PRL25-C pure TGVF | `tgvf-deepeyes-system-v2-clean-final-v1` | `e74bb5e1…5633` | `f33f61d4…aba5` |
+| PRL25-D Atomic Crop+TGVF | `crop-tgvf-deepeyes-system-v2-clean-final-v1` | `5efbd617…52e69` | `0f73b2e8…1ca39` |
+
+PRL25-C 的可见 `target` schema 核心说明为：
+
+```text
+A concise, self-contained visual query specifying what to inspect and what
+visual evidence, attribute, text, count, comparison, or spatial relation to
+obtain. Do not include a guessed final answer or answer-option value.
+```
+
+PRL25-D 的可见 Atomic schema 则为：
+
+```text
+A concise, self-contained visual query specifying both what to inspect inside
+the crop and what evidence or relation to extract, read, compare, count, or
+verify. Do not include a guessed final answer.
+```
+
+两者都放在简洁的 DeepEyes/Hermes 工具框架中，只再给出 JSON 调用格式和一个“读取小仪表
+指针”的正例。PRL25-D 用户问题后的固定 suffix 是：
+
+```text
+Think first, call **tgvf_crop_tool** if needed, then answer. Format strictly as:
+<think>...</think> <tool_call>...</tool_call> (if tools needed), followed by
+the final answer directly as plain text.
+```
+
+成功调用后，tool message 返回 crop-conditioned latent visual item 和同一短 suffix；它不会
+在 tool-response 文本中再次回显 target。运行时最多允许 6 次调用，但 DeepEyes-matched
+system prompt 故意不显示调用预算，以免可见文本与 runtime cap 形成另一处协议分叉。
+
+这套 prompt 的优势是协议短、JSON 结构清晰、与 Crop 控制组高度对齐；缺点是绝大多数 target
+质量约束只压缩在 schema 的一句 description 中。它没有明确写出“保持中性、不要预设关系”、
+“只请求视觉证据而不执行后续计算”、“bbox 与 target 必须指向同一内容”或“关系任务尽量在
+同一 bbox 中保留全部实体”，也没有提供反例。因此它足以教会模型输出格式合法的 target，
+但不足以单靠 prompt 稳定地产生高质量 target。
+
+RL/eval 不存在 prompt shift。PRL25-C 的训练配置和 eval 冻结配置文件 SHA256 均为
+`660de24d…ff49`，PRL25-D 均为 `37a4f2bb…b1e`；D 的 prompt bundle、tool schema 和
+Qwen chat-template hash 也在 evaluation identity 中逐项匹配。因此，本文观察到的 target
+退化在 RL 协议中已经存在，不是 eval 换了 system prompt 或漏传 schema 所致。
+
+#### 6.4.2 项目期望语义与实际执行边界
+
+结合较完整的通用协议与 tool schema，项目期望的 Atomic `target` 语义是：
 
 1. 简洁且自包含；
 2. 同时说明 crop 内要检查的对象，以及要读取、提取、计数、比较或验证的视觉证据/关系；
 3. 对比较或关系任务，bbox 应尽量同时包含所有必要对象；
 4. 不得把猜测的最终答案或答案选项值写进 target。
+
+其中第 1、2 项和“不放入猜测最终答案”出现在 PRL25-D 的实际 schema；第 3 项、显式禁止
+答案选项值，以及更细的中性/证据导向要求只存在于较完整的通用说明或项目期望中，没有完整
+出现在 D 的冻结可见 prompt。这个区别意味着它们可以作为人工审计标准，但不能声称模型在
+D 中已经逐字收到过全部四项指令。
 
 当前 parser/runtime 只强制 `target` 是非空、单行、可安全回显的字符串，并不检查上述语义。
 更关键的是，PRL25-D 的冻结运行配置明确使用 `answer + protocol/repeated-call penalty`，并设置
@@ -303,6 +362,33 @@ Atomic 总计出现 21 次 `tool_call_limit_exceeded`。因此，多步局部观
 解释方法分叉而挑选，不能把 `8/17` 当作全量无偏的失败率。可以确定的是，用户观察到的
 “target 内容一塌糊涂”并非纯粹观感：**格式层面合法，语义层面确有系统性缺口**。在补上
 无偏人工标注或启用独立 focus judge 前，不应把 Atomic 的优势归因为高质量 target 本身。
+
+#### 6.4.3 下一版 prompt 的最低改动建议
+
+下一版不需要把 system prompt 扩成很长的教程，但至少应在现有 tool schema 后增加以下可执行
+边界，并补充一组正反例：
+
+```text
+Write target as a neutral request for visual evidence.
+
+Do not:
+- assert the relation or attribute being tested;
+- copy a proposed answer or answer-option value;
+- ask the tool to perform arithmetic or downstream reasoning;
+- describe content outside the bbox;
+- provide only an object name or merely restate the question.
+
+For comparison or relation questions, include all necessary entities in the
+same bbox whenever possible.
+
+Use: target = required entities + directly observable evidence/attribute/relation.
+```
+
+该改动必须建立新的 prompt version、bundle hash 和 protocol/run identity，不能覆盖 PRL25-C/D
+已经冻结的历史身份。旧 checkpoint 配新 prompt 可以作为 prompt-sensitivity 诊断，但由于它
+改变了 policy 的输入分布，不能直接混入现有 PRL25 主表或冒充原协议复测。即使采用新版
+prompt，若仍只使用 answer + FMT2 reward，语义退化仍可能被最终答案奖励容忍；要把规则真正
+变成训练约束，还需要 target lint、独立 focus judge 或等价的可审计 reward。
 
 ### 6.5 共享 OCR 案例：同一页面的三种信息路径
 
