@@ -1,0 +1,288 @@
+# NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
+
+更新时间：2026-08-26（Asia/Tokyo）
+
+状态：**实验进行中；RP67 三臂验证已闭合，full-prompt 正式评测运行中，Atomic target
+盲审生成器已通过真实 matched trajectory 校验但双臂盲审尚未闭合。**
+
+进度查看：本报告同步到 main 工作区
+`docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
+审计包生成和文章结论更新等关键节点同步；运行中的计数只作为状态快照，不提前当作结果。同步仅
+更新工作区文件，除非另行明确要求，不自动 commit 或 push。
+
+## 1. 文章当前主线
+
+本文不以宽泛的“互补能力与优化动态”作为唯一叙事。当前更可检验、也更有证据支撑的主线是：
+
+> Target-conditioned latent evidence improves particular visual-reasoning regimes,
+> especially semantic localization, relative depth, cross-region reasoning and
+> visually grounded arithmetic, while retaining clear limitations on fine-grained
+> text and pixel-faithful recognition.
+
+正文以 **Pure TGVF** 为机制主线，以 **Native Crop** 为强工具基线，以 **Original** 为
+raw direct 端到端参考。**Atomic Crop+TGVF** 暂列探索性扩展；只有 full-prompt 稳健性和
+无偏 target 合格率审计闭合后，才升级为正文核心方法。
+
+## 2. 固定术语和比较口径
+
+| 简称 | 本文固定含义 | checkpoint / run | 解释边界 |
+|---|---|---|---|
+| **Original** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；因 prompt/agent protocol 不同，只是端到端 direct reference，不是严格 paired control |
+| **Crop** | PRL25-B native RGB Crop | S32，seed42 | 当前最强 Macro* 工具基线；不补 seed43 |
+| **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
+| **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
+| **matched prompt** | 80-step 训练与既有 CoreDev 评测使用的简化、训练匹配 prompt | 历史结果 | 用于现有主表 |
+| **full prompt** | 详细说明 target、bbox、关系与禁止答案泄漏的 Instruct prompt；可见与运行时上限均为 6 次 | `full_visual_tool_prompt_v5_instruct_cap6` | 只在冻结 S64/S16 上评测，不重选 checkpoint；衡量 prompt shift robustness |
+| **Macro\*** | 七个百分比组件的无权平均 | VStar、HRBench、BLINK-180、OCR EN/CN mean、MMMU-269、MathVista、MathVerse 五版本宏平均 | 只在相同测量合同内比较 |
+
+固定排除项：**不补 Crop seed43**。它不是本文结论的必要验证，也不用于构造三方法对称性。
+
+## 3. 当前主结果：Original 必须在场
+
+下表全部为当前选定 checkpoint 的 seed42 结果，单位为 `%`。Original 的精确七项均值为
+`55.3556`，按既有测量合同报告为 `55.36`。
+
+| Method | Macro* | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Original | 55.3556 | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | 74.3333 | 50.6000 |
+| Crop S32 | **63.5377** | **+8.1821** | **80.1047** | 73.0000 | 64.4444 | **54.8108** | 49.0706 | 71.3333 | 52.0000 |
+| TGVF S64 | 59.8086 | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | **72.3333** | 50.4000 |
+| Atomic S16 | 63.0827 | +7.7271 | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
+
+可直接写入正文的事实边界：
+
+- 三个工具方法的 Macro* 都高于 Original；其中 Crop 的总体优势最大。
+- TGVF 不是全榜最优方法，因此文章不能写成“通用性能支配”。它相对 Original 的主要整体
+  增益在 VStar、HRBench 和 MMMU，并在一组更细的关系/数学任务中形成集中优势。
+- Atomic 与 Crop 的 Macro* 接近，但来源不同；这支持能力分解，不支持“Atomic 已严格优于
+  Crop”或“Crop+TGVF 存在因果 synergy”。
+- Original 在 MathVista 和部分视觉强度切片上仍优于工具方法，必须作为负面边界一起报告。
+
+## 4. 用于彰显优势的 sub-benchmark 面板
+
+### 4.1 预冻结选择规则
+
+主图只使用官方 scorer 已提供、样本定义稳定且可对四种方法对齐的 sub-benchmark。候选项必须
+满足以下至少一项：
+
+1. 对应方法相对 Original 有正增益，且能映射到明确的视觉能力；
+2. 对应方法在 Crop/TGVF/Atomic 中形成方法特异性领先；
+3. 是会限制论文主张的重要反例。
+
+不允许在 full-prompt 结果出来后重新挑选切片。主图展示精简面板，补充材料报告同一 family
+的完整官方切片，避免只报有利项。
+
+### 4.2 当前候选面板
+
+| Sub-benchmark | n | Original | Crop S32 | TGVF S64 | Atomic S16 |
+|---|---:|---:|---:|---:|---:|
+| BLINK / Relative Depth | 30 | 83.33 | 70.00 | **86.67** | 80.00 |
+| BLINK / Relative Reflectance | 30 | 50.00 | 53.33 | 46.67 | **70.00** |
+| BLINK / Spatial Relation | 30 | **96.67** | 90.00 | 93.33 | 90.00 |
+| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** |
+| HRBench / single-image aggregate | 100 | 59.00 | **85.00** | 69.00 | 79.00 |
+| MathVista / arithmetic reasoning | 104 | 65.38 | 66.35 | **72.12** | 63.46 |
+| MathVista / math word problem | 63 | 77.78 | 74.60 | **84.13** | 79.37 |
+| MathVista / numeric commonsense | 36 | 47.22 | 47.22 | **58.33** | 50.00 |
+| MathVista / visual question answering | 42 | 54.76 | 59.52 | **64.29** | 50.00 |
+| OCR EN / text recognition | category | 60.49 | 68.76 | 55.05 | **73.38** |
+| OCR CN / text recognition | category | 59.82 | **73.99** | 22.17 | 67.80 |
+| MathVerse / Vision Only | 100 | 28.00 | 42.00 | 42.00 | **51.00** |
+| MathVerse / Vision Intensive | 100 | **52.00** | 46.00 | 42.00 | 49.00 |
+
+建议主图分成三块：
+
+- **TGVF favorable regimes**：Relative Depth、MathVista arithmetic、math word、numeric
+  commonsense、visual QA；
+- **Atomic favorable regimes**：HR cross-image、Relative Reflectance、MathVerse Vision Only；
+- **Boundary cases**：OCR CN text recognition、BLINK Spatial Relation、MathVerse Vision
+  Intensive。
+
+小样本切片（尤其 BLINK `n=30`）只作能力定位，必须同时给置信区间，不能单独承担文章核心结论。
+
+## 5. 三项必须补齐的验证
+
+### 5.1 RP67 image + D matched utility
+
+目的：验证 RP67 提供的是 target-specific answer utility，而不只是额外 token 或任意 latent
+扰动。
+
+固定三臂：
+
+| Arm | 定义 | 作用 |
+|---|---|---|
+| `image_correct_D` | 原图 + 正确 target 的 RP67 D | treatment |
+| `image_target_zero_D` | 原图 + 同位置零 D | 测 D content utility 的 control |
+| `image_matched_wrong_D` | 原图 + 同图、不同 target、答案安全 donor 的 D | 测 target specificity 的 control |
+
+主要量：
+
+- `Δcontent = Acc(image_correct_D) - Acc(image_target_zero_D)`；
+- `Δspecificity = Acc(image_correct_D) - Acc(image_matched_wrong_D)`；
+- 辅助报告 `Acc(wrong) - Acc(zero)`、paired wins/losses、95% CI。
+
+当前状态：
+
+- [x] 完整 867 样本预检；203 个 image group 均可构造 answer-safe wrong mapping；
+- [x] 8-way 可恢复正式生成完成；867 × 3 = 2,601 条记录，无缺失或重复；
+- [x] 对 deterministic unresolved 完成固定 Qwen2.5-72B blind semantic overlay；
+- [x] 汇总三臂 accuracy、paired delta、bootstrap/Wilson CI。
+
+结果：
+
+| Arm | Correct / 867 | Accuracy | 95% Wilson CI |
+|---|---:|---:|---:|
+| `image_correct_D` | 736 | **84.89%** | [82.35, 87.12] |
+| `image_target_zero_D` | 674 | 77.74% | [74.85, 80.38] |
+| `image_matched_wrong_D` | 549 | 63.32% | [60.06, 66.46] |
+
+| Paired contrast | Δ accuracy | 95% paired bootstrap CI | wins / losses | exact McNemar p |
+|---|---:|---:|---:|---:|
+| correct − zero (`Δcontent`) | **+7.15 pp** | [4.73, 9.57] | 92 / 30 | `1.65e-8` |
+| correct − matched-wrong (`Δspecificity`) | **+21.57 pp** | [18.22, 24.91] | 222 / 35 | `1.95e-34` |
+| matched-wrong − zero | −14.42 pp | [−17.99, −10.84] | 71 / 196 | `1.04e-14` |
+
+解释：correct D 同时显著优于零 D 和同图错误 target 的 D，支持 RP67 observation 携带
+**内容相关且 target-specific** 的 answer utility。wrong D 仍有 63.32% accuracy，说明原图和
+语言先验仍能解出大量题目；但 wrong 显著低于 zero，也说明不匹配 D 会主动干扰 reader，不能
+把 wrong arm 当作“无信息”基线。
+
+评分边界：原始 deterministic scorer 对 verbose answer 保守地返回 unresolved，因此最终结果
+使用固定哈希的 Qwen2.5-72B blind semantic overlay。共 2,055 个唯一 judge 请求，零重试、零
+长度截断。项目 schema 将它标为 `diagnostic_semantic_overlay_not_formal_pilot`；正文必须称为
+diagnostic semantic accuracy，并在附录同时给 deterministic lower bound 与完整 judge 合同。
+三臂 deterministic strict lower bound 分别只有 `1.04% / 52.71% / 0.81%`；其巨大差异主要
+反映 correct/wrong 输出远比 zero verbose、从而更常 unresolved，不能把这组三臂 lower bound
+当成可比较的 accuracy 估计。
+
+生成根目录：
+`artifacts/representation_experiments/answer_utility/evaluation/rp67_step2000_full867_three_arm_20260826_v1/`
+
+语义 overlay：
+`artifacts/representation_experiments/answer_utility/evaluation/rp67_step2000_full867_three_arm_semantic_20260826_v1/`
+
+### 5.2 冻结最佳 checkpoint 的 full-prompt 评测
+
+目的：检查现有优势是否依赖过度简化的 matched prompt。
+
+固定设计：
+
+- Pure TGVF：S64；
+- Atomic：S16；
+- checkpoint 在看 full-prompt 结果前冻结，不允许重新选 step；
+- 仍使用 CoreDev-2511、相同官方 scorer、temperature 1、seed42；
+- prompt 详细规定 target 必须包含“看什么 + 提取什么证据/关系”，Atomic 还规定 bbox、关系实体
+  覆盖、禁止猜测答案；
+- 可见工具上限与运行时均为 6；成功 observation 回显 target；
+- 这是同一 benchmark 上的 prompt-shift robustness，不是 held-out dataset confirmation。
+
+当前状态：
+
+- [x] 新增独立协议 `full_visual_tool_prompt_v5_instruct_cap6`；
+- [x] TGVF/Atomic prompt bundle、system prompt、tool schema、target echo 和 RNG 协议均绑定 SHA256；
+- [x] S64/S16 两份计划通过真实训练配置和冻结 RP67 绑定预检；
+- [x] 相关协议与计划测试 18/18 通过；
+- [x] 修复并回归测试已完成训练中“历史最优 checkpoint + 历史 RP67 manifest”的等待边界；
+- [ ] 正式生成与官方七套 scorer（TGVF S64 与 Atomic S16 已分别在 GPU 0–3 / 4–7
+  并行生成；两臂生成完成后顺序运行官方 scorer）；
+- [ ] 与 matched prompt、Original、Crop 同表报告。
+
+运行快照（2026-08-26 01:34 JST）：TGVF `174 / 2,240`，Atomic `380 / 2,240`；
+两路均持续写入且未发现错误。此计数仅表示可恢复的生成进度，不是准确率结果。
+
+计划文件：
+
+- `configs/evaluation/prl25_c_frozen_rp67_tfree_teacher25_s64_full_prompt_v5_cap6_coredev2511_plan.json`
+- `configs/evaluation/prl25_d_atomic_crop_tgvf_tfree_teacher25_s16_full_prompt_v5_cap6_coredev2511_plan.json`
+
+### 5.3 Atomic 无偏 target 合格率审计
+
+目的：把“协议可解析”与“语义 target 合格”分开，确定 Atomic 是否能在正文中被描述为稳定地产生
+高质量 target。
+
+固定抽样与盲审设计：
+
+- matched prompt 与 full prompt 各抽取 200 条**实际使用工具**的 trajectory；
+- 以 `dataset × arm` 分层，层内按 SHA256 排序抽样；每条 trajectory 只审第一次工具调用，防止
+  多调用样本过度加权；
+- 标注者不看到 arm 名、checkpoint、最终答案、正确性、reward 或 benchmark score；
+- 两名独立标注者；分歧由第三人裁决；报告 agreement 和逐标准 Wilson CI。
+
+逐条全部通过才计为合格：
+
+1. referent 可识别；
+2. 明确说明要取得的视觉证据/属性/关系，不只是物体名；
+3. 不泄漏猜测答案或后续计算结果；
+4. bbox 与 target 一致；
+5. 关系/比较任务包含必要实体；
+6. target 是视觉查询，而不是含糊的后续推理指令。
+
+当前状态：
+
+- [x] 审计 rubric 和正文纳入门槛冻结；
+- [x] 在 matched S16 的 1,863 条工具 trajectory 上实测物化 200 条盲审样本；七个数据集按
+  population-proportional quota 覆盖，review view 未泄漏 arm、dataset、sample ID、correct、
+  reward、score 或 final answer；
+- [ ] 生成 matched/full 两个 blind audit pack；
+- [ ] 双人盲标、裁决、Wilson CI 与 agreement；
+- [ ] 根据审计结果决定 Atomic 的正文层级。
+
+## 6. Atomic 纳入正文的决策门槛
+
+Atomic 进入正文核心方法必须同时满足：
+
+1. full-prompt Macro* 和主要 Atomic favorable sub-benchmark 不发生足以推翻当前定位的崩塌；
+2. target audit 的 all-pass rate 及逐标准结果可被透明报告；
+3. 文章只声称观察到的任务条件优势，不声称未被单变量消融证明的 synergy；
+4. Original、Crop、TGVF 和 Atomic 四列同时出现，且 MathVerse Vision Intensive 等负面切片保留。
+
+如果任一条件不满足，Atomic 降级到 exploratory analysis / appendix。Pure TGVF + RP67 utility
+仍作为主机制线，Crop 作为强基线。
+
+## 7. Claim–evidence–boundary 台账
+
+| Claim | 当前证据 | 必须保留的边界 | 状态 |
+|---|---|---|---|
+| TGVF 改善一组 target-conditioned reasoning regimes | Relative Depth；MathVista arithmetic、word、numeric、visual QA；逐题案例 | 不是总体最优；OCR 和精细像素读取弱；BLINK 切片小 | 可写，待 CI |
+| RP67 D 具有内容 utility 和 target specificity | correct−zero `+7.15 pp`；correct−wrong `+21.57 pp`；两者 95% CI 不跨零 | diagnostic semantic overlay；oracle target 不测自主工具选择 | 已支持 |
+| Atomic 在跨图、反射率和 Vision Only 上显示优势 | HR cross、BLINK reflectance、MathVerse Vision Only | full prompt 与 target 合格率未闭合；Vision Intensive 低于 Original | 探索性 |
+| 详细 prompt 下优势仍存在 | 新协议和冻结计划已校验 | 同数据 prompt shift，不是新 benchmark 泛化 | 待运行 |
+| 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；MathVista 等单项仍可能更强 | 可写 |
+
+## 8. 论文实验部分建议结构
+
+1. **Comprehensive comparison.** 四方法七套 benchmark 主表，Original 永不缺席。
+2. **Where target-conditioned evidence helps.** 预冻结 sub-benchmark 图，突出 TGVF 的关系、
+   深度和视觉数学优势，同时给负面切片。
+3. **Does RP67 carry target-specific answer utility?** 867 样本 correct/zero/wrong 三臂与
+   paired effect。
+4. **Robustness to a complete tool-use prompt.** S64/S16 frozen-checkpoint prompt shift。
+5. **Exploratory Atomic Crop+TGVF.** 只有 target audit 合格后放正文，否则移附录。
+6. **Qualitative mechanisms and failures.** 复用已有真实 trajectory 与 bbox 案例，但把机制语言
+   限定为 behavior-level inference。
+
+## 9. 当前推进顺序
+
+1. [已完成] RP67 semantic overlay 和 CI，机制主张已锁定；
+2. [运行中] 用 8 GPU 依次运行 TGVF S64、Atomic S16 full prompt；
+3. [生成器已验证] full inference 闭合后，从 matched/full inference JSONL 物化正式 Atomic
+   blind audit pack；
+4. [待回填] 将 full-prompt 和 target audit 写回本文件；
+5. [待写作] 形成英文 Experiments/Discussion 初稿；
+6. [明确不做] Crop seed43。
+
+## 10. 证据来源
+
+- Original 定义和 Macro* 合同：
+  `docs/POLICY_RL_COREDEV2511_MEASUREMENT_CONTRACT_AND_BASELINES_20260812.md`
+- 80-step 三线路数值与 checkpoint 选择：
+  `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`
+- 三方法逐题轨迹与失败案例：
+  `docs/PRL25_CROP_TGVF_ATOMIC_QUALITATIVE_CASE_ANALYSIS_20260825.md`
+- Crop S32 官方 summary：
+  `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP8-STEP32-STEP48-STEP64-TEMP1-SEED42-UNIFIED-V1/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json`
+- TGVF S64 / Atomic S16：对应 six-point evaluation 的 `step64` / `step16` 官方 summary 与
+  `paired-summary.json`。
+
+注意：主仓当前 qualitative 文档可能尚未进入本 worktree 的提交历史；本文只把它作为只读证据
+来源，不覆盖主仓未提交内容。
