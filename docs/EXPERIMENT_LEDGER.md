@@ -10007,3 +10007,16 @@ than inferred from a script name or prior conversation.
   functional canary to complete without any successful tool observation before
   admitting the fresh S0 formal run. No canary trajectory enters the formal
   lineage.
+- Canary recovery authorization: the first real canary reached the native
+  AgentLoop worker but failed before rollout or optimizer Step 1 because the
+  shared termination builder still required a `</tool_call>` stop for every
+  policy. Recovery commit
+  `8140ce05b2fbb6d5c9c9fd0594eb9f5b5984f6aa` makes tool-boundary interpretation
+  an explicit termination-contract field. It is disabled only for the
+  No-Tool schema, whose EOS/length-complete output—including any tool-like
+  text—is retained for the direct-only loop to mark invalid without parsing or
+  executing it. Existing tool-enabled contract hashes and behavior are
+  unchanged. The same commit adds a 129-test focused regression result and the
+  fail-closed S32 supervisor; this ledger entry authorizes that clean recovery
+  descendant without changing data, prompt, reward, sampling, optimizer,
+  checkpoint schedule or the fixed S32 endpoint.
