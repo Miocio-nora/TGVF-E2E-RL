@@ -9989,7 +9989,7 @@ than inferred from a script name or prior conversation.
 ### PRL25-D Atomic Crop+TGVF 80-step formal run (2026-08-24)
 
 - Cell/status: `PRL-25-D-QWEN3-INSTRUCT-FULL-FROZEN-RP67-BS16-N16-TFREE-CROP-TGVF-TEACHER25-80STEP-WS8`
-  / `RUNNING`; PRL25-C's formal six-point `evaluation-complete` receipt closed
+  / `COMPLETED; SIX-POINT EVALUATION PASS`; PRL25-C's formal six-point `evaluation-complete` receipt closed
   the handoff and a detached supervisor admitted D from fresh S0 on physical
   GPUs 0--7. It did not accept inference-only or partial-arm completion as the
   handoff gate.
@@ -10073,6 +10073,33 @@ than inferred from a script name or prior conversation.
   `293e3749c3b44bd3badf1823a2f10ca1b1e100c4682aedf091589451433be1d6`;
   these are intentionally different identity layers. The paired evaluator
   repeats the same checkpoint-mapping/receipt checks before accepting an arm.
+- Training closure: S80 passed the permanent-checkpoint gate at
+  `2026-08-25 13:42 JST`; `metrics.jsonl` contains 80 consecutive optimizer
+  steps, 1,280 prompts and 20,480 trajectories. The final cumulative answer
+  reward/FMT2 rates are `72.4121%/2.6758%`; `17,656/17,737` Atomic attempts
+  produced a TGVF observation (`99.54%`). S80 itself records answer
+  `73.4375%`, FMT2 `2/256 = 0.78125%`, `207/209` successful observations and
+  `967.769 s` end to end. The 80 successful step timers sum to
+  `99,800.446 s = 27 h 43 min 20 s`; this excludes wall-clock gaps between
+  interrupted/recovered attempts.
+- Final six-point closure: automatic evaluation completed at
+  `2026-08-25 16:15 JST`. Every S8/S16/S32/S48/S64/S80 arm has 2,240 supported
+  single-image generations, 2,511 official rows, 7/7 scoring receipts and a
+  `PASS` summary under the shared temp1/seed42 paired-RNG contract. Macro* is
+  respectively `62.4154/63.0827/60.8876/61.1505/60.9028/59.5618`; judge parse
+  failures are `0/0/2/0/1/0` and are deterministically counted incorrect.
+  S16 is the post-hoc maximum (`+0.6672 pp` over S8), while S80 is
+  `-3.5208 pp` below S16. No post-S16 node improves on S16, so this arm rejects
+  the stable long-horizon-gain hypothesis while retaining S80 as the
+  preregistered primary endpoint. The complete component table and B/C/D
+  comparison are recorded in
+  `docs/PRL25_BS16_TEACHER25_80STEP_PHASE3_PLAN_20260820.md`.
+- Final artifact identity: evaluation ID
+  `PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-COREDEV2511-S8-S16-S32-S48-S64-S80-PAIRED-SEED-V1`;
+  paired-summary SHA256
+  `9b78159a04a4fe29abdeb8976b7d571973929f3e346b3c625f10dabfb051228f`;
+  evaluation-complete SHA256
+  `e801e9300d7a16079d4b84caea3b22b32d9f83fa4e12bd77958452c416adede4`.
 
 ### Policy-RL checkpoint compact-retention decision and storage inventory (2026-08-24)
 

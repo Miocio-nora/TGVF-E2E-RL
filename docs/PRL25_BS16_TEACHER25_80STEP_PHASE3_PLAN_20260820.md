@@ -1,8 +1,8 @@
 # 第三期（PRL25）：BS16 Teacher25 80-step 统一实验计划
 
-日期：2026-08-20；执行状态更新：2026-08-24（Asia/Tokyo）
+日期：2026-08-20；执行状态更新：2026-08-25（Asia/Tokyo）
 
-状态：`RUNNING / PRL25-B/C 六点曲线已完成；PRL25-D 已闭合正式 S8，正继续训练至 S80`
+状态：`PRL25-B/C/D 训练与六点曲线已完成；PRL25-A/E 尚未启动`
 
 Decision ID：`POLICY-RL-PHASE3-BS16-TEACHER25-80STEP-20260820-v1`
 
@@ -404,6 +404,58 @@ extra-state shard、data cursor、FSDP 配置与 receipt。严格读取校验通
 `293e3749c3b44bd3badf1823a2f10ca1b1e100c4682aedf091589451433be1d6` 是包含 config、
 数据、prompt、tool、RP67 与 reward 哈希的完整 checkpoint-identity mapping digest，
 二者是有意区分的两层身份而非错线。自动 evaluator 对每个节点执行同一严格门禁。
+
+#### 4.6.1 S80 训练闭环（2026-08-25）
+
+PRL25-D 于 `2026-08-25 13:42 JST` 完成并通过 S80 永久 checkpoint 门禁。
+`metrics.jsonl` 连续包含 S1--S80，共 `1,280` prompts、`20,480` trajectories；80 个成功
+step 的 `end_to_end_step_seconds` 合计 `99,800.446 s = 27 h 43 min 20 s`，平均
+`20 min 47.5 s/step`。这一计时是成功 step 的内部累计，不等同于包含中断与恢复间隔的
+机器 wall time。
+
+全程累计 answer reward 为 `72.4121%`，FMT2 error 为 `2.6758%`，共生成
+`6,418,757` policy tokens。`17,737` 次 Atomic tool attempt 中有 `17,656` 次成功产生
+TGVF observation，成功率 `99.54%`；81 次错误由 call-limit、execution failure、
+incomplete/invalid JSON 和 invalid tool name 组成。S80 单步 answer 为 `73.4375%`、FMT2
+error 为 `0.78125% = 2/256`，`207/209` 次调用成功产生 observation，完整 step 用时
+`967.769 s = 16 min 07.8 s`。因此最终训练状态没有工具链或 format 崩溃；外评曲线的回落
+不能归因于 S80 checkpoint 不完整。
+
+#### 4.6.2 六点正式结果与结论（2026-08-25）
+
+自动评测于 `2026-08-25 16:15 JST` 完成。S8/S16/S32/S48/S64/S80 每个节点均有完整的
+`2,240` 条受支持单图生成、`2,511` 条 CoreDev 记分覆盖、7/7 数据集 receipt 和 `PASS`
+summary。六点共享 Atomic Crop+TGVF prompt/tool、temperature 1、master seed 42 与逐题逐
+turn common-random-numbers 合同。下表单位均为 `%`；HRBench 使用 Average/all，BLINK 与
+MMMU 使用共同单图支持集，OCR 为 EN/CN mean，MathVerse 为 five-version macro。
+
+| Step | Macro* | VStar | HRBench | BLINK-single | OCR-mean | MMMU-single | MathVista | MathVerse-macro | Judge parse failures |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S8 | 62.4154 | 70.6806 | 70.5000 | 63.3333 | **54.8183** | 49.4424 | **71.3333** | 56.8000 | 0 |
+| **S16** | **63.0827** | 71.7277 | **73.5000** | 66.1111 | 54.2720 | **51.3011** | 69.6667 | 55.0000 | 0 |
+| S32 | 60.8876 | **74.8691** | 68.5000 | 60.5556 | 50.6360 | 50.1859 | 65.6667 | 55.8000 | 2 |
+| S48 | 61.1505 | 71.7277 | 68.0000 | **68.3333** | 50.9081 | 42.7509 | 69.3333 | **57.0000** | 0 |
+| S64 | 60.9028 | 72.7749 | 71.0000 | 67.2222 | 49.9798 | 44.6097 | 65.3333 | 55.4000 | 1 |
+| S80 | 59.5618 | 74.3455 | 65.0000 | 61.1111 | 46.3896 | 45.3532 | 69.3333 | 55.4000 | 0 |
+
+S16 是该轨迹的 post-hoc 最佳节点，比 S8 高 `+0.6672 pp`。S32/S48/S64/S80 相对 S16
+分别为 `-2.1951/-1.9322/-2.1798/-3.5208 pp`，没有任何长程节点满足第 7 节要求的
+`>1 pp` 改善。S16 到 S80 的主要变化为 VStar `+2.6178 pp`，但 HRBench、BLINK、OCR、
+MMMU、MathVista 分别下降 `8.5000/5.0000/7.8824/5.9480/0.3333 pp`，MathVerse 仅上升
+`0.4000 pp`。这说明后半程更像能力重新分配并伴随总体退化，而不是稳定学习。
+
+与同一期另外两条已完成 T-free 主线作描述性比较：native Crop 的最佳点为 S32
+`63.5377`，pure TGVF 的最佳点为 S64 `59.8086`，Atomic Crop+TGVF 的最佳点为 S16
+`63.0827`。D 的最佳点比 B 低 `0.4550 pp`、比 C 高 `3.2741 pp`；但三条工具协议不同，
+这些差值不能写成严格 synergy 或单变量因果结论。预注册 S80 仍是主终点，S16 只作为完整
+六点曲线中明确标注的补充最佳点。
+
+本 arm 因而复现了 Atomic Crop+TGVF 的早期竞争力，但否定“只需把 S16 延长到 S80 就会
+持续改善外评”的假设。评测 ID 为
+`PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-COREDEV2511-S8-S16-S32-S48-S64-S80-PAIRED-SEED-V1`；
+paired-summary 与 evaluation-complete SHA256 分别为
+`9b78159a04a4fe29abdeb8976b7d571973929f3e346b3c625f10dabfb051228f` 和
+`e801e9300d7a16079d4b84caea3b22b32d9f83fa4e12bd77958452c416adede4`。
 
 ## 5. Reward 合同
 
