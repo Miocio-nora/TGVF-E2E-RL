@@ -6,8 +6,8 @@
 matched prompt 两臂均已完成并评分；只增加 target 定义与案例后，TGVF S64 / Atomic S16
 Macro* 仍高于 Original，但相对各自 matched prompt 有温和回退。No-Tool RL 因果对照已冻结
 为 32-step 正式主终点，保留 S0/S8/S16/S32；独立实现、严格配置与 CPU 回归已完成，真实
-1-step canary 已通过，正式 8 卡 S32 已于 07:18 JST 启动，首个正式保留点 S8 已闭合并验收。
-下一步完成该对照、
+1-step canary 已通过，正式 8 卡训练已闭合 S32，S8/S16/S32 三个永久 checkpoint 均已验收。
+下一步完成 matched no-tool / raw-direct 双协议评测、
 正式 Atomic matched/target-only 盲审与调用行为对照。**
 
 进度查看：本报告同步到 main 工作区
@@ -639,7 +639,8 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   CPU compose/回归测试；
 - [x] 真实 1-step canary：首轮在 Step 0 前发现共享 termination builder 仍把
   `</tool_call>` stop 当作全路径硬条件；修复后 canary 已闭合 Step 1 且零工具调用；
-- [ ] 正式 32-step 训练以及 S0/S8/S16/S32 双协议评测：8 卡训练已启动；
+- [x] 正式 32-step 训练：S8/S16/S32 永久 checkpoint 与最终 supervisor acceptance 均已闭合；
+- [ ] S0/S8/S16/S32 matched no-tool / raw-direct 双协议评测；
 - [ ] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
 
 执行与审计快照（2026-08-26 07:18 JST）：
@@ -682,6 +683,19 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   permanent receipt、8 份 model、8 份 optimizer、8 份 extra-state shard 及配对 project state，
   共 40 个文件。tmux/supervisor 存活且无 traceback，训练已继续向 S16/S32 推进；按当前约
   `11.1 min/step` 的运行均速粗估，S16 约还需 1.5 小时、S32 约还需 4.5 小时。
+- 2026-08-26 13:19 JST 完成节点：正式训练已闭合 **S32/32**，supervisor 写入
+  `step32-accepted` 后正常退出。最终累计 512 prompts、8,192 trajectories、2,826,178
+  generated policy tokens；累计 mean answer reward 为 `0.6182`，format error rate 为
+  `0.1564`，S32 单步对应 `0.7227 / 0.1836`。这些数值只描述训练遥测，不替代 CoreDev
+  benchmark。No-Tool 合同全程满足：8,192 条 trajectory 中
+  `successful_tgvf_observations=0`、`tool_call_attempt_rate=0.0`、
+  `mean_tool_call_attempts=0.0`。S8、S16、S32 permanent checkpoint 均包含 receipt、8 份
+  model、8 份 optimizer、8 份 extra-state shard 与 paired project state，各 40 个文件。
+  Step 9 后 answer judge 曾出现一次 HTTP 429 transient-window failure；守护器保留已提交
+  checkpoint，冷却后从同一正式 lineage 自动恢复，最终 prompts/trajectories 计数与冻结合同
+  精确一致。训练成功后的 vLLM teardown 输出 `pure virtual method called`，发生在最终 metrics、
+  permanent receipt 与 100% progress 之后，不影响 S32 验收。下一步只执行事前冻结的
+  matched no-tool / raw-direct 双协议评测，不依据训练 reward 改选 checkpoint。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -738,8 +752,8 @@ Atomic 进入正文核心方法必须同时满足：
 2. [已完成] 广义 full-prompt stress test 及七项官方评分；
 3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
-5. [执行中] No-Tool RL S32：合同、实现、配置、CPU 回归与真实 canary 均已闭合；正式 8 卡
-   fresh-S0 训练已启动，目标固定 S32；
+5. [训练完成，评测待执行] No-Tool RL：合同、实现、CPU 回归、真实 canary 与正式 S32 均已
+   闭合；S8/S16/S32 永久 checkpoint 已验收，下一步执行 S0/S8/S16/S32 双协议评测；
 6. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 7. [待回填] target-only 调用行为对照与正式 audit；
