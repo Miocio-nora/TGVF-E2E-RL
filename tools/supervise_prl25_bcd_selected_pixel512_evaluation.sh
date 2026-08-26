@@ -28,6 +28,7 @@ phase=waiting_for_s32_raw_direct_512
 active_label=""
 active_pids=()
 launched_pid=""
+attached_tgvf_infer_pid=${PRL25_TGVF_INFER_PID:-}
 
 timestamp() {
   date '+%F %T %Z'
@@ -81,7 +82,9 @@ launch_eval() {
   active_label=$label
   phase="running_${label}_${mode}"
   mkdir -p "$output_root/logs"
-  setsid "${command[@]}" >"$log_root/${label}-${mode}.log" 2>&1 &
+  # Do not leak the supervisor flock into long-lived evaluation children.  A
+  # leaked descriptor prevents a replacement supervisor from taking over.
+  setsid "${command[@]}" >"$log_root/${label}-${mode}.log" 2>&1 9>&- &
   launched_pid=$!
   active_pids+=("$launched_pid")
 }
@@ -95,6 +98,31 @@ wait_eval() {
   wait "$pid"
 }
 
+wait_attached_eval() {
+  local pid=$1
+  local label=$2
+  local mode=$3
+  active_label=$label
+  phase="waiting_attached_${label}_${mode}"
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 15
+  done
+}
+
+validate_inference_rows() {
+  local output_root=$1
+  local step=$2
+  local expected_rows=$3
+  local inference_root="$output_root/$step/inference"
+  local actual_rows
+  actual_rows=$(find "$inference_root" -maxdepth 1 -type f -name 'rank-*.jsonl' -print0 \
+    | xargs -0 -r cat | wc -l)
+  if [[ "$actual_rows" -ne "$expected_rows" ]]; then
+    echo "incomplete inference rows: root=$inference_root expected=$expected_rows actual=$actual_rows" >&2
+    return 1
+  fi
+}
+
 while [[ ! -f "$s32_root/runtime/scoring-supervisor/raw-direct-512-s32-scoring-complete" ]]; do
   sleep 15
 done
@@ -102,20 +130,36 @@ done
 export PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
 rm -f "$control_root/failed" "$control_root/pixel512-selected-evaluation-complete"
 
-# Fill all eight GPUs during the first inference phase.  Scoring is delayed
-# until both four-GPU inference groups have released GPU0/1 for the TP=2 judge.
-launch_eval 0 infer 4 5 6 7
-crop_infer_pid=$launched_pid
-launch_eval 1 infer 0 1 2 3
-tgvf_infer_pid=$launched_pid
-wait_eval "$crop_infer_pid" crop-s80 infer
-touch "$control_root/crop-s80-inference-complete"
-wait_eval "$tgvf_infer_pid" tgvf-s64 infer
-touch "$control_root/tgvf-s64-inference-complete"
+# Fill all eight GPUs during the first inference phase.  As soon as Crop has
+# released GPU4-7, start Atomic there instead of waiting at a cross-arm barrier.
+if [[ ! -f "$control_root/crop-s80-inference-complete" ]]; then
+  launch_eval 0 infer 4 5 6 7
+  crop_infer_pid=$launched_pid
+fi
+if [[ ! -f "$control_root/tgvf-s64-inference-complete" && -z "$attached_tgvf_infer_pid" ]]; then
+  launch_eval 1 infer 0 1 2 3
+  tgvf_infer_pid=$launched_pid
+fi
+if [[ -n "${crop_infer_pid:-}" ]]; then
+  wait_eval "$crop_infer_pid" crop-s80 infer
+  validate_inference_rows "${output_roots[0]}" step80 2240
+  touch "$control_root/crop-s80-inference-complete"
+fi
 
-# Keep GPU4-7 occupied with Atomic while GPU0/1 score the completed arms.
 launch_eval 2 infer 4 5 6 7
 atomic_infer_pid=$launched_pid
+
+if [[ ! -f "$control_root/tgvf-s64-inference-complete" ]]; then
+  if [[ -n "$attached_tgvf_infer_pid" ]]; then
+    wait_attached_eval "$attached_tgvf_infer_pid" tgvf-s64 infer
+  else
+    wait_eval "$tgvf_infer_pid" tgvf-s64 infer
+  fi
+  validate_inference_rows "${output_roots[1]}" step64 2240
+  touch "$control_root/tgvf-s64-inference-complete"
+fi
+
+# GPU0/1 are now free for the TP=2 judge while Atomic continues on GPU4-7.
 launch_eval 0 score 0 1 2 3
 crop_score_pid=$launched_pid
 wait_eval "$crop_score_pid" crop-s80 score
@@ -125,6 +169,7 @@ tgvf_score_pid=$launched_pid
 wait_eval "$tgvf_score_pid" tgvf-s64 score
 touch "$control_root/tgvf-s64-complete"
 wait_eval "$atomic_infer_pid" atomic-s16 infer
+validate_inference_rows "${output_roots[2]}" step16 2240
 touch "$control_root/atomic-s16-inference-complete"
 launch_eval 2 score 0 1 2 3
 atomic_score_pid=$launched_pid
