@@ -6,8 +6,9 @@
 matched prompt 两臂均已完成并评分；只增加 target 定义与案例后，TGVF S64 / Atomic S16
 Macro* 仍高于 Original，但相对各自 matched prompt 有温和回退。No-Tool RL 因果对照已冻结
 为 32-step 正式主终点，保留 S0/S8/S16/S32；独立实现、严格配置与 CPU 回归已完成，真实
-1-step canary 已通过，正式 8 卡训练已闭合 S32，S8/S16/S32 三个永久 checkpoint 均已验收。
-下一步完成 matched no-tool 的 S0/S8/S16/S32 单协议评测、
+1-step canary 已通过，正式 8 卡训练已闭合 S32，S8/S16/S32 三个永久 checkpoint 均已验收；
+matched no-tool 的 S0/S8/S16/S32 单图推理已全部闭合，七项正式评分正在启动。
+下一步完成 No-Tool RL 评分与结果回填、
 正式 Atomic matched/target-only 盲审与调用行为对照。**
 
 进度查看：本报告同步到 main 工作区
@@ -639,7 +640,8 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 - [x] 真实 1-step canary：首轮在 Step 0 前发现共享 termination builder 仍把
   `</tool_call>` stop 当作全路径硬条件；修复后 canary 已闭合 Step 1 且零工具调用；
 - [x] 正式 32-step 训练：S8/S16/S32 永久 checkpoint 与最终 supervisor acceptance 均已闭合；
-- [ ] S0/S8/S16/S32 matched no-tool 单协议评测；
+- [x] S0/S8/S16/S32 matched no-tool 的 `4 × 2,240` 条单图推理；
+- [ ] S0/S8/S16/S32 matched no-tool 的七项正式评分；
 - [ ] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
 
 执行与审计快照（2026-08-26 07:18 JST）：
@@ -713,6 +715,12 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   四个正式 worker 正在初始化；S32 full-model checkpoint merge 已并行启动。tmux 与 supervisor
   均存活，当前未发现致命错误。此节点只证明推理工件进度，S0 尚未执行七项评分，因此不产生
   Macro*、sub-benchmark 优劣或论文结论。
+- 2026-08-26 15:23 JST 推理闭合与评分启动节点：S0、S8、S16、S32 均已完成各自全部
+  `2,240/2,240` 条单图推理，四臂 completion marker 与总 `matched-inference-complete` 均已落盘。
+  严格评分守护器已在独立 tmux `prl25_f_notool_matched_score` 启动，执行实现已推送至
+  `daf1b26`。四臂均已通过 scoring-view 物化校验：每臂 2,240 条观测单图答案、271 条显式
+  fail-closed 多图任务、2,511 条官方总计及七个 slice；本地 Qwen2.5-72B-Instruct judge 正在
+  GPU0/1 初始化。此时尚无任何 slice 完成正式评分，也尚无 Macro* 或 sub-benchmark 结论。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -769,8 +777,9 @@ Atomic 进入正文核心方法必须同时满足：
 2. [已完成] 广义 full-prompt stress test 及七项官方评分；
 3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
-5. [训练完成，评测运行中] No-Tool RL：合同、实现、CPU 回归、真实 canary 与正式 S32 均已
-   闭合；S8/S16/S32 永久 checkpoint 已验收，当前只执行 S0/S8/S16/S32 matched no-tool；
+5. [训练与推理完成，评分运行中] No-Tool RL：合同、实现、CPU 回归、真实 canary 与正式 S32
+   均已闭合；S8/S16/S32 永久 checkpoint 已验收；S0/S8/S16/S32 matched no-tool 推理已完成，
+   当前执行四臂七项正式评分；
 6. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 7. [待回填] target-only 调用行为对照与正式 audit；
