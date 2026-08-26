@@ -2,14 +2,13 @@
 
 更新时间：2026-08-26（Asia/Tokyo）
 
-状态：**实验进行中；RP67 三臂验证已闭合；广义 full-prompt stress test 与严格 target-only
-matched prompt 两臂均已完成并评分；只增加 target 定义与案例后，TGVF S64 / Atomic S16
-Macro* 仍高于 Original，但相对各自 matched prompt 有温和回退。No-Tool RL 因果对照已冻结
-为 32-step 正式主终点，保留 S0/S8/S16/S32；独立实现、严格配置与 CPU 回归已完成，真实
-1-step canary 已通过，正式 8 卡训练已闭合 S32，S8/S16/S32 三个永久 checkpoint 均已验收；
-matched no-tool 的 S0/S8/S16/S32 单图推理已全部闭合，七项正式评分正在启动。
-下一步完成 No-Tool RL 评分与结果回填、
-正式 Atomic matched/target-only 盲审与调用行为对照。**
+状态：**实验进行中；RP67 三臂验证、广义 full-prompt stress test、严格 target-only matched
+prompt 与 No-Tool RL S0/S8/S16/S32 matched no-tool 评测均已闭合。事前冻结的 No-Tool S32
+Macro* 为 `66.6853`，同协议 S0 为 `64.4712`，即 32-step RL 增益为 `+2.2141 pp`；S32 同时
+高于 Crop S80、TGVF S64 和 Atomic S16。该结果不支持“工具方法的总体增益超越当前 RL-only
+control”，文章据此收缩总体工具优势 claim，并把工具价值限定到 RP67 内容 utility、特定
+sub-benchmark 和策略行为。下一步完成正式 Atomic matched/target-only 盲审、target-only 调用
+行为对照与英文 Experiments/Discussion 初稿。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -20,13 +19,13 @@ matched no-tool 的 S0/S8/S16/S32 单图推理已全部闭合，七项正式评�
 
 本文不以宽泛的“互补能力与优化动态”作为唯一叙事。当前更可检验、也更有证据支撑的主线是：
 
-> Target-conditioned latent evidence improves particular visual-reasoning regimes,
-> especially semantic localization, relative depth, cross-region reasoning and
-> visually grounded arithmetic, while retaining clear limitations on fine-grained
-> text and pixel-faithful recognition.
+> Under the current protocols, no-tool RL provides the strongest aggregate control,
+> while target-conditioned latent evidence retains target-specific utility and
+> method-specific advantages in selected visual-reasoning regimes. These results do
+> not establish aggregate superiority of tool-augmented policies.
 
-正文以 **Pure TGVF** 为机制主线，以 **Native Crop** 为强工具基线，以 **Original** 为
-raw direct 端到端参考。**Atomic Crop+TGVF** 目前仍列探索性扩展；其正文层级等待真正的
+正文先以 **No-Tool RL** 收缩总体 claim，再以 **Pure TGVF** 为机制主线、**Native Crop** 为强
+工具基线、**Original** 为 raw direct 端到端参考。**Atomic Crop+TGVF** 目前仍列探索性扩展；其正文层级等待真正的
 target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-prompt stress test 同时改变了
 多项 prompt/observation 合同，不能单独用于决定 Atomic 的正文层级。
 
@@ -52,26 +51,36 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 
 | Method | Macro* | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Original | 55.3556 | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | **74.3333** | 50.6000 |
-| Crop S80 | 62.2288 | +6.8732 | **81.6754** | **74.5000** | 58.8889 | **55.3358** | 46.4684 | 67.3333 | 51.4000 |
+| Original | 55.3556 | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | 74.3333 | 50.6000 |
+| Crop S80 | 62.2288 | +6.8732 | 81.6754 | **74.5000** | 58.8889 | **55.3358** | 46.4684 | 67.3333 | 51.4000 |
 | TGVF S64 | 59.8086 | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
-| Atomic S16 | **63.0827** | **+7.7271** | 71.7277 | 73.5000 | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
+| Atomic S16 | 63.0827 | +7.7271 | 71.7277 | 73.5000 | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
+| No-Tool RL S32 | **66.6853** | **+11.3297†** | **84.2932** | 69.0000 | **70.5556** | 50.8528 | **55.7621** | **75.3333** | **61.0000** |
+
+`†` No-Tool S32 与 Original 的差值跨越 matched no-tool 与 raw-direct 两种 prompt/protocol，只是
+端到端参考，不能解释为同协议 RL effect。同协议 RL effect 应使用 S32−S0，即 `+2.2141 pp`。
 
 可直接写入正文的事实边界：
 
-- 三个工具方法的 Macro* 都高于 Original；当前表中 Atomic S16 的 matched-prompt Macro* 最高，
-  Crop S80 是按用户指定报告的 80-step 终点基线，不再使用 post-hoc 最优 S32。
+- 三个工具方法的 Macro* 都高于 raw-direct Original；工具线路中 Atomic S16 最高。Crop S80
+  是按用户指定报告的 80-step 终点基线，不再使用 post-hoc 最优 S32。
+- No-Tool RL S32 是全表最高 Macro*，比 Crop S80、TGVF S64、Atomic S16 分别高
+  `4.4565 / 6.8767 / 3.6026 pp`。这直接否定“当前工具方法总体优于 RL-only 对照”的写法。
+- No-Tool S0 已达到 `64.4712`，而 S32−S0 只有 `+2.2141 pp`。因此 prompt/schema/agent
+  protocol 是主要替代解释之一；matched no-tool 去除了工具 schema，仍不是工具存在性的严格
+  单变量消融。
 - TGVF 不是全榜最优方法，因此文章不能写成“通用性能支配”。它相对 Original 的主要整体
   增益在 VStar、HRBench 和 MMMU，并在一组更细的关系/数学任务中形成集中优势。
 - Atomic 与 Crop 的 Macro* 接近，但来源不同；这支持能力分解，不支持“Atomic 已严格优于
   Crop”或“Crop+TGVF 存在因果 synergy”。
-- Original 在 MathVista 和部分视觉强度切片上仍优于工具方法，必须作为负面边界一起报告。
+- Original 在部分视觉强度与 OCR 切片上仍有优势，必须作为负面边界一起报告；No-Tool S32
+  则在 MathVista headline 上比 Original 高 `1.0000 pp`。
 
 ## 4. 用于彰显优势的 sub-benchmark 面板
 
 ### 4.1 预冻结选择规则
 
-主图只使用官方 scorer 已提供、样本定义稳定且可对四种方法对齐的 sub-benchmark。候选项必须
+主图只使用官方 scorer 已提供、样本定义稳定且可对五种方法对齐的 sub-benchmark。候选项必须
 满足以下至少一项：
 
 1. 对应方法相对 Original 有正增益，且能映射到明确的视觉能力；
@@ -84,30 +93,30 @@ endpoint。本文在 target-only 结果揭晓前冻结其 v2 版本；此后不�
 
 ### 4.2 正文候选：扩展优势面板 v2
 
-表中粗体表示四种方法的行最优；最后一列是 `max(TGVF, Atomic) − Original`，因此即使 Crop
-是行最优，也能看清两条 target-conditioned 方法相对 Original 的增益。
+表中粗体表示五种方法的行最优；最后一列仍是 `max(TGVF, Atomic) − Original`，专门保留
+target-conditioned 方法的能力增益。No-Tool 列作为控制进入完整面板，不参与该列的定义。
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | Best TGVF/Atomic Δ |
-|---|---:|---:|---:|---:|---:|---:|
-| VStar / direct attributes | 115 | 48.70 | **83.48** | 70.43 | 69.57 | **+21.74** |
-| VStar / relative position | 76 | 53.95 | 78.95 | **80.26** | 75.00 | **+26.32** |
-| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** | **+9.00** |
-| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 | **+20.00** |
-| BLINK / Counting | 30 | 66.67 | 70.00 | **73.33** | **73.33** | **+6.67** |
-| BLINK / Object Localization | 30 | 56.67 | 56.67 | 70.00 | **73.33** | **+16.67** |
-| BLINK / Relative Depth | 30 | 83.33 | 83.33 | **86.67** | 80.00 | **+3.33** |
-| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** | **+20.00** |
-| MathVista / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 | **+11.11** |
-| MathVista / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 | **+6.73** |
-| MathVista / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 | **+9.52** |
-| MathVista / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 | **+6.35** |
-| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** | **+12.89** |
-| OCR EN / visual text understanding | category | 75.00 | 81.61 | 80.00 | **83.21** | **+8.21** |
-| OCR CN / visual text understanding | category | 35.00 | 60.00 | **65.00** | 55.00 | **+30.00** |
-| MathVerse / Text Lite | 100 | 53.00 | 56.00 | 58.00 | **59.00** | **+6.00** |
-| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | **51.00** | **+23.00** |
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 | Best TGVF/Atomic Δ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| VStar / direct attributes | 115 | 48.70 | 83.48 | 70.43 | 69.57 | **86.09** | **+21.74** |
+| VStar / relative position | 76 | 53.95 | 78.95 | 80.26 | 75.00 | **81.58** | **+26.32** |
+| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** | 66.00 | **+9.00** |
+| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 | 72.00 | **+20.00** |
+| BLINK / Counting | 30 | 66.67 | 70.00 | 73.33 | 73.33 | **80.00** | **+6.67** |
+| BLINK / Object Localization | 30 | 56.67 | 56.67 | 70.00 | **73.33** | 70.00 | **+16.67** |
+| BLINK / Relative Depth | 30 | 83.33 | 83.33 | 86.67 | 80.00 | **90.00** | **+3.33** |
+| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** | 60.00 | **+20.00** |
+| MathVista / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 | **58.33** | **+11.11** |
+| MathVista / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 | 71.15 | **+6.73** |
+| MathVista / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 | 61.90 | **+9.52** |
+| MathVista / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 | 82.54 | **+6.35** |
+| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** | 65.54 | **+12.89** |
+| OCR EN / visual text understanding | category | 75.00 | 81.61 | 80.00 | **83.21** | 78.33 | **+8.21** |
+| OCR CN / visual text understanding | category | 35.00 | 60.00 | **65.00** | 55.00 | 60.00 | **+30.00** |
+| MathVerse / Text Lite | 100 | 53.00 | 56.00 | 58.00 | 59.00 | **65.00** | **+6.00** |
+| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | 51.00 | **55.00** | **+23.00** |
 
-建议主图分成三块：
+建议主图分成三块，并把 No-Tool 作为贯穿每块的控制列：
 
 - **target-conditioned shared gains**：VStar、HR、Counting、Object Localization；
 - **TGVF-concentrated gains**：relative position/depth、MathVista 四项、OCR CN visual text
@@ -120,9 +129,9 @@ geometry reasoning、MathVerse Vision Intensive。这样主图可以彰显优势
 
 ### 4.3 MathVista MINI 低于 Original 的归因
 
-这不是测试 subset 不同造成的。四种方法都在同一份完整 `MathVista_MINI` 上评分，逐题核对后
-均为相同的 300 个 `index`；Original 答对 223 题，而 Crop、TGVF、Atomic 分别答对
-202、217、209 题。按官方判分函数逐题配对得到：
+这不是测试 subset 不同造成的。五种方法都在同一份完整 `MathVista_MINI` 上评分，逐题核对后
+均为相同的 300 个 `index`；Original 答对 223 题，而 Crop、TGVF、Atomic、No-Tool S32
+分别答对 202、217、209、226 题。按官方判分函数逐题配对得到：
 
 | Method | Correct / 300 | Δ correct vs Original | Gained: method correct, Original wrong | Lost: Original correct, method wrong |
 |---|---:|---:|---:|---:|
@@ -130,6 +139,7 @@ geometry reasoning、MathVerse Vision Intensive。这样主图可以彰显优势
 | Crop S80 | 202 | -21 | 15 | 36 |
 | TGVF S64 | 217 | -6 | 26 | 32 |
 | Atomic S16 | 209 | -14 | 19 | 33 |
+| No-Tool S32 | 226 | +3 | 23 | 20 |
 
 对 TGVF，5 个互斥官方 task 的净变化为：textbook question answering `-7` 题、figure
 question answering `-4`、geometry problem solving `-3`，被 math word problem `+4` 和
@@ -164,6 +174,7 @@ Crop 与 TGVF observation 的原子工具，不能拆成两次工具调用。
 | Method | Tool function | Attempted questions | Successful-use questions | Executed calls | Invalid attempts | Execution yield | Calls/question | Calls/used question | Repeat-use questions |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original | none | 0 (0.00%) | 0 (0.00%) | 0 | 0 | — | 0.000 | — | 0 (0.00%) |
+| No-Tool RL S32 | none | 0 (0.00%) | 0 (0.00%) | 0 | 0 | — | 0.000 | — | 0 (0.00%) |
 | Crop S80 | `image_zoom_in_tool` | 1,576 (70.36%) | 1,502 (67.05%) | 1,508 | 100 | 93.78% | 0.673 | 1.004 | 3 (0.13%) |
 | TGVF S64 | `tgvf_focus_tool` | **2,012 (89.82%)** | **2,010 (89.73%)** | 2,011 | 3 | **99.85%** | 0.898 | 1.000 | 1 (0.04%) |
 | Atomic S16 | `tgvf_crop_tool` | 1,866 (83.30%) | 1,863 (83.17%) | **2,300** | 36 | 98.46% | **1.027** | **1.235** | **221 (9.87%)** |
@@ -207,6 +218,7 @@ Crop 与 TGVF observation 的原子工具，不能拆成两次工具调用。
 | Method | 0 calls | 1 call | 2 calls | 3 calls | 4 calls | 5+ calls |
 |---|---:|---:|---:|---:|---:|---:|
 | Original | 2,240 (100.00%) | 0 | 0 | 0 | 0 | 0 |
+| No-Tool RL S32 | 2,240 (100.00%) | 0 | 0 | 0 | 0 | 0 |
 | Crop S80 | 738 (32.95%) | 1,499 (66.92%) | 2 (0.09%) | 0 | 0 | 1 (0.04%) |
 | TGVF S64 | 230 (10.27%) | 2,009 (89.69%) | 1 (0.04%) | 0 | 0 | 0 |
 | Atomic S16 | 377 (16.83%) | 1,642 (73.30%) | 120 (5.36%) | 44 (1.96%) | 23 (1.03%) | 34 (1.52%) |
@@ -225,6 +237,10 @@ calls 分开报告，因为错误尝试没有产生工具 observation。
   两次有效调用；VStar、HRBench 和 BLINK 的覆盖率均超过 `97%`。
 - Atomic S16 表现为**按 set 改变调用强度**：成功使用率 `83.17%`，但 `9.87%` 的全部题目
   出现重复调用，使整体达到 `1.027 calls/question`；重复检索主要集中在 BLINK 和 OCR。
+- No-Tool RL S32 的七个 set 合计 `2,240` 条 trajectory 中，有效调用、工具错误、observation
+  和结构化工具文本泄漏均为 `0`；全部 set 的 calls/question 均为 `0.000`。作为学习动态审计，
+  S0/S8 曾分别出现 `16/5` 条结构化工具样式输出并以 `invalid_format` fail-closed，S16/S32 均为
+  `0`，没有任何一次被解析或执行为工具调用。
 - 调用率和调用次数是行为描述，不是因果 utility。不能由“调用更多”直接推出“工具更有效”；
   后续应按相同 ID 报告 `0/1/2+` 调用组的正确率与置信区间，并明确其受 policy 自选择混杂。
 
@@ -630,7 +646,31 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   增益归给 TGVF/RP67。
 - matched no-tool 去除了工具 schema，因此它是当前最强的 RL-only control，但仍不可消除
   “存在工具 schema / agent loop”这一协议差异。已有 Original 的 raw direct 结果也不能替代
-  matched 因果对照。
+  matched RL-only 比较。
+
+#### 5.4.4 正式结果与学习动态
+
+下表全部使用 matched no-tool 协议。S32 是事前冻结的唯一 headline；S8/S16 只用于描述动态，
+不能因为 S16 的 Macro* 略高而把正式 checkpoint 改选为 S16。
+
+| Step | Macro* | Δ vs S0 | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S0 | 64.4712 | — | 79.5812 | 61.0000 | 65.5556 | 48.8072 | 57.6208 | 77.3333 | 61.4000 |
+| S8 | 66.1132 | +1.6420 | 83.7696 | 66.0000 | 65.5556 | 48.9899 | 56.8773 | **78.0000** | **63.6000** |
+| S16 | **66.9028** | **+2.4317** | 82.1990 | **69.5000** | **71.1111** | 50.6324 | 56.8773 | 75.0000 | 63.0000 |
+| **S32 frozen** | 66.6853 | +2.2141 | **84.2932** | 69.0000 | 70.5556 | **50.8528** | 55.7621 | 75.3333 | 61.0000 |
+
+观察与解释边界：
+
+- 同协议 S32−S0 为 `+2.2141 pp`，说明 32-step No-Tool RL 带来温和净增益；学习曲线在 S16
+  达到 `66.9028` 后轻微回落 `0.2175 pp`，但不触发 post-hoc checkpoint 重选。
+- S0 已达到 `64.4712`，高于 Crop S80、TGVF S64 和 Atomic S16 的 headline Macro*。因此
+  no-tool prompt/protocol 本身是主要替代解释，当前实验不能把工具线路相对 raw Original 的总增益
+  全部归给工具，也不支持工具方法在 Macro* 上超过当前 RL-only control。
+- S32 相对三个工具方法的差值为 Crop `+4.4565 pp`、TGVF `+6.8767 pp`、Atomic
+  `+3.6026 pp`。工具证据必须转向特定切片、RP67 三臂 utility 与行为机制，不能继续声称总体支配。
+- 该比较仍不是“只切换工具开关”的严格因果消融：matched no-tool 同时去除了工具 schema 和
+  agent loop。Original raw direct 必须保留，但其 prompt/protocol 又不同，只作端到端参考。
 
 当前状态：
 
@@ -641,8 +681,8 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   `</tool_call>` stop 当作全路径硬条件；修复后 canary 已闭合 Step 1 且零工具调用；
 - [x] 正式 32-step 训练：S8/S16/S32 永久 checkpoint 与最终 supervisor acceptance 均已闭合；
 - [x] S0/S8/S16/S32 matched no-tool 的 `4 × 2,240` 条单图推理；
-- [ ] S0/S8/S16/S32 matched no-tool 的七项正式评分；
-- [ ] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
+- [x] S0/S8/S16/S32 matched no-tool 的七项正式评分；
+- [x] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
 
 执行与审计快照（2026-08-26 07:18 JST）：
 
@@ -735,6 +775,13 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   隔离到各 step/dataset，并在恢复时跳过已有 receipt、只重跑未闭合 slice；CPU 合同测试
   `34 passed`，修复已推送至 `9744dca`。自动恢复 waiter 已启动，将在当前批次自然退出后接管；
   四臂 summary 和 Macro* 仍未生成。
+- 2026-08-26 16:04 JST 正式评分闭合节点：恢复流程已生成并校验 `28/28` 个 pinned-reuse
+  receipt、四个 step 的 `coredev-2511-eval-summary.json` 和总 `matched-scoring-complete` marker；
+  四份 summary 均为 `status=pass`、`slice_count=7`、`sample_count=2,511` 且
+  `judge_parse_failure_count=0`。最终汇总改为从 receipt 固定的 destination eval ID 精确读取，
+  避免旧失败 OCR eval 被“latest”规则误选；修复和结果生成代码已推送至执行分支 commit
+  `abee6a4`。正式 S32 Macro* 为 `66.6853`，所有 No-Tool 结果现已进入本文主表、完整
+  sub-benchmark、调用行为表与 claim ledger。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -763,18 +810,19 @@ Atomic 进入正文核心方法必须同时满足：
 | Atomic matched prompt 下在跨图、反射率和 Vision Only 上显示优势 | matched HR cross、BLINK reflectance、MathVerse Vision Only | target-only 下 HR cross / reflectance 优势明显收窄，Vision Only 保持；target 合格率未闭合 | 探索性，核心门槛部分验证 |
 | 广义 prompt bundle 下工具总体增益仍存在 | TGVF / Atomic stress-test Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；非 target-only；不是新 benchmark 泛化 | 已支持，带退化边界 |
 | 只补充 target 定义与案例的稳健性 | TGVF / Atomic target-only Macro* `58.1788 / 60.8253`，仍比 Original 高 `2.8233 / 5.4697 pp` | 相对 own matched 分别下降 `1.6298 / 2.2574 pp`；不支持“详细 target 定义普遍增益” | 已支持，带退化边界 |
-| 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；MathVista 等单项仍可能更强 | 可写 |
-| 工具方法的增益不能只用 RL 本身解释 | No-Tool RL S32；matched no-tool；S0/S8/S16 学习动态 | 尚未出结果；工具 schema / agent-loop 差异仍存在；不测训练后 raw-direct transfer | 已冻结，运行中 |
+| 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；No-Tool S0/S32 同时高于三个工具方法，不能把差值归因给工具 | 仅可作端到端描述 |
+| 工具方法的总体增益超越当前 RL-only/no-tool control | No-Tool S32 `66.6853`，高于 Crop/TGVF/Atomic `4.4565/6.8767/3.6026 pp`；S0 `64.4712`；S32−S0 `+2.2141 pp` | no-tool 与工具线路的 schema/agent-loop 仍不同，不是严格工具开关消融；不测训练后 raw-direct transfer | **当前不支持，必须撤回总体 claim** |
 | 三种方法形成不同工具调用行为 | Crop/TGVF/Atomic successful-use rate `67.05/89.73/83.17%`；calls/question `0.673/0.898/1.027`；逐 set 表 | matched-prompt 描述性统计；调用更多不等于 utility 更高；policy 自选择混杂 | 已支持 |
 
 ## 8. 论文实验部分建议结构
 
-1. **Comprehensive comparison.** Original、No-Tool RL 与三个工具方法的七套 benchmark 主表，
-   Original 永不缺席。
-2. **Does RL alone explain the gain?** 冻结 No-Tool RL S32 主终点，以 matched no-tool 为唯一
-   RL-only 对照；Original raw direct 只保留为端到端参考。
-3. **Where target-conditioned evidence helps.** 预冻结 sub-benchmark 图，突出 TGVF 的关系、
-   深度和视觉数学优势，同时给负面切片。
+1. **Comprehensive comparison and control result.** Original、No-Tool RL 与三个工具方法的七套
+   benchmark 主表；先报告 No-Tool S32 总体最高及其协议边界，Original 永不缺席。
+2. **How much does RL itself add?** 报告冻结 No-Tool S32 与同协议 S0/S8/S16 动态，明确
+   S32−S0 `+2.2141 pp`，并把 prompt/schema/agent protocol 列为替代解释。
+3. **Where target-conditioned evidence remains useful.** 在总体 claim 收缩后，用完整
+   sub-benchmark 图定位 TGVF/Atomic 的关系、深度、视觉数学与 OCR 条件优势，同时保留
+   No-Tool 控制列和负面切片。
 4. **How do the policies use their tools?** 报告整体及逐 set 的调用覆盖率、调用强度、重复调用和
    无效尝试，并与正确率分析分开。
 5. **Does RP67 carry target-specific answer utility?** 867 样本 correct/zero/wrong 三臂与
@@ -791,9 +839,8 @@ Atomic 进入正文核心方法必须同时满足：
 2. [已完成] 广义 full-prompt stress test 及七项官方评分；
 3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
-5. [训练与推理完成，评分运行中] No-Tool RL：合同、实现、CPU 回归、真实 canary 与正式 S32
-   均已闭合；S8/S16/S32 永久 checkpoint 已验收；S0/S8/S16/S32 matched no-tool 推理已完成，
-   当前执行四臂七项正式评分；
+5. [已完成] No-Tool RL：合同、实现、CPU 回归、真实 canary、正式 S32 训练、S0/S8/S16/S32
+   matched no-tool 推理、28 个 slice 评分、四臂汇总与文章结果回填均已闭合；
 6. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 7. [待回填] target-only 调用行为对照与正式 audit；
@@ -814,87 +861,91 @@ Atomic 进入正文核心方法必须同时满足：
   `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP80-TEMP1-SEED42-UNIFIED-V1/step80/scoring/coredev-official-v1/coredev-2511-eval-summary.json`
 - TGVF S64 / Atomic S16：对应 six-point evaluation 的 `step64` / `step16` 官方 summary 与
   `paired-summary.json`。
+- No-Tool RL S0/S8/S16/S32 matched summary：
+  `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1/matched/step{0,8,16,32}/scoring/coredev-official-v1/coredev-2511-eval-summary.json`；
+  28 个精确评分来源由同级各 dataset 的 `pinned-reuse-receipt.json` 固定。
 
 注意：主仓当前 qualitative 文档可能尚未进入本 worktree 的提交历史；本文只把它作为只读证据
 来源，不覆盖主仓未提交内容。
 
 ## Appendix A. 完整 aligned sub-benchmark 清单
 
-本附录不只保留有利切片，而是完整列出当前四种方法可稳定对齐的 sub-benchmark。除 MMMU
-subject 重算外共有 40 行；其中 TGVF 或 Atomic 在 `22/40` 行上高于 Original。该计数仅用于
-清点覆盖面：MathVista skill 等标签彼此重叠，不能把 `22/40` 当作独立样本上的显著性检验或
+本附录不只保留有利切片，而是完整列出当前五种方法可稳定对齐的 sub-benchmark。除 MMMU
+subject 重算外共有 40 行；其中 TGVF 或 Atomic 在 `22/40` 行、No-Tool S32 在 `27/40` 行上
+高于 Original（另有 2 行持平）。这些计数仅用于
+清点覆盖面：MathVista skill 等标签彼此重叠，不能把这些行数当作独立样本上的显著性检验或
 新的综合指标。小样本切片（尤其 BLINK `n=30` 和 MMMU subject `n=5–10`）只作能力定位，
 不能单独承担论文核心结论。
 
 ### A.1 VStar、HRBench 与 BLINK 共同单图切片
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
-|---|---:|---:|---:|---:|---:|
-| VStar / direct attributes | 115 | 48.70 | **83.48** | 70.43 | 69.57 |
-| VStar / relative position | 76 | 53.95 | 78.95 | **80.26** | 75.00 |
-| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** |
-| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 |
-| BLINK / Counting | 30 | 66.67 | 70.00 | **73.33** | **73.33** |
-| BLINK / IQ Test | 30 | **40.00** | 26.67 | 23.33 | 10.00 |
-| BLINK / Object Localization | 30 | 56.67 | 56.67 | 70.00 | **73.33** |
-| BLINK / Relative Depth | 30 | 83.33 | 83.33 | **86.67** | 80.00 |
-| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** |
-| BLINK / Spatial Relation | 30 | **96.67** | 86.67 | 93.33 | 90.00 |
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+|---|---:|---:|---:|---:|---:|---:|
+| VStar / direct attributes | 115 | 48.70 | 83.48 | 70.43 | 69.57 | **86.09** |
+| VStar / relative position | 76 | 53.95 | 78.95 | 80.26 | 75.00 | **81.58** |
+| HRBench / cross-image aggregate | 100 | 59.00 | 61.00 | 64.00 | **68.00** | 66.00 |
+| HRBench / single-image aggregate | 100 | 59.00 | **88.00** | 69.00 | 79.00 | 72.00 |
+| BLINK / Counting | 30 | 66.67 | 70.00 | 73.33 | 73.33 | **80.00** |
+| BLINK / IQ Test | 30 | **40.00** | 26.67 | 23.33 | 10.00 | 26.67 |
+| BLINK / Object Localization | 30 | 56.67 | 56.67 | 70.00 | **73.33** | 70.00 |
+| BLINK / Relative Depth | 30 | 83.33 | 83.33 | 86.67 | 80.00 | **90.00** |
+| BLINK / Relative Reflectance | 30 | 50.00 | 30.00 | 46.67 | **70.00** | 60.00 |
+| BLINK / Spatial Relation | 30 | **96.67** | 86.67 | 93.33 | 90.00 | **96.67** |
 
 VStar 和 HRBench 已列出各自全部官方对齐切片。BLINK 官方 full-420 中其余 8 个类别为多图
-输入，对当前工具方法不受支持并被填零；本表完整列出四种方法共同支持的 6 个单图类别。
+输入，对当前工具方法不受支持并被填零；本表完整列出五种方法共同支持的 6 个单图类别。
 
 ### A.2 MathVista MINI 全部 12 个官方 Task&Skill 标签
 
 前 5 行 task 互斥并完整覆盖 300 题；后 7 行 skill 可重叠，同一题可能进入多个 skill。
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
-|---|---:|---:|---:|---:|---:|
-| MathVista task / figure question answering | 96 | **73.96** | 70.83 | 69.79 | 69.79 |
-| MathVista task / geometry problem solving | 49 | **91.84** | 77.55 | 85.71 | 87.76 |
-| MathVista task / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 |
-| MathVista task / textbook question answering | 50 | **70.00** | 64.00 | 56.00 | 56.00 |
-| MathVista task / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 |
-| MathVista skill / algebraic reasoning | 75 | **84.00** | 70.67 | 74.67 | 76.00 |
-| MathVista skill / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 |
-| MathVista skill / geometry reasoning | 63 | **87.30** | 73.02 | 79.37 | 79.37 |
-| MathVista skill / logical reasoning | 12 | **41.67** | 33.33 | 16.67 | 25.00 |
-| MathVista skill / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 |
-| MathVista skill / scientific reasoning | 37 | **62.16** | **62.16** | 54.05 | 56.76 |
-| MathVista skill / statistical reasoning | 111 | **82.88** | 80.18 | 81.98 | 81.08 |
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+|---|---:|---:|---:|---:|---:|---:|
+| MathVista task / figure question answering | 96 | **73.96** | 70.83 | 69.79 | 69.79 | **73.96** |
+| MathVista task / geometry problem solving | 49 | **91.84** | 77.55 | 85.71 | 87.76 | 89.80 |
+| MathVista task / math word problem | 63 | 77.78 | 68.25 | **84.13** | 79.37 | 82.54 |
+| MathVista task / textbook question answering | 50 | **70.00** | 64.00 | 56.00 | 56.00 | 66.00 |
+| MathVista task / visual question answering | 42 | 54.76 | 50.00 | **64.29** | 50.00 | 61.90 |
+| MathVista skill / algebraic reasoning | 75 | **84.00** | 70.67 | 74.67 | 76.00 | 81.33 |
+| MathVista skill / arithmetic reasoning | 104 | 65.38 | 57.69 | **72.12** | 63.46 | 71.15 |
+| MathVista skill / geometry reasoning | 63 | **87.30** | 73.02 | 79.37 | 79.37 | 84.13 |
+| MathVista skill / logical reasoning | 12 | **41.67** | 33.33 | 16.67 | 25.00 | 33.33 |
+| MathVista skill / numeric commonsense | 36 | 47.22 | 44.44 | **58.33** | 50.00 | **58.33** |
+| MathVista skill / scientific reasoning | 37 | 62.16 | 62.16 | 54.05 | 56.76 | **64.86** |
+| MathVista skill / statistical reasoning | 111 | 82.88 | 80.18 | 81.98 | 81.08 | **83.78** |
 
-四种方法均使用完整的相同 300 个 `index`。作为互斥的附加诊断，free-form / multi-choice 的
+五种方法均使用完整的相同 300 个 `index`。作为互斥的附加诊断，free-form / multi-choice 的
 样本数为 `171 / 129`：Original 为 `64.91 / 86.82`，Crop S80 为 `59.65 / 77.52`，TGVF
-S64 为 `65.50 / 81.40`，Atomic S16 为 `61.40 / 80.62`。这定位出 TGVF 总体回退主要落在
-multi-choice，而不是评测 subset 改变。
+S64 为 `65.50 / 81.40`，Atomic S16 为 `61.40 / 80.62`，No-Tool S32 为
+`67.84 / 85.27`。这定位出 TGVF 总体回退主要落在 multi-choice，而不是评测 subset 改变。
 
 ### A.3 MathVerse MINI 全部 5 个版本
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
-|---|---:|---:|---:|---:|---:|
-| MathVerse / Text Dominant | 100 | **69.00** | 64.00 | 64.00 | 66.00 |
-| MathVerse / Text Lite | 100 | 53.00 | 56.00 | 58.00 | **59.00** |
-| MathVerse / Vision Dominant | 100 | **51.00** | 45.00 | 46.00 | 50.00 |
-| MathVerse / Vision Intensive | 100 | **52.00** | 49.00 | 42.00 | 49.00 |
-| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | **51.00** |
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+|---|---:|---:|---:|---:|---:|---:|
+| MathVerse / Text Dominant | 100 | 69.00 | 64.00 | 64.00 | 66.00 | **71.00** |
+| MathVerse / Text Lite | 100 | 53.00 | 56.00 | 58.00 | 59.00 | **65.00** |
+| MathVerse / Vision Dominant | 100 | 51.00 | 45.00 | 46.00 | 50.00 | **61.00** |
+| MathVerse / Vision Intensive | 100 | 52.00 | 49.00 | 42.00 | 49.00 | **53.00** |
+| MathVerse / Vision Only | 100 | 28.00 | 43.00 | 42.00 | 51.00 | **55.00** |
 
 ### A.4 OCRBench v2 全部 13 个官方语言类别
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
-|---|---:|---:|---:|---:|---:|
-| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** |
-| OCR EN / text detection | category | 29.00 | 24.55 | 28.87 | **36.05** |
-| OCR EN / text spotting | category | 0.00 | 10.00 | 16.50 | **18.90** |
-| OCR EN / relationship extraction | category | 89.05 | **90.55** | 76.63 | 88.14 |
-| OCR EN / element parsing | category | **43.89** | 39.67 | 29.27 | 40.25 |
-| OCR EN / mathematical calculation | category | 39.25 | **43.67** | 34.14 | 32.82 |
-| OCR EN / visual text understanding | category | 75.00 | 81.61 | 80.00 | **83.21** |
-| OCR EN / knowledge reasoning | category | **62.44** | 56.35 | 57.50 | 57.47 |
-| OCR CN / text recognition | category | 59.82 | **71.23** | 22.17 | 67.80 |
-| OCR CN / relationship extraction | category | 49.31 | **77.13** | 55.82 | 58.81 |
-| OCR CN / element parsing | category | 27.75 | 28.94 | 20.69 | **33.14** |
-| OCR CN / visual text understanding | category | 35.00 | 60.00 | **65.00** | 55.00 |
-| OCR CN / knowledge reasoning | category | **60.51** | 55.68 | 45.55 | 59.07 |
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+|---|---:|---:|---:|---:|---:|---:|
+| OCR EN / text recognition | category | 60.49 | 70.23 | 55.05 | **73.38** | 65.54 |
+| OCR EN / text detection | category | 29.00 | 24.55 | 28.87 | **36.05** | 28.00 |
+| OCR EN / text spotting | category | 0.00 | 10.00 | 16.50 | **18.90** | 4.10 |
+| OCR EN / relationship extraction | category | 89.05 | **90.55** | 76.63 | 88.14 | 73.16 |
+| OCR EN / element parsing | category | **43.89** | 39.67 | 29.27 | 40.25 | 23.78 |
+| OCR EN / mathematical calculation | category | 39.25 | **43.67** | 34.14 | 32.82 | 42.01 |
+| OCR EN / visual text understanding | category | 75.00 | 81.61 | 80.00 | **83.21** | 78.33 |
+| OCR EN / knowledge reasoning | category | **62.44** | 56.35 | 57.50 | 57.47 | 52.50 |
+| OCR CN / text recognition | category | 59.82 | 71.23 | 22.17 | 67.80 | **80.21** |
+| OCR CN / relationship extraction | category | 49.31 | **77.13** | 55.82 | 58.81 | 53.29 |
+| OCR CN / element parsing | category | 27.75 | 28.94 | 20.69 | **33.14** | 28.17 |
+| OCR CN / visual text understanding | category | 35.00 | 60.00 | **65.00** | 55.00 | 60.00 |
+| OCR CN / knowledge reasoning | category | **60.51** | 55.68 | 45.55 | 59.07 | 57.21 |
 
 OCR 类别分数来自官方 rule-based scorer；各类别内部样本数和计分尺度不同，因此不对这 13 行
 再做无权平均。
@@ -902,43 +953,43 @@ OCR 类别分数来自官方 rule-based scorer；各类别内部样本数和计�
 ### A.5 MMMU-Pro 共同 269 单图的完整 subject 审计
 
 MMMU 官方 subject 表混有工具方法不支持的 31 个多图样本，不能直接与 Original 比。下表以
-三个工具 result TSV 的 `extra_records.coverage` 共同支持标记确定 269 个单图 ID，再与 Original
-result TSV 按相同 `index` 对齐并按 subject 聚合 `hit`。这是由官方逐题判分导出的 aligned
+三个工具方法与 No-Tool S32 result TSV 的 `extra_records.coverage` 支持标记确定 269 个单图
+ID，再与 Original result TSV 按相同 `index` 对齐并按 subject 聚合 `hit`。这是由官方逐题判分导出的 aligned
 diagnostic，不是 MMMU 官方 subject headline。
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 |
-|---|---:|---:|---:|---:|---:|
-| MMMU / Accounting | 10 | 20.00 | 50.00 | **60.00** | **60.00** |
-| MMMU / Agriculture | 10 | **40.00** | 30.00 | **40.00** | 30.00 |
-| MMMU / Architecture and Engineering | 10 | 40.00 | 50.00 | 50.00 | **60.00** |
-| MMMU / Art | 10 | **50.00** | 30.00 | 30.00 | 30.00 |
-| MMMU / Art Theory | 7 | **57.14** | **57.14** | **57.14** | **57.14** |
-| MMMU / Basic Medical Science | 10 | 30.00 | 10.00 | 20.00 | **50.00** |
-| MMMU / Biology | 7 | **42.86** | 14.29 | 0.00 | 14.29 |
-| MMMU / Chemistry | 5 | 20.00 | 40.00 | **60.00** | **60.00** |
-| MMMU / Clinical Medicine | 9 | 11.11 | 11.11 | **22.22** | **22.22** |
-| MMMU / Computer Science | 10 | **70.00** | **70.00** | 40.00 | 50.00 |
-| MMMU / Design | 10 | 70.00 | **80.00** | 70.00 | 60.00 |
-| MMMU / Diagnostics and Laboratory Medicine | 10 | **20.00** | 10.00 | 10.00 | **20.00** |
-| MMMU / Economics | 8 | **50.00** | 37.50 | 25.00 | 37.50 |
-| MMMU / Electronics | 10 | 40.00 | 60.00 | 50.00 | **70.00** |
-| MMMU / Energy and Power | 10 | **40.00** | 20.00 | 30.00 | 30.00 |
-| MMMU / Finance | 10 | 10.00 | 60.00 | **70.00** | **70.00** |
-| MMMU / Geography | 8 | **50.00** | 37.50 | 25.00 | 37.50 |
-| MMMU / History | 8 | 50.00 | **62.50** | **62.50** | **62.50** |
-| MMMU / Literature | 8 | 75.00 | **87.50** | 75.00 | 75.00 |
-| MMMU / Manage | 10 | **50.00** | 40.00 | 40.00 | **50.00** |
-| MMMU / Marketing | 9 | 33.33 | 66.67 | 88.89 | **100.00** |
-| MMMU / Materials | 8 | 12.50 | 25.00 | 50.00 | **75.00** |
-| MMMU / Math | 10 | **60.00** | 30.00 | 40.00 | 40.00 |
-| MMMU / Mechanical Engineering | 10 | 0.00 | **50.00** | 40.00 | 40.00 |
-| MMMU / Music | 7 | 42.86 | **71.43** | 42.86 | 42.86 |
-| MMMU / Pharmacy | 7 | 14.29 | 42.86 | 57.14 | **71.43** |
-| MMMU / Physics | 10 | 30.00 | 50.00 | 40.00 | **60.00** |
-| MMMU / Psychology | 8 | 50.00 | **62.50** | 25.00 | **62.50** |
-| MMMU / Public Health | 10 | 40.00 | **90.00** | 80.00 | 60.00 |
-| MMMU / Sociology | 10 | **50.00** | **50.00** | **50.00** | **50.00** |
+| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+|---|---:|---:|---:|---:|---:|---:|
+| MMMU / Accounting | 10 | 20.00 | 50.00 | **60.00** | **60.00** | 50.00 |
+| MMMU / Agriculture | 10 | **40.00** | 30.00 | **40.00** | 30.00 | **40.00** |
+| MMMU / Architecture and Engineering | 10 | 40.00 | 50.00 | 50.00 | **60.00** | **60.00** |
+| MMMU / Art | 10 | **50.00** | 30.00 | 30.00 | 30.00 | 30.00 |
+| MMMU / Art Theory | 7 | 57.14 | 57.14 | 57.14 | 57.14 | **71.43** |
+| MMMU / Basic Medical Science | 10 | 30.00 | 10.00 | 20.00 | **50.00** | 30.00 |
+| MMMU / Biology | 7 | **42.86** | 14.29 | 0.00 | 14.29 | 28.57 |
+| MMMU / Chemistry | 5 | 20.00 | 40.00 | **60.00** | **60.00** | **60.00** |
+| MMMU / Clinical Medicine | 9 | 11.11 | 11.11 | **22.22** | **22.22** | **22.22** |
+| MMMU / Computer Science | 10 | **70.00** | **70.00** | 40.00 | 50.00 | 50.00 |
+| MMMU / Design | 10 | 70.00 | **80.00** | 70.00 | 60.00 | 70.00 |
+| MMMU / Diagnostics and Laboratory Medicine | 10 | 20.00 | 10.00 | 10.00 | 20.00 | **30.00** |
+| MMMU / Economics | 8 | 50.00 | 37.50 | 25.00 | 37.50 | **62.50** |
+| MMMU / Electronics | 10 | 40.00 | 60.00 | 50.00 | **70.00** | **70.00** |
+| MMMU / Energy and Power | 10 | 40.00 | 20.00 | 30.00 | 30.00 | **70.00** |
+| MMMU / Finance | 10 | 10.00 | 60.00 | 70.00 | 70.00 | **80.00** |
+| MMMU / Geography | 8 | **50.00** | 37.50 | 25.00 | 37.50 | 37.50 |
+| MMMU / History | 8 | 50.00 | **62.50** | **62.50** | **62.50** | **62.50** |
+| MMMU / Literature | 8 | 75.00 | **87.50** | 75.00 | 75.00 | 75.00 |
+| MMMU / Manage | 10 | 50.00 | 40.00 | 40.00 | 50.00 | **70.00** |
+| MMMU / Marketing | 9 | 33.33 | 66.67 | 88.89 | **100.00** | 66.67 |
+| MMMU / Materials | 8 | 12.50 | 25.00 | 50.00 | **75.00** | 50.00 |
+| MMMU / Math | 10 | **60.00** | 30.00 | 40.00 | 40.00 | 50.00 |
+| MMMU / Mechanical Engineering | 10 | 0.00 | 50.00 | 40.00 | 40.00 | **60.00** |
+| MMMU / Music | 7 | 42.86 | **71.43** | 42.86 | 42.86 | 57.14 |
+| MMMU / Pharmacy | 7 | 14.29 | 42.86 | 57.14 | **71.43** | 57.14 |
+| MMMU / Physics | 10 | 30.00 | 50.00 | 40.00 | **60.00** | **60.00** |
+| MMMU / Psychology | 8 | 50.00 | **62.50** | 25.00 | **62.50** | **62.50** |
+| MMMU / Public Health | 10 | 40.00 | **90.00** | 80.00 | 60.00 | **90.00** |
+| MMMU / Sociology | 10 | 50.00 | 50.00 | 50.00 | 50.00 | **70.00** |
 
-TGVF 或 Atomic 在 `15/30` 个 subject 上高于 Original；其中 Marketing、Materials、Finance、
-Pharmacy、Accounting 的描述性增益最大。由于每个 subject 仅 `n=5–10`，这些行只用于提出
-能力假设和挑选案例，不进入 Macro*。
+TGVF 或 Atomic 在 `15/30` 个 subject、No-Tool S32 在 `21/30` 个 subject 上高于 Original；
+其中 Marketing、Materials、Finance、Pharmacy、Accounting 的工具方法描述性增益最大。由于
+每个 subject 仅 `n=5–10`，这些行只用于提出能力假设和挑选案例，不进入 Macro*。
