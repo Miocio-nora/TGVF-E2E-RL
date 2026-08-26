@@ -202,6 +202,38 @@ PY
   done
 }
 
+all_scores_complete() {
+  "$python_bin" - "$eval_root" "$control_root/source-runs.tsv" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+source_runs = {}
+for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
+    dataset, run_id, _status_path = line.split("\t", maxsplit=2)
+    source_runs[dataset] = run_id
+for dataset, source_run in source_runs.items():
+    model_root = root / f"inference/{dataset}/work/Qwen3-VL-8B-Instruct"
+    complete = False
+    for status_path in model_root.glob("T*/status.json"):
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        entry = payload.get("datasets", {}).get(dataset, {})
+        if (
+            payload.get("mode") == "eval"
+            and entry.get("status") == "done"
+            and entry.get("source_run") == source_run
+        ):
+            complete = True
+            break
+    if not complete:
+        raise SystemExit(1)
+PY
+}
+
 gpu01_are_idle() {
   local gpu active
   for gpu in 0 1; do
@@ -315,6 +347,7 @@ import sys
 
 from tgvf_rl.evaluation.coredev_results import (
     extract_coredev_macro_star,
+    summarize_coredev_results,
     write_json_atomic,
 )
 
@@ -338,9 +371,32 @@ if tuple(source_runs) != datasets:
     raise RuntimeError("raw-direct source-run map differs")
 
 slices = []
+partials = []
 for dataset in datasets:
-    partial_path = root / f"inference/{dataset}/work/coredev-2511-eval-summary.json"
-    partial = json.loads(partial_path.read_text(encoding="utf-8"))
+    dataset_work = root / f"inference/{dataset}/work"
+    model_root = dataset_work / "Qwen3-VL-8B-Instruct"
+    candidates = []
+    for status_path in model_root.glob("T*/status.json"):
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+        entry = payload.get("datasets", {}).get(dataset, {})
+        if (
+            payload.get("mode") == "eval"
+            and entry.get("status") == "done"
+            and entry.get("source_run") == source_runs[dataset]
+        ):
+            candidates.append((status_path.stat().st_mtime_ns, payload["eval_id"]))
+    if not candidates:
+        raise RuntimeError(f"{dataset} has no completed scorer for frozen source")
+    destination_run = max(candidates)[1]
+    partial = summarize_coredev_results(
+        work_dir=dataset_work.resolve(),
+        repository_root=root,
+        phase="eval",
+        datasets=(dataset,),
+        expected_judge_base_url=judge_base_url,
+        expected_model="Qwen3-VL-8B-Instruct",
+        expected_eval_ids={dataset: destination_run},
+    )
     if (
         partial.get("schema_version") != 1
         or partial.get("phase") != "eval"
@@ -352,31 +408,36 @@ for dataset in datasets:
     ):
         raise RuntimeError(f"{dataset} partial summary differs")
     item = partial["slices"][0]
-    status_path = Path(item["status_path"])
-    status = json.loads(status_path.read_text(encoding="utf-8"))
-    entry = status.get("datasets", {}).get(dataset, {})
-    if entry.get("source_run") != source_runs[dataset]:
-        raise RuntimeError(f"{dataset} scorer did not reuse the frozen inference run")
+    partials.append(partial)
     slices.append(item)
 
+first = partials[0]
+for partial in partials[1:]:
+    for field in (
+        "suite",
+        "phase",
+        "status",
+        "model",
+        "vlmevalkit_commit",
+        "judge_parse_failure_policy",
+        "judge_parse_failure_rate_limit",
+    ):
+        if partial.get(field) != first.get(field):
+            raise RuntimeError(f"raw-direct partial {field} differs")
 summary = {
     "schema_version": 1,
-    "suite": "coredev-2511-vlmevalkit-7055d301-v1",
-    "phase": "eval",
-    "status": "pass",
-    "model": "Qwen3-VL-8B-Instruct",
+    "suite": first["suite"],
+    "phase": first["phase"],
+    "status": first["status"],
+    "model": first["model"],
     "evaluation_contract": "raw-direct@512-s32-v1",
     "max_pixels": 262144,
     "judge_base_url": judge_base_url,
-    "vlmevalkit_commit": slices[0] and json.loads(
-        (root / "inference/VStarBench/work/coredev-2511-eval-summary.json").read_text(
-            encoding="utf-8"
-        )
-    )["vlmevalkit_commit"],
+    "vlmevalkit_commit": first["vlmevalkit_commit"],
     "sample_count": sum(item["sample_count"] for item in slices),
     "slice_count": len(slices),
-    "judge_parse_failure_policy": "deterministic_incorrect",
-    "judge_parse_failure_rate_limit": 0.02,
+    "judge_parse_failure_policy": first["judge_parse_failure_policy"],
+    "judge_parse_failure_rate_limit": first["judge_parse_failure_rate_limit"],
     "judge_parse_failure_count": sum(
         item["judge_parse_failure_count"] for item in slices
     ),
@@ -396,9 +457,14 @@ printf '[%s] raw-direct@512 scoring supervisor started\n' "$(timestamp)"
 wait_for_inference
 prepare_mathverse_metadata_view
 capture_source_runs
-wait_for_idle_gpu01
-start_judge
-score_all_datasets
+if all_scores_complete; then
+  printf '[%s] all seven frozen-source scores already exist; skip judge restart\n' \
+    "$(timestamp)"
+else
+  wait_for_idle_gpu01
+  start_judge
+  score_all_datasets
+fi
 aggregate_summary >"$log_root/raw-direct-512-headline.json"
 phase=complete
 printf 'status=pass\ntime=%s\nsample_count=2511\nslice_count=7\n' \
