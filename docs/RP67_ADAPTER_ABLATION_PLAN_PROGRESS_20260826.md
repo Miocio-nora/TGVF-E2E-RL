@@ -1,6 +1,6 @@
 # RP67 Adapter Ablation：计划、进度与结果
 
-更新时间：2026-08-27 01:25 JST
+更新时间：2026-08-27 08:47 JST
 
 ## 1. 目标
 
@@ -19,10 +19,10 @@ RP67 完整基线为：
 |---|---|---|---|
 | RP67 full | 已有 | 无 | 主 `D` + 三路学习型 `D-DeepStack` |
 | RP66 / no image-axis | 已有，可复用 | 去掉 image-axis CE | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP71 / no MatrixCE | **运行中，Step 1680；S1500 已持久化** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP72 / no DeepStack | **运行中，Step 1780；S1500 已持久化** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
-| RP73 / unidirectional | **运行中，Step 910；S500 已持久化** | 双向交互改为一次 target→visual payload 写入 | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP74 / post-merger | **运行中，Step 930；S500 已持久化** | Adapter 从 visual merger 前移到 merger 后 | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP71 / no MatrixCE | **已完成 Step 2000 + internal eval** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP72 / no DeepStack | **已完成 Step 2000 + internal eval** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
+| RP73 / unidirectional | **已完成 Step 2000 + internal eval** | 双向交互改为一次 target→visual payload 写入 | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP74 / post-merger | **已完成 Step 2000 + internal eval；Stage-1 优先候选** | Adapter 从 visual merger 前移到 merger 后 | 主 `D` + 三路学习型 `D-DeepStack` |
 
 RP71 仍计算 raw MatrixCE 供诊断，但 weighted MatrixCE 严格为零，不进入总损失和梯度。
 RP72 是结构/训练联合消融；它回答“学习型 DeepStack 分支是否必要”，不能与“仅在推理时
@@ -76,10 +76,10 @@ identity writeback，不再次调用 Qwen merger。attention bottleneck 仍固�
 
 | Arm | GPU | 预计训练时间 | 产物目录 |
 |---|---:|---:|---|
-| RP71 no MatrixCE | 0,1 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-71-qwen3-instruct-rp67-ablation-no-matrixce-2000-gpu01/` |
-| RP72 no DeepStack | 2,3 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-72-qwen3-instruct-rp67-ablation-no-deepstack-2000-gpu23/` |
-| RP73 unidirectional | 4,5 | 运行中；当前约 8.13 s/step | `artifacts/representation/RP-73-qwen3-instruct-rp67-ablation-unidirectional-2000-gpu45/` |
-| RP74 post-merger | 6,7 | 运行中；当前约 7.98 s/step | `artifacts/representation/RP-74-qwen3-instruct-rp67-ablation-post-merger-2000-gpu67/` |
+| RP71 no MatrixCE | 0,1 | 已完成并释放 GPU | `artifacts/representation/RP-71-qwen3-instruct-rp67-ablation-no-matrixce-2000-gpu01/` |
+| RP72 no DeepStack | 2,3 | 已完成并释放 GPU | `artifacts/representation/RP-72-qwen3-instruct-rp67-ablation-no-deepstack-2000-gpu23/` |
+| RP73 unidirectional | 4,5 | 已完成并释放 GPU | `artifacts/representation/RP-73-qwen3-instruct-rp67-ablation-unidirectional-2000-gpu45/` |
+| RP74 post-merger | 6,7 | 已完成并释放 GPU | `artifacts/representation/RP-74-qwen3-instruct-rp67-ablation-post-merger-2000-gpu67/` |
 
 四臂均采用 2-GPU FSDP2。RP73/RP74 先确认 step 1 完成、loss/gradient 有限且参数
 所有权检查通过，再转为正式 2,000-step 运行；后续 checkpoint 评测不能抢占训练 GPU。
@@ -157,19 +157,41 @@ RP72 训练主体约 `01:55 JST` 完成，RP71 约 `02:10 JST`；RP73/RP74 训�
 `03:50–04:05 JST` 完成，随后各自自动运行 ordered-group、counterfactual 与 grounding
 internal eval。
 
-## 6. 结果表（待填）
+## 6. 完成结果
 
-| Arm | Step | MatrixCE | L_gen | Norm | image-axis CE | internal matched utility | zero-D utility | wrong-target utility | grounding |
+四个新 arm 均完成 2,000 step、最终 validation、Adapter 导出与同协议 internal eval，
+GPU 0–7 已释放。下表只报告相同 200-sample/46-group 的表示内部协议；full-867
+image+`D` correct/zero/wrong-target matched utility 尚未对 RP71–RP74 执行。
+
+| Arm | val MatrixCE | val L_gen | val weighted Norm | val Total | retrieval top-1 | diag gap | MRR | correct > all controls | correct > wrong-same `D` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| RP67 full | 2000 | 待统一抄录 | 待统一抄录 | 待统一抄录 | 待统一抄录 | 待统一抄录 | 待统一抄录 | 待统一抄录 | 待统一抄录 |
-| RP66 no image-axis | 2000 | 待统一抄录 | 待统一抄录 | 待统一抄录 | N/A | 待统一抄录 | 待统一抄录 | 待统一抄录 | 待统一抄录 |
-| RP71 no MatrixCE | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
-| RP72 no DeepStack | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
-| RP73 unidirectional | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
-| RP74 post-merger | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
+| RP67 full/pre-merger | 0.201813 | 1.298340 | 0.072451 | 1.572604 | 0.900 | 3.0327 | 0.9463 | 0.945 | 0.950 |
+| RP71 no MatrixCE | 1.386719 | 1.124512 | 0.029622 | 1.154133* | 0.515 | 0.0077 | 0.7068 | 0.725 | 0.725 |
+| RP72 no DeepStack | 1.296875 | 1.543945 | 0.048275 | 2.889095 | 0.375 | -0.0142 | 0.6170 | 0.635 | 0.645 |
+| RP73 unidirectional/pre-merger | 0.304688 | 1.226074 | 0.060507 | 1.591269 | 0.725 | 1.5823 | 0.8513 | 0.885 | 0.895 |
+| **RP74 bidirectional/post-merger** | **0.021942** | **1.165527** | **0.049253** | **1.236723** | **0.935** | **6.2979** | **0.9667** | **0.965** | **0.965** |
 
-正式解释必须同时看表示内部指标和下游 matched utility。单独的训练 loss 下降不能证明
-Adapter 更有效；RP72 参数量更小，也不能把吞吐变化误写成精度收益。
+`*` RP71 的 total 不包含 raw MatrixCE，不能用其较小 total 与其余 arm 直接比较。
+
+RP74 相对 RP67 的 retrieval top-1 `+3.5 pp`、all-controls `+2.0 pp`、wrong-same
+`+1.5 pp`，并把 mean diagonal gap 从 `3.0327` 提升到 `6.2979`。在 evaluator 报告的
+31 个 grouped strata 中，RP74 在 retrieval top-1、all-controls 和 wrong-same 三项上均
+无负 delta；其中 document (`n=31`) top-1 从 `0.8065` 到 `0.9355`。native
+counterfactual continuation 从 `0.5000` 到 `0.6111`，expected-direction flip 从
+`0.5556` 到 `0.6667`。
+
+限制同样必须保留：RP74 的 native target-presence continuation 仍只有 `0.0417`，actual
+direction accuracy 为 `0.1111`。因此 RP74 现在是 **Stage-1 优先候选**，还不是 RP67 的
+正式下游替代。只有补完 full-867 correct/zero/wrong-target utility 以及必要的 policy-level
+验证后，才能改 production/default binding。
+
+RP74 Adapter file SHA-256 为
+`005a5144df8b75ac3ac7822ed558e987cb08781f1cc11c0c2bf0fa77145829c7`，artifact
+manifest SHA-256 为
+`b7ef606711d983efedb39e4588e92498ded71a0101a715380b3af0ba0f816d16`；internal report
+payload SHA-256 为
+`ea6368333f2f1eb82aa09f3ac72adeb58faf065aada9886eba670ad6c5734c91`。RP74 也已写入
+常规 `PROJECT_TASK.md` 和 `EXPERIMENT_LEDGER.md`，不再只存在于 workshop 专用报告。
 
 ## 7. 第二优先级候选
 

@@ -1356,6 +1356,52 @@ accepted single native counterfactual but reduced query top-1 from `0.83` to
 ablation task and supports retaining learned D-DeepStack branches in the
 production TGVF Adapter.
 
+### 0.10A Recorded RP74 post-merger bidirectional Stage-1 candidate
+
+Decision ID: **RPI-20260827-RP74-POST-MERGER-CANDIDATE**
+
+Recorded by user instruction on **2026-08-27 JST**. This entry promotes RP74
+from a workshop-specific progress note into the regular project record; it
+does not yet replace RP67 as the policy-RL/default representation artifact.
+
+RP74 retains RP67's bidirectional target/visual interaction, full main `D`,
+three learned D-DeepStack branches, contextual target conditioning, training
+population, seed 42, `512^2` image limit, Matrix CE + `L_gen` + Norm +
+image-axis objective, optimizer and 2,000-step schedule. Its structural
+intervention is to move Adapter interaction from the pre-merger visual tokens
+`[N,1152]` to Qwen's post-merger tokens `[N/4,4096]`. The attention bottleneck
+remains 1152; outputs use identity writeback and never invoke the visual merger
+a second time. This raises trainable parameters from RP67's `72,055,808` to
+`174,601,216`, so the comparison isolates injection location as an implemented
+architecture choice but is not parameter-matched.
+
+The completed, common 200-sample/46-group internal evaluation favors RP74 over
+RP67: query retrieval top-1 `0.900 -> 0.935`, mean diagonal gap
+`3.0327 -> 6.2979`, MRR `0.9463 -> 0.9667`, correct `D` beating all available
+controls `0.945 -> 0.965`, and correct `D` beating wrong same-image `D`
+`0.950 -> 0.965`. Counterfactual continuation accuracy changes
+`0.500 -> 0.6111` and expected-direction flip rate `0.5556 -> 0.6667`.
+Across the evaluator's 31 reported grouped strata, RP74 has no negative delta
+against RP67 for retrieval top-1, all-available-control wins, or wrong-same-
+image wins; the largest favorable source cut is `document` (`n=31`), where
+top-1 changes `0.8065 -> 0.9355`.
+
+This is strong Stage-1 evidence, not a downstream promotion gate. Native
+target-presence continuation remains weak (`0.0417`, actual-direction accuracy
+`0.1111`), and the full-867 image+`D` correct/zero/wrong-target utility audit
+has not yet been run for RP74. RP67 therefore remains the accepted downstream
+default until RP74 passes that external utility comparison and any required
+policy-level evaluation.
+
+The immutable RP74 Adapter is
+`artifacts/representation/RP-74-qwen3-instruct-rp67-ablation-post-merger-2000-gpu67/adapter.pt`,
+file SHA-256 `005a5144df8b75ac3ac7822ed558e987cb08781f1cc11c0c2bf0fa77145829c7`
+and artifact-manifest SHA-256
+`b7ef606711d983efedb39e4588e92498ded71a0101a715380b3af0ba0f816d16`.
+Its internal report is `int-diag-step2000.json`, payload SHA-256
+`ea6368333f2f1eb82aa09f3ac72adeb58faf065aada9886eba670ad6c5734c91`.
+The full execution record is retained in `docs/EXPERIMENT_LEDGER.md`.
+
 ### 0.11 Accepted audited native-D grounding diagnostics
 
 Decision ID: **RPI-20260721-AUDITED-D-GROUNDING-DIAGNOSTICS**

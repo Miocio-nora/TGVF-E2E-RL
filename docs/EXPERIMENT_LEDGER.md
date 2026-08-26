@@ -10227,3 +10227,73 @@ than inferred from a script name or prior conversation.
   provenance, initialized all eight ranks and completed the canonical S1
   metrics/checkpoint pair. No state from failed attempt 01 entered the
   scientific lineage.
+
+### RP-74-QWEN3-INSTRUCT-REP-POST-MERGER-IMAGE-AXIS-2000-GPU67
+
+- Cell/status: `RP-74`; formal 2,000-step representation architecture
+  ablation / `COMPLETE` / strong Stage-1 candidate. It is recorded in the
+  regular project ledger, not only in the NeurIPS-workshop experiment report.
+  RP67 remains the accepted downstream default pending RP74's full-867 utility
+  audit and policy-level comparison.
+- Question: does preserving bidirectional target/visual interaction while
+  moving it from the pre-visual-merger token grid to the post-merger token grid
+  improve target-specific representation quality under the otherwise fixed
+  RP67 recipe?
+- Paired baseline/fixed conditions: RP67 bidirectional pre-merger Adapter;
+  Qwen3-VL-8B-Instruct, contextual target hidden state, identical retained T1
+  train/validation content, same-image `K=4`, seed `42`, AdamW `1e-4`, global
+  batch 32, 100-step warmup and 2,000-step cosine schedule, BF16/SDPA FSDP2,
+  maximum image area `262144`, and Matrix CE/`L_gen`/Norm/image-axis objective
+  are unchanged.
+- Structural intervention: RP74 consumes post-merger visual tokens
+  `[N/4,4096]`, retains an attention bottleneck of 1152, writes four outputs
+  back by identity and does not call the Qwen visual merger twice. It retains
+  the main `D` and learned branches `(8,16,24)`. RP74 has 104 artifact tensors
+  and `174,601,216` trainable parameters versus RP67's 104 tensors and
+  `72,055,808` parameters; injection position is therefore tested without a
+  parameter-matching claim.
+- Code/config identity: structure implementation commit
+  `ea14377c6e8837a43f38422c8756704da0b1c4e3`; source TOML SHA-256
+  `f664c6de09b0cc7400fd1cfb199e757eb0ee466686244d9839d61533d8207815`;
+  canonical config SHA-256
+  `0d0b1f51f8439b2e2205eed432e1ee361705de13a129f0404fbb113edd270b3a`;
+  run identity SHA-256
+  `5f854aa0b76e9c3dcefb3f89b5f73ce27aca2d1d364d9c9075b7a9f560c6dea8`.
+- Execution: physical GPUs 6--7, logical ranks 0--1, world size 2. All ordinary
+  500/1000/1500/2000 checkpoints, final validation, Adapter export and automatic
+  internal evaluation completed; tokenizer length remained `151669`. No OOM,
+  traceback, non-finite loss or ownership failure occurred, and both GPUs were
+  released at completion on 2026-08-27 JST.
+- Artifact:
+  `artifacts/representation/RP-74-qwen3-instruct-rp67-ablation-post-merger-2000-gpu67/adapter.pt`,
+  `349253487` bytes, file SHA-256
+  `005a5144df8b75ac3ac7822ed558e987cb08781f1cc11c0c2bf0fa77145829c7`,
+  artifact-manifest SHA-256
+  `b7ef606711d983efedb39e4588e92498ded71a0101a715380b3af0ba0f816d16`.
+  The internal report is the adjacent `int-diag-step2000.json`, `2584485`
+  bytes, payload SHA-256
+  `ea6368333f2f1eb82aa09f3ac72adeb58faf065aada9886eba670ad6c5734c91`.
+- Step-2000 held-out validation: Matrix CE `0.021942`, `L_gen` `1.165527`,
+  weighted Norm `0.049253`, total `1.236723`. The matching final training point
+  is Matrix CE `0.267976`, `L_gen` `1.086421`, weighted Norm `0.048202`,
+  image-axis CE `0.0000969`, total `1.402695`.
+- Common internal evaluation (`n=200`, 46 query groups): retrieval top-1
+  `0.935`, mean diagonal gap `6.297924`, MRR `0.966667`; correct `D` beats all
+  available controls at `0.965`, wrong same-image `D` at `0.965`, random `D`
+  at `1.000`, and target-only at `1.000`. Main-D/source mean-token-norm ratio is
+  `1.538799`, finite rate is `1.0`, and collapse warning is false.
+- Native diagnostics: counterfactual continuation accuracy `0.611111` and
+  expected-direction flip `0.666667` over nine pairs; target-presence
+  continuation `0.041667`, actual-direction accuracy `0.111111`, and negative
+  false-positive rate `0.0` over 36 pairs. The weak target-presence result is a
+  retained limitation, not hidden by the favorable retrieval result.
+- Paired RP67 delta: retrieval top-1 `+3.5 pp`, diagonal gap
+  `3.032720 -> 6.297924`, MRR `+0.020417`, all-available-control wins `+2.0 pp`,
+  wrong-same-image wins `+1.5 pp`, counterfactual continuation `+11.11 pp`, and
+  expected-direction flip `+11.11 pp`. None of the 31 reported grouped strata
+  regresses for retrieval top-1, all-available-control wins, or wrong-same-
+  image wins; `document` (`n=31`) improves from `0.80645` to `0.93548` top-1.
+- Conclusion: RP74 is the leading Stage-1 architecture candidate from this
+  matrix. It is not yet a promoted RP67 replacement because the full-867
+  image+`D` correct/zero/wrong-target matched-utility audit has not run, and no
+  downstream benchmark or policy-RL result is claimed here.
