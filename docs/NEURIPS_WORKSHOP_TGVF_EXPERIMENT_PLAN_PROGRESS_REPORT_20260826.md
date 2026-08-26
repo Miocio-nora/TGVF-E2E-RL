@@ -7,8 +7,10 @@ prompt 与 No-Tool RL S0/S8/S16/S32 matched no-tool 评测均已闭合。事前�
 Macro* 为 `66.6853`，同协议 S0 为 `64.4712`，即 32-step RL 增益为 `+2.2141 pp`；S32 同时
 高于 Crop S80、TGVF S64 和 Atomic S16。该结果不支持“工具方法的总体增益超越当前 RL-only
 control”，文章据此收缩总体工具优势 claim，并把工具价值限定到 RP67 内容 utility、特定
-sub-benchmark 和策略行为。下一步完成正式 Atomic matched/target-only 盲审、target-only 调用
-行为对照与英文 Experiments/Discussion 初稿。**
+sub-benchmark 和策略行为。协议复核同时发现：历史 Original raw direct 的图像上限为
+`262,144` pixels，而 PRL25 matched 各臂为 `1,003,520` pixels；因此正在补充冻结 S32 的
+`raw-direct@512` 对照。下一步完成该对照的七项评分、正式 Atomic matched/target-only 盲审、
+target-only 调用行为对照与英文 Experiments/Discussion 初稿。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -33,8 +35,8 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 
 | 简称 | 本文固定含义 | checkpoint / run | 解释边界 |
 |---|---|---|---|
-| **Original** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；因 prompt/agent protocol 不同，只是端到端 direct reference，不是严格 paired control |
-| **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | 用于回答增益有多少来自 RL 本身；只执行 matched no-tool 评测，不得改称 Original |
+| **Original raw-direct@512** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt；`max_pixels=262144` | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；与 PRL25 matched 行同时跨越 prompt/agent protocol 和输入像素上限，只是端到端 direct reference |
+| **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | matched S0/S8/S16/S32 回答同协议优化动态；新增 S32 raw-direct@512 回答训练后模型在 Original 合同下的 transfer，不得改称 Original |
 | **Crop** | PRL25-B native RGB Crop | S80，seed42 | 80-step 终点工具基线；不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
@@ -44,10 +46,28 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 
 固定排除项：**不补 Crop seed43**。它不是本文结论的必要验证，也不用于构造三方法对称性。
 
+### 2.1 输入分辨率与测量合同
+
+`max_pixels` 表示保持长宽比时允许的最大图像像素面积，不是把所有图片强制缩放成正方形。
+`262,144 = 512²`，而 `1,003,520` 的等面积正方形边长约为 `1,002` pixels，后者的像素面积预算
+约为前者的 `3.83×`。
+
+| 比较臂 | Prompt / agent contract | 最大图像像素面积 | 当前用途 |
+|---|---|---:|---|
+| Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
+| Crop S80 / TGVF S64 / Atomic S16 matched | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 三个 PRL25 工具方法之间的像素上限对齐比较 |
+| No-Tool S0/S8/S16/S32 matched | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | S0→S32 的同协议 RL 动态；与三个 PRL25 工具臂像素上限对齐 |
+| No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 正在运行；隔离训练后模型在 Original 测量合同下的表现 |
+
+因此，No-Tool matched 的 S32−S0 `+2.2141 pp` 不受分辨率混杂；Crop/TGVF/Atomic/No-Tool
+matched 的像素上限也相同。相反，Original 与任何 PRL25 matched 行的绝对差值同时混入 prompt、
+agent loop 和输入分辨率，不能写成 prompt-only gain，更不能直接归因给 RL 或工具。
+
 ## 3. 当前主结果：Original 必须在场
 
 下表全部为当前选定 checkpoint 的 seed42 结果，单位为 `%`。Original 的精确七项均值为
-`55.3556`，按既有测量合同报告为 `55.36`。
+`55.3556`，按其既有 raw-direct@512 测量合同报告为 `55.36`；其他四行使用
+PRL25 matched@1M 合同。该表用于完整展示，不构成五行严格 paired ranking。
 
 | Method | Macro* | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -57,13 +77,16 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 | Atomic S16 | 63.0827 | +7.7271 | 71.7277 | 73.5000 | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
 | No-Tool RL S32 | **66.6853** | **+11.3297†** | **84.2932** | 69.0000 | **70.5556** | 50.8528 | **55.7621** | **75.3333** | **61.0000** |
 
-`†` No-Tool S32 与 Original 的差值跨越 matched no-tool 与 raw-direct 两种 prompt/protocol，只是
-端到端参考，不能解释为同协议 RL effect。同协议 RL effect 应使用 S32−S0，即 `+2.2141 pp`。
+`†` No-Tool S32 与 Original 的差值同时跨越 prompt/protocol 和最大图像像素面积
+（`1,003,520` vs `262,144`），只是端到端参考，不能解释为同协议 RL effect。同协议 RL effect
+应使用 matched@1M 的 S32−S0，即 `+2.2141 pp`。正在补充的 S32 raw-direct@512 将提供训练后
+模型与 Original 的同测量合同对照。
 
 可直接写入正文的事实边界：
 
-- 三个工具方法的 Macro* 都高于 raw-direct Original；工具线路中 Atomic S16 最高。Crop S80
-  是按用户指定报告的 80-step 终点基线，不再使用 post-hoc 最优 S32。
+- 三个工具方法的 Macro* 都高于 raw-direct@512 Original；该描述同时跨越 prompt/agent contract
+  和像素上限，只能作为端到端观察。工具线路内部的像素上限相同，其中 Atomic S16 最高。Crop
+  S80 是按用户指定报告的 80-step 终点基线，不再使用 post-hoc 最优 S32。
 - No-Tool RL S32 是全表最高 Macro*，比 Crop S80、TGVF S64、Atomic S16 分别高
   `4.4565 / 6.8767 / 3.6026 pp`。这直接否定“当前工具方法总体优于 RL-only 对照”的写法。
 - No-Tool S0 已达到 `64.4712`，而 S32−S0 只有 `+2.2141 pp`。因此 prompt/schema/agent
@@ -628,11 +651,18 @@ Teacher25 各条线路已有的原始 no-tool 合同不变。任何结构化工�
 
 #### 5.4.2 固定评测矩阵
 
-每个 S0/S8/S16/S32 checkpoint 只执行 **matched no-tool**：使用与 No-Tool RL visual-row
-训练一致的 no-tool prompt，作为 `No-Tool RL ↔ Crop/TGVF/Atomic RL` 的主要训练匹配对照。
-不再对训练后的 No-Tool RL checkpoint 执行 raw-direct transfer；已有 Original raw direct
-结果仍进入所有文章主表和 sub-benchmark 表，但只作为端到端参考，不能据此声称
-`Original → No-Tool RL` 的同协议变化。
+S0/S8/S16/S32 checkpoint 均执行 **matched no-tool@1M**：使用与 No-Tool RL visual-row
+训练一致的 no-tool prompt，作为优化动态和 `No-Tool RL ↔ Crop/TGVF/Atomic RL` 的主要控制。
+协议复核发现历史 Original 实际使用 `max_pixels=262144`，而上述 matched 评测使用
+`image_max_pixels=1003520`。因此在不改变冻结 checkpoint 的前提下，新增 **S32
+raw-direct@512**：其配置与历史 Original 逐字段一致，只替换模型路径。无需重跑 S0 raw-direct，
+因为历史 Original 本身就是同一 base model 的 S0 raw-direct@512 结果。
+
+| 评测 | Checkpoint | Pixel cap | 主要问题 |
+|---|---|---:|---|
+| matched no-tool | S0 / S8 / S16 / S32 | 1,003,520 | RL 学习动态与 PRL25 matched 控制 |
+| raw-direct transfer | S32 | 262,144 | 在 Original 合同下，32-step RL 后性能是否仍提升 |
+| historical raw-direct | Original = base/S0 | 262,144 | 上一行的严格 base comparator |
 
 matched no-tool 使用同一 CoreDev2511 七项、Macro*、完整 aligned sub-benchmark 和逐 set 输出；
 No-Tool RL 的工具调用率定义上应为 0，另做结构化工具文本泄漏审计。S32 是唯一正式 headline，
@@ -646,7 +676,7 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   增益归给 TGVF/RP67。
 - matched no-tool 去除了工具 schema，因此它是当前最强的 RL-only control，但仍不可消除
   “存在工具 schema / agent loop”这一协议差异。已有 Original 的 raw direct 结果也不能替代
-  matched RL-only 比较。
+  matched RL-only 比较；S32 raw-direct@512 只回答训练后 transfer，不替代 matched 工具对照。
 
 #### 5.4.4 正式结果与学习动态
 
@@ -683,6 +713,7 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 - [x] S0/S8/S16/S32 matched no-tool 的 `4 × 2,240` 条单图推理；
 - [x] S0/S8/S16/S32 matched no-tool 的七项正式评分；
 - [x] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
+- [ ] S32 raw-direct@512 的七项推理、官方评分与 Original 同合同差值；2026-08-26 已启动。
 
 执行与审计快照（2026-08-26 07:18 JST）：
 
@@ -749,6 +780,12 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   raw-direct transfer 复测，只保留 S0/S8/S16/S32 matched no-tool。raw-direct 从未启动，当前
   supervisor 本身也只执行 matched 路径，因此无需中断或重启在跑任务。已有运行目录和 tmux
   名称中的 `DUAL` / `dual` 是启动时的历史标签，不表示第二套协议产生了数据。
+- 2026-08-26 16:44 JST 分辨率复核与范围修订节点：逐字段核对历史 Original resolved config
+  后确认其 `max_pixels=262144`；Crop/TGVF/Atomic/No-Tool matched 的冻结配置均为
+  `image_max_pixels=1003520`。因此 13:54 的“不测 raw-direct transfer”决策被新的可比性证据
+  覆盖，新增且只新增冻结 S32 的 raw-direct@512。七个 CoreDev 完整 slice 共 2,511 条已按
+  dataset 隔离并行启动；配置除 S32 model path 外复现 Original 的生成参数、seed namespace 与
+  raw-direct prompt。该节点只是运行状态，不提前报告 Macro*。
 - 2026-08-26 14:34 JST 推理节点：S0 matched no-tool 已闭合全部 `2,240/2,240` 条单图任务，
   completion marker 与状态文件均已落盘；CoreDev manifest 中另有 271 条多图任务按既有协议显式
   hold，不计作未完成。S8 已生成 `1,900/2,240` 条单图结果（`84.82%`）；S16 真机 smoke 已通过，
@@ -810,8 +847,8 @@ Atomic 进入正文核心方法必须同时满足：
 | Atomic matched prompt 下在跨图、反射率和 Vision Only 上显示优势 | matched HR cross、BLINK reflectance、MathVerse Vision Only | target-only 下 HR cross / reflectance 优势明显收窄，Vision Only 保持；target 合格率未闭合 | 探索性，核心门槛部分验证 |
 | 广义 prompt bundle 下工具总体增益仍存在 | TGVF / Atomic stress-test Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；非 target-only；不是新 benchmark 泛化 | 已支持，带退化边界 |
 | 只补充 target 定义与案例的稳健性 | TGVF / Atomic target-only Macro* `58.1788 / 60.8253`，仍比 Original 高 `2.8233 / 5.4697 pp` | 相对 own matched 分别下降 `1.6298 / 2.2574 pp`；不支持“详细 target 定义普遍增益” | 已支持，带退化边界 |
-| 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；No-Tool S0/S32 同时高于三个工具方法，不能把差值归因给工具 | 仅可作端到端描述 |
-| 工具方法的总体增益超越当前 RL-only/no-tool control | No-Tool S32 `66.6853`，高于 Crop/TGVF/Atomic `4.4565/6.8767/3.6026 pp`；S0 `64.4712`；S32−S0 `+2.2141 pp` | no-tool 与工具线路的 schema/agent-loop 仍不同，不是严格工具开关消融；不测训练后 raw-direct transfer | **当前不支持，必须撤回总体 claim** |
+| 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control，且使用 262,144 而非 PRL25 的 1,003,520 pixel cap；不能把差值归因给工具 | 仅可作跨合同端到端描述 |
+| 工具方法的总体增益超越当前 RL-only/no-tool control | No-Tool S32 `66.6853`，高于 Crop/TGVF/Atomic `4.4565/6.8767/3.6026 pp`；S0 `64.4712`；S32−S0 `+2.2141 pp` | no-tool 与工具线路的 schema/agent-loop 仍不同，不是严格工具开关消融；S32 raw-direct@512 只检验训练后 transfer | **当前不支持，必须撤回总体 claim** |
 | 三种方法形成不同工具调用行为 | Crop/TGVF/Atomic successful-use rate `67.05/89.73/83.17%`；calls/question `0.673/0.898/1.027`；逐 set 表 | matched-prompt 描述性统计；调用更多不等于 utility 更高；policy 自选择混杂 | 已支持 |
 
 ## 8. 论文实验部分建议结构
