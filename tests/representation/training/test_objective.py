@@ -73,6 +73,46 @@ def test_v3_defaults_to_balanced_matrix_ce_at_unit_temperature() -> None:
     )
 
 
+def test_v3_named_no_matrix_ce_ablation_keeps_raw_diagnostic_but_zeroes_weight() -> (
+    None
+):
+    objective = RepresentationObjectiveConfigV3(
+        identity="l-gen-norm-no-matrix-ce",
+        kind=(
+            RepresentationObjectiveKind.L_GEN_AND_NORM_NO_MATRIX_CE_ABLATION
+        ),
+        matrix_ce_weight=0.0,
+        l_gen_weight=1.0,
+        norm_weight=0.1,
+        matrix_ce_mode=MatrixCEScoreMode.BALANCED,
+        matrix_ce_temperature=1.0,
+    )
+    result = compose_reference_representation_objective(
+        SameImageMatrixCELossTerms(torch.tensor(8.0), 2),
+        EvidenceReadabilityLossTerms(torch.tensor(6.0), 2),
+        objective,
+        HistoricalNormLossTerms(torch.tensor(2.0), 2),
+    )
+
+    assert result.matrix_ce_loss.item() == 4.0
+    assert result.weighted_matrix_ce.item() == 0.0
+    assert result.l_gen_loss.item() == 3.0
+    assert result.weighted_norm is not None
+    assert result.weighted_norm.item() == pytest.approx(0.1)
+    assert result.total_loss.item() == pytest.approx(3.1)
+
+    with pytest.raises(ValueError, match="requires Matrix-CE weight zero"):
+        RepresentationObjectiveConfigV3(
+            identity="invalid-no-matrix-ce",
+            kind=(
+                RepresentationObjectiveKind.L_GEN_AND_NORM_NO_MATRIX_CE_ABLATION
+            ),
+            matrix_ce_weight=1.0,
+            l_gen_weight=1.0,
+            norm_weight=0.1,
+        )
+
+
 def test_v2_baseline_composes_and_logs_raw_and_weighted_norm() -> None:
     config = RepresentationObjectiveConfigV2(
         identity="native-qwen3-historical-norm-baseline",

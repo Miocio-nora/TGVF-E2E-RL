@@ -19,6 +19,7 @@ from tgvf_rl.representation.training.config import (
     RepresentationTrainingConfig,
     load_representation_training_config,
 )
+from tgvf_rl.representation.training.objective import RepresentationObjectiveKind
 
 from .trainer import ImageAxisGroundingObjectiveConfig
 
@@ -106,6 +107,7 @@ class ImageAxisGroundingExperimentConfig:
             base_training_config_sha256=self.base_training_config_sha256,
             donor_manifest_sha256=self.donor_manifest_sha256,
             objective=self.objective,
+            base_objective_kind=self.base_training.objective.objective.kind,
         )
 
     def validation_payload(self) -> dict[str, object]:
@@ -243,6 +245,9 @@ def image_axis_treatment_objective_identity(
     base_training_config_sha256: str,
     donor_manifest_sha256: str,
     objective: ImageAxisGroundingObjectiveConfig,
+    base_objective_kind: RepresentationObjectiveKind = (
+        RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM
+    ),
 ) -> str:
     """Identity embedded in the inner core run to bind all outer loss inputs."""
 
@@ -250,8 +255,15 @@ def image_axis_treatment_objective_identity(
     _sha(donor_manifest_sha256, name="donor manifest SHA256")
     if not isinstance(objective, ImageAxisGroundingObjectiveConfig):
         raise TypeError("image-axis objective must be typed")
+    if not isinstance(base_objective_kind, RepresentationObjectiveKind):
+        raise TypeError("base objective kind must be explicit")
+    prefix = "balanced-matrix-ce-l-gen-norm-plus-image-axis-v1"
+    if base_objective_kind is (
+        RepresentationObjectiveKind.L_GEN_AND_NORM_NO_MATRIX_CE_ABLATION
+    ):
+        prefix = "l-gen-norm-no-matrix-ce-plus-image-axis-ablation-v1"
     return (
-        "balanced-matrix-ce-l-gen-norm-plus-image-axis-v1:"
+        f"{prefix}:"
         f"base={base_training_config_sha256}:"
         f"donor={donor_manifest_sha256}:"
         f"weight={objective.image_axis_matrix_weight.hex()}:"

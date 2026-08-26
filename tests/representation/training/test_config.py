@@ -664,6 +664,26 @@ def test_v5_content_binds_vision_routing_adapter_variant(tmp_path: Path) -> None
     )
 
 
+def test_v5_parses_named_no_matrix_ce_ablation(tmp_path: Path) -> None:
+    path = _upgrade_config_to_v5(
+        _write_config(tmp_path), variant="full_d_deepstack"
+    )
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        'kind = "matrix_ce_l_gen_and_norm"',
+        'kind = "l_gen_and_norm_no_matrix_ce_ablation"',
+        1,
+    ).replace("matrix_ce_weight = 1.0", "matrix_ce_weight = 0.0", 1)
+    path.write_text(text, encoding="utf-8")
+
+    config = load_representation_training_config(path, verify_external_files=False)
+
+    assert config.objective.objective.kind is (
+        RepresentationObjectiveKind.L_GEN_AND_NORM_NO_MATRIX_CE_ABLATION
+    )
+    assert config.objective.objective.matrix_ce_weight == 0.0
+
+
 def test_v4_enabled_post_training_evaluation_requires_every_identity(
     tmp_path: Path,
 ) -> None:

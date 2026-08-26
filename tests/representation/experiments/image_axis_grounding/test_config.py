@@ -9,6 +9,7 @@ from tgvf_rl.representation.experiments.image_axis_grounding.config import (
     image_axis_treatment_objective_identity,
     load_image_axis_grounding_experiment_config,
 )
+from tgvf_rl.representation.training.objective import RepresentationObjectiveKind
 
 
 def test_treatment_objective_identity_binds_every_experimental_input() -> None:
@@ -27,6 +28,21 @@ def test_treatment_objective_identity_binds_every_experimental_input() -> None:
         f"base={'a' * 64}:donor={'b' * 64}:"
         "weight=0x1.0000000000000p+0:"
         "temperature=0x1.0000000000000p+0:negatives=1"
+    )
+
+
+def test_no_matrix_ce_treatment_identity_names_the_ablation() -> None:
+    identity = image_axis_treatment_objective_identity(
+        base_training_config_sha256="a" * 64,
+        donor_manifest_sha256="b" * 64,
+        objective=ImageAxisGroundingObjectiveConfig(),
+        base_objective_kind=(
+            RepresentationObjectiveKind.L_GEN_AND_NORM_NO_MATRIX_CE_ABLATION
+        ),
+    )
+
+    assert identity.startswith(
+        "l-gen-norm-no-matrix-ce-plus-image-axis-ablation-v1:"
     )
 
 

@@ -27,6 +27,9 @@ class RepresentationObjectiveKind(str, Enum):
     MATRIX_CE_AND_L_GEN = "matrix_ce_and_l_gen"
     MATRIX_CE_L_GEN_AND_NORM = "matrix_ce_l_gen_and_norm"
     MATRIX_CE_ONLY_ABLATION = "matrix_ce_only_ablation"
+    L_GEN_AND_NORM_NO_MATRIX_CE_ABLATION = (
+        "l_gen_and_norm_no_matrix_ce_ablation"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +101,12 @@ class RepresentationObjectiveConfigV2(RepresentationObjectiveConfig):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RepresentationObjectiveConfigV3(RepresentationObjectiveConfigV2):
-    """Norm-aware objective with an explicit Matrix-CE cell-score identity."""
+    """Norm-aware objective with an explicit Matrix-CE cell-score identity.
+
+    V3 also owns the named no-Matrix-CE ablation. The raw Matrix-CE term is
+    still evaluated for matched diagnostics, but its exact zero weight removes
+    it from both the optimized total and Adapter gradients.
+    """
 
     matrix_ce_mode: MatrixCEScoreMode = MatrixCEScoreMode.BALANCED
     matrix_ce_temperature: float = 1.0
@@ -112,11 +120,20 @@ class RepresentationObjectiveConfigV3(RepresentationObjectiveConfigV2):
         _validate_weight(self.matrix_ce_weight, field_name="matrix_ce_weight")
         _validate_weight(self.l_gen_weight, field_name="l_gen_weight")
         _validate_weight(self.norm_weight, field_name="norm_weight")
-        if self.matrix_ce_weight <= 0:
-            raise ValueError("Matrix-CE weight must be greater than zero")
-        if self.kind is not RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM:
+        if self.kind is RepresentationObjectiveKind.MATRIX_CE_L_GEN_AND_NORM:
+            if self.matrix_ce_weight <= 0:
+                raise ValueError("Matrix-CE weight must be greater than zero")
+        elif self.kind is (
+            RepresentationObjectiveKind.L_GEN_AND_NORM_NO_MATRIX_CE_ABLATION
+        ):
+            if self.matrix_ce_weight != 0.0:
+                raise ValueError(
+                    "the no-Matrix-CE ablation requires Matrix-CE weight zero"
+                )
+        else:
             raise ValueError(
-                "objective v3 requires the matrix_ce_l_gen_and_norm baseline"
+                "objective v3 requires either the matrix_ce_l_gen_and_norm "
+                "baseline or the named no-Matrix-CE ablation"
             )
         if self.l_gen_weight <= 0:
             raise ValueError("the v3 baseline requires a nonzero L_gen weight")
