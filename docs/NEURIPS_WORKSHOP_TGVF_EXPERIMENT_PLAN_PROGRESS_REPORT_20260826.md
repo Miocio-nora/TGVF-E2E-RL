@@ -11,8 +11,8 @@ sub-benchmark 和策略行为。协议复核同时发现：历史 Original raw d
 `262,144` pixels，而 PRL25 matched 各臂为 `1,003,520` pixels。冻结 S32 的 raw-direct@512
 Macro* 为 `54.3543`，比同合同 Original 低 `1.0013 pp`；这进一步否定“32-step RL 在原始
 raw-direct 合同上带来普遍增益”的解释。为隔离分辨率因素，Crop S80、TGVF S64 和 Atomic S16
-的 matched 工具协议 `@512` 控制也已冻结；Crop S80 的 2,240 条单图推理已完成，TGVF S64
-与 Atomic S16 已在两组 GPU 上并行推进。下一步完成三个工具方法的
+的 matched 工具协议 `@512` 控制也已冻结；Crop S80 与 TGVF S64 已完成推理和评分，Atomic
+S16 已完成 2,240 条单图推理并进入评分。下一步完成 Atomic 的
 `@512` 对照、正式 Atomic matched/target-only 盲审、target-only
 调用行为对照与英文 Experiments/Discussion 初稿。**
 
@@ -67,7 +67,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---:|---|
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
 | Crop S80 / TGVF S64 / Atomic S16 matched | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 三个 PRL25 工具方法之间的像素上限对齐比较 |
-| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | Crop 推理完成；TGVF 与 Atomic 并行运行；分别测量每个工具方法的纯评测分辨率敏感性 |
+| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | Crop、TGVF 已闭合；Atomic 评分中；分别测量每个工具方法的纯评测分辨率敏感性 |
 | No-Tool S0/S8/S16/S32 matched | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | S0→S32 的同协议 RL 动态；与三个 PRL25 工具臂像素上限对齐 |
 | No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 已完成；Macro* `54.3543`，比 Original 低 `1.0013 pp` |
 
@@ -877,6 +877,11 @@ Vision Dominant `50.0`。
 - 2026-08-26 19:01 JST Crop S80 `@512` 正式闭合节点：七个 slice accepted summary 为
   `status=pass`，Macro* `61.5591`，比自身 matched@1M 的 `62.2288` 低 `0.6697 pp`。
   `crop-s80-complete` marker 已落盘并自动触发 TGVF S64 score；同期 Atomic S16 推理继续清尾。
+- 2026-08-26 19:16 JST TGVF S64 `@512` 正式闭合节点：七个 slice accepted summary 为
+  `status=pass`，冻结 `extract_coredev_macro_star` 由相同 scorer artifact 提取 Macro*
+  `55.4067`，比自身 matched@1M 的 `59.8086` 低 `4.4019 pp`。v2 plan 的 accepted summary
+  不内嵌 `headline` 字段，但七个 slice、2,511 样本及 extractor 输入完整；这是 artifact schema
+  差异，不是改用另一统计标准。Atomic S16 同期完成 `2,240/2,240` 条推理并自动进入评分。
 
 ### 5.5 三个工具方法的 matched@512 分辨率控制
 
@@ -887,8 +892,8 @@ Vision Dominant `50.0`。
 | Arm | Frozen checkpoint | 保持不变 | 唯一改动 | 状态 |
 |---|---|---|---|---|
 | Crop | S80 | native Crop prompt、tool schema、agent loop、temperature 1、seed42、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
-| TGVF | S64 | matched TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 推理完成，评分中 |
-| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 推理中 |
+| TGVF | S64 | matched TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
+| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 推理完成，评分中 |
 
 三个 arm 的推理按两组 GPU 流水并行，72B judge 评分按 arm 串行以避免同一输出根并发写入。每臂必须完成 2,240 个支持的单图 trajectory、
 271 个显式 fail-closed 多图条目、七个官方 slice、Macro*、完整 sub-benchmark 以及逐 set 工具调用
@@ -901,12 +906,21 @@ No-Tool RL，且不得把 `@512` 评测回退解释为训练像素设置的因�
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Crop S80 / 1,003,520 | 62.2288 | reference | 81.6754 | 74.5000 | 58.8889 | 55.3358 | 46.4684 | 67.3333 | 51.4000 |
 | Crop S80 / 262,144 | **61.5591** | **−0.6697** | 75.3927 | 75.0000 | 63.3333 | 53.1455 | 49.4424 | 63.0000 | 51.6000 |
+| TGVF S64 / 1,003,520 | 59.8086 | reference | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
+| TGVF S64 / 262,144 | **55.4067** | **−4.4019** | 53.4031 | 60.5000 | 62.7778 | 40.7642 | 46.4684 | 72.3333 | 51.6000 |
 
 Crop 的分辨率回退不是逐项一致下降：VStar 和 MathVista 分别下降 `6.2827 / 4.3333 pp`，OCR
 mean 下降 `2.1903 pp`；但 BLINK-180、MMMU-269 和 HR 分别上升 `4.4444 / 2.9740 /
 0.5000 pp`。因此当前只支持小幅 Macro* 敏感性，不能把单次 deterministic eval 的各分项波动
 都解释为像素预算因果效应。Crop@512 比 Original raw-direct@512 高 `6.2035 pp`，但该差值仍
 跨 prompt/agent 协议，只能作为同像素端到端观察。
+
+TGVF 的分辨率敏感性明显强于 Crop：主要回退来自 VStar `−20.9424 pp`、HR `−6.0000 pp`、
+OCR mean `−3.7804 pp` 和 BLINK-180 `−2.7778 pp`；MathVista 不变，MMMU-269 与 MathVerse
+分别上升 `1.4870 / 1.2000 pp`。TGVF@512 的 Macro* 比 Original raw-direct@512 只高
+`0.0511 pp`，而二者仍跨 agent/tool 协议，不能据此声称显著优于 Original。OCR scorer 还暴露
+出低分辨率下的生成病态：个别 final answer 达 `117,574` 字符，导致官方本地字符串指标耗时
+显著增加；这些回答被原样评分，没有后处理截断。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -966,8 +980,8 @@ Atomic 进入正文核心方法必须同时满足：
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
 5. [已完成] No-Tool RL：合同、实现、CPU 回归、真实 canary、正式 S32 训练、S0/S8/S16/S32
    matched no-tool 推理、28 个 slice 评分、四臂汇总与文章结果回填均已闭合；
-6. [运行中] S32 raw-direct@512 已闭合；Crop S80 matched@512 推理已完成，TGVF S64 与
-   Atomic S16 正在两组 GPU 上并行运行；评分闭合后回填 Macro*、完整 sub-benchmark 与调用行为；
+6. [运行中] S32 raw-direct@512、Crop S80 与 TGVF S64 matched@512 已闭合；Atomic S16
+   推理完成、评分中，随后回填完整 sub-benchmark 与调用行为；
 7. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 8. [待回填] target-only 调用行为对照与正式 audit；
