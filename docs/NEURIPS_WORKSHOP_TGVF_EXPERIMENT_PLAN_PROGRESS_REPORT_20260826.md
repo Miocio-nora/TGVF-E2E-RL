@@ -9,8 +9,10 @@ Macro* 为 `66.6853`，同协议 S0 为 `64.4712`，即 32-step RL 增益为 `+2
 control”，文章据此收缩总体工具优势 claim，并把工具价值限定到 RP67 内容 utility、特定
 sub-benchmark 和策略行为。协议复核同时发现：历史 Original raw direct 的图像上限为
 `262,144` pixels，而 PRL25 matched 各臂为 `1,003,520` pixels；因此正在补充冻结 S32 的
-`raw-direct@512` 对照。下一步完成该对照的七项评分、正式 Atomic matched/target-only 盲审、
-target-only 调用行为对照与英文 Experiments/Discussion 初稿。**
+`raw-direct@512` 对照；其七个完整 slice 推理已经闭合，官方评分正在恢复汇总。为进一步隔离
+分辨率因素，Crop S80、TGVF S64 和 Atomic S16 的 matched 工具协议 `@512` 控制也已冻结并进入
+自动队列。下一步完成四个 `@512` 对照、正式 Atomic matched/target-only 盲审、target-only
+调用行为对照与英文 Experiments/Discussion 初稿。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -42,6 +44,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
 | **matched prompt** | 80-step 训练与既有 CoreDev 评测使用的简化、训练匹配 prompt | 历史结果 | 用于现有主表 |
 | **full prompt** | 详细说明 target、bbox、关系与禁止答案泄漏的 Instruct prompt；可见与运行时上限均为 6 次 | `full_visual_tool_prompt_v5_instruct_cap6` | 只在冻结 S64/S16 上评测，不重选 checkpoint；衡量 prompt shift robustness |
+| **matched@512 control** | 保留各方法原 matched prompt、工具 schema、agent loop、checkpoint、seed42 与七项任务，只把评测 `max_pixels` 改为 `262144` | Crop S80 / TGVF S64 / Atomic S16 | 单变量输入分辨率控制；训练仍为 matched@1M，不改称新方法或新 checkpoint |
 | **Macro\*** | 七个百分比组件的无权平均 | VStar、HRBench、BLINK-180、OCR EN/CN mean、MMMU-269、MathVista、MathVerse 五版本宏平均 | 只在相同测量合同内比较 |
 
 固定排除项：**不补 Crop seed43**。它不是本文结论的必要验证，也不用于构造三方法对称性。
@@ -61,8 +64,9 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---:|---|
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
 | Crop S80 / TGVF S64 / Atomic S16 matched | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 三个 PRL25 工具方法之间的像素上限对齐比较 |
+| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | 已排队；分别测量每个工具方法的纯评测分辨率敏感性 |
 | No-Tool S0/S8/S16/S32 matched | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | S0→S32 的同协议 RL 动态；与三个 PRL25 工具臂像素上限对齐 |
-| No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 正在运行；隔离训练后模型在 Original 测量合同下的表现 |
+| No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 2,511 条推理已完成、官方评分中；隔离训练后模型在 Original 测量合同下的表现 |
 
 因此，No-Tool matched 的 S32−S0 `+2.2141 pp` 不受分辨率混杂；Crop/TGVF/Atomic/No-Tool
 matched 的像素上限也相同。相反，Original 与任何 PRL25 matched 行的绝对差值同时混入 prompt、
@@ -718,7 +722,9 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 - [x] S0/S8/S16/S32 matched no-tool 的 `4 × 2,240` 条单图推理；
 - [x] S0/S8/S16/S32 matched no-tool 的七项正式评分；
 - [x] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
-- [ ] S32 raw-direct@512 的七项推理、官方评分与 Original 同合同差值；2026-08-26 已启动。
+- [x] S32 raw-direct@512 的七个完整 slice、共 2,511 条推理；
+- [ ] S32 raw-direct@512 的七项官方评分与 Original 同合同差值；2026-08-26 17:37 JST 已恢复
+  严格 source-run 绑定评分。
 
 执行与审计快照（2026-08-26 07:18 JST）：
 
@@ -824,6 +830,31 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   避免旧失败 OCR eval 被“latest”规则误选；修复和结果生成代码已推送至执行分支 commit
   `abee6a4`。正式 S32 Macro* 为 `66.6853`，所有 No-Tool 结果现已进入本文主表、完整
   sub-benchmark、调用行为表与 claim ledger。
+- 2026-08-26 17:38 JST `@512` 控制节点：冻结 S32 raw-direct 的七个完整 slice 推理均已
+  完成。MathVerse judge 行已产生，但历史 raw-direct TSV 缺少官方聚合所需的
+  `metadata.problem_version`；恢复实现只从固定 MathVerse `testmini.json` 补入该元数据，并逐行
+  验证 `prediction` 完全不变，随后重新执行官方聚合。七个推理 source run 已显式绑定；本地
+  Qwen2.5-72B-Instruct judge 正在 GPU0/1 初始化。与此同时，Crop S80、TGVF S64 与 Atomic S16
+  的 matched@512 单变量控制已由自动 supervisor 排队，待 S32 评分闭合后依次使用 GPU4–7。
+  实现与计划已推送到执行分支 `neurips-notool-rl-s32` 的 `81cec97`，source-run 选择修复为
+  `12b4ca1`；相关 targeted 回归为 `79 passed`。该节点仍不提前报告任何新 Macro*。
+
+### 5.5 三个工具方法的 matched@512 分辨率控制
+
+该控制直接回答：Crop、TGVF 与 Atomic 的既有 matched@1M 结果中，有多少对较高输入像素预算
+敏感。它不是新训练，也不是 raw-direct 测试；若把工具 prompt 或 agent loop 去掉，方法本身就不再
+成立，因此每臂只改变 evaluator 的 `max_pixels`。
+
+| Arm | Frozen checkpoint | 保持不变 | 唯一改动 | 状态 |
+|---|---|---|---|---|
+| Crop | S80 | native Crop prompt、tool schema、agent loop、temperature 1、seed42、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 已排队 |
+| TGVF | S64 | matched TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 已排队 |
+| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 已排队 |
+
+三个 arm 顺序运行以避免共享 GPU 和 judge 资源竞争。每臂必须完成 2,240 个支持的单图 trajectory、
+271 个显式 fail-closed 多图条目、七个官方 slice、Macro*、完整 sub-benchmark 以及逐 set 工具调用
+统计。结果只能与同方法 matched@1M 行形成分辨率消融；跨方法结论仍需同时报告 Original 和
+No-Tool RL，且不得把 `@512` 评测回退解释为训练像素设置的因果最优性。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -883,11 +914,13 @@ Atomic 进入正文核心方法必须同时满足：
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
 5. [已完成] No-Tool RL：合同、实现、CPU 回归、真实 canary、正式 S32 训练、S0/S8/S16/S32
    matched no-tool 推理、28 个 slice 评分、四臂汇总与文章结果回填均已闭合；
-6. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
+6. [运行中] S32 raw-direct@512 官方评分；完成后自动依次运行 Crop S80、TGVF S64、Atomic S16
+   matched@512 单变量控制，并回填 Macro*、完整 sub-benchmark 与调用行为；
+7. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
-7. [待回填] target-only 调用行为对照与正式 audit；
-8. [待写作] 形成英文 Experiments/Discussion 初稿；
-9. [明确不做] Crop seed43。
+8. [待回填] target-only 调用行为对照与正式 audit；
+9. [待写作] 形成英文 Experiments/Discussion 初稿；
+10. [明确不做] Crop seed43。
 
 ## 10. 证据来源
 
@@ -906,6 +939,9 @@ Atomic 进入正文核心方法必须同时满足：
 - No-Tool RL S0/S8/S16/S32 matched summary：
   `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1/matched/step{0,8,16,32}/scoring/coredev-official-v1/coredev-2511-eval-summary.json`；
   28 个精确评分来源由同级各 dataset 的 `pinned-reuse-receipt.json` 固定。
+- `@512` 执行计划：
+  `configs/evaluation/prl25_{b_crop_exact_step80,c_frozen_rp67_tfree_teacher25_s64_matched,d_atomic_crop_tgvf_s16_matched}_pixel512_coredev2511_plan.json`；
+  顺序 supervisor 为 `tools/supervise_prl25_bcd_selected_pixel512_evaluation.sh`。
 
 注意：主仓当前 qualitative 文档可能尚未进入本 worktree 的提交历史；本文只把它作为只读证据
 来源，不覆盖主仓未提交内容。
