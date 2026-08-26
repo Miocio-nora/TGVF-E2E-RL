@@ -696,6 +696,15 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   精确一致。训练成功后的 vLLM teardown 输出 `pure virtual method called`，发生在最终 metrics、
   permanent receipt 与 100% progress 之后，不影响 S32 验收。下一步只执行事前冻结的
   matched no-tool / raw-direct 双协议评测，不依据训练 reward 改选 checkpoint。
+- 2026-08-26 13:37 JST 评测启动节点：matched no-tool 的 full-model 原生像素 evaluator、
+  S0/S8/S16/S32 snapshot/merge 流水线与可恢复 supervisor 已通过 CPU 回归（相关既有路径与
+  新增 no-tool 专项合计 `26 passed`），执行分支推送至 `36702a1`。tmux
+  `prl25_f_notool_dual_eval` 已启动，当前正在为 S0 构建并绑定 immutable full-model snapshot；
+  随后自动执行单题真机 smoke、四卡完整 S0 推理，并在其运行期间合并 S8 FSDP 权重。S8 与
+  S0 分配到不同四卡组，后续 S16/S32 复用对应组并保持相同 CoreDev2511 task manifest、
+  paired seed namespace 与 matched no-tool prompt。此节点表示评测已进入工件准备/执行流水线，
+  尚不表示任何 CoreDev 分数已经产生；raw-direct 仍使用 Original 的 VLMEvalKit prompt/像素合同，
+  不与 matched evaluator 混用。
 
 ## 6. Atomic 纳入正文的决策门槛
 
