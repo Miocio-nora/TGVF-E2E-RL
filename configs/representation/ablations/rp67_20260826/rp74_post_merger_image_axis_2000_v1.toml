@@ -1,0 +1,14 @@
+schema_version = "image-axis-grounding-config-v1"
+scope = "isolated_representation_image_axis_grounding"
+run_id = "RP-74-QWEN3-INSTRUCT-REP-POST-MERGER-IMAGE-AXIS-2000-GPU67"
+base_training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-adapter-architecture/configs/representation/ablations/rp67_20260826/rp74_post_merger_base_2000_gpu67.toml"
+base_training_config_sha256 = "d53876ce876fc4e8a022bc5f3aa3c13cce9318326fcd23e10a44797ddfd8c574"
+treatment_training_config_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-adapter-architecture/configs/representation/ablations/rp67_20260826/rp74_post_merger_image_axis_treatment_2000_gpu67.toml"
+treatment_training_config_sha256 = "f664c6de09b0cc7400fd1cfb199e757eb0ee466686244d9839d61533d8207815"
+donor_manifest_path = "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/representation/experiments/image_axis_grounding/rp66_train_seed42_donor_manifest_v1.json"
+donor_manifest_sha256 = "9d04f60e2d60cf9e769ac22a857133c00a417603db3126f891cc1b891abb2080"
+
+[objective]
+image_axis_matrix_weight = 1.0
+image_axis_temperature = 1.0
+negative_count = 1

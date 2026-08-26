@@ -1,6 +1,6 @@
 # RP67 Adapter Ablation：计划、进度与结果
 
-更新时间：2026-08-26 22:46 JST
+更新时间：2026-08-26 23:18 JST
 
 ## 1. 目标
 
@@ -19,13 +19,25 @@ RP67 完整基线为：
 |---|---|---|---|
 | RP67 full | 已有 | 无 | 主 `D` + 三路学习型 `D-DeepStack` |
 | RP66 / no image-axis | 已有，可复用 | 去掉 image-axis CE | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP71 / no MatrixCE | **运行中，Step 490** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP72 / no DeepStack | **运行中，Step 520；S500 已持久化** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
+| RP71 / no MatrixCE | **运行中，Step 730** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP72 / no DeepStack | **运行中，Step 770；S500 已持久化** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
+| RP73 / unidirectional | **生产预检通过，待启动** | 双向交互改为一次 target→visual payload 写入 | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP74 / post-merger | **生产预检通过，待启动** | Adapter 从 visual merger 前移到 merger 后 | 主 `D` + 三路学习型 `D-DeepStack` |
 
 RP71 仍计算 raw MatrixCE 供诊断，但 weighted MatrixCE 严格为零，不进入总损失和梯度。
 RP72 是结构/训练联合消融；它回答“学习型 DeepStack 分支是否必要”，不能与“仅在推理时
 屏蔽 RP67 的 DeepStack”混为一谈。后者属于便宜的 deployment-use control，可在本轮
 checkpoint 训练期间并行补。
+
+RP73 的 active 路径只允许 target keys/values 写入 visual token。为了不把交互方向和
+参数量混在一起，历史 visual→target enrichment 分支仍计算诊断 attention，但以严格零
+系数接入输出；其参数梯度张量存在但数值为零。因此 RP73 与 RP67 都是 104 个 artifact
+tensor、`72,055,808` 个可训练参数。
+
+RP74 真正在 merger 输出之后交互：输入由 `[N,1152]` 变为 `[N/4,4096]`，四路输出直接
+identity writeback，不再次调用 Qwen merger。attention bottleneck 仍固定为 `1152`，但
+4096 维 visual projection、delta 和 gate 使参数量自然增至 `174,601,216`。这属于注入
+位置结构消融的固有变化，结果解释不能假装它与 RP67 参数匹配。
 
 ## 3. 固定条件
 
@@ -50,7 +62,15 @@ checkpoint 训练期间并行补。
 - RP72 outer config canonical SHA256：
   `e29e7815b4c20c9d2dfb1bf4036c4e37901b5a5032d8873f43116f4b78978530`
 - 两臂 CPU/data/identity fail-closed 预检均通过；没有初始化 CUDA。
-- 相关 objective/config/image-axis 测试：`53 passed`。
+- RP73/RP74 结构实现 commit：`ea14377c6e8837a43f38422c8756704da0b1c4e3`
+- RP73 outer config canonical SHA256：
+  `778eb764cd9abf410704ce56effdecf1ff8fa14b25bd3b3e64e740c3dbf3b111`
+- RP74 outer config canonical SHA256：
+  `8853131bce360d60aa32ef153e6cc574671a5e02722c367adf124b4089c4ea33`
+- RP73/RP74 的 CPU/data/donor/identity fail-closed 预检均通过：8,209 个 donor assignment，
+  其中 8,173 matched、36 masked；没有初始化 CUDA。
+- 第一批相关 objective/config/image-axis 测试：`53 passed`；新增结构实现的完整
+  representation 测试：`553 passed`。
 
 ## 5. 运行安排
 
@@ -58,9 +78,11 @@ checkpoint 训练期间并行补。
 |---|---:|---:|---|
 | RP71 no MatrixCE | 0,1 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-71-qwen3-instruct-rp67-ablation-no-matrixce-2000-gpu01/` |
 | RP72 no DeepStack | 2,3 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-72-qwen3-instruct-rp67-ablation-no-deepstack-2000-gpu23/` |
+| RP73 unidirectional | 4,5 | 待 GPU smoke 后正式启动 | `artifacts/representation/RP-73-qwen3-instruct-rp67-ablation-unidirectional-2000-gpu45/` |
+| RP74 post-merger | 6,7 | 待 GPU smoke 后正式启动 | `artifacts/representation/RP-74-qwen3-instruct-rp67-ablation-post-merger-2000-gpu67/` |
 
-GPU 4–7 暂不占用，留给 checkpoint 评测和 cheap controls。两臂应并行启动；先确认
-step 1 完成、loss/gradient 有限且参数所有权检查通过，再把状态更新为正式运行中。
+四臂均采用 2-GPU FSDP2。RP73/RP74 先确认 step 1 完成、loss/gradient 有限且参数
+所有权检查通过，再转为正式 2,000-step 运行；后续 checkpoint 评测不能抢占训练 GPU。
 
 ### 5.1 启动验收
 
@@ -95,6 +117,16 @@ internal/utility validation 完成前解释为下游质量。按启动至当前�
 20–30 分钟完成两臂 full-867 correct/zero/wrong utility，可在约 `03:00 JST` 前后形成
 完整第一版结论。
 
+### 5.3 RP73/RP74 结构与预检
+
+`2026-08-26 23:18 JST`：两个新 variant 已实现并完成 CPU、artifact、checkpoint、
+runtime、FSDP2、native pipeline 和 image-axis 全链路测试。RP73 outer config 的 source
+SHA256 为 `941767ceb784e7814cfeb40f53a7110338d10c4f6b0d21ab2d33a948d11a6040`；
+RP74 为 `e6115e5de6d958667bbbc9162c26fd38709827f3c7f2636d1a11af7a6e5348dc`。
+两臂的 model、512² 图像上限、数据内容哈希、完整 objective、seed、optimizer、scheduler、
+global batch 和 internal eval 与 RP67 对齐。下一验收点是各自在 GPU 4–5 / 6–7 的首个
+optimizer step，随后记录 Step-10 持久化 metric。
+
 ## 6. 结果表（待填）
 
 | Arm | Step | MatrixCE | L_gen | Norm | image-axis CE | internal matched utility | zero-D utility | wrong-target utility | grounding |
@@ -103,6 +135,8 @@ internal/utility validation 完成前解释为下游质量。按启动至当前�
 | RP66 no image-axis | 2000 | 待统一抄录 | 待统一抄录 | 待统一抄录 | N/A | 待统一抄录 | 待统一抄录 | 待统一抄录 | 待统一抄录 |
 | RP71 no MatrixCE | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
 | RP72 no DeepStack | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
+| RP73 unidirectional | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
+| RP74 post-merger | 2000 | 待运行 | 待运行 | 待运行 | 待运行 | 待评测 | 待评测 | 待评测 | 待评测 |
 
 正式解释必须同时看表示内部指标和下游 matched utility。单独的训练 loss 下降不能证明
 Adapter 更有效；RP72 参数量更小，也不能把吞吐变化误写成精度收益。
@@ -114,4 +148,4 @@ Adapter 更有效；RP72 参数量更小，也不能把吞吐变化误写成精�
 3. target-free / shuffled-target control。已有 correct/zero/wrong-target utility 可先复用，
    不应在读完现有证据前重复训练。
 
-优先完成 RP71、RP72 与现有 RP67/RP66 的统一评测，再决定是否扩张训练矩阵。
+优先完成 RP71–RP74 与现有 RP67/RP66 的统一评测，再决定是否扩张训练矩阵。
