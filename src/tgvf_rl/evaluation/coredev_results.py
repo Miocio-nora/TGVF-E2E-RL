@@ -550,6 +550,7 @@ def _single_image_mcq_accuracy(
             "single_image_evaluated",
             "single_image_policy_output_contract_failure",
             "unsupported_multi_image",
+            "excluded_multi_image_reference",
         }:
             raise RuntimeError(f"CoreDev headline {dataset} coverage label differs")
         coverage_counts[str(coverage)] = coverage_counts.get(str(coverage), 0) + 1
@@ -561,6 +562,8 @@ def _single_image_mcq_accuracy(
                 raise RuntimeError(
                     f"CoreDev headline {dataset} unsupported sample scored correct"
                 )
+            continue
+        if coverage == "excluded_multi_image_reference":
             continue
         if coverage == "single_image_policy_output_contract_failure" and hit != 0:
             raise RuntimeError(

@@ -11,6 +11,7 @@ import pytest
 
 from tgvf_rl.evaluation.final_answer_view import (
     INVALID_SENTINEL_PREFIX,
+    materialize_coredev_reference_coverage_view,
     materialize_final_answer_view,
     materialize_mathverse_metadata_view,
 )
@@ -299,6 +300,56 @@ def test_mathverse_metadata_only_view_preserves_predictions(tmp_path: Path) -> N
     assert actual[0]["prediction"] == rows[0]["prediction"]
     assert json.loads(actual[0]["metadata"])["problem_version"] == "Vision Only"
     assert manifest["prediction_values_identical"] is True
+
+
+def test_reference_coverage_view_preserves_raw_direct_results(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "BLINK-result.tsv"
+    derived = tmp_path / "BLINK-reference-view.tsv"
+    task_manifest = tmp_path / "tasks.jsonl"
+    rows = [
+        {
+            "index": f"blink-{index}",
+            "prediction": "A",
+            "hit": "1" if index in {0, 180} else "0",
+        }
+        for index in range(181)
+    ]
+    _write_tsv(source, ["index", "prediction", "hit"], rows)
+    task_manifest.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "dataset": "BLINK",
+                    "index": f"blink-{index}",
+                    "image_paths": ["one.jpg"] if index < 180 else ["a.jpg", "b.jpg"],
+                }
+            )
+            + "\n"
+            for index in range(181)
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = materialize_coredev_reference_coverage_view(
+        source_tsv=source,
+        derived_tsv=derived,
+        task_manifest_path=task_manifest,
+        dataset="BLINK",
+    )
+    _, actual = _read_tsv(derived)
+
+    assert [row["prediction"] for row in actual] == [row["prediction"] for row in rows]
+    assert [row["hit"] for row in actual] == [row["hit"] for row in rows]
+    assert manifest["counts"] == {
+        "single_image_evaluated": 180,
+        "excluded_multi_image_reference": 1,
+    }
+    assert (
+        json.loads(actual[-1]["extra_records"])["coverage"]
+        == "excluded_multi_image_reference"
+    )
 
 
 def test_materializer_rejects_overwrite_duplicate_indices_and_bad_mathverse_join(

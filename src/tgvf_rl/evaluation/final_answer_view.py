@@ -21,6 +21,9 @@ from typing import Any
 THINK_CLOSER = "</think>"
 SCORING_VIEW_CONTRACT = "vlmevalkit-final-answer-view-v1"
 MATHVERSE_METADATA_VIEW_CONTRACT = "vlmevalkit-mathverse-metadata-view-v1"
+COREDEV_REFERENCE_COVERAGE_VIEW_CONTRACT = (
+    "coredev-reference-coverage-result-view-v1"
+)
 INVALID_SENTINEL_PREFIX = "__TGVF_INVALID_FINAL_ANSWER__"
 _OPTION_LABELS = tuple(reversed("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
 _REQUIRED_COLUMNS = frozenset({"index", "prediction"})
@@ -506,11 +509,163 @@ def materialize_mathverse_metadata_view(
     return payload
 
 
+def materialize_coredev_reference_coverage_view(
+    *,
+    source_tsv: str | Path,
+    derived_tsv: str | Path,
+    task_manifest_path: str | Path,
+    dataset: str,
+    manifest_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Add auditable single-image coverage labels to a raw-direct result TSV."""
+
+    expected_single_counts = {"BLINK": 180, "MMMU_Pro_10c": 269}
+    if dataset not in expected_single_counts:
+        raise ValueError("reference coverage view only supports BLINK and MMMU_Pro_10c")
+    source = Path(source_tsv).resolve()
+    derived = Path(derived_tsv).resolve()
+    task_manifest = Path(task_manifest_path).resolve()
+    manifest = (
+        Path(manifest_path).resolve()
+        if manifest_path is not None
+        else derived.with_suffix(derived.suffix + ".manifest.json")
+    )
+    if not source.is_file():
+        raise FileNotFoundError(f"source result TSV does not exist: {source}")
+    if not task_manifest.is_file():
+        raise FileNotFoundError(f"task manifest does not exist: {task_manifest}")
+    if source == derived:
+        raise ValueError("source and derived TSV paths must differ")
+    if derived.exists() or manifest.exists():
+        raise FileExistsError(
+            "derived TSV and manifest are immutable and must not exist"
+        )
+
+    source_fields, source_rows = _read_tsv(source)
+    if "hit" not in source_fields:
+        raise ValueError("reference coverage source lacks hit column")
+    if "extra_records" in source_fields:
+        raise ValueError("reference coverage source already has extra_records")
+    image_counts: dict[str, int] = {}
+    with task_manifest.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            try:
+                task = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"task manifest line {line_number} is not valid JSON"
+                ) from error
+            if not isinstance(task, Mapping) or task.get("dataset") != dataset:
+                continue
+            index = task.get("index")
+            image_paths = task.get("image_paths")
+            if (
+                not isinstance(index, str)
+                or not index.strip()
+                or not isinstance(image_paths, list)
+                or not image_paths
+                or any(not isinstance(path, str) or not path for path in image_paths)
+            ):
+                raise ValueError(
+                    f"task manifest line {line_number} has invalid image identity"
+                )
+            if index in image_counts:
+                raise ValueError(f"task manifest contains duplicate index {index!r}")
+            image_counts[index] = len(image_paths)
+
+    source_indices = [row["index"] for row in source_rows]
+    if set(source_indices) != set(image_counts) or len(source_rows) != len(image_counts):
+        raise ValueError("reference coverage task/result index identity differs")
+    rows = [dict(row) for row in source_rows]
+    counts = {"single_image_evaluated": 0, "excluded_multi_image_reference": 0}
+    for row in rows:
+        coverage = (
+            "single_image_evaluated"
+            if image_counts[row["index"]] == 1
+            else "excluded_multi_image_reference"
+        )
+        counts[coverage] += 1
+        row["extra_records"] = json.dumps(
+            {
+                "schema_version": COREDEV_REFERENCE_COVERAGE_VIEW_CONTRACT,
+                "dataset": dataset,
+                "coverage": coverage,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    if counts["single_image_evaluated"] != expected_single_counts[dataset]:
+        raise ValueError("reference coverage single-image count differs")
+
+    derived_fields = [*source_fields, "extra_records"]
+    derived.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{derived.name}.", dir=derived.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    temporary.unlink()
+    try:
+        _write_tsv(temporary, derived_fields, rows)
+        verified_fields, verified_rows = _read_tsv(temporary)
+        if verified_rows != rows or verified_fields != derived_fields:
+            raise RuntimeError("reference coverage derived TSV verification failed")
+        for source_row, derived_row in zip(
+            source_rows, verified_rows, strict=True
+        ):
+            if any(source_row[field] != derived_row[field] for field in source_fields):
+                raise RuntimeError("reference coverage view changed a source field")
+        derived_bytes = temporary.read_bytes()
+    finally:
+        temporary.unlink(missing_ok=True)
+    _publish_bytes_exclusive(derived, derived_bytes)
+    payload = {
+        "schema_version": 1,
+        "contract": COREDEV_REFERENCE_COVERAGE_VIEW_CONTRACT,
+        "dataset": dataset,
+        "source": {
+            "path": str(source),
+            "sha256": _sha256_file(source),
+            "row_count": len(source_rows),
+            "columns": source_fields,
+        },
+        "derived": {
+            "path": str(derived),
+            "sha256": _sha256_file(derived),
+            "row_count": len(verified_rows),
+            "columns": verified_fields,
+        },
+        "task_manifest": {
+            "path": str(task_manifest),
+            "sha256": _sha256_file(task_manifest),
+        },
+        "counts": counts,
+        "source_fields_identical": True,
+        "prediction_values_identical": True,
+        "hit_values_identical": True,
+    }
+    try:
+        _publish_bytes_exclusive(
+            manifest,
+            (
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n"
+            ).encode("utf-8"),
+        )
+    except Exception:
+        derived.unlink(missing_ok=True)
+        raise
+    return payload
+
+
 __all__ = [
+    "COREDEV_REFERENCE_COVERAGE_VIEW_CONTRACT",
     "INVALID_SENTINEL_PREFIX",
     "MATHVERSE_METADATA_VIEW_CONTRACT",
     "SCORING_VIEW_CONTRACT",
     "THINK_CLOSER",
+    "materialize_coredev_reference_coverage_view",
     "materialize_final_answer_view",
     "materialize_mathverse_metadata_view",
 ]

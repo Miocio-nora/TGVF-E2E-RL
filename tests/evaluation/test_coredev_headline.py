@@ -319,6 +319,23 @@ def test_policy_output_failure_stays_in_fixed_single_image_denominator(
     assert result["components_percent"]["blink_single_180"] == pytest.approx(50.0)
 
 
+def test_reference_multi_image_rows_may_retain_their_official_hits(
+    tmp_path: Path,
+) -> None:
+    summary, paths = _accepted_summary_fixture(tmp_path)
+    expected = extract_coredev_macro_star(summary)
+    header, rows = _read_table(paths["blink"], delimiter="\t")
+    rows[-1][header.index("extra_records")] = _extra(
+        "excluded_multi_image_reference"
+    )
+    rows[-1][header.index("hit")] = "1"
+    _write_table(paths["blink"], header, rows, delimiter="\t")
+
+    result = extract_coredev_macro_star(summary)
+
+    assert result == expected
+
+
 @pytest.mark.parametrize(
     "mutation",
     (

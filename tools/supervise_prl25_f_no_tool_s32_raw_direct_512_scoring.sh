@@ -11,6 +11,7 @@ log_root="$eval_root/logs"
 judge_port=8012
 judge_base_url="http://127.0.0.1:${judge_port}/v1"
 mathverse_source=/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json
+task_manifest="$main_root/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl"
 
 datasets=(
   VStarBench
@@ -338,7 +339,8 @@ score_all_datasets() {
 aggregate_summary() {
   phase=aggregating_summary
   PYTHONPATH="$repo_root/src" "$python_bin" - \
-    "$eval_root" "$control_root/source-runs.tsv" "$judge_base_url" <<'PY'
+    "$eval_root" "$control_root/source-runs.tsv" "$judge_base_url" \
+    "$task_manifest" <<'PY'
 from __future__ import annotations
 
 import json
@@ -350,10 +352,15 @@ from tgvf_rl.evaluation.coredev_results import (
     summarize_coredev_results,
     write_json_atomic,
 )
+from tgvf_rl.evaluation.final_answer_view import (
+    COREDEV_REFERENCE_COVERAGE_VIEW_CONTRACT,
+    materialize_coredev_reference_coverage_view,
+)
 
 root = Path(sys.argv[1]).resolve()
 source_map_path = Path(sys.argv[2]).resolve()
 judge_base_url = sys.argv[3]
+task_manifest = Path(sys.argv[4]).resolve()
 datasets = (
     "VStarBench",
     "HRBench4K",
@@ -410,6 +417,52 @@ for dataset in datasets:
     item = partial["slices"][0]
     partials.append(partial)
     slices.append(item)
+
+for item in slices:
+    dataset = item["dataset"]
+    if dataset not in {"BLINK", "MMMU_Pro_10c"}:
+        continue
+    source_status = Path(item["status_path"]).resolve()
+    source_results = tuple(source_status.parent.glob("*_result.tsv"))
+    if len(source_results) != 1:
+        raise RuntimeError(f"{dataset} raw-direct result TSV is not unique")
+    derived_dir = root / f"scoring/headline-coverage-views/{dataset}"
+    derived_result = derived_dir / source_results[0].name
+    view_manifest = derived_dir / "coverage-view-manifest.json"
+    derived_status = derived_dir / "status.json"
+    if not derived_result.exists() and not view_manifest.exists():
+        materialize_coredev_reference_coverage_view(
+            source_tsv=source_results[0],
+            derived_tsv=derived_result,
+            task_manifest_path=task_manifest,
+            dataset=dataset,
+            manifest_path=view_manifest,
+        )
+    view = json.loads(view_manifest.read_text(encoding="utf-8"))
+    if (
+        view.get("contract") != COREDEV_REFERENCE_COVERAGE_VIEW_CONTRACT
+        or view.get("dataset") != dataset
+        or Path(view.get("source", {}).get("path", "")).resolve()
+        != source_results[0].resolve()
+        or Path(view.get("derived", {}).get("path", "")).resolve()
+        != derived_result.resolve()
+        or view.get("source_fields_identical") is not True
+        or view.get("prediction_values_identical") is not True
+        or view.get("hit_values_identical") is not True
+    ):
+        raise RuntimeError(f"{dataset} reference coverage view differs")
+    if not derived_status.exists():
+        write_json_atomic(
+            derived_status,
+            {
+                "schema_version": 1,
+                "contract": COREDEV_REFERENCE_COVERAGE_VIEW_CONTRACT,
+                "dataset": dataset,
+                "source_status_path": str(source_status),
+                "coverage_view_manifest": str(view_manifest),
+            },
+        )
+    item["status_path"] = str(derived_status)
 
 first = partials[0]
 for partial in partials[1:]:
