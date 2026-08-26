@@ -707,6 +707,12 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   raw-direct transfer 复测，只保留 S0/S8/S16/S32 matched no-tool。raw-direct 从未启动，当前
   supervisor 本身也只执行 matched 路径，因此无需中断或重启在跑任务。已有运行目录和 tmux
   名称中的 `DUAL` / `dual` 是启动时的历史标签，不表示第二套协议产生了数据。
+- 2026-08-26 14:34 JST 推理节点：S0 matched no-tool 已闭合全部 `2,240/2,240` 条单图任务，
+  completion marker 与状态文件均已落盘；CoreDev manifest 中另有 271 条多图任务按既有协议显式
+  hold，不计作未完成。S8 已生成 `1,900/2,240` 条单图结果（`84.82%`）；S16 真机 smoke 已通过，
+  四个正式 worker 正在初始化；S32 full-model checkpoint merge 已并行启动。tmux 与 supervisor
+  均存活，当前未发现致命错误。此节点只证明推理工件进度，S0 尚未执行七项评分，因此不产生
+  Macro*、sub-benchmark 优劣或论文结论。
 
 ## 6. Atomic 纳入正文的决策门槛
 
