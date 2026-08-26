@@ -728,6 +728,13 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   与 `--reuse-aux infer`；相关 pinned-reuse/参数合同测试 `21 passed`，修复已推送至 `4bbddf4`。
   重启后本地 Qwen2.5-72B-Instruct judge 已通过 health gate，28/28 个 slice scorer 均已真实启动，
   暂未再次出现参数断言。此节点仍是运行状态，不表示任何 slice 或四臂汇总已经完成。
+- 2026-08-26 15:49 JST 并发评分隔离节点：恢复批次证明 pinned-reuse 参数链有效，但四个并行
+  OCRBench scorer 共用执行 checkout 下的 `.vlmeval` 临时目录，发生 ground-truth 文件竞争；
+  OCR slice fail-closed，其他 dataset 不受该临时目录问题影响。截至该快照已有 19 个 slice 写入
+  通过 wrapper postflight 的 pinned-reuse receipt，另有 8 个 scorer 仍在运行。修复将当前工作目录
+  隔离到各 step/dataset，并在恢复时跳过已有 receipt、只重跑未闭合 slice；CPU 合同测试
+  `34 passed`，修复已推送至 `9744dca`。自动恢复 waiter 已启动，将在当前批次自然退出后接管；
+  四臂 summary 和 Macro* 仍未生成。
 
 ## 6. Atomic 纳入正文的决策门槛
 
