@@ -1,6 +1,6 @@
 # RP67 Adapter Ablation：计划、进度与结果
 
-更新时间：2026-08-26 21:37 JST
+更新时间：2026-08-26 21:41 JST
 
 ## 1. 目标
 
@@ -19,8 +19,8 @@ RP67 完整基线为：
 |---|---|---|---|
 | RP67 full | 已有 | 无 | 主 `D` + 三路学习型 `D-DeepStack` |
 | RP66 / no image-axis | 已有，可复用 | 去掉 image-axis CE | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP71 / no MatrixCE | CPU 预检通过，待启动 | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP72 / no DeepStack | CPU 预检通过，待启动 | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
+| RP71 / no MatrixCE | **运行中，Step 10 已验收** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP72 / no DeepStack | **运行中，Step 10 已验收** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
 
 RP71 仍计算 raw MatrixCE 供诊断，但 weighted MatrixCE 严格为零，不进入总损失和梯度。
 RP72 是结构/训练联合消融；它回答“学习型 DeepStack 分支是否必要”，不能与“仅在推理时
@@ -56,11 +56,27 @@ checkpoint 训练期间并行补。
 
 | Arm | GPU | 预计训练时间 | 产物目录 |
 |---|---:|---:|---|
-| RP71 no MatrixCE | 0,1 | 约 8–10 h | `artifacts/representation/RP-71-qwen3-instruct-rp67-ablation-no-matrixce-2000-gpu01/` |
-| RP72 no DeepStack | 2,3 | 约 8–10 h | `artifacts/representation/RP-72-qwen3-instruct-rp67-ablation-no-deepstack-2000-gpu23/` |
+| RP71 no MatrixCE | 0,1 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-71-qwen3-instruct-rp67-ablation-no-matrixce-2000-gpu01/` |
+| RP72 no DeepStack | 2,3 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-72-qwen3-instruct-rp67-ablation-no-deepstack-2000-gpu23/` |
 
 GPU 4–7 暂不占用，留给 checkpoint 评测和 cheap controls。两臂应并行启动；先确认
 step 1 完成、loss/gradient 有限且参数所有权检查通过，再把状态更新为正式运行中。
+
+### 5.1 启动验收
+
+两臂于 `2026-08-26 21:38:50 JST` 并行启动。immutable start event、data identity、
+split-overlap identity 与 run identity 均已落盘。`21:41 JST` 两臂都完成首个持久化
+Step-10 metric，未出现 traceback、OOM、非有限 loss 或参数所有权错误。
+
+| Arm | Step | raw MatrixCE | weighted MatrixCE | L_gen | Norm | weighted Norm | image-axis CE | Total | pre-clip grad norm | step wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| RP71 no MatrixCE | 10 | 1.386686 | **0** | 5.035548 | 0.460832 | 0.046083 | 0.881284 | 5.962914 | 2.800789 | 8.004 s |
+| RP72 no DeepStack | 10 | 1.384432 | 1.384432 | 4.910587 | 0.818586 | 0.081859 | 0.870416 | 7.247293 | 0.854934 | 7.544 s |
+
+RP71 的 total 精确等于 `L_gen + 0.1 Norm + image-axis CE`，验证 raw MatrixCE 没有
+进入优化目标。RP72 的 Adapter 参数面已由 `main_d_only` 配置内容绑定。当前 GPU 0–3
+持续工作，GPU 4–7 空闲。训练主体按当前速度约 4.5 小时；最终 validation、checkpoint
+导出和 post-training internal eval 需要额外时间。
 
 ## 6. 结果表（待填）
 
