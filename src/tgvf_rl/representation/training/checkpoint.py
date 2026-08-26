@@ -580,9 +580,9 @@ class RepresentationAdapterContractIdentity:
             attention_dim=adapter.attn_dim,
             spatial_merge_size=adapter.spatial_merge_size,
             deepstack_branch_layers=tuple(adapter.d_deepstack_branch_layers),
-            main_projection_identity=adapter.main_projection.identity,
-            deepstack_projection_identities=tuple(
-                port.identity for port in adapter.d_deepstack_projections.projections
+            main_projection_identity=adapter.main_output_projection_identity,
+            deepstack_projection_identities=(
+                adapter.deepstack_output_projection_identities
             ),
         )
 
@@ -645,9 +645,9 @@ class RepresentationAdapterContractIdentityV2(RepresentationAdapterContractIdent
             attention_dim=adapter.attn_dim,
             spatial_merge_size=adapter.spatial_merge_size,
             deepstack_branch_layers=tuple(adapter.d_deepstack_branch_layers),
-            main_projection_identity=adapter.main_projection.identity,
-            deepstack_projection_identities=tuple(
-                port.identity for port in adapter.d_deepstack_projections.projections
+            main_projection_identity=adapter.main_output_projection_identity,
+            deepstack_projection_identities=(
+                adapter.deepstack_output_projection_identities
             ),
             variant=adapter.variant.value,
         )

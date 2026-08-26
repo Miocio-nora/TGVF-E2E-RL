@@ -47,6 +47,22 @@ def _adapter(
     )
 
 
+def _post_merger_adapter() -> TGVFAdapter:
+    torch.manual_seed(11)
+    return TGVFAdapter(
+        d_lm=6,
+        d_v=6,
+        attn_dim=5,
+        main_projection=_projection("main-merger"),
+        deepstack_projections=tuple(
+            _projection(identity)
+            for identity in ("merger-8", "merger-16", "merger-24")
+        ),
+        branch_layers=(8, 16, 24),
+        variant=TGVFAdapterVariant.FULL_D_DEEPSTACK_POST_MERGER,
+    )
+
+
 def test_adapter_produces_main_and_required_independent_deepstack_branches() -> None:
     adapter = _adapter()
     target = torch.randn(3, 6, requires_grad=True)
@@ -391,3 +407,115 @@ def test_vision_routing_cannot_encode_target_when_visual_tokens_are_indistinguis
         strict=True,
     ):
         torch.testing.assert_close(first_branch, second_branch)
+
+
+def test_unidirectional_variant_has_only_target_to_visual_active_payload_edge() -> None:
+    adapter = _adapter(
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_UNIDIRECTIONAL_TARGET_TO_VISUAL
+    )
+    target = torch.randn(3, 6)
+    visual = torch.randn(8, 4)
+    branches = tuple(torch.randn(8, 4) for _ in range(3))
+
+    first = adapter(
+        target_hidden_states=target,
+        pre_merge_visual_tokens=visual,
+        deepstack_pre_merge_visual_tokens=branches,
+    )
+    with torch.no_grad():
+        adapter.target_q_proj.weight.add_(17.0)
+        adapter.target_q_proj.bias.add_(17.0)
+        adapter.visual_k_proj.weight.sub_(13.0)
+        adapter.visual_v_proj.bias.add_(11.0)
+        adapter.enriched_target_norm.weight.mul_(3.0)
+    second = adapter(
+        target_hidden_states=target,
+        pre_merge_visual_tokens=visual,
+        deepstack_pre_merge_visual_tokens=branches,
+    )
+
+    assert adapter.unidirectional_target_to_visual
+    assert all(
+        branch.unidirectional_target_to_visual
+        for branch in adapter.d_deepstack_branch_adapters.values()
+    )
+    assert not torch.equal(
+        first.main_attention.target_to_visual_attention,
+        second.main_attention.target_to_visual_attention,
+    )
+    torch.testing.assert_close(first.main_d, second.main_d)
+
+
+def test_unidirectional_parameter_matched_diagnostic_leaves_receive_zero_gradients() -> (
+    None
+):
+    adapter = _adapter(
+        TGVFAdapterVariant.FULL_D_DEEPSTACK_UNIDIRECTIONAL_TARGET_TO_VISUAL
+    )
+    output = adapter(
+        target_hidden_states=torch.randn(3, 6),
+        pre_merge_visual_tokens=torch.randn(8, 4),
+        deepstack_pre_merge_visual_tokens=tuple(
+            torch.randn(8, 4) for _ in range(3)
+        ),
+    )
+
+    (output.main_d.sum() + sum(output.deepstack_visual_embeds).sum()).backward()
+
+    owned = adapter.artifact_state_dict(keep_vars=True)
+    assert len(owned) == 104
+    assert all(parameter.grad is not None for parameter in owned.values())
+    assert torch.count_nonzero(adapter.target_q_proj.weight.grad).item() == 0
+    assert torch.count_nonzero(adapter.visual_k_proj.weight.grad).item() == 0
+    assert torch.count_nonzero(adapter.visual_v_proj.weight.grad).item() == 0
+    assert torch.count_nonzero(adapter.enriched_target_norm.weight.grad).item() == 0
+    assert torch.count_nonzero(adapter.target_v_proj.weight.grad).item() > 0
+
+
+def test_post_merger_variant_operates_in_merged_width_without_reprojecting() -> None:
+    adapter = _post_merger_adapter()
+    target = torch.randn(3, 6, requires_grad=True)
+    main_merged = torch.randn(2, 6, requires_grad=True)
+    branch_merged = tuple(torch.randn(2, 6, requires_grad=True) for _ in range(3))
+    projection_calls: list[str] = []
+    handles = [
+        port.projection.register_forward_hook(
+            lambda _module, _inputs, _output, identity=port.identity: (
+                projection_calls.append(identity)
+            )
+        )
+        for port in (
+            adapter.main_projection,
+            *adapter.d_deepstack_projections.projections,
+        )
+    ]
+    try:
+        output = adapter(
+            target_hidden_states=target,
+            pre_merge_visual_tokens=main_merged,
+            deepstack_pre_merge_visual_tokens=branch_merged,
+        )
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    assert projection_calls == []
+    assert adapter.d_v == adapter.d_lm == 6
+    assert adapter.spatial_merge_size == 1
+    assert output.main_d.shape == (2, 6)
+    assert all(branch.shape == (2, 6) for branch in output.deepstack_visual_embeds)
+    torch.testing.assert_close(
+        output.main_d, output.main_attention.conditioned_visual_tokens
+    )
+    assert output.metadata.main_projection_identity.endswith(
+        "::post-merger-identity-writeback"
+    )
+    assert all(
+        identity.endswith("::post-merger-identity-writeback")
+        for identity in output.metadata.deepstack_projection_identities
+    )
+
+    (output.main_d.sum() + sum(output.deepstack_visual_embeds).sum()).backward()
+    assert target.grad is not None
+    assert main_merged.grad is not None
+    assert all(branch.grad is not None for branch in branch_merged)

@@ -508,10 +508,17 @@ class Qwen3RepresentationRuntime:
             raise ValueError("vision model differs from the runtime binding")
         if vision.projection_identities != self.projection_identities:
             raise ValueError("vision merger identities differ from the runtime binding")
+        post_merger = self.adapter.variant.uses_post_merger_injection
         return TGVFAdapterInput.from_conditioning(
             condition,
-            pre_merge_visual_tokens=vision.pre_merge_main,
-            deepstack_pre_merge_visual_tokens=vision.pre_merge_deepstack,
+            pre_merge_visual_tokens=(
+                vision.merged_main if post_merger else vision.pre_merge_main
+            ),
+            deepstack_pre_merge_visual_tokens=(
+                vision.merged_deepstack
+                if post_merger
+                else vision.pre_merge_deepstack
+            ),
         )
 
 
@@ -791,11 +798,22 @@ def create_qwen3_representation_runtime(
         )
         for merger, identity in zip(mergers, projection_ids, strict=True)
     )
+    post_merger = adapter_variant.uses_post_merger_injection
+    adapter_visual_width = (
+        architecture.language_hidden_size
+        if post_merger
+        else architecture.vision_hidden_size
+    )
+    effective_attn_dim = (
+        architecture.vision_hidden_size
+        if post_merger and attn_dim is None
+        else attn_dim
+    )
     with torch.device(weight.device):
         adapter = TGVFAdapter(
             d_lm=architecture.language_hidden_size,
-            d_v=architecture.vision_hidden_size,
-            attn_dim=attn_dim,
+            d_v=adapter_visual_width,
+            attn_dim=effective_attn_dim,
             main_projection=ports[0],
             deepstack_projections=DDeepStackProjectionPorts(
                 branch_layers=architecture.branch_layers,

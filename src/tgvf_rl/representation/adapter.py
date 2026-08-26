@@ -39,12 +39,20 @@ class TGVFAdapterVariant(str, Enum):
     architecture.  ``FULL_D_DEEPSTACK_VISION_ROUTING`` retains the same main-D,
     D-DeepStack, parameter, and compute surfaces while restricting target state
     to attention routing: the second attention's values come from the first
-    attention's visual context rather than enriched target state.
+    attention's visual context rather than enriched target state.  The named
+    unidirectional variant retains the historical parameter surface but allows
+    only target values to enter visual outputs.  The post-merger variant moves
+    all four interactions and identity writebacks to Qwen's merged LM-width
+    visual-token space.
     ``MAIN_D_ONLY`` remains the historical output ablation.
     """
 
     FULL_D_DEEPSTACK = "full_d_deepstack"
     FULL_D_DEEPSTACK_VISION_ROUTING = "full_d_deepstack_vision_routing"
+    FULL_D_DEEPSTACK_UNIDIRECTIONAL_TARGET_TO_VISUAL = (
+        "full_d_deepstack_unidirectional_target_to_visual"
+    )
+    FULL_D_DEEPSTACK_POST_MERGER = "full_d_deepstack_post_merger"
     MAIN_D_ONLY = "main_d_only"
 
     @property
@@ -54,6 +62,16 @@ class TGVFAdapterVariant(str, Enum):
     @property
     def uses_vision_routing_only(self) -> bool:
         return self is TGVFAdapterVariant.FULL_D_DEEPSTACK_VISION_ROUTING
+
+    @property
+    def uses_unidirectional_target_to_visual(self) -> bool:
+        return self is (
+            TGVFAdapterVariant.FULL_D_DEEPSTACK_UNIDIRECTIONAL_TARGET_TO_VISUAL
+        )
+
+    @property
+    def uses_post_merger_injection(self) -> bool:
+        return self is TGVFAdapterVariant.FULL_D_DEEPSTACK_POST_MERGER
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +158,9 @@ class TGVFBidirectionalAttention(nn.Module):
     The default path is the pinned historical bidirectional target-value
     implementation.  The opt-in routing-only path lets target state affect
     attention weights while sourcing every second-stage value from visual
-    context.  Both variants deliberately own the exact same parameter set.
+    context.  The unidirectional path uses direct target-to-visual retrieval
+    and retains the reverse branch only as a zero-impact parameter-matching
+    diagnostic.  All interaction-flow variants own the same parameter set.
     """
 
     def __init__(
@@ -150,6 +170,7 @@ class TGVFBidirectionalAttention(nn.Module):
         d_v: int,
         attn_dim: int | None = None,
         vision_routing_only: bool = False,
+        unidirectional_target_to_visual: bool = False,
     ) -> None:
         super().__init__()
         if d_lm <= 0 or d_v <= 0:
@@ -161,7 +182,14 @@ class TGVFBidirectionalAttention(nn.Module):
         self.attn_dim = self.d_v if attn_dim is None else int(attn_dim)
         if not isinstance(vision_routing_only, bool):
             raise TypeError("vision_routing_only must be a bool")
+        if not isinstance(unidirectional_target_to_visual, bool):
+            raise TypeError("unidirectional_target_to_visual must be a bool")
+        if vision_routing_only and unidirectional_target_to_visual:
+            raise ValueError(
+                "vision-routing-only and unidirectional interaction are exclusive"
+            )
         self.vision_routing_only = vision_routing_only
+        self.unidirectional_target_to_visual = unidirectional_target_to_visual
 
         self.target_norm = nn.LayerNorm(self.d_lm)
         self.target_proj = nn.Linear(self.d_lm, self.attn_dim)
@@ -235,17 +263,34 @@ class TGVFBidirectionalAttention(nn.Module):
             self.visual_v_proj(visual_projected),
         )
         enriched_target = self.enriched_target_norm(target_tokens + target_context)
-        # Routing-only preserves target-derived keys but removes target state
-        # from the value/payload edge. ``target_context`` is a weighted sum of
-        # projected visual values; target state can change only those weights.
-        second_stage_value_source = (
-            target_context if self.vision_routing_only else enriched_target
-        )
-        visual_context, visual_to_target = _cross_attention(
-            self.visual_q_proj(visual_projected),
-            self.target_k_proj(enriched_target),
-            self.target_v_proj(second_stage_value_source),
-        )
+        if self.unidirectional_target_to_visual:
+            # The only active information edge is target -> visual: visual
+            # queries retrieve target keys/values directly.  The historical
+            # visual -> enriched-target stage above is retained solely as a
+            # zero-impact diagnostic/parameter-matching branch.  Multiplying
+            # its summary by zero keeps every historical leaf in the autograd
+            # inventory without allowing that branch to change the output.
+            visual_context, visual_to_target = _cross_attention(
+                self.visual_q_proj(visual_projected),
+                self.target_k_proj(target_tokens),
+                self.target_v_proj(target_tokens),
+            )
+            inactive_bidirectional_anchor = enriched_target.mean(
+                dim=-2, keepdim=True
+            )
+            visual_context = visual_context + inactive_bidirectional_anchor * 0.0
+        else:
+            # Routing-only preserves target-derived keys but removes target state
+            # from the value/payload edge. ``target_context`` is a weighted sum of
+            # projected visual values; target state can change only those weights.
+            second_stage_value_source = (
+                target_context if self.vision_routing_only else enriched_target
+            )
+            visual_context, visual_to_target = _cross_attention(
+                self.visual_q_proj(visual_projected),
+                self.target_k_proj(enriched_target),
+                self.target_v_proj(second_stage_value_source),
+            )
         delta = self.context_to_delta(visual_context)
         gate = torch.sigmoid(
             self.gate_proj(torch.cat((visual_tokens, visual_context), dim=-1))
@@ -366,6 +411,9 @@ class TGVFAdapter(TGVFBidirectionalAttention):
             d_v=d_v,
             attn_dim=attn_dim,
             vision_routing_only=variant.uses_vision_routing_only,
+            unidirectional_target_to_visual=(
+                variant.uses_unidirectional_target_to_visual
+            ),
         )
         if not isinstance(main_projection, FrozenProjectionPort):
             raise TypeError("main_projection must be a FrozenProjectionPort")
@@ -383,13 +431,26 @@ class TGVFAdapter(TGVFBidirectionalAttention):
                 branch_layers=branch_layers, projections=deepstack_projections
             )
         expected_signature = (self.d_v, self.d_lm)
-        if (
+        if variant.uses_post_merger_injection:
+            if main_projection.output_dim != self.d_lm:
+                raise ValueError(
+                    "post-merger ownership port must output the language width"
+                )
+        elif (
             main_projection.input_dim,
             main_projection.output_dim,
         ) != expected_signature:
             raise ValueError("main projection dimensions differ from TGVF dimensions")
         for port in projection_ports.projections:
-            if (port.input_dim, port.output_dim) != expected_signature:
+            if variant.uses_post_merger_injection:
+                if (port.input_dim, port.output_dim) != (
+                    main_projection.input_dim,
+                    main_projection.output_dim,
+                ):
+                    raise ValueError(
+                        "post-merger ownership ports must share one Qwen signature"
+                    )
+            elif (port.input_dim, port.output_dim) != expected_signature:
                 raise ValueError(
                     "D-DeepStack projection dimensions differ from TGVF dimensions"
                 )
@@ -405,7 +466,11 @@ class TGVFAdapter(TGVFBidirectionalAttention):
         if len({port.identity for port in all_ports}) != len(all_ports):
             raise ValueError("all frozen projection identities must be unique")
 
-        self.spatial_merge_size = main_projection.spatial_merge_size
+        self.spatial_merge_size = (
+            1
+            if variant.uses_post_merger_injection
+            else main_projection.spatial_merge_size
+        )
         self.main_projection = main_projection
         self.d_deepstack_projections = projection_ports
         self.d_deepstack_branch_layers = projection_ports.branch_layers
@@ -417,6 +482,9 @@ class TGVFAdapter(TGVFBidirectionalAttention):
                     d_v=self.d_v,
                     attn_dim=self.attn_dim,
                     vision_routing_only=variant.uses_vision_routing_only,
+                    unidirectional_target_to_visual=(
+                        variant.uses_unidirectional_target_to_visual
+                    ),
                 )
                 for layer in (
                     self.d_deepstack_branch_layers
@@ -425,6 +493,24 @@ class TGVFAdapter(TGVFBidirectionalAttention):
                 )
             }
         )
+
+    @property
+    def main_output_projection_identity(self) -> str:
+        if self.variant.uses_post_merger_injection:
+            return f"{self.main_projection.identity}::post-merger-identity-writeback"
+        return self.main_projection.identity
+
+    @property
+    def deepstack_output_projection_identities(self) -> tuple[str, ...]:
+        identities = tuple(
+            port.identity for port in self.d_deepstack_projections.projections
+        )
+        if self.variant.uses_post_merger_injection:
+            return tuple(
+                f"{identity}::post-merger-identity-writeback"
+                for identity in identities
+            )
+        return identities
 
     def artifact_state_dict(
         self, *, keep_vars: bool = False
@@ -561,9 +647,23 @@ class TGVFAdapter(TGVFBidirectionalAttention):
         conditioned_branches = tuple(
             output.conditioned_visual_tokens for output in branch_attention
         )
-        main_d = self.main_projection(main_attention.conditioned_visual_tokens)
+        main_d = (
+            main_attention.conditioned_visual_tokens
+            if self.variant.uses_post_merger_injection
+            else self.main_projection(main_attention.conditioned_visual_tokens)
+        )
         if self.variant.has_learned_deepstack:
-            d_deepstack = self.d_deepstack_projections(conditioned_branches)
+            d_deepstack = (
+                DDeepStackPayload(
+                    branch_layers=self.d_deepstack_branch_layers,
+                    branches=conditioned_branches,
+                    projection_identities=(
+                        self.deepstack_output_projection_identities
+                    ),
+                )
+                if self.variant.uses_post_merger_injection
+                else self.d_deepstack_projections(conditioned_branches)
+            )
             metadata_projection_identities = d_deepstack.projection_identities
         else:
             d_deepstack = DDeepStackPayload(
@@ -589,7 +689,7 @@ class TGVFAdapter(TGVFBidirectionalAttention):
             deepstack_attention=branch_attention,
             metadata=TGVFAdapterMetadata(
                 branch_layers=self.d_deepstack_branch_layers,
-                main_projection_identity=self.main_projection.identity,
+                main_projection_identity=self.main_output_projection_identity,
                 deepstack_projection_identities=metadata_projection_identities,
                 batched=batched,
                 batch_size=batch_size,

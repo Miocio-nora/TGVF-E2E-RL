@@ -273,6 +273,46 @@ def test_factory_builds_isolated_full_vision_routing_variant() -> None:
     assert len(runtime.adapter.artifact_state_dict()) == 104
 
 
+def test_factory_post_merger_variant_binds_merged_feature_space() -> None:
+    identity = _identity()
+    model = _TinyQwen3(name_or_path=identity.revision_or_path)
+    runtime = create_qwen3_representation_runtime(
+        model=model,
+        processor=_processor(),
+        model_identity=identity,
+        conditioning_config=_context_config(),
+        adapter_dtype=torch.float32,
+        adapter_variant=TGVFAdapterVariant.FULL_D_DEEPSTACK_POST_MERGER,
+        fixture_mode=True,
+    )
+    condition = runtime.build_target_condition(
+        _target_request(identity),
+        contextual_hidden_states=Qwen3ContextualHiddenStateStack(
+            (torch.randn(4, 6), torch.randn(4, 6))
+        ),
+    )
+    vision = runtime.extract_vision_features(_vision_request())
+    adapter_input = runtime.make_adapter_input(condition, vision)
+    output = runtime.adapter(adapter_input)
+
+    assert runtime.adapter.d_v == 6
+    # Production defaults keep the historical 1152-dimensional attention
+    # bottleneck; tiny fixtures analogously retain their vision width.
+    assert runtime.adapter.attn_dim == 4
+    assert adapter_input.pre_merge_visual_tokens is vision.merged_main
+    assert all(
+        actual is expected
+        for actual, expected in zip(
+            adapter_input.deepstack_pre_merge_visual_tokens,
+            vision.merged_deepstack,
+            strict=True,
+        )
+    )
+    assert output.main_d.shape == vision.merged_main.shape
+    assert output.metadata.pre_merge_visual_token_count == 1
+    assert output.metadata.d_token_count == 1
+
+
 def test_patch_embed_linear_fast_path_preserves_state_and_parameter_identity() -> None:
     torch.manual_seed(803)
     vision = _ProductionGeometryVisionShell().eval()

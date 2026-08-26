@@ -126,6 +126,45 @@ def test_vision_routing_contract_is_isolated_from_historical_rp66() -> None:
         contract.assert_matches(_adapter(3))
 
 
+def test_unidirectional_contract_is_isolated_from_bidirectional_adapter() -> None:
+    one_way = _adapter(
+        3, TGVFAdapterVariant.FULL_D_DEEPSTACK_UNIDIRECTIONAL_TARGET_TO_VISUAL
+    )
+    contract = representation_adapter_contract_identity(one_way)
+
+    assert isinstance(contract, RepresentationAdapterContractIdentityV2)
+    assert contract.variant == "full_d_deepstack_unidirectional_target_to_visual"
+    contract.assert_matches(one_way)
+    with pytest.raises(IdentityMismatchError, match="variant"):
+        contract.assert_matches(_adapter(3))
+
+
+def test_post_merger_contract_binds_width_merge_size_and_identity_writeback() -> None:
+    torch.manual_seed(3)
+    post = TGVFAdapter(
+        d_lm=6,
+        d_v=6,
+        attn_dim=4,
+        main_projection=_projection("qwen-main-merger@model-revision"),
+        deepstack_projections=tuple(
+            _projection(f"qwen-merger-{layer}@model-revision")
+            for layer in (8, 16, 24)
+        ),
+        branch_layers=(8, 16, 24),
+        variant=TGVFAdapterVariant.FULL_D_DEEPSTACK_POST_MERGER,
+    )
+    contract = representation_adapter_contract_identity(post)
+
+    assert isinstance(contract, RepresentationAdapterContractIdentityV2)
+    assert contract.variant == "full_d_deepstack_post_merger"
+    assert contract.d_v == 6
+    assert contract.spatial_merge_size == 1
+    assert contract.main_projection_identity.endswith(
+        "::post-merger-identity-writeback"
+    )
+    contract.assert_matches(post)
+
+
 def _run_identity(
     adapter: TGVFAdapter,
     *,

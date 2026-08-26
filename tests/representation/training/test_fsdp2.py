@@ -120,6 +120,21 @@ def test_vision_routing_plan_covers_only_routing_and_visual_value_leaves() -> No
     assert len(plan.borrowed_buffer_names) == 4
 
 
+def test_unidirectional_plan_is_parameter_matched_to_bidirectional_plan() -> None:
+    qwen, adapter = _owned_pair(
+        variant=(
+            TGVFAdapterVariant.FULL_D_DEEPSTACK_UNIDIRECTIONAL_TARGET_TO_VISUAL
+        )
+    )
+    plan = build_representation_fsdp2_plan(adapter, qwen)
+    historical_qwen, historical = _owned_pair()
+    historical_plan = build_representation_fsdp2_plan(historical, historical_qwen)
+
+    assert len(plan.owned_group_module_names) == 52
+    assert plan.owned_parameter_numel == historical_plan.owned_parameter_numel
+    assert plan.borrowed_parameter_numel == historical_plan.borrowed_parameter_numel
+
+
 def test_plan_rejects_wrong_qwen_owner_and_parameter_freeze_drift() -> None:
     qwen, adapter = _owned_pair()
     other_qwen, _ = _owned_pair()
