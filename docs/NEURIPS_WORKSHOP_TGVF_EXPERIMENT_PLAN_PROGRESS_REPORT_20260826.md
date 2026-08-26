@@ -874,6 +874,9 @@ Vision Dominant `50.0`。
   marker 已落盘；Crop S80 score 随即自动启动，Qwen2.5-72B TP=2 judge 从所给
   GPU0–3 池中实际选择 GPU2–3 加载。同期 Atomic S16 保持 GPU4–7 推理并持续写入。无失败
   marker；Crop/TGVF 的 `@512` 分数仍须等待各自 accepted summary，不能从未完成评分外推。
+- 2026-08-26 19:01 JST Crop S80 `@512` 正式闭合节点：七个 slice accepted summary 为
+  `status=pass`，Macro* `61.5591`，比自身 matched@1M 的 `62.2288` 低 `0.6697 pp`。
+  `crop-s80-complete` marker 已落盘并自动触发 TGVF S64 score；同期 Atomic S16 推理继续清尾。
 
 ### 5.5 三个工具方法的 matched@512 分辨率控制
 
@@ -883,14 +886,27 @@ Vision Dominant `50.0`。
 
 | Arm | Frozen checkpoint | 保持不变 | 唯一改动 | 状态 |
 |---|---|---|---|---|
-| Crop | S80 | native Crop prompt、tool schema、agent loop、temperature 1、seed42、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 运行中 |
-| TGVF | S64 | matched TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 已排队 |
-| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 已排队 |
+| Crop | S80 | native Crop prompt、tool schema、agent loop、temperature 1、seed42、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
+| TGVF | S64 | matched TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 推理完成，评分中 |
+| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | 推理中 |
 
-三个 arm 顺序运行以避免共享 GPU 和 judge 资源竞争。每臂必须完成 2,240 个支持的单图 trajectory、
+三个 arm 的推理按两组 GPU 流水并行，72B judge 评分按 arm 串行以避免同一输出根并发写入。每臂必须完成 2,240 个支持的单图 trajectory、
 271 个显式 fail-closed 多图条目、七个官方 slice、Macro*、完整 sub-benchmark 以及逐 set 工具调用
 统计。结果只能与同方法 matched@1M 行形成分辨率消融；跨方法结论仍需同时报告 Original 和
 No-Tool RL，且不得把 `@512` 评测回退解释为训练像素设置的因果最优性。
+
+当前正式结果：
+
+| Arm / pixel cap | Macro* | Δ vs own matched@1M | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Crop S80 / 1,003,520 | 62.2288 | reference | 81.6754 | 74.5000 | 58.8889 | 55.3358 | 46.4684 | 67.3333 | 51.4000 |
+| Crop S80 / 262,144 | **61.5591** | **−0.6697** | 75.3927 | 75.0000 | 63.3333 | 53.1455 | 49.4424 | 63.0000 | 51.6000 |
+
+Crop 的分辨率回退不是逐项一致下降：VStar 和 MathVista 分别下降 `6.2827 / 4.3333 pp`，OCR
+mean 下降 `2.1903 pp`；但 BLINK-180、MMMU-269 和 HR 分别上升 `4.4444 / 2.9740 /
+0.5000 pp`。因此当前只支持小幅 Macro* 敏感性，不能把单次 deterministic eval 的各分项波动
+都解释为像素预算因果效应。Crop@512 比 Original raw-direct@512 高 `6.2035 pp`，但该差值仍
+跨 prompt/agent 协议，只能作为同像素端到端观察。
 
 ## 6. Atomic 纳入正文的决策门槛
 
