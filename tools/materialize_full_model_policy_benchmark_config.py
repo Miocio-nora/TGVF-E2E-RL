@@ -15,6 +15,10 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from tgvf_rl.evaluation.policy_benchmark_config import (  # noqa: E402
     materialize_full_model_policy_benchmark_config,
 )
+from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
+    DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+    TRAINING_RUN_EVALUATION_PROTOCOL,
+)
 
 
 def main() -> int:
@@ -38,6 +42,14 @@ def main() -> int:
         default=False,
     )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    parser.add_argument(
+        "--evaluation-protocol",
+        choices=(
+            DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+            TRAINING_RUN_EVALUATION_PROTOCOL,
+        ),
+        default=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+    )
     parser.add_argument(
         "--gpu-ids",
         type=int,
@@ -64,6 +76,7 @@ def main() -> int:
         enable_chunked_prefill=args.enable_chunked_prefill,
         gpu_memory_utilization=args.gpu_memory_utilization,
         gpu_ids=tuple(args.gpu_ids),
+        evaluation_protocol=args.evaluation_protocol,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

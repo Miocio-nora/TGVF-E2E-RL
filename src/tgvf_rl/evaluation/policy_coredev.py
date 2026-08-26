@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import csv
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import fcntl
 import hashlib
 import io
@@ -61,6 +61,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _RemoteCropVisualMaterializer,
     _RemoteTGVFFocusToolRuntime,
     _VisualTokenCountResolver,
+    _DisabledNoToolRuntime,
     _artifact_identity,
     _initial_vllm_inputs,
     _source_visual_positions,
@@ -97,9 +98,15 @@ from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
+)
+from tgvf_rl.policy.no_tool_rl_protocol import (
+    NO_TOOL_RL_PROMPT_IDENTITY,
+    NO_TOOL_RL_PROMPT_VERSION,
+    build_no_tool_visual_messages,
 )
 from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
     CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
@@ -212,6 +219,14 @@ def _matched_prompt_materializer_identity(
         builder = "build_crop_tgvf_visual_messages"
         prompt_version = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
         prompt_sha256 = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+    elif run.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+        if run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL:
+            raise ValueError("matched no-tool run has a non-empty tool profile")
+        if run.protocol.enabled_tool_names:
+            raise ValueError("matched no-tool run exposes tool names")
+        builder = "build_no_tool_visual_messages"
+        prompt_version = NO_TOOL_RL_PROMPT_VERSION
+        prompt_sha256 = NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256
     else:
         # Existing generic native and official-visible evaluations retain their
         # historical rendering and identity bytes.
@@ -257,11 +272,12 @@ def _render_training_run_visual_prompt(
         renderer.assert_generation_prefill(rendered, renderer.tokenizer)
         return rendered.text, rendered.token_ids
 
-    messages = (
-        build_crop_tgvf_visual_messages(question)
-        if run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA
-        else build_tgvf_visual_messages(question)
-    )
+    if run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+        messages = build_crop_tgvf_visual_messages(question)
+    elif run.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+        messages = build_no_tool_visual_messages(question)
+    else:
+        messages = build_tgvf_visual_messages(question)
     renderer.assert_tokenizer_length()
     renderer.assert_chat_template_identity()
     renderer.assert_tool_schema_identity()
@@ -343,18 +359,23 @@ def validate_policy_benchmark_runtime_interfaces(
     renderer = _success_environment_text_renderer(run)
     profile = run.protocol.tool_profile
     manager_method = {
+        NativeToolCapabilityProfile.NO_TOOL: None,
         NativeToolCapabilityProfile.TGVF_ONLY: "materialize_focus",
         NativeToolCapabilityProfile.CROP_ONLY: "materialize_crop",
         NativeToolCapabilityProfile.CROP_TGVF: "materialize_crop_tgvf",
     }.get(profile)
-    if manager_method is None:
+    if profile is not NativeToolCapabilityProfile.NO_TOOL and manager_method is None:
         raise ValueError("policy benchmark has an unsupported tool profile")
-    if not callable(getattr(StandaloneTGVFVLLMManager, manager_method, None)):
+    if manager_method is not None and not callable(
+        getattr(StandaloneTGVFVLLMManager, manager_method, None)
+    ):
         raise TypeError(f"standalone evaluator lacks {manager_method}()")
 
     event_loop = asyncio.new_event_loop()
     try:
-        if profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        if profile is NativeToolCapabilityProfile.NO_TOOL:
+            runtime = _DisabledNoToolRuntime()
+        elif profile is NativeToolCapabilityProfile.TGVF_ONLY:
             runtime = _build_remote_tgvf_focus_tool_runtime(
                 event_loop=event_loop,
                 server_client=object(),
@@ -629,10 +650,13 @@ class PolicyCoreDevConfig:
                 )
             if (
                 self.evaluation_protocol
-                != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                not in {
+                    DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+                    TRAINING_RUN_EVALUATION_PROTOCOL,
+                }
             ):
                 raise ValueError(
-                    "full-model snapshots are supported only by official-visible evaluation"
+                    "full-model snapshots require official-visible or training-run evaluation"
                 )
             if any(value is not None for value in paired_binding):
                 raise ValueError("full-model snapshot backend forbids paired bindings")
@@ -866,6 +890,29 @@ def _load_full_model_from_paths(
         manifest_path, receipt_path, runtime_lightweight=True
     )
     _assert_policy_snapshot_binding(config, snapshot, owner="full-model snapshot")
+    if config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
+        if snapshot.manifest.checkpoint_owner is None:
+            raise ValueError(
+                "training-run full-model evaluation requires a checkpoint owner"
+            )
+        run = load_policy_e2e_smoke_run_config(
+            config.policy_config_path, allow_external_agent_loop_config=True
+        )
+        if (
+            run.schema_version
+            != POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+            or run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL
+            or run.protocol.enabled_tool_names
+        ):
+            raise ValueError(
+                "training-run full-model evaluation is restricted to matched no-tool runs"
+            )
+        if (
+            run.run_id != snapshot.policy_version.run_id
+            or run.identity_sha256 != snapshot.run_identity_sha256
+        ):
+            raise ValueError("full-model checkpoint owner run identity differs")
+        snapshot = replace(snapshot, run=run)
     return snapshot
 
 
@@ -1909,10 +1956,15 @@ def _evaluation_protocol_identity(
 ) -> dict[str, object]:
     if config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
         if not isinstance(
-            snapshot, (PolicyEvaluationSnapshot, PairedTGVFEvaluationSnapshot)
+            snapshot,
+            (
+                PolicyEvaluationSnapshot,
+                PairedTGVFEvaluationSnapshot,
+                FullModelEvaluationSnapshot,
+            ),
         ):
             raise ValueError(
-                "training-run evaluation requires a LoRA or paired TGVF snapshot"
+                "training-run evaluation requires a bound policy snapshot"
             )
         protocol = snapshot.run.protocol
         return {
@@ -1922,7 +1974,7 @@ def _evaluation_protocol_identity(
             "tool_profile": protocol.tool_profile.value,
             "enabled_tool_names": list(protocol.enabled_tool_names),
             "maximum_tool_calls": protocol.maximum_tool_calls,
-            "native_pixels": False,
+            "native_pixels": isinstance(snapshot, FullModelEvaluationSnapshot),
         }
     if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
         raise ValueError("unsupported policy evaluation protocol")
@@ -2091,6 +2143,10 @@ def policy_evaluation_identity(
     if (
         config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
         or isinstance(snapshot, PairedTGVFEvaluationSnapshot)
+        or (
+            isinstance(snapshot, FullModelEvaluationSnapshot)
+            and config.evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL
+        )
     ):
         content["protocol"] = _evaluation_protocol_identity(config, snapshot)
     paired_rng = _paired_evaluation_rng_contract(
@@ -2624,6 +2680,18 @@ def _decoding_contract() -> VLLMOutputDecodingContract:
 
 def _termination_contract(run: PolicyE2ESmokeRunConfig) -> VLLMTurnTerminationContract:
     sampling = run.policy.sampling
+    if run.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+        return VLLMTurnTerminationContract(
+            required_request_stop_strings=tuple(sampling.stop_strings or ()),
+            required_request_stop_token_ids=tuple(sampling.stop_token_ids or ()),
+            include_stop_str_in_output=bool(sampling.include_stop_str_in_output),
+            tool_call_terminal_suffixes=(),
+            tool_call_outcomes=(),
+            final_turn_outcomes=qwen3_vl_final_turn_outcomes(
+                tuple(sampling.stop_token_ids or ())
+            ),
+            tool_calls_enabled=False,
+        )
     return VLLMTurnTerminationContract(
         required_request_stop_strings=tuple(sampling.stop_strings or ()),
         required_request_stop_token_ids=tuple(sampling.stop_token_ids or ()),

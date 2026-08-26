@@ -43,6 +43,15 @@ from tgvf_rl.evaluation.policy_official_visible import (  # noqa: E402
     official_visible_trajectory_audit_payload,
     validate_official_visible_processor,
 )
+from tgvf_rl.evaluation.policy_no_tool_matched import (  # noqa: E402
+    NoToolMatchedPolicyEvaluator,
+)
+from tgvf_rl.evaluation.policy_full_model_snapshot import (  # noqa: E402
+    FullModelEvaluationSnapshot,
+)
+from tgvf_rl.policy.run_config import (  # noqa: E402
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -149,8 +158,24 @@ async def _worker(args: argparse.Namespace, config: PolicyCoreDevConfig) -> int:
             local_files_only=True,
             trust_remote_code=True,
         )
+        no_tool_full_model = (
+            isinstance(snapshot, FullModelEvaluationSnapshot)
+            and config.evaluation_protocol
+            != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+            and run.schema_version
+            == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+        )
         evaluator = (
-            OfficialVisiblePolicyEvaluator(
+            NoToolMatchedPolicyEvaluator(
+                config=config,
+                run=run,
+                manager=manager,
+                processor=processor,
+                snapshot=snapshot,
+                evaluation_identity=evaluation_identity,
+            )
+            if no_tool_full_model
+            else OfficialVisiblePolicyEvaluator(
                 config=config,
                 run=run,
                 manager=manager,

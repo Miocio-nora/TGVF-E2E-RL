@@ -32,6 +32,7 @@ from tgvf_rl.policy.deepeyes_native_contract import (
     DeepEyesNativeRunContract,
     load_deepeyes_native_run_contract,
 )
+from tgvf_rl.protocol import NativeToolCapabilityProfile
 
 
 FULL_MODEL_SNAPSHOT_SCHEMA = "tgvf-prl13-full-model-snapshot-v1"
@@ -1539,6 +1540,11 @@ def full_model_vllm_engine_kwargs(
         or not 0 < float(gpu_memory_utilization) < 1
     ):
         raise ValueError("gpu_memory_utilization must lie in (0,1)")
+    protocol = getattr(snapshot.run, "protocol", None)
+    no_tool = (
+        getattr(protocol, "tool_profile", None)
+        is NativeToolCapabilityProfile.NO_TOOL
+    )
     return {
         "model": str(snapshot.model_path),
         # A veRL checkpoint can carry an exported tokenizer whose metadata differs
@@ -1568,7 +1574,7 @@ def full_model_vllm_engine_kwargs(
         "mm_processor_cache_gb": 0,
         # Use the driver-portable vision path already accepted by the project.
         "mm_encoder_attn_backend": "TORCH_SDPA",
-        "limit_mm_per_prompt": {"image": 7, "video": 0},
+        "limit_mm_per_prompt": {"image": 1 if no_tool else 7, "video": 0},
     }
 
 

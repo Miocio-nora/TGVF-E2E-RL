@@ -16,11 +16,16 @@ from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
 )
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
     build_tgvf_visual_messages,
+)
+from tgvf_rl.policy.no_tool_rl_protocol import (
+    NO_TOOL_RL_PROMPT_IDENTITY,
+    build_no_tool_visual_messages,
 )
 from tgvf_rl.protocol import NativeAssistantDialect, NativeToolCapabilityProfile
 
@@ -79,6 +84,7 @@ class _Renderer:
 
 def _run(schema: str, profile: NativeToolCapabilityProfile) -> object:
     tool_name = {
+        NativeToolCapabilityProfile.NO_TOOL: None,
         NativeToolCapabilityProfile.TGVF_ONLY: "tgvf_focus_tool",
         NativeToolCapabilityProfile.CROP_ONLY: "image_zoom_in_tool",
         NativeToolCapabilityProfile.CROP_TGVF: "tgvf_crop_tool",
@@ -92,7 +98,7 @@ def _run(schema: str, profile: NativeToolCapabilityProfile) -> object:
         policy=SimpleNamespace(image_max_pixels=1_003_520),
         protocol=SimpleNamespace(
             tool_profile=profile,
-            enabled_tool_names=(tool_name,),
+            enabled_tool_names=() if tool_name is None else (tool_name,),
         ),
     )
 
@@ -115,6 +121,14 @@ def _run(schema: str, profile: NativeToolCapabilityProfile) -> object:
             ),
             build_crop_tgvf_visual_messages("question"),
             CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+        ),
+        (
+            _run(
+                POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+                NativeToolCapabilityProfile.NO_TOOL,
+            ),
+            build_no_tool_visual_messages("question"),
+            NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256,
         ),
     ),
 )
@@ -182,6 +196,24 @@ def test_official_visible_identity_does_not_admit_matched_materializer() -> None
         )
         is None
     )
+
+
+def test_no_tool_termination_disables_tool_boundary_interpretation() -> None:
+    run = _run(
+        POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+        NativeToolCapabilityProfile.NO_TOOL,
+    )
+    run.policy.sampling = SimpleNamespace(
+        stop_strings=(),
+        stop_token_ids=(151645,),
+        include_stop_str_in_output=True,
+    )
+
+    contract = implementation._termination_contract(run)
+
+    assert contract.tool_calls_enabled is False
+    assert contract.tool_call_outcomes == ()
+    assert contract.tool_call_terminal_suffixes == ()
 
 
 def test_prompt_materializer_is_outside_paired_rng_protocol_identity(

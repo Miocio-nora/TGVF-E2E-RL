@@ -172,8 +172,9 @@ def materialize_full_model_policy_benchmark_config(
     gpu_memory_utilization: float = 0.9,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
     paired_seed_namespace: str | None = None,
+    evaluation_protocol: str = DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
 ) -> dict[str, Any]:
-    """Bind an official-visible suite to one exact standalone full model.
+    """Bind one exact standalone full model to an admitted evaluation protocol.
 
     The manifest binds the source checkpoint and run contract; the receipt
     binds the directly loadable Hugging Face tree.  Both record files and the
@@ -237,7 +238,7 @@ def materialize_full_model_policy_benchmark_config(
         "max_num_batched_tokens": max_num_batched_tokens,
         "enable_chunked_prefill": enable_chunked_prefill,
         "gpu_memory_utilization": gpu_memory_utilization,
-        "evaluation_protocol": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+        "evaluation_protocol": evaluation_protocol,
         "task_manifest_path": str(task_manifest),
         "task_manifest_sha256": task_sha256,
         "expected_task_count": expected_task_count,
