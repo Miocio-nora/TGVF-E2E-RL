@@ -52,6 +52,11 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 `262,144 = 512²`，而 `1,003,520` 的等面积正方形边长约为 `1,002` pixels，后者的像素面积预算
 约为前者的 `3.83×`。
 
+训练侧也使用同一高像素预算。Crop、TGVF、Atomic 与 No-Tool 四条 PRL25 RL trainer 的实际日志
+均记录 `mm_processor_kwargs.max_pixels=1003520`，其冻结 matched evaluator 配置同样记录
+`image_max_pixels=1003520`。因此 1M 上限不是评测时临时提高，而是 PRL25 训练—matched 评测
+一致的视觉处理合同；Original 未经过这轮 RL，其历史 direct eval 使用 262,144。
+
 | 比较臂 | Prompt / agent contract | 最大图像像素面积 | 当前用途 |
 |---|---|---:|---|
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
