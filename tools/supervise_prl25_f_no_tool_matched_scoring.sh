@@ -275,16 +275,69 @@ score_all_steps() {
   (( failed == 0 )) || { echo "one or more CoreDev scoring slices failed"; return 1; }
 }
 
+all_scoring_receipts_present() {
+  local datasets=(VStarBench HRBench4K BLINK OCRBench_v2 MMMU_Pro_10c MathVista_MINI MathVerse_MINI)
+  local step dataset score_root
+  for step in 0 8 16 32; do
+    score_root="$eval_root/matched/step${step}/scoring/coredev-official-v1"
+    for dataset in "${datasets[@]}"; do
+      [[ -s "$score_root/$dataset/pinned-reuse-receipt.json" ]] || return 1
+    done
+  done
+}
+
 summarize_step() {
   local step=$1
   local score_root="$eval_root/matched/step${step}/scoring/coredev-official-v1"
   local summary="$score_root/coredev-2511-eval-summary.json"
-  PYTHONPATH="$repo_root/src" "$python_bin" "$repo_root/tools/summarize_coredev_2511.py" \
-    --work-dir "$score_root" --phase eval \
-    --judge-base-url "$judge_base_url" \
-    --expected-model Qwen3-VL-8B-Instruct \
-    --output "$summary" \
-    >"$log_root/summary-s${step}.log"
+  PYTHONPATH="$repo_root/src" "$python_bin" - \
+    "$score_root" "$summary" "$judge_base_url" "$step" \
+    >"$log_root/summary-s${step}.log" <<'PY'
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+
+from tgvf_rl.evaluation.coredev_results import (
+    summarize_coredev_results,
+    write_json_atomic,
+)
+from tgvf_rl.evaluation.policy_coredev_scoring import DATASETS
+
+root = Path(sys.argv[1]).resolve()
+output = Path(sys.argv[2]).resolve()
+judge_base_url = sys.argv[3]
+step = int(sys.argv[4])
+expected_eval_ids: dict[str, str] = {}
+for dataset in DATASETS:
+    receipt_path = root / dataset / "pinned-reuse-receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    expected_source = f"PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S{step}-V1"
+    if (
+        receipt.get("schema_version")
+        != "tgvf.vlmevalkit-pinned-reuse-receipt.v1"
+        or receipt.get("dataset") != dataset
+        or receipt.get("model") != "Qwen3-VL-8B-Instruct"
+        or receipt.get("source_evaluation_id") != expected_source
+    ):
+        raise RuntimeError(f"S{step}/{dataset} pinned receipt identity differs")
+    destination = receipt.get("destination_run_id")
+    if not isinstance(destination, str) or not destination:
+        raise RuntimeError(f"S{step}/{dataset} receipt has no destination run")
+    expected_eval_ids[dataset] = destination
+
+payload = summarize_coredev_results(
+    work_dir=root,
+    repository_root=Path.cwd(),
+    phase="eval",
+    expected_judge_base_url=judge_base_url,
+    expected_model="Qwen3-VL-8B-Instruct",
+    expected_eval_ids=expected_eval_ids,
+)
+write_json_atomic(output, payload)
+print(json.dumps(payload, indent=2, ensure_ascii=False))
+PY
   "$python_bin" - "$summary" "$step" <<'PY'
 import json
 from pathlib import Path
@@ -312,9 +365,13 @@ for step in 0 8 16 32; do
   validate_step_inference "$step" >"$log_root/scoring-inference-validation-s${step}.json"
   materialize_step "$step"
 done
-wait_for_idle_gpu01
-start_judge
-score_all_steps
+if all_scoring_receipts_present; then
+  printf '[%s] all 28 pinned scoring receipts already exist; skip judge restart\n' "$(timestamp)"
+else
+  wait_for_idle_gpu01
+  start_judge
+  score_all_steps
+fi
 phase=summarizing
 for step in 0 8 16 32; do
   summarize_step "$step"
