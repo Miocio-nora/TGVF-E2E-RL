@@ -7,7 +7,7 @@ matched prompt 两臂均已完成并评分；只增加 target 定义与案例后
 Macro* 仍高于 Original，但相对各自 matched prompt 有温和回退。No-Tool RL 因果对照已冻结
 为 32-step 正式主终点，保留 S0/S8/S16/S32；独立实现、严格配置与 CPU 回归已完成，真实
 1-step canary 已通过，正式 8 卡训练已闭合 S32，S8/S16/S32 三个永久 checkpoint 均已验收。
-下一步完成 matched no-tool / raw-direct 双协议评测、
+下一步完成 matched no-tool 的 S0/S8/S16/S32 单协议评测、
 正式 Atomic matched/target-only 盲审与调用行为对照。**
 
 进度查看：本报告同步到 main 工作区
@@ -34,7 +34,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 | 简称 | 本文固定含义 | checkpoint / run | 解释边界 |
 |---|---|---|---|
 | **Original** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；因 prompt/agent protocol 不同，只是端到端 direct reference，不是严格 paired control |
-| **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | 用于回答增益有多少来自 RL 本身；matched no-tool 为主要因果对照，raw-direct transfer 为诊断，不得改称 Original |
+| **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | 用于回答增益有多少来自 RL 本身；只执行 matched no-tool 评测，不得改称 Original |
 | **Crop** | PRL25-B native RGB Crop | S80，seed42 | 80-step 终点工具基线；不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
@@ -611,14 +611,13 @@ Teacher25 各条线路已有的原始 no-tool 合同不变。任何结构化工�
 
 #### 5.4.2 固定评测矩阵
 
-每个 S0/S8/S16/S32 checkpoint 都执行两套评测，且在 S32 结果揭晓后不得重选协议：
+每个 S0/S8/S16/S32 checkpoint 只执行 **matched no-tool**：使用与 No-Tool RL visual-row
+训练一致的 no-tool prompt，作为 `No-Tool RL ↔ Crop/TGVF/Atomic RL` 的主要训练匹配对照。
+不再对训练后的 No-Tool RL checkpoint 执行 raw-direct transfer；已有 Original raw direct
+结果仍进入所有文章主表和 sub-benchmark 表，但只作为端到端参考，不能据此声称
+`Original → No-Tool RL` 的同协议变化。
 
-1. **matched no-tool（主要）**：使用与 No-Tool RL visual-row 训练一致的 no-tool prompt，作为
-   `No-Tool RL ↔ Crop/TGVF/Atomic RL` 的主要训练匹配对照；
-2. **raw direct（诊断）**：使用 Original 的 raw direct prompt，衡量 RL 后能力能否迁移回原始
-   Qwen 使用方式，并直接连接 `Original ↔ No-Tool RL`。
-
-两套协议均使用同一 CoreDev2511 七项、Macro*、完整 aligned sub-benchmark 和逐 set 输出；
+matched no-tool 使用同一 CoreDev2511 七项、Macro*、完整 aligned sub-benchmark 和逐 set 输出；
 No-Tool RL 的工具调用率定义上应为 0，另做结构化工具文本泄漏审计。S32 是唯一正式 headline，
 S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 
@@ -626,21 +625,21 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 
 - 若工具方法超过 matched No-Tool RL，可把差额解释为与工具化训练合同相关的增益候选；只有在
   其他合同严格一致且置信区间支持时，才进一步归因到视觉工具。
-- 若 No-Tool RL 已解释大部分相对 Original 的增益，正文必须把“RL 本身”列为主要替代解释，
-  不能把全部增益归给 TGVF/RP67。
+- 若 matched No-Tool RL 已接近工具方法，正文必须把“RL 本身”列为主要替代解释，不能把全部
+  增益归给 TGVF/RP67。
 - matched no-tool 去除了工具 schema，因此它是当前最强的 RL-only control，但仍不可消除
-  “存在工具 schema / agent loop”这一协议差异；raw-direct arm 只诊断迁移，也不替代 matched
-  因果对照。
+  “存在工具 schema / agent loop”这一协议差异。已有 Original 的 raw direct 结果也不能替代
+  matched 因果对照。
 
 当前状态：
 
-- [x] 名称、S32 主终点、训练预算、双评测协议和解释边界已事前冻结；
+- [x] 名称、S32 主终点、训练预算、matched no-tool 评测协议和解释边界已冻结；
 - [x] 独立干净分支上的 no-tool prompt/data route、空工具 schema、run config、S32 守护脚本与
   CPU compose/回归测试；
 - [x] 真实 1-step canary：首轮在 Step 0 前发现共享 termination builder 仍把
   `</tool_call>` stop 当作全路径硬条件；修复后 canary 已闭合 Step 1 且零工具调用；
 - [x] 正式 32-step 训练：S8/S16/S32 永久 checkpoint 与最终 supervisor acceptance 均已闭合；
-- [ ] S0/S8/S16/S32 matched no-tool / raw-direct 双协议评测；
+- [ ] S0/S8/S16/S32 matched no-tool 单协议评测；
 - [ ] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
 
 执行与审计快照（2026-08-26 07:18 JST）：
@@ -695,7 +694,7 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   checkpoint，冷却后从同一正式 lineage 自动恢复，最终 prompts/trajectories 计数与冻结合同
   精确一致。训练成功后的 vLLM teardown 输出 `pure virtual method called`，发生在最终 metrics、
   permanent receipt 与 100% progress 之后，不影响 S32 验收。下一步只执行事前冻结的
-  matched no-tool / raw-direct 双协议评测，不依据训练 reward 改选 checkpoint。
+  matched no-tool 评测，不依据训练 reward 改选 checkpoint。
 - 2026-08-26 13:37 JST 评测启动节点：matched no-tool 的 full-model 原生像素 evaluator、
   S0/S8/S16/S32 snapshot/merge 流水线与可恢复 supervisor 已通过 CPU 回归（相关既有路径与
   新增 no-tool 专项合计 `26 passed`），执行分支推送至 `36702a1`。tmux
@@ -703,8 +702,11 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   随后自动执行单题真机 smoke、四卡完整 S0 推理，并在其运行期间合并 S8 FSDP 权重。S8 与
   S0 分配到不同四卡组，后续 S16/S32 复用对应组并保持相同 CoreDev2511 task manifest、
   paired seed namespace 与 matched no-tool prompt。此节点表示评测已进入工件准备/执行流水线，
-  尚不表示任何 CoreDev 分数已经产生；raw-direct 仍使用 Original 的 VLMEvalKit prompt/像素合同，
-  不与 matched evaluator 混用。
+  尚不表示任何 CoreDev 分数已经产生。
+- 2026-08-26 13:54 JST 文章范围决策：在任何 No-Tool RL CoreDev 结果产生前，作者取消
+  raw-direct transfer 复测，只保留 S0/S8/S16/S32 matched no-tool。raw-direct 从未启动，当前
+  supervisor 本身也只执行 matched 路径，因此无需中断或重启在跑任务。已有运行目录和 tmux
+  名称中的 `DUAL` / `dual` 是启动时的历史标签，不表示第二套协议产生了数据。
 
 ## 6. Atomic 纳入正文的决策门槛
 
@@ -734,15 +736,15 @@ Atomic 进入正文核心方法必须同时满足：
 | 广义 prompt bundle 下工具总体增益仍存在 | TGVF / Atomic stress-test Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；非 target-only；不是新 benchmark 泛化 | 已支持，带退化边界 |
 | 只补充 target 定义与案例的稳健性 | TGVF / Atomic target-only Macro* `58.1788 / 60.8253`，仍比 Original 高 `2.8233 / 5.4697 pp` | 相对 own matched 分别下降 `1.6298 / 2.2574 pp`；不支持“详细 target 定义普遍增益” | 已支持，带退化边界 |
 | 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control；MathVista 等单项仍可能更强 | 可写 |
-| 工具方法的增益不能只用 RL 本身解释 | No-Tool RL S32；matched no-tool 与 raw-direct 双协议；S0/S8/S16 学习动态 | 尚未出结果；工具 schema / agent-loop 差异仍存在 | 已冻结，待运行 |
+| 工具方法的增益不能只用 RL 本身解释 | No-Tool RL S32；matched no-tool；S0/S8/S16 学习动态 | 尚未出结果；工具 schema / agent-loop 差异仍存在；不测训练后 raw-direct transfer | 已冻结，运行中 |
 | 三种方法形成不同工具调用行为 | Crop/TGVF/Atomic successful-use rate `67.05/89.73/83.17%`；calls/question `0.673/0.898/1.027`；逐 set 表 | matched-prompt 描述性统计；调用更多不等于 utility 更高；policy 自选择混杂 | 已支持 |
 
 ## 8. 论文实验部分建议结构
 
 1. **Comprehensive comparison.** Original、No-Tool RL 与三个工具方法的七套 benchmark 主表，
    Original 永不缺席。
-2. **Does RL alone explain the gain?** 冻结 No-Tool RL S32 主终点，并同时报告 matched no-tool
-   与 raw-direct transfer。
+2. **Does RL alone explain the gain?** 冻结 No-Tool RL S32 主终点，以 matched no-tool 为唯一
+   RL-only 对照；Original raw direct 只保留为端到端参考。
 3. **Where target-conditioned evidence helps.** 预冻结 sub-benchmark 图，突出 TGVF 的关系、
    深度和视觉数学优势，同时给负面切片。
 4. **How do the policies use their tools?** 报告整体及逐 set 的调用覆盖率、调用强度、重复调用和
@@ -761,8 +763,8 @@ Atomic 进入正文核心方法必须同时满足：
 2. [已完成] 广义 full-prompt stress test 及七项官方评分；
 3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
-5. [训练完成，评测待执行] No-Tool RL：合同、实现、CPU 回归、真实 canary 与正式 S32 均已
-   闭合；S8/S16/S32 永久 checkpoint 已验收，下一步执行 S0/S8/S16/S32 双协议评测；
+5. [训练完成，评测运行中] No-Tool RL：合同、实现、CPU 回归、真实 canary 与正式 S32 均已
+   闭合；S8/S16/S32 永久 checkpoint 已验收，当前只执行 S0/S8/S16/S32 matched no-tool；
 6. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 7. [待回填] target-only 调用行为对照与正式 audit；
