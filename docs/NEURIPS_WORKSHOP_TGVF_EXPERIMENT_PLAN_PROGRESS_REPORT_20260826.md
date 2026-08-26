@@ -721,6 +721,13 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
   `daf1b26`。四臂均已通过 scoring-view 物化校验：每臂 2,240 条观测单图答案、271 条显式
   fail-closed 多图任务、2,511 条官方总计及七个 slice；本地 Qwen2.5-72B-Instruct judge 正在
   GPU0/1 初始化。此时尚无任何 slice 完成正式评分，也尚无 Macro* 或 sub-benchmark 结论。
+- 2026-08-26 15:46 JST 评分 fail-closed 与恢复节点：首轮 28 个 scorer 在 15:25 因执行分支
+  wrapper 同时收到上游互斥的 `--config` 与 `--data/--model` 参数而全部在正式评分前退出；已保存
+  推理、四臂 scoring view 和 source manifest 均未改变，也没有产生可误用的正式分数。恢复实现
+  移除该冲突，并对每个 step/dataset 显式绑定不可变 source run ID、source manifest、`--reuse`
+  与 `--reuse-aux infer`；相关 pinned-reuse/参数合同测试 `21 passed`，修复已推送至 `4bbddf4`。
+  重启后本地 Qwen2.5-72B-Instruct judge 已通过 health gate，28/28 个 slice scorer 均已真实启动，
+  暂未再次出现参数断言。此节点仍是运行状态，不表示任何 slice 或四臂汇总已经完成。
 
 ## 6. Atomic 纳入正文的决策门槛
 
