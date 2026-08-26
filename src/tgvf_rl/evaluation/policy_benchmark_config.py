@@ -172,6 +172,7 @@ def materialize_full_model_policy_benchmark_config(
     gpu_memory_utilization: float = 0.9,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
     paired_seed_namespace: str | None = None,
+    evaluation_image_max_pixels: int | None = None,
     evaluation_protocol: str = DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
 ) -> dict[str, Any]:
     """Bind one exact standalone full model to an admitted evaluation protocol.
@@ -246,6 +247,8 @@ def materialize_full_model_policy_benchmark_config(
     }
     if paired_seed_namespace is not None:
         payload["paired_seed_namespace"] = paired_seed_namespace
+    if evaluation_image_max_pixels is not None:
+        payload["evaluation_image_max_pixels"] = evaluation_image_max_pixels
     PolicyCoreDevConfig(**payload)
     _write_immutable(frozen_policy_config, policy_config.read_bytes())
     encoded = (
@@ -275,6 +278,7 @@ def materialize_paired_tgvf_policy_benchmark_config(
     gpu_memory_utilization: float = 0.9,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
     paired_seed_namespace: str | None = None,
+    evaluation_image_max_pixels: int | None = None,
 ) -> dict[str, Any]:
     """Bind one same-step full-Qwen/RP66 pair to a benchmark arm."""
 
@@ -330,6 +334,8 @@ def materialize_paired_tgvf_policy_benchmark_config(
     }
     if paired_seed_namespace is not None:
         payload["paired_seed_namespace"] = paired_seed_namespace
+    if evaluation_image_max_pixels is not None:
+        payload["evaluation_image_max_pixels"] = evaluation_image_max_pixels
     PolicyCoreDevConfig(**payload)
     encoded = (
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

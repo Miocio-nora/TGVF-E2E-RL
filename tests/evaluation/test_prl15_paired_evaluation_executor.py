@@ -131,6 +131,18 @@ def test_plan_loader_rejects_non_generatable_scoring_prefix(tmp_path: Path) -> N
         _MODULE._load_plan(path)
 
 
+def test_plan_loader_rejects_invalid_evaluation_pixel_override(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(_PLAN.read_text(encoding="utf-8"))
+    payload["evaluation_image_max_pixels"] = 0
+    path = tmp_path / "invalid-pixel-cap-plan.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="image_max_pixels override"):
+        _MODULE._load_plan(path)
+
+
 def test_plan_loader_accepts_ordered_nonzero_checkpoint_pair() -> None:
     plan = _MODULE._load_plan(_PRL17_PLAN)
 

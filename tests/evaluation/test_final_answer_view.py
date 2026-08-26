@@ -12,6 +12,7 @@ import pytest
 from tgvf_rl.evaluation.final_answer_view import (
     INVALID_SENTINEL_PREFIX,
     materialize_final_answer_view,
+    materialize_mathverse_metadata_view,
 )
 
 
@@ -268,6 +269,36 @@ def test_mathverse_problem_version_is_exactly_joined_into_metadata(
     assert (
         enrichment["source_json_sha256"] == sha256(mathverse.read_bytes()).hexdigest()
     )
+
+
+def test_mathverse_metadata_only_view_preserves_predictions(tmp_path: Path) -> None:
+    source = tmp_path / "MathVerse_MINI.tsv"
+    derived = tmp_path / "metadata-view.tsv"
+    mathverse = tmp_path / "testmini.json"
+    fields = ["index", "source_row_index", "metadata", "prediction"]
+    rows = [
+        {
+            "index": "mv/0",
+            "source_row_index": "0",
+            "metadata": '{"subject":"geometry"}',
+            "prediction": "raw answer without a think closer\n17",
+        }
+    ]
+    _write_tsv(source, fields, rows)
+    mathverse.write_text(
+        json.dumps([{"problem_version": "Vision Only"}]), encoding="utf-8"
+    )
+
+    manifest = materialize_mathverse_metadata_view(
+        source_tsv=source,
+        derived_tsv=derived,
+        mathverse_source_json=mathverse,
+    )
+    _, actual = _read_tsv(derived)
+
+    assert actual[0]["prediction"] == rows[0]["prediction"]
+    assert json.loads(actual[0]["metadata"])["problem_version"] == "Vision Only"
+    assert manifest["prediction_values_identical"] is True
 
 
 def test_materializer_rejects_overwrite_duplicate_indices_and_bad_mathverse_join(

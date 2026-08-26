@@ -47,6 +47,7 @@ from .policy_coredev import (
     PolicyCoreDevConfig,
     PolicyEvaluationSnapshot,
     StandaloneTGVFVLLMManager,
+    evaluation_image_max_pixels,
     full_model_protocol_audit_fields,
     load_verified_task_image,
     paired_evaluation_rng_for_task,
@@ -413,6 +414,7 @@ class OfficialVisiblePolicyEvaluator:
         self.evaluation_identity = expected_identity
         self.policy_version = snapshot.policy_version
         self.full_model = full_model
+        self.image_max_pixels = evaluation_image_max_pixels(config, snapshot)
         self.tokenizer = getattr(processor, "tokenizer", None)
         if not callable(getattr(self.tokenizer, "decode", None)):
             raise TypeError("official-visible evaluator requires tokenizer.decode")
@@ -465,7 +467,11 @@ class OfficialVisiblePolicyEvaluator:
             prompt_ids=list(prompt_ids),
             sampling_params=parameters,
             image_data=list(images),
-            mm_processor_kwargs={"max_pixels": self.run.policy.image_max_pixels},
+            mm_processor_kwargs={
+                "max_pixels": getattr(
+                    self, "image_max_pixels", self.run.policy.image_max_pixels
+                )
+            },
             tgvf_expected_step=self.policy_version.optimizer_step,
         )
         token_ids = tuple(getattr(output, "token_ids", ()))
@@ -518,7 +524,9 @@ class OfficialVisiblePolicyEvaluator:
                     self.processor,
                     messages,
                     images=images,
-                    image_max_pixels=self.run.policy.image_max_pixels,
+                    image_max_pixels=getattr(
+                        self, "image_max_pixels", self.run.policy.image_max_pixels
+                    ),
                 )
                 try:
                     text, token_ids, _logprobs, stop_reason = await self._sample_turn(

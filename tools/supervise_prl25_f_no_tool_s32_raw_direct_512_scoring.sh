@@ -10,6 +10,7 @@ control_root="$eval_root/runtime/scoring-supervisor"
 log_root="$eval_root/logs"
 judge_port=8012
 judge_base_url="http://127.0.0.1:${judge_port}/v1"
+mathverse_source=/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json
 
 datasets=(
   VStarBench
@@ -70,6 +71,94 @@ wait_for_inference() {
     fi
     sleep 5
   done
+}
+
+prepare_mathverse_metadata_view() {
+  phase=preparing_mathverse_metadata_view
+  local work model_root source_status source_run source_tsv derived_run derived_dir
+  work="$eval_root/inference/MathVerse_MINI/work"
+  model_root="$work/Qwen3-VL-8B-Instruct"
+  source_status=$("$python_bin" - "$model_root" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+candidates = []
+for path in root.glob("*/status.json"):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        continue
+    entry = payload.get("datasets", {}).get("MathVerse_MINI", {})
+    if payload.get("mode") == "infer" and entry.get("status") == "done":
+        if entry.get("scoring_view_contract") is None:
+            candidates.append((path.stat().st_mtime_ns, path))
+if not candidates:
+    raise RuntimeError("MathVerse has no completed raw inference source")
+print(max(candidates)[1])
+PY
+  )
+  source_run=$("$python_bin" - "$source_status" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["eval_id"])
+PY
+  )
+  source_tsv="$model_root/$source_run/Qwen3-VL-8B-Instruct_MathVerse_MINI.tsv"
+  derived_run=T20260826_G3ee4eb6f2e20063e41d5bf93423b5fa085056e087330df29b24c94dfe4570912
+  derived_dir="$model_root/$derived_run"
+  if [[ ! -f "$derived_dir/status.json" ]]; then
+    mkdir -p "$derived_dir"
+    "$python_bin" "$repo_root/tools/materialize_vlmevalkit_final_answers.py" \
+      "$source_tsv" "$derived_dir/Qwen3-VL-8B-Instruct_MathVerse_MINI.tsv" \
+      --manifest "$derived_dir/mathverse-metadata-view-manifest.json" \
+      --mathverse-source-json "$mathverse_source" \
+      --mathverse-metadata-only \
+      >"$derived_dir/materializer-output.json"
+    "$python_bin" - \
+      "$derived_dir/status.json" "$derived_run" "$source_run" \
+      "$derived_dir/Qwen3-VL-8B-Instruct_MathVerse_MINI.tsv" <<'PY'
+import json
+from datetime import datetime
+from pathlib import Path
+import sys
+
+path, run_id, source_run, prediction = sys.argv[1:]
+now = datetime.now().astimezone().isoformat()
+payload = {
+    "schema_version": "1.0",
+    "eval_id": run_id,
+    "created_at": now,
+    "datasets": {
+        "MathVerse_MINI": {
+            "status": "done",
+            "prediction_file": str(Path(prediction).resolve()),
+            "updated_at": now,
+            "judge_model": "Qwen2.5-72B-Instruct",
+            "source_run": source_run,
+            "reuse_aux": "infer",
+            "skip_reason": "mode_infer",
+            "scoring_view_contract": "vlmevalkit-mathverse-metadata-view-v1",
+        }
+    },
+    "model_name": "Qwen3-VL-8B-Instruct",
+    "commit": "7055d301",
+    "argv": ["synthetic-mathverse-metadata-view", source_run],
+    "api_mode": False,
+    "world_size": 1,
+    "pred_format": "tsv",
+    "eval_format": "json",
+    "mode": "infer",
+    "reuse": False,
+    "reuse_aux": "infer",
+    "updated_at": now,
+}
+Path(path).write_text(
+    json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+  fi
 }
 
 capture_source_runs() {
@@ -292,6 +381,7 @@ PY
 rm -f "$control_root/raw-direct-512-s32-scoring-complete" "$control_root/failed"
 printf '[%s] raw-direct@512 scoring supervisor started\n' "$(timestamp)"
 wait_for_inference
+prepare_mathverse_metadata_view
 capture_source_runs
 wait_for_idle_gpu01
 start_judge

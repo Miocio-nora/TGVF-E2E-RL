@@ -341,8 +341,21 @@ def _build_remote_tgvf_focus_tool_runtime(
 
 def validate_policy_benchmark_runtime_interfaces(
     run: PolicyE2ESmokeRunConfig,
+    *,
+    image_max_pixels: int | None = None,
 ) -> dict[str, object]:
     """Exercise CPU-only evaluator interfaces before any vLLM construction."""
+
+    effective_image_max_pixels = (
+        run.policy.image_max_pixels
+        if image_max_pixels is None
+        else image_max_pixels
+    )
+    if (
+        type(effective_image_max_pixels) is not int
+        or effective_image_max_pixels <= 0
+    ):
+        raise ValueError("policy benchmark image_max_pixels must be positive")
 
     from tgvf_rl.framework.verl.smoke_dataset import (
         _materialize_source_image_prompt_token_ids,
@@ -395,7 +408,7 @@ def validate_policy_benchmark_runtime_interfaces(
                 server_client=object(),
                 processor=object(),
                 model_identity=run.model,
-                image_max_pixels=run.policy.image_max_pixels,
+                image_max_pixels=effective_image_max_pixels,
                 trajectory_id="cpu-preflight",
                 behavior_policy=PolicyVersion("cpu-preflight", 0, "0" * 64),
             )
@@ -434,7 +447,7 @@ def validate_policy_benchmark_runtime_interfaces(
                     {"profile": profile.value},
                 ),
                 processor=object(),
-                image_max_pixels=run.policy.image_max_pixels,
+                image_max_pixels=effective_image_max_pixels,
                 success_environment_text_renderer=renderer,
                 assistant_dialect=dialect,
             )
@@ -484,6 +497,7 @@ class PolicyCoreDevConfig:
     paired_snapshot_receipt_sha256: str | None = None
     evaluation_protocol: str = TRAINING_RUN_EVALUATION_PROTOCOL
     paired_seed_namespace: str | None = None
+    evaluation_image_max_pixels: int | None = None
     schema_version: str = POLICY_COREDEV_SCHEMA
 
     def __post_init__(self) -> None:
@@ -542,6 +556,13 @@ class PolicyCoreDevConfig:
                 raise ValueError(
                     "paired evaluation RNG requires an explicitly hashed task manifest"
                 )
+        if self.evaluation_image_max_pixels is not None and (
+            type(self.evaluation_image_max_pixels) is not int
+            or self.evaluation_image_max_pixels <= 0
+        ):
+            raise ValueError(
+                "evaluation_image_max_pixels must be a positive integer"
+            )
         if (
             len(self.gpu_ids) != 4
             or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in self.gpu_ids)
@@ -724,6 +745,20 @@ class PolicyCoreDevConfig:
         return self.task_manifest_path is None
 
 
+def evaluation_image_max_pixels(
+    config: PolicyCoreDevConfig,
+    snapshot: PolicyEvaluationSubject,
+) -> int:
+    """Resolve a benchmark-only pixel cap without mutating checkpoint identity."""
+
+    frozen_value = snapshot.run.policy.image_max_pixels
+    override = getattr(config, "evaluation_image_max_pixels", None)
+    value = frozen_value if override is None else override
+    if type(value) is not int or value <= 0:
+        raise ValueError("resolved evaluation image max pixels must be positive")
+    return value
+
+
 def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     required = {
@@ -759,6 +794,7 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "paired_snapshot_receipt_sha256",
         "evaluation_protocol",
         "paired_seed_namespace",
+        "evaluation_image_max_pixels",
     }
     if not required <= set(payload) or not set(payload) <= required | optional:
         raise ValueError("policy benchmark config fields differ")
@@ -2026,7 +2062,7 @@ def _evaluation_protocol_identity(
         "crop_source": "immutable_original_image",
         "native_pixels": True,
         "precomputed_image_embeds": False,
-        "image_max_pixels": snapshot.run.policy.image_max_pixels,
+        "image_max_pixels": evaluation_image_max_pixels(config, snapshot),
         "native_image_limit_per_prompt": DEEPEYES_MAX_ACTIVE_PERCEPTION + 1,
         "observation_role": "user",
         "observation_envelope": (
@@ -2099,6 +2135,12 @@ def policy_evaluation_identity(
             "inference_concurrency_per_gpu": config.inference_concurrency_per_gpu,
         },
     }
+    if getattr(config, "evaluation_image_max_pixels", None) is not None:
+        content["image_preprocessing"] = {
+            "max_pixels": evaluation_image_max_pixels(config, snapshot),
+            "source": "evaluation_override",
+            "frozen_policy_max_pixels": snapshot.run.policy.image_max_pixels,
+        }
     if (
         isinstance(snapshot, FullModelEvaluationSnapshot)
         and snapshot.manifest.checkpoint_owner is not None
@@ -2727,6 +2769,7 @@ class PolicyCoreDevEvaluator:
         self.snapshot = snapshot
         self.evaluation_identity = expected_identity
         self.policy_version = snapshot.policy_version
+        self.image_max_pixels = evaluation_image_max_pixels(config, snapshot)
         self.store = ObservationStore()
         self.behavior_store = BehaviorTraceStore()
         self.focus_ledger = FocusExecutionLedger()
@@ -2806,7 +2849,7 @@ class PolicyCoreDevEvaluator:
             processor=self.processor,
             canonical_token_ids=canonical_token_ids,
             prompt_text=prompt_text,
-            image_max_pixels=self.run.policy.image_max_pixels,
+            image_max_pixels=self.image_max_pixels,
             source_rgb=source_rgb,
         )
 
@@ -2830,7 +2873,7 @@ class PolicyCoreDevEvaluator:
         pixel_values, image_grid_thw = preprocess_qwen3_rgb(
             processor=self.processor,
             rgb=source_rgb,
-            image_max_pixels=self.run.policy.image_max_pixels,
+            image_max_pixels=self.image_max_pixels,
         )
         source = await self.manager.materialize_source(
             request_id=trajectory_id,
@@ -2865,7 +2908,7 @@ class PolicyCoreDevEvaluator:
                 initial_prompt_token_ids=prompt_ids,
                 image_token_id=self.layout_builder.image_pad_id,
                 source=source,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.image_max_pixels,
             ),
         )
         appender = QwenNativeToolObservationAppender(
@@ -2898,7 +2941,7 @@ class PolicyCoreDevEvaluator:
                 self.config.schema_version,
                 {
                     "model": self.run.model.revision_or_path,
-                    "max_pixels": self.run.policy.image_max_pixels,
+                    "max_pixels": self.image_max_pixels,
                 },
             )
             layout_identity = _artifact_identity(
@@ -2912,7 +2955,7 @@ class PolicyCoreDevEvaluator:
                 server_client=self.manager,
                 processor=self.processor,
                 model_identity=self.run.model,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.image_max_pixels,
                 trajectory_id=trajectory_id,
                 behavior_policy=self.policy_version,
             )
@@ -2933,7 +2976,7 @@ class PolicyCoreDevEvaluator:
                 self.config.schema_version,
                 {
                     "model": self.run.model.revision_or_path,
-                    "max_pixels": self.run.policy.image_max_pixels,
+                    "max_pixels": self.image_max_pixels,
                 },
             )
             layout_identity = _artifact_identity(
@@ -2955,7 +2998,7 @@ class PolicyCoreDevEvaluator:
                 crop_processor_identity=processor_identity,
                 crop_layout_identity=layout_identity,
                 processor=self.processor,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.image_max_pixels,
                 success_environment_text_renderer=(
                     self.success_environment_text_renderer
                 ),

@@ -25,6 +25,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     PolicyCoreDevEvaluator,
     PolicyEvaluationSnapshot,
     build_standalone_manager,
+    evaluation_image_max_pixels,
     freeze_policy_evaluation_snapshot,
     load_bound_policy_benchmark_tasks,
     load_frozen_policy_evaluation_snapshot,
@@ -346,7 +347,10 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
     }
     if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
         result["runtime_interface_preflight"] = (
-            validate_policy_benchmark_runtime_interfaces(snapshot.run)
+            validate_policy_benchmark_runtime_interfaces(
+                snapshot.run,
+                image_max_pixels=evaluation_image_max_pixels(config, snapshot),
+            )
         )
     if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
         from transformers import AutoProcessor
@@ -360,7 +364,7 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
             validate_official_visible_processor(
                 processor,
                 tokenizer_length=snapshot.run.model.tokenizer_length,
-                image_max_pixels=snapshot.run.policy.image_max_pixels,
+                image_max_pixels=evaluation_image_max_pixels(config, snapshot),
             )
         )
     print(json.dumps(result, indent=2, sort_keys=True))

@@ -171,10 +171,12 @@ def test_full_model_config_materializer_binds_manifest_receipt_and_identity(
         config_path=tmp_path / "configs/step8-paired.json",
         gpu_ids=(4, 5, 6, 7),
         paired_seed_namespace="coredev2511/crop/step8-step16/temp1/seed42/v1",
+        evaluation_image_max_pixels=262_144,
     )
     assert paired_payload["paired_seed_namespace"] == (
         "coredev2511/crop/step8-step16/temp1/seed42/v1"
     )
+    assert paired_payload["evaluation_image_max_pixels"] == 262_144
 
     with pytest.raises(ValueError, match="optimizer step"):
         implementation.materialize_full_model_policy_benchmark_config(

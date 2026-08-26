@@ -20,6 +20,7 @@ from typing import Any
 
 THINK_CLOSER = "</think>"
 SCORING_VIEW_CONTRACT = "vlmevalkit-final-answer-view-v1"
+MATHVERSE_METADATA_VIEW_CONTRACT = "vlmevalkit-mathverse-metadata-view-v1"
 INVALID_SENTINEL_PREFIX = "__TGVF_INVALID_FINAL_ANSWER__"
 _OPTION_LABELS = tuple(reversed("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
 _REQUIRED_COLUMNS = frozenset({"index", "prediction"})
@@ -418,9 +419,98 @@ def materialize_final_answer_view(
     return payload
 
 
+def materialize_mathverse_metadata_view(
+    *,
+    source_tsv: str | Path,
+    derived_tsv: str | Path,
+    mathverse_source_json: str | Path,
+    manifest_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Copy predictions exactly while joining MathVerse problem-version metadata."""
+
+    source = Path(source_tsv).resolve()
+    derived = Path(derived_tsv).resolve()
+    manifest = (
+        Path(manifest_path).resolve()
+        if manifest_path is not None
+        else derived.with_suffix(derived.suffix + ".manifest.json")
+    )
+    if not source.is_file():
+        raise FileNotFoundError(f"source prediction TSV does not exist: {source}")
+    if source == derived:
+        raise ValueError("source and derived TSV paths must differ")
+    if derived.exists() or manifest.exists():
+        raise FileExistsError(
+            "derived TSV and manifest are immutable and must not exist"
+        )
+    source_fields, source_rows = _read_tsv(source)
+    rows = [dict(row) for row in source_rows]
+    enrichment = _enrich_mathverse_metadata(
+        rows,
+        source_json=Path(mathverse_source_json).resolve(),
+    )
+    derived.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{derived.name}.", dir=derived.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    temporary.unlink()
+    try:
+        _write_tsv(temporary, source_fields, rows)
+        verified_fields, verified_rows = _verify_derived_rows(
+            source_fields=source_fields,
+            source_rows=source_rows,
+            derived_path=temporary,
+            expected_rows=rows,
+            metadata_enriched=True,
+        )
+        derived_bytes = temporary.read_bytes()
+    finally:
+        temporary.unlink(missing_ok=True)
+    _publish_bytes_exclusive(derived, derived_bytes)
+    if any(
+        source_row["prediction"] != derived_row["prediction"]
+        for source_row, derived_row in zip(
+            source_rows, verified_rows, strict=True
+        )
+    ):
+        derived.unlink(missing_ok=True)
+        raise RuntimeError("MathVerse metadata view changed a prediction")
+    payload = {
+        "schema_version": 1,
+        "contract": MATHVERSE_METADATA_VIEW_CONTRACT,
+        "source": {
+            "path": str(source),
+            "sha256": _sha256_file(source),
+            "row_count": len(source_rows),
+            "columns": source_fields,
+        },
+        "derived": {
+            "path": str(derived),
+            "sha256": _sha256_file(derived),
+            "row_count": len(verified_rows),
+            "columns": verified_fields,
+        },
+        "prediction_values_identical": True,
+        "mathverse_metadata_enrichment": enrichment,
+    }
+    manifest_bytes = (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    try:
+        _publish_bytes_exclusive(manifest, manifest_bytes)
+    except Exception:
+        derived.unlink(missing_ok=True)
+        raise
+    return payload
+
+
 __all__ = [
     "INVALID_SENTINEL_PREFIX",
+    "MATHVERSE_METADATA_VIEW_CONTRACT",
     "SCORING_VIEW_CONTRACT",
     "THINK_CLOSER",
     "materialize_final_answer_view",
+    "materialize_mathverse_metadata_view",
 ]

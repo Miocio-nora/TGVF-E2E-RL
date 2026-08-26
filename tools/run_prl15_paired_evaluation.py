@@ -310,7 +310,15 @@ def _validate_v3_static_plan(payload: dict[str, Any]) -> None:
         "protocol",
         "scoring",
     }
-    if set(payload) != required_top_level or payload.get("status") != "ready":
+    if (
+        not required_top_level <= set(payload)
+        or set(payload) - required_top_level != (
+            {"evaluation_image_max_pixels"}
+            if "evaluation_image_max_pixels" in payload
+            else set()
+        )
+        or payload.get("status") != "ready"
+    ):
         raise ValueError("v3 paired evaluation plan fields/status differ")
 
     owner = payload.get("checkpoint_owner")
@@ -453,6 +461,14 @@ def _load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("PRL15 paired evaluation plan schema differs")
     if payload["schema_version"] == PLAN_SCHEMA_V3:
         _validate_v3_static_plan(payload)
+    evaluation_image_max_pixels = payload.get("evaluation_image_max_pixels")
+    if evaluation_image_max_pixels is not None and (
+        type(evaluation_image_max_pixels) is not int
+        or evaluation_image_max_pixels <= 0
+    ):
+        raise ValueError(
+            "paired evaluation image_max_pixels override must be positive"
+        )
     arms = payload.get("arms")
     if not isinstance(arms, list) or not arms:
         raise ValueError("paired evaluation plan must contain at least one arm")
@@ -778,6 +794,7 @@ def _validate_v3_runtime(
         protocol_probe_config = SimpleNamespace(
             evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
             paired_seed_namespace=paired_rng["seed_namespace"],
+            evaluation_image_max_pixels=plan.get("evaluation_image_max_pixels"),
         )
         _validate_runtime_paired_rng(
             plan,
@@ -981,6 +998,7 @@ def _validate_v3_policy_run_runtime(
             SimpleNamespace(
                 evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
                 paired_seed_namespace=paired_rng["seed_namespace"],
+                evaluation_image_max_pixels=plan.get("evaluation_image_max_pixels"),
             ),
             protocol_probe,
         )
@@ -1564,6 +1582,7 @@ def _validate_existing_arm_config(
         "task_manifest_sha256": plan["task_manifest_sha256"],
         "expected_task_count": plan["expected_task_count"],
         "expected_single_image_count": plan["expected_single_image_count"],
+        "evaluation_image_max_pixels": plan.get("evaluation_image_max_pixels"),
     }
     if gpu_ids is not None:
         expected["gpu_ids"] = gpu_ids
@@ -1706,6 +1725,7 @@ def _materialize_full_model_arm(
         enable_chunked_prefill=snapshot_plan["enable_chunked_prefill"],
         gpu_memory_utilization=snapshot_plan["gpu_memory_utilization"],
         paired_seed_namespace=_paired_seed_namespace(plan),
+        evaluation_image_max_pixels=plan.get("evaluation_image_max_pixels"),
     )
     config = load_policy_coredev_config(paths["config"])
     snapshot = load_full_model_evaluation_snapshot(
@@ -1786,6 +1806,7 @@ def _materialize_arm(
         enable_chunked_prefill=False,
         gpu_memory_utilization=0.9,
         paired_seed_namespace=_paired_seed_namespace(plan),
+        evaluation_image_max_pixels=plan.get("evaluation_image_max_pixels"),
     )
     return paths["config"]
 
