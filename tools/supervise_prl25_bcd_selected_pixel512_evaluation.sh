@@ -62,7 +62,6 @@ for index in "${!plans[@]}"; do
     --mode run \
     --output-root "$output_root" \
     --gpu-ids 4 5 6 7 \
-    --wait-for-final-arm \
     --wait-for-gpus \
     --wait-timeout-seconds 86400 \
     --poll-seconds 30 \
