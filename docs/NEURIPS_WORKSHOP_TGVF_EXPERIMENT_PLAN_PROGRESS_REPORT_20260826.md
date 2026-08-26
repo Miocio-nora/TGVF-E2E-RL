@@ -869,6 +869,11 @@ Vision Dominant `50.0`。
   释放 GPU0/1 后将与 Atomic 推理重叠执行 Crop、TGVF 的 TP=2 judge，随后评分 Atomic。接管后
   无 OOM、Traceback 或失败 marker；可恢复 supervisor 修复已在执行分支提交并推送为
   `4fdd724`。本节点只报告运行进度，不提前报告 `@512` 分数。
+- 2026-08-26 18:55 JST TGVF 推理闭合/评分接力节点：TGVF S64 的四个 rank 已完整写入
+  `2,240/2,240` 条单图记录并通过 supervisor 行数 gate，`tgvf-s64-inference-complete`
+  marker 已落盘；Crop S80 score 随即自动启动，Qwen2.5-72B TP=2 judge 从所给
+  GPU0–3 池中实际选择 GPU2–3 加载。同期 Atomic S16 保持 GPU4–7 推理并持续写入。无失败
+  marker；Crop/TGVF 的 `@512` 分数仍须等待各自 accepted summary，不能从未完成评分外推。
 
 ### 5.5 三个工具方法的 matched@512 分辨率控制
 
