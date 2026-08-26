@@ -63,7 +63,8 @@ trap 'phase=signal; exit 130' INT TERM
 wait_for_inference() {
   phase=waiting_for_inference
   while [[ ! -f "$inference_control/raw-direct-512-s32-inference-complete" ]]; do
-    if ! tmux has-session -t prl25-raw512-s32 2>/dev/null; then
+    if ! tmux list-sessions -F '#S' 2>/dev/null \
+      | grep -Fxq prl25-raw512-s32; then
       echo "inference supervisor exited without a completion marker" >&2
       return 1
     fi

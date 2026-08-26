@@ -93,53 +93,73 @@ for raw_path in sys.argv[1:]:
 print("raw-direct@512 contract: pass")
 PY
 
-phase=checking_gpus
-for gpu in "${gpus[@]}"; do
-  active=$(nvidia-smi -i "$gpu" --query-compute-apps=pid --format=csv,noheader,nounits)
-  active=$(printf '%s\n' "$active" | tr -d '[:space:]')
-  [[ -z "$active" ]] || { echo "GPU $gpu is busy" >&2; exit 1; }
-done
+all_inference_statuses_are_done() {
+  local dataset work_dir status
+  for dataset in "${datasets[@]}"; do
+    work_dir="$eval_root/inference/$dataset/work"
+    status=$(find "$work_dir/Qwen3-VL-8B-Instruct" \
+      -mindepth 2 -maxdepth 2 -type f -name status.json -printf '%T@ %p\n' \
+      2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+    [[ -n "$status" ]] || return 1
+    jq -e --arg dataset "$dataset" \
+      '.mode == "infer" and .datasets[$dataset].status == "done"' \
+      "$status" >/dev/null || return 1
+  done
+}
 
-phase=launching
-: >"$control_root/launch.tsv"
-: >"$control_root/receipts.tsv"
-for index in "${!datasets[@]}"; do
-  dataset=${datasets[$index]}
-  gpu=${gpus[$index]}
-  config=${configs[$index]}
-  work_dir="$eval_root/inference/$dataset/work"
-  cwd="$eval_root/inference/$dataset/cwd"
-  mkdir -p "$work_dir" "$cwd"
-  (
-    cd "$cwd"
-    exec setsid env \
-      CUDA_DEVICE_ORDER=PCI_BUS_ID \
-      CUDA_VISIBLE_DEVICES="$gpu" \
-      PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
-      PYTHONHASHSEED=42 \
-      TOKENIZERS_PARALLELISM=false \
-      VLLM_USE_V1=1 \
-      VLLM_WORKER_MULTIPROC_METHOD=spawn \
-      TORCH_DEVICE_BACKEND_AUTOLOAD=0 \
-      "$python_bin" "$repo_root/tools/run_coredev_2511_vlmevalkit.py" \
-        --config "$config" \
-        --work-dir "$work_dir" \
-        --mode infer
-  ) >"$log_root/infer-$dataset.log" 2>&1 &
-  pids+=("$!")
-  printf '%s\t%s\t%s\n' "$dataset" "$gpu" "$!" >>"$control_root/launch.tsv"
-done
+if all_inference_statuses_are_done; then
+  phase=resuming_completed_inference
+  printf '[%s] all seven inference statuses are already done; validating only\n' \
+    "$(timestamp)"
+else
+  phase=checking_gpus
+  for gpu in "${gpus[@]}"; do
+    active=$(nvidia-smi -i "$gpu" --query-compute-apps=pid --format=csv,noheader,nounits)
+    active=$(printf '%s\n' "$active" | tr -d '[:space:]')
+    [[ -z "$active" ]] || { echo "GPU $gpu is busy" >&2; exit 1; }
+  done
 
-phase=waiting
-for index in "${!datasets[@]}"; do
-  if ! wait "${pids[$index]}"; then
-    echo "${datasets[$index]} inference failed" >&2
-    exit 1
-  fi
-done
-pids=()
+  phase=launching
+  : >"$control_root/launch.tsv"
+  for index in "${!datasets[@]}"; do
+    dataset=${datasets[$index]}
+    gpu=${gpus[$index]}
+    config=${configs[$index]}
+    work_dir="$eval_root/inference/$dataset/work"
+    cwd="$eval_root/inference/$dataset/cwd"
+    mkdir -p "$work_dir" "$cwd"
+    (
+      cd "$cwd"
+      exec setsid env \
+        CUDA_DEVICE_ORDER=PCI_BUS_ID \
+        CUDA_VISIBLE_DEVICES="$gpu" \
+        PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" \
+        PYTHONHASHSEED=42 \
+        TOKENIZERS_PARALLELISM=false \
+        VLLM_USE_V1=1 \
+        VLLM_WORKER_MULTIPROC_METHOD=spawn \
+        TORCH_DEVICE_BACKEND_AUTOLOAD=0 \
+        "$python_bin" "$repo_root/tools/run_coredev_2511_vlmevalkit.py" \
+          --config "$config" \
+          --work-dir "$work_dir" \
+          --mode infer
+    ) >"$log_root/infer-$dataset.log" 2>&1 &
+    pids+=("$!")
+    printf '%s\t%s\t%s\n' "$dataset" "$gpu" "$!" >>"$control_root/launch.tsv"
+  done
+
+  phase=waiting
+  for index in "${!datasets[@]}"; do
+    if ! wait "${pids[$index]}"; then
+      echo "${datasets[$index]} inference failed" >&2
+      exit 1
+    fi
+  done
+  pids=()
+fi
 
 phase=validating_outputs
+: >"$control_root/receipts.tsv"
 for index in "${!datasets[@]}"; do
   dataset=${datasets[$index]}
   work_dir="$eval_root/inference/$dataset/work"
@@ -164,7 +184,28 @@ print(prediction)
 PY
   )
   [[ -f "$prediction" ]] || { echo "$dataset prediction is missing: $prediction" >&2; exit 1; }
-  rows=$(( $(wc -l <"$prediction") - 1 ))
+  rows=$("$python_bin" - "$prediction" <<'PY'
+import csv
+from pathlib import Path
+import sys
+
+csv.field_size_limit(sys.maxsize)
+path = Path(sys.argv[1])
+with path.open("r", encoding="utf-8", newline="") as handle:
+    reader = csv.DictReader(handle, delimiter="\t")
+    if reader.fieldnames is None or not {"index", "prediction"}.issubset(
+        reader.fieldnames
+    ):
+        raise RuntimeError(f"prediction TSV schema differs: {path}")
+    rows = list(reader)
+indices = [str(row["index"]).strip() for row in rows]
+if any(not index for index in indices) or len(set(indices)) != len(indices):
+    raise RuntimeError(f"prediction TSV index identity differs: {path}")
+if any(not str(row["prediction"]).strip() for row in rows):
+    raise RuntimeError(f"prediction TSV contains an empty prediction: {path}")
+print(len(rows))
+PY
+  )
   [[ "$rows" -eq "${expected_rows[$index]}" ]] || {
     echo "$dataset row count differs: $rows" >&2
     exit 1
