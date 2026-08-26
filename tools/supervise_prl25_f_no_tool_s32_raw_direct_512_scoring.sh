@@ -166,22 +166,35 @@ capture_source_runs() {
   : >"$control_root/source-runs.tsv"
   local dataset status source_run
   for dataset in "${datasets[@]}"; do
-    status=$(find "$eval_root/inference/$dataset/work/Qwen3-VL-8B-Instruct" \
-      -mindepth 2 -maxdepth 2 -type f -name status.json -printf '%T@ %p\n' \
-      | sort -nr | head -1 | cut -d' ' -f2-)
-    [[ -n "$status" ]] || { echo "$dataset has no inference status" >&2; return 1; }
-    source_run=$("$python_bin" - "$status" "$dataset" <<'PY'
+    status=$("$python_bin" - \
+      "$eval_root/inference/$dataset/work/Qwen3-VL-8B-Instruct" \
+      "$dataset" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-status_path = Path(sys.argv[1])
+root = Path(sys.argv[1])
 dataset = sys.argv[2]
-payload = json.loads(status_path.read_text(encoding="utf-8"))
-entry = payload.get("datasets", {}).get(dataset, {})
-if payload.get("mode") != "infer" or entry.get("status") != "done":
-    raise RuntimeError(f"{dataset} source inference is not complete")
-print(payload["eval_id"])
+candidates = []
+for status_path in root.glob("*/status.json"):
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        continue
+    entry = payload.get("datasets", {}).get(dataset, {})
+    if payload.get("mode") == "infer" and entry.get("status") == "done":
+        candidates.append((status_path.stat().st_mtime_ns, status_path))
+if not candidates:
+    raise RuntimeError(f"{dataset} has no completed inference status")
+print(max(candidates)[1])
+PY
+    )
+    source_run=$("$python_bin" - "$status" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["eval_id"])
 PY
     )
     printf '%s\t%s\t%s\n' "$dataset" "$source_run" "$status" \
