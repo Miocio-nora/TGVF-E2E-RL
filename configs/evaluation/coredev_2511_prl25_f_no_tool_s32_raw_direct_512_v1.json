@@ -1,0 +1,61 @@
+{
+  "model": {
+    "Qwen3-VL-8B-Instruct": {
+      "model_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1/shared/step32/model",
+      "use_custom_prompt": false,
+      "use_vllm": true,
+      "min_pixels": null,
+      "max_pixels": 262144,
+      "total_pixels": null,
+      "max_new_tokens": 8192,
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": -1,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "do_sample": true,
+      "post_process": false,
+      "system_prompt": null,
+      "gpu_utils": 0.9,
+      "inference_batch_size": 8,
+      "request_seed_base": 42,
+      "request_seed_namespace": "coredev-2511-qwen3-instruct-direct-prl04-comparable-v1",
+      "limit_mm_per_prompt": {
+        "image": 24,
+        "video": 0
+      },
+      "max_model_len": 65536,
+      "mm_encoder_attn_backend": "TORCH_SDPA"
+    }
+  },
+  "data": {
+    "VStarBench": {
+      "class": "CoreDev2511VStarBenchSlice",
+      "dataset": "VStarBench"
+    },
+    "HRBench4K": {
+      "class": "CoreDev2511HRBench4KSlice",
+      "dataset": "HRBench4K"
+    },
+    "BLINK": {
+      "class": "CoreDev2511BLINKSlice",
+      "dataset": "BLINK"
+    },
+    "OCRBench_v2": {
+      "class": "CoreDev2511OCRBenchv2Slice",
+      "dataset": "OCRBench_v2"
+    },
+    "MMMU_Pro_10c": {
+      "class": "CoreDev2511MMMUPro10cSlice",
+      "dataset": "MMMU_Pro_10c"
+    },
+    "MathVista_MINI": {
+      "class": "CoreDev2511MathVistaMINISlice",
+      "dataset": "MathVista_MINI"
+    },
+    "MathVerse_MINI": {
+      "class": "CoreDev2511MathVerseMINISlice",
+      "dataset": "MathVerse_MINI"
+    }
+  }
+}

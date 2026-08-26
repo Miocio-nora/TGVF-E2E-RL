@@ -59,6 +59,27 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_evaluated_model_is_derived_from_single_model_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "config.json"
+    _write_json(config, {"model": {_MODEL: {"model_path": "/model"}}})
+    monkeypatch.setattr(sys, "argv", ["runner", "--config", str(config)])
+
+    assert _MODULE._evaluated_model_from_cli_or_config() == _MODEL
+
+
+def test_evaluated_model_rejects_ambiguous_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "config.json"
+    _write_json(config, {"model": {"model-a": {}, "model-b": {}}})
+    monkeypatch.setattr(sys, "argv", ["runner", "--config", str(config)])
+
+    with pytest.raises(RuntimeError, match="exactly one model"):
+        _MODULE._evaluated_model_from_cli_or_config()
+
+
 def _source_fixture(tmp_path: Path):
     work_dir = tmp_path / "work"
     source_run_dir = work_dir / _MODEL / _SOURCE_RUN

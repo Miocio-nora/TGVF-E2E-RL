@@ -344,6 +344,24 @@ def _option_values(name: str) -> tuple[str, ...]:
     return tuple(values)
 
 
+def _evaluated_model_from_cli_or_config() -> str:
+    """Resolve one evaluated model without violating VLMEvalKit config mode."""
+
+    cli_models = _option_values("--model")
+    if cli_models:
+        if len(cli_models) != 1:
+            raise RuntimeError("CoreDev runner requires exactly one model")
+        return cli_models[0]
+    if "--config" not in sys.argv:
+        raise RuntimeError("CoreDev runner requires --model or --config")
+    config_path = Path(_required_option("--config")).resolve()
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    configured_models = tuple(payload.get("model", {}))
+    if len(configured_models) != 1:
+        raise RuntimeError("CoreDev config must contain exactly one model")
+    return configured_models[0]
+
+
 def main() -> int:
     pinned_source_run_id = _pop_option("--tgvf-reuse-source-run-id")
     pinned_manifest_path = _pop_option("--tgvf-reuse-manifest")
@@ -359,7 +377,13 @@ def main() -> int:
     overlay = Path(deployment["overlay"])
     artifact_root = Path(pinned["artifact_root"])
     artifact_identity = artifact_root / pinned["artifact_manifest"]
-    sys.path[:0] = [str(checkout), str(overlay), str(REPOSITORY_ROOT / "src")]
+    # Keep the project's pinned dependencies ahead of the compatibility
+    # overlay.  The overlay contains antlr4 4.11, while the bundled
+    # latex2sympy2 grammar used here requires the project's antlr4 4.9.3.
+    injected_paths = (str(checkout), str(overlay), str(REPOSITORY_ROOT / "src"))
+    sys.path[:] = [entry for entry in sys.path if entry not in injected_paths]
+    sys.path[:0] = [str(checkout), str(REPOSITORY_ROOT / "src")]
+    sys.path.append(str(overlay))
 
     from tgvf_rl.evaluation.coredev_materialize import (  # noqa: PLC0415
         COREDEV_LLM_JUDGE_MODEL,
@@ -442,7 +466,17 @@ def main() -> int:
     import vlmeval.inference as inference_module  # noqa: PLC0415
 
     register_coredev_vlmevalkit_slices(dataset_module, artifacts)
-    model_name = "Qwen3-VL-8B-Thinking"
+    evaluated_model = (
+        _evaluated_model_from_cli_or_config()
+        if "--help" not in sys.argv
+        else "Qwen3-VL-8B-Thinking"
+    )
+    if evaluated_model not in {
+        "Qwen3-VL-8B-Instruct",
+        "Qwen3-VL-8B-Thinking",
+    }:
+        raise RuntimeError(f"unsupported CoreDev evaluated model: {evaluated_model}")
+    model_name = evaluated_model
     model_factory = attach_coredev_batch_options_from_factory_kwargs(
         inject_vllm_engine_options_from_factory_kwargs(
             model_config_module.supported_VLM[model_name]
@@ -454,9 +488,6 @@ def main() -> int:
     install_coredev_batched_inference(inference_module)
 
     mode = sys.argv[sys.argv.index("--mode") + 1] if "--mode" in sys.argv else "all"
-    evaluated_model = (
-        _required_option("--model") if "--help" not in sys.argv else model_name
-    )
     pinned_reuse: _PinnedReuseContract | None = None
     pinned_destination_run_id: str | None = None
     preexisting_run_ids: set[str] | None = None
