@@ -1,6 +1,6 @@
 # RP67 Adapter Ablation：计划、进度与结果
 
-更新时间：2026-08-26 23:23 JST
+更新时间：2026-08-27 01:25 JST
 
 ## 1. 目标
 
@@ -19,10 +19,10 @@ RP67 完整基线为：
 |---|---|---|---|
 | RP67 full | 已有 | 无 | 主 `D` + 三路学习型 `D-DeepStack` |
 | RP66 / no image-axis | 已有，可复用 | 去掉 image-axis CE | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP71 / no MatrixCE | **运行中，Step 730** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP72 / no DeepStack | **运行中，Step 770；S500 已持久化** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
-| RP73 / unidirectional | **运行中，Step 10** | 双向交互改为一次 target→visual payload 写入 | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP74 / post-merger | **运行中，Step 10** | Adapter 从 visual merger 前移到 merger 后 | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP71 / no MatrixCE | **运行中，Step 1680；S1500 已持久化** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP72 / no DeepStack | **运行中，Step 1780；S1500 已持久化** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
+| RP73 / unidirectional | **运行中，Step 910；S500 已持久化** | 双向交互改为一次 target→visual payload 写入 | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP74 / post-merger | **运行中，Step 930；S500 已持久化** | Adapter 从 visual merger 前移到 merger 后 | 主 `D` + 三路学习型 `D-DeepStack` |
 
 RP71 仍计算 raw MatrixCE 供诊断，但 weighted MatrixCE 严格为零，不进入总损失和梯度。
 RP72 是结构/训练联合消融；它回答“学习型 DeepStack 分支是否必要”，不能与“仅在推理时
@@ -138,6 +138,24 @@ Step-10 持久化检查。
 traceback。RP74 的 pre-clip norm 较大，但已由共同的 `max_grad_norm=1.0` 执行裁剪；需要
 继续观察其后续是否稳定。虽然 RP74 参数更多，但 merger 后 token 数为原来的四分之一，
 Step-10 吞吐暂未慢于 RP73；这只是启动性能观察，不是质量结论。
+
+### 5.4 2026-08-27 01:25 进度
+
+四臂的 tmux、双 rank 训练进程和 GPU 占用均正常，无 OOM、traceback 或非有限值。
+RP71/RP72 已跨过 S1500 checkpoint，RP73/RP74 已跨过 S500 checkpoint。
+
+| Arm | Step | raw MatrixCE | L_gen | image-axis CE | weighted Norm | Total | pre-clip grad norm |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| RP71 no MatrixCE | 1680 | 1.335171（weighted=0） | 1.043074 | 0.000977 | 0.031952 | 1.076004 | 1.336213 |
+| RP72 no DeepStack | 1780 | 1.328554 | 1.307445 | 0.007642 | 0.043075 | 2.686716 | 1.408716 |
+| RP73 unidirectional | 910 | 0.922179 | 1.358059 | 0.003355 | 0.071165 | 2.354759 | 11.843270 |
+| RP74 post-merger | 930 | 0.426972 | 1.076513 | 0.000199 | 0.061652 | 1.565335 | 4.951835 |
+
+四臂该日志点的 image-axis top-1 都是 `1.0`。RP74 当前 MatrixCE 低于 RP73，但训练
+日志是不同 minibatch 的单点观测，必须等待统一 validation 才能解释。按近期 wall time，
+RP72 训练主体约 `01:55 JST` 完成，RP71 约 `02:10 JST`；RP73/RP74 训练主体约
+`03:50–04:05 JST` 完成，随后各自自动运行 ordered-group、counterfactual 与 grounding
+internal eval。
 
 ## 6. 结果表（待填）
 
