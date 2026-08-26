@@ -1,6 +1,6 @@
 # RP67 Adapter Ablation：计划、进度与结果
 
-更新时间：2026-08-26 23:18 JST
+更新时间：2026-08-26 23:23 JST
 
 ## 1. 目标
 
@@ -21,8 +21,8 @@ RP67 完整基线为：
 | RP66 / no image-axis | 已有，可复用 | 去掉 image-axis CE | 主 `D` + 三路学习型 `D-DeepStack` |
 | RP71 / no MatrixCE | **运行中，Step 730** | same-image MatrixCE 权重 `1.0 → 0.0` | 主 `D` + 三路学习型 `D-DeepStack` |
 | RP72 / no DeepStack | **运行中，Step 770；S500 已持久化** | Adapter 变为 `main_d_only` | 仅主 `D`；三路分支固定为零且无分支可训练参数 |
-| RP73 / unidirectional | **生产预检通过，待启动** | 双向交互改为一次 target→visual payload 写入 | 主 `D` + 三路学习型 `D-DeepStack` |
-| RP74 / post-merger | **生产预检通过，待启动** | Adapter 从 visual merger 前移到 merger 后 | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP73 / unidirectional | **运行中，Step 10** | 双向交互改为一次 target→visual payload 写入 | 主 `D` + 三路学习型 `D-DeepStack` |
+| RP74 / post-merger | **运行中，Step 10** | Adapter 从 visual merger 前移到 merger 后 | 主 `D` + 三路学习型 `D-DeepStack` |
 
 RP71 仍计算 raw MatrixCE 供诊断，但 weighted MatrixCE 严格为零，不进入总损失和梯度。
 RP72 是结构/训练联合消融；它回答“学习型 DeepStack 分支是否必要”，不能与“仅在推理时
@@ -78,8 +78,8 @@ identity writeback，不再次调用 Qwen merger。attention bottleneck 仍固�
 |---|---:|---:|---|
 | RP71 no MatrixCE | 0,1 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-71-qwen3-instruct-rp67-ablation-no-matrixce-2000-gpu01/` |
 | RP72 no DeepStack | 2,3 | 运行中；当前训练主体约 4.5 h | `artifacts/representation/RP-72-qwen3-instruct-rp67-ablation-no-deepstack-2000-gpu23/` |
-| RP73 unidirectional | 4,5 | 待 GPU smoke 后正式启动 | `artifacts/representation/RP-73-qwen3-instruct-rp67-ablation-unidirectional-2000-gpu45/` |
-| RP74 post-merger | 6,7 | 待 GPU smoke 后正式启动 | `artifacts/representation/RP-74-qwen3-instruct-rp67-ablation-post-merger-2000-gpu67/` |
+| RP73 unidirectional | 4,5 | 运行中；当前约 8.13 s/step | `artifacts/representation/RP-73-qwen3-instruct-rp67-ablation-unidirectional-2000-gpu45/` |
+| RP74 post-merger | 6,7 | 运行中；当前约 7.98 s/step | `artifacts/representation/RP-74-qwen3-instruct-rp67-ablation-post-merger-2000-gpu67/` |
 
 四臂均采用 2-GPU FSDP2。RP73/RP74 先确认 step 1 完成、loss/gradient 有限且参数
 所有权检查通过，再转为正式 2,000-step 运行；后续 checkpoint 评测不能抢占训练 GPU。
@@ -124,8 +124,20 @@ runtime、FSDP2、native pipeline 和 image-axis 全链路测试。RP73 outer co
 SHA256 为 `941767ceb784e7814cfeb40f53a7110338d10c4f6b0d21ab2d33a948d11a6040`；
 RP74 为 `e6115e5de6d958667bbbc9162c26fd38709827f3c7f2636d1a11af7a6e5348dc`。
 两臂的 model、512² 图像上限、数据内容哈希、完整 objective、seed、optimizer、scheduler、
-global batch 和 internal eval 与 RP67 对齐。下一验收点是各自在 GPU 4–5 / 6–7 的首个
-optimizer step，随后记录 Step-10 持久化 metric。
+global batch 和 internal eval 与 RP67 对齐，并已通过 GPU 4–5 / 6–7 的启动验收与
+Step-10 持久化检查。
+
+两臂于 `2026-08-26 23:19:38 JST` 启动，并均已完成 Step-10 持久化指标：
+
+| Arm | Step | MatrixCE | L_gen | image-axis CE | weighted Norm | Total | pre-clip grad norm | step wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| RP73 unidirectional | 10 | 1.386515 | 5.029835 | 0.879372 | 0.046347 | 7.342069 | 1.921622 | 8.131 s |
+| RP74 post-merger | 10 | 1.389620 | 4.978840 | 0.872325 | 0.018113 | 7.258899 | 11.588552 | 7.978 s |
+
+两臂 image-axis top-1 均为 `0.21875`，loss、梯度和参数所有权均为有限值，无 OOM 或
+traceback。RP74 的 pre-clip norm 较大，但已由共同的 `max_grad_norm=1.0` 执行裁剪；需要
+继续观察其后续是否稳定。虽然 RP74 参数更多，但 merger 后 token 数为原来的四分之一，
+Step-10 吞吐暂未慢于 RP73；这只是启动性能观察，不是质量结论。
 
 ## 6. 结果表（待填）
 
