@@ -233,21 +233,24 @@ PY
 score_all_steps() {
   phase=scoring_all_steps
   local datasets=(VStarBench HRBench4K BLINK OCRBench_v2 MMMU_Pro_10c MathVista_MINI MathVerse_MINI)
-  local step dataset score_root
+  local step dataset score_root source_run_id source_manifest
   score_pids=()
   for step in 0 8 16 32; do
     score_root="$eval_root/matched/step${step}/scoring/coredev-official-v1"
+    source_run_id=$(run_id_for_step "$step")
     for dataset in "${datasets[@]}"; do
+      source_manifest="$score_root/$dataset/Qwen3-VL-8B-Instruct/$source_run_id/final-answer-view-manifest.json"
       (
         cd "$repo_root"
         exec setsid env OPENAI_API_KEY=EMPTY CUDA_VISIBLE_DEVICES= VLLM_PLUGINS= \
           PYTHONPATH="$repo_root/src" PYTHONHASHSEED=42 TOKENIZERS_PARALLELISM=false \
           "$python_bin" tools/run_coredev_2511_vlmevalkit.py \
-            --config configs/evaluation/coredev_2511_qwen3_instruct_direct_prl04_v1.json \
-            --model Qwen3-VL-8B-Instruct \
             --data "$dataset" \
+            --model Qwen3-VL-8B-Instruct \
             --work-dir "$score_root/$dataset" \
-            --mode eval --reuse-aux infer \
+            --mode eval --reuse --reuse-aux infer \
+            --tgvf-reuse-source-run-id "$source_run_id" \
+            --tgvf-reuse-manifest "$source_manifest" \
             --judge Qwen2.5-72B-Instruct \
             --judge-base-url "$judge_base_url" \
             --judge-key EMPTY --judge-api-nproc 4 --judge-retry 6 --judge-timeout 600
