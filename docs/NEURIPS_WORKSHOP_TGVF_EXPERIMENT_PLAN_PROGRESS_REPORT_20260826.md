@@ -11,7 +11,8 @@ sub-benchmark 和策略行为。协议复核同时发现：历史 Original raw d
 `262,144` pixels，而 PRL25 matched 各臂为 `1,003,520` pixels。冻结 S32 的 raw-direct@512
 Macro* 为 `54.3543`，比同合同 Original 低 `1.0013 pp`；这进一步否定“32-step RL 在原始
 raw-direct 合同上带来普遍增益”的解释。为隔离分辨率因素，Crop S80、TGVF S64 和 Atomic S16
-的 matched 工具协议 `@512` 控制也已冻结；Crop S80 已自动接续运行。下一步完成三个工具方法的
+的 matched 工具协议 `@512` 控制也已冻结；Crop S80 的 2,240 条单图推理已完成，TGVF S64
+与 Atomic S16 已在两组 GPU 上并行推进。下一步完成三个工具方法的
 `@512` 对照、正式 Atomic matched/target-only 盲审、target-only
 调用行为对照与英文 Experiments/Discussion 初稿。**
 
@@ -66,7 +67,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---:|---|
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
 | Crop S80 / TGVF S64 / Atomic S16 matched | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 三个 PRL25 工具方法之间的像素上限对齐比较 |
-| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | Crop 运行中，TGVF/Atomic 排队；分别测量每个工具方法的纯评测分辨率敏感性 |
+| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | Crop 推理完成；TGVF 与 Atomic 并行运行；分别测量每个工具方法的纯评测分辨率敏感性 |
 | No-Tool S0/S8/S16/S32 matched | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | S0→S32 的同协议 RL 动态；与三个 PRL25 工具臂像素上限对齐 |
 | No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 已完成；Macro* `54.3543`，比 Original 低 `1.0013 pp` |
 
@@ -862,6 +863,12 @@ Vision Dominant `50.0`。
   从 180/269 单图 headline 排除。最终 Macro* 为 `54.3543`，比 Original raw-direct@512 低
   `1.0013 pp`。汇总与 coverage 实现已推送至执行分支 `e54b851`，相关新增回归 `62 passed`。
   完成 marker 触发三方法顺序队列，Crop S80 matched@512 已于 17:50 JST 开始准备 snapshot。
+- 2026-08-26 18:35 JST 工具方法 `@512` 并行接管节点：Crop S80 推理以 `2,240/2,240`
+  单图记录完整闭合；原顺序 barrier 被移除。既有 TGVF S64 推理进程及已写记录无损保留并继续
+  使用 GPU0–3，Atomic S16 已立即在 GPU4–7 开始 checkpoint materialization/validation；TGVF
+  释放 GPU0/1 后将与 Atomic 推理重叠执行 Crop、TGVF 的 TP=2 judge，随后评分 Atomic。接管后
+  无 OOM、Traceback 或失败 marker；可恢复 supervisor 修复已在执行分支提交并推送为
+  `4fdd724`。本节点只报告运行进度，不提前报告 `@512` 分数。
 
 ### 5.5 三个工具方法的 matched@512 分辨率控制
 
@@ -938,8 +945,8 @@ Atomic 进入正文核心方法必须同时满足：
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
 5. [已完成] No-Tool RL：合同、实现、CPU 回归、真实 canary、正式 S32 训练、S0/S8/S16/S32
    matched no-tool 推理、28 个 slice 评分、四臂汇总与文章结果回填均已闭合；
-6. [运行中] S32 raw-direct@512 已闭合；正在自动依次运行 Crop S80、TGVF S64、Atomic S16
-   matched@512 单变量控制，并回填 Macro*、完整 sub-benchmark 与调用行为；
+6. [运行中] S32 raw-direct@512 已闭合；Crop S80 matched@512 推理已完成，TGVF S64 与
+   Atomic S16 正在两组 GPU 上并行运行；评分闭合后回填 Macro*、完整 sub-benchmark 与调用行为；
 7. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 8. [待回填] target-only 调用行为对照与正式 audit；
@@ -965,7 +972,7 @@ Atomic 进入正文核心方法必须同时满足：
   28 个精确评分来源由同级各 dataset 的 `pinned-reuse-receipt.json` 固定。
 - `@512` 执行计划：
   `configs/evaluation/prl25_{b_crop_exact_step80,c_frozen_rp67_tfree_teacher25_s64_matched,d_atomic_crop_tgvf_s16_matched}_pixel512_coredev2511_plan.json`；
-  顺序 supervisor 为 `tools/supervise_prl25_bcd_selected_pixel512_evaluation.sh`。
+  并行、可恢复 supervisor 为 `tools/supervise_prl25_bcd_selected_pixel512_evaluation.sh`。
 - No-Tool S32 raw-direct@512 accepted summary：
   `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-RAW-DIRECT-512-S32-V1/scoring/coredev-2511-eval-summary.json`。
 
