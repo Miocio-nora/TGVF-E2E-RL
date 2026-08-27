@@ -407,3 +407,20 @@ def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> Non
     assert locally_limited.stop == "context_limit"
     assert locally_limited.final_answer is None
     assert manager.calls == 0
+
+    # A mixed action/final turn violates the hard </tool_call> boundary.  It
+    # must be visible as a protocol failure, never accepted as a direct answer
+    # with the requested Crop silently skipped.
+    manager.calls = 0
+    evaluator.config.max_model_len = 32768
+    processor.tokenizer.decoded[201] = (
+        '<think>inspect</think><tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,50,710,760]}}</tool_call> A'
+    )
+    mixed = asyncio.run(evaluator.evaluate(task))
+    assert mixed.stop == "malformed_action"
+    assert mixed.final_answer is None
+    assert manager.calls == 1
+    assert mixed.tool_calls == ()
+    assert mixed.tool_errors[-1]["code"] == "tool_call_terminal_suffix"
+    assert mixed.tool_errors[-1]["recoverable"] is False

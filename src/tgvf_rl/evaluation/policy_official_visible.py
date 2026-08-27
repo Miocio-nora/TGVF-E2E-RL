@@ -577,14 +577,35 @@ class OfficialVisiblePolicyEvaluator:
                 )
                 messages.append({"role": "assistant", "content": text})
                 trailing_final = direct_answer_after_last_tool_call(text)
-                if trailing_final is not None:
-                    extraction = extract_visual_answer(trailing_final)
-                    final_answer = extraction.answer or None
-                    stop = (
-                        "final_answer"
-                        if final_answer is not None
-                        else "malformed_action"
+                if is_tool_call and trailing_final is not None:
+                    # A well-formed request hard-stops at </tool_call>.  Never
+                    # degrade a boundary violation into a direct final answer:
+                    # doing so silently skips the requested Crop and inflates
+                    # answer-over-action results.
+                    tool_errors.append(
+                        {
+                            "attempt_index": attempts,
+                            "assistant_turn_index": turn_index,
+                            "function_name": DEEPEYES_TOOL_NAME,
+                            "code": "tool_call_terminal_suffix",
+                            "payload_json": json.dumps(
+                                {
+                                    "response_text_sha256": hashlib.sha256(
+                                        text.encode("utf-8")
+                                    ).hexdigest(),
+                                    "suffix_sha256": hashlib.sha256(
+                                        trailing_final.encode("utf-8")
+                                    ).hexdigest(),
+                                    "suffix_char_count": len(trailing_final),
+                                },
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            "recoverable": False,
+                        }
                     )
+                    stop = "malformed_action"
                     break
                 if not is_tool_call:
                     extraction = extract_visual_answer(text)

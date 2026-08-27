@@ -178,6 +178,25 @@ def test_step_zero_full_model_snapshot_round_trip_and_tamper(tmp_path: Path) -> 
     assert identity["lora_request"] is None
     assert "protocol_run_id" not in identity
     assert snapshot.model_path == base.resolve()
+    assert identity["evaluation_sampling"]["stop_strings"] == ["</tool_call>"]
+    assert identity["evaluation_sampling"]["include_stop_str_in_output"] is True
+    assert dict(
+        snapshot.run.policy.sampling.as_vllm_parameters(max_tokens=1024)
+    ) == {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "min_p": 0.0,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "stop_token_ids": [151645],
+        "stop": ["</tool_call>"],
+        "include_stop_str_in_output": True,
+        "ignore_eos": False,
+        "max_tokens": 1024,
+        "logprobs": True,
+    }
 
     torch.save({"changed": torch.ones(1)}, base / "pytorch_model.bin")
     with pytest.raises(ValueError, match="full-model"):
