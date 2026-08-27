@@ -1,0 +1,108 @@
+{
+  "arms": [
+    {
+      "evaluation_id": "PRL25-B-CROP-EXACT-COREDEV2511-STEP80-PIXEL512-TEMP1-SEED42-TOOL-BOUNDARY-FIX-V2",
+      "name": "step80",
+      "optimizer_step": 80,
+      "source": {
+        "kind": "owner_checkpoint",
+        "relative_path": "permanent-checkpoints/global_step_80"
+      }
+    }
+  ],
+  "checkpoint_owner": {
+    "checkpoint_world_size": 8,
+    "completion_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/permanent-checkpoints/global_step_80/tgvf_permanent_checkpoint_receipt.json",
+    "completion_sha256": "d0d68f006898676bfea0518f3bf419fb70b1ec539b31d3a1b8e6d71c7649878f",
+    "config_path": "configs/policy/runs/prl_25_b_qwen3_instruct_full_crop_exact_bs16_n16_tfree_teacher25_80step_ws8.toml",
+    "config_sha256": "e31780fb47814a28ef39484b614d92ad1a0bf4b4c9c11a6bf9c27a1dd0829094",
+    "contract_type": "policy_e2e_crop_exact_run_config_v1",
+    "output_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8",
+    "run_id": "PRL-25-B-QWEN3-INSTRUCT-FULL-CROP-EXACT-BS16-N16-TFREE-TEACHER25-80STEP-WS8",
+    "run_identity_sha256": "8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1"
+  },
+  "evaluation_id": "PRL25-B-CROP-EXACT-COREDEV2511-STEP80-PIXEL512-TEMP1-SEED42-TOOL-BOUNDARY-FIX-V2",
+  "evaluation_image_max_pixels": 262144,
+  "expected_single_image_count": 2240,
+  "expected_task_count": 2511,
+  "paired_rng": {
+    "do_sample": true,
+    "excluded_arm_components": [
+      "evaluation_id",
+      "arm_name",
+      "optimizer_step",
+      "checkpoint_hash",
+      "policy_weights_sha256",
+      "prompt_token_ids_sha256"
+    ],
+    "master_seed": 42,
+    "mode": "common_random_numbers_per_task_turn",
+    "protocol_sha256": "cadbff473bbc55650a5ac3b1b99fe8b4c5645ddc4dfb0cc0a0be75fd86183920",
+    "schema_version": "tgvf.policy-paired-evaluation-rng-plan.v1",
+    "seed_namespace": "coredev2511-official-v1/prl25-b-crop-exact/step80/pixel512/temp1/seed42/v1",
+    "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+    "temperature": 1.0
+  },
+  "protocol": {
+    "evaluation_protocol": "deepeyes_official_visible_native_crop_v1",
+    "maximum_tool_calls": 6,
+    "native_pixels": true,
+    "same_tasks_and_rank_partition": true,
+    "sampling_source": "bound_protocol_contract",
+    "tool_name": "image_zoom_in_tool",
+    "tool_parser": "hermes",
+    "visual_prompt_bundle_sha256": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2"
+  },
+  "protocol_contract": {
+    "config_path": "configs/policy/runs/prl_24_d_base_qwen3_instruct_full_crop_teacher25_native_prl13.toml",
+    "config_sha256": "5888d64132b36541ad9172e83720631df5ce15e9863666e07253b6f3e3a695a8",
+    "contract_type": "deepeyes_native_crop_v1",
+    "run_id": "PRL-24-D-BASE-QWEN3-INSTRUCT-FULL-CROP-TEACHER25-NATIVE",
+    "run_identity_sha256": "d8fd32fcc9fda156db54e41a18c56055d53ba0f96eb52859ea02ff6cfa4b460f"
+  },
+  "schema_version": "tgvf.paired-policy-benchmark-plan.v3",
+  "scoring": {
+    "datasets": [
+      "VStarBench",
+      "HRBench4K",
+      "BLINK",
+      "OCRBench_v2",
+      "MMMU_Pro_10c",
+      "MathVista_MINI",
+      "MathVerse_MINI"
+    ],
+    "evaluated_model": "Qwen3-VL-8B-Instruct",
+    "execution": {
+      "mode": "eval",
+      "reuse": true,
+      "reuse_aux": "infer"
+    },
+    "gpt_fallback": false,
+    "judge_api_nproc": 4,
+    "judge_config_path": "configs/evaluation/qwen25_72b_judge_service_v1.json",
+    "judge_config_sha256": "85114f295ba57ec39c98785890e2041de7c756f73e04abee5424ca4eecc5f0e4",
+    "judge_retry": 6,
+    "judge_timeout_seconds": 600,
+    "mathverse_source_json": "/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testmini.json",
+    "mathverse_source_sha256": "f4ce9b18d111b23d5950dcbc8f377c6a05955a458db6a3103aec706fa63b0e9b",
+    "pinned_artifacts_config_path": "configs/evaluation/coredev_2511_vlmevalkit_v1.json",
+    "pinned_artifacts_config_sha256": "eb2a34b3be5b36d9208c887ff657c93d1e222b899741330c45733ffa3951a267",
+    "run_id_prefix": "T20260828-PRL25-B-CROP-EXACT-STEP80-PIXEL512-BOUNDARYFIX-V2",
+    "source_root": "/nvmesv/dredvpn009/datasets/benchmarks/coredev_2511_vlmevalkit_7055d301_v1",
+    "view_name": "coredev-official-v1",
+    "vlmevalkit_deployment_config_path": "configs/evaluation/vlmevalkit_deployment_v1.json",
+    "vlmevalkit_deployment_config_sha256": "7d7dc8a470f2ec25bdd95bef56f76fa965accb5bf12a840a4db448f1f53b27f8"
+  },
+  "snapshot": {
+    "backend": "full_model",
+    "enable_chunked_prefill": false,
+    "gpu_memory_utilization": 0.8,
+    "inference_concurrency_per_gpu": 8,
+    "max_model_len": 32768,
+    "max_num_batched_tokens": 32768
+  },
+  "status": "ready",
+  "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
+  "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+  "unsupported_multi_image_count": 271
+}
