@@ -2,25 +2,31 @@
 
 更新时间：2026-08-28（Asia/Tokyo）
 
-> **Crop 边界勘误（2026-08-28）：S32/S80 native-pixel 与 S80@512 fixed-boundary
-> 正式复测均已闭合。** 修正后 S32/S80 Macro* 为 `61.6699 / 59.1785`，S80@512 为
-> `62.0967`，三臂 same-turn mixed 均为 `0`。旧 S8/S16/S48/S64 仍为 provisional；旧
-> boundary 的 S80@512 `61.5591` 已作废。Pure TGVF 与 Atomic 不受该特定缺陷影响。详见第 0 节。
+> **Crop 双重勘误（2026-08-28）：action boundary 已修复，但此前宣称的 Crop
+> 1M→512 像素控制无效。** fixed-boundary S32/S80 的 Macro* 为 `61.6699 / 59.1785`；另一次
+> nominal `@512` 运行的 Macro* 为 `62.0967`，三臂 same-turn mixed 均为 `0`。然而处理器审计
+> 证明后两次 S80 运行的 initial visual token counts 完全相同，均实际使用 fast processor 默认
+> `size.longest_edge=16,777,216`，而不是 `1,003,520 / 262,144`。因此两项数值只保留为
+> native-default 历史运行，`+2.9182 pp` 不具有像素效应含义。Crop true@1M/true@512 正在等待
+> corrected common-RNG rerun。旧 boundary 的 nominal S80@512 `61.5591` 仍作废；Pure TGVF
+> 与 Atomic 不受 Crop action-boundary 或该 Crop processor-override 缺陷影响。详见第 0 与 5.5 节。
 
 状态：**实验进行中；RP67 三臂验证、广义 full-prompt stress test、严格 target-only matched
 prompt 与 No-Tool RL S0/S8/S16/S32 matched no-tool 评测均已闭合。事前冻结的 No-Tool S32
 Macro* 为 `66.6853`，同协议 S0 为 `64.4712`，即 32-step RL 增益为 `+2.2141 pp`；S32 同时
-高于修正后 Crop S80、TGVF S64 和 Atomic S16。该结果不支持“工具方法的总体增益超越当前 RL-only
+高于 Crop S80 native-default 历史运行、TGVF S64 和 Atomic S16。该结果不支持“工具方法的总体增益超越当前 RL-only
 control”，文章据此收缩总体工具优势 claim，并把工具价值限定到 RP67 内容 utility、特定
 sub-benchmark 和策略行为。协议复核同时发现：历史 Original raw direct 的图像上限为
-`262,144` pixels，而 PRL25 matched 各臂为 `1,003,520` pixels。冻结 S32 的 raw-direct@512
+`262,144` pixels，而 TGVF、Atomic 与 No-Tool matched 各臂为 `1,003,520` pixels；Crop
+official-visible 路径后来确认实际落到 processor default。冻结 S32 的 raw-direct@512
 Macro* 为 `54.3543`，比同合同 Original 低 `1.0013 pp`；这进一步否定“32-step RL 在原始
-raw-direct 合同上带来普遍增益”的解释。Crop S32/S80 fixed-boundary 主复测及 S80@512
-修正复测均已完成；Crop/TGVF/Atomic matched@512 的 Macro* 分别为
-`62.0967 / 55.4067 / 57.2762`，相对各自 matched@1M 为
-`+2.9182 / −4.4019 / −5.8065 pp`。这表明输入分辨率效应具有方法特异性，不能统一写成
-低分辨率退化。下一步完成正式 Atomic matched/target-only 盲审、target-only 调用行为对照与
-英文 Experiments/Discussion 初稿。**
+raw-direct 合同上带来普遍增益”的解释。Crop S32/S80 fixed-boundary 主复测已完成，但 nominal
+Crop S80@512 并未真正应用 512² pixel cap：其 Macro* `62.0967` 与 `59.1785` 只能作为两次
+native-default 历史运行，二者 RNG namespace 与 protocol 又不相同，差值不可归因。TGVF
+S64@512 与 Atomic S16@512 的路径经复核正确，Macro* `55.4067 / 57.2762` 及相对各自
+matched@1M 的 `−4.4019 / −5.8065 pp` 仍有效。下一步优先完成 Crop true@1M/true@512 的
+corrected common-RNG rerun，再完成正式 Atomic matched/target-only 盲审、target-only 调用行为
+对照与英文 Experiments/Discussion 初稿。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -29,10 +35,11 @@ raw-direct 合同上带来普遍增益”的解释。Crop S32/S80 fixed-boundary
 
 ## 0. 紧急勘误：Crop `</tool_call>` action boundary（2026-08-28）
 
-**Crop S32/S80 native-pixel 与 S80@512 fixed-boundary 复测均已完成，本文当前 Crop
-headline 改用修正后 S80。** 历史 S8/S16/S48/S64 的准确率、sub-benchmark 和工具使用率
-仍为 provisional；旧 boundary 的 S80@512 结果已作废，由本次 fixed-boundary 结果替换。
-Original、Pure TGVF 和 Atomic 不因这一特定缺陷降级。
+**Crop S32/S80 fixed-boundary 复测已完成，本文当前 Crop headline 使用 S80 的
+native-default 历史运行；此前 nominal S80@512 不能作为像素控制。** 历史 S8/S16/S48/S64
+的准确率、sub-benchmark 和工具使用率仍为 provisional；旧 boundary 的 nominal S80@512
+结果已作废。Original、Pure TGVF 和 Atomic 不因 Crop action-boundary 缺陷降级；其中 TGVF
+和 Atomic 的 pixel-cap override 路径经复核有效。
 
 根因在 Crop-only 的 `full_model + deepeyes_official_visible_native_crop_v1` 路径：
 full-model snapshot 重建 vLLM sampling request 时丢失了
@@ -69,7 +76,7 @@ full-model snapshot 重建 vLLM sampling request 时丢失了
 | S32 / fixed boundary | **61.6699** | 80.6283 | 67.5000 | 61.6667 | 53.8465 | 44.9814 | 69.6667 | 53.4000 |
 | S32 fixed − old | **−1.8678** | +0.5236 | −5.5000 | −2.7778 | −0.9643 | −4.0892 | −1.6667 | +1.4000 |
 | S80 / old boundary | 62.2288 | 81.6754 | 74.5000 | 58.8889 | 55.3358 | 46.4684 | 67.3333 | 51.4000 |
-| S80 / fixed boundary | **59.1785** | 78.5340 | 61.5000 | 57.7778 | 55.4948 | 44.6097 | 66.3333 | 50.0000 |
+| S80 / fixed boundary, native-default historical | **59.1785** | 78.5340 | 61.5000 | 57.7778 | 55.4948 | 44.6097 | 66.3333 | 50.0000 |
 | S80 fixed − old | **−3.0503** | −3.1414 | −13.0000 | −1.1111 | +0.1589 | −1.8587 | −1.0000 | −1.4000 |
 
 - S32/S80 的 executed calls 为 `1,677 / 2,010`，successful observations 也精确为
@@ -77,10 +84,13 @@ full-model snapshot 重建 vLLM sampling request 时丢失了
   两臂同轮 `tool_call + final` 均为 `0`，所有工具 turn 均以 `</tool_call>` 结束。
 - S80 仍是事先指定的 80-step headline，不因修正后 S32 高 `2.4914 pp` 而 post-hoc
   重选 checkpoint。S80 只在 OCR mean 上高于 S32（`+1.6483 pp`）。
-- Crop S80@512 同样受旧边界缺陷影响。fixed-boundary plan 已在现有
+- nominal Crop S80@512 同样受旧边界缺陷影响。fixed-boundary plan 已在现有
   `neurips-notool-rl-s32` 分支 commit `eb37ad9` 冻结并完成：`2,240/2,240` 条受支持
   trajectory、`7/7` 官方 slice、summary `status=pass`、judge parse failure `0`，Macro*
-  为 `62.0967`。旧 `61.5591` 只作历史无效记录，不再进入结论。
+  为 `62.0967`。该运行可验证 action boundary，但不能验证 512² pixel cap：processor audit
+  显示它与 Macro* `59.1785` 的 S80 运行均使用默认 `size.longest_edge=16,777,216`，样例
+  `2250×1500` 图像均产生 `3,290` 个 initial visual tokens。旧 `61.5591` 只作历史无效记录；
+  true@1M/true@512 需使用 nested `images_kwargs.size` 后按 common RNG 重跑。
 
 ## 1. 文章当前主线
 
@@ -92,8 +102,9 @@ full-model snapshot 重建 vLLM sampling request 时丢失了
 > selected visual-reasoning regimes, without establishing aggregate superiority of
 > tool-augmented policies.
 
-正文先以 **No-Tool RL** 收缩总体 claim，再以 **Pure TGVF** 为机制主线、**Native Crop** 为强
-工具基线、**Original** 为 raw direct 端到端参考。**Atomic Crop+TGVF** 目前仍列探索性扩展；其正文层级等待真正的
+正文先以 **No-Tool RL** 收缩总体 claim，再以 **Pure TGVF** 为机制主线、**Native Crop** 为
+native-default 历史工具基线、**Original** 为 raw direct 端到端参考。Crop 的公平 1M/512 基线
+位置等待 corrected rerun。**Atomic Crop+TGVF** 目前仍列探索性扩展；其正文层级等待真正的
 target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-prompt stress test 同时改变了
 多项 prompt/observation 合同，不能单独用于决定 Atomic 的正文层级。
 
@@ -103,12 +114,13 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---|---|
 | **Original raw-direct@512** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt；`max_pixels=262144` | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；与 PRL25 matched 行同时跨越 prompt/agent protocol 和输入像素上限，只是端到端 direct reference |
 | **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | matched S0/S8/S16/S32 回答同协议优化动态；新增 S32 raw-direct@512 回答训练后模型在 Original 合同下的 transfer，不得改称 Original |
-| **Crop** | PRL25-B native RGB Crop | S80，seed42 | 80-step 终点工具基线；不补 seed43 |
+| **Crop** | PRL25-B native RGB Crop | S80，seed42 | 80-step 终点工具基线；当前 `59.1785` 是 fixed-boundary native-default 历史运行，不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
 | **matched prompt** | 80-step 训练与既有 CoreDev 评测使用的简化、训练匹配 prompt | 历史结果 | 用于现有主表 |
 | **full prompt** | 详细说明 target、bbox、关系与禁止答案泄漏的 Instruct prompt；可见与运行时上限均为 6 次 | `full_visual_tool_prompt_v5_instruct_cap6` | 只在冻结 S64/S16 上评测，不重选 checkpoint；衡量 prompt shift robustness |
-| **matched@512 control** | 保留各方法原 matched prompt、工具 schema、agent loop、checkpoint、seed42 与七项任务，只把评测 `max_pixels` 改为 `262144` | Crop S80 / TGVF S64 / Atomic S16 | 单变量输入分辨率控制；训练仍为 matched@1M，不改称新方法或新 checkpoint |
+| **matched@512 control** | 保留原 matched prompt、工具 schema、agent loop、checkpoint、seed42 与七项任务，并把评测上限真正改为 `262144` | 当前仅 TGVF S64 / Atomic S16 已有效完成 | 单变量输入分辨率控制；Crop nominal @512 因 override 未生效而排除，true@1M/true@512 pending |
+| **Crop native-default historical runs** | fixed-boundary Crop S80 的两次历史运行；processor 均使用默认 `size.longest_edge=16,777,216` | Macro* `59.1785 / 62.0967` | 后者虽在 plan 中 nominal 标为 @512，但不是有效 pixel-cap control；两次运行 RNG/protocol 不同，差值不可归因 |
 | **Macro\*** | 七个百分比组件的无权平均 | VStar、HRBench、BLINK-180、OCR EN/CN mean、MMMU-269、MathVista、MathVerse 五版本宏平均 | 只在相同测量合同内比较 |
 
 固定排除项：**不补 Crop seed43**。它不是本文结论的必要验证，也不用于构造三方法对称性。
@@ -119,35 +131,41 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 `262,144 = 512²`，而 `1,003,520` 的等面积正方形边长约为 `1,002` pixels，后者的像素面积预算
 约为前者的 `3.83×`。
 
-训练侧也使用同一高像素预算。Crop、TGVF、Atomic 与 No-Tool 四条 PRL25 RL trainer 的实际日志
-均记录 `mm_processor_kwargs.max_pixels=1003520`，其冻结 matched evaluator 配置同样记录
-`image_max_pixels=1003520`。因此 1M 上限不是评测时临时提高，而是 PRL25 训练—matched 评测
-一致的视觉处理合同；Original 未经过这轮 RL，其历史 direct eval 使用 262,144。
+训练侧的 Crop、TGVF、Atomic 与 No-Tool 四条 PRL25 RL trainer 日志均记录
+`mm_processor_kwargs.max_pixels=1003520`。但“配置中记录了该值”不等于所有 evaluator 都实际
+应用了该值。TGVF、Atomic 与 No-Tool 的冻结 matched 路径正确解析该上限；Crop 的
+`policy_official_visible` 路径把 `max_pixels` 作为 fast processor 不读取的顶层 kwarg 传入，
+实际回退到 `size.longest_edge=16,777,216`。因此现有 Crop S80 不能再标成 matched@1M，也不能
+与 nominal @512 组成像素消融。Original 未经过这轮 RL，其历史 direct eval 的 262,144 路径仍
+有效。
 
 | 比较臂 | Prompt / agent contract | 最大图像像素面积 | 当前用途 |
 |---|---|---:|---|
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
-| Crop S80 / TGVF S64 / Atomic S16 matched | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 三个 PRL25 工具方法之间的像素上限对齐比较 |
-| Crop S80 / TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | 三臂均已闭合；Crop 使用 fixed-boundary 修正复测，旧结果作废 |
-| No-Tool S0/S8/S16/S32 matched | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | S0→S32 的同协议 RL 动态；与三个 PRL25 工具臂像素上限对齐 |
+| Crop S80 fixed-boundary historical | native Crop prompt 与 agent loop | processor default 16,777,216 | Macro* `59.1785`；不是 matched@1M，保留为历史性能记录 |
+| Crop S80 nominal @512 fixed-boundary | 同一类 Crop evaluator；plan nominal 请求 262,144 | processor default 16,777,216 | Macro* `62.0967`；override 未生效，invalid pixel control |
+| TGVF S64 / Atomic S16 matched | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 两个 latent-evidence 方法之间的有效 matched 上限 |
+| TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | 两臂均已闭合且 override 路径有效 |
+| No-Tool S0/S8/S16/S32 matched | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | S0→S32 的同协议 RL 动态；与 TGVF/Atomic matched 像素上限对齐，不与现有 Crop 历史运行对齐 |
 | No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 已完成；Macro* `54.3543`，比 Original 低 `1.0013 pp` |
 
-因此，No-Tool matched 的 S32−S0 `+2.2141 pp` 不受分辨率混杂；Crop/TGVF/Atomic/No-Tool
-matched 的像素上限也相同。相反，Original 与任何 PRL25 matched 行的绝对差值同时混入 prompt、
-agent loop 和输入分辨率，不能写成 prompt-only gain，更不能直接归因给 RL 或工具。
+因此，No-Tool matched 的 S32−S0 `+2.2141 pp` 不受分辨率混杂；TGVF、Atomic 与 No-Tool
+matched 的像素上限也相同。Crop 当前历史结果使用 processor default，不能加入这一像素对齐集合。
+Original 与任何 PRL25 工具/matched 行的绝对差值同时混入 prompt、agent loop 和输入分辨率，
+不能写成 prompt-only gain，更不能直接归因给 RL 或工具。
 
 ## 3. 当前主结果：Original 必须在场
 
 下表全部为当前选定 checkpoint 的 seed42 结果，单位为 `%`。Original 的精确七项均值为
 `55.3556`，按其既有 raw-direct@512 测量合同报告为 `55.36`。No-Tool S32 raw-direct 行与
-Original 使用同合同；其余四个 PRL25 行使用 matched@1M 合同。该表用于完整展示，不构成所有行
-之间的严格 paired ranking。
+Original 使用同合同；TGVF、Atomic 与 No-Tool matched 行使用有效的 matched@1M 合同，而 Crop
+行是 processor-default 历史合同。该表用于完整展示，不构成所有行之间的严格 paired ranking。
 
 | Method | Macro* | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original | 55.3556 | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | 74.3333 | 50.6000 |
 | No-Tool RL S32 raw-direct@512 | 54.3543 | −1.0013 | 51.3089 | 59.0000 | 60.0000 | 47.9377 | 39.0335 | 74.0000 | 49.2000 |
-| Crop S80 / fixed boundary | 59.1785 | +3.8229 | 78.5340 | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
+| Crop S80 / fixed boundary, native-default historical | 59.1785 | +3.8229 | 78.5340 | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
 | TGVF S64 | 59.8086 | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | Atomic S16 | 63.0827 | +7.7271 | 71.7277 | **73.5000** | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
 | No-Tool RL S32 | **66.6853** | **+11.3297†** | **84.2932** | 69.0000 | **70.5556** | 50.8528 | **55.7621** | **75.3333** | **61.0000** |
@@ -159,10 +177,11 @@ Original 使用同合同；其余四个 PRL25 行使用 matched@1M 合同。该�
 
 可直接写入正文的事实边界：
 
-- 三个工具方法的 Macro* 都高于 raw-direct@512 Original；该描述同时跨越 prompt/agent contract
-  和像素上限，只能作为端到端观察。工具线路内部的像素上限相同，其中 Atomic S16 最高。Crop
-  S80 是按用户指定报告的 80-step 终点基线，不再使用 post-hoc 最优 S32。
-- No-Tool RL S32 是全表最高 Macro*，比修正后 Crop S80、TGVF S64、Atomic S16 分别高
+- 三个工具方法的历史 Macro* 都高于 raw-direct@512 Original；该描述同时跨越 prompt/agent
+  contract 和像素上限，只能作为端到端观察。TGVF/Atomic 的像素上限对齐，但 Crop 使用
+  processor default，不能再声称三个工具线路内部像素对齐。Crop S80 是按用户指定报告的
+  80-step 历史终点，不再使用 post-hoc 最优 S32。
+- No-Tool RL S32 是全表最高 Macro*，比 Crop S80 native-default 历史运行、TGVF S64、Atomic S16 分别高
   `7.5068 / 6.8767 / 3.6026 pp`。这直接否定“当前工具方法总体优于 RL-only 对照”的写法。
 - No-Tool S0 已达到 `64.4712`，而 S32−S0 只有 `+2.2141 pp`。因此 prompt/schema/agent
   protocol 是主要替代解释之一；matched no-tool 去除了工具 schema，仍不是工具存在性的严格
@@ -172,8 +191,8 @@ Original 使用同合同；其余四个 PRL25 行使用 matched@1M 合同。该�
   MathVerse `−1.4000 pp`。净结果为 `−1.0013 pp`，不支持 raw-direct transfer gain。
 - TGVF 不是全榜最优方法，因此文章不能写成“通用性能支配”。它相对 Original 的主要整体
   增益在 VStar、HRBench 和 MMMU，并在一组更细的关系/数学任务中形成集中优势。
-- Atomic 的 Macro* 比修正后 Crop S80 高 `3.9042 pp`，且分项来源不同；这支持
-  能力分解，但仍不能在没有严格工具开关消融时声称“Crop+TGVF 存在因果 synergy”。
+- Atomic 的 Macro* 比 Crop S80 native-default 历史运行高 `3.9042 pp`，但两者的有效像素合同
+  不同；该差值只能描述既有端点，不能支持公平的方法排序或“Crop+TGVF 存在因果 synergy”。
 - Original 在部分视觉强度与 OCR 切片上仍有优势，必须作为负面边界一起报告；No-Tool matched
   S32 在 MathVista headline 上比 Original 高 `1.0000 pp`，但 raw-direct@512 S32 低
   `0.3333 pp`。
@@ -197,8 +216,10 @@ endpoint。本文在 target-only 结果揭晓前冻结其 v2 版本；此后不�
 
 表中粗体表示五种方法的行最优；最后一列仍是 `max(TGVF, Atomic) − Original`，专门保留
 target-conditioned 方法的能力增益。No-Tool 列作为控制进入完整面板，不参与该列的定义。
+Crop 列来自 fixed-boundary native-default 历史运行，不是 matched@1M；它与其他列任务 ID
+对齐，但视觉像素合同不对齐，因此只作探索性上下文，不承担公平像素预算下的方法排序。
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 | Best TGVF/Atomic Δ |
+| Sub-benchmark | n | Original | Crop S80 native-default | TGVF S64 | Atomic S16 | No-Tool S32 | Best TGVF/Atomic Δ |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | VStar / direct attributes | 115 | 48.70 | 82.61 | 70.43 | 69.57 | **86.09** | **+21.74** |
 | VStar / relative position | 76 | 53.95 | 72.37 | 80.26 | 75.00 | **81.58** | **+26.32** |
@@ -232,13 +253,13 @@ geometry reasoning、MathVerse Vision Intensive。这样主图可以彰显优势
 ### 4.3 MathVista MINI 低于 Original 的归因
 
 这不是测试 subset 不同造成的。五种方法都在同一份完整 `MathVista_MINI` 上评分，逐题核对后
-均为相同的 300 个 `index`；Original 答对 223 题，而修正后 Crop、TGVF、Atomic、
+均为相同的 300 个 `index`；Original 答对 223 题，而 Crop native-default historical、TGVF、Atomic、
 No-Tool S32 分别答对 199、217、209、226 题。按官方判分函数逐题配对得到：
 
 | Method | Correct / 300 | Δ correct vs Original | Gained: method correct, Original wrong | Lost: Original correct, method wrong |
 |---|---:|---:|---:|---:|
 | Original | 223 | — | — | — |
-| Crop S80 / fixed boundary | 199 | -24 | 12 | 36 |
+| Crop S80 / fixed boundary, native-default historical | 199 | -24 | 12 | 36 |
 | TGVF S64 | 217 | -6 | 26 | 32 |
 | Atomic S16 | 209 | -14 | 19 | 33 |
 | No-Tool S32 | 226 | +3 | 23 | 20 |
@@ -263,6 +284,9 @@ shift 或答案格式。
 相同的 `2,240` 个受支持单图 ID 上各有一条记录，其中 BLINK 使用共同单图 `n=180`，
 MMMU-Pro 使用共同单图 `n=269`。本文区分以下口径：
 
+这里的 Crop 调用行为来自 S80 fixed-boundary native-default 历史运行。调用计数本身有效，但
+不能解释为 matched@1M 行为，亦不能与 nominal @512 历史运行构造像素效应。
+
 - **attempted question**：`tool_calls + tool_errors > 0`，即模型至少生成过一次工具尝试；
 - **successful-use question**：`tool_calls > 0`，即至少一次调用被执行并返回 observation；
 - **executed calls**：trajectory 中 `tool_calls` 的总数；
@@ -277,7 +301,7 @@ Crop 与 TGVF observation 的原子工具，不能拆成两次工具调用。
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original | none | 0 (0.00%) | 0 (0.00%) | 0 | 0 | — | 0.000 | — | 0 (0.00%) |
 | No-Tool RL S32 | none | 0 (0.00%) | 0 (0.00%) | 0 | 0 | — | 0.000 | — | 0 (0.00%) |
-| Crop S80 / fixed boundary | `image_zoom_in_tool` | 2,071 (92.46%) | 1,977 (88.26%) | 2,010 | 153 | 92.93% | 0.897 | 1.017 | 21 (0.94%) |
+| Crop S80 / fixed boundary, native-default | `image_zoom_in_tool` | 2,071 (92.46%) | 1,977 (88.26%) | 2,010 | 153 | 92.93% | 0.897 | 1.017 | 21 (0.94%) |
 | TGVF S64 | `tgvf_focus_tool` | **2,012 (89.82%)** | **2,010 (89.73%)** | 2,011 | 3 | **99.85%** | 0.898 | 1.000 | 1 (0.04%) |
 | Atomic S16 | `tgvf_crop_tool` | 1,866 (83.30%) | 1,863 (83.17%) | **2,300** | 36 | 98.46% | **1.027** | **1.235** | **221 (9.87%)** |
 
@@ -290,7 +314,7 @@ Crop 与 TGVF observation 的原子工具，不能拆成两次工具调用。
 每格为 `successful-use questions / n (rate)`。该表回答“模型在多少题上实际使用了工具”，不把
 无效尝试算作成功使用。
 
-| Set | n | Crop S80 | TGVF S64 | Atomic S16 |
+| Set | n | Crop S80 native-default | TGVF S64 | Atomic S16 |
 |---|---:|---:|---:|---:|
 | VStarBench | 191 | 185/191 (96.86%) | 186/191 (97.38%) | **188/191 (98.43%)** |
 | HRBench4K | 200 | 196/200 (98.00%) | **199/200 (99.50%)** | 198/200 (99.00%) |
@@ -305,7 +329,7 @@ Crop 与 TGVF observation 的原子工具，不能拆成两次工具调用。
 每格为 `executed calls / calls per eligible question`。分母始终是该 set 的全部受支持题目，而
 不是只包含工具调用题，因此不同方法可直接比较调用强度。
 
-| Set | Crop S80 | TGVF S64 | Atomic S16 |
+| Set | Crop S80 native-default | TGVF S64 | Atomic S16 |
 |---|---:|---:|---:|
 | VStarBench | 185 / 0.969 | 186 / 0.974 | **191 / 1.000** |
 | HRBench4K | 198 / 0.990 | 199 / 0.995 | **218 / 1.090** |
@@ -321,11 +345,11 @@ Crop 与 TGVF observation 的原子工具，不能拆成两次工具调用。
 |---|---:|---:|---:|---:|---:|---:|
 | Original | 2,240 (100.00%) | 0 | 0 | 0 | 0 | 0 |
 | No-Tool RL S32 | 2,240 (100.00%) | 0 | 0 | 0 | 0 | 0 |
-| Crop S80 / fixed boundary | 263 (11.74%) | 1,956 (87.32%) | 14 (0.63%) | 5 (0.22%) | 0 | 2 (0.09%) |
+| Crop S80 / fixed boundary, native-default | 263 (11.74%) | 1,956 (87.32%) | 14 (0.63%) | 5 (0.22%) | 0 | 2 (0.09%) |
 | TGVF S64 | 230 (10.27%) | 2,009 (89.69%) | 1 (0.04%) | 0 | 0 | 0 |
 | Atomic S16 | 377 (16.83%) | 1,642 (73.30%) | 120 (5.36%) | 44 (1.96%) | 23 (1.03%) | 34 (1.52%) |
 
-无效尝试的错误构成也不同：修正后 Crop S80 的 153 次包括 `invalid_crop=112`、
+无效尝试的错误构成也不同：Crop S80 native-default 历史运行的 153 次包括 `invalid_crop=112`、
 `context_limit=41`；
 TGVF S64 只有 `tool_parse.invalid_tool_name=3`；Atomic S16 的 36 次包括
 `tool_call_limit_exceeded=21`、`tool_parse.invalid_bbox=8`、
@@ -334,7 +358,7 @@ calls 分开报告，因为错误尝试没有产生工具 observation。
 
 #### 4.4.5 可写结论与边界
 
-- 修正后 Crop S80 表现为**高覆盖、仍以单次为主**的调用：整体成功使用率
+- Crop S80 native-default 历史运行表现为**高覆盖、仍以单次为主**的调用：整体成功使用率
   `88.26%`，调用强度 `0.897 calls/question`；`1,956/1,977` 个工具使用题
   只有一次有效调用。历史边界缺失曾系统性低估 Crop 实际执行率。
 - TGVF S64 表现为**高覆盖、近乎固定一次**调用：整体成功使用率 `89.73%`，只有 1 题发生
@@ -552,7 +576,7 @@ target 定义”的单变量结果，也不得把下降归因于 target 细化�
   failure 为 0；
 - [x] Atomic S16 七套官方 scorer 全部完成：7/7 slices，summary contract 通过，judge parse
   failure 为 0；
-- [x] 两臂完整结果与 matched prompt、Original、Crop 同表报告。
+- [x] 两臂完整结果与 matched prompt、Original、Crop native-default 历史参考同表报告。
 
 完成快照（2026-08-26 02:40 JST）：TGVF 与 Atomic 均为 `2,240 / 2,240`，两份
 completion receipt 均已生成。TGVF stop 分布为 2,005 final-answer、156 direct-answer、78
@@ -566,7 +590,7 @@ max-tokens、1 call-cap，累计 41 次工具错误；Atomic 为 2,003 final-ans
 | Reference / run | Macro* | Δ vs matched | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original raw direct | 55.3556 | — | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | **74.3333** | 50.6000 |
-| Crop S80 / matched prompt, fixed boundary | 59.1785 | reference | +3.8229 | **78.5340** | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
+| Crop S80 / fixed boundary, native-default historical | 59.1785 | n/a | +3.8229 | **78.5340** | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
 | TGVF S64 / matched prompt | 59.8086 | reference | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | TGVF S64 / full prompt | 58.5138 | −1.2949 | +3.1582 | 71.7277 | 64.5000 | 66.1111 | 39.4659 | 45.7249 | 68.6667 | 53.4000 |
 | Atomic S16 / matched prompt | **63.0827** | reference | **+7.7271** | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | 55.0000 |
@@ -633,12 +657,12 @@ full-prompt 权威 summary：
 - [x] 两臂均完成 2,240 条共同支持单图推理；七套官方 scorer 均通过，共覆盖各自完整的
   2,511-row CoreDev 输入合同；TGVF / Atomic judge parse failure 为 `4 / 2`，均按固定
   deterministic-incorrect 策略处理且低于阈值；
-- [x] 与 matched、广义 stress、Crop S80、Original 同表回填。
+- [x] 与 matched、广义 stress、Crop S80 native-default 历史参考、Original 同表回填。
 
 | Arm | Macro* | Δ vs own matched | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original | 55.3556 | — | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | **74.3333** | 50.6000 |
-| Crop S80 / matched, fixed boundary | 59.1785 | reference | +3.8229 | **78.5340** | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
+| Crop S80 / fixed boundary, native-default historical | 59.1785 | n/a | +3.8229 | **78.5340** | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
 | TGVF S64 / matched | 59.8086 | reference | +4.4531 | 74.3455 | 66.5000 | **65.5556** | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | TGVF S64 / target-only | 58.1788 | -1.6298 | +2.8233 | 75.3927 | 61.5000 | 63.8889 | 40.1453 | 45.7249 | 68.0000 | 52.6000 |
 | Atomic S16 / matched | 63.0827 | reference | +7.7271 | 71.7277 | **73.5000** | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
@@ -733,7 +757,8 @@ Teacher25 各条线路已有的原始 no-tool 合同不变。任何结构化工�
 #### 5.4.2 固定评测矩阵
 
 S0/S8/S16/S32 checkpoint 均执行 **matched no-tool@1M**：使用与 No-Tool RL visual-row
-训练一致的 no-tool prompt，作为优化动态和 `No-Tool RL ↔ Crop/TGVF/Atomic RL` 的主要控制。
+训练一致的 no-tool prompt，作为优化动态以及 `No-Tool RL ↔ TGVF/Atomic RL` 的主要像素对齐
+控制。与现有 Crop 历史运行的比较仍跨 effective pixel contract，需等待 Crop true@1M。
 协议复核发现历史 Original 实际使用 `max_pixels=262144`，而上述 matched 评测使用
 `image_max_pixels=1003520`。因此在不改变冻结 checkpoint 的前提下，新增 **S32
 raw-direct@512**：其配置与历史 Original 逐字段一致，只替换模型路径。无需重跑 S0 raw-direct，
@@ -784,11 +809,13 @@ Vision Dominant `50.0`。
 
 - 同协议 S32−S0 为 `+2.2141 pp`，说明 32-step No-Tool RL 带来温和净增益；学习曲线在 S16
   达到 `66.9028` 后轻微回落 `0.2175 pp`，但不触发 post-hoc checkpoint 重选。
-- S0 已达到 `64.4712`，高于 Crop S80、TGVF S64 和 Atomic S16 的 headline Macro*。因此
-  no-tool prompt/protocol 本身是主要替代解释，当前实验不能把工具线路相对 raw Original 的总增益
-  全部归给工具，也不支持工具方法在 Macro* 上超过当前 RL-only control。
-- S32 相对三个工具方法的差值为修正后 Crop `+7.5068 pp`、TGVF `+6.8767 pp`、Atomic
-  `+3.6026 pp`。工具证据必须转向特定切片、RP67 三臂 utility 与行为机制，不能继续声称总体支配。
+- S0 已达到 `64.4712`，高于 Crop S80 native-default 历史运行、TGVF S64 和 Atomic S16 的
+  headline Macro*。因此 no-tool prompt/protocol 本身是主要替代解释，当前实验不能把工具线路
+  相对 raw Original 的总增益全部归给工具，也不支持工具方法在 Macro* 上超过当前 RL-only
+  control；其中与 Crop 的比较还额外跨越有效像素合同。
+- S32 相对 Crop native-default 历史运行、TGVF、Atomic 的描述性差值分别为
+  `+7.5068 / +6.8767 / +3.6026 pp`。工具证据必须转向特定切片、RP67 三臂 utility 与行为机制；
+  Crop true@1M 结果产生前，第一项尤其不能作为像素对齐的方法差值。
 - 该比较仍不是“只切换工具开关”的严格因果消融：matched no-tool 同时去除了工具 schema 和
   agent loop。Original raw direct 必须保留，但其 prompt/protocol 又不同，只作端到端参考。
 
@@ -872,9 +899,11 @@ Vision Dominant `50.0`。
   raw-direct transfer 复测，只保留 S0/S8/S16/S32 matched no-tool。raw-direct 从未启动，当前
   supervisor 本身也只执行 matched 路径，因此无需中断或重启在跑任务。已有运行目录和 tmux
   名称中的 `DUAL` / `dual` 是启动时的历史标签，不表示第二套协议产生了数据。
-- 2026-08-26 16:44 JST 分辨率复核与范围修订节点：逐字段核对历史 Original resolved config
-  后确认其 `max_pixels=262144`；Crop/TGVF/Atomic/No-Tool matched 的冻结配置均为
-  `image_max_pixels=1003520`。因此 13:54 的“不测 raw-direct transfer”决策被新的可比性证据
+- 2026-08-26 16:44 JST 配置级分辨率复核与范围修订节点：逐字段核对历史 Original resolved
+  config 后确认其 `max_pixels=262144`；Crop/TGVF/Atomic/No-Tool matched 的冻结配置均记录
+  `image_max_pixels=1003520`。当时因此把四者视作同一有效像素合同；2026-08-28 processor audit
+  后该判断只对 TGVF/Atomic/No-Tool 成立，Crop 配置值被 fast processor 忽略。13:54 的“不测
+  raw-direct transfer”决策仍被 Original/No-Tool 的可比性证据
   覆盖，新增且只新增冻结 S32 的 raw-direct@512。七个 CoreDev 完整 slice 共 2,511 条已按
   dataset 隔离并行启动；配置除 S32 model path 外复现 Original 的生成参数、seed namespace 与
   raw-direct prompt。该节点只是运行状态，不提前报告 Macro*。
@@ -916,7 +945,9 @@ Vision Dominant `50.0`。
   `metadata.problem_version`；恢复实现只从固定 MathVerse `testmini.json` 补入该元数据，并逐行
   验证 `prediction` 完全不变，随后重新执行官方聚合。七个推理 source run 已显式绑定；本地
   Qwen2.5-72B-Instruct judge 正在 GPU0/1 初始化。与此同时，Crop S80、TGVF S64 与 Atomic S16
-  的 matched@512 单变量控制已由自动 supervisor 排队，待 S32 评分闭合后依次使用 GPU4–7。
+  的 nominal matched@512 计划已由自动 supervisor 排队，待 S32 评分闭合后依次使用 GPU4–7；
+  后续 processor audit 证明其中只有 TGVF 与 Atomic 真正应用了 262,144，Crop 计划不是有效
+  单变量控制。
   实现与计划已推送到执行分支 `neurips-notool-rl-s32` 的 `81cec97`，source-run 选择修复为
   `12b4ca1`；相关 targeted 回归为 `79 passed`。该节点仍不提前报告任何新 Macro*。
 - 2026-08-26 17:50 JST S32 raw-direct@512 正式闭合节点：七项 accepted summary 为
@@ -925,8 +956,8 @@ Vision Dominant `50.0`。
   按 index 生成只读 coverage view，原 prediction、hit 和 scorer 字段逐值不变，只将多图 reference
   从 180/269 单图 headline 排除。最终 Macro* 为 `54.3543`，比 Original raw-direct@512 低
   `1.0013 pp`。汇总与 coverage 实现已推送至执行分支 `e54b851`，相关新增回归 `62 passed`。
-  完成 marker 触发三方法顺序队列，Crop S80 matched@512 已于 17:50 JST 开始准备 snapshot。
-- 2026-08-26 18:35 JST 工具方法 `@512` 并行接管节点：Crop S80 推理以 `2,240/2,240`
+  完成 marker 触发三方法顺序队列，Crop S80 nominal @512 已于 17:50 JST 开始准备 snapshot。
+- 2026-08-26 18:35 JST 工具方法 nominal `@512` 并行接管节点：Crop S80 推理以 `2,240/2,240`
   单图记录完整闭合；原顺序 barrier 被移除。既有 TGVF S64 推理进程及已写记录无损保留并继续
   使用 GPU0–3，Atomic S16 已立即在 GPU4–7 开始 checkpoint materialization/validation；TGVF
   释放 GPU0/1 后将与 Atomic 推理重叠执行 Crop、TGVF 的 TP=2 judge，随后评分 Atomic。接管后
@@ -936,8 +967,9 @@ Vision Dominant `50.0`。
   `2,240/2,240` 条单图记录并通过 supervisor 行数 gate，`tgvf-s64-inference-complete`
   marker 已落盘；Crop S80 score 随即自动启动，Qwen2.5-72B TP=2 judge 从所给
   GPU0–3 池中实际选择 GPU2–3 加载。同期 Atomic S16 保持 GPU4–7 推理并持续写入。无失败
-  marker；Crop/TGVF 的 `@512` 分数仍须等待各自 accepted summary，不能从未完成评分外推。
-- 2026-08-26 19:01 JST Crop S80 `@512` 历史评分节点：当时 summary 为
+  marker；Crop nominal `@512` 与 TGVF true@512 的分数仍须等待各自 accepted summary，不能从
+  未完成评分外推。
+- 2026-08-26 19:01 JST Crop S80 nominal `@512` 历史评分节点：当时 summary 为
   `status=pass`、Macro* `61.5591`；后续确认该 full-model evaluator 同样缺失
   `</tool_call>` action boundary，因而该数字已作废，只作运行历史。
 - 2026-08-26 19:16 JST TGVF S64 `@512` 正式闭合节点：七个 slice accepted summary 为
@@ -948,53 +980,61 @@ Vision Dominant `50.0`。
 - 2026-08-26 19:25 JST Atomic S16 `@512` 正式闭合：`7/7` slice、`2,511`
   条 official coverage、judge parse failure `0`；统一 extractor 得到 Macro* `57.2762`，
   比自身 matched@1M 低 `5.8065 pp`。
-- 2026-08-28 03:05 JST Crop S80 fixed-boundary `@512` 正式闭合：四个 rank 完整写入
+- 2026-08-28 03:05 JST Crop S80 fixed-boundary nominal `@512` 运行闭合：四个 rank 完整写入
   `2,240/2,240` 条受支持单图 trajectory，七项 accepted summary 为 `status=pass`、
   `sample_count=2,511`、`slice_count=7`、judge parse failure `0`，Macro* 为 `62.0967`。
   `2,014` 次 executed calls 与 successful observations 精确相等，same-turn mixed 为 `0`；
-  相对 fixed-boundary matched@1M 上升 `2.9182 pp`。runner、judge 和全部 GPU 随后正常退出。
+  runner、judge 和全部 GPU 随后正常退出。该节点只闭合 action-boundary 与评分工件，后续
+  processor audit 已撤回其 `@512` 像素控制身份。
+- 2026-08-28 Crop processor-override 勘误节点：逐条比较两次 fixed-boundary S80 的 initial
+  visual token counts 后确认它们完全相同，均走 fast processor 默认
+  `size.longest_edge=16,777,216`。此前传入的顶层 `max_pixels` kwarg 被忽略。对一张
+  `2250×1500` 样例图，两次历史运行均产生 `3,290` tokens；使用正确的 nested
+  `images_kwargs.size` 后，true@512 与 true@1M 分别产生 `247 / 950` tokens。两次历史运行
+  的 RNG namespace 与 protocol 不同，因此 `62.0967−59.1785=+2.9182 pp` 只是不可归因的
+  跨运行差异。Crop true@1M/true@512 common-RNG rerun 尚待执行；TGVF/Atomic 的 override
+  路径和 paired RNG 复核通过，既有两组 pixel-cap 结果不撤回。
 
-### 5.5 三个工具方法的 matched@512 分辨率控制
+### 5.5 有效的 TGVF/Atomic matched@512 控制与 Crop pixel-cap 勘误
 
-该控制直接回答：Crop、TGVF 与 Atomic 的既有 matched@1M 结果中，有多少对较高输入像素预算
-敏感。它不是新训练，也不是 raw-direct 测试；若把工具 prompt 或 agent loop 去掉，方法本身就不再
-成立，因此每臂只改变 evaluator 的 `max_pixels`。
+本节原计划对 Crop、TGVF 与 Atomic 做 matched@1M→matched@512 单变量控制。运行后处理器审计
+确认，TGVF 与 Atomic 的 override 路径正确，且各自 1M/512 运行逐字复用了同一 paired RNG
+namespace。Crop 的 `policy_official_visible` 路径则把 `max_pixels` 放在 fast processor 忽略的
+顶层 kwarg 中；两次 S80 运行均实际使用 processor default
+`size.longest_edge=16,777,216`。因此本节只保留 TGVF/Atomic 的像素效应结论，Crop true@1M
+与 true@512 仍为 pending corrected common-RNG rerun。
 
-| Arm | Frozen checkpoint | 保持不变 | 唯一改动 | 状态 |
-|---|---|---|---|---|
-| Crop | S80 | native Crop prompt、tool schema、agent loop、temperature 1、seed42、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **fixed-boundary 修正复测已完成**；旧结果作废 |
-| TGVF | S64 | matched TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
-| Atomic | S16 | matched Crop+TGVF prompt、Frozen RP67、最多 6 次调用、原 paired RNG namespace、CoreDev2511、官方 scorer | `1,003,520 → 262,144` | **已完成** |
+| Arm | Frozen checkpoint | Nominal request | 实际 processor 合同 | 状态 |
+|---|---|---:|---:|---|
+| Crop historical A | S80 | 1,003,520 | default 16,777,216 | Macro* `59.1785`；native-default 历史运行，不是 true@1M |
+| Crop historical B | S80 | 262,144 | default 16,777,216 | Macro* `62.0967`；nominal @512 invalid control，只验证 fixed boundary |
+| TGVF | S64 | `1,003,520 → 262,144` | `1,003,520 → 262,144` | **有效且已完成** |
+| Atomic | S16 | `1,003,520 → 262,144` | `1,003,520 → 262,144` | **有效且已完成** |
 
-三个 arm 的推理按两组 GPU 流水并行，72B judge 评分按 arm 串行以避免同一输出根并发写入。每臂必须完成 2,240 个支持的单图 trajectory、
-271 个显式 fail-closed 多图条目、七个官方 slice、Macro*、完整 sub-benchmark 以及逐 set 工具调用
-统计。结果只能与同方法 matched@1M 行形成分辨率消融；跨方法结论仍需同时报告 Original 和
-No-Tool RL，且不得把 `@512` 评测回退解释为训练像素设置的因果最优性。
+Crop 的判定来自实际 visual-token 证据，而不是配置文件名。两次历史运行的逐题 initial visual
+token counts 完全相同；一张 `2250×1500` 样例图在两次运行中均为 `3,290` tokens。将 cap
+正确放入 nested `images_kwargs.size` 后，同图 true@512 与 true@1M 分别为 `247 / 950`
+tokens，证明旧调用链没有应用计划中的 cap。历史 A/B 还使用不同 RNG namespace 与 protocol，
+所以 `62.0967−59.1785=+2.9182 pp` 只是不可归因的随机运行差异，不能解释成分辨率效应、调用
+策略效应或更低分辨率增益。
 
-当前正式结果如下。Original 始终保留为 raw-direct@512 端到端参考；`Δ vs Original` 只描述
-总系统差值，不把跨 prompt/tool/agent contract 的差异归因给工具。
+当前可报告的结果如下。Original 始终保留为 raw-direct@512 端到端参考；`Δ vs Original` 只
+描述总系统差值，不把跨 prompt/tool/agent contract 的差异归因给工具。Crop 两行只作历史记录，
+不进入 pixel-cap delta。
 
-| Arm / pixel cap | Macro* | Δ vs own matched@1M | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
+| Arm / effective pixel contract | Macro* | Δ vs own true@1M | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original raw-direct / 262,144 | 55.3556 | — | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | **74.3333** | 50.6000 |
-| Crop S80 / 1,003,520, fixed boundary | 59.1785 | reference | +3.8229 | 78.5340 | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
-| Crop S80 / 262,144, fixed boundary | **62.0967** | **+2.9182** | **+6.7411** | **86.9110** | 65.5000 | 64.4444 | 54.4299 | 45.7249 | 65.6667 | 52.0000 |
+| Crop S80 historical A / native-default | 59.1785 | n/a | +3.8229 | 78.5340 | 61.5000 | 57.7778 | **55.4948** | 44.6097 | 66.3333 | 50.0000 |
+| Crop S80 historical B / native-default; nominal @512 invalid | 62.0967 | n/a | +6.7411 | **86.9110** | 65.5000 | 64.4444 | 54.4299 | 45.7249 | 65.6667 | 52.0000 |
 | TGVF S64 / 1,003,520 | 59.8086 | reference | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | TGVF S64 / 262,144 | 55.4067 | −4.4019 | +0.0511 | 53.4031 | 60.5000 | 62.7778 | 40.7642 | 46.4684 | 72.3333 | 51.6000 |
 | Atomic S16 / 1,003,520 | 63.0827 | reference | +7.7271 | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
 | Atomic S16 / 262,144 | 57.2762 | −5.8065 | +1.9206 | 57.0681 | 59.5000 | 61.6667 | 47.7713 | 48.3271 | 71.0000 | 55.6000 |
 
-Crop 的旧 @512 分项及“只回退 `0.6697 pp`”结论均已作废。fixed-boundary 复测显示相反
-趋势：Macro* 相对自身 matched@1M **上升 `2.9182 pp`**。分项变化为 VStar
-`+8.3770`、BLINK-180 `+6.6667`、HR `+4.0000`、MathVerse `+2.0000`、MMMU-269
-`+1.1152`、MathVista `−0.6667`、OCR mean `−1.0649 pp`。OCR 的中文/英文分项为
-`57.5382 / 51.3216`。因此三个工具方法不存在统一的“降到 512 即退化”规律：Crop 上升，
-TGVF 与 Atomic 则分别下降 `4.4019 / 5.8065 pp`。
-
-该提升也不能归因于更高的调用频率。Crop S80@512 共执行 `2,014` 次 Crop，几乎等于
-matched@1M 的 `2,010` 次；有成功调用的题数反而从 `1,977` 略降到 `1,969`。@512 的
-`2,014` 次调用全部产生 observation，same-turn mixed 为 `0`，证明边界修复生效。逐 set
-行为如下：
+Crop historical B 的行为统计仍能证明 fixed action boundary 生效，但不能称为 @512 行为。该运行
+共执行 `2,014` 次 Crop，全部产生 observation，same-turn mixed 为 `0`；它与 historical A 的
+调用差异同样不能归因于 pixel cap。逐 set 历史行为如下：
 
 | Set | Supported questions | Successful-use questions | Executed calls | Calls / question | Tool errors |
 |---|---:|---:|---:|---:|---:|
@@ -1052,15 +1092,17 @@ Atomic 进入正文核心方法必须同时满足：
 | Atomic matched prompt 下在跨图、反射率和 Vision Only 上显示优势 | matched HR cross、BLINK reflectance、MathVerse Vision Only | target-only 下 HR cross / reflectance 优势明显收窄，Vision Only 保持；target 合格率未闭合 | 探索性，核心门槛部分验证 |
 | 广义 prompt bundle 下工具总体增益仍存在 | TGVF / Atomic stress-test Macro* 为 `58.5138 / 60.4684`，分别比 Original 高 `3.1582 / 5.1128 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；非 target-only；不是新 benchmark 泛化 | 已支持，带退化边界 |
 | 只补充 target 定义与案例的稳健性 | TGVF / Atomic target-only Macro* `58.1788 / 60.8253`，仍比 Original 高 `2.8233 / 5.4697 pp` | 相对 own matched 分别下降 `1.6298 / 2.2574 pp`；不支持“详细 target 定义普遍增益” | 已支持，带退化边界 |
-| 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的 Macro* 均高于 55.36 | Original 非 paired control，且使用 262,144 而非 PRL25 的 1,003,520 pixel cap；不能把差值归因给工具 | 仅可作跨合同端到端描述 |
-| 工具方法的总体增益超越当前 RL-only/no-tool control | No-Tool matched S32 `66.6853`，高于修正后 Crop/TGVF/Atomic `7.5068/6.8767/3.6026 pp`；S0 `64.4712`；S32−S0 `+2.2141 pp` | no-tool 与工具线路的 schema/agent-loop 仍不同，不是严格工具开关消融；S32 raw-direct@512 为 `54.3543`，比 Original 低 `1.0013 pp`，显示 matched 高分不 transfer 到 raw-direct | **当前不支持，必须撤回总体 claim** |
-| 降低输入像素上限会统一削弱工具方法 | Crop/TGVF/Atomic matched@512 相对自身 matched@1M 为 `+2.9182/−4.4019/−5.8065 pp` | 单个冻结 checkpoint、seed42 与 temperature 1；只支持逐方法分辨率消融，不证明训练像素最优性，也不能把变化归因于单一机制 | **不支持；效应具有方法特异性** |
-| 三种方法形成不同工具调用行为 | 修正后 Crop/TGVF/Atomic successful-use rate `88.26/89.73/83.17%`；calls/question `0.897/0.898/1.027`；逐 set 表 | matched-prompt 描述性统计；调用更多不等于 utility 更高；policy 自选择混杂 | 已支持 |
+| 工具方法整体优于 raw direct Original | 三个选定 checkpoint 的历史 Macro* 均高于 55.36 | Original 非 paired control；TGVF/Atomic 为 1,003,520，Crop 为 processor default 16,777,216，而 Original 为 262,144；不能把差值归因给工具 | 仅可作跨合同端到端描述 |
+| 工具方法的总体增益超越当前 RL-only/no-tool control | No-Tool matched S32 `66.6853`，高于 Crop native-default historical/TGVF/Atomic `7.5068/6.8767/3.6026 pp`；S0 `64.4712`；S32−S0 `+2.2141 pp` | no-tool 与工具线路的 schema/agent-loop 仍不同；与 Crop 还跨有效像素合同。S32 raw-direct@512 为 `54.3543`，比 Original 低 `1.0013 pp` | **当前不支持，必须撤回总体 claim** |
+| Crop 在 1M→512 下获得 `+2.9182 pp` 像素增益 | 两次 historical Macro* 为 `59.1785 / 62.0967`，但 initial visual token counts 完全相同；`2250×1500` 样例均为 3,290 tokens | 两次均走 default 16,777,216，且 RNG namespace/protocol 不同；差值不可归因 | **已撤回；true@1M/true@512 pending corrected common-RNG rerun** |
+| TGVF/Atomic 降低输入像素上限会降低当前 checkpoint 的 Macro* | 有效 matched@512 相对 matched@1M 为 `−4.4019 / −5.8065 pp` | 两臂各自 1M/512 paired RNG 完全一致；只支持所选 checkpoint 的逐方法消融，不证明训练像素最优性 | **已支持，限 TGVF/Atomic** |
+| 三种方法形成不同工具调用行为 | Crop native-default historical/TGVF/Atomic successful-use rate `88.26/89.73/83.17%`；calls/question `0.897/0.898/1.027`；逐 set 表 | 描述性统计；Crop 不属于 1M 对齐集合；调用更多不等于 utility 更高；policy 自选择混杂 | 已支持，带 Crop 像素合同边界 |
 
 ## 8. 论文实验部分建议结构
 
 1. **Comprehensive comparison and control result.** Original、No-Tool RL 与三个工具方法的七套
-   benchmark 主表；先报告 No-Tool S32 总体最高及其协议边界，Original 永不缺席。
+   benchmark 主表；先报告 No-Tool S32 总体最高及其协议边界，Original 永不缺席，Crop
+   native-default 历史列显式标注为未与 1M 对齐。
 2. **How much does RL itself add?** 报告冻结 No-Tool S32 与同协议 S0/S8/S16 动态，明确
    S32−S0 `+2.2141 pp`，并把 prompt/schema/agent protocol 列为替代解释。
 3. **Where target-conditioned evidence remains useful.** 在总体 claim 收缩后，用完整
@@ -1080,17 +1122,20 @@ Atomic 进入正文核心方法必须同时满足：
 
 1. [已完成] RP67 semantic overlay 和 CI，机制主张已锁定；
 2. [已完成] 广义 full-prompt stress test 及七项官方评分；
-3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；
+3. [已完成] matched-prompt 三方法整体、逐 set 调用率、调用次数和错误类型审计；Crop 行已补充
+   native-default effective pixel contract 边界；
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
 5. [已完成] No-Tool RL：合同、实现、CPU 回归、真实 canary、正式 S32 训练、S0/S8/S16/S32
    matched no-tool 推理、28 个 slice 评分、四臂汇总与文章结果回填均已闭合；
-6. [已完成] S32 raw-direct@512 及 Crop S80、TGVF S64、Atomic S16 matched@512 均已闭合；
-   Crop 旧 @512 结果已作废并由 fixed-boundary Macro* `62.0967` 替换；
-7. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
+6. [已完成] S32 raw-direct@512 及 TGVF S64、Atomic S16 的有效 matched@512 已闭合；
+   Crop Macro* `59.1785 / 62.0967` 已降级为 native-default 历史运行，nominal @512 control
+   无效；
+7. [待执行] 使用正确 nested `images_kwargs.size` 完成 Crop true@1M/true@512 common-RNG rerun；
+8. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
-8. [待回填] target-only 调用行为对照与正式 audit；
-9. [待写作] 形成英文 Experiments/Discussion 初稿；
-10. [明确不做] Crop seed43。
+9. [待回填] target-only 调用行为对照与正式 audit；
+10. [待写作] 形成英文 Experiments/Discussion 初稿；
+11. [明确不做] Crop seed43。
 
 ## 10. 证据来源
 
@@ -1104,20 +1149,27 @@ Atomic 进入正文核心方法必须同时满足：
   的 `tool_calls`、`tool_errors` 与 `successful_observation_count`；三臂均为 2,240 个唯一共同 ID。
 - Crop S32/S80 fixed-boundary 官方 summary：
   `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-S32-S80-TOOL-BOUNDARY-FIX-V2/step{32,80}/scoring/coredev-official-v1/coredev-2511-eval-summary.json`；
-  总合同为同级 `paired-summary.json`。
+  总合同为同级 `paired-summary.json`。其中 S80 Macro* `59.1785` 只标作 native-default
+  historical，不标作 true@1M。
 - TGVF S64 / Atomic S16：对应 six-point evaluation 的 `step64` / `step16` 官方 summary 与
   `paired-summary.json`。
 - No-Tool RL S0/S8/S16/S32 matched summary：
   `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1/matched/step{0,8,16,32}/scoring/coredev-official-v1/coredev-2511-eval-summary.json`；
   28 个精确评分来源由同级各 dataset 的 `pinned-reuse-receipt.json` 固定。
-- `@512` 执行计划：
+- nominal `@512` 执行计划：
   `configs/evaluation/prl25_{b_crop_exact_step80,c_frozen_rp67_tfree_teacher25_s64_matched,d_atomic_crop_tgvf_s16_matched}_pixel512_coredev2511_plan.json`；
-  并行、可恢复 supervisor 为 `tools/supervise_prl25_bcd_selected_pixel512_evaluation.sh`。
-- Crop S80@512 fixed-boundary 替代计划：
+  并行、可恢复 supervisor 为 `tools/supervise_prl25_bcd_selected_pixel512_evaluation.sh`。其中
+  TGVF/Atomic 的 override 有效；Crop 计划只作无效控制的 provenance。
+- Crop S80 nominal @512 fixed-boundary 历史计划：
   `configs/evaluation/prl25_b_crop_exact_step80_pixel512_tool_boundary_fix_v2_coredev2511_plan.json`，
   现有 `neurips-notool-rl-s32` 分支 commit `eb37ad9`；accepted summary 与总合同分别为
   `artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP80-PIXEL512-TEMP1-SEED42-TOOL-BOUNDARY-FIX-V2/step80/scoring/coredev-official-v1/coredev-2511-eval-summary.json`
-  和同级 evaluation 根目录的 `paired-summary.json` / `evaluation-complete`。
+  和同级 evaluation 根目录的 `paired-summary.json` / `evaluation-complete`。该 artifact 的
+  Macro* `62.0967` 只证明运行与 fixed-boundary 评分闭合，不证明 pixel cap 生效。
+- Crop processor audit：两次 fixed-boundary S80 的逐题 initial visual token counts 完全一致；
+  processor default 为 `size.longest_edge=16,777,216`。`2250×1500` 样例在两次历史运行均为
+  `3,290` tokens，正确 nested `images_kwargs.size` 下 true@512/true@1M 为 `247/950`。
+  corrected common-RNG rerun 尚无 accepted summary，不能提前填入结果表。
 - No-Tool S32 raw-direct@512 accepted summary：
   `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-RAW-DIRECT-512-S32-V1/scoring/coredev-2511-eval-summary.json`。
 
@@ -1126,7 +1178,10 @@ Atomic 进入正文核心方法必须同时满足：
 
 ## Appendix A. 完整 aligned sub-benchmark 清单
 
-本附录不只保留有利切片，而是完整列出当前五种方法可稳定对齐的 sub-benchmark。除 MMMU
+本附录不只保留有利切片，而是完整列出当前五种方法在共同任务 ID 上可稳定对齐的
+sub-benchmark。这里的“对齐”只指样本与 scorer；所有 Crop 列均来自 S80 fixed-boundary
+native-default 历史运行，并不与 TGVF/Atomic/No-Tool 的 1,003,520 pixel contract 对齐。Crop
+true@1M/true@512 完成前，这些列只作探索性历史上下文。除 MMMU
 subject 重算外共有 40 行；其中 TGVF 或 Atomic 在 `22/40` 行、No-Tool S32 在 `27/40` 行上
 高于 Original（另有 2 行持平）。这些计数仅用于
 清点覆盖面：MathVista skill 等标签彼此重叠，不能把这些行数当作独立样本上的显著性检验或
@@ -1135,7 +1190,7 @@ subject 重算外共有 40 行；其中 TGVF 或 Atomic 在 `22/40` 行、No-Too
 
 ### A.1 VStar、HRBench 与 BLINK 共同单图切片
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+| Sub-benchmark | n | Original | Crop S80 native-default | TGVF S64 | Atomic S16 | No-Tool S32 |
 |---|---:|---:|---:|---:|---:|---:|
 | VStar / direct attributes | 115 | 48.70 | 82.61 | 70.43 | 69.57 | **86.09** |
 | VStar / relative position | 76 | 53.95 | 72.37 | 80.26 | 75.00 | **81.58** |
@@ -1155,7 +1210,7 @@ VStar 和 HRBench 已列出各自全部官方对齐切片。BLINK 官方 full-42
 
 前 5 行 task 互斥并完整覆盖 300 题；后 7 行 skill 可重叠，同一题可能进入多个 skill。
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+| Sub-benchmark | n | Original | Crop S80 native-default | TGVF S64 | Atomic S16 | No-Tool S32 |
 |---|---:|---:|---:|---:|---:|---:|
 | MathVista task / figure question answering | 96 | **73.96** | 69.79 | 69.79 | 69.79 | **73.96** |
 | MathVista task / geometry problem solving | 49 | **91.84** | 83.67 | 85.71 | 87.76 | 89.80 |
@@ -1171,13 +1226,14 @@ VStar 和 HRBench 已列出各自全部官方对齐切片。BLINK 官方 full-42
 | MathVista skill / statistical reasoning | 111 | 82.88 | 79.28 | 81.98 | 81.08 | **83.78** |
 
 五种方法均使用完整的相同 300 个 `index`。作为互斥的附加诊断，free-form / multi-choice 的
-样本数为 `171 / 129`：Original 为 `64.91 / 86.82`，修正后 Crop S80 为 `53.80 / 82.95`，TGVF
+样本数为 `171 / 129`：Original 为 `64.91 / 86.82`，Crop S80 native-default historical 为
+`53.80 / 82.95`，TGVF
 S64 为 `65.50 / 81.40`，Atomic S16 为 `61.40 / 80.62`，No-Tool S32 为
 `67.84 / 85.27`。这定位出 TGVF 总体回退主要落在 multi-choice，而不是评测 subset 改变。
 
 ### A.3 MathVerse MINI 全部 5 个版本
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+| Sub-benchmark | n | Original | Crop S80 native-default | TGVF S64 | Atomic S16 | No-Tool S32 |
 |---|---:|---:|---:|---:|---:|---:|
 | MathVerse / Text Dominant | 100 | 69.00 | 66.00 | 64.00 | 66.00 | **71.00** |
 | MathVerse / Text Lite | 100 | 53.00 | 52.00 | 58.00 | 59.00 | **65.00** |
@@ -1187,7 +1243,7 @@ S64 为 `65.50 / 81.40`，Atomic S16 为 `61.40 / 80.62`，No-Tool S32 为
 
 ### A.4 OCRBench v2 全部 13 个官方语言类别
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+| Sub-benchmark | n | Original | Crop S80 native-default | TGVF S64 | Atomic S16 | No-Tool S32 |
 |---|---:|---:|---:|---:|---:|---:|
 | OCR EN / text recognition | category | 60.49 | 73.05 | 55.05 | **73.38** | 65.54 |
 | OCR EN / text detection | category | 29.00 | 22.97 | 28.87 | **36.05** | 28.00 |
@@ -1213,7 +1269,7 @@ MMMU 官方 subject 表混有工具方法不支持的 31 个多图样本，不�
 ID，再与 Original result TSV 按相同 `index` 对齐并按 subject 聚合 `hit`。这是由官方逐题判分导出的 aligned
 diagnostic，不是 MMMU 官方 subject headline。
 
-| Sub-benchmark | n | Original | Crop S80 | TGVF S64 | Atomic S16 | No-Tool S32 |
+| Sub-benchmark | n | Original | Crop S80 native-default | TGVF S64 | Atomic S16 | No-Tool S32 |
 |---|---:|---:|---:|---:|---:|---:|
 | MMMU / Accounting | 10 | 20.00 | 50.00 | **60.00** | **60.00** | 50.00 |
 | MMMU / Agriculture | 10 | **40.00** | 30.00 | **40.00** | 30.00 | **40.00** |
