@@ -39,6 +39,9 @@ from tgvf_rl.evaluation.coredev_results import (  # noqa: E402
 )
 from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+    IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION,
+    IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES,
+    RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
     PolicyEvaluationSnapshot,
     freeze_policy_evaluation_snapshot,
     load_benchmark_tasks,
@@ -105,6 +108,7 @@ JUDGE_SERVICE_CONFIG = (
 )
 PLAN_SCHEMA_V2 = "tgvf.prl15-paired-policy-benchmark-plan.v2"
 PLAN_SCHEMA_V3 = "tgvf.paired-policy-benchmark-plan.v3"
+PLAN_SCHEMA_V4 = "tgvf.resolution-paired-policy-benchmark-plan.v4"
 # Historical tests and downstream imports use this name for the v2 ABI.
 PLAN_SCHEMA = PLAN_SCHEMA_V2
 PAIRED_TGVF_BACKEND = "paired_tgvf"
@@ -112,6 +116,9 @@ FULL_MODEL_BACKEND = "full_model"
 PAIR_SUMMARY_SCHEMA = "tgvf.prl15-paired-coredev-summary.v1"
 GENERIC_PAIR_SUMMARY_SCHEMA = "tgvf.paired-coredev-summary.v2"
 PAIRED_RNG_PLAN_SCHEMA = "tgvf.policy-paired-evaluation-rng-plan.v1"
+RESOLUTION_PAIRED_RNG_PLAN_SCHEMA = (
+    "tgvf.policy-paired-evaluation-rng-plan.v2"
+)
 _PAIRED_RNG_EXCLUSIONS = (
     "evaluation_id",
     "arm_name",
@@ -272,6 +279,40 @@ def _canonical_json_sha256(value: object) -> str:
 def _paired_seed_namespace(plan: dict[str, Any]) -> str | None:
     contract = plan.get("paired_rng")
     return None if contract is None else str(contract["seed_namespace"])
+
+
+def _resolution_pair_projection_identity() -> dict[str, object]:
+    return {
+        "kind": IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION,
+        "excluded_protocol_field": "image_max_pixels",
+        "axis_values": list(IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES),
+    }
+
+
+def _arm_image_max_pixels(plan: dict[str, Any], arm_name: str) -> int | None:
+    """Resolve the cap without changing the legacy top-level v2/v3 ABI."""
+
+    if plan.get("schema_version") != PLAN_SCHEMA_V4:
+        return plan.get("evaluation_image_max_pixels")
+    arm = next(
+        (item for item in plan.get("arms", ()) if item.get("name") == arm_name),
+        None,
+    )
+    if arm is None:
+        raise ValueError("resolution-pair arm is absent")
+    value = arm.get("evaluation_image_max_pixels")
+    if type(value) is not int or value not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES:
+        raise ValueError("resolution-pair arm image_max_pixels differs")
+    return value
+
+
+def _arm_rng_protocol_projection(
+    plan: dict[str, Any], arm_name: str
+) -> str | None:
+    if plan.get("schema_version") != PLAN_SCHEMA_V4:
+        return None
+    _arm_image_max_pixels(plan, arm_name)
+    return IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION
 
 
 def _require_sha256(value: object, *, name: str) -> str:
@@ -452,15 +493,162 @@ def _validate_v3_static_plan(payload: dict[str, Any]) -> None:
         )
 
 
+def _validate_v4_static_plan(payload: dict[str, Any]) -> None:
+    """Admit only the one same-S80 1M/512 resolution-pair experiment."""
+
+    required_top_level = {
+        "schema_version",
+        "evaluation_id",
+        "status",
+        "checkpoint_owner",
+        "protocol_contract",
+        "snapshot",
+        "task_manifest_path",
+        "task_manifest_sha256",
+        "expected_task_count",
+        "expected_single_image_count",
+        "unsupported_multi_image_count",
+        "paired_rng",
+        "resolution_pair",
+        "arms",
+        "protocol",
+        "scoring",
+    }
+    if set(payload) != required_top_level or payload.get("status") != "ready":
+        raise ValueError("v4 resolution-pair plan fields/status differ")
+    if "evaluation_image_max_pixels" in payload:
+        raise ValueError("v4 resolution-pair forbids a top-level pixel cap")
+
+    projection = _resolution_pair_projection_identity()
+    if payload.get("resolution_pair") != projection:
+        raise ValueError("v4 resolution-pair projection differs")
+    if payload.get("checkpoint_owner", {}).get("contract_type") != (
+        "policy_e2e_crop_exact_run_config_v1"
+    ):
+        raise ValueError("v4 resolution-pair requires the exact-Crop owner")
+    protocol = payload.get("protocol")
+    if not isinstance(protocol, dict) or (
+        protocol.get("evaluation_protocol")
+        != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+        or protocol.get("native_pixels") is not True
+        or protocol.get("tool_name") != "image_zoom_in_tool"
+    ):
+        raise ValueError("v4 resolution-pair requires official-visible Crop")
+    if payload.get("snapshot", {}).get("backend") != FULL_MODEL_BACKEND:
+        raise ValueError("v4 resolution-pair requires full-model snapshots")
+
+    arms = payload.get("arms")
+    expected_names = ("pixel1003520", "pixel262144")
+    if (
+        not isinstance(arms, list)
+        or tuple(
+            arm.get("name") if isinstance(arm, dict) else None for arm in arms
+        )
+        != expected_names
+    ):
+        raise ValueError("v4 resolution-pair arms differ")
+    expected_caps = (1003520, 262144)
+    for arm, name, cap in zip(arms, expected_names, expected_caps, strict=True):
+        if set(arm) != {
+            "name",
+            "optimizer_step",
+            "source",
+            "evaluation_id",
+            "evaluation_image_max_pixels",
+        }:
+            raise ValueError("v4 resolution-pair arm fields differ")
+        if (
+            arm["name"] != name
+            or arm["optimizer_step"] != 80
+            or arm["evaluation_image_max_pixels"] != cap
+        ):
+            raise ValueError("v4 resolution-pair arm step/cap differs")
+    if arms[0]["source"] != arms[1]["source"]:
+        raise ValueError("v4 resolution-pair arms must share one checkpoint source")
+
+    paired_rng = payload.get("paired_rng")
+    expected_rng_fields = {
+        "schema_version",
+        "mode",
+        "seed_namespace",
+        "master_seed",
+        "task_manifest_sha256",
+        "seed_protocol_sha256",
+        "arm_protocol_sha256",
+        "protocol_projection",
+        "temperature",
+        "do_sample",
+        "excluded_arm_components",
+    }
+    if not isinstance(paired_rng, dict) or set(paired_rng) != expected_rng_fields:
+        raise ValueError("v4 resolution-pair RNG fields differ")
+    namespace = paired_rng.get("seed_namespace")
+    if (
+        paired_rng.get("schema_version") != RESOLUTION_PAIRED_RNG_PLAN_SCHEMA
+        or paired_rng.get("mode") != "common_random_numbers_per_task_turn"
+        or not isinstance(namespace, str)
+        or not namespace
+        or namespace.strip() != namespace
+        or any(character.isspace() for character in namespace)
+        or paired_rng.get("master_seed") != 42
+        or paired_rng.get("temperature") != 1.0
+        or paired_rng.get("do_sample") is not True
+        or paired_rng.get("task_manifest_sha256")
+        != payload.get("task_manifest_sha256")
+        or paired_rng.get("protocol_projection") != projection
+        or tuple(paired_rng.get("excluded_arm_components", ()))
+        != _PAIRED_RNG_EXCLUSIONS
+    ):
+        raise ValueError("v4 resolution-pair RNG identity differs")
+    _require_sha256(
+        paired_rng.get("seed_protocol_sha256"),
+        name="v4 shared seed protocol identity",
+    )
+    arm_protocols = paired_rng.get("arm_protocol_sha256")
+    if not isinstance(arm_protocols, dict) or set(arm_protocols) != set(
+        expected_names
+    ):
+        raise ValueError("v4 arm protocol identities differ")
+    arm_hashes = tuple(
+        _require_sha256(
+            arm_protocols[name], name=f"v4 {name} arm protocol identity"
+        )
+        for name in expected_names
+    )
+    if len(set(arm_hashes)) != 2:
+        raise ValueError("v4 arm protocol identities must retain distinct caps")
+
+    # Reuse every v3 owner/protocol/snapshot/source/scoring invariant without
+    # weakening the legacy v3 schema or teaching it about duplicate steps.
+    compatible = copy.deepcopy(payload)
+    compatible["schema_version"] = PLAN_SCHEMA_V3
+    compatible.pop("resolution_pair")
+    compatible["arms"] = [
+        {
+            key: value
+            for key, value in arm.items()
+            if key != "evaluation_image_max_pixels"
+        }
+        for arm in arms
+    ]
+    compatible["paired_rng"]["protocol_sha256"] = paired_rng[
+        "seed_protocol_sha256"
+    ]
+    _validate_v3_static_plan(compatible)
+
+
 def _load_plan(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("schema_version") not in {
         PLAN_SCHEMA_V2,
         PLAN_SCHEMA_V3,
+        PLAN_SCHEMA_V4,
     }:
         raise ValueError("PRL15 paired evaluation plan schema differs")
     if payload["schema_version"] == PLAN_SCHEMA_V3:
         _validate_v3_static_plan(payload)
+    elif payload["schema_version"] == PLAN_SCHEMA_V4:
+        _validate_v4_static_plan(payload)
     evaluation_image_max_pixels = payload.get("evaluation_image_max_pixels")
     if evaluation_image_max_pixels is not None and (
         type(evaluation_image_max_pixels) is not int
@@ -474,14 +662,17 @@ def _load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("paired evaluation plan must contain at least one arm")
     steps = [arm.get("optimizer_step") for arm in arms if isinstance(arm, dict)]
     names = [arm.get("name") for arm in arms if isinstance(arm, dict)]
-    if (
-        len(steps) != len(arms)
-        or any(type(step) is not int or step < 0 for step in steps)
-        or steps != sorted(steps)
-        or len(set(steps)) != len(steps)
-        or names != [f"step{step}" for step in steps]
-    ):
-        raise ValueError("paired evaluation arms must be unique ordered stepN states")
+    if payload["schema_version"] != PLAN_SCHEMA_V4:
+        if (
+            len(steps) != len(arms)
+            or any(type(step) is not int or step < 0 for step in steps)
+            or steps != sorted(steps)
+            or len(set(steps)) != len(steps)
+            or names != [f"step{step}" for step in steps]
+        ):
+            raise ValueError(
+                "paired evaluation arms must be unique ordered stepN states"
+            )
     if (
         payload.get("expected_task_count") != 2511
         or payload.get("expected_single_image_count") != 2240
@@ -515,7 +706,7 @@ def _load_plan(path: Path) -> dict[str, Any]:
     if len(set(arm_evaluation_ids)) != len(arm_evaluation_ids):
         raise ValueError("paired evaluation arm IDs must be distinct")
     paired_rng = payload.get("paired_rng")
-    if paired_rng is not None:
+    if paired_rng is not None and payload["schema_version"] != PLAN_SCHEMA_V4:
         expected_fields = {
             "schema_version",
             "mode",
@@ -980,28 +1171,64 @@ def _validate_v3_policy_run_runtime(
         or paired_rng["task_manifest_sha256"] != plan["task_manifest_sha256"]
     ):
         raise RuntimeError("v3 paired RNG task/seed identity differs")
-    probe_step = next(
-        (arm["optimizer_step"] for arm in plan["arms"] if arm["optimizer_step"] > 0),
-        None,
-    )
-    if probe_step is not None:
-        protocol_probe = SimpleNamespace(
-            run=SimpleNamespace(
-                model=owner.model,
-                policy=owner.policy,
-                rollout_rng=owner.rollout_rng,
+    if plan.get("schema_version") == PLAN_SCHEMA_V4:
+        for arm_plan in plan["arms"]:
+            protocol_probe = SimpleNamespace(
+                run=SimpleNamespace(
+                    model=owner.model,
+                    policy=owner.policy,
+                    rollout_rng=owner.rollout_rng,
+                ),
+                policy_version=SimpleNamespace(optimizer_step=80),
+            )
+            _validate_runtime_paired_rng(
+                plan,
+                SimpleNamespace(
+                    evaluation_protocol=(
+                        DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                    ),
+                    paired_seed_namespace=paired_rng["seed_namespace"],
+                    paired_rng_protocol_projection=(
+                        IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION
+                    ),
+                    evaluation_image_max_pixels=arm_plan[
+                        "evaluation_image_max_pixels"
+                    ],
+                ),
+                protocol_probe,
+                arm=arm_plan["name"],
+            )
+    else:
+        probe_step = next(
+            (
+                arm["optimizer_step"]
+                for arm in plan["arms"]
+                if arm["optimizer_step"] > 0
             ),
-            policy_version=SimpleNamespace(optimizer_step=probe_step),
+            None,
         )
-        _validate_runtime_paired_rng(
-            plan,
-            SimpleNamespace(
-                evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
-                paired_seed_namespace=paired_rng["seed_namespace"],
-                evaluation_image_max_pixels=plan.get("evaluation_image_max_pixels"),
-            ),
-            protocol_probe,
-        )
+        if probe_step is not None:
+            protocol_probe = SimpleNamespace(
+                run=SimpleNamespace(
+                    model=owner.model,
+                    policy=owner.policy,
+                    rollout_rng=owner.rollout_rng,
+                ),
+                policy_version=SimpleNamespace(optimizer_step=probe_step),
+            )
+            _validate_runtime_paired_rng(
+                plan,
+                SimpleNamespace(
+                    evaluation_protocol=(
+                        DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                    ),
+                    paired_seed_namespace=paired_rng["seed_namespace"],
+                    evaluation_image_max_pixels=plan.get(
+                        "evaluation_image_max_pixels"
+                    ),
+                ),
+                protocol_probe,
+            )
 
     requested = [
         arm for arm in plan["arms"] if arm["source"]["kind"] == "owner_checkpoint"
@@ -1118,6 +1345,76 @@ def _validate_materialized_frozen_pairing(
             raise RuntimeError("frozen RP66 state changed between evaluation arms")
         if step > 0 and receipt.rp66_storage_sha256 != expected_runtime_storage:
             raise RuntimeError("frozen RP66 runtime storage identity differs")
+
+
+def _validate_materialized_resolution_pairing(
+    plan: dict[str, Any], configs: dict[str, Path]
+) -> None:
+    """Prove both resolution arms use one checkpoint and one projected stream."""
+
+    if plan.get("schema_version") != PLAN_SCHEMA_V4:
+        return
+    snapshots: dict[str, FullModelEvaluationSnapshot] = {}
+    contracts: dict[str, dict[str, object]] = {}
+    for arm_plan in plan["arms"]:
+        arm = arm_plan["name"]
+        config = load_policy_coredev_config(configs[arm])
+        if (
+            config.snapshot_backend != FULL_MODEL_EVALUATION_BACKEND
+            or config.evaluation_protocol
+            != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+            or config.expected_optimizer_step != 80
+            or config.evaluation_image_max_pixels
+            != arm_plan["evaluation_image_max_pixels"]
+            or config.paired_rng_protocol_projection
+            != IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION
+        ):
+            raise RuntimeError(f"materialized {arm} resolution contract differs")
+        snapshot = load_policy_evaluation_snapshot(config)
+        if not isinstance(snapshot, FullModelEvaluationSnapshot):
+            raise RuntimeError("resolution pairing requires full-model snapshots")
+        contract = paired_evaluation_rng_contract(
+            config,
+            snapshot,
+            task_manifest_sha256=plan["task_manifest_sha256"],
+        )
+        if contract is None:
+            raise RuntimeError("resolution-pair RNG contract is absent")
+        snapshots[arm] = snapshot
+        contracts[arm] = contract
+
+    first, second = (snapshots[name] for name in ("pixel1003520", "pixel262144"))
+    same_checkpoint = (
+        first.policy_version.optimizer_step
+        == second.policy_version.optimizer_step
+        == 80
+        and first.policy_version.weights_sha256
+        == second.policy_version.weights_sha256
+        and first.manifest.checkpoint_sha256 == second.manifest.checkpoint_sha256
+        and first.manifest.source_tree_sha256 == second.manifest.source_tree_sha256
+        and Path(first.manifest.source_path).resolve()
+        == Path(second.manifest.source_path).resolve()
+        and first.manifest.checkpoint_owner == second.manifest.checkpoint_owner
+    )
+    if not same_checkpoint:
+        raise RuntimeError("resolution-pair materializations do not share one checkpoint")
+    first_rng, second_rng = (
+        contracts[name] for name in ("pixel1003520", "pixel262144")
+    )
+    if (
+        first_rng["arm_protocol_sha256"]
+        == second_rng["arm_protocol_sha256"]
+        or first_rng["seed_protocol_sha256"]
+        != second_rng["seed_protocol_sha256"]
+        or first_rng["seed_protocol_sha256"]
+        != plan["paired_rng"]["seed_protocol_sha256"]
+    ):
+        raise RuntimeError("resolution-pair full/seed protocol identities differ")
+    for arm in ("pixel1003520", "pixel262144"):
+        if contracts[arm]["arm_protocol_sha256"] != plan["paired_rng"][
+            "arm_protocol_sha256"
+        ][arm]:
+            raise RuntimeError(f"materialized {arm} arm protocol identity differs")
 
 
 def _resolve_repo_path(value: str) -> Path:
@@ -1505,6 +1802,21 @@ def _arm_paths(base: Path, arm: str) -> dict[str, Path]:
     }
 
 
+def _arm_paths_for_plan(
+    plan: dict[str, Any], base: Path, arm: str
+) -> dict[str, Path]:
+    paths = _arm_paths(base, arm)
+    if plan.get("schema_version") != PLAN_SCHEMA_V4:
+        return paths
+    shared = base / "runtime/resolution-pair-shared-full-model"
+    return {
+        **paths,
+        "full_model_snapshot": shared / "full-model-snapshot.json",
+        "full_model_receipt": shared / "full-model-materialization.json",
+        "full_model_merge": shared / "full-model-hf",
+    }
+
+
 def _full_model_source_path(
     plan: dict[str, Any],
     runtime: _EvaluationRuntime,
@@ -1582,7 +1894,8 @@ def _validate_existing_arm_config(
         "task_manifest_sha256": plan["task_manifest_sha256"],
         "expected_task_count": plan["expected_task_count"],
         "expected_single_image_count": plan["expected_single_image_count"],
-        "evaluation_image_max_pixels": plan.get("evaluation_image_max_pixels"),
+        "evaluation_image_max_pixels": _arm_image_max_pixels(plan, arm),
+        "paired_rng_protocol_projection": _arm_rng_protocol_projection(plan, arm),
     }
     if gpu_ids is not None:
         expected["gpu_ids"] = gpu_ids
@@ -1604,7 +1917,7 @@ def _validate_existing_arm_config(
 
 
 def _validate_runtime_paired_rng(
-    plan: dict[str, Any], config: Any, snapshot: Any
+    plan: dict[str, Any], config: Any, snapshot: Any, *, arm: str | None = None
 ) -> None:
     planned = plan.get("paired_rng")
     observed = paired_evaluation_rng_contract(
@@ -1618,6 +1931,38 @@ def _validate_runtime_paired_rng(
         return
     if observed is None:
         raise RuntimeError("planned paired RNG contract was not materialized")
+    if plan.get("schema_version") == PLAN_SCHEMA_V4:
+        if arm not in {"pixel1003520", "pixel262144"}:
+            raise RuntimeError("resolution-pair RNG validation requires an exact arm")
+        if observed.get("schema_version") != (
+            RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA
+        ):
+            raise RuntimeError("resolution-pair RNG runtime schema differs")
+        for field in (
+            "mode",
+            "seed_namespace",
+            "master_seed",
+            "task_manifest_sha256",
+            "seed_protocol_sha256",
+            "protocol_projection",
+            "excluded_arm_components",
+        ):
+            if observed.get(field) != planned.get(field):
+                raise RuntimeError(
+                    f"resolution-pair RNG runtime {field} differs from plan"
+                )
+        expected_arm_protocol = planned["arm_protocol_sha256"][arm]
+        if observed.get("arm_protocol_sha256") != expected_arm_protocol:
+            raise RuntimeError(
+                "resolution-pair RNG runtime arm_protocol_sha256 differs from plan"
+            )
+        sampling = snapshot.run.policy.sampling
+        if (
+            float(sampling.temperature) != planned["temperature"]
+            or getattr(sampling, "do_sample", True) is not planned["do_sample"]
+        ):
+            raise RuntimeError("paired RNG runtime sampling differs from plan")
+        return
     for field in (
         "mode",
         "seed_namespace",
@@ -1646,7 +1991,7 @@ def _materialize_full_model_arm(
 ) -> Path:
     if not isinstance(runtime.protocol_contract, DeepEyesNativeRunContract):
         raise TypeError("full-model backend requires a native Crop protocol contract")
-    paths = _arm_paths(output_base, arm)
+    paths = _arm_paths_for_plan(plan, output_base, arm)
     source = _full_model_source_path(plan, runtime, arm=arm, step=step)
     checkpoint_owner = _full_model_checkpoint_owner(plan)
     complete = (
@@ -1669,7 +2014,7 @@ def _materialize_full_model_arm(
             paths["full_model_receipt"],
             runtime_lightweight=True,
         )
-        _validate_runtime_paired_rng(plan, config, snapshot)
+        _validate_runtime_paired_rng(plan, config, snapshot, arm=arm)
         if (
             config.evaluation_id != _arm_evaluation_id(plan, arm)
             or snapshot.policy_version.optimizer_step != step
@@ -1725,7 +2070,8 @@ def _materialize_full_model_arm(
         enable_chunked_prefill=snapshot_plan["enable_chunked_prefill"],
         gpu_memory_utilization=snapshot_plan["gpu_memory_utilization"],
         paired_seed_namespace=_paired_seed_namespace(plan),
-        evaluation_image_max_pixels=plan.get("evaluation_image_max_pixels"),
+        paired_rng_protocol_projection=_arm_rng_protocol_projection(plan, arm),
+        evaluation_image_max_pixels=_arm_image_max_pixels(plan, arm),
     )
     config = load_policy_coredev_config(paths["config"])
     snapshot = load_full_model_evaluation_snapshot(
@@ -1733,7 +2079,7 @@ def _materialize_full_model_arm(
         paths["full_model_receipt"],
         runtime_lightweight=True,
     )
-    _validate_runtime_paired_rng(plan, config, snapshot)
+    _validate_runtime_paired_rng(plan, config, snapshot, arm=arm)
     return paths["config"]
 
 
@@ -1756,7 +2102,7 @@ def _materialize_arm(
             output_base=output_base,
             gpu_ids=gpu_ids,
         )
-    paths = _arm_paths(output_base, arm)
+    paths = _arm_paths_for_plan(plan, output_base, arm)
     if paths["config"].is_file() and paths["receipt"].is_file():
         config = load_policy_coredev_config(paths["config"])
         _validate_existing_arm_config(
@@ -1768,7 +2114,7 @@ def _materialize_arm(
             gpu_ids=gpu_ids,
         )
         snapshot = load_policy_evaluation_snapshot(config)
-        _validate_runtime_paired_rng(plan, config, snapshot)
+        _validate_runtime_paired_rng(plan, config, snapshot, arm=arm)
         return paths["config"]
     if step == 0:
         qwen_model = Path(run.model.revision_or_path)
@@ -1806,7 +2152,7 @@ def _materialize_arm(
         enable_chunked_prefill=False,
         gpu_memory_utilization=0.9,
         paired_seed_namespace=_paired_seed_namespace(plan),
-        evaluation_image_max_pixels=plan.get("evaluation_image_max_pixels"),
+        evaluation_image_max_pixels=_arm_image_max_pixels(plan, arm),
     )
     return paths["config"]
 
@@ -1822,7 +2168,7 @@ def _load_existing_arm(
 ) -> Path:
     """Load one completed arm without preparing or mutating it."""
 
-    paths = _arm_paths(output_base, arm)
+    paths = _arm_paths_for_plan(plan, output_base, arm)
     required_receipt = (
         paths["full_model_receipt"]
         if runtime is not None and runtime.backend == FULL_MODEL_BACKEND
@@ -1842,7 +2188,7 @@ def _load_existing_arm(
         gpu_ids=gpu_ids,
     )
     snapshot = load_policy_evaluation_snapshot(config)
-    _validate_runtime_paired_rng(plan, config, snapshot)
+    _validate_runtime_paired_rng(plan, config, snapshot, arm=arm)
     if snapshot.policy_version.optimizer_step != step:
         raise RuntimeError(f"existing {arm} optimizer step differs from plan")
     if runtime is not None and runtime.backend == FULL_MODEL_BACKEND:
@@ -2850,7 +3196,10 @@ def _accepted_scored_arm(
         run_id_prefix=plan["scoring"]["run_id_prefix"],
         arm_evaluation_id=config.evaluation_id,
     )
-    require_pinned_receipts = plan.get("schema_version") == PLAN_SCHEMA_V3
+    require_pinned_receipts = plan.get("schema_version") in {
+        PLAN_SCHEMA_V3,
+        PLAN_SCHEMA_V4,
+    }
     return _accepted_official_summary(
         scoring_root,
         judge,
@@ -2926,7 +3275,7 @@ def _summarize_scored_arm(
         expected_model=EVALUATED_MODEL,
         expected_eval_ids=expected_eval_ids,
     )
-    if plan.get("schema_version") == PLAN_SCHEMA_V3:
+    if plan.get("schema_version") in {PLAN_SCHEMA_V3, PLAN_SCHEMA_V4}:
         result["headline"] = extract_coredev_macro_star(result)
     write_json_atomic(scoring_root / "coredev-2511-eval-summary.json", result)
     return result
@@ -3100,9 +3449,10 @@ def _build_paired_report(
     official_summaries: dict[str, dict[str, Any] | None],
     arms: tuple[tuple[str, int], ...],
 ) -> dict[str, Any]:
-    """Build v2 byte-compatible or v3 owner-aware paired reports."""
+    """Build v2 byte-compatible or owner-aware generic paired reports."""
 
-    is_v3 = plan.get("schema_version") == PLAN_SCHEMA_V3
+    is_generic = plan.get("schema_version") in {PLAN_SCHEMA_V3, PLAN_SCHEMA_V4}
+    is_resolution_pair = plan.get("schema_version") == PLAN_SCHEMA_V4
     arm_reports: dict[str, dict[str, Any]] = {}
     for arm, step in arms:
         arm_report: dict[str, Any] = {
@@ -3110,12 +3460,24 @@ def _build_paired_report(
             "evaluation_identity_sha256": _arm_evaluation_identity_sha256(configs[arm]),
             "official_summary": official_summaries[arm],
         }
-        if is_v3:
+        if is_generic:
             arm_report["evaluation_id"] = _arm_evaluation_id(plan, arm)
+        if is_resolution_pair:
+            arm_report["evaluation_image_max_pixels"] = _arm_image_max_pixels(
+                plan, arm
+            )
+            arm_report["arm_protocol_sha256"] = plan["paired_rng"][
+                "arm_protocol_sha256"
+            ][arm]
+            arm_report["seed_protocol_sha256"] = plan["paired_rng"][
+                "seed_protocol_sha256"
+            ]
         arm_reports[arm] = arm_report
 
     report: dict[str, Any] = {
-        "schema_version": GENERIC_PAIR_SUMMARY_SCHEMA if is_v3 else PAIR_SUMMARY_SCHEMA,
+        "schema_version": (
+            GENERIC_PAIR_SUMMARY_SCHEMA if is_generic else PAIR_SUMMARY_SCHEMA
+        ),
         "evaluation_id": plan["evaluation_id"],
         "coverage": {
             "official_manifest_rows": 2511,
@@ -3127,8 +3489,10 @@ def _build_paired_report(
         "sampling": _sampling_report(plan, runtime),
         "arms": arm_reports,
     }
-    if is_v3:
+    if is_generic:
         report["identity_contracts"] = _identity_contract_report(plan, runtime)
+    if is_resolution_pair:
+        report["resolution_pair"] = dict(plan["resolution_pair"])
     for arm, _step in arms:
         report[arm] = official_summaries[arm]
     return report
@@ -3316,6 +3680,7 @@ def _main() -> int:
             for index, (arm, step) in enumerate(arms)
         }
     _validate_materialized_frozen_pairing(plan, configs)
+    _validate_materialized_resolution_pairing(plan, configs)
     if args.wait_for_gpus:
         _wait_for_gpus(
             tuple(args.gpu_ids),

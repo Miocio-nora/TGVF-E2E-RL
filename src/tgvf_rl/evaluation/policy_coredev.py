@@ -168,6 +168,13 @@ POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION = (
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
 POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA = "tgvf-policy-output-contract-failure-v1"
 PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-rng-v1"
+RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA = (
+    "tgvf-policy-paired-evaluation-rng-v2"
+)
+IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION = (
+    "image_max_pixels_resolution_pair_v1"
+)
+IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES = (262144, 1003520)
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
     "deepeyes_official_visible_native_crop_v1"
@@ -497,6 +504,7 @@ class PolicyCoreDevConfig:
     paired_snapshot_receipt_sha256: str | None = None
     evaluation_protocol: str = TRAINING_RUN_EVALUATION_PROTOCOL
     paired_seed_namespace: str | None = None
+    paired_rng_protocol_projection: str | None = None
     evaluation_image_max_pixels: int | None = None
     schema_version: str = POLICY_COREDEV_SCHEMA
 
@@ -563,6 +571,26 @@ class PolicyCoreDevConfig:
             raise ValueError(
                 "evaluation_image_max_pixels must be a positive integer"
             )
+        if self.paired_rng_protocol_projection is not None:
+            if (
+                self.paired_rng_protocol_projection
+                != IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION
+            ):
+                raise ValueError("paired RNG protocol projection differs")
+            if (
+                self.schema_version != POLICY_BENCHMARK_SCHEMA
+                or self.paired_seed_namespace is None
+                or self.evaluation_protocol
+                != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                or self.snapshot_backend != FULL_MODEL_EVALUATION_BACKEND
+                or self.expected_optimizer_step != 80
+                or self.evaluation_image_max_pixels
+                not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES
+            ):
+                raise ValueError(
+                    "image_max_pixels resolution pairing requires the exact "
+                    "official-visible full-model step80 benchmark contract"
+                )
         if (
             len(self.gpu_ids) != 4
             or any(type(gpu_id) is not int or gpu_id < 0 for gpu_id in self.gpu_ids)
@@ -794,6 +822,7 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "paired_snapshot_receipt_sha256",
         "evaluation_protocol",
         "paired_seed_namespace",
+        "paired_rng_protocol_projection",
         "evaluation_image_max_pixels",
     }
     if not required <= set(payload) or not set(payload) <= required | optional:
@@ -1760,6 +1789,7 @@ class PairedEvaluationVLLMTurnRNG:
     protocol_sha256: str
     sample_id: str
     rollout_index: int
+    schema_version: str = PAIRED_POLICY_EVALUATION_RNG_SCHEMA
 
     def __post_init__(self) -> None:
         if (
@@ -1779,6 +1809,11 @@ class PairedEvaluationVLLMTurnRNG:
             self.task_manifest_sha256, name="paired RNG task manifest SHA256"
         )
         _require_sha256(self.protocol_sha256, name="paired RNG protocol SHA256")
+        if self.schema_version not in {
+            PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+            RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+        }:
+            raise ValueError("paired evaluation RNG schema differs")
         if not isinstance(self.sample_id, str) or not self.sample_id:
             raise ValueError("paired evaluation sample_id must be non-empty")
         if type(self.rollout_index) is not int or self.rollout_index < 0:
@@ -1786,15 +1821,21 @@ class PairedEvaluationVLLMTurnRNG:
 
     @property
     def stream_identity(self) -> dict[str, object]:
-        return {
-            "schema_version": PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+        identity: dict[str, object] = {
+            "schema_version": self.schema_version,
             "seed_namespace": self.seed_namespace,
             "master_seed": self.master_seed,
             "task_manifest_sha256": self.task_manifest_sha256,
-            "protocol_sha256": self.protocol_sha256,
             "sample_id": self.sample_id,
             "rollout_index": self.rollout_index,
         }
+        protocol_field = (
+            "protocol_sha256"
+            if self.schema_version == PAIRED_POLICY_EVALUATION_RNG_SCHEMA
+            else "seed_protocol_sha256"
+        )
+        identity[protocol_field] = self.protocol_sha256
+        return identity
 
     @property
     def stream_identity_sha256(self) -> str:
@@ -1822,8 +1863,13 @@ class PairedEvaluationVLLMTurnRNG:
             "assistant_turn_index": turn_index,
         }
         rng_state_sha256 = _canonical_json_sha256(state)
+        seed_domain = (
+            b"tgvf-policy-paired-evaluation-seed-v1\0"
+            if self.schema_version == PAIRED_POLICY_EVALUATION_RNG_SCHEMA
+            else b"tgvf-policy-paired-evaluation-seed-v2\0"
+        )
         seed_digest = hashlib.sha256(
-            b"tgvf-policy-paired-evaluation-seed-v1\0" + bytes.fromhex(rng_state_sha256)
+            seed_domain + bytes.fromhex(rng_state_sha256)
         ).digest()
         return VLLMTurnRNGIdentity(
             seed=int.from_bytes(seed_digest[:8], "big") % _VLLM_SEED_MODULUS,
@@ -1847,6 +1893,51 @@ def _paired_evaluation_rng_contract(
     rng_protocol = dict(_evaluation_protocol_identity(config, snapshot))
     rng_protocol.pop("base_equivalence", None)
     protocol_sha256 = _canonical_json_sha256(rng_protocol)
+    projection_kind = getattr(config, "paired_rng_protocol_projection", None)
+    if projection_kind is not None:
+        if projection_kind != IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION:
+            raise ValueError("paired RNG protocol projection differs")
+        image_max_pixels = rng_protocol.pop("image_max_pixels", None)
+        if image_max_pixels not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES:
+            raise ValueError("resolution-pair protocol image_max_pixels differs")
+        projection = {
+            "kind": IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION,
+            "excluded_protocol_field": "image_max_pixels",
+            "axis_values": list(IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES),
+        }
+        seed_protocol_sha256 = _canonical_json_sha256(
+            {
+                "projection": projection,
+                "projected_protocol": rng_protocol,
+            }
+        )
+        return {
+            "schema_version": RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+            "mode": "common_random_numbers_per_task_turn",
+            "seed_namespace": namespace,
+            "master_seed": snapshot.run.rollout_rng.master_seed,
+            "task_manifest_sha256": task_manifest_sha256,
+            "arm_protocol_sha256": protocol_sha256,
+            "seed_protocol_sha256": seed_protocol_sha256,
+            "protocol_projection": projection,
+            "seed_components": [
+                "master_seed",
+                "seed_namespace",
+                "task_manifest_sha256",
+                "seed_protocol_sha256",
+                "sample_id",
+                "rollout_index",
+                "assistant_turn_index",
+            ],
+            "excluded_arm_components": [
+                "evaluation_id",
+                "arm_name",
+                "optimizer_step",
+                "checkpoint_hash",
+                "policy_weights_sha256",
+                "prompt_token_ids_sha256",
+            ],
+        }
     return {
         "schema_version": PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
         "mode": "common_random_numbers_per_task_turn",
@@ -1900,15 +1991,25 @@ def paired_evaluation_rng_for_task(
     contract = evaluation_identity.get("sampling_rng")
     if not isinstance(contract, Mapping):
         raise ValueError("evaluation identity has no paired sampling RNG contract")
-    if contract.get("schema_version") != PAIRED_POLICY_EVALUATION_RNG_SCHEMA:
+    schema_version = contract.get("schema_version")
+    if schema_version not in {
+        PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+        RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+    }:
         raise ValueError("paired sampling RNG schema differs")
+    protocol_sha256 = (
+        contract.get("protocol_sha256")
+        if schema_version == PAIRED_POLICY_EVALUATION_RNG_SCHEMA
+        else contract.get("seed_protocol_sha256")
+    )
     return PairedEvaluationVLLMTurnRNG(
         master_seed=contract.get("master_seed"),
         seed_namespace=contract.get("seed_namespace"),
         task_manifest_sha256=contract.get("task_manifest_sha256"),
-        protocol_sha256=contract.get("protocol_sha256"),
+        protocol_sha256=protocol_sha256,
         sample_id=sample_id,
         rollout_index=rollout_index,
+        schema_version=schema_version,
     )
 
 
