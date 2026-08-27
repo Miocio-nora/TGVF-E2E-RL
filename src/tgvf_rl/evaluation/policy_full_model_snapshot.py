@@ -1165,6 +1165,35 @@ class _NativeEvaluationSampling:
     max_response_length: int
     temperature: float
     top_p: float
+    top_k: int
+    min_p: float
+    repetition_penalty: float
+    presence_penalty: float
+    frequency_penalty: float
+    stop_token_ids: tuple[int, ...]
+    stop_strings: tuple[str, ...]
+    include_stop_str_in_output: bool
+    ignore_eos: bool
+
+    def identity_record(self) -> Mapping[str, object]:
+        """Return the turn-invariant sampling/action-boundary identity."""
+
+        return MappingProxyType(
+            {
+                "max_response_length": self.max_response_length,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "min_p": self.min_p,
+                "repetition_penalty": self.repetition_penalty,
+                "presence_penalty": self.presence_penalty,
+                "frequency_penalty": self.frequency_penalty,
+                "stop_token_ids": list(self.stop_token_ids),
+                "stop_strings": list(self.stop_strings),
+                "include_stop_str_in_output": self.include_stop_str_in_output,
+                "ignore_eos": self.ignore_eos,
+            }
+        )
 
     def remaining_response_tokens(self, consumed_policy_tokens: int) -> int:
         if type(consumed_policy_tokens) is not int or consumed_policy_tokens < 0:
@@ -1184,7 +1213,15 @@ class _NativeEvaluationSampling:
             {
                 "temperature": self.temperature,
                 "top_p": self.top_p,
-                "top_k": -1,
+                "top_k": self.top_k,
+                "min_p": self.min_p,
+                "repetition_penalty": self.repetition_penalty,
+                "presence_penalty": self.presence_penalty,
+                "frequency_penalty": self.frequency_penalty,
+                "stop_token_ids": list(self.stop_token_ids),
+                "stop": list(self.stop_strings),
+                "include_stop_str_in_output": self.include_stop_str_in_output,
+                "ignore_eos": self.ignore_eos,
                 "max_tokens": max_tokens,
                 "logprobs": True,
             }
@@ -1249,6 +1286,19 @@ def _native_evaluation_run_view(
                 max_response_length=int(rollout["max_response_length"]),
                 temperature=float(rollout["temperature"]),
                 top_p=float(rollout["top_p"]),
+                top_k=-1,
+                min_p=0.0,
+                repetition_penalty=1.0,
+                presence_penalty=0.0,
+                frequency_penalty=0.0,
+                # The owner runs bind this same action boundary explicitly.
+                # The native DeepEyes protocol contract predates those fields,
+                # so reconstruct them here instead of silently inheriting
+                # vLLM defaults during full-model evaluation.
+                stop_token_ids=(151_645,),
+                stop_strings=("</tool_call>",),
+                include_stop_str_in_output=True,
+                ignore_eos=False,
             ),
         ),
         rollout_rng=SimpleNamespace(master_seed=int(dataset["schedule_seed"])),
@@ -1473,6 +1523,7 @@ def full_model_snapshot_identity_record(
         "materialization_identity_sha256": snapshot.receipt.identity_sha256,
         "materialized_model_tree_sha256": snapshot.receipt.model_tree_sha256,
         "materialization_mode": snapshot.receipt.mode.value,
+        "evaluation_sampling": dict(snapshot.run.policy.sampling.identity_record()),
         "lora_request": None,
     }
     if snapshot.manifest.checkpoint_owner is not None:
