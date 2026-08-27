@@ -1,6 +1,11 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-26（Asia/Tokyo）
+更新时间：2026-08-28（Asia/Tokyo）
+
+> **Crop 紧急勘误（2026-08-28）：历史 full-model official-visible 评测丢失
+> `</tool_call>` 硬停边界。在 corrected rerun 完成前，本文所有旧 Crop 准确率、
+> sub-benchmark 和工具使用统计均为 provisional；Pure TGVF 与 Atomic 不受该
+> 缺陷影响。详见第 0 节。**
 
 状态：**实验进行中；RP67 三臂验证、广义 full-prompt stress test、严格 target-only matched
 prompt 与 No-Tool RL S0/S8/S16/S32 matched no-tool 评测均已闭合。事前冻结的 No-Tool S32
@@ -20,6 +25,42 @@ S16 已完成 2,240 条单图推理并进入评分。下一步完成 Atomic 的
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
 审计包生成和文章结论更新等关键节点同步；运行中的计数只作为状态快照，不提前当作结果。按当前
 授权，每个关键节点只提交这一个报告文件并 push 到 `origin/main`，不带入 main 的其他工作区改动。
+
+## 0. 紧急勘误：Crop `</tool_call>` action boundary（2026-08-28）
+
+**在 fixed-boundary 复测完成前，历史 Crop S8/S16/S32/S48/S64/S80 及 Crop
+S80@512 的准确率、sub-benchmark 和工具使用率均降级为 provisional，不得继续
+作为正文定稿结果引用。** 下文为保留完整实验历史而未删除的旧 Crop 数字，统一受本节
+勘误覆盖。Original、Pure TGVF 和 Atomic 的旧结果不因这一特定缺陷降级。
+
+根因在 Crop-only 的 `full_model + deepeyes_official_visible_native_crop_v1` 路径：
+full-model snapshot 重建 vLLM sampling request 时丢失了
+`stop=["</tool_call>"]`、`stop_token_ids=[151645]` 和
+`include_stop_str_in_output=true` 等 run-bound sampling 字段。模型因此可在合法
+`</tool_call>` 后同轮继续生成 plain final，旧 evaluator 又会按 answer-over-action
+接受尾文，使已请求的 Crop 没有执行。历史六点中同轮 `tool_call + final` 的题数为：
+
+| Crop checkpoint | S8 | S16 | S32 | S48 | S64 | S80 |
+|---|---:|---:|---:|---:|---:|---:|
+| Same-turn `tool_call + final` | 150 | 213 | 336 | 618 | 512 | 483 |
+
+这些题不能用离线规则反推修复后准确率，因而必须重跑。对照审计中，Pure TGVF S64
+和 Atomic S16 的同类 same-turn 计数均为 **0**；两者使用另一条 paired
+`training_run` evaluator 路径，从完整 owner config 传入 stop 契约，因此无需因本缺陷
+重跑 TGVF S64 或 Atomic S16。
+
+修复与复测状态：
+
+- 修复 commit `5e37a77` 已在现有 `prl25-c-tgvf-80step` 分支落地，没有新建修复
+  分支。full-model sampling identity 现在显式绑定完整 stop/action-boundary；正常生成
+  在 `</tool_call>` 处硬停，若后端仍返回 mixed turn，evaluator 则以
+  `tool_call_terminal_suffix` fail-closed，不再接受尾文为 final。
+- Corrected S32/S80 formal rerun 使用 plan commit `e436629`，顶层 evaluation ID 为
+  `PRL25-B-CROP-EXACT-COREDEV2511-S32-S80-TOOL-BOUNDARY-FIX-V2`。该任务已启动并
+  **正在运行**：S32 使用 GPU 0–3，S80 使用 GPU 4–7；新 output root 与 evaluation
+  identity 独立，不复用旧 inference 或 score。
+- Crop S80@512 同样受影响，将在当前 S32/S80 fixed-boundary 复测闭合后补跑；
+  当前不用它阻塞两个主结果。
 
 ## 1. 文章当前主线
 
