@@ -83,6 +83,80 @@ def _rgb_tensor_to_pil(rgb: torch.Tensor) -> Image.Image:
     return Image.fromarray(np.asarray(rgb.contiguous().numpy()), mode="RGB")
 
 
+def _official_visible_processor_geometry(
+    processor: object,
+) -> tuple[Mapping[str, object], int, int]:
+    image_processor = getattr(processor, "image_processor", None)
+    size = getattr(image_processor, "size", None)
+    patch_size = getattr(image_processor, "patch_size", None)
+    merge_size = getattr(image_processor, "merge_size", None)
+    if not isinstance(size, Mapping):
+        raise ValueError("official-visible processor size is invalid")
+    shortest_edge = size.get("shortest_edge")
+    if type(shortest_edge) is not int or shortest_edge <= 0:
+        raise ValueError("official-visible processor shortest_edge is invalid")
+    if type(patch_size) is not int or patch_size <= 0:
+        raise ValueError("official-visible processor patch_size is invalid")
+    if type(merge_size) is not int or merge_size <= 0:
+        raise ValueError("official-visible processor merge_size is invalid")
+    return size, patch_size, merge_size
+
+
+def _official_visible_mm_processor_kwargs(
+    processor: object,
+    image_max_pixels: int,
+) -> dict[str, object]:
+    """Build the one Qwen3 image-size contract used before and during decode."""
+
+    if type(image_max_pixels) is not int or image_max_pixels <= 0:
+        raise ValueError("official-visible image_max_pixels must be positive")
+    size, _patch_size, _merge_size = _official_visible_processor_geometry(processor)
+    shortest_edge = size["shortest_edge"]
+    if image_max_pixels < shortest_edge:
+        raise ValueError(
+            "official-visible image_max_pixels is below processor shortest_edge"
+        )
+    return {
+        "images_kwargs": {
+            "size": {
+                "shortest_edge": shortest_edge,
+                "longest_edge": image_max_pixels,
+            }
+        }
+    }
+
+
+def _official_visible_visual_counts(
+    processor: object,
+    image_grid_thw: torch.Tensor,
+    *,
+    image_count: int,
+    image_max_pixels: int,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    if image_grid_thw.ndim != 2 or tuple(image_grid_thw.shape) != (image_count, 3):
+        raise ValueError("official-visible image_grid_thw is malformed")
+    _size, patch_size, merge_size = _official_visible_processor_geometry(processor)
+    merge_area = merge_size**2
+    visual_counts: list[int] = []
+    represented_pixel_areas: list[int] = []
+    for grid in image_grid_thw:
+        values = tuple(value.item() for value in grid)
+        if any(type(value) is not int or value <= 0 for value in values):
+            raise ValueError("official-visible image grid values are invalid")
+        temporal, grid_height, grid_width = values
+        if temporal != 1:
+            raise ValueError("official-visible PIL image grid must be single-frame")
+        premerge_count = temporal * grid_height * grid_width
+        if premerge_count % merge_area:
+            raise ValueError("official-visible image grid is not merge-aligned")
+        represented_pixel_area = grid_height * grid_width * patch_size**2
+        if represented_pixel_area > image_max_pixels:
+            raise ValueError("official-visible processor grid exceeds image_max_pixels")
+        visual_counts.append(premerge_count // merge_area)
+        represented_pixel_areas.append(represented_pixel_area)
+    return tuple(visual_counts), tuple(represented_pixel_areas)
+
+
 @dataclass(frozen=True, slots=True)
 class OfficialVisibleCropBox:
     requested_bbox_2d: tuple[int, int, int, int]
@@ -209,18 +283,19 @@ def _render_native_prompt(
     """Render the same expanded native prompt IDs used by veRL's agent loop."""
 
     text, canonical_ids = _render_prompt(processor, messages)
-    if type(image_max_pixels) is not int or image_max_pixels <= 0:
-        raise ValueError("official-visible image_max_pixels must be positive")
     if not images or any(not isinstance(image, Image.Image) for image in images):
         raise TypeError("official-visible native prompt requires PIL images")
     process = getattr(processor, "__call__", None)
     if not callable(process):
         raise TypeError("official-visible processor is not callable")
+    mm_processor_kwargs = _official_visible_mm_processor_kwargs(
+        processor, image_max_pixels
+    )
     batch = process(
         text=[text],
         images=list(images),
-        max_pixels=image_max_pixels,
         return_tensors="pt",
+        **mm_processor_kwargs,
     )
     if not isinstance(batch, Mapping):
         raise TypeError("official-visible processor output must be a mapping")
@@ -231,20 +306,14 @@ def _render_native_prompt(
         or input_ids.ndim != 2
         or input_ids.shape[0] != 1
         or not isinstance(image_grid_thw, torch.Tensor)
-        or image_grid_thw.ndim != 2
-        or tuple(image_grid_thw.shape) != (len(images), 3)
     ):
         raise ValueError("official-visible native processor tensors are malformed")
-    image_processor = getattr(processor, "image_processor", None)
-    merge_size = getattr(image_processor, "merge_size", None)
-    if type(merge_size) is not int or merge_size <= 0:
-        raise ValueError("official-visible processor merge_size is invalid")
-    visual_counts = tuple(
-        int(grid[0].item() * grid[1].item() * grid[2].item() // (merge_size**2))
-        for grid in image_grid_thw
+    visual_counts, _represented_pixel_areas = _official_visible_visual_counts(
+        processor,
+        image_grid_thw,
+        image_count=len(images),
+        image_max_pixels=image_max_pixels,
     )
-    if any(count <= 0 for count in visual_counts):
-        raise ValueError("official-visible visual token count is invalid")
     tokenizer = getattr(processor, "tokenizer", None)
     convert = getattr(tokenizer, "convert_tokens_to_ids", None)
     if not callable(convert):
@@ -296,9 +365,12 @@ def validate_official_visible_processor(
     ):
         raise ValueError("official visible crop observation rendering differs")
     probe_images = (
-        Image.new("RGB", (96, 64), (10, 20, 30)),
-        Image.new("RGB", (64, 96), (40, 50, 60)),
+        Image.new("RGB", (2048, 1536), (10, 20, 30)),
+        Image.new("RGB", (1536, 2048), (40, 50, 60)),
     )
+    source_pixel_areas = tuple(image.width * image.height for image in probe_images)
+    if not any(area > image_max_pixels for area in source_pixel_areas):
+        raise ValueError("official-visible static probe must exceed image_max_pixels")
     try:
         _, expanded_ids, visual_counts = _render_native_prompt(
             processor,
@@ -309,14 +381,30 @@ def validate_official_visible_processor(
     finally:
         for image in probe_images:
             image.close()
+    processor_size, patch_size, merge_size = _official_visible_processor_geometry(
+        processor
+    )
+    represented_pixel_areas = tuple(
+        count * merge_size**2 * patch_size**2 for count in visual_counts
+    )
     return {
-        "schema_version": "tgvf-official-visible-processor-static-proof-v1",
+        "schema_version": "tgvf-official-visible-processor-static-proof-v2",
         "prompt_bundle_sha256": VISUAL_PROMPT_IDENTITY.bundle_sha256,
         "initial_prompt_token_ids_sha256": _canonical_sha256(initial_ids),
         "continuation_prompt_token_ids_sha256": _canonical_sha256(continuation_ids),
         "initial_prompt_token_count": len(initial_ids),
         "continuation_prompt_token_count": len(continuation_ids),
         "continuation_expanded_prompt_token_count": len(expanded_ids),
+        "configured_image_max_pixels": image_max_pixels,
+        "processor_image_size": dict(processor_size),
+        "effective_processor_image_size": {
+            "shortest_edge": processor_size["shortest_edge"],
+            "longest_edge": image_max_pixels,
+        },
+        "processor_patch_size": patch_size,
+        "processor_merge_size": merge_size,
+        "synthetic_native_source_pixel_areas": list(source_pixel_areas),
+        "synthetic_native_represented_pixel_areas": list(represented_pixel_areas),
         "synthetic_native_visual_token_counts": list(visual_counts),
         "native_original_image_count": 1,
         "native_crop_image_count": 1,
@@ -467,11 +555,9 @@ class OfficialVisiblePolicyEvaluator:
             prompt_ids=list(prompt_ids),
             sampling_params=parameters,
             image_data=list(images),
-            mm_processor_kwargs={
-                "max_pixels": getattr(
-                    self, "image_max_pixels", self.run.policy.image_max_pixels
-                )
-            },
+            mm_processor_kwargs=_official_visible_mm_processor_kwargs(
+                self.processor, self.image_max_pixels
+            ),
             tgvf_expected_step=self.policy_version.optimizer_step,
         )
         token_ids = tuple(getattr(output, "token_ids", ()))
@@ -524,9 +610,7 @@ class OfficialVisiblePolicyEvaluator:
                     self.processor,
                     messages,
                     images=images,
-                    image_max_pixels=getattr(
-                        self, "image_max_pixels", self.run.policy.image_max_pixels
-                    ),
+                    image_max_pixels=self.image_max_pixels,
                 )
                 try:
                     text, token_ids, _logprobs, stop_reason = await self._sample_turn(

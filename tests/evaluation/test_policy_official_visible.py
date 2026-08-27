@@ -16,6 +16,7 @@ from tgvf_rl.evaluation.policy_coredev import (
 )
 from tgvf_rl.evaluation.policy_official_visible import (
     OfficialVisiblePolicyEvaluator,
+    _render_native_prompt,
     normalize_official_visible_crop_box,
     normalize_qwen3_official_visible_crop_box,
     official_visible_observation_message,
@@ -23,7 +24,13 @@ from tgvf_rl.evaluation.policy_official_visible import (
 )
 from tgvf_rl.framework.verl.native_crop_tool import normalize_native_crop_box
 from tgvf_rl.framework.vllm import ContentAddressedVLLMTurnRNG
-from tgvf_rl.policy.deepeyes_official_protocol import USER_PROMPT_V2
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    USER_PROMPT_V2,
+    build_visual_messages,
+)
+
+
+_QWEN3_PROCESSOR_PATH = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct")
 
 
 class _Tokenizer:
@@ -61,7 +68,11 @@ class _Tokenizer:
 class _Processor:
     def __init__(self) -> None:
         self.tokenizer = _Tokenizer()
-        self.image_processor = SimpleNamespace(merge_size=2)
+        self.image_processor = SimpleNamespace(
+            size={"shortest_edge": 65_536, "longest_edge": 16_777_216},
+            patch_size=16,
+            merge_size=2,
+        )
         self.rendered: list[str] = []
 
     def apply_chat_template(
@@ -96,10 +107,15 @@ class _Processor:
         *,
         text: list[str],
         images: list[Image.Image],
-        max_pixels: int,
+        images_kwargs: dict[str, object],
         return_tensors: str,
     ) -> dict[str, torch.Tensor]:
-        assert max_pixels == 1_003_520
+        assert images_kwargs == {
+            "size": {
+                "shortest_edge": 65_536,
+                "longest_edge": 1_003_520,
+            }
+        }
         assert return_tensors == "pt"
         canonical = self.tokenizer.encode(text[0], add_special_tokens=False)
         expanded: list[int] = []
@@ -190,10 +206,79 @@ def test_static_processor_proof_includes_native_visual_expansion() -> None:
     assert proof["native_original_image_count"] == 1
     assert proof["native_crop_image_count"] == 1
     assert proof["synthetic_native_visual_token_counts"] == [4, 4]
+    assert proof["configured_image_max_pixels"] == 1_003_520
+    assert proof["processor_image_size"] == {
+        "shortest_edge": 65_536,
+        "longest_edge": 16_777_216,
+    }
+    assert proof["effective_processor_image_size"] == {
+        "shortest_edge": 65_536,
+        "longest_edge": 1_003_520,
+    }
+    assert proof["synthetic_native_source_pixel_areas"] == [3_145_728, 3_145_728]
+    assert proof["synthetic_native_represented_pixel_areas"] == [4096, 4096]
     assert (
         proof["continuation_expanded_prompt_token_count"]
         > proof["continuation_prompt_token_count"]
     )
+
+
+def test_real_qwen3_processor_cap_changes_large_image_grid() -> None:
+    if not _QWEN3_PROCESSOR_PATH.is_dir():
+        pytest.skip("accepted local Qwen3 processor is unavailable")
+    transformers = pytest.importorskip(
+        "transformers", reason="accepted local Qwen3 processor is unavailable"
+    )
+    delegate = transformers.AutoProcessor.from_pretrained(
+        _QWEN3_PROCESSOR_PATH,
+        local_files_only=True,
+        trust_remote_code=True,
+    )
+
+    class _RecordingProcessor:
+        def __init__(self) -> None:
+            self.tokenizer = delegate.tokenizer
+            self.image_processor = delegate.image_processor
+            self.grids: list[list[list[int]]] = []
+
+        def apply_chat_template(self, *args: object, **kwargs: object) -> str:
+            return delegate.apply_chat_template(*args, **kwargs)
+
+        def __call__(self, **kwargs: object) -> object:
+            batch = delegate(**kwargs)
+            self.grids.append(batch["image_grid_thw"].tolist())
+            return batch
+
+    processor = _RecordingProcessor()
+    image = Image.new("RGB", (2048, 1536), (10, 20, 30))
+    messages = list(build_visual_messages("Which detail is visible?", image="<image>"))
+    try:
+        _low_text, low_ids, low_counts = _render_native_prompt(
+            processor,
+            messages,
+            images=(image,),
+            image_max_pixels=512 * 512,
+        )
+        _high_text, high_ids, high_counts = _render_native_prompt(
+            processor,
+            messages,
+            images=(image,),
+            image_max_pixels=1_003_520,
+        )
+    finally:
+        image.close()
+
+    assert processor.grids == [[[1, 26, 36]], [[1, 54, 72]]]
+    assert low_counts == (234,)
+    assert high_counts == (972,)
+    assert len(low_ids) < len(high_ids)
+    patch_size = processor.image_processor.patch_size
+    represented_areas = [
+        grid[0][1] * grid[0][2] * patch_size**2 for grid in processor.grids
+    ]
+    assert represented_areas == [239_616, 995_328]
+    assert represented_areas[0] <= 512 * 512
+    assert represented_areas[1] <= 1_003_520
 
 
 def test_official_visible_uses_paired_rng_and_preserves_legacy_seed_path() -> None:
@@ -202,6 +287,14 @@ def test_official_visible_uses_paired_rng_and_preserves_legacy_seed_path() -> No
             self.seeds: list[int] = []
 
         async def generate(self, **kwargs: object) -> object:
+            assert kwargs["mm_processor_kwargs"] == {
+                "images_kwargs": {
+                    "size": {
+                        "shortest_edge": 65_536,
+                        "longest_edge": 1_003_520,
+                    }
+                }
+            }
             self.seeds.append(kwargs["sampling_params"]["seed"])
             return SimpleNamespace(
                 token_ids=[201],
@@ -231,6 +324,8 @@ def test_official_visible_uses_paired_rng_and_preserves_legacy_seed_path() -> No
             rollout_rng=SimpleNamespace(master_seed=42),
         )
         instance.manager = manager
+        instance.processor = _Processor()
+        instance.image_max_pixels = 1_003_520
         instance.policy_version = PolicyVersion("run", step, str(step % 10) * 64)
         instance.tokenizer = SimpleNamespace(decode=lambda *_args, **_kwargs: "A")
         instance.evaluation_identity = {
@@ -330,6 +425,14 @@ def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> Non
         async def generate(self, **kwargs: object) -> object:
             self.calls += 1
             assert len(kwargs["image_data"]) == self.calls
+            assert kwargs["mm_processor_kwargs"] == {
+                "images_kwargs": {
+                    "size": {
+                        "shortest_edge": 65_536,
+                        "longest_edge": 1_003_520,
+                    }
+                }
+            }
             if self.fail_context and self.calls == 2:
                 raise ValueError(
                     "The decoder prompt (length 32891) is longer than the maximum "
@@ -375,6 +478,7 @@ def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> Non
     )
     evaluator.manager = manager
     evaluator.processor = processor
+    evaluator.image_max_pixels = 1_003_520
     evaluator.policy_version = policy_version
     evaluator.tokenizer = processor.tokenizer
 
