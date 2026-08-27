@@ -8,7 +8,9 @@
 > 证明后两次 S80 运行的 initial visual token counts 完全相同，均实际使用 fast processor 默认
 > `size.longest_edge=16,777,216`，而不是 `1,003,520 / 262,144`。因此两项数值只保留为
 > native-default 历史运行，`+2.9182 pp` 不具有像素效应含义。Crop true@1M/true@512 正在等待
-> corrected common-RNG rerun。旧 boundary 的 nominal S80@512 `61.5591` 仍作废；Pure TGVF
+> corrected common-RNG rerun；严格双臂实现与计划已在 commit `ec8f3cd` 冻结，当前处于共享
+> S80 full-model materialization/prepare 阶段，尚未产生 true@1M/true@512 分数。旧 boundary 的
+> nominal S80@512 `61.5591` 仍作废；Pure TGVF
 > 与 Atomic 不受 Crop action-boundary 或该 Crop processor-override 缺陷影响。详见第 0 与 5.5 节。
 
 状态：**实验进行中；RP67 三臂验证、广义 full-prompt stress test、严格 target-only matched
@@ -84,6 +86,34 @@ full-model snapshot 重建 vLLM sampling request 时丢失了
   两臂同轮 `tool_call + final` 均为 `0`，所有工具 turn 均以 `</tool_call>` 结束。
 - S80 仍是事先指定的 80-step headline，不因修正后 S32 高 `2.4914 pp` 而 post-hoc
   重选 checkpoint。S80 只在 OCR mean 上高于 S32（`+1.6483 pp`）。
+- 对该 `S32 > S80` 现象做了严格逐题审计：两臂的 `2,240/2,240` 个 `sample_id`、题目与
+  `paired_rng_stream_identity_sha256` 全部一致，因此这里没有题集或采样流混杂。在除 OCR
+  连续部分分外的六个二值评分 set（`n=1,640`）中，S32→S80 的转移为：
+
+| S32→S80 outcome | 题数 |
+|---|---:|
+| correct→wrong | 174 |
+| wrong→correct | 123 |
+| both correct | 823 |
+| both wrong | 520 |
+
+  净差为 S32 `+51` 题；按 set 分别为 VStar `+4`、HRBench `+12`、BLINK-single `+7`、
+  MMMU-single `+1`、MathVista `+10`、MathVerse `+17`。加上 OCR 后，S32 在七项中的六项
+  更高，只有 OCR mean 低 `1.6483 pp`，故不是某一个 subset 单独造成的偶然反转。
+- 工具策略同时发生显著漂移：successful-use question 从 S32 的 `1,385/2,240=61.83%`
+  增至 S80 的 `1,977/2,240=88.26%`，任意尝试率从 `64.24%` 增至 `92.46%`。有 `620`
+  题由 “S32 不调用” 转为 “S80 调用”；在其中属于六个二值 set 的 `559` 题上，
+  correct→wrong / wrong→correct 为 `65/42`，S32 仍净胜 `23` 题。双方都调用的六-set
+  `888` 题上对应为 `96/69`，S32 又净胜 `27` 题。因此退化不仅是调用覆盖面变化；S80 在
+  相同工具使用条件下的回答质量也回落。
+- S80 的错误 trajectory 为 `141`（S32 `87`），其中 `context_limit` 从 `18` 增至 `41`，
+  而 `invalid_crop` 基本不变（`109→112`）。S80 输出反而更短：assistant sampled-token
+  均值/中位数为 `366.7/107`，S32 为 `493.8/141`；所以不能解释为 S80 plain output 更冗长，
+  更符合高频 Crop 与多轮图像上下文带来额外 terminal/compound failure 的现象。
+- 当前最强、但仍限于诊断性的解释是 **late-RL over-optimization**：S32→S80 学到了更激进的
+  Crop 策略，却没有同步提高工具条件下的最终答题质量，并增加了 context-limit failure。
+  该配对审计不单独证明“过调用”是全部因果机制；它只排除分辨率、题集、逐轮 RNG 和输出长度
+  作为 S32 优势的替代解释。正式像素效应仍只由 pending 的 true@1M/true@512 单变量对照回答。
 - nominal Crop S80@512 同样受旧边界缺陷影响。fixed-boundary plan 已在现有
   `neurips-notool-rl-s32` 分支 commit `eb37ad9` 冻结并完成：`2,240/2,240` 条受支持
   trajectory、`7/7` 官方 slice、summary `status=pass`、judge parse failure `0`，Macro*
