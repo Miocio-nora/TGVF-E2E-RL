@@ -11,6 +11,9 @@
 > `max_pixels=1,003,520`、真实 grid proof、相同七项 scorer 重测。冻结口径与实时状态见
 > [项目级 true-1M 唯一合同](COREDEV2511_TRUE1M_UNIFIED_MEASUREMENT_CONTRACT_20260828.md)。
 > 本勘误优先于本文下方尚未逐段改写的旧 `matched@1M` 或主表表述。
+> 运行时接口也以该合同为准：裸 HF/训练 preprocessing 可使用 nested `images_kwargs.size`，
+> 但 vLLM 0.12 evaluator 必须使用可哈希的顶层 `mm_processor_kwargs.size`；本文下方旧的
+> “评测统一使用 nested”表述已经作废。
 
 > **Crop 双重勘误（2026-08-28）：action boundary 已修复，但此前宣称的 Crop
 > 1M→512 像素控制无效。** fixed-boundary S32/S80 的 Macro* 为 `61.6699 / 59.1785`；另一次
