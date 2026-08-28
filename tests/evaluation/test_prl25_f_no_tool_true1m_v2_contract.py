@@ -330,6 +330,9 @@ def _write_inference_source_fixture(
                 row = {
                     **unsigned_row,
                     "result_identity_sha256": result_identity,
+                    # Written after result identity construction by the real
+                    # benchmark worker; the rank-file byte binding covers it.
+                    "wall_seconds": float(ordinal + 1),
                 }
                 rows.append(json.dumps(row, sort_keys=True))
                 identities.append(
@@ -1064,6 +1067,15 @@ def test_inference_source_closure_binds_rank_bytes_and_processor_proofs(
     first_rank_path.write_bytes(
         original_rank_bytes.replace(b"answer-0-0", b"answer-X-0", 1)
     )
+    with pytest.raises(RuntimeError, match="rank0 byte binding"):
+        scoring_finalizer.validate_inference_source_closure(eval_root)
+    first_rank_path.write_bytes(original_rank_bytes)
+
+    changed_telemetry = original_rank_bytes.replace(
+        b'"wall_seconds": 1.0', b'"wall_seconds": 9.0', 1
+    )
+    assert changed_telemetry != original_rank_bytes
+    first_rank_path.write_bytes(changed_telemetry)
     with pytest.raises(RuntimeError, match="rank0 byte binding"):
         scoring_finalizer.validate_inference_source_closure(eval_root)
     first_rank_path.write_bytes(original_rank_bytes)

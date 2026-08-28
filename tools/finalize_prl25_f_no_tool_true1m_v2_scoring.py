@@ -440,6 +440,11 @@ def _validate_rank_tree(
                 result_identity = row.get("result_identity_sha256")
                 hash_payload = dict(row)
                 hash_payload.pop("result_identity_sha256", None)
+                # ``wall_seconds`` is durable runtime telemetry, not part of the
+                # policy-result identity.  Keep this recomputation aligned with
+                # validate_policy_benchmark_result(), while the enclosing rank
+                # file SHA256 still binds the exact telemetry bytes.
+                hash_payload.pop("wall_seconds", None)
                 if (
                     type(ordinal) is not int
                     or ordinal % 4 != rank
