@@ -1,6 +1,6 @@
 # CoreDev-2511 true-1M 统一测量合同与重测台账
 
-更新时间：2026-08-28 14:58 JST
+更新时间：2026-08-28 15:15 JST
 
 状态：**合同已冻结；结果补测进行中。本文是当前项目级唯一 true-1M 口径。** 在本文标为
 `accepted` 之前，任何仅在配置中写有 `1,003,520`、但没有真实 processor/grid 证据的结果，均不得
@@ -28,7 +28,7 @@ Crop fixed-boundary S32/S80 与旧 No-Tool S0/S8/S16/S32 都不是 true-1M 结�
 | **No-Tool RL matched true-1M** | PRL25-F 的训练匹配 user-only no-tool prompt 与 direct-only loop，S0/S8/S16/S32 |
 | **Crop fixed-boundary true-1M** | PRL25-B native RGB Crop，严格 `</tool_call>` action boundary，S32/S80 |
 | **TGVF matched true-1M** | PRL25-C Pure TGVF、Frozen RP67，S64 |
-| **Atomic matched true-1M** | PRL25-D Atomic Crop+TGVF、Frozen RP67，S16 |
+| **Atomic (TGVF+Crop) matched true-1M** | PRL25-D Atomic Crop+TGVF、Frozen RP67，S16 |
 | **Macro\*** | VStar、HRBench、BLINK-180、OCR EN/CN mean、MMMU-269、MathVista、MathVerse 五版本宏平均的七项无权平均 |
 
 ## 3. 统一主表合同
@@ -59,7 +59,7 @@ agent loop、工具 schema 和可调用工具仍不同，因此该表是**统一
 | Crop | S32 | `inference running (GPU 4–7)` | — |
 | Crop | S80 | `inference running (GPU 0–3)` | — |
 | TGVF | S64 | `accepted` | 59.8086 |
-| Atomic | S16 | `accepted` | 63.0827 |
+| Atomic (TGVF+Crop) | S16 | `accepted` | 63.0827 |
 
 No-Tool S0/S8/S16/S32 全部补测，以保留训练动态；S32 是统一主表行，S0 是训练前控制行。
 
@@ -104,11 +104,18 @@ receipt 为准。
 
 ## 6. 训练像素审计
 
-PRL25-B/C/D/F 的 run config 均声明 `image_max_pixels = 1,003,520`。训练数据的 source-image
-prompt expansion 使用 nested `images_kwargs.size.longest_edge`；在线 rollout 使用预展开的
-image embeddings 与已绑定的 `image_grid_thw`。Crop observation 与 TGVF preprocessing 也在
-同一上限下物化。因此 checkpoint 中保存的 processor 默认 `16,777,216` 不能被解读为训练
-实际输入面积。
+PRL25-B/C/D/F 的冻结 run config 均绑定 `image_max_pixels = 1,003,520`。进一步按各自最终
+launch provenance commit（B `08a9d8b4`、C `b87126ae`、D `017b5077`、F `7645fe4a`）回查
+历史源码：在线 rollout 的 source image，以及 Crop/Atomic 的 crop observation，均调用
+`preprocess_qwen3_rgb()`；该函数通过 Hugging Face 实际识别的
+`images_kwargs.size.longest_edge=image_max_pixels` 先生成受限的
+`pixel_values/image_grid_thw`，再把预展开视觉张量送入 vLLM。dataset prompt expansion 使用
+同一有效绑定。
+
+用训练模型的真实 Qwen3 processor 对 `2048×1536` RGB 复跑上述历史函数：processor 保存的
+默认上限虽为 `16,777,216`，实际得到 `image_grid_thw=[1,54,72]`、represented area
+`995,328`、merged visual tokens `972`，均满足 `1,003,520` 上限。因此这些 checkpoint 的
+训练输入是 true-1M；`16,777,216` 仅是 override 缺失或失效时的 processor 默认值。
 
 像素问题与 action-boundary 问题分开处理：Crop true-1M 重测同时要求 fixed
 `</tool_call>` boundary；像素修复本身不改变 TGVF/Atomic 的 action boundary 结论。
@@ -119,8 +126,9 @@ image embeddings 与已绑定的 `image_grid_thw`。Crop observation 与 TGVF pr
 - [x] 撤销 Crop 与 No-Tool 旧 nominal-1M 身份。
 - [x] 保留 TGVF S64 与 Atomic S16 accepted true-1M 结果。
 - [ ] Crop S32/S80：fixed boundary、有效 `size` cap、独立 compile cache；首次启动在零预测时
-  捕获 vLLM nested-dict cache 错误并 fail-closed，已切换到顶层 `mm_processor_kwargs.size`，
-  S80 正重新启动，待首条真实预测与最终评分闭合。
+  捕获 vLLM nested-dict cache 错误并 fail-closed，已切换到顶层 `mm_processor_kwargs.size`。
+  S80 已通过真实首批请求（native visual-token count 受 1M cap 约束），S32/S80 均在推理，待
+  completion receipt 与最终评分闭合。
 - [ ] No-Tool S0/S8/S16/S32：顶层 `mm_processor_kwargs.size`、独立 compile cache，完成推理与评分。
 - [ ] Original：raw-direct true-1M 的真实 processor probe 已通过（`2048×1536 → 1152×864`，
   represented area `995,328`）；七卡推理排在 Crop 后，相同官方 scorer 与 Macro* 聚合。
