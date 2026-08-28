@@ -1,5 +1,10 @@
 # Policy RL CoreDev-2511 统一测量标准与主基线
 
+> **2026-08-28 true-1M 合同更新：** 当前像素口径、处理器审计、失效历史结果和重测状态统一以
+> [CoreDev-2511 true-1M 统一测量合同](COREDEV2511_TRUE1M_UNIFIED_MEASUREMENT_CONTRACT_20260828.md)
+> 为准。旧 Crop 与 No-Tool nominal-1M 结果实际回退到 processor default `16,777,216`，不得
+> 继续作为 true-1M 基线；TGVF S64 与 Atomic S16 的 true-1M 身份保留。
+
 日期：2026-08-12
 
 结果更新：2026-08-16

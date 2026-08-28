@@ -2,6 +2,16 @@
 
 更新时间：2026-08-28（Asia/Tokyo）
 
+> **true-1M 全表重置（2026-08-28 14:30 JST）：** 处理器级复核确认，旧 No-Tool
+> S0/S8/S16/S32 与旧 Crop fixed-boundary S32/S80 都把像素覆盖值以 flat kwarg 传入 Qwen3
+> fast processor，实际回退到 `size.longest_edge=16,777,216`。因此 No-Tool
+> `64.4712/66.1132/66.9028/66.6853` 与 Crop `61.6699/59.1785` 全部降级为 actual-16.7M
+> 历史结果，不再进入 true-1M 主表。TGVF S64 `59.8086` 与 Atomic S16 `63.0827` 的 nested
+> preprocessing 路径有效，继续保留。Original raw-direct、No-Tool 四步和 Crop S32/S80 正按
+> `max_pixels=1,003,520`、真实 grid proof、相同七项 scorer 重测。冻结口径与实时状态见
+> [项目级 true-1M 唯一合同](COREDEV2511_TRUE1M_UNIFIED_MEASUREMENT_CONTRACT_20260828.md)。
+> 本勘误优先于本文下方尚未逐段改写的旧 `matched@1M` 或主表表述。
+
 > **Crop 双重勘误（2026-08-28）：action boundary 已修复，但此前宣称的 Crop
 > 1M→512 像素控制无效。** fixed-boundary S32/S80 的 Macro* 为 `61.6699 / 59.1785`；另一次
 > nominal `@512` 运行的 Macro* 为 `62.0967`，三臂 same-turn mixed 均为 `0`。然而处理器审计
