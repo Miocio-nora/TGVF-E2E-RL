@@ -34,9 +34,9 @@ from tgvf_rl.data.policy_teacher_ratio_mix import (
 )
 from tgvf_rl.policy.deepeyes_official_protocol import THINKLITE_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
-    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
-    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_TRAINABLE_RP66_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
@@ -178,14 +178,11 @@ _OPTIONAL_PARENT_LAUNCH_ENV = frozenset(
 
 
 def _is_exact_crop(config: PolicyE2ESmokeRunConfig) -> bool:
-    return (
-        config.schema_version
-        == POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
-    )
+    return config.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
 
 
 def _is_no_tool(config: PolicyE2ESmokeRunConfig) -> bool:
-    return config.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+    return config.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
 
 
 def _uses_native_qwen_engine(config: PolicyE2ESmokeRunConfig) -> bool:

@@ -39,7 +39,7 @@ from tgvf_rl.observations.store import ObservationStore
 from tgvf_rl.policy.no_tool_rl_protocol import build_no_tool_visual_messages
 from tgvf_rl.policy.no_tool_rl_protocol import NO_TOOL_RL_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
-    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
 )
 from tgvf_rl.protocol import (
@@ -258,7 +258,8 @@ class NoToolMatchedPolicyEvaluator:
     ) -> None:
         if (
             config.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL
-            or run.schema_version != POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+            or run.schema_version
+            not in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
             or run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL
             or run.protocol.enabled_tool_names
         ):

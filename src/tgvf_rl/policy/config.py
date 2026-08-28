@@ -39,6 +39,12 @@ POLICY_CROP_EXACT_MATCHED_EXPERIMENT_CONFIG_SCHEMA = (
 POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA = (
     "policy-no-tool-deepeyes-matched-experiment-v1"
 )
+POLICY_CROP_EXACT_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA = (
+    "policy-crop-exact-deepeyes-matched-pixel512-parity-experiment-v1"
+)
+POLICY_NO_TOOL_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA = (
+    "policy-no-tool-deepeyes-matched-pixel512-parity-experiment-v1"
+)
 POLICY_PILOT_V1_MODEL_PATH = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
 POLICY_PILOT_V1_MODEL_FAMILY = "qwen3_vl"
 POLICY_PILOT_V1_MODEL_NAME = "Qwen3-VL-8B-Instruct"
@@ -873,6 +879,98 @@ class PolicyNoToolMatchedExperimentConfig(PolicyPilotV1Config):
             raise TypeError("grpo must be PilotGRPOConfig")
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyCropExactPixel512ParityExperimentConfig(PolicyPilotV1Config):
+    """Fresh-S0 exact-Crop parity rerun with a true 512-squared image cap."""
+
+    schema_version: str = POLICY_CROP_EXACT_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA
+    tool_profile: NativeToolCapabilityProfile = NativeToolCapabilityProfile.CROP_ONLY
+    enabled_tool_names: tuple[str, ...] = (
+        NativeToolCapabilityProfile.CROP_ONLY.tool_names
+    )
+    max_tgvf_call_attempts: int = 6
+    image_max_pixels: int = 512 * 512
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        expected = {
+            "schema_version": (
+                self.schema_version,
+                POLICY_CROP_EXACT_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA,
+            ),
+            "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
+            "native_deepstack_enabled": (self.native_deepstack_enabled, True),
+            "tool_profile": (
+                self.tool_profile,
+                NativeToolCapabilityProfile.CROP_ONLY,
+            ),
+            "enabled_tool_names": (
+                self.enabled_tool_names,
+                NativeToolCapabilityProfile.CROP_ONLY.tool_names,
+            ),
+            "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 6),
+            "image_max_pixels": (self.image_max_pixels, 512 * 512),
+        }
+        for name, (actual, required) in expected.items():
+            if actual != required:
+                raise ValueError(
+                    "pixel512 parity exact Crop experiment requires "
+                    f"{name}={required!r}, got {actual!r}"
+                )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError("pixel512 parity exact Crop model_path is not supported")
+        if not isinstance(self.sampling, PilotSamplingConfig):
+            raise TypeError("sampling must be PilotSamplingConfig")
+        if not isinstance(self.lora, DecoderLoRAConfig):
+            raise TypeError("lora must be DecoderLoRAConfig")
+        if not isinstance(self.grpo, PilotGRPOConfig):
+            raise TypeError("grpo must be PilotGRPOConfig")
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyNoToolPixel512ParityExperimentConfig(PolicyPilotV1Config):
+    """Fresh-S0 direct-only parity rerun with a true 512-squared image cap."""
+
+    schema_version: str = POLICY_NO_TOOL_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA
+    tool_profile: NativeToolCapabilityProfile = NativeToolCapabilityProfile.NO_TOOL
+    enabled_tool_names: tuple[str, ...] = ()
+    # The shared transport requires a positive unreachable call cap.
+    max_tgvf_call_attempts: int = 1
+    image_max_pixels: int = 512 * 512
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled_tool_names", tuple(self.enabled_tool_names))
+        expected = {
+            "schema_version": (
+                self.schema_version,
+                POLICY_NO_TOOL_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA,
+            ),
+            "model_family": (self.model_family, POLICY_PILOT_V1_MODEL_FAMILY),
+            "native_deepstack_enabled": (self.native_deepstack_enabled, True),
+            "tool_profile": (
+                self.tool_profile,
+                NativeToolCapabilityProfile.NO_TOOL,
+            ),
+            "enabled_tool_names": (self.enabled_tool_names, ()),
+            "max_tgvf_call_attempts": (self.max_tgvf_call_attempts, 1),
+            "image_max_pixels": (self.image_max_pixels, 512 * 512),
+        }
+        for name, (actual, required) in expected.items():
+            if actual != required:
+                raise ValueError(
+                    "pixel512 parity no-tool experiment requires "
+                    f"{name}={required!r}, got {actual!r}"
+                )
+        if self.model_path not in POLICY_PILOT_V1_SUPPORTED_MODEL_PATHS:
+            raise ValueError("pixel512 parity no-tool model_path is not supported")
+        if not isinstance(self.sampling, PilotSamplingConfig):
+            raise TypeError("sampling must be PilotSamplingConfig")
+        if not isinstance(self.lora, DecoderLoRAConfig):
+            raise TypeError("lora must be DecoderLoRAConfig")
+        if not isinstance(self.grpo, PilotGRPOConfig):
+            raise TypeError("grpo must be PilotGRPOConfig")
+
+
 __all__ = [
     "POLICY_PILOT_ACCEPTED_SAMPLING_SCALES",
     "POLICY_PILOT_FUNCTIONAL_CANARY_SAMPLING_SCALE",
@@ -883,6 +981,8 @@ __all__ = [
     "POLICY_CROP_TGVF_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_CROP_EXACT_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_NO_TOOL_MATCHED_EXPERIMENT_CONFIG_SCHEMA",
+    "POLICY_CROP_EXACT_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA",
+    "POLICY_NO_TOOL_PIXEL512_PARITY_EXPERIMENT_CONFIG_SCHEMA",
     "POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256",
     "POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME",
@@ -911,5 +1011,7 @@ __all__ = [
     "PolicyCropTGVFMatchedExperimentConfig",
     "PolicyCropExactMatchedExperimentConfig",
     "PolicyNoToolMatchedExperimentConfig",
+    "PolicyCropExactPixel512ParityExperimentConfig",
+    "PolicyNoToolPixel512ParityExperimentConfig",
     "PolicyVisualToolExperimentConfig",
 ]

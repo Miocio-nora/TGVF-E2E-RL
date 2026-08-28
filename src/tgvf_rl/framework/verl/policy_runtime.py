@@ -37,8 +37,8 @@ from tgvf_rl.framework.vllm import (
     qwen3_vl_final_turn_outcomes,
 )
 from tgvf_rl.policy.run_config import (
-    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
-    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -474,10 +474,10 @@ class PolicyE2ERuntimeInvocationFactory:
             if core is None:
                 full_qwen = (
                     config.schema_version
-                    in {
-                        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
-                        POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
-                    }
+                    in (
+                        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+                        | POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
+                    )
                 )
                 if full_qwen:
                     from .exact_replay_engine import (
@@ -656,7 +656,7 @@ def _policy_termination_contract(
     stop_strings = tuple(sampling.stop_strings or ())
     stop_token_ids = tuple(sampling.stop_token_ids or ())
     final_outcomes = qwen3_vl_final_turn_outcomes(stop_token_ids)
-    if config.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+    if config.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         return VLLMTurnTerminationContract(
             required_request_stop_strings=stop_strings,
             required_request_stop_token_ids=stop_token_ids,

@@ -98,7 +98,7 @@ from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
-    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
@@ -223,7 +223,7 @@ def _matched_prompt_materializer_identity(
         builder = "build_crop_tgvf_visual_messages"
         prompt_version = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
         prompt_sha256 = CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
-    elif run.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+    elif run.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         if run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL:
             raise ValueError("matched no-tool run has a non-empty tool profile")
         if run.protocol.enabled_tool_names:
@@ -278,7 +278,7 @@ def _render_training_run_visual_prompt(
 
     if run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
         messages = build_crop_tgvf_visual_messages(question)
-    elif run.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+    elif run.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         messages = build_no_tool_visual_messages(question)
     else:
         messages = build_tgvf_visual_messages(question)
@@ -957,7 +957,7 @@ def _load_full_model_from_paths(
             config.policy_config_path, allow_external_agent_loop_config=True
         )
         if (
-            run.schema_version != POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+            run.schema_version not in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
             or run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL
             or run.protocol.enabled_tool_names
         ):
@@ -2813,7 +2813,7 @@ def _decoding_contract() -> VLLMOutputDecodingContract:
 
 def _termination_contract(run: PolicyE2ESmokeRunConfig) -> VLLMTurnTerminationContract:
     sampling = run.policy.sampling
-    if run.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
+    if run.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         return VLLMTurnTerminationContract(
             required_request_stop_strings=tuple(sampling.stop_strings or ()),
             required_request_stop_token_ids=tuple(sampling.stop_token_ids or ()),
