@@ -1,9 +1,9 @@
 # CoreDev-2511 true-1M 统一测量合同与重测台账
 
-更新时间：2026-08-28 16:54 JST
+更新时间：2026-08-28 17:31 JST
 
-状态：**合同已冻结；Crop S32/S80、TGVF S64 与 Atomic S16 的 true-1M 结果已
-闭合，Original 与 No-Tool 仍在补测。本文是当前项目级唯一 true-1M 口径。** 在本文标为
+状态：**合同已冻结；Crop S32/S80、TGVF S64、Atomic S16 与 Original raw-direct 的
+true-1M 结果已闭合，仅 No-Tool 仍在补测。本文是当前项目级唯一 true-1M 口径。** 在本文标为
 `accepted` 之前，任何仅在配置中写有 `1,003,520`、但没有真实 processor/grid 证据的结果，均不得
 进入统一主表。
 
@@ -25,21 +25,23 @@ Crop fixed-boundary S32/S80 与旧 No-Tool S0/S8/S16/S32 都不是 true-1M 结�
 
 ### Stage golden result under the unified true-1M contract
 
-下表是当前最对齐的三方结果：三条 policy RL 训练与评测都使用 `1,003,520`，评测均为
-同一 `2,240` 条支持集、七项统计与 scorer。Crop 以 S32 作为当前性能代表，取代 S80 进入
-golden 主表。单位为 `%`。
+下表是当前统一输入预算下的四方端到端结果：四行评测都使用 `1,003,520`、同一
+`2,240` 条支持集、七项统计与 scorer；Crop、TGVF 和 Atomic 的 policy RL 训练也使用
+`1,003,520`。Crop 以 S32 作为当前性能代表，取代 S80 进入 golden 主表。单位为 `%`。
 
 | Method | Macro* | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Original raw-direct | 61.3147 | 72.7749 | 66.5000 | 63.8889 | **59.7877** | 37.9182 | **75.3333** | 53.0000 |
 | Crop S32 | 61.0706 | 73.2984 | 68.0000 | 63.3333 | 53.8604 | 46.4684 | 68.3333 | 54.2000 |
-| TGVF S64 | 59.8086 | **74.3455** | 66.5000 | 65.5556 | 44.5446 | 44.9814 | **72.3333** | 50.4000 |
-| Atomic S16 | **63.0827** | 71.7277 | **73.5000** | **66.1111** | **54.2720** | **51.3011** | 69.6667 | **55.0000** |
+| TGVF S64 | 59.8086 | **74.3455** | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
+| Atomic S16 | **63.0827** | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
 
-Atomic 在 Macro* 与七个组件中的五项最高；TGVF 在 VStar 与 MathVista 最高；Crop S32 的整体
-表现更均衡，且高于同合同 Crop S80。Macro* 上，Atomic 比 Crop 高 `2.0121 pp`、比 TGVF
-高 `3.2740 pp`，Crop 比 TGVF 高 `1.2619 pp`。这是统一输入预算下的端到端比较，不是严格单变量因果消融：
-三者的工具协议和 checkpoint step 不同。RP67 adapter 预训练仍为 `512²`，但加载它的 TGVF/Atomic
-policy RL 及本表评测均为 true-1M。
+Atomic 在 Macro* 与七个组件中的四项最高；Original 在 OCR mean 与 MathVista 最高；TGVF 在
+VStar 最高。Macro* 排序为 Atomic `63.0827` > Original `61.3147` > Crop S32 `61.0706` >
+TGVF `59.8086`；相邻差值依次为 `1.7680 / 0.2442 / 1.2619 pp`。这是统一输入预算、scorer
+和 sample reference 下的端到端比较，不是严格单变量因果消融：Original 是 raw-direct、无工具、
+不同 prompt path；三条 RL 方法之间的工具协议和 checkpoint step 也不同。RP67 adapter 预训练仍为
+`512²`，但加载它的 TGVF/Atomic policy RL 及本表评测均为 true-1M。
 
 ## 2. 固定术语
 
@@ -78,7 +80,7 @@ agent loop、工具 schema 和可调用工具仍不同，因此该表是**统一
 
 | 主表行 | checkpoint | true-1M 状态 | 当前 Macro* |
 |---|---|---|---:|
-| Original raw-direct | base Qwen3-VL-8B-Instruct | `processor proof accepted; queued` | — |
+| Original raw-direct | base Qwen3-VL-8B-Instruct | `accepted; raw-direct reference` | 61.3147 |
 | No-Tool RL | S32 | `pending rerun` | — |
 | Crop | S32 | `accepted; stage golden` | 61.0706 |
 | Crop | S80 | `accepted; diagnostic endpoint` | 59.6463 |
@@ -91,10 +93,21 @@ No-Tool S0/S8/S16/S32 全部补测，以保留训练动态；S32 是统一主表
 
 | Method | Macro* | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Original raw-direct | 61.3147 | 72.7749 | 66.5000 | 63.8889 | 59.7877 | 37.9182 | 75.3333 | 53.0000 |
 | Crop S32 | 61.0706 | 73.2984 | 68.0000 | 63.3333 | 53.8604 | 46.4684 | 68.3333 | 54.2000 |
 | Crop S80 | 59.6463 | 73.8220 | 69.5000 | 59.4444 | 54.0426 | 44.9814 | 63.3333 | 52.4000 |
 | TGVF S64 | 59.8086 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | Atomic S16 | 63.0827 | 71.7277 | 73.5000 | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
+
+Original completion receipt 与 accepted summary 分别为
+`artifacts/evaluation/PRL25-ORIGINAL-QWEN3-INSTRUCT-RAW-DIRECT-TRUE1M-V1/runtime/scoring-supervisor/original-true1m-scoring-complete.json`
+和同一 evaluation 根目录下的 `scoring/coredev-2511-eval-summary.json`。completion 状态为
+`complete`，summary 状态为 `pass`；两者固定 `max_pixels=1,003,520`、`sample_count=2,511`、
+`slice_count=7`，summary 的 judge parse failure 为 `0`，summary SHA256 为
+`f8dc31b5353c36d2e764096ee2f2a1f0da0ca3d28fb4525c2fb660829c705904`。
+Original 的 OCR EN/CN 分别为 `59.0441/60.5313`，MMMU-269 为 `102/269`；MathVerse 五版本
+Text Dominant / Text Lite / Vision Dominant / Vision Intensive / Vision Only 分别为
+`70/50/54/57/34`，宏平均 `53.0000`。
 
 ### 4.1 Crop true-1M 工具行为与边界审计
 
@@ -226,15 +239,17 @@ launch provenance commit（B `08a9d8b4`、C `b87126ae`、D `017b5077`、F `7645f
 - [x] Crop S32/S80：fixed boundary、有效顶层 `mm_processor_kwargs.size` cap、独立
   compile cache、`2,240/2,240` 推理、七项评分与 true-1M audit receipt 均已闭合。
 - [ ] No-Tool S0/S8/S16/S32：顶层 `mm_processor_kwargs.size`、独立 compile cache，完成推理与评分。
-- [ ] Original：raw-direct true-1M 的真实 processor probe 已通过（`2048×1536 → 1152×864`，
-  represented area `995,328`）；七卡推理排在 Crop 后，相同官方 scorer 与 Macro* 聚合。
-- [ ] 回填 Original 与 No-Tool 后，生成最终完整主表与 sub-benchmark；Crop 工具行为已回填。
+- [x] Original：raw-direct true-1M 的真实 processor probe、2,511 行推理、七项官方评分与
+  completion receipt 均已闭合；Macro* `61.3147`，judge parse failure `0`。
+- [x] 回填 Original 主表与 59-slice sub-benchmark；Crop 工具行为已回填。
+- [ ] No-Tool 闭合后，生成含 RL-only 控制的最终完整主表。
 - [x] 把 Crop accepted true-1M 结果同步到 NeurIPS workshop 报告；旧值仅保留在历史勘误区。
 
 ## 9. 文章 claim 边界
 
-当前可报告的 stage-golden 观测是 Atomic S16 `63.0827` > Crop S32 `61.0706` > TGVF S64
-`59.8086`。这一排序只适用于已闭合的三方 true-1M 端到端比较；Original 与 No-Tool
-true-1M 仍未闭合，不得把它改写为完整方法榜单。同时，不能把跨 prompt、agent contract 与
-checkpoint step 的差值直接归因给视觉工具。Atomic 是否进入正文主线，仍由 target-only 稳健性、
-无偏 target 合格率与统一 true-1M 主表共同决定。
+当前可报告的 stage-golden 观测是 Atomic S16 `63.0827` > Original raw-direct `61.3147` >
+Crop S32 `61.0706` > TGVF S64 `59.8086`。这四行共享 true-1M、scorer 与 sample reference，
+但 Original 是无工具 raw-direct 且使用不同 prompt path；因此不能把跨 prompt、agent contract 与
+checkpoint step 的差值直接归因给视觉工具。No-Tool true-1M 仍未闭合，所以这还不是含 RL-only
+控制的最终方法榜单。Atomic 是否进入正文主线，仍由 target-only 稳健性、无偏 target 合格率与
+统一 true-1M 主表共同决定。
