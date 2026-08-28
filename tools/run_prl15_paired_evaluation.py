@@ -101,6 +101,7 @@ from tgvf_rl.policy.deepeyes_native_contract import (  # noqa: E402
 )
 from tgvf_rl.policy.run_config import (  # noqa: E402
     POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -392,6 +393,7 @@ def _validate_v3_static_plan(payload: dict[str, Any]) -> None:
     if owner["contract_type"] not in {
         "crop_tfree_run_contract_v1",
         "policy_e2e_crop_exact_run_config_v1",
+        "policy_e2e_crop_exact_pixel512_parity_run_config_v1",
     }:
         raise ValueError("v3 checkpoint owner contract type differs")
     _require_sha256(owner["config_sha256"], name="checkpoint owner config")
@@ -1310,8 +1312,18 @@ def _validate_v3_policy_run_runtime(
 
     owner_plan = plan["checkpoint_owner"]
     protocol_plan = plan["protocol_contract"]
+    owner_contract_types = {
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA: (
+            "policy_e2e_crop_exact_run_config_v1"
+        ),
+        POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+            "policy_e2e_crop_exact_pixel512_parity_run_config_v1"
+        ),
+    }
+    expected_owner_type = owner_contract_types.get(owner.schema_version)
     if (
-        owner.schema_version != POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA
+        expected_owner_type is None
+        or owner_plan["contract_type"] != expected_owner_type
         or owner.source_sha256 != owner_plan["config_sha256"]
         or owner.run_id != owner_plan["run_id"]
         or owner.identity_sha256 != owner_plan["run_identity_sha256"]
@@ -1338,6 +1350,11 @@ def _validate_v3_policy_run_runtime(
         "same_tasks_and_rank_partition": True,
     }
     sampling = owner.policy.sampling
+    owner_image_max_pixels = owner.policy.image_max_pixels
+    pixel512_owner = (
+        owner.schema_version
+        == POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA
+    )
     if (
         plan.get("protocol") != expected_protocol
         or protocol.payload["model"]["native_pixels"] is not True
@@ -1350,7 +1367,17 @@ def _validate_v3_policy_run_runtime(
         or owner.protocol.enabled_tool_names != (protocol_payload["tool_name"],)
         or owner.protocol.maximum_tool_calls
         != protocol_payload["max_active_perception"]
-        or owner.policy.image_max_pixels != FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS
+        or (
+            pixel512_owner
+            and (
+                owner_image_max_pixels != 262144
+                or plan.get("evaluation_image_max_pixels") != 262144
+            )
+        )
+        or (
+            not pixel512_owner
+            and owner_image_max_pixels != FULL_MODEL_EVALUATION_IMAGE_MAX_PIXELS
+        )
         or sampling.temperature != 1.0
         or sampling.do_sample is not True
         or owner.rollout_rng.master_seed != 42
@@ -1482,7 +1509,10 @@ def _load_evaluation_runtime(plan: dict[str, Any]) -> _EvaluationRuntime:
         )
         _validate_v3_runtime(plan, owner, protocol)
         output_root = owner.output_root.resolve()
-    elif owner_type == "policy_e2e_crop_exact_run_config_v1":
+    elif owner_type in {
+        "policy_e2e_crop_exact_run_config_v1",
+        "policy_e2e_crop_exact_pixel512_parity_run_config_v1",
+    }:
         owner = load_policy_e2e_smoke_run_config(
             owner_path, allow_external_agent_loop_config=True
         )

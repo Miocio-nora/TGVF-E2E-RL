@@ -52,7 +52,7 @@ from tgvf_rl.evaluation.policy_full_model_snapshot import (  # noqa: E402
     FullModelEvaluationSnapshot,
 )
 from tgvf_rl.policy.run_config import (  # noqa: E402
-    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
 )
 
 
@@ -66,6 +66,21 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--world-size", type=int)
     parser.add_argument("--max-tasks", type=int, default=-1)
     return parser
+
+
+def _is_no_tool_full_model(
+    config: PolicyCoreDevConfig,
+    snapshot: object,
+    run: object,
+) -> bool:
+    """Route every admitted matched-NoTool schema through the same evaluator."""
+
+    return (
+        isinstance(snapshot, FullModelEvaluationSnapshot)
+        and config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+        and getattr(run, "schema_version", None)
+        in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
+    )
 
 
 def _world_size(config: PolicyCoreDevConfig, requested: int | None) -> int:
@@ -160,12 +175,7 @@ async def _worker(args: argparse.Namespace, config: PolicyCoreDevConfig) -> int:
             local_files_only=True,
             trust_remote_code=True,
         )
-        no_tool_full_model = (
-            isinstance(snapshot, FullModelEvaluationSnapshot)
-            and config.evaluation_protocol
-            != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
-            and run.schema_version == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
-        )
+        no_tool_full_model = _is_no_tool_full_model(config, snapshot, run)
         evaluator = (
             NoToolMatchedPolicyEvaluator(
                 config=config,
@@ -333,12 +343,7 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
     tasks = load_bound_policy_benchmark_tasks(config)
     _world_size(config, requested_world_size)
     snapshot = load_frozen_policy_evaluation_snapshot(config)
-    no_tool_full_model = (
-        isinstance(snapshot, FullModelEvaluationSnapshot)
-        and config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
-        and snapshot.run.schema_version
-        == POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
-    )
+    no_tool_full_model = _is_no_tool_full_model(config, snapshot, snapshot.run)
     identity = write_policy_evaluation_identity(config, snapshot)
     result: dict[str, object] = {
         "evaluation_id": config.evaluation_id,

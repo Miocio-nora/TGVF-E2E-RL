@@ -8,6 +8,19 @@ eval_root=${PRL25_F_MATCHED_EVAL_ROOT:-"$main_root/artifacts/policy/PRL-25-F-qwe
 evaluation_id_prefix=${PRL25_F_MATCHED_EVALUATION_ID_PREFIX:-PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S}
 evaluation_id_suffix=${PRL25_F_MATCHED_EVALUATION_ID_SUFFIX:--V1}
 required_image_max_pixels=${PRL25_F_MATCHED_REQUIRED_IMAGE_MAX_PIXELS:-}
+processor_proof_filename=${PRL25_F_MATCHED_PROCESSOR_PROOF_FILENAME:-true1m-processor-proof.json}
+steps_text=${PRL25_F_MATCHED_STEPS:-"0 8 16 32"}
+read -r -a steps <<<"$steps_text"
+if (( ${#steps[@]} == 0 )); then
+  echo "matched scoring requires at least one optimizer step" >&2
+  exit 1
+fi
+for step in "${steps[@]}"; do
+  [[ "$step" =~ ^[0-9]+$ ]] || {
+    echo "invalid matched scoring optimizer step: $step" >&2
+    exit 1
+  }
+done
 inference_control="$eval_root/runtime/supervisor"
 inference_failure_marker=${PRL25_F_MATCHED_INFERENCE_FAILURE_MARKER:-"$inference_control/failed"}
 control_root="$eval_root/runtime/scoring-supervisor"
@@ -88,7 +101,8 @@ wait_for_inference() {
 validate_step_inference() {
   local step=$1
   "$python_bin" - "$eval_root" "$step" "$evaluation_id_prefix" \
-    "$evaluation_id_suffix" "$required_image_max_pixels" <<'PY'
+    "$evaluation_id_suffix" "$required_image_max_pixels" \
+    "$processor_proof_filename" <<'PY'
 from __future__ import annotations
 
 import json
@@ -99,20 +113,25 @@ root = Path(sys.argv[1])
 step = int(sys.argv[2])
 evaluation_id = f"{sys.argv[3]}{step}{sys.argv[4]}"
 required_image_max_pixels = int(sys.argv[5]) if sys.argv[5] else None
+processor_proof_filename = sys.argv[6]
 arm = root / f"matched/step{step}"
 config = json.loads((arm / "config.json").read_text(encoding="utf-8"))
 if config.get("evaluation_id") != evaluation_id:
     raise RuntimeError(f"S{step} scoring source evaluation identity differs")
 if required_image_max_pixels is not None:
-    proof = json.loads((arm / "runtime/true1m-processor-proof.json").read_text(encoding="utf-8"))
+    proof = json.loads((arm / "runtime" / processor_proof_filename).read_text(encoding="utf-8"))
     processor = proof.get("proof", {})
+    represented = processor.get("synthetic_native_represented_pixel_area")
+    visual_tokens = processor.get("synthetic_native_visual_token_count")
     if (
         config.get("evaluation_image_max_pixels") != required_image_max_pixels
         or processor.get("configured_image_max_pixels") != required_image_max_pixels
         or processor.get("synthetic_native_source_pixel_area") != 3_145_728
-        or processor.get("synthetic_native_represented_pixel_area") != 995_328
-        or processor.get("synthetic_native_represented_pixel_area") > required_image_max_pixels
-        or processor.get("synthetic_native_visual_token_count") != 972
+        or type(represented) is not int
+        or represented <= 0
+        or represented > required_image_max_pixels
+        or type(visual_tokens) is not int
+        or visual_tokens <= 0
         or processor.get("runtime_mm_processor_kwargs")
         != {"size": {"shortest_edge": 65_536, "longest_edge": required_image_max_pixels}}
         or processor.get("runtime_override_path")
@@ -121,7 +140,13 @@ if required_image_max_pixels is not None:
         or processor.get("nested_images_kwargs_present") is not False
         or processor.get("max_pixels_kwarg_present") is not False
     ):
-        raise RuntimeError(f"S{step} corrected true1M processor proof differs")
+        raise RuntimeError(f"S{step} processor cap proof differs")
+    if required_image_max_pixels == 1_003_520 and (
+        represented != 995_328 or visual_tokens != 972
+    ):
+        raise RuntimeError(f"S{step} corrected true1M processor geometry differs")
+    if required_image_max_pixels not in {262_144, 1_003_520}:
+        raise RuntimeError(f"S{step} unsupported formal processor cap")
 tasks = [json.loads(line) for line in (arm / "runtime/policy-benchmark-tasks.jsonl").read_text(encoding="utf-8").splitlines()]
 single = {row["ordinal"] for row in tasks if len(row["image_paths"]) == 1}
 if len(tasks) != 2511 or len(single) != 2240 or len(tasks) - len(single) != 271:
@@ -143,7 +168,14 @@ PY
 }
 
 run_id_for_step() {
-  case "$1" in
+  local step=$1
+  local override_name="PRL25_F_MATCHED_RUN_ID_S${step}"
+  local override=${!override_name:-}
+  if [[ -n "$override" ]]; then
+    echo "$override"
+    return 0
+  fi
+  case "$step" in
     0) echo T20260826_G0 ;;
     8) echo T20260826_G8 ;;
     16) echo T20260826_G10 ;;
@@ -280,7 +312,7 @@ score_all_steps() {
   local datasets=(VStarBench HRBench4K BLINK OCRBench_v2 MMMU_Pro_10c MathVista_MINI MathVerse_MINI)
   local step dataset score_root source_run_id source_manifest receipt
   score_pids=()
-  for step in 0 8 16 32; do
+  for step in "${steps[@]}"; do
     score_root="$eval_root/matched/step${step}/scoring/coredev-official-v1"
     source_run_id=$(run_id_for_step "$step")
     for dataset in "${datasets[@]}"; do
@@ -323,7 +355,7 @@ score_all_steps() {
 all_scoring_receipts_present() {
   local datasets=(VStarBench HRBench4K BLINK OCRBench_v2 MMMU_Pro_10c MathVista_MINI MathVerse_MINI)
   local step dataset score_root
-  for step in 0 8 16 32; do
+  for step in "${steps[@]}"; do
     score_root="$eval_root/matched/step${step}/scoring/coredev-official-v1"
     for dataset in "${datasets[@]}"; do
       [[ -s "$score_root/$dataset/pinned-reuse-receipt.json" ]] || return 1
@@ -422,7 +454,7 @@ if (( formal_true1m_v2 == 1 )); then
     --verify-completion-only \
     >"$log_root/formal-inference-completion-validation.json"
 fi
-for step in 0 8 16 32; do
+for step in "${steps[@]}"; do
   validate_step_inference "$step" >"$log_root/scoring-inference-validation-s${step}.json"
   materialize_step "$step"
 done
@@ -434,7 +466,7 @@ else
   score_all_steps
 fi
 phase=summarizing
-for step in 0 8 16 32; do
+for step in "${steps[@]}"; do
   summarize_step "$step"
 done
 if (( formal_true1m_v2 == 1 )); then
@@ -444,6 +476,7 @@ if (( formal_true1m_v2 == 1 )); then
     >"$log_root/headline-all-steps.log"
 fi
 phase=complete
-printf 'status=pass\ntime=%s\nsteps=0,8,16,32\nslice_count_per_step=7\nsample_count_per_step=2511\n' \
-  "$(timestamp)" >"$complete_marker"
+steps_csv=$(IFS=,; echo "${steps[*]}")
+printf 'status=pass\ntime=%s\nsteps=%s\nslice_count_per_step=7\nsample_count_per_step=2511\n' \
+  "$(timestamp)" "$steps_csv" >"$complete_marker"
 printf '[%s] PRL25-F matched scoring complete\n' "$(timestamp)"
