@@ -1,6 +1,6 @@
 # CoreDev-2511 true-1M 统一测量合同与重测台账
 
-更新时间：2026-08-28 14:30 JST
+更新时间：2026-08-28 14:42 JST
 
 状态：**合同已冻结；结果补测进行中。本文是当前项目级唯一 true-1M 口径。** 在本文标为
 `accepted` 之前，任何仅在配置中写有 `1,003,520`、但没有真实 processor/grid 证据的结果，均不得
@@ -53,10 +53,10 @@ agent loop、工具 schema 和可调用工具仍不同，因此该表是**统一
 
 | 主表行 | checkpoint | true-1M 状态 | 当前 Macro* |
 |---|---|---|---:|
-| Original raw-direct | base Qwen3-VL-8B-Instruct | `pending rerun` | — |
+| Original raw-direct | base Qwen3-VL-8B-Instruct | `processor proof accepted; queued` | — |
 | No-Tool RL | S32 | `pending rerun` | — |
-| Crop | S32 | `pending rerun` | — |
-| Crop | S80 | `pending rerun` | — |
+| Crop | S32 | `inference running (GPU 4–7)` | — |
+| Crop | S80 | `inference running (GPU 0–3)` | — |
 | TGVF | S64 | `accepted` | 59.8086 |
 | Atomic | S16 | `accepted` | 63.0827 |
 
@@ -111,9 +111,11 @@ image embeddings 与已绑定的 `image_grid_thw`。Crop observation 与 TGVF pr
 - [x] 审计训练侧真实像素路径；确认 PRL25 RL 为 true-1M。
 - [x] 撤销 Crop 与 No-Tool 旧 nominal-1M 身份。
 - [x] 保留 TGVF S64 与 Atomic S16 accepted true-1M 结果。
-- [ ] Crop S32/S80：fixed boundary、nested pixel cap、独立 compile cache，完成推理与评分。
+- [ ] Crop S32/S80：fixed boundary、nested pixel cap、独立 compile cache；14:40 JST 已并行启动
+  true-1M 推理，待推理与评分闭合。
 - [ ] No-Tool S0/S8/S16/S32：nested prompt/decode、独立 compile cache，完成推理与评分。
-- [ ] Original：raw-direct true-1M 七卡推理、相同官方 scorer 与 Macro* 聚合。
+- [ ] Original：raw-direct true-1M 的真实 processor probe 已通过（`2048×1536 → 1152×864`，
+  represented area `995,328`）；七卡推理排在 Crop 后，相同官方 scorer 与 Macro* 聚合。
 - [ ] 回填完整七项主表、四步 No-Tool 动态、sub-benchmark 与工具行为统计。
 - [ ] 把 accepted 结果同步到 NeurIPS workshop 报告；旧值继续保留但只放历史勘误区。
 
@@ -123,4 +125,3 @@ image embeddings 与已绑定的 `image_grid_thw`。Crop observation 与 TGVF pr
 性能，并寻找 TGVF/Atomic/Crop 在 sub-benchmark 上的相对优势；不能把跨 prompt 与 agent
 contract 的差值直接归因给视觉工具。Atomic 是否进入正文主线，仍由 target-only 稳健性、无偏
 target 合格率与统一 true-1M 主表共同决定。
-
