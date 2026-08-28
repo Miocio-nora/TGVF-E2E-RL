@@ -1,6 +1,6 @@
 # CoreDev-2511 true-1M 统一测量合同与重测台账
 
-更新时间：2026-08-28 15:15 JST
+更新时间：2026-08-28 15:28 JST
 
 状态：**合同已冻结；结果补测进行中。本文是当前项目级唯一 true-1M 口径。** 在本文标为
 `accepted` 之前，任何仅在配置中写有 `1,003,520`、但没有真实 processor/grid 证据的结果，均不得
@@ -11,6 +11,10 @@
 PRL25 的 Crop、TGVF、Atomic 和 No-Tool RL 训练均使用
 `image_max_pixels = 1,003,520`。`16,777,216 = 4096²` 是 Qwen3 fast image processor
 保存的默认 `size.longest_edge`，不是这批 RL 训练允许的最大面积。
+
+这里的“RL 训练”专指 PRL25 policy RL。TGVF/Atomic 所加载的 RP67 representation adapter
+预训练使用 `image_max_pixels = 262,144 = 512²`；因此不能把 adapter 预训练与后续 policy RL
+混称为同一个分辨率合同。两阶段都不是 `16,777,216`。
 
 评测侧曾有两条独立缺陷：旧 Crop official-visible evaluator 与旧 No-Tool matched evaluator
 均把像素覆盖值放在 processor 不读取的 flat kwarg 中，因而实际回退到 `16,777,216`。所以旧
@@ -103,6 +107,18 @@ receipt 为准。
 同理只属于 512 合同。
 
 ## 6. 训练像素审计
+
+训练链分为两层：
+
+| 训练层 | 适用对象 | 生效像素上限 |
+|---|---|---:|
+| representation adapter 预训练 | RP67（随后供 TGVF/Atomic 加载） | `262,144 = 512²` |
+| policy RL | PRL25-B/C/D/F | `1,003,520` |
+
+RP67 的正式配置
+`configs/representation/experiments/image_axis_grounding/rp67_qwen3_instruct_image_axis_grounded_2000_gpu01.toml`
+绑定 `image_max_pixels = 262,144`；其完成日志与 `metrics.jsonl` 的 start/complete 记录也均保存
+同一值（run identity `0b53d04c…`，global step `2000`）。
 
 PRL25-B/C/D/F 的冻结 run config 均绑定 `image_max_pixels = 1,003,520`。进一步按各自最终
 launch provenance commit（B `08a9d8b4`、C `b87126ae`、D `017b5077`、F `7645fe4a`）回查
