@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-28 20:38 JST（Asia/Tokyo）
+更新时间：2026-08-28 20:41 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -782,6 +782,44 @@ MMMU-269 `-4.46 pp`、BLINK-180 `-4.44 pp` 和 HR `-3.00 pp`，MathVerse 提高 
 干预下存在明确的 benchmark-specific sensitivity，且 Atomic 总体接近、但没有超过同像素
 raw-direct reference。
 
+target-only prompt 同时改变了工具调用行为。下表沿用 4.4 节定义；`Execution yield` 为
+`executed calls / (executed calls + invalid attempts)`，coverage、calls/question 与 repeat-use
+rate 的分母为共同的 2,240 条 single-image trajectory，calls/used question 则只以成功使用题为分母。
+
+| Method / prompt | Attempted questions | Successful-use questions | Executed calls | Invalid attempts | Execution yield | Calls/question | Calls/used question | Repeat-use questions |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| TGVF S64 / matched | 2,012 (89.82%) | 2,010 (89.73%) | 2,011 | 3 | 99.85% | 0.898 | 1.000 | 1 (0.04%) |
+| TGVF S64 / target-only | 2,118 (94.55%) | 2,116 (94.46%) | 2,120 | 6 | 99.72% | 0.946 | 1.002 | 4 (0.18%) |
+| Atomic S16 / matched | 1,866 (83.30%) | 1,863 (83.17%) | 2,300 | 36 | 98.46% | 1.027 | 1.235 | 221 (9.87%) |
+| Atomic S16 / target-only | 2,089 (93.26%) | 2,088 (93.21%) | 2,420 | 21 | 99.14% | 1.080 | 1.159 | 174 (7.77%) |
+
+逐 set 的 successful-use coverage 与调用强度如下。每格依次为
+`successful-use questions / n (rate); executed calls / question`。
+
+| Set | n | TGVF matched → target-only | Atomic matched → target-only |
+|---|---:|---:|---:|
+| VStarBench | 191 | 186/191 (97.38%); 0.974 → 191/191 (100.00%); 1.000 | 188/191 (98.43%); 1.000 → 189/191 (98.95%); 0.990 |
+| HRBench4K | 200 | 199/200 (99.50%); 0.995 → 200/200 (100.00%); 1.000 | 198/200 (99.00%); 1.090 → 200/200 (100.00%); 1.050 |
+| BLINK single-image | 180 | 178/180 (98.89%); 0.989 → 180/180 (100.00%); 1.000 | 178/180 (98.89%); 1.706 → 180/180 (100.00%); 1.572 |
+| OCRBench v2 | 600 | 556/600 (92.67%); 0.927 → 571/600 (95.17%); 0.952 | 560/600 (93.33%); 1.213 → 576/600 (96.00%); 1.115 |
+| MMMU-Pro single-image | 269 | 232/269 (86.25%); 0.862 → 252/269 (93.68%); 0.948 | 243/269 (90.33%); 1.067 → 263/269 (97.77%); 1.134 |
+| MathVista MINI | 300 | 268/300 (89.33%); 0.893 → 285/300 (95.00%); 0.953 | 222/300 (74.00%); 0.937 → 261/300 (87.00%); 1.100 |
+| MathVerse MINI | 500 | 391/500 (78.20%); 0.784 → 437/500 (87.40%); 0.874 | 274/500 (54.80%); 0.576 → 419/500 (83.80%); 0.868 |
+
+Results 层面，target-only prompt 将 TGVF/Atomic 的 successful-use coverage 分别提高
+`4.73/10.04 pp`，其中 Atomic 在 MathVerse 的覆盖率提高 `29.00 pp`；但两者 Macro* 同时下降
+`1.6298/2.2574 pp`。因此更多调用没有转化为总体准确率增益。Atomic 的总调用强度上升，但
+repeat-use questions 反而从 `221` 降至 `174`，说明变化主要来自更多题转为一次调用，而不是普遍
+增加多轮检索。
+
+target 长度和整条输出长度也没有呈现统一方向。对两臂都成功调用工具的共同样本，仅比较第一次
+调用时，Atomic（n=1,840）的 target 平均从 `14.22` 增至 `15.21` 个空白分词（`+0.99`），
+TGVF（n=1,977）则从 `14.29` 降至 `13.78`（`−0.50`）。按 trajectory 汇总所有 assistant turn
+的 `sampled_token_count`，并以经验顺序统计量取分位数，TGVF 的 mean/P50/P95 从 `812.1/116/3,376` 变为
+`1,092.0/111/5,888`，Atomic 从 `529.7/155/1,937` 变为 `501.3/147/1,960`。TGVF 的均值上升
+主要来自更长的尾部，而 Atomic 均值下降；现有证据不支持用“target 或输出统一变长”解释性能回退。
+这些均为生成行为统计，不是 target 语义合格率；后者仍由 5.3 节盲审决定。
+
 计划文件：
 
 - `configs/evaluation/prl25_c_frozen_rp67_tfree_teacher25_s64_target_detailed_matched_v1_coredev2511_plan.json`
@@ -824,17 +862,25 @@ raw-direct reference。
 - [x] 既有 matched/广义-full blind audit pack 已生成：每臂 200，共 400 条；review view 仅含 bbox、
   call index、image path/hash、question、opaque review ID、schema 和 target；400 个 review ID
   唯一，未出现 arm、dataset、sample ID、correct、reward、score 或 final answer 字段；
-- [ ] 基于已闭合的 target-only inference 物化新的 matched/target-only 正式盲审包；既有
-  广义-full pack 不替代该主要审计；
+- [x] 基于已闭合的 target-only inference 物化新的 matched/target-only 正式盲审包：两臂各
+  200 条，共 400 条；matched/target-only 可用工具 trajectory population 为 `1,863/2,088`，
+  均按七个 dataset 的 population-proportional largest-remainder quota 抽样；
+- [x] reviewer-facing 字段与图片路径盲化复核：400 个 review ID 唯一，400/400 图片 SHA256
+  复现；匿名图片路径不含 dataset，review items 不含 arm、dataset、sample ID、checkpoint、
+  final answer、correctness、reward 或 score；
 - [ ] 双人盲标、裁决、Wilson CI 与 agreement；
 - [ ] 根据审计结果界定 Atomic 探索性分析可使用的 target-quality 表述。
 
 正式盲审根目录：
-`artifacts/evaluation/neurips-workshop-atomic-target-audit-20260826-v1/`。manifest SHA256 为
-`5af64da18e03d7455ab523e011887baf7d1361e50a59d19914f10380bbd165cc`；状态为
-`ready_for_blind_annotation`。matched/full 可用工具 trajectory population 分别为
-`1,863 / 2,009`，按各自七套数据 population-proportional 抽样 200 条。coordinator key 与
-review view 分离；人工标注完成前不得报告 target 合格率或据此升级 Atomic 的正文地位。
+`artifacts/evaluation/neurips-workshop-atomic-target-audit-matched-target-only-20260828-v2/`。
+manifest SHA256 为
+`a352a0692834b3f556226ee2bccf656d668adebce6754095c9b65964064035b7`，状态为
+`ready_for_two_reviewer_blind_annotation`；review image tree identity 为
+`81936292aa6c9708f87bb13181b07f0dfe7e4aa42e678676631f7964bab523b5`。generator、输入 rank
+文件 SHA、quota、review image inventory 与 coordinator key 均由 manifest 固定。独立 pack
+复核通过 6 个绑定文件、400 条 review row、400 张匿名图片和 `200/200` source split。旧
+`neurips-workshop-atomic-target-audit-20260826-v1` 仅保留 matched/广义-full stress 的历史诊断，
+不替代当前主要审计。人工标注完成前不得报告 target 合格率或据此升级 Atomic 的正文地位。
 
 ### 5.4 No-Tool RL：corrected true-1M RL-only control
 
@@ -1246,9 +1292,10 @@ Atomic 进入正文核心方法必须同时满足：
 8. [已完成] Original raw-direct true-1M 2,511 行正式评分、七项 headline、completion receipt
    与 59-slice 回填均已闭合；
 9. [已完成] Appendix A 加入 frozen No-Tool S32 后机械重算 59-slice winner 与 pairwise W/L/T；
-10. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
-   blind audit pack；
-11. [待回填] target-only 调用行为对照与正式 audit；
+10. [已完成] 从 matched/target-only inference JSONL 物化正式 Atomic blind audit pack，
+    review view、图片哈希、分层 quota 与 source split 均已复核；
+11. [部分完成] target-only 调用行为对照已回填；正式 audit 仍待双人盲标、第三人裁决、
+    Wilson CI 与 agreement；
 12. [待写作] 形成英文 Experiments/Discussion 初稿；
 13. [明确不做] Crop seed43。
 
