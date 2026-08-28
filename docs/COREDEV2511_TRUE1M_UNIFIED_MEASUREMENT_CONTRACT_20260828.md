@@ -1,6 +1,6 @@
 # CoreDev-2511 true-1M 统一测量合同与重测台账
 
-更新时间：2026-08-28 20:16 JST
+更新时间：2026-08-28 20:38 JST
 
 状态：**合同已冻结；Original raw-direct、No-Tool S0/S8/S16/S32、Crop S32/S80、TGVF S64
 与 Atomic S16 的 true-1M 结果均已闭合。本文是当前项目级唯一 true-1M 口径。** 在本文标为
@@ -295,7 +295,8 @@ launch provenance commit（B `08a9d8b4`、C `b87126ae`、D `017b5077`、F `7645f
   completion receipt 均已闭合；Macro* `61.3147`，judge parse failure `0`。
 - [x] 回填 Original 主表与 59-slice sub-benchmark；Crop 工具行为已回填。
 - [x] 生成含 frozen No-Tool S32 RL-only 控制的最终完整主表。
-- [ ] 加入 No-Tool S32 后机械重算 59-slice 附录、winner 与 pairwise W/L/T。
+- [x] 加入 No-Tool S32 后机械重算 59-slice 附录、winner 与 pairwise W/L/T；六方法结果见
+  workshop 报告 Appendix A。
 - [x] 把 Crop accepted true-1M 结果同步到 NeurIPS workshop 报告；旧值仅保留在历史勘误区。
 
 ## 9. 文章 claim 边界

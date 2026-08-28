@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-28 20:16 JST（Asia/Tokyo）
+更新时间：2026-08-28 20:38 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -26,8 +26,8 @@
 Results 层面，No-Tool S32 `63.7520` > Atomic S16 `63.0827` > Original `61.3147` > Crop S32
 `61.0706` > TGVF S64 `59.8086`，相邻差值为 `0.6693 / 1.7680 / 0.2442 / 1.2619 pp`。
 No-Tool 在 Macro*、BLINK-180、MMMU-269 与 MathVerse 最高；Original 在 OCR mean 与 MathVista
-最高；TGVF 在 VStar 最高；Atomic 在 HR 最高。加入 No-Tool 后的 59-slice 胜出数正在 Appendix A
-机械重算；该统计只作描述性能力地图，不应解读为 59 个独立假设检验。
+最高；TGVF 在 VStar 最高；Atomic 在 HR 最高。加入 No-Tool 后的 59-slice 胜出数与六方法
+pairwise W/L/T 已在 Appendix A 机械重算；该统计只作描述性能力地图，不应解读为 59 个独立假设检验。
 
 Discussion 层面，这一统一像素合同排除了旧 Crop/No-Tool processor-default 运行的主要混杂，
 但仍不是严格单变量因果消融：Original 是 raw-direct；No-Tool 使用训练匹配的 no-tool prompt 与
@@ -987,7 +987,7 @@ Aggregate scoring receipt 的 `status=complete`，identity 为
 - [x] S0/S8/S16/S32 matched no-tool 的 `4 × 2,240` 条单图推理；
 - [x] S0/S8/S16/S32 matched no-tool 的七项正式评分；
 - [x] corrected true-1M V2 结果回填主表、学习动态、行为表和 claim ledger；
-- [ ] Appendix A 加入 frozen S32 后的 59-slice winner 与 pairwise W/L/T 机械重算。
+- [x] Appendix A 加入 frozen S32 后的 59-slice winner 与 pairwise W/L/T 机械重算。
 - [x] S32 raw-direct@512 的七个完整 slice、共 2,511 条推理；
 - [x] S32 raw-direct@512 的七项官方评分、180/269 单图 headline 对齐和 Original 同合同差值；
   Macro* `54.3543`，即 `−1.0013 pp`。
@@ -1245,7 +1245,7 @@ Atomic 进入正文核心方法必须同时满足：
 7. [已完成] Crop S32/S80 true-1M 推理、评分、processor/grid audit 与 receipt 已闭合；
 8. [已完成] Original raw-direct true-1M 2,511 行正式评分、七项 headline、completion receipt
    与 59-slice 回填均已闭合；
-9. [进行中] Appendix A 加入 frozen No-Tool S32 后机械重算 59-slice winner 与 pairwise W/L/T；
+9. [已完成] Appendix A 加入 frozen No-Tool S32 后机械重算 59-slice winner 与 pairwise W/L/T；
 10. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
 11. [待回填] target-only 调用行为对照与正式 audit；
@@ -1302,7 +1302,7 @@ Atomic 进入正文核心方法必须同时满足：
 
 ## Appendix A. Unified true-1M aligned sub-benchmark appendix
 
-这里的 aligned 严格限定为五个已完成方法共同支持的 2,240 个 single-image items：VStar 191、HRBench 200、BLINK 180、OCRBench 600、MMMU 269、MathVista 300、MathVerse 500。所有 subgroup 都只从这组共同 support IDs 统计；full scorer 中的 unsupported multi-image 零分占位项一律排除。Original 使用正式 raw-direct true-1M 结果，没有混入任何 @512 数值。除特别说明外，数值单位均为百分比。
+这里的 aligned 严格限定为六个已完成方法共同支持的 2,240 个 single-image items：VStar 191、HRBench 200、BLINK 180、OCRBench 600、MMMU 269、MathVista 300、MathVerse 500。所有 subgroup 都只从这组共同 support IDs 统计；full scorer 中的 unsupported multi-image 零分占位项一律排除。Original 使用正式 raw-direct true-1M 结果，No-Tool 使用事前冻结的 S32；没有混入任何 @512 数值。除特别说明外，数值单位均为百分比。
 
 | Method | Macro* | VStar | HR | BLINK-180 | OCR EN/CN mean | MMMU-269 | MathVista | MathVerse-5 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -1311,131 +1311,159 @@ Atomic 进入正文核心方法必须同时满足：
 | TGVF S64 | 59.8086 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | Atomic S16 | 63.0827 | 71.7277 | 73.5000 | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
 | Original true-1M | 61.3147 | 72.7749 | 66.5000 | 63.8889 | 59.7877 | 37.9182 | 75.3333 | 53.0000 |
+| NoTool S32 | 63.7520 | 70.1571 | 65.5000 | 71.1111 | 49.3928 | 53.9033 | 75.0000 | 61.2000 |
 
-以下胜出统计覆盖共同 2,240 supported items 上的 59 个 aligned slices。含并列胜出会给每个并列方法各记一次，因此该列不要求合计为 59；并列按比例分摊列的合计为 59。五种方法全部参加统计；Original 进入后已机械重算每行 winner、胜出计数与 pairwise W/L/T。
+以下胜出统计覆盖共同 2,240 supported items 上的 59 个 aligned slices。含并列胜出会给每个并列方法各记一次，因此该列不要求合计为 59；并列按比例分摊列的合计为 59。六种方法全部参加统计；按表中四位小数判断并列，并已机械重算每行 winner、胜出计数与 pairwise W/L/T。
 
 | Method | 含并列胜出 | 独占胜出 | 并列按比例分摊 |
 |---|---:|---:|---:|
-| Crop S32 | 13 | 5 | 7.8333 |
-| Crop S80 | 13 | 4 | 7.0833 |
-| TGVF S64 | 18 | 7 | 10.8333 |
-| Atomic S16 | 24 | 11 | 15.6667 |
-| Original | 22 | 15 | 17.5833 |
+| Crop S32 | 9 | 4 | 5.5667 |
+| Crop S80 | 10 | 2 | 4.9333 |
+| TGVF S64 | 13 | 5 | 7.4667 |
+| Atomic S16 | 17 | 4 | 9.1333 |
+| Original | 17 | 7 | 10.7667 |
+| NoTool S32 | 32 | 14 | 21.1333 |
 
 ### VStar-2
 
-| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | Winner |
-|---|---:|---:|---:|---:|---:|---:|---|
-| direct_attributes | 115 | 75.6522 | 73.9130 | 70.4348 | 69.5652 | 71.3043 | Crop S32 |
-| relative_position | 76 | 69.7368 | 73.6842 | 80.2632 | 75.0000 | 75.0000 | TGVF S64 |
+| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | NoTool S32 | Winner |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| direct_attributes | 115 | 75.6522 | 73.9130 | 70.4348 | 69.5652 | 71.3043 | 70.4348 | Crop S32 |
+| relative_position | 76 | 69.7368 | 73.6842 | 80.2632 | 75.0000 | 75.0000 | 69.7368 | TGVF S64 |
 
 ### HR-2
 
-这里采用官方 scorer 的四个 cycle 平均；single 与 cross 各 100 个样本，每个 cycle 各 25 个。
+这里采用官方 scorer 的 `cycle=Average`；single 与 cross 各 100 个样本。此前附录将部分
+per-cycle 单元格误当成 aggregate，现已按六份 accepted 200-row result TSV 统一修正。
 
-| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | Winner |
-|---|---:|---:|---:|---:|---:|---:|---|
-| single | 100 | 77.2500 | 74.7500 | 70.2500 | 77.7500 | 65.0000 | Atomic S16 |
-| cross | 100 | 61.7500 | 60.0000 | 65.0000 | 71.0000 | 68.0000 | Atomic S16 |
+| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | NoTool S32 | Winner |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| single | 100 | 77.0000 | 79.0000 | 69.0000 | 79.0000 | 65.0000 | 68.0000 | Crop S80 / Atomic S16 |
+| cross | 100 | 59.0000 | 60.0000 | 64.0000 | 68.0000 | 68.0000 | 63.0000 | Atomic S16 / Original |
 
 ### BLINK-6
 
 这是统一合同中的六个 single-image 子集，各 30 个样本；不使用完整 scorer 中 unsupported multi-image 的零分占位项。
 
-| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | Winner |
-|---|---:|---:|---:|---:|---:|---:|---|
-| Counting | 30 | 73.3333 | 60.0000 | 73.3333 | 73.3333 | 66.6667 | Crop S32 / TGVF / Atomic |
-| IQ Test | 30 | 23.3333 | 33.3333 | 23.3333 | 10.0000 | 20.0000 | Crop S80 |
-| Object Localization | 30 | 60.0000 | 53.3333 | 70.0000 | 73.3333 | 60.0000 | Atomic S16 |
-| Relative Depth | 30 | 73.3333 | 83.3333 | 86.6667 | 80.0000 | 83.3333 | TGVF S64 |
-| Relative Reflectance | 30 | 63.3333 | 40.0000 | 46.6667 | 70.0000 | 56.6667 | Atomic S16 |
-| Spatial Relation | 30 | 86.6667 | 86.6667 | 93.3333 | 90.0000 | 96.6667 | Original |
+| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | NoTool S32 | Winner |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Counting | 30 | 73.3333 | 60.0000 | 73.3333 | 73.3333 | 66.6667 | 76.6667 | NoTool S32 |
+| IQ Test | 30 | 23.3333 | 33.3333 | 23.3333 | 10.0000 | 20.0000 | 33.3333 | Crop S80 / NoTool S32 |
+| Object Localization | 30 | 60.0000 | 53.3333 | 70.0000 | 73.3333 | 60.0000 | 73.3333 | Atomic S16 / NoTool S32 |
+| Relative Depth | 30 | 73.3333 | 83.3333 | 86.6667 | 80.0000 | 83.3333 | 80.0000 | TGVF S64 |
+| Relative Reflectance | 30 | 63.3333 | 40.0000 | 46.6667 | 70.0000 | 56.6667 | 66.6667 | Atomic S16 |
+| Spatial Relation | 30 | 86.6667 | 86.6667 | 93.3333 | 90.0000 | 96.6667 | 96.6667 | Original / NoTool S32 |
 
 ### MathVista-12
 
 MathVista skill 标签可重叠，因此各行 n 不能相加作为总样本数；总样本仍为 300。
 
-| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | Winner |
-|---|---:|---:|---:|---:|---:|---:|---|
-| algebraic reasoning | 75 | 70.6667 | 64.0000 | 74.6667 | 76.0000 | 81.3333 | Original |
-| arithmetic reasoning | 104 | 65.3846 | 54.8077 | 72.1154 | 63.4615 | 71.1538 | TGVF S64 |
-| figure question answering | 96 | 66.6667 | 67.7083 | 69.7917 | 69.7917 | 73.9583 | Original |
-| geometry problem solving | 49 | 77.5510 | 73.4694 | 85.7143 | 87.7551 | 85.7143 | Atomic S16 |
-| geometry reasoning | 63 | 71.4286 | 66.6667 | 79.3651 | 79.3651 | 82.5397 | Original |
-| logical reasoning | 12 | 25.0000 | 33.3333 | 16.6667 | 25.0000 | 16.6667 | Crop S80 |
-| math word problem | 63 | 76.1905 | 60.3175 | 84.1270 | 79.3651 | 82.5397 | TGVF S64 |
-| numeric commonsense | 36 | 55.5556 | 44.4444 | 58.3333 | 50.0000 | 50.0000 | TGVF S64 |
-| scientific reasoning | 37 | 56.7568 | 56.7568 | 54.0541 | 56.7568 | 64.8649 | Original |
-| statistical reasoning | 111 | 76.5766 | 77.4775 | 81.9820 | 81.0811 | 85.5856 | Original |
-| textbook question answering | 50 | 58.0000 | 54.0000 | 56.0000 | 56.0000 | 70.0000 | Original |
-| visual question answering | 42 | 61.9048 | 57.1429 | 64.2857 | 50.0000 | 61.9048 | TGVF S64 |
+| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | NoTool S32 | Winner |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| algebraic reasoning | 75 | 70.6667 | 64.0000 | 74.6667 | 76.0000 | 81.3333 | 80.0000 | Original |
+| arithmetic reasoning | 104 | 65.3846 | 54.8077 | 72.1154 | 63.4615 | 71.1538 | 72.1154 | TGVF S64 / NoTool S32 |
+| figure question answering | 96 | 66.6667 | 67.7083 | 69.7917 | 69.7917 | 73.9583 | 73.9583 | Original / NoTool S32 |
+| geometry problem solving | 49 | 77.5510 | 73.4694 | 85.7143 | 87.7551 | 85.7143 | 87.7551 | Atomic S16 / NoTool S32 |
+| geometry reasoning | 63 | 71.4286 | 66.6667 | 79.3651 | 79.3651 | 82.5397 | 84.1270 | NoTool S32 |
+| logical reasoning | 12 | 25.0000 | 33.3333 | 16.6667 | 25.0000 | 16.6667 | 33.3333 | Crop S80 / NoTool S32 |
+| math word problem | 63 | 76.1905 | 60.3175 | 84.1270 | 79.3651 | 82.5397 | 85.7143 | NoTool S32 |
+| numeric commonsense | 36 | 55.5556 | 44.4444 | 58.3333 | 50.0000 | 50.0000 | 47.2222 | TGVF S64 |
+| scientific reasoning | 37 | 56.7568 | 56.7568 | 54.0541 | 56.7568 | 64.8649 | 64.8649 | Original / NoTool S32 |
+| statistical reasoning | 111 | 76.5766 | 77.4775 | 81.9820 | 81.0811 | 85.5856 | 83.7838 | Original |
+| textbook question answering | 50 | 58.0000 | 54.0000 | 56.0000 | 56.0000 | 70.0000 | 66.0000 | Original |
+| visual question answering | 42 | 61.9048 | 57.1429 | 64.2857 | 50.0000 | 61.9048 | 57.1429 | TGVF S64 |
 
 ### MathVerse-5
 
-| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | Winner |
-|---|---:|---:|---:|---:|---:|---:|---|
-| Text Dominant | 100 | 71.0000 | 67.0000 | 64.0000 | 66.0000 | 70.0000 | Crop S32 |
-| Text Lite | 100 | 57.0000 | 57.0000 | 58.0000 | 59.0000 | 50.0000 | Atomic S16 |
-| Vision Dominant | 100 | 51.0000 | 49.0000 | 46.0000 | 50.0000 | 54.0000 | Original |
-| Vision Intensive | 100 | 47.0000 | 48.0000 | 42.0000 | 49.0000 | 57.0000 | Original |
-| Vision Only | 100 | 45.0000 | 41.0000 | 42.0000 | 51.0000 | 34.0000 | Atomic S16 |
+| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | NoTool S32 | Winner |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Text Dominant | 100 | 71.0000 | 67.0000 | 64.0000 | 66.0000 | 70.0000 | 70.0000 | Crop S32 |
+| Text Lite | 100 | 57.0000 | 57.0000 | 58.0000 | 59.0000 | 50.0000 | 61.0000 | NoTool S32 |
+| Vision Dominant | 100 | 51.0000 | 49.0000 | 46.0000 | 50.0000 | 54.0000 | 60.0000 | NoTool S32 |
+| Vision Intensive | 100 | 47.0000 | 48.0000 | 42.0000 | 49.0000 | 57.0000 | 60.0000 | NoTool S32 |
+| Vision Only | 100 | 45.0000 | 41.0000 | 42.0000 | 51.0000 | 34.0000 | 55.0000 | NoTool S32 |
 
 ### OCR EN/CN
 
-| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | Winner |
-|---|---:|---:|---:|---:|---:|---:|---|
-| English Overall | 400 | 51.5033 | 51.4573 | 47.2443 | 53.7774 | 59.0441 | Original |
-| Chinese Overall | 200 | 56.2175 | 56.6280 | 41.8449 | 54.7665 | 60.5313 | Original |
+| Slice | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | NoTool S32 | Winner |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| English Overall | 400 | 51.5033 | 51.4573 | 47.2443 | 53.7774 | 59.0441 | 46.2998 | Original |
+| Chinese Overall | 200 | 56.2175 | 56.6280 | 41.8449 | 54.7665 | 60.5313 | 52.4859 | Original |
 
 ### MMMU subject 全表
 
-下表从五份 accepted MMMU coverage-result TSV 取共同的 269 个 `coverage=single_image_evaluated` sample IDs，再按 subject 对 hit 求均值。31 个 unsupported/excluded multi-image 零分占位项已完全排除，因此 subject n 为 5–10，总和为 269；这与 headline MMMU-269 使用完全相同的支持集合。
+下表从六份 accepted MMMU coverage-result TSV 取共同的 269 个 `coverage=single_image_evaluated` sample IDs，再按 subject 对 hit 求均值。31 个 unsupported/excluded multi-image 零分占位项已完全排除，因此 subject n 为 5–10，总和为 269；这与 headline MMMU-269 使用完全相同的支持集合。
 
-| Subject | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | Winner |
-|---|---:|---:|---:|---:|---:|---:|---|
-| Accounting | 10 | 50.0000 | 30.0000 | 60.0000 | 60.0000 | 20.0000 | TGVF / Atomic |
-| Agriculture | 10 | 30.0000 | 30.0000 | 40.0000 | 30.0000 | 30.0000 | TGVF S64 |
-| Architecture and Engineering | 10 | 20.0000 | 50.0000 | 50.0000 | 60.0000 | 40.0000 | Atomic S16 |
-| Art | 10 | 20.0000 | 30.0000 | 30.0000 | 30.0000 | 30.0000 | Crop S80 / TGVF / Atomic / Original |
-| Art Theory | 7 | 42.8571 | 57.1429 | 57.1429 | 57.1429 | 57.1429 | Crop S80 / TGVF / Atomic / Original |
-| Basic Medical Science | 10 | 30.0000 | 30.0000 | 20.0000 | 50.0000 | 20.0000 | Atomic S16 |
-| Biology | 7 | 28.5714 | 28.5714 | 0.0000 | 14.2857 | 14.2857 | Crop S32 / Crop S80 |
-| Chemistry | 5 | 60.0000 | 60.0000 | 60.0000 | 60.0000 | 20.0000 | Crop S32 / Crop S80 / TGVF / Atomic |
-| Clinical Medicine | 9 | 33.3333 | 22.2222 | 22.2222 | 22.2222 | 11.1111 | Crop S32 |
-| Computer Science | 10 | 50.0000 | 50.0000 | 40.0000 | 50.0000 | 70.0000 | Original |
-| Design | 10 | 60.0000 | 50.0000 | 70.0000 | 60.0000 | 70.0000 | TGVF / Original |
-| Diagnostics and Laboratory Medicine | 10 | 0.0000 | 20.0000 | 10.0000 | 20.0000 | 20.0000 | Crop S80 / Atomic / Original |
-| Economics | 8 | 50.0000 | 37.5000 | 25.0000 | 37.5000 | 50.0000 | Crop S32 / Original |
-| Electronics | 10 | 60.0000 | 80.0000 | 50.0000 | 70.0000 | 30.0000 | Crop S80 |
-| Energy and Power | 10 | 30.0000 | 30.0000 | 30.0000 | 30.0000 | 50.0000 | Original |
-| Finance | 10 | 60.0000 | 50.0000 | 70.0000 | 70.0000 | 10.0000 | TGVF / Atomic |
-| Geography | 8 | 75.0000 | 37.5000 | 25.0000 | 37.5000 | 50.0000 | Crop S32 |
-| History | 8 | 62.5000 | 62.5000 | 62.5000 | 62.5000 | 50.0000 | Crop S32 / Crop S80 / TGVF / Atomic |
-| Literature | 8 | 75.0000 | 62.5000 | 75.0000 | 75.0000 | 75.0000 | Crop S32 / TGVF / Atomic / Original |
-| Manage | 10 | 40.0000 | 40.0000 | 40.0000 | 50.0000 | 50.0000 | Atomic / Original |
-| Marketing | 9 | 66.6667 | 66.6667 | 88.8889 | 100.0000 | 44.4444 | Atomic S16 |
-| Materials | 8 | 37.5000 | 25.0000 | 50.0000 | 75.0000 | 12.5000 | Atomic S16 |
-| Math | 10 | 30.0000 | 30.0000 | 40.0000 | 40.0000 | 60.0000 | Original |
-| Mechanical Engineering | 10 | 40.0000 | 40.0000 | 40.0000 | 40.0000 | 0.0000 | Crop S32 / Crop S80 / TGVF / Atomic |
-| Music | 7 | 42.8571 | 57.1429 | 42.8571 | 42.8571 | 42.8571 | Crop S80 |
-| Pharmacy | 7 | 71.4286 | 42.8571 | 57.1429 | 71.4286 | 14.2857 | Crop S32 / Atomic |
-| Physics | 10 | 80.0000 | 60.0000 | 40.0000 | 60.0000 | 30.0000 | Crop S32 |
-| Psychology | 8 | 50.0000 | 62.5000 | 25.0000 | 62.5000 | 50.0000 | Crop S80 / Atomic |
-| Public Health | 10 | 70.0000 | 80.0000 | 80.0000 | 60.0000 | 40.0000 | Crop S80 / TGVF |
-| Sociology | 10 | 50.0000 | 40.0000 | 50.0000 | 50.0000 | 70.0000 | Original |
+| Subject | n | Crop S32 | Crop S80 | TGVF S64 | Atomic S16 | Original | NoTool S32 | Winner |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Accounting | 10 | 50.0000 | 30.0000 | 60.0000 | 60.0000 | 20.0000 | 60.0000 | TGVF S64 / Atomic S16 / NoTool S32 |
+| Agriculture | 10 | 30.0000 | 30.0000 | 40.0000 | 30.0000 | 30.0000 | 30.0000 | TGVF S64 |
+| Architecture and Engineering | 10 | 20.0000 | 50.0000 | 50.0000 | 60.0000 | 40.0000 | 60.0000 | Atomic S16 / NoTool S32 |
+| Art | 10 | 20.0000 | 30.0000 | 30.0000 | 30.0000 | 30.0000 | 30.0000 | Crop S80 / TGVF S64 / Atomic S16 / Original / NoTool S32 |
+| Art Theory | 7 | 42.8571 | 57.1429 | 57.1429 | 57.1429 | 57.1429 | 57.1429 | Crop S80 / TGVF S64 / Atomic S16 / Original / NoTool S32 |
+| Basic Medical Science | 10 | 30.0000 | 30.0000 | 20.0000 | 50.0000 | 20.0000 | 40.0000 | Atomic S16 |
+| Biology | 7 | 28.5714 | 28.5714 | 0.0000 | 14.2857 | 14.2857 | 28.5714 | Crop S32 / Crop S80 / NoTool S32 |
+| Chemistry | 5 | 60.0000 | 60.0000 | 60.0000 | 60.0000 | 20.0000 | 60.0000 | Crop S32 / Crop S80 / TGVF S64 / Atomic S16 / NoTool S32 |
+| Clinical Medicine | 9 | 33.3333 | 22.2222 | 22.2222 | 22.2222 | 11.1111 | 44.4444 | NoTool S32 |
+| Computer Science | 10 | 50.0000 | 50.0000 | 40.0000 | 50.0000 | 70.0000 | 50.0000 | Original |
+| Design | 10 | 60.0000 | 50.0000 | 70.0000 | 60.0000 | 70.0000 | 70.0000 | TGVF S64 / Original / NoTool S32 |
+| Diagnostics and Laboratory Medicine | 10 | 0.0000 | 20.0000 | 10.0000 | 20.0000 | 20.0000 | 40.0000 | NoTool S32 |
+| Economics | 8 | 50.0000 | 37.5000 | 25.0000 | 37.5000 | 50.0000 | 50.0000 | Crop S32 / Original / NoTool S32 |
+| Electronics | 10 | 60.0000 | 80.0000 | 50.0000 | 70.0000 | 30.0000 | 60.0000 | Crop S80 |
+| Energy and Power | 10 | 30.0000 | 30.0000 | 30.0000 | 30.0000 | 50.0000 | 60.0000 | NoTool S32 |
+| Finance | 10 | 60.0000 | 50.0000 | 70.0000 | 70.0000 | 10.0000 | 60.0000 | TGVF S64 / Atomic S16 |
+| Geography | 8 | 75.0000 | 37.5000 | 25.0000 | 37.5000 | 50.0000 | 25.0000 | Crop S32 |
+| History | 8 | 62.5000 | 62.5000 | 62.5000 | 62.5000 | 50.0000 | 75.0000 | NoTool S32 |
+| Literature | 8 | 75.0000 | 62.5000 | 75.0000 | 75.0000 | 75.0000 | 75.0000 | Crop S32 / TGVF S64 / Atomic S16 / Original / NoTool S32 |
+| Manage | 10 | 40.0000 | 40.0000 | 40.0000 | 50.0000 | 50.0000 | 70.0000 | NoTool S32 |
+| Marketing | 9 | 66.6667 | 66.6667 | 88.8889 | 100.0000 | 44.4444 | 77.7778 | Atomic S16 |
+| Materials | 8 | 37.5000 | 25.0000 | 50.0000 | 75.0000 | 12.5000 | 62.5000 | Atomic S16 |
+| Math | 10 | 30.0000 | 30.0000 | 40.0000 | 40.0000 | 60.0000 | 60.0000 | Original / NoTool S32 |
+| Mechanical Engineering | 10 | 40.0000 | 40.0000 | 40.0000 | 40.0000 | 0.0000 | 50.0000 | NoTool S32 |
+| Music | 7 | 42.8571 | 57.1429 | 42.8571 | 42.8571 | 42.8571 | 42.8571 | Crop S80 |
+| Pharmacy | 7 | 71.4286 | 42.8571 | 57.1429 | 71.4286 | 14.2857 | 42.8571 | Crop S32 / Atomic S16 |
+| Physics | 10 | 80.0000 | 60.0000 | 40.0000 | 60.0000 | 30.0000 | 40.0000 | Crop S32 |
+| Psychology | 8 | 50.0000 | 62.5000 | 25.0000 | 62.5000 | 50.0000 | 37.5000 | Crop S80 / Atomic S16 |
+| Public Health | 10 | 70.0000 | 80.0000 | 80.0000 | 60.0000 | 40.0000 | 100.0000 | NoTool S32 |
+| Sociology | 10 | 50.0000 | 40.0000 | 50.0000 | 50.0000 | 70.0000 | 50.0000 | Original |
 
-### Crop S32 的有利与不利边界
+### 六方法 pairwise W/L/T 与能力边界
 
-- 相对 TGVF，59 slices 中为 22 胜 / 27 负 / 10 平，Macro* 高 1.2619 pp。
-- 相对 Atomic，为 15 胜 / 30 负 / 14 平，Macro* 低 2.0121 pp。
-- 相对 Original，为 25 胜 / 27 负 / 7 平，Macro* 低 0.2442 pp；Crop 的优势集中于部分 slice，
-  不能改写为总体领先。
-- 较稳定的有利方向是 OCR 与文本主导数学：相对 TGVF，OCR CN 高 14.3725 pp、OCR EN 高 4.2589 pp，MathVerse Text Dominant 高 7.0000 pp。
-- 局部视觉读取也有有利 slice：VStar direct attributes 相对 TGVF/Atomic 分别高 5.2174/6.0870 pp；BLINK Relative Reflectance 相对 TGVF 高 16.6667 pp。
-- 相对 Atomic，Crop S32 还在 BLINK IQ Test 高 13.3333 pp、MathVista visual question answering 高 11.9048 pp。
-- 不利方向集中于几何/统计推理、相对位置和跨图交互：相对 TGVF，VStar relative position 低 10.5263 pp、BLINK Relative Depth 低 13.3333 pp；MathVista 仅 3/12 slices 严格优于 TGVF。
-- 因而可以将 Crop 的优势定位为局部视觉读取、文本主导和属性识别，但不能表述为全面优于 TGVF、Atomic 或 Original；尤其 Original 在 OCR EN/CN 均领先。
-- MMMU subject 只有 n=5–10，适合用于定位能力差异，不适合作为单独的强统计结论。MathVista skill 标签存在重叠，59-slice 胜出数同样属于描述性统计，不等同于 59 个独立检验。
+W/L/T 均按左侧方法视角，以表中四位小数判断相等：
+
+| Left method | Right method | W | L | T |
+|---|---|---:|---:|---:|
+| Crop S32 | Crop S80 | 27 | 18 | 14 |
+| Crop S32 | TGVF S64 | 22 | 27 | 10 |
+| Crop S32 | Atomic S16 | 15 | 30 | 14 |
+| Crop S32 | Original | 25 | 27 | 7 |
+| Crop S32 | NoTool S32 | 11 | 37 | 11 |
+| Crop S80 | TGVF S64 | 20 | 29 | 10 |
+| Crop S80 | Atomic S16 | 11 | 32 | 16 |
+| Crop S80 | Original | 23 | 31 | 5 |
+| Crop S80 | NoTool S32 | 11 | 38 | 10 |
+| TGVF S64 | Atomic S16 | 13 | 29 | 17 |
+| TGVF S64 | Original | 26 | 25 | 8 |
+| TGVF S64 | NoTool S32 | 11 | 36 | 12 |
+| Atomic S16 | Original | 23 | 25 | 11 |
+| Atomic S16 | NoTool S32 | 16 | 30 | 13 |
+| Original | NoTool S32 | 15 | 32 | 12 |
+
+- NoTool S32 的 `32` 个含并列胜出 slice 由 MMMU 小 subject（17）、MathVista 重叠标签（7）、
+  MathVerse（4）、BLINK（4）共同构成；其中独占胜出为 14。它没有在 VStar、HR 或 OCR slice
+  上胜出，不能解释为 32 个独立显著优势。
+- Crop S32 相对 TGVF / Atomic / Original / NoTool 分别为 `22/27/10`、`15/30/14`、
+  `25/27/7`、`11/37/11`；相应 Macro* 差值为 `+1.2619 / −2.0121 / −0.2442 / −2.6814 pp`。
+- Crop 较稳定的有利方向是局部视觉读取与文本主导任务：相对 TGVF，OCR CN 高
+  `14.3725 pp`、OCR EN 高 `4.2589 pp`、MathVerse Text Dominant 高 `7.0000 pp`；VStar
+  direct attributes 相对 TGVF/Atomic 分别高 `5.2174/6.0870 pp`。
+- Crop 的不利方向集中于几何/统计推理、相对位置和跨图交互：相对 TGVF，VStar relative
+  position 低 `10.5263 pp`、BLINK Relative Depth 低 `13.3333 pp`；MathVista 仅 3/12
+  slices 严格优于 TGVF。
+- 因而可以将 Crop 的优势定位为部分局部视觉读取、文本主导和属性识别，但不能表述为全面优于
+  TGVF、Atomic、Original 或 NoTool；尤其 Original 在 OCR EN/CN 均领先。
+- MMMU subject 只有 n=5–10，MathVista skill 标签彼此重叠；59-slice winner 与 pairwise
+  W/L/T 都是能力定位用的描述性统计，不等同于 59 个独立检验，也不替代 headline Macro*。
 
 ### Accepted scorer 数据源与 SHA256
 
@@ -1454,8 +1482,14 @@ MathVista skill 标签可重叠，因此各行 n 不能相加作为总样本数�
 - Original raw-direct true-1M summary:
   artifacts/evaluation/PRL25-ORIGINAL-QWEN3-INSTRUCT-RAW-DIRECT-TRUE1M-V1/scoring/coredev-2511-eval-summary.json
   SHA256: f8dc31b5353c36d2e764096ee2f2a1f0da0ca3d28fb4525c2fb660829c705904
+- NoTool S32 true-1M summary:
+  artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S0-S8-S16-S32-TRUE1M-V2/matched/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json
+  SHA256: bd6057d798c37791714033c4f9a734f435264ec1242fc841fdaad4fd064d897a
 
-五份 summary 均满足 status=pass、sample_count=2511、slice_count=7，并固定于 VLMEvalKit commit 7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f。2511 是 scorer materialization 总行数；本附录的 aligned 分母只使用五方法共同的 2240 supported items。Original 的 judge parse failure 为 0。对 MMMU，五份 coverage-result TSV 都恰为 269 个 single_image_evaluated 加 31 个 unsupported/excluded multi-image，且五份 269-ID 集合完全相同；本附录只读取前者的 hit。
+六份 summary 均满足 status=pass、sample_count=2511、slice_count=7，并固定于 VLMEvalKit commit 7055d3010c38ccb5dcae1bc9535ca19c7fe5d79f。2511 是 scorer materialization 总行数；本附录的 aligned 分母只使用六方法共同的 2240 supported items。Original 的 judge parse failure 为 0；NoTool S32 为 2，均位于 VStar，并已按 deterministic-incorrect 规则纳入 accepted 分数。对 MMMU，六份 coverage-result TSV 都恰为 269 个 single_image_evaluated 加 31 个 unsupported/excluded multi-image，且六份 269-ID 集合完全相同；本附录只读取前者的 hit。
+
+NoTool true-1M V2 aggregate completion receipt 为
+`artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S0-S8-S16-S32-TRUE1M-V2/runtime/scoring-supervisor/matched-scoring-complete.json`，文件 SHA256 为 `0fc8bcf3865c4d6ee360206da318c7913afb8c4cf659ea4bcb29104ad132db59`，内嵌 identity 为 `69328dfe889366650e96a0582eaa86a27df1ac349751ee40493d83f47c92a955`。S32 单步 receipt SHA256 为 `ba48a5742509238dc46e21bb6cae30e3cf68b8d79bfd7cb2b837ffbbb5a3717a`。
 
 Original scoring completion receipt 为
 `artifacts/evaluation/PRL25-ORIGINAL-QWEN3-INSTRUCT-RAW-DIRECT-TRUE1M-V1/runtime/scoring-supervisor/original-true1m-scoring-complete.json`，文件 SHA256 为 `8f5881aa227ec350f4839c9a46779c20ecc64de2092e9012345717387a39a366`；其内嵌 `summary_sha256` 与上列 accepted summary SHA 完全一致，并固定 `max_pixels=1,003,520`、2,511 rows 与 7 slices。
@@ -1467,15 +1501,20 @@ Crop true-1M audit receipt:
 
 两份 receipt 均为 status=accepted，记录 evaluation_image_max_pixels=1,003,520、maximum_observed_visual_token_count=980、maximum_observed_represented_pixel_area=1,003,520，以及 2240 个受支持的 single-image 推理结果。
 
-MMMU-269 过滤后的总命中数为 Crop S32 125/269、Crop S80 121/269、TGVF S64 121/269、Atomic S16 138/269、Original 102/269，分别精确复现 headline 的 46.4684、44.9814、44.9814、51.3011、37.9182。
+MMMU-269 过滤后的总命中数为 Crop S32 125/269、Crop S80 121/269、TGVF S64 121/269、Atomic S16 138/269、Original 102/269、NoTool S32 145/269，分别精确复现 headline 的 46.4684、44.9814、44.9814、51.3011、37.9182、53.9033。
 
-按 sample_id 字典序排序、以 LF 分隔并保留末尾 LF 后，共同 269-ID 集合的 SHA256 为 3b7beed9691569723c023caa1d8080957f20a49bec69d6e792467bfcc95ba38f。五份 accepted MMMU coverage-result TSV 的 SHA256 依次为：
+按 sample_id 字典序排序、以 LF 分隔并保留末尾 LF 后，共同 269-ID 集合的 SHA256 为 3b7beed9691569723c023caa1d8080957f20a49bec69d6e792467bfcc95ba38f。六份 accepted MMMU coverage-result TSV 的 SHA256 依次为：
 
 - Crop S32: a0a36780118e5f03b9107ea89cb980f9632ef02a86f1bedb07ca6b0a61289528
 - Crop S80: 47b8ba4e5467270b89bf0d20aab2c603c11c5dc28e3fe6d44cdcf1d318e17a51
 - TGVF S64: 3cbd0731bd2b59db1fcdc3e62d53e2e006b1a141fecaffca57d3ed5fdfa22323
 - Atomic S16: 9ae8907f93ebef755c03a604d671778eafa5c0d558094efa87da001bbedd3f1d
 - Original: 08ea4d45f9e1d7a561bb4dc0552ce26e399cfeadc5764de9550d94cd9beb2271
+- NoTool S32: e362ce65dde083c0828a99320909d294482c5400adc7133b4bf493c9fbdf9822
+
+六方法共同的 2,240 supported-ID 集合 SHA256 为
+`1754796867842d7ae78ee8c0616b4a035efc5fe853df8333bb24eefb3a42bb85`。NoTool S32 的
+HR accepted result TSV SHA256 为 `7ade24ffa765b5da8517933d8c522a80516f99b552241efe579669050b14bae7`。
 
 ### 最小复核方式
 
@@ -1498,18 +1537,25 @@ jq '{
 }' "$EVAL_ROOT/runtime/true1m-audit-receipt.json"
 ~~~
 
-MMMU subject 的共同支持集合和分数可直接从五份 accepted coverage-result TSV 复核：
+MMMU subject 的共同支持集合和分数可直接从六份 accepted coverage-result TSV 复核：
 
 ~~~bash
 python - "$CROP_S32_MMMU_TSV" "$CROP_S80_MMMU_TSV" \
   "$TGVF_S64_MMMU_TSV" "$ATOMIC_S16_MMMU_TSV" \
-  "$ORIGINAL_MMMU_TSV" <<'PY'
+  "$ORIGINAL_MMMU_TSV" "$NOTOOL_S32_MMMU_TSV" <<'PY'
 import json
 import sys
 
 import pandas as pd
 
-names = ["Crop S32", "Crop S80", "TGVF S64", "Atomic S16", "Original"]
+names = [
+    "Crop S32",
+    "Crop S80",
+    "TGVF S64",
+    "Atomic S16",
+    "Original",
+    "NoTool S32",
+]
 frames = {
     name: pd.read_csv(path, sep="\t")
     for name, path in zip(names, sys.argv[1:], strict=True)
