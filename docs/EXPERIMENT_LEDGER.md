@@ -10030,3 +10030,32 @@ than inferred from a script name or prior conversation.
   canonical rolling generation and the nested step/cumulative metrics rather
   than looking for a non-contractual permanent copy. This is an admission-gate
   correction only and authorizes the clean formal launch descendant.
+
+### PRL26 train@512 S32 NoTool/Crop parity rerun (2026-08-29)
+
+- Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` and
+  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `CONFIGURED, NOT LAUNCHED`. These are
+  fresh-S0 train@512 parity reruns, not literal one-variable continuations of
+  the historical NoTool S32 and Crop S80 lineages.
+- Implementation commit
+  `e756546b273be70992c72471ed549b3e3a2834ae` adds versioned, fail-closed
+  pixel512 schemas. The old matched schemas remain hard-bound to 1,003,520
+  pixels; only the new schemas admit `image_max_pixels=262144`. Runtime,
+  full-Qwen synchronization and CoreDev routing recognize both schema
+  generations without changing the old contracts.
+- Formal parity contract: Qwen3-VL-8B-Instruct full-model update, Teacher25,
+  BS16 x n16, world8/FSDP2/GA1, seed42, temperature 1, constant LR `1e-6`,
+  32 optimizer steps and retained S0/S8/S16/S24/S32 boundaries. Reward,
+  sampling, data and prompt identities remain frozen. NoTool exposes no tool;
+  Crop preserves the corrected `</tool_call>` action boundary with the closing
+  tag included in policy output. Formal configs use recoverable `auto` mode
+  with no explicit resume path; the handoff supervisor must require a new
+  output root on first admission and thereafter resume only the same identity
+  from its committed checkpoint tracker.
+- C0 gates are isolated one-step fresh runs with `resume_mode=disable`:
+  NoTool uses physical GPUs 0--3 and Crop uses 4--7, allowing parallel
+  execution. Canary logs and control state must remain outside their output
+  roots. The four immutable configs are under `configs/policy/runs/prl_26_*`
+  and bind the implementation commit above. This ledger-bearing descendant
+  authorizes their co-location at one clean HEAD for the execution-identity
+  gate; no training was started while preparing these records.
