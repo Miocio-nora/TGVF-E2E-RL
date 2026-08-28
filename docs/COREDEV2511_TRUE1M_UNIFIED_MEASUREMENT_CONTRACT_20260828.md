@@ -1,6 +1,6 @@
 # CoreDev-2511 true-1M 统一测量合同与重测台账
 
-更新时间：2026-08-28 16:39 JST
+更新时间：2026-08-28 16:54 JST
 
 状态：**合同已冻结；Crop S32/S80、TGVF S64 与 Atomic S16 的 true-1M 结果已
 闭合，Original 与 No-Tool 仍在补测。本文是当前项目级唯一 true-1M 口径。** 在本文标为
@@ -130,6 +130,28 @@ final。结构审计另外发现 S80 中 **1 个**样例在一个已闭合调用
 这是同像素上限下的端到端表，不是同 prompt 的严格方法消融。Original 使用 raw-direct
 prompt，无 system prompt 与工具；Crop、TGVF 和 Atomic 分别使用各自训练匹配的 prompt、工具
 schema 和 agent loop。因此跨行差值不得直接归因给某一工具或 RL。
+
+### 5.1 Method-specific resolution response
+
+| Method | true-1M Macro* | true-512 Macro* | Δ (512 − 1M) | 可解释性 |
+|---|---:|---:|---:|---|
+| Crop S80 | 59.6463 | 62.0967 | **+2.4504 pp** | 两臂 RNG namespace 不同；只作 descriptive response |
+| TGVF S64 | 59.8086 | 55.4067 | **−4.4019 pp** | same run/step/frozen config/RP67/prompt/tool/task/RNG/scorer；snapshot semantic equality 未闭合 |
+| Atomic S16 | 63.0827 | 57.2762 | **−5.8065 pp** | same run/step/frozen config/RP67/prompt/tool/task/RNG/scorer；snapshot semantic equality 未闭合 |
+
+TGVF 和 Atomic 的高度匹配结果支持一个限定观测：当评测输入从 policy RL 的 1M rollout 尺度
+偏离到 512 时，两个 TGVF-family checkpoint 都出现 Macro* 回落。这些证据 **consistent with**
+TGVF-family 依赖 policy-RL 训练/评测尺度对齐，但不构成因果证明。RP67 adapter 预训练本身是
+`512²`，因此这里的“alignment”严格特指 policy rollout/evaluation distribution，不是 adapter
+pretraining resolution。两个像素臂虽来自同 run/optimizer step 并绑定同一 frozen policy config SHA 与
+RP67 state，Qwen snapshot 却分别 materialize，tree/combined-weight byte SHA 不同；现有 receipt 没有
+闭合 tensor-semantic equality proof。更强的单变量控制应复用同一 snapshot 或提供 semantic tensor hash，
+并以 512-only 或 multi-scale TGVF/Atomic 训练 × 512/1M 评测做完整 factorial 交叉。
+
+Crop 两臂的 `+2.4504 pp` 因 RNG namespace 不同而只是描述性差值。在有效 true-512 四方表中，
+Crop 比 Original、TGVF 和 Atomic 分别高 `6.7411 / 6.6900 / 4.8205 pp`，并在 Macro*、VStar、HR
+与 OCR mean 上排名第一。这支持 Crop 系统在 constrained-pixel setting 下的 end-to-end effectiveness，
+但不能将跨方法差值孤立归因给 crop tool。
 
 ## 6. 必须降级的历史结果
 
