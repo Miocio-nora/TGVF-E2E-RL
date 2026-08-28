@@ -115,10 +115,13 @@ receipt 为准。
 | representation adapter 预训练 | RP67（随后供 TGVF/Atomic 加载） | `262,144 = 512²` |
 | policy RL | PRL25-B/C/D/F | `1,003,520` |
 
-RP67 的正式配置
-`configs/representation/experiments/image_axis_grounding/rp67_qwen3_instruct_image_axis_grounded_2000_gpu01.toml`
-绑定 `image_max_pixels = 262,144`；其完成日志与 `metrics.jsonl` 的 start/complete 记录也均保存
-同一值（run identity `0b53d04c…`，global step `2000`）。
+RP67 的最终配置
+`configs/representation/experiments/image_axis_grounding/rp67_qwen3_instruct_image_axis_grounded_2000_gpu01_finalize_step2000.toml`
+（SHA256 `cbbfc146…`）绑定 `image_max_pixels = 262,144`；其 `metrics.jsonl` durable
+completion 记录也保存同一值（run identity `0b53d04c…`，global step `2000`，adapter
+SHA256 `13332865…`）。用历史 representation preprocessing 对 `2048×1536` RGB 复跑，得到
+`image_grid_thw=[1,26,36]`、represented area `239,616`、merged visual tokens `234`，确认
+RP67 adapter 预训练为 true-512。
 
 PRL25-B/C/D/F 的冻结 run config 均绑定 `image_max_pixels = 1,003,520`。进一步按各自最终
 launch provenance commit（B `08a9d8b4`、C `b87126ae`、D `017b5077`、F `7645fe4a`）回查
