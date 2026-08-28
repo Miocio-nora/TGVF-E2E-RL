@@ -1,37 +1,41 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-28 17:31 JST（Asia/Tokyo）
+更新时间：2026-08-28 20:16 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
 > action boundary、`2,240/2,240` 支持集和七项 scorer 重跑闭合。Original raw-direct true-1M
-> 也已完成 2,511 行正式评分并通过验收，Macro* 为 `61.3147`。冻结定义、完整证据与实时状态见
+> 也已完成 2,511 行正式评分并通过验收，Macro* 为 `61.3147`。No-Tool S0/S8/S16/S32 的
+> corrected true-1M V2 现已全部闭合；事前冻结 S32 Macro* 为 `63.7520`。冻结定义、完整证据与实时状态见
 > [项目级 true-1M 唯一合同](COREDEV2511_TRUE1M_UNIFIED_MEASUREMENT_CONTRACT_20260828.md)。
 
 ## Stage golden result under the unified true-1M contract
 
-这是本阶段统一输入预算下最具参考价值的四方端到端比较：四行评测都使用 `1,003,520`、
-同一 `2,240` 条支持集、七项统计与 scorer；Crop、TGVF 和 Atomic 的 policy RL 训练也使用
-`1,003,520`。单位为 `%`。
+这是本阶段统一输入预算下最具参考价值的五方端到端比较：五行评测都使用 `1,003,520`、
+同一 `2,240` 条支持集、七项统计与 scorer；No-Tool、Crop、TGVF 和 Atomic 的 policy RL 训练也
+使用 `1,003,520`。No-Tool S32 是事前冻结的唯一 no-tool headline。单位为 `%`。
 
 | Method | Macro* | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original raw-direct | 61.3147 | 72.7749 | 66.5000 | 63.8889 | **59.7877** | 37.9182 | **75.3333** | 53.0000 |
+| No-Tool RL S32 | **63.7520** | 70.1571 | 65.5000 | **71.1111** | 49.3928 | **53.9033** | 75.0000 | **61.2000** |
 | Crop S32 | 61.0706 | 73.2984 | 68.0000 | 63.3333 | 53.8604 | 46.4684 | 68.3333 | 54.2000 |
 | TGVF S64 | 59.8086 | **74.3455** | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
-| Atomic S16 | **63.0827** | 71.7277 | **73.5000** | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
+| Atomic S16 | 63.0827 | 71.7277 | **73.5000** | 66.1111 | 54.2720 | 51.3011 | 69.6667 | 55.0000 |
 
-Results 层面，Atomic S16 `63.0827` > Original `61.3147` > Crop S32 `61.0706` > TGVF S64
-`59.8086`，相邻差值为 `1.7680 / 0.2442 / 1.2619 pp`。Atomic 在七个 component 中的四项
-最高，Original 在 OCR mean 与 MathVista 两项最高，TGVF 在 VStar 最高。在共同 `2,240` 条
-supported items 上的 59 个 aligned slices 中，Crop S32 / Crop S80 / TGVF / Atomic /
-Original 的含并列胜出数为 `13/13/18/24/22`，独占胜出数为 `5/4/7/11/15`。该统计
-只是描述性能力地图；MathVista 标签可重叠，MMMU subject 只有 `n=5–10`，不应解读为 59 个独立假设检验。
+Results 层面，No-Tool S32 `63.7520` > Atomic S16 `63.0827` > Original `61.3147` > Crop S32
+`61.0706` > TGVF S64 `59.8086`，相邻差值为 `0.6693 / 1.7680 / 0.2442 / 1.2619 pp`。
+No-Tool 在 Macro*、BLINK-180、MMMU-269 与 MathVerse 最高；Original 在 OCR mean 与 MathVista
+最高；TGVF 在 VStar 最高；Atomic 在 HR 最高。加入 No-Tool 后的 59-slice 胜出数正在 Appendix A
+机械重算；该统计只作描述性能力地图，不应解读为 59 个独立假设检验。
 
-Discussion 层面，这一统一像素合同排除了旧 Crop processor-default 运行的主要混杂，但仍不是
-严格单变量因果消融：Original 是 raw-direct、无工具且使用不同 prompt path；三条 RL 方法的
-工具协议与 checkpoint step 也不同。RP67 adapter 预训练仍为 `512²`，但 TGVF/Atomic policy RL
-与本表评测均为 true-1M。No-Tool true-1M 尚未闭合，因此上述排序仍不是含 RL-only 控制的最终榜单。
+Discussion 层面，这一统一像素合同排除了旧 Crop/No-Tool processor-default 运行的主要混杂，
+但仍不是严格单变量因果消融：Original 是 raw-direct；No-Tool 使用训练匹配的 no-tool prompt 与
+direct-only loop；三条工具 RL 方法的 prompt、工具协议与 checkpoint step 也不同。No-Tool S32
+领先 Atomic/Crop/TGVF `0.6693/2.6814/3.9434 pp`，只支持统一像素下的端到端排序，不支持
+“关闭工具本身因果更优”。同一 No-Tool 合同内 S32−S0 仅 `−0.0098 pp`，因此 32-step RL 的
+aggregate 结果近似持平。RP67 adapter 预训练仍为 `512²`，但 TGVF/Atomic policy RL 与本表评测
+均为 true-1M。
 
 Crop S80 true-1M 也已闭合：Macro* `59.6463`，七项为
 `73.8220/69.5000/59.4444/54.0426/44.9814/63.3333/52.4000`。它低于 Crop S32，因此
@@ -85,8 +89,8 @@ receipt identity 分别为 `0109f7f4f602106bf71bca50309019ae248962387dd7aa33f2b8
 `paired-summary.json` SHA256 分别为 `a3aa1befedb509e48b69edf4822d7e0467bca346b866da6fd78378d3265ea87d`
 与 `715ae0aca71532804942ef5f301afb31c99080d8ec78768b9a10d2be8f448ae5`。
 
-状态：**Crop/TGVF/Atomic 与 Original raw-direct true-1M stage-golden 比较已闭合；仅 No-Tool
-true-1M 仍在补测。旧 No-Tool processor-default 数值不进入 true-1M 主表。**
+状态：**Original、No-Tool、Crop、TGVF 与 Atomic 的 true-1M stage-golden 比较已闭合。旧
+No-Tool processor-default 数值不进入 true-1M 主表，只保留为 historical。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -186,15 +190,15 @@ RNG/protocol 是否配对的边界约束。
 
 本文不以宽泛的“互补能力与优化动态”作为唯一叙事。当前更可检验、也更有证据支撑的主线是：
 
-> Under the unified true-1M evaluation contract, Atomic is the only current tool policy
-> above the raw-direct Original in aggregate score; Crop is near-tied and TGVF is lower.
-> Target-conditioned latent evidence retains target-specific utility and method-specific
-> advantages in selected visual-reasoning regimes, while the true-1M RL-only control
-> remains pending and aggregate tool superiority is not established.
+> Under the unified true-1M evaluation contract, the frozen no-tool RL control leads the
+> aggregate score while remaining flat relative to its matched S0 control. Atomic is the
+> strongest tool policy in aggregate, whereas target-conditioned latent evidence retains
+> target-specific utility and method-specific advantages only in selected visual-reasoning
+> regimes. Aggregate tool superiority is therefore not established.
 
-正文将文首 true-1M stage-golden 结果作为当前四方端到端主对照，以 **Crop S32** 作为
-native Crop 代表、**Pure TGVF** 作为机制主线、**Original true-1M** 作为同像素预算、同 scorer
-和同 sample reference 的 raw-direct 参考。
+正文将文首 true-1M stage-golden 结果作为当前五方端到端主对照，以事前冻结的 **No-Tool S32**
+作为 RL-only control、**Crop S32** 作为 native Crop 代表、**Pure TGVF** 作为机制主线、
+**Original true-1M** 作为同像素预算、同 scorer 和同 sample reference 的 raw-direct 参考。
 **Atomic Crop+TGVF** 目前仍列探索性扩展；其正文层级等待真正的
 target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-prompt stress test 同时改变了
 多项 prompt/observation 合同，不能单独用于决定 Atomic 的正文层级。
@@ -204,7 +208,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 | 简称 | 本文固定含义 | checkpoint / run | 解释边界 |
 |---|---|---|---|
 | **Original raw-direct true-1M** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt；`max_pixels=1003520` | `PRL25-ORIGINAL-QWEN3-INSTRUCT-RAW-DIRECT-TRUE1M-V1` | 进入当前统一主表和 59-slice 表；像素、scorer、sample reference 对齐，但与 PRL25 matched 行仍跨 prompt/agent protocol，只是端到端 direct reference |
-| **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | matched S0/S8/S16/S32 回答同协议优化动态；新增 S32 raw-direct@512 回答训练后模型在 Original 合同下的 transfer，不得改称 Original |
+| **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | corrected true-1M V2 S0/S8/S16/S32 已闭合；S32 Macro* `63.7520` 进入统一主表，S16 只作探索性动态；raw-direct@512 只回答 transfer，不得改称 Original |
 | **Crop** | PRL25-B native RGB Crop | S32 stage golden；S80 动态终点，seed42 | true-1M S32 `61.0706` 进入当前 golden 主表；S80 true-1M `59.6463` 作优化动态；不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
@@ -235,13 +239,14 @@ TGVF/Atomic 对齐为 true-1M。Original 未经过这轮 RL；其 true-1M raw-di
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
 | Crop S32/S80 true-1M | native Crop prompt 与 fixed-boundary agent loop | 1,003,520 | S32 为 stage golden；S80 为优化动态终点 |
 | Crop S80 boundary-fix V2@512 | 同一类 Crop prompt 与 fixed-boundary agent loop | 262,144 | 有效 true-512；Macro* `62.0967` |
-| TGVF S64 / Atomic S16 matched true-1M | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | stage-golden 四方表的两个 latent-evidence 方法 |
+| TGVF S64 / Atomic S16 matched true-1M | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | stage-golden 五方表的两个 latent-evidence 方法 |
 | TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | 两臂均已闭合 |
-| No-Tool S0/S8/S16/S32 historical matched | 训练匹配的 no-tool prompt 与 direct-only loop | processor default 16,777,216 | 旧分数已降级；true-1M 重跑 pending |
+| No-Tool S0/S8/S16/S32 corrected true-1M V2 | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | 已闭合；S32 frozen headline `63.7520`，S32−S0 `−0.0098 pp` |
+| No-Tool S0/S8/S16/S32 processor-default historical | 同上，但旧 flat evaluator override 失效 | processor default 16,777,216 | `64.4712/66.1132/66.9028/66.6853` 只保留 historical，不进入当前主表 |
 | No-Tool S32 raw-direct@512 | 与历史 Original 相同的 raw-direct 配置，只替换 model path | 262,144 | 已完成；Macro* `54.3543`，比 Original 低 `1.0013 pp` |
 
-因此，文首 Original/Crop/TGVF/Atomic 表在评测像素上限、scorer 和 sample reference 上对齐，
-三条 RL 方法的训练像素上限也对齐；但方法间仍跨 prompt、agent loop 与 checkpoint step。
+因此，文首 Original/No-Tool/Crop/TGVF/Atomic 表在评测像素上限、scorer 和 sample reference
+上对齐，四条 RL 方法的训练像素上限也对齐；但方法间仍跨 prompt、agent loop 与 checkpoint step。
 Original 与任何 PRL25 工具/matched 行的绝对差值还会混入这些合同差异，不能写成 prompt-only
 gain，更不能直接归因给 RL 或工具。
 
@@ -249,8 +254,8 @@ gain，更不能直接归因给 RL 或工具。
 
 下表保留先前文章决策的历史上下文，不再作当前主表。Original 的精确七项均值为
 `55.3556`，按其既有 raw-direct@512 测量合同报告为 `55.36`。No-Tool S32 raw-direct 行与
-Original 使用同合同；TGVF、Atomic 与 No-Tool matched 行使用有效的 matched@1M 合同，而 Crop
-行是 processor-default 历史合同。该表用于完整展示，不构成所有行之间的严格 paired ranking。
+Original 使用同合同；TGVF 与 Atomic 使用有效 matched@1M，而 Crop 和表内 No-Tool matched
+行都实际回退到 processor default。该表用于完整展示，不构成所有行之间的严格 paired ranking。
 
 | Method | Macro* | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -262,21 +267,21 @@ Original 使用同合同；TGVF、Atomic 与 No-Tool matched 行使用有效的 
 | No-Tool RL S32 | **66.6853** | **+11.3297†** | **84.2932** | 69.0000 | **70.5556** | 50.8528 | **55.7621** | **75.3333** | **61.0000** |
 
 `†` No-Tool S32 matched 与 Original 的差值同时跨越 prompt/protocol 和最大图像像素面积
-（`1,003,520` vs `262,144`），只是端到端参考，不能解释为同协议 RL effect。同协议 RL effect
-应使用 matched@1M 的 S32−S0，即 `+2.2141 pp`。在 Original 同测量合同下，S32 raw-direct@512
-反而低 `1.0013 pp`；因此 matched 增益不能外推为 raw-direct transfer。
+（processor default `16,777,216` vs `262,144`），只是历史端到端参考。旧 No-Tool
+processor-default 同协议 S32−S0 为 `+2.2141 pp`，但已被 corrected true-1M V2 的
+`−0.0098 pp` supersede。在 Original 同测量合同下，S32 raw-direct@512 低 `1.0013 pp`；
+因此旧 matched 增益既不能当作当前 RL effect，也不能外推为 raw-direct transfer。
 
-可直接写入正文的事实边界：
+只可作为历史上下文保留的事实边界：
 
 - 三个工具方法的历史 Macro* 都高于 raw-direct@512 Original；该描述同时跨越 prompt/agent
   contract 和像素上限，只能作为端到端观察。TGVF/Atomic 的像素上限对齐，但 Crop 使用
   processor default，不能再声称三个工具线路内部像素对齐。Crop S80 是按用户指定报告的
   80-step 历史终点，不再使用 post-hoc 最优 S32。
-- No-Tool RL S32 是全表最高 Macro*，比 Crop S80 native-default 历史运行、TGVF S64、Atomic S16 分别高
-  `7.5068 / 6.8767 / 3.6026 pp`。这直接否定“当前工具方法总体优于 RL-only 对照”的写法。
-- No-Tool S0 已达到 `64.4712`，而 S32−S0 只有 `+2.2141 pp`。因此 prompt/schema/agent
-  protocol 是主要替代解释之一；matched no-tool 去除了工具 schema，仍不是工具存在性的严格
-  单变量消融。
+- 旧 No-Tool RL S32 是该 mixed-contract 表最高 Macro*，比 Crop S80 historical、TGVF S64、
+  Atomic S16 分别高 `7.5068 / 6.8767 / 3.6026 pp`；这些差值跨像素合同，不再支撑当前排序。
+- 旧 No-Tool S0/S32 为 `64.4712/66.6853`、差 `+2.2141 pp`，只说明旧 processor-default
+  测量轨迹；当前 RL 动态必须使用 corrected true-1M V2 的 `−0.0098 pp`。
 - No-Tool S32 raw-direct@512 相对 Original 的分项差值为 VStar `+0.5236`、HR `0.0000`、
   BLINK-180 `−5.5556`、OCR mean `−0.2471`、MMMU-269 `+0.0035`、MathVista `−0.3333`、
   MathVerse `−1.4000 pp`。净结果为 `−1.0013 pp`，不支持 raw-direct transfer gain。
@@ -284,9 +289,9 @@ Original 使用同合同；TGVF、Atomic 与 No-Tool matched 行使用有效的 
   增益在 VStar、HRBench 和 MMMU，并在一组更细的关系/数学任务中形成集中优势。
 - Atomic 的 Macro* 比 Crop S80 native-default 历史运行高 `3.9042 pp`，但两者的有效像素合同
   不同；该差值只能描述既有端点，不能支持公平的方法排序或“Crop+TGVF 存在因果 synergy”。
-- Original 在部分视觉强度与 OCR 切片上仍有优势，必须作为负面边界一起报告；No-Tool matched
-  S32 在 MathVista headline 上比 Original 高 `1.0000 pp`，但 raw-direct@512 S32 低
-  `0.3333 pp`。
+- Original 在部分视觉强度与 OCR 切片上仍有优势；旧 No-Tool processor-default S32 的
+  MathVista 比 Original@512 高 `1.0000 pp`，而 raw-direct@512 S32 低 `0.3333 pp`。两者均不
+  替代当前 true-1M 五方表。
 
 ## 4. 历史 mixed-contract sub-benchmark 面板（superseded）
 
@@ -831,7 +836,7 @@ raw-direct reference。
 `1,863 / 2,009`，按各自七套数据 population-proportional 抽样 200 条。coordinator key 与
 review view 分离；人工标注完成前不得报告 target 合格率或据此升级 Atomic 的正文地位。
 
-### 5.4 No-Tool RL：processor-default 历史对照（true-1M rerun pending）
+### 5.4 No-Tool RL：corrected true-1M RL-only control
 
 这条新线路回答一个独立于工具机制的问题：当前 Crop、TGVF 和 Atomic 相对 raw Original 的
 增益中，有多少可以由**同等训练预算下的 full-model RL 本身**解释。为避免把 raw base 与训练后
@@ -860,8 +865,8 @@ Teacher25 各条线路已有的原始 no-tool 合同不变。任何结构化工�
 
 S0/S8/S16/S32 checkpoint 均执行 **matched no-tool@1M**：使用与 No-Tool RL visual-row
 训练一致的 no-tool prompt，作为优化动态以及 `No-Tool RL ↔ TGVF/Atomic RL` 的主要像素对齐
-控制。与现有 Crop 历史运行的比较仍跨 effective pixel contract，需等待 Crop true@1M。
-协议复核发现历史 Original 实际使用 `max_pixels=262144`，而上述 matched 评测使用
+控制。Crop/No-Tool 的 corrected true-1M 重跑现已闭合，因此文首五方表已消除 effective pixel
+contract 的主要混杂。协议复核发现历史 Original 实际使用 `max_pixels=262144`，而上述 matched 评测使用
 `image_max_pixels=1003520`。因此在不改变冻结 checkpoint 的前提下，新增 **S32
 raw-direct@512**：其配置与历史 Original 逐字段一致，只替换模型路径。无需重跑 S0 raw-direct，
 因为历史 Original 本身就是同一 base model 的 S0 raw-direct@512 结果。
@@ -878,10 +883,10 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 
 #### 5.4.3 可支持的结论与边界
 
-- 若工具方法超过 matched No-Tool RL，可把差额解释为与工具化训练合同相关的增益候选；只有在
-  其他合同严格一致且置信区间支持时，才进一步归因到视觉工具。
-- 若 matched No-Tool RL 已接近工具方法，正文必须把“RL 本身”列为主要替代解释，不能把全部
-  增益归给 TGVF/RP67。
+- 当前 frozen No-Tool S32 超过三个工具方法，因此不支持工具方法的 aggregate superiority；
+  工具证据必须转向预先界定的能力切片、matched utility 与行为机制。
+- 同协议 S32−S0 近似为零，因此 corrected true-1M 并不支持“32-step no-tool RL 自身带来总体
+  增益”；No-Tool 相对 Original 的差值同时包含 prompt/direct-loop 合同差异。
 - matched no-tool 去除了工具 schema，因此它是当前最强的 RL-only control，但仍不可消除
   “存在工具 schema / agent loop”这一协议差异。已有 Original 的 raw direct 结果也不能替代
   matched RL-only 比较；S32 raw-direct@512 已显示 `−1.0013 pp` transfer，不替代 matched 工具对照。
@@ -889,7 +894,25 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 #### 5.4.4 正式结果与学习动态
 
 下表全部使用 matched no-tool 协议。S32 是事前冻结的唯一 headline；S8/S16 只用于描述动态，
-不能因为 S16 的 Macro* 略高而把正式 checkpoint 改选为 S16。
+不能因为 S16 的 Macro* 略高而把正式 checkpoint 改选为 S16。首先报告 corrected true-1M V2；
+旧 processor-default 表随后单列，仅用于保留实验史。
+
+##### Corrected true-1M V2（当前正式结果）
+
+| Step | Macro* | Δ vs S0 | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse | Parse fail |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S0 | 63.7619 | — | **72.2513** | 64.0000 | 66.6667 | 48.5015 | 54.6468 | **77.6667** | 62.6000 | 0 |
+| S8 | 63.7354 | −0.0264 | 71.2042 | 66.0000 | 66.1111 | 48.8990 | **56.1338** | 75.0000 | **62.8000** | 0 |
+| S16 exploratory | **63.9307** | **+0.1688** | 71.7277 | **68.0000** | 69.4444 | 47.6957 | 54.6468 | 76.0000 | 60.0000 | 1 |
+| **S32 frozen** | 63.7520 | −0.0098 | 70.1571 | 65.5000 | **71.1111** | **49.3928** | 53.9033 | 75.0000 | 61.2000 | 2 |
+
+S16 的唯一 judge parse failure 是
+`hr_bench_4k_800/hr_bench_4k_snapshot_hr_bench_4k_parquet/700_000700`；S32 的两个 failure 是
+`vstar_test_questions_191/vstar_bench_snapshot_test_questions_jsonl/110_000110` 与
+`vstar_test_questions_191/vstar_bench_snapshot_test_questions_jsonl/167_000167`。三条均按冻结
+fail-closed 规则确定性记错；四份 summary 仍为 `status=pass`。
+
+##### Processor-default historical（已降级，不进入当前主表）
 
 | Step | Macro* | Δ vs S0 | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -897,6 +920,9 @@ S8/S16 只呈现学习动态，不能用于 post-hoc checkpoint 选择。
 | S8 | 66.1132 | +1.6420 | 83.7696 | 66.0000 | 65.5556 | 48.9899 | 56.8773 | **78.0000** | **63.6000** |
 | S16 | **66.9028** | **+2.4317** | 82.1990 | **69.5000** | **71.1111** | 50.6324 | 56.8773 | 75.0000 | 63.0000 |
 | **S32 frozen** | 66.6853 | +2.2141 | **84.2932** | 69.0000 | 70.5556 | **50.8528** | 55.7621 | 75.3333 | 61.0000 |
+
+以上四个旧值实际回退到 processor default `16,777,216`，不能与 corrected true-1M V2 混用，
+也不能据此声称 S32−S0 获得 `+2.2141 pp` 的当前有效增益。
 
 同合同 raw-direct transfer 结果如下。OCR EN/CN 分别为 `49.5995 / 46.2760`；MathVerse 五版本
 为 Text Dominant `70.0`、Vision Only `30.0`、Text Lite `48.0`、Vision Intensive `48.0`、
@@ -909,17 +935,46 @@ Vision Dominant `50.0`。
 
 观察与解释边界：
 
-- 同协议 S32−S0 为 `+2.2141 pp`，说明 32-step No-Tool RL 带来温和净增益；学习曲线在 S16
-  达到 `66.9028` 后轻微回落 `0.2175 pp`，但不触发 post-hoc checkpoint 重选。
-- S0 已达到 `64.4712`，高于 Crop S80 native-default 历史运行、TGVF S64 和 Atomic S16 的
-  headline Macro*。因此 no-tool prompt/protocol 本身是主要替代解释，当前实验不能把工具线路
-  相对 raw Original 的总增益全部归给工具，也不支持工具方法在 Macro* 上超过当前 RL-only
-  control；其中与 Crop 的比较还额外跨越有效像素合同。
-- S32 相对 Crop native-default 历史运行、TGVF、Atomic 的描述性差值分别为
-  `+7.5068 / +6.8767 / +3.6026 pp`。工具证据必须转向特定切片、RP67 三臂 utility 与行为机制；
-  Crop true@1M 结果产生前，第一项尤其不能作为像素对齐的方法差值。
+- Corrected true-1M 的 S32−S0 为 `−0.0098 pp`，应描述为 aggregate-flat。S16 的探索性峰值
+  仅为 `+0.1688 pp`，不触发 post-hoc checkpoint 重选。
+- Frozen S32 比 Atomic、Original、Crop S32 与 TGVF 分别高
+  `0.6693 / 2.4373 / 2.6814 / 3.9434 pp`。这些是统一像素、scorer 与 sample reference 下的
+  端到端差值；其中 No-Tool 与 Original 仍跨 prompt/loop，与工具方法还跨工具 schema 和 agent loop。
+- 近似不变的 Macro* 掩盖了分项重分配：S32 相对 S0 的 BLINK 上升 `4.4444 pp`，但 VStar、
+  MMMU 与 MathVista 分别下降 `2.0942/0.7435/2.6667 pp`。
 - 该比较仍不是“只切换工具开关”的严格因果消融：matched no-tool 同时去除了工具 schema 和
   agent loop。Original raw direct 必须保留，但其 prompt/protocol 又不同，只作端到端参考。
+
+#### 5.4.5 输出长度、格式与零工具行为
+
+四步各 2,240 条 accepted rank JSONL 的 sampled-token 统计如下。P50/P90/P95 使用 empirical
+order-statistic 口径；空 final 包含达到 token 上限或 invalid-format 后没有可评分 final 的行。
+
+| Step | Mean sampled tokens | P50 | P90 | P95 | `max_tokens` | `invalid_format` | Empty final | Tool calls / errors / observations |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S0 | 1005.88 | 171 | 3068 | 5443 | 3 | 3 | 6 | 0 / 0 / 0 |
+| S8 | 1024.41 | 163 | 3270 | 5808 | 4 | 0 | 4 | 0 / 0 / 0 |
+| S16 | 944.06 | 145 | 2822 | 5416 | 4 | 0 | 4 | 0 / 0 / 0 |
+| S32 | 839.73 | 127 | 2065 | 5065 | 5 | 0 | 5 | 0 / 0 / 0 |
+
+S32 的 mean/P50/P90 均低于 S0，说明训练后输出总体变短；但仅凭长度与分数共同变化不能建立
+因果关系。四步工具调用、工具错误与 observation 均为零，符合 direct-only no-tool 合同。
+
+#### 5.4.6 正式验收与 finalizer 边界修复
+
+Aggregate scoring receipt 的 `status=complete`，identity 为
+`69328dfe889366650e96a0582eaa86a27df1ac349751ee40493d83f47c92a955`，文件 SHA256 为
+`0fc8bcf3865c4d6ee360206da318c7913afb8c4cf659ea4bcb29104ad132db59`；它固定每步
+`max_pixels=1,003,520`、2,511 rows 与 7 slices。S0/S8/S16/S32 accepted summary SHA256 为
+`37c7b376cfc53dcd9b3d47101348fcb25fcb05c74f9a7d6d446ae4219edf0bbe`、
+`b28d941746592ef80cdd8157bf077c058bf1253a76cf1ccd17e4bc8af5bc9223`、
+`13bf456370d23540c8130b855f30adaae8b4b6c21f24dabcd9a37ff058390d72`、
+`bd6057d798c37791714033c4f9a734f435264ec1242fc841fdaad4fd064d897a`。
+
+闭合过程中，aggregate finalizer 的二次身份检查曾把 worker 在结果 hash 之后附加的
+`wall_seconds` telemetry 错误纳入语义 hash。对齐正式 worker validator 后，四步共
+`8,960/8,960` 行全部通过；rank-file SHA/size 仍绑定包含 telemetry 的精确字节。这是验收器的
+身份边界修复，不是实验失败，推理与评分均无需重跑。
 
 当前状态：
 
@@ -931,7 +986,8 @@ Vision Dominant `50.0`。
 - [x] 正式 32-step 训练：S8/S16/S32 永久 checkpoint 与最终 supervisor acceptance 均已闭合；
 - [x] S0/S8/S16/S32 matched no-tool 的 `4 × 2,240` 条单图推理；
 - [x] S0/S8/S16/S32 matched no-tool 的七项正式评分；
-- [x] 结果回填主表、sub-benchmark、调用行为表和 claim ledger。
+- [x] corrected true-1M V2 结果回填主表、学习动态、行为表和 claim ledger；
+- [ ] Appendix A 加入 frozen S32 后的 59-slice winner 与 pairwise W/L/T 机械重算。
 - [x] S32 raw-direct@512 的七个完整 slice、共 2,511 条推理；
 - [x] S32 raw-direct@512 的七项官方评分、180/269 单图 headline 对齐和 Original 同合同差值；
   Macro* `54.3543`，即 `−1.0013 pp`。
@@ -1040,8 +1096,8 @@ Vision Dominant `50.0`。
   四份 summary 均为 `status=pass`、`slice_count=7`、`sample_count=2,511` 且
   `judge_parse_failure_count=0`。最终汇总改为从 receipt 固定的 destination eval ID 精确读取，
   避免旧失败 OCR eval 被“latest”规则误选；修复和结果生成代码已推送至执行分支 commit
-  `abee6a4`。正式 S32 Macro* 为 `66.6853`，所有 No-Tool 结果现已进入本文主表、完整
-  sub-benchmark、调用行为表与 claim ledger。
+  `abee6a4`。当时得到的 S32 `66.6853` 后续已确认属于 processor-default historical，不能进入
+  当前 true-1M 主表；当前只使用 corrected V2 S32 `63.7520`。
 - 2026-08-26 17:38 JST `@512` 控制节点：冻结 S32 raw-direct 的七个完整 slice 推理均已
   完成。MathVerse judge 行已产生，但历史 raw-direct TSV 缺少官方聚合所需的
   `metadata.problem_version`；恢复实现只从固定 MathVerse `testmini.json` 补入该元数据，并逐行
@@ -1126,7 +1182,8 @@ Atomic 进入正文核心方法必须同时满足：
 1. target-only Macro* 和主要 Atomic favorable sub-benchmark 不发生足以推翻当前定位的崩塌；
 2. target audit 的 all-pass rate 及逐标准结果可被透明报告；
 3. 文章只声称观察到的任务条件优势，不声称未被单变量消融证明的 synergy；
-4. Original、Crop、TGVF 和 Atomic 四列同时出现，且 MathVerse Vision Intensive 等负面切片保留。
+4. Original、No-Tool、Crop、TGVF 和 Atomic 五列同时出现，且 MathVerse Vision Intensive 等
+   负面切片保留。
 
 如果任一条件不满足，Atomic 降级到 exploratory analysis / appendix。Pure TGVF + RP67 utility
 仍作为主机制线，Crop 作为强基线。
@@ -1148,18 +1205,18 @@ Atomic 进入正文核心方法必须同时满足：
 | 广义 prompt bundle 下工具总体增益仍存在 | TGVF / Atomic stress-test Macro* 为 `58.5138 / 60.4684`，分别比 true-1M Original 低 `2.8009 / 0.8463 pp` | 相对各自 matched prompt 下降 `1.2949 / 2.6142 pp`；非 target-only；不是新 benchmark 泛化 | **总体 claim 不支持；保留分项稳健性** |
 | 只补充 target 定义与案例的稳健性 | TGVF / Atomic target-only Macro* `58.1788 / 60.8253`，分别比 true-1M Original 低 `3.1359 / 0.4894 pp` | 相对 own matched 分别下降 `1.6298 / 2.2574 pp`；不支持“详细 target 定义普遍增益” | 已支持 benchmark-specific sensitivity，不支持总体增益 |
 | 工具方法整体优于 raw direct Original | true-1M 表中仅 Atomic 高于 Original `1.7680 pp`；Crop/TGVF 分别低 `0.2442/1.5061 pp`。true-512 表中三者均高于 Original | Original 是 raw-direct，其余三行使用方法特定 prompt/tool/agent contract；不能把差值孤立归因给工具 | **整体 claim 不支持；仅作分辨率内端到端描述** |
-| 工具方法的总体增益超越 RL-only/no-tool control | 旧 No-Tool S0/S32 processor-default 为 `64.4712/66.6853`；S32 raw-direct@512 为 `54.3543` | 旧 matched 行不是 true-1M；No-Tool true-1M 未闭合前不能作当前公平 control | **当前未解决；不作总体 claim** |
+| 工具方法的总体增益超越 RL-only/no-tool control | Corrected true-1M frozen No-Tool S32 为 `63.7520`，高于 Atomic/Crop S32/TGVF `0.6693/2.6814/3.9434 pp`；S32−S0 为 `−0.0098 pp` | 方法间仍跨 prompt、工具 schema 与 agent loop；这是端到端 control，不是纯工具开关消融 | **总体 claim 不支持；转向能力切片与机制证据** |
 | Crop S80 在 1M→512 下的 Macro* 上升 | 有效 true-1M/true-512 为 `59.6463/62.0967`，差 `+2.4504 pp` | 两臂 RNG namespace 不同；只是 descriptive response，不是低分辨率因果增益 | **已观测，不作因果宣称** |
 | TGVF-family 依赖 policy-RL train/eval scale alignment | TGVF/Atomic highly matched 512−1M 为 `−4.4019/−5.8065 pp` | RP67 adapter 预训练为 512²；snapshot semantic equality 未闭合；需复用同 snapshot 或 semantic tensor hash，再做 train-cap × eval-cap factorial | **consistent with，非因果证明** |
 | 三种方法形成不同工具调用行为 | Crop S32/S80 true-1M 成功调用率 `63.53/89.55%`，实际调用 `1,769/2,043`；TGVF/Atomic 另表 | 描述性统计；调用更多不等于 utility 更高；policy 自选择混杂 | 已支持 |
 
 ## 8. 论文实验部分建议结构
 
-1. **Unified true-1M stage-golden comparison.** 先报告 Original、Crop S32、TGVF S64 与 Atomic
-   S16 的统一 `1,003,520` 表与完整 sub-benchmark；明确它是 prompt/agent contract 不同的
-   端到端比较。No-Tool true-1M 闭合前不写成含 RL-only 控制的最终榜单。
-2. **How much does RL itself add?** 待 No-Tool S0/S8/S16/S32 true-1M 闭合后报告同协议动态；
-   旧 processor-default `+2.2141 pp` 只作历史线索。
+1. **Unified true-1M stage-golden comparison.** 先报告 Original、frozen No-Tool S32、Crop S32、
+   TGVF S64 与 Atomic S16 的统一 `1,003,520` 表与完整 sub-benchmark；明确它是
+   prompt/agent contract 不同的端到端比较。
+2. **How much does RL itself add?** 报告 No-Tool S0/S8/S16/S32 corrected true-1M 动态；S32−S0
+   `−0.0098 pp` 为 aggregate-flat，旧 processor-default `+2.2141 pp` 只作历史线索。
 3. **Where target-conditioned evidence remains useful.** 在总体 claim 收缩后，用完整
    sub-benchmark 图定位 TGVF/Atomic 的关系、深度、视觉数学与 OCR 条件优势，同时保留
    No-Tool 控制列和负面切片。
@@ -1182,17 +1239,18 @@ Atomic 进入正文核心方法必须同时满足：
 3. [已完成] Crop S32/S80 true-1M 与 TGVF/Atomic matched-prompt 整体、逐 set 调用率、
    调用次数和错误类型审计；
 4. [已完成] TGVF S64、Atomic S16 target-only matched prompt 推理与七套官方评分；
-5. [进行中] No-Tool RL 训练已闭合；旧 S0/S8/S16/S32 matched 评测已降级为
-   processor-default historical，true-1M rerun 与评分待闭合；
+5. [已完成] No-Tool RL 训练与 corrected true-1M V2 S0/S8/S16/S32 推理、评分、processor/grid
+   proof 和 aggregate receipt 已闭合；旧 matched 评测仅保留 processor-default historical；
 6. [已完成] Crop S80、TGVF S64、Atomic S16 的 true-512 结果与四方表已闭合；
 7. [已完成] Crop S32/S80 true-1M 推理、评分、processor/grid audit 与 receipt 已闭合；
 8. [已完成] Original raw-direct true-1M 2,511 行正式评分、七项 headline、completion receipt
    与 59-slice 回填均已闭合；
-9. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
+9. [进行中] Appendix A 加入 frozen No-Tool S32 后机械重算 59-slice winner 与 pairwise W/L/T；
+10. [待执行] 从 matched/target-only inference JSONL 物化正式 Atomic
    blind audit pack；
-10. [待回填] target-only 调用行为对照与正式 audit；
-11. [待写作] 形成英文 Experiments/Discussion 初稿；
-12. [明确不做] Crop seed43。
+11. [待回填] target-only 调用行为对照与正式 audit；
+12. [待写作] 形成英文 Experiments/Discussion 初稿；
+13. [明确不做] Crop seed43。
 
 ## 10. 证据来源
 
@@ -1222,6 +1280,10 @@ Atomic 进入正文核心方法必须同时满足：
   `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1/matched/step{0,8,16,32}/scoring/coredev-official-v1/coredev-2511-eval-summary.json`；
   28 个精确评分来源由同级各 dataset 的 `pinned-reuse-receipt.json` 固定；这些分数不进入
   true-1M 主表。
+- No-Tool RL corrected true-1M V2 aggregate receipt：
+  `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S0-S8-S16-S32-TRUE1M-V2/runtime/scoring-supervisor/matched-scoring-complete.json`；
+  receipt identity `69328dfe889366650e96a0582eaa86a27df1ac349751ee40493d83f47c92a955`，
+  文件 SHA256 `0fc8bcf3865c4d6ee360206da318c7913afb8c4cf659ea4bcb29104ad132db59`。
 - `@512` 执行计划：
   `configs/evaluation/prl25_{b_crop_exact_step80,c_frozen_rp67_tfree_teacher25_s64_matched,d_atomic_crop_tgvf_s16_matched}_pixel512_coredev2511_plan.json`；
   并行、可恢复 supervisor 为 `tools/supervise_prl25_bcd_selected_pixel512_evaluation.sh`。
