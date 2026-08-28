@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import importlib.util
 import json
@@ -34,9 +35,23 @@ _PRL25_B_REMAINING_CURVE_PLAN = (
     _ROOT / "configs/evaluation/"
     "prl25_b_crop_exact_step8_step32_step48_step64_full_model_coredev2511_plan.json"
 )
+_PRL25_B_TRUE1M_V4_PLAN = (
+    _ROOT / "configs/evaluation/"
+    "prl25_b_crop_exact_step80_true1m_true512_resolution_pair_"
+    "v4_coredev2511_plan.json"
+)
+_PRL25_B_STEP32_TRUE1M_V5_PLAN = (
+    _ROOT / "configs/evaluation/"
+    "prl25_b_crop_exact_step32_true1m_resolution_rng_extension_"
+    "v5_coredev2511_plan.json"
+)
+_PRL25_B_STEP80_TRUE1M_V5_PLAN = (
+    _ROOT / "configs/evaluation/"
+    "prl25_b_crop_exact_step80_true1m_resolution_rng_projection_"
+    "v5_coredev2511_plan.json"
+)
 _PRL25_C_SIX_POINT_PLAN = (
-    _ROOT
-    / "configs/evaluation/"
+    _ROOT / "configs/evaluation/"
     "prl25_c_frozen_rp67_tfree_teacher25_"
     "s8_s16_s32_s48_s64_s80_paired_seed_coredev2511_plan.json"
 )
@@ -78,6 +93,39 @@ def test_r1_plan_and_judge_commands_are_fully_bound() -> None:
         "/tmp/prl15-score/MathVerse_MINI/Qwen3-VL-8B-Instruct/"
         "T20260810_Gdeadbeef/final-answer-view-manifest.json"
     )
+
+
+def test_judge_environment_purges_parent_toolchain_pollution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _MODULE._load_plan(_PLAN)
+    judge = _MODULE._load_judge_config(plan)
+    poisoned = {
+        "CFLAGS": "-I/poison/revisit-vlm/include",
+        "CPPFLAGS": "-I/poison/revisit-vlm/include",
+        "CXXFLAGS": "-I/poison/revisit-vlm/include",
+        "LD": "/poison/revisit-vlm/bin/ld",
+        "LDFLAGS": "-L/poison/revisit-vlm/lib",
+        "CONDA_PREFIX": "/poison/conda",
+        "_CONDA_ROOT": "/poison/conda-root",
+    }
+    for name, value in poisoned.items():
+        monkeypatch.setenv(name, value)
+
+    environment = _MODULE._judge_environment(judge)
+    controlled = _MODULE._judge_toolchain_environment(judge)
+
+    assert _MODULE.controlled_toolchain_contract(controlled)["schema_version"] == (
+        "tgvf.controlled-toolchain-environment.v1"
+    )
+    assert (
+        _MODULE.controlled_toolchain_verification(
+            environment,
+            controlled=controlled,
+        )["verified"]
+        is True
+    )
+    assert all(name not in environment for name in poisoned)
 
 
 def test_vlmevalkit_scoring_run_id_is_legal_stable_and_arm_specific() -> None:
@@ -177,9 +225,7 @@ def test_v2_evaluation_replicate_seed_override_is_explicit_and_distinct() -> Non
         _MODULE._validate_plan_run(bound_drift, runtime.checkpoint_owner)
 
     replicate = json.loads(json.dumps(bound_drift))
-    replicate["protocol"]["sampling_source"] = (
-        "evaluation_replicate_seed_override"
-    )
+    replicate["protocol"]["sampling_source"] = "evaluation_replicate_seed_override"
     _MODULE._validate_plan_run(replicate, runtime.checkpoint_owner)
 
     replicate["paired_rng"]["master_seed"] = 42
@@ -553,6 +599,206 @@ def test_scoring_materialization_failure_never_publishes_partial_view(
     assert not tuple(root.parent.glob(f".{root.name}.staging-*"))
 
 
+def test_true1m_audit_gate_selects_only_resolution_1m_arms() -> None:
+    pair = _MODULE._load_plan(_PRL25_B_TRUE1M_V4_PLAN)
+    extension = _MODULE._load_plan(_PRL25_B_STEP32_TRUE1M_V5_PLAN)
+    s80_projection = _MODULE._load_plan(_PRL25_B_STEP80_TRUE1M_V5_PLAN)
+
+    assert _MODULE._arm_requires_true1m_audit(pair, "pixel1003520") is True
+    assert _MODULE._arm_requires_true1m_audit(pair, "pixel262144") is False
+    assert _MODULE._arm_requires_true1m_audit(extension, "step32") is True
+    assert _MODULE._arm_requires_true1m_audit(s80_projection, "pixel1003520") is True
+
+
+def test_existing_true1m_scoring_view_fails_before_read_without_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _MODULE._load_plan(_PRL25_B_TRUE1M_V4_PLAN)
+    config = SimpleNamespace(
+        evaluation_id=_MODULE._arm_evaluation_id(plan, "pixel1003520"),
+        output_root=tmp_path / "pixel1003520",
+    )
+    monkeypatch.setattr(_MODULE, "load_policy_coredev_config", lambda _path: config)
+
+    with pytest.raises(RuntimeError, match="true1M audit receipt"):
+        _MODULE._load_existing_official_scoring_view(
+            tmp_path / "benchmark-config.json",
+            plan,
+            arm="pixel1003520",
+        )
+
+
+def test_required_true1m_auditor_runs_only_after_completed_arm_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _MODULE._load_plan(_PRL25_B_TRUE1M_V4_PLAN)
+    calls: list[dict[str, object]] = []
+
+    def materialize(**kwargs):
+        calls.append(kwargs)
+        return {"status": "accepted"}
+
+    monkeypatch.setattr(
+        _MODULE, "materialize_official_visible_true1m_audit", materialize
+    )
+    configs = {
+        "pixel1003520": tmp_path / "true1m/benchmark-config.json",
+        "pixel262144": tmp_path / "true512/benchmark-config.json",
+    }
+
+    result = _MODULE._materialize_required_true1m_audits(
+        configs,
+        plan,
+        plan_path=_PRL25_B_TRUE1M_V4_PLAN,
+    )
+
+    assert result == {"pixel1003520": {"status": "accepted"}}
+    assert calls == [
+        {
+            "config_path": configs["pixel1003520"],
+            "plan_path": _PRL25_B_TRUE1M_V4_PLAN,
+            "arm_name": "pixel1003520",
+        }
+    ]
+
+
+def test_s80_v5_dispatch_materializes_the_real_v4_arm_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _MODULE._load_plan(_PRL25_B_STEP80_TRUE1M_V5_PLAN)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        _MODULE,
+        "materialize_official_visible_true1m_audit",
+        lambda **kwargs: calls.append(kwargs) or {"status": "accepted"},
+    )
+    config = tmp_path / "pixel1003520/benchmark-config.json"
+
+    result = _MODULE._materialize_required_true1m_audits(
+        {"pixel1003520": config},
+        plan,
+        plan_path=_PRL25_B_STEP80_TRUE1M_V5_PLAN,
+    )
+
+    assert result == {"pixel1003520": {"status": "accepted"}}
+    assert calls == [
+        {
+            "config_path": config,
+            "plan_path": _PRL25_B_TRUE1M_V4_PLAN.resolve(),
+            "arm_name": "pixel1003520",
+        }
+    ]
+
+
+def test_s80_v5_scoring_accepts_exact_v4_arm_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _MODULE._load_plan(_PRL25_B_STEP80_TRUE1M_V5_PLAN)
+    reference_plan = _MODULE._load_plan(_PRL25_B_TRUE1M_V4_PLAN)
+    reference_arm = reference_plan["arms"][0]
+    config_path = tmp_path / "pixel1003520/benchmark-config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("{}\n", encoding="utf-8")
+    config = SimpleNamespace(
+        evaluation_id=reference_arm["evaluation_id"],
+        output_root=config_path.parent,
+    )
+    receipt = {
+        "receipt_identity_sha256": "c" * 64,
+        "plan": {
+            "sha256": _MODULE._sha256_file(_PRL25_B_TRUE1M_V4_PLAN),
+            "identity_sha256": _MODULE.canonical_true1m_sha256(reference_plan),
+            "evaluation_id": reference_plan["evaluation_id"],
+        },
+        "arm": {
+            "name": "pixel1003520",
+            "evaluation_id": reference_arm["evaluation_id"],
+            "output_root": str(config.output_root),
+            "benchmark_config": {
+                "path": str(config_path),
+                "sha256": _MODULE._sha256_file(config_path),
+            },
+        },
+        "inference": {"tree_identity_sha256": "d" * 64},
+        "rows": {
+            "result_identity_sequence_sha256": "e" * 64,
+            "native_visual_count_evidence_sha256": "f" * 64,
+        },
+    }
+    monkeypatch.setattr(_MODULE, "load_policy_coredev_config", lambda _path: config)
+    monkeypatch.setattr(
+        _MODULE,
+        "load_official_visible_true1m_audit_receipt",
+        lambda _path: receipt,
+    )
+    monkeypatch.setattr(_MODULE, "true1m_file_sha256", lambda _path: "a" * 64)
+
+    accepted = _MODULE._load_true1m_audit_for_scoring(
+        config_path,
+        plan,
+        arm="pixel1003520",
+    )
+
+    assert accepted is not None
+    assert accepted["v5_self_projection_from_v4"] is True
+    assert (
+        accepted["receipt_plan_identity_sha256"] == receipt["plan"]["identity_sha256"]
+    )
+    assert accepted["scoring_plan_identity_sha256"] == (
+        _MODULE.canonical_true1m_sha256(plan)
+    )
+
+
+def test_true1m_scoring_raw_view_is_bound_to_result_identity_sequence(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    path = raw / "Fixture.tsv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["index", "extra_records"],
+            delimiter="\t",
+            lineterminator="\n",
+            quoting=csv.QUOTE_ALL,
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "index": "held",
+                "extra_records": json.dumps({"coverage": "unsupported_multi_image"}),
+            }
+        )
+        for ordinal, digest in ((9, "b" * 64), (2, "a" * 64)):
+            writer.writerow(
+                {
+                    "index": str(ordinal),
+                    "extra_records": json.dumps(
+                        {
+                            "coverage": "single_image_evaluated",
+                            "ordinal": ordinal,
+                            "result_identity_sha256": digest,
+                        }
+                    ),
+                }
+            )
+
+    observed = _MODULE._scoring_view_result_identity_sha256(
+        tmp_path,
+        datasets=("Fixture",),
+        expected_count=2,
+    )
+
+    expected = _MODULE.canonical_true1m_sha256(
+        [
+            {"ordinal": 2, "result_identity_sha256": "a" * 64},
+            {"ordinal": 9, "result_identity_sha256": "b" * 64},
+        ]
+    )
+    assert observed == expected
+
+
 def test_score_mode_reuses_existing_arms_without_policy_pipeline(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -888,9 +1134,7 @@ def test_single_arm_rebinds_judge_when_pinned_gpus_are_outside_pool() -> None:
 
     assert assigned["step72"]["devices"]["physical"] == [4, 5]
     assert assigned["step72"]["server"]["port"] == 8014
-    assert assigned["step72"]["server"]["base_url"] == (
-        "http://127.0.0.1:8014/v1"
-    )
+    assert assigned["step72"]["server"]["base_url"] == ("http://127.0.0.1:8014/v1")
     assert judge["devices"]["physical"] == [2, 3]
     assert judge["server"]["port"] == 8012
 
@@ -1009,6 +1253,15 @@ def test_policy_workers_launch_in_isolated_process_groups(
     assert [
         launch["command"][launch["command"].index("--rank") + 1] for launch in launches
     ] == ["0", "1", "2", "3"]
+    assert [
+        Path(launch["env"]["VLLM_CACHE_ROOT"]).relative_to(tmp_path).as_posix()
+        for launch in launches
+    ] == [
+        "runtime/cache/vllm/rank-0",
+        "runtime/cache/vllm/rank-1",
+        "runtime/cache/vllm/rank-2",
+        "runtime/cache/vllm/rank-3",
+    ]
     for process in processes:
         _MODULE._ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
 

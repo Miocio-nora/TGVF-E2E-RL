@@ -4,8 +4,12 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
 python_bin="$main_root/.venv312/bin/python"
-eval_root="$main_root/artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1"
+eval_root=${PRL25_F_MATCHED_EVAL_ROOT:-"$main_root/artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1"}
+evaluation_id_prefix=${PRL25_F_MATCHED_EVALUATION_ID_PREFIX:-PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S}
+evaluation_id_suffix=${PRL25_F_MATCHED_EVALUATION_ID_SUFFIX:--V1}
+required_image_max_pixels=${PRL25_F_MATCHED_REQUIRED_IMAGE_MAX_PIXELS:-}
 inference_control="$eval_root/runtime/supervisor"
+inference_failure_marker=${PRL25_F_MATCHED_INFERENCE_FAILURE_MARKER:-"$inference_control/failed"}
 control_root="$eval_root/runtime/scoring-supervisor"
 log_root="$eval_root/logs"
 tasks="$main_root/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl"
@@ -14,7 +18,12 @@ mathverse_source=/nvmesv/dredvpn009/datasets/benchmarks/mathverse/snapshot/testm
 judge_port=8012
 judge_base_url="http://127.0.0.1:${judge_port}/v1"
 complete_marker="$control_root/matched-scoring-complete"
+complete_receipt="$control_root/matched-scoring-complete.json"
 failure_marker="$control_root/failed"
+formal_true1m_v2=0
+if [[ "$evaluation_id_suffix" == "-TRUE1M-V2" && "$required_image_max_pixels" == "1003520" ]]; then
+  formal_true1m_v2=1
+fi
 
 mkdir -p "$control_root" "$log_root"
 exec 9>"$control_root/supervisor.lock"
@@ -55,6 +64,7 @@ cleanup() {
   if (( status == 0 )); then
     rm -f "$failure_marker"
   else
+    rm -f "$complete_marker" "$complete_receipt"
     printf 'status=failed\nphase=%s\ntime=%s\nexit_status=%s\n' \
       "$phase" "$(timestamp)" "$status" >"$failure_marker"
   fi
@@ -67,7 +77,7 @@ trap 'phase=signal; exit 130' INT TERM
 wait_for_inference() {
   phase=waiting_for_matched_inference
   while [[ ! -f "$inference_control/matched-inference-complete" ]]; do
-    if [[ -f "$inference_control/failed" ]]; then
+    if [[ -f "$inference_failure_marker" ]]; then
       echo "matched inference supervisor reported failure"
       return 1
     fi
@@ -77,7 +87,8 @@ wait_for_inference() {
 
 validate_step_inference() {
   local step=$1
-  "$python_bin" - "$eval_root" "$step" <<'PY'
+  "$python_bin" - "$eval_root" "$step" "$evaluation_id_prefix" \
+    "$evaluation_id_suffix" "$required_image_max_pixels" <<'PY'
 from __future__ import annotations
 
 import json
@@ -86,7 +97,31 @@ import sys
 
 root = Path(sys.argv[1])
 step = int(sys.argv[2])
+evaluation_id = f"{sys.argv[3]}{step}{sys.argv[4]}"
+required_image_max_pixels = int(sys.argv[5]) if sys.argv[5] else None
 arm = root / f"matched/step{step}"
+config = json.loads((arm / "config.json").read_text(encoding="utf-8"))
+if config.get("evaluation_id") != evaluation_id:
+    raise RuntimeError(f"S{step} scoring source evaluation identity differs")
+if required_image_max_pixels is not None:
+    proof = json.loads((arm / "runtime/true1m-processor-proof.json").read_text(encoding="utf-8"))
+    processor = proof.get("proof", {})
+    if (
+        config.get("evaluation_image_max_pixels") != required_image_max_pixels
+        or processor.get("configured_image_max_pixels") != required_image_max_pixels
+        or processor.get("synthetic_native_source_pixel_area") != 3_145_728
+        or processor.get("synthetic_native_represented_pixel_area") != 995_328
+        or processor.get("synthetic_native_represented_pixel_area") > required_image_max_pixels
+        or processor.get("synthetic_native_visual_token_count") != 972
+        or processor.get("runtime_mm_processor_kwargs")
+        != {"size": {"shortest_edge": 65_536, "longest_edge": required_image_max_pixels}}
+        or processor.get("runtime_override_path")
+        != "mm_processor_kwargs.size.longest_edge"
+        or processor.get("vllm_012_shallow_hashable") is not True
+        or processor.get("nested_images_kwargs_present") is not False
+        or processor.get("max_pixels_kwarg_present") is not False
+    ):
+        raise RuntimeError(f"S{step} corrected true1M processor proof differs")
 tasks = [json.loads(line) for line in (arm / "runtime/policy-benchmark-tasks.jsonl").read_text(encoding="utf-8").splitlines()]
 single = {row["ordinal"] for row in tasks if len(row["image_paths"]) == 1}
 if len(tasks) != 2511 or len(single) != 2240 or len(tasks) - len(single) != 271:
@@ -94,6 +129,8 @@ if len(tasks) != 2511 or len(single) != 2240 or len(tasks) - len(single) != 271:
 observed: set[int] = set()
 for rank in range(4):
     rows = [json.loads(line) for line in (arm / f"inference/rank-{rank}.jsonl").read_text(encoding="utf-8").splitlines()]
+    if any(row.get("evaluation_id") != evaluation_id for row in rows):
+        raise RuntimeError(f"S{step} rank{rank} evaluation identity differs")
     ordinals = [row.get("ordinal") for row in rows]
     expected = {ordinal for ordinal in single if ordinal % 4 == rank}
     if len(ordinals) != len(expected) or set(ordinals) != expected:
@@ -131,12 +168,13 @@ materialize_step() {
       --tasks "$tasks" \
       --source-root "$source_root" \
       --output-root "$score_root" \
-      --evaluation-id "PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S${step}-V1" \
+      --evaluation-id "${evaluation_id_prefix}${step}${evaluation_id_suffix}" \
       --run-id "$run_id" \
       --mathverse-source-json "$mathverse_source" \
       >"$log_root/materialization-s${step}.log"
   fi
-  "$python_bin" - "$summary" "$step" "$run_id" <<'PY'
+  "$python_bin" - "$summary" "$step" "$run_id" \
+    "$evaluation_id_prefix" "$evaluation_id_suffix" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -144,8 +182,9 @@ import sys
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 step = int(sys.argv[2])
 expected_run_id = sys.argv[3]
+expected_evaluation_id = f"{sys.argv[4]}{step}{sys.argv[5]}"
 expected = {
-    "evaluation_id": f"PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S{step}-V1",
+    "evaluation_id": expected_evaluation_id,
     "run_id": expected_run_id,
     "observed_single_image_count": 2240,
     "unsupported_multi_image_count": 271,
@@ -196,13 +235,19 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 PY
   (
     cd "$main_root"
-    exec setsid env \
-      CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1 \
-      CC=/usr/bin/gcc CXX=/usr/bin/g++ \
-      CPATH="$main_root/.deps/python312-dev/root/usr/include:$main_root/.deps/python312-dev/root/usr/include/python3.12" \
-      VLLM_USE_V1=1 VLLM_WORKER_MULTIPROC_METHOD=spawn VLLM_PLUGINS= \
-      VLLM_ATTENTION_BACKEND=TRITON_ATTN TOKENIZERS_PARALLELISM=false \
-      "$python_bin" -m vllm.entrypoints.openai.api_server \
+    exec setsid "$python_bin" \
+      "$repo_root/tools/exec_with_controlled_toolchain.py" \
+      --python-environment-root "$main_root/.venv312" \
+      --python-header-root "$main_root/.deps/python312-dev/root/usr/include" \
+      --environment CUDA_DEVICE_ORDER=PCI_BUS_ID \
+      --environment CUDA_VISIBLE_DEVICES=0,1 \
+      --environment VLLM_USE_V1=1 \
+      --environment VLLM_WORKER_MULTIPROC_METHOD=spawn \
+      --environment VLLM_PLUGINS= \
+      --environment VLLM_ATTENTION_BACKEND=TRITON_ATTN \
+      --environment TOKENIZERS_PARALLELISM=false \
+      --contract-out "$control_root/judge-toolchain-contract.json" \
+      -- "$python_bin" -m vllm.entrypoints.openai.api_server \
         --model /nvmesv/dredvpn009/models/hf/Qwen2.5-72B-Instruct \
         --served-model-name Qwen2.5-72B-Instruct \
         --host 127.0.0.1 --port "$judge_port" \
@@ -292,6 +337,7 @@ summarize_step() {
   local summary="$score_root/coredev-2511-eval-summary.json"
   PYTHONPATH="$repo_root/src" "$python_bin" - \
     "$score_root" "$summary" "$judge_base_url" "$step" \
+    "$evaluation_id_prefix" "$evaluation_id_suffix" \
     >"$log_root/summary-s${step}.log" <<'PY'
 from __future__ import annotations
 
@@ -309,11 +355,13 @@ root = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2]).resolve()
 judge_base_url = sys.argv[3]
 step = int(sys.argv[4])
+evaluation_id_prefix = sys.argv[5]
+evaluation_id_suffix = sys.argv[6]
 expected_eval_ids: dict[str, str] = {}
 for dataset in DATASETS:
     receipt_path = root / dataset / "pinned-reuse-receipt.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    expected_source = f"PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S{step}-V1"
+    expected_source = f"{evaluation_id_prefix}{step}{evaluation_id_suffix}"
     if (
         receipt.get("schema_version")
         != "tgvf.vlmevalkit-pinned-reuse-receipt.v1"
@@ -338,6 +386,12 @@ payload = summarize_coredev_results(
 write_json_atomic(output, payload)
 print(json.dumps(payload, indent=2, ensure_ascii=False))
 PY
+  if (( formal_true1m_v2 == 1 )); then
+    PYTHONPATH="$repo_root/src" "$python_bin" \
+      "$repo_root/tools/finalize_prl25_f_no_tool_true1m_v2_scoring.py" \
+      --eval-root "$eval_root" --step "$step" \
+      >"$log_root/headline-s${step}.log"
+  else
   "$python_bin" - "$summary" "$step" <<'PY'
 import json
 from pathlib import Path
@@ -355,12 +409,19 @@ if len(payload.get("slices", [])) != 7:
     raise RuntimeError(f"S{step} summary lacks seven slices")
 print(json.dumps({"step": step, "summary": "pass"}, sort_keys=True))
 PY
+  fi
   touch "$control_root/s${step}-scoring-complete"
 }
 
-rm -f "$complete_marker" "$failure_marker"
+rm -f "$complete_marker" "$complete_receipt" "$failure_marker"
 printf '[%s] PRL25-F matched scoring supervisor started\n' "$(timestamp)"
 wait_for_inference
+if (( formal_true1m_v2 == 1 )); then
+  "$python_bin" \
+    "$repo_root/tools/supervise_prl25_f_no_tool_true1m_v2_inference.py" \
+    --verify-completion-only \
+    >"$log_root/formal-inference-completion-validation.json"
+fi
 for step in 0 8 16 32; do
   validate_step_inference "$step" >"$log_root/scoring-inference-validation-s${step}.json"
   materialize_step "$step"
@@ -376,6 +437,12 @@ phase=summarizing
 for step in 0 8 16 32; do
   summarize_step "$step"
 done
+if (( formal_true1m_v2 == 1 )); then
+  PYTHONPATH="$repo_root/src" "$python_bin" \
+    "$repo_root/tools/finalize_prl25_f_no_tool_true1m_v2_scoring.py" \
+    --eval-root "$eval_root" --finalize-all \
+    >"$log_root/headline-all-steps.log"
+fi
 phase=complete
 printf 'status=pass\ntime=%s\nsteps=0,8,16,32\nslice_count_per_step=7\nsample_count_per_step=2511\n' \
   "$(timestamp)" >"$complete_marker"

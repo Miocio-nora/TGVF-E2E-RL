@@ -16,11 +16,15 @@ from tgvf_rl.evaluation.policy_coredev import (
 )
 from tgvf_rl.evaluation.policy_official_visible import (
     OfficialVisiblePolicyEvaluator,
+    _official_visible_mm_processor_kwargs,
     _render_native_prompt,
     normalize_official_visible_crop_box,
     normalize_qwen3_official_visible_crop_box,
     official_visible_observation_message,
     validate_official_visible_processor,
+)
+from tgvf_rl.evaluation.policy_no_tool_matched import (
+    validate_no_tool_matched_processor,
 )
 from tgvf_rl.framework.verl.native_crop_tool import normalize_native_crop_box
 from tgvf_rl.framework.vllm import ContentAddressedVLLMTurnRNG
@@ -107,14 +111,12 @@ class _Processor:
         *,
         text: list[str],
         images: list[Image.Image],
-        images_kwargs: dict[str, object],
+        size: dict[str, int],
         return_tensors: str,
     ) -> dict[str, torch.Tensor]:
-        assert images_kwargs == {
-            "size": {
-                "shortest_edge": 65_536,
-                "longest_edge": 1_003_520,
-            }
+        assert size == {
+            "shortest_edge": 65_536,
+            "longest_edge": 1_003_520,
         }
         assert return_tensors == "pt"
         canonical = self.tokenizer.encode(text[0], add_special_tokens=False)
@@ -217,10 +219,59 @@ def test_static_processor_proof_includes_native_visual_expansion() -> None:
     }
     assert proof["synthetic_native_source_pixel_areas"] == [3_145_728, 3_145_728]
     assert proof["synthetic_native_represented_pixel_areas"] == [4096, 4096]
+    assert proof["runtime_mm_processor_kwargs"] == {
+        "size": {
+            "shortest_edge": 65_536,
+            "longest_edge": 1_003_520,
+        }
+    }
+    assert proof["runtime_override_path"] == ("mm_processor_kwargs.size.longest_edge")
+    assert proof["vllm_012_shallow_hashable"] is True
+    assert proof["nested_images_kwargs_present"] is False
+    assert proof["max_pixels_kwarg_present"] is False
     assert (
         proof["continuation_expanded_prompt_token_count"]
         > proof["continuation_prompt_token_count"]
     )
+
+
+def test_no_tool_static_processor_proof_uses_true1m_size_cap() -> None:
+    proof = validate_no_tool_matched_processor(
+        _Processor(), tokenizer_length=123, image_max_pixels=1_003_520
+    )
+
+    assert proof["configured_image_max_pixels"] == 1_003_520
+    assert proof["processor_image_size"]["longest_edge"] == 16_777_216
+    assert proof["effective_processor_image_size"]["longest_edge"] == 1_003_520
+    assert proof["synthetic_native_source_pixel_area"] == 3_145_728
+    assert proof["synthetic_native_represented_pixel_area"] == 4096
+    assert proof["synthetic_native_visual_token_count"] == 4
+    assert proof["runtime_mm_processor_kwargs"] == {
+        "size": {
+            "shortest_edge": 65_536,
+            "longest_edge": 1_003_520,
+        }
+    }
+    assert proof["runtime_override_path"] == ("mm_processor_kwargs.size.longest_edge")
+    assert proof["vllm_012_shallow_hashable"] is True
+    assert proof["nested_images_kwargs_present"] is False
+    assert proof["max_pixels_kwarg_present"] is False
+    assert proof["tool_schema_visible"] is False
+
+
+def test_vllm_true1m_kwargs_use_one_level_hashable_size_mapping() -> None:
+    kwargs = _official_visible_mm_processor_kwargs(_Processor(), 1_003_520)
+
+    assert kwargs == {
+        "size": {
+            "shortest_edge": 65_536,
+            "longest_edge": 1_003_520,
+        }
+    }
+    assert "images_kwargs" not in kwargs
+    # vLLM 0.12 shallow-wraps each top-level dict before using it as an
+    # lru_cache key; nested images_kwargs would leave an unhashable dict value.
+    assert hash(frozenset(kwargs["size"].items()))
 
 
 def test_real_qwen3_processor_cap_changes_large_image_grid() -> None:
@@ -288,11 +339,9 @@ def test_official_visible_uses_paired_rng_and_preserves_legacy_seed_path() -> No
 
         async def generate(self, **kwargs: object) -> object:
             assert kwargs["mm_processor_kwargs"] == {
-                "images_kwargs": {
-                    "size": {
-                        "shortest_edge": 65_536,
-                        "longest_edge": 1_003_520,
-                    }
+                "size": {
+                    "shortest_edge": 65_536,
+                    "longest_edge": 1_003_520,
                 }
             }
             self.seeds.append(kwargs["sampling_params"]["seed"])
@@ -426,11 +475,9 @@ def test_evaluator_returns_native_source_pixel_crop_audit(tmp_path: Path) -> Non
             self.calls += 1
             assert len(kwargs["image_data"]) == self.calls
             assert kwargs["mm_processor_kwargs"] == {
-                "images_kwargs": {
-                    "size": {
-                        "shortest_edge": 65_536,
-                        "longest_edge": 1_003_520,
-                    }
+                "size": {
+                    "shortest_edge": 65_536,
+                    "longest_edge": 1_003_520,
                 }
             }
             if self.fail_context and self.calls == 2:

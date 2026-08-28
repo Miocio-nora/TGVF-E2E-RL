@@ -248,6 +248,38 @@ class PilotSamplingConfig:
             raise ValueError("the trajectory policy-token budget is exhausted")
         return remaining
 
+    def identity_record(self) -> Mapping[str, object]:
+        """Return the turn-invariant sampling/action-boundary identity.
+
+        Full-model evaluation normally reconstructs an internal native
+        sampling view.  A checkpoint-owned No-Tool full model instead restores
+        this run-bound pilot config, so both views expose the same small
+        identity ABI.
+        """
+
+        self._require_run_bound()
+        assert self.min_p is not None
+        assert self.stop_token_ids is not None
+        assert self.stop_strings is not None
+        assert self.include_stop_str_in_output is not None
+        assert self.ignore_eos is not None
+        return MappingProxyType(
+            {
+                "max_response_length": self.max_response_length,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "min_p": self.min_p,
+                "repetition_penalty": self.repetition_penalty,
+                "presence_penalty": self.presence_penalty,
+                "frequency_penalty": self.frequency_penalty,
+                "stop_token_ids": list(self.stop_token_ids),
+                "stop_strings": list(self.stop_strings),
+                "include_stop_str_in_output": self.include_stop_str_in_output,
+                "ignore_eos": self.ignore_eos,
+            }
+        )
+
     def as_vllm_parameters(self, *, max_tokens: int) -> Mapping[str, object]:
         """Build one single-continuation vLLM request from the remaining budget."""
 

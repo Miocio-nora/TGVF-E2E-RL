@@ -106,7 +106,13 @@ def _official_visible_mm_processor_kwargs(
     processor: object,
     image_max_pixels: int,
 ) -> dict[str, object]:
-    """Build the one Qwen3 image-size contract used before and during decode."""
+    """Build the Qwen3 image-size contract used before and during decode.
+
+    Qwen3's processor accepts ``size`` as a flat dynamic image kwarg.  That
+    spelling is also required by vLLM 0.12: it wraps the one-level size mapping
+    in its hashable processor cache.  Nesting it under ``images_kwargs`` leaves
+    an inner plain dict and fails before generation with ``unhashable dict``.
+    """
 
     if type(image_max_pixels) is not int or image_max_pixels <= 0:
         raise ValueError("official-visible image_max_pixels must be positive")
@@ -117,11 +123,9 @@ def _official_visible_mm_processor_kwargs(
             "official-visible image_max_pixels is below processor shortest_edge"
         )
     return {
-        "images_kwargs": {
-            "size": {
-                "shortest_edge": shortest_edge,
-                "longest_edge": image_max_pixels,
-            }
+        "size": {
+            "shortest_edge": shortest_edge,
+            "longest_edge": image_max_pixels,
         }
     }
 
@@ -387,6 +391,24 @@ def validate_official_visible_processor(
     represented_pixel_areas = tuple(
         count * merge_size**2 * patch_size**2 for count in visual_counts
     )
+    runtime_mm_processor_kwargs = _official_visible_mm_processor_kwargs(
+        processor, image_max_pixels
+    )
+    runtime_size = runtime_mm_processor_kwargs.get("size")
+    if (
+        set(runtime_mm_processor_kwargs) != {"size"}
+        or not isinstance(runtime_size, Mapping)
+        or runtime_size
+        != {
+            "shortest_edge": processor_size["shortest_edge"],
+            "longest_edge": image_max_pixels,
+        }
+    ):
+        raise ValueError("official-visible vLLM processor override differs")
+    # vLLM 0.12 shallow-wraps this top-level mapping before lru_cache use.
+    # Prove the inner contents are hashable; a nested images_kwargs mapping
+    # would retain a plain dict value and fail before the first generation.
+    hash(frozenset(runtime_size.items()))
     return {
         "schema_version": "tgvf-official-visible-processor-static-proof-v2",
         "prompt_bundle_sha256": VISUAL_PROMPT_IDENTITY.bundle_sha256,
@@ -406,6 +428,11 @@ def validate_official_visible_processor(
         "synthetic_native_source_pixel_areas": list(source_pixel_areas),
         "synthetic_native_represented_pixel_areas": list(represented_pixel_areas),
         "synthetic_native_visual_token_counts": list(visual_counts),
+        "runtime_mm_processor_kwargs": runtime_mm_processor_kwargs,
+        "runtime_override_path": "mm_processor_kwargs.size.longest_edge",
+        "vllm_012_shallow_hashable": True,
+        "nested_images_kwargs_present": False,
+        "max_pixels_kwarg_present": False,
         "native_original_image_count": 1,
         "native_crop_image_count": 1,
         "tools_argument_empty": True,

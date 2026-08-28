@@ -28,7 +28,6 @@ from tgvf_rl.framework.verl.native_agent_loop import (
 from tgvf_rl.framework.vllm import (
     ContentAddressedVLLMTurnRNG,
     FastTokenizerTokenByteSpanDecoder,
-    VLLMOutputDecodingContract,
     VLLMPolicySampler,
     VLLMPolicyTurnRequest,
     VLLMPolicyTurnResponse,
@@ -38,6 +37,7 @@ from tgvf_rl.framework.vllm.registration import SUPPORTED_VLLM_VERSION
 from tgvf_rl.framework.vllm.sampler import VLLM_PROCESSED_LOGPROBS_MODE
 from tgvf_rl.observations.store import ObservationStore
 from tgvf_rl.policy.no_tool_rl_protocol import build_no_tool_visual_messages
+from tgvf_rl.policy.no_tool_rl_protocol import NO_TOOL_RL_PROMPT_IDENTITY
 from tgvf_rl.policy.run_config import (
     POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
@@ -63,11 +63,17 @@ from .policy_coredev import (
     _decoding_contract,
     _termination_contract,
     load_verified_task_image,
+    evaluation_image_max_pixels,
     paired_evaluation_rng_for_task,
     policy_evaluation_identity,
 )
 from .policy_full_model_snapshot import FullModelEvaluationSnapshot
-from .policy_official_visible import _render_native_prompt, _rgb_tensor_to_pil
+from .policy_official_visible import (
+    _official_visible_mm_processor_kwargs,
+    _official_visible_processor_geometry,
+    _render_native_prompt,
+    _rgb_tensor_to_pil,
+)
 
 
 _VLLM_CONTEXT_SAFETY_TOKENS = 16
@@ -128,6 +134,7 @@ class _NativePixelAsyncPolicyTurnClient:
         *,
         manager: StandaloneTGVFVLLMManager,
         event_loop: asyncio.AbstractEventLoop,
+        processor: object,
         tokenizer: object,
         image: Image.Image,
         image_max_pixels: int,
@@ -141,6 +148,7 @@ class _NativePixelAsyncPolicyTurnClient:
             raise TypeError("no-tool native-pixel client requires tokenizer.decode")
         self.manager = manager
         self.event_loop = event_loop
+        self.processor = processor
         self.tokenizer = tokenizer
         self.image = image
         self.image_max_pixels = image_max_pixels
@@ -154,7 +162,9 @@ class _NativePixelAsyncPolicyTurnClient:
         if threading.get_ident() == self._event_loop_thread_id:
             raise RuntimeError("native-pixel sampling must run outside the owner loop")
         if not isinstance(request, VLLMPolicyTurnRequest):
-            raise TypeError("no-tool native-pixel client requires VLLMPolicyTurnRequest")
+            raise TypeError(
+                "no-tool native-pixel client requires VLLMPolicyTurnRequest"
+            )
         if (
             request.backend_version != self.backend_version
             or request.logprobs_mode != self.logprobs_mode
@@ -170,7 +180,9 @@ class _NativePixelAsyncPolicyTurnClient:
             image_data=[self.image],
             video_data=None,
             audio_data=None,
-            mm_processor_kwargs={"max_pixels": self.image_max_pixels},
+            mm_processor_kwargs=_official_visible_mm_processor_kwargs(
+                self.processor, self.image_max_pixels
+            ),
             tgvf_expected_step=request.behavior_policy.optimizer_step,
         )
         future = asyncio.run_coroutine_threadsafe(awaitable, self.event_loop)
@@ -246,8 +258,7 @@ class NoToolMatchedPolicyEvaluator:
     ) -> None:
         if (
             config.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL
-            or run.schema_version
-            != POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+            or run.schema_version != POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
             or run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL
             or run.protocol.enabled_tool_names
         ):
@@ -255,7 +266,9 @@ class NoToolMatchedPolicyEvaluator:
         if not isinstance(snapshot, FullModelEvaluationSnapshot) or snapshot.run != run:
             raise ValueError("no-tool evaluator requires its bound full-model snapshot")
         if not manager.native_pixels or manager.capture_hidden or manager.lora_request:
-            raise ValueError("no-tool evaluator requires stock full-model native pixels")
+            raise ValueError(
+                "no-tool evaluator requires stock full-model native pixels"
+            )
         expected_identity = policy_evaluation_identity(config, snapshot)
         if dict(evaluation_identity) != expected_identity:
             raise ValueError("no-tool matched evaluation identity differs")
@@ -274,6 +287,7 @@ class NoToolMatchedPolicyEvaluator:
         self.snapshot = snapshot
         self.evaluation_identity = expected_identity
         self.policy_version = snapshot.policy_version
+        self.image_max_pixels = evaluation_image_max_pixels(config, snapshot)
         self.assistant_dialect = native_assistant_dialect_for_model(
             run.model.model_name
         )
@@ -306,20 +320,21 @@ class NoToolMatchedPolicyEvaluator:
                 self.processor,
                 build_no_tool_visual_messages(task.question, image="<image>"),
                 images=[image],
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.image_max_pixels,
             )
             image_sha256 = hashlib.sha256(image.tobytes()).hexdigest()
             context = _NativePixelRequestContext(
                 prompt_ids,
                 image_sha256=image_sha256,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.image_max_pixels,
             )
             client = _NativePixelAsyncPolicyTurnClient(
                 manager=self.manager,
                 event_loop=asyncio.get_running_loop(),
+                processor=self.processor,
                 tokenizer=self.tokenizer,
                 image=image,
-                image_max_pixels=self.run.policy.image_max_pixels,
+                image_max_pixels=self.image_max_pixels,
                 sticky_request_id=trajectory_id,
                 max_model_len=self.config.max_model_len,
             )
@@ -352,9 +367,7 @@ class NoToolMatchedPolicyEvaluator:
             )
             if maximum <= 0:
                 raise ValueError("matched no-tool prompt exhausted max_model_len")
-            parameters = self.run.policy.sampling.as_vllm_parameters(
-                max_tokens=maximum
-            )
+            parameters = self.run.policy.sampling.as_vllm_parameters(max_tokens=maximum)
             sampled = await asyncio.to_thread(
                 sampler.sample, prompt_ids, parameters, turn_index=0
             )
@@ -431,4 +444,78 @@ class NoToolMatchedPolicyEvaluator:
                 behavior_store.release_trajectories((trajectory_id,))
 
 
-__all__ = ["NoToolMatchedPolicyEvaluator"]
+def validate_no_tool_matched_processor(
+    processor: object,
+    *,
+    tokenizer_length: int,
+    image_max_pixels: int,
+) -> dict[str, object]:
+    """CPU proof that both no-tool prompt expansion and decode obey the cap."""
+
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None or len(tokenizer) != tokenizer_length:
+        raise ValueError("no-tool matched tokenizer length differs")
+    image = Image.new("RGB", (2048, 1536), (10, 20, 30))
+    source_pixel_area = image.width * image.height
+    try:
+        _text, prompt_ids, visual_counts = _render_native_prompt(
+            processor,
+            build_no_tool_visual_messages("STATIC_PROTOCOL_PROBE", image="<image>"),
+            images=[image],
+            image_max_pixels=image_max_pixels,
+        )
+    finally:
+        image.close()
+    if len(visual_counts) != 1 or source_pixel_area <= image_max_pixels:
+        raise ValueError("no-tool matched pixel probe is malformed")
+    processor_size, patch_size, merge_size = _official_visible_processor_geometry(
+        processor
+    )
+    represented_pixel_area = visual_counts[0] * merge_size**2 * patch_size**2
+    if represented_pixel_area > image_max_pixels:
+        raise ValueError("no-tool matched represented pixels exceed the cap")
+    runtime_mm_processor_kwargs = _official_visible_mm_processor_kwargs(
+        processor, image_max_pixels
+    )
+    runtime_size = runtime_mm_processor_kwargs.get("size")
+    if (
+        set(runtime_mm_processor_kwargs) != {"size"}
+        or not isinstance(runtime_size, Mapping)
+        or runtime_size
+        != {
+            "shortest_edge": processor_size["shortest_edge"],
+            "longest_edge": image_max_pixels,
+        }
+    ):
+        raise ValueError("no-tool matched vLLM processor override differs")
+    # vLLM 0.12 shallow-wraps this one top-level dict before lru_cache use.
+    # Prove its contents are hashable; nesting under images_kwargs would leave
+    # a plain dict as one of the outer values and fail on the first request.
+    hash(frozenset(runtime_size.items()))
+    return {
+        "schema_version": "tgvf.no-tool-matched-processor-static-proof.v1",
+        "prompt_bundle_sha256": NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256,
+        "prompt_token_ids_sha256": _canonical_sha256(prompt_ids),
+        "prompt_token_count": len(prompt_ids),
+        "configured_image_max_pixels": image_max_pixels,
+        "processor_image_size": dict(processor_size),
+        "effective_processor_image_size": {
+            "shortest_edge": processor_size["shortest_edge"],
+            "longest_edge": image_max_pixels,
+        },
+        "processor_patch_size": patch_size,
+        "processor_merge_size": merge_size,
+        "synthetic_native_source_pixel_area": source_pixel_area,
+        "synthetic_native_represented_pixel_area": represented_pixel_area,
+        "synthetic_native_visual_token_count": visual_counts[0],
+        "runtime_mm_processor_kwargs": runtime_mm_processor_kwargs,
+        "runtime_override_path": "mm_processor_kwargs.size.longest_edge",
+        "vllm_012_shallow_hashable": True,
+        "nested_images_kwargs_present": False,
+        "max_pixels_kwarg_present": False,
+        "tool_schema_visible": False,
+        "system_prompt_present": False,
+    }
+
+
+__all__ = ["NoToolMatchedPolicyEvaluator", "validate_no_tool_matched_processor"]

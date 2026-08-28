@@ -1,0 +1,142 @@
+{
+  "schema_version": "tgvf.prl25-f-no-tool-true1m-evaluation-plan.v2",
+  "evaluation_id": "PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S0-S8-S16-S32-TRUE1M-V2",
+  "status": "ready",
+  "checkpoint_owner": {
+    "config_path": "configs/policy/runs/prl_25_f_qwen3_instruct_full_no_tool_rl_bs16_n16_tfree_teacher25_32step_ws8.toml",
+    "config_file_sha256": "d82063946e7153edc81132cd9f2563828ffd8b69bb419b1490da67c65c3aad25",
+    "run_id": "PRL-25-F-QWEN3-INSTRUCT-FULL-NO-TOOL-RL-BS16-N16-TFREE-TEACHER25-32STEP-WS8",
+    "run_identity_sha256": "b4bda7580cedaf2014fefbfa4ac21acc277958ff0783292bda69693135baf7b8"
+  },
+  "evaluation_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S0-S8-S16-S32-TRUE1M-V2",
+  "weight_snapshot_reuse": {
+    "source_root": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-COREDEV2511-S0-S8-S16-S32-DUAL-V1/shared",
+    "allowed_files": [
+      "full-model-snapshot.json",
+      "full-model-materialization.json"
+    ],
+    "allowed_payload": "materialized_full_model_tree_referenced_by_receipt",
+    "reuse_inference_rows": false,
+    "reuse_scoring_rows": false
+  },
+  "benchmark": {
+    "task_manifest_path": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/CoreDev2511-official-visible-v1/tasks.jsonl",
+    "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+    "expected_task_count": 2511,
+    "expected_single_image_count": 2240,
+    "unsupported_multi_image_count": 271,
+    "datasets": [
+      "VStarBench",
+      "HRBench4K",
+      "BLINK",
+      "OCRBench_v2",
+      "MMMU_Pro_10c",
+      "MathVista_MINI",
+      "MathVerse_MINI"
+    ]
+  },
+  "protocol": {
+    "evaluation_protocol": "training_run",
+    "prompt_contract": "prl25-f-training-matched-no-tool",
+    "prompt_bundle_sha256": "8010ec191b5b9147baaf8363ed9826250151568e55bcbb80693bd759d5bb8593",
+    "tool_profile": "no_tool",
+    "enabled_tool_names": [],
+    "system_tool_schema_visible": false,
+    "template_tools_argument": [],
+    "native_pixels": true
+  },
+  "image_preprocessing": {
+    "configured_image_max_pixels": 1003520,
+    "qwen_fast_processor_default_max_pixels": 16777216,
+    "runtime_override_path": "mm_processor_kwargs.size.longest_edge",
+    "forbid_nested_images_kwargs": true,
+    "forbid_max_pixels_kwarg": true,
+    "prepare_validate_probe": {
+      "source_width": 2048,
+      "source_height": 1536,
+      "source_pixel_area": 3145728,
+      "expected_represented_pixel_area": 995328,
+      "expected_visual_token_count": 972
+    }
+  },
+  "paired_rng": {
+    "mode": "common_random_numbers_per_task_turn",
+    "seed_namespace": "coredev2511/no-tool-rl-matched/s0-s8-s16-s32/temp1/seed42/true1m-v2",
+    "master_seed": 42,
+    "temperature": 1.0,
+    "do_sample": true,
+    "rollout_index": 0,
+    "excluded_arm_components": [
+      "evaluation_id",
+      "optimizer_step",
+      "checkpoint_hash",
+      "policy_weights_sha256",
+      "prompt_token_ids_sha256"
+    ]
+  },
+  "arms": [
+    {
+      "name": "step0",
+      "optimizer_step": 0,
+      "evaluation_id": "PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S0-TRUE1M-V2",
+      "concurrency_round": 0,
+      "gpu_group": "left"
+    },
+    {
+      "name": "step8",
+      "optimizer_step": 8,
+      "evaluation_id": "PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S8-TRUE1M-V2",
+      "concurrency_round": 0,
+      "gpu_group": "right"
+    },
+    {
+      "name": "step16",
+      "optimizer_step": 16,
+      "evaluation_id": "PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S16-TRUE1M-V2",
+      "concurrency_round": 1,
+      "gpu_group": "left"
+    },
+    {
+      "name": "step32",
+      "optimizer_step": 32,
+      "evaluation_id": "PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S32-TRUE1M-V2",
+      "concurrency_round": 1,
+      "gpu_group": "right"
+    }
+  ],
+  "execution": {
+    "physical_gpu_count": 8,
+    "world_size_per_arm": 4,
+    "concurrent_arm_count": 2,
+    "inference_concurrency_per_gpu": 8,
+    "max_model_len": 32768,
+    "max_num_batched_tokens": 32768,
+    "enable_chunked_prefill": false,
+    "gpu_memory_utilization": 0.8,
+    "rank_cache_environment": [
+      "VLLM_CACHE_ROOT",
+      "TRITON_CACHE_DIR",
+      "TORCHINDUCTOR_CACHE_DIR"
+    ],
+    "toolchain_environment": {
+      "CC": "/usr/bin/gcc",
+      "CXX": "/usr/bin/g++",
+      "CPATH": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include:/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.deps/python312-dev/root/usr/include/python3.12",
+      "LIBRARY_PATH": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/lib",
+      "PATH": "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/.venv312/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    },
+    "resume_policy": "identity_validated_rank_jsonl",
+    "failure_policy": "terminate_active_process_groups_preserve_durable_rows"
+  },
+  "scoring": {
+    "entrypoint": "tools/supervise_prl25_f_no_tool_true1m_v2_scoring.sh",
+    "layout": "matched/step{optimizer_step}/scoring/coredev-official-v1",
+    "judge": "Qwen2.5-72B-Instruct",
+    "run_ids": {
+      "0": "T20260826_G0",
+      "8": "T20260826_G8",
+      "16": "T20260826_G10",
+      "32": "T20260826_G20"
+    }
+  }
+}

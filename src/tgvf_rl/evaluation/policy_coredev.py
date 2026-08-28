@@ -168,13 +168,10 @@ POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION = (
 POLICY_BENCHMARK_TRAJECTORY_AUDIT_SCHEMA = "tgvf-policy-coredev-trajectory-audit-v1"
 POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA = "tgvf-policy-output-contract-failure-v1"
 PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-rng-v1"
-RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA = (
-    "tgvf-policy-paired-evaluation-rng-v2"
-)
-IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION = (
-    "image_max_pixels_resolution_pair_v1"
-)
+RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-rng-v2"
+IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION = "image_max_pixels_resolution_pair_v1"
 IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES = (262144, 1003520)
+IMAGE_MAX_PIXELS_RESOLUTION_PROJECTED_OPTIMIZER_STEPS = (32, 80)
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
     "deepeyes_official_visible_native_crop_v1"
@@ -354,14 +351,9 @@ def validate_policy_benchmark_runtime_interfaces(
     """Exercise CPU-only evaluator interfaces before any vLLM construction."""
 
     effective_image_max_pixels = (
-        run.policy.image_max_pixels
-        if image_max_pixels is None
-        else image_max_pixels
+        run.policy.image_max_pixels if image_max_pixels is None else image_max_pixels
     )
-    if (
-        type(effective_image_max_pixels) is not int
-        or effective_image_max_pixels <= 0
-    ):
+    if type(effective_image_max_pixels) is not int or effective_image_max_pixels <= 0:
         raise ValueError("policy benchmark image_max_pixels must be positive")
 
     from tgvf_rl.framework.verl.smoke_dataset import (
@@ -568,9 +560,7 @@ class PolicyCoreDevConfig:
             type(self.evaluation_image_max_pixels) is not int
             or self.evaluation_image_max_pixels <= 0
         ):
-            raise ValueError(
-                "evaluation_image_max_pixels must be a positive integer"
-            )
+            raise ValueError("evaluation_image_max_pixels must be a positive integer")
         if self.paired_rng_protocol_projection is not None:
             if (
                 self.paired_rng_protocol_projection
@@ -583,13 +573,19 @@ class PolicyCoreDevConfig:
                 or self.evaluation_protocol
                 != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
                 or self.snapshot_backend != FULL_MODEL_EVALUATION_BACKEND
-                or self.expected_optimizer_step != 80
+                or self.expected_optimizer_step
+                not in IMAGE_MAX_PIXELS_RESOLUTION_PROJECTED_OPTIMIZER_STEPS
                 or self.evaluation_image_max_pixels
                 not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES
+                or (
+                    self.expected_optimizer_step == 32
+                    and self.evaluation_image_max_pixels != 1003520
+                )
             ):
                 raise ValueError(
-                    "image_max_pixels resolution pairing requires the exact "
-                    "official-visible full-model step80 benchmark contract"
+                    "image_max_pixels resolution projection requires the exact "
+                    "official-visible full-model step80 pair or step32 true1M "
+                    "extension contract"
                 )
         if (
             len(self.gpu_ids) != 4
@@ -697,13 +693,10 @@ class PolicyCoreDevConfig:
                 raise ValueError(
                     "full-model snapshot backend requires manifest, receipt, and identity bindings"
                 )
-            if (
-                self.evaluation_protocol
-                not in {
-                    DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
-                    TRAINING_RUN_EVALUATION_PROTOCOL,
-                }
-            ):
+            if self.evaluation_protocol not in {
+                DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+                TRAINING_RUN_EVALUATION_PROTOCOL,
+            }:
                 raise ValueError(
                     "full-model snapshots require official-visible or training-run evaluation"
                 )
@@ -964,8 +957,7 @@ def _load_full_model_from_paths(
             config.policy_config_path, allow_external_agent_loop_config=True
         )
         if (
-            run.schema_version
-            != POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
+            run.schema_version != POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA
             or run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL
             or run.protocol.enabled_tool_names
         ):
@@ -2100,9 +2092,7 @@ def _evaluation_protocol_identity(
                 FullModelEvaluationSnapshot,
             ),
         ):
-            raise ValueError(
-                "training-run evaluation requires a bound policy snapshot"
-            )
+            raise ValueError("training-run evaluation requires a bound policy snapshot")
         protocol = snapshot.run.protocol
         return {
             "profile": TRAINING_RUN_EVALUATION_PROTOCOL,
