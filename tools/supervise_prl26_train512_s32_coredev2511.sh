@@ -24,7 +24,9 @@ crop_config="$crop_eval_root/step32/config.json"
 crop_validation="$crop_eval_root/logs/prl26-pixel512-static-validation.json"
 crop_proof="$crop_eval_root/step32/runtime/pixel512-processor-proof.json"
 
-mkdir -p "$runtime_root" "$log_root" "$crop_eval_root/logs"
+# Keep both canonical training roots absent until their trainers have closed
+# S32.  Evaluation control belongs under the separate evaluation namespace.
+mkdir -p "$runtime_root" "$log_root"
 exec 9>"$runtime_root/supervisor.lock"
 flock -n 9 || {
   echo "PRL-26 Train@512 S32 evaluator is already active" >&2
@@ -86,6 +88,8 @@ while [[ ! -s "$notool_completion" || ! -s "$crop_completion" ]]; do
 done
 
 phase=binding_completed_s32_checkpoints
+# Only a closed Crop S32 receipt authorizes materializing its evaluation tree.
+mkdir -p "$crop_eval_root/logs"
 env CUDA_VISIBLE_DEVICES= "$python_bin" \
   "$repo_root/tools/bind_prl26_train512_s32_evaluation.py" \
   --crop-plan-output "$crop_plan" --handoff-output "$handoff" \

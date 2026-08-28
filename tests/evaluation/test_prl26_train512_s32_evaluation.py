@@ -46,6 +46,19 @@ def _load_module(name: str, path: Path) -> ModuleType:
     return module
 
 
+def test_evaluation_supervisor_does_not_precreate_crop_training_root() -> None:
+    supervisor = (
+        TOOLS / "supervise_prl26_train512_s32_coredev2511.sh"
+    ).read_text(encoding="utf-8")
+
+    wait_boundary = 'while [[ ! -s "$notool_completion" || ! -s "$crop_completion" ]]'
+    materialize = 'mkdir -p "$crop_eval_root/logs"'
+    assert 'mkdir -p "$runtime_root" "$log_root"' in supervisor
+    assert wait_boundary in supervisor
+    assert supervisor.count(materialize) == 1
+    assert supervisor.index(wait_boundary) < supervisor.index(materialize)
+
+
 @pytest.fixture(scope="module")
 def binder() -> ModuleType:
     return _load_module(
