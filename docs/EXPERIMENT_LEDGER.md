@@ -10131,3 +10131,43 @@ than inferred from a script name or prior conversation.
   the typed `JudgeGlobalFailure` proving that the internal transient window was
   exhausted. Bare 429 text, 401/402/403 and every unknown failure remain
   terminal; the shared maximum-restart bound still applies.
+
+### PRL26-E train@512 Atomic Crop+TGVF parity rerun (2026-08-29)
+
+- Cell/status: `PRL-26-E-TRAIN512-S32-PARITY-ATOMIC-CROP-TGVF` /
+  `CONFIGURED, QUEUED AFTER C/D EVALUATION`. This is an independent
+  fresh-Original-S0 run. It cannot use a C/D checkpoint and cannot start from
+  the mere presence of a C/D S32 receipt: the complete Short/Target-guide-v2
+  paired CoreDev evaluation must first pass its exact result, summary, hash,
+  coverage and common-random-number closure.
+- Runtime implementation commit
+  `8e6b3d647d3a94c7768e3d8718b69d544010841e` adds the explicit Atomic
+  Crop+TGVF policy schema, runtime routing, CoreDev materialization and
+  pixel-cap proof. The Atomic prompt is the established teacher-matched bundle
+  `5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69`;
+  it does not inherit the PRL26-D Target-guide-v2 treatment. The single
+  `tgvf_crop_tool` exposes the matched Atomic operation, with at most six calls
+  and the corrected `</tool_call>` action boundary retained in policy output.
+- Formal parity contract: Qwen3-VL-8B-Instruct full-model update, frozen RP67
+  Step-2000 adapter, Teacher25 with the identical seed-42 schedule, BS16 x n16,
+  world8/FSDP2/GA1, train and evaluation `image_max_pixels=262144`, temperature
+  1, constant LR `1e-6`, and S0/S8/S16/S24/S32 retention. It keeps the same
+  answer and protocol reward used by the other PRL26 parity arms; tool-utility,
+  Focus/Grounding and visual-quality rewards remain disabled.
+- Admission is fail closed. A fresh one-step C0 gate uses GPUs 0--3 only after
+  the C/D evaluation closes and at least two consecutive probes find every GPU
+  and Ray clean. The formal S32 run then uses GPUs 0--7 and automatically hands
+  off to matched Eval@512. First admission requires absent C0 and formal output
+  roots; recovery accepts only the same nonempty admitted-HEAD record and the
+  canonical checkpoint tracker/receipt.
+- The formal and C0 configs pin the two immutable TGVF-Short reference-config
+  file hashes before projecting the allowed Atomic-only differences. This
+  closes model, Teacher25 content, RP67 artifact, sampling, optimizer and
+  distributed parity against a descendant commit that might otherwise change
+  both the reference and Atomic files together.
+- The final Atomic report must publish all seven official subsets and separate
+  tool-attempt, successful-call, successful-observation and typed-error counts
+  overall and per subset. It must also close the 2,240 unique sample IDs,
+  per-task RNG stream identities, result identities, task-manifest identity
+  and their deterministic sequence digests before the result can be marked
+  `pass`.

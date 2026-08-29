@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+"""Fail-closed CPU gates for PRL-26-E Atomic Train@512 S32 + Eval@512."""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Mapping
+import hashlib
+import importlib.util
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+from typing import Any
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPOSITORY_ROOT))
+sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
+
+from tools.validate_prl26_tgvf_prompt_handoff import (  # noqa: E402
+    validate_canary_completion,
+)
+from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (  # noqa: E402
+    CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+)
+from tgvf_rl.policy.run_config import (  # noqa: E402
+    POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    load_policy_e2e_smoke_run_config,
+)
+from tgvf_rl.evaluation.coredev_results import (  # noqa: E402
+    extract_coredev_macro_star,
+)
+
+
+_RUNTIME_BASELINE_COMMIT = "8e6b3d647d3a94c7768e3d8718b69d544010841e"
+_EXPECTED_FORMAL_GPU_IDS = tuple(range(8))
+_EXPECTED_CHECKPOINTS = (0, 8, 16, 24, 32)
+_EXPECTED_PERMANENT = (8, 16, 24, 32)
+_RESULT_SCHEMA = "tgvf.prl26-tgvf-target-prompt-s32-results.v1"
+_PLAN_SCHEMA = "tgvf.prl15-paired-policy-benchmark-plan.v2"
+_EXPECTED_TOOL_SCHEMA_SHA256 = (
+    "0f73b2e8c06a88d3fc08857843d153fb7138c4a3f66d64b4e6dd2c6dfef1ca39"
+)
+_EXPECTED_RNG_PROTOCOL_SHA256 = (
+    "576beb9a1b77148249f87ff86c118acb7003efe1012ca651495cf908c536c656"
+)
+_EXPECTED_REFERENCE_CONFIG_SHA256 = {
+    "canary": "cfcb374b91261174c14bfcd23a843a23f17631efb38f0c44e7ed92e7d35bd724",
+    "formal": "17efa65a8622f36c337a0691bed2dd9acf799562a2109595d8a43acf3b7ebe17",
+}
+_PREREQUISITE_ROOT = Path(
+    "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/"
+    "PRL26-CD-TGVF-PROMPT-PAIR-S32-PIXEL512-COREDEV2511-V1"
+)
+_PREREQUISITE_RESULT = (
+    _PREREQUISITE_ROOT / "tgvf-target-prompt-s32-pixel512-results.json"
+)
+_PREREQUISITE_COMPLETE = _PREREQUISITE_ROOT / "runtime/evaluation-complete"
+_PREREQUISITE_FAILED = _PREREQUISITE_ROOT / "runtime/failed"
+_PREREQUISITE_PAIRED_SUMMARY = _PREREQUISITE_ROOT / "paired-summary.json"
+_PREREQUISITE_RUNNER_COMPLETE = _PREREQUISITE_ROOT / "evaluation-complete"
+_PREREQUISITE_EVALUATION_ID = (
+    "PRL26-CD-TRAIN512-S32-TGVF-TARGET-PROMPT-PAIR-PIXEL512-"
+    "COREDEV2511-SEED42-V1"
+)
+_PREREQUISITE_CONTRACT = (
+    "independent fresh-S0 Train@512 S32; matched Eval@512; prompt-axis "
+    "common random numbers"
+)
+_PREREQUISITE_COVERAGE = {
+    "official_manifest_rows": 2511,
+    "evaluated_single_image_rows": 2240,
+    "held_multi_image_rows": 271,
+    "subset_count": 7,
+}
+_PREREQUISITE_PAIRED_COVERAGE = {
+    "official_manifest_rows": 2511,
+    "evaluated_single_image_rows": 2240,
+    "held_multi_image_rows": 271,
+    "multi_image_policy": "unsupported_explicit_hold",
+}
+_PREREQUISITE_TARGET_PROMPT_PAIR = {
+    "kind": "target_prompt_pair_v1",
+    "excluded_protocol_field": "prompt_sha256",
+    "axis_values": [
+        "e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633",
+        "77ed3a597d2a58e748b70bafe37882760944e293723a28008818a96aad025d0d",
+    ],
+}
+_PREREQUISITE_ARM_CONTRACTS = {
+    "short": {
+        "method": "TGVF Short Train@512 S32",
+        "evaluation_id": (
+            "PRL26-C-TRAIN512-S32-TGVF-SHORT-MATCHED-COREDEV2511-PIXEL512-V1"
+        ),
+        "arm_protocol_sha256": (
+            "e82f05a663928df20e5a757c2de14264c990cc04cb9bf4985e23f1e90e257a25"
+        ),
+    },
+    "full": {
+        "method": "TGVF Target-guide-v2 Train@512 S32",
+        "evaluation_id": (
+            "PRL26-D-TRAIN512-S32-TGVF-TARGET-GUIDE-V2-MATCHED-"
+            "COREDEV2511-PIXEL512-V1"
+        ),
+        "arm_protocol_sha256": (
+            "16786ff994c19933bc664a263f16b94c615cf6a5f220ee2d13e700e0e82a6b41"
+        ),
+    },
+}
+_PREREQUISITE_SEED_PROTOCOL_SHA256 = (
+    "4cbfd3cf698cb47b0c9594ca9f9e146ca09932d62bdb93d0877e59f9a85bee9c"
+)
+
+
+def _fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _git(root: Path, *arguments: str) -> str:
+    try:
+        return subprocess.run(
+            ("git", *arguments),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError("Atomic handoff Git identity is unavailable") from error
+
+
+def _toml(path: Path) -> dict[str, object]:
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise RuntimeError(f"Atomic run config is unreadable: {path}") from error
+
+
+def _leaf_differences(
+    left: object,
+    right: object,
+    path: tuple[str, ...] = (),
+) -> set[tuple[str, ...]]:
+    if isinstance(left, Mapping) and isinstance(right, Mapping):
+        result: set[tuple[str, ...]] = set()
+        for key in set(left) | set(right):
+            result.update(
+                _leaf_differences(left.get(key), right.get(key), path + (str(key),))
+            )
+        return result
+    return set() if left == right else {path}
+
+
+def _load_paired_runner(repository: Path) -> Any:
+    runner = repository / "tools/run_prl15_paired_evaluation.py"
+    spec = importlib.util.spec_from_file_location("prl26_e_atomic_runner", runner)
+    if spec is None or spec.loader is None:
+        _fail("Atomic paired evaluator module cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _validate_atomic_config(config: Any, *, canary: bool) -> None:
+    expected_steps = 1 if canary else 32
+    expected_checkpoints = (0, 1) if canary else _EXPECTED_CHECKPOINTS
+    expected_permanent = (1,) if canary else _EXPECTED_PERMANENT
+    expected_gpu_ids = (0, 1, 2, 3) if canary else _EXPECTED_FORMAL_GPU_IDS
+    expected_batch = 4 if canary else 16
+    expected_trajectories = 2 if canary else 16
+    expected_response = 512 if canary else 20480
+    expected_resume = "disable" if canary else "auto"
+    if (
+        config.schema_version
+        != POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA
+        or config.code.commit != _RUNTIME_BASELINE_COMMIT
+        or config.policy.image_max_pixels != 512 * 512
+        or config.policy.native_deepstack_enabled is not True
+        or config.protocol.prompt_sha256
+        != CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+        or config.protocol.tool_profile.value != "crop_tgvf"
+        or config.protocol.tool_schema_sha256 != _EXPECTED_TOOL_SCHEMA_SHA256
+        or config.protocol.enabled_tool_names != ("tgvf_crop_tool",)
+        or config.protocol.maximum_tool_calls != 6
+        or config.policy.sampling.stop_strings != ("</tool_call>",)
+        or config.policy.sampling.stop_token_ids != (151_645,)
+        or config.policy.sampling.include_stop_str_in_output is not True
+        or config.policy.sampling.temperature != 1.0
+        or config.policy.sampling.do_sample is not True
+        or config.policy.sampling.trajectories_per_prompt != expected_trajectories
+        or config.policy.sampling.max_response_length != expected_response
+        or config.rollout_rng.master_seed != 42
+        or config.dataset.runtime_binding.schedule_seed != 42
+        or config.representation.adapter_update_mode.value != "frozen_adapter"
+        or config.optimizer.learning_rate != 1.0e-6
+        or config.reward.tool_utility_reward_enabled is not False
+        or config.reward.focus_reward_enabled is not False
+        or config.reward.grounding_reward_enabled is not False
+        or config.reward.visual_quality_judge_config_path is not None
+        or config.reward.protocol_error_penalty != 2.0
+        or config.accumulation.global_prompt_batch_size != expected_batch
+        or config.distributed.physical_gpu_ids != expected_gpu_ids
+        or config.distributed.logical_gpu_ids != tuple(range(len(expected_gpu_ids)))
+        or config.distributed.world_size != len(expected_gpu_ids)
+        or config.training.maximum_optimizer_steps != expected_steps
+        or config.scheduler.total_steps != expected_steps
+        or config.training.checkpoint_steps != expected_checkpoints
+        or config.training.permanent_checkpoint_steps != expected_permanent
+        or config.training.resume_mode != expected_resume
+        or config.training.resume_from_path is not None
+        or config.framework.agent_loop_config_path.name
+        != "prl20_crop_tgvf_deepeyes_matched.yaml"
+    ):
+        _fail(f"Atomic arm contract differs: {config.run_id}")
+
+
+def _validate_reference_parity(atomic: Path, reference: Path) -> None:
+    allowed = {
+        ("schema_version",),
+        ("run_id",),
+        ("code", "commit"),
+        ("protocol", "prompt_sha256"),
+        ("protocol", "tool_profile"),
+        ("protocol", "tool_schema_sha256"),
+        ("protocol", "enabled_tool_names"),
+        ("reward", "judge_reason"),
+        ("framework", "agent_loop_config_path"),
+        ("framework", "agent_loop_config_sha256"),
+        ("output", "root"),
+        ("output", "checkpoint_directory"),
+        ("output", "metrics_path"),
+    }
+    observed = _leaf_differences(_toml(atomic), _toml(reference))
+    if observed != allowed:
+        _fail(
+            "Atomic and TGVF-Short parity configs differ beyond the tool arm: "
+            f"{sorted(observed ^ allowed)!r}"
+        )
+
+
+def validate_contracts(
+    *,
+    repository: Path,
+    canary_path: Path,
+    formal_path: Path,
+    reference_canary_path: Path,
+    reference_formal_path: Path,
+    plan_path: Path,
+    require_clean: bool,
+    require_output_roots_absent: bool = False,
+) -> dict[str, object]:
+    root = repository.resolve()
+    if Path(_git(root, "rev-parse", "--show-toplevel")).resolve() != root:
+        _fail("Atomic handoff repository root differs")
+    head = _git(root, "rev-parse", "HEAD")
+    if subprocess.run(
+        ("git", "merge-base", "--is-ancestor", _RUNTIME_BASELINE_COMMIT, head),
+        cwd=root,
+        check=False,
+    ).returncode:
+        _fail("Atomic runtime baseline is not an ancestor of handoff HEAD")
+    dirty = _git(root, "status", "--porcelain=v1", "--untracked-files=all")
+    if require_clean and dirty:
+        _fail("Atomic execution handoff requires a clean repository")
+
+    paths = {
+        "canary": canary_path.resolve(),
+        "formal": formal_path.resolve(),
+        "reference_canary": reference_canary_path.resolve(),
+        "reference_formal": reference_formal_path.resolve(),
+        "plan": plan_path.resolve(),
+    }
+    for path in paths.values():
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise RuntimeError("Atomic contract path escaped the repository") from error
+        if path.is_symlink() or not path.is_file():
+            _fail(f"Atomic contract file is unavailable: {path}")
+
+    canary = load_policy_e2e_smoke_run_config(paths["canary"])
+    formal = load_policy_e2e_smoke_run_config(paths["formal"])
+    reference_hashes = {
+        "canary": _sha256(paths["reference_canary"]),
+        "formal": _sha256(paths["reference_formal"]),
+    }
+    if reference_hashes != _EXPECTED_REFERENCE_CONFIG_SHA256:
+        _fail("pinned TGVF-Short reference config identity differs")
+    _validate_atomic_config(canary, canary=True)
+    _validate_atomic_config(formal, canary=False)
+    _validate_reference_parity(paths["canary"], paths["reference_canary"])
+    _validate_reference_parity(paths["formal"], paths["reference_formal"])
+
+    runner = _load_paired_runner(root)
+    plan = runner._load_plan(paths["plan"])
+    runtime = runner._load_evaluation_runtime(plan)
+    if (
+        plan.get("schema_version") != _PLAN_SCHEMA
+        or plan.get("evaluation_image_max_pixels") != 262_144
+        or plan.get("policy_config") != str(paths["formal"].relative_to(root))
+        or plan.get("policy_config_sha256") != formal.source_sha256
+        or plan.get("paired_rng", {}).get("protocol_sha256")
+        != _EXPECTED_RNG_PROTOCOL_SHA256
+        or plan.get("paired_rng", {}).get("master_seed") != 42
+        or plan.get("paired_rng", {}).get("temperature") != 1.0
+        or plan.get("paired_rng", {}).get("do_sample") is not True
+        or plan.get("arms")
+        != [
+            {
+                "name": "step32",
+                "optimizer_step": 32,
+                "qwen_source": ("output.root/permanent-checkpoints/global_step_32"),
+                "rp66_source": (
+                    "output.root/runtime-policy-state/"
+                    "lora-manifests/step-00000032-*.json"
+                ),
+                "evaluation_id": (
+                    "PRL26-E-ATOMIC-CROP-TGVF-TRAIN512-S32-MATCHED-"
+                    "COREDEV2511-PIXEL512-V1"
+                ),
+            }
+        ]
+        or runtime.backend != "paired_tgvf"
+        or runtime.checkpoint_owner.identity_sha256 != formal.identity_sha256
+    ):
+        _fail("Atomic Eval@512 plan differs from its formal owner")
+
+    outputs = {
+        "canary": canary.output.root,
+        "formal": formal.output.root,
+    }
+    all_output_roots_absent = not any(
+        os.path.lexists(path) for path in outputs.values()
+    )
+    if require_output_roots_absent and not all_output_roots_absent:
+        _fail("first Atomic admission requires fresh output roots")
+    return {
+        "schema_version": "tgvf.prl26-e-atomic-handoff-contracts.v1",
+        "status": "accepted",
+        "repository": str(root),
+        "repository_head": head,
+        "repository_clean_required": require_clean,
+        "repository_dirty": bool(dirty),
+        "runtime_baseline_commit": _RUNTIME_BASELINE_COMMIT,
+        "configs": {
+            name: {
+                "path": str(paths[name]),
+                "file_sha256": config.source_sha256,
+                "identity_sha256": config.identity_sha256,
+                "output_root": str(config.output.root),
+                "output_exists": os.path.lexists(config.output.root),
+            }
+            for name, config in (("canary", canary), ("formal", formal))
+        },
+        "reference_configs": {
+            name: {
+                "path": str(paths[f"reference_{name}"]),
+                "file_sha256": reference_hashes[name],
+            }
+            for name in ("canary", "formal")
+        },
+        "evaluation_plan": {
+            "path": str(paths["plan"]),
+            "file_sha256": _sha256(paths["plan"]),
+            "evaluation_id": plan["evaluation_id"],
+            "rng_protocol_sha256": plan["paired_rng"]["protocol_sha256"],
+        },
+        "all_output_roots_absent": all_output_roots_absent,
+        "fresh_output_roots_required": require_output_roots_absent,
+    }
+
+
+def _read_json(path: Path, owner: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"{owner} is unavailable or malformed") from error
+    if not isinstance(value, dict):
+        _fail(f"{owner} is not an object")
+    return value
+
+
+def _absolute(path: Path) -> Path:
+    return Path(os.path.abspath(path))
+
+
+def _require_exact_file(path: Path, expected: Path, owner: str) -> None:
+    if (
+        _absolute(path) != expected
+        or path.is_symlink()
+        or not path.is_file()
+    ):
+        _fail(f"{owner} path or file boundary differs")
+
+
+def _is_lower_hex_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _validate_official_summary(
+    *, name: str, summary: dict[str, Any], result_arm: dict[str, Any]
+) -> dict[str, Any]:
+    slices = summary.get("slices")
+    if (
+        summary.get("schema_version") != 1
+        or summary.get("status") != "pass"
+        or summary.get("phase") != "eval"
+        or summary.get("sample_count") != 2511
+        or summary.get("slice_count") != 7
+        or not isinstance(slices, list)
+        or len(slices) != 7
+    ):
+        _fail(f"TGVF prerequisite {name} official summary differs")
+    headline = extract_coredev_macro_star(summary)
+    macro = result_arm.get("macro_star_percent")
+    if (
+        not isinstance(headline, dict)
+        or type(headline.get("macro_star_percent")) not in (int, float)
+        or type(macro) not in (int, float)
+        or not math.isfinite(float(macro))
+        or not math.isclose(
+            float(macro),
+            float(headline["macro_star_percent"]),
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+        or result_arm.get("headline") != headline
+        or result_arm.get("seven_subset_statistics") != slices
+    ):
+        _fail(f"TGVF prerequisite {name} headline closure differs")
+    return headline
+
+
+def validate_prerequisite(
+    *, result_path: Path, complete_marker: Path, failed_marker: Path
+) -> dict[str, object]:
+    _require_exact_file(
+        result_path, _PREREQUISITE_RESULT, "TGVF target-prompt result"
+    )
+    _require_exact_file(
+        complete_marker,
+        _PREREQUISITE_COMPLETE,
+        "TGVF target-prompt completion marker",
+    )
+    if (
+        _absolute(failed_marker) != _PREREQUISITE_FAILED
+        or os.path.lexists(failed_marker)
+    ):
+        _fail("TGVF paired-evaluation prerequisite boundary differs")
+    payload = _read_json(result_path, "TGVF target-prompt result")
+    arms = payload.get("arms")
+    if (
+        payload.get("schema_version") != _RESULT_SCHEMA
+        or payload.get("status") != "pass"
+        or payload.get("evaluation_id") != _PREREQUISITE_EVALUATION_ID
+        or payload.get("contract") != _PREREQUISITE_CONTRACT
+        or payload.get("coverage") != _PREREQUISITE_COVERAGE
+        or payload.get("paired_rng_streams_equal") is not True
+        or payload.get("paired_rng_stream_count") != 2240
+        or not isinstance(arms, dict)
+        or set(arms) != {"short", "full"}
+    ):
+        _fail("TGVF paired-evaluation prerequisite result differs")
+
+    paired_summary_path = Path(str(payload.get("paired_summary_path", "")))
+    _require_exact_file(
+        paired_summary_path,
+        _PREREQUISITE_PAIRED_SUMMARY,
+        "TGVF paired summary",
+    )
+    paired_summary_sha256 = _sha256(paired_summary_path)
+    if payload.get("paired_summary_sha256") != paired_summary_sha256:
+        _fail("TGVF paired-summary declared SHA256 differs")
+    paired = _read_json(paired_summary_path, "TGVF paired summary")
+    paired_arms = paired.get("arms")
+    if (
+        paired.get("schema_version") != "tgvf.paired-coredev-summary.v2"
+        or paired.get("evaluation_id") != _PREREQUISITE_EVALUATION_ID
+        or paired.get("coverage") != _PREREQUISITE_PAIRED_COVERAGE
+        or paired.get("target_prompt_pair")
+        != _PREREQUISITE_TARGET_PROMPT_PAIR
+        or not isinstance(paired_arms, dict)
+        or set(paired_arms) != {"short", "full"}
+    ):
+        _fail("TGVF paired-summary contract differs")
+
+    sampling = paired.get("sampling")
+    paired_rng = sampling.get("paired_rng") if isinstance(sampling, dict) else None
+    if (
+        not isinstance(sampling, dict)
+        or sampling.get("source") != "bound_policy_run_config"
+        or sampling.get("temperature") != 1.0
+        or sampling.get("top_p") != 1.0
+        or sampling.get("top_k") != -1
+        or sampling.get("min_p") != 0.0
+        or sampling.get("do_sample") is not True
+        or not isinstance(paired_rng, dict)
+        or paired_rng.get("mode") != "common_random_numbers_per_task_turn"
+        or paired_rng.get("master_seed") != 42
+        or paired_rng.get("task_manifest_sha256")
+        != "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc"
+        or paired_rng.get("seed_protocol_sha256")
+        != _PREREQUISITE_SEED_PROTOCOL_SHA256
+        or paired_rng.get("arm_protocol_sha256")
+        != {
+            name: contract["arm_protocol_sha256"]
+            for name, contract in _PREREQUISITE_ARM_CONTRACTS.items()
+        }
+        or paired_rng.get("protocol_projection")
+        != _PREREQUISITE_TARGET_PROMPT_PAIR
+        or paired_rng.get("temperature") != 1.0
+        or paired_rng.get("do_sample") is not True
+    ):
+        _fail("TGVF paired-summary RNG contract differs")
+
+    accepted: dict[str, object] = {}
+    for name in ("short", "full"):
+        arm = arms[name]
+        paired_arm = paired_arms[name]
+        expected = _PREREQUISITE_ARM_CONTRACTS[name]
+        if not isinstance(arm, dict) or not isinstance(paired_arm, dict):
+            _fail(f"TGVF prerequisite {name} arm is malformed")
+        summary_path = _PREREQUISITE_ROOT / (
+            f"{name}/scoring/coredev-official-v1/"
+            "coredev-2511-eval-summary.json"
+        )
+        declared_summary_path = Path(str(arm.get("summary_path", "")))
+        _require_exact_file(
+            declared_summary_path,
+            summary_path,
+            f"TGVF prerequisite {name} official summary",
+        )
+        summary_sha256 = _sha256(summary_path)
+        if (
+            arm.get("method") != expected["method"]
+            or arm.get("optimizer_step") != 32
+            or arm.get("train_image_max_pixels") != 262_144
+            or arm.get("evaluation_image_max_pixels") != 262_144
+            or arm.get("summary_sha256") != summary_sha256
+            or paired_arm.get("optimizer_step") != 32
+            or paired_arm.get("evaluation_id") != expected["evaluation_id"]
+            or paired_arm.get("evaluation_image_max_pixels") != 262_144
+            or paired_arm.get("arm_protocol_sha256")
+            != expected["arm_protocol_sha256"]
+            or paired_arm.get("seed_protocol_sha256")
+            != _PREREQUISITE_SEED_PROTOCOL_SHA256
+            or not _is_lower_hex_sha256(
+                paired_arm.get("evaluation_identity_sha256")
+            )
+        ):
+            _fail(f"TGVF prerequisite {name} arm is incomplete")
+        summary = _read_json(summary_path, f"TGVF prerequisite {name} summary")
+        _validate_official_summary(name=name, summary=summary, result_arm=arm)
+        if (
+            paired_arm.get("official_summary") != summary
+            or paired.get(name) != summary
+        ):
+            _fail(f"TGVF prerequisite {name} paired-summary closure differs")
+        accepted[name] = {
+            "macro_star_percent": float(arm["macro_star_percent"]),
+            "summary_path": str(summary_path.resolve()),
+            "summary_sha256": summary_sha256,
+        }
+
+    _require_exact_file(
+        _PREREQUISITE_RUNNER_COMPLETE,
+        _PREREQUISITE_RUNNER_COMPLETE,
+        "TGVF paired runner completion",
+    )
+    runner_complete = _read_json(
+        _PREREQUISITE_RUNNER_COMPLETE, "TGVF paired runner completion"
+    )
+    if (
+        runner_complete.get("schema_version")
+        != "tgvf.paired-coredev-evaluation-complete.v1"
+        or runner_complete.get("status") != "complete"
+        or runner_complete.get("evaluation_id") != _PREREQUISITE_EVALUATION_ID
+        or runner_complete.get("paired_summary_path")
+        != str(_PREREQUISITE_PAIRED_SUMMARY.resolve())
+        or runner_complete.get("paired_summary_sha256")
+        != paired_summary_sha256
+    ):
+        _fail("TGVF paired runner completion receipt differs")
+    return {
+        "schema_version": "tgvf.prl26-e-atomic-prerequisite.v1",
+        "status": "accepted",
+        "evaluation_id": _PREREQUISITE_EVALUATION_ID,
+        "result_path": str(_PREREQUISITE_RESULT),
+        "result_sha256": _sha256(result_path),
+        "paired_summary_path": str(_PREREQUISITE_PAIRED_SUMMARY),
+        "paired_summary_sha256": paired_summary_sha256,
+        "arms": accepted,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    contracts = subparsers.add_parser("contracts")
+    contracts.add_argument("--repository", type=Path, required=True)
+    contracts.add_argument("--canary", type=Path, required=True)
+    contracts.add_argument("--formal", type=Path, required=True)
+    contracts.add_argument("--reference-canary", type=Path, required=True)
+    contracts.add_argument("--reference-formal", type=Path, required=True)
+    contracts.add_argument("--plan", type=Path, required=True)
+    contracts.add_argument("--require-clean", action="store_true")
+    contracts.add_argument(
+        "--require-output-roots-absent", action="store_true"
+    )
+    prerequisite = subparsers.add_parser("prerequisite")
+    prerequisite.add_argument("--result", type=Path, required=True)
+    prerequisite.add_argument("--complete-marker", type=Path, required=True)
+    prerequisite.add_argument("--failed-marker", type=Path, required=True)
+    canary = subparsers.add_parser("canary-complete")
+    canary.add_argument("--config", type=Path, required=True)
+    canary.add_argument("--repository", type=Path, required=True)
+    canary.add_argument("--expected-head", required=True)
+    args = parser.parse_args()
+    if args.command == "contracts":
+        result = validate_contracts(
+            repository=args.repository,
+            canary_path=args.canary,
+            formal_path=args.formal,
+            reference_canary_path=args.reference_canary,
+            reference_formal_path=args.reference_formal,
+            plan_path=args.plan,
+            require_clean=args.require_clean,
+            require_output_roots_absent=args.require_output_roots_absent,
+        )
+    elif args.command == "prerequisite":
+        result = validate_prerequisite(
+            result_path=args.result,
+            complete_marker=args.complete_marker,
+            failed_marker=args.failed_marker,
+        )
+    else:
+        result = validate_canary_completion(
+            config_path=args.config.resolve(),
+            repository=args.repository.resolve(),
+            expected_head=args.expected_head,
+        )
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
