@@ -193,6 +193,11 @@ def test_generic86_supervisor_is_executable_and_orders_fail_closed_route() -> No
     assert "PRL26_B_GENERIC86_EVAL_ATTEMPT" in LAUNCHER.read_text(
         encoding="utf-8"
     )
+    assert "validating_frozen_generic86_recovery_artifacts" in source
+    assert 'if [[ -L "$path" || ! -f "$path" || ! -s "$path" ]]' in source
+    assert "-${admitted_head}-attempt${attempt}" in LAUNCHER.read_text(
+        encoding="utf-8"
+    )
     assert "read_only_existing_hf_tree_no_merge" in (
         TOOLS / "reuse_prl26_b_s32_full_model_for_generic86_eval.py"
     ).read_text(encoding="utf-8")

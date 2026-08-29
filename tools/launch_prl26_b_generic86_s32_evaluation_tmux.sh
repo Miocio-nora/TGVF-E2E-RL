@@ -42,7 +42,7 @@ if [[ "$observed_root" != "$repo_root" \
 fi
 
 mkdir -p "$control_root"
-gate="prl26-b-generic86-eval-launch-${admitted_head}"
+gate="prl26-b-generic86-eval-launch-${admitted_head}-attempt${attempt}"
 command=$(printf \
   'tmux wait-for %q; exec %q >>%q 2>&1' \
   "$gate" "$supervisor" "$log_path")
