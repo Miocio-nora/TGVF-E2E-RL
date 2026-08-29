@@ -10059,3 +10059,38 @@ than inferred from a script name or prior conversation.
   and bind the implementation commit above. This ledger-bearing descendant
   authorizes their co-location at one clean HEAD for the execution-identity
   gate; no training was started while preparing these records.
+
+### PRL26-C/D train@512 TGVF Target-prompt parity rerun (2026-08-29)
+
+- Cell/status: `PRL-26-C-TRAIN512-S32-PARITY-TGVF-SHORT` and
+  `PRL-26-D-TRAIN512-S32-PARITY-TGVF-TARGET-GUIDE-V2` / `CONFIGURED, QUEUED`.
+  Neither arm may start until the PRL26-A/B NoTool-versus-Crop S32 evaluation
+  has closed and two consecutive admission checks find GPUs 0--7 and Ray
+  runtime state clean.
+- Implementation commit
+  `396a25819871f753f40242b5137e4c6f9fd49348` adds an explicit, fail-closed
+  prompt-hash route for the frozen Short prompt and the Target-guide-only v2
+  treatment. The Full treatment adds only a teacher-aligned Target definition
+  and examples and replaces the legacy answer-oriented gauge Target with
+  `small circular gauge, its needle position, and surrounding scale markings`.
+  Removing those Target changes restores the Short system prompt byte for
+  byte; the user suffix, `<think>` instruction, final-answer convention,
+  observation rendering, Hermes parser, tool schema and `</tool_call>` action
+  boundary remain unchanged. The Short and Full bundle SHA256 values are
+  respectively
+  `e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633`
+  and
+  `77ed3a597d2a58e748b70bafe37882760944e293723a28008818a96aad025d0d`.
+- Formal parity contract: both arms are independent fresh-Original-S0 runs at
+  `image_max_pixels=262144`, with a frozen RP67 Step-2000 adapter, the identical
+  Teacher25 seed-42 row order, BS16 x n16, world8/FSDP2/GA1, temperature 1,
+  constant LR `1e-6`, maximum six TGVF calls and retained S0/S8/S16/S24/S32
+  boundaries. Reward, optimizer, sampling and data are identical between arms
+  and retain the established PRL25/26 matched contract; no tool-utility
+  sidecar, Focus/Grounding reward or visual-quality judge is introduced.
+- Isolated fresh-S0 one-step C0 configs cover Short on GPUs 0--3 and Full on
+  GPUs 4--7. After both functional gates pass, the formal arms use all eight
+  GPUs sequentially and must be evaluated under one matched CoreDev-2511
+  train@512/eval@512 contract. This ledger-bearing config descendant binds all
+  four immutable run configs to the implementation commit above; preparation
+  does not admit canary trajectories into either formal lineage.
