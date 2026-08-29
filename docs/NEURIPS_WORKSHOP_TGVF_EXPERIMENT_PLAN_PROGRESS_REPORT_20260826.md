@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29 14:47 JST（Asia/Tokyo）
+更新时间：2026-08-29 15:35 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -98,17 +98,18 @@ No-Tool processor-default 数值不进入 true-1M 主表，只保留为 historic
 fresh-S0 对照，用于回答从 RL 开始即固定 `262,144` pixels 时，No-Tool、Crop 与 TGVF 的表现及
 prompt sensitivity 是否改变；在正式 scorer 闭合前，训练 reward 和工具调用统计只作健康诊断。
 
-| Arm | 状态（2026-08-29 14:47 JST） | 已验收边界 | 下一自动动作 |
+| Arm | 状态（2026-08-29 15:35 JST） | 已验收边界 | 下一自动动作 |
 |---|---|---|---|
 | No-Tool Train@512 | **S32 完成** | S8/S16/S24/S32 permanent receipts；S32 run identity `c079c678...` | 等待 Crop S32 后进入 paired Eval@512 |
-| Crop Train@512 | **S16 深审计通过，继续训练** | S16 run identity `b064bf21...`；当前步无 action-boundary / parse / execution error | S24 稀疏检查，S32 后触发 A/B Eval@512 |
+| Crop Train@512 | **S20 已提交，S21 运行中** | S16 深审计通过；截至 S20 无 429、崩溃、action-boundary / incomplete error | S24 稀疏检查，S32 后触发 A/B Eval@512 |
 | TGVF Short Train@512 | **已冻结、未启动** | prompt、tool、RP67、@512 processor 与 S32 合同已预检 | A/B 评测完成且 GPU/Ray 释放后启动 |
 | TGVF Target-guide-v2 Train@512 | **已冻结、未启动** | 仅增加 teacher-aligned Target 定义与视觉案例 | Short S32 后启动，再做 prompt-axis paired eval |
 | Atomic Train@512 | **总矩阵保留，当前接力未启动** | 不与 Target-guide-v2 混为同一 arm | 在上述 prompt-axis 对照后单独排程 |
 
-当前 Crop S32 预计完成窗口为 `18:00–18:45 JST`，属于按 S9–S16 平均 step 时间估算，不是验收
-承诺。`prl26-train512-s32-eval` 与 `prl26-cd-tgvf-prompt-s32` 两个常驻 supervisor 均存活；前者
-等待 Crop S32 后接管 No-Tool/Crop 评测，后者等待 A/B 评测闭合后接管两条 TGVF 训练与评测。
+当前最近 7 个完整 step 平均 `13.18 min/step`，Crop S24 / S32 预计为 `16:13 / 17:59 JST`；
+它们是速度估算，不是验收承诺。`prl26-train512-s32-eval` 与
+`prl26-cd-tgvf-prompt-s32` 两个常驻 supervisor 均存活；前者等待 Crop S32 后接管 No-Tool/Crop
+评测，后者等待 A/B 评测闭合后接管两条 TGVF 训练与评测。
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -1291,8 +1292,14 @@ SHA256 为 `4cbfd3cf698cb47b0c9594ca9f9e146ca09932d62bdb93d0877e59f9a85bee9c`。
 总数/强度、成功 observation、错误、stop 分布与输出 token p50/p95/p99，并逐题核对 2,240 个 ID
 和 RNG stream identity。
 
-PRL26 的合同、自动接力与 164 项综合测试固定在
-`origin/neurips-notool-rl-s32@efeaf1b48a18dc7481732712d326d2da8cdf2338`。当前执行顺序严格为
+PRL26 的合同、自动接力与 164 项综合测试首先固定在
+`origin/neurips-notool-rl-s32@efeaf1b48a18dc7481732712d326d2da8cdf2338`。运行前复核发现 A/B
+成功标记由 `touch` 生成零字节 regular file，而 C/D relay 原先以 `-s` 等待非空文件，会在 A/B
+成功后永久等待。修复 commit
+`c0cebefd1ebc9ca2ddd91482a340f0d4b755e0b7` 将等待条件改为 `-f`，并增加回归断言；4 项 handoff
+测试与 shell/diff 检查通过。旧等待型 tmux 在尚未产生任何 C/D 输出时以状态 130 退出，新 tmux
+已在 clean `c0cebef` 上重启并通过 static contract audit；Crop 与 A/B evaluator 均未中断。
+当前执行顺序严格为
 `Crop S32 → No-Tool/Crop Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间 reward、S16/S24 checkpoint 或单个
 subset 分数都不得替代事前冻结的 S32/七项正式结果。
@@ -1434,7 +1441,7 @@ Atomic 进入正文核心方法必须同时满足：
   `prl26-train512-s32-eval`。
 - PRL26 TGVF prompt-axis V6 plan：
   `configs/evaluation/prl26_cd_tgvf_target_prompt_pair_s32_pixel512_coredev2511_plan.json`，固定于
-  `origin/neurips-notool-rl-s32@efeaf1b48a18dc7481732712d326d2da8cdf2338`；控制根为
+  `origin/neurips-notool-rl-s32@c0cebefd1ebc9ca2ddd91482a340f0d4b755e0b7`；控制根为
   `artifacts/control/PRL-26-tgvf-prompt-parity-20260829`，常驻 tmux session 为
   `prl26-cd-tgvf-prompt-s32`。
 
