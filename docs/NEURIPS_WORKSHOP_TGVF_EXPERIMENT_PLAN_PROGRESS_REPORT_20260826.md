@@ -1365,6 +1365,15 @@ accepted，Atomic 仍保持等待。
 通过，GPU 0--3 四个 worker 与 Crop GPU 4--7 四个 worker 均完成模型加载、预热并写出各自首批
 prediction。首次 18:12 失败发生在 inference 前，未占用 GPU、未生成 prediction 或 score，因此
 不会污染本次输出；当前 failed marker 为空。这里记录的是运行状态，不是正式七项分数。
+19:32 JST，两臂 inference 均已完整闭合：No-Tool 与 Crop 的四个 rank 合计分别为
+`2,240/2,240` 个受支持 single-image prediction；完整 scorer materialization 仍为 `2,511` 行，其中
+`271` 个 unsupported multi-image 由合同显式 hold，七个 subset 均已物化。两臂均无 sample-local
+failure，GPU 0--7 已从 inference worker 释放。由于旧 supervisor 的 success path 未把 worker PGID
+cleanup 固化在 scoring marker 之前，现场采用可逆 cgroup gate 暂停 outer supervisor，并在两次相隔
+30 秒的 clean probe 均确认 GPU、Ray、已知 PGID 与 judge 端口干净后放行；没有重跑或修改 prediction。
+19:35 JST，Crop S32 七项正式 scorer 已并行启动，本地 Qwen2.5-72B judge 以 TP2 使用 GPU 2--3；
+Crop 闭合后自动执行 No-Tool S32 scorer。当前轮只评测事前冻结的 S32，不混入 S0/S8/S16/S24；
+在 summary 与 completion receipt 发布前仍无可报告的 Macro*。
 当前执行顺序严格为
 `Crop S32 → No-Tool/Crop aligned Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512 → Atomic C0/S32 → Atomic Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间
@@ -1458,9 +1467,10 @@ Atomic 进入正文核心方法必须同时满足：
 12. [已完成] PRL26 No-Tool fresh-S0 Train@512 到 S32，permanent receipt 已审计；
 13. [已完成] PRL26 Crop fresh-S0 Train@512 S32、permanent receipt、rolling/permanent samefile 与
     supervisor `return_code=0` 均已验收；
-14. [运行中] No-Tool/Crop aligned/matched Eval@512 已通过两臂 @512 processor proof 并进入实际
-    4+4 GPU inference；No-Tool 使用 GPU 0--3、Crop 使用 GPU 4--7，八个 rank 均已产生 prediction；
-    七项正式 scorer 尚未开始/闭合，因此暂无 benchmark 分数；
+14. [运行中] No-Tool/Crop aligned/matched Eval@512 的两臂 inference 均已完成：各 `2,240/2,240`
+    个 supported single-image prediction，另有合同显式 hold 的 271 个 unsupported multi-image；
+    Crop S32 七项正式 scorer 正在运行，随后自动评分 No-Tool S32。本轮只评测 S32；summary 与
+    completion receipt 尚未闭合，因此暂无正式 Macro*；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
 16. [已排队] Atomic fresh-S0 Train@512/Eval@512 clean 接力已通过 static admission 并挂起；
