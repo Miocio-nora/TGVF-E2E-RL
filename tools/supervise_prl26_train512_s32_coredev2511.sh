@@ -21,7 +21,7 @@ crop_evaluation_id=PRL26-B-TRAIN512-S32-CROP-MATCHED-COREDEV2511-PIXEL512-BOUNDA
 notool_eval_root="$notool_training_root/evaluation/$notool_evaluation_id"
 crop_eval_root="$crop_training_root/evaluation/$crop_evaluation_id"
 crop_plan="$crop_eval_root/runtime/bound-crop-plan.json"
-crop_config="$crop_eval_root/step32/config.json"
+crop_config="$crop_eval_root/step32/benchmark-config.json"
 crop_validation="$crop_eval_root/logs/prl26-pixel512-static-validation.json"
 crop_proof="$crop_eval_root/step32/runtime/pixel512-processor-proof.json"
 

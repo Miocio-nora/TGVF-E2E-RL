@@ -4,6 +4,7 @@ from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -97,6 +98,25 @@ def proof_validator() -> ModuleType:
         "prl26_processor_proof_under_test",
         TOOLS / "validate_prl26_train512_processor_proof.py",
     )
+
+
+def test_crop_supervisor_uses_generic_runner_canonical_config_path(
+    paired_runner: ModuleType,
+    tmp_path: Path,
+) -> None:
+    supervisor = (
+        TOOLS / "supervise_prl26_train512_s32_coredev2511.sh"
+    ).read_text(encoding="utf-8")
+    assignment = re.search(
+        r'^crop_config="\$crop_eval_root/(?P<relative_path>[^"\n]+)"$',
+        supervisor,
+        flags=re.MULTILINE,
+    )
+    assert assignment is not None
+
+    supervisor_config = tmp_path / assignment.group("relative_path")
+    runner_config = paired_runner._arm_paths(tmp_path, "step32")["config"]
+    assert supervisor_config == runner_config
 
 
 def _pixel512_geometry() -> dict[str, object]:
