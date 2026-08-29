@@ -23,6 +23,9 @@ from tgvf_rl.environment.crop_runtime import (
     ImageZoomInToolRuntime,
 )
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
+from tgvf_rl.environment.native_appender import (
+    render_qwen_native_success_environment_text,
+)
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
 from tgvf_rl.observations.store import (
     ObservationStore,
@@ -33,6 +36,7 @@ from tgvf_rl.observations.store import (
 from tgvf_rl.policy.trainable_crop_replay import (
     build_trainable_crop_current_request,
 )
+from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.qwen.crop_coordinates import (
     CanonicalSourcePixelCropCoordinateMapper,
 )
@@ -119,6 +123,10 @@ def _crop_replay(*, legacy_crop_pixels: bool = False):
         ),
         execution_ledger=CropExecutionLedger(),
         coordinate_mapper=CanonicalSourcePixelCropCoordinateMapper(),
+        success_environment_text_renderer=(
+            render_qwen_native_success_environment_text
+        ),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
     )
     parsed = _parsed_call()
     context = _context(parsed_call=parsed, source=source, model=model_identity)

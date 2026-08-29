@@ -3658,6 +3658,10 @@ class PolicyCoreDevEvaluator:
                 crop_layout_identity=layout_identity,
                 execution_ledger=self.crop_ledger,
                 coordinate_mapper=Qwen3VLAdapter(),
+                success_environment_text_renderer=(
+                    self.success_environment_text_renderer
+                ),
+                assistant_dialect=self.assistant_dialect,
             )
         elif self.run.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
             processor_identity = _artifact_identity(

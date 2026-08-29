@@ -12,6 +12,7 @@ from tgvf_rl.contracts.errors import RecoverableToolExecutionError
 from tgvf_rl.contracts.identity import ArtifactIdentity, ModelIdentity
 from tgvf_rl.observations.schema import TrajectorySourceVisual
 from tgvf_rl.observations.store import ObservationHandle, ObservationStore
+from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.schema import IMAGE_ZOOM_IN_TOOL_NAME, ParsedImageZoomInCall
 from tgvf_rl.qwen.crop_coordinates import CropCoordinateMapper
 
@@ -23,6 +24,7 @@ from .crop_tool import (
     CropVisualTensorBundle,
     ImageZoomInTool,
 )
+from .native_appender import NativeSuccessEnvironmentTextRenderer
 
 
 @dataclass(slots=True)
@@ -122,6 +124,8 @@ class CropRuntimeLayoutPort(Protocol):
         context: ToolExecutionContext,
         crop_visual: CropVisualTensorBundle,
         parsed_call: ParsedImageZoomInCall,
+        *,
+        environment_success_text: str,
     ) -> CropReplayLayout: ...
 
 
@@ -130,6 +134,7 @@ class _BoundCropReplayLayoutBuilder:
     owner: CropRuntimeLayoutPort
     context: ToolExecutionContext
     parsed_call: ParsedImageZoomInCall
+    environment_success_text: str
 
     def build(
         self,
@@ -149,7 +154,12 @@ class _BoundCropReplayLayoutBuilder:
             raise ValueError("bound crop layout parsed call changed")
         if trajectory_source_visual != context.trajectory_source_visual:
             raise ValueError("bound crop layout source visual changed")
-        return self.owner.build_crop(context, crop_visual, parsed_call)
+        return self.owner.build_crop(
+            context,
+            crop_visual,
+            parsed_call,
+            environment_success_text=self.environment_success_text,
+        )
 
 
 class ImageZoomInToolRuntime:
@@ -172,6 +182,8 @@ class ImageZoomInToolRuntime:
         crop_layout_identity: ArtifactIdentity,
         execution_ledger: CropExecutionLedger,
         coordinate_mapper: CropCoordinateMapper,
+        success_environment_text_renderer: NativeSuccessEnvironmentTextRenderer,
+        assistant_dialect: NativeAssistantDialect,
         processor_resized_size: tuple[int, int] | None = None,
     ) -> None:
         if not isinstance(model, ModelIdentity):
@@ -190,6 +202,12 @@ class ImageZoomInToolRuntime:
             raise TypeError("plain crop runtime requires a CropExecutionLedger")
         if not callable(getattr(coordinate_mapper, "map_crop_bbox_to_source", None)):
             raise TypeError("plain crop runtime requires an explicit coordinate mapper")
+        if not callable(success_environment_text_renderer):
+            raise TypeError(
+                "plain crop runtime requires a success environment text renderer"
+            )
+        if not isinstance(assistant_dialect, NativeAssistantDialect):
+            raise TypeError("assistant_dialect must be NativeAssistantDialect")
         bound_model = getattr(materializer, "model_identity", None)
         if bound_model is not None and bound_model != model:
             raise ValueError("crop materializer model differs from runtime model")
@@ -205,6 +223,8 @@ class ImageZoomInToolRuntime:
         self.crop_layout_identity = crop_layout_identity
         self.execution_ledger = execution_ledger
         self.coordinate_mapper = coordinate_mapper
+        self.success_environment_text_renderer = success_environment_text_renderer
+        self.assistant_dialect = assistant_dialect
         self.processor_resized_size = processor_resized_size
         self.crop_tool = ImageZoomInTool(
             materializer,
@@ -248,6 +268,12 @@ class ImageZoomInToolRuntime:
         parsed_call: ParsedImageZoomInCall,
         context: ToolExecutionContext,
     ) -> ObservationHandle:
+        environment_success_text = self.success_environment_text_renderer(
+            parsed_call,
+            assistant_dialect=self.assistant_dialect,
+        )
+        if not isinstance(environment_success_text, str) or not environment_success_text:
+            raise ValueError("plain crop success response must be non-empty text")
         try:
             result = self.crop_tool.execute(
                 CropToolExecutionRequest(
@@ -259,6 +285,7 @@ class ImageZoomInToolRuntime:
                         self.layout_builder,
                         context,
                         parsed_call,
+                        environment_success_text,
                     ),
                     model=context.model,
                     policy_version=context.behavior_policy,

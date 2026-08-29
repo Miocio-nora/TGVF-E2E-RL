@@ -803,6 +803,10 @@ class _Qwen3PolicyTrajectoryComponents:
                 crop_layout_identity=crop_layout_identity,
                 execution_ledger=self.crop_execution_ledger,
                 coordinate_mapper=Qwen3VLAdapter(),
+                success_environment_text_renderer=(
+                    success_environment_text_renderer
+                ),
+                assistant_dialect=assistant_dialect,
             )
         elif self.config.protocol.tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
             crop_processor_identity = _artifact_identity(

@@ -35,7 +35,10 @@ from tgvf_rl.environment.crop_runtime import CropExecutionLedger, ImageZoomInToo
 from tgvf_rl.environment.crop_tgvf_runtime import AtomicCropTGVFToolRuntime
 from tgvf_rl.environment.crop_tgvf_tool import AtomicCropTGVFTool
 from tgvf_rl.environment.focus_runtime import FocusExecutionLedger
-from tgvf_rl.environment.native_appender import QWEN_NATIVE_IMAGE_PLACEHOLDER
+from tgvf_rl.environment.native_appender import (
+    QWEN_NATIVE_IMAGE_PLACEHOLDER,
+    render_qwen_native_success_environment_text,
+)
 from tgvf_rl.environment.qwen3_crop_materializer import Qwen3CropVisualMaterializer
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
@@ -43,6 +46,7 @@ from tgvf_rl.framework.vllm import Qwen3VLLMObservationPayloadResolver
 from tgvf_rl.observations.schema import CropObservationRecord, CropTGVFObservationRecord
 from tgvf_rl.observations.store import ObservationStore
 from tgvf_rl.protocol.parser import StrictToolCallParser
+from tgvf_rl.protocol.native import NativeAssistantDialect
 from tgvf_rl.protocol.schema import (
     TGVF_CROP_TOOL_NAME,
     IMAGE_ZOOM_IN_TOOL_NAME,
@@ -461,6 +465,10 @@ def main() -> int:
         crop_layout_identity=layout_identity,
         execution_ledger=CropExecutionLedger(),
         coordinate_mapper=Qwen3VLAdapter(),
+        success_environment_text_renderer=(
+            render_qwen_native_success_environment_text
+        ),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
     )
     plain_handle = plain_runtime.execute(
         plain_parsed,

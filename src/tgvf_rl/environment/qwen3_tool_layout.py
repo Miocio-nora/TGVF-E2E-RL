@@ -441,6 +441,8 @@ class Qwen3NativeToolLayoutBuilder:
         context: ToolExecutionContext,
         crop_visual: CropVisualTensorBundle,
         parsed_call: ParsedImageZoomInCall,
+        *,
+        environment_success_text: str,
     ) -> CropReplayLayout:
         if not isinstance(crop_visual, CropVisualTensorBundle):
             raise TypeError("plain crop layout requires CropVisualTensorBundle")
@@ -454,6 +456,7 @@ class Qwen3NativeToolLayoutBuilder:
             new_grid=crop_visual.image_grid_thw,
             new_merge_size=crop_visual.spatial_merge_size,
             parsed_call=parsed_call,
+            environment_success_text=environment_success_text,
         )
         positions = expanded.new_positions
         return CropReplayLayout(
