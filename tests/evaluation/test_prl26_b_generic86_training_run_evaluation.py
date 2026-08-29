@@ -183,8 +183,15 @@ def test_generic86_supervisor_is_executable_and_orders_fail_closed_route() -> No
     assert score < summarize < complete
     assert "release_stable_polls < 3" in source
     assert "export VLLM_PLUGINS=tgvf_qwen3_precomputed" in source
+    assert "export VLLM_ATTENTION_BACKEND=TRITON_ATTN" in source
+    assert "export VERL_FULL_DETERMINISM=0" in source
+    assert "export VLLM_BATCH_INVARIANT=0" in source
     assert "export VLLM_PLUGINS=" not in source.replace(
         "export VLLM_PLUGINS=tgvf_qwen3_precomputed", ""
+    )
+    assert "PRL26_B_GENERIC86_EVAL_ATTEMPT" in source
+    assert "PRL26_B_GENERIC86_EVAL_ATTEMPT" in LAUNCHER.read_text(
+        encoding="utf-8"
     )
     assert "read_only_existing_hf_tree_no_merge" in (
         TOOLS / "reuse_prl26_b_s32_full_model_for_generic86_eval.py"
