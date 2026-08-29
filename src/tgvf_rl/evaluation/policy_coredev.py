@@ -100,6 +100,7 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -117,6 +118,11 @@ from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
     TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
     build_tgvf_visual_messages,
+)
+from tgvf_rl.policy.tgvf_target_guide_v2_protocol import (
+    TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY,
+    TGVF_TARGET_GUIDE_V2_PROMPT_VERSION,
+    build_tgvf_target_guide_v2_visual_messages,
 )
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
@@ -201,7 +207,11 @@ def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
         return render_qwen_native_matched_crop_tgvf_success_environment_text
     return (
         render_qwen_native_matched_tgvf_success_environment_text
-        if run.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+        if run.schema_version
+        in (
+            POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+            | POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
+        )
         else render_qwen_native_success_environment_text
     )
 
@@ -211,12 +221,27 @@ def _matched_prompt_materializer_identity(
 ) -> dict[str, object] | None:
     """Bind the corrected training-matched prompt path without legacy drift."""
 
-    if run.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS:
+    if run.schema_version in (
+        POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+        | POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
+    ):
         if run.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
             raise ValueError("matched TGVF run has a non-TGVF tool profile")
-        builder = "build_tgvf_visual_messages"
-        prompt_version = TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
-        prompt_sha256 = TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+        contracts = {
+            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256: (
+                "build_tgvf_visual_messages",
+                TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
+            ),
+            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256: (
+                "build_tgvf_target_guide_v2_visual_messages",
+                TGVF_TARGET_GUIDE_V2_PROMPT_VERSION,
+            ),
+        }
+        contract = contracts.get(run.protocol.prompt_sha256)
+        if contract is None:
+            raise ValueError("matched TGVF evaluation prompt identity differs")
+        builder, prompt_version = contract
+        prompt_sha256 = run.protocol.prompt_sha256
     elif run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
         if run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_TGVF:
             raise ValueError("matched Crop+TGVF run has a non-combined tool profile")
@@ -280,6 +305,10 @@ def _render_training_run_visual_prompt(
         messages = build_crop_tgvf_visual_messages(question)
     elif run.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         messages = build_no_tool_visual_messages(question)
+    elif run.protocol.prompt_sha256 == (
+        TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256
+    ):
+        messages = build_tgvf_target_guide_v2_visual_messages(question)
     else:
         messages = build_tgvf_visual_messages(question)
     renderer.assert_tokenizer_length()

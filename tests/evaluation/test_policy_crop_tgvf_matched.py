@@ -18,10 +18,16 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
 )
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
     build_tgvf_visual_messages,
+)
+from tgvf_rl.policy.tgvf_target_guide_v2_protocol import (
+    TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY,
+    build_tgvf_target_guide_v2_visual_messages,
 )
 from tgvf_rl.policy.no_tool_rl_protocol import (
     NO_TOOL_RL_PROMPT_IDENTITY,
@@ -82,13 +88,31 @@ class _Renderer:
         )
 
 
-def _run(schema: str, profile: NativeToolCapabilityProfile) -> object:
+def _run(
+    schema: str,
+    profile: NativeToolCapabilityProfile,
+    *,
+    prompt_sha256: str | None = None,
+) -> object:
     tool_name = {
         NativeToolCapabilityProfile.NO_TOOL: None,
         NativeToolCapabilityProfile.TGVF_ONLY: "tgvf_focus_tool",
         NativeToolCapabilityProfile.CROP_ONLY: "image_zoom_in_tool",
         NativeToolCapabilityProfile.CROP_TGVF: "tgvf_crop_tool",
     }[profile]
+    if prompt_sha256 is None:
+        prompt_sha256 = {
+            NativeToolCapabilityProfile.NO_TOOL: (
+                NO_TOOL_RL_PROMPT_IDENTITY.bundle_sha256
+            ),
+            NativeToolCapabilityProfile.TGVF_ONLY: (
+                TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+            ),
+            NativeToolCapabilityProfile.CROP_ONLY: "f" * 64,
+            NativeToolCapabilityProfile.CROP_TGVF: (
+                CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+            ),
+        }[profile]
     return SimpleNamespace(
         schema_version=schema,
         model=SimpleNamespace(
@@ -99,6 +123,7 @@ def _run(schema: str, profile: NativeToolCapabilityProfile) -> object:
         protocol=SimpleNamespace(
             tool_profile=profile,
             enabled_tool_names=() if tool_name is None else (tool_name,),
+            prompt_sha256=prompt_sha256,
         ),
     )
 
@@ -113,6 +138,23 @@ def _run(schema: str, profile: NativeToolCapabilityProfile) -> object:
             ),
             build_tgvf_visual_messages("question"),
             TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+        ),
+        (
+            _run(
+                POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+                NativeToolCapabilityProfile.TGVF_ONLY,
+            ),
+            build_tgvf_visual_messages("question"),
+            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+        ),
+        (
+            _run(
+                POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+                NativeToolCapabilityProfile.TGVF_ONLY,
+                prompt_sha256=TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
+            ),
+            build_tgvf_target_guide_v2_visual_messages("question"),
+            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
         ),
         (
             _run(
@@ -177,6 +219,34 @@ def test_legacy_generic_crop_prompt_route_is_unchanged() -> None:
     assert not processor.calls
     assert len(renderer.render_calls) == 1
     assert implementation._matched_prompt_materializer_identity(run) is None
+
+
+def test_target_guide_evaluation_route_rejects_an_unknown_prompt_hash() -> None:
+    run = _run(
+        POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        prompt_sha256="0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="evaluation prompt identity differs"):
+        implementation._matched_prompt_materializer_identity(run)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    (
+        POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    ),
+)
+def test_pixel512_tgvf_evaluation_uses_matched_observation_renderer(
+    schema: str,
+) -> None:
+    run = _run(schema, NativeToolCapabilityProfile.TGVF_ONLY)
+
+    assert implementation._success_environment_text_renderer(run) is (
+        implementation.render_qwen_native_matched_tgvf_success_environment_text
+    )
 
 
 def test_official_visible_identity_does_not_admit_matched_materializer() -> None:

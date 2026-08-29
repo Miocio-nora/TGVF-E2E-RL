@@ -10094,3 +10094,10 @@ than inferred from a script name or prior conversation.
   train@512/eval@512 contract. This ledger-bearing config descendant binds all
   four immutable run configs to the implementation commit above; preparation
   does not admit canary trajectories into either formal lineage.
+- Evaluation preflight found that the historical CoreDev materializer selected
+  pure-TGVF prompts only by the old RP66 schema family. This ledger-bearing
+  recovery explicitly admits the two pixel512 schemas and selects Short versus
+  Target-guide v2 by the bound prompt hash. It also binds the matched visual
+  observation renderer, rejects unknown hashes, and leaves every historical
+  evaluation schema unchanged. No C/D training or evaluation was started
+  before this correction and its regression gates passed.
