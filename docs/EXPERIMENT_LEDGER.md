@@ -10406,3 +10406,15 @@ than inferred from a script name or prior conversation.
   `prl27-b-crop-s32-eval512`. Its observed phase is
   `waiting_for_s32_training_acceptance`; this phase consumes no GPU and cannot
   bypass the accepted-S32 or post-training resource-release gates.
+- **First real update closure:** S1 published at `2026-08-30 02:18:02 JST`
+  after `784.7084546489641` seconds end to end. All 256 trajectories completed
+  rollout, repeated Crop/final replay and the optimizer update without a
+  replay, parse or execution failure; the only typed tool error was seven
+  `tool_call_limit_exceeded` events. S1 recorded answer reward `0.67578125`,
+  stage-3 answer reward `1.3515625`, tool-attempt rate `0.8125`, 446 attempts,
+  439 successful observations, mean attempts `1.7421875`, format-error rate
+  `0.1328125`, group reward variance `0.720140625` and zero-variance-group rate
+  `0.1875`. The 8-way model/optimizer shards, pair/project state and tracker
+  closed at global step 1, after which the same attempt entered S2. This is the
+  first production evidence that the byte-parity fix survives a real gradient
+  update; it is a training-health datum, not a benchmark score.
