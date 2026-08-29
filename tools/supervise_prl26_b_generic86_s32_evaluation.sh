@@ -21,7 +21,16 @@ paired_summary="$eval_root/paired-summary.json"
 runner_complete="$eval_root/evaluation-complete"
 result="$eval_root/generic86-crop-s32-pixel512-results.json"
 
-control_root="$main_root/artifacts/control/PRL-26-B-generic86-s32-eval512-20260830"
+attempt=${PRL26_B_GENERIC86_EVAL_ATTEMPT:-0}
+if [[ ! "$attempt" =~ ^[0-9]+$ ]]; then
+  echo "PRL-26-B generic86 evaluation attempt is malformed" >&2
+  exit 1
+fi
+control_name=PRL-26-B-generic86-s32-eval512-20260830
+if (( attempt > 0 )); then
+  control_name="${control_name}-recovery${attempt}"
+fi
+control_root="$main_root/artifacts/control/$control_name"
 runtime_root="$control_root/runtime"
 log_root="$control_root/logs"
 state_root="$control_root/state"
@@ -104,9 +113,12 @@ export VLLM_USE_V1=1
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 # The generic86 arm evaluates the exact training runtime with precomputed image
 # embeddings.  Its full-model engine therefore selects the repo-owned
-# TGVFQwen3VLForConditionalGeneration architecture and worker extension; keep
-# the corresponding audited vLLM general plugin enabled in every spawned rank.
+# TGVFQwen3VLForConditionalGeneration architecture and worker extension.  Keep
+# the complete audited rollout environment enabled in every spawned rank.
 export VLLM_PLUGINS=tgvf_qwen3_precomputed
+export VLLM_ATTENTION_BACKEND=TRITON_ATTN
+export VERL_FULL_DETERMINISM=0
+export VLLM_BATCH_INVARIANT=0
 export TORCH_DEVICE_BACKEND_AUTOLOAD=0
 
 phase=admission

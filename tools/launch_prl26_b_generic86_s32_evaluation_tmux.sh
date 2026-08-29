@@ -4,8 +4,18 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
 supervisor="$repo_root/tools/supervise_prl26_b_generic86_s32_evaluation.sh"
+attempt=${PRL26_B_GENERIC86_EVAL_ATTEMPT:-0}
+if [[ ! "$attempt" =~ ^[0-9]+$ ]]; then
+  echo "PRL-26-B generic86 evaluation attempt is malformed" >&2
+  exit 1
+fi
 session=prl26-b-generic86-s32-eval512
-control_root="$main_root/artifacts/control/PRL-26-B-generic86-s32-eval512-20260830"
+control_name=PRL-26-B-generic86-s32-eval512-20260830
+if (( attempt > 0 )); then
+  session="${session}-r${attempt}"
+  control_name="${control_name}-recovery${attempt}"
+fi
+control_root="$main_root/artifacts/control/$control_name"
 log_path="$control_root/tmux-launch.log"
 
 if [[ ! -x "$supervisor" ]]; then
@@ -47,7 +57,8 @@ trap cleanup_unarmed_session EXIT
 
 tmux new-session -d -E \
   -s "$session" -c "$repo_root" \
-  -e "PRL26_B_GENERIC86_EVAL_ADMITTED_HEAD=$admitted_head" "$command"
+  -e "PRL26_B_GENERIC86_EVAL_ADMITTED_HEAD=$admitted_head" \
+  -e "PRL26_B_GENERIC86_EVAL_ATTEMPT=$attempt" "$command"
 tmux set-option -w -t "${session}:" remain-on-exit on
 pane_count=$(tmux list-panes -t "=$session" -F '#{pane_id}' | wc -l)
 remain=$(tmux show-options -w -v -t "${session}:" remain-on-exit)
