@@ -10366,3 +10366,16 @@ than inferred from a script name or prior conversation.
   policy root. The seven-benchmark training-run Eval@512 identity/RNG namespace
   will be bound in a separate immutable evaluation handoff before S32 and does
   not delay this training admission package.
+- Prelaunch validation of the committed training package passed `11` tests
+  with one expected skip belonging only to PRL27-A's historical non-fresh
+  root, Ruff, shell syntax and diff checks. The strict B contract audit binds
+  target identity
+  `45d66b2e830a18869cb8e1fef82c47ccd95b3f85fb99f436a1ab735869db9de1`,
+  the 60-token continuation hash and total-response/10,240-token turn budget;
+  formal compose exits zero without creating the target root. PRL26-C reclosed
+  at S32 with 32 contiguous metrics and terminal return code zero, while the
+  live resource audit found GPUs 0--7 at 4 MiB each with no compute owner or
+  Ray process. The B policy root, B control root and B tmux session remained
+  absent at this boundary. A final ledger-bearing documentation descendant may
+  freeze and launch the identical package; it must still rerun every external
+  resource, real-processor canary and fresh-root gate in the retained handoff.

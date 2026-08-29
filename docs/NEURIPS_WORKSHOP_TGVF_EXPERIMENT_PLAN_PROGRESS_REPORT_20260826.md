@@ -34,8 +34,9 @@
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
 S32 因 post-tool continuation 不一致而隔离为历史训练。PRL27-A 是无更新的 invalid pre-S1
-infrastructure attempt；完整 replay 修复已通过 CPU 回归并推送，PRL27-B fresh-S0 启动包与真实
-processor 双 Crop/final replay 硬门正在完成，尚未启动 GPU。Target-guide-v2 仍未启动。运行中的
+infrastructure attempt；完整 replay 修复与真实 processor 双 Crop/final replay 硬门均已通过，
+PRL27-B fresh-S0 启动包已完成 strict contracts、formal compose、PRL26-C sealed-S32 与空闲资源
+预检，处于 launch-ready，尚未启动 GPU。Target-guide-v2 仍未启动。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
@@ -50,7 +51,7 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
 | Historical Crop（PRL26-B） | **S32 已完成，隔离** | action boundary 正确，但成功 Crop 后 continuation 与评测不一致 | 不再作为 aligned golden；不得通过重测旧权重“修复” |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
-| Corrected Crop replay-fix（PRL27-B） | **启动硬门准备中；GPU 未启动** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | S32 后仅用新的 `training_run` eval ID/root/RNG namespace 评测 |
+| Corrected Crop replay-fix（PRL27-B） | **全部训练硬门通过；launch-ready** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | 训练使用冻结 worktree；独立 S32 `training_run` eval waiter 在 S32 前挂起 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
 | TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
 
