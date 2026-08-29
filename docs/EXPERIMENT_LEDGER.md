@@ -10549,14 +10549,22 @@ than inferred from a script name or prior conversation.
   has therefore passed the initial attempt's unsupported-architecture failure
   boundary and remains in four-GPU inference. This is runtime-health evidence
   only: no formal inference row or benchmark result is yet admitted.
-- **First trajectory production snapshots:** all four ranks are now writing
-  trajectory records. Aggregate progress was `659/2511` at `03:46:35 JST` and
-  `853/2511` at `03:47:45 JST`. A read-only 761-row snapshot around 03:46
-  contained 667 tool-using examples (`87.65%`), 694 total calls and three typed
-  tool errors; stop categories were `direct=93`, `final=667` and
-  `call_cap=1`. At the current resource snapshot, GPUs
-  0--3 each hold approximately 145 GB and retain active inference workers,
-  while GPUs 4--7 remain idle. Every count in this bullet is a changing,
-  incomplete running-interim diagnostic: it proves that trajectory and tool
-  paths are executing, but is not an accuracy, Macro* or method-comparison
-  result.
+- **Denominator correction and trajectory production snapshots:** the previous
+  live update incorrectly wrote progress as `659/2511` and `853/2511`. The
+  frozen manifest contains 2,511 tasks, but the frozen plan separates 2,240
+  supported single-image tasks from `unsupported_multi_image_count=271`; the
+  multi-image protocol decision remains pending and those 271 tasks do not
+  enter this Crop policy inference. The correct worker-progress snapshots are
+  therefore `659/2240` at `03:46:35 JST` and `853/2240` at `03:47:45 JST`.
+  This is an explicit denominator correction, not a change to the manifest.
+- The read-only 761-row snapshot around 03:46 contained 667 tool-using examples
+  (`87.65%`), 694 total calls and three typed tool errors; stop categories were
+  `direct=93`, `final=667` and `call_cap=1`. At 03:48, GPUs 0--3 each held
+  approximately 145 GB and retained active inference workers, while GPUs 4--7
+  remained idle. By 03:57, progress reached `2125/2240 = 94.9%`; ranks 1 and 3
+  had exited normally and released their GPUs, while ranks 0 and 2 were
+  finishing normally. The official scorer follows the established supported
+  single-image view; the 271 held multi-image tasks must be reported separately
+  and must not be defaulted to incorrect. Every count here remains an
+  incomplete running-interim diagnostic, not an accuracy, Macro* or
+  method-comparison result.
