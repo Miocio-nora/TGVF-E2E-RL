@@ -182,6 +182,10 @@ def test_generic86_supervisor_is_executable_and_orders_fail_closed_route() -> No
     assert release < bind < reuse < prepare < validate < proof < infer < score
     assert score < summarize < complete
     assert "release_stable_polls < 3" in source
+    assert "export VLLM_PLUGINS=tgvf_qwen3_precomputed" in source
+    assert "export VLLM_PLUGINS=" not in source.replace(
+        "export VLLM_PLUGINS=tgvf_qwen3_precomputed", ""
+    )
     assert "read_only_existing_hf_tree_no_merge" in (
         TOOLS / "reuse_prl26_b_s32_full_model_for_generic86_eval.py"
     ).read_text(encoding="utf-8")
