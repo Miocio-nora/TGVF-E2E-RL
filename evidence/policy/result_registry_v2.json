@@ -1,0 +1,872 @@
+{
+  "schema_version": "tgvf.policy-result-registry.v2",
+  "comparison_definitions": [],
+  "results": [
+    {
+      "result_id": "original-raw-direct-true1m",
+      "label": "Original raw-direct true-1M",
+      "method": "original",
+      "optimizer_step": null,
+      "status": "standalone",
+      "status_reason": "Valid raw-direct reference under its own prompt/runtime contract; not a method-matched RL control.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "Qwen3-VL-8B-Instruct base HF weights",
+        "sha256": "9dcd359ed8c2133d9bc6987e66d09bbdc77ab6dc464e8240f5b3b546b27d798f"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "none/raw-direct-base-model",
+        "training_image_max_pixels": null,
+        "declared_evaluation_image_max_pixels": 1003520,
+        "effective_evaluation_image_max_pixels": 1003520,
+        "runtime_identity": "vlmevalkit-qwen3-raw-direct-native-v1",
+        "parser_identity": "vlmevalkit-raw-final-response-v1",
+        "action_boundary_identity": "none/direct-only-no-tool-action-boundary",
+        "observation_identity": "none/no-tool-observation",
+        "prompt_identity": "qwen3-native-image-plus-canonical-question/no-system/no-tools",
+        "rng_identity": "coredev2511/original/raw-direct/true1m/temp1/seed42/v1",
+        "generation_identity": "temperature1/top_p1/top_k-1/max_new_tokens8192",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2511,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 61.31471437129777,
+        "components_percent": {
+          "vstar": 72.77486910994764,
+          "hr_average_all": 66.5,
+          "blink_single_180": 63.888888888888886,
+          "ocr_mean": 59.787693653531626,
+          "mmmu_single_269": 37.9182156133829,
+          "mathvista": 75.33333333333333,
+          "mathverse_five_version_macro": 53.0
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/evaluation/PRL25-ORIGINAL-QWEN3-INSTRUCT-RAW-DIRECT-TRUE1M-V1/scoring/coredev-2511-eval-summary.json",
+        "sha256": "f8dc31b5353c36d2e764096ee2f2a1f0da0ca3d28fb4525c2fb660829c705904",
+        "kind": "score_summary"
+      }
+    },
+    {
+      "result_id": "notool-prl25f-s32-true1m",
+      "label": "No-Tool RL S32 true-1M",
+      "method": "no_tool",
+      "optimizer_step": 32,
+      "status": "standalone",
+      "status_reason": "Valid matched no-tool endpoint; its prompt, RNG and direct-only loop differ from every tool method and Original.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-F S32 full-model evaluation snapshot",
+        "sha256": "b226eaa87f94efadb36f410c614765c94f34d858eb739c6745e755d792076630"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "b4bda7580cedaf2014fefbfa4ac21acc277958ff0783292bda69693135baf7b8",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 1003520,
+        "effective_evaluation_image_max_pixels": 1003520,
+        "runtime_identity": "training_run/direct_only/native_pixels/v1",
+        "parser_identity": "direct-only-final-answer-view-v1",
+        "action_boundary_identity": "none/direct-only-no-tool-action-boundary",
+        "observation_identity": "none/no-tool-observation",
+        "prompt_identity": "8010ec191b5b9147baaf8363ed9826250151568e55bcbb80693bd759d5bb8593",
+        "rng_identity": "coredev2511/no-tool-rl-matched/s0-s8-s16-s32/temp1/seed42/true1m-v2|d4b344499af272c4757432c21cba431e2b1c042e9500d96a7a463a6418ce3219",
+        "generation_identity": "training-run/temp1/top_p1/max_response20480/stop151645",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 63.75204891069169,
+        "components_percent": {
+          "vstar": 70.1571,
+          "hr_average_all": 65.5,
+          "blink_single_180": 71.1111,
+          "ocr_mean": 49.3928,
+          "mmmu_single_269": 53.9033,
+          "mathvista": 75.0,
+          "mathverse_five_version_macro": 61.2
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-MATCHED-COREDEV2511-S0-S8-S16-S32-TRUE1M-V2/matched/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "bd6057d798c37791714033c4f9a734f435264ec1242fc841fdaad4fd064d897a",
+        "kind": "score_summary"
+      }
+    },
+    {
+      "result_id": "crop-prl25b-s32-true1m",
+      "label": "Crop S32 true-1M (historical)",
+      "method": "crop",
+      "optimizer_step": 32,
+      "status": "confounded",
+      "status_reason": "Measured with correct true-1M pixels and fixed action boundary, but Crop training used generic86 while evaluation appended the 60-token native Crop continuation.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-B S32 full-model evaluation snapshot",
+        "sha256": "0838513f09ee3de4d27d4f389146fc6e31500fb97235607145aa875ae941efcc"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1/generic86",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 1003520,
+        "effective_evaluation_image_max_pixels": 1003520,
+        "runtime_identity": "deepeyes-official-visible-native-crop-boundaryfix-v2",
+        "parser_identity": "hermes-terminal-tool-call-boundaryfix-v2",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "crop-rgb-plus-user-prompt-v2-60token",
+        "prompt_identity": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2",
+        "rng_identity": "coredev2511-official-v1/prl25-b-crop-exact/step80/pixel1003520-vs-pixel262144/temp1/seed42/v1",
+        "generation_identity": "temp1/top_p1/tool_cap6/boundaryfix-v2",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 61.070553946772925,
+        "components_percent": {
+          "vstar": 73.2984,
+          "hr_average_all": 68.0,
+          "blink_single_180": 63.3333,
+          "ocr_mean": 53.8604,
+          "mmmu_single_269": 46.4684,
+          "mathvista": 68.3333,
+          "mathverse_five_version_macro": 54.2
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP32-TRUE1M-RESOLUTION-RNG-EXTENSION-V1/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "f8ac95e39873ea03bf1ea822e096178d92a058a0c678a1b17508f31419971cbd",
+        "kind": "score_summary"
+      }
+    },
+    {
+      "result_id": "tgvf-prl25c-s64-true1m",
+      "label": "TGVF S64 true-1M",
+      "method": "tgvf",
+      "optimizer_step": 64,
+      "status": "standalone",
+      "status_reason": "Valid endpoint under its own TGVF training_run, prompt and RNG contract; not paired with Original, No-Tool, Crop or Atomic.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-C S64 Qwen plus frozen RP67 snapshot",
+        "sha256": "a49e7105f7400a148bf0aff07ad20b51c4be94876876e910ec0a62d960a945d3"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "272d6209be1247582c8c4b2f616609b55203646c2a4b26a4b075aad3960c9b02",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 1003520,
+        "effective_evaluation_image_max_pixels": 1003520,
+        "runtime_identity": "training_run/precomputed-tgvf/rp67/v1",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "matched-tgvf-success-renderer-v1",
+        "prompt_identity": "e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633",
+        "rng_identity": "coredev2511-official-v1/prl25-c-rp67-tfree/s8-s16-s32-s48-s64-s80/temp1/seed42/v1|e82f05a663928df20e5a757c2de14264c990cc04cb9bf4985e23f1e90e257a25",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response-budget",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 59.8086,
+        "components_percent": {
+          "vstar": 74.3455,
+          "hr_average_all": 66.5,
+          "blink_single_180": 65.5556,
+          "ocr_mean": 44.5446,
+          "mmmu_single_269": 44.9814,
+          "mathvista": 72.3333,
+          "mathverse_five_version_macro": 50.4
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-C-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-C-FROZEN-RP67-TFREE-TEACHER25-COREDEV2511-S8-S16-S32-S48-S64-S80-PAIRED-SEED-V1/step64/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "0e1986ca84eb7102c21dc58750175d74b943930514626f592d9edccf15ce2720",
+        "kind": "evaluation_run_summary_digest_only"
+      }
+    },
+    {
+      "result_id": "atomic-prl25d-s16-true1m",
+      "label": "Atomic S16 true-1M",
+      "method": "atomic",
+      "optimizer_step": 16,
+      "status": "standalone",
+      "status_reason": "Valid endpoint under its own Atomic training_run, prompt and RNG contract; not paired with the other methods.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-D S16 Qwen plus frozen RP67 snapshot",
+        "sha256": "fa02be41fe378db8643ce8603f07c91217bd415e57269e796c49281b42ee2e8c"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "a0b8183875c38482da476e90a676c9b2ad401b100d452c73361d37b53157990c",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 1003520,
+        "effective_evaluation_image_max_pixels": 1003520,
+        "runtime_identity": "training_run/precomputed-atomic/rp67/v1",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "matched-atomic-crop-tgvf-success-renderer-v1",
+        "prompt_identity": "5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69",
+        "rng_identity": "coredev2511-official-v1/prl25-d-atomic-crop-tgvf-rp67-tfree/s8-s16-s32-s48-s64-s80/temp1/seed42/v1|576beb9a1b77148249f87ff86c118acb7003efe1012ca651495cf908c536c656",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response-budget",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 63.0827,
+        "components_percent": {
+          "vstar": 71.7277,
+          "hr_average_all": 73.5,
+          "blink_single_180": 66.1111,
+          "ocr_mean": 54.272,
+          "mmmu_single_269": 51.3011,
+          "mathvista": 69.6667,
+          "mathverse_five_version_macro": 55.0
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-D-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-teacher25-80step-ws8/evaluation/PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-COREDEV2511-S8-S16-S32-S48-S64-S80-PAIRED-SEED-V1/step16/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "9ead00a25cd123a12b6bc5dff5b9067714716d3c31c301216a4ba531023501f2",
+        "kind": "evaluation_run_summary_digest_only"
+      }
+    },
+    {
+      "result_id": "original-raw-direct-512",
+      "label": "Original raw-direct @512",
+      "method": "original",
+      "optimizer_step": null,
+      "status": "standalone",
+      "status_reason": "Valid legacy raw-direct reference; no unified result identity or method-matched prompt/runtime exists for the RL arms.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "Qwen3-VL-8B-Instruct base HF weights",
+        "sha256": "9dcd359ed8c2133d9bc6987e66d09bbdc77ab6dc464e8240f5b3b546b27d798f"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "none/raw-direct-base-model",
+        "training_image_max_pixels": null,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "vlmevalkit-qwen3-raw-direct-native-r4",
+        "parser_identity": "vlmevalkit-raw-final-response-v1",
+        "action_boundary_identity": "none/direct-only-no-tool-action-boundary",
+        "observation_identity": "none/no-tool-observation",
+        "prompt_identity": "qwen3-native-image-plus-canonical-question/no-system/no-tools",
+        "rng_identity": "coredev-2511-qwen3-instruct-direct-prl04-comparable-v1|seed42",
+        "generation_identity": "temperature1/top_p1/top_k-1/max_new_tokens8192",
+        "scorer_identity": "legacy-coredev2511-seven-slice/qwen2.5-72b",
+        "inference_sample_count": 2511,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 55.3556,
+        "components_percent": {
+          "vstar": 50.7853,
+          "hr_average_all": 59.0,
+          "blink_single_180": 65.5556,
+          "ocr_mean": 48.1848,
+          "mmmu_single_269": 39.03,
+          "mathvista": 74.3333,
+          "mathverse_five_version_macro": 50.6
+        }
+      },
+      "score_artifact": {
+        "path": "docs/POLICY_RL_PRIMARY_BASELINE_20260810.md",
+        "sha256": "cd4a7e2c3c46124e5f8259920aea0531a68c085dda3ef70b319d6d4ee4352dac",
+        "kind": "curated_report_digest_only"
+      }
+    },
+    {
+      "result_id": "crop-prl25b-s80-preboundary-processor-default",
+      "label": "Crop S80 pre-boundary (processor-default)",
+      "method": "crop",
+      "optimizer_step": 80,
+      "status": "invalid",
+      "status_reason": "The evaluator accepted answer text after a same-turn tool action; the declared @512 override also did not become the effective processor cap.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-B S80 full-model evaluation snapshot",
+        "sha256": "8b072a43ef03e8baee408a3800de1c5c1ff09b00c434b4f0c530199f71327c36"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1/generic86",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 16777216,
+        "runtime_identity": "deepeyes-official-visible-native-crop-preboundary-v1",
+        "parser_identity": "answer-over-action-legacy-invalid",
+        "action_boundary_identity": "historical/answer-over-action-legacy-observed",
+        "observation_identity": "crop-rgb-plus-user-prompt-v2-60token",
+        "prompt_identity": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2",
+        "rng_identity": "coredev2511/prl25-b/s80/nominal-pixel512/temp1/seed42/v1",
+        "generation_identity": "temp1/missing-terminal-tool-stop/legacy-invalid",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 61.559122685509514,
+        "components_percent": {
+          "vstar": 75.39267015706805,
+          "hr_average_all": 75.0,
+          "blink_single_180": 63.333333333333336,
+          "ocr_mean": 53.14547612600909,
+          "mmmu_single_269": 49.44237918215613,
+          "mathvista": 63.0,
+          "mathverse_five_version_macro": 51.6
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP80-PIXEL512-TEMP1-SEED42-V1/step80/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "a0cb44b4da7b3f86ec2c196be8b352353ae8c5bb773d886495bcbdd2b0403739",
+        "kind": "score_summary"
+      }
+    },
+    {
+      "result_id": "crop-prl25b-s80-boundaryfix-processor-default",
+      "label": "Crop S80 boundary-fix (processor-default)",
+      "method": "crop",
+      "optimizer_step": 80,
+      "status": "confounded",
+      "status_reason": "Action boundary is corrected, but the nominal @512 override was ineffective and train/eval Crop continuation remains mismatched.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-B S80 full-model evaluation snapshot",
+        "sha256": "8b072a43ef03e8baee408a3800de1c5c1ff09b00c434b4f0c530199f71327c36"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "8749332d6031ed87b18c08a91c0cb0590ea7a14c4729300bfe812b3aa44eaca1/generic86",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 16777216,
+        "runtime_identity": "deepeyes-official-visible-native-crop-boundaryfix-v2",
+        "parser_identity": "terminal-tool-call-boundaryfix-v2",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "crop-rgb-plus-user-prompt-v2-60token",
+        "prompt_identity": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2",
+        "rng_identity": "coredev2511/prl25-b/s80/nominal-pixel512/boundaryfix/temp1/seed42/v2",
+        "generation_identity": "temp1/tool-terminal-stop-included/boundaryfix-v2",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 62.09670055674969,
+        "components_percent": {
+          "vstar": 86.91099476439791,
+          "hr_average_all": 65.5,
+          "blink_single_180": 64.44444444444444,
+          "ocr_mean": 54.4298909585418,
+          "mmmu_single_269": 45.72490706319702,
+          "mathvista": 65.66666666666666,
+          "mathverse_five_version_macro": 52.0
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-B-qwen3-instruct-full-crop-exact-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-B-CROP-EXACT-COREDEV2511-STEP80-PIXEL512-TEMP1-SEED42-TOOL-BOUNDARY-FIX-V2/step80/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "a03e3781e3b765655886998128f64ebb2854c5ed249b2be4db962407019fa60b",
+        "kind": "score_summary"
+      }
+    },
+    {
+      "result_id": "tgvf-prl25c-s64-512",
+      "label": "TGVF S64 @512",
+      "method": "tgvf",
+      "optimizer_step": 64,
+      "status": "standalone",
+      "status_reason": "Valid @512 endpoint, but it transfers a Train@1M policy and has its own TGVF prompt/runtime/RNG identity.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-C S64 @512 materialized Qwen plus RP67 snapshot",
+        "sha256": "8bd0f951c3f4826278385eda1bc2b742029bc8fbc7e7dd5f24811e03ee143eed"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "272d6209be1247582c8c4b2f616609b55203646c2a4b26a4b075aad3960c9b02",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/precomputed-tgvf/rp67/v1",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "matched-tgvf-success-renderer-v1",
+        "prompt_identity": "e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633",
+        "rng_identity": "coredev2511-official-v1/prl25-c-rp67-tfree/s8-s16-s32-s48-s64-s80/temp1/seed42/v1|e82f05a663928df20e5a757c2de14264c990cc04cb9bf4985e23f1e90e257a25",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response-budget",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 55.4067,
+        "components_percent": {
+          "vstar": 53.4031,
+          "hr_average_all": 60.5,
+          "blink_single_180": 62.7778,
+          "ocr_mean": 40.7642,
+          "mmmu_single_269": 46.4684,
+          "mathvista": 72.3333,
+          "mathverse_five_version_macro": 51.6
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-C-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-teacher25-80step-ws8/evaluation/PRL25-C-FROZEN-RP67-TFREE-TEACHER25-S64-MATCHED-PIXEL512-COREDEV2511-SEED42-V1/step64/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "66ec8bdc89fcf4f589ce428158fb6fd805e44cef400e6e3a832b446f4e370497",
+        "kind": "evaluation_run_summary_digest_only"
+      }
+    },
+    {
+      "result_id": "atomic-prl25d-s16-512",
+      "label": "Atomic S16 @512",
+      "method": "atomic",
+      "optimizer_step": 16,
+      "status": "standalone",
+      "status_reason": "Valid @512 endpoint, but it transfers a Train@1M policy and has its own Atomic prompt/runtime/RNG identity.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-25-D S16 @512 materialized Qwen plus RP67 snapshot",
+        "sha256": "123492de944f97f277f9cf33ea8f2551432a82e27cc38e929cf910f75bf384bd"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "a0b8183875c38482da476e90a676c9b2ad401b100d452c73361d37b53157990c",
+        "training_image_max_pixels": 1003520,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/precomputed-atomic/rp67/v1",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "matched-atomic-crop-tgvf-success-renderer-v1",
+        "prompt_identity": "5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69",
+        "rng_identity": "coredev2511-official-v1/prl25-d-atomic-crop-tgvf-rp67-tfree/s8-s16-s32-s48-s64-s80/temp1/seed42/v1|576beb9a1b77148249f87ff86c118acb7003efe1012ca651495cf908c536c656",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response-budget",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 57.2762,
+        "components_percent": {
+          "vstar": 57.0681,
+          "hr_average_all": 59.5,
+          "blink_single_180": 61.6667,
+          "ocr_mean": 47.7713,
+          "mmmu_single_269": 48.3271,
+          "mathvista": 71.0,
+          "mathverse_five_version_macro": 55.6
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-25-D-qwen3-instruct-full-frozen-rp67-bs16-n16-tfree-crop-tgvf-teacher25-80step-ws8/evaluation/PRL25-D-ATOMIC-CROP-TGVF-RP67-TFREE-TEACHER25-S16-MATCHED-PIXEL512-COREDEV2511-SEED42-V1/step16/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "fbc672333ffdd14be78b73ec2ea2366e3587311a00e739905b7881cfb715d138",
+        "kind": "evaluation_run_summary_digest_only"
+      }
+    },
+    {
+      "result_id": "notool-prl26a-s32-512",
+      "label": "No-Tool PRL26-A S32 @512",
+      "method": "no_tool",
+      "optimizer_step": 32,
+      "status": "standalone",
+      "status_reason": "Valid Train@512/Eval@512 endpoint; its prompt, direct-only runtime and RNG namespace are not shared with Crop or Original.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-26-A S32 full-model evaluation snapshot",
+        "sha256": "afa470ca523c09cf2c0c01afc4a081f3e809b67a9e1b20d23c7c2780c3474d18"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "3f81c190da9935824de5a1af02d117191b7ebaf678404a788fd8d41b16ca1340",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/direct_only/native_pixels/v1",
+        "parser_identity": "direct-only-final-answer-view-v1",
+        "action_boundary_identity": "none/direct-only-no-tool-action-boundary",
+        "observation_identity": "none/no-tool-observation",
+        "prompt_identity": "8010ec191b5b9147baaf8363ed9826250151568e55bcbb80693bd759d5bb8593",
+        "rng_identity": "coredev2511/no-tool-rl-matched/prl26-a-train512-s32/pixel262144/temp1/seed42/v1|d4b344499af272c4757432c21cba431e2b1c042e9500d96a7a463a6418ce3219",
+        "generation_identity": "training-run/temp1/top_p1/max_response20480/stop151645",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 59.0505977942,
+        "components_percent": {
+          "vstar": 56.0209,
+          "hr_average_all": 55.0,
+          "blink_single_180": 66.1111,
+          "ocr_mean": 43.9448,
+          "mmmu_single_269": 56.8773,
+          "mathvista": 74.0,
+          "mathverse_five_version_macro": 61.4
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-26-A-train512-s32-parity-notool-qwen3-instruct-bs16-n16-teacher25-ws8/evaluation/PRL26-A-TRAIN512-S32-NOTOOL-MATCHED-COREDEV2511-S32-PIXEL512-V1/matched/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "ef9d247cec672adb0ef70f64413624dc8ec665fc45821f0f70c975d5f7e5fe69",
+        "kind": "evaluation_run_summary_digest_only"
+      }
+    },
+    {
+      "result_id": "crop-prl26b-s32-512-official60",
+      "label": "Crop PRL26-B S32 @512 (official60)",
+      "method": "crop",
+      "optimizer_step": 32,
+      "status": "confounded",
+      "status_reason": "Train@512 used generic86, while this native official-visible evaluation used the 60-token Crop continuation; its RNG namespace also has zero identity overlap with No-Tool over 2,240 tasks.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-26-B S32 official60 full-model evaluation snapshot",
+        "sha256": "b6089b3f9206252e28b04a3ee9bf5b61f86693318663b04cc51e8b6fd2ca1bfb"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "15dea512f5971c60749f98c7d55f183873170c3d85545b80f0777ab982065102/generic86",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "deepeyes-official-visible-native-crop-boundaryfix-v1",
+        "parser_identity": "hermes-terminal-tool-call-boundaryfix-v1",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "crop-rgb-plus-user-prompt-v2-60token",
+        "prompt_identity": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2",
+        "rng_identity": "coredev2511/prl26-b/crop-official60/train512-eval512/s32/temp1/seed42/v1|no-tool-overlap=0-of-2240",
+        "generation_identity": "official-visible/temp1/top_p1/tool_cap6/boundaryfix",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 54.93512172159565,
+        "components_percent": {
+          "vstar": 56.02094240837696,
+          "hr_average_all": 57.00000000000001,
+          "blink_single_180": 57.77777777777778,
+          "ocr_mean": 46.38381092325518,
+          "mmmu_single_269": 46.09665427509294,
+          "mathvista": 69.66666666666667,
+          "mathverse_five_version_macro": 51.6
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-26-B-train512-s32-parity-crop-qwen3-instruct-bs16-n16-teacher25-ws8/evaluation/PRL26-B-TRAIN512-S32-CROP-MATCHED-COREDEV2511-PIXEL512-BOUNDARYFIX-V1/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "819849b3c46c6d3f0af3fc947748a39daf529314799c025a8aac54f974e037c1",
+        "kind": "score_summary"
+      }
+    },
+    {
+      "result_id": "crop-prl26b-s32-512-generic86",
+      "label": "Crop PRL26-B S32 @512 (exact generic86 runtime)",
+      "method": "crop",
+      "optimizer_step": 32,
+      "status": "standalone",
+      "status_reason": "Valid exact training-runtime endpoint for the historical generic86 weights; it is not a causal A/B with official60 or No-Tool because runtime and RNG identities differ.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "present",
+        "identity": "PRL-26-B S32 generic86 full-model evaluation snapshot",
+        "sha256": "b6089b3f9206252e28b04a3ee9bf5b61f86693318663b04cc51e8b6fd2ca1bfb"
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "15dea512f5971c60749f98c7d55f183873170c3d85545b80f0777ab982065102/generic86",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/precomputed-crop/generic86/e756546b",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "72a2caecb47a2b775a4497e5846c244061d9455fbb4b9690d3501cbc2521e187/86token",
+        "prompt_identity": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2",
+        "rng_identity": "coredev2511/prl26-b/owner-generic86/training-run/train512-eval512/s32/temp1/seed42/v1|fa9782cfeeffc2f211d984cf07b515ed616eb6bd87339922247521ea832000a5",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response20480/turn10240",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": {
+        "macro_star_percent": 53.55481695986398,
+        "components_percent": {
+          "vstar": 48.16753926701571,
+          "hr_average_all": 51.0,
+          "blink_single_180": 62.77777777777778,
+          "ocr_mean": 47.21572509432868,
+          "mmmu_single_269": 43.12267657992565,
+          "mathvista": 69.0,
+          "mathverse_five_version_macro": 53.6
+        }
+      },
+      "score_artifact": {
+        "path": "artifacts/policy/PRL-26-B-train512-s32-parity-crop-qwen3-instruct-bs16-n16-teacher25-ws8/evaluation/PRL26-B-S32-OWNER-GENERIC86-TRAINING-RUN-COREDEV2511-PIXEL512-V1/step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json",
+        "sha256": "742b1da50018d453181ada3d28adb41038fef6ddb5cd0061a30d210e4ba733f1",
+        "kind": "score_summary"
+      }
+    },
+    {
+      "result_id": "crop-prl27a-hybrid-s0-s4",
+      "label": "PRL27-A Crop hybrid lineage",
+      "method": "crop",
+      "optimizer_step": null,
+      "status": "invalid",
+      "status_reason": "PRL27-A used matched60 in live rollout but generic86 replay layout. All checkpoints, rewards and status claims from this lineage are invalid.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "invalid",
+        "identity": "PRL27-A live60/replay86 hybrid lineage",
+        "sha256": null
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "prl27-a/live60-replay86-hybrid/invalid",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "live-matched60/replay-generic86-hybrid-invalid",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "historical/action-boundary-not-cryptographically-bound",
+        "observation_identity": "live-f745fa6c-60token/replay-72a2caec-86token",
+        "prompt_identity": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2",
+        "rng_identity": "prl27-a-invalid-lineage",
+        "generation_identity": "training-run/temp1/tool_cap6/invalid-replay-geometry",
+        "scorer_identity": "not-evaluated",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": null,
+      "score_artifact": null
+    },
+    {
+      "result_id": "crop-prl27b-canonical-s32-eval",
+      "label": "PRL27-B Crop canonical S32 @512",
+      "method": "crop",
+      "optimizer_step": 32,
+      "status": "pending",
+      "status_reason": "PRL27-B is the first single-renderer live/replay implementation, but execution stopped at S4; no S32 checkpoint or evaluation exists.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "expected",
+        "identity": "PRL27-B canonical matched60 S32 evaluation snapshot",
+        "sha256": null
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "prl27-b/c448e583/single-renderer-matched60",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/precomputed-crop/single-renderer-matched60/c448e583",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "qwen-native-action-boundary-single-terminal-tool-call-v2",
+        "observation_identity": "f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a/60token",
+        "prompt_identity": "2b8b6d799ebe4bbfd6b3830344850575141b2293750f857c031a2031426c0dd2",
+        "rng_identity": "prl27-b/canonical-matched60/train512-eval512/s32/seed42/v1",
+        "generation_identity": "training-run/temp1/tool_cap6/total-response20480/turn10240",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": null,
+      "score_artifact": null
+    },
+    {
+      "result_id": "tgvf-prl26c-short-s32-512-eval",
+      "label": "TGVF Short PRL26-C S32 @512 evaluation",
+      "method": "tgvf",
+      "optimizer_step": 32,
+      "status": "pending",
+      "status_reason": "The S32 training receipt exists, but no accepted formal evaluation artifact is registered.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "expected",
+        "identity": "PRL-26-C Short S32 exact evaluation snapshot",
+        "sha256": null
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "5a11f22ce58b3497c6f854bab5a68841fe02e46639735c0a3c23f1fe6b205b28",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/precomputed-tgvf/rp67/v1",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "qwen-native-action-boundary-single-terminal-tool-call-v2",
+        "observation_identity": "matched-tgvf-success-renderer-v1",
+        "prompt_identity": "e74bb5e1253af107ff27badfcfaca747b94574e19677d22cfe42b0b1c0ba5633",
+        "rng_identity": "prl26-c-short/train512-eval512/s32/seed42/v1",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response-budget",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": null,
+      "score_artifact": null
+    },
+    {
+      "result_id": "tgvf-prl26d-target-v2-s32-512-eval",
+      "label": "TGVF Target-guide-v2 PRL26-D S32 @512",
+      "method": "tgvf",
+      "optimizer_step": 32,
+      "status": "pending",
+      "status_reason": "Only the C0/configuration line exists; formal S32 training and evaluation have not completed.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "expected",
+        "identity": "PRL-26-D Target-guide-v2 S32 evaluation snapshot",
+        "sha256": null
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "prl26-d/target-guide-v2/train512/s32",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/precomputed-tgvf/rp67/v1",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "qwen-native-action-boundary-single-terminal-tool-call-v2",
+        "observation_identity": "matched-tgvf-success-renderer-v1",
+        "prompt_identity": "77ed3a597d2a58e748b70bafe37882760944e293723a28008818a96aad025d0d",
+        "rng_identity": "prl26-d-target-v2/train512-eval512/s32/seed42/v1",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response-budget",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": null,
+      "score_artifact": null
+    },
+    {
+      "result_id": "atomic-prl26e-s32-512-eval",
+      "label": "Atomic PRL26-E S32 @512",
+      "method": "atomic",
+      "optimizer_step": 32,
+      "status": "pending",
+      "status_reason": "The fresh-S0 formal training/evaluation root was absent at audit time; the stopped waiter is not scientific execution evidence.",
+      "comparison_group": "audit/current-mixed-contract-v1",
+      "declared_intervention_axes": [],
+      "weights": {
+        "state": "expected",
+        "identity": "PRL-26-E Atomic S32 evaluation snapshot",
+        "sha256": null
+      },
+      "contract": {
+        "task_manifest_sha256": "3f69119d24867c3f3210c8b01eb71304247725ddaf9ca983d2b41c2885403cbc",
+        "training_contract_identity": "prl26-e/atomic/train512/s32",
+        "training_image_max_pixels": 262144,
+        "declared_evaluation_image_max_pixels": 262144,
+        "effective_evaluation_image_max_pixels": 262144,
+        "runtime_identity": "training_run/precomputed-atomic/rp67/v1",
+        "parser_identity": "strict-native-tool-call-parser-v1",
+        "action_boundary_identity": "qwen-native-action-boundary-single-terminal-tool-call-v2",
+        "observation_identity": "matched-atomic-crop-tgvf-success-renderer-v1",
+        "prompt_identity": "5efbd617f69ce9b3a6cb6b0c96bf7e24d8156b6e4dab9af55c9dfe5692c52e69",
+        "rng_identity": "prl26-e-atomic/train512-eval512/s32/seed42/v1",
+        "generation_identity": "training-run/temp1/top_p1/tool_cap6/total-response-budget",
+        "scorer_identity": "coredev2511-macro-star-v1/qwen2.5-72b-fail-closed",
+        "inference_sample_count": 2240,
+        "scored_sample_count": 2511,
+        "slice_count": 7
+      },
+      "score": null,
+      "score_artifact": null
+    }
+  ],
+  "tables": [
+    {
+      "table_id": "true1m-evidence-inventory",
+      "title": "true-1M evidence inventory (mixed contracts; no cross-method delta)",
+      "result_ids": [
+        "original-raw-direct-true1m",
+        "notool-prl25f-s32-true1m",
+        "crop-prl25b-s32-true1m",
+        "tgvf-prl25c-s64-true1m",
+        "atomic-prl25d-s16-true1m"
+      ],
+      "baseline_result_id": "original-raw-direct-true1m"
+    },
+    {
+      "table_id": "pixel512-evidence-inventory",
+      "title": "@512 and nominal-@512 evidence inventory (mixed contracts; not A/B)",
+      "result_ids": [
+        "original-raw-direct-512",
+        "notool-prl26a-s32-512",
+        "crop-prl26b-s32-512-official60",
+        "crop-prl26b-s32-512-generic86",
+        "tgvf-prl25c-s64-512",
+        "atomic-prl25d-s16-512",
+        "crop-prl25b-s80-preboundary-processor-default",
+        "crop-prl25b-s80-boundaryfix-processor-default"
+      ],
+      "baseline_result_id": "original-raw-direct-512"
+    },
+    {
+      "table_id": "stabilization-status",
+      "title": "Protocol-corrected run/evaluation status",
+      "result_ids": [
+        "crop-prl27a-hybrid-s0-s4",
+        "crop-prl27b-canonical-s32-eval",
+        "tgvf-prl26c-short-s32-512-eval",
+        "tgvf-prl26d-target-v2-s32-512-eval",
+        "atomic-prl26e-s32-512-eval"
+      ],
+      "baseline_result_id": null
+    }
+  ]
+}
