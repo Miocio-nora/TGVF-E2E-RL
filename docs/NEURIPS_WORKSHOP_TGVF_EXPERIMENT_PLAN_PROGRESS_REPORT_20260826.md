@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29 17:34 JST（Asia/Tokyo）
+更新时间：2026-08-29 18:04 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -1283,17 +1283,19 @@ Target-guide-v2。Atomic fresh-S0@512 保持为独立 arm，不与当前 TGVF pr
 | Monitoring | 只在 S16/S24/S32 或异常时汇报；“稀疏”不表示训练监督、reward、数据或 sampling 稀疏化 |
 | Crop boundary | 生成在 `</tool_call>` 处硬停并 include-stop；mixed answer-over-action fail-closed |
 
-No-Tool 已完成 S32，permanent checkpoint receipt 的 `optimizer_step=32`，pair/project/run 三项
-identity 均已落盘。Crop 已完成 S30，S31 正在运行；最近的 S24 永久 receipt 的
-run/pair/project SHA256 分别为
+No-Tool 与 Crop 均已完成 S32，permanent checkpoint receipt 的 `optimizer_step=32` 及
+pair/project/run 三项 identity 均已落盘。Crop S32 reward 为 `0.796875`、format error rate 为
+`5.46875%`、工具尝试题率为 `67.1875%`，172/172 次调用成功且 typed error 为空。截至 S32，
+累计 9,460 次尝试中 9,348 次得到成功 observation，累计 reward 为 `0.6910400391`。S32 的
+run/project/pair SHA256 分别为
 `b064bf21674b6dea2d932c67e40f63e3aab7fad306245dd0bd4d92ad356d5d92`、
-`f48c6e267df64c98e82898a9d6b551724fd1a86093d0894d5d8704e5c89607fb` 与
-`c739c3437bc29c7a6a4d20d9bd0fa970d5fa13b1a89ee2689c8c6006b5d3b8f6`。S30 为 209/209 次调用成功
-且 typed error 为空；reward 为 `0.75`、format error rate 为 `0.78125%`、工具尝试题率为
-`80.078125%`。截至 S30，累计 9,084 次尝试中 8,972 次得到成功 observation，累计 reward 为
-`0.6861979167`。S24、S26–S29 的最新无错误步也都保持 100% 工具执行成功；S25 的 258 次尝试中
-256 次成功，另有 2 次 execution failure。S23 的 4 次 incomplete 与 1 次 invalid JSON 被保留为
-稀疏解析失败，不据此宣称 action-boundary 回归。
+`bf4c4105bc6777ec91c34398f7a62294700cda48c4ffaf233eae930239dcea0e` 与
+`3ce41ba87614302120d43543d5e0aa63b6fea440bda1da53e650533879794252`；receipt 文件 SHA256 为
+`c35aafa3c1d24390157a067953439639da6e0ef7b4cacc55cf51d6c1592c0136`。独立深审计确认 metrics
+恰为 32 条且 1–32 连续，rolling/permanent 的 26 个必需文件 26/26 `samefile`，state/pair 相等，
+supervisor attempt 从 S0 到 S32 并以 `return_code=0` 完成。S24、S26–S32 的无错误步均保持
+100% 工具执行成功；S25 的 258 次尝试中 256 次成功，另有 2 次 execution failure。S23 的 4 次
+incomplete 与 1 次 invalid JSON 被保留为稀疏解析失败，不据此宣称 action-boundary 回归。
 这些数值只证明训练链路健康，不作为 CoreDev-2511 benchmark 结果，也不用于提前选择 checkpoint。
 
 TGVF 的两个训练 arm 只允许一个 prompt 变量。Short 保留既有 user suffix、
@@ -1339,6 +1341,10 @@ P0/P1。live A/B pane `%179` 在不中断 Crop 的情况下启用 retention；C/
 P0/P1：No-Tool S32 source receipt 已完整验收，Crop trainer/evaluator config SHA 一致，正式 eval
 roots 尚未创建，端口、judge shards、磁盘与 credential availability 均满足启动合同。No-Tool inference
 结束转 scoring 时仍现场核对 GPU 0–3 与残留 process group；这是监控项，不是当前失败条件。
+17:57 JST，Crop trainer 已以状态 0 退出；两次间隔 30 秒的 all-GPU/Ray clean probe 均通过并发布
+`training-resources-released.json`。canonical A/B handoff identity 为
+`f28a2e49f2a5243dc0c6c1f50eb784cd91f424c2191052cd8f77180c76ea9501`。A/B Eval@512 已进入
+Crop S32 full-model HF 物化与静态 processor proof 阶段，尚未提前发布 benchmark 结果。
 当前执行顺序严格为
 `Crop S32 → No-Tool/Crop aligned Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512 → Atomic C0/S32 → Atomic Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间
@@ -1430,9 +1436,10 @@ Atomic 进入正文核心方法必须同时满足：
 11. [部分完成] target-only 调用行为对照已回填；正式 audit 仍待双人盲标、第三人裁决、
     Wilson CI 与 agreement；
 12. [已完成] PRL26 No-Tool fresh-S0 Train@512 到 S32，permanent receipt 已审计；
-13. [运行中] PRL26 Crop fresh-S0 Train@512 已完成 S30，S31 正在运行并继续向 S32；最近的 S24
-    permanent checkpoint 已验收，S30 为 209/209 次成功调用且无 typed error；
-14. [已排队] Crop S32 后自动执行 No-Tool/Crop matched Eval@512；
+13. [已完成] PRL26 Crop fresh-S0 Train@512 S32、permanent receipt、rolling/permanent samefile 与
+    supervisor `return_code=0` 均已验收；
+14. [运行中] No-Tool/Crop matched Eval@512 已通过双稳定 GPU/Ray release gate 与 canonical handoff，
+    当前正在物化 Crop S32 full-model HF snapshot；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
 16. [已排队] Atomic fresh-S0 Train@512/Eval@512 clean 接力已通过 static admission 并挂起；
@@ -1486,7 +1493,7 @@ Atomic 进入正文核心方法必须同时满足：
   `artifacts/policy/PRL-25-F-qwen3-instruct-full-no-tool-rl-bs16-n16-tfree-teacher25-32step-ws8/evaluation/PRL25-F-NO-TOOL-RL-RAW-DIRECT-512-S32-V1/scoring/coredev-2511-eval-summary.json`。
 - PRL26 No-Tool / Crop Train@512 roots：
   `artifacts/policy/PRL-26-{A-train512-s32-parity-notool,B-train512-s32-parity-crop}-qwen3-instruct-bs16-n16-teacher25-ws8`；
-  permanent receipt 分别见 `global_step_32` 与当前已验收的 `global_step_24`。
+  两臂 permanent receipt 均见 `global_step_32`。
 - PRL26 No-Tool/Crop Eval@512 输出根：
   `artifacts/evaluation/PRL26-TRAIN512-S32-PIXEL512-COREDEV2511-V1`；常驻 tmux session 为
   `prl26-train512-s32-eval`。S32 receipt 后的双稳定 GPU/Ray release gate 固定于
