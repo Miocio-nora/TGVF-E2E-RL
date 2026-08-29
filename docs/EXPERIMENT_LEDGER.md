@@ -10063,7 +10063,8 @@ than inferred from a script name or prior conversation.
 - **Correction implementation and fresh identity:** commit
   `ecddc379d392d154c91783d7651528b20d40afba` implements and tests the exact
   continuation plus the shared full-model `training_run` path, and is published
-  on `origin/neurips-notool-rl-s32`. The new, not-yet-launched owner is
+  on `origin/neurips-notool-rl-s32`. The new, user-authorized but not-yet-launched
+  owner is
   `PRL-27-A-TRAIN512-S32-CROP-EXACT-CONTINUATION-QWEN3-INSTRUCT-BS16-N16-TEACHER25-WS8`
   with an absent/fresh output root under `artifacts/policy/PRL-27-A-*`. Its
   post-S32 binder writes only
@@ -10072,6 +10073,24 @@ than inferred from a script name or prior conversation.
   rejects drift in the owner code commit, renderer bytes/hash, action boundary,
   response budget, checkpoint receipt or RNG protocol. Configuration and
   binder preparation did not start training or evaluation.
+- **Authorized execution order (2026-08-29):** finish the already-running
+  PRL26-C Pure-TGVF Short arm through an exact accepted S32 boundary, release
+  its C/D scheduler ownership, and require at least three consecutive clean
+  all-GPU/Ray probes; then launch corrected PRL27-A from an absent fresh-S0
+  output root, validate its recoverable S32 closure, and run only its bound
+  `training_run` Eval@512 chain. PRL26-D and other world8 consumers remain
+  behind this correction. The handoff takes the existing PRL26 C/D supervisor
+  lock before resource admission, so it cannot race the old automatic D relay
+  and never terminates that relay itself. For this reorder only the outer C/D
+  bash received `SIGTERM`; its foreground Short children remain uninterrupted,
+  and the deferred trap produces retained pane status `130` only after the
+  accepted S32 child closes. The handoff requires that exact status plus the
+  `phase=signal`/`exit_status=130` receipt before treating the scheduler as
+  released. The paired tmux launcher creates
+  separate retained training and evaluation-waiter sessions, keeps credentials
+  only in their tmux environments, and records auditable pane exit statuses.
+  This ledger-bearing descendant authorizes that queued order; preparation and
+  validation still do not constitute launch.
 
 - Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
   `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `S32 COMPLETE; HISTORICAL,
