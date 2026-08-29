@@ -1374,6 +1374,14 @@ cleanup 固化在 scoring marker 之前，现场采用可逆 cgroup gate 暂停 
 19:35 JST，Crop S32 七项正式 scorer 已并行启动，本地 Qwen2.5-72B judge 以 TP2 使用 GPU 2--3；
 Crop 闭合后自动执行 No-Tool S32 scorer。当前轮只评测事前冻结的 S32，不混入 S0/S8/S16/S24；
 在 summary 与 completion receipt 发布前仍无可报告的 Macro*。
+19:41 JST，Crop S32@512 的七项 scorer 与 completion receipt 正式闭合：summary
+`status=pass`、`sample_count=2511`、`slice_count=7`，Macro* 为 **54.9351**；七个百分比分量依次为
+VStar `56.0209`、HR Average `57.0000`、BLINK-180 `57.7778`、OCR mean `46.3838`、
+MMMU-269 `46.0967`、MathVista `69.6667`、MathVerse five-version macro `51.6000`。所有 scorer
+的 inference failure 均为 0；MMMU 有 1 个 judge parse failure，已按预注册的
+deterministic-incorrect 规则计错且低于阈值。该值是 fresh-S0 Train@512 到 S32 后的 matched Eval@512，
+不能与历史 Crop S80@512 混写。Crop judge 随后完全卸载，GPU 0--7 clean；No-Tool S32 scorer
+已按同一 @512/七项合同启动，在其 summary 闭合前不作两臂优劣判断。
 当前执行顺序严格为
 `Crop S32 → No-Tool/Crop aligned Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512 → Atomic C0/S32 → Atomic Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间
@@ -1469,8 +1477,9 @@ Atomic 进入正文核心方法必须同时满足：
     supervisor `return_code=0` 均已验收；
 14. [运行中] No-Tool/Crop aligned/matched Eval@512 的两臂 inference 均已完成：各 `2,240/2,240`
     个 supported single-image prediction，另有合同显式 hold 的 271 个 unsupported multi-image；
-    Crop S32 七项正式 scorer 正在运行，随后自动评分 No-Tool S32。本轮只评测 S32；summary 与
-    completion receipt 尚未闭合，因此暂无正式 Macro*；
+    Crop S32 已以 Macro* `54.9351`、7/7 scorer、零 inference failure 正式闭合；MMMU 的 1 个
+    judge parse failure 按合同计错且低于阈值。No-Tool S32 正在同合同打分；本轮只评测 S32，
+    两臂汇总表和 aggregate completion receipt 尚未闭合；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
 16. [已排队] Atomic fresh-S0 Train@512/Eval@512 clean 接力已通过 static admission 并挂起；
