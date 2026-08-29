@@ -1,6 +1,16 @@
 """Native Qwen TGVF tool protocol."""
 
+from .action_boundary import (
+    AssistantActionBoundary,
+    AssistantTurnDisposition,
+    NativeActionBoundaryProtocolId,
+    classify_assistant_action_boundary,
+)
 from .parser import StrictToolCallParser
+from .observation_contract import (
+    NativeSuccessObservationProtocolId,
+    validate_success_observation_protocol,
+)
 from .native import (
     NativeAssistantDialect,
     NativeProtocolRenderer,
@@ -91,6 +101,8 @@ from .tool_prompts import (
 )
 
 __all__ = [
+    "AssistantActionBoundary",
+    "AssistantTurnDisposition",
     "CROP_ONLY_SYSTEM_PROMPT",
     "NativeAssistantDialect",
     "CROP_ONLY_SYSTEM_PROMPT_SHA256",
@@ -118,7 +130,10 @@ __all__ = [
     "CapErrorBehavior",
     "InvalidTransitionError",
     "MultiCallStateMachine",
+    "NativeActionBoundaryProtocolId",
     "NativeProtocolRenderer",
+    "NativeSuccessObservationProtocolId",
+    "validate_success_observation_protocol",
     "NativeToolCapabilityProfile",
     "ParseErrorCode",
     "ParsedCropTGVFCall",
@@ -166,6 +181,7 @@ __all__ = [
     "build_native_tool_schemas",
     "build_tgvf_focus_tool_schema",
     "build_visual_tool_prompt_messages",
+    "classify_assistant_action_boundary",
     "native_policy_messages_sha256",
     "native_assistant_dialect_for_model",
     "native_tool_set_sha256",
