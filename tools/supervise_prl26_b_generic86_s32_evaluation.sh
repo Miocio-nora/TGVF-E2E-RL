@@ -207,18 +207,29 @@ env CUDA_VISIBLE_DEVICES= "$python_bin" "$reuser" \
 
 phase=preparing_generic86_full_model
 record_phase
-validate_worktree
-run_group "$log_root/prepare.log" \
-  "$python_bin" "$runner" --plan "$plan" --mode prepare \
-  --output-root "$eval_root" --gpu-ids 0 1 2 3
+if (( attempt == 0 )); then
+  validate_worktree
+  run_group "$log_root/prepare.log" \
+    "$python_bin" "$runner" --plan "$plan" --mode prepare \
+    --output-root "$eval_root" --gpu-ids 0 1 2 3
 
-phase=proving_pixel512_and_generic86_continuation
-record_phase
-validate_worktree
-mkdir -p "$eval_root/logs" "$(dirname "$validation")" "$(dirname "$proof")"
-env CUDA_VISIBLE_DEVICES= "$python_bin" "$benchmark_runner" \
-  --config "$config" --mode validate --world-size 4 \
-  >"$validation" 2>"$eval_root/logs/generic86-static-validation.stderr.log"
+  phase=proving_pixel512_and_generic86_continuation
+  record_phase
+  validate_worktree
+  mkdir -p "$eval_root/logs" "$(dirname "$validation")" "$(dirname "$proof")"
+  env CUDA_VISIBLE_DEVICES= "$python_bin" "$benchmark_runner" \
+    --config "$config" --mode validate --world-size 4 \
+    >"$validation" 2>"$eval_root/logs/generic86-static-validation.stderr.log"
+else
+  phase=validating_frozen_generic86_recovery_artifacts
+  record_phase
+  for path in "$plan" "$handoff" "$reuse_proof" "$config" "$validation" "$proof"; do
+    if [[ -L "$path" || ! -f "$path" || ! -s "$path" ]]; then
+      echo "PRL-26-B generic86 recovery artifact is unsafe: $path" >&2
+      exit 1
+    fi
+  done
+fi
 env CUDA_VISIBLE_DEVICES= "$python_bin" "$proof_validator" \
   --arm crop --config "$config" --validation-json "$validation" \
   --output "$proof" >"$log_root/pixel512-generic86-proof.json"
