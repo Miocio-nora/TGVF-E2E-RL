@@ -10158,6 +10158,24 @@ than inferred from a script name or prior conversation.
   the typed `JudgeGlobalFailure` proving that the internal transient window was
   exhausted. Bare 429 text, 401/402/403 and every unknown failure remain
   terminal; the shared maximum-restart bound still applies.
+- Launch-recovery authorization after the A/B prerequisite closed: the
+  NoTool/Crop train@512 S32 evaluation completed at 2026-08-29 19:52 JST with
+  the preregistered `2,511/2,240/271/7` coverage. NoTool and Crop Macro* are
+  respectively `59.0505977942` and `54.9351217216`; the canonical A/B result
+  and completion marker were published and the retained producer pane exited
+  with status zero. C/D then passed its prerequisite result/hash/coverage
+  audit and two clean GPU/Ray probes, but both C0 launchers failed closed before
+  creating either output root or using a GPU because the execution-identity
+  gate correctly required the post-`396a258` recovery lineage to be recorded
+  in this ledger. The relevant recovery lineage ends at
+  `5baddc64983039ac88a2fbb2cd6d95ed43601b20`: it hardens the A/B/C/D handoff,
+  adds the Atomic downstream relay, and corrects the generic Crop evaluator's
+  canonical `step32/benchmark-config.json` path. This ledger-bearing descendant
+  authorizes a clean restart of the same four immutable C/D configs after a
+  read-only identity preflight. It does not alter prompt bytes, RP67, data,
+  reward, sampling, optimizer, pixel cap, step budget, checkpoint selection or
+  evaluation contract; the failed preflight contributes no trajectory or
+  checkpoint to either C/D lineage.
 
 ### PRL26-E train@512 Atomic Crop+TGVF parity rerun (2026-08-29)
 
