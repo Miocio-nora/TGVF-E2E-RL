@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29 17:04 JST（Asia/Tokyo）
+更新时间：2026-08-29 17:14 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -1284,13 +1284,13 @@ Target-guide-v2。Atomic fresh-S0@512 保持为独立 arm，不与当前 TGVF pr
 | Crop boundary | 生成在 `</tool_call>` 处硬停并 include-stop；mixed answer-over-action fail-closed |
 
 No-Tool 已完成 S32，permanent checkpoint receipt 的 `optimizer_step=32`，pair/project/run 三项
-identity 均已落盘。Crop 已完成 S27，S28 正在运行；最近的 S24 永久 receipt 的 run/pair/project SHA256 分别为
+identity 均已落盘。Crop 已完成 S28，S29 正在运行；最近的 S24 永久 receipt 的 run/pair/project SHA256 分别为
 `b064bf21674b6dea2d932c67e40f63e3aab7fad306245dd0bd4d92ad356d5d92`、
 `f48c6e267df64c98e82898a9d6b551724fd1a86093d0894d5d8704e5c89607fb` 与
-`c739c3437bc29c7a6a4d20d9bd0fa970d5fa13b1a89ee2689c8c6006b5d3b8f6`。S24、S26、S27 分别为
-222/222、267/267、220/220 次调用成功且 typed error 为空；S27 reward 为 `0.68359375`、
-format error rate 为 `1.171875%`、工具尝试题率为 `81.25%`。截至 S27，累计 8,441 次尝试中
-8,329 次得到成功 observation。S25 的 258 次尝试中 256 次成功，另有 2 次 execution failure；
+`c739c3437bc29c7a6a4d20d9bd0fa970d5fa13b1a89ee2689c8c6006b5d3b8f6`。S24、S26、S27、S28 分别为
+222/222、267/267、220/220、255/255 次调用成功且 typed error 为空；S28 reward 为 `0.578125`、
+format error rate 为 `4.296875%`、工具尝试题率为 `87.109375%`。截至 S28，累计 8,696 次尝试中
+8,584 次得到成功 observation。S25 的 258 次尝试中 256 次成功，另有 2 次 execution failure；
 S23 的 4 次 incomplete 与 1 次 invalid JSON 被保留为稀疏解析失败，不据此宣称 action-boundary 回归。
 这些数值只证明训练链路健康，不作为 CoreDev-2511 benchmark 结果，也不用于提前选择 checkpoint。
 
@@ -1425,8 +1425,8 @@ Atomic 进入正文核心方法必须同时满足：
 11. [部分完成] target-only 调用行为对照已回填；正式 audit 仍待双人盲标、第三人裁决、
     Wilson CI 与 agreement；
 12. [已完成] PRL26 No-Tool fresh-S0 Train@512 到 S32，permanent receipt 已审计；
-13. [运行中] PRL26 Crop fresh-S0 Train@512 已完成 S27，S28 正在运行并继续向 S32；最近的 S24
-    permanent checkpoint 已验收，S26/S27 分别为 267/267、220/220 次成功调用且无 typed error；
+13. [运行中] PRL26 Crop fresh-S0 Train@512 已完成 S28，S29 正在运行并继续向 S32；最近的 S24
+    permanent checkpoint 已验收，S28 为 255/255 次成功调用且无 typed error；
 14. [已排队] Crop S32 后自动执行 No-Tool/Crop matched Eval@512；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
