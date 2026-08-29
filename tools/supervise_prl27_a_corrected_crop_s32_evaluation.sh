@@ -7,6 +7,9 @@ main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
 python_bin="$main_root/.venv312/bin/python"
 training_root="$main_root/artifacts/policy/PRL-27-A-train512-s32-crop-exact-continuation-qwen3-instruct-bs16-n16-teacher25-ws8"
 receipt="$training_root/permanent-checkpoints/global_step_32/tgvf_permanent_checkpoint_receipt.json"
+training_control_root="$main_root/artifacts/control/PRL-27-A-crop-train512-s32-20260829"
+training_complete="$training_control_root/state/s32-accepted"
+training_failed="$training_control_root/state/failed"
 evaluation_id=PRL27-A-CROP-EXACT-CONTINUATION-TRAIN512-S32-MATCHED-COREDEV2511-PIXEL512-V1
 eval_root="$training_root/evaluation/$evaluation_id"
 plan="$eval_root/runtime/bound-crop-plan.json"
@@ -108,7 +111,7 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export VLLM_PLUGINS=
 export TORCH_DEVICE_BACKEND_AUTOLOAD=0
 
-phase=waiting_for_s32_receipt
+phase=waiting_for_s32_training_acceptance
 active_pid=
 
 timestamp() {
@@ -165,9 +168,23 @@ run_group() {
   return "$status"
 }
 
-while [[ ! -s "$receipt" ]]; do
+while [[ ! -f "$training_complete" || ! -s "$receipt" ]]; do
+  if [[ -L "$training_complete" || -L "$receipt" ]]; then
+    echo "PRL-27-A training completion boundary cannot be a symlink" >&2
+    exit 1
+  fi
+  if [[ -e "$training_failed" || -L "$training_failed" ]]; then
+    echo "PRL-27-A training supervisor failed before accepted S32" >&2
+    exit 1
+  fi
   sleep "$poll_seconds"
 done
+if [[ -L "$training_complete" || ! -f "$training_complete" \
+      || -L "$receipt" || ! -s "$receipt" \
+      || -e "$training_failed" || -L "$training_failed" ]]; then
+  echo "PRL-27-A accepted S32 boundary changed during evaluation admission" >&2
+  exit 1
+fi
 
 # A permanent checkpoint receipt can precede the trainer's final process exit.
 # Preserve every probe and require two consecutive clean all-GPU/Ray samples.
@@ -176,6 +193,10 @@ record_phase
 quiet=0
 total=0
 while (( quiet < release_stable_polls )); do
+  if [[ -e "$training_failed" || -L "$training_failed" ]]; then
+    echo "PRL-27-A training failure appeared during resource admission" >&2
+    exit 1
+  fi
   total=$((total + 1))
   probe="$runtime_root/resource-probe-${total}.json"
   if "$python_bin" "$resource_validator" resources-free \
@@ -207,12 +228,14 @@ env CUDA_VISIBLE_DEVICES= "$python_bin" "$binder" \
 
 phase=preparing_corrected_crop_full_model
 record_phase
+validate_worktree
 run_group "$log_root/prepare.log" \
   "$python_bin" "$runner" --plan "$plan" --mode prepare \
   --output-root "$eval_root" --gpu-ids 0 1 2 3
 
 phase=proving_pixel512_and_exact_continuation
 record_phase
+validate_worktree
 mkdir -p "$(dirname "$validation")" "$(dirname "$proof")"
 env CUDA_VISIBLE_DEVICES= "$python_bin" "$benchmark_runner" \
   --config "$config" --mode validate --world-size 4 \
@@ -224,6 +247,7 @@ touch "$state_root/processor-proof-complete"
 
 phase=running_corrected_crop_four_gpu_inference
 record_phase
+validate_worktree
 run_group "$log_root/inference.log" \
   "$python_bin" "$runner" --plan "$plan" --mode infer \
   --output-root "$eval_root" --gpu-ids 0 1 2 3
@@ -231,12 +255,14 @@ touch "$state_root/inference-complete"
 
 phase=scoring_corrected_crop_seven_subsets
 record_phase
+validate_worktree
 run_group "$log_root/scoring.log" \
   "$python_bin" "$runner" --plan "$plan" --mode score \
   --output-root "$eval_root" --gpu-ids 0 1 2 3
 
 phase=publishing_corrected_crop_result_and_tool_usage
 record_phase
+validate_worktree
 env CUDA_VISIBLE_DEVICES= PYTHONPATH="$repo_root/src" "$python_bin" - \
   "$evaluation_id" "$plan" "$handoff" "$proof" "$paired_summary" \
   "$summary" "$eval_root/step32/inference" "$result" \

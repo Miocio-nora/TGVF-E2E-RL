@@ -20,7 +20,9 @@ def test_prl27_a_evaluation_supervisor_is_valid_executable_bash() -> None:
 
 def test_prl27_a_evaluation_chain_is_receipt_and_release_gated() -> None:
     source = _source()
-    receipt_wait = source.index('while [[ ! -s "$receipt" ]]')
+    receipt_wait = source.index(
+        'while [[ ! -f "$training_complete" || ! -s "$receipt" ]]'
+    )
     release_gate = source.index("while (( quiet < release_stable_polls ))")
     create_evaluation_root = source.index('mkdir -p "$eval_root/logs"')
     bind = source.index('"$python_bin" "$binder"', create_evaluation_root)
@@ -49,12 +51,17 @@ def test_prl27_a_evaluation_chain_is_receipt_and_release_gated() -> None:
     )
     assert "release_stable_polls < 2" in source
     assert "resources-free" in source
+    assert 'training_complete="$training_control_root/state/s32-accepted"' in source
+    assert 'training_failed="$training_control_root/state/failed"' in source
+    assert '[[ -e "$training_failed" || -L "$training_failed" ]]' in source
 
 
 def test_prl27_a_evaluation_rechecks_clean_admitted_head_before_binding() -> None:
     source = _source()
     initial_check = source.index("validate_worktree")
-    receipt_wait = source.index('while [[ ! -s "$receipt" ]]')
+    receipt_wait = source.index(
+        'while [[ ! -f "$training_complete" || ! -s "$receipt" ]]'
+    )
     release_receipt = source.index('cp "$probe" "$runtime_root/resources-released.json"')
     final_check = source.index("validate_worktree", release_receipt)
     binder = source.index('"$python_bin" "$binder"', final_check)
@@ -64,6 +71,31 @@ def test_prl27_a_evaluation_rechecks_clean_admitted_head_before_binding() -> Non
     assert "status --porcelain=v1 --untracked-files=all" in source
     assert '"$observed_head" != "$admitted_head"' in source
     assert "admitted-head.txt" in source
+    assert source.count("validate_worktree") >= 7
+
+
+def test_prl27_a_evaluation_rejects_failed_and_accepted_state_coexistence() -> None:
+    source = _source()
+    receipt_wait = source.index(
+        'while [[ ! -f "$training_complete" || ! -s "$receipt" ]]'
+    )
+    post_wait_failure_gate = source.index(
+        '|| -e "$training_failed" || -L "$training_failed"', receipt_wait
+    )
+    resource_wait = source.index("while (( quiet < release_stable_polls ))")
+    resource_failure_gate = source.index(
+        'if [[ -e "$training_failed" || -L "$training_failed" ]]',
+        resource_wait,
+    )
+    binder = source.index('"$python_bin" "$binder"', resource_failure_gate)
+
+    assert (
+        receipt_wait
+        < post_wait_failure_gate
+        < resource_wait
+        < resource_failure_gate
+        < binder
+    )
 
 
 def test_prl27_a_evaluation_contract_is_single_arm_exact_training_run() -> None:

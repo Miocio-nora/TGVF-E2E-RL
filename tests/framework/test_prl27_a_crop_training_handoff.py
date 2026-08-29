@@ -67,6 +67,9 @@ def test_handoff_is_shell_valid_and_orders_every_fail_closed_gate() -> None:
     assert "crop-fresh-s0-authorization.json" in source
     assert "--mode formal --target-step 32 --compose-only" in source
     assert "setsid" in source and "stop_process_group" in source
+    assert 'admitted_head=${PRL27_A_ADMITTED_HEAD:-}' in source
+    assert 'admitted_head=$(git -C "$repo_root" rev-parse HEAD)' not in source
+    assert '[[ ! "$admitted_head" =~ ^[0-9a-f]{40}$ ]]' in source
 
 
 def test_handoff_never_kills_or_rewrites_the_prl26_source() -> None:
@@ -98,6 +101,10 @@ def test_tmux_launcher_arms_two_retained_sessions_without_secret_commands() -> N
     assert clean_gate < first_session < signal_gate
     assert source.count("tmux new-session") == 2
     assert source.count("remain-on-exit on") == 2
+    assert source.count('tmux set-option -w -t "${') == 2
+    assert 'show-options -w -v -t "${session}:" remain-on-exit' in source
+    assert 'display-message -p -t "${session}:" \'#{pane_dead}\'' in source
+    assert '"$pane_dead" != 0' in source
     assert 'tmux has-session -t "=$name"' in source
     assert "handoff_prl26_c_to_prl27_a_crop_train512_s32.sh" in source
     assert "supervise_prl27_a_corrected_crop_s32_evaluation.sh" in source
@@ -110,6 +117,10 @@ def test_tmux_launcher_arms_two_retained_sessions_without_secret_commands() -> N
     ]
     assert "OPENROUTER_API_KEY" not in pane_commands
     assert "created_sessions" in source and "kill-session" in source
+    final_clean_check = source.rindex(
+        'dirty=$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)'
+    )
+    assert final_clean_check < signal_gate
 
 
 def test_formal_contract_binds_source_core_fix_and_exact_crop_runtime() -> None:

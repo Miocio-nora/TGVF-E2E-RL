@@ -84,22 +84,33 @@ tmux new-session -d -E \
   -s "$training_session" -c "$repo_root" \
   "${training_environment[@]}" "$training_command"
 created_sessions+=("$training_session")
-tmux set-option -w -t "=$training_session" remain-on-exit on
+tmux set-option -w -t "${training_session}:" remain-on-exit on
 
 tmux new-session -d -E \
   -s "$evaluation_session" -c "$repo_root" \
   "${evaluation_environment[@]}" "$evaluation_command"
 created_sessions+=("$evaluation_session")
-tmux set-option -w -t "=$evaluation_session" remain-on-exit on
+tmux set-option -w -t "${evaluation_session}:" remain-on-exit on
 
 for session in "$training_session" "$evaluation_session"; do
   pane_count=$(tmux list-panes -t "=$session" -F '#{pane_id}' | wc -l)
-  remain=$(tmux show-options -w -v -t "=$session" remain-on-exit)
-  if [[ "$pane_count" != 1 || "$remain" != on ]]; then
+  remain=$(tmux show-options -w -v -t "${session}:" remain-on-exit)
+  pane_dead=$(tmux display-message -p -t "${session}:" '#{pane_dead}')
+  if [[ "$pane_count" != 1 || "$remain" != on || "$pane_dead" != 0 ]]; then
     echo "PRL-27-A tmux session admission differs: $session" >&2
     exit 1
   fi
 done
+
+# Close the check-to-signal window: both panes are still blocked above, so any
+# HEAD or dirty-state drift aborts and removes them before either supervisor
+# can observe a different implementation identity.
+observed_head=$(git -C "$repo_root" rev-parse HEAD)
+dirty=$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)
+if [[ "$observed_head" != "$admitted_head" || -n "$dirty" ]]; then
+  echo "PRL-27-A worktree changed while tmux sessions were being admitted" >&2
+  exit 1
+fi
 
 tmux wait-for -S "$launch_gate"
 trap - EXIT

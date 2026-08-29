@@ -29,9 +29,14 @@ gpu_memory_threshold_mib=${PRL27_A_GPU_IDLE_MEMORY_THRESHOLD_MIB:-32}
 source_lock_timeout_seconds=${PRL27_A_SOURCE_LOCK_TIMEOUT_SECONDS:-3600}
 maximum_restarts=${PRL27_A_TRAIN_MAXIMUM_RESTARTS:-12}
 cooldown_seconds=${PRL27_A_TRAIN_RESTART_COOLDOWN_SECONDS:-15}
+admitted_head=${PRL27_A_ADMITTED_HEAD:-}
 
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   echo "OPENROUTER_API_KEY is required before arming PRL-27-A" >&2
+  exit 1
+fi
+if [[ ! "$admitted_head" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "PRL27_A_ADMITTED_HEAD is required before arming PRL-27-A" >&2
   exit 1
 fi
 for path in "$python_bin" "$validator" "$source_config" "$target_config"; do
@@ -122,7 +127,6 @@ cleanup() {
 trap cleanup EXIT
 trap 'phase=signal; exit 130' INT TERM
 
-admitted_head=$(git -C "$repo_root" rev-parse HEAD)
 validate_worktree
 if [[ -L "$control_root/admitted-head.txt" ]]; then
   echo "PRL-27-A admitted HEAD state cannot be a symlink" >&2
