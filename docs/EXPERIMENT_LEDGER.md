@@ -10418,3 +10418,12 @@ than inferred from a script name or prior conversation.
   closed at global step 1, after which the same attempt entered S2. This is the
   first production evidence that the byte-parity fix survives a real gradient
   update; it is a training-health datum, not a benchmark score.
+- S2 published at `2026-08-30 02:26:37 JST` after `513.8471985859796`
+  seconds. It again completed replay, optimizer update and all 8-way
+  model/optimizer checkpoint shards with no replay or parse error. S2 recorded
+  answer reward `0.703125`, tool-attempt rate `0.75`, 528 attempts, 510
+  successful observations, mean attempts `2.0625`, format-error rate
+  `0.08203125`, group reward variance `0.793796875` and zero-variance-group
+  rate `0.125`; 17 call-limit events and one execution failure followed the
+  declared fail-soft path. The tracker advanced to 2 and the same attempt
+  entered S3 without restart.
