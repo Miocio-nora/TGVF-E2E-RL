@@ -98,27 +98,30 @@ No-Tool processor-default 数值不进入 true-1M 主表，只保留为 historic
 fresh-S0 对照，用于回答从 RL 开始即固定 `262,144` pixels 时，No-Tool、Crop 与 TGVF 的表现及
 prompt sensitivity 是否改变；在正式 scorer 闭合前，训练 reward 和工具调用统计只作健康诊断。
 
-| Arm | 状态（2026-08-29 16:35 JST） | 已验收边界 | 下一自动动作 |
+| Arm | 状态（2026-08-29 18:48 JST） | 已验收边界 | 下一自动动作 |
 |---|---|---|---|
-| No-Tool Train@512 | **S32 完成** | S8/S16/S24/S32 permanent receipts；S32 run identity `c079c678...` | 等待 Crop S32 后进入 aligned/matched Eval@512 |
-| Crop Train@512 | **S25 完成，S26 运行中** | S24 permanent receipt；S25 为 256/258 次成功调用、2 execution failures | S32 后触发 A/B Eval@512 |
+| No-Tool Train@512 | **S32 完成；Eval@512 inference 运行中** | S8/S16/S24/S32 permanent receipts；S32 run identity `c079c678...`；@512 processor proof 通过 | GPU 0--3 四个 rank 完成 2,240 条 prediction 后进入评分 |
+| Crop Train@512 | **S32 完成；Eval@512 inference 运行中** | S32 permanent receipt、rolling/permanent samefile、trainer `return_code=0`；corrected action boundary 与 @512 processor proof 通过 | GPU 4--7 四个 rank 完成 2,240 条 prediction 后进入评分 |
 | TGVF Short Train@512 | **已冻结、未启动** | prompt、tool、RP67、@512 processor 与 S32 合同已预检 | A/B 评测完成且 GPU/Ray 释放后启动 |
 | TGVF Target-guide-v2 Train@512 | **已冻结、未启动** | 仅增加 teacher-aligned Target 定义与视觉案例 | Short S32 后启动，再做 prompt-axis paired eval |
 | Atomic Train@512 | **clean 自动接力已挂起、未开始训练** | `e5e0287` static admission accepted；独立 fresh-S0、matched Atomic prompt、@512；当前不占 GPU | 完整 C/D paired Eval@512 验收后自动 C0→S32→Eval@512 |
 
-Crop S25 的 answer reward、format error、工具尝试题率和端到端时长分别为
-`0.609375 / 3.90625% / 93.359375% / 799.56 s`，258 次尝试中 256 次成功，另有 2 次
-`tool_execution_failed`。S23 出现 4 次
-`incomplete_tool_call` 与 1 次 `invalid_json`，但仍有 273/278 次成功调用；S24 随即为 222/222、
-0 error。结合 `include_stop_str_in_output=true`，当前只把 S23 记作稀疏 generation/parser failure，
-没有证据把它升级为旧 answer-over-action action-boundary 缺陷回归。S1--S25 累计 6,400 条轨迹、
-7,954 次工具尝试、7,842 次成功 observation，累计 answer reward `0.68671875`、format error
-`5.515625%`；训练 reward 仅作链路诊断，不是 benchmark 结果。
+Crop S32 的 answer reward、format error、工具尝试题率和端到端时长分别为
+`0.796875 / 5.46875% / 67.1875% / 825.49 s`，172/172 次工具调用成功。S1--S32 累计
+8,192 条轨迹、9,460 次工具尝试、9,348 次成功 observation，累计 answer reward
+`0.6910400391`、format error `4.91943359%`；训练 reward 仅作链路诊断，不是 benchmark 结果。
+S32 rolling/permanent 的 26/26 个要求文件均为 samefile，checkpoint mapping、receipt 与
+supervisor `return_code=0` 已独立复核。`prl26-train512-s32-eval`、
+`prl26-cd-tgvf-prompt-s32` 与 `prl26-e-atomic-train512-s32` 三个常驻 supervisor 均存活；后两条
+等待链不占 GPU，等待 A/B 正式评测和 C/D 完整 paired 评测闭合后接力。
 
-最近 S18--S25 八个完整 step 平均 `13.77 min/step`，Crop S32 预计约 `18:07 JST`；这是速度估算，
-不是验收承诺。`prl26-train512-s32-eval`、`prl26-cd-tgvf-prompt-s32` 与
-`prl26-e-atomic-train512-s32` 三个常驻 supervisor 均存活：依次等待 Crop S32、A/B 正式评测和
-C/D 完整 paired 评测。后两条等待链不占 GPU，不会与当前 Crop 训练争用资源。
+18:48 JST，修正后的 No-Tool/Crop aligned/matched Eval@512 已进入实际 4+4 GPU inference：
+No-Tool rank 0--3 分别绑定 GPU 0--3，Crop rank 0--3 分别绑定 GPU 4--7，八个 worker 均存活且
+八个 prediction JSONL 均已写出首批样本；快照时 No-Tool 为 `31/32/48/48`，Crop 为
+`192/271/231/223`。No-Tool processor proof 固定 `max_pixels=262144`、represented pixels
+`239,616`、visual tokens `234`，并确认 `gpu_or_api_used=false`、`vllm_engine_constructed=false`；
+Crop 对应 proof 也已通过。当前 failed marker 为空。这些只是未评分的推理进度，不是
+CoreDev-2511 benchmark 结果，也不提前报告 Macro*。
 
 A/B handoff 的 S32 前独立审计发现，旧 evaluator 在看到两个 permanent receipt 后会直接进入
 bind/prepare/inference，却没有显式等待 trainer 的 vLLM/Ray teardown；已完成的 No-Tool 线路中，
@@ -1353,8 +1356,13 @@ Crop S32 full-model HF 物化与静态 processor proof 阶段，尚未提前发�
 拒绝；随后将原 A/B worktree clean fast-forward 到同一修复 commit，在原路径重新通过两次资源探针、
 bind 与 handoff 字节一致性。18:25 JST，修正后的 Crop 静态验证和 processor proof 已通过：
 `max_pixels=262144`、represented pixels `239,616`、visual tokens `234`、`gpu_or_api_used=false`。
-No-Tool GPU 0–3 与 Crop GPU 4–7 的并行 inference wrappers 已启动，当前仍在各自 CPU prepare，尚未
-发布正式 benchmark 结果；TGVF relay 已在 clean `5baddc6` 上重新 accepted，Atomic 仍保持等待。
+No-Tool GPU 0–3 与 Crop GPU 4–7 的并行 inference wrappers 随后启动；在 18:25 的状态快照中，两臂
+仍处于 CPU prepare，尚未发布正式 benchmark 结果。TGVF relay 已在 clean `5baddc6` 上重新
+accepted，Atomic 仍保持等待。
+18:48 JST，恢复链已经跨过原失败点并进入实际 4+4 GPU inference：No-Tool 的 @512 processor proof
+通过，GPU 0--3 四个 worker 与 Crop GPU 4--7 四个 worker 均完成模型加载、预热并写出各自首批
+prediction。首次 18:12 失败发生在 inference 前，未占用 GPU、未生成 prediction 或 score，因此
+不会污染本次输出；当前 failed marker 为空。这里记录的是运行状态，不是正式七项分数。
 当前执行顺序严格为
 `Crop S32 → No-Tool/Crop aligned Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512 → Atomic C0/S32 → Atomic Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间
@@ -1448,8 +1456,9 @@ Atomic 进入正文核心方法必须同时满足：
 12. [已完成] PRL26 No-Tool fresh-S0 Train@512 到 S32，permanent receipt 已审计；
 13. [已完成] PRL26 Crop fresh-S0 Train@512 S32、permanent receipt、rolling/permanent samefile 与
     supervisor `return_code=0` 均已验收；
-14. [运行中] No-Tool/Crop matched Eval@512 已通过修正后的 Crop processor proof；No-Tool GPU 0–3
-    与 Crop GPU 4–7 的并行 inference wrappers 已启动，当前在 CPU prepare/模型加载阶段；
+14. [运行中] No-Tool/Crop aligned/matched Eval@512 已通过两臂 @512 processor proof 并进入实际
+    4+4 GPU inference；No-Tool 使用 GPU 0--3、Crop 使用 GPU 4--7，八个 rank 均已产生 prediction；
+    七项正式 scorer 尚未开始/闭合，因此暂无 benchmark 分数；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
 16. [已排队] Atomic fresh-S0 Train@512/Eval@512 clean 接力已通过 static admission 并挂起；
