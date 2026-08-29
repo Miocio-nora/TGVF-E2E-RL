@@ -102,7 +102,11 @@ export TOKENIZERS_PARALLELISM=false
 export PYTHONHASHSEED=42
 export VLLM_USE_V1=1
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export VLLM_PLUGINS=
+# The generic86 arm evaluates the exact training runtime with precomputed image
+# embeddings.  Its full-model engine therefore selects the repo-owned
+# TGVFQwen3VLForConditionalGeneration architecture and worker extension; keep
+# the corresponding audited vLLM general plugin enabled in every spawned rank.
+export VLLM_PLUGINS=tgvf_qwen3_precomputed
 export TORCH_DEVICE_BACKEND_AUTOLOAD=0
 
 phase=admission
