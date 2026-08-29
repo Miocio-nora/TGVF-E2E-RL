@@ -10034,8 +10034,8 @@ than inferred from a script name or prior conversation.
 ### PRL26 train@512 S32 NoTool/Crop parity rerun (2026-08-29)
 
 - Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
-  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `RUNNING; S24 RETAINED` as of
-  2026-08-29 16:22 JST. These are
+  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `RUNNING; S26 COMPLETE, S24 RETAINED`
+  as of 2026-08-29 16:44 JST. These are
   fresh-S0 train@512 parity reruns, not literal one-variable continuations of
   the historical NoTool S32 and Crop S80 lineages.
 - Implementation commit
@@ -10079,6 +10079,12 @@ than inferred from a script name or prior conversation.
   malformed polling parameters and a stability count below two fail before the
   wait. This is orchestration-only and does not alter either policy, prompt,
   data, sampling, reward, checkpoint or evaluation contract.
+- The A/B tmux pane is now retained after process exit. The C/D consumer
+  requires that option before admission and fails closed if the pane disappears
+  before or after publication, or if its exit status cannot be read. This keeps
+  the zero-byte regular completion marker separate from the required process
+  exit-status proof. The already-live A/B session received the same option
+  without restarting or interrupting Crop.
 
 ### PRL26-C/D train@512 TGVF Target-prompt parity rerun (2026-08-29)
 
@@ -10136,6 +10142,16 @@ than inferred from a script name or prior conversation.
   trajectory, successful-observation count, tool errors, stop distribution and
   generated-token mean/p50/p95/p99. It additionally rejects the result unless
   all 2,240 Short/Full sample IDs and projected RNG stream identities match.
+- C/D no longer trusts the A/B result table as a shallow receipt. Before any C0
+  launch it requires canonical regular non-symlink result, handoff, completion
+  and two official-summary paths; rejects any failed path including a broken
+  symlink; recomputes the bound-handoff canonical identity; and closes exact
+  `2,511/2,240/271/7` coverage. It then reruns the frozen CoreDev Macro*
+  extractor over both scorer trees and requires the recomputed headline,
+  Macro* and seven summary slices to equal the published NoTool/Crop rows. The
+  prerequisite audit records result, handoff and summary SHA256 values. This is
+  a CPU-side admission hardening only; the live A/B producer schema and both
+  evaluation contracts remain unchanged.
 - Operational recovery remains bounded. Besides the existing exact vLLM
   weight-wake OOM classifier, a clean-process retry is admitted only when the
   log contains both the typed `_JudgeTransientHTTPError` HTTP-429 record and

@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = ROOT / "tools/validate_prl26_tgvf_prompt_handoff.py"
 SUPERVISOR = ROOT / "tools/supervise_prl26_tgvf_prompt_train_and_eval.sh"
+A_B_LAUNCHER = ROOT / "tools/launch_prl26_train512_s32_coredev2511_tmux.sh"
 
 
 def _load_module() -> ModuleType:
@@ -50,6 +51,19 @@ def test_supervisor_orders_prerequisite_canaries_formal_arms_and_eval() -> None:
     assert 'mkdir -p "$full_root"' not in source
     assert 'while [[ ! -f "$prerequisite_complete" ]]' in source
     assert 'while [[ ! -s "$prerequisite_complete" ]]' not in source
+    assert 'if [[ "$prerequisite_remain" != on ]]' in source
+    assert "A/B evaluator pane disappeared before completion" in source
+    assert "A/B evaluator pane disappeared after completion" in source
+    assert "A/B evaluator exit status is unavailable" in source
+
+
+def test_ab_launcher_retains_pane_for_downstream_exit_status_audit() -> None:
+    source = A_B_LAUNCHER.read_text(encoding="utf-8")
+    launch = 'tmux new-session -d -s "$session"'
+    retain = 'tmux set-option -t "$session" remain-on-exit on'
+    verify = 'tmux show-options -t "$session" -v remain-on-exit'
+    assert source.index(launch) < source.index(retain) < source.index(verify)
+    assert 'tmux kill-session -t "$session"' in source
 
 
 def test_current_tgvf_prompt_config_matrix_is_exact(
@@ -95,33 +109,120 @@ def test_current_tgvf_prompt_config_matrix_is_exact(
 
 
 def test_prerequisite_requires_complete_passed_two_arm_result(
-    validator: ModuleType, tmp_path: Path
+    validator: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    marker = tmp_path / "evaluation-complete"
+    control = tmp_path / "control"
+    runtime = control / "runtime"
+    runtime.mkdir(parents=True)
+    marker = runtime / "evaluation-complete"
     marker.touch()
-    failed = tmp_path / "failed"
+    failed = runtime / "failed"
+    result_path = control / "train512-s32-pixel512-results.json"
+    handoff_path = runtime / "bound-handoff.json"
+    summaries = {
+        name: tmp_path / name / "coredev-2511-eval-summary.json"
+        for name in ("no_tool", "crop")
+    }
+    for summary in summaries.values():
+        summary.parent.mkdir(parents=True)
+    monkeypatch.setattr(validator, "_EXPECTED_RESULT_PATH", result_path)
+    monkeypatch.setattr(validator, "_EXPECTED_COMPLETE_MARKER", marker)
+    monkeypatch.setattr(validator, "_EXPECTED_FAILED_MARKER", failed)
+    monkeypatch.setattr(validator, "_EXPECTED_HANDOFF_PATH", handoff_path)
+    monkeypatch.setattr(validator, "_EXPECTED_SUMMARY_PATHS", summaries)
+
+    headline = {
+        "schema_version": "tgvf.coredev-2511-macro-star.v1",
+        "macro_star_percent": 61.25,
+    }
+    monkeypatch.setattr(
+        validator, "extract_coredev_macro_star", lambda _summary: headline
+    )
+    slices = [{"dataset": str(index)} for index in range(7)]
     arms: dict[str, object] = {}
     for name in ("no_tool", "crop"):
-        summary = tmp_path / f"{name}-summary.json"
-        summary.write_text('{"status":"complete"}\n', encoding="utf-8")
+        summary = summaries[name]
+        summary.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "pass",
+                    "phase": "eval",
+                    "model": "Qwen3-VL-8B-Instruct",
+                    "sample_count": 2511,
+                    "slice_count": 7,
+                    "slices": slices,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         arms[name] = {
+            "method": validator._EXPECTED_METHODS[name],
             "train_image_max_pixels": 262_144,
             "evaluation_image_max_pixels": 262_144,
             "optimizer_step": 32,
             "macro_star_percent": 61.25,
-            "seven_subset_statistics": [{} for _ in range(7)],
+            "headline": headline,
+            "seven_subset_statistics": slices,
             "summary_path": str(summary),
         }
-    result_path = tmp_path / "result.json"
+
+    handoff_arms: dict[str, object] = {}
+    for name in ("no_tool", "crop"):
+        config = tmp_path / f"{name}.toml"
+        completion = tmp_path / f"{name}-completion.json"
+        config.write_text(f"name = \"{name}\"\n", encoding="utf-8")
+        completion.write_text('{"optimizer_step":32}\n', encoding="utf-8")
+        handoff_arms[name] = {
+            "evaluation_id": validator._EXPECTED_EVALUATION_IDS[name],
+            "run_id": f"RUN-{name}",
+            "run_identity_sha256": "a" * 64,
+            "config_path": str(config),
+            "config_file_sha256": validator._sha256(config),
+            "completion_path": str(completion),
+            "completion_file_sha256": validator._sha256(completion),
+            "checkpoint_pair_integrity_sha256": "b" * 64,
+        }
+    plan = tmp_path / "bound-plan.json"
+    plan.write_text('{"status":"ready"}\n', encoding="utf-8")
+    crop_handoff = handoff_arms["crop"]
+    assert isinstance(crop_handoff, dict)
+    crop_handoff.update(
+        {
+            "bound_plan_path": str(plan),
+            "bound_plan_file_sha256": validator._sha256(plan),
+            "tool_action_boundary": {
+                "stop_strings": ["</tool_call>"],
+                "include_stop_str_in_output": True,
+            },
+        }
+    )
+    handoff_content = {
+        "schema_version": "tgvf.prl26-train512-s32-evaluation-handoff.v1",
+        "status": "ready",
+        "train_image_max_pixels": 262_144,
+        "evaluation_image_max_pixels": 262_144,
+        "optimizer_step": 32,
+        "coverage": validator._EXPECTED_HANDOFF_COVERAGE,
+        **handoff_arms,
+    }
+    handoff = {
+        **handoff_content,
+        "identity_sha256": validator._canonical_sha256(handoff_content),
+    }
+    handoff_path.write_text(json.dumps(handoff) + "\n", encoding="utf-8")
+
+    result_payload = {
+        "schema_version": validator._RESULT_SCHEMA,
+        "status": "pass",
+        "contract": "fresh-S0 Train@512 S32; matched Eval@512",
+        "coverage": validator._EXPECTED_COVERAGE,
+        "handoff_identity_sha256": handoff["identity_sha256"],
+        "arms": arms,
+    }
     result_path.write_text(
-        json.dumps(
-            {
-                "schema_version": validator._RESULT_SCHEMA,
-                "status": "pass",
-                "contract": "fresh-S0 Train@512 S32; matched Eval@512",
-                "arms": arms,
-            }
-        ),
+        json.dumps(result_payload),
         encoding="utf-8",
     )
 
@@ -132,9 +233,57 @@ def test_prerequisite_requires_complete_passed_two_arm_result(
     )
     assert accepted["status"] == "accepted"
     assert set(accepted["arms"]) == {"no_tool", "crop"}
+    assert accepted["handoff_identity_sha256"] == handoff["identity_sha256"]
+    assert accepted["coverage"] == validator._EXPECTED_COVERAGE
 
-    failed.write_text("failed\n", encoding="utf-8")
+    failed.symlink_to(tmp_path / "missing-failure-target")
     with pytest.raises(RuntimeError, match="completion boundary differs"):
+        validator.validate_prerequisite(
+            result_path=result_path,
+            complete_marker=marker,
+            failed_marker=failed,
+        )
+
+    failed.unlink()
+    drifted_result = dict(result_payload)
+    drifted_result["coverage"] = {**validator._EXPECTED_COVERAGE, "subset_count": 6}
+    result_path.write_text(json.dumps(drifted_result), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="result table contract differs"):
+        validator.validate_prerequisite(
+            result_path=result_path,
+            complete_marker=marker,
+            failed_marker=failed,
+        )
+
+    result_path.write_text(json.dumps(result_payload), encoding="utf-8")
+    drifted_headline = json.loads(json.dumps(result_payload))
+    drifted_headline["arms"]["no_tool"]["macro_star_percent"] = 60.0
+    result_path.write_text(json.dumps(drifted_headline), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="published headline differs"):
+        validator.validate_prerequisite(
+            result_path=result_path,
+            complete_marker=marker,
+            failed_marker=failed,
+        )
+
+    result_path.write_text(json.dumps(result_payload), encoding="utf-8")
+    no_tool_summary = summaries["no_tool"]
+    no_tool_summary_backup = no_tool_summary.with_name("summary-backup.json")
+    no_tool_summary.rename(no_tool_summary_backup)
+    no_tool_summary.symlink_to(no_tool_summary_backup)
+    with pytest.raises(RuntimeError, match="summary is not a regular file"):
+        validator.validate_prerequisite(
+            result_path=result_path,
+            complete_marker=marker,
+            failed_marker=failed,
+        )
+    no_tool_summary.unlink()
+    no_tool_summary_backup.rename(no_tool_summary)
+
+    drifted_handoff = dict(handoff)
+    drifted_handoff["identity_sha256"] = "c" * 64
+    handoff_path.write_text(json.dumps(drifted_handoff), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="canonical identity differs"):
         validator.validate_prerequisite(
             result_path=result_path,
             complete_marker=marker,

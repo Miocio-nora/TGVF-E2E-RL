@@ -175,21 +175,47 @@ if [[ "$prerequisite_command" != *"supervise_prl26_train512_s32_coredev2511.sh"*
   echo "PRL-26 A/B evaluation pane identity differs" >&2
   exit 1
 fi
+prerequisite_remain=$(
+  tmux show-options -t "$prerequisite_session" -v remain-on-exit 2>/dev/null
+)
+if [[ "$prerequisite_remain" != on ]]; then
+  echo "PRL-26 A/B evaluation pane is not retained for exit-status audit" >&2
+  exit 1
+fi
 while [[ ! -f "$prerequisite_complete" ]]; do
   if [[ -s "$prerequisite_failed" ]]; then
     echo "PRL-26 A/B evaluation failed; C/D remains untouched" >&2
     exit 1
   fi
-  if [[ "$(tmux display-message -p -t "$prerequisite_pane" '#{pane_dead}')" == 1 ]]; then
+  if ! prerequisite_dead=$(
+    tmux display-message -p -t "$prerequisite_pane" '#{pane_dead}' 2>/dev/null
+  ); then
+    echo "PRL-26 A/B evaluator pane disappeared before completion" >&2
+    exit 1
+  fi
+  if [[ "$prerequisite_dead" == 1 ]]; then
     echo "PRL-26 A/B evaluator exited before publishing completion" >&2
     exit 1
   fi
   sleep "$poll_seconds"
 done
-while [[ "$(tmux display-message -p -t "$prerequisite_pane" '#{pane_dead}')" != 1 ]]; do
+while true; do
+  if ! prerequisite_dead=$(
+    tmux display-message -p -t "$prerequisite_pane" '#{pane_dead}' 2>/dev/null
+  ); then
+    echo "PRL-26 A/B evaluator pane disappeared after completion" >&2
+    exit 1
+  fi
+  [[ "$prerequisite_dead" == 1 ]] && break
   sleep 1
 done
-if [[ "$(tmux display-message -p -t "$prerequisite_pane" '#{pane_dead_status}')" != 0 ]]; then
+if ! prerequisite_status=$(
+  tmux display-message -p -t "$prerequisite_pane" '#{pane_dead_status}' 2>/dev/null
+); then
+  echo "PRL-26 A/B evaluator exit status is unavailable" >&2
+  exit 1
+fi
+if [[ "$prerequisite_status" != 0 ]]; then
   echo "PRL-26 A/B evaluator exited nonzero" >&2
   exit 1
 fi

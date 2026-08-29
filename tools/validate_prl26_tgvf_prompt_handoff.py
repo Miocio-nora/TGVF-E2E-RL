@@ -27,6 +27,9 @@ from tools.validate_prl26_train512_training_handoff import (  # noqa: E402
     _validate_generation,
     _validate_metrics_rows,
 )
+from tgvf_rl.evaluation.coredev_results import (  # noqa: E402
+    extract_coredev_macro_star,
+)
 from tgvf_rl.policy.run_config import (  # noqa: E402
     POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
@@ -46,6 +49,51 @@ _EXPECTED_CHECKPOINTS = (0, 8, 16, 24, 32)
 _EXPECTED_PERMANENT = (8, 16, 24, 32)
 _RESULT_SCHEMA = "tgvf.prl26-train512-s32-pixel512-results.v1"
 _PROVENANCE_SCHEMA = "tgvf.prl15-launch-provenance.v1"
+_A_B_CONTROL_ROOT = Path(
+    "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/evaluation/"
+    "PRL26-TRAIN512-S32-PIXEL512-COREDEV2511-V1"
+)
+_EXPECTED_RESULT_PATH = _A_B_CONTROL_ROOT / "train512-s32-pixel512-results.json"
+_EXPECTED_COMPLETE_MARKER = _A_B_CONTROL_ROOT / "runtime/evaluation-complete"
+_EXPECTED_FAILED_MARKER = _A_B_CONTROL_ROOT / "runtime/failed"
+_EXPECTED_HANDOFF_PATH = _A_B_CONTROL_ROOT / "runtime/bound-handoff.json"
+_EXPECTED_COVERAGE = {
+    "official_manifest_rows": 2511,
+    "evaluated_single_image_rows": 2240,
+    "held_multi_image_rows": 271,
+    "subset_count": 7,
+}
+_EXPECTED_HANDOFF_COVERAGE = {
+    "official_manifest_rows": 2511,
+    "evaluated_single_image_rows": 2240,
+    "held_multi_image_rows": 271,
+    "datasets": 7,
+}
+_EXPECTED_EVALUATION_IDS = {
+    "no_tool": "PRL26-A-TRAIN512-S32-NOTOOL-MATCHED-COREDEV2511-S32-PIXEL512-V1",
+    "crop": "PRL26-B-TRAIN512-S32-CROP-MATCHED-COREDEV2511-PIXEL512-BOUNDARYFIX-V1",
+}
+_EXPECTED_METHODS = {
+    "no_tool": "NoTool Train@512 S32",
+    "crop": "Crop Train@512 S32",
+}
+_EXPECTED_SUMMARY_PATHS = {
+    "no_tool": Path(
+        "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/"
+        "PRL-26-A-train512-s32-parity-notool-qwen3-instruct-bs16-n16-"
+        "teacher25-ws8/evaluation/"
+        "PRL26-A-TRAIN512-S32-NOTOOL-MATCHED-COREDEV2511-S32-PIXEL512-V1/"
+        "matched/step32/scoring/coredev-official-v1/"
+        "coredev-2511-eval-summary.json"
+    ),
+    "crop": Path(
+        "/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl/artifacts/policy/"
+        "PRL-26-B-train512-s32-parity-crop-qwen3-instruct-bs16-n16-"
+        "teacher25-ws8/evaluation/"
+        "PRL26-B-TRAIN512-S32-CROP-MATCHED-COREDEV2511-PIXEL512-BOUNDARYFIX-V1/"
+        "step32/scoring/coredev-official-v1/coredev-2511-eval-summary.json"
+    ),
+}
 
 
 def _fail(message: str) -> None:
@@ -58,6 +106,90 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _require_regular_file(path: Path, owner: str, *, nonempty: bool = True) -> None:
+    if path.is_symlink() or not path.is_file():
+        _fail(f"{owner} is not a regular file")
+    if nonempty and path.stat().st_size <= 0:
+        _fail(f"{owner} is empty")
+
+
+def _require_sha256(value: object, owner: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        _fail(f"{owner} is not a lowercase SHA256")
+    return value
+
+
+def _validate_bound_handoff(path: Path) -> dict[str, object]:
+    _require_regular_file(path, "PRL26 A/B bound handoff")
+    payload = _read_json(path, "PRL26 A/B bound handoff")
+    if not isinstance(payload, dict):
+        _fail("PRL26 A/B bound handoff is not an object")
+    identity = _require_sha256(
+        payload.get("identity_sha256"), "PRL26 A/B handoff identity"
+    )
+    content = {key: value for key, value in payload.items() if key != "identity_sha256"}
+    if identity != _canonical_sha256(content):
+        _fail("PRL26 A/B handoff canonical identity differs")
+    if (
+        payload.get("schema_version")
+        != "tgvf.prl26-train512-s32-evaluation-handoff.v1"
+        or payload.get("status") != "ready"
+        or payload.get("train_image_max_pixels") != 512 * 512
+        or payload.get("evaluation_image_max_pixels") != 512 * 512
+        or payload.get("optimizer_step") != 32
+        or payload.get("coverage") != _EXPECTED_HANDOFF_COVERAGE
+    ):
+        _fail("PRL26 A/B handoff contract differs")
+    for name in ("no_tool", "crop"):
+        arm = payload.get(name)
+        if not isinstance(arm, dict):
+            _fail(f"PRL26 A/B handoff {name} arm is malformed")
+        completion_path = Path(str(arm.get("completion_path", "")))
+        config_path = Path(str(arm.get("config_path", "")))
+        _require_regular_file(completion_path, f"PRL26 A/B {name} completion")
+        _require_regular_file(config_path, f"PRL26 A/B {name} config")
+        if (
+            arm.get("evaluation_id") != _EXPECTED_EVALUATION_IDS[name]
+            or arm.get("completion_file_sha256") != _sha256(completion_path)
+            or arm.get("config_file_sha256") != _sha256(config_path)
+        ):
+            _fail(f"PRL26 A/B handoff {name} provenance differs")
+        _require_sha256(
+            arm.get("run_identity_sha256"), f"PRL26 A/B {name} run identity"
+        )
+        _require_sha256(
+            arm.get("checkpoint_pair_integrity_sha256"),
+            f"PRL26 A/B {name} checkpoint pair",
+        )
+    crop = payload["crop"]
+    assert isinstance(crop, dict)
+    plan_path = Path(str(crop.get("bound_plan_path", "")))
+    _require_regular_file(plan_path, "PRL26 A/B bound Crop plan")
+    if (
+        crop.get("bound_plan_file_sha256") != _sha256(plan_path)
+        or crop.get("tool_action_boundary")
+        != {"stop_strings": ["</tool_call>"], "include_stop_str_in_output": True}
+    ):
+        _fail("PRL26 A/B bound Crop plan or action boundary differs")
+    return payload
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -256,12 +388,18 @@ def validate_prerequisite(
     *, result_path: Path, complete_marker: Path, failed_marker: Path
 ) -> dict[str, object]:
     if (
-        complete_marker.is_symlink()
-        or not complete_marker.is_file()
-        or failed_marker.exists()
-        or failed_marker.is_symlink()
+        result_path.resolve() != _EXPECTED_RESULT_PATH.resolve()
+        or complete_marker.resolve() != _EXPECTED_COMPLETE_MARKER.resolve()
+        or failed_marker.resolve() != _EXPECTED_FAILED_MARKER.resolve()
     ):
+        _fail("PRL26 A/B prerequisite canonical paths differ")
+    _require_regular_file(result_path, "PRL26 A/B result table")
+    _require_regular_file(
+        complete_marker, "PRL26 A/B completion marker", nonempty=False
+    )
+    if os.path.lexists(failed_marker):
         _fail("PRL26 A/B evaluation completion boundary differs")
+    handoff = _validate_bound_handoff(_EXPECTED_HANDOFF_PATH)
     payload = _read_json(result_path, "PRL26 A/B result table")
     if not isinstance(payload, dict):
         _fail("PRL26 A/B result table is not an object")
@@ -270,6 +408,8 @@ def validate_prerequisite(
         payload.get("schema_version") != _RESULT_SCHEMA
         or payload.get("status") != "pass"
         or payload.get("contract") != "fresh-S0 Train@512 S32; matched Eval@512"
+        or payload.get("coverage") != _EXPECTED_COVERAGE
+        or payload.get("handoff_identity_sha256") != handoff["identity_sha256"]
         or not isinstance(arms, dict)
         or set(arms) != {"no_tool", "crop"}
     ):
@@ -283,19 +423,49 @@ def validate_prerequisite(
         subsets = arm.get("seven_subset_statistics")
         summary_path = Path(str(arm.get("summary_path", "")))
         if (
-            arm.get("train_image_max_pixels") != 512 * 512
+            arm.get("method") != _EXPECTED_METHODS[name]
+            or arm.get("train_image_max_pixels") != 512 * 512
             or arm.get("evaluation_image_max_pixels") != 512 * 512
             or arm.get("optimizer_step") != 32
             or not isinstance(macro, (int, float))
             or not math.isfinite(float(macro))
             or not isinstance(subsets, list)
             or len(subsets) != 7
-            or summary_path.is_symlink()
-            or not summary_path.is_file()
+            or summary_path.resolve() != _EXPECTED_SUMMARY_PATHS[name].resolve()
         ):
             _fail(f"PRL26 A/B {name} result is incomplete")
+        _require_regular_file(summary_path, f"PRL26 A/B {name} summary")
+        summary = _read_json(summary_path, f"PRL26 A/B {name} summary")
+        if not isinstance(summary, dict):
+            _fail(f"PRL26 A/B {name} summary is not an object")
+        if (
+            summary.get("schema_version") != 1
+            or summary.get("status") != "pass"
+            or summary.get("phase") != "eval"
+            or summary.get("model") != "Qwen3-VL-8B-Instruct"
+            or summary.get("sample_count") != 2511
+            or summary.get("slice_count") != 7
+            or not isinstance(summary.get("slices"), list)
+            or len(summary["slices"]) != 7
+            or subsets != summary["slices"]
+        ):
+            _fail(f"PRL26 A/B {name} summary contract differs")
+        try:
+            headline = extract_coredev_macro_star(summary)
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            raise RuntimeError(
+                f"PRL26 A/B {name} frozen CoreDev extraction failed: {error}"
+            ) from error
+        if arm.get("headline") != headline or not math.isclose(
+            float(macro),
+            float(headline["macro_star_percent"]),
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            _fail(f"PRL26 A/B {name} published headline differs")
         accepted[name] = {
             "macro_star_percent": float(macro),
+            "headline": headline,
             "summary_path": str(summary_path.resolve()),
             "summary_sha256": _sha256(summary_path),
         }
@@ -304,6 +474,10 @@ def validate_prerequisite(
         "status": "accepted",
         "result_path": str(result_path.resolve()),
         "result_sha256": _sha256(result_path),
+        "handoff_path": str(_EXPECTED_HANDOFF_PATH.resolve()),
+        "handoff_sha256": _sha256(_EXPECTED_HANDOFF_PATH),
+        "handoff_identity_sha256": handoff["identity_sha256"],
+        "coverage": _EXPECTED_COVERAGE,
         "arms": accepted,
     }
 
