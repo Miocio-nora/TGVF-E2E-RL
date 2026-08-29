@@ -108,27 +108,29 @@ def _validate_supervisor_events(
 ) -> dict[str, object]:
     if not rows:
         _fail("NoTool supervisor event stream is empty")
-    active: dict[int, Mapping[str, object]] = {}
-    finished: dict[int, Mapping[str, object]] = {}
-    last_after = 0
+    paired_attempts: list[
+        tuple[int, int, Mapping[str, object], Mapping[str, object]]
+    ] = []
+    active: tuple[int, Mapping[str, object]] | None = None
+    used_logs: set[Path] = set()
     for record_number, row in enumerate(rows, start=1):
         event = row.get("event")
         attempt = row.get("attempt")
         if type(attempt) is not int or attempt <= 0:
             _fail(f"NoTool supervisor event {record_number} has a bad attempt")
         if event == "attempt_started":
-            if attempt in active or attempt in finished:
-                _fail("NoTool supervisor has a duplicate attempt start")
-            if attempt != len(active) + len(finished) + 1:
-                _fail("NoTool supervisor attempts are not sequential")
+            if active is not None:
+                _fail("NoTool supervisor has an unfinished attempt")
             before = row.get("checkpoint_step")
-            if type(before) is not int or before != last_after:
+            if type(before) is not int or before < 0 or before > target_step:
                 _fail("NoTool supervisor attempt starts from an ambiguous step")
-            active[attempt] = row
+            active = (record_number, row)
             continue
-        if event != "attempt_finished" or attempt not in active or attempt in finished:
+        if event != "attempt_finished" or active is None:
             _fail(f"NoTool supervisor event {record_number} is out of sequence")
-        started = active.pop(attempt)
+        start_record, started = active
+        if attempt != started.get("attempt"):
+            _fail("NoTool supervisor finish attempt identity differs")
         before = row.get("checkpoint_step_before")
         after = row.get("checkpoint_step_after")
         return_code = row.get("return_code")
@@ -156,27 +158,104 @@ def _validate_supervisor_events(
             or attempt_log.stat().st_size <= 0
         ):
             _fail("NoTool supervisor attempt log is absent or empty")
+        resolved_log = attempt_log.resolve()
+        if resolved_log in used_logs:
+            _fail("NoTool supervisor reused an attempt log")
+        used_logs.add(resolved_log)
         decision = row.get("decision")
         if decision not in {"complete", "retry_weight_wake_oom", "fail"}:
             _fail("NoTool supervisor decision is malformed")
         if decision == "retry_weight_wake_oom" and return_code == 0:
             _fail("NoTool supervisor retry has an impossible zero return code")
-        if decision == "fail":
-            _fail("NoTool supervisor recorded a failed attempt")
-        last_after = after
-        finished[attempt] = row
-    if active:
+        if decision == "complete" and (return_code != 0 or after != target_step):
+            _fail("NoTool supervisor completion boundary is malformed")
+        if decision != "complete" and after >= target_step:
+            _fail("NoTool supervisor non-completion reached the target step")
+        paired_attempts.append((start_record, record_number, started, row))
+        active = None
+    if active is not None:
         _fail("NoTool supervisor has an unfinished attempt")
-    final = rows[-1]
+    if not paired_attempts:
+        _fail("NoTool supervisor event stream has no finished attempt")
+
+    # The supervisor schema predates an explicit invocation ID. Its attempt
+    # counter is process-local, so a reset to attempt 1 after a closed pair is
+    # the only auditable invocation boundary; increasing attempts stay within
+    # one invocation and are legal only after the classified retry decision.
+    invocations: list[dict[str, object]] = []
+    previous_attempt: int | None = None
+    previous_finish: Mapping[str, object] | None = None
+    current_invocation: dict[str, object] | None = None
+    for start_record, finish_record, started, finished in paired_attempts:
+        attempt = started["attempt"]
+        before = started["checkpoint_step"]
+        after = finished["checkpoint_step_after"]
+        assert type(attempt) is int
+        assert type(before) is int
+        assert type(after) is int
+        if previous_finish is None:
+            if attempt != 1 or before != 0:
+                _fail(
+                    "NoTool supervisor first invocation must start at attempt 1, step 0"
+                )
+            current_invocation = {
+                "invocation": 1,
+                "event_record_start": start_record,
+                "checkpoint_step_before": before,
+                "attempts": 0,
+            }
+            invocations.append(current_invocation)
+        else:
+            previous_after = previous_finish["checkpoint_step_after"]
+            previous_decision = previous_finish["decision"]
+            if before != previous_after:
+                _fail("NoTool supervisor checkpoint chain has a gap or overlap")
+            if previous_decision == "complete":
+                _fail("NoTool supervisor continued after a successful invocation")
+            if attempt == 1:
+                if previous_decision != "fail":
+                    _fail(
+                        "NoTool supervisor began a new invocation without a prior "
+                        "terminal failure"
+                    )
+                current_invocation = {
+                    "invocation": len(invocations) + 1,
+                    "event_record_start": start_record,
+                    "checkpoint_step_before": before,
+                    "attempts": 0,
+                }
+                invocations.append(current_invocation)
+            else:
+                if (
+                    current_invocation is None
+                    or previous_attempt is None
+                    or attempt != previous_attempt + 1
+                ):
+                    _fail("NoTool supervisor attempts are not sequential")
+                if previous_decision != "retry_weight_wake_oom":
+                    _fail(
+                        "NoTool supervisor continued an invocation after a terminal decision"
+                    )
+        assert current_invocation is not None
+        current_invocation["attempts"] = int(current_invocation["attempts"]) + 1
+        current_invocation["event_record_end"] = finish_record
+        current_invocation["checkpoint_step_after"] = after
+        current_invocation["terminal_return_code"] = finished["return_code"]
+        current_invocation["terminal_decision"] = finished["decision"]
+        previous_attempt = attempt
+        previous_finish = finished
+
+    final = paired_attempts[-1][3]
     if (
-        final.get("event") != "attempt_finished"
-        or final.get("decision") != "complete"
+        final.get("decision") != "complete"
         or final.get("return_code") != 0
         or final.get("checkpoint_step_after") != target_step
     ):
         _fail("NoTool supervisor did not finish S32 with return code zero")
     return {
-        "attempts": len(finished),
+        "invocation_count": len(invocations),
+        "attempts": len(paired_attempts),
+        "invocations": invocations,
         "final_return_code": 0,
         "final_decision": "complete",
         "final_checkpoint_step": target_step,

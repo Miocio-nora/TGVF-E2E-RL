@@ -33,6 +33,35 @@ def _metric(step: int) -> dict[str, object]:
     }
 
 
+def _attempt_events(
+    log_path: Path,
+    *,
+    attempt: int,
+    before: int,
+    after: int,
+    return_code: int,
+    decision: str,
+) -> list[dict[str, object]]:
+    log_path.write_text("trainer output\n", encoding="utf-8")
+    return [
+        {
+            "event": "attempt_started",
+            "attempt": attempt,
+            "checkpoint_step": before,
+            "log_path": str(log_path),
+        },
+        {
+            "event": "attempt_finished",
+            "attempt": attempt,
+            "checkpoint_step_before": before,
+            "checkpoint_step_after": after,
+            "return_code": return_code,
+            "decision": decision,
+            "log_path": str(log_path),
+        },
+    ]
+
+
 def test_handoff_is_shell_valid_and_keeps_crop_outputs_external() -> None:
     subprocess.run(["bash", "-n", str(_HANDOFF)], check=True)
     source = _HANDOFF.read_text(encoding="utf-8")
@@ -107,32 +136,265 @@ def test_supervisor_event_validator_rejects_nonzero_terminal_attempt(
     tmp_path: Path,
 ) -> None:
     module = _validator_module()
-    attempt_log = tmp_path / "attempt.log"
-    attempt_log.write_text("trainer output\n", encoding="utf-8")
-    started = {
-        "event": "attempt_started",
-        "attempt": 1,
-        "checkpoint_step": 0,
-        "log_path": str(attempt_log),
-    }
-    finished = {
-        "event": "attempt_finished",
-        "attempt": 1,
-        "checkpoint_step_before": 0,
-        "checkpoint_step_after": 32,
-        "return_code": 0,
-        "decision": "complete",
-        "log_path": str(attempt_log),
-    }
+    rows = _attempt_events(
+        tmp_path / "attempt.log",
+        attempt=1,
+        before=0,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
     audit = module._validate_supervisor_events(
-        [started, finished], event_directory=tmp_path, target_step=32
+        rows, event_directory=tmp_path, target_step=32
     )
     assert audit["final_return_code"] == 0
 
-    failed = dict(finished, return_code=3)
-    with pytest.raises(RuntimeError, match="return code zero"):
+    rows[-1]["return_code"] = 3
+    with pytest.raises(RuntimeError, match="completion boundary is malformed"):
         module._validate_supervisor_events(
-            [started, failed], event_directory=tmp_path, target_step=32
+            rows, event_directory=tmp_path, target_step=32
+        )
+
+    failed = _attempt_events(
+        tmp_path / "failed.log",
+        attempt=1,
+        before=0,
+        after=26,
+        return_code=1,
+        decision="fail",
+    )
+    with pytest.raises(RuntimeError, match="did not finish S32"):
+        module._validate_supervisor_events(
+            failed, event_directory=tmp_path, target_step=32
+        )
+
+
+def test_supervisor_event_validator_accepts_recovered_independent_invocation(
+    tmp_path: Path,
+) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "attempt-01-from-step-0.log",
+        attempt=1,
+        before=0,
+        after=26,
+        return_code=1,
+        decision="fail",
+    )
+    rows += _attempt_events(
+        tmp_path / "attempt-01-from-step-26.log",
+        attempt=1,
+        before=26,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    audit = module._validate_supervisor_events(
+        rows, event_directory=tmp_path, target_step=32
+    )
+
+    assert audit == {
+        "invocation_count": 2,
+        "attempts": 2,
+        "invocations": [
+            {
+                "invocation": 1,
+                "event_record_start": 1,
+                "event_record_end": 2,
+                "checkpoint_step_before": 0,
+                "checkpoint_step_after": 26,
+                "attempts": 1,
+                "terminal_return_code": 1,
+                "terminal_decision": "fail",
+            },
+            {
+                "invocation": 2,
+                "event_record_start": 3,
+                "event_record_end": 4,
+                "checkpoint_step_before": 26,
+                "checkpoint_step_after": 32,
+                "attempts": 1,
+                "terminal_return_code": 0,
+                "terminal_decision": "complete",
+            },
+        ],
+        "final_return_code": 0,
+        "final_decision": "complete",
+        "final_checkpoint_step": 32,
+    }
+
+
+def test_supervisor_event_validator_distinguishes_retry_from_new_invocation(
+    tmp_path: Path,
+) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "attempt-01.log",
+        attempt=1,
+        before=0,
+        after=8,
+        return_code=1,
+        decision="retry_weight_wake_oom",
+    )
+    rows += _attempt_events(
+        tmp_path / "attempt-02.log",
+        attempt=2,
+        before=8,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    audit = module._validate_supervisor_events(
+        rows, event_directory=tmp_path, target_step=32
+    )
+
+    assert audit["invocation_count"] == 1
+    assert audit["attempts"] == 2
+    assert audit["invocations"][0]["terminal_decision"] == "complete"
+
+
+def test_supervisor_event_validator_rejects_attempt_after_terminal_fail(
+    tmp_path: Path,
+) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "attempt-01.log",
+        attempt=1,
+        before=0,
+        after=8,
+        return_code=1,
+        decision="fail",
+    )
+    rows += _attempt_events(
+        tmp_path / "attempt-02.log",
+        attempt=2,
+        before=8,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    with pytest.raises(RuntimeError, match="after a terminal decision"):
+        module._validate_supervisor_events(
+            rows, event_directory=tmp_path, target_step=32
+        )
+
+
+def test_supervisor_event_validator_rejects_reset_after_retry(tmp_path: Path) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "first.log",
+        attempt=1,
+        before=0,
+        after=8,
+        return_code=1,
+        decision="retry_weight_wake_oom",
+    )
+    rows += _attempt_events(
+        tmp_path / "reset.log",
+        attempt=1,
+        before=8,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    with pytest.raises(RuntimeError, match="without a prior terminal failure"):
+        module._validate_supervisor_events(
+            rows, event_directory=tmp_path, target_step=32
+        )
+
+
+@pytest.mark.parametrize("next_step", [25, 27])
+def test_supervisor_event_validator_rejects_recovery_overlap_or_gap(
+    tmp_path: Path, next_step: int
+) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "first.log",
+        attempt=1,
+        before=0,
+        after=26,
+        return_code=1,
+        decision="fail",
+    )
+    rows += _attempt_events(
+        tmp_path / "second.log",
+        attempt=1,
+        before=next_step,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    with pytest.raises(RuntimeError, match="gap or overlap"):
+        module._validate_supervisor_events(
+            rows, event_directory=tmp_path, target_step=32
+        )
+
+
+def test_supervisor_event_validator_rejects_run_after_success(tmp_path: Path) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "successful.log",
+        attempt=1,
+        before=0,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+    rows += _attempt_events(
+        tmp_path / "unexpected.log",
+        attempt=1,
+        before=32,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    with pytest.raises(RuntimeError, match="successful invocation"):
+        module._validate_supervisor_events(
+            rows, event_directory=tmp_path, target_step=32
+        )
+
+
+def test_supervisor_event_validator_rejects_unknown_decision(tmp_path: Path) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "attempt.log",
+        attempt=1,
+        before=0,
+        after=26,
+        return_code=1,
+        decision="manual_retry",
+    )
+
+    with pytest.raises(RuntimeError, match="decision is malformed"):
+        module._validate_supervisor_events(
+            rows, event_directory=tmp_path, target_step=32
+        )
+
+
+def test_supervisor_event_validator_rejects_unfinished_final_invocation(
+    tmp_path: Path,
+) -> None:
+    module = _validator_module()
+    log_path = tmp_path / "attempt.log"
+    log_path.write_text("trainer output\n", encoding="utf-8")
+    rows = [
+        {
+            "event": "attempt_started",
+            "attempt": 1,
+            "checkpoint_step": 0,
+            "log_path": str(log_path),
+        }
+    ]
+
+    with pytest.raises(RuntimeError, match="unfinished attempt"):
+        module._validate_supervisor_events(
+            rows, event_directory=tmp_path, target_step=32
         )
 
 
