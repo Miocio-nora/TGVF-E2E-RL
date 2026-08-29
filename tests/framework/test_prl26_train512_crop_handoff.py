@@ -169,6 +169,33 @@ def test_supervisor_event_validator_rejects_nonzero_terminal_attempt(
         )
 
 
+def test_supervisor_event_validator_rejects_zero_rc_historical_fail(
+    tmp_path: Path,
+) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "failed.log",
+        attempt=1,
+        before=0,
+        after=26,
+        return_code=0,
+        decision="fail",
+    )
+    rows += _attempt_events(
+        tmp_path / "recovered.log",
+        attempt=1,
+        before=26,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    with pytest.raises(RuntimeError, match="failure has an impossible zero"):
+        module._validate_supervisor_events(
+            rows, event_directory=tmp_path, target_step=32
+        )
+
+
 def test_supervisor_event_validator_accepts_recovered_independent_invocation(
     tmp_path: Path,
 ) -> None:

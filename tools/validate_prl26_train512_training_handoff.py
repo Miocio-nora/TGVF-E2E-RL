@@ -167,6 +167,8 @@ def _validate_supervisor_events(
             _fail("NoTool supervisor decision is malformed")
         if decision == "retry_weight_wake_oom" and return_code == 0:
             _fail("NoTool supervisor retry has an impossible zero return code")
+        if decision == "fail" and return_code == 0:
+            _fail("NoTool supervisor failure has an impossible zero return code")
         if decision == "complete" and (return_code != 0 or after != target_step):
             _fail("NoTool supervisor completion boundary is malformed")
         if decision != "complete" and after >= target_step:
