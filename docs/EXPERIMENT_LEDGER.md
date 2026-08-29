@@ -10450,3 +10450,29 @@ than inferred from a script name or prior conversation.
   `-0.3359375`. This strengthens the provisional interpretation of more
   aggressive tool chaining with worse format/protocol and answer stability;
   it is not admitted as a causal mechanism until S8 and Eval@512 evidence.
+- **Priority correction and user-directed stop (2026-08-30 02:58 JST):** the
+  original PRL26-B issue is a train/eval distribution mismatch, not internally
+  invalid training. Historical commit `e756546b273be70992c72471ed549b3e3a2834ae`
+  proves Crop-only training selected `render_qwen_native_success_environment_text`,
+  the generic observation/reasoning-reminder continuation. The scientifically
+  primary and cheaper correction is therefore PRL26-B S32 evaluated with that
+  exact legacy renderer; 60-token matched retraining is a separate protocol
+  ablation, not the only admissible recovery.
+- On direct user instruction, PRL27-B was interrupted during uncommitted S5.
+  Its last accepted boundary is S4: four contiguous metrics, tracker 4, 39
+  nonempty checkpoint files (8 model, 8 optimizer and 8 extra-state ranks),
+  and matching pair/project/runtime identities passed repository-native
+  structural validation. Training and its pending S32 evaluator exited by
+  signal with status 130; this is `USER_ABORTED_AT_S4`, not an infrastructure
+  failure. No S32-accepted marker exists. All eight GPUs returned to 4 MiB/0%,
+  and the formal resource validator found no compute PID, Ray, vLLM or engine
+  process. The canceled PRL27-B S32 evaluator must never publish a result.
+- The next admitted primary operation is a new, disjoint single-arm Eval@512
+  identity over PRL26-B's already sealed S32 checkpoint. It must force the
+  historical generic renderer for both layout and appender, prove its exact
+  real-processor token/byte sequence, retain the corrected action boundary,
+  parser/call-cap/final-recovery and training-run runtime, and publish all seven
+  subsets plus Macro*, tool-use/error and output-length statistics. The prior
+  `...BOUNDARYFIX-V1` root used the 60-token official-visible continuation and
+  remains immutable cross-protocol evidence; it cannot be renamed or reused as
+  the 86-token result.

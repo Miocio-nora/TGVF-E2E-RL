@@ -1,22 +1,26 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-30（Asia/Tokyo；PRL27-B replay-fix 已连续完成 S1--S4，S5 运行中）
+更新时间：2026-08-30（Asia/Tokyo；60-token PRL27-B 已按用户指令停在完整 S4，转测旧训练原生 86-token 协议）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
 > Crop 后追加 generic `Zoomed-in visual observation` 与长 reasoning reminder；旧评测追加的
 > 是 crop image + `USER_PROMPT_V2`。因此本文中的 PRL25-B Crop S80、PRL26-B Crop S32@512
-> 数值可保留为历史测量，但在修复后重训、重测之前不得称为 train/eval-aligned golden，也
-> 不得用来判断“Crop 工具本身造成伤害”或与 No-Tool 做干净的因果比较。No-Tool、Pure TGVF
+> 数值可保留为 60-token cross-protocol 历史测量，但不得称为 train/eval-aligned golden，也
+> 不得用来判断“Crop 工具本身造成伤害”或与 No-Tool 做干净的因果比较。PRL26-B 的训练本身
+> 始终使用同一 generic continuation，内部有效；第一优先级修复是用该训练原生 86-token
+> continuation 重测其既有 S32 checkpoint，而不是先重训。No-Tool、Pure TGVF
 > 与 Atomic 使用另外的 renderer，不受这个 Crop-only continuation bug 直接影响。
 >
 > 修复合同固定为 Qwen3-Instruct chat-template 的精确字节：
 > `<tool_response><image>USER_PROMPT_V2</tool_response>`（边界无额外换行），真实 processor
 > 的环境增量为 60 tokens，文本 SHA256 为
 > `f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a`。
-> 后续 Crop 正式评测改用与训练共用 parser、错误 JSON、六次调用上限、cap 后 final recovery
-> turn、total-response budget 和 precomputed-image-embed runtime 的 `training_run` 后端。旧
-> checkpoint 不能通过只重测来追溯修复，必须使用新 run/evaluation ID 从 Original S0 重训。
+> 该 60-token 合同是一个可测的新协议，不是唯一正确合同。若要测 60-token train/eval matched，
+> 必须使用新 run 从 Original S0 重训；若要回答旧 Crop RL 实际学得如何，则应保留旧权重并在
+> 评测侧使用训练原生 generic 86-token continuation。两者都必须共用 parser、错误 JSON、六次
+> 调用上限、cap 后 final recovery、total-response budget 和 precomputed-image-embed runtime，
+> 但不得把 60-token cross-protocol 旧分数冒充任何一条 matched 结果。
 >
 > 第一版 continuation 修复 `ecddc379d392d154c91783d7651528b20d40afba` 只统一了实际
 > observation appender，没有把同一 matched renderer 传给 plain-Crop layout builder。
@@ -66,12 +70,19 @@
 > `523→581`、成功 observations `505→554`，但 answer reward `0.7890625→0.71875`、protocol
 > reward `-0.2265625→-0.3359375`。当前证据更符合“matched continuation 激发更激进的工具链，
 > 但格式/协议与最终答案稳定性下降”，而非工具调用塌缩；该机制解释仍待 S8 与评测验证。
+>
+> **优先级纠正与主动终止（02:58 JST）**：四步负面趋势出现后，用户指令立即终止 60-token
+> PRL27-B 并优先测试旧 S32 的训练原生 continuation。S5 没有 metric/checkpoint，最后有效边界
+> 是结构验收通过的 S4；8-way model/optimizer/extra state、pair/project 摘要与 tracker=4 完整。
+> 训练和其 S32 eval waiter 均以用户 signal/130 结束，不是 infrastructure failure；8 张 GPU、
+> Ray 与 vLLM 已全部释放并通过正式资源审计。PRL27-B 现仅作为 60-token 训练协议的早期负面
+> ablation，不再拥有 corrected golden 的优先级。
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
-S32 因 post-tool continuation 不一致而隔离为历史训练。PRL27-A 是无更新的 invalid pre-S1
+S32 训练内部有效，但此前 60-token 评测与其训练原生 86-token continuation 不一致。PRL27-A 是无更新的 invalid pre-S1
 infrastructure attempt；完整 replay 修复与真实 processor 双 Crop/final replay 硬门均已通过，
-PRL27-B 已从冻结 HEAD 正式 fresh-S0 启动并连续完成 S1--S4，当前 S5 运行中；独立七项
-Eval@512 waiter 已完成 10 项契约测试并从单独冻结评测 worktree 挂起。Target-guide-v2 仍未启动。运行中的
+PRL27-B 已按用户指令停在完整 S4，其 60-token S32 waiter 同步取消；当前最高优先级是 PRL26-B
+S32 的 exact 86-token training-matched Eval@512。Target-guide-v2 仍未启动。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
@@ -84,9 +95,9 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | Arm | 当前状态 | 固定训练合同 | 后续评测 |
 |---|---|---|---|
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
-| Historical Crop（PRL26-B） | **S32 已完成，隔离** | action boundary 正确，但成功 Crop 后 continuation 与评测不一致 | 不再作为 aligned golden；不得通过重测旧权重“修复” |
+| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact eval 准备中** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | 复用既有 S32，按训练原生 renderer 做七项 Eval@512；这是当前第一优先级 |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
-| Corrected Crop replay-fix（PRL27-B） | **S4 完成；S5 运行中** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | replay/checkpoint 稳定；四步 answer/format 较差、工具覆盖略高；独立 S32 Eval@512 waiter 已挂起 |
+| 60-token protocol ablation（PRL27-B） | **用户主动停在完整 S4** | fresh Original S0；@512；BS16×n16；Teacher25；60-token layout/appender 同字节 | 四步 answer/format 较差、工具覆盖略高；S5 未落盘，S32 waiter 已取消 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
 | TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
 
@@ -94,20 +105,21 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 稀疏化或修改。
 
 No-Tool 的 Step-32 permanent receipt 已落盘，8,192 条训练 trajectory 的工具调用和成功 observation
-均为 0。旧 PRL26-B Crop 也有完整 S32 receipt 与 8,192 条 trajectory，但这些 reward、调用率和
-observation 统计只描述错误 continuation 下的历史优化动态，不能替代 corrected PRL27-B 的训练或
-CoreDev 结果。
+均为 0。PRL26-B Crop 也有完整 S32 receipt 与 8,192 条 trajectory；其训练动态属于内部一致的
+generic 86-token 协议，当前缺口是用同一协议完成七项 CoreDev Eval@512。此前 60-token 评测只
+描述 cross-protocol transfer，不能替代该 training-matched 结果。
 
 PRL27-B 的固定评测身份为
 `PRL27-B-CROP-REPLAY-BYTE-PARITY-TRAIN512-S32-TRAINING-RUN-COREDEV2511-PIXEL512-V1`，
 独立 RNG namespace 为
 `coredev2511/prl27-b/crop-replay-byte-parity/training-run/train512-eval512/s32/temp1/seed42/v1`。
-它只在 accepted S32 permanent receipt、无 training-failed marker、训练 HEAD 精确匹配以及连续三次
+它原定只在 accepted S32 permanent receipt、无 training-failed marker、训练 HEAD 精确匹配以及连续三次
 全 GPU/Ray 空闲探针同时成立后才创建评测 root；随后覆盖七个官方 subset，并输出 Macro*、总体及
 分 subset 工具使用/调用统计和 sampled-token 长度 mean/p50/p95/p99。
-评测 waiter 已于 2026-08-30 02:08:13 JST 以 clean eval HEAD
+评测 waiter 曾于 2026-08-30 02:08:13 JST 以 clean eval HEAD
 `b6fdb73cfe926b6131b86e0a5c97a4af52940e3e` 挂起；当前 phase 为
-`waiting_for_s32_training_acceptance`，不占用 GPU。
+`waiting_for_s32_training_acceptance`，不占用 GPU；已于 02:58 随用户主动停训以 signal/130 取消，
+不会启动或产出 S32 结果。
 
 Short/Target-guide-v2 的评测不再把两个 prompt 各自独立 seed 后直接比较，而使用
 `target_prompt_pair_v1`：每题每轮的随机流只投影掉实验变量 `prompt_sha256`，其余工具 schema、
@@ -137,7 +149,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---|---|
 | **Original** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；因 prompt/agent protocol 不同，只是端到端 direct reference，不是严格 paired control |
 | **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | 用于回答增益有多少来自 RL 本身；matched no-tool 为主要因果对照，raw-direct transfer 为诊断，不得改称 Original |
-| **Crop** | PRL25-B native RGB Crop（历史、continuation-mismatched） | S80，seed42 | 数值仅作历史工具基线；corrected golden 等待 PRL27-B S32；不补 seed43 |
+| **Crop** | Native RGB Crop；现有主表值为 60-token cross-protocol 历史测量 | PRL26-B S32 为当前 exact-eval owner；PRL25-B S80 保留历史曲线 | corrected matched 结果等待 PRL26-B S32 + 训练原生 86-token Eval@512；PRL27-B 仅为已停 S4 ablation；不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
 | **matched prompt** | 80-step 训练与既有 CoreDev 评测使用的简化、训练匹配 prompt | 历史结果 | 用于现有主表 |
