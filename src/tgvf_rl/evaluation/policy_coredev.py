@@ -43,6 +43,8 @@ from tgvf_rl.environment import (
     record_trajectory_source_visual,
 )
 from tgvf_rl.environment.native_appender import (
+    QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT,
+    QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT_SHA256,
     QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
     render_qwen_native_matched_crop_success_environment_text,
     render_qwen_native_matched_crop_tgvf_success_environment_text,
@@ -197,6 +199,21 @@ TARGET_PROMPT_PAIR_VALUES = (
     TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
 )
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
+PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT = (
+    "prl26-b-e756546b-generic-crop-continuation-v1"
+)
+PRL26_B_GENERIC_CROP_OWNER_RUN_ID = (
+    "PRL-26-B-TRAIN512-S32-PARITY-CROP-QWEN3-INSTRUCT-"
+    "BS16-N16-TEACHER25-WS8"
+)
+PRL26_B_GENERIC_CROP_OWNER_CODE_COMMIT = (
+    "e756546b273be70992c72471ed549b3e3a2834ae"
+)
+PRL26_B_GENERIC_CROP_TRAINING_LAUNCH_COMMIT = (
+    "40f1728a69e0a3f868117776c80c45ad6de70b8c"
+)
+PRL26_B_GENERIC_CROP_ENVIRONMENT_TOKEN_COUNT = 86
+TRAINING_RUN_VARIANTS = frozenset({PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT})
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
     "deepeyes_official_visible_native_crop_v1"
 )
@@ -220,7 +237,37 @@ POLICY_EVALUATION_BACKENDS = frozenset(
 )
 
 
-def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
+def _validate_training_run_variant(
+    run: PolicyE2ESmokeRunConfig,
+    training_run_variant: str | None,
+) -> None:
+    if training_run_variant is None:
+        return
+    if (
+        training_run_variant != PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT
+        or run.run_id != PRL26_B_GENERIC_CROP_OWNER_RUN_ID
+        or run.code.commit != PRL26_B_GENERIC_CROP_OWNER_CODE_COMMIT
+        or run.schema_version
+        not in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+        or run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_ONLY
+        or run.protocol.enabled_tool_names != (DEEPEYES_TOOL_NAME,)
+        or run.protocol.maximum_tool_calls != DEEPEYES_MAX_ACTIVE_PERCEPTION
+        or run.policy.image_max_pixels != 262_144
+    ):
+        raise ValueError(
+            "legacy generic Crop training-run variant requires the exact "
+            "PRL-26-B e756546b owner"
+        )
+
+
+def _success_environment_text_renderer(
+    run: PolicyE2ESmokeRunConfig,
+    *,
+    training_run_variant: str | None = None,
+):
+    _validate_training_run_variant(run, training_run_variant)
+    if training_run_variant == PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT:
+        return render_qwen_native_success_environment_text
     if run.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS:
         return render_qwen_native_matched_crop_success_environment_text
     if run.schema_version in POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
@@ -432,6 +479,7 @@ def validate_policy_benchmark_runtime_interfaces(
     run: PolicyE2ESmokeRunConfig,
     *,
     image_max_pixels: int | None = None,
+    training_run_variant: str | None = None,
 ) -> dict[str, object]:
     """Exercise CPU-only evaluator interfaces before any vLLM construction."""
 
@@ -453,7 +501,9 @@ def validate_policy_benchmark_runtime_interfaces(
         image_max_pixels=1,
     )
     dialect = native_assistant_dialect_for_model(run.model.model_name)
-    renderer = _success_environment_text_renderer(run)
+    renderer = _success_environment_text_renderer(
+        run, training_run_variant=training_run_variant
+    )
     profile = run.protocol.tool_profile
     manager_method = {
         NativeToolCapabilityProfile.NO_TOOL: None,
@@ -543,6 +593,7 @@ def validate_policy_benchmark_runtime_interfaces(
         "standalone_manager_method": manager_method,
         "remote_tool_runtime": type(runtime).__name__,
         "success_environment_renderer": renderer.__name__,
+        "training_run_variant": training_run_variant,
         "assistant_dialect": dialect.value,
     }
     if profile is NativeToolCapabilityProfile.TGVF_ONLY:
@@ -704,6 +755,7 @@ def validate_matched_crop_processor(
     run: PolicyE2ESmokeRunConfig,
     *,
     image_max_pixels: int,
+    training_run_variant: str | None = None,
 ) -> dict[str, object]:
     """Prove exact Crop prompt/continuation plus the shared AgentLoop contract."""
 
@@ -724,10 +776,15 @@ def validate_matched_crop_processor(
         != VISUAL_PROMPT_IDENTITY.bundle_sha256
     ):
         raise RuntimeError("matched Crop prompt materializer differs")
-    if (
-        _success_environment_text_renderer(run)
-        is not render_qwen_native_matched_crop_success_environment_text
-    ):
+    success_renderer = _success_environment_text_renderer(
+        run, training_run_variant=training_run_variant
+    )
+    expected_renderer = (
+        render_qwen_native_success_environment_text
+        if training_run_variant == PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT
+        else render_qwen_native_matched_crop_success_environment_text
+    )
+    if success_renderer is not expected_renderer:
         raise RuntimeError("matched Crop observation renderer differs")
 
     # The historical native-pixel evaluator remains the independent Qwen chat
@@ -748,7 +805,69 @@ def validate_matched_crop_processor(
         run,
         full_model=True,
         precomputed_image_embeds=True,
+        training_run_variant=training_run_variant,
     )
+    if training_run_variant == PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT:
+        tokenizer = getattr(processor, "tokenizer", None)
+        encode = getattr(tokenizer, "encode", None)
+        if not callable(encode):
+            raise TypeError("legacy generic Crop proof requires tokenizer.encode()")
+        environment_ids = tuple(
+            encode(
+                QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT,
+                add_special_tokens=False,
+            )
+        )
+        image_pad_id = tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        if (
+            len(environment_ids) != PRL26_B_GENERIC_CROP_ENVIRONMENT_TOKEN_COUNT
+            or environment_ids.count(image_pad_id) != 1
+            or hashlib.sha256(
+                QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT.encode("utf-8")
+            ).hexdigest()
+            != QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT_SHA256
+            or protocol_identity.get("success_environment_text_sha256")
+            != QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT_SHA256
+        ):
+            raise RuntimeError("legacy generic Crop continuation bytes/tokens differ")
+        legacy_proof = {
+            key: value
+            for key, value in visible_proof.items()
+            if key
+            not in {
+                "continuation_prompt_token_ids_sha256",
+                "continuation_environment_text_sha256",
+                "continuation_environment_token_ids_sha256",
+                "continuation_environment_token_count",
+                "continuation_parity",
+                "success_environment_renderer",
+                "continuation_prompt_token_count",
+                "continuation_expanded_prompt_token_count",
+            }
+        }
+        return {
+            **legacy_proof,
+            "schema_version": "tgvf.legacy-generic-crop-processor-static-proof.v1",
+            "run_config_schema": run.schema_version,
+            "message_builder": materializer["message_builder"],
+            "prompt_version": materializer["prompt_version"],
+            "prompt_bundle_sha256": materializer["prompt_bundle_sha256"],
+            "training_run_variant": training_run_variant,
+            "training_launch_project_commit": (
+                PRL26_B_GENERIC_CROP_TRAINING_LAUNCH_COMMIT
+            ),
+            "success_environment_renderer": success_renderer.__name__,
+            "continuation_environment_text_sha256": (
+                QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT_SHA256
+            ),
+            "continuation_environment_token_ids_sha256": (
+                _canonical_json_sha256(list(environment_ids))
+            ),
+            "continuation_environment_token_count": len(environment_ids),
+            "continuation_parity": True,
+            "training_run_protocol": protocol_identity,
+            "action_boundary": termination.canonical_payload,
+        }
     if (
         visible_proof.get("continuation_parity") is not True
         or visible_proof.get("continuation_environment_text_sha256")
@@ -777,6 +896,7 @@ def validate_matched_crop_processor(
         "success_environment_renderer": (
             render_qwen_native_matched_crop_success_environment_text.__name__
         ),
+        "training_run_variant": training_run_variant,
         "training_run_protocol": protocol_identity,
         "action_boundary": termination.canonical_payload,
     }
@@ -961,6 +1081,7 @@ class PolicyCoreDevConfig:
     paired_seed_namespace: str | None = None
     paired_rng_protocol_projection: str | None = None
     evaluation_image_max_pixels: int | None = None
+    training_run_variant: str | None = None
     schema_version: str = POLICY_COREDEV_SCHEMA
 
     def __post_init__(self) -> None:
@@ -985,6 +1106,14 @@ class PolicyCoreDevConfig:
             raise ValueError("policy benchmark config schema differs")
         if self.evaluation_protocol not in POLICY_EVALUATION_PROTOCOLS:
             raise ValueError("policy benchmark evaluation protocol differs")
+        if self.training_run_variant is not None and (
+            self.training_run_variant not in TRAINING_RUN_VARIANTS
+            or self.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL
+            or self.snapshot_backend != FULL_MODEL_EVALUATION_BACKEND
+        ):
+            raise ValueError(
+                "training_run_variant requires an admitted full-model training-run"
+            )
         if self.snapshot_backend not in POLICY_EVALUATION_BACKENDS:
             raise ValueError("policy benchmark snapshot backend differs")
         if not self.evaluation_id:
@@ -1295,6 +1424,7 @@ def load_policy_coredev_config(path: str | Path) -> PolicyCoreDevConfig:
         "paired_seed_namespace",
         "paired_rng_protocol_projection",
         "evaluation_image_max_pixels",
+        "training_run_variant",
     }
     if not required <= set(payload) or not set(payload) <= required | optional:
         raise ValueError("policy benchmark config fields differ")
@@ -2631,6 +2761,7 @@ def _evaluation_protocol_identity(
             snapshot.run,
             full_model=isinstance(snapshot, FullModelEvaluationSnapshot),
             precomputed_image_embeds=precomputed_image_embeds,
+            training_run_variant=config.training_run_variant,
         )
     if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
         raise ValueError("unsupported policy evaluation protocol")
@@ -2703,6 +2834,7 @@ def training_run_evaluation_protocol_identity(
     *,
     full_model: bool,
     precomputed_image_embeds: bool,
+    training_run_variant: str | None = None,
 ) -> dict[str, object]:
     """Build the shared training-run identity without requiring a snapshot.
 
@@ -2713,6 +2845,7 @@ def training_run_evaluation_protocol_identity(
 
     if type(full_model) is not bool or type(precomputed_image_embeds) is not bool:
         raise TypeError("training-run visual backend flags must be boolean")
+    _validate_training_run_variant(run, training_run_variant)
     matched_crop = (
         run.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
     )
@@ -2740,6 +2873,9 @@ def training_run_evaluation_protocol_identity(
         response_budget_scope, single_response_max_tokens = (
             _training_run_response_budget_controls(run)
         )
+        legacy_generic = (
+            training_run_variant == PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT
+        )
         identity.update(
             {
                 "assistant_dialect": native_assistant_dialect_for_model(
@@ -2748,10 +2884,14 @@ def training_run_evaluation_protocol_identity(
                 "precomputed_image_embeds": precomputed_image_embeds,
                 "tool_parser": "strict_native_tool_call_parser_v1",
                 "success_environment_renderer": (
-                    render_qwen_native_matched_crop_success_environment_text.__name__
+                    render_qwen_native_success_environment_text.__name__
+                    if legacy_generic
+                    else render_qwen_native_matched_crop_success_environment_text.__name__
                 ),
                 "success_environment_text_sha256": (
-                    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+                    QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT_SHA256
+                    if legacy_generic
+                    else QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
                 ),
                 "error_environment_renderer": (
                     "qwen_native_standard_tool_error_canonical_json_v1"
@@ -2761,6 +2901,19 @@ def training_run_evaluation_protocol_identity(
                 "single_response_max_tokens": single_response_max_tokens,
             }
         )
+        if legacy_generic:
+            identity.update(
+                {
+                    "training_run_variant": training_run_variant,
+                    "owner_code_commit": PRL26_B_GENERIC_CROP_OWNER_CODE_COMMIT,
+                    "training_launch_project_commit": (
+                        PRL26_B_GENERIC_CROP_TRAINING_LAUNCH_COMMIT
+                    ),
+                    "success_environment_token_count": (
+                        PRL26_B_GENERIC_CROP_ENVIRONMENT_TOKEN_COUNT
+                    ),
+                }
+            )
     return identity
 
 
@@ -3469,7 +3622,9 @@ class PolicyCoreDevEvaluator:
         self.assistant_dialect = native_assistant_dialect_for_model(
             run.model.model_name
         )
-        self.success_environment_text_renderer = _success_environment_text_renderer(run)
+        self.success_environment_text_renderer = _success_environment_text_renderer(
+            run, training_run_variant=config.training_run_variant
+        )
         (
             self.response_budget_scope,
             self.single_response_max_tokens,

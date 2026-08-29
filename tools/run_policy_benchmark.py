@@ -363,10 +363,16 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
         "vllm_engine_constructed": False,
     }
     if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        runtime_preflight_kwargs: dict[str, object] = {
+            "image_max_pixels": evaluation_image_max_pixels(config, snapshot)
+        }
+        training_run_variant = getattr(config, "training_run_variant", None)
+        if training_run_variant is not None:
+            runtime_preflight_kwargs["training_run_variant"] = training_run_variant
         result["runtime_interface_preflight"] = (
             validate_policy_benchmark_runtime_interfaces(
                 snapshot.run,
-                image_max_pixels=evaluation_image_max_pixels(config, snapshot),
+                **runtime_preflight_kwargs,
             )
         )
     if config.evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
@@ -409,10 +415,16 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
             local_files_only=True,
             trust_remote_code=True,
         )
+        crop_processor_kwargs: dict[str, object] = {
+            "image_max_pixels": evaluation_image_max_pixels(config, snapshot)
+        }
+        training_run_variant = getattr(config, "training_run_variant", None)
+        if training_run_variant is not None:
+            crop_processor_kwargs["training_run_variant"] = training_run_variant
         result["matched_crop_processor_proof"] = validate_matched_crop_processor(
             processor,
             snapshot.run,
-            image_max_pixels=evaluation_image_max_pixels(config, snapshot),
+            **crop_processor_kwargs,
         )
     if (
         config.evaluation_protocol

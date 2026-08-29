@@ -175,6 +175,7 @@ def materialize_full_model_policy_benchmark_config(
     paired_rng_protocol_projection: str | None = None,
     evaluation_image_max_pixels: int | None = None,
     evaluation_protocol: str = DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+    training_run_variant: str | None = None,
 ) -> dict[str, Any]:
     """Bind one exact standalone full model to an admitted evaluation protocol.
 
@@ -252,6 +253,8 @@ def materialize_full_model_policy_benchmark_config(
         payload["paired_rng_protocol_projection"] = paired_rng_protocol_projection
     if evaluation_image_max_pixels is not None:
         payload["evaluation_image_max_pixels"] = evaluation_image_max_pixels
+    if training_run_variant is not None:
+        payload["training_run_variant"] = training_run_variant
     PolicyCoreDevConfig(**payload)
     _write_immutable(frozen_policy_config, policy_config.read_bytes())
     encoded = (

@@ -27,6 +27,7 @@ from tgvf_rl.protocol.schema import (
     StandardToolError,
 )
 from tgvf_rl.protocol.tool_prompts import (
+    IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT,
     QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER,
     render_successful_visual_tool_response,
 )
@@ -61,6 +62,23 @@ QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT = (
 )
 QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256 = hashlib.sha256(
     QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT.encode("utf-8")
+).hexdigest()
+# PRL-26-B was trained before the exact-Crop schema selected the official-visible
+# continuation renderer.  Its Instruct Crop path therefore used the generic
+# native observation below on every successful action.  Keep the complete bytes
+# and digest explicit so an owner-matched evaluation cannot silently fall back
+# to the newer 60-token continuation.
+QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT = (
+    QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX
+    + IMAGE_ZOOM_IN_SUCCESS_RESPONSE_TEXT
+    + "\n"
+    + QWEN_NATIVE_IMAGE_PLACEHOLDER
+    + "\n\n"
+    + QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER
+    + QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX
+)
+QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT_SHA256 = hashlib.sha256(
+    QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT.encode("utf-8")
 ).hexdigest()
 
 
@@ -438,6 +456,8 @@ __all__ = [
     "NativeToolTurnRegistrar",
     "QWEN_NATIVE_IMAGE_PLACEHOLDER",
     "QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX",
+    "QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT",
+    "QWEN_NATIVE_GENERIC_CROP_SUCCESS_TEXT_SHA256",
     "QWEN_NATIVE_RESPONSE_SUFFIX",
     "QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX",
     "QwenNativeToolObservationAppender",

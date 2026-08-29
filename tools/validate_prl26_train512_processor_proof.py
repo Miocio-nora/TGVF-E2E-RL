@@ -151,6 +151,10 @@ def _validate_crop(
         proof.get("schema_version")
         == "tgvf.matched-crop-processor-static-proof.v1"
     )
+    legacy_generic_training_run = (
+        proof.get("schema_version")
+        == "tgvf.legacy-generic-crop-processor-static-proof.v1"
+    )
     training_run_protocol = proof.get("training_run_protocol")
     if (
         sources != [3_145_728, 3_145_728]
@@ -170,6 +174,30 @@ def _validate_crop(
         or tuple(runtime_sampling.stop_strings) != ("</tool_call>",)
         or runtime_sampling.include_stop_str_in_output is not True
         or tuple(runtime_sampling.stop_token_ids) != (151_645,)
+        or (
+            legacy_generic_training_run
+            and (
+                proof.get("training_run_variant")
+                != "prl26-b-e756546b-generic-crop-continuation-v1"
+                or proof.get("training_launch_project_commit")
+                != "40f1728a69e0a3f868117776c80c45ad6de70b8c"
+                or proof.get("continuation_parity") is not True
+                or proof.get("continuation_environment_token_count") != 86
+                or proof.get("continuation_environment_text_sha256")
+                != "72a2caecb47a2b775a4497e5846c244061d9455fbb4b9690d3501cbc2521e187"
+                or proof.get("success_environment_renderer")
+                != "render_qwen_native_success_environment_text"
+                or not isinstance(training_run_protocol, dict)
+                or training_run_protocol.get("profile") != "training_run"
+                or training_run_protocol.get("native_pixels") is not False
+                or training_run_protocol.get("precomputed_image_embeds") is not True
+                or training_run_protocol.get("response_budget_scope")
+                != "total_response_tokens"
+                or training_run_protocol.get("single_response_max_tokens") != 10240
+                or training_run_protocol.get("cap_error_behavior")
+                != "one_final_answer_turn"
+            )
+        )
         or (
             matched_training_run
             and (
@@ -204,6 +232,11 @@ def _validate_crop(
         "success_environment_text_sha256": proof.get(
             "continuation_environment_text_sha256"
         ),
+        "continuation_environment_token_count": proof.get(
+            "continuation_environment_token_count"
+        ),
+        "success_environment_renderer": proof.get("success_environment_renderer"),
+        "training_run_variant": proof.get("training_run_variant"),
     }
 
 
