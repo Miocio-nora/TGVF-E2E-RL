@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29 17:14 JST（Asia/Tokyo）
+更新时间：2026-08-29 17:34 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -1284,14 +1284,16 @@ Target-guide-v2。Atomic fresh-S0@512 保持为独立 arm，不与当前 TGVF pr
 | Crop boundary | 生成在 `</tool_call>` 处硬停并 include-stop；mixed answer-over-action fail-closed |
 
 No-Tool 已完成 S32，permanent checkpoint receipt 的 `optimizer_step=32`，pair/project/run 三项
-identity 均已落盘。Crop 已完成 S28，S29 正在运行；最近的 S24 永久 receipt 的 run/pair/project SHA256 分别为
+identity 均已落盘。Crop 已完成 S30，S31 正在运行；最近的 S24 永久 receipt 的
+run/pair/project SHA256 分别为
 `b064bf21674b6dea2d932c67e40f63e3aab7fad306245dd0bd4d92ad356d5d92`、
 `f48c6e267df64c98e82898a9d6b551724fd1a86093d0894d5d8704e5c89607fb` 与
-`c739c3437bc29c7a6a4d20d9bd0fa970d5fa13b1a89ee2689c8c6006b5d3b8f6`。S24、S26、S27、S28 分别为
-222/222、267/267、220/220、255/255 次调用成功且 typed error 为空；S28 reward 为 `0.578125`、
-format error rate 为 `4.296875%`、工具尝试题率为 `87.109375%`。截至 S28，累计 8,696 次尝试中
-8,584 次得到成功 observation。S25 的 258 次尝试中 256 次成功，另有 2 次 execution failure；
-S23 的 4 次 incomplete 与 1 次 invalid JSON 被保留为稀疏解析失败，不据此宣称 action-boundary 回归。
+`c739c3437bc29c7a6a4d20d9bd0fa970d5fa13b1a89ee2689c8c6006b5d3b8f6`。S30 为 209/209 次调用成功
+且 typed error 为空；reward 为 `0.75`、format error rate 为 `0.78125%`、工具尝试题率为
+`80.078125%`。截至 S30，累计 9,084 次尝试中 8,972 次得到成功 observation，累计 reward 为
+`0.6861979167`。S24、S26–S29 的最新无错误步也都保持 100% 工具执行成功；S25 的 258 次尝试中
+256 次成功，另有 2 次 execution failure。S23 的 4 次 incomplete 与 1 次 invalid JSON 被保留为
+稀疏解析失败，不据此宣称 action-boundary 回归。
 这些数值只证明训练链路健康，不作为 CoreDev-2511 benchmark 结果，也不用于提前选择 checkpoint。
 
 TGVF 的两个训练 arm 只允许一个 prompt 变量。Short 保留既有 user suffix、
@@ -1333,7 +1335,10 @@ A/B launcher 原先未保留退出 pane。`9e4d59f8b97a0b8d495d0a6bd761fe9f55852
 及 frozen CoreDev headline 重算全部纳入 C/D admission。46 项组合回归和独立只读审查均未发现
 P0/P1。live A/B pane `%179` 在不中断 Crop 的情况下启用 retention；C/D 等待器以状态 130 受控
 退出旧版本后在 pane `%181` 重启，static contract audit 已在 clean `9e4d59f` 上 accepted，且未产生
-任何 C/D 训练输出。
+任何 C/D 训练输出。17:14 JST 的最终 live preflight 未发现会在 Crop S32 后必然阻断 Eval@512 的
+P0/P1：No-Tool S32 source receipt 已完整验收，Crop trainer/evaluator config SHA 一致，正式 eval
+roots 尚未创建，端口、judge shards、磁盘与 credential availability 均满足启动合同。No-Tool inference
+结束转 scoring 时仍现场核对 GPU 0–3 与残留 process group；这是监控项，不是当前失败条件。
 当前执行顺序严格为
 `Crop S32 → No-Tool/Crop aligned Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512 → Atomic C0/S32 → Atomic Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间
@@ -1425,8 +1430,8 @@ Atomic 进入正文核心方法必须同时满足：
 11. [部分完成] target-only 调用行为对照已回填；正式 audit 仍待双人盲标、第三人裁决、
     Wilson CI 与 agreement；
 12. [已完成] PRL26 No-Tool fresh-S0 Train@512 到 S32，permanent receipt 已审计；
-13. [运行中] PRL26 Crop fresh-S0 Train@512 已完成 S28，S29 正在运行并继续向 S32；最近的 S24
-    permanent checkpoint 已验收，S28 为 255/255 次成功调用且无 typed error；
+13. [运行中] PRL26 Crop fresh-S0 Train@512 已完成 S30，S31 正在运行并继续向 S32；最近的 S24
+    permanent checkpoint 已验收，S30 为 209/209 次成功调用且无 typed error；
 14. [已排队] Crop S32 后自动执行 No-Tool/Crop matched Eval@512；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
