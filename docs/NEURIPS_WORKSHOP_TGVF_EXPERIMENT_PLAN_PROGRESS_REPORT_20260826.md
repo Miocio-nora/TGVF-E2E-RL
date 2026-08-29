@@ -100,8 +100,8 @@ prompt sensitivity 是否改变；在正式 scorer 闭合前，训练 reward 和
 
 | Arm | 状态（2026-08-29 18:48 JST） | 已验收边界 | 下一自动动作 |
 |---|---|---|---|
-| No-Tool Train@512 | **S32 完成；Eval@512 inference 运行中** | S8/S16/S24/S32 permanent receipts；S32 run identity `c079c678...`；@512 processor proof 通过 | GPU 0--3 四个 rank 完成 2,240 条 prediction 后进入评分 |
-| Crop Train@512 | **S32 完成；Eval@512 inference 运行中** | S32 permanent receipt、rolling/permanent samefile、trainer `return_code=0`；corrected action boundary 与 @512 processor proof 通过 | GPU 4--7 四个 rank 完成 2,240 条 prediction 后进入评分 |
+| No-Tool Train@512 | **S32 完成；Eval@512 inference 运行中** | S8/S16/S24/S32 permanent receipts；S32 run identity `c079c678...`；@512 processor proof 通过 | GPU 0--3 四个 rank 完成 2,511 条 prediction（其中 2,240 条 single-image）后进入评分 |
+| Crop Train@512 | **S32 完成；Eval@512 inference 运行中** | S32 permanent receipt、rolling/permanent samefile、trainer `return_code=0`；corrected action boundary 与 @512 processor proof 通过 | GPU 4--7 四个 rank 完成 2,511 条 prediction（其中 2,240 条 single-image）后进入评分 |
 | TGVF Short Train@512 | **已冻结、未启动** | prompt、tool、RP67、@512 processor 与 S32 合同已预检 | A/B 评测完成且 GPU/Ray 释放后启动 |
 | TGVF Target-guide-v2 Train@512 | **已冻结、未启动** | 仅增加 teacher-aligned Target 定义与视觉案例 | Short S32 后启动，再做 prompt-axis paired eval |
 | Atomic Train@512 | **clean 自动接力已挂起、未开始训练** | `e5e0287` static admission accepted；独立 fresh-S0、matched Atomic prompt、@512；当前不占 GPU | 完整 C/D paired Eval@512 验收后自动 C0→S32→Eval@512 |
