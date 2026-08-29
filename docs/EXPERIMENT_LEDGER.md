@@ -10505,3 +10505,35 @@ than inferred from a script name or prior conversation.
   proof, four-GPU inference on devices 0--3, seven-subset scoring, then Macro*,
   overall/per-subset tool-use and sampled-token length publication. No score is
   admitted until that sequence completes.
+- **Initial pre-GPU failure:** the three resource probes, sealed-S32 binding,
+  read-only full-model reuse and exact real-processor proof all passed. At
+  `2026-08-30 03:30:29 JST`, however, all inference workers failed closed before
+  model/GPU load because the supervisor cleared `VLLM_PLUGINS`; vLLM therefore
+  did not register the repo-owned `TGVFQwen3VLForConditionalGeneration`
+  architecture. This attempt produced no inference row, score or benchmark
+  result. Its failed control root and all valid immutable CPU evidence remain
+  retained and are not overwritten.
+- Runtime commits `40492ec3d6c3cac26fc4d5f25a79287a58b7dac6` and
+  `d35ff2e7d7b59a68bb7221bb7c436272ce718faa` enable the audited
+  `tgvf_qwen3_precomputed` plugin and the complete rollout environment for the
+  inference ranks. A strict CPU-only plugin canary passed: the custom
+  architecture registered successfully while every GPU remained unused.
+- Recovery1 started from `d35ff2e7d7b59a68bb7221bb7c436272ce718faa`
+  at `03:36:24 JST` with disjoint control/tmux identities. During its read-only
+  reuser phase, an audit found that the then-current route would rewrite an
+  already-frozen static-validation artifact before GPU admission. The operator
+  stopped it for evidence safety; it exited by signal with status 130 at
+  `03:37:26 JST`, before processor proof or inference, with no GPU use and no
+  rows. This is an operator safety stop, not a new model/plugin failure; its
+  control root is retained.
+- **Recovery2 launch:** commit
+  `1dc0d1ec5eb233397b38bba9adf0f01812a79845` validates the existing immutable
+  validation/proof artifacts instead of rewriting them, then proceeds directly
+  to inference. It launched at `2026-08-30 03:38:39 JST` in tmux
+  `prl26-b-generic86-s32-eval512-r2`, with disjoint control root
+  `PRL-26-B-generic86-s32-eval512-20260830-recovery2`. The frozen Eval ID,
+  evaluation root, 86-token generic continuation, Eval@512 (`262144` pixels),
+  weights and RNG namespace remain unchanged; no retraining or remerge occurs,
+  and both earlier controls remain immutable. The `03:38:46 JST` snapshot is
+  `waiting_for_all_gpu_and_ray_release`; no evaluation row or score is yet
+  admitted.
