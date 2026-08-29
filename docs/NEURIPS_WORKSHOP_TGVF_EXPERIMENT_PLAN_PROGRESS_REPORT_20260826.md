@@ -43,7 +43,7 @@
 S32 因 post-tool continuation 不一致而隔离为历史训练。PRL27-A 是无更新的 invalid pre-S1
 infrastructure attempt；完整 replay 修复与真实 processor 双 Crop/final replay 硬门均已通过，
 PRL27-B 已从冻结 HEAD 正式 fresh-S0 启动并越过旧崩溃时间点，目前仍在 pre-S1；独立七项
-Eval@512 waiter 已完成 10 项契约测试，待从单独冻结评测 worktree 挂起。Target-guide-v2 仍未启动。运行中的
+Eval@512 waiter 已完成 10 项契约测试并从单独冻结评测 worktree 挂起。Target-guide-v2 仍未启动。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
@@ -58,7 +58,7 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
 | Historical Crop（PRL26-B） | **S32 已完成，隔离** | action boundary 正确，但成功 Crop 后 continuation 与评测不一致 | 不再作为 aligned golden；不得通过重测旧权重“修复” |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
-| Corrected Crop replay-fix（PRL27-B） | **正式运行中；pre-S1** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | 冻结训练 HEAD 已越过旧崩溃时间点；独立 S32 `training_run` Eval@512 waiter 已验证，等待挂起 |
+| Corrected Crop replay-fix（PRL27-B） | **正式运行中；pre-S1** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | 冻结训练 HEAD 已越过旧崩溃时间点；独立 S32 `training_run` Eval@512 waiter 已挂起等待 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
 | TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
 
@@ -77,6 +77,9 @@ PRL27-B 的固定评测身份为
 它只在 accepted S32 permanent receipt、无 training-failed marker、训练 HEAD 精确匹配以及连续三次
 全 GPU/Ray 空闲探针同时成立后才创建评测 root；随后覆盖七个官方 subset，并输出 Macro*、总体及
 分 subset 工具使用/调用统计和 sampled-token 长度 mean/p50/p95/p99。
+评测 waiter 已于 2026-08-30 02:08:13 JST 以 clean eval HEAD
+`b6fdb73cfe926b6131b86e0a5c97a4af52940e3e` 挂起；当前 phase 为
+`waiting_for_s32_training_acceptance`，不占用 GPU。
 
 Short/Target-guide-v2 的评测不再把两个 prompt 各自独立 seed 后直接比较，而使用
 `target_prompt_pair_v1`：每题每轮的随机流只投影掉实验变量 `prompt_sha256`，其余工具 schema、

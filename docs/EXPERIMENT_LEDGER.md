@@ -10401,3 +10401,8 @@ than inferred from a script name or prior conversation.
   and per-subset tool calls/use, tool errors and sampled-token
   mean/p50/p95/p99. Ruff, shell syntax and all 10 focused evaluation contract
   tests passed before this ledger-bearing evaluation admission.
+- The evaluator was queued at `2026-08-30 02:08:13 JST` from immutable clean
+  eval HEAD `b6fdb73cfe926b6131b86e0a5c97a4af52940e3e` in tmux session
+  `prl27-b-crop-s32-eval512`. Its observed phase is
+  `waiting_for_s32_training_acceptance`; this phase consumes no GPU and cannot
+  bypass the accepted-S32 or post-training resource-release gates.
