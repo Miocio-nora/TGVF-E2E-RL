@@ -10549,3 +10549,14 @@ than inferred from a script name or prior conversation.
   has therefore passed the initial attempt's unsupported-architecture failure
   boundary and remains in four-GPU inference. This is runtime-health evidence
   only: no formal inference row or benchmark result is yet admitted.
+- **First trajectory production snapshots:** all four ranks are now writing
+  trajectory records. Aggregate progress was `659/2511` at `03:46:35 JST` and
+  `853/2511` at `03:47:45 JST`. A read-only 761-row snapshot around 03:46
+  contained 667 tool-using examples (`87.65%`), 694 total calls and three typed
+  tool errors; stop categories were `direct=93`, `final=667` and
+  `call_cap=1`. At the current resource snapshot, GPUs
+  0--3 each hold approximately 145 GB and retain active inference workers,
+  while GPUs 4--7 remain idle. Every count in this bullet is a changing,
+  incomplete running-interim diagnostic: it proves that trajectory and tool
+  paths are executing, but is not an accuracy, Macro* or method-comparison
+  result.
