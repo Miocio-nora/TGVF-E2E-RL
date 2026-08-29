@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SUPERVISOR = ROOT / "tools/supervise_prl27_b_corrected_crop_s32_evaluation.sh"
+LAUNCHER = ROOT / "tools/launch_prl27_b_corrected_crop_s32_evaluation_tmux.sh"
 SUMMARIZER = ROOT / "tools/summarize_prl27_b_corrected_crop_s32_evaluation.py"
 
 
@@ -33,6 +34,9 @@ def test_prl27_b_evaluation_supervisor_is_valid_executable_bash() -> None:
     assert SUPERVISOR.is_file()
     assert SUPERVISOR.stat().st_mode & 0o111
     subprocess.run(["bash", "-n", str(SUPERVISOR)], check=True)
+    assert LAUNCHER.is_file()
+    assert LAUNCHER.stat().st_mode & 0o111
+    subprocess.run(["bash", "-n", str(LAUNCHER)], check=True)
 
 
 def test_prl27_b_waiter_is_training_admission_s32_and_release_gated() -> None:
@@ -67,7 +71,7 @@ def test_prl27_b_waiter_is_training_admission_s32_and_release_gated() -> None:
     assert 'training_complete="$training_control_root/state/s32-accepted"' in source
     assert 'training_failed="$training_control_root/state/failed"' in source
     assert 'training_admitted_head="$training_control_root/admitted-head.txt"' in source
-    assert "release_stable_polls < 2" in source
+    assert "release_stable_polls < 3" in source
     assert "resources-free" in source
     assert "PRL27_B_EVAL_RELEASE_STABLE_POLLS:-3" in source
 
@@ -96,18 +100,28 @@ def test_prl27_b_waiter_rejects_failure_at_every_training_boundary() -> None:
     assert source.count('[[ -e "$training_failed" || -L "$training_failed" ]]') >= 3
 
 
-def test_prl27_b_waiter_binds_one_clean_head_without_root_redirection() -> None:
+def test_prl27_b_waiter_binds_frozen_training_and_clean_eval_heads() -> None:
     source = _source()
     assert "admitted_head=${PRL27_B_EVAL_ADMITTED_HEAD:-}" in source
     assert 'admitted_head=$(git -C "$repo_root" rev-parse HEAD)' not in source
     assert "status --porcelain=v1 --untracked-files=all" in source
     assert '"$observed_head" != "$admitted_head"' in source
-    assert "evaluation HEAD differs from training admission" in source
+    assert (
+        "expected_training_admitted_head="
+        "f50fe3c66c719dd10f5dc5522e5142594831038b"
+    ) in source
+    assert "training admitted HEAD differs from the frozen owner" in source
+    assert "training-evaluation-head-binding.txt" in source
     assert source.count("validate_worktree") >= 6
     assert "PRL27_B_EVAL_ROOT" not in source
     assert "PRL27_B_TRAINING_ROOT" not in source
     assert "PRL27_A" not in source
     assert "PRL-27-A" not in source
+
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    assert "PRL27_B_EVAL_ADMITTED_HEAD" in launcher
+    assert "prl27-b-crop-s32-eval512" in launcher
+    assert "status --porcelain=v1 --untracked-files=all" in launcher
 
 
 def test_prl27_b_eval_identity_is_new_training_run_pixel512_single_arm() -> None:

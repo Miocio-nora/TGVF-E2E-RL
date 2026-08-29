@@ -12,6 +12,7 @@ training_control_root="$main_root/artifacts/control/PRL-27-B-crop-train512-s32-2
 training_complete="$training_control_root/state/s32-accepted"
 training_failed="$training_control_root/state/failed"
 training_admitted_head="$training_control_root/admitted-head.txt"
+expected_training_admitted_head=f50fe3c66c719dd10f5dc5522e5142594831038b
 
 evaluation_id=PRL27-B-CROP-REPLAY-BYTE-PARITY-TRAIN512-S32-TRAINING-RUN-COREDEV2511-PIXEL512-V1
 eval_root="$training_root/evaluation/$evaluation_id"
@@ -60,8 +61,8 @@ if [[ ! "$poll_seconds" =~ ^[1-9][0-9]*$ \
   echo "PRL-27-B evaluation polling setting is malformed" >&2
   exit 1
 fi
-if (( release_stable_polls < 2 )); then
-  echo "PRL-27-B evaluation requires consecutive clean resource probes" >&2
+if (( release_stable_polls < 3 )); then
+  echo "PRL-27-B evaluation requires at least three clean resource probes" >&2
   exit 1
 fi
 if [[ ! "$admitted_head" =~ ^[0-9a-f]{40}$ ]]; then
@@ -83,7 +84,15 @@ validate_worktree() {
 }
 
 validate_worktree
+if [[ -L "$control_root" || ( -e "$control_root" && ! -d "$control_root" ) ]]; then
+  echo "PRL-27-B evaluation control root is unsafe" >&2
+  exit 1
+fi
 mkdir -p "$runtime_root" "$log_root" "$state_root"
+if [[ -L "$runtime_root/supervisor.lock" ]]; then
+  echo "PRL-27-B evaluation supervisor lock cannot be a symlink" >&2
+  exit 1
+fi
 exec 9>"$runtime_root/supervisor.lock"
 flock -n 9 || {
   echo "PRL-27-B corrected Crop evaluator is already active" >&2
@@ -183,10 +192,14 @@ while [[ ! -s "$training_admitted_head" ]]; do
   sleep "$poll_seconds"
 done
 if [[ -L "$training_admitted_head" \
-      || "$(tr -d '\r\n' <"$training_admitted_head")" != "$admitted_head" ]]; then
-  echo "PRL-27-B evaluation HEAD differs from training admission" >&2
+      || "$(tr -d '\r\n' <"$training_admitted_head")" \
+          != "$expected_training_admitted_head" ]]; then
+  echo "PRL-27-B training admitted HEAD differs from the frozen owner" >&2
   exit 1
 fi
+printf 'training_admitted_head=%s\nevaluation_admitted_head=%s\n' \
+  "$expected_training_admitted_head" "$admitted_head" \
+  >"$runtime_root/training-evaluation-head-binding.txt"
 
 phase=waiting_for_s32_training_acceptance
 record_phase

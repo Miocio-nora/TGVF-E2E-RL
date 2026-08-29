@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-30（Asia/Tokyo；PRL27-A 在 S1 前 fail-closed，replay binding 修复已入库）
+更新时间：2026-08-30（Asia/Tokyo；PRL27-B replay-fix 已从 fresh S0 正式启动，S1 待定）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -31,12 +31,19 @@
 > `training_run` eval 两条生产构造路径均已接线；连续两次 Crop 与 final recorded replay 回归通过。
 > PRL27-A 的失败 root/control/tmux 原位保留。后续使用全新的 PRL27-B run/output/control/W&B/
 > eval/RNG 身份从 Original S0 重启，不能覆盖或续跑 A。
+>
+> PRL27-B 已由冻结训练 worktree/HEAD
+> `f50fe3c66c719dd10f5dc5522e5142594831038b` 于 2026-08-30 02:01:07 JST 从 fresh S0
+> 正式启动。启动前 strict audit、PRL26-C sealed-S32 handoff、三次全 GPU/Ray 空闲探针、真实
+> Qwen processor 双 Crop/final-replay canary 和 canary 后资源探针均通过。截至 02:05:53，8 卡
+> 进程健康且未出现失败、重启或 `ReplayMismatch`，已经越过 PRL27-A 启动后 4 分 24 秒的旧崩溃
+> 时间点；但尚无 S1 metric/checkpoint，因此只能记为“running, pre-S1”，不能提前判定训练成功。
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
 S32 因 post-tool continuation 不一致而隔离为历史训练。PRL27-A 是无更新的 invalid pre-S1
 infrastructure attempt；完整 replay 修复与真实 processor 双 Crop/final replay 硬门均已通过，
-PRL27-B fresh-S0 启动包已完成 strict contracts、formal compose、PRL26-C sealed-S32 与空闲资源
-预检，处于 launch-ready，尚未启动 GPU。Target-guide-v2 仍未启动。运行中的
+PRL27-B 已从冻结 HEAD 正式 fresh-S0 启动并越过旧崩溃时间点，目前仍在 pre-S1；独立七项
+Eval@512 waiter 已完成 10 项契约测试，待从单独冻结评测 worktree 挂起。Target-guide-v2 仍未启动。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
@@ -51,7 +58,7 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
 | Historical Crop（PRL26-B） | **S32 已完成，隔离** | action boundary 正确，但成功 Crop 后 continuation 与评测不一致 | 不再作为 aligned golden；不得通过重测旧权重“修复” |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
-| Corrected Crop replay-fix（PRL27-B） | **全部训练硬门通过；launch-ready** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | 训练使用冻结 worktree；独立 S32 `training_run` eval waiter 在 S32 前挂起 |
+| Corrected Crop replay-fix（PRL27-B） | **正式运行中；pre-S1** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | 冻结训练 HEAD 已越过旧崩溃时间点；独立 S32 `training_run` Eval@512 waiter 已验证，等待挂起 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
 | TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
 
@@ -60,8 +67,16 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 No-Tool 的 Step-32 permanent receipt 已落盘，8,192 条训练 trajectory 的工具调用和成功 observation
 均为 0。旧 PRL26-B Crop 也有完整 S32 receipt 与 8,192 条 trajectory，但这些 reward、调用率和
-observation 统计只描述错误 continuation 下的历史优化动态，不能替代 corrected PRL27-A 的训练或
+observation 统计只描述错误 continuation 下的历史优化动态，不能替代 corrected PRL27-B 的训练或
 CoreDev 结果。
+
+PRL27-B 的固定评测身份为
+`PRL27-B-CROP-REPLAY-BYTE-PARITY-TRAIN512-S32-TRAINING-RUN-COREDEV2511-PIXEL512-V1`，
+独立 RNG namespace 为
+`coredev2511/prl27-b/crop-replay-byte-parity/training-run/train512-eval512/s32/temp1/seed42/v1`。
+它只在 accepted S32 permanent receipt、无 training-failed marker、训练 HEAD 精确匹配以及连续三次
+全 GPU/Ray 空闲探针同时成立后才创建评测 root；随后覆盖七个官方 subset，并输出 Macro*、总体及
+分 subset 工具使用/调用统计和 sampled-token 长度 mean/p50/p95/p99。
 
 Short/Target-guide-v2 的评测不再把两个 prompt 各自独立 seed 后直接比较，而使用
 `target_prompt_pair_v1`：每题每轮的随机流只投影掉实验变量 `prompt_sha256`，其余工具 schema、
@@ -91,7 +106,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---|---|
 | **Original** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；因 prompt/agent protocol 不同，只是端到端 direct reference，不是严格 paired control |
 | **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | 用于回答增益有多少来自 RL 本身；matched no-tool 为主要因果对照，raw-direct transfer 为诊断，不得改称 Original |
-| **Crop** | PRL25-B native RGB Crop（历史、continuation-mismatched） | S80，seed42 | 数值仅作历史工具基线；corrected golden 等待 PRL27-A；不补 seed43 |
+| **Crop** | PRL25-B native RGB Crop（历史、continuation-mismatched） | S80，seed42 | 数值仅作历史工具基线；corrected golden 等待 PRL27-B S32；不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
 | **matched prompt** | 80-step 训练与既有 CoreDev 评测使用的简化、训练匹配 prompt | 历史结果 | 用于现有主表 |

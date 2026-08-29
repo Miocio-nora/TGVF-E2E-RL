@@ -10379,3 +10379,25 @@ than inferred from a script name or prior conversation.
   absent at this boundary. A final ledger-bearing documentation descendant may
   freeze and launch the identical package; it must still rerun every external
   resource, real-processor canary and fresh-root gate in the retained handoff.
+- **Formal launch event:** the immutable training worktree admitted HEAD
+  `f50fe3c66c719dd10f5dc5522e5142594831038b` and started PRL27-B attempt 1
+  from fresh S0 at `2026-08-30 02:01:07 JST`. The admission retained three
+  pre-canary all-GPU/Ray-free probes, the exact two-test real-processor canary,
+  a post-canary resource probe and a fresh-S0 authorization receipt. At
+  `02:05:53 JST` the single attempt remained live on all eight GPUs with no
+  failed marker, restart, metric or checkpoint; it had crossed PRL27-A's
+  four-minute-24-second failure interval but remained `RUNNING/PRE-S1`.
+- **Independent post-S32 evaluation admission:** corrected Crop owns Eval@512
+  identity
+  `PRL27-B-CROP-REPLAY-BYTE-PARITY-TRAIN512-S32-TRAINING-RUN-COREDEV2511-PIXEL512-V1`
+  and RNG namespace
+  `coredev2511/prl27-b/crop-replay-byte-parity/training-run/train512-eval512/s32/temp1/seed42/v1`.
+  The waiter explicitly binds the frozen training admitted HEAD separately
+  from its own clean evaluation admitted HEAD. It cannot materialize the eval
+  root until the accepted S32 marker and permanent receipt both exist, no
+  training-failed boundary exists, and at least three consecutive GPU/Ray-free
+  probes pass. It then runs the shared `training_run` Crop runtime at
+  `262144` pixels over all seven official subsets and publishes Macro*, overall
+  and per-subset tool calls/use, tool errors and sampled-token
+  mean/p50/p95/p99. Ruff, shell syntax and all 10 focused evaluation contract
+  tests passed before this ledger-bearing evaluation admission.
