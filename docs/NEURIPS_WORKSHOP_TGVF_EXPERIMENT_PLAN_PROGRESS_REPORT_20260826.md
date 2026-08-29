@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29（Asia/Tokyo；Crop continuation 修复已入库，corrected rerun 尚未启动）
+更新时间：2026-08-30（Asia/Tokyo；PRL27-A 在 S1 前 fail-closed，replay binding 修复已入库）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -18,15 +18,25 @@
 > turn、total-response budget 和 precomputed-image-embed runtime 的 `training_run` 后端。旧
 > checkpoint 不能通过只重测来追溯修复，必须使用新 run/evaluation ID 从 Original S0 重训。
 >
-> 修复代码已固化并上传为 `ecddc379d392d154c91783d7651528b20d40afba`。新的
+> 第一版 continuation 修复 `ecddc379d392d154c91783d7651528b20d40afba` 只统一了实际
+> observation appender，没有把同一 matched renderer 传给 plain-Crop layout builder。
 > `PRL-27-A-TRAIN512-S32-CROP-EXACT-CONTINUATION-QWEN3-INSTRUCT-BS16-N16-TEACHER25-WS8`
-> 配置与 fail-closed 评测 binder 已完成，但**训练和评测均未启动**；其独立输出目录当前不存在。
+> 于 2026-08-30 01:03:56 JST 启动，并于 01:08:20 在 S0→S0 fail-closed：layout 按旧
+> generic 86-token response 记录位置，appender 实际追加 matched 60-token response，第二次
+> Crop replay 触发 `expanded native visual positions differ from rollout record`。该 attempt
+> 没有 metrics、checkpoint 或任何 optimizer update，不能恢复，也不构成实验结果。
+>
+> 完整 replay binding 修复已作为 `c448e583887e4e49b79fe52fefb4b42934cd787e`
+> 推送到远端：plain-Crop runtime 现在强制 layout 与 appender 共用同一 renderer/dialect，训练和
+> `training_run` eval 两条生产构造路径均已接线；连续两次 Crop 与 final recorded replay 回归通过。
+> PRL27-A 的失败 root/control/tmux 原位保留。后续使用全新的 PRL27-B run/output/control/W&B/
+> eval/RNG 身份从 Original S0 重启，不能覆盖或续跑 A。
 
-状态：**实验进行中。No-Tool Train@512 S32 已完成；旧 PRL26-B Crop S32 也已完成，但因
-post-tool continuation 不一致而隔离为历史训练，不能进入 aligned golden。corrected Crop 已改用全新
-PRL27-A 身份并完成配置/评测门禁，尚未启动。Pure TGVF Short 与仅增加 teacher-aligned Target
-定义/案例的 Target-guide-v2 继续保持已配置、未启动。运行中的 reward 与调用率只作诊断，不提前
-当作 benchmark 结论。**
+状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
+S32 因 post-tool continuation 不一致而隔离为历史训练。PRL27-A 是无更新的 invalid pre-S1
+infrastructure attempt；完整 replay 修复已通过 CPU 回归并推送，PRL27-B fresh-S0 启动包与真实
+processor 双 Crop/final replay 硬门正在完成，尚未启动 GPU。Target-guide-v2 仍未启动。运行中的
+reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -39,8 +49,9 @@ PRL27-A 身份并完成配置/评测门禁，尚未启动。Pure TGVF Short 与�
 |---|---|---|---|
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
 | Historical Crop（PRL26-B） | **S32 已完成，隔离** | action boundary 正确，但成功 Crop 后 continuation 与评测不一致 | 不再作为 aligned golden；不得通过重测旧权重“修复” |
-| Corrected Crop（PRL27-A） | **已配置，尚未启动** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation | S32 后仅用新 `training_run` eval ID/root/RNG namespace 评测 |
-| TGVF Short | **已配置，尚未启动** | frozen RP67；matched Short prompt；最多 6 次 TGVF | A/B 评测闭合并释放全部 GPU/Ray 后启动 |
+| Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
+| Corrected Crop replay-fix（PRL27-B） | **启动硬门准备中；GPU 未启动** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | S32 后仅用新的 `training_run` eval ID/root/RNG namespace 评测 |
+| TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
 | TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
 
 这里的“稀疏”仅指运行监控按 S16/S24/S32 和异常事件汇报；训练监督、reward、采样与数据合同均未

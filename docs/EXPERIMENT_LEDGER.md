@@ -10104,6 +10104,45 @@ than inferred from a script name or prior conversation.
   `.aborted-prelaunch-db743096`, and no PRL27 policy output root, trainer, GPU
   worker, checkpoint, metric or evaluation artifact was created. This latest
   ledger-bearing hotfix is the only launchable descendant for the formal run.
+- **PRL27-A invalid pre-S1 attempt and replay-binding correction
+  (2026-08-30):** after PRL26-C Short closed an accepted S32 boundary, PRL27-A
+  crossed fresh-S0 admission at 01:03:56 JST and failed closed at 01:08:20,
+  before its first optimizer update. The exact terminal event is step `0 -> 0`,
+  return code `1`, with primary `ReplayMismatchError: expanded native visual
+  positions differ from rollout record`. Its policy root contains only launch
+  provenance and the step-zero full-Qwen runtime version; it has no metrics,
+  tracker, checkpoint, permanent receipt or learned state. The failed policy,
+  training-control, evaluation-control, retained tmux and offline W&B evidence
+  remain in place and must not be overwritten or represented as a run result.
+- **Root cause and affected scope:** commit `ecddc379d392d154c91783d7651528b20d40afba`
+  correctly selected the 60-token matched Crop appender but left the plain-Crop
+  layout builder on the generic 86-token renderer. With the accepted local
+  Qwen3-Instruct tokenizer the image-pad position differs by seven tokens.
+  A second Crop detects the prior recorded-position drift during rollout; even
+  a single successful Crop would detect it during final recorded replay.
+  Corrected plain-Crop training and its `training_run` evaluation path were
+  directly affected. Historical PRL26 Crop used internally consistent generic
+  layout/appender bytes and does not acquire this specific replay exception,
+  although it remains continuation-mismatched evidence. Production Pure TGVF
+  and Atomic already pass their selected renderer text into layout and are not
+  invalidated by this plain-Crop omission.
+- **Complete implementation fix:** commit
+  `c448e583887e4e49b79fe52fefb4b42934cd787e` makes the plain-Crop runtime require
+  an explicit success renderer and assistant dialect, renders the exact text
+  for the accepted call, and passes that same text into `build_crop`; both the
+  live training and CoreDev `training_run` constructors now supply the same
+  renderer/dialect object used by their appender. The core Crop/replay suite is
+  `13/13` passing and the production live/evaluation route suites are `82/82`
+  passing in the pinned environment, including two consecutive matched Crops
+  and final recorded replay. This commit is published on
+  `origin/prl27-crop-replay-renderer-fix-20260830`.
+- **Recovery identity:** PRL27-A is not resumable: its existing empty learned
+  state fails the exact-resume gate and its authorization binds the superseded
+  HEAD. Recovery therefore requires PRL27-B with new run/output/control/tmux,
+  W&B, evaluation and RNG namespace identities, an absent fresh-S0 root, the
+  already-sealed PRL26-C S32 evidence, consecutive all-GPU/Ray-free receipts,
+  and a real local-processor two-Crop plus final-replay canary. No PRL27-B GPU
+  launch is authorized by this documentation commit alone.
 
 - Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
   `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `S32 COMPLETE; HISTORICAL,
