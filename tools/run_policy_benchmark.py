@@ -36,6 +36,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     policy_output_contract_failure_audit_payload,
     prepare_policy_benchmark_tasks,
     trajectory_audit_payload,
+    validate_matched_tgvf_processor,
     validate_policy_benchmark_runtime_interfaces,
     write_policy_evaluation_identity,
 )
@@ -53,6 +54,7 @@ from tgvf_rl.evaluation.policy_full_model_snapshot import (  # noqa: E402
 )
 from tgvf_rl.policy.run_config import (  # noqa: E402
     POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
 )
 
 
@@ -389,6 +391,24 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
         result["no_tool_matched_processor_proof"] = validate_no_tool_matched_processor(
             processor,
             tokenizer_length=snapshot.run.model.tokenizer_length,
+            image_max_pixels=evaluation_image_max_pixels(config, snapshot),
+        )
+    if (
+        config.evaluation_protocol
+        != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+        and snapshot.run.schema_version
+        in POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
+    ):
+        from transformers import AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(
+            snapshot.run.model.revision_or_path,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
+        result["matched_tgvf_processor_proof"] = validate_matched_tgvf_processor(
+            processor,
+            snapshot.run,
             image_max_pixels=evaluation_image_max_pixels(config, snapshot),
         )
     print(json.dumps(result, indent=2, sort_keys=True))

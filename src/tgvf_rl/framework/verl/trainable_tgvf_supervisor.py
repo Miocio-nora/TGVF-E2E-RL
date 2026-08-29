@@ -1,8 +1,9 @@
 """Bounded clean-process recovery for a formal trainable-TGVF run.
 
 The upstream trainer already resumes from the last committed checkpoint.  This
-supervisor adds one operational guarantee: the known vLLM CuMem weight-wake OOM
-is retried in a fresh process without waiting for a person to notice it.  It
+supervisor adds two operational guarantees: the known vLLM CuMem weight-wake
+OOM and an exhausted, explicitly classified OpenRouter HTTP-429 judge window
+are retried in a fresh process without waiting for a person to notice them. It
 never retries an unclassified failure and never treats an in-memory optimizer
 update as durable progress.
 """
@@ -23,11 +24,28 @@ from typing import Literal
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 
 
-SupervisorDecision = Literal["complete", "retry_weight_wake_oom", "fail"]
+SupervisorDecision = Literal[
+    "complete",
+    "retry_weight_wake_oom",
+    "retry_judge_transient_429",
+    "fail",
+]
 _WEIGHT_WAKE_OOM_MARKERS = (
     'resume(tags=["weights"])',
     "CUDA Error: out of memory",
     "cumem_allocator.cpp:112",
+)
+_JUDGE_TRANSIENT_429_MARKERS = (
+    (
+        "tgvf_rl.rewards.deepeyes_verl_reward._JudgeTransientHTTPError: "
+        "DeepEyes judge transient HTTP failure 429"
+    ),
+    (
+        "tgvf_rl.rewards.deepeyes_batch.JudgeGlobalFailure: DeepEyes transient "
+        "judge failures exceed the bounded window; "
+        "last_error=_JudgeTransientHTTPError: DeepEyes judge transient HTTP "
+        "failure 429"
+    ),
 )
 
 
@@ -55,6 +73,12 @@ def is_weight_wake_oom(log_text: str) -> bool:
     return all(marker in log_text for marker in _WEIGHT_WAKE_OOM_MARKERS)
 
 
+def is_judge_transient_429(log_text: str) -> bool:
+    """Recognize only the judge's exhausted transient HTTP-429 failure."""
+
+    return all(marker in log_text for marker in _JUDGE_TRANSIENT_429_MARKERS)
+
+
 def supervisor_decision(
     *,
     return_code: int,
@@ -72,6 +96,12 @@ def supervisor_decision(
         and is_weight_wake_oom(attempt_log)
     ):
         return "retry_weight_wake_oom"
+    if (
+        return_code != 0
+        and completed_restarts < maximum_restarts
+        and is_judge_transient_429(attempt_log)
+    ):
+        return "retry_judge_transient_429"
     return "fail"
 
 
@@ -207,6 +237,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "checkpointed_step",
+    "is_judge_transient_429",
     "is_weight_wake_oom",
     "main",
     "supervise",

@@ -282,6 +282,36 @@ def test_supervisor_event_validator_distinguishes_retry_from_new_invocation(
     assert audit["invocations"][0]["terminal_decision"] == "complete"
 
 
+def test_supervisor_event_validator_accepts_bounded_judge_429_retry(
+    tmp_path: Path,
+) -> None:
+    module = _validator_module()
+    rows = _attempt_events(
+        tmp_path / "attempt-01.log",
+        attempt=1,
+        before=0,
+        after=17,
+        return_code=1,
+        decision="retry_judge_transient_429",
+    )
+    rows += _attempt_events(
+        tmp_path / "attempt-02.log",
+        attempt=2,
+        before=17,
+        after=32,
+        return_code=0,
+        decision="complete",
+    )
+
+    audit = module._validate_supervisor_events(
+        rows, event_directory=tmp_path, target_step=32
+    )
+
+    assert audit["invocation_count"] == 1
+    assert audit["attempts"] == 2
+    assert audit["invocations"][0]["terminal_decision"] == "complete"
+
+
 def test_supervisor_event_validator_rejects_attempt_after_terminal_fail(
     tmp_path: Path,
 ) -> None:

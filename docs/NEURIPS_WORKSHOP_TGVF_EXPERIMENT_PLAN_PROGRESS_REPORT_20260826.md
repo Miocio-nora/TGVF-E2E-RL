@@ -1,17 +1,42 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-26（Asia/Tokyo）
+更新时间：2026-08-29 14:26（Asia/Tokyo）
 
-状态：**实验进行中；RP67 三臂验证已闭合；广义 full-prompt stress test 与严格 target-only
-matched prompt 两臂均已完成并评分；只增加 target 定义与案例后，TGVF S64 / Atomic S16
-Macro* 仍高于 Original，但相对各自 matched prompt 有温和回退。No-Tool RL 因果对照已冻结
-为 32-step 正式主终点，保留 S0/S8/S16/S32，并进入独立实现与启动阶段。下一步并行完成该对照、
-正式 Atomic matched/target-only 盲审与调用行为对照。**
+状态：**实验进行中；历史 RP67 三臂、full-prompt stress 与 target-only 评测均已闭合。
+新一轮统一 Train@512/Eval@512 的 fresh-S0 S32 对照正在执行：No-Tool 已完成 S32，Crop 已完成并
+保留 S16、继续向 S32 训练；两臂 matched CoreDev-2511 评测已自动排队。其后才启动 Pure TGVF
+Short 与仅增加 teacher-aligned Target 定义/案例的 Target-guide-v2，两臂都从 Original S0 独立训练
+至 S32。运行中的 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
 审计包生成和文章结论更新等关键节点同步；运行中的计数只作为状态快照，不提前当作结果。按当前
-授权，每个关键节点只提交这一个报告文件并 push 到 `origin/main`，不带入 main 的其他工作区改动。
+授权，关键节点会连同可复现合同同步到既有远端实验分支；不带入工作区的无关改动。
+
+## 0. PRL26 统一 Train@512/Eval@512 执行快照
+
+| Arm | 当前状态 | 固定训练合同 | 后续评测 |
+|---|---|---|---|
+| No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 等待与 Crop 同批 Eval@512 |
+| Crop | **S16 已固化，继续到 S32** | 同上；仅增加 corrected native Crop action boundary | S32 后自动与 No-Tool 做 4+4 GPU 推理及七 subset 评分 |
+| TGVF Short | **已配置，尚未启动** | frozen RP67；matched Short prompt；最多 6 次 TGVF | A/B 评测闭合并释放全部 GPU/Ray 后启动 |
+| TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
+
+这里的“稀疏”仅指运行监控按 S16/S24/S32 和异常事件汇报；训练监督、reward、采样与数据合同均未
+稀疏化或修改。
+
+No-Tool 的 Step-32 permanent receipt 已落盘，8,192 条训练 trajectory 的工具调用和成功 observation
+均为 0。Crop S16 的单步诊断为 answer reward `0.6328`、tool-use rate `86.33%`、289 次成功
+observation、format error `1.56%`，且该步没有新增 parse/execution error；这些数字不能替代
+CoreDev 结果。
+
+Short/Target-guide-v2 的评测不再把两个 prompt 各自独立 seed 后直接比较，而使用
+`target_prompt_pair_v1`：每题每轮的随机流只投影掉实验变量 `prompt_sha256`，其余工具 schema、
+调用上限、@512 像素、temperature 1 与 seed42 全部保持在随机协议中。两臂 arm protocol 仍不同，
+共享 seed protocol hash 为
+`4cbfd3cf698cb47b0c9594ca9f9e146ca09932d62bdb93d0877e59f9a85bee9c`。最终报告除完整七项
+Macro* 表外，还会自动输出每个 subset 的工具使用题率、总调用次数、平均调用强度、成功 observation、
+工具错误、停止原因与输出 token 长度分布，并验证 2,240 个样本的随机流逐题一致。
 
 ## 1. 文章当前主线
 

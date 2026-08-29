@@ -6,6 +6,7 @@ import pytest
 
 from tgvf_rl.framework.verl.trainable_tgvf_supervisor import (
     checkpointed_step,
+    is_judge_transient_429,
     is_weight_wake_oom,
     supervisor_decision,
 )
@@ -83,3 +84,45 @@ def test_supervisor_completion_and_retry_bound() -> None:
         )
         == "fail"
     )
+
+
+def test_supervisor_retries_only_exhausted_transient_judge_429() -> None:
+    exact = (
+        "tgvf_rl.rewards.deepeyes_verl_reward._JudgeTransientHTTPError: "
+        "DeepEyes judge transient HTTP failure 429\n"
+        "tgvf_rl.rewards.deepeyes_batch.JudgeGlobalFailure: DeepEyes transient "
+        "judge failures exceed the bounded window; "
+        "last_error=_JudgeTransientHTTPError: DeepEyes judge transient HTTP "
+        "failure 429"
+    )
+    assert is_judge_transient_429(exact)
+    assert (
+        supervisor_decision(
+            return_code=1,
+            checkpoint_step=17,
+            target_step=32,
+            attempt_log=exact,
+            completed_restarts=0,
+            maximum_restarts=8,
+        )
+        == "retry_judge_transient_429"
+    )
+    for unclassified in (
+        "HTTP 429",
+        "DeepEyes judge transient HTTP failure 429",
+        "HTTP 401",
+        "HTTP 402",
+        "HTTP 403",
+    ):
+        assert not is_judge_transient_429(unclassified)
+        assert (
+            supervisor_decision(
+                return_code=1,
+                checkpoint_step=17,
+                target_step=32,
+                attempt_log=unclassified,
+                completed_restarts=0,
+                maximum_restarts=8,
+            )
+            == "fail"
+        )

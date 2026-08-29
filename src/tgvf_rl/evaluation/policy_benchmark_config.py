@@ -281,6 +281,7 @@ def materialize_paired_tgvf_policy_benchmark_config(
     gpu_memory_utilization: float = 0.9,
     gpu_ids: tuple[int, ...] = (0, 1, 2, 3),
     paired_seed_namespace: str | None = None,
+    paired_rng_protocol_projection: str | None = None,
     evaluation_image_max_pixels: int | None = None,
 ) -> dict[str, Any]:
     """Bind one same-step full-Qwen/RP66 pair to a benchmark arm."""
@@ -337,6 +338,8 @@ def materialize_paired_tgvf_policy_benchmark_config(
     }
     if paired_seed_namespace is not None:
         payload["paired_seed_namespace"] = paired_seed_namespace
+    if paired_rng_protocol_projection is not None:
+        payload["paired_rng_protocol_projection"] = paired_rng_protocol_projection
     if evaluation_image_max_pixels is not None:
         payload["evaluation_image_max_pixels"] = evaluation_image_max_pixels
     PolicyCoreDevConfig(**payload)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,7 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    load_policy_e2e_smoke_run_config,
 )
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
@@ -34,6 +36,25 @@ from tgvf_rl.policy.no_tool_rl_protocol import (
     build_no_tool_visual_messages,
 )
 from tgvf_rl.protocol import NativeAssistantDialect, NativeToolCapabilityProfile
+
+
+_ROOT = Path(__file__).parents[2]
+_REAL_PROMPT_CONFIGS = (
+    (
+        "configs/policy/runs/"
+        "prl_26_c_qwen3_instruct_short_tgvf_train512_parity_"
+        "s32_bs16_n16_teacher25_ws8.toml",
+        "build_tgvf_visual_messages",
+        TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+    ),
+    (
+        "configs/policy/runs/"
+        "prl_26_d_qwen3_instruct_target_guide_v2_tgvf_train512_parity_"
+        "s32_bs16_n16_teacher25_ws8.toml",
+        "build_tgvf_target_guide_v2_visual_messages",
+        TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
+    ),
+)
 
 
 class _Tokenizer:
@@ -230,6 +251,78 @@ def test_target_guide_evaluation_route_rejects_an_unknown_prompt_hash() -> None:
 
     with pytest.raises(ValueError, match="evaluation prompt identity differs"):
         implementation._matched_prompt_materializer_identity(run)
+
+
+@pytest.mark.parametrize(
+    ("schema", "wrong_prompt_sha256"),
+    (
+        (
+            POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
+        ),
+        (
+            POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+        ),
+        (
+            POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
+            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
+        ),
+    ),
+)
+def test_matched_tgvf_evaluation_rejects_cross_schema_prompt_hashes(
+    schema: str, wrong_prompt_sha256: str
+) -> None:
+    run = _run(
+        schema,
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        prompt_sha256=wrong_prompt_sha256,
+    )
+
+    with pytest.raises(ValueError, match="evaluation prompt identity differs"):
+        implementation._matched_prompt_materializer_identity(run)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_builder", "expected_prompt_sha256"),
+    _REAL_PROMPT_CONFIGS,
+)
+def test_real_prl26_cd_configs_bind_and_render_the_exact_evaluation_prompt(
+    relative_path: str, expected_builder: str, expected_prompt_sha256: str
+) -> None:
+    run = load_policy_e2e_smoke_run_config(
+        (_ROOT / relative_path).resolve(), allow_external_agent_loop_config=True
+    )
+    identity = implementation._evaluation_prompt_materializer_identity(
+        SimpleNamespace(
+            evaluation_protocol=implementation.TRAINING_RUN_EVALUATION_PROTOCOL
+        ),
+        run,
+    )
+    assert identity is not None
+    assert identity["message_builder"] == expected_builder
+    assert identity["prompt_bundle_sha256"] == expected_prompt_sha256
+
+    processor = _Processor()
+    renderer = _Renderer()
+    text, token_ids = implementation._render_training_run_visual_prompt(
+        run=run,
+        processor=processor,
+        renderer=renderer,
+        question="question",
+    )
+
+    expected_messages = (
+        build_tgvf_target_guide_v2_visual_messages("question")
+        if expected_builder == "build_tgvf_target_guide_v2_visual_messages"
+        else build_tgvf_visual_messages("question")
+    )
+    assert processor.calls == [(list(expected_messages), [])]
+    assert text == "matched-body<|im_start|>assistant\n"
+    assert token_ids == tuple(ord(character) for character in text)
+    assert implementation._success_environment_text_renderer(run) is (
+        implementation.render_qwen_native_matched_tgvf_success_environment_text
+    )
 
 
 @pytest.mark.parametrize(

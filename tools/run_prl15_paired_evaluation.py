@@ -49,6 +49,8 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION,
     IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES,
     RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
+    TARGET_PROMPT_PAIR_PROJECTION,
+    TARGET_PROMPT_PAIR_VALUES,
     PolicyEvaluationSnapshot,
     freeze_policy_evaluation_snapshot,
     load_benchmark_tasks,
@@ -102,6 +104,8 @@ from tgvf_rl.policy.deepeyes_native_contract import (  # noqa: E402
 from tgvf_rl.policy.run_config import (  # noqa: E402
     POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
 )
@@ -126,6 +130,7 @@ PLAN_SCHEMA_V2 = "tgvf.prl15-paired-policy-benchmark-plan.v2"
 PLAN_SCHEMA_V3 = "tgvf.paired-policy-benchmark-plan.v3"
 PLAN_SCHEMA_V4 = "tgvf.resolution-paired-policy-benchmark-plan.v4"
 PLAN_SCHEMA_V5 = "tgvf.resolution-projected-policy-benchmark-extension-plan.v5"
+PLAN_SCHEMA_V6 = "tgvf.target-prompt-paired-policy-benchmark-plan.v6"
 # Historical tests and downstream imports use this name for the v2 ABI.
 PLAN_SCHEMA = PLAN_SCHEMA_V2
 PAIRED_TGVF_BACKEND = "paired_tgvf"
@@ -225,6 +230,7 @@ class _EvaluationRuntime:
         "protocol_contract",
         "output_root",
         "checkpoint_world_size",
+        "arm_checkpoint_owners",
     )
 
     def __init__(
@@ -235,12 +241,17 @@ class _EvaluationRuntime:
         protocol_contract: object,
         output_root: Path,
         checkpoint_world_size: int,
+        arm_checkpoint_owners: dict[str, object] | None = None,
     ) -> None:
         self.backend = backend
         self.checkpoint_owner = checkpoint_owner
         self.protocol_contract = protocol_contract
         self.output_root = output_root
         self.checkpoint_world_size = checkpoint_world_size
+        self.arm_checkpoint_owners = dict(arm_checkpoint_owners or {})
+
+    def checkpoint_owner_for_arm(self, arm: str) -> object:
+        return self.arm_checkpoint_owners.get(arm, self.checkpoint_owner)
 
 
 def _vlmevalkit_scoring_run_id(
@@ -304,6 +315,14 @@ def _resolution_pair_projection_identity() -> dict[str, object]:
     }
 
 
+def _target_prompt_pair_projection_identity() -> dict[str, object]:
+    return {
+        "kind": TARGET_PROMPT_PAIR_PROJECTION,
+        "excluded_protocol_field": "prompt_sha256",
+        "axis_values": list(TARGET_PROMPT_PAIR_VALUES),
+    }
+
+
 def _arm_image_max_pixels(plan: dict[str, Any], arm_name: str) -> int | None:
     """Resolve the cap without changing the legacy top-level v2/v3 ABI."""
 
@@ -322,6 +341,10 @@ def _arm_image_max_pixels(plan: dict[str, Any], arm_name: str) -> int | None:
 
 
 def _arm_rng_protocol_projection(plan: dict[str, Any], arm_name: str) -> str | None:
+    if plan.get("schema_version") == PLAN_SCHEMA_V6:
+        if arm_name not in {"short", "full"}:
+            raise ValueError("target-prompt pair arm is absent")
+        return TARGET_PROMPT_PAIR_PROJECTION
     if plan.get("schema_version") not in {PLAN_SCHEMA_V4, PLAN_SCHEMA_V5}:
         return None
     _arm_image_max_pixels(plan, arm_name)
@@ -832,6 +855,206 @@ def _validate_v5_static_plan(payload: dict[str, Any]) -> None:
     _validate_v3_static_plan(compatible)
 
 
+def _training_run_rng_protocol(run: PolicyE2ESmokeRunConfig) -> dict[str, object]:
+    return {
+        "profile": "training_run",
+        "prompt_sha256": run.protocol.prompt_sha256,
+        "tool_schema_sha256": run.protocol.tool_schema_sha256,
+        "tool_profile": run.protocol.tool_profile.value,
+        "enabled_tool_names": list(run.protocol.enabled_tool_names),
+        "maximum_tool_calls": run.protocol.maximum_tool_calls,
+        "native_pixels": False,
+    }
+
+
+def _validate_v6_static_plan(payload: dict[str, Any]) -> None:
+    """Admit exactly one PRL-26 Short/Target-v2 S32 prompt pair."""
+
+    required_top_level = {
+        "schema_version",
+        "evaluation_id",
+        "status",
+        "evaluation_image_max_pixels",
+        "output_root",
+        "policy_arms",
+        "task_manifest_path",
+        "task_manifest_sha256",
+        "expected_task_count",
+        "expected_single_image_count",
+        "unsupported_multi_image_count",
+        "executor",
+        "protocols",
+        "paired_rng",
+        "arms",
+        "required_pairing",
+        "scoring",
+    }
+    if set(payload) != required_top_level or payload.get("status") != "ready":
+        raise ValueError("v6 target-prompt pair plan fields/status differ")
+    if payload.get("evaluation_image_max_pixels") != 262144:
+        raise ValueError("v6 target-prompt pair requires Eval@512")
+    output_root = Path(str(payload.get("output_root", "")))
+    if not output_root.is_absolute() or output_root.is_symlink():
+        raise ValueError("v6 target-prompt pair output_root must be absolute")
+    executor = payload.get("executor")
+    if (
+        not isinstance(executor, dict)
+        or set(executor)
+        != {
+            "path",
+            "supervisor",
+            "snapshot_backend",
+            "supports_wait_for_final_arm",
+            "waits_for_gpu_release",
+            "supports_resume",
+            "eight_gpu_schedule",
+        }
+        or executor.get("path") != "tools/run_prl15_paired_evaluation.py"
+        or executor.get("snapshot_backend") != PAIRED_TGVF_BACKEND
+        or executor.get("supports_wait_for_final_arm") is not True
+        or executor.get("waits_for_gpu_release") is not True
+        or executor.get("supports_resume") is not True
+        or executor.get("eight_gpu_schedule")
+        != "short_gpu0_3_full_gpu4_7_parallel_inference_sequential_scoring"
+        or not isinstance(executor.get("supervisor"), str)
+        or not executor["supervisor"]
+    ):
+        raise ValueError("v6 target-prompt pair executor contract differs")
+
+    arm_names = ("short", "full")
+    policy_arms = payload.get("policy_arms")
+    protocols = payload.get("protocols")
+    arms = payload.get("arms")
+    if (
+        not isinstance(policy_arms, dict)
+        or tuple(policy_arms) != arm_names
+        or not isinstance(protocols, dict)
+        or tuple(protocols) != arm_names
+        or not isinstance(arms, list)
+        or tuple(arm.get("name") for arm in arms if isinstance(arm, dict))
+        != arm_names
+    ):
+        raise ValueError("v6 target-prompt pair arms differ")
+
+    runs: dict[str, PolicyE2ESmokeRunConfig] = {}
+    expected_schemas = {
+        "short": POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        "full": POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    }
+    expected_prompts = dict(zip(arm_names, TARGET_PROMPT_PAIR_VALUES, strict=True))
+    arm_protocols: dict[str, str] = {}
+    projected_protocol: dict[str, object] | None = None
+    projection = _target_prompt_pair_projection_identity()
+    for arm_name, arm in zip(arm_names, arms, strict=True):
+        binding = policy_arms[arm_name]
+        if not isinstance(binding, dict) or set(binding) != {
+            "policy_config",
+            "policy_config_sha256",
+        }:
+            raise ValueError(f"v6 {arm_name} policy binding fields differ")
+        config_path = _resolve_repo_path(str(binding["policy_config"]))
+        if (
+            not config_path.is_file()
+            or _sha256_file(config_path) != binding["policy_config_sha256"]
+        ):
+            raise RuntimeError(f"v6 {arm_name} policy config identity differs")
+        run = load_policy_e2e_smoke_run_config(
+            config_path, allow_external_agent_loop_config=True
+        )
+        if (
+            run.schema_version != expected_schemas[arm_name]
+            or run.protocol.prompt_sha256 != expected_prompts[arm_name]
+            or run.policy.image_max_pixels != 262144
+            or run.rollout_rng.master_seed != 42
+            or float(run.policy.sampling.temperature) != 1.0
+            or run.policy.sampling.do_sample is not True
+            or run.distributed.world_size != 8
+            or 32 not in run.training.permanent_checkpoint_steps
+        ):
+            raise RuntimeError(f"v6 {arm_name} training-run identity differs")
+        if not isinstance(arm, dict) or set(arm) != {
+            "name",
+            "optimizer_step",
+            "qwen_source",
+            "rp66_source",
+            "evaluation_id",
+        }:
+            raise ValueError(f"v6 {arm_name} arm fields differ")
+        if (
+            arm["optimizer_step"] != 32
+            or arm["qwen_source"]
+            != "output.root/permanent-checkpoints/global_step_32"
+            or arm["rp66_source"]
+            != "output.root/runtime-policy-state/lora-manifests/step-00000032-*.json"
+            or not isinstance(arm["evaluation_id"], str)
+            or not arm["evaluation_id"]
+        ):
+            raise ValueError(f"v6 {arm_name} S32 source/evaluation identity differs")
+        compatible = {
+            "schema_version": PLAN_SCHEMA_V2,
+            "protocol": protocols[arm_name],
+            "required_pairing": payload["required_pairing"],
+        }
+        _validate_plan_run(compatible, run)
+        runtime_protocol = _training_run_rng_protocol(run)
+        arm_protocols[arm_name] = _canonical_json_sha256(runtime_protocol)
+        prompt_sha256 = runtime_protocol.pop("prompt_sha256")
+        if prompt_sha256 != expected_prompts[arm_name]:
+            raise RuntimeError(f"v6 {arm_name} prompt axis differs")
+        if projected_protocol is None:
+            projected_protocol = runtime_protocol
+        elif runtime_protocol != projected_protocol:
+            raise RuntimeError(
+                "v6 target-prompt pair protocol differs beyond prompt_sha256"
+            )
+        runs[arm_name] = run
+
+    assert projected_protocol is not None
+    paired_rng = payload.get("paired_rng")
+    expected_rng_fields = {
+        "schema_version",
+        "mode",
+        "seed_namespace",
+        "master_seed",
+        "task_manifest_sha256",
+        "seed_protocol_sha256",
+        "arm_protocol_sha256",
+        "protocol_projection",
+        "temperature",
+        "do_sample",
+        "excluded_arm_components",
+    }
+    expected_seed_protocol_sha256 = _canonical_json_sha256(
+        {"projection": projection, "projected_protocol": projected_protocol}
+    )
+    if (
+        not isinstance(paired_rng, dict)
+        or set(paired_rng) != expected_rng_fields
+        or paired_rng.get("schema_version") != RESOLUTION_PAIRED_RNG_PLAN_SCHEMA
+        or paired_rng.get("mode") != "common_random_numbers_per_task_turn"
+        or not isinstance(paired_rng.get("seed_namespace"), str)
+        or not paired_rng["seed_namespace"]
+        or paired_rng["seed_namespace"].strip() != paired_rng["seed_namespace"]
+        or any(character.isspace() for character in paired_rng["seed_namespace"])
+        or paired_rng.get("master_seed") != 42
+        or paired_rng.get("task_manifest_sha256")
+        != payload.get("task_manifest_sha256")
+        or paired_rng.get("seed_protocol_sha256")
+        != expected_seed_protocol_sha256
+        or paired_rng.get("arm_protocol_sha256") != arm_protocols
+        or paired_rng.get("protocol_projection") != projection
+        or paired_rng.get("temperature") != 1.0
+        or paired_rng.get("do_sample") is not True
+        or tuple(paired_rng.get("excluded_arm_components", ()))
+        != _PAIRED_RNG_EXCLUSIONS
+    ):
+        raise ValueError("v6 target-prompt pair RNG identity differs")
+    if runs["short"].protocol.tool_schema_sha256 != (
+        runs["full"].protocol.tool_schema_sha256
+    ):
+        raise RuntimeError("v6 target-prompt tool schema differs")
+
+
 def _load_plan(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("schema_version") not in {
@@ -839,6 +1062,7 @@ def _load_plan(path: Path) -> dict[str, Any]:
         PLAN_SCHEMA_V3,
         PLAN_SCHEMA_V4,
         PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
     }:
         raise ValueError("PRL15 paired evaluation plan schema differs")
     if payload["schema_version"] == PLAN_SCHEMA_V3:
@@ -847,6 +1071,8 @@ def _load_plan(path: Path) -> dict[str, Any]:
         _validate_v4_static_plan(payload)
     elif payload["schema_version"] == PLAN_SCHEMA_V5:
         _validate_v5_static_plan(payload)
+    elif payload["schema_version"] == PLAN_SCHEMA_V6:
+        _validate_v6_static_plan(payload)
     evaluation_image_max_pixels = payload.get("evaluation_image_max_pixels")
     if evaluation_image_max_pixels is not None and (
         type(evaluation_image_max_pixels) is not int or evaluation_image_max_pixels <= 0
@@ -857,7 +1083,11 @@ def _load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("paired evaluation plan must contain at least one arm")
     steps = [arm.get("optimizer_step") for arm in arms if isinstance(arm, dict)]
     names = [arm.get("name") for arm in arms if isinstance(arm, dict)]
-    if payload["schema_version"] not in {PLAN_SCHEMA_V4, PLAN_SCHEMA_V5}:
+    if payload["schema_version"] not in {
+        PLAN_SCHEMA_V4,
+        PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
+    }:
         if (
             len(steps) != len(arms)
             or any(type(step) is not int or step < 0 for step in steps)
@@ -904,6 +1134,7 @@ def _load_plan(path: Path) -> dict[str, Any]:
     if paired_rng is not None and payload["schema_version"] not in {
         PLAN_SCHEMA_V4,
         PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
     }:
         expected_fields = {
             "schema_version",
@@ -956,6 +1187,15 @@ def _load_plan(path: Path) -> dict[str, Any]:
         policy_config = _resolve_repo_path(payload["policy_config"])
         if not policy_config.is_file():
             raise RuntimeError("PRL15 plan policy_config is unavailable")
+    elif payload["schema_version"] == PLAN_SCHEMA_V6:
+        for arm_name in ("short", "full"):
+            binding = payload["policy_arms"][arm_name]
+            resolved = _resolve_repo_path(binding["policy_config"])
+            if (
+                not resolved.is_file()
+                or _sha256_file(resolved) != binding["policy_config_sha256"]
+            ):
+                raise RuntimeError(f"v6 {arm_name} policy config identity differs")
     else:
         for section in ("checkpoint_owner", "protocol_contract"):
             resolved = _resolve_repo_path(payload[section]["config_path"])
@@ -1483,6 +1723,31 @@ def _validate_v3_policy_run_runtime(
 
 
 def _load_evaluation_runtime(plan: dict[str, Any]) -> _EvaluationRuntime:
+    if plan["schema_version"] == PLAN_SCHEMA_V6:
+        owners = {
+            arm: load_policy_e2e_smoke_run_config(
+                _resolve_repo_path(plan["policy_arms"][arm]["policy_config"]),
+                allow_external_agent_loop_config=True,
+            )
+            for arm in ("short", "full")
+        }
+        for arm, run in owners.items():
+            _validate_plan_run(
+                {
+                    "schema_version": PLAN_SCHEMA_V2,
+                    "protocol": plan["protocols"][arm],
+                    "required_pairing": plan["required_pairing"],
+                },
+                run,
+            )
+        return _EvaluationRuntime(
+            backend=PAIRED_TGVF_BACKEND,
+            checkpoint_owner=owners["short"],
+            protocol_contract=owners["short"],
+            output_root=Path(plan["output_root"]).resolve(),
+            checkpoint_world_size=8,
+            arm_checkpoint_owners=owners,
+        )
     if plan["schema_version"] == PLAN_SCHEMA_V2:
         policy_config = _resolve_repo_path(plan["policy_config"])
         run = load_policy_e2e_smoke_run_config(
@@ -1659,6 +1924,52 @@ def _validate_materialized_resolution_pairing(
             != plan["paired_rng"]["arm_protocol_sha256"][arm]
         ):
             raise RuntimeError(f"materialized {arm} arm protocol identity differs")
+
+
+def _validate_materialized_target_prompt_pairing(
+    plan: dict[str, Any], configs: dict[str, Path]
+) -> None:
+    """Prove C/D differ in prompt identity while sharing one RNG stream."""
+
+    if plan.get("schema_version") != PLAN_SCHEMA_V6:
+        return
+    contracts: dict[str, dict[str, object]] = {}
+    snapshots: dict[str, object] = {}
+    for arm in ("short", "full"):
+        config = load_policy_coredev_config(configs[arm])
+        if (
+            config.snapshot_backend != PAIRED_TGVF_EVALUATION_BACKEND
+            or config.evaluation_protocol != "training_run"
+            or config.expected_optimizer_step != 32
+            or config.evaluation_image_max_pixels != 262144
+            or config.paired_rng_protocol_projection != TARGET_PROMPT_PAIR_PROJECTION
+        ):
+            raise RuntimeError(f"materialized {arm} target-prompt contract differs")
+        snapshot = load_policy_evaluation_snapshot(config)
+        contract = paired_evaluation_rng_contract(
+            config,
+            snapshot,
+            task_manifest_sha256=plan["task_manifest_sha256"],
+        )
+        if contract is None:
+            raise RuntimeError(f"materialized {arm} target-prompt RNG is absent")
+        _validate_runtime_paired_rng(plan, config, snapshot, arm=arm)
+        snapshots[arm] = snapshot
+        contracts[arm] = contract
+
+    short = contracts["short"]
+    full = contracts["full"]
+    if (
+        short["arm_protocol_sha256"] == full["arm_protocol_sha256"]
+        or short["seed_protocol_sha256"] != full["seed_protocol_sha256"]
+        or short["seed_protocol_sha256"]
+        != plan["paired_rng"]["seed_protocol_sha256"]
+        or snapshots["short"].run.protocol.prompt_sha256
+        != TARGET_PROMPT_PAIR_VALUES[0]
+        or snapshots["full"].run.protocol.prompt_sha256
+        != TARGET_PROMPT_PAIR_VALUES[1]
+    ):
+        raise RuntimeError("materialized target-prompt full/seed identities differ")
 
 
 def _resolve_repo_path(value: str) -> Path:
@@ -2063,6 +2374,29 @@ def _arm_paths_for_plan(plan: dict[str, Any], base: Path, arm: str) -> dict[str,
     }
 
 
+def _policy_config_path_for_arm(plan: dict[str, Any], arm: str) -> Path:
+    if plan.get("schema_version") == PLAN_SCHEMA_V6:
+        binding = plan.get("policy_arms", {}).get(arm)
+        if not isinstance(binding, dict):
+            raise ValueError("target-prompt policy arm is absent")
+        return _resolve_repo_path(str(binding["policy_config"]))
+    return _resolve_repo_path(plan["policy_config"])
+
+
+def _evaluation_protocol_for_arm(plan: dict[str, Any], arm: str) -> str:
+    protocol = (
+        plan.get("protocols", {}).get(arm)
+        if plan.get("schema_version") == PLAN_SCHEMA_V6
+        else plan.get("protocol")
+    )
+    if not isinstance(protocol, dict):
+        raise ValueError("evaluation arm protocol is absent")
+    value = protocol.get("evaluation_protocol")
+    if not isinstance(value, str) or not value:
+        raise ValueError("evaluation arm protocol identity is absent")
+    return value
+
+
 def _full_model_source_path(
     plan: dict[str, Any],
     runtime: _EvaluationRuntime,
@@ -2134,7 +2468,7 @@ def _validate_existing_arm_config(
     expected: dict[str, object] = {
         **_expected_arm_runtime_settings(plan, runtime),
         "evaluation_id": _arm_evaluation_id(plan, arm),
-        "evaluation_protocol": plan["protocol"]["evaluation_protocol"],
+        "evaluation_protocol": _evaluation_protocol_for_arm(plan, arm),
         "output_root": paths["root"].resolve(),
         "task_manifest_path": _resolve_repo_path(plan["task_manifest_path"]),
         "task_manifest_sha256": plan["task_manifest_sha256"],
@@ -2177,16 +2511,20 @@ def _validate_runtime_paired_rng(
         return
     if observed is None:
         raise RuntimeError("planned paired RNG contract was not materialized")
-    if plan.get("schema_version") in {PLAN_SCHEMA_V4, PLAN_SCHEMA_V5}:
+    if plan.get("schema_version") in {
+        PLAN_SCHEMA_V4,
+        PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
+    }:
         arm_protocols = planned.get("arm_protocol_sha256")
         if not isinstance(arm_protocols, dict) or arm not in arm_protocols:
             raise RuntimeError(
-                "resolution-projected RNG validation requires an exact arm"
+                "projected RNG validation requires an exact arm"
             )
         if observed.get("schema_version") != (
             RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA
         ):
-            raise RuntimeError("resolution-pair RNG runtime schema differs")
+            raise RuntimeError("projected RNG runtime schema differs")
         for field in (
             "mode",
             "seed_namespace",
@@ -2198,12 +2536,12 @@ def _validate_runtime_paired_rng(
         ):
             if observed.get(field) != planned.get(field):
                 raise RuntimeError(
-                    f"resolution-pair RNG runtime {field} differs from plan"
+                    f"projected RNG runtime {field} differs from plan"
                 )
         expected_arm_protocol = arm_protocols[arm]
         if observed.get("arm_protocol_sha256") != expected_arm_protocol:
             raise RuntimeError(
-                "resolution-pair RNG runtime arm_protocol_sha256 differs from plan"
+                "projected RNG runtime arm_protocol_sha256 differs from plan"
             )
         sampling = snapshot.run.policy.sampling
         if (
@@ -2376,7 +2714,7 @@ def _materialize_arm(
             arm=arm,
         )
         qwen_model = materialize_qwen_only_policy_checkpoint(
-            policy_config_path=_resolve_repo_path(plan["policy_config"]),
+            policy_config_path=_policy_config_path_for_arm(plan, arm),
             optimizer_step=step,
             checkpoint_path=checkpoint,
             rp66_pointer_path=rp66_pointer,
@@ -2384,7 +2722,7 @@ def _materialize_arm(
         )
     materialize_paired_tgvf_policy_benchmark_config(
         evaluation_id=_arm_evaluation_id(plan, arm),
-        policy_config_path=_resolve_repo_path(plan["policy_config"]),
+        policy_config_path=_policy_config_path_for_arm(plan, arm),
         optimizer_step=step,
         qwen_model_path=qwen_model,
         rp66_pointer_path=rp66_pointer,
@@ -2401,6 +2739,7 @@ def _materialize_arm(
         enable_chunked_prefill=False,
         gpu_memory_utilization=0.9,
         paired_seed_namespace=_paired_seed_namespace(plan),
+        paired_rng_protocol_projection=_arm_rng_protocol_projection(plan, arm),
         evaluation_image_max_pixels=_arm_image_max_pixels(plan, arm),
     )
     return paths["config"]
@@ -3671,6 +4010,7 @@ def _accepted_scored_arm(
         PLAN_SCHEMA_V3,
         PLAN_SCHEMA_V4,
         PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
     }
     return _accepted_official_summary(
         scoring_root,
@@ -3751,6 +4091,7 @@ def _summarize_scored_arm(
         PLAN_SCHEMA_V3,
         PLAN_SCHEMA_V4,
         PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
     }:
         result["headline"] = extract_coredev_macro_star(result)
     write_json_atomic(scoring_root / "coredev-2511-eval-summary.json", result)
@@ -3765,7 +4106,44 @@ def _score_missing_arms(
     *,
     log_root: Path,
 ) -> dict[str, dict[str, Any] | None]:
-    """Run every missing arm concurrently and drain all scorers before failure."""
+    """Run missing scorers, with V6 arms strictly drained Short then Full."""
+
+    if plan.get("schema_version") == PLAN_SCHEMA_V6:
+        for arm in (item["name"] for item in plan["arms"]):
+            if existing[arm] is not None:
+                continue
+            launched = _launch_score_arm(
+                configs[arm], plan, judges[arm], arm=arm, log_root=log_root
+            )
+            failures: list[str] = []
+            try:
+                for dataset, process in launched:
+                    code = process.wait()
+                    if code != 0:
+                        failures.append(f"{arm}/{dataset}={code}")
+            except BaseException:
+                _terminate_worker_groups(
+                    [process for _dataset, process in launched]
+                )
+                raise
+            residual = [
+                process
+                for _dataset, process in launched
+                if _worker_group_exists(process)
+            ]
+            if residual:
+                _terminate_worker_groups(residual)
+            for _dataset, process in launched:
+                _ACTIVE_PROCESS_GROUPS.pop(process.pid, None)
+            if failures:
+                raise RuntimeError(
+                    "official scorers failed after one target-prompt arm drained: "
+                    + ", ".join(failures)
+                )
+            existing[arm] = _summarize_scored_arm(
+                configs[arm], plan, judges[arm]
+            )
+        return existing
 
     launched: list[tuple[str, str, subprocess.Popen[bytes]]] = []
     arm_names = [arm["name"] for arm in plan.get("arms", ())] or list(configs)
@@ -3925,6 +4303,24 @@ def _sampling_report(
 def _identity_contract_report(
     plan: dict[str, Any], runtime: _EvaluationRuntime
 ) -> dict[str, object]:
+    if plan.get("schema_version") == PLAN_SCHEMA_V6:
+        return {
+            "backend": PAIRED_TGVF_BACKEND,
+            "checkpoint_owner_and_protocol_contract_are_same_per_arm": True,
+            "policy_arms": {
+                arm: {
+                    "policy_config_path": str(_policy_config_path_for_arm(plan, arm)),
+                    "policy_config_sha256": plan["policy_arms"][arm][
+                        "policy_config_sha256"
+                    ],
+                    "run_id": runtime.checkpoint_owner_for_arm(arm).run_id,
+                    "run_identity_sha256": runtime.checkpoint_owner_for_arm(
+                        arm
+                    ).identity_sha256,
+                }
+                for arm in ("short", "full")
+            },
+        }
     if runtime.backend == PAIRED_TGVF_BACKEND:
         return {
             "backend": PAIRED_TGVF_BACKEND,
@@ -3957,11 +4353,13 @@ def _build_paired_report(
         PLAN_SCHEMA_V3,
         PLAN_SCHEMA_V4,
         PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
     }
     is_resolution_pair = plan.get("schema_version") == PLAN_SCHEMA_V4
     is_resolution_projected = plan.get("schema_version") in {
         PLAN_SCHEMA_V4,
         PLAN_SCHEMA_V5,
+        PLAN_SCHEMA_V6,
     }
     arm_reports: dict[str, dict[str, Any]] = {}
     for arm, step in arms:
@@ -4004,6 +4402,8 @@ def _build_paired_report(
     if plan.get("schema_version") == PLAN_SCHEMA_V5:
         report["resolution_pair"] = dict(plan["resolution_pair"])
         report["rng_reference"] = dict(plan["rng_reference"])
+    if plan.get("schema_version") == PLAN_SCHEMA_V6:
+        report["target_prompt_pair"] = _target_prompt_pair_projection_identity()
     for arm, _step in arms:
         report[arm] = official_summaries[arm]
     return report
@@ -4118,6 +4518,8 @@ def _main() -> int:
     output_base = (
         args.output_root.resolve()
         if args.output_root is not None
+        else runtime.output_root
+        if plan.get("schema_version") == PLAN_SCHEMA_V6
         else runtime.output_root / "evaluation" / plan["evaluation_id"]
     )
     _acquire_evaluation_process_lock(output_base)
@@ -4138,26 +4540,31 @@ def _main() -> int:
                 poll_seconds=args.poll_seconds,
             )
     if args.wait_for_final_arm:
-        final_arm = max(plan["arms"], key=lambda item: item["optimizer_step"])
-        final_step = final_arm["optimizer_step"]
-        if final_step <= 0:
-            raise ValueError("final-arm wait requires a positive checkpoint arm")
-        if runtime.backend == FULL_MODEL_BACKEND:
-            _wait_for_full_model_arm(
-                plan,
-                runtime,
-                arm=final_arm["name"],
-                optimizer_step=final_step,
-                timeout_seconds=args.wait_timeout_seconds,
-                poll_seconds=args.poll_seconds,
-            )
-        else:
-            _wait_for_optimizer_step(
-                runtime.checkpoint_owner,
-                optimizer_step=final_step,
-                timeout_seconds=args.wait_timeout_seconds,
-                poll_seconds=args.poll_seconds,
-            )
+        final_arms = (
+            plan["arms"]
+            if plan.get("schema_version") == PLAN_SCHEMA_V6
+            else (max(plan["arms"], key=lambda item: item["optimizer_step"]),)
+        )
+        for final_arm in final_arms:
+            final_step = final_arm["optimizer_step"]
+            if final_step <= 0:
+                raise ValueError("final-arm wait requires a positive checkpoint arm")
+            if runtime.backend == FULL_MODEL_BACKEND:
+                _wait_for_full_model_arm(
+                    plan,
+                    runtime,
+                    arm=final_arm["name"],
+                    optimizer_step=final_step,
+                    timeout_seconds=args.wait_timeout_seconds,
+                    poll_seconds=args.poll_seconds,
+                )
+            else:
+                _wait_for_optimizer_step(
+                    runtime.checkpoint_owner_for_arm(final_arm["name"]),
+                    optimizer_step=final_step,
+                    timeout_seconds=args.wait_timeout_seconds,
+                    poll_seconds=args.poll_seconds,
+                )
     gpu_groups = [tuple(args.gpu_ids[:4])]
     if len(args.gpu_ids) == 8:
         gpu_groups.append(tuple(args.gpu_ids[4:]))
@@ -4183,7 +4590,7 @@ def _main() -> int:
             arm: _materialize_arm(
                 plan=plan,
                 runtime=runtime,
-                run=runtime.checkpoint_owner,
+                run=runtime.checkpoint_owner_for_arm(arm),
                 arm=arm,
                 step=step,
                 output_base=output_base,
@@ -4193,6 +4600,7 @@ def _main() -> int:
         }
     _validate_materialized_frozen_pairing(plan, configs)
     _validate_materialized_resolution_pairing(plan, configs)
+    _validate_materialized_target_prompt_pairing(plan, configs)
     if args.wait_for_gpus:
         _wait_for_gpus(
             tuple(args.gpu_ids),

@@ -10033,8 +10033,9 @@ than inferred from a script name or prior conversation.
 
 ### PRL26 train@512 S32 NoTool/Crop parity rerun (2026-08-29)
 
-- Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` and
-  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `CONFIGURED, NOT LAUNCHED`. These are
+- Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
+  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `RUNNING; S16 RETAINED` as of
+  2026-08-29 14:26 JST. These are
   fresh-S0 train@512 parity reruns, not literal one-variable continuations of
   the historical NoTool S32 and Crop S80 lineages.
 - Implementation commit
@@ -10059,6 +10060,14 @@ than inferred from a script name or prior conversation.
   and bind the implementation commit above. This ledger-bearing descendant
   authorizes their co-location at one clean HEAD for the execution-identity
   gate; no training was started while preparing these records.
+- Execution evidence: NoTool has a committed Step-32 tracker and permanent
+  receipt, with all 8,192 trajectories recording zero tool calls and zero
+  successful tool observations. Crop has a committed Step-16 tracker and
+  permanent receipt; its Step-16 slice records answer reward `0.6328125`,
+  tool-attempt rate `0.86328125`, 289 successful observations and format-error
+  rate `0.015625`, without a new tool parse/execution error. These are live
+  training diagnostics, not CoreDev results. The matched A/B CoreDev evaluator
+  is already armed and must remain waiting for the Crop S32 receipt.
 
 ### PRL26-C/D train@512 TGVF Target-prompt parity rerun (2026-08-29)
 
@@ -10101,3 +10110,24 @@ than inferred from a script name or prior conversation.
   observation renderer, rejects unknown hashes, and leaves every historical
   evaluation schema unchanged. No C/D training or evaluation was started
   before this correction and its regression gates passed.
+- Evaluation pairing is preregistered as
+  `tgvf.target-prompt-paired-policy-benchmark-plan.v6`. Short and Target-guide
+  v2 use independent S32 checkpoints but one projected per-task/per-turn random
+  stream: the projection removes only `prompt_sha256`; tool schema, tool
+  profile, call cap, pixel cap, seed and sampling remain in the seed protocol.
+  The arm protocol SHA256 values remain distinct while the projected seed
+  protocol SHA256 is
+  `4cbfd3cf698cb47b0c9594ca9f9e146ca09932d62bdb93d0877e59f9a85bee9c`.
+  Evaluation runs both four-GPU inference arms together at Eval@512, then
+  scores all seven official subsets with two disjoint TP=2 pinned judges.
+- The result publisher must report the complete seven-subset table plus, for
+  every arm and subset, tool-use question rate, executed-call count, calls per
+  trajectory, successful-observation count, tool errors, stop distribution and
+  generated-token mean/p50/p95/p99. It additionally rejects the result unless
+  all 2,240 Short/Full sample IDs and projected RNG stream identities match.
+- Operational recovery remains bounded. Besides the existing exact vLLM
+  weight-wake OOM classifier, a clean-process retry is admitted only when the
+  log contains both the typed `_JudgeTransientHTTPError` HTTP-429 record and
+  the typed `JudgeGlobalFailure` proving that the internal transient window was
+  exhausted. Bare 429 text, 401/402/403 and every unknown failure remain
+  terminal; the shared maximum-restart bound still applies.

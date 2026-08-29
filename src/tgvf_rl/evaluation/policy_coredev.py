@@ -100,6 +100,8 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS,
+    POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
@@ -178,6 +180,11 @@ RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA = "tgvf-policy-paired-evaluation-
 IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION = "image_max_pixels_resolution_pair_v1"
 IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES = (262144, 1003520)
 IMAGE_MAX_PIXELS_RESOLUTION_PROJECTED_OPTIMIZER_STEPS = (32, 80)
+TARGET_PROMPT_PAIR_PROJECTION = "target_prompt_pair_v1"
+TARGET_PROMPT_PAIR_VALUES = (
+    TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+    TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
+)
 TRAINING_RUN_EVALUATION_PROTOCOL = "training_run"
 DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL = (
     "deepeyes_official_visible_native_crop_v1"
@@ -221,27 +228,33 @@ def _matched_prompt_materializer_identity(
 ) -> dict[str, object] | None:
     """Bind the corrected training-matched prompt path without legacy drift."""
 
-    if run.schema_version in (
-        POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
-        | POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
-    ):
+    if run.schema_version in POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS:
+        if run.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
+            raise ValueError("matched TGVF run has a non-TGVF tool profile")
+        expected_prompt_sha256 = TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+        builder = "build_tgvf_visual_messages"
+        prompt_version = TGVF_DEEPEYES_MATCHED_PROMPT_VERSION
+        if run.protocol.prompt_sha256 != expected_prompt_sha256:
+            raise ValueError("matched TGVF evaluation prompt identity differs")
+        prompt_sha256 = expected_prompt_sha256
+    elif run.schema_version in POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS:
         if run.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
             raise ValueError("matched TGVF run has a non-TGVF tool profile")
         contracts = {
-            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256: (
+            POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+                TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
                 "build_tgvf_visual_messages",
                 TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
             ),
-            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256: (
+            POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: (
+                TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
                 "build_tgvf_target_guide_v2_visual_messages",
                 TGVF_TARGET_GUIDE_V2_PROMPT_VERSION,
             ),
         }
-        contract = contracts.get(run.protocol.prompt_sha256)
-        if contract is None:
+        prompt_sha256, builder, prompt_version = contracts[run.schema_version]
+        if run.protocol.prompt_sha256 != prompt_sha256:
             raise ValueError("matched TGVF evaluation prompt identity differs")
-        builder, prompt_version = contract
-        prompt_sha256 = run.protocol.prompt_sha256
     elif run.schema_version == POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA:
         if run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_TGVF:
             raise ValueError("matched Crop+TGVF run has a non-combined tool profile")
@@ -305,12 +318,12 @@ def _render_training_run_visual_prompt(
         messages = build_crop_tgvf_visual_messages(question)
     elif run.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         messages = build_no_tool_visual_messages(question)
-    elif run.protocol.prompt_sha256 == (
-        TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256
-    ):
+    elif materializer["message_builder"] == "build_tgvf_target_guide_v2_visual_messages":
         messages = build_tgvf_target_guide_v2_visual_messages(question)
-    else:
+    elif materializer["message_builder"] == "build_tgvf_visual_messages":
         messages = build_tgvf_visual_messages(question)
+    else:  # pragma: no cover - every admitted materializer is handled above
+        raise RuntimeError("matched evaluation prompt builder is unsupported")
     renderer.assert_tokenizer_length()
     renderer.assert_chat_template_identity()
     renderer.assert_tool_schema_identity()
@@ -494,6 +507,145 @@ def validate_policy_benchmark_runtime_interfaces(
     return result
 
 
+def validate_matched_tgvf_processor(
+    processor: object,
+    run: PolicyE2ESmokeRunConfig,
+    *,
+    image_max_pixels: int,
+) -> dict[str, object]:
+    """CPU proof of the exact C/D prompt, pixel cap, and action boundary."""
+
+    if (
+        run.schema_version not in POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
+        or run.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY
+        or run.protocol.enabled_tool_names != ("tgvf_focus_tool",)
+        or run.protocol.maximum_tool_calls != 6
+        or run.policy.image_max_pixels != 262144
+        or image_max_pixels != 262144
+    ):
+        raise ValueError("matched TGVF processor proof requires PRL-26 C/D @512")
+    materializer = _matched_prompt_materializer_identity(run)
+    if materializer is None:
+        raise RuntimeError("matched TGVF prompt materializer is absent")
+    renderer = NativeProtocolRenderer(
+        processor,
+        expected_tokenizer_length=run.model.tokenizer_length,
+        tool_names=run.protocol.enabled_tool_names,
+        tool_schemas=tuple(build_native_tool_schemas(run.protocol.enabled_tool_names)),
+        assistant_dialect=native_assistant_dialect_for_model(run.model.model_name),
+    )
+    question = "STATIC_TARGET_PROMPT_PROTOCOL_PROBE"
+    prompt_text, canonical_token_ids = _render_training_run_visual_prompt(
+        run=run,
+        processor=processor,
+        renderer=renderer,
+        question=question,
+    )
+    builder_name = str(materializer["message_builder"])
+    messages = (
+        build_tgvf_target_guide_v2_visual_messages(question)
+        if builder_name == "build_tgvf_target_guide_v2_visual_messages"
+        else build_tgvf_visual_messages(question)
+    )
+    system_prompt = messages[0].get("content")
+    if not isinstance(system_prompt, str):
+        raise TypeError("matched TGVF system prompt is not text")
+    system_prompt_sha256 = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
+    expected_system_prompt_sha256 = (
+        TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.system_prompt_sha256
+        if builder_name == "build_tgvf_target_guide_v2_visual_messages"
+        else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.system_prompt_sha256
+    )
+    if system_prompt_sha256 != expected_system_prompt_sha256:
+        raise ValueError("matched TGVF rendered system prompt identity differs")
+    source_rgb = torch.zeros((1536, 2048, 3), dtype=torch.uint8)
+    from tgvf_rl.framework.verl.smoke_dataset import (
+        _materialize_source_image_prompt_token_ids,
+    )
+
+    expanded_token_ids = _materialize_source_image_prompt_token_ids(
+        processor=processor,
+        canonical_token_ids=canonical_token_ids,
+        prompt_text=prompt_text,
+        source_rgb=source_rgb,
+        image_max_pixels=image_max_pixels,
+    )
+    _pixel_values, image_grid_thw = preprocess_qwen3_rgb(
+        processor=processor,
+        rgb=source_rgb,
+        image_max_pixels=image_max_pixels,
+    )
+    image_processor = getattr(processor, "image_processor", None)
+    patch_size = getattr(image_processor, "patch_size", None)
+    merge_size = getattr(image_processor, "merge_size", None)
+    processor_size = getattr(image_processor, "size", None)
+    if (
+        type(patch_size) is not int
+        or patch_size <= 0
+        or type(merge_size) is not int
+        or merge_size <= 0
+        or not isinstance(processor_size, Mapping)
+    ):
+        raise ValueError("matched TGVF processor geometry is invalid")
+    grid = tuple(int(value) for value in image_grid_thw[0].tolist())
+    represented_pixel_area = grid[1] * grid[2] * patch_size**2
+    visual_token_count = grid[0] * grid[1] * grid[2] // merge_size**2
+    image_pad_id = renderer.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    if (
+        represented_pixel_area > image_max_pixels
+        or canonical_token_ids.count(image_pad_id) != 1
+        or expanded_token_ids.count(image_pad_id) != visual_token_count
+    ):
+        raise ValueError("matched TGVF @512 visual expansion differs")
+    termination = _termination_contract(run)
+    if (
+        termination.required_request_stop_strings != ("</tool_call>",)
+        or termination.required_request_stop_token_ids != (151645,)
+        or termination.include_stop_str_in_output is not True
+        or termination.tool_call_terminal_suffixes != ("",)
+        or tuple(
+            outcome.canonical_payload for outcome in termination.tool_call_outcomes
+        )
+        != ({"finish_reason": "stop", "stop_reason": "</tool_call>"},)
+        or termination.tool_calls_enabled is not True
+    ):
+        raise ValueError("matched TGVF action-boundary contract differs")
+    success_renderer = _success_environment_text_renderer(run)
+    if success_renderer is not render_qwen_native_matched_tgvf_success_environment_text:
+        raise ValueError("matched TGVF observation renderer differs")
+    return {
+        "schema_version": "tgvf.matched-tgvf-processor-static-proof.v1",
+        "run_config_schema": run.schema_version,
+        "message_builder": builder_name,
+        "prompt_version": materializer["prompt_version"],
+        "prompt_bundle_sha256": materializer["prompt_bundle_sha256"],
+        "system_prompt_sha256": system_prompt_sha256,
+        "prompt_text_sha256": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest(),
+        "canonical_prompt_token_ids_sha256": _canonical_json_sha256(
+            list(canonical_token_ids)
+        ),
+        "expanded_prompt_token_ids_sha256": _canonical_json_sha256(
+            list(expanded_token_ids)
+        ),
+        "canonical_prompt_token_count": len(canonical_token_ids),
+        "expanded_prompt_token_count": len(expanded_token_ids),
+        "template_tools_argument": [],
+        "configured_image_max_pixels": image_max_pixels,
+        "processor_image_size": dict(processor_size),
+        "effective_processor_image_size": {
+            "shortest_edge": processor_size.get("shortest_edge"),
+            "longest_edge": image_max_pixels,
+        },
+        "processor_patch_size": patch_size,
+        "processor_merge_size": merge_size,
+        "synthetic_source_pixel_area": int(source_rgb.shape[0] * source_rgb.shape[1]),
+        "synthetic_represented_pixel_area": represented_pixel_area,
+        "synthetic_visual_token_count": visual_token_count,
+        "success_environment_renderer": success_renderer.__name__,
+        "action_boundary": termination.canonical_payload,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyCoreDevConfig:
     evaluation_id: str
@@ -591,30 +743,45 @@ class PolicyCoreDevConfig:
         ):
             raise ValueError("evaluation_image_max_pixels must be a positive integer")
         if self.paired_rng_protocol_projection is not None:
-            if (
-                self.paired_rng_protocol_projection
-                != IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION
-            ):
+            if self.paired_rng_protocol_projection not in {
+                IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION,
+                TARGET_PROMPT_PAIR_PROJECTION,
+            }:
                 raise ValueError("paired RNG protocol projection differs")
             if (
+                self.paired_rng_protocol_projection
+                == IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION
+            ):
+                if (
+                    self.schema_version != POLICY_BENCHMARK_SCHEMA
+                    or self.paired_seed_namespace is None
+                    or self.evaluation_protocol
+                    != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+                    or self.snapshot_backend != FULL_MODEL_EVALUATION_BACKEND
+                    or self.expected_optimizer_step
+                    not in IMAGE_MAX_PIXELS_RESOLUTION_PROJECTED_OPTIMIZER_STEPS
+                    or self.evaluation_image_max_pixels
+                    not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES
+                    or (
+                        self.expected_optimizer_step == 32
+                        and self.evaluation_image_max_pixels != 1003520
+                    )
+                ):
+                    raise ValueError(
+                        "image_max_pixels resolution projection requires the exact "
+                        "official-visible full-model step80 pair or step32 true1M "
+                        "extension contract"
+                    )
+            elif (
                 self.schema_version != POLICY_BENCHMARK_SCHEMA
                 or self.paired_seed_namespace is None
-                or self.evaluation_protocol
-                != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
-                or self.snapshot_backend != FULL_MODEL_EVALUATION_BACKEND
-                or self.expected_optimizer_step
-                not in IMAGE_MAX_PIXELS_RESOLUTION_PROJECTED_OPTIMIZER_STEPS
-                or self.evaluation_image_max_pixels
-                not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES
-                or (
-                    self.expected_optimizer_step == 32
-                    and self.evaluation_image_max_pixels != 1003520
-                )
+                or self.evaluation_protocol != TRAINING_RUN_EVALUATION_PROTOCOL
+                or self.snapshot_backend != PAIRED_TGVF_EVALUATION_BACKEND
+                or self.expected_optimizer_step != 32
+                or self.evaluation_image_max_pixels != 262144
             ):
                 raise ValueError(
-                    "image_max_pixels resolution projection requires the exact "
-                    "official-visible full-model step80 pair or step32 true1M "
-                    "extension contract"
+                    "target prompt projection requires paired TGVF step32 Eval@512"
                 )
         if (
             len(self.gpu_ids) != 4
@@ -1916,16 +2083,51 @@ def _paired_evaluation_rng_contract(
     protocol_sha256 = _canonical_json_sha256(rng_protocol)
     projection_kind = getattr(config, "paired_rng_protocol_projection", None)
     if projection_kind is not None:
-        if projection_kind != IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION:
+        if projection_kind == IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION:
+            image_max_pixels = rng_protocol.pop("image_max_pixels", None)
+            if image_max_pixels not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES:
+                raise ValueError("resolution-pair protocol image_max_pixels differs")
+            projection = {
+                "kind": IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION,
+                "excluded_protocol_field": "image_max_pixels",
+                "axis_values": list(IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES),
+            }
+        elif projection_kind == TARGET_PROMPT_PAIR_PROJECTION:
+            run = snapshot.run
+            expected_schema_for_prompt = {
+                TARGET_PROMPT_PAIR_VALUES[0]: (
+                    POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA
+                ),
+                TARGET_PROMPT_PAIR_VALUES[1]: (
+                    POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA
+                ),
+            }
+            prompt_sha256 = rng_protocol.pop("prompt_sha256", None)
+            sampling = run.policy.sampling
+            if (
+                not isinstance(snapshot, PairedTGVFEvaluationSnapshot)
+                or prompt_sha256 not in TARGET_PROMPT_PAIR_VALUES
+                or run.schema_version
+                != expected_schema_for_prompt.get(prompt_sha256)
+                or run.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY
+                or run.policy.image_max_pixels != 262144
+                or evaluation_image_max_pixels(config, snapshot) != 262144
+                or snapshot.policy_version.optimizer_step != 32
+                or run.rollout_rng.master_seed != 42
+                or float(sampling.temperature) != 1.0
+                or sampling.do_sample is not True
+            ):
+                raise ValueError(
+                    "target prompt projection requires the exact Short/Target-v2 "
+                    "paired-TGVF S32 Train@512/Eval@512 protocol"
+                )
+            projection = {
+                "kind": TARGET_PROMPT_PAIR_PROJECTION,
+                "excluded_protocol_field": "prompt_sha256",
+                "axis_values": list(TARGET_PROMPT_PAIR_VALUES),
+            }
+        else:
             raise ValueError("paired RNG protocol projection differs")
-        image_max_pixels = rng_protocol.pop("image_max_pixels", None)
-        if image_max_pixels not in IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES:
-            raise ValueError("resolution-pair protocol image_max_pixels differs")
-        projection = {
-            "kind": IMAGE_MAX_PIXELS_RESOLUTION_PAIR_PROJECTION,
-            "excluded_protocol_field": "image_max_pixels",
-            "axis_values": list(IMAGE_MAX_PIXELS_RESOLUTION_PAIR_VALUES),
-        }
         seed_protocol_sha256 = _canonical_json_sha256(
             {
                 "projection": projection,
@@ -3834,6 +4036,8 @@ __all__ = [
     "POLICY_MATCHED_PROMPT_MATERIALIZER_VERSION",
     "POLICY_OUTPUT_CONTRACT_FAILURE_SCHEMA",
     "PAIRED_POLICY_EVALUATION_RNG_SCHEMA",
+    "TARGET_PROMPT_PAIR_PROJECTION",
+    "TARGET_PROMPT_PAIR_VALUES",
     "PairedEvaluationVLLMTurnRNG",
     "PolicyCoreDevConfig",
     "PolicyCoreDevEvaluator",
@@ -3864,6 +4068,7 @@ __all__ = [
     "prepare_policy_benchmark_tasks",
     "trajectory_audit_payload",
     "validate_policy_benchmark_runtime_interfaces",
+    "validate_matched_tgvf_processor",
     "validate_policy_benchmark_result",
     "write_policy_evaluation_identity",
     "write_official_coredev_tasks",

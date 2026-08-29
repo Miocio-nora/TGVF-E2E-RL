@@ -163,9 +163,13 @@ def _validate_supervisor_events(
             _fail("NoTool supervisor reused an attempt log")
         used_logs.add(resolved_log)
         decision = row.get("decision")
-        if decision not in {"complete", "retry_weight_wake_oom", "fail"}:
+        retry_decisions = {
+            "retry_weight_wake_oom",
+            "retry_judge_transient_429",
+        }
+        if decision not in {"complete", *retry_decisions, "fail"}:
             _fail("NoTool supervisor decision is malformed")
-        if decision == "retry_weight_wake_oom" and return_code == 0:
+        if decision in retry_decisions and return_code == 0:
             _fail("NoTool supervisor retry has an impossible zero return code")
         if decision == "fail" and return_code == 0:
             _fail("NoTool supervisor failure has an impossible zero return code")
@@ -234,7 +238,10 @@ def _validate_supervisor_events(
                     or attempt != previous_attempt + 1
                 ):
                     _fail("NoTool supervisor attempts are not sequential")
-                if previous_decision != "retry_weight_wake_oom":
+                if previous_decision not in {
+                    "retry_weight_wake_oom",
+                    "retry_judge_transient_429",
+                }:
                     _fail(
                         "NoTool supervisor continued an invocation after a terminal decision"
                     )
