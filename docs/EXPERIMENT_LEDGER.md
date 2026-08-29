@@ -10329,3 +10329,40 @@ than inferred from a script name or prior conversation.
   per-task RNG stream identities, result identities, task-manifest identity
   and their deterministic sequence digests before the result can be marked
   `pass`.
+
+### PRL27-B corrected Crop replay-byte-parity recovery (2026-08-30)
+
+- PRL27-A failed closed before optimizer Step 1 with
+  `ReplayMismatchError: expanded native visual positions differ from rollout
+  record`. It produced no metric row, optimizer update or checkpoint. Its
+  `PRL-27-A-*` policy and control roots remain immutable failed evidence and
+  are not reused or overwritten by this recovery.
+- Runtime fix commit `c448e583887e4e49b79fe52fefb4b42934cd787e`
+  binds `ImageZoomInToolRuntime` layout construction and the native observation
+  appender to the same matched environment bytes. It also covers two sequential
+  Crop calls and final recorded-visual replay, the path that PRL27-A exposed.
+- PRL27-B is a new independent fresh-Original-S0 identity:
+  `PRL-27-B-TRAIN512-S32-CROP-REPLAY-BYTE-PARITY-QWEN3-INSTRUCT-BS16-N16-TEACHER25-WS8`.
+  It owns a disjoint policy root, external control root, tmux session and W&B
+  run ID. Apart from the replay-byte repair and provenance identities, the
+  PRL27-A contract is preserved exactly: Qwen3-VL-8B-Instruct, Train@512,
+  Teacher25 seed-42 schedule, BS16 x n16, world8/FSDP2/GA1, temperature 1,
+  constant LR `1e-6`, Crop-only maximum six calls, and S0/S8/S16/S24/S32
+  checkpoint boundaries.
+- Launch is fail closed and does not depend on a live or retained PRL26-C tmux
+  pane. It revalidates PRL26-C's sealed S32 tracker, contiguous metrics,
+  generation, permanent receipt and successful terminal supervisor event,
+  requires at least three consecutive all-GPU/Ray-free probes, and then runs a
+  real local Qwen processor canary with every accelerator hidden. The canary
+  must pass exactly two tests with no skip: two matched Crop calls plus final
+  replay must preserve layout/appender bytes, while a one-token drift must be
+  rejected. Its immutable self-identified receipt is pinned to the clean
+  admitted HEAD, current test/driver hashes, the 60-token matched continuation,
+  pixel cap `262144`, tokenizer/model identity and exact hidden-accelerator
+  environment. A final resource probe closes the canary window before the
+  still-absent B root receives fresh-S0 authorization.
+- Training uses `trainable_tgvf_supervisor` with bounded recovery through S32.
+  Preparation and CPU tests do not start a GPU process or create the PRL27-B
+  policy root. The seven-benchmark training-run Eval@512 identity/RNG namespace
+  will be bound in a separate immutable evaluation handoff before S32 and does
+  not delay this training admission package.
