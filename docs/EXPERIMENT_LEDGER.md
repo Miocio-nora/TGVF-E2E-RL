@@ -10568,3 +10568,19 @@ than inferred from a script name or prior conversation.
   and must not be defaulted to incorrect. Every count here remains an
   incomplete running-interim diagnostic, not an accuracy, Macro* or
   method-comparison result.
+- **Inference completion:** at `2026-08-30 04:02:50 JST`, ranks 0--3 completed
+  normally with `575/543/577/545` rows, respectively, closing the supported
+  single-image inference view at `2240/2240` with no failure. All four inference
+  GPU allocations on devices 0--3 were released. The 271 unsupported
+  multi-image manifest entries remain held pending a protocol decision and are
+  neither sent through this Crop policy inference nor defaulted to incorrect.
+- The complete 2,240-row inference behavior audit records 1,557 tool-using
+  examples (`69.5089%`), 683 zero-call examples, 1,616 total calls and six typed
+  tool errors. Stop counts are `direct=673`, `final=1551`, `max_tokens=15` and
+  `call_cap=1`; per-example call-count distribution is
+  `0:683, 1:1521, 2:21, 3:10, 4:3, 5:1, 6:1`. These are complete behavior
+  statistics for the supported inference view, not answer-quality scores.
+- **Seven-subset scoring launch:** at `04:03:03 JST` the control phase advanced
+  to `scoring_generic86_seven_subsets`. The Qwen2.5-72B judge is running on
+  GPUs 2--3 with API concurrency 200. Accuracy, per-subset scores and Macro*
+  have not yet been produced or admitted.

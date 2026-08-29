@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-30 03:57（Asia/Tokyo；旧 PRL26-B S32 的训练原生 86-token Eval@512 recovery2 已完成 2,240 条 supported single-image view 的 94.9%）
+更新时间：2026-08-30 04:03（Asia/Tokyo；旧 PRL26-B S32 的训练原生 86-token Eval@512 已完成 2,240/2,240 inference，七项 scoring 运行中）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -136,6 +136,18 @@
 > GPU，rank 0/2 正常收尾，GPU 4--7 始终空闲。Official scorer 沿用既有
 > supported single-image view 口径，271 条 held multi-image 必须单独报告，不能默认记为
 > 错误。上述全部仍是 running interim 诊断，不是 accuracy、Macro* 或方法优劣结论。
+>
+> **Inference 完整闭环与 scoring 启动（04:02--04:03 JST）**：04:02:50，四个 rank
+> 以 `575/543/577/545` rows 正常完成，合计 `2240/2240`，无 failure；推理阶段
+> GPU 0--3 全部释放。这 2,240 条 supported single-image 中，工具使用题
+> `1557` 条（`69.5089%`），zero-call `683`，总调用 `1616`，typed tool errors `6`；
+> stop 分布为 `direct=673`、`final=1551`、`max_tokens=15`、`call_cap=1`，单题调用次数
+> 分布为 `0:683, 1:1521, 2:21, 3:10, 4:3, 5:1, 6:1`。271 条 multi-image 继续作为
+> protocol-pending held 集，不默认记错。
+>
+> 04:03:03 控制面进入 `scoring_generic86_seven_subsets`；Qwen2.5-72B judge 使用
+> GPU 2--3，API concurrency 为 `200`。上述工具数据是已完成 inference 的行为统计，
+> 不是答题质量结果；正确率、各 subset score 和 Macro* 尚未产生，不得提前引用。
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
 S32 训练内部有效，但此前 60-token 评测与其训练原生 86-token continuation 不一致。PRL27-A 是无更新的 invalid pre-S1
@@ -144,9 +156,9 @@ PRL27-B 已按用户指令停在完整 S4，其 60-token S32 waiter 同步取消
 86-token training-matched Eval@512 初次 attempt 在 GPU 前因 vLLM plugin 未注册而 fail-closed，无结果；
 plugin 修复和 CPU canary 通过后，recovery2 已于 03:38:39 从独立 control 启动。Target-guide-v2
 仍未启动。Recovery2 的四个 worker 已成功注入扩展、选择 TRITON_ATTN 并加载同一
-S32 full-model，已越过旧 unsupported-architecture 失败；首批 trajectories 已落盘，但尚无
-完整结果。03:57 的正确进度口径是 supported single-image `2125/2240`，不是
-CoreDev frozen manifest `2125/2511`。运行中的
+S32 full-model，已越过旧 unsupported-architecture 失败；04:02:50 已完成 supported
+single-image `2240/2240` inference 且无 failure，04:03:03 进入七项 scoring。271 条
+multi-image 仍为 protocol-pending held 集，不进入本次 Crop scoring denominator。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
@@ -159,7 +171,7 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | Arm | 当前状态 | 固定训练合同 | 后续评测 |
 |---|---|---|---|
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
-| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact Eval@512 recovery2 inference 94.9%** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | 03:57 interim `2125/2240`；rank 1/3 已正常完成，0/2 收尾；271 multi-image held pending protocol，不默认记错 |
+| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact Eval@512 inference 完成，scoring 运行中** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | `2240/2240` supported rows 无 failure；Qwen2.5-72B judge 在 GPU 2--3/API 200 评分；accuracy/Macro* 待产生 |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
 | 60-token protocol ablation（PRL27-B） | **用户主动停在完整 S4** | fresh Original S0；@512；BS16×n16；Teacher25；60-token layout/appender 同字节 | 四步 answer/format 较差、工具覆盖略高；S5 未落盘，S32 waiter 已取消 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
