@@ -10439,3 +10439,14 @@ than inferred from a script name or prior conversation.
   group reward variance `1.357974609375`. The admitted interpretation is
   therefore early quality/format regression with retained tool exploration
   and faster execution, pending S4/S8 and benchmark evidence.
+- S4 closed after `687.935554214986` seconds with tracker 4 and no replay or
+  execution failure. The four-step historical-to-corrected comparison now
+  shows cumulative answer reward `0.75390625` to `0.7294921875` and format
+  error `0.09765625` to `0.142578125`, while tool-attempt rate is unchanged
+  within sampling noise (`0.82421875` to `0.8271484375`) and successful
+  observations increase from 2051 to 2105. On S4 alone, attempts increase
+  `523` to `581` and observations `505` to `554`, but answer reward declines
+  `0.7890625` to `0.71875` and protocol reward declines `-0.2265625` to
+  `-0.3359375`. This strengthens the provisional interpretation of more
+  aggressive tool chaining with worse format/protocol and answer stability;
+  it is not admitted as a causal mechanism until S8 and Eval@512 evidence.
