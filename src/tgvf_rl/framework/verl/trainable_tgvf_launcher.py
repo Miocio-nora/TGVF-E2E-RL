@@ -53,7 +53,7 @@ from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
 from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
     CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
-from tgvf_rl.protocol import visual_tool_prompt_identity
+from tgvf_rl.protocol import NativeToolCapabilityProfile, visual_tool_prompt_identity
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 
 from . import launcher as legacy_launcher
@@ -471,6 +471,7 @@ def _matched_dataset_binding(
     visual_prompt_bundle_sha256 = (
         config.protocol.prompt_sha256
         if _uses_native_qwen_engine(config)
+        or config.protocol.tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
         else CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
         if crop_tgvf
         else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256

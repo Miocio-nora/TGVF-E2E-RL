@@ -95,6 +95,7 @@ from .config import (
     PolicyCropExactPixel512ParityExperimentConfig,
     PolicyNoToolMatchedExperimentConfig,
     PolicyNoToolPixel512ParityExperimentConfig,
+    PolicyTGVFPixel512ParityExperimentConfig,
     PolicyPilotV1Config,
     PolicyTGVFStage3ExperimentConfig,
     PolicyTrainableRP66ExperimentConfig,
@@ -109,6 +110,7 @@ from .no_tool_rl_protocol import NO_TOOL_RL_PROMPT_IDENTITY
 from .tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
+from .tgvf_target_guide_v2_protocol import TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY
 
 
 POLICY_E2E_SMOKE_CONFIG_SCHEMA = "policy-e2e-smoke-config-v3"
@@ -148,6 +150,19 @@ POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
 POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
     "policy-e2e-no-tool-tfree-deepeyes-matched-pixel512-parity-run-config-v1"
 )
+POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-tgvf-short-tfree-deepeyes-matched-pixel512-parity-run-config-v1"
+)
+POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA = (
+    "policy-e2e-tgvf-target-guide-v2-tfree-deepeyes-matched-"
+    "pixel512-parity-run-config-v1"
+)
+POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS = frozenset(
+    {
+        POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+    }
+)
 POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMA,
@@ -164,6 +179,7 @@ POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS = frozenset(
     {
         POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
         POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        *POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }
 )
 POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS = frozenset(
@@ -186,6 +202,7 @@ POLICY_E2E_TGVF_BACKED_MATCHED_RUN_CONFIG_SCHEMAS = frozenset(
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
         *POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
         *POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
+        *POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }
 )
 POLICY_E2E_SMOKE_CODE_REPOSITORY = "Miocio-nora/TGVF-E2E-RL"
@@ -662,6 +679,8 @@ class PolicyE2ESmokeRunConfig:
             POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: False,
             POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: False,
+            POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA: False,
         }
         if self.schema_version not in accepted:
             raise ValueError("policy E2E run config schema mismatch")
@@ -744,6 +763,8 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
         POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
         POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     }:
         raise ValueError("policy E2E run config schema mismatch")
     formal_pilot = schema_version == POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA
@@ -757,6 +778,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
         *POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
         *POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
+        *POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }
     rp66_shaped_run = schema_version in {
         POLICY_E2E_RP66_SHAPED_CONTROL_RUN_CONFIG_SCHEMA,
@@ -764,12 +786,14 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
         *POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
         *POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
+        *POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }
     tfree_reward_run = schema_version in {
         POLICY_E2E_RP66_TFREE_CONTROL_RUN_CONFIG_SCHEMA,
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
         *POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
         *POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
+        *POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }
     deepeyes_scaled_crop_run = (
         schema_version == POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA
@@ -783,6 +807,9 @@ def load_policy_e2e_smoke_run_config(
     )
     no_tool_matched_run = (
         schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
+    )
+    tgvf_pixel512_matched_run = (
+        schema_version in POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
     )
     pixel512_parity_run = schema_version in POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
     tgvf_backed_matched_run = (
@@ -1131,6 +1158,7 @@ def load_policy_e2e_smoke_run_config(
     if (
         schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS
         or crop_tgvf_matched_run
+        or tgvf_pixel512_matched_run
     ):
         representation_fields.add("adapter_update_mode")
     representation_table = _table(
@@ -1171,6 +1199,7 @@ def load_policy_e2e_smoke_run_config(
     if (
         schema_version in POLICY_E2E_RP66_EXPLICIT_CONTROL_RUN_CONFIG_SCHEMAS
         or crop_tgvf_matched_run
+        or tgvf_pixel512_matched_run
     ):
         try:
             adapter_update_mode = RP66AdapterUpdateMode(
@@ -1280,6 +1309,15 @@ def load_policy_e2e_smoke_run_config(
         elif crop_tgvf_matched_run:
             accepted_prompt_hashes = {
                 CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+            }
+        elif tgvf_pixel512_matched_run:
+            accepted_prompt_hashes = {
+                (
+                    TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256
+                    if schema_version
+                    == POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA
+                    else TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256
+                )
             }
         elif rp66_matched_run:
             accepted_prompt_hashes = {
@@ -1904,6 +1942,7 @@ def load_policy_e2e_smoke_run_config(
         POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
         *POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
         *POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
+        *POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     }
     if lifecycle_control_run:
         distributed_fields.add("actor_optimizer_offload")
@@ -2068,7 +2107,7 @@ def load_policy_e2e_smoke_run_config(
         else POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH
         if crop_tgvf_matched_run
         else POLICY_E2E_TRAINABLE_RP66_AGENT_LOOP_CONFIG_PATH
-        if rp66_matched_run
+        if rp66_matched_run or tgvf_pixel512_matched_run
         else POLICY_E2E_AGENT_LOOP_CONFIG_PATH
     )
     if (
@@ -2225,7 +2264,9 @@ def load_policy_e2e_smoke_run_config(
         _require_within(resume_from_path, output_root, name="training.resume_from_path")
     output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
 
-    if schema_version == POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA:
+    if tgvf_pixel512_matched_run:
+        policy_type = PolicyTGVFPixel512ParityExperimentConfig
+    elif schema_version == POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA:
         policy_type = PolicyNoToolPixel512ParityExperimentConfig
     elif schema_version == POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA:
         policy_type = PolicyCropExactPixel512ParityExperimentConfig
@@ -2526,18 +2567,21 @@ def load_policy_e2e_smoke_run_config(
             )
             if training.resume_from_path is not None:
                 raise ValueError("pixel512 parity resume path must be empty")
-            if crop_exact_matched_run:
+            if tgvf_pixel512_matched_run:
                 _require_exact(
                     (
-                        sampling.stop_token_ids,
-                        sampling.stop_strings,
-                        sampling.include_stop_str_in_output,
-                        sampling.ignore_eos,
+                        representation.adapter_update_mode,
+                        distributed.weight_sync_mode,
+                        distributed.weight_sync_interval_optimizer_steps,
                     ),
-                    ((151645,), ("</tool_call>",), True, False),
-                    "pixel512 parity Crop action boundary",
+                    (
+                        RP66AdapterUpdateMode.FROZEN_ADAPTER,
+                        "nccl_full_qwen_plus_trainable_rp66_v1",
+                        1,
+                    ),
+                    "pixel512 parity TGVF frozen-RP67 ownership",
                 )
-            else:
+            if no_tool_matched_run:
                 _require_exact(
                     (
                         sampling.stop_token_ids,
@@ -2547,6 +2591,21 @@ def load_policy_e2e_smoke_run_config(
                     ),
                     ((151645,), (), True, False),
                     "pixel512 parity NoTool termination boundary",
+                )
+            else:
+                _require_exact(
+                    (
+                        sampling.stop_token_ids,
+                        sampling.stop_strings,
+                        sampling.include_stop_str_in_output,
+                        sampling.ignore_eos,
+                    ),
+                    ((151645,), ("</tool_call>",), True, False),
+                    (
+                        "pixel512 parity Crop action boundary"
+                        if crop_exact_matched_run
+                        else "pixel512 parity TGVF tool action boundary"
+                    ),
                 )
             if functional_canary:
                 _require_exact(
@@ -3136,6 +3195,9 @@ __all__ = [
     "POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_NO_TOOL_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
+    "POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA",
+    "POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS",
     "POLICY_E2E_CROP_TGVF_MATCHED_AGENT_LOOP_CONFIG_PATH",
     "POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA",
     "POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA",

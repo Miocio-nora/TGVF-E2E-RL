@@ -32,6 +32,10 @@ from tgvf_rl.policy.deepeyes_official_protocol import (
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
 )
+from tgvf_rl.policy.tgvf_target_guide_v2_protocol import (
+    TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY,
+    TGVF_TARGET_GUIDE_V2_SYSTEM_PROMPT,
+)
 from tgvf_rl.policy.no_tool_rl_protocol import NO_TOOL_RL_PROMPT_IDENTITY
 from tgvf_rl.protocol import NativeToolCapabilityProfile
 from tests.framework.test_tgvf_deepeyes_matched_dataset import (
@@ -87,6 +91,12 @@ def _binding(
         (
             NativeToolCapabilityProfile.TGVF_ONLY,
             TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+            module.TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+            PolicyTeacherQuarterMixDataset,
+        ),
+        (
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
             module.TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
             PolicyTeacherQuarterMixDataset,
         ),
@@ -221,6 +231,32 @@ def test_binding_rejects_a_renderer_identity_from_another_tool_profile(
             profile=NativeToolCapabilityProfile.TGVF_ONLY,
             prompt_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
             template_sha256=module.POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
+        )
+
+
+def test_tgvf_renderer_route_is_explicitly_bound_by_prompt_hash() -> None:
+    short_contract = module._visual_prompt_contract(
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256,
+    )
+    full_contract = module._visual_prompt_contract(
+        NativeToolCapabilityProfile.TGVF_ONLY,
+        TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256,
+    )
+
+    assert short_contract[0] is TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY
+    assert full_contract[0] is TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY
+    assert full_contract[2]("question")[0]["content"] == (
+        TGVF_TARGET_GUIDE_V2_SYSTEM_PROMPT
+    )
+    assert short_contract[3] == full_contract[3]
+    assert short_contract[4] == "matched_tgvf_visual_tool"
+    assert full_contract[4] == short_contract[4]
+
+    with pytest.raises(ValueError, match="visual prompt identity differs"):
+        module._visual_prompt_contract(
+            NativeToolCapabilityProfile.TGVF_ONLY,
+            "f" * 64,
         )
 
 

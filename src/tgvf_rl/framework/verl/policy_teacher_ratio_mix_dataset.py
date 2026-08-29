@@ -115,9 +115,10 @@ class PolicyTeacherRatioMixDatasetBinding:
             raise ValueError("teacher-ratio tokenizer length differs")
         if self.chat_template_sha256 != POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256:
             raise ValueError("teacher-ratio chat-template identity differs")
-        prompt_identity, _, _, _, _ = _visual_prompt_contract(self.tool_profile)
-        if self.visual_prompt_bundle_sha256 != prompt_identity.bundle_sha256:
-            raise ValueError("teacher-ratio visual prompt identity differs")
+        _visual_prompt_contract(
+            self.tool_profile,
+            self.visual_prompt_bundle_sha256,
+        )
         if self.thinklite_prompt_bundle_sha256 != (
             THINKLITE_PROMPT_IDENTITY.bundle_sha256
         ):

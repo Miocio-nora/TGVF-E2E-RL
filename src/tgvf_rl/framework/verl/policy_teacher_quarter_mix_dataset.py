@@ -51,6 +51,11 @@ from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
     build_tgvf_visual_messages,
 )
+from tgvf_rl.policy.tgvf_target_guide_v2_protocol import (
+    TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY,
+    TGVF_TARGET_GUIDE_V2_PROMPT_VERSION,
+    build_tgvf_target_guide_v2_visual_messages,
+)
 from tgvf_rl.protocol import NativeToolCapabilityProfile
 
 from .deepeyes_official_dataset import (
@@ -119,42 +124,59 @@ _CONFIG_FIELDS = {
 
 def _visual_prompt_contract(
     profile: NativeToolCapabilityProfile,
+    visual_prompt_bundle_sha256: str,
 ) -> tuple[object, str, object, str, str]:
-    """Return identity, version, builder, agent, and source route."""
+    """Resolve one explicitly bound renderer, rejecting implicit fallbacks."""
 
     if profile is NativeToolCapabilityProfile.NO_TOOL:
-        return (
+        contract = (
             NO_TOOL_RL_PROMPT_IDENTITY,
             NO_TOOL_RL_PROMPT_VERSION,
             build_no_tool_visual_messages,
             POLICY_TEACHER_QUARTER_MIX_NO_TOOL_AGENT_NAME,
             "matched_no_tool_visual",
         )
-    if profile is NativeToolCapabilityProfile.CROP_ONLY:
-        return (
+    elif profile is NativeToolCapabilityProfile.CROP_ONLY:
+        contract = (
             VISUAL_PROMPT_IDENTITY,
             VISUAL_PROMPT_IDENTITY.version,
             build_visual_messages,
             "",
             "native_crop_visual_tool",
         )
-    if profile is NativeToolCapabilityProfile.TGVF_ONLY:
-        return (
-            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
-            TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
-            build_tgvf_visual_messages,
-            TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
-            "matched_tgvf_visual_tool",
-        )
-    if profile is NativeToolCapabilityProfile.CROP_TGVF:
-        return (
+    elif profile is NativeToolCapabilityProfile.TGVF_ONLY:
+        tgvf_contracts = {
+            TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY.bundle_sha256: (
+                TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
+                TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
+                build_tgvf_visual_messages,
+                TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+                "matched_tgvf_visual_tool",
+            ),
+            TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY.bundle_sha256: (
+                TGVF_TARGET_GUIDE_V2_PROMPT_IDENTITY,
+                TGVF_TARGET_GUIDE_V2_PROMPT_VERSION,
+                build_tgvf_target_guide_v2_visual_messages,
+                TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
+                "matched_tgvf_visual_tool",
+            ),
+        }
+        contract = tgvf_contracts.get(visual_prompt_bundle_sha256)
+        if contract is None:
+            raise ValueError("teacher-quarter visual prompt identity differs")
+    elif profile is NativeToolCapabilityProfile.CROP_TGVF:
+        contract = (
             CROP_TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
             CROP_TGVF_DEEPEYES_MATCHED_PROMPT_VERSION,
             build_crop_tgvf_visual_messages,
             CROP_TGVF_DEEPEYES_MATCHED_VISUAL_AGENT_NAME,
             "matched_crop_tgvf_visual_tool",
         )
-    raise ValueError(f"unsupported teacher-quarter tool profile: {profile!r}")
+    else:
+        raise ValueError(f"unsupported teacher-quarter tool profile: {profile!r}")
+    if visual_prompt_bundle_sha256 != contract[0].bundle_sha256:
+        raise ValueError("teacher-quarter visual prompt identity differs")
+    return contract
 
 
 def _smoke_expectation(
@@ -223,9 +245,10 @@ class PolicyTeacherQuarterMixDatasetBinding:
             raise ValueError("teacher-quarter tokenizer length differs")
         if self.chat_template_sha256 != POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256:
             raise ValueError("teacher-quarter chat-template identity differs")
-        prompt_identity, _, _, _, _ = _visual_prompt_contract(self.tool_profile)
-        if self.visual_prompt_bundle_sha256 != prompt_identity.bundle_sha256:
-            raise ValueError("teacher-quarter visual prompt identity differs")
+        _visual_prompt_contract(
+            self.tool_profile,
+            self.visual_prompt_bundle_sha256,
+        )
         if self.thinklite_prompt_bundle_sha256 != (
             THINKLITE_PROMPT_IDENTITY.bundle_sha256
         ):
@@ -374,7 +397,10 @@ class PolicyTeacherQuarterMixDataset(TGVFDeepEyesOfficialDataset):
         _require_sha256(candidate_sha256, "candidate_sha256")
 
         prompt_identity, prompt_version, builder, matched_agent, source_route = (
-            _visual_prompt_contract(self.binding.tool_profile)
+            _visual_prompt_contract(
+                self.binding.tool_profile,
+                self.binding.visual_prompt_bundle_sha256,
+            )
         )
         if family == "thinklite":
             raw_prompt: list[dict[str, Any]] = [
