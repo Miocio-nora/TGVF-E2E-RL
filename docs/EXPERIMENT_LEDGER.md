@@ -10574,13 +10574,41 @@ than inferred from a script name or prior conversation.
   GPU allocations on devices 0--3 were released. The 271 unsupported
   multi-image manifest entries remain held pending a protocol decision and are
   neither sent through this Crop policy inference nor defaulted to incorrect.
-- The complete 2,240-row inference behavior audit records 1,557 tool-using
-  examples (`69.5089%`), 683 zero-call examples, 1,616 total calls and six typed
-  tool errors. Stop counts are `direct=673`, `final=1551`, `max_tokens=15` and
-  `call_cap=1`; per-example call-count distribution is
-  `0:683, 1:1521, 2:21, 3:10, 4:3, 5:1, 6:1`. These are complete behavior
-  statistics for the supported inference view, not answer-quality scores.
+- The complete 2,240-row inference behavior audit records 1,561 trajectories
+  attempting a tool (`69.6875%`) and 1,557 with at least one successful call
+  (`69.5089%`). The official no-tool count is 679. There are 1,616 successful
+  calls/observations and six typed tool errors, or 1,622 total attempts when the
+  failed attempts are included. Stop counts are `direct=673`, `final=1551`,
+  `max_tokens=15` and `call_cap=1`. The distribution
+  `0:683, 1:1521, 2:21, 3:10, 4:3, 5:1, 6:1` is explicitly the
+  **successful-call-count** distribution: the earlier jq-derived 683 means
+  zero successful calls and is not the official no-tool definition. Generated
+  token length is mean `357.2357`, p50 `113`, p95 `1051` and p99 `6107`.
 - **Seven-subset scoring launch:** at `04:03:03 JST` the control phase advanced
   to `scoring_generic86_seven_subsets`. The Qwen2.5-72B judge is running on
   GPUs 2--3 with API concurrency 200. Accuracy, per-subset scores and Macro*
   have not yet been produced or admitted.
+- **Final complete/pass result (2026-08-30 04:08:18 JST):** all seven official
+  subset scores closed with `judge_parse_failure_count=0`. Coverage is 2,240
+  evaluated supported single-image rows out of the 2,511-row frozen manifest,
+  with 271 multi-image rows held pending protocol rather than defaulted to
+  incorrect.
+
+  | Eval protocol | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse | Macro* |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 86-token owner-native / training-matched | 48.1675392670 | 51.0 | 62.7777777778 | 47.2157250943 | 43.1226765799 | 69.0 | 53.6 | **53.5548169599** |
+  | 60-token cross-protocol | 56.0209424084 | 57.0 | 57.7777777778 | 46.3838109233 | 46.0966542751 | 69.6666666667 | 51.6 | 54.9351217216 |
+  | Delta (86 - 60) | -7.85340314136 | -6.0 | +5.0 | +0.83191417107 | -2.97397769517 | -0.66666666667 | +2.0 | **-1.38030476173** |
+
+- The 86-token OCR language components are CN `44.9394364858` and EN
+  `49.4920137029`. The canonical pass result is
+  `artifacts/policy/PRL-26-B-train512-s32-parity-crop-qwen3-instruct-bs16-n16-teacher25-ws8/evaluation/PRL26-B-S32-OWNER-GENERIC86-TRAINING-RUN-COREDEV2511-PIXEL512-V1/generic86-crop-s32-pixel512-results.json`
+  (SHA256 `9816d574f06ef18658404aa21ce9c857553b4444537badf910f4c3d37a9da4e2`);
+  its official summary SHA256 is
+  `742b1da50018d453181ada3d28adb41038fef6ddb5cd0061a30d210e4ba733f1`.
+- On the same historical S32 weights, the 60-token evaluation protocol has a
+  descriptive overall uplift of `1.38030476173 pp`, although component effects
+  are mixed. This is evidence about an evaluation-protocol shift, not evidence
+  that 60-token retraining works. PRL27-B remains a negative early S4 ablation
+  and was stopped by user instruction; the higher cross-protocol score cannot
+  be used to reverse that conclusion.
