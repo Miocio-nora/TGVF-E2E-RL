@@ -10091,6 +10091,19 @@ than inferred from a script name or prior conversation.
   only in their tmux environments, and records auditable pane exit statuses.
   This ledger-bearing descendant authorizes that queued order; preparation and
   validation still do not constitute launch.
+- **Launch-admission hardening (2026-08-30):** the retained-session launcher
+  uses explicit tmux window targets, binds both supervisors to one immutable
+  admitted HEAD, and rechecks a clean worktree before releasing their shared
+  start gate. Evaluation requires both the audited training
+  `state/s32-accepted` marker and the permanent S32 receipt, while rejecting a
+  coexisting or later training-failure marker throughout resource admission.
+  Worktree identity is rechecked at every prepare/infer/score boundary. An
+  initial wait-only admission at `db743096251da728625f476cdfd639fe2c51ad84`
+  was withdrawn before either pane crossed its scheduling/resource gate; its
+  control directories are retained with the suffix
+  `.aborted-prelaunch-db743096`, and no PRL27 policy output root, trainer, GPU
+  worker, checkpoint, metric or evaluation artifact was created. This latest
+  ledger-bearing hotfix is the only launchable descendant for the formal run.
 
 - Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
   `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `S32 COMPLETE; HISTORICAL,
