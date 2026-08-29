@@ -51,6 +51,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
     TARGET_PROMPT_PAIR_PROJECTION,
     TARGET_PROMPT_PAIR_VALUES,
+    PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT,
     TRAINING_RUN_EVALUATION_PROTOCOL,
     PolicyEvaluationSnapshot,
     freeze_policy_evaluation_snapshot,
@@ -871,6 +872,8 @@ def _training_run_rng_protocol(run: PolicyE2ESmokeRunConfig) -> dict[str, object
 
 def _training_run_crop_plan_protocol(
     run: PolicyE2ESmokeRunConfig,
+    *,
+    training_run_variant: str | None = None,
 ) -> dict[str, object]:
     """Bind corrected full-model Crop to the actual training runtime contract."""
 
@@ -878,9 +881,10 @@ def _training_run_crop_plan_protocol(
         run,
         full_model=True,
         precomputed_image_embeds=True,
+        training_run_variant=training_run_variant,
     )
     sampling = run.policy.sampling
-    return {
+    result: dict[str, object] = {
         "evaluation_protocol": TRAINING_RUN_EVALUATION_PROTOCOL,
         "training_run_identity": identity,
         "sampling_source": "bound_policy_run_config",
@@ -897,6 +901,9 @@ def _training_run_crop_plan_protocol(
             "dirty_state_sha256": run.code.dirty_state_sha256,
         },
     }
+    if training_run_variant is not None:
+        result["training_run_variant"] = training_run_variant
+    return result
 
 
 def _validate_v6_static_plan(payload: dict[str, Any]) -> None:
@@ -1626,7 +1633,14 @@ def _validate_v3_policy_run_runtime(
             "same_tasks_and_rank_partition": True,
         }
     elif evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
-        expected_protocol = _training_run_crop_plan_protocol(owner)
+        training_run_variant = plan.get("protocol", {}).get("training_run_variant")
+        if training_run_variant is not None and not isinstance(
+            training_run_variant, str
+        ):
+            raise RuntimeError("v3 training-run variant is malformed")
+        expected_protocol = _training_run_crop_plan_protocol(
+            owner, training_run_variant=training_run_variant
+        )
     else:
         raise RuntimeError("v3 Policy-E2E evaluation protocol differs")
     sampling = owner.policy.sampling
@@ -2452,6 +2466,24 @@ def _evaluation_protocol_for_arm(plan: dict[str, Any], arm: str) -> str:
     return value
 
 
+def _training_run_variant_for_arm(
+    plan: dict[str, Any], arm: str
+) -> str | None:
+    protocol = (
+        plan.get("protocols", {}).get(arm)
+        if plan.get("schema_version") == PLAN_SCHEMA_V6
+        else plan.get("protocol")
+    )
+    if not isinstance(protocol, dict):
+        raise ValueError("evaluation arm protocol is absent")
+    value = protocol.get("training_run_variant")
+    if value is None:
+        return None
+    if value != PRL26_B_GENERIC_CROP_TRAINING_RUN_VARIANT:
+        raise ValueError("evaluation arm training-run variant differs")
+    return value
+
+
 def _full_model_source_path(
     plan: dict[str, Any],
     runtime: _EvaluationRuntime,
@@ -2524,6 +2556,7 @@ def _validate_existing_arm_config(
         **_expected_arm_runtime_settings(plan, runtime),
         "evaluation_id": _arm_evaluation_id(plan, arm),
         "evaluation_protocol": _evaluation_protocol_for_arm(plan, arm),
+        "training_run_variant": _training_run_variant_for_arm(plan, arm),
         "output_root": paths["root"].resolve(),
         "task_manifest_path": _resolve_repo_path(plan["task_manifest_path"]),
         "task_manifest_sha256": plan["task_manifest_sha256"],
@@ -2716,6 +2749,7 @@ def _materialize_full_model_arm(
         paired_rng_protocol_projection=_arm_rng_protocol_projection(plan, arm),
         evaluation_image_max_pixels=_arm_image_max_pixels(plan, arm),
         evaluation_protocol=_evaluation_protocol_for_arm(plan, arm),
+        training_run_variant=_training_run_variant_for_arm(plan, arm),
     )
     config = load_policy_coredev_config(paths["config"])
     runtime_snapshot = load_policy_evaluation_snapshot(config)
