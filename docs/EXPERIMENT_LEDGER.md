@@ -10596,9 +10596,9 @@ than inferred from a script name or prior conversation.
 
   | Eval protocol | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse | Macro* |
   |---|---:|---:|---:|---:|---:|---:|---:|---:|
-  | 86-token owner-native / training-matched | 48.1675392670 | 51.0 | 62.7777777778 | 47.2157250943 | 43.1226765799 | 69.0 | 53.6 | **53.5548169599** |
-  | 60-token cross-protocol | 56.0209424084 | 57.0 | 57.7777777778 | 46.3838109233 | 46.0966542751 | 69.6666666667 | 51.6 | 54.9351217216 |
-  | Delta (86 - 60) | -7.85340314136 | -6.0 | +5.0 | +0.83191417107 | -2.97397769517 | -0.66666666667 | +2.0 | **-1.38030476173** |
+  | 86-token training-runtime run | 48.1675392670 | 51.0 | 62.7777777778 | 47.2157250943 | 43.1226765799 | 69.0 | 53.6 | **53.5548169599** |
+  | 60-token historical native-runtime run | 56.0209424084 | 57.0 | 57.7777777778 | 46.3838109233 | 46.0966542751 | 69.6666666667 | 51.6 | 54.9351217216 |
+  | Descriptive delta (86-run - 60-run; not a prompt effect) | -7.85340314136 | -6.0 | +5.0 | +0.83191417107 | -2.97397769517 | -0.66666666667 | +2.0 | **-1.38030476173** |
 
 - The 86-token OCR language components are CN `44.9394364858` and EN
   `49.4920137029`. The canonical pass result is
@@ -10606,9 +10606,19 @@ than inferred from a script name or prior conversation.
   (SHA256 `9816d574f06ef18658404aa21ce9c857553b4444537badf910f4c3d37a9da4e2`);
   its official summary SHA256 is
   `742b1da50018d453181ada3d28adb41038fef6ddb5cd0061a30d210e4ba733f1`.
-- On the same historical S32 weights, the 60-token evaluation protocol has a
-  descriptive overall uplift of `1.38030476173 pp`, although component effects
-  are mixed. This is evidence about an evaluation-protocol shift, not evidence
-  that 60-token retraining works. PRL27-B remains a negative early S4 ablation
-  and was stopped by user instruction; the higher cross-protocol score cannot
-  be used to reverse that conclusion.
+- **Causal-interpretation retraction (2026-08-30 04:18 JST):** an earlier
+  ledger revision called the `1.38030476173 pp` difference a 60-token protocol
+  uplift. That attribution is invalid and is explicitly withdrawn. The two
+  runs share the S32 weight hash, 2,511-row task-manifest hash and 262,144-pixel
+  ceiling, but not the controlled sampling/runtime contract. Frozen sampling is
+  stochastic (`temperature=1.0`, `do_sample=true`), while the RNG namespace and
+  RNG-protocol SHA differ, changing every per-task/per-turn seed. The old run
+  uses `official-visible`, native pixels, Hermes parsing and its user
+  observation envelope; the new run uses `training_run`, precomputed image
+  embeddings, strict native parsing, a different observation envelope and a
+  different single-response budget. Therefore `53.5548169599` is a valid
+  standalone 86-token training-runtime result and `54.9351217216` is a valid
+  standalone historical result, but their delta is not an estimate of the
+  60-versus-86 continuation effect. A valid prompt-only A/B must share one
+  common-random-number stream and the same training runtime, parser,
+  observation envelope and budgets, changing only the continuation bytes.

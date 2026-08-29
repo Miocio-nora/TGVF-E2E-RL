@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-30 04:08（Asia/Tokyo；旧 PRL26-B S32 的训练原生 86-token Eval@512 已 complete/pass，Macro* `53.5548`）
+更新时间：2026-08-30 04:18（Asia/Tokyo；86-token Eval@512 独立结果 complete/pass；已撤回与旧 60-token run 的混杂因果比较）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -154,14 +154,16 @@
 > 不是答题质量结果；正确率、各 subset score 和 Macro* 尚未产生，不得提前引用。
 >
 > **最终 complete/pass（04:08:18 JST）**：七项 official scoring 全部完成，
-> `judge_parse_failure=0`。同一 PRL26-B S32 权重在训练原生 86-token continuation 与旧
-> 60-token cross-protocol eval 下的对照如下（单位 `%`）：
+> `judge_parse_failure=0`。下表保留两个历史测量，但 **不是 prompt-only A/B**：它们虽然使用
+> 同一 PRL26-B S32 权重、同一 CoreDev manifest 与同一 @512 上限，仍同时改变了逐题/逐轮
+> RNG、图像输入路径、tool parser、observation envelope 和单轮生成预算。因此末行只能描述
+> 两个完整运行合同的分数差，不能归因于 60/86-token continuation 文本（单位 `%`）：
 >
 > | Eval protocol | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse | Macro* |
 > |---|---:|---:|---:|---:|---:|---:|---:|---:|
-> | **86-token owner-native / training-matched** | 48.1675392670 | 51.0 | 62.7777777778 | 47.2157250943 | 43.1226765799 | 69.0 | 53.6 | **53.5548169599** |
-> | 60-token cross-protocol | 56.0209424084 | 57.0 | 57.7777777778 | 46.3838109233 | 46.0966542751 | 69.6666666667 | 51.6 | 54.9351217216 |
-> | Δ（86 - 60） | -7.85340314136 | -6.0 | +5.0 | +0.83191417107 | -2.97397769517 | -0.66666666667 | +2.0 | **-1.38030476173** |
+> | **86-token training-runtime run** | 48.1675392670 | 51.0 | 62.7777777778 | 47.2157250943 | 43.1226765799 | 69.0 | 53.6 | **53.5548169599** |
+> | 60-token historical native-runtime run | 56.0209424084 | 57.0 | 57.7777777778 | 46.3838109233 | 46.0966542751 | 69.6666666667 | 51.6 | 54.9351217216 |
+> | 描述性差值（86-run - 60-run；不可归因于 prompt） | -7.85340314136 | -6.0 | +5.0 | +0.83191417107 | -2.97397769517 | -0.66666666667 | +2.0 | **-1.38030476173** |
 >
 > 86-token OCR 细分为 CN `44.9394364858`、EN `49.4920137029`。它的输出 token 长度为
 > mean `357.2357`、p50 `113`、p95 `1051`、p99 `6107`。覆盖口径是
@@ -169,10 +171,14 @@
 > `artifacts/policy/PRL-26-B-train512-s32-parity-crop-qwen3-instruct-bs16-n16-teacher25-ws8/evaluation/PRL26-B-S32-OWNER-GENERIC86-TRAINING-RUN-COREDEV2511-PIXEL512-V1/generic86-crop-s32-pixel512-results.json`
 > （`status=pass`）。
 >
-> 可支持的结论只是：对同一旧 S32 权重，60-token eval protocol 有 `+1.3803 pp`
-> overall protocol uplift，但它对七个组件的影响混合，且完全不是“60-token retrain
-> 有效”的证据。60-token PRL27-B 的真实重训仍是早期 S4 negative ablation，已按用户
-> 指令停止，不能用旧 cross-protocol eval 的较高分数替它翻案。
+> **归因撤回（04:18 JST）**：此前把 `+1.3803 pp` 写成“60-token eval protocol uplift”是
+> 过度归因，现正式撤回。冻结配置显示 `temperature=1.0, do_sample=true`，而两个 run 的
+> RNG namespace 与 RNG protocol SHA 均不同，故同一题每一轮的 seed 全部变化；旧 run 还是
+> `official-visible + native_pixels + Hermes parser`，新 run 则是
+> `training_run + precomputed image embeds + strict native parser`，observation envelope 与
+> 单轮 token budget 也不同。当前只能说两个完整合同相差 `1.3803 pp`；不能说 86-token
+> prompt 更差，也不能说 60-token prompt 带来增益。下一项有效验证必须固定同一训练 runtime、
+> 同一逐题逐轮随机流，仅替换成功 observation 后的 60/86-token continuation 文本。
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
 S32 训练内部有效，但此前 60-token 评测与其训练原生 86-token continuation 不一致。PRL27-A 是无更新的 invalid pre-S1
@@ -183,9 +189,9 @@ plugin 修复和 CPU canary 通过后，recovery2 已于 03:38:39 从独立 cont
 Recovery2 的四个 worker 已成功注入扩展、选择 TRITON_ATTN 并加载同一
 S32 full-model，已越过旧 unsupported-architecture 失败；04:08:18 已 complete/pass，
 supported single-image `2240/2240`、held multi-image `271`、`judge_parse_failure=0`，
-Macro* `53.5548169599`。该分数是 PRL26-B 旧 S32 的训练原生 86-token aligned 结果；
-旧 60-token cross-protocol Macro* `54.9351217216` 只显示 eval protocol uplift，不证明 60-token
-retrain 有效。Target-guide-v2 仍未启动。**
+Macro* `53.5548169599`。该分数是 PRL26-B 旧 S32 在 86-token training-runtime 合同下的有效
+独立结果；旧 60-token run 的 Macro* `54.9351217216` 因 RNG 与多项 runtime 条件同时不同，
+不能拿来估计 prompt 效应，也不证明 60-token retrain 有效。Target-guide-v2 仍未启动。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -197,7 +203,7 @@ retrain 有效。Target-guide-v2 仍未启动。**
 | Arm | 当前状态 | 固定训练合同 | 后续评测 |
 |---|---|---|---|
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
-| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact Eval@512 complete/pass** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | `2240/2240 + 271 held`；judge parse failure 0；Macro* `53.5548169599`；比旧 60-token cross-protocol 低 `1.38030476173 pp` |
+| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token training-runtime Eval@512 complete/pass** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | `2240/2240 + 271 held`；judge parse failure 0；Macro* `53.5548169599`；与旧 60-token run 的 `-1.3803 pp` 仅为混杂的描述性差值 |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
 | 60-token protocol ablation（PRL27-B） | **用户主动停在完整 S4** | fresh Original S0；@512；BS16×n16；Teacher25；60-token layout/appender 同字节 | 四步 answer/format 较差、工具覆盖略高；S5 未落盘，S32 waiter 已取消 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
@@ -208,9 +214,10 @@ retrain 有效。Target-guide-v2 仍未启动。**
 
 No-Tool 的 Step-32 permanent receipt 已落盘，8,192 条训练 trajectory 的工具调用和成功 observation
 均为 0。PRL26-B Crop 也有完整 S32 receipt 与 8,192 条 trajectory；其训练动态属于内部一致的
-generic 86-token 协议。同协议的七项 CoreDev Eval@512 现已 complete/pass，Macro*
-为 `53.5548169599`。此前 60-token Macro* `54.9351217216` 只描述 cross-protocol
-transfer，不能替代该 training-matched 结果，也不是 60-token retrain 的有效性证据。
+generic 86-token 协议。86-token training-runtime 的七项 CoreDev Eval@512 现已
+complete/pass，Macro* 为 `53.5548169599`。此前 60-token run 的 Macro* 为
+`54.9351217216`，但其 RNG、native/precomputed 图像路径、parser、observation envelope 和
+单轮预算都不相同；该差值不是 prompt-only transfer estimate，也不是 60-token retrain 的有效性证据。
 
 PRL27-B 的固定评测身份为
 `PRL27-B-CROP-REPLAY-BYTE-PARITY-TRAIN512-S32-TRAINING-RUN-COREDEV2511-PIXEL512-V1`，
