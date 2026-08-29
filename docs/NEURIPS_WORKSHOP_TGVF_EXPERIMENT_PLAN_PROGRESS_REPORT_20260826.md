@@ -100,8 +100,8 @@ prompt sensitivity 是否改变；在正式 scorer 闭合前，训练 reward 和
 
 | Arm | 状态（2026-08-29 18:48 JST） | 已验收边界 | 下一自动动作 |
 |---|---|---|---|
-| No-Tool Train@512 | **S32 完成；Eval@512 inference 运行中** | S8/S16/S24/S32 permanent receipts；S32 run identity `c079c678...`；@512 processor proof 通过 | GPU 0--3 四个 rank 完成 2,511 条 prediction（其中 2,240 条 single-image）后进入评分 |
-| Crop Train@512 | **S32 完成；Eval@512 inference 运行中** | S32 permanent receipt、rolling/permanent samefile、trainer `return_code=0`；corrected action boundary 与 @512 processor proof 通过 | GPU 4--7 四个 rank 完成 2,511 条 prediction（其中 2,240 条 single-image）后进入评分 |
+| No-Tool Train@512 | **S32 完成；Eval@512 inference 运行中** | S8/S16/S24/S32 permanent receipts；S32 run identity `c079c678...`；@512 processor proof 通过 | GPU 0--3 四个 rank 完成 2,240 条 single-image prediction，并登记 271 条 multi-image pending-protocol 后进入评分 |
+| Crop Train@512 | **S32 完成；Eval@512 inference 运行中** | S32 permanent receipt、rolling/permanent samefile、trainer `return_code=0`；corrected action boundary 与 @512 processor proof 通过 | GPU 4--7 四个 rank 完成 2,240 条 single-image prediction，并登记 271 条 multi-image pending-protocol 后进入评分 |
 | TGVF Short Train@512 | **已冻结、未启动** | prompt、tool、RP67、@512 processor 与 S32 合同已预检 | A/B 评测完成且 GPU/Ray 释放后启动 |
 | TGVF Target-guide-v2 Train@512 | **已冻结、未启动** | 仅增加 teacher-aligned Target 定义与视觉案例 | Short S32 后启动，再做 prompt-axis paired eval |
 | Atomic Train@512 | **clean 自动接力已挂起、未开始训练** | `e5e0287` static admission accepted；独立 fresh-S0、matched Atomic prompt、@512；当前不占 GPU | 完整 C/D paired Eval@512 验收后自动 C0→S32→Eval@512 |
@@ -120,7 +120,9 @@ No-Tool rank 0--3 分别绑定 GPU 0--3，Crop rank 0--3 分别绑定 GPU 4--7�
 八个 prediction JSONL 均已写出首批样本；快照时 No-Tool 为 `31/32/48/48`，Crop 为
 `192/271/231/223`。No-Tool processor proof 固定 `max_pixels=262144`、represented pixels
 `239,616`、visual tokens `234`，并确认 `gpu_or_api_used=false`、`vllm_engine_constructed=false`；
-Crop 对应 proof 也已通过。当前 failed marker 为空。这些只是未评分的推理进度，不是
+Crop 对应 proof 也已通过。冻结覆盖合同为 `2,511/2,240/271/7`：2,511 条 task manifest 中实际
+推理 2,240 条 single-image，另有 271 条 multi-image 明示为 pending protocol decision，共覆盖七个
+subset；因此 prediction JSONL 的运行分母是 2,240，而不是 2,511。当前 failed marker 为空。这些只是未评分的推理进度，不是
 CoreDev-2511 benchmark 结果，也不提前报告 Macro*。
 
 A/B handoff 的 S32 前独立审计发现，旧 evaluator 在看到两个 permanent receipt 后会直接进入
