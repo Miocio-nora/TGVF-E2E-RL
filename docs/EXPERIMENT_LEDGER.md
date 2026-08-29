@@ -10427,3 +10427,15 @@ than inferred from a script name or prior conversation.
   rate `0.125`; 17 call-limit events and one execution failure followed the
   declared fail-soft path. The tracker advanced to 2 and the same attempt
   entered S3 without restart.
+- S3 published at `2026-08-30 02:38:14 JST` after `690.3834569300525`
+  seconds and closed tracker 3 without replay or execution failure. Against
+  historical PRL26-B at the same three-step boundary, cumulative answer reward
+  is lower (`0.7421875` to `0.7330729167`) and format-error rate is materially
+  higher (`0.0924479167` to `0.1341145833`). Tool-attempt rate is effectively
+  unchanged (`0.83203125` to `0.8333333333`) and successful observations are
+  marginally higher (`1546` to `1551`), so this is not early tool-use collapse.
+  S3 itself used 633 attempts and 602 successful observations with answer
+  reward `0.8203125`, format-error rate `0.1875`, protocol reward `-0.375` and
+  group reward variance `1.357974609375`. The admitted interpretation is
+  therefore early quality/format regression with retained tool exploration
+  and faster execution, pending S4/S8 and benchmark evidence.

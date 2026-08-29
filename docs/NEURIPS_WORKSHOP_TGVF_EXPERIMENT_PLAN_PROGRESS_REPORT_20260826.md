@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-30（Asia/Tokyo；PRL27-B replay-fix 已连续完成 S1/S2，S3 运行中）
+更新时间：2026-08-30（Asia/Tokyo；PRL27-B replay-fix 已连续完成 S1--S3，S4 运行中）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -51,11 +51,19 @@
 > model/optimizer checkpoint。S2 answer reward `0.703125`、工具调用题率 `0.75`、528 次调用、
 > 510 个成功 observation、format error `0.08203125`；17 次调用上限与 1 次工具执行失败均由
 > 既定 fail-soft 路径处理。S2 用时 `513.8472s`，当前 tracker 为 2，S3 运行中。
+>
+> **S3 与历史同 step 对照（02:38:14 JST）**：S3 继续完整闭环，tracker=3。相比历史
+> continuation-mismatched PRL26-B 的前三步累计，新训练 answer reward 从 `0.7421875` 降到
+> `0.7330729`，format error 从 `0.0924479` 升到 `0.1341146`；这是早期质量侧退化，不能被
+> 更快吞吐掩盖。与此同时工具调用题率 `0.8320313→0.8333333`、成功 observations
+> `1546→1551`，说明工具探索没有塌缩。S3 单步调用 633 次、成功 observation 602 个、answer
+> reward `0.8203125`、format error `0.1875`，没有 replay/execution failure。当前只能记为
+> “工具覆盖持平，answer 略低，格式/协议明显较差，速度更快”，等待 S4/S8 与最终评测确认。
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
 S32 因 post-tool continuation 不一致而隔离为历史训练。PRL27-A 是无更新的 invalid pre-S1
 infrastructure attempt；完整 replay 修复与真实 processor 双 Crop/final replay 硬门均已通过，
-PRL27-B 已从冻结 HEAD 正式 fresh-S0 启动并连续完成 S1/S2，当前 S3 运行中；独立七项
+PRL27-B 已从冻结 HEAD 正式 fresh-S0 启动并连续完成 S1--S3，当前 S4 运行中；独立七项
 Eval@512 waiter 已完成 10 项契约测试并从单独冻结评测 worktree 挂起。Target-guide-v2 仍未启动。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
@@ -71,7 +79,7 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
 | Historical Crop（PRL26-B） | **S32 已完成，隔离** | action boundary 正确，但成功 Crop 后 continuation 与评测不一致 | 不再作为 aligned golden；不得通过重测旧权重“修复” |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
-| Corrected Crop replay-fix（PRL27-B） | **S2 完成；S3 运行中** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | 连续两个 optimizer update/replay/checkpoint 已闭环；独立 S32 `training_run` Eval@512 waiter 已挂起等待 |
+| Corrected Crop replay-fix（PRL27-B） | **S3 完成；S4 运行中** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation 与 layout/appender 同字节 | replay/checkpoint 稳定；前三步 answer 略低、format 明显较差、工具覆盖持平；独立 S32 Eval@512 waiter 已挂起 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |
 | TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
 
