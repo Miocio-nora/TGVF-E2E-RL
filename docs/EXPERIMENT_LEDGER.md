@@ -10228,6 +10228,45 @@ than inferred from a script name or prior conversation.
   metrics/checkpoint pair. No state from failed attempt 01 entered the
   scientific lineage.
 
+### Crop-only post-tool continuation incident and PRL27-A correction (2026-08-29)
+
+- Cell/status: PRL25-B Crop S32/S80 and PRL26-B Crop S32 / `HISTORICAL;
+  TRAIN/EVAL CONTINUATION-MISMATCHED`. Their immutable training, inference and
+  scoring artifacts remain retained, but none is an aligned Crop golden result.
+- Root cause: the initial Crop prompt was the same on both sides, but after a
+  successful `image_zoom_in_tool` call the training AgentLoop appended generic
+  `Zoomed-in visual observation:` text plus a long reasoning reminder. The old
+  evaluator instead appended the crop image followed by pinned
+  `USER_PROMPT_V2`. A prompt hash and corrected `</tool_call>` action boundary
+  therefore did not prove the post-tool continuation contract. Re-evaluating
+  the old weights cannot retroactively repair their optimization distribution.
+- Impact boundary: all existing Crop-only Macro*, subset and tool-behavior
+  values are historical measurements. They cannot establish that Crop pixels,
+  calling the tool or Crop RL caused a gain/regression. No-Tool, Pure TGVF and
+  Atomic Crop+TGVF use different success renderers and are not directly
+  invalidated by this Crop-only defect.
+- Corrected runtime: experimental-branch commit
+  `ecddc379d392d154c91783d7651528b20d40afba` makes matched Crop training and
+  full-model evaluation share the exact Qwen3-VL-Instruct continuation. The
+  local processor proof reports 60 environment tokens and text SHA256
+  `f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a`.
+  Evaluation is bound to `training_run`, precomputed image embeddings, the
+  strict parser, canonical JSON errors, six-call cap, one-final-answer recovery,
+  total-response token accounting and a 10,240-token per-turn ceiling. The
+  combined targeted regression passed 248 tests plus Ruff/diff checks; a real
+  local processor proof independently confirmed parity, hash, token count and
+  runtime flags.
+- Fresh rerun identity: commit `122db51` adds but does not launch
+  `PRL-27-A-TRAIN512-S32-CROP-EXACT-CONTINUATION-QWEN3-INSTRUCT-BS16-N16-TEACHER25-WS8`.
+  It pins the correction commit, Original S0, Train@512, Teacher25, BS16 x n16,
+  seed42 and S32 while using a new, currently absent output root. Its post-S32
+  binder accepts only evaluation ID
+  `PRL27-A-CROP-EXACT-CONTINUATION-TRAIN512-S32-MATCHED-COREDEV2511-PIXEL512-V1`
+  and a new RNG namespace; owner commit, renderer hash, action boundary,
+  response budget, checkpoint receipt and RNG tampering all fail closed. Both
+  commits are published on `origin/neurips-notool-rl-s32`; training and
+  evaluation remain not started pending explicit launch.
+
 ### RP-74-QWEN3-INSTRUCT-REP-POST-MERGER-IMAGE-AXIS-2000-GPU67
 
 - Cell/status: `RP-74`; formal 2,000-step representation architecture
