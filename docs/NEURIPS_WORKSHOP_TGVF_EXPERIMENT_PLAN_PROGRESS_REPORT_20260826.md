@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29 18:04 JST（Asia/Tokyo）
+更新时间：2026-08-29 18:28 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -1344,7 +1344,17 @@ roots 尚未创建，端口、judge shards、磁盘与 credential availability �
 17:57 JST，Crop trainer 已以状态 0 退出；两次间隔 30 秒的 all-GPU/Ray clean probe 均通过并发布
 `training-resources-released.json`。canonical A/B handoff identity 为
 `f28a2e49f2a5243dc0c6c1f50eb784cd91f424c2191052cd8f77180c76ea9501`。A/B Eval@512 已进入
-Crop S32 full-model HF 物化与静态 processor proof 阶段，尚未提前发布 benchmark 结果。
+Crop S32 full-model HF 物化与静态 processor proof 阶段，尚未提前发布 benchmark 结果。首次 prepare
+完成后，A/B 在 18:12 JST 被静态验证 fail closed：supervisor 错将通用 runner 生成的
+`step32/benchmark-config.json` 写成 `step32/config.json`。`5baddc64983039ac88a2fbb2cd6d95ed43601b20`
+修正该 canonical path，并加入从 supervisor 赋值到 generic `_arm_paths` 的语义回归；PRL26 专项
+9 项、generic evaluator 64 项及 Ruff/shell/diff 检查均通过。该失败发生在 inference 前，GPU 未被
+占用，未产生可误用的预测或分数。第一次恢复又因更换临时 worktree 绝对路径而被 immutable handoff
+拒绝；随后将原 A/B worktree clean fast-forward 到同一修复 commit，在原路径重新通过两次资源探针、
+bind 与 handoff 字节一致性。18:25 JST，修正后的 Crop 静态验证和 processor proof 已通过：
+`max_pixels=262144`、represented pixels `239,616`、visual tokens `234`、`gpu_or_api_used=false`。
+No-Tool GPU 0–3 与 Crop GPU 4–7 的并行 inference wrappers 已启动，当前仍在各自 CPU prepare，尚未
+发布正式 benchmark 结果；TGVF relay 已在 clean `5baddc6` 上重新 accepted，Atomic 仍保持等待。
 当前执行顺序严格为
 `Crop S32 → No-Tool/Crop aligned Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512 → Atomic C0/S32 → Atomic Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间
@@ -1438,8 +1448,8 @@ Atomic 进入正文核心方法必须同时满足：
 12. [已完成] PRL26 No-Tool fresh-S0 Train@512 到 S32，permanent receipt 已审计；
 13. [已完成] PRL26 Crop fresh-S0 Train@512 S32、permanent receipt、rolling/permanent samefile 与
     supervisor `return_code=0` 均已验收；
-14. [运行中] No-Tool/Crop matched Eval@512 已通过双稳定 GPU/Ray release gate 与 canonical handoff，
-    当前正在物化 Crop S32 full-model HF snapshot；
+14. [运行中] No-Tool/Crop matched Eval@512 已通过修正后的 Crop processor proof；No-Tool GPU 0–3
+    与 Crop GPU 4–7 的并行 inference wrappers 已启动，当前在 CPU prepare/模型加载阶段；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
 16. [已排队] Atomic fresh-S0 Train@512/Eval@512 clean 接力已通过 static admission 并挂起；
@@ -1500,10 +1510,12 @@ Atomic 进入正文核心方法必须同时满足：
   `origin/neurips-notool-rl-s32@bd31ac5e1ce299d44efbead30f553781b8f274fc`；通过后的探针将写入
   上述输出根的 `runtime/training-resource-probe-*.json` 与 `training-resources-released.json`。
   pane retention 与 result→C/D 严格 consumer validation 固定于
-  `origin/neurips-notool-rl-s32@9e4d59f8b97a0b8d495d0a6bd761fe9f55852509`。
+  `origin/neurips-notool-rl-s32@9e4d59f8b97a0b8d495d0a6bd761fe9f55852509`；Crop canonical
+  benchmark-config path 修复与恢复链固定于
+  `origin/neurips-notool-rl-s32@5baddc64983039ac88a2fbb2cd6d95ed43601b20`。
 - PRL26 TGVF prompt-axis V6 plan：
   `configs/evaluation/prl26_cd_tgvf_target_prompt_pair_s32_pixel512_coredev2511_plan.json`，固定于
-  `origin/neurips-notool-rl-s32@9e4d59f8b97a0b8d495d0a6bd761fe9f55852509`；控制根为
+  `origin/neurips-notool-rl-s32@5baddc64983039ac88a2fbb2cd6d95ed43601b20`；控制根为
   `artifacts/control/PRL-26-tgvf-prompt-parity-20260829`，常驻 tmux session 为
   `prl26-cd-tgvf-prompt-s32`。
 - PRL26 Atomic Train@512/Eval@512：运行实现 commit `8e6b3d647d3a94c7768e3d8718b69d544010841e`，
