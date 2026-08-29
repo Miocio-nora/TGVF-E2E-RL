@@ -15,6 +15,7 @@ from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
     build_crop_tgvf_visual_messages,
 )
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMA,
@@ -22,6 +23,10 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_TGVF_SHORT_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_TGVF_TARGET_GUIDE_V2_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     load_policy_e2e_smoke_run_config,
+)
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    VISUAL_PROMPT_IDENTITY,
+    build_visual_messages,
 )
 from tgvf_rl.policy.tgvf_deepeyes_matched_protocol import (
     TGVF_DEEPEYES_MATCHED_PROMPT_IDENTITY,
@@ -36,6 +41,10 @@ from tgvf_rl.policy.no_tool_rl_protocol import (
     build_no_tool_visual_messages,
 )
 from tgvf_rl.protocol import NativeAssistantDialect, NativeToolCapabilityProfile
+from tgvf_rl.environment.agent_loop import ResponseBudgetScope
+from tgvf_rl.framework.verl.native_deepeyes_runtime import (
+    NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS,
+)
 
 
 _ROOT = Path(__file__).parents[2]
@@ -145,6 +154,8 @@ def _run(
             tool_profile=profile,
             enabled_tool_names=() if tool_name is None else (tool_name,),
             prompt_sha256=prompt_sha256,
+            tool_schema_sha256="a" * 64,
+            maximum_tool_calls=6,
         ),
     )
 
@@ -240,6 +251,74 @@ def test_legacy_generic_crop_prompt_route_is_unchanged() -> None:
     assert not processor.calls
     assert len(renderer.render_calls) == 1
     assert implementation._matched_prompt_materializer_identity(run) is None
+
+
+def test_pixel512_crop_training_run_uses_exact_prompt_and_observation() -> None:
+    run = _run(
+        POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        NativeToolCapabilityProfile.CROP_ONLY,
+        prompt_sha256=VISUAL_PROMPT_IDENTITY.bundle_sha256,
+    )
+    processor = _Processor()
+    renderer = _Renderer()
+
+    text, token_ids = implementation._render_training_run_visual_prompt(
+        run=run,
+        processor=processor,
+        renderer=renderer,
+        question="question",
+    )
+
+    identity = implementation._matched_prompt_materializer_identity(run)
+    assert identity is not None
+    assert identity["message_builder"] == "build_visual_messages"
+    assert identity["prompt_bundle_sha256"] == VISUAL_PROMPT_IDENTITY.bundle_sha256
+    assert processor.calls == [(list(build_visual_messages("question")), [])]
+    assert text == "matched-body<|im_start|>assistant\n"
+    assert token_ids == tuple(ord(character) for character in text)
+    assert implementation._success_environment_text_renderer(run) is (
+        implementation.render_qwen_native_matched_crop_success_environment_text
+    )
+
+    assert implementation._training_run_response_budget_controls(run) == (
+        ResponseBudgetScope.TOTAL_RESPONSE,
+        NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS,
+    )
+    assert implementation._training_run_full_model_owner_supported(run) is True
+    protocol_identity = implementation.training_run_evaluation_protocol_identity(
+        run,
+        full_model=True,
+        precomputed_image_embeds=True,
+    )
+    assert protocol_identity["native_pixels"] is False
+    assert protocol_identity["precomputed_image_embeds"] is True
+    assert protocol_identity["success_environment_text_sha256"] == (
+        implementation.QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+    )
+    assert protocol_identity["response_budget_scope"] == "total_response_tokens"
+    assert protocol_identity["single_response_max_tokens"] == (
+        NATIVE_DEEPEYES_SINGLE_RESPONSE_MAX_TOKENS
+    )
+
+
+def test_full_model_training_run_crop_admission_is_fail_closed() -> None:
+    wrong_profile = _run(
+        POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+        NativeToolCapabilityProfile.TGVF_ONLY,
+    )
+    legacy_crop = _run(
+        POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
+        NativeToolCapabilityProfile.CROP_ONLY,
+    )
+
+    assert implementation._training_run_full_model_owner_supported(wrong_profile) is False
+    assert implementation._training_run_full_model_owner_supported(legacy_crop) is False
+    with pytest.raises(ValueError, match="requires precomputed image embeds"):
+        implementation.training_run_evaluation_protocol_identity(
+            legacy_crop,
+            full_model=True,
+            precomputed_image_embeds=True,
+        )
 
 
 def test_target_guide_evaluation_route_rejects_an_unknown_prompt_hash() -> None:

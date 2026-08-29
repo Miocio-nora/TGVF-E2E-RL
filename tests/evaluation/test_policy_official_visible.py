@@ -98,11 +98,17 @@ class _Processor:
             else:
                 assert isinstance(content, list)
                 body = "".join(
-                    "<|image_pad|>" if item["type"] == "image" else str(item["text"])
+                    (
+                        "<|vision_start|><|image_pad|><|vision_end|>"
+                        if item["type"] == "image"
+                        else str(item["text"])
+                    )
                     for item in content
                 )
-            chunks.append(f"<{message['role']}>{body}</{message['role']}>")
-        text = "".join(chunks) + "<assistant>"
+            chunks.append(
+                f"<|im_start|>{message['role']}\n{body}<|im_end|>\n"
+            )
+        text = "".join(chunks) + "<|im_start|>assistant\n"
         self.rendered.append(text)
         return text
 
@@ -205,6 +211,13 @@ def test_static_processor_proof_includes_native_visual_expansion() -> None:
 
     assert proof["tools_argument_empty"] is True
     assert proof["observation_role"] == "user"
+    assert proof["continuation_parity"] is True
+    assert proof["continuation_environment_text_sha256"] == (
+        "f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a"
+    )
+    assert proof["success_environment_renderer"] == (
+        "render_qwen_native_matched_crop_success_environment_text"
+    )
     assert proof["native_original_image_count"] == 1
     assert proof["native_crop_image_count"] == 1
     assert proof["synthetic_native_visual_token_counts"] == [4, 4]

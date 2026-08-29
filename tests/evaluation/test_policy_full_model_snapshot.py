@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,6 +42,14 @@ from tgvf_rl.evaluation.policy_official_visible import (
 from tgvf_rl.policy.deepeyes_native_contract import (
     load_deepeyes_native_run_contract,
 )
+from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
+)
+from tgvf_rl.protocol import NativeToolCapabilityProfile
+from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    TGVF_VLLM_WORKER_EXTENSION_FQN,
+)
+from tgvf_rl.framework.vllm.registration import TGVF_QWEN3_VLLM_ARCHITECTURE
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -610,6 +619,44 @@ def test_fake_four_rank_fsdp_materializes_without_loading_8b(tmp_path: Path) -> 
     assert kwargs["enable_lora"] is False
     assert "hf_overrides" not in kwargs
     assert "worker_extension_cls" not in kwargs
+
+    matched_crop = SimpleNamespace(
+        schema_version=(
+            POLICY_E2E_CROP_TFREE_EXACT_PIXEL512_PARITY_RUN_CONFIG_SCHEMA
+        ),
+        model=snapshot.run.model,
+        rollout_rng=snapshot.run.rollout_rng,
+        protocol=SimpleNamespace(
+            tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+            maximum_tool_calls=6,
+        ),
+    )
+    matched_snapshot = replace(snapshot, run=matched_crop)
+    assert full_model_snapshot._full_model_uses_precomputed_crop_runtime(
+        SimpleNamespace(evaluation_protocol="training_run"), matched_snapshot
+    ) is True
+    assert full_model_snapshot._full_model_uses_precomputed_crop_runtime(
+        SimpleNamespace(
+            evaluation_protocol=DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL
+        ),
+        matched_snapshot,
+    ) is False
+    matched_kwargs = full_model_vllm_engine_kwargs(
+        matched_snapshot,
+        max_model_len=32768,
+        max_num_batched_tokens=32768,
+        inference_concurrency_per_gpu=8,
+        gpu_memory_utilization=0.8,
+        enable_chunked_prefill=False,
+        precomputed_image_embeds=True,
+    )
+    assert matched_kwargs["enable_lora"] is False
+    assert matched_kwargs["enable_mm_embeds"] is True
+    assert matched_kwargs["worker_extension_cls"] == TGVF_VLLM_WORKER_EXTENSION_FQN
+    assert matched_kwargs["hf_overrides"] == {
+        "architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]
+    }
+    assert matched_kwargs["limit_mm_per_prompt"] == {"image": 7, "video": 0}
 
 
 def test_complete_embedded_hf_binds_runtime_ws8_without_hashing_fsdp_payloads(

@@ -1,8 +1,24 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29 14:26（Asia/Tokyo）
+更新时间：2026-08-29（Asia/Tokyo；Crop continuation incident 已阻断）
 
-状态：**实验进行中；历史 RP67 三臂、full-prompt stress 与 target-only 评测均已闭合。
+> **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
+> Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
+> Crop 后追加 generic `Zoomed-in visual observation` 与长 reasoning reminder；旧评测追加的
+> 是 crop image + `USER_PROMPT_V2`。因此本文中的 PRL25-B Crop S80、PRL26-B Crop S32@512
+> 数值可保留为历史测量，但在修复后重训、重测之前不得称为 train/eval-aligned golden，也
+> 不得用来判断“Crop 工具本身造成伤害”或与 No-Tool 做干净的因果比较。No-Tool、Pure TGVF
+> 与 Atomic 使用另外的 renderer，不受这个 Crop-only continuation bug 直接影响。
+>
+> 修复合同固定为 Qwen3-Instruct chat-template 的精确字节：
+> `<tool_response><image>USER_PROMPT_V2</tool_response>`（边界无额外换行），真实 processor
+> 的环境增量为 60 tokens，文本 SHA256 为
+> `f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a`。
+> 后续 Crop 正式评测改用与训练共用 parser、错误 JSON、六次调用上限、cap 后 final recovery
+> turn、total-response budget 和 precomputed-image-embed runtime 的 `training_run` 后端。旧
+> checkpoint 不能通过只重测来追溯修复，必须使用新 run/evaluation ID 从 Original S0 重训。
+
+状态：**实验进行中；Crop-only train/eval continuation 已列为 blocking incident。历史 RP67 三臂、full-prompt stress 与 target-only 评测均已闭合。
 新一轮统一 Train@512/Eval@512 的 fresh-S0 S32 对照正在执行：No-Tool 已完成 S32，Crop 已完成并
 保留 S16、继续向 S32 训练；两臂 matched CoreDev-2511 评测已自动排队。其后才启动 Pure TGVF
 Short 与仅增加 teacher-aligned Target 定义/案例的 Target-guide-v2，两臂都从 Original S0 独立训练

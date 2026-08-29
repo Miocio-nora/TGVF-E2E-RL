@@ -24,6 +24,13 @@ from uuid import uuid4
 import torch
 
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
+from tgvf_rl.framework.verl.vllm_tool_runtime import (
+    TGVF_VLLM_WORKER_EXTENSION_FQN,
+)
+from tgvf_rl.framework.vllm.registration import (
+    TGVF_QWEN3_VLLM_ARCHITECTURE,
+    TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
+)
 from tgvf_rl.policy.config import (
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
@@ -31,6 +38,9 @@ from tgvf_rl.policy.config import (
 from tgvf_rl.policy.deepeyes_native_contract import (
     DeepEyesNativeRunContract,
     load_deepeyes_native_run_contract,
+)
+from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
 )
 from tgvf_rl.protocol import NativeToolCapabilityProfile
 
@@ -1572,6 +1582,7 @@ def full_model_vllm_engine_kwargs(
     inference_concurrency_per_gpu: int,
     gpu_memory_utilization: float,
     enable_chunked_prefill: bool,
+    precomputed_image_embeds: bool = False,
 ) -> dict[str, object]:
     """Stock Qwen3-VL vLLM args; adapter loading is explicitly disabled."""
 
@@ -1596,7 +1607,19 @@ def full_model_vllm_engine_kwargs(
         getattr(protocol, "tool_profile", None)
         is NativeToolCapabilityProfile.NO_TOOL
     )
-    return {
+    if type(precomputed_image_embeds) is not bool:
+        raise TypeError("precomputed_image_embeds must be boolean")
+    if precomputed_image_embeds and not (
+        getattr(snapshot.run, "schema_version", None)
+        in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+        and getattr(protocol, "tool_profile", None)
+        is NativeToolCapabilityProfile.CROP_ONLY
+    ):
+        raise ValueError(
+            "precomputed full-model runtime is restricted to exact matched Crop"
+        )
+    maximum_tool_calls = getattr(protocol, "maximum_tool_calls", 6)
+    common = {
         "model": str(snapshot.model_path),
         # A veRL checkpoint can carry an exported tokenizer whose metadata differs
         # from the tokenizer used by the run.  Keep the policy weights checkpointed,
@@ -1625,8 +1648,39 @@ def full_model_vllm_engine_kwargs(
         "mm_processor_cache_gb": 0,
         # Use the driver-portable vision path already accepted by the project.
         "mm_encoder_attn_backend": "TORCH_SDPA",
-        "limit_mm_per_prompt": {"image": 1 if no_tool else 7, "video": 0},
+        "limit_mm_per_prompt": {
+            "image": (
+                1
+                if no_tool
+                else 1 + int(maximum_tool_calls)
+            ),
+            "video": 0,
+        },
     }
+    if not precomputed_image_embeds:
+        return common
+    return {
+        **common,
+        "worker_extension_cls": TGVF_VLLM_WORKER_EXTENSION_FQN,
+        "enable_mm_embeds": True,
+        "mm_encoder_attn_backend": TGVF_VLLM_MM_ENCODER_ATTN_BACKEND,
+        "hf_overrides": {"architectures": [TGVF_QWEN3_VLLM_ARCHITECTURE]},
+    }
+
+
+def _full_model_uses_precomputed_crop_runtime(
+    config: object,
+    snapshot: FullModelEvaluationSnapshot,
+) -> bool:
+    """Select the training runtime only for the explicitly matched Crop owner."""
+
+    return (
+        getattr(config, "evaluation_protocol", None) == "training_run"
+        and getattr(snapshot.run, "schema_version", None)
+        in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+        and getattr(getattr(snapshot.run, "protocol", None), "tool_profile", None)
+        is NativeToolCapabilityProfile.CROP_ONLY
+    )
 
 
 async def build_full_model_standalone_manager(
@@ -1640,6 +1694,16 @@ async def build_full_model_standalone_manager(
 
     from .policy_coredev import StandaloneTGVFVLLMManager
 
+    precomputed_image_embeds = _full_model_uses_precomputed_crop_runtime(
+        config, snapshot
+    )
+    if precomputed_image_embeds:
+        policy_config_path = Path(getattr(config, "policy_config_path")).resolve()
+        if not policy_config_path.is_file() or policy_config_path.is_symlink():
+            raise ValueError(
+                "training-run full-model Crop requires a regular policy config"
+            )
+        os.environ["TGVF_POLICY_RUN_CONFIG_PATH"] = str(policy_config_path)
     kwargs = full_model_vllm_engine_kwargs(
         snapshot,
         max_model_len=int(getattr(config, "max_model_len")),
@@ -1649,13 +1713,14 @@ async def build_full_model_standalone_manager(
         ),
         gpu_memory_utilization=float(getattr(config, "gpu_memory_utilization")),
         enable_chunked_prefill=bool(getattr(config, "enable_chunked_prefill")),
+        precomputed_image_embeds=precomputed_image_embeds,
     )
     engine = AsyncLLM.from_engine_args(AsyncEngineArgs(**kwargs))
     manager = StandaloneTGVFVLLMManager(
         engine,
         None,
         capture_hidden=False,
-        native_pixels=True,
+        native_pixels=not precomputed_image_embeds,
     )
     if manager.lora_request is not None:
         raise RuntimeError(

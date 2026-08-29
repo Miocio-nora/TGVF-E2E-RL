@@ -51,6 +51,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     RESOLUTION_PAIRED_POLICY_EVALUATION_RNG_SCHEMA,
     TARGET_PROMPT_PAIR_PROJECTION,
     TARGET_PROMPT_PAIR_VALUES,
+    TRAINING_RUN_EVALUATION_PROTOCOL,
     PolicyEvaluationSnapshot,
     freeze_policy_evaluation_snapshot,
     load_benchmark_tasks,
@@ -59,6 +60,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     materialize_vllm_lora_adapter,
     paired_evaluation_rng_contract,
     policy_benchmark_task_path,
+    training_run_evaluation_protocol_identity,
     write_policy_evaluation_identity,
 )
 from tgvf_rl.evaluation.policy_coredev_scoring import (  # noqa: E402
@@ -867,6 +869,36 @@ def _training_run_rng_protocol(run: PolicyE2ESmokeRunConfig) -> dict[str, object
     }
 
 
+def _training_run_crop_plan_protocol(
+    run: PolicyE2ESmokeRunConfig,
+) -> dict[str, object]:
+    """Bind corrected full-model Crop to the actual training runtime contract."""
+
+    identity = training_run_evaluation_protocol_identity(
+        run,
+        full_model=True,
+        precomputed_image_embeds=True,
+    )
+    sampling = run.policy.sampling
+    return {
+        "evaluation_protocol": TRAINING_RUN_EVALUATION_PROTOCOL,
+        "training_run_identity": identity,
+        "sampling_source": "bound_policy_run_config",
+        "same_tasks_and_rank_partition": True,
+        "action_boundary": {
+            "stop_strings": list(sampling.stop_strings),
+            "stop_token_ids": list(sampling.stop_token_ids),
+            "include_stop_str_in_output": sampling.include_stop_str_in_output,
+            "ignore_eos": sampling.ignore_eos,
+        },
+        "owner_code": {
+            "repository": run.code.repository,
+            "commit": run.code.commit,
+            "dirty_state_sha256": run.code.dirty_state_sha256,
+        },
+    }
+
+
 def _validate_v6_static_plan(payload: dict[str, Any]) -> None:
     """Admit exactly one PRL-26 Short/Target-v2 S32 prompt pair."""
 
@@ -1579,16 +1611,24 @@ def _validate_v3_policy_run_runtime(
         raise RuntimeError("v3 protocol contract identity differs")
 
     protocol_payload = protocol.payload["protocol"]
-    expected_protocol = {
-        "evaluation_protocol": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
-        "visual_prompt_bundle_sha256": protocol_payload["visual_prompt_bundle_sha256"],
-        "tool_name": protocol_payload["tool_name"],
-        "tool_parser": protocol_payload["tool_parser"],
-        "maximum_tool_calls": protocol_payload["max_active_perception"],
-        "native_pixels": True,
-        "sampling_source": "bound_protocol_contract",
-        "same_tasks_and_rank_partition": True,
-    }
+    evaluation_protocol = plan.get("protocol", {}).get("evaluation_protocol")
+    if evaluation_protocol == DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
+        expected_protocol = {
+            "evaluation_protocol": DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL,
+            "visual_prompt_bundle_sha256": protocol_payload[
+                "visual_prompt_bundle_sha256"
+            ],
+            "tool_name": protocol_payload["tool_name"],
+            "tool_parser": protocol_payload["tool_parser"],
+            "maximum_tool_calls": protocol_payload["max_active_perception"],
+            "native_pixels": True,
+            "sampling_source": "bound_protocol_contract",
+            "same_tasks_and_rank_partition": True,
+        }
+    elif evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
+        expected_protocol = _training_run_crop_plan_protocol(owner)
+    else:
+        raise RuntimeError("v3 Policy-E2E evaluation protocol differs")
     sampling = owner.policy.sampling
     owner_image_max_pixels = owner.policy.image_max_pixels
     pixel512_owner = (
@@ -1634,7 +1674,22 @@ def _validate_v3_policy_run_runtime(
         or paired_rng["task_manifest_sha256"] != plan["task_manifest_sha256"]
     ):
         raise RuntimeError("v3 paired RNG task/seed identity differs")
-    if plan.get("schema_version") in {PLAN_SCHEMA_V4, PLAN_SCHEMA_V5}:
+    if evaluation_protocol == TRAINING_RUN_EVALUATION_PROTOCOL:
+        if plan.get("schema_version") in {PLAN_SCHEMA_V4, PLAN_SCHEMA_V5}:
+            raise RuntimeError(
+                "resolution-projected Crop plans require official-visible evaluation"
+            )
+        expected_rng_protocol_sha256 = _canonical_json_sha256(
+            expected_protocol["training_run_identity"]
+        )
+        if (
+            paired_rng.get("protocol_sha256")
+            != expected_rng_protocol_sha256
+            or paired_rng.get("seed_namespace") is None
+            or paired_rng.get("master_seed") != owner.rollout_rng.master_seed
+        ):
+            raise RuntimeError("v3 training-run Crop paired RNG identity differs")
+    elif plan.get("schema_version") in {PLAN_SCHEMA_V4, PLAN_SCHEMA_V5}:
         for arm_plan in plan["arms"]:
             protocol_probe = SimpleNamespace(
                 run=SimpleNamespace(
@@ -2601,7 +2656,8 @@ def _materialize_full_model_arm(
             paths["full_model_receipt"],
             runtime_lightweight=True,
         )
-        _validate_runtime_paired_rng(plan, config, snapshot, arm=arm)
+        runtime_snapshot = load_policy_evaluation_snapshot(config)
+        _validate_runtime_paired_rng(plan, config, runtime_snapshot, arm=arm)
         if (
             config.evaluation_id != _arm_evaluation_id(plan, arm)
             or snapshot.policy_version.optimizer_step != step
@@ -2659,14 +2715,11 @@ def _materialize_full_model_arm(
         paired_seed_namespace=_paired_seed_namespace(plan),
         paired_rng_protocol_projection=_arm_rng_protocol_projection(plan, arm),
         evaluation_image_max_pixels=_arm_image_max_pixels(plan, arm),
+        evaluation_protocol=_evaluation_protocol_for_arm(plan, arm),
     )
     config = load_policy_coredev_config(paths["config"])
-    snapshot = load_full_model_evaluation_snapshot(
-        paths["full_model_snapshot"],
-        paths["full_model_receipt"],
-        runtime_lightweight=True,
-    )
-    _validate_runtime_paired_rng(plan, config, snapshot, arm=arm)
+    runtime_snapshot = load_policy_evaluation_snapshot(config)
+    _validate_runtime_paired_rng(plan, config, runtime_snapshot, arm=arm)
     return paths["config"]
 
 
@@ -4275,8 +4328,17 @@ def _arm_evaluation_identity_sha256(config_path: Path) -> str:
 def _sampling_report(
     plan: dict[str, Any], runtime: _EvaluationRuntime
 ) -> dict[str, object]:
-    if runtime.backend == PAIRED_TGVF_BACKEND:
-        sampling = runtime.protocol_contract.policy.sampling
+    training_run = (
+        _evaluation_protocol_for_arm(plan, plan["arms"][0]["name"])
+        == TRAINING_RUN_EVALUATION_PROTOCOL
+    )
+    if runtime.backend == PAIRED_TGVF_BACKEND or training_run:
+        source = (
+            runtime.protocol_contract
+            if runtime.backend == PAIRED_TGVF_BACKEND
+            else runtime.checkpoint_owner
+        )
+        sampling = source.policy.sampling
         return {
             "source": "bound_policy_run_config",
             "temperature": sampling.temperature,
@@ -4330,12 +4392,24 @@ def _identity_contract_report(
             "run_id": runtime.checkpoint_owner.run_id,
             "run_identity_sha256": runtime.checkpoint_owner.identity_sha256,
         }
-    return {
+    report = {
         "backend": FULL_MODEL_BACKEND,
         "checkpoint_owner_and_protocol_contract_are_same": False,
         "checkpoint_owner": dict(plan["checkpoint_owner"]),
         "protocol_contract": dict(plan["protocol_contract"]),
     }
+    if (
+        _evaluation_protocol_for_arm(plan, plan["arms"][0]["name"])
+        == TRAINING_RUN_EVALUATION_PROTOCOL
+    ):
+        report.update(
+            {
+                "evaluation_protocol_source": "checkpoint_owner_policy_config",
+                "protocol_contract_role": "full_model_materialization_only",
+                "training_run_protocol": dict(plan["protocol"]),
+            }
+        )
+    return report
 
 
 def _build_paired_report(

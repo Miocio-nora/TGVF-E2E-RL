@@ -20,6 +20,11 @@ from PIL import Image
 import torch
 
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
+from tgvf_rl.environment.native_appender import (
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT,
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
+    render_qwen_native_matched_crop_success_environment_text,
+)
 from tgvf_rl.framework.vllm import ContentAddressedVLLMTurnRNG
 from tgvf_rl.policy.deepeyes_official_protocol import (
     DEEPEYES_MAX_ACTIVE_PERCEPTION,
@@ -348,19 +353,38 @@ def validate_official_visible_processor(
         raise ValueError("pinned DeepEyes-derived prompt literals are not visible")
     if initial_text.count("<|image_pad|>") != 1:
         raise ValueError("official initial prompt must expose one native image")
+    sampled_call_text = (
+        '<think>probe</think><tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,0,64,64]}}</tool_call>'
+    )
     messages.extend(
         [
             {
                 "role": "assistant",
-                "content": (
-                    '<think>probe</think><tool_call>{"name":"image_zoom_in_tool",'
-                    '"arguments":{"bbox_2d":[0,0,64,64]}}</tool_call>'
-                ),
+                "content": sampled_call_text,
             },
             official_visible_observation_message(image="<image>"),
         ]
     )
     continuation_text, continuation_ids = _render_prompt(processor, messages)
+    continuation_prefix = initial_text + sampled_call_text
+    if not continuation_text.startswith(continuation_prefix):
+        raise ValueError("official visible continuation changed prior prompt bytes")
+    continuation_delta = continuation_text[len(continuation_prefix) :]
+    continuation_delta_ids = tuple(
+        tokenizer.encode(continuation_delta, add_special_tokens=False)
+    )
+    sampled_call_ids = tuple(
+        tokenizer.encode(sampled_call_text, add_special_tokens=False)
+    )
+    if (
+        continuation_delta != QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT
+        or hashlib.sha256(continuation_delta.encode("utf-8")).hexdigest()
+        != QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+        or continuation_ids
+        != initial_ids + sampled_call_ids + continuation_delta_ids
+    ):
+        raise ValueError("official visible Crop continuation differs from training")
     visible_envelope = "<tool_response>"
     if (
         continuation_text.count("<|image_pad|>") != 2
@@ -414,6 +438,17 @@ def validate_official_visible_processor(
         "prompt_bundle_sha256": VISUAL_PROMPT_IDENTITY.bundle_sha256,
         "initial_prompt_token_ids_sha256": _canonical_sha256(initial_ids),
         "continuation_prompt_token_ids_sha256": _canonical_sha256(continuation_ids),
+        "continuation_environment_text_sha256": (
+            QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+        ),
+        "continuation_environment_token_ids_sha256": _canonical_sha256(
+            continuation_delta_ids
+        ),
+        "continuation_environment_token_count": len(continuation_delta_ids),
+        "continuation_parity": True,
+        "success_environment_renderer": (
+            render_qwen_native_matched_crop_success_environment_text.__name__
+        ),
         "initial_prompt_token_count": len(initial_ids),
         "continuation_prompt_token_count": len(continuation_ids),
         "continuation_expanded_prompt_token_count": len(expanded_ids),

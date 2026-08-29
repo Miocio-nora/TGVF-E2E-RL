@@ -49,6 +49,7 @@ from tgvf_rl.environment import (
     record_trajectory_source_visual,
 )
 from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_crop_success_environment_text,
     render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_environment_text,
@@ -281,6 +282,11 @@ def _success_environment_text_renderer(
 
     if tool_profile is NativeToolCapabilityProfile.CROP_TGVF:
         return render_qwen_native_matched_crop_tgvf_success_environment_text
+    if (
+        tool_profile is NativeToolCapabilityProfile.CROP_ONLY
+        and matched_visual_observation
+    ):
+        return render_qwen_native_matched_crop_success_environment_text
     if (
         tool_profile is NativeToolCapabilityProfile.TGVF_ONLY
         and matched_visual_observation

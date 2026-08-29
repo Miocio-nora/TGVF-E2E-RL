@@ -10033,6 +10033,34 @@ than inferred from a script name or prior conversation.
 
 ### PRL26 train@512 S32 NoTool/Crop parity rerun (2026-08-29)
 
+- **Post-tool continuation incident / result-status correction (blocking):**
+  read-only transcript audit found that every exact-matched Crop-only owner in
+  this lineage selected the generic native success renderer during training.
+  After an accepted `image_zoom_in_tool` action it supplied
+  `Zoomed-in visual observation:` plus a long Qwen reasoning reminder, whereas
+  the official-visible benchmark supplied only the crop image followed by the
+  pinned `USER_PROMPT_V2`. The initial prompt hash therefore did not prove the
+  continuation contract. PRL26-B S32 and earlier PRL25-B Crop checkpoints were
+  optimized under the former bytes; their existing benchmark numbers remain
+  immutable historical observations but are not train/eval-matched golden
+  evidence. They cannot be repaired by re-evaluating the same weights.
+- **Corrected contract:** matched Crop training now selects a dedicated
+  Qwen3-VL-Instruct renderer whose output is byte-identical and token-identical
+  to the Qwen chat-template oracle. The environment text SHA256 is
+  `f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a`
+  and the accepted local tokenizer emits 60 environment tokens. Generic legacy
+  Crop routes remain unchanged. Corrected full-model evaluation must use
+  `training_run`, precomputed image embeds, the strict native parser, canonical
+  JSON tool errors, `ONE_FINAL_ANSWER_TURN` cap behavior and the same formal
+  total-response/10,240-token per-turn budget as training. Static proof fails
+  closed on renderer/hash/token drift.
+- **Scope:** NoTool, Pure TGVF and Atomic Crop+TGVF use separate observation
+  renderers and are not directly invalidated by this Crop-only bug. Claims that
+  depend on Crop as an aligned baseline or attribute the PRL26-B regression to
+  crop pixels/tool use alone are suspended. A new code-pinned run ID, output
+  root, evaluation ID and RNG namespace are required for the corrected fresh-S0
+  Crop rerun; existing immutable PRL26-B artifacts must not be overwritten.
+
 - Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
   `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `RUNNING; S26 COMPLETE, S24 RETAINED`
   as of 2026-08-29 16:44 JST. These are

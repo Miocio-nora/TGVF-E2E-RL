@@ -43,6 +43,8 @@ from tgvf_rl.environment import (
     record_trajectory_source_visual,
 )
 from tgvf_rl.environment.native_appender import (
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256,
+    render_qwen_native_matched_crop_success_environment_text,
     render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_environment_text,
@@ -64,6 +66,7 @@ from tgvf_rl.framework.verl.policy_live_runtime import (
     _DisabledNoToolRuntime,
     _artifact_identity,
     _initial_vllm_inputs,
+    _rp66_response_budget_controls,
     _source_visual_positions,
 )
 from tgvf_rl.framework.verl.vllm_tool_runtime import (
@@ -97,6 +100,7 @@ from tgvf_rl.framework.vllm.registration import (
 from tgvf_rl.observations.store import ObservationStore, tensor_checksum
 from tgvf_rl.qwen import Qwen3VLAdapter
 from tgvf_rl.policy.run_config import (
+    POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
     POLICY_E2E_CROP_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMA,
     POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS,
@@ -106,6 +110,12 @@ from tgvf_rl.policy.run_config import (
     POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS,
     PolicyE2ESmokeRunConfig,
     load_policy_e2e_smoke_run_config,
+)
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    DEEPEYES_MAX_ACTIVE_PERCEPTION,
+    DEEPEYES_TOOL_NAME,
+    VISUAL_PROMPT_IDENTITY,
+    build_visual_messages,
 )
 from tgvf_rl.policy.no_tool_rl_protocol import (
     NO_TOOL_RL_PROMPT_IDENTITY,
@@ -211,6 +221,8 @@ POLICY_EVALUATION_BACKENDS = frozenset(
 
 
 def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
+    if run.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS:
+        return render_qwen_native_matched_crop_success_environment_text
     if run.schema_version in POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         return render_qwen_native_matched_crop_tgvf_success_environment_text
     return (
@@ -221,6 +233,24 @@ def _success_environment_text_renderer(run: PolicyE2ESmokeRunConfig):
             | POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
         )
         else render_qwen_native_success_environment_text
+    )
+
+
+def _training_run_response_budget_controls(
+    run: PolicyE2ESmokeRunConfig,
+):
+    """Reuse the formal training horizon for every matched visual evaluator."""
+
+    matched_visual_observation = run.schema_version in (
+        POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+        | POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
+        | POLICY_E2E_RP66_MATCHED_RUN_CONFIG_SCHEMAS
+        | POLICY_E2E_TGVF_TFREE_PIXEL512_PARITY_RUN_CONFIG_SCHEMAS
+    )
+    return _rp66_response_budget_controls(
+        launch_mode="formal" if matched_visual_observation else None,
+        direct_only=False,
+        matched_visual_observation=matched_visual_observation,
     )
 
 
@@ -256,6 +286,14 @@ def _matched_prompt_materializer_identity(
         prompt_sha256, builder, prompt_version = contracts[run.schema_version]
         if run.protocol.prompt_sha256 != prompt_sha256:
             raise ValueError("matched TGVF evaluation prompt identity differs")
+    elif run.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS:
+        if run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_ONLY:
+            raise ValueError("matched Crop run has a non-Crop tool profile")
+        builder = "build_visual_messages"
+        prompt_version = VISUAL_PROMPT_IDENTITY.version
+        prompt_sha256 = VISUAL_PROMPT_IDENTITY.bundle_sha256
+        if run.protocol.prompt_sha256 != prompt_sha256:
+            raise ValueError("matched Crop evaluation prompt identity differs")
     elif run.schema_version in POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         if run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_TGVF:
             raise ValueError("matched Crop+TGVF run has a non-combined tool profile")
@@ -317,7 +355,9 @@ def _render_training_run_visual_prompt(
         renderer.assert_generation_prefill(rendered, renderer.tokenizer)
         return rendered.text, rendered.token_ids
 
-    if run.schema_version in POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
+    if run.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS:
+        messages = build_visual_messages(question)
+    elif run.schema_version in POLICY_E2E_CROP_TGVF_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         messages = build_crop_tgvf_visual_messages(question)
     elif run.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS:
         messages = build_no_tool_visual_messages(question)
@@ -655,6 +695,89 @@ def validate_matched_atomic_crop_tgvf_processor(
         "synthetic_represented_pixel_area": represented_pixel_area,
         "synthetic_visual_token_count": visual_token_count,
         "success_environment_renderer": success_renderer.__name__,
+        "action_boundary": termination.canonical_payload,
+    }
+
+
+def validate_matched_crop_processor(
+    processor: object,
+    run: PolicyE2ESmokeRunConfig,
+    *,
+    image_max_pixels: int,
+) -> dict[str, object]:
+    """Prove exact Crop prompt/continuation plus the shared AgentLoop contract."""
+
+    if (
+        run.schema_version
+        not in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+        or run.protocol.tool_profile is not NativeToolCapabilityProfile.CROP_ONLY
+        or run.protocol.enabled_tool_names != (DEEPEYES_TOOL_NAME,)
+        or run.protocol.maximum_tool_calls != DEEPEYES_MAX_ACTIVE_PERCEPTION
+        or run.policy.image_max_pixels != image_max_pixels
+    ):
+        raise ValueError("matched Crop processor proof requires an exact Crop run")
+    materializer = _matched_prompt_materializer_identity(run)
+    if (
+        materializer is None
+        or materializer["message_builder"] != "build_visual_messages"
+        or materializer["prompt_bundle_sha256"]
+        != VISUAL_PROMPT_IDENTITY.bundle_sha256
+    ):
+        raise RuntimeError("matched Crop prompt materializer differs")
+    if (
+        _success_environment_text_renderer(run)
+        is not render_qwen_native_matched_crop_success_environment_text
+    ):
+        raise RuntimeError("matched Crop observation renderer differs")
+
+    # The historical native-pixel evaluator remains the independent Qwen chat
+    # template oracle for these bytes.  The corrected evaluator itself uses
+    # precomputed embeddings and the training AgentLoop.
+    from .policy_official_visible import validate_official_visible_processor
+
+    visible_proof = validate_official_visible_processor(
+        processor,
+        tokenizer_length=run.model.tokenizer_length,
+        image_max_pixels=image_max_pixels,
+    )
+    termination = _termination_contract(run)
+    response_budget_scope, single_response_max_tokens = (
+        _training_run_response_budget_controls(run)
+    )
+    protocol_identity = training_run_evaluation_protocol_identity(
+        run,
+        full_model=True,
+        precomputed_image_embeds=True,
+    )
+    if (
+        visible_proof.get("continuation_parity") is not True
+        or visible_proof.get("continuation_environment_text_sha256")
+        != QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+        or termination.required_request_stop_strings != ("</tool_call>",)
+        or termination.required_request_stop_token_ids != (151645,)
+        or termination.include_stop_str_in_output is not True
+        or termination.tool_call_terminal_suffixes != ("",)
+        or tuple(
+            outcome.canonical_payload for outcome in termination.tool_call_outcomes
+        )
+        != ({"finish_reason": "stop", "stop_reason": "</tool_call>"},)
+        or response_budget_scope.value
+        != protocol_identity["response_budget_scope"]
+        or single_response_max_tokens
+        != protocol_identity["single_response_max_tokens"]
+    ):
+        raise RuntimeError("matched Crop continuation/action contract differs")
+    return {
+        **visible_proof,
+        "schema_version": "tgvf.matched-crop-processor-static-proof.v1",
+        "run_config_schema": run.schema_version,
+        "message_builder": materializer["message_builder"],
+        "prompt_version": materializer["prompt_version"],
+        "prompt_bundle_sha256": materializer["prompt_bundle_sha256"],
+        "success_environment_renderer": (
+            render_qwen_native_matched_crop_success_environment_text.__name__
+        ),
+        "training_run_protocol": protocol_identity,
         "action_boundary": termination.canonical_payload,
     }
 
@@ -1311,13 +1434,10 @@ def _load_full_model_from_paths(
         run = load_policy_e2e_smoke_run_config(
             config.policy_config_path, allow_external_agent_loop_config=True
         )
-        if (
-            run.schema_version not in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
-            or run.protocol.tool_profile is not NativeToolCapabilityProfile.NO_TOOL
-            or run.protocol.enabled_tool_names
-        ):
+        if not _training_run_full_model_owner_supported(run):
             raise ValueError(
-                "training-run full-model evaluation is restricted to matched no-tool runs"
+                "training-run full-model evaluation is restricted to exact matched "
+                "no-tool or Crop runs"
             )
         if (
             run.run_id != snapshot.policy_version.run_id
@@ -1326,6 +1446,25 @@ def _load_full_model_from_paths(
             raise ValueError("full-model checkpoint owner run identity differs")
         snapshot = replace(snapshot, run=run)
     return snapshot
+
+
+def _training_run_full_model_owner_supported(
+    run: PolicyE2ESmokeRunConfig,
+) -> bool:
+    """Admit only the two audited full-model training-run owner families."""
+
+    matched_no_tool = (
+        run.schema_version in POLICY_E2E_NO_TOOL_TFREE_MATCHED_RUN_CONFIG_SCHEMAS
+        and run.protocol.tool_profile is NativeToolCapabilityProfile.NO_TOOL
+        and not run.protocol.enabled_tool_names
+    )
+    matched_crop = (
+        run.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+        and run.protocol.tool_profile is NativeToolCapabilityProfile.CROP_ONLY
+        and run.protocol.enabled_tool_names == (DEEPEYES_TOOL_NAME,)
+        and run.protocol.maximum_tool_calls == DEEPEYES_MAX_ACTIVE_PERCEPTION
+    )
+    return matched_no_tool or matched_crop
 
 
 def load_policy_evaluation_snapshot(
@@ -2483,16 +2622,16 @@ def _evaluation_protocol_identity(
             ),
         ):
             raise ValueError("training-run evaluation requires a bound policy snapshot")
-        protocol = snapshot.run.protocol
-        return {
-            "profile": TRAINING_RUN_EVALUATION_PROTOCOL,
-            "prompt_sha256": protocol.prompt_sha256,
-            "tool_schema_sha256": protocol.tool_schema_sha256,
-            "tool_profile": protocol.tool_profile.value,
-            "enabled_tool_names": list(protocol.enabled_tool_names),
-            "maximum_tool_calls": protocol.maximum_tool_calls,
-            "native_pixels": isinstance(snapshot, FullModelEvaluationSnapshot),
-        }
+        precomputed_image_embeds = (
+            isinstance(snapshot, FullModelEvaluationSnapshot)
+            and snapshot.run.schema_version
+            in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+        )
+        return training_run_evaluation_protocol_identity(
+            snapshot.run,
+            full_model=isinstance(snapshot, FullModelEvaluationSnapshot),
+            precomputed_image_embeds=precomputed_image_embeds,
+        )
     if config.evaluation_protocol != DEEPEYES_OFFICIAL_VISIBLE_EVALUATION_PROTOCOL:
         raise ValueError("unsupported policy evaluation protocol")
     from tgvf_rl.policy.deepeyes_official_protocol import (
@@ -2555,6 +2694,72 @@ def _evaluation_protocol_identity(
             _base_equivalent_step_zero_lora(snapshot)
             if isinstance(snapshot, PolicyEvaluationSnapshot)
             else _base_equivalent_step_zero_full_model(snapshot)
+        )
+    return identity
+
+
+def training_run_evaluation_protocol_identity(
+    run: PolicyE2ESmokeRunConfig,
+    *,
+    full_model: bool,
+    precomputed_image_embeds: bool,
+) -> dict[str, object]:
+    """Build the shared training-run identity without requiring a snapshot.
+
+    The post-tool renderer and AgentLoop controls are explicit for exact Crop,
+    so a changed continuation cannot hide behind an unchanged initial-prompt
+    hash.  Plan binders use this same helper before a snapshot is materialized.
+    """
+
+    if type(full_model) is not bool or type(precomputed_image_embeds) is not bool:
+        raise TypeError("training-run visual backend flags must be boolean")
+    matched_crop = (
+        run.schema_version in POLICY_E2E_CROP_TFREE_EXACT_MATCHED_RUN_CONFIG_SCHEMAS
+    )
+    if precomputed_image_embeds != (full_model and matched_crop):
+        raise ValueError(
+            "exact Crop full-model training-run requires precomputed image embeds"
+        )
+    protocol = run.protocol
+    identity: dict[str, object] = {
+        "profile": TRAINING_RUN_EVALUATION_PROTOCOL,
+        "prompt_sha256": protocol.prompt_sha256,
+        "tool_schema_sha256": protocol.tool_schema_sha256,
+        "tool_profile": protocol.tool_profile.value,
+        "enabled_tool_names": list(protocol.enabled_tool_names),
+        "maximum_tool_calls": protocol.maximum_tool_calls,
+        "native_pixels": full_model and not precomputed_image_embeds,
+    }
+    if matched_crop:
+        if (
+            protocol.tool_profile is not NativeToolCapabilityProfile.CROP_ONLY
+            or protocol.enabled_tool_names != (DEEPEYES_TOOL_NAME,)
+            or protocol.maximum_tool_calls != DEEPEYES_MAX_ACTIVE_PERCEPTION
+        ):
+            raise ValueError("exact Crop training-run protocol fields differ")
+        response_budget_scope, single_response_max_tokens = (
+            _training_run_response_budget_controls(run)
+        )
+        identity.update(
+            {
+                "assistant_dialect": native_assistant_dialect_for_model(
+                    run.model.model_name
+                ).value,
+                "precomputed_image_embeds": precomputed_image_embeds,
+                "tool_parser": "strict_native_tool_call_parser_v1",
+                "success_environment_renderer": (
+                    render_qwen_native_matched_crop_success_environment_text.__name__
+                ),
+                "success_environment_text_sha256": (
+                    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256
+                ),
+                "error_environment_renderer": (
+                    "qwen_native_standard_tool_error_canonical_json_v1"
+                ),
+                "cap_error_behavior": CapErrorBehavior.ONE_FINAL_ANSWER_TURN.value,
+                "response_budget_scope": response_budget_scope.value,
+                "single_response_max_tokens": single_response_max_tokens,
+            }
         )
     return identity
 
@@ -3265,6 +3470,10 @@ class PolicyCoreDevEvaluator:
             run.model.model_name
         )
         self.success_environment_text_renderer = _success_environment_text_renderer(run)
+        (
+            self.response_budget_scope,
+            self.single_response_max_tokens,
+        ) = _training_run_response_budget_controls(run)
         self.renderer = NativeProtocolRenderer(
             processor,
             expected_tokenizer_length=run.model.tokenizer_length,
@@ -3534,6 +3743,8 @@ class PolicyCoreDevEvaluator:
             enabled_tool_names=self.run.protocol.enabled_tool_names,
             cap_error_behavior=CapErrorBehavior.ONE_FINAL_ANSWER_TURN,
             assistant_dialect=self.assistant_dialect,
+            response_budget_scope=self.response_budget_scope,
+            single_response_max_tokens=self.single_response_max_tokens,
             forbidden_policy_token_ids=(
                 self.layout_builder.forbidden_policy_visual_token_ids
             ),

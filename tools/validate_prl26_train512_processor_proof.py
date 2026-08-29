@@ -147,6 +147,11 @@ def _validate_crop(
     sources = proof.get("synthetic_native_source_pixel_areas")
     represented = proof.get("synthetic_native_represented_pixel_areas")
     visual_tokens = proof.get("synthetic_native_visual_token_counts")
+    matched_training_run = (
+        proof.get("schema_version")
+        == "tgvf.matched-crop-processor-static-proof.v1"
+    )
+    training_run_protocol = proof.get("training_run_protocol")
     if (
         sources != [3_145_728, 3_145_728]
         or represented != [239_616, 239_616]
@@ -165,6 +170,26 @@ def _validate_crop(
         or tuple(runtime_sampling.stop_strings) != ("</tool_call>",)
         or runtime_sampling.include_stop_str_in_output is not True
         or tuple(runtime_sampling.stop_token_ids) != (151_645,)
+        or (
+            matched_training_run
+            and (
+                proof.get("continuation_parity") is not True
+                or proof.get("continuation_environment_token_count") != 60
+                or proof.get("continuation_environment_text_sha256")
+                != "f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a"
+                or proof.get("success_environment_renderer")
+                != "render_qwen_native_matched_crop_success_environment_text"
+                or not isinstance(training_run_protocol, dict)
+                or training_run_protocol.get("profile") != "training_run"
+                or training_run_protocol.get("native_pixels") is not False
+                or training_run_protocol.get("precomputed_image_embeds") is not True
+                or training_run_protocol.get("response_budget_scope")
+                != "total_response_tokens"
+                or training_run_protocol.get("single_response_max_tokens") != 10240
+                or training_run_protocol.get("cap_error_behavior")
+                != "one_final_answer_turn"
+            )
+        )
     ):
         raise RuntimeError("PRL-26-B Crop processor/action-boundary proof differs")
     return {
@@ -175,6 +200,10 @@ def _validate_crop(
         "include_stop_str_in_output": True,
         "represented_pixel_areas": represented,
         "visual_token_counts": visual_tokens,
+        "continuation_parity": proof.get("continuation_parity"),
+        "success_environment_text_sha256": proof.get(
+            "continuation_environment_text_sha256"
+        ),
     }
 
 
@@ -352,7 +381,11 @@ def validate(
         raise RuntimeError("PRL-26 Train@512 validation envelope differs")
     proof_key = {
         "no-tool": "no_tool_matched_processor_proof",
-        "crop": "official_visible_processor_proof",
+        "crop": (
+            "matched_crop_processor_proof"
+            if config.evaluation_protocol == "training_run"
+            else "official_visible_processor_proof"
+        ),
         "short": "matched_tgvf_processor_proof",
         "full": "matched_tgvf_processor_proof",
         "atomic": "matched_atomic_processor_proof",

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Protocol
 
 from tgvf_rl.observations.store import ObservationHandle
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    DEEPEYES_TOOL_NAME,
+    USER_PROMPT_V2,
+)
 from tgvf_rl.policy.crop_tgvf_deepeyes_matched_protocol import (
     CROP_TGVF_DEEPEYES_MATCHED_TOOL_NAME,
     CROP_TGVF_DEEPEYES_MATCHED_USER_PROMPT,
@@ -37,6 +42,26 @@ QWEN_NATIVE_RESPONSE_SUFFIX = (
 QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX = (
     "\n</tool_response><|im_end|>\n<|im_start|>assistant\n"
 )
+# Qwen3-VL Instruct renders the public DeepEyes Crop observation as a user
+# turn.  Unlike the generic native tool envelope, its chat-template bytes have
+# no newline after ``<tool_response>`` or before ``</tool_response>``.  Keep
+# these literals separate so a harmless-looking whitespace refactor cannot
+# silently reintroduce train/eval drift.
+QWEN_NATIVE_MATCHED_CROP_SUCCESS_PREFIX = (
+    "<|im_end|>\n<|im_start|>user\n<tool_response>"
+)
+QWEN_NATIVE_MATCHED_CROP_SUCCESS_SUFFIX = (
+    "</tool_response><|im_end|>\n<|im_start|>assistant\n"
+)
+QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT = (
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_PREFIX
+    + QWEN_NATIVE_IMAGE_PLACEHOLDER
+    + USER_PROMPT_V2
+    + QWEN_NATIVE_MATCHED_CROP_SUCCESS_SUFFIX
+)
+QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT_SHA256 = hashlib.sha256(
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT.encode("utf-8")
+).hexdigest()
 
 
 class NativeToolTurnRegistrar(Protocol):
@@ -280,6 +305,35 @@ def render_qwen_native_success_environment_text(
         )
         + qwen_native_response_suffix(assistant_dialect)
     )
+
+
+def render_qwen_native_matched_crop_success_environment_text(
+    parsed_call: NativeToolCall,
+    *,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_INSTRUCT
+    ),
+) -> str:
+    """Render the exact DeepEyes Crop continuation used by evaluation.
+
+    The accepted bbox and optional label are policy-owned action arguments;
+    the environment returns only the crop image plus the pinned user suffix.
+    This byte string is deliberately identical to rerendering
+    ``official_visible_observation_message`` with Qwen3-VL Instruct.
+    """
+
+    if not isinstance(parsed_call, ParsedImageZoomInCall):
+        raise TypeError("matched Crop response requires a parsed Crop call")
+    if parsed_call.name != DEEPEYES_TOOL_NAME:
+        raise ValueError("matched Crop response received another tool")
+    if assistant_dialect is not NativeAssistantDialect.QWEN3_VL_INSTRUCT:
+        raise ValueError("matched Crop response requires Qwen3-VL Instruct")
+    if (
+        "<answer>" in QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT
+        or "</answer>" in QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT
+    ):
+        raise RuntimeError("matched Crop observation introduced an answer wrapper")
+    return QWEN_NATIVE_MATCHED_CROP_SUCCESS_TEXT
 
 
 def render_qwen_native_matched_tgvf_success_environment_text(

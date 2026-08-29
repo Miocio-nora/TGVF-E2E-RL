@@ -23,6 +23,7 @@ from tgvf_rl.data.policy_teacher_quarter_mix import (
 from tgvf_rl.environment.focus_tool import SourceVisualTensorBundle
 from tgvf_rl.environment.focus_tool import PrecomputedTGVFObservationPayload
 from tgvf_rl.environment.native_appender import (
+    render_qwen_native_matched_crop_success_environment_text,
     render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_environment_text,
@@ -486,6 +487,11 @@ def test_trainable_rp66_visual_rows_select_matched_observation_renderer(
         (
             NativeToolCapabilityProfile.CROP_ONLY,
             True,
+            render_qwen_native_matched_crop_success_environment_text,
+        ),
+        (
+            NativeToolCapabilityProfile.CROP_ONLY,
+            False,
             render_qwen_native_success_environment_text,
         ),
         (

@@ -11,12 +11,22 @@ from tgvf_rl.environment.agent_loop import SampledPolicyTurn
 from tgvf_rl.environment.native_appender import (
     QWEN_NATIVE_IMAGE_PLACEHOLDER,
     QWEN_NATIVE_INSTRUCT_RESPONSE_SUFFIX,
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_PREFIX,
+    QWEN_NATIVE_MATCHED_CROP_SUCCESS_SUFFIX,
     QWEN_NATIVE_RESPONSE_SUFFIX,
     QWEN_NATIVE_SUCCESS_RESPONSE_PREFIX,
     QwenNativeToolObservationAppender,
+    render_qwen_native_matched_crop_success_environment_text,
     render_qwen_native_matched_crop_tgvf_success_environment_text,
     render_qwen_native_matched_tgvf_success_environment_text,
     render_qwen_native_success_payload,
+)
+from tgvf_rl.evaluation.policy_official_visible import (
+    official_visible_observation_message,
+)
+from tgvf_rl.policy.deepeyes_official_protocol import (
+    USER_PROMPT_V2,
+    build_visual_messages,
 )
 from tgvf_rl.observations.store import ObservationHandle
 from tgvf_rl.protocol import (
@@ -99,6 +109,9 @@ def _sampled(
     token_ids: tuple[int, ...],
     *,
     token_byte_spans: tuple[TokenByteSpan, ...] | None = None,
+    assistant_dialect: NativeAssistantDialect = (
+        NativeAssistantDialect.QWEN3_VL_THINKING
+    ),
 ) -> SampledPolicyTurn:
     policy = PolicyVersion("native-appender-test", 0, "1" * 64)
     sampling = SamplingIdentity(
@@ -129,6 +142,7 @@ def _sampled(
         stop_reason="tool_call_stop",
         backend_request_sha256="3" * 64,
         backend_response_sha256="4" * 64,
+        assistant_dialect=assistant_dialect,
     )
 
 
@@ -262,6 +276,63 @@ def test_injected_matched_tgvf_response_is_latent_only_without_target_echo() -> 
     assert "Focused visual observation for target" not in suffix_text
     assert "<answer>" not in suffix_text
     assert suffix_text.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
+
+
+def test_injected_matched_crop_response_exactly_matches_official_visible_bytes() -> None:
+    tokenizer = _CharacterTokenizer()
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=tokenizer,
+        registrar=_Registrar(),
+        success_environment_text_renderer=(
+            render_qwen_native_matched_crop_success_environment_text
+        ),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    secret_label = "UNIQUE_CROP_LABEL_MUST_NOT_BE_ECHOED"
+    sampled, parsed = _ascii_sampled_call(
+        "image_zoom_in_tool",
+        {"bbox_2d": [111, 222, 333, 444], "label": secret_label},
+    )
+
+    _updated, suffix = appender.append(
+        (7, 8),
+        sampled,
+        ObservationHandle("obs-crop-matched", "5" * 64),
+        call_index=0,
+        parsed_call=parsed,
+    )
+
+    suffix_text = "".join(map(chr, suffix))
+    assert suffix_text == (
+        QWEN_NATIVE_MATCHED_CROP_SUCCESS_PREFIX
+        + QWEN_NATIVE_IMAGE_PLACEHOLDER
+        + USER_PROMPT_V2
+        + QWEN_NATIVE_MATCHED_CROP_SUCCESS_SUFFIX
+    )
+    assert "<tool_response>\n" not in suffix_text
+    assert "\n</tool_response>" not in suffix_text
+    assert secret_label not in suffix_text
+    assert "111" not in suffix_text
+    assert "Zoomed-in visual observation" not in suffix_text
+    assert "<answer>" not in suffix_text
+    assert suffix_text.count(QWEN_NATIVE_IMAGE_PLACEHOLDER) == 1
+
+
+def test_matched_crop_response_rejects_wrong_call_type_or_dialect() -> None:
+    _crop_sampled, crop = _ascii_sampled_call(
+        "image_zoom_in_tool", {"bbox_2d": [1, 2, 30, 40]}
+    )
+    _tgvf_sampled, tgvf = _ascii_sampled_call(
+        "tgvf_focus_tool", {"target": "the gauge"}
+    )
+
+    with pytest.raises(TypeError, match="parsed Crop call"):
+        render_qwen_native_matched_crop_success_environment_text(tgvf)
+    with pytest.raises(ValueError, match="requires Qwen3-VL Instruct"):
+        render_qwen_native_matched_crop_success_environment_text(
+            crop,
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
+        )
 
 
 def test_injected_matched_crop_tgvf_response_is_d_only_without_argument_echo() -> None:
@@ -463,6 +534,84 @@ def test_qwen3_appended_tokens_equal_native_chat_template() -> None:
 
     assert updated == next_prompt.token_ids
     assert updated.count(processor.tokenizer.convert_tokens_to_ids("<think>")) == 2
+
+
+def test_qwen3_instruct_matched_crop_tokens_equal_official_visible_rerender() -> None:
+    transformers = pytest.importorskip("transformers")
+    model_path = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+    processor = transformers.AutoProcessor.from_pretrained(
+        model_path, local_files_only=True, trust_remote_code=False
+    )
+    messages = list(build_visual_messages("STATIC_PROTOCOL_PROBE", image="<image>"))
+    initial_text = processor.apply_chat_template(
+        messages,
+        tools=[],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    initial_ids = tuple(
+        processor.tokenizer.encode(initial_text, add_special_tokens=False)
+    )
+    sampled_text = (
+        '<think>probe</think><tool_call>{"name":"image_zoom_in_tool",'
+        '"arguments":{"bbox_2d":[0,0,64,64]}}</tool_call>'
+    )
+    sampled_ids = tuple(
+        processor.tokenizer.encode(sampled_text, add_special_tokens=False)
+    )
+    sampled = _sampled(
+        sampled_text,
+        sampled_ids,
+        token_byte_spans=_fast_token_spans(
+            processor.tokenizer, sampled_text, sampled_ids
+        ),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+    parsed = StrictToolCallParser().parse(sampled.parser_turn())
+    appender = QwenNativeToolObservationAppender(
+        tokenizer=processor.tokenizer,
+        registrar=_Registrar(),
+        success_environment_text_renderer=(
+            render_qwen_native_matched_crop_success_environment_text
+        ),
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_INSTRUCT,
+    )
+
+    updated, environment_ids = appender.append(
+        initial_ids,
+        sampled,
+        ObservationHandle("obs-real-crop", sha256(b"crop").hexdigest()),
+        call_index=0,
+        parsed_call=parsed,
+    )
+    messages.extend(
+        [
+            {"role": "assistant", "content": sampled_text},
+            official_visible_observation_message(image="<image>"),
+        ]
+    )
+    rerendered_text = processor.apply_chat_template(
+        messages,
+        tools=[],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    rerendered_ids = tuple(
+        processor.tokenizer.encode(rerendered_text, add_special_tokens=False)
+    )
+    environment_text = processor.tokenizer.decode(
+        environment_ids,
+        skip_special_tokens=False,
+        clean_up_tokenization_spaces=False,
+        spaces_between_special_tokens=False,
+    )
+
+    assert updated == rerendered_ids
+    assert initial_text + sampled_text + environment_text == rerendered_text
+    assert len(environment_ids) == 60
+    assert sha256(environment_text.encode("utf-8")).hexdigest() == (
+        "f745fa6cfcc3ba9eb27125a49581fd823fb5930b7b0a51b28e51982999fa2d0a"
+    )
 
 
 def _fast_token_spans(tokenizer, text: str, token_ids: tuple[int, ...]):
