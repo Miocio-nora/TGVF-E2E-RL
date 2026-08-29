@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-30（Asia/Tokyo；60-token PRL27-B 已按用户指令停在完整 S4，转测旧训练原生 86-token 协议）
+更新时间：2026-08-30 03:20（Asia/Tokyo；旧 PRL26-B S32 的训练原生 86-token Eval@512 已正式启动）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -77,12 +77,23 @@
 > 训练和其 S32 eval waiter 均以用户 signal/130 结束，不是 infrastructure failure；8 张 GPU、
 > Ray 与 vLLM 已全部释放并通过正式资源审计。PRL27-B 现仅作为 60-token 训练协议的早期负面
 > ablation，不再拥有 corrected golden 的优先级。
+>
+> **旧 S32 exact-eval 正式启动（03:20 JST）**：专用 evaluator 已在 clean HEAD
+> `dc4763e2eee1c1aa72003cc44abb5dac3e51d4c9` 通过 48 项相关回归、ruff、shell syntax、
+> sealed-S32 binder 与真实 Qwen tokenizer gate 后启动，tmux 为
+> `prl26-b-generic86-s32-eval512`。新身份是
+> `PRL26-B-S32-OWNER-GENERIC86-TRAINING-RUN-COREDEV2511-PIXEL512-V1`；它只读复用旧 S32
+> 已合并 HF tree，不重新训练、不重新 merge，也不覆盖旧 60-token root。成功 observation
+> 固定为 `render_qwen_native_success_environment_text`，真实 tokenizer 为 86 tokens，文本
+> SHA256 为 `72a2caecb47a2b775a4497e5846c244061d9455fbb4b9690d3501cbc2521e187`；训练 launch
+> HEAD 绑定为 `40f1728a69e0a3f868117776c80c45ad6de70b8c`。当前依次执行三次资源释放探针、
+> full-model reuse/processor proof、GPU 0--3 inference、七项评分及工具使用/长度汇总；结果尚未产生。
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
 S32 训练内部有效，但此前 60-token 评测与其训练原生 86-token continuation 不一致。PRL27-A 是无更新的 invalid pre-S1
 infrastructure attempt；完整 replay 修复与真实 processor 双 Crop/final replay 硬门均已通过，
-PRL27-B 已按用户指令停在完整 S4，其 60-token S32 waiter 同步取消；当前最高优先级是 PRL26-B
-S32 的 exact 86-token training-matched Eval@512。Target-guide-v2 仍未启动。运行中的
+PRL27-B 已按用户指令停在完整 S4，其 60-token S32 waiter 同步取消；PRL26-B S32 的 exact
+86-token training-matched Eval@512 已于 03:20 正式启动。Target-guide-v2 仍未启动。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
@@ -95,7 +106,7 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | Arm | 当前状态 | 固定训练合同 | 后续评测 |
 |---|---|---|---|
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
-| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact eval 准备中** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | 复用既有 S32，按训练原生 renderer 做七项 Eval@512；这是当前第一优先级 |
+| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact Eval@512 运行中** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | clean HEAD `dc4763e2`；只读复用既有 HF tree；GPU 0--3；七项结果待回收 |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
 | 60-token protocol ablation（PRL27-B） | **用户主动停在完整 S4** | fresh Original S0；@512；BS16×n16；Teacher25；60-token layout/appender 同字节 | 四步 answer/format 较差、工具覆盖略高；S5 未落盘，S32 waiter 已取消 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |

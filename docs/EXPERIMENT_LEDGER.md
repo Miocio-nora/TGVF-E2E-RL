@@ -10476,3 +10476,32 @@ than inferred from a script name or prior conversation.
   `...BOUNDARYFIX-V1` root used the 60-token official-visible continuation and
   remains immutable cross-protocol evidence; it cannot be renamed or reused as
   the 86-token result.
+
+## PRL26-B owner-native generic86 S32 Eval@512 launch (2026-08-30 03:20 JST)
+
+- User-directed execution order was applied: PRL27-B 60-token retraining remains
+  stopped at accepted S4, and the historical PRL26-B S32 checkpoint is evaluated
+  first without any additional optimizer update.
+- The dedicated evaluator commit is
+  `dc4763e2eee1c1aa72003cc44abb5dac3e51d4c9`; 48 focused and affected tests,
+  Ruff, Bash syntax and `git diff --check` passed before admission. The sealed
+  S32 binder also passed against the recorded launch provenance.
+- Evaluation identity is
+  `PRL26-B-S32-OWNER-GENERIC86-TRAINING-RUN-COREDEV2511-PIXEL512-V1`, with an
+  independent seed namespace
+  `coredev2511/prl26-b/owner-generic86/training-run/train512-eval512/s32/temp1/seed42/v1`.
+  The old 60-token `...BOUNDARYFIX-V1` tree remains immutable and disjoint.
+- The evaluator is owner-locked to PRL26-B config commit `e756546b...` and its
+  actual clean training launch HEAD `40f1728a...`. Successful Crop observations
+  use `render_qwen_native_success_environment_text`; the real Qwen tokenizer
+  proves 86 tokens and text SHA256
+  `72a2caecb47a2b775a4497e5846c244061d9455fbb4b9690d3501cbc2521e187`.
+  The corrected `</tool_call>` boundary, Crop-only schema, six-call cap,
+  total-response budget and Eval@512 (`262144` pixels) remain fixed.
+- The existing 16 GB S32 HF tree is reused read-only; no retraining and no FSDP
+  merge are performed. Tmux session `prl26-b-generic86-s32-eval512` was queued
+  at 03:20 JST from the clean admitted HEAD. Its fail-closed sequence is three
+  consecutive GPU/Ray release probes, materialization-reuse proof, real-processor
+  proof, four-GPU inference on devices 0--3, seven-subset scoring, then Macro*,
+  overall/per-subset tool-use and sampled-token length publication. No score is
+  admitted until that sequence completes.
