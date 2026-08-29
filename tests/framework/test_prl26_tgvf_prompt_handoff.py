@@ -48,6 +48,8 @@ def test_supervisor_orders_prerequisite_canaries_formal_arms_and_eval() -> None:
     assert 'mkdir -p "$full_c0_root"' not in source
     assert 'mkdir -p "$short_root"' not in source
     assert 'mkdir -p "$full_root"' not in source
+    assert 'while [[ ! -f "$prerequisite_complete" ]]' in source
+    assert 'while [[ ! -s "$prerequisite_complete" ]]' not in source
 
 
 def test_current_tgvf_prompt_config_matrix_is_exact(

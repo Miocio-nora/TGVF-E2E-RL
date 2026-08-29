@@ -175,7 +175,7 @@ if [[ "$prerequisite_command" != *"supervise_prl26_train512_s32_coredev2511.sh"*
   echo "PRL-26 A/B evaluation pane identity differs" >&2
   exit 1
 fi
-while [[ ! -s "$prerequisite_complete" ]]; do
+while [[ ! -f "$prerequisite_complete" ]]; do
   if [[ -s "$prerequisite_failed" ]]; then
     echo "PRL-26 A/B evaluation failed; C/D remains untouched" >&2
     exit 1
