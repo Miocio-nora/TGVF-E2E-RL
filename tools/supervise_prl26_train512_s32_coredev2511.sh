@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 main_root=/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl
 python_bin="$main_root/.venv312/bin/python"
+resource_validator="$repo_root/tools/validate_prl26_train512_training_handoff.py"
 control_root="$main_root/artifacts/evaluation/PRL26-TRAIN512-S32-PIXEL512-COREDEV2511-V1"
 runtime_root="$control_root/runtime"
 log_root="$control_root/logs"
@@ -23,6 +24,27 @@ crop_plan="$crop_eval_root/runtime/bound-crop-plan.json"
 crop_config="$crop_eval_root/step32/config.json"
 crop_validation="$crop_eval_root/logs/prl26-pixel512-static-validation.json"
 crop_proof="$crop_eval_root/step32/runtime/pixel512-processor-proof.json"
+
+poll_seconds=${PRL26_AB_POLL_SECONDS:-30}
+release_stable_polls=${PRL26_AB_RELEASE_STABLE_POLLS:-2}
+release_maximum_polls=${PRL26_AB_RELEASE_MAXIMUM_POLLS:-240}
+gpu_memory_threshold_mib=${PRL26_AB_GPU_IDLE_MEMORY_THRESHOLD_MIB:-32}
+
+if [[ ! -f "$resource_validator" ]]; then
+  echo "PRL-26 A/B resource validator is absent: $resource_validator" >&2
+  exit 1
+fi
+if [[ ! "$poll_seconds" =~ ^[1-9][0-9]*$ \
+      || ! "$release_stable_polls" =~ ^[1-9][0-9]*$ \
+      || ! "$release_maximum_polls" =~ ^[1-9][0-9]*$ \
+      || ! "$gpu_memory_threshold_mib" =~ ^[0-9]+$ ]]; then
+  echo "PRL-26 A/B resource polling setting is malformed" >&2
+  exit 1
+fi
+if (( release_stable_polls < 2 )); then
+  echo "PRL-26 A/B requires at least two consecutive clean resource probes" >&2
+  exit 1
+fi
 
 # Keep both canonical training roots absent until their trainers have closed
 # S32.  Evaluation control belongs under the separate evaluation namespace.
@@ -47,6 +69,32 @@ active_pids=()
 
 timestamp() {
   date '+%F %T %Z'
+}
+
+wait_for_resources() {
+  local label=$1
+  local quiet=0
+  local total=0
+  local probe
+  phase="waiting_for_${label}_resource_release"
+  while (( quiet < release_stable_polls )); do
+    total=$((total + 1))
+    probe="$runtime_root/${label}-resource-probe-${total}.json"
+    if "$python_bin" "$resource_validator" resources-free \
+        --memory-threshold-mib "$gpu_memory_threshold_mib" >"$probe"; then
+      quiet=$((quiet + 1))
+    else
+      quiet=0
+    fi
+    if (( quiet < release_stable_polls )); then
+      if (( total >= release_maximum_polls )); then
+        echo "GPUs or Ray did not become clean after $label" >&2
+        return 1
+      fi
+      sleep "$poll_seconds"
+    fi
+  done
+  cp "$probe" "$runtime_root/${label}-resources-released.json"
 }
 
 stop_process_group() {
@@ -84,8 +132,13 @@ trap 'phase=signal; exit 130' INT TERM
 
 rm -f "$runtime_root/failed" "$runtime_root/evaluation-complete"
 while [[ ! -s "$notool_completion" || ! -s "$crop_completion" ]]; do
-  sleep 30
+  sleep "$poll_seconds"
 done
+
+# The permanent S32 receipt is published before the trainer has necessarily
+# torn down every vLLM/Ray worker.  Require two consecutive all-GPU and Ray
+# clean observations before either arm is allowed to materialize or infer.
+wait_for_resources training
 
 phase=binding_completed_s32_checkpoints
 # Only a closed Crop S32 receipt authorizes materializing its evaluation tree.

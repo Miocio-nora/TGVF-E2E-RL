@@ -10034,8 +10034,8 @@ than inferred from a script name or prior conversation.
 ### PRL26 train@512 S32 NoTool/Crop parity rerun (2026-08-29)
 
 - Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
-  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `RUNNING; S16 RETAINED` as of
-  2026-08-29 14:26 JST. These are
+  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `RUNNING; S24 RETAINED` as of
+  2026-08-29 16:22 JST. These are
   fresh-S0 train@512 parity reruns, not literal one-variable continuations of
   the historical NoTool S32 and Crop S80 lineages.
 - Implementation commit
@@ -10062,12 +10062,23 @@ than inferred from a script name or prior conversation.
   gate; no training was started while preparing these records.
 - Execution evidence: NoTool has a committed Step-32 tracker and permanent
   receipt, with all 8,192 trajectories recording zero tool calls and zero
-  successful tool observations. Crop has a committed Step-16 tracker and
-  permanent receipt; its Step-16 slice records answer reward `0.6328125`,
-  tool-attempt rate `0.86328125`, 289 successful observations and format-error
-  rate `0.015625`, without a new tool parse/execution error. These are live
+  successful tool observations. Crop has a committed Step-24 tracker and
+  permanent receipt; its Step-24 slice records answer reward `0.51953125`,
+  tool-attempt rate `0.8046875`, 222/222 successful observations and format-error
+  rate `0.00390625`, without a typed tool error. These are live
   training diagnostics, not CoreDev results. The matched A/B CoreDev evaluator
   is already armed and must remain waiting for the Crop S32 receipt.
+- Handoff audit found that the initial A/B evaluator treated the nonempty S32
+  receipts as sufficient resource admission even though a permanent receipt can
+  precede complete vLLM/Ray teardown. The completed NoTool run exhibited a
+  17-second receipt-to-trainer-exit interval. This ledger-bearing recovery adds
+  a fail-closed gate after both receipts and before checkpoint binding or GPU
+  materialization: all GPUs 0--7 must have no compute PID, every GPU must be at
+  or below 32 MiB, and no Ray process may remain for at least two consecutive
+  probes. Probe receipts are retained under the A/B evaluation runtime root;
+  malformed polling parameters and a stability count below two fail before the
+  wait. This is orchestration-only and does not alter either policy, prompt,
+  data, sampling, reward, checkpoint or evaluation contract.
 
 ### PRL26-C/D train@512 TGVF Target-prompt parity rerun (2026-08-29)
 

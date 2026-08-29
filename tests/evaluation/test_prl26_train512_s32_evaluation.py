@@ -59,6 +59,22 @@ def test_evaluation_supervisor_does_not_precreate_crop_training_root() -> None:
     assert supervisor.index(wait_boundary) < supervisor.index(materialize)
 
 
+def test_evaluation_supervisor_waits_for_stable_training_resource_release() -> None:
+    supervisor = (
+        TOOLS / "supervise_prl26_train512_s32_coredev2511.sh"
+    ).read_text(encoding="utf-8")
+
+    receipt_wait = 'while [[ ! -s "$notool_completion" || ! -s "$crop_completion" ]]'
+    release_gate = "wait_for_resources training"
+    materialize = 'mkdir -p "$crop_eval_root/logs"'
+    assert 'release_stable_polls=${PRL26_AB_RELEASE_STABLE_POLLS:-2}' in supervisor
+    assert 'if (( release_stable_polls < 2 )); then' in supervisor
+    assert '"$resource_validator" resources-free' in supervisor
+    assert 'cp "$probe" "$runtime_root/${label}-resources-released.json"' in supervisor
+    assert supervisor.index(receipt_wait) < supervisor.index(release_gate)
+    assert supervisor.index(release_gate) < supervisor.index(materialize)
+
+
 @pytest.fixture(scope="module")
 def binder() -> ModuleType:
     return _load_module(
