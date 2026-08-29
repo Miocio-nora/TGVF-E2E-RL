@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-30 03:38（Asia/Tokyo；旧 PRL26-B S32 的训练原生 86-token Eval@512 recovery2 已启动）
+更新时间：2026-08-30 03:43（Asia/Tokyo；旧 PRL26-B S32 的训练原生 86-token Eval@512 recovery2 已成功加载四个推理 rank）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -111,6 +111,16 @@
 > 86-token generic continuation、@512 像素合同与权重均不变；不重训、不重新 merge，初次
 > failed control 与 recovery1 safety-stop control 都保留且不覆盖。03:38:46 状态快照为
 > `waiting_for_all_gpu_and_ray_release`，尚无评测 rows 或分数。
+>
+> **插件修复的真实 GPU 闭环（03:42--03:43 JST）**：四个 benchmark rank 于
+> 03:42:47 同时存活，四个 EngineCore 于 03:42:59--03:43:00 启动并全部解析为
+> `TGVFQwen3VLForConditionalGeneration`。03:43:18--03:43:21 四个 worker 均成功注入
+> `TGVFVLLMWorkerExtension`，03:43:22--03:43:25 四个 worker 均确认
+> `AttentionBackendEnum.TRITON_ATTN`。03:43:33--03:43:42，GPU 0--3 各自完成同一 S32
+> full-model 加载，每个模型占用 `17.3668 GiB`；03:43:48 资源快照为 GPU 0--3
+> 各 `24,960 MiB`，GPU 4--7 仍空闲。这已越过初次 attempt 的 unsupported-architecture
+> 失败点，但当前仍只能记为 inference running：尚未核验任何正式 row，也没有
+> benchmark 结果或分数。
 
 状态：**实验进行中。No-Tool Train@512 S32 与 Pure TGVF Short S32 已完成；旧 PRL26-B Crop
 S32 训练内部有效，但此前 60-token 评测与其训练原生 86-token continuation 不一致。PRL27-A 是无更新的 invalid pre-S1
@@ -118,7 +128,8 @@ infrastructure attempt；完整 replay 修复与真实 processor 双 Crop/final 
 PRL27-B 已按用户指令停在完整 S4，其 60-token S32 waiter 同步取消；PRL26-B S32 的 exact
 86-token training-matched Eval@512 初次 attempt 在 GPU 前因 vLLM plugin 未注册而 fail-closed，无结果；
 plugin 修复和 CPU canary 通过后，recovery2 已于 03:38:39 从独立 control 启动。Target-guide-v2
-仍未启动。运行中的
+仍未启动。Recovery2 的四个 worker 已成功注入扩展、选择 TRITON_ATTN 并加载同一
+S32 full-model，已越过旧 unsupported-architecture 失败；尚无 rows/结果。运行中的
 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
@@ -131,7 +142,7 @@ reward 与调用率只作诊断，不提前当作 benchmark 结论。**
 | Arm | 当前状态 | 固定训练合同 | 后续评测 |
 |---|---|---|---|
 | No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
-| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact Eval@512 recovery2 运行中** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | clean HEAD `1dc0d1e`；只读复用既有 HF tree；保留冻结 proof 后直达 GPU 0--3 infer；七项结果待回收 |
+| Legacy-protocol Crop（PRL26-B） | **S32 已完成；86-token exact Eval@512 recovery2 inference running** | 训练内部始终使用 generic 86-token continuation；action boundary 正确 | clean HEAD `1dc0d1e`；四 rank 已注入 worker extension/TRITON_ATTN 并成功加载 S32 full-model；尚无 rows，七项结果待回收 |
 | Corrected Crop（PRL27-A） | **invalid pre-S1；无参数更新** | S0→S0 replay binding fail-closed；失败现场永久保留 | 不恢复、不评测、不报告分数 |
 | 60-token protocol ablation（PRL27-B） | **用户主动停在完整 S4** | fresh Original S0；@512；BS16×n16；Teacher25；60-token layout/appender 同字节 | 四步 answer/format 较差、工具覆盖略高；S5 未落盘，S32 waiter 已取消 |
 | TGVF Short | **S32 已完成** | frozen RP67；matched Short prompt；最多 6 次 TGVF | S32 receipt 已封口；独立评测按既定合同处理 |

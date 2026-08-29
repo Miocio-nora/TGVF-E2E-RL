@@ -10537,3 +10537,15 @@ than inferred from a script name or prior conversation.
   and both earlier controls remain immutable. The `03:38:46 JST` snapshot is
   `waiting_for_all_gpu_and_ray_release`; no evaluation row or score is yet
   admitted.
+- **First real GPU closure past the original failure:** all four benchmark rank
+  processes were live at `03:42:47 JST`; four EngineCore processes then
+  resolved `TGVFQwen3VLForConditionalGeneration` at `03:42:59--03:43:00`.
+  All four workers injected `TGVFVLLMWorkerExtension` at
+  `03:43:18--03:43:21` and selected `AttentionBackendEnum.TRITON_ATTN` at
+  `03:43:22--03:43:25`. Between `03:43:33` and `03:43:42`, devices 0--3 each
+  loaded the same sealed S32 full-model, with the vLLM loader reporting
+  `17.3668 GiB` per model. The `03:43:48` resource snapshot recorded
+  `24,960 MiB` on each of GPUs 0--3 while GPUs 4--7 remained idle. Recovery2
+  has therefore passed the initial attempt's unsupported-architecture failure
+  boundary and remains in four-GPU inference. This is runtime-health evidence
+  only: no formal inference row or benchmark result is yet admitted.
