@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29 16:35 JST（Asia/Tokyo）
+更新时间：2026-08-29 17:04 JST（Asia/Tokyo）
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
 > 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
@@ -1284,12 +1284,14 @@ Target-guide-v2。Atomic fresh-S0@512 保持为独立 arm，不与当前 TGVF pr
 | Crop boundary | 生成在 `</tool_call>` 处硬停并 include-stop；mixed answer-over-action fail-closed |
 
 No-Tool 已完成 S32，permanent checkpoint receipt 的 `optimizer_step=32`，pair/project/run 三项
-identity 均已落盘。Crop 已完成 S25；最近的 S24 永久 receipt 的 run/pair/project SHA256 分别为
+identity 均已落盘。Crop 已完成 S27，S28 正在运行；最近的 S24 永久 receipt 的 run/pair/project SHA256 分别为
 `b064bf21674b6dea2d932c67e40f63e3aab7fad306245dd0bd4d92ad356d5d92`、
 `f48c6e267df64c98e82898a9d6b551724fd1a86093d0894d5d8704e5c89607fb` 与
-`c739c3437bc29c7a6a4d20d9bd0fa970d5fa13b1a89ee2689c8c6006b5d3b8f6`。S24 为 222/222 次调用
-成功且 typed error 为空。S25 的 258 次尝试中 256 次成功，另有 2 次 execution failure。S23 的
-4 次 incomplete 与 1 次 invalid JSON 被保留为稀疏解析失败，不据此宣称 action-boundary 回归。
+`c739c3437bc29c7a6a4d20d9bd0fa970d5fa13b1a89ee2689c8c6006b5d3b8f6`。S24、S26、S27 分别为
+222/222、267/267、220/220 次调用成功且 typed error 为空；S27 reward 为 `0.68359375`、
+format error rate 为 `1.171875%`、工具尝试题率为 `81.25%`。截至 S27，累计 8,441 次尝试中
+8,329 次得到成功 observation。S25 的 258 次尝试中 256 次成功，另有 2 次 execution failure；
+S23 的 4 次 incomplete 与 1 次 invalid JSON 被保留为稀疏解析失败，不据此宣称 action-boundary 回归。
 这些数值只证明训练链路健康，不作为 CoreDev-2511 benchmark 结果，也不用于提前选择 checkpoint。
 
 TGVF 的两个训练 arm 只允许一个 prompt 变量。Short 保留既有 user suffix、
@@ -1324,7 +1326,14 @@ PRL26 的合同、自动接力与 164 项综合测试首先固定在
 receipt-to-resource-release race：No-Tool 的 receipt→trainer-exit 实测间隔为 17 秒，而旧 A/B
 supervisor 没有 GPU/Ray admission gate。`bd31ac5e1ce299d44efbead30f553781b8f274fc` 增加至少两次
 连续 all-GPU/Ray clean 探针，并通过 35 项直接 handoff 回归。等待中的 A/B 与 C/D 被受控停止后
-分别在 pane `%179/%180` 重挂；Crop 与 Atomic 均未中断。
+分别重挂；Crop 与 Atomic 均未中断。随后又发现 C/D 要读取 A/B 的最终 `pane_dead_status=0`，而
+A/B launcher 原先未保留退出 pane。`9e4d59f8b97a0b8d495d0a6bd761fe9f55852509` 将
+`remain-on-exit=on` 固化到 launcher，并使 C/D 在 pane 消失、退出状态不可读或非零时 fail closed；
+同时把 A/B result、canonical handoff identity、精确 `2,511/2,240/271/7` 覆盖、两条正式 summary
+及 frozen CoreDev headline 重算全部纳入 C/D admission。46 项组合回归和独立只读审查均未发现
+P0/P1。live A/B pane `%179` 在不中断 Crop 的情况下启用 retention；C/D 等待器以状态 130 受控
+退出旧版本后在 pane `%181` 重启，static contract audit 已在 clean `9e4d59f` 上 accepted，且未产生
+任何 C/D 训练输出。
 当前执行顺序严格为
 `Crop S32 → No-Tool/Crop aligned Eval@512 → TGVF Short C0/S32 → Target-guide-v2 C0/S32 → paired
 Eval@512 → Atomic C0/S32 → Atomic Eval@512`；训练与评测不会并发争用同一组 GPU。任何中间
@@ -1416,8 +1425,8 @@ Atomic 进入正文核心方法必须同时满足：
 11. [部分完成] target-only 调用行为对照已回填；正式 audit 仍待双人盲标、第三人裁决、
     Wilson CI 与 agreement；
 12. [已完成] PRL26 No-Tool fresh-S0 Train@512 到 S32，permanent receipt 已审计；
-13. [运行中] PRL26 Crop fresh-S0 Train@512 已完成 S25 并继续向 S32；最近的 S24 permanent
-    checkpoint 已验收，S25 为 256/258 次成功调用、2 次 execution failure；
+13. [运行中] PRL26 Crop fresh-S0 Train@512 已完成 S27，S28 正在运行并继续向 S32；最近的 S24
+    permanent checkpoint 已验收，S26/S27 分别为 267/267、220/220 次成功调用且无 typed error；
 14. [已排队] Crop S32 后自动执行 No-Tool/Crop matched Eval@512；
 15. [已排队] A/B 评测闭合后自动执行 TGVF Short 与 Target-guide-v2 的 C0、两个独立 S32 训练
     和 prompt-axis paired Eval@512；
@@ -1478,9 +1487,11 @@ Atomic 进入正文核心方法必须同时满足：
   `prl26-train512-s32-eval`。S32 receipt 后的双稳定 GPU/Ray release gate 固定于
   `origin/neurips-notool-rl-s32@bd31ac5e1ce299d44efbead30f553781b8f274fc`；通过后的探针将写入
   上述输出根的 `runtime/training-resource-probe-*.json` 与 `training-resources-released.json`。
+  pane retention 与 result→C/D 严格 consumer validation 固定于
+  `origin/neurips-notool-rl-s32@9e4d59f8b97a0b8d495d0a6bd761fe9f55852509`。
 - PRL26 TGVF prompt-axis V6 plan：
   `configs/evaluation/prl26_cd_tgvf_target_prompt_pair_s32_pixel512_coredev2511_plan.json`，固定于
-  `origin/neurips-notool-rl-s32@c0cebefd1ebc9ca2ddd91482a340f0d4b755e0b7`；控制根为
+  `origin/neurips-notool-rl-s32@9e4d59f8b97a0b8d495d0a6bd761fe9f55852509`；控制根为
   `artifacts/control/PRL-26-tgvf-prompt-parity-20260829`，常驻 tmux session 为
   `prl26-cd-tgvf-prompt-s32`。
 - PRL26 Atomic Train@512/Eval@512：运行实现 commit `8e6b3d647d3a94c7768e3d8718b69d544010841e`，
