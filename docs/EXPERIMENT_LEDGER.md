@@ -10060,10 +10060,22 @@ than inferred from a script name or prior conversation.
   crop pixels/tool use alone are suspended. A new code-pinned run ID, output
   root, evaluation ID and RNG namespace are required for the corrected fresh-S0
   Crop rerun; existing immutable PRL26-B artifacts must not be overwritten.
+- **Correction implementation and fresh identity:** commit
+  `ecddc379d392d154c91783d7651528b20d40afba` implements and tests the exact
+  continuation plus the shared full-model `training_run` path, and is published
+  on `origin/neurips-notool-rl-s32`. The new, not-yet-launched owner is
+  `PRL-27-A-TRAIN512-S32-CROP-EXACT-CONTINUATION-QWEN3-INSTRUCT-BS16-N16-TEACHER25-WS8`
+  with an absent/fresh output root under `artifacts/policy/PRL-27-A-*`. Its
+  post-S32 binder writes only
+  `PRL27-A-CROP-EXACT-CONTINUATION-TRAIN512-S32-MATCHED-COREDEV2511-PIXEL512-V1`
+  and binds a new RNG namespace. It has no NoTool-completion dependency and
+  rejects drift in the owner code commit, renderer bytes/hash, action boundary,
+  response budget, checkpoint receipt or RNG protocol. Configuration and
+  binder preparation did not start training or evaluation.
 
 - Cell/status: `PRL-26-A-TRAIN512-S32-PARITY-NOTOOL` / `S32 COMPLETE` and
-  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `RUNNING; S26 COMPLETE, S24 RETAINED`
-  as of 2026-08-29 16:44 JST. These are
+  `PRL-26-B-TRAIN512-S32-PARITY-CROP` / `S32 COMPLETE; HISTORICAL,
+  CONTINUATION-MISMATCHED`. These are
   fresh-S0 train@512 parity reruns, not literal one-variable continuations of
   the historical NoTool S32 and Crop S80 lineages.
 - Implementation commit
@@ -10075,9 +10087,10 @@ than inferred from a script name or prior conversation.
 - Formal parity contract: Qwen3-VL-8B-Instruct full-model update, Teacher25,
   BS16 x n16, world8/FSDP2/GA1, seed42, temperature 1, constant LR `1e-6`,
   32 optimizer steps and retained S0/S8/S16/S24/S32 boundaries. Reward,
-  sampling, data and prompt identities remain frozen. NoTool exposes no tool;
-  Crop preserves the corrected `</tool_call>` action boundary with the closing
-  tag included in policy output. Formal configs use recoverable `auto` mode
+  sampling, data and prompt identities remain frozen. NoTool exposes no tool.
+  PRL26-B Crop preserved the corrected `</tool_call>` action boundary with the
+  closing tag included in policy output, but that did not fix its separate
+  post-tool continuation mismatch. Formal configs use recoverable `auto` mode
   with no explicit resume path; the handoff supervisor must require a new
   output root on first admission and thereafter resume only the same identity
   from its committed checkpoint tracker.
@@ -10090,12 +10103,13 @@ than inferred from a script name or prior conversation.
   gate; no training was started while preparing these records.
 - Execution evidence: NoTool has a committed Step-32 tracker and permanent
   receipt, with all 8,192 trajectories recording zero tool calls and zero
-  successful tool observations. Crop has a committed Step-24 tracker and
-  permanent receipt; its Step-24 slice records answer reward `0.51953125`,
-  tool-attempt rate `0.8046875`, 222/222 successful observations and format-error
-  rate `0.00390625`, without a typed tool error. These are live
-  training diagnostics, not CoreDev results. The matched A/B CoreDev evaluator
-  is already armed and must remain waiting for the Crop S32 receipt.
+  successful tool observations. PRL26-B Crop also closed Step 32 with a
+  permanent receipt and 8,192 trajectories; its cumulative answer reward is
+  `0.6910400390625`, tool-attempt rate `0.808349609375` and successful
+  observations `9348`. These are diagnostics from the mismatched historical
+  continuation, not corrected CoreDev evidence. The old PRL26 A/B evaluator
+  must not publish PRL26-B as an aligned Crop result; PRL27-A owns the separate
+  corrected evaluation identity after its own S32 receipt exists.
 - Handoff audit found that the initial A/B evaluator treated the nonempty S32
   receipts as sufficient resource admission even though a permanent receipt can
   precede complete vLLM/Ray teardown. The completed NoTool run exhibited a

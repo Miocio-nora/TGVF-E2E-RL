@@ -1,6 +1,6 @@
 # NeurIPS Workshop：TGVF 文章实验计划、推进台账与阶段报告
 
-更新时间：2026-08-29（Asia/Tokyo；Crop continuation incident 已阻断）
+更新时间：2026-08-29（Asia/Tokyo；Crop continuation 修复已入库，corrected rerun 尚未启动）
 
 > **阻断性更正（2026-08-29）**：此前所有声称“训练/测试 prompt matched”的
 > Crop-only RL 结果都发现了 post-tool continuation 不一致。初始 prompt 相同，但训练在成功
@@ -17,12 +17,16 @@
 > 后续 Crop 正式评测改用与训练共用 parser、错误 JSON、六次调用上限、cap 后 final recovery
 > turn、total-response budget 和 precomputed-image-embed runtime 的 `training_run` 后端。旧
 > checkpoint 不能通过只重测来追溯修复，必须使用新 run/evaluation ID 从 Original S0 重训。
+>
+> 修复代码已固化并上传为 `ecddc379d392d154c91783d7651528b20d40afba`。新的
+> `PRL-27-A-TRAIN512-S32-CROP-EXACT-CONTINUATION-QWEN3-INSTRUCT-BS16-N16-TEACHER25-WS8`
+> 配置与 fail-closed 评测 binder 已完成，但**训练和评测均未启动**；其独立输出目录当前不存在。
 
-状态：**实验进行中；Crop-only train/eval continuation 已列为 blocking incident。历史 RP67 三臂、full-prompt stress 与 target-only 评测均已闭合。
-新一轮统一 Train@512/Eval@512 的 fresh-S0 S32 对照正在执行：No-Tool 已完成 S32，Crop 已完成并
-保留 S16、继续向 S32 训练；两臂 matched CoreDev-2511 评测已自动排队。其后才启动 Pure TGVF
-Short 与仅增加 teacher-aligned Target 定义/案例的 Target-guide-v2，两臂都从 Original S0 独立训练
-至 S32。运行中的 reward 与调用率只作诊断，不提前当作 benchmark 结论。**
+状态：**实验进行中。No-Tool Train@512 S32 已完成；旧 PRL26-B Crop S32 也已完成，但因
+post-tool continuation 不一致而隔离为历史训练，不能进入 aligned golden。corrected Crop 已改用全新
+PRL27-A 身份并完成配置/评测门禁，尚未启动。Pure TGVF Short 与仅增加 teacher-aligned Target
+定义/案例的 Target-guide-v2 继续保持已配置、未启动。运行中的 reward 与调用率只作诊断，不提前
+当作 benchmark 结论。**
 
 进度查看：本报告同步到 main 工作区
 `docs/NEURIPS_WORKSHOP_TGVF_EXPERIMENT_PLAN_PROGRESS_REPORT_20260826.md`。在推理完成、评分完成、
@@ -33,8 +37,9 @@ Short 与仅增加 teacher-aligned Target 定义/案例的 Target-guide-v2，两
 
 | Arm | 当前状态 | 固定训练合同 | 后续评测 |
 |---|---|---|---|
-| No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 等待与 Crop 同批 Eval@512 |
-| Crop | **S16 已固化，继续到 S32** | 同上；仅增加 corrected native Crop action boundary | S32 后自动与 No-Tool 做 4+4 GPU 推理及七 subset 评分 |
+| No-Tool | **S32 已完成** | fresh Original S0；BS16×n16；Teacher25；seed42；32 step；无工具 | 既有 matched Eval@512 保留为有效 No-Tool 对照 |
+| Historical Crop（PRL26-B） | **S32 已完成，隔离** | action boundary 正确，但成功 Crop 后 continuation 与评测不一致 | 不再作为 aligned golden；不得通过重测旧权重“修复” |
+| Corrected Crop（PRL27-A） | **已配置，尚未启动** | fresh Original S0；@512；BS16×n16；Teacher25；S32；精确 60-token continuation | S32 后仅用新 `training_run` eval ID/root/RNG namespace 评测 |
 | TGVF Short | **已配置，尚未启动** | frozen RP67；matched Short prompt；最多 6 次 TGVF | A/B 评测闭合并释放全部 GPU/Ray 后启动 |
 | TGVF Target-guide-v2 | **已配置，尚未启动** | 与 Short 相同，只增加 teacher-aligned Target 定义和视觉化案例 | 与 Short 做 prompt-axis paired Eval@512 |
 
@@ -42,8 +47,8 @@ Short 与仅增加 teacher-aligned Target 定义/案例的 Target-guide-v2，两
 稀疏化或修改。
 
 No-Tool 的 Step-32 permanent receipt 已落盘，8,192 条训练 trajectory 的工具调用和成功 observation
-均为 0。Crop S16 的单步诊断为 answer reward `0.6328`、tool-use rate `86.33%`、289 次成功
-observation、format error `1.56%`，且该步没有新增 parse/execution error；这些数字不能替代
+均为 0。旧 PRL26-B Crop 也有完整 S32 receipt 与 8,192 条 trajectory，但这些 reward、调用率和
+observation 统计只描述错误 continuation 下的历史优化动态，不能替代 corrected PRL27-A 的训练或
 CoreDev 结果。
 
 Short/Target-guide-v2 的评测不再把两个 prompt 各自独立 seed 后直接比较，而使用
@@ -74,7 +79,7 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 |---|---|---|---|
 | **Original** | 原始 Qwen3-VL-8B-Instruct；无视觉工具、无自定义 system prompt | `PRL-04-R2-raw-instruct-coredev2511-gpu4567-r4` | 必须进入所有主表和 sub-benchmark 表；因 prompt/agent protocol 不同，只是端到端 direct reference，不是严格 paired control |
 | **No-Tool RL** | 同一 Qwen3-VL-8B-Instruct 做 full-model RL，但没有 Crop、TGVF、RP67、工具 schema 或工具调用 | `PRL-25-F-...-NO-TOOL-RL-...-32STEP-WS8`；S32 为事前冻结主终点 | 用于回答增益有多少来自 RL 本身；matched no-tool 为主要因果对照，raw-direct transfer 为诊断，不得改称 Original |
-| **Crop** | PRL25-B native RGB Crop | S80，seed42 | 80-step 终点工具基线；不补 seed43 |
+| **Crop** | PRL25-B native RGB Crop（历史、continuation-mismatched） | S80，seed42 | 数值仅作历史工具基线；corrected golden 等待 PRL27-A；不补 seed43 |
 | **TGVF** | PRL25-C Pure TGVF，Frozen RP67 | S64，seed42；seed43 仅作所选 checkpoint 复测 | 文章机制主线 |
 | **Atomic** | PRL25-D Atomic Crop+TGVF，Frozen RP67 | S16，seed42；seed43 仅作所选 checkpoint 复测 | 探索性扩展，不能在审计前声称已稳定学会高质量 target |
 | **matched prompt** | 80-step 训练与既有 CoreDev 评测使用的简化、训练匹配 prompt | 历史结果 | 用于现有主表 |
@@ -91,9 +96,12 @@ target-only 稳健性与无偏 target 合格率审计。已完成的广义 full-
 | Method | Macro* | Δ vs Original | VStar | HR | BLINK-180 | OCR mean | MMMU-269 | MathVista | MathVerse |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | Original | 55.3556 | — | 50.7853 | 59.0000 | 65.5556 | 48.1848 | 39.0300 | **74.3333** | 50.6000 |
-| Crop S80 | 62.2288 | +6.8732 | **81.6754** | **74.5000** | 58.8889 | **55.3358** | 46.4684 | 67.3333 | 51.4000 |
+| Crop S80† | 62.2288 | +6.8732 | **81.6754** | **74.5000** | 58.8889 | **55.3358** | 46.4684 | 67.3333 | 51.4000 |
 | TGVF S64 | 59.8086 | +4.4531 | 74.3455 | 66.5000 | 65.5556 | 44.5446 | 44.9814 | 72.3333 | 50.4000 |
 | Atomic S16 | **63.0827** | **+7.7271** | 71.7277 | 73.5000 | **66.1111** | 54.2720 | **51.3011** | 69.6667 | **55.0000** |
+
+† Crop S80 使用已确认 continuation-mismatched 的历史训练合同；表中保留其测量值用于追溯，修复后
+结果出来前不得把它称为 train/eval-aligned golden 或用于归因 Crop 工具本身。
 
 可直接写入正文的事实边界：
 
