@@ -46,19 +46,15 @@ from tgvf_rl.judges import (
     load_tgvf_visual_quality_judge,
 )
 from tgvf_rl.protocol import (
-    NativeActionBoundaryProtocolId,
-    NativeAssistantDialect,
-    NativeSuccessObservationProtocolId,
+    NativeActionBoundaryProtocolId as NativeActionBoundaryProtocolId,
+    NativeSuccessObservationProtocolId as NativeSuccessObservationProtocolId,
     NativeToolCapabilityProfile,
-    validate_success_observation_protocol,
-    visual_tool_prompt_identity,
 )
 from tgvf_rl.protocol.native import native_assistant_dialect_for_model
 from tgvf_rl.rewards.schema import pilot_reward_weight_profile_name
 from tgvf_rl.rewards.stage3_shaped import STAGE3_SHAPED_REWARD_VERSION
 
 from .config import (
-    POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES,
     POLICY_PILOT_V1_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_HISTORICAL_THINKING_CHAT_TEMPLATE_SHA256,
     POLICY_PILOT_V1_HISTORICAL_THINKING_MODEL_NAME,
@@ -67,26 +63,19 @@ from .config import (
     POLICY_PILOT_V1_MODEL_NAME,
     POLICY_PILOT_V1_MODEL_PATH,
     POLICY_PILOT_V1_TOKENIZER_LENGTH,
-    POLICY_PILOT_V1_TOOL_PROFILE,
-    POLICY_PILOT_V1_VLLM_VERSION,
-    DecoderLoRAConfig,
-    PilotGRPOConfig,
-    PilotSamplingConfig,
-    PolicyPilotV1Config,
-    PolicyTGVFStage3ExperimentConfig,
-    PolicyVisualToolExperimentConfig,
+    PolicyPilotV1Config as PolicyPilotV1Config,
+    PolicyTGVFStage3ExperimentConfig as PolicyTGVFStage3ExperimentConfig,
+    PolicyVisualToolExperimentConfig as PolicyVisualToolExperimentConfig,
 )
 from .deepeyes_strict_control import (
     DeepEyesStrictControlBinding,
     DeepEyesVisualAnswerVerifierMode,
 )
+from .run_config_canonical_launch import bind_canonical_policy_launch
 from .run_config_schema import (
     POLICY_E2E_AGENT_LOOP_CONFIG_PATH,
     POLICY_E2E_DEEPEYES_SCALED_CROP_RUN_CONFIG_SCHEMA,
     POLICY_E2E_DEEPEYES_STRICT_CONTROL_RUN_CONFIG_SCHEMA,
-    POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER,
-    POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER_SHA256,
-    POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_MODE,
     POLICY_E2E_EXPLICIT_OBSERVATION_RUN_CONFIG_SCHEMA,
     POLICY_E2E_FORMAL_PILOT_CONFIG_SCHEMA,
     POLICY_E2E_MIXED_ANSWER_VERIFIER,
@@ -126,36 +115,36 @@ from .run_config_schema import (
     SmokeTrainingBinding,
 )
 from .run_config_validation import (
-    _absolute_path,
-    _boolean,
-    _checkpoint_steps,
-    _conditioning,
-    _distributed,
-    _exact_real,
-    _existing_directory,
-    _existing_file,
-    _fqn,
-    _integer,
-    _logprob_measurement,
-    _nonnegative_int,
-    _nonnegative_int_tuple,
-    _nonnegative_real,
-    _normalize_json,
-    _optional_absolute_path,
-    _positive_int,
-    _positive_real,
-    _real,
-    _require_exact,
-    _require_within,
-    _safe_project_name,
-    _safe_run_id,
-    _sha256,
-    _sha256_file,
-    _table,
-    _text,
-    _text_tuple,
-    _unit_interval,
-    _validate_deepeyes_strict_judge,
+    _absolute_path as _absolute_path,
+    _boolean as _boolean,
+    _checkpoint_steps as _checkpoint_steps,
+    _conditioning as _conditioning,
+    _distributed as _distributed,
+    _exact_real as _exact_real,
+    _existing_directory as _existing_directory,
+    _existing_file as _existing_file,
+    _fqn as _fqn,
+    _integer as _integer,
+    _logprob_measurement as _logprob_measurement,
+    _nonnegative_int as _nonnegative_int,
+    _nonnegative_int_tuple as _nonnegative_int_tuple,
+    _nonnegative_real as _nonnegative_real,
+    _normalize_json as _normalize_json,
+    _optional_absolute_path as _optional_absolute_path,
+    _positive_int as _positive_int,
+    _positive_real as _positive_real,
+    _real as _real,
+    _require_exact as _require_exact,
+    _require_within as _require_within,
+    _safe_project_name as _safe_project_name,
+    _safe_run_id as _safe_run_id,
+    _sha256 as _sha256,
+    _sha256_file as _sha256_file,
+    _table as _table,
+    _text as _text,
+    _text_tuple as _text_tuple,
+    _unit_interval as _unit_interval,
+    _validate_deepeyes_strict_judge as _validate_deepeyes_strict_judge,
 )
 
 
@@ -173,21 +162,6 @@ _SUPPORTED_POLICY_MODEL_IDENTITIES = frozenset(
         ),
     }
 )
-
-# Read compatibility for immutable pre-Instruct run records.  New runs always
-# bind the dialect-specific identity returned by visual_tool_prompt_identity().
-_HISTORICAL_THINKING_PROMPT_BUNDLES = {
-    NativeToolCapabilityProfile.TGVF_ONLY: (
-        "b44d8a6ff67f3752d9debe6365b0cb9ce4e37a13f117c7fdd87519d57751283f"
-    ),
-    NativeToolCapabilityProfile.CROP_ONLY: (
-        "4bc9d8e814e0c6735d03a671ecff79cff6cffc74811e2693410fe3fe446cb31d"
-    ),
-    NativeToolCapabilityProfile.CROP_TGVF: (
-        "c860c0a348646fc9a06500217709ec62b9bc01c422024641f35db232748da57f"
-    ),
-}
-
 
 _GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _MCQ_OPTION_PATTERN = re.compile(r"(?im)(?:^|\n)\s*(?:\(([A-H])\)|([A-H])[.):.])\s+\S")
@@ -635,844 +609,49 @@ def load_policy_e2e_smoke_run_config(
         conditioning=conditioning,
     )
 
-    protocol_fields = {
-        "prompt_sha256",
-        "cap_error_sha256",
-        "tool_profile",
-        "tool_schema_sha256",
-        "enabled_tool_names",
-        "maximum_tool_calls",
-    }
-    if explicit_observation_run:
-        protocol_fields.add("success_observation_protocol_id")
-        protocol_fields.add("action_boundary_protocol_id")
-    protocol_table = _table(
-        payload,
-        "protocol",
-        protocol_fields,
-    )
-    enabled_tools = _text_tuple(
-        protocol_table["enabled_tool_names"], name="protocol.enabled_tool_names"
-    )
-    try:
-        tool_profile = NativeToolCapabilityProfile(protocol_table["tool_profile"])
-    except (TypeError, ValueError) as error:
-        raise ValueError("protocol.tool_profile is invalid") from error
-    _require_exact(
-        enabled_tools,
-        tool_profile.tool_names,
-        "protocol.enabled_tool_names",
-    )
-    _require_exact(
-        protocol_table["tool_schema_sha256"],
-        tool_profile.tool_set_sha256,
-        "protocol.tool_schema_sha256",
-    )
-    expected_maximum_tool_calls = 1 if stage3_shaped_run else 4
-    _require_exact(
-        protocol_table["maximum_tool_calls"],
-        expected_maximum_tool_calls,
-        "protocol.maximum_tool_calls",
-    )
-    cap_error_sha256 = _sha256(
-        protocol_table["cap_error_sha256"], name="protocol.cap_error_sha256"
-    )
-    _require_exact(
-        cap_error_sha256,
-        (
-            POLICY_E2E_STAGE3_ONE_CALL_CAP_ERROR_SHA256
-            if stage3_shaped_run
-            else POLICY_E2E_SMOKE_CAP_ERROR_SHA256
-        ),
-        "protocol.cap_error_sha256",
-    )
-    success_observation_protocol_id: NativeSuccessObservationProtocolId | None = None
-    action_boundary_protocol_id: NativeActionBoundaryProtocolId | None = None
-    if explicit_observation_run:
-        success_observation_protocol_id = validate_success_observation_protocol(
-            protocol_table["success_observation_protocol_id"],
-            tool_profile=tool_profile,
-            assistant_dialect=assistant_dialect,
-        )
-        try:
-            action_boundary_protocol_id = NativeActionBoundaryProtocolId(
-                protocol_table["action_boundary_protocol_id"]
-            )
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                "protocol.action_boundary_protocol_id is invalid"
-            ) from error
-    protocol = SmokeProtocolBinding(
-        prompt_sha256=_sha256(
-            protocol_table["prompt_sha256"], name="protocol.prompt_sha256"
-        ),
-        cap_error_sha256=cap_error_sha256,
-        tool_profile=tool_profile,
-        tool_schema_sha256=protocol_table["tool_schema_sha256"],
-        enabled_tool_names=enabled_tools,
-        maximum_tool_calls=protocol_table["maximum_tool_calls"],
-        success_observation_protocol_id=success_observation_protocol_id,
-        action_boundary_protocol_id=action_boundary_protocol_id,
-    )
-    if deepeyes_control is not None:
-        _require_exact(
-            protocol.prompt_sha256,
-            deepeyes_control.prompt_bundle_sha256(assistant_dialect),
-            "protocol.prompt_sha256",
-        )
-    elif mixed_run:
-        accepted_prompt_hashes = {
-            visual_tool_prompt_identity(
-                tool_profile,
-                assistant_dialect=assistant_dialect,
-            ).bundle_sha256
-        }
-        if assistant_dialect is NativeAssistantDialect.QWEN3_VL_THINKING:
-            accepted_prompt_hashes.add(
-                _HISTORICAL_THINKING_PROMPT_BUNDLES[tool_profile]
-            )
-        if protocol.prompt_sha256 not in accepted_prompt_hashes:
-            raise ValueError("protocol.prompt_sha256 differs from model dialect")
-
-    sampling_table = _table(
-        payload,
-        "sampling",
-        {
-            "trajectories_per_prompt",
-            "temperature",
-            "top_p",
-            "top_k",
-            "min_p",
-            "repetition_penalty",
-            "presence_penalty",
-            "frequency_penalty",
-            "max_response_length",
-            "asynchronous_staleness_steps",
-            "do_sample",
-            "backend",
-            "backend_version",
-            "logit_processors",
-            "logprob_measurement",
-            "stop_token_ids",
-            "stop_strings",
-            "include_stop_str_in_output",
-            "ignore_eos",
-            "rollout_master_seed",
-            "seed_derivation_name",
-            "seed_derivation_sha256",
-        },
-    )
-    sampling = PilotSamplingConfig(
-        trajectories_per_prompt=_integer(
-            sampling_table["trajectories_per_prompt"],
-            name="sampling.trajectories_per_prompt",
-        ),
-        temperature=_real(sampling_table["temperature"], name="sampling.temperature"),
-        top_p=_real(sampling_table["top_p"], name="sampling.top_p"),
-        top_k=_integer(sampling_table["top_k"], name="sampling.top_k"),
-        min_p=_real(sampling_table["min_p"], name="sampling.min_p"),
-        repetition_penalty=_real(
-            sampling_table["repetition_penalty"], name="sampling.repetition_penalty"
-        ),
-        presence_penalty=_real(
-            sampling_table["presence_penalty"], name="sampling.presence_penalty"
-        ),
-        frequency_penalty=_real(
-            sampling_table["frequency_penalty"], name="sampling.frequency_penalty"
-        ),
-        max_response_length=_positive_int(
-            sampling_table["max_response_length"], name="sampling.max_response_length"
-        ),
-        asynchronous_staleness_steps=_nonnegative_int(
-            sampling_table["asynchronous_staleness_steps"],
-            name="sampling.asynchronous_staleness_steps",
-        ),
-        do_sample=_boolean(sampling_table["do_sample"], name="sampling.do_sample"),
-        backend=_text(sampling_table["backend"], name="sampling.backend"),
-        backend_version=_text(
-            sampling_table["backend_version"], name="sampling.backend_version"
-        ),
-        logit_processors=_text_tuple(
-            sampling_table["logit_processors"], name="sampling.logit_processors"
-        ),
-        logprob_measurement=_logprob_measurement(sampling_table["logprob_measurement"]),
-        stop_token_ids=_nonnegative_int_tuple(
-            sampling_table["stop_token_ids"], name="sampling.stop_token_ids"
-        ),
-        stop_strings=_text_tuple(
-            sampling_table["stop_strings"], name="sampling.stop_strings"
-        ),
-        include_stop_str_in_output=_boolean(
-            sampling_table["include_stop_str_in_output"],
-            name="sampling.include_stop_str_in_output",
-        ),
-        ignore_eos=_boolean(sampling_table["ignore_eos"], name="sampling.ignore_eos"),
-    )
-    expected_sampling_scale = (16, 20480) if deepeyes_scaled_crop_run else (8, 8192)
-    _require_exact(
-        (sampling.trajectories_per_prompt, sampling.max_response_length),
-        expected_sampling_scale,
-        "sampling DeepEyes-reference scale",
-    )
-    if (
-        "</tool_call>" in (sampling.stop_strings or ())
-        and sampling.include_stop_str_in_output is not True
-    ):
-        raise ValueError(
-            "sampling.include_stop_str_in_output must be true when </tool_call> "
-            "is a stop string so the complete closing tag remains policy-sampled"
-        )
-    derivation_name = _text(
-        sampling_table["seed_derivation_name"],
-        name="sampling.seed_derivation_name",
-    )
-    derivation_sha256 = _sha256(
-        sampling_table["seed_derivation_sha256"],
-        name="sampling.seed_derivation_sha256",
-    )
-    _require_exact(
-        derivation_name,
-        POLICY_E2E_SMOKE_SEED_DERIVATION_NAME,
-        "sampling.seed_derivation_name",
-    )
-    _require_exact(
-        derivation_sha256,
-        POLICY_E2E_SMOKE_SEED_DERIVATION_SHA256,
-        "sampling.seed_derivation_sha256",
-    )
-    rollout_rng = SmokeRolloutRNGBinding(
-        master_seed=_nonnegative_int(
-            sampling_table["rollout_master_seed"],
-            name="sampling.rollout_master_seed",
-        ),
-        derivation_name=derivation_name,
-        derivation_sha256=derivation_sha256,
-    )
-
-    reward_fields = {
-        "task_kind",
-        "answer_verifier",
-        "answer_verifier_sha256",
-        "judge_mode",
-        "judge_reason",
-    }
-    if mixed_run:
-        reward_fields.update({"judge_config_path", "judge_config_sha256"})
-    if stage3_shaped_run:
-        reward_fields.update(
-            {
-                "profile",
-                "tool_utility_sidecar_path",
-                "tool_utility_sidecar_sha256",
-                "tool_utility_manifest_path",
-                "tool_utility_manifest_sha256",
-                "visual_quality_judge_config_path",
-                "visual_quality_judge_config_sha256",
-            }
-        )
-    else:
-        reward_fields.update(
-            {"answer_weight", "format_weight", "conditional_tool_weight"}
-        )
-    reward_table = _table(
-        payload,
-        "reward",
-        reward_fields,
-    )
-    expected_task = (
-        POLICY_E2E_MIXED_REWARD_TASK if mixed_run else POLICY_E2E_SMOKE_REWARD_TASK
-    )
     visual_always_judge = (
         deepeyes_control is not None
         and deepeyes_control.visual_answer_verifier
         is DeepEyesVisualAnswerVerifierMode.ALWAYS_QWEN25_72B
     )
-    if visual_always_judge:
-        expected_verifier = POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER
-        expected_judge_mode = POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_JUDGE_MODE
-    else:
-        expected_verifier = (
-            POLICY_E2E_MIXED_ANSWER_VERIFIER
-            if mixed_run
-            else POLICY_E2E_SMOKE_ANSWER_VERIFIER
-        )
-        expected_judge_mode = (
-            POLICY_E2E_MIXED_JUDGE_MODE if mixed_run else POLICY_E2E_SMOKE_JUDGE_MODE
-        )
-    _require_exact(reward_table["task_kind"], expected_task, "reward.task_kind")
-    _require_exact(
-        reward_table["answer_verifier"],
-        expected_verifier,
-        "reward.answer_verifier",
-    )
-    _require_exact(reward_table["judge_mode"], expected_judge_mode, "reward.judge_mode")
-    answer_verifier_sha256 = _sha256(
-        reward_table["answer_verifier_sha256"],
-        name="reward.answer_verifier_sha256",
-    )
-    if visual_always_judge:
-        current_answer_verifier_sha256 = (
-            POLICY_E2E_DEEPEYES_VISUAL_ALWAYS_ANSWER_VERIFIER_SHA256
-        )
-    else:
-        current_answer_verifier_sha256 = (
-            POLICY_E2E_MIXED_ANSWER_VERIFIER_SHA256
-            if mixed_run
-            else POLICY_E2E_SMOKE_ANSWER_VERIFIER_SHA256
-        )
-    historical_answer_verifier_sha256 = (
-        POLICY_E2E_MIXED_ANSWER_VERIFIER_V1_SHA256
-        if mixed_run
-        else POLICY_E2E_SMOKE_ANSWER_VERIFIER_V2_SHA256
-    )
-    accepted_answer_verifier_sha256s = {current_answer_verifier_sha256}
-    if allow_historical_reward_contract and deepeyes_control is None:
-        accepted_answer_verifier_sha256s.add(historical_answer_verifier_sha256)
-    if answer_verifier_sha256 not in accepted_answer_verifier_sha256s:
-        raise ValueError(
-            "reward.answer_verifier_sha256 differs from the current contract"
-            + (
-                " and the named historical evaluation contract"
-                if allow_historical_reward_contract
-                else ""
-            )
-        )
-    if mixed_run:
-        judge_config_path = _existing_file(
-            reward_table["judge_config_path"], name="reward.judge_config_path"
-        )
-        if judge_config_path.is_symlink():
-            raise ValueError("reward judge config must not be a symlink")
-        judge_config_sha256 = _sha256(
-            reward_table["judge_config_sha256"],
-            name="reward.judge_config_sha256",
-        )
-        if _sha256_file(judge_config_path) != judge_config_sha256:
-            raise ValueError("reward judge config SHA256 mismatch")
-        if deepeyes_control is not None:
-            _validate_deepeyes_strict_judge(
-                judge_config_path,
-                judge_config_sha256=judge_config_sha256,
-                visual_always=visual_always_judge,
-            )
-        else:
-            bound_judge = load_openai_compatible_judge(
-                judge_config_path,
-                expected_file_sha256=judge_config_sha256,
-            )
-            if formal_pilot and not bound_judge.formal_pilot_accepted:
-                raise ValueError("reward judge is not accepted for the formal Pilot")
-    else:
-        judge_config_path = None
-        judge_config_sha256 = None
-    if stage3_shaped_run:
-        _require_exact(
-            reward_table["profile"],
-            STAGE3_SHAPED_REWARD_VERSION,
-            "reward.profile",
-        )
-        if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
-            raise ValueError("Stage3-shaped reward requires the mixed-v2 T1 dataset")
-        if tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
-            raise ValueError("Stage3-shaped reward requires the TGVF-only tool profile")
-        sidecar_path = _existing_file(
-            reward_table["tool_utility_sidecar_path"],
-            name="reward.tool_utility_sidecar_path",
-        )
-        sidecar_sha256 = _sha256(
-            reward_table["tool_utility_sidecar_sha256"],
-            name="reward.tool_utility_sidecar_sha256",
-        )
-        sidecar_manifest_path = _existing_file(
-            reward_table["tool_utility_manifest_path"],
-            name="reward.tool_utility_manifest_path",
-        )
-        sidecar_manifest_sha256 = _sha256(
-            reward_table["tool_utility_manifest_sha256"],
-            name="reward.tool_utility_manifest_sha256",
-        )
-        tool_utility = load_tgvf_tool_utility_runtime_binding(
-            sidecar_path,
-            expected_sidecar_sha256=sidecar_sha256,
-            manifest_path=sidecar_manifest_path,
-            expected_manifest_sha256=sidecar_manifest_sha256,
-            expected_dataset_iteration_identity_sha256=iteration_sha256,
-        )
-        visual_quality_config_path = _existing_file(
-            reward_table["visual_quality_judge_config_path"],
-            name="reward.visual_quality_judge_config_path",
-        )
-        visual_quality_config_sha256 = _sha256(
-            reward_table["visual_quality_judge_config_sha256"],
-            name="reward.visual_quality_judge_config_sha256",
-        )
-        if _sha256_file(visual_quality_config_path) != visual_quality_config_sha256:
-            raise ValueError("reward visual-quality judge config SHA256 mismatch")
-        bound_visual_quality_judge = load_tgvf_visual_quality_judge(
-            visual_quality_config_path,
-            expected_file_sha256=visual_quality_config_sha256,
-        )
-        visual_quality_judge_identity = bound_visual_quality_judge.config_identity
-        reward_profile = STAGE3_SHAPED_REWARD_VERSION
-        reward_weights: tuple[float, float, float] | None = None
-    else:
-        reward_weights = (
-            _real(reward_table["answer_weight"], name="reward.answer_weight"),
-            _real(reward_table["format_weight"], name="reward.format_weight"),
-            _real(
-                reward_table["conditional_tool_weight"],
-                name="reward.conditional_tool_weight",
-            ),
-        )
-        pilot_reward_weight_profile_name(reward_weights)
-        reward_profile = "pilot-v1"
-        tool_utility = None
-        visual_quality_config_path = None
-        visual_quality_config_sha256 = None
-        visual_quality_judge_identity = None
-    reward = SmokeRewardBinding(
-        profile=reward_profile,
-        task_kind=reward_table["task_kind"],
-        answer_verifier=reward_table["answer_verifier"],
-        answer_verifier_sha256=answer_verifier_sha256,
-        judge_mode=reward_table["judge_mode"],
-        judge_reason=_text(reward_table["judge_reason"], name="reward.judge_reason"),
-        answer_weight=None if reward_weights is None else reward_weights[0],
-        format_weight=None if reward_weights is None else reward_weights[1],
-        conditional_tool_weight=None if reward_weights is None else reward_weights[2],
-        judge_config_path=judge_config_path,
-        judge_config_sha256=judge_config_sha256,
-        tool_utility=tool_utility,
-        visual_quality_judge_config_path=visual_quality_config_path,
-        visual_quality_judge_config_sha256=visual_quality_config_sha256,
-        visual_quality_judge_identity=visual_quality_judge_identity,
-    )
-
-    optimizer_table = _table(
+    canonical_launch = bind_canonical_policy_launch(
         payload,
-        "optimizer",
-        {
-            "name",
-            "learning_rate",
-            "beta1",
-            "beta2",
-            "epsilon",
-            "weight_decay",
-            "maximum_gradient_norm",
-        },
-    )
-    _require_exact(optimizer_table["name"], "adamw", "optimizer.name")
-    learning_rate = _positive_real(
-        optimizer_table["learning_rate"], name="optimizer.learning_rate"
-    )
-    if learning_rate not in POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES:
-        raise ValueError(
-            "optimizer.learning_rate must be one of "
-            f"{POLICY_PILOT_V1_ACCEPTED_LEARNING_RATES!r}"
-        )
-    optimizer = SmokeOptimizerBinding(
-        name=optimizer_table["name"],
-        learning_rate=learning_rate,
-        beta1=_unit_interval(optimizer_table["beta1"], name="optimizer.beta1"),
-        beta2=_unit_interval(optimizer_table["beta2"], name="optimizer.beta2"),
-        epsilon=_positive_real(optimizer_table["epsilon"], name="optimizer.epsilon"),
-        weight_decay=_nonnegative_real(
-            optimizer_table["weight_decay"], name="optimizer.weight_decay"
+        allow_external_agent_loop_config=allow_external_agent_loop_config,
+        allow_historical_reward_contract=allow_historical_reward_contract,
+        assistant_dialect=assistant_dialect,
+        deepeyes_control=deepeyes_control,
+        deepeyes_scaled_crop_run=deepeyes_scaled_crop_run,
+        explicit_observation_run=explicit_observation_run,
+        formal_pilot=formal_pilot,
+        iteration_sha256=iteration_sha256,
+        mixed_run=mixed_run,
+        model=model,
+        model_table=model_table,
+        runtime_binding=runtime_binding,
+        stage3_shaped_reward_version=STAGE3_SHAPED_REWARD_VERSION,
+        stage3_shaped_run=stage3_shaped_run,
+        visual_always_judge=visual_always_judge,
+        pilot_reward_weight_profile_name=pilot_reward_weight_profile_name,
+        load_openai_compatible_judge=load_openai_compatible_judge,
+        load_tgvf_tool_utility_runtime_binding=(
+            load_tgvf_tool_utility_runtime_binding
         ),
-        maximum_gradient_norm=_exact_real(
-            optimizer_table["maximum_gradient_norm"],
-            1.0,
-            "optimizer.maximum_gradient_norm",
-        ),
+        load_tgvf_visual_quality_judge=load_tgvf_visual_quality_judge,
     )
+    protocol = canonical_launch.protocol
+    rollout_rng = canonical_launch.rollout_rng
+    reward = canonical_launch.reward
+    optimizer = canonical_launch.optimizer
+    scheduler = canonical_launch.scheduler
+    precision = canonical_launch.precision
+    accumulation = canonical_launch.accumulation
+    distributed = canonical_launch.distributed
+    capacity = canonical_launch.capacity
+    framework = canonical_launch.framework
+    training = canonical_launch.training
+    output = canonical_launch.output
+    policy = canonical_launch.policy
 
-    scheduler_table = _table(
-        payload,
-        "scheduler",
-        {"name", "warmup_steps", "total_steps", "minimum_learning_rate_ratio"},
-    )
-    scheduler_name = _text(scheduler_table["name"], name="scheduler.name")
-    if scheduler_name not in {"constant", "cosine"}:
-        raise ValueError("scheduler.name must be constant or cosine")
-    scheduler = SmokeSchedulerBinding(
-        name=scheduler_name,
-        warmup_steps=_nonnegative_int(
-            scheduler_table["warmup_steps"], name="scheduler.warmup_steps"
-        ),
-        total_steps=_positive_int(
-            scheduler_table["total_steps"], name="scheduler.total_steps"
-        ),
-        minimum_learning_rate_ratio=_unit_interval(
-            scheduler_table["minimum_learning_rate_ratio"],
-            name="scheduler.minimum_learning_rate_ratio",
-            inclusive=True,
-        ),
-    )
-
-    precision_table = _table(
-        payload,
-        "precision",
-        {
-            "parameter_dtype",
-            "reduce_dtype",
-            "optimizer_state_dtype",
-            "autocast_dtype",
-            "gradient_scaler_enabled",
-            "allow_tf32",
-        },
-    )
-    _require_exact(
-        precision_table["parameter_dtype"], "bfloat16", "precision.parameter_dtype"
-    )
-    _require_exact(
-        precision_table["optimizer_state_dtype"],
-        "float32",
-        "precision.optimizer_state_dtype",
-    )
-    _require_exact(
-        precision_table["autocast_dtype"], "bfloat16", "precision.autocast_dtype"
-    )
-    _require_exact(
-        precision_table["gradient_scaler_enabled"],
-        False,
-        "precision.gradient_scaler_enabled",
-    )
-    reduce_dtype = _text(precision_table["reduce_dtype"], name="precision.reduce_dtype")
-    if reduce_dtype not in {"bfloat16", "float32"}:
-        raise ValueError("precision.reduce_dtype must be bfloat16 or float32")
-    precision = SmokePrecisionBinding(
-        parameter_dtype=precision_table["parameter_dtype"],
-        reduce_dtype=reduce_dtype,
-        optimizer_state_dtype=precision_table["optimizer_state_dtype"],
-        autocast_dtype=precision_table["autocast_dtype"],
-        gradient_scaler_enabled=precision_table["gradient_scaler_enabled"],
-        allow_tf32=_boolean(precision_table["allow_tf32"], name="precision.allow_tf32"),
-    )
-
-    accumulation_table = _table(
-        payload,
-        "accumulation",
-        {
-            "global_prompt_batch_size",
-            "prompt_micro_batch_size_per_rank",
-            "rollout_prompt_micro_batch_size_per_engine",
-            "gradient_accumulation_steps",
-        },
-    )
-    accumulation = SmokeAccumulationBinding(
-        global_prompt_batch_size=_positive_int(
-            accumulation_table["global_prompt_batch_size"],
-            name="accumulation.global_prompt_batch_size",
-        ),
-        prompt_micro_batch_size_per_rank=_positive_int(
-            accumulation_table["prompt_micro_batch_size_per_rank"],
-            name="accumulation.prompt_micro_batch_size_per_rank",
-        ),
-        rollout_prompt_micro_batch_size_per_engine=_positive_int(
-            accumulation_table["rollout_prompt_micro_batch_size_per_engine"],
-            name="accumulation.rollout_prompt_micro_batch_size_per_engine",
-        ),
-        gradient_accumulation_steps=_positive_int(
-            accumulation_table["gradient_accumulation_steps"],
-            name="accumulation.gradient_accumulation_steps",
-        ),
-    )
-
-    distributed_table = _table(
-        payload,
-        "distributed",
-        {
-            "physical_gpu_ids",
-            "logical_gpu_ids",
-            "world_size",
-            "actor_logical_gpu_ids",
-            "rollout_logical_gpu_ids",
-            "fsdp_strategy",
-            "fsdp_reshard_after_forward",
-            "rollout_backend",
-            "vllm_tensor_parallel_size",
-            "placement",
-            "weight_sync_mode",
-            "weight_sync_interval_optimizer_steps",
-        },
-    )
-    distributed = _distributed(distributed_table)
-    expected_global_batch = (
-        accumulation.prompt_micro_batch_size_per_rank
-        * distributed.world_size
-        * accumulation.gradient_accumulation_steps
-    )
-    if accumulation.global_prompt_batch_size != expected_global_batch:
-        raise ValueError(
-            "accumulation global prompt batch is inconsistent with world size"
-        )
-
-    capacity_table = _table(
-        payload,
-        "capacity",
-        {
-            "max_prompt_length",
-            "actor_ppo_max_token_len_per_gpu",
-            "rollout_log_prob_max_token_len_per_gpu",
-            "reference_log_prob_max_token_len_per_gpu",
-            "vllm_gpu_memory_utilization",
-            "vllm_max_num_batched_tokens",
-            "vllm_max_model_len",
-            "vllm_max_num_seqs",
-            "vllm_enable_chunked_prefill",
-            "vllm_enforce_eager",
-        },
-    )
-    capacity = SmokeCapacityBinding(
-        max_prompt_length=_positive_int(
-            capacity_table["max_prompt_length"],
-            name="capacity.max_prompt_length",
-        ),
-        actor_ppo_max_token_len_per_gpu=_positive_int(
-            capacity_table["actor_ppo_max_token_len_per_gpu"],
-            name="capacity.actor_ppo_max_token_len_per_gpu",
-        ),
-        rollout_log_prob_max_token_len_per_gpu=_positive_int(
-            capacity_table["rollout_log_prob_max_token_len_per_gpu"],
-            name="capacity.rollout_log_prob_max_token_len_per_gpu",
-        ),
-        reference_log_prob_max_token_len_per_gpu=_positive_int(
-            capacity_table["reference_log_prob_max_token_len_per_gpu"],
-            name="capacity.reference_log_prob_max_token_len_per_gpu",
-        ),
-        vllm_gpu_memory_utilization=_unit_interval(
-            capacity_table["vllm_gpu_memory_utilization"],
-            name="capacity.vllm_gpu_memory_utilization",
-        ),
-        vllm_max_num_batched_tokens=_positive_int(
-            capacity_table["vllm_max_num_batched_tokens"],
-            name="capacity.vllm_max_num_batched_tokens",
-        ),
-        vllm_max_model_len=_positive_int(
-            capacity_table["vllm_max_model_len"],
-            name="capacity.vllm_max_model_len",
-        ),
-        vllm_max_num_seqs=_positive_int(
-            capacity_table["vllm_max_num_seqs"],
-            name="capacity.vllm_max_num_seqs",
-        ),
-        vllm_enable_chunked_prefill=_boolean(
-            capacity_table["vllm_enable_chunked_prefill"],
-            name="capacity.vllm_enable_chunked_prefill",
-        ),
-        vllm_enforce_eager=_boolean(
-            capacity_table["vllm_enforce_eager"],
-            name="capacity.vllm_enforce_eager",
-        ),
-    )
-    minimum_context = capacity.max_prompt_length + sampling.max_response_length
-    if capacity.vllm_max_model_len < minimum_context:
-        raise ValueError(
-            "capacity.vllm_max_model_len cannot hold max prompt plus response"
-        )
-    minimum_actor_tokens = (
-        accumulation.prompt_micro_batch_size_per_rank
-        * sampling.trajectories_per_prompt
-        * minimum_context
-    )
-    if capacity.actor_ppo_max_token_len_per_gpu < minimum_actor_tokens:
-        raise ValueError(
-            "capacity.actor_ppo_max_token_len_per_gpu is smaller than one "
-            "expanded Policy Pilot micro-batch"
-        )
-    if (
-        capacity.rollout_log_prob_max_token_len_per_gpu
-        < capacity.actor_ppo_max_token_len_per_gpu
-        or capacity.reference_log_prob_max_token_len_per_gpu
-        < capacity.actor_ppo_max_token_len_per_gpu
-    ):
-        raise ValueError(
-            "rollout/reference log-prob token bounds cannot be smaller than the "
-            "actor bound"
-        )
-    if capacity.vllm_max_num_batched_tokens > capacity.vllm_max_model_len:
-        raise ValueError(
-            "capacity.vllm_max_num_batched_tokens cannot exceed max_model_len"
-        )
-    if (
-        capacity.vllm_max_num_seqs
-        < accumulation.rollout_prompt_micro_batch_size_per_engine
-        * sampling.trajectories_per_prompt
-    ):
-        raise ValueError(
-            "capacity.vllm_max_num_seqs cannot hold one rollout engine micro-batch"
-        )
-
-    framework_table = _table(
-        payload,
-        "framework",
-        {
-            "agent_loop_config_path",
-            "agent_loop_config_sha256",
-            "runtime_invocation_factory_fqn",
-            "server_timeout_seconds",
-        },
-    )
-    agent_loop_config_path = _existing_file(
-        framework_table["agent_loop_config_path"],
-        name="framework.agent_loop_config_path",
-    )
-    if (
-        not allow_external_agent_loop_config
-        and agent_loop_config_path != POLICY_E2E_AGENT_LOOP_CONFIG_PATH
-    ):
-        raise ValueError(
-            "framework.agent_loop_config_path differs from the checked-in "
-            "Policy Pilot composition"
-        )
-    agent_loop_config_sha256 = _sha256(
-        framework_table["agent_loop_config_sha256"],
-        name="framework.agent_loop_config_sha256",
-    )
-    if _sha256_file(agent_loop_config_path) != agent_loop_config_sha256:
-        raise ValueError("framework AgentLoop config SHA256 mismatch")
-    runtime_factory_fqn = _fqn(
-        framework_table["runtime_invocation_factory_fqn"],
-        name="framework.runtime_invocation_factory_fqn",
-    )
-    _require_exact(
-        runtime_factory_fqn,
-        POLICY_E2E_RUNTIME_INVOCATION_FACTORY_FQN,
-        "framework.runtime_invocation_factory_fqn",
-    )
-    framework = SmokeFrameworkBinding(
-        agent_loop_config_path=agent_loop_config_path,
-        agent_loop_config_sha256=agent_loop_config_sha256,
-        runtime_invocation_factory_fqn=runtime_factory_fqn,
-        server_timeout_seconds=_positive_real(
-            framework_table["server_timeout_seconds"],
-            name="framework.server_timeout_seconds",
-        ),
-    )
-
-    training_table = _table(
-        payload,
-        "training",
-        {
-            "total_training_epochs",
-            "maximum_optimizer_steps",
-            "checkpoint_steps",
-            "logger",
-            "project_name",
-            "validation_before_training",
-            "validation_frequency",
-            "resume_mode",
-            "resume_from_path",
-            "maximum_actor_checkpoints_to_keep",
-        },
-    )
-    loggers = _text_tuple(training_table["logger"], name="training.logger")
-    if not loggers or len(set(loggers)) != len(loggers):
-        raise ValueError("training.logger must be non-empty and unique")
-    unsupported_loggers = set(loggers).difference({"console", "wandb"})
-    if unsupported_loggers:
-        raise ValueError(
-            f"training.logger contains unsupported backends: {sorted(unsupported_loggers)!r}"
-        )
-    validation_frequency = _integer(
-        training_table["validation_frequency"],
-        name="training.validation_frequency",
-    )
-    if validation_frequency != -1:
-        raise ValueError(
-            "bounded Policy E2E smoke requires training.validation_frequency=-1"
-        )
-    resume_mode = _text(training_table["resume_mode"], name="training.resume_mode")
-    if resume_mode not in {"auto", "disable", "resume_path"}:
-        raise ValueError("training.resume_mode must be auto, disable, or resume_path")
-    resume_from_path = _optional_absolute_path(
-        training_table["resume_from_path"],
-        name="training.resume_from_path",
-    )
-    if resume_mode in {"auto", "disable"} and resume_from_path is not None:
-        raise ValueError("training.resume_from_path must be empty in auto/disable mode")
-    if resume_mode == "resume_path":
-        if resume_from_path is None or not resume_from_path.is_dir():
-            raise ValueError(
-                "training.resume_from_path must be an existing directory in resume_path mode"
-            )
-    training = SmokeTrainingBinding(
-        total_training_epochs=_positive_int(
-            training_table["total_training_epochs"],
-            name="training.total_training_epochs",
-        ),
-        maximum_optimizer_steps=_positive_int(
-            training_table["maximum_optimizer_steps"],
-            name="training.maximum_optimizer_steps",
-        ),
-        checkpoint_steps=_checkpoint_steps(training_table["checkpoint_steps"]),
-        logger=loggers,
-        project_name=_safe_project_name(training_table["project_name"]),
-        validation_before_training=_boolean(
-            training_table["validation_before_training"],
-            name="training.validation_before_training",
-        ),
-        validation_frequency=validation_frequency,
-        resume_mode=resume_mode,
-        resume_from_path=resume_from_path,
-        maximum_actor_checkpoints_to_keep=_positive_int(
-            training_table["maximum_actor_checkpoints_to_keep"],
-            name="training.maximum_actor_checkpoints_to_keep",
-        ),
-    )
-    if training.validation_before_training:
-        raise ValueError(
-            "bounded Policy E2E smoke does not own a validation population"
-        )
-    if training.checkpoint_steps[-1] > training.maximum_optimizer_steps:
-        raise ValueError("training checkpoint step exceeds maximum_optimizer_steps")
-    if scheduler.total_steps < training.maximum_optimizer_steps:
-        raise ValueError(
-            "scheduler total_steps is smaller than maximum_optimizer_steps"
-        )
-    if scheduler.warmup_steps >= scheduler.total_steps:
-        raise ValueError("scheduler warmup_steps must be smaller than total_steps")
-
-    output_table = _table(
-        payload, "output", {"root", "checkpoint_directory", "metrics_path"}
-    )
-    output_root = _absolute_path(output_table["root"], name="output.root")
-    if output_root == Path("/"):
-        raise ValueError("output.root cannot be the filesystem root")
-    checkpoint_directory = _absolute_path(
-        output_table["checkpoint_directory"], name="output.checkpoint_directory"
-    )
-    metrics_path = _absolute_path(
-        output_table["metrics_path"], name="output.metrics_path"
-    )
-    _require_within(
-        checkpoint_directory, output_root, name="output.checkpoint_directory"
-    )
-    _require_within(metrics_path, output_root, name="output.metrics_path")
-    if resume_from_path is not None:
-        _require_within(resume_from_path, output_root, name="training.resume_from_path")
-    output = SmokeOutputBinding(output_root, checkpoint_directory, metrics_path)
-
-    if stage3_shaped_run:
-        policy_type = PolicyTGVFStage3ExperimentConfig
-    elif protocol.tool_profile is POLICY_PILOT_V1_TOOL_PROFILE:
-        policy_type = PolicyPilotV1Config
-    else:
-        policy_type = PolicyVisualToolExperimentConfig
-    policy = policy_type(
-        model_family=model.family,
-        model_path=model.revision_or_path,
-        native_deepstack_enabled=model_table["native_deepstack_enabled"],
-        tool_profile=protocol.tool_profile,
-        enabled_tool_names=protocol.enabled_tool_names,
-        max_tgvf_call_attempts=protocol.maximum_tool_calls,
-        image_max_pixels=model_table["image_max_pixels"],
-        sampling=sampling,
-        lora=DecoderLoRAConfig(initial_learning_rate=optimizer.learning_rate),
-        grpo=PilotGRPOConfig(total_training_epochs=training.total_training_epochs),
-    )
-    if sampling.backend_version != POLICY_PILOT_V1_VLLM_VERSION:
-        raise ValueError("sampling backend version differs from Policy Pilot v1")
     if deepeyes_scaled_crop_run:
         if not isinstance(runtime_binding, PolicyT1MixedRuntimeBinding):
             raise ValueError(
