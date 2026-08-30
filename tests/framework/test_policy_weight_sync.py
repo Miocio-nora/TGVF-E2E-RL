@@ -7,7 +7,11 @@ import inspect
 import json
 import os
 from pathlib import Path
+import pickle
+import subprocess
+import sys
 import threading
+from typing import get_type_hints
 
 import pytest
 import torch
@@ -76,6 +80,21 @@ def _publish(
         )
     )
     return state, observed
+
+
+def test_snapshot_store_split_preserves_public_contract_ownership_and_pickle(
+    tmp_path: Path,
+) -> None:
+    state = PolicyWeightSyncState.from_environment(_environment(tmp_path))
+
+    assert PolicyWeightSyncState.__module__ == (
+        "tgvf_rl.framework.verl.policy_weight_sync"
+    )
+    assert pickle.loads(pickle.dumps(state)) == state
+    assert get_type_hints(load_policy_weight_sync_request) == {
+        "state": PolicyWeightSyncState,
+        "return": policy_weight_sync.PolicyWeightSyncRequest,
+    }
 
 
 def test_rank_zero_publishes_exact_snapshot_without_changing_stream(
@@ -558,6 +577,110 @@ def test_snapshot_closure_rejects_symlinked_state_root_ancestor(
             pointer_path=linked_state.latest_path,
             expected_optimizer_step=6,
         )
+
+
+def test_active_request_reader_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    environment = _environment(tmp_path)
+    state = PolicyWeightSyncState.from_environment(environment)
+    state.directory.mkdir(parents=True)
+    os.mkfifo(state.request_path)
+    program = "\n".join(
+        (
+            "import sys",
+            "from pathlib import Path",
+            "from tgvf_rl.contracts.errors import ReplayMismatchError",
+            "from tgvf_rl.framework.verl.policy_weight_sync import (",
+            "    PolicyWeightSyncState, load_policy_weight_sync_request)",
+            "state = PolicyWeightSyncState(Path(sys.argv[1]), sys.argv[2], sys.argv[3])",
+            "try:",
+            "    load_policy_weight_sync_request(state)",
+            "except ReplayMismatchError as error:",
+            "    if 'Policy weight-sync request is missing or unreadable' in str(error):",
+            "        raise SystemExit(0)",
+            "    raise",
+            "raise SystemExit(1)",
+        )
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            program,
+            str(state.directory),
+            state.run_id,
+            state.run_identity_sha256,
+        ],
+        check=False,
+        timeout=5.0,
+    )
+
+    assert completed.returncode == 0
+
+
+def test_active_request_missing_root_retains_public_error_contract(
+    tmp_path: Path,
+) -> None:
+    state = PolicyWeightSyncState.from_environment(_environment(tmp_path))
+
+    with pytest.raises(
+        ReplayMismatchError,
+        match="^Policy weight-sync request is missing or unreadable$",
+    ):
+        load_policy_weight_sync_request(state)
+
+
+def test_active_request_rejects_root_rebind_and_closes_bound_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = _environment(tmp_path)
+    state = PolicyWeightSyncState.from_environment(environment)
+    publish_policy_weight_sync_request(state, 7, nonce="request-root-rebind")
+    original_reader = policy_weight_sync._read_relative_file_bytes_at
+    moved_root = tmp_path / "original-policy-state"
+    replaced = False
+
+    def replace_root_after_request(
+        root_descriptor: int,
+        relative_path: str,
+        owner: str,
+    ) -> bytes:
+        nonlocal replaced
+        payload = original_reader(root_descriptor, relative_path, owner)
+        state.directory.rename(moved_root)
+        state.directory.mkdir()
+        replaced = True
+        return payload
+
+    descriptor_count_before = len(os.listdir("/proc/self/fd"))
+    monkeypatch.setattr(
+        policy_weight_sync,
+        "_read_relative_file_bytes_at",
+        replace_root_after_request,
+    )
+
+    with pytest.raises(ReplayMismatchError, match="root changed"):
+        load_policy_weight_sync_request(state)
+
+    assert replaced is True
+    assert len(os.listdir("/proc/self/fd")) == descriptor_count_before
+
+
+def test_active_request_parse_failure_closes_bound_root_descriptor(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path)
+    state = PolicyWeightSyncState.from_environment(environment)
+    state.directory.mkdir(parents=True)
+    state.request_path.write_bytes(b"not-json")
+    descriptor_count_before = len(os.listdir("/proc/self/fd"))
+
+    for _ in range(10):
+        with pytest.raises(ReplayMismatchError, match="request is unreadable"):
+            load_policy_weight_sync_request(state)
+
+    assert len(os.listdir("/proc/self/fd")) == descriptor_count_before
 
 
 def test_step_mismatch_fails_before_lora_stream_is_consumed(tmp_path: Path) -> None:

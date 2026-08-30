@@ -22,7 +22,6 @@ import asyncio
 from collections.abc import Callable, Iterable, Iterator, Mapping
 import concurrent.futures
 from dataclasses import dataclass
-import fcntl
 from functools import wraps
 import hashlib
 import hmac
@@ -31,8 +30,6 @@ import inspect
 import json
 import os
 from pathlib import Path
-import stat
-import tempfile
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -40,6 +37,22 @@ import torch
 
 from tgvf_rl.contracts.errors import IdentityMismatchError, ReplayMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
+import tgvf_rl.framework.verl.policy_weight_snapshot_store as _snapshot_store
+
+
+# Keep the historical private facade intact while the filesystem mechanics live
+# in an import-acyclic, framework-neutral leaf.
+_assert_immutable_file_equals_at = _snapshot_store.assert_immutable_file_equals_at
+_assert_snapshot_root_path_binding = (
+    _snapshot_store.assert_snapshot_root_path_binding
+)
+_atomic_replace_bytes = _snapshot_store.atomic_replace_bytes
+_fsync_directory = _snapshot_store.fsync_directory
+_open_snapshot_root = _snapshot_store.open_snapshot_root
+_read_bytes = _snapshot_store.read_bytes
+_read_relative_file_bytes_at = _snapshot_store.read_relative_file_bytes_at
+_safe_snapshot_relative_path = _snapshot_store.safe_snapshot_relative_path
+_write_immutable_bytes = _snapshot_store.write_immutable_bytes
 
 
 POLICY_WEIGHT_SYNC_REQUEST_SCHEMA = "tgvf-policy-weight-sync-request-v1"
@@ -220,8 +233,28 @@ def load_policy_weight_sync_request(
 ) -> PolicyWeightSyncRequest:
     """Load the active request and prove it belongs to this run identity."""
 
-    mapping = _strict_json_mapping(
-        state.request_path,
+    try:
+        root_descriptor = _open_snapshot_root(state.directory)
+    except ReplayMismatchError as error:
+        raise ReplayMismatchError(
+            "Policy weight-sync request is missing or unreadable"
+        ) from error
+    try:
+        try:
+            request_bytes = _read_relative_file_bytes_at(
+                root_descriptor,
+                POLICY_WEIGHT_SYNC_REQUEST_FILENAME,
+                "Policy weight-sync request",
+            )
+        except ReplayMismatchError as error:
+            raise ReplayMismatchError(
+                "Policy weight-sync request is missing or unreadable"
+            ) from error
+        _assert_snapshot_root_path_binding(state.directory, root_descriptor)
+    finally:
+        os.close(root_descriptor)
+    mapping = _strict_json_bytes_mapping(
+        request_bytes,
         {
             "schema_version",
             "run_id",
@@ -791,184 +824,6 @@ def _verify_integrity_field(
         raise ReplayMismatchError(f"{owner} integrity mismatch")
 
 
-def _atomic_replace_bytes(path: Path, value: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="wb",
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-        delete=False,
-    ) as handle:
-        temporary = Path(handle.name)
-        handle.write(value)
-        handle.flush()
-        os.fsync(handle.fileno())
-    try:
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-def _write_immutable_bytes(path: Path, value: bytes, *, owner: str) -> None:
-    """Publish one immutable file without replacing a concurrent winner."""
-
-    directory_descriptor = _open_snapshot_root(path.parent, create_missing=True)
-    temporary_name = f".{path.name}.{uuid4().hex}.tmp"
-    temporary_descriptor: int | None = None
-    temporary_exists = False
-    lock_acquired = False
-    active_error: BaseException | None = None
-    try:
-        try:
-            fcntl.flock(directory_descriptor, fcntl.LOCK_EX)
-            lock_acquired = True
-            temporary_descriptor = os.open(
-                temporary_name,
-                os.O_WRONLY
-                | os.O_CREAT
-                | os.O_EXCL
-                | getattr(os, "O_CLOEXEC", 0)
-                | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-                dir_fd=directory_descriptor,
-            )
-            temporary_exists = True
-            remaining = memoryview(value)
-            while remaining:
-                written = os.write(temporary_descriptor, remaining)
-                if written <= 0:
-                    raise OSError(f"short write while publishing {owner}")
-                remaining = remaining[written:]
-            os.fchmod(temporary_descriptor, 0o600)
-            os.fsync(temporary_descriptor)
-            os.close(temporary_descriptor)
-            temporary_descriptor = None
-            try:
-                os.link(
-                    temporary_name,
-                    path.name,
-                    src_dir_fd=directory_descriptor,
-                    dst_dir_fd=directory_descriptor,
-                    follow_symlinks=False,
-                )
-            except FileExistsError:
-                _assert_immutable_file_equals_at(
-                    directory_descriptor,
-                    path.name,
-                    value,
-                    owner=owner,
-                )
-            os.unlink(temporary_name, dir_fd=directory_descriptor)
-            temporary_exists = False
-            os.fsync(directory_descriptor)
-            _assert_snapshot_root_path_binding(path.parent, directory_descriptor)
-        except OSError as error:
-            raise ReplayMismatchError(f"could not publish immutable {owner}") from error
-    except BaseException as error:
-        active_error = error
-
-    cleanup_errors: list[tuple[str, BaseException]] = []
-
-    def attempt_cleanup(action: str, cleanup: Callable[[], None]) -> None:
-        try:
-            cleanup()
-        except BaseException as error:
-            cleanup_errors.append((action, error))
-
-    if temporary_descriptor is not None:
-        attempt_cleanup(
-            "close temporary descriptor",
-            lambda: os.close(temporary_descriptor),
-        )
-    if temporary_exists:
-        attempt_cleanup(
-            "unlink temporary file",
-            lambda: os.unlink(temporary_name, dir_fd=directory_descriptor),
-        )
-    if lock_acquired:
-        attempt_cleanup(
-            "unlock immutable publication directory",
-            lambda: fcntl.flock(directory_descriptor, fcntl.LOCK_UN),
-        )
-    attempt_cleanup(
-        "close immutable publication directory",
-        lambda: os.close(directory_descriptor),
-    )
-
-    if active_error is not None:
-        for action, cleanup_error in cleanup_errors:
-            active_error.add_note(
-                f"immutable {owner} cleanup also failed while attempting to {action}: "
-                f"{type(cleanup_error).__name__}: {cleanup_error}"
-            )
-        if cleanup_errors:
-            raise active_error from cleanup_errors[0][1]
-        raise active_error
-    if cleanup_errors:
-        cleanup_failure = ReplayMismatchError(
-            f"immutable {owner} cleanup failed after publication"
-        )
-        for action, cleanup_error in cleanup_errors[1:]:
-            cleanup_failure.add_note(
-                f"additional cleanup failure while attempting to {action}: "
-                f"{type(cleanup_error).__name__}: {cleanup_error}"
-            )
-        raise cleanup_failure from cleanup_errors[0][1]
-
-
-def _assert_immutable_file_equals_at(
-    directory_descriptor: int,
-    name: str,
-    value: bytes,
-    *,
-    owner: str,
-) -> None:
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(
-            name,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=directory_descriptor,
-        )
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o600
-            or metadata.st_nlink != 1
-        ):
-            raise ReplayMismatchError(
-                f"existing content-addressed {owner} has unsafe inode metadata"
-            )
-        chunks: list[bytes] = []
-        while True:
-            block = os.read(descriptor, 8 * 1024 * 1024)
-            if not block:
-                break
-            chunks.append(block)
-        if b"".join(chunks) != value:
-            raise ReplayMismatchError(f"existing content-addressed {owner} differs")
-        os.fsync(descriptor)
-    except OSError as error:
-        raise ReplayMismatchError(
-            f"existing content-addressed {owner} is unreadable or symlinked"
-        ) from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def _strict_json_mapping(
     path: Path, expected: set[str], owner: str
 ) -> Mapping[str, object]:
@@ -993,155 +848,6 @@ def _strict_json_bytes_mapping(
             f"extra={sorted(actual - expected)!r}"
         )
     return decoded
-
-
-def _read_bytes(path: Path, owner: str) -> bytes:
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ReplayMismatchError(f"{owner} must be a regular file")
-        chunks: list[bytes] = []
-        while True:
-            block = os.read(descriptor, 8 * 1024 * 1024)
-            if not block:
-                break
-            chunks.append(block)
-        return b"".join(chunks)
-    except OSError as error:
-        raise ReplayMismatchError(f"{owner} is missing or unreadable") from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
-def _open_snapshot_root(root: Path, *, create_missing: bool = False) -> int:
-    """Open, and optionally create, a root without following component symlinks."""
-
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    normalized = Path(os.path.abspath(os.fspath(root)))
-    if not normalized.is_absolute():
-        raise ValueError("LoRA snapshot root must be absolute")
-    descriptor = os.open(os.sep, flags)
-    completed = False
-    try:
-        for part in normalized.parts[1:]:
-            next_descriptor: int | None = None
-            try:
-                try:
-                    next_descriptor = os.open(part, flags, dir_fd=descriptor)
-                except FileNotFoundError:
-                    if not create_missing:
-                        raise
-                    try:
-                        os.mkdir(part, mode=0o700, dir_fd=descriptor)
-                    except FileExistsError:
-                        pass
-                    next_descriptor = os.open(part, flags, dir_fd=descriptor)
-                if not stat.S_ISDIR(os.fstat(next_descriptor).st_mode):
-                    raise ReplayMismatchError(
-                        "LoRA snapshot root path contains a non-directory"
-                    )
-            except BaseException:
-                if next_descriptor is not None:
-                    os.close(next_descriptor)
-                raise
-            os.close(descriptor)
-            descriptor = next_descriptor
-        completed = True
-        return descriptor
-    except OSError as error:
-        raise ReplayMismatchError(
-            "LoRA snapshot root path is missing, unreadable, or contains a symlink"
-        ) from error
-    finally:
-        if not completed:
-            os.close(descriptor)
-
-
-def _safe_snapshot_relative_path(value: str) -> Path:
-    if not isinstance(value, str) or not value:
-        raise ReplayMismatchError("LoRA snapshot contains an unsafe path")
-    if "\x00" in value or value.startswith("/"):
-        raise ReplayMismatchError("LoRA snapshot contains an unsafe path")
-    parts = value.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        raise ReplayMismatchError("LoRA snapshot contains an unsafe path")
-    return Path(*parts)
-
-
-def _assert_snapshot_root_path_binding(root: Path, root_descriptor: int) -> None:
-    """Reject replacement of the lexical root while its closure was read."""
-
-    expected = os.fstat(root_descriptor)
-    observed_descriptor = _open_snapshot_root(root)
-    try:
-        observed = os.fstat(observed_descriptor)
-        if (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
-            raise ReplayMismatchError("LoRA snapshot root changed while loading")
-    finally:
-        os.close(observed_descriptor)
-
-
-def _read_relative_file_bytes_at(
-    root_descriptor: int,
-    relative_path: str,
-    owner: str,
-) -> bytes:
-    """Read one regular file via openat from an already-open immutable root."""
-
-    relative = _safe_snapshot_relative_path(relative_path)
-    parts = relative.parts
-    directory_descriptor = os.dup(root_descriptor)
-    file_descriptor: int | None = None
-    try:
-        directory_flags = (
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_DIRECTORY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
-        for part in parts[:-1]:
-            next_descriptor = os.open(
-                part,
-                directory_flags,
-                dir_fd=directory_descriptor,
-            )
-            metadata = os.fstat(next_descriptor)
-            if not stat.S_ISDIR(metadata.st_mode):
-                os.close(next_descriptor)
-                raise ReplayMismatchError(f"{owner} parent must be a regular directory")
-            os.close(directory_descriptor)
-            directory_descriptor = next_descriptor
-        file_descriptor = os.open(
-            parts[-1],
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=directory_descriptor,
-        )
-        metadata = os.fstat(file_descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ReplayMismatchError(f"{owner} must be a regular file")
-        chunks: list[bytes] = []
-        while True:
-            block = os.read(file_descriptor, 8 * 1024 * 1024)
-            if not block:
-                break
-            chunks.append(block)
-        return b"".join(chunks)
-    except OSError as error:
-        raise ReplayMismatchError(
-            f"{owner} is missing or unreadable (including symlink rejection)"
-        ) from error
-    finally:
-        if file_descriptor is not None:
-            os.close(file_descriptor)
-        os.close(directory_descriptor)
 
 
 def _require_run_identity(
