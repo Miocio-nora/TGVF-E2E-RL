@@ -376,6 +376,7 @@ def test_external_binding_intentionally_rejects_data_symlinks(
 
 def test_external_binding_rejects_fifo_without_blocking(tmp_path: Path) -> None:
     fifo = tmp_path / "train.fifo"
+    ready = tmp_path / "external-binding-fifo-probe-ready"
     os.mkfifo(fifo)
     config = _binding_config(
         tmp_path,
@@ -392,6 +393,7 @@ def test_external_binding_rejects_fifo_without_blocking(tmp_path: Path) -> None:
         )
 
         root = Path(sys.argv[1])
+        Path(sys.argv[4]).write_text("ready", encoding="utf-8")
         config = SimpleNamespace(
             model=SimpleNamespace(local_path=root / "model"),
             data=SimpleNamespace(
@@ -420,7 +422,7 @@ def test_external_binding_rejects_fifo_without_blocking(tmp_path: Path) -> None:
         """
     )
 
-    completed = subprocess.run(
+    process = subprocess.Popen(
         [
             sys.executable,
             "-c",
@@ -428,12 +430,36 @@ def test_external_binding_rejects_fifo_without_blocking(tmp_path: Path) -> None:
             str(tmp_path),
             str(fifo),
             config.data.validation.source_sha256,
+            str(ready),
         ],
-        check=False,
-        timeout=2.0,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
     )
+    try:
+        import_deadline = time.monotonic() + 30.0
+        while not ready.is_file() and process.poll() is None:
+            if time.monotonic() >= import_deadline:
+                process.kill()
+                _stdout, stderr = process.communicate(timeout=5.0)
+                pytest.fail(f"external binding probe import did not become ready: {stderr}")
+            time.sleep(0.01)
+        if not ready.is_file():
+            _stdout, stderr = process.communicate(timeout=5.0)
+            pytest.fail(f"external binding probe exited before verification: {stderr}")
+        try:
+            returncode = process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            _stdout, stderr = process.communicate(timeout=5.0)
+            pytest.fail(f"external binding verification blocked on FIFO: {stderr}")
+        _stdout, stderr = process.communicate(timeout=5.0)
+    finally:
+        if process.poll() is None:  # pragma: no cover - defensive cleanup
+            process.kill()
+            process.wait(timeout=5.0)
 
-    assert completed.returncode == 0
+    assert returncode == 0, stderr
 
 
 @pytest.mark.parametrize("symlink_kind", ["leaf", "ancestor"])
