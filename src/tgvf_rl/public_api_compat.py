@@ -63,11 +63,12 @@ def rebind_public_class(
     changed = contract_type.__module__ == implementation_module
     contract_type.__module__ = public_module
     for member in vars(contract_type).values():
-        functions = (
-            (member.fget, member.fset, member.fdel)
-            if isinstance(member, property)
-            else (member,)
-        )
+        if isinstance(member, property):
+            functions = (member.fget, member.fset, member.fdel)
+        elif isinstance(member, (classmethod, staticmethod)):
+            functions = (member.__func__,)
+        else:
+            functions = (member,)
         for function in functions:
             if isinstance(function, FunctionType):
                 changed = (

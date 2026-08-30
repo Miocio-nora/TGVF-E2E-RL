@@ -54,6 +54,14 @@ class Contract:
     def doubled(self) -> int:
         return self.value * 2
 
+    @classmethod
+    def from_text(cls, value: str) -> "Contract":
+        return cls(int(value))
+
+    @staticmethod
+    def normalize(value: int) -> int:
+        return abs(value)
+
 class Port(Protocol):
     def consume(self, value: int) -> int: ...
 
@@ -99,6 +107,10 @@ def implementation_function(value: int) -> int:
     assert pickle.loads(pickle.dumps(function)) is function
     assert contract.__module__ == public_name
     assert contract.doubled.fget.__module__ == public_name
+    assert vars(contract)["from_text"].__func__.__module__ == public_name
+    assert vars(contract)["normalize"].__func__.__module__ == public_name
+    assert contract.from_text("3") == contract(3)
+    assert contract.normalize(-3) == 3
     assert port.consume.__module__ == public_name
     assert function.__module__ == public_name
     assert function.__name__ == "legacy_function"
