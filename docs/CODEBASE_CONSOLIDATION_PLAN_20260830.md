@@ -486,6 +486,47 @@ complete remote workflow in run `33329512817`.
 Experiment policy revision 4 therefore still records
 `runtime_closure.launch_enabled=false` and the identical seven blockers.
 
+## 2026-08-31 worker bootstrap inspection-v2 checkpoint
+
+Committed A-minus checkpoint `9ca6822` keeps the worker bootstrap diagnostic
+and non-dispatching while composing two additional existing contracts. First,
+inspection schema v2 requires the exact seven authorized
+`python_executable*` fields. It binds the current interpreter through the
+retained `/proc/self/exe`-matched executable descriptor, compares its path,
+real path, bytes, size, device, inode, and mode with the gate identity, and
+closes the descriptor on all paths. No executable capability is retained in
+the ordinary diagnostic result.
+
+Second, both fixed modes now verify the role child-environment base identity
+and exact late-field inventory. Policy uses the Policy-driver profile and
+Representation uses the torchrun profile. This intentionally stops before
+late-value semantics: the v2 record says base and inventory checked, says late
+values unchecked, and carries
+`role-specific-child-environment-late-value-validation-missing`. It therefore
+does not turn a malformed compile-receipt digest, rank, or rendezvous value into
+startup authority.
+
+This checkpoint is still characterization rather than canonical reachability.
+`canonical-worker-bootstrap-routing-missing` remains explicit; the real CLI and
+launch paths do not call the bootstrap. It performs no Representation member
+selection or one-use receipt consumption, no evidence mint, no target import,
+and no dispatch, and every executable invocation exits 2. Immutable runtime
+packaging, trusted module origins, worker-local locator verification, late-value
+validation, Representation launcher/member authority, and the other recorded
+runtime residuals remain future work.
+
+Final local evidence for `9ca6822` is 59 worker tests, a 61-test focused
+selection, 626 complete `tests/ops` passes, and 2,770 passed/five skipped/four
+warnings in the full hermetic CPU suite in 149.25 seconds. Independent review
+passed 303 tests. Full Ruff,
+execution-surface revision 10 with 80 content-bound entries, repository-boundary
+revision 7 with 61 debts/zero violations, both audits, hashes, and the diff
+check are green. No remote CI result exists yet for `9ca6822`. The preceding
+docs-only commit `b0e240c` is
+green in complete remote run `33329825931`; v1 combined checkpoint `79edd70`
+remains historically green in run `33329512817`. Experiment policy revision 4
+still has the same seven blockers and `launch_enabled=false`.
+
 ## Why the repository feels fragmented
 
 The problem is not only the number of branches. The C0 tag contained 245

@@ -498,6 +498,47 @@ checkpoint `79edd70` is green in complete remote CI run `33329512817`.
 Experiment policy revision 4 remains
 `runtime_closure.launch_enabled=false` with all seven blockers unchanged.
 
+## 2026-08-31 worker bootstrap inspection-v2 boundary
+
+Committed A-minus checkpoint `9ca6822` advances only the bounded diagnostic
+contract. After the existing firebreak and inherited receipt checks, inspection
+schema v2 requires the exact seven-key `python_executable*` authorization
+namespace. It opens the current `sys.executable` through the retained,
+`/proc/self/exe`-bound executable capability, compares path, real path, SHA-256,
+size, device, inode, and mode with the authorized identity, and closes the
+descriptor on every success or refusal path before producing a record. The
+record therefore reports the executable identity checked and no descriptor
+retained.
+
+For both the Policy-driver and Representation-member modes, v2 also checks the
+role profile, exact child-environment parameter namespace, complete base
+environment entry count and content identity, and the exact required late-field
+inventory. It deliberately does not validate late-field values. The diagnostic
+states base identity and late inventory as checked, states late values as
+unchecked, and retains the exact
+`role-specific-child-environment-late-value-validation-missing` blocker. Invalid
+Policy compile-receipt values and invalid Representation rank or rendezvous
+values are characterization cases, not accepted execution authority.
+
+This remains an unwired inspection. Canonical worker-bootstrap routing is an
+explicit blocker; the implementation does not select or consume a
+Representation member, create a member receipt, mint `VerifiedWorkerStartup`,
+import a training target, or dispatch. Every executable path still exits 2, and
+the public CLI, Policy launcher, and Representation path remain unchanged.
+
+Local evidence for committed bytes `9ca6822` is 59 worker-bootstrap tests, a
+61-test focused selection, 626 complete `tests/ops` passes, and a full
+hermetic CPU suite of 2,770 passed, five skipped, and four warnings in 149.25
+seconds. Independent final review passed 303 tests. Full Ruff, the
+revision-10/80-surface control audit, the
+revision-7 repository-boundary audit at 61 debts/zero violations, content-hash
+checks, and `git diff --check` are green. No remote CI result is claimed for
+`9ca6822`. The preceding docs-only checkpoint
+`b0e240c` is green in complete remote run `33329825931`; the v1 combined
+code/docs checkpoint `79edd70` remains historically green in run
+`33329512817`. Experiment policy revision 4 remains launch-disabled with the
+same seven blocker IDs.
+
 ## 2026-08-30 canonical line versus physical `main`
 
 At verified code checkpoint `4dd8267`, the graph is linear: the stabilization
