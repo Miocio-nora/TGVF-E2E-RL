@@ -38,20 +38,34 @@ def test_internal_evaluation_artifact_boundary_has_no_import_back_edge() -> None
 def test_internal_evaluation_contract_is_a_one_way_dependency() -> None:
     evaluator = _TRAINING_PACKAGE / "internal_evaluation.py"
     contract = _TRAINING_PACKAGE / "internal_evaluation_contract.py"
+    native_runtime = (
+        _TRAINING_PACKAGE / "internal_evaluation_native_runtime.py"
+    )
     evaluator_imports = _relative_imports(evaluator)
     contract_imports = _relative_imports(contract)
+    native_runtime_imports = _relative_imports(native_runtime)
 
     assert "internal_evaluation_contract" in evaluator_imports
+    assert "internal_evaluation_native_runtime" in evaluator_imports
     assert not contract_imports & {
         "internal_evaluation",
         "internal_evaluation_artifact",
+        "internal_evaluation_native_runtime",
         "native_pipeline",
         "qwen3_counterfactual",
         "qwen3_grounding",
         "streaming",
         "trainer",
     }
-    assert _top_level_classes(evaluator) == {
+    assert not native_runtime_imports & {
+        "internal_evaluation",
+        "internal_evaluation_artifact",
+        "metrics",
+        "streaming",
+        "trainer",
+    }
+    assert not _top_level_classes(evaluator)
+    assert _top_level_classes(native_runtime) == {
         "InjectedNativeCounterfactualEvaluator"
     }
     assert len(_top_level_classes(contract)) == 33
