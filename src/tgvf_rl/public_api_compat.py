@@ -5,6 +5,11 @@ facade and pickle coordinates.  A function is eligible only while its
 ``__module__`` still names the implementation module.  That ownership gate is
 important for dataclass and Protocol classes, whose dictionaries may contain
 shared helpers owned by :mod:`dataclasses` or :mod:`typing`.
+
+Rebinding is intentionally a metadata/serialization contract.  It does not
+rewrite a function's globals or emulate arbitrary monkeypatches of sibling
+symbols on the facade.  A production hook that must remain late-bound belongs
+in the facade explicitly and should have its own characterization test.
 """
 
 from __future__ import annotations
