@@ -23,6 +23,11 @@ The authorization-proof consumption follow-up is green with 2,386 passed, five
 skipped, and four warnings in 141.13 seconds; its expanded focused selection has
 289 passing tests in 64.83 seconds. Commit `311770f` passes the complete remote
 CI workflow in run `33304029789`.
+Worker-startup identity scaffold commit `6cb133d` is independently green across
+the complete remote workflow in run `33304509263`.
+The later compile-verifier import-firebreak follow-up has 2,427 passed, five
+skipped, and four warnings in 143.16 seconds. It is locally green and awaits its
+own remote result.
 Policy v3 revision 7 records the 17 remaining oversized modules and rejects
 growth, slack, stale entries, or a relaxed baseline. This plan does not
 authorize an experiment or rewrite historical evidence.
@@ -57,7 +62,7 @@ preserved historical snapshot, not the current head.
 At the current checkpoint, repository-boundary policy v3 revision 7 passes
 with 61 visible debts (five evidence-only roots, 25 machine paths, 17 oversized
 modules, and 14 run-specific paths) and zero violations. Execution-surface
-policy revision 6 binds 79 surfaces and the control-plane audit passes with
+policy revision 7 binds 79 surfaces and the control-plane audit passes with
 zero violations. Before the added size-tamper parameter, the focused
 stabilization selection had 304
 passing tests; the updated fd security file passes 10/10, and the fd-closure
@@ -72,6 +77,10 @@ The later authorization-proof consumption follow-up has 2,386 passed, five
 skipped, and four warnings in 141.13 seconds, with 289 passing focused tests in
 64.83 seconds. Commit `311770f` is green across install, lint, both audits, and
 the complete CPU suite in remote run `33304029789`.
+The newer compile-verifier import-firebreak head has 2,427 passed, five skipped,
+and four warnings in 143.16 seconds. Execution-surface revision 7 and boundary
+revision 7 pass locally at 79 surfaces/zero violations and 61 debts/zero
+violations, respectively; this head awaits its own remote workflow.
 Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
 full CPU job after five private-machine-path test fixtures were made hermetic.
 The fd-closure head `ab508c4` is independently green in remote run
@@ -183,6 +192,45 @@ control utility. The expanded focused selection has 289 passing tests in 64.83
 seconds; the final hermetic CPU suite has 2,386 passed, five skipped, and four
 warnings in 141.13 seconds. Both repository audits remain green at 61 debts/zero
 violations and 79 surfaces/zero violations.
+
+## 2026-08-30 worker-startup identity scaffold
+
+The dependency-light `tgvf_rl.ops.worker_startup` contract fixes the three
+roles `policy-driver`, `representation-launcher`, and `representation-member`.
+Its identity binds the exact argv, target, future runtime-package digest, and
+future dependency-roots digest. Process-local verified evidence is PID-bound,
+non-copyable, non-pickleable, and cannot be minted by ordinary construction.
+Thirty-nine focused tests pass, and commit `6cb133d` is green in remote run
+`33304509263`.
+
+This is a scaffold, not a launch-path migration. It does not yet provide the
+runtime/dependency locator, fixed role-to-target dispatch, Representation's
+separate launcher/member envelopes, or member claims. No experiment blocker is
+removed by this checkpoint.
+
+## 2026-08-30 compile-verifier import-firebreak follow-up
+
+The canonical Policy compile-prerequisite implementation now lives in the
+dependency-light `tgvf_rl.ops.policy_compile_prerequisites` leaf. The former
+`tgvf_rl.framework.verl.compile_prerequisites` path is an exact compatibility
+facade: its four public dataclasses and five public functions are the same
+objects and retain their historical import and pickle coordinates. Production
+Policy launch and worker code imports the light leaf directly.
+
+An isolated `python -B -P -S` regression imports that canonical leaf from an
+exact `PYTHONPATH` and proves that Torch, NumPy, Hydra, Ray, veRL, and
+`tgvf_rl.framework` remain unloaded. This removes one structural obstacle to a
+future worker bootstrap; it does not provide the immutable runtime package,
+dependency-root locator, startup envelope, or recursive compiler closure.
+Experiment policy revision 4 therefore remains frozen with the same seven
+blockers.
+
+Execution-surface revision 7 binds the changed Policy worker and control
+utility. Sixty-nine migration-focused tests pass; the full hermetic CPU suite
+has 2,427 passed, five skipped, and four warnings in 143.16 seconds. Boundary
+revision 7 remains at 61 debts/zero violations and the control audit remains at
+79 surfaces/zero violations. These results are local until this head's remote
+workflow completes.
 
 ## Why the repository feels fragmented
 
@@ -389,7 +437,9 @@ ratchet, the known-cycle condition, the fd-bound Python-exec blocker, and the
 strict child-environment blocker are complete, and C4 remains a read-only
 inventory. Validated one-use proof fields are also consumed before downstream
 dispatch. The predecessor, fd-closure, strict child-environment, and
-proof-consumption checkpoints all have green remote CPU CI.
+proof-consumption checkpoints all have green remote CPU CI. The newer
+compile-verifier import-firebreak checkpoint is locally green and awaits its
+own remote result.
 Portable runtime/CLI closure remains disabled by seven named blockers, now
 including `role_scoped_judge_secret_transport_missing`; immutable code/startup
 closure, the worker envelope and member claims, Ray-descendant environment

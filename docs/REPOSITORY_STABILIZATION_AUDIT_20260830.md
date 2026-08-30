@@ -24,7 +24,7 @@ not closed merely because the affected experiment has stopped running.
 | Area | State | Required closure |
 |---|---|---|
 | Repository ownership | partial | Boundary policy v3 revision 7 passes with zero violations and 61 visible debts: five evidence-only roots, 25 machine paths, 17 oversized modules, and 14 run-specific paths. Every oversized row binds its current line count, owner, rationale, and next split; baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
-| Execution-surface inventory | verified | Execution-surface policy revision 6 binds 79 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes with zero violations. |
+| Execution-surface inventory | verified | Execution-surface policy revision 7 binds 79 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes with zero violations. |
 | Public and historical launch surfaces | contained; fd execution and strict child environment narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Experiment policy revision 4 removes their blocker IDs but keeps launch false with seven blockers. Immutable runtime packaging, Python startup/`.pth` and import-before-authorization closure, worker startup envelope/member claims, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers are not thereby solved. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical RP/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
@@ -32,7 +32,7 @@ not closed merely because the affected experiment has stopped running.
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | current local and remote verification green | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passed, five skips, four warnings, and zero failures in 141.13 seconds; its expanded focused selection has 289 passing tests in 64.83 seconds. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 6 at 79 surfaces/zero violations. Commit `311770f` passes the complete remote workflow in run `33304029789`. |
+| Test discovery and behavior | newest head local green; preceding remote checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. The newer compile-verifier import-firebreak head has 2,427 passed, five skips, four warnings, and zero failures in 143.16 seconds; its 69 migration-focused tests pass. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 7 at 79 surfaces/zero violations. The newest head awaits its own remote workflow. |
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -137,6 +137,44 @@ Execution-surface revision 6 binds the changed surfaces. The expanded focused
 selection has 289 passing tests in 64.83 seconds, the final hermetic CPU suite
 has 2,386 passed, five skipped, and four warnings in 141.13 seconds, and both
 audits pass with zero violations.
+
+## 2026-08-30 worker-startup identity scaffold
+
+The dependency-light `tgvf_rl.ops.worker_startup` contract defines exact
+Policy driver, Representation launcher, and Representation member roles. Its
+identity binds complete argv, target, and future runtime-package and
+dependency-root digests. Verified evidence is PID-bound, non-copyable,
+non-pickleable, and unavailable through ordinary construction. Thirty-nine
+focused tests pass; commit `6cb133d` is green across the complete remote
+workflow in run `33304509263`.
+
+The scaffold is not wired into canonical launch dispatch and has no
+runtime/dependency locator, fixed role-to-target mapping, dual Representation
+envelopes, or member claims. Experiment policy revision 4 therefore remains
+frozen with the same seven blockers.
+
+## 2026-08-30 compile-verifier import-firebreak follow-up
+
+The Policy compile-prerequisite implementation moved out of the eager
+`tgvf_rl.framework.verl` package into the dependency-light
+`tgvf_rl.ops.policy_compile_prerequisites` leaf. The old module is an exact
+compatibility facade; four dataclasses and five public functions retain object
+identity plus their historical import and pickle coordinates. Canonical Policy
+launch and worker imports now use the light implementation path.
+
+An exact-environment `python -B -P -S` regression proves that importing the
+canonical verifier does not load Torch, NumPy, Hydra, Ray, veRL, or
+`tgvf_rl.framework`. This removes a structural import-before-authorization
+obstacle, but does not bind an immutable runtime package or dependency locator,
+define the worker envelope/member claims, or close the recursive compiler
+toolchain. Experiment policy revision 4 is unchanged and launch remains false
+with seven blockers.
+
+Execution-surface revision 7 binds the changed Policy worker and control
+utility. Sixty-nine migration-focused tests pass; the final hermetic CPU suite
+has 2,427 passed, five skipped, and four warnings in 143.16 seconds. Boundary
+revision 7 reports 61 debts/zero violations and the control audit reports 79
+surfaces/zero violations. This head is local until its own remote run completes.
 
 ## Historical post-ratchet consolidation milestone (`fd8da97`)
 
@@ -364,7 +402,7 @@ but is not score provenance.
 - Credentials must be passed to the target session/process only. Global tmux
   environment mutation is forbidden.
 - Direct entry-point coverage is recursive and exact, not marker-based. The
-  v2-schema inventory is at revision 6 and contains 79 content-bound rows. It
+  v2-schema inventory is at revision 7 and contains 79 content-bound rows. It
   covers every Python file in `tools`/`spikes`, all shell files there, and `src`
   modules exposed by a main guard, `__main__.py`, a Python shebang, executable
   mode, or a `project.scripts` console entry. The one non-entry support module
@@ -429,10 +467,13 @@ but is not score provenance.
   its local count is superseded by the later local suite. Each later remote
   status is stated separately below rather than inherited from this snapshot.
 - At the current checkpoint, repository boundary policy v3 revision 7 passes
-  with 61 debts and zero violations, and execution-surface policy revision 6
-  passes with 79 surfaces and zero violations. The authorization-proof
-  consumption follow-up has 2,386 passed, five skipped, four warnings, and zero
-  failures in 141.13 seconds, with 289 focused passes in 64.83 seconds. The
+  with 61 debts and zero violations, and execution-surface policy revision 7
+  passes with 79 surfaces and zero violations. The compile-verifier
+  import-firebreak follow-up has 2,427 passed, five skipped, four warnings, and
+  zero failures in 143.16 seconds, with 69 migration-focused passes. The
+  preceding authorization-proof consumption follow-up has 2,386 passed, five
+  skipped, four warnings, and zero failures in 141.13 seconds, with 289 focused
+  passes in 64.83 seconds. The
   preceding strict child-environment final hermetic CPU suite has 2,383 passed,
   five skipped, four warnings, and zero failures in 143.29 seconds. Its
   expanded focused selection has 285 passing tests in 64.77 seconds; its

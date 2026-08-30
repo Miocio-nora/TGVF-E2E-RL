@@ -244,6 +244,38 @@ changed files; 289 focused tests pass in 64.83 seconds and the full hermetic CPU
 suite has 2,386 passed, five skipped, and four warnings in 141.13 seconds. Both
 audits remain green with zero violations.
 
+## 2026-08-30 worker-startup identity scaffold
+
+The light `tgvf_rl.ops.worker_startup` leaf defines exact Policy driver,
+Representation launcher, and Representation member roles. It content-binds
+the complete argv, target, and future runtime-package and dependency-root
+digests. Its verified evidence is PID-bound, non-copyable, non-pickleable, and
+not publicly constructible. Thirty-nine focused tests pass; commit `6cb133d`
+passes the complete remote workflow in run `33304509263`.
+
+This contract is not yet the canonical executable entry. Runtime/dependency
+locators, fixed role dispatch, dual Representation envelopes, and member claims
+remain open, so experiment policy revision 4 and all seven blockers are
+unchanged.
+
+## 2026-08-30 compile-verifier import-firebreak follow-up
+
+Policy compile-prerequisite verification is now owned by the dependency-light
+`tgvf_rl.ops.policy_compile_prerequisites` leaf. The historical
+`tgvf_rl.framework.verl.compile_prerequisites` module is an exact compatibility
+facade and retains all established public and pickle coordinates. Canonical
+Policy production imports use the light leaf.
+
+An exact-environment `python -B -P -S` test proves the leaf imports without
+Torch, NumPy, Hydra, Ray, veRL, or `tgvf_rl.framework`. This is a prerequisite
+for authorization-before-runtime bootstrap work, not an immutable runtime
+package or complete startup envelope. Experiment policy revision 4 remains
+frozen with the same seven blockers. Execution-surface revision 7 binds the
+changed Policy worker and control utility; the full hermetic CPU suite has
+2,427 passed, five skipped, and four warnings in 143.16 seconds. Boundary and
+control audits pass locally at 61 debts/zero violations and 79 surfaces/zero
+violations.
+
 ## Absolute-path debt
 
 Machine-specific absolute paths under source and tools are prohibited for new
@@ -325,7 +357,7 @@ commands (`ready`, `authorize`, `override-freeze`, `consume`, `wait`, `status`,
 `quarantine-legacy`, and `audit-control-plane`) and to its exact conservative
 capability map. Parser-mode or policy drift blocks the audit.
 
-The revision-6 stabilization inventory contains 79 unique paths, and each has
+The revision-7 stabilization inventory contains 79 unique paths, and each has
 exactly one machine-checked disposition. The current control-plane audit covers
 all 79 and reports zero violations. The inventory contains two canonical
 entries, two control-audit utilities, 36 permanently quarantined Python
@@ -418,7 +450,7 @@ CUDA_VISIBLE_DEVICES='' .venv312/bin/python tools/check_launch_gate.py \
   audit-control-plane --repository-root .
 ```
 
-At this checkpoint execution-surface policy revision 6 binds all 79 surfaces,
+At this checkpoint execution-surface policy revision 7 binds all 79 surfaces,
 and both the control-plane and repository-boundary audits pass locally. The
 predecessor commit `a5dd0d1` is green in remote CI across dependency
 installation, lint, boundary, control-plane, and the full CPU suite after five
@@ -439,3 +471,6 @@ The later authorization-proof consumption follow-up has 289 focused passes in
 64.83 seconds and a full hermetic CPU result of 2,386 passed, five skipped, and
 four warnings in 141.13 seconds. Commit `311770f` passes install, lint, both
 audits, and the complete CPU suite in remote run `33304029789`.
+The newer compile-verifier import-firebreak follow-up has 69 focused passes and
+a full hermetic CPU result of 2,427 passed, five skipped, and four warnings in
+143.16 seconds. It is local until its own remote run completes.
