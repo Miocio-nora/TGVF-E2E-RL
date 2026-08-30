@@ -21,7 +21,7 @@ from tgvf_rl.representation.training.config import (
 )
 from tgvf_rl.representation.training.objective import RepresentationObjectiveKind
 
-from .trainer import ImageAxisGroundingObjectiveConfig
+from .objective import ImageAxisGroundingObjectiveConfig
 
 
 IMAGE_AXIS_GROUNDING_CONFIG_SCHEMA_VERSION = "image-axis-grounding-config-v1"

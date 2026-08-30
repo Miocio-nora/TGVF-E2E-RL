@@ -16,7 +16,6 @@ contract; a separate donor backward could be mistaken for the last backward.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
 
 import torch
 from torch.nn import functional as F
@@ -50,9 +49,7 @@ from tgvf_rl.representation.training.streaming import (
 )
 
 from .native_pipeline import ImageAxisGroundingGroup
-
-if TYPE_CHECKING:
-    from .trainer import ImageAxisGroundingObjectiveConfig
+from .objective import ImageAxisGroundingObjectiveConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,8 +485,6 @@ def _validate_inputs(
     legacy_objective: object,
     normalization: object,
 ) -> None:
-    from .trainer import ImageAxisGroundingObjectiveConfig
-
     if not isinstance(group, ImageAxisGroundingGroup):
         raise TypeError("image-axis backward requires ImageAxisGroundingGroup")
     if not isinstance(image_axis_objective, ImageAxisGroundingObjectiveConfig):
