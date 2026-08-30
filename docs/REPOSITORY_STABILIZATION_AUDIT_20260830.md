@@ -261,6 +261,64 @@ no CLI/`exec` wiring or member-bootstrap verification. Formal stage-0,
 immutable-runtime, and member-bootstrap blockers remain. Revision 4 stays
 launch-disabled with the same seven identifiers.
 
+## 2026-08-31 Policy startup authorization binding audit
+
+Policy startup-envelope binding landed in `e3aa054`; follow-up `48e3f07`
+preserves the established public type-error contract. Exact live
+runtime-locator evidence now produces an internally owned singleton
+`policy-driver` envelope whose command, fixed target, runtime/dependency
+digests, and executable path/SHA-256/length agree with the prepared fd-bound
+Python identity. Prepared schema v3 includes the complete envelope.
+
+Independent adversarial review found and closed two pre-commit defects:
+cross-group injection into the protected `worker_startup_` namespace and
+subclass dispatch around `PreparedPolicyLaunch.__post_init__`. Aggregate and
+consumed authorization maps are now reconstructed as complete envelopes, and
+execution accepts only the exact prepared type. The focused Policy/startup
+selection has 223 passes; complete remote run `33324381122` is green.
+
+The evidence remains borrowed and the runtime locator still reports incomplete
+closure. The public CLI does not materialize or pass this evidence, and no
+worker bootstrap consumes the envelope before runtime import. No blocker is
+removed: revision 4 remains launch-disabled with the same seven identifiers.
+
+## 2026-08-31 Representation member selection-only audit
+
+At checkpoint `1141df1`, an exact `CLIExecutionAuthorizationIdentity` is
+retained in the selection and its full gate identity digest is recorded. The
+selector reconstructs the complete startup plan, verifies
+configuration/world bindings and canonical identity JSON, validates the full
+materialized child environment, and binds every raw environment field into
+`full_environment_sha256`. Exact world sizes two and four, rank topology,
+unique GPU mapping, pinned standalone torchrun fields, and a real two-worker CPU
+Torch 2.9 subprocess are covered.
+
+Independent review first found three pre-commit defects: two distinct outer CLI
+authorities collapsed to the same selection, raw worker fields such as
+`PYTHONPATH` were projected away, and the synthetic torchrun fixture accepted
+an impossible agent-store/run-ID combination for the fixed `--standalone`
+command. The final checkpoint binds the complete gate identity and full raw
+environment, reuses the materialized child-environment verifier, requires
+`TORCHELASTIC_USE_AGENT_STORE=True`, and requires a canonical lowercase UUID4
+run ID. The original reviewer reproduced all three attacks against the fixed
+version and confirmed that they fail closed or produce distinct records.
+
+The resulting record is deliberately replayable:
+`authorization_scope="selection-only"` and `replay_protected=false`. It neither
+consumes receipt/liveness authority nor verifies runtime/module origin, imports
+the training target, dispatches a member, or mints verified startup evidence.
+Validation has 135 focused, 201 repository/control, and 553 complete
+`tests/ops` passes. The full suite has 2,672 passed, five skipped, and four
+warnings in 146.52 seconds; complete remote run `33324892712` is green. The
+repository-boundary audit remains at 61 registered debts and zero violations;
+the control-plane audit remains at 79 surfaces and zero violations.
+
+Member bootstrap and the same seven closure blockers remain open. At code
+checkpoint `1141df1`, the canonical line is 124 commits ahead of local `main`
+and 82 ahead of `origin/main`, with no opposite-side commits. Physical `main`
+remains unmodified by this work and still has 38 tracked plus 55 untracked
+status entries; no promotion or cleanup is authorized here.
+
 ## Historical post-ratchet consolidation milestone (`fd8da97`)
 
 This section preserves the earlier `fd8da97` snapshot. Its counts are not those

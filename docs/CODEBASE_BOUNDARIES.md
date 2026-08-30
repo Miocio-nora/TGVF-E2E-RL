@@ -361,6 +361,48 @@ individual claim. Formal stage-0 and immutable-runtime closure also remain
 absent. Experiment policy revision 4 stays at
 `runtime_closure.launch_enabled=false` with the same seven blockers.
 
+## 2026-08-31 Policy startup authorization binding boundary
+
+Commits `e3aa054` and `48e3f07` make runtime-locator evidence caller-owned,
+borrowed process-local evidence and make the resulting singleton Policy startup
+envelope `PreparedPolicyLaunch`-owned authorization data. The prepared object
+cannot be subclassed; executable identity, full argv, fixed driver target,
+runtime/dependency digests, and the exact three-field protected startup
+namespace are revalidated before authorization use and again at execution.
+Cross-group protected-name injection is rejected.
+
+This does not transfer runtime-root descriptor ownership to the prepared plan
+and does not establish worker-bootstrap authority. The canonical CLI currently
+supplies no locator evidence, so it cannot reach this scaffold after the
+existing closure gates are lifted without further wiring. The focused
+Policy/startup selection has 223 passes, and complete remote run `33324381122`
+is green. All seven runtime-closure blockers remain.
+
+## 2026-08-31 Representation member selection-only boundary
+
+Checkpoint `1141df1` gives the dependency-light selector ownership only of a
+copied selection record. Selection requires the complete exact outer CLI gate
+identity and complete materialized worker environment. Changes to any CLI
+parameter or raw base, receipt/liveness, or torchrun field change the bound
+record or fail verification. Rank selection is derived from the complete
+startup plan and exact world/rank/GPU mapping.
+
+The record explicitly states `authorization_scope="selection-only"` and
+`replay_protected=false`. Receipt and liveness values are bound as input bytes
+but are not consumed as one-use filesystem authority. The selector performs no
+runtime-origin verification, target import, dispatch, or
+`VerifiedWorkerStartup` minting. Validation has 135 focused, 201
+repository/control, and 553 complete `tests/ops` passes. The full suite has
+2,672 passed, five skipped, and four warnings in 146.52 seconds; complete remote
+run `33324892712` is green.
+
+A future member bootstrap must add one-use receipt consumption and
+immutable-runtime verification. The seven launch blockers remain unchanged. At
+code checkpoint `1141df1`, the canonical line is 124 commits ahead of local
+`main` and 82 ahead of `origin/main`, while physical `main` remains dirty with
+the same 93 collapsed status entries; this boundary does not authorize
+promotion.
+
 ## 2026-08-30 canonical line versus physical `main`
 
 At verified code checkpoint `4dd8267`, the graph is linear: the stabilization

@@ -326,6 +326,56 @@ There is no CLI/`exec` wiring or member-bootstrap verification. Formal stage-0,
 immutable-runtime, and member-bootstrap blockers remain; revision 4 stays
 launch-disabled with the same seven identifiers.
 
+## 2026-08-31 Policy startup authorization binding scaffold
+
+Implementation commit `e3aa054` and error-contract follow-up `48e3f07` require
+every exact `PreparedPolicyLaunch` to receive live, exact-type, PID-bound
+`VerifiedRuntimeLocatorScaffoldEvidence`. The evidence is borrowed rather than
+retained or closed. Policy constructs its singleton `policy-driver` startup
+envelope internally and binds the complete prepared command, fixed driver
+target, runtime/dependency identities, and executable path, SHA-256, and byte
+length to the fd-bound Python identity.
+
+The prepared identity advances to schema v3. Its complete protected
+`worker_startup_` namespace is reconstructed after authorization-parameter
+aggregation and again at execution. Cross-group protected-name injection,
+downgrade fields, changed envelopes, and prepared-plan subclasses fail closed.
+The Policy/startup focused selection has 223 passing tests. Complete remote CI
+run `33324381122` is green across install, lint, both audits, and the full CPU
+suite.
+
+This is an authorization-binding scaffold, not a completed startup chain. The
+public Policy CLI does not yet construct or pass runtime-locator evidence, and
+no stage-0 bootstrap verifies the envelope before runtime imports. The existing
+compile and runtime-closure gates still precede this requirement. Experiment
+policy revision 4 remains launch-disabled with the same seven exact blockers.
+
+## 2026-08-31 Representation member selection-only scaffold
+
+Checkpoint `1141df1` adds a dependency-light selector that reconstructs the
+complete `RepresentationStartupPlan` from an exact caller-supplied outer CLI
+identity and selects one rank only from an exact copied torchrun worker
+environment. It binds the complete CLI gate identity, configuration and world
+identities, full child-environment identity, CLI receipt/liveness strings,
+torchrun topology, dynamic standalone fields, rank, and physical-GPU mapping.
+A real pinned Torch 2.9 two-worker CPU subprocess regression characterizes the
+emitted worker fields.
+
+`RepresentationMemberSelection` is ordinary authorization data with
+`authorization_scope="selection-only"` and `replay_protected=false`. It exposes
+no standalone authorization parameters, establishes no authorization
+consumption, verifies no runtime origin, imports no training target, and mints
+no `VerifiedWorkerStartup`. Validation has 135 focused, 201 repository/control,
+and 553 complete `tests/ops` passes. The committed full hermetic suite has 2,672
+passed, five skipped, and four warnings in 146.52 seconds; complete remote run
+`33324892712` is green.
+
+Production member bootstrap remains unwired and the same seven launch blockers
+remain. At code checkpoint `1141df1`, the canonical line is 124 commits ahead
+of local `main` and 82 ahead of `origin/main`, with zero opposite-side commits
+in both comparisons. Physical `main` still has 38 tracked and 55 untracked
+status entries, so no promotion is authorized by this checkpoint.
+
 ## Why the repository feels fragmented
 
 The problem is not only the number of branches. The C0 tag contained 245
