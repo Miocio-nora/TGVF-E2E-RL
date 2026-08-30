@@ -42,6 +42,7 @@ from tgvf_rl.secure_file_read import (
     SecureFileReadError,
     retain_regular_file_absolute_nofollow,
 )
+from tests.runtime_locator_support import verified_runtime_locator_evidence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -287,7 +288,11 @@ def test_policy_exec_uses_integer_bound_fd_and_closes_on_exec_failure(
     declared = _copied_executable(tmp_path)
     binding = _binding_for_path(declared)
     descriptor = binding.fileno()
-    command = (str(declared), "-m", "worker")
+    command = (
+        str(declared),
+        "-m",
+        "tgvf_rl.framework.verl.policy_main",
+    )
     receipt = SimpleNamespace(receipt_sha256="d" * 64)
     plan = SimpleNamespace(
         assert_launch_ready=lambda: None,
@@ -306,6 +311,10 @@ def test_policy_exec_uses_integer_bound_fd_and_closes_on_exec_failure(
         manifest_source_sha256="f" * 64,
     )
     compile_authorization = SimpleNamespace(authorization_parameters=lambda: {})
+    runtime_locator_evidence = verified_runtime_locator_evidence(
+        tmp_path,
+        executable=binding.identity.resolved_path,
+    )
     prepared = policy_launch.PreparedPolicyLaunch(
         config=config,
         plan=plan,
@@ -318,6 +327,7 @@ def test_policy_exec_uses_integer_bound_fd_and_closes_on_exec_failure(
             POLICY_VERL_DRIVER_PROFILE
         ),
         repository_root=tmp_path,
+        runtime_locator_evidence=runtime_locator_evidence,
         python_binding=binding,
     )
     identity = CLIExecutionAuthorizationIdentity.create(
@@ -369,6 +379,7 @@ def test_policy_exec_uses_integer_bound_fd_and_closes_on_exec_failure(
     }
     assert "OPENROUTER_API_KEY" not in captured_environment
     assert binding.closed
+    runtime_locator_evidence.close()
     with pytest.raises(OSError):
         os.fstat(descriptor)
 

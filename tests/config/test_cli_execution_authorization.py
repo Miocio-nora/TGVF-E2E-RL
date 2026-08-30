@@ -215,10 +215,16 @@ def test_policy_uses_one_prepared_identity_after_consumption(
         source_sha256="b" * 64,
         source_path=binding.source_path,
     )
+    prepared_parameters = {
+        "prepared_policy_launch_sha256": "e" * 64,
+        "worker_startup_envelope_schema": "tgvf-worker-startup-envelope-v1",
+        "worker_startup_envelope_json": '{"bound":"policy-driver"}',
+        "worker_startup_envelope_sha256": "f" * 64,
+    }
     prepared = SimpleNamespace(
         config=config,
         horizon_extension=None,
-        authorization_parameters=lambda: {"prepared_policy_launch_sha256": "e" * 64},
+        authorization_parameters=lambda: prepared_parameters,
         close_python_binding=lambda: None,
     )
     worker = CLIWorkerAuthorization(
@@ -289,6 +295,16 @@ def test_policy_uses_one_prepared_identity_after_consumption(
     assert executed[1] is prepared
     assert executed[2]["launch_identity"] is consumed_identity
     assert "compile_prerequisite_manifest_path" not in executed[2]
+    consumed_parameters = dict(consumed_identity.parameters)
+    assert {
+        name: consumed_parameters[name]
+        for name in prepared_parameters
+        if name.startswith("worker_startup_")
+    } == {
+        name: value
+        for name, value in prepared_parameters.items()
+        if name.startswith("worker_startup_")
+    }
 
 
 def test_representation_preflights_then_consumes_then_executes_same_plan(

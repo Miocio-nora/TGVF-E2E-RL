@@ -1691,6 +1691,7 @@ def test_policy_launch_record_and_pre_authorization_preflight_fail_closed(
         preflight_policy_launch_for_authorization(
             config,
             compile_prerequisite_manifest_path=None,
+            runtime_locator_evidence=object(),  # type: ignore[arg-type]
         )
 
     binding = _write_compile_prerequisites(tmp_path)
@@ -1708,6 +1709,7 @@ def test_policy_launch_record_and_pre_authorization_preflight_fail_closed(
         preflight_policy_launch_for_authorization(
             config,
             compile_prerequisite_manifest_path=binding.manifest_source_path,
+            runtime_locator_evidence=object(),  # type: ignore[arg-type]
         )
 
 

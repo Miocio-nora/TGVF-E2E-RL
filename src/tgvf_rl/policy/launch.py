@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 import hashlib
 import json
 import os
@@ -41,6 +41,12 @@ from tgvf_rl.ops.cli_authorization import (
     cli_worker_authorization_environment,
     verify_python_executable_binding,
 )
+from tgvf_rl.ops.runtime_locator import VerifiedRuntimeLocatorScaffoldEvidence
+from tgvf_rl.ops.worker_startup import (
+    POLICY_DRIVER_ROLE,
+    WorkerStartupEnvelope,
+    WorkerStartupIdentity,
+)
 
 from .horizon_extension import (
     PolicyHorizonExtension,
@@ -50,7 +56,16 @@ from .run_config import PolicyE2ESmokeRunConfig
 
 
 POLICY_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+POLICY_DRIVER_STARTUP_TARGET = "tgvf_rl.framework.verl.policy_main:main"
+_POLICY_DRIVER_MAIN_MODULE = POLICY_DRIVER_STARTUP_TARGET.partition(":")[0]
 _EXPERIMENT_LEDGER_PATH = "docs/EXPERIMENT_LEDGER.md"
+_WORKER_STARTUP_ENVELOPE_AUTHORIZATION_KEYS = frozenset(
+    {
+        "worker_startup_envelope_schema",
+        "worker_startup_envelope_json",
+        "worker_startup_envelope_sha256",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,10 +121,19 @@ class PreparedPolicyLaunch:
     command: tuple[str, ...]
     child_environment_binding: ChildEnvironmentBinding
     repository_root: Path
+    runtime_locator_evidence: InitVar[VerifiedRuntimeLocatorScaffoldEvidence]
     horizon_extension: PolicyHorizonExtension | None = None
     python_binding: PythonExecutableBinding | None = None
+    worker_startup_envelope: WorkerStartupEnvelope = field(init=False)
+    _worker_startup_envelope_sha256: str = field(init=False, repr=False)
 
-    def __post_init__(self) -> None:
+    def __init_subclass__(cls, **_kwargs: object) -> None:
+        raise TypeError("PreparedPolicyLaunch cannot be subclassed")
+
+    def __post_init__(
+        self,
+        runtime_locator_evidence: VerifiedRuntimeLocatorScaffoldEvidence,
+    ) -> None:
         if not isinstance(self.child_environment_binding, ChildEnvironmentBinding):
             raise TypeError("child_environment_binding must be ChildEnvironmentBinding")
         if self.child_environment_binding.profile != POLICY_VERL_DRIVER_PROFILE:
@@ -123,6 +147,17 @@ class PreparedPolicyLaunch:
             and self.python_binding.identity != self.python_identity
         ):
             raise ValueError("prepared Python binding differs from its identity")
+        envelope = _build_policy_worker_startup_envelope(
+            command=self.command,
+            python_identity=self.python_identity,
+            runtime_locator_evidence=runtime_locator_evidence,
+        )
+        object.__setattr__(self, "worker_startup_envelope", envelope)
+        object.__setattr__(
+            self,
+            "_worker_startup_envelope_sha256",
+            envelope.envelope_sha256,
+        )
 
     def close_python_binding(self) -> None:
         """Release the process-local executable capability if still owned."""
@@ -132,8 +167,9 @@ class PreparedPolicyLaunch:
 
     @property
     def prepared_identity_sha256(self) -> str:
+        startup_envelope = self._validated_worker_startup_envelope()
         record = {
-            "schema_version": "tgvf-prepared-policy-launch-v2",
+            "schema_version": "tgvf-prepared-policy-launch-v3",
             "run_identity_sha256": self.config.identity_sha256,
             "config_source_sha256": self.config.source_sha256,
             "horizon_extension_sha256": (
@@ -145,6 +181,7 @@ class PreparedPolicyLaunch:
             "compile": self.compile_authorization.authorization_parameters(),
             "python": self.python_identity.authorization_parameters(),
             "command": list(self.command),
+            "worker_startup_envelope": startup_envelope.as_record(),
             "child_environment": (
                 self.child_environment_binding.authorization_parameters()
             ),
@@ -153,12 +190,58 @@ class PreparedPolicyLaunch:
         return _canonical_json_sha256(record)
 
     def authorization_parameters(self) -> dict[str, str]:
-        return {
-            **self.compile_authorization.authorization_parameters(),
-            **self.python_identity.authorization_parameters(),
-            **self.child_environment_binding.authorization_parameters(),
-            "prepared_policy_launch_sha256": self.prepared_identity_sha256,
-        }
+        startup_envelope = self._validated_worker_startup_envelope()
+        startup_parameters = startup_envelope.authorization_parameters()
+        if (
+            type(startup_parameters) is not dict
+            or set(startup_parameters) != _WORKER_STARTUP_ENVELOPE_AUTHORIZATION_KEYS
+        ):
+            raise RuntimeError(
+                "Policy worker startup authorization parameter group differs"
+            )
+        merged = _merge_disjoint_authorization_parameter_groups(
+            (
+                "compile prerequisites",
+                self.compile_authorization.authorization_parameters(),
+            ),
+            ("Python executable", self.python_identity.authorization_parameters()),
+            (
+                "child environment",
+                self.child_environment_binding.authorization_parameters(),
+            ),
+            ("worker startup envelope", startup_parameters),
+            (
+                "prepared Policy launch",
+                {"prepared_policy_launch_sha256": self.prepared_identity_sha256},
+            ),
+        )
+        try:
+            reconstructed = WorkerStartupEnvelope.from_authorization_parameters(
+                merged,
+                expected_entry_role=POLICY_DRIVER_ROLE,
+            )
+        except (TypeError, ValueError, PermissionError) as error:
+            raise RuntimeError(
+                "Policy worker startup authorization namespace differs"
+            ) from error
+        if reconstructed != startup_envelope:
+            raise RuntimeError("Policy worker startup authorization envelope differs")
+        return merged
+
+    def _validated_worker_startup_envelope(self) -> WorkerStartupEnvelope:
+        envelope = self.worker_startup_envelope
+        if type(envelope) is not WorkerStartupEnvelope:
+            raise RuntimeError("prepared Policy worker startup envelope type differs")
+        if envelope.envelope_sha256 != self._worker_startup_envelope_sha256:
+            raise RuntimeError("prepared Policy worker startup envelope changed")
+        if envelope.entry_role != POLICY_DRIVER_ROLE:
+            raise RuntimeError("prepared Policy worker startup entry role differs")
+        identity = envelope.identity_for_role(POLICY_DRIVER_ROLE)
+        if identity.command != self.command:
+            raise RuntimeError("prepared Policy worker startup command differs")
+        if identity.target != POLICY_DRIVER_STARTUP_TARGET:
+            raise RuntimeError("prepared Policy worker startup target differs")
+        return envelope
 
 
 def build_policy_launch_record(
@@ -192,6 +275,7 @@ def preflight_policy_launch_for_authorization(
     config: PolicyE2ESmokeRunConfig,
     *,
     compile_prerequisite_manifest_path: str | Path | None,
+    runtime_locator_evidence: VerifiedRuntimeLocatorScaffoldEvidence | None = None,
     python_executable: str | Path | None = None,
     repository_root: str | Path = POLICY_REPOSITORY_ROOT,
     horizon_extension: PolicyHorizonExtension | None = None,
@@ -224,6 +308,10 @@ def preflight_policy_launch_for_authorization(
         repository_root=repository_root,
         horizon_extension=horizon_extension,
     )
+    if runtime_locator_evidence is None:
+        raise RuntimeError(
+            "verified Policy runtime locator scaffold evidence is required"
+        )
     python_binding = bind_current_python_executable_for_exec(
         python_executable or sys.executable
     )
@@ -248,12 +336,99 @@ def preflight_policy_launch_for_authorization(
             command=command,
             child_environment_binding=child_environment_binding,
             repository_root=Path(repository_root).resolve(),
+            runtime_locator_evidence=runtime_locator_evidence,
             horizon_extension=horizon_extension,
             python_binding=python_binding,
         )
     except BaseException:
         python_binding.close()
         raise
+
+
+def _build_policy_worker_startup_envelope(
+    *,
+    command: tuple[str, ...],
+    python_identity: PythonExecutableIdentity,
+    runtime_locator_evidence: VerifiedRuntimeLocatorScaffoldEvidence,
+) -> WorkerStartupEnvelope:
+    """Build authorization data from borrowed, already-verified evidence.
+
+    The evidence remains owned by the caller.  This function neither retains
+    nor closes its descriptor capabilities.
+    """
+
+    if type(runtime_locator_evidence) is not VerifiedRuntimeLocatorScaffoldEvidence:
+        raise TypeError(
+            "runtime_locator_evidence must be exactly "
+            "VerifiedRuntimeLocatorScaffoldEvidence"
+        )
+    if type(python_identity) is not PythonExecutableIdentity:
+        raise TypeError("python_identity must be exactly PythonExecutableIdentity")
+    if type(command) is not tuple or not command:
+        raise TypeError("prepared Policy command must be a non-empty exact tuple")
+    if command[0] != str(python_identity.declared_path):
+        raise ValueError("prepared Policy argv[0] differs from declared Python path")
+    if len(command) < 3 or command[1:3] != ("-m", _POLICY_DRIVER_MAIN_MODULE):
+        raise ValueError("prepared Policy argv does not invoke the fixed driver module")
+
+    manifest = runtime_locator_evidence.manifest
+    executable = manifest.executable
+    if executable.path != python_identity.resolved_path:
+        raise ValueError(
+            "Policy runtime locator executable path differs from resolved Python path"
+        )
+    if executable.sha256 != python_identity.sha256:
+        raise ValueError(
+            "Policy runtime locator executable SHA256 differs from Python identity"
+        )
+    if executable.byte_length != python_identity.byte_length:
+        raise ValueError(
+            "Policy runtime locator executable byte length differs from Python identity"
+        )
+    if POLICY_DRIVER_STARTUP_TARGET not in manifest.target_coordinates:
+        raise ValueError(
+            "Policy runtime locator does not declare the fixed driver target"
+        )
+
+    identity = WorkerStartupIdentity(
+        role=POLICY_DRIVER_ROLE,
+        command=command,
+        target=POLICY_DRIVER_STARTUP_TARGET,
+        runtime_package_sha256=runtime_locator_evidence.runtime_package_sha256,
+        dependency_roots_sha256=runtime_locator_evidence.dependency_roots_sha256,
+    )
+    return WorkerStartupEnvelope(
+        entry_role=POLICY_DRIVER_ROLE,
+        identities=(identity,),
+    )
+
+
+def _merge_disjoint_authorization_parameter_groups(
+    *groups: tuple[str, dict[str, str]],
+) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for label, parameters in groups:
+        if type(label) is not str or not label:
+            raise TypeError("Policy authorization parameter group label differs")
+        if type(parameters) is not dict:
+            raise TypeError(
+                f"Policy {label} authorization parameters must be an exact dict"
+            )
+        if any(type(key) is not str for key in parameters):
+            raise TypeError(
+                f"Policy {label} authorization parameter keys must be exactly str"
+            )
+        if any(type(value) is not str for value in parameters.values()):
+            raise TypeError(
+                f"Policy {label} authorization parameter values must be exactly str"
+            )
+        collisions = sorted(set(merged).intersection(parameters))
+        if collisions:
+            raise RuntimeError(
+                f"Policy {label} authorization parameters collide: {collisions!r}"
+            )
+        merged.update(parameters)
+    return merged
 
 
 def policy_child_environment(
@@ -381,8 +556,8 @@ def execute_policy_e2e_smoke(
     second, potentially different launch identity could be constructed.
     """
 
-    if not isinstance(prepared, PreparedPolicyLaunch):
-        raise TypeError("prepared must be PreparedPolicyLaunch")
+    if type(prepared) is not PreparedPolicyLaunch:
+        raise TypeError("prepared must be exactly PreparedPolicyLaunch")
     python_binding = prepared.python_binding
     if python_binding is None:
         raise RuntimeError("prepared Policy launch has no bound Python fd")
@@ -391,10 +566,27 @@ def execute_policy_e2e_smoke(
             raise RuntimeError(
                 "prepared Policy Python capability differs from its authorization identity"
             )
-        if not isinstance(launch_identity, CLIExecutionAuthorizationIdentity):
-            raise TypeError("launch_identity must be CLIExecutionAuthorizationIdentity")
+        if type(launch_identity) is not CLIExecutionAuthorizationIdentity:
+            raise TypeError(
+                "launch_identity must be exactly CLIExecutionAuthorizationIdentity"
+            )
         expected_parameters = prepared.authorization_parameters()
         observed_parameters = dict(launch_identity.parameters)
+        try:
+            observed_startup_envelope = (
+                WorkerStartupEnvelope.from_authorization_parameters(
+                    observed_parameters,
+                    expected_entry_role=POLICY_DRIVER_ROLE,
+                )
+            )
+        except (TypeError, ValueError, PermissionError) as error:
+            raise RuntimeError(
+                "consumed Policy worker startup authorization differs"
+            ) from error
+        if observed_startup_envelope != prepared._validated_worker_startup_envelope():
+            raise RuntimeError(
+                "consumed Policy worker startup envelope differs from prepared launch"
+            )
         for name, expected in expected_parameters.items():
             if observed_parameters.get(name) != expected:
                 raise RuntimeError(
@@ -596,6 +788,7 @@ def _canonical_json_sha256(value: object) -> str:
 
 
 __all__ = [
+    "POLICY_DRIVER_STARTUP_TARGET",
     "POLICY_REPOSITORY_ROOT",
     "PreparedPolicyLaunch",
     "PolicyCompileAuthorizationProof",
