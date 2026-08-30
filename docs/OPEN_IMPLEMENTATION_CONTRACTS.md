@@ -1,13 +1,22 @@
 # Open Implementation Contracts
 
-Status: **bounded framework implementation complete; production gate checklist active**
+Status: **repository stabilization active; GPU execution frozen**
 Recorded: **2026-07-19 JST**
+Updated: **2026-08-30 JST**
 
 ## 1. Purpose
 
 This file records implementation contracts that are still missing or only
 partially specified. It separates framework-skeleton work from decisions that
 must be frozen before rollout, an optimizer step, or GPU execution.
+
+Repository-wide stabilization decision
+`REPOSITORY-STABILIZATION-20260830` is authoritative while this checklist is
+being reconciled. Its preservation, protocol, result-registry, launch-gate and
+verification requirements are recorded in
+[`REPOSITORY_STABILIZATION_AUDIT_20260830.md`](REPOSITORY_STABILIZATION_AUDIT_20260830.md).
+No historical `PLANNED`, watcher, relay, or completed prerequisite bypasses the
+current execution freeze.
 
 Rules:
 

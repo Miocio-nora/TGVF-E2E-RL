@@ -40,6 +40,13 @@ If the veRL checkpoint already contains complete weights under
 it executes `python -m verl.model_merger merge --backend fsdp ...` and hashes
 the resulting HF tree.
 
+“Immutable” applies to the JSON identity records, not to a second private copy
+of the model payload. The receipt continues to reference its external
+`model_path`; the prepare/freeze path copies only the manifest and receipt.
+Consequently, a frozen full-model record is valid only while both the source
+checkpoint and materialized Hugging Face tree still match every recorded file
+digest.
+
 Before every evaluator launch, revalidate both the source checkpoint and the
 materialized model:
 
@@ -52,4 +59,12 @@ materialized model:
 
 The full-model vLLM builder loads the receipt's `model_path`, sets
 `enable_lora=False`, uses no custom recorded-feature architecture, and passes no
-`lora_request` argument to generation.
+`lora_request` argument to generation. Official execution never uses the
+metadata-only `runtime_lightweight` loader: it streams the exact checkpoint
+and model closure when loading frozen records, then repeats that content check
+as the first builder action immediately before importing/constructing vLLM.
+Same-size mutation of a `.bin` or `.safetensors` file therefore fails even
+when names and sizes are unchanged. vLLM does not expose an engine-loaded
+full-model digest, so a same-UID mutation racing the later vLLM file reads
+remains a documented residual; these records must not be described as a sealed
+private weight copy.

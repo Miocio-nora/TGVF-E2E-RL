@@ -64,7 +64,7 @@ A/B comparison.
 
 `Score evidence` is `content-checked` only when the registered Macro* and all seven components are parsed from and matched to a typed score summary; `digest-only` binds provenance bytes but does not validate the registered score content.
 
-`Δ` is emitted only for two golden rows in one independently preregistered comparison group when all invariants match and the actual differences equal the group-level intervention axes exactly; `contract differs` is a deliberate fail-closed result.
+Registry v2 cannot promote `golden` rows or emit numeric `Δ`: its score artifacts are not mechanically bound to evaluation identity, trajectory-set identity, weights and the full comparison contract. `contract differs` is the deliberate fail-closed display until a later receipt schema closes that provenance chain.
 
 PRL27-A is separately registered `invalid`: it combined a matched60 live
 appender with generic86 replay geometry, so all checkpoint/reward/status claims

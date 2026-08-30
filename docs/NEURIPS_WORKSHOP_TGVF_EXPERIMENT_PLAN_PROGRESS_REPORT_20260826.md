@@ -11,12 +11,34 @@
 >
 > `c448e583`/PRL27-B 才是首个让同一份 renderer bytes 同时进入 live appender 与 replay
 > layout 的 canonical 实现；该运行停在 S4，没有 S32 checkpoint 或正式评测，状态为
-> `pending`。No-Tool、Pure TGVF 与 Atomic 使用不同 renderer，不受这一 Crop-only 缺陷直接
-> 影响。任何 fresh Crop 结论都必须等待 canonical lineage 从 S0 完成训练与测评。
+> `pending`。No-Tool 不经过视觉工具 observation。对实现提交 `b100d3d`、`ec0555b`、
+> `8e6b3d`、`5baddc` 以及实际 provenance checkout `b87126a`、`017b507`、`001838b`
+> 的独立逐文件复核确认，Pure TGVF 与 Atomic 都把同一个按模型 dialect 渲染的 success
+> text 显式传给 live appender 与 layout；训练 replay 直接使用 trajectory 已记录的
+> `final_ids/native_rows`，没有触发 layout 的 `None -> Thinking` fallback。因此这些行不受
+> Crop-only matched60/generic86 缺陷影响。这里的正式路径是 `training_run`/precomputed
+> runtime；即使 task manifest 名称含 `official-visible`，也不能把结果表述为
+> official-visible/native-pixel 评测。稳定化代码仍已移除该隐式 fallback，使未来任何
+> Crop/TGVF/Atomic 运行都必须用同一份显式 protocol/dialect renderer bytes 驱动 live
+> append 与 replay layout。
+
+> **阻断性更正——Strict action boundary 只对未来显式绑定的运行生效（2026-08-30）：**
+> 当前没有任何历史 config 绑定新 `StrictNativeDeepEyesAgentLoopV2`；PRL13 仍是 legacy
+> `NativeDeepEyesAgentLoop`，PRL26/PRL27 则走另一条 generic loop。因此稳定化修复不能
+> 追溯改写历史 reward。对 13 个已保留 PRL13 JSONL 的只读反事实重放覆盖 2,828 条唯一
+> trajectory，发现 790 条至少含一个 strict-invalid turn，其中 447 条历史上仍是
+> `acc=1` 且 score>0；主要问题为同一 assistant turn 多次 tool call。这个结果只证明
+> retained PRL13 evidence 与 strict-v2 存在实质偏离，不外推到未保留 rollout，也不直接
+> 判定 PRL26/PRL27。未来 canonical tool RL 必须在 run config 中显式绑定 strict loop 和
+> `action_boundary_violation_*` telemetry，不能只依赖生成 stop 参数。
+> 本报告后文为保持历史 run identity 而保留的 `fixed-boundary` / `boundary-fix` 标签，
+> 一律只表示当时的 sampling stop、evaluator guard 与事后输出审计，不表示当前
+> producer-bound strict-v2 合同。
 
 > **当前权威口径：** 旧 Crop processor-default S32/S80 `61.6699/59.1785` 不是 true-1M，
-> 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、fixed `</tool_call>`
-> action boundary、`2,240/2,240` 支持集和七项 scorer 完成测量，但同样受上述 continuation
+> 仅作历史记录。Crop S32/S80 已以有效 `max_pixels=1,003,520`、配置的 `</tool_call>`
+> stop、事后 raw-text boundary 审计、`2,240/2,240` 支持集和七项 scorer 完成测量；但该
+> artifact 没有 producer-bound strict-v2 identity/telemetry，并且同样受上述 continuation
 > mismatch 约束，不能作为 aligned golden。Original raw-direct true-1M
 > 也已完成 2,511 行正式评分并通过验收，Macro* 为 `61.3147`。No-Tool S0/S8/S16/S32 的
 > corrected true-1M V2 现已全部闭合；事前冻结 S32 Macro* 为 `63.7520`。冻结定义、完整证据与实时状态见
@@ -45,11 +67,12 @@
 
 `Score evidence` is `content-checked` only when the registered Macro* and all seven components are parsed from and matched to a typed score summary; `digest-only` binds provenance bytes but does not validate the registered score content.
 
-`Δ` is emitted only for two golden rows in one independently preregistered comparison group when all invariants match and the actual differences equal the group-level intervention axes exactly; `contract differs` is a deliberate fail-closed result.
+Registry v2 cannot promote `golden` rows or emit numeric `Δ`: its score artifacts are not mechanically bound to evaluation identity, trajectory-set identity, weights and the full comparison contract. `contract differs` is the deliberate fail-closed display until a later receipt schema closes that provenance chain.
 
-这意味着 `Δ` 只允许在两行均为 `golden`、属于同一独立 preregistration 的固定成员、硬不变量一致，
-且实际差异集合与组级 intervention axes **精确相等**时生成；任何未声明的额外差异，
-或声明后实际未改变的轴，都会 fail closed。task manifest、RNG、scorer 与覆盖计数属于硬不变量；
+这意味着 v2 无论行标签如何都不会生成 `Δ`。未来 receipt schema 除了先机械闭合
+score→evaluation identity→trajectory set→weights→完整合同的证据链，还必须要求两行属于同一独立
+preregistration 的固定成员、硬不变量一致，且实际差异集合与组级 intervention axes **精确相等**；
+任何未声明的额外差异，或声明后实际未改变的轴，都会 fail closed。task manifest、RNG、scorer 与覆盖计数属于硬不变量；
 method、weights、训练合同、像素、runtime/parser/action-boundary/observation/prompt/generation 则可以被记录为实验
 干预轴，而不再被错误地要求无条件相同。七项 component 值仍作为各自合同内的描述性证据保留在
 registry 绑定的 score artifact 和 Appendix A，不再据此生成跨方法排序、胜出数或差值。
@@ -78,7 +101,7 @@ S32 在历史 Crop 曲线中高于 S80；两者都受 continuation mismatch 约�
 
 `Score evidence` is `content-checked` only when the registered Macro* and all seven components are parsed from and matched to a typed score summary; `digest-only` binds provenance bytes but does not validate the registered score content.
 
-`Δ` is emitted only for two golden rows in one independently preregistered comparison group when all invariants match and the actual differences equal the group-level intervention axes exactly; `contract differs` is a deliberate fail-closed result.
+Registry v2 cannot promote `golden` rows or emit numeric `Δ`: its score artifacts are not mechanically bound to evaluation identity, trajectory-set identity, weights and the full comparison contract. `contract differs` is the deliberate fail-closed display until a later receipt schema closes that provenance chain.
 
 本表没有跨方法 numeric delta。
 
@@ -122,7 +145,8 @@ Crop 的严格 1M→512 resolution response 目前缺失：历史 `62.0967` 的�
 | S32 | 1,423 / 2,240 | 63.53% | 1,769 | 92 | 11 |
 | S80 | 2,006 / 2,240 | 89.55% | 2,043 | 102 | 0 |
 
-fixed action boundary 已阻止旧 answer-over-action 路径。S80 的结构审计另发现 `1` 个未闭合的第二
+retained output 的事后审计没有重现旧 answer-over-action 尾文；这不能替代缺失的
+producer-bound strict-v2 telemetry。S80 的结构审计另发现 `1` 个未闭合的第二
 `<tool_call>` opener；它未被执行为合法调用，但作为语法边界明示保留。S32/S80 的 audit
 receipt identity 分别为 `0109f7f4f602106bf71bca50309019ae248962387dd7aa33f2b8e12c65042581`
 与 `fac02bd313a2c9786b93f7927dccb25403f7b6421aba3256e21d40a97757bbe9`；对应
@@ -144,7 +168,7 @@ TGVF Short S32 只有训练 receipt、尚无正式评测；Target-guide-v2 与 A
 | Arm | 审计状态（2026-08-30） | 已验收边界 | 处置 |
 |---|---|---|---|
 | No-Tool Train@512 | **S32 与 Eval@512 正式闭合；Macro* 59.0506** | `2,240` predictions、`2,511` scorer rows、7 slices、0 judge parse failure；summary SHA `ef9d247c...` | 仅作 standalone reference；不得与 Crop 补算 A/B delta |
-| Historical Crop Train@512（PRL26-B） | **S32 与 Eval@512 已闭合；Macro* 54.9351；隔离** | pixel/action boundary/覆盖正确，但 post-tool continuation mismatch | 不得作为 aligned Crop；不得用旧权重重测“修复” |
+| Historical Crop Train@512（PRL26-B） | **S32 与 Eval@512 已闭合；Macro* 54.9351；隔离** | pixel/覆盖闭合；retained output 的 raw-text boundary 扫描通过，但无 producer-bound strict telemetry；post-tool continuation mismatch | 不得作为 aligned Crop；不得用旧权重重测“修复” |
 | PRL27-A Crop | **invalid** | live appender=matched60；replay layout=generic86 | 全部 checkpoint/reward/status 撤回，不得续跑或评测 |
 | PRL27-B Crop | **canonical implementation；停 S4；S32/Eval pending** | `c448e583` 单一 renderer bytes 同时绑定 live/replay | 实验冻结；后续只能经新授权从 canonical lineage 继续 |
 | TGVF Short Train@512 | **S32 receipt 存在；Eval pending** | prompt、tool、RP67 与 @512 训练合同已固定 | 不把 checkpoint receipt 当 benchmark result |
@@ -192,7 +216,8 @@ supervisor 现已恢复并启动 Short/Target-guide-v2 两个 C0。
 归因于 Crop 工具、像素、调用策略或 RL。PRL27-B canonical lineage 的 fresh-S0 重训重测是恢复
 可解释 Crop endpoint 的前置条件；本节不再作为 corrected Crop 的阶段结论。
 
-当前证据不支持“工具没执行”或“`</tool_call>` boundary 再次失效”：2,240 条轨迹中
+当前证据不支持“工具没执行”。对 2,240 条 retained output 的事后 raw-text 扫描也没有发现
+incomplete、multi-call 或 nonterminal tail，但这不是 producer-bound strict-v2 证明：
 `1,588` 条至少获得一次成功 Crop observation（`70.89%`），`1,645` 条有任意工具尝试
 （`73.44%`），成功 calls/observations=`1,929/1,929`；incomplete opener 与 same-turn
 action+answer 均为 0。91 次错误全部是 `invalid_crop`，其中 87 次为有效 crop 尺寸不大于
@@ -268,9 +293,10 @@ full-model snapshot 重建 vLLM sampling request 时丢失了
 修复与复测状态：
 
 - 修复 commit `5e37a77` 已在现有 `prl25-c-tgvf-80step` 分支落地，没有新建修复
-  分支。full-model sampling identity 现在显式绑定完整 stop/action-boundary；正常生成
-  在 `</tool_call>` 处硬停，若后端仍返回 mixed turn，evaluator 则以
-  `tool_call_terminal_suffix` fail-closed，不再接受尾文为 final。
+  分支。full-model sampling identity 显式绑定 stop 字段，历史 evaluator 也增加了
+  `tool_call_terminal_suffix` guard。该 rerun 早于当前 strict-v2 protocol identity 与
+  `action_boundary_violation_*` telemetry，因此这里的验收证据仅是 retained output 的
+  事后 raw-text 审计，不能称为 producer-bound strict-v2。
 - Corrected S32/S80 formal rerun 使用 plan commit `e436629`，顶层 evaluation ID 为
   `PRL25-B-CROP-EXACT-COREDEV2511-S32-S80-TOOL-BOUNDARY-FIX-V2`。两臂均完成
   `2,240/2,240` 条受支持单图 trajectory、`7/7` 官方 slice，summary 状态均为
@@ -292,7 +318,8 @@ true-1M S32/S80 comparison；统一尺度数值与优化动态只以文首表和
 
 - S32/S80 的 executed calls 为 `1,677 / 2,010`，successful observations 也精确为
   `1,677 / 2,010`；有效使用题为 `1,385 / 1,977`（`61.83% / 88.26%`）。
-  两臂同轮 `tool_call + final` 均为 `0`，所有工具 turn 均以 `</tool_call>` 结束。
+  retained output 的事后扫描中，两臂同轮 `tool_call + final` 均为 `0`，所有观察到的
+  工具 turn 均以 `</tool_call>` 结束；这不替代缺失的 producer-bound telemetry。
 - 在当时冻结的 processor-default six-point analysis 中，S80 是事先指定的 80-step headline，
   不因修正后 S32 高 `2.4914 pp` 而 post-hoc 重选 checkpoint；该历史合同下 S80 只在 OCR mean
   上高于 S32（`+1.6483 pp`）。当前统一 true-1M 主表则按事前阶段口径使用 Crop S32。
@@ -384,8 +411,8 @@ TGVF/Atomic 对齐为 true-1M。Original 未经过这轮 RL；其 true-1M raw-di
 |---|---|---:|---|
 | Original raw-direct true-1M | 无 system prompt、无工具、direct generation | 1,003,520 | 当前统一主表与 59-slice 的 direct reference；Macro* `61.3147` |
 | Original raw-direct@512 | 无 system prompt、无工具、direct generation | 262,144 | 历史端到端参考；也是 S32 raw-direct@512 的严格 base comparator |
-| Crop S32/S80 true-1M | native Crop prompt 与 fixed-boundary agent loop | 1,003,520 | 像素测量已闭合；两行均因 continuation mismatch 隔离为 historical |
-| Crop S80 boundary-fix V2 nominal-@512 | 同一类 Crop prompt 与 fixed-boundary agent loop | processor default 16,777,216 | Macro* `62.0967` 只作 boundary-corrected historical；不是 true-512 |
+| Crop S32/S80 true-1M | native Crop prompt 与 historical stop-bounded evaluator；仅有 post-hoc raw-text boundary audit | 1,003,520 | 像素测量已闭合；无 strict-v2 identity/telemetry，且两行均因 continuation mismatch 隔离为 historical |
+| Crop S80 boundary-fix V2 nominal-@512 | 同一类 Crop prompt 与 historical stop-bounded evaluator；仅有 post-hoc raw-text boundary audit | processor default 16,777,216 | Macro* `62.0967` 只作 historical；不是 producer-bound strict-v2，也不是真正 true-512 |
 | TGVF S64 / Atomic S16 matched true-1M | 各自训练匹配的工具 prompt 与 agent loop | 1,003,520 | 统一表中的两个 latent-evidence 方法 |
 | TGVF S64 / Atomic S16 matched@512 | 与上一行逐方法相同，只降低 evaluator 像素上限 | 262,144 | 两臂均已闭合 |
 | No-Tool S0/S8/S16/S32 corrected true-1M V2 | 训练匹配的 no-tool prompt 与 direct-only loop | 1,003,520 | 已闭合；S32 frozen headline `63.7520`，S32−S0 `−0.0098 pp` |

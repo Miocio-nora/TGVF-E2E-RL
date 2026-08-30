@@ -1,8 +1,8 @@
 # TGVF End-to-End RL: Project Task
 
-Status: **I8H-20260719 bounded framework implementation complete; production gates open**
+Status: **repository stabilization active; experiment execution frozen**
 Recorded: **2026-07-18 JST**
-Updated: **2026-07-26 JST**
+Updated: **2026-08-30 JST**
 
 Unresolved implementation contracts and their promotion gates are tracked in
 [`OPEN_IMPLEMENTATION_CONTRACTS.md`](OPEN_IMPLEMENTATION_CONTRACTS.md). An open
@@ -13,6 +13,43 @@ field there must not be filled silently from a framework default.
 Decision ID: **I8H-20260719**
 
 Accepted by: **user**, on **2026-07-19 JST**
+
+### 0S. Authoritative repository stabilization decision
+
+Decision ID: **REPOSITORY-STABILIZATION-20260830**
+
+Accepted by: **user**, on **2026-08-30 JST**
+
+The user authorized execution of the stabilization strategy after a read-only
+audit found protocol, result-provenance, orchestration, documentation, and
+worktree drift. This decision supersedes any historical watcher, handoff,
+ledger line, or launcher that would otherwise start a new training/evaluation
+stage automatically.
+
+Until the gates in
+[`REPOSITORY_STABILIZATION_AUDIT_20260830.md`](REPOSITORY_STABILIZATION_AUDIT_20260830.md)
+pass on one reviewed commit:
+
+- all GPU training and evaluation launches are frozen;
+- supervisors may validate prerequisites and write readiness receipts only;
+- a later mutating launch requires a separate, run-identity-bound,
+  single-consumption authorization token;
+- Crop success-observation bytes must be selected by an explicit protocol
+  identity and shared exactly between live continuation and replay layout;
+- historical generic86, native-visible, matched60, precomputed, and raw-direct
+  measurements remain distinct contracts;
+- every reported result must be classified by the canonical result registry,
+  and cross-row deltas are forbidden when comparison identities differ;
+- dirty worktrees are preservation boundaries and may not be reset, cleaned,
+  stashed, or removed by stabilization;
+- whole PRL branch merges are forbidden. Reviewed changes are ported
+  selectively from a clean `origin/main` base.
+
+This stabilization decision authorizes CPU-only implementation, testing,
+documentation correction, safe removal of globally scoped credentials, and
+read-only inventory of operational state. It does not authorize removal of a
+worktree, branch, pane, artifact, or checkpoint, and it does not authorize a
+fresh RL run or benchmark evaluation.
 
 This decision authorizes one bounded eight-hour implementation goal. It is the
 authoritative execution contract wherever older sections or linked planning

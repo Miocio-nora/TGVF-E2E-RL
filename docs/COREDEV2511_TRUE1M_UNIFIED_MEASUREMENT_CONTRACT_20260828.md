@@ -30,9 +30,10 @@ PRL25 的 Crop、TGVF、Atomic 和 No-Tool RL 训练均使用
 
 评测侧曾有两条独立缺陷：旧 Crop official-visible evaluator 与旧 No-Tool matched evaluator
 均把像素覆盖值放在 processor 不读取的 flat kwarg 中，因而实际回退到 `16,777,216`。所以旧
-Crop fixed-boundary S32/S80 与旧 No-Tool S0/S8/S16/S32 都不是 true-1M 结果。TGVF 与 Atomic
+Crop historical stop-bounded S32/S80 与旧 No-Tool S0/S8/S16/S32 都不是 true-1M 结果。TGVF 与 Atomic
 使用另一条已验证的 nested preprocessing 路径，不受该缺陷影响。Crop 已在顶层
-`mm_processor_kwargs.size` 和 fixed action boundary 下重跑闭合；No-Tool 四个冻结 step 也已用
+`mm_processor_kwargs.size`、历史 sampling stop/evaluator guard 与事后 raw-text 审计下重跑
+闭合；它没有当前 producer-bound strict-v2 identity/telemetry。No-Tool 四个冻结 step 也已用
 有效顶层像素覆盖值重跑并通过正式 aggregate receipt 验收。
 
 ### Unified true-1M stage table（Crop row quarantined）
@@ -70,7 +71,7 @@ RP67 adapter 预训练仍为 `512²`，但加载它的 TGVF/Atomic policy RL 及
 | **processor-default cap (≤16.7M)** | `size.longest_edge = 16,777,216 = 4096²`；它是失效历史运行的上限，不表示每张图都被放大到 16.7M |
 | **Original raw-direct true-1M** | 原始 Qwen3-VL-8B-Instruct，官方 raw prompt，无 system prompt、无工具，seed42，仅把历史 direct 的像素上限改为 `1,003,520` |
 | **No-Tool RL matched true-1M** | PRL25-F 的训练匹配 user-only no-tool prompt 与 direct-only loop，S0/S8/S16/S32 |
-| **Crop fixed-boundary true-1M historical** | PRL25-B native RGB Crop，严格 `</tool_call>` action boundary，但 post-tool continuation mismatch，S32/S80 |
+| **Crop stop-bounded true-1M historical** | PRL25-B native RGB Crop，配置 `</tool_call>` stop 且 retained output 的事后 raw-text boundary 审计通过；没有 producer-bound strict-v2 identity/telemetry，并存在 post-tool continuation mismatch，S32/S80 |
 | **TGVF matched true-1M** | PRL25-C Pure TGVF、Frozen RP67，S64 |
 | **Atomic (TGVF+Crop) matched true-1M** | PRL25-D Atomic Crop+TGVF、Frozen RP67，S16 |
 | **Macro\*** | VStar、HRBench、BLINK-180、OCR EN/CN mean、MMMU-269、MathVista、MathVerse 五版本宏平均的七项无权平均 |
@@ -185,8 +186,9 @@ S32 的 mean/P50/P90 均低于 S0，且四个 step 的工具调用、工具错�
 | S32 | 1,423 / 2,240 | 63.53% | 1,769 | 92 | 11 |
 | S80 | 2,006 / 2,240 | 89.55% | 2,043 | 102 | 0 |
 
-fixed action boundary 使合法 `</tool_call>` 在当轮终止，评分不再接受同轮工具请求后的 plain
-final。结构审计另外发现 S80 中 **1 个**样例在一个已闭合调用后又生成了未闭合的第二个
+历史 rerun 配置 `</tool_call>` stop，并由 evaluator guard 拒绝同轮工具请求后的 plain final；
+但 artifact 没有 producer-bound strict-v2 identity/telemetry，以下结论来自 retained output
+的事后 raw-text 结构审计。该审计另外发现 S80 中 **1 个**样例在一个已闭合调用后又生成了未闭合的第二个
 `<tool_call>` opener。该次未被解析或执行为合法调用，也未重现旧的 answer-over-action 接受路径；
 它仍是一个需要保留的格式边界，因此不将 S80 描述为“所有工具语法都完全闭合”。
 
@@ -297,15 +299,17 @@ launch provenance commit（B `08a9d8b4`、C `b87126ae`、D `017b5077`、F `7645f
 `995,328`、merged visual tokens `972`，均满足 `1,003,520` 上限。因此这些 checkpoint 的
 训练输入是 true-1M；`16,777,216` 仅是 override 缺失或失效时的 processor 默认值。
 
-像素问题与 action-boundary 问题分开处理：Crop true-1M 重测同时要求 fixed
-`</tool_call>` boundary；像素修复本身不改变 TGVF/Atomic 的 action boundary 结论。
+像素问题与 action-boundary 问题分开处理：Crop true-1M 重测要求配置
+`</tool_call>` stop 并做 retained-output raw-text 审计；它不具备当前 producer-bound
+strict-v2 identity/telemetry。像素修复本身也不能提升 TGVF/Atomic 的 action-boundary
+证据等级。
 
 ## 8. 执行队列
 
 - [x] 审计训练侧真实像素路径；确认 PRL25 RL 为 true-1M。
 - [x] 撤销 Crop 与 No-Tool 旧 nominal-1M 身份。
 - [x] 保留 TGVF S64 与 Atomic S16 accepted true-1M 结果。
-- [x] Crop S32/S80：fixed boundary、有效顶层 `mm_processor_kwargs.size` cap、独立
+- [x] Crop S32/S80：historical stop 配置与 post-hoc raw-text boundary 审计、有效顶层 `mm_processor_kwargs.size` cap、独立
   compile cache、`2,240/2,240` 推理、七项评分与 true-1M audit receipt 均已闭合；结果已因
   continuation mismatch 降级为 historical。
 - [x] No-Tool S0/S8/S16/S32：顶层 `mm_processor_kwargs.size`、独立 compile cache、

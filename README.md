@@ -5,12 +5,22 @@ Target-Guided Visual Foveation for a Qwen reasoning policy trained with
 end-to-end reinforcement learning. Qwen3-VL-8B-Thinking is the primary target;
 `Qwen/Qwen2.5-VL-7B-Instruct` is the required secondary compatibility model.
 
-> **Status:** the bounded framework and representation-phase trainer are
-> implemented on `main`. `RP-11` passes a real-Qwen3/two-rank K=4/GA=4
-> continuous-versus-process-teardown resume smoke with Matrix CE, `L_gen`, and
-> the fixed historical Norm loss. No production
-> data/hyperparameter contract, production representation run, promoted TGVF
-> Adapter, policy RL prompt/run, or task evaluation result exists yet.
+> **Status (2026-08-30):** the framework, representation trainer, multiple
+> policy-RL runs, and CoreDev-2511 evaluations exist. Their historical evidence
+> is not one uniform comparison contract: several Crop results mix native and
+> precomputed runtimes, continuation renderers, or image caps. Repository
+> stabilization is therefore active and new experiment execution is frozen
+> until the protocol, result-registry, control-plane, and CI gates in
+> [the stabilization audit](docs/REPOSITORY_STABILIZATION_AUDIT_20260830.md)
+> pass. A result is not canonical merely because its run completed.
+
+The selective migration from the experiment side lineage is tracked in the
+[canonical runtime migration plan](docs/CANONICAL_RUNTIME_MIGRATION_PLAN_20260830.md).
+Reusable code, quarantined run evidence, and future canonical configuration
+roots are defined by the enforced [codebase boundaries](docs/CODEBASE_BOUNDARIES.md).
+The measured module, entry-point, import-cycle, branch, and worktree cleanup is
+ordered in the [codebase consolidation plan](docs/CODEBASE_CONSOLIDATION_PLAN_20260830.md);
+historical state is preserved until an exact removal list is reviewed.
 
 The bounded [veRL compatibility task](docs/VERL_COMPATIBILITY_SPIKE_PLAN.md)
 selected upstream veRL commit
@@ -19,9 +29,10 @@ Python 3.12 compatibility environment. vLLM is the only rollout backend. This
 is the accepted compatibility stack, not a production parallel-topology or
 training lock.
 
-Current evidence is deliberately small:
+The original bounded-framework evidence included:
 
-- `346` CPU tests pass for the framework, representation-phase contracts, and
+- `346` CPU tests passed at that historical framework milestone for the
+  framework, representation-phase contracts, and
   synthetic oracles;
 - the representation suite covers the audited retained-JSONL transform,
   same-image sampler, native Qwen3 pipeline with both target-conditioning
