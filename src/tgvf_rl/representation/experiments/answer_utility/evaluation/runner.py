@@ -80,6 +80,8 @@ from .input_identity import (
 from .input_matching import (
     AnswerUtilityWrongImageDonor,
     _QwenImageGridContract as _QwenImageGridContract,
+    _load_qwen_image_grid_contract as _load_qwen_image_grid_contract,
+    _normalized_target_identity as _normalized_target_identity,
     _qwen_image_grid_thw as _qwen_image_grid_thw,
     _same_target_wrong_image_model_inputs,
     build_answer_safe_wrong_mapping,
@@ -97,6 +99,7 @@ from .inputs import (
     _InputLoaderBindings,
     _assert_evaluation_output_isolated,
     _audit_completed_training_metrics_impl,
+    _has_same_target_wrong_image_arm as _has_same_target_wrong_image_arm,
     _load_private_inputs_impl,
     _load_production_source_inputs_impl,
     _load_validated_production_export_impl,

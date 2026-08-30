@@ -161,6 +161,18 @@ def test_moved_contracts_and_functions_keep_exact_facade_identity() -> None:
             input_matching._same_target_wrong_image_model_inputs,
         ),
         (
+            runner._load_qwen_image_grid_contract,
+            input_matching._load_qwen_image_grid_contract,
+        ),
+        (
+            runner._normalized_target_identity,
+            input_matching._normalized_target_identity,
+        ),
+        (
+            runner._has_same_target_wrong_image_arm,
+            inputs._has_same_target_wrong_image_arm,
+        ),
+        (
             runner._evaluation_arm_contract,
             input_identity._evaluation_arm_contract,
         ),
