@@ -24,7 +24,7 @@ from tgvf_rl.trajectories.schema import TrajectoryRecord
 
 from .compatibility import load_verl_public_api
 from .objective_bridge import validate_objective_sentinels
-from .rollout_bridge import (
+from .rollout_contract import (
     ACTUAL_RESPONSE_LOGPROBS_FIELD,
     AGENT_LOOP_EXACT_SIDECAR_FIELDS,
     DATAPROTO_META_SCHEMA_FIELD,
