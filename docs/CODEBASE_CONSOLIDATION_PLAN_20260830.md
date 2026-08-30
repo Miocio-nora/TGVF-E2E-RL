@@ -481,7 +481,8 @@ evidence comprises 414 related passes, a full hermetic CPU result of 2,745
 passed/five skipped/four warnings in 148.46 seconds, passing repository and
 control audits, and green Ruff and diff checks. A separate frozen-byte review
 ran 438 tests and accepted committed bytes `64ee534` under the same strict
-inspection-only scope. No remote result is asserted for this checkpoint.
+inspection-only scope. Combined code/docs checkpoint `79edd70` passes the
+complete remote workflow in run `33329512817`.
 Experiment policy revision 4 therefore still records
 `runtime_closure.launch_enabled=false` and the identical seven blockers.
 

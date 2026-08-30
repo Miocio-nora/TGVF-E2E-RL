@@ -493,8 +493,9 @@ Execution-surface policy revision 9 content-binds 80 surfaces. The related local
 selection has 414 passes; the full hermetic CPU suite has 2,745 passed, five
 skipped, and four warnings in 148.46 seconds. Both audits, Ruff, and the diff
 check pass. An independent frozen-byte review ran 438 tests and judged commit
-`64ee534` green only within this same non-dispatch scope. Remote CI is not yet
-claimed. Experiment policy revision 4 remains
+`64ee534` green only within this same non-dispatch scope. Combined code/docs
+checkpoint `79edd70` is green in complete remote CI run `33329512817`.
+Experiment policy revision 4 remains
 `runtime_closure.launch_enabled=false` with all seven blockers unchanged.
 
 ## 2026-08-30 canonical line versus physical `main`
