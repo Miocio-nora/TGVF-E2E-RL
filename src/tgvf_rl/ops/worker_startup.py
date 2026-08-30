@@ -17,6 +17,7 @@ import re
 
 
 WORKER_STARTUP_SCHEMA = "tgvf-worker-startup-v1"
+WORKER_STARTUP_ENVELOPE_SCHEMA = "tgvf-worker-startup-envelope-v1"
 POLICY_DRIVER_ROLE = "policy-driver"
 REPRESENTATION_LAUNCHER_ROLE = "representation-launcher"
 REPRESENTATION_MEMBER_ROLE = "representation-member"
@@ -30,6 +31,26 @@ _SUPPORTED_ROLE_SET = frozenset(SUPPORTED_WORKER_STARTUP_ROLES)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _COORDINATE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$")
 _VERIFIED_WORKER_STARTUP_SENTINEL = object()
+
+_IDENTITY_RECORD_FIELDS = {
+    "schema",
+    "role",
+    "command",
+    "target",
+    "runtime_package_sha256",
+    "dependency_roots_sha256",
+    "identity_sha256",
+}
+_ENVELOPE_RECORD_FIELDS = {
+    "schema",
+    "entry_role",
+    "identities",
+}
+_POLICY_ENVELOPE_ROLES = frozenset({POLICY_DRIVER_ROLE})
+_REPRESENTATION_ENVELOPE_ROLES = frozenset(
+    {REPRESENTATION_LAUNCHER_ROLE, REPRESENTATION_MEMBER_ROLE}
+)
+_ROLE_ORDER = {role: index for index, role in enumerate(SUPPORTED_WORKER_STARTUP_ROLES)}
 
 
 def _canonical_sha256(value: object) -> str:
@@ -51,6 +72,32 @@ def _canonical_json(value: object) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _strict_json_object(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"worker startup JSON contains duplicate key {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json(value: str) -> object:
+    raise ValueError(f"worker startup JSON contains non-finite value {value!r}")
+
+
+def _load_strict_json(value: str) -> object:
+    try:
+        return json.loads(
+            value,
+            object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_nonfinite_json,
+        )
+    except json.JSONDecodeError as error:
+        raise ValueError("worker startup JSON is malformed") from error
 
 
 def _require_supported_role(role: object) -> str:
@@ -137,6 +184,49 @@ class WorkerStartupIdentity:
                 f"received {self.role!r}"
             )
 
+    def as_record(self) -> dict[str, object]:
+        """Return the exact JSON-safe identity record including its digest."""
+
+        return {
+            "schema": WORKER_STARTUP_SCHEMA,
+            "role": self.role,
+            "command": list(self.command),
+            "target": self.target,
+            "runtime_package_sha256": self.runtime_package_sha256,
+            "dependency_roots_sha256": self.dependency_roots_sha256,
+            "identity_sha256": self.identity_sha256,
+        }
+
+    @classmethod
+    def from_record(cls, value: object) -> WorkerStartupIdentity:
+        """Reconstruct one identity from an exact, digest-bound record."""
+
+        if type(value) is not dict or set(value) != _IDENTITY_RECORD_FIELDS:
+            raise ValueError("worker startup identity record field set differs")
+        if value["schema"] != WORKER_STARTUP_SCHEMA:
+            raise ValueError("worker startup identity record schema differs")
+        command = value["command"]
+        if type(command) is not list:
+            raise ValueError("worker startup identity record command must be a list")
+        identity = cls(
+            role=value["role"],  # type: ignore[arg-type]
+            command=tuple(command),  # type: ignore[arg-type]
+            target=value["target"],  # type: ignore[arg-type]
+            runtime_package_sha256=value[  # type: ignore[arg-type]
+                "runtime_package_sha256"
+            ],
+            dependency_roots_sha256=value[  # type: ignore[arg-type]
+                "dependency_roots_sha256"
+            ],
+        )
+        record_sha256 = _require_sha256(
+            value["identity_sha256"],
+            name="identity_record_sha256",
+        )
+        if record_sha256 != identity.identity_sha256:
+            raise ValueError("worker startup identity record digest differs")
+        return identity
+
     def authorization_parameters(self) -> dict[str, str]:
         """Return the complete deterministic startup identity for a gate."""
 
@@ -149,6 +239,131 @@ class WorkerStartupIdentity:
             "worker_startup_runtime_package_sha256": self.runtime_package_sha256,
             "worker_startup_dependency_roots_sha256": (self.dependency_roots_sha256),
             "worker_startup_identity_sha256": self.identity_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerStartupEnvelope:
+    """Atomic role-keyed startup identities bound into one CLI authorization."""
+
+    entry_role: str
+    identities: tuple[WorkerStartupIdentity, ...]
+
+    def __post_init__(self) -> None:
+        entry_role = _require_supported_role(self.entry_role)
+        if entry_role not in {POLICY_DRIVER_ROLE, REPRESENTATION_LAUNCHER_ROLE}:
+            raise ValueError(
+                "worker startup envelope entry role must be policy-driver or "
+                "representation-launcher"
+            )
+        if type(self.identities) is not tuple:
+            raise TypeError("worker startup envelope identities must be an exact tuple")
+        roles: set[str] = set()
+        for identity in self.identities:
+            if type(identity) is not WorkerStartupIdentity:
+                raise TypeError(
+                    "worker startup envelope identities must be exactly "
+                    "WorkerStartupIdentity"
+                )
+            if identity.role in roles:
+                raise ValueError(
+                    f"worker startup envelope repeats role {identity.role!r}"
+                )
+            roles.add(identity.role)
+        expected_roles = (
+            _POLICY_ENVELOPE_ROLES
+            if entry_role == POLICY_DRIVER_ROLE
+            else _REPRESENTATION_ENVELOPE_ROLES
+        )
+        if frozenset(roles) != expected_roles:
+            missing = sorted(expected_roles.difference(roles))
+            extra = sorted(roles.difference(expected_roles))
+            raise ValueError(
+                "worker startup envelope role set differs: "
+                f"missing={missing!r}, extra={extra!r}"
+            )
+        ordered = tuple(
+            sorted(self.identities, key=lambda identity: _ROLE_ORDER[identity.role])
+        )
+        object.__setattr__(self, "identities", ordered)
+
+    def identity_for_role(self, role: str) -> WorkerStartupIdentity:
+        """Return one exact identity already admitted by this envelope shape."""
+
+        expected = _require_supported_role(role)
+        for identity in self.identities:
+            if identity.role == expected:
+                return identity
+        raise PermissionError(
+            f"worker startup envelope does not contain role {expected!r}"
+        )
+
+    def as_record(self) -> dict[str, object]:
+        """Return the canonical role-keyed JSON-safe envelope record."""
+
+        return {
+            "schema": WORKER_STARTUP_ENVELOPE_SCHEMA,
+            "entry_role": self.entry_role,
+            "identities": {
+                identity.role: identity.as_record() for identity in self.identities
+            },
+        }
+
+    @property
+    def envelope_sha256(self) -> str:
+        return _canonical_sha256(self.as_record())
+
+    def to_json(self) -> str:
+        """Serialize the envelope with one deterministic canonical encoding."""
+
+        return _canonical_json(self.as_record())
+
+    @classmethod
+    def from_record(cls, value: object) -> WorkerStartupEnvelope:
+        """Reconstruct an envelope from an exact nested record."""
+
+        if type(value) is not dict or set(value) != _ENVELOPE_RECORD_FIELDS:
+            raise ValueError("worker startup envelope record field set differs")
+        if value["schema"] != WORKER_STARTUP_ENVELOPE_SCHEMA:
+            raise ValueError("worker startup envelope record schema differs")
+        identity_records = value["identities"]
+        if type(identity_records) is not dict:
+            raise ValueError("worker startup envelope identities must be an object")
+        identities: list[WorkerStartupIdentity] = []
+        for role, identity_record in identity_records.items():
+            if type(role) is not str:
+                raise ValueError(
+                    "worker startup envelope identity role must be a string"
+                )
+            identity = WorkerStartupIdentity.from_record(identity_record)
+            if role != identity.role:
+                raise ValueError(
+                    "worker startup envelope identity key differs from record role"
+                )
+            identities.append(identity)
+        return cls(
+            entry_role=value["entry_role"],  # type: ignore[arg-type]
+            identities=tuple(identities),
+        )
+
+    @classmethod
+    def from_json(cls, value: object) -> WorkerStartupEnvelope:
+        """Parse only strict JSON and require its one canonical byte spelling."""
+
+        if type(value) is not str:
+            raise TypeError("worker startup envelope JSON must be exactly str")
+        envelope = cls.from_record(_load_strict_json(value))
+        if envelope.to_json() != value:
+            raise ValueError("worker startup envelope JSON is not canonical")
+        return envelope
+
+    def authorization_parameters(self) -> dict[str, str]:
+        """Return one atomic, collision-free authorization parameter group."""
+
+        return {
+            "worker_startup_envelope_schema": WORKER_STARTUP_ENVELOPE_SCHEMA,
+            "worker_startup_envelope_json": self.to_json(),
+            "worker_startup_envelope_sha256": self.envelope_sha256,
         }
 
 
@@ -260,7 +475,9 @@ __all__ = [
     "REPRESENTATION_LAUNCHER_ROLE",
     "REPRESENTATION_MEMBER_ROLE",
     "SUPPORTED_WORKER_STARTUP_ROLES",
+    "WORKER_STARTUP_ENVELOPE_SCHEMA",
     "WORKER_STARTUP_SCHEMA",
     "VerifiedWorkerStartup",
+    "WorkerStartupEnvelope",
     "WorkerStartupIdentity",
 ]
