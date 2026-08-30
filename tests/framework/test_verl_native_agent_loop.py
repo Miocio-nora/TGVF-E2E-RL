@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 from hashlib import sha256
+import pickle
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pytest
 
+from tgvf_rl.framework.verl import native_agent_client as client_leaf
+from tgvf_rl.framework.verl import native_agent_loop as native_agent_loop_facade
 from tgvf_rl.contracts.errors import ContractUnsetError, ReplayMismatchError
 from tgvf_rl.contracts.identity import ModelIdentity, PolicyVersion
 from tgvf_rl.environment.agent_loop import FrameworkNeutralAgentLoop, RolloutRequest
@@ -21,12 +25,14 @@ from tgvf_rl.framework.verl.native_agent_loop import (
     VerlNativeTrajectoryComponents,
     _recover_termination,
 )
+from tgvf_rl.framework.vllm.live_client import VLLMLivePromptInputsPort
 from tgvf_rl.framework.vllm import (
     ContentAddressedVLLMTurnRNG,
     LiveVLLMTurnContextRegistry,
     VLLMLivePromptInputs,
     VLLMOutputDecodingContract,
     VLLMPolicyTurnRequest,
+    VLLMPolicyTurnResponse,
     VLLMResolvedObservationPayload,
     VLLMTerminationOutcome,
     VLLMTurnRNGIdentity,
@@ -70,6 +76,36 @@ _SOURCE_STORE, _SOURCE_HANDLE = populated_observation_store()
 SOURCE_VISUAL = trajectory_source_visual(_SOURCE_STORE.resolve_record(_SOURCE_HANDLE))
 IMAGE_TOKEN_ID = 9876
 IMAGE_TOKEN = "<|image_pad|>"
+
+
+def test_async_server_client_leaf_preserves_exact_facade_identity() -> None:
+    public_client = native_agent_loop_facade.VerlAsyncServerPolicyTurnClient
+
+    assert public_client is client_leaf.VerlAsyncServerPolicyTurnClient
+    assert public_client.__module__ == native_agent_loop_facade.__name__
+    assert public_client.__qualname__ == "VerlAsyncServerPolicyTurnClient"
+    assert public_client.__init__.__module__ == native_agent_loop_facade.__name__
+    assert public_client.generate.__module__ == native_agent_loop_facade.__name__
+    assert pickle.loads(pickle.dumps(public_client)) is public_client
+    assert get_type_hints(public_client.__init__)["prompt_inputs"] is (
+        VLLMLivePromptInputsPort
+    )
+    assert get_type_hints(public_client.generate) == {
+        "request": VLLMPolicyTurnRequest,
+        "return": VLLMPolicyTurnResponse,
+    }
+
+    for helper_name in (
+        "_verl_server_sampling_parameters",
+        "_token_ids",
+        "_selected_processed_logprobs",
+        "_validate_policy_step_evidence",
+        "_recover_termination",
+    ):
+        public_helper = getattr(native_agent_loop_facade, helper_name)
+        assert public_helper is getattr(client_leaf, helper_name)
+        assert public_helper.__module__ == native_agent_loop_facade.__name__
+        assert pickle.loads(pickle.dumps(public_helper)) is public_helper
 
 
 class _CharacterTokenizer:
@@ -517,6 +553,40 @@ def test_upstream_agent_loop_bridge_preserves_multiturn_inputs_and_logprobs() ->
             strict=True,
         )
     )
+
+
+def test_agent_loop_keeps_public_client_facade_hook_late_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = _CharacterTokenizer()
+    factory = _InvocationFactory(tokenizer)
+    original_client = native_agent_loop_facade.VerlAsyncServerPolicyTurnClient
+    client_calls: list[dict[str, object]] = []
+
+    def client_factory(**kwargs: object) -> object:
+        client_calls.append(dict(kwargs))
+        return original_client(**kwargs)
+
+    monkeypatch.setattr(
+        native_agent_loop_facade,
+        "VerlAsyncServerPolicyTurnClient",
+        client_factory,
+    )
+    bridge = VerlFrameworkNeutralAgentLoop(
+        trainer_config=object(),
+        server_manager=_FakeServerManager(),
+        tokenizer=tokenizer,
+        processor=None,
+        dataset_cls=object,
+        data_config=object(),
+        invocation_factory=factory,
+        logprobs_mode="processed_logprobs",
+        server_timeout_seconds=5.0,
+    )
+
+    asyncio.run(bridge.run({"temperature": 1.0}, data_source="fixture"))
+
+    assert len(client_calls) == 1
 
 
 def test_upstream_length_truncation_is_retained_as_invalid_trajectory() -> None:
