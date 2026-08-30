@@ -18,6 +18,7 @@ import torch
 from tgvf_rl.contracts.errors import ReplayMismatchError
 from tgvf_rl.contracts.identity import PolicyVersion
 import tgvf_rl.evaluation.policy_coredev as policy_coredev
+import tgvf_rl.evaluation.policy_evaluation_config as policy_evaluation_config
 from tgvf_rl.evaluation.policy_coredev import (
     CoreDevTask,
     LORA_ADAPTER_EVALUATION_BACKEND,
@@ -57,6 +58,25 @@ from tgvf_rl.protocol import (
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_policy_coredev_reexports_policy_evaluation_config_contract() -> None:
+    assert (
+        policy_coredev.PolicyCoreDevConfig
+        is policy_evaluation_config.PolicyCoreDevConfig
+    )
+    assert (
+        policy_coredev.load_policy_coredev_config
+        is policy_evaluation_config.load_policy_coredev_config
+    )
+    assert (
+        policy_coredev.POLICY_COREDEV_SCHEMA
+        == policy_evaluation_config.POLICY_COREDEV_SCHEMA
+    )
+    assert (
+        policy_coredev.POLICY_BENCHMARK_SCHEMA
+        == policy_evaluation_config.POLICY_BENCHMARK_SCHEMA
+    )
 
 
 def _sha256(value: bytes) -> str:

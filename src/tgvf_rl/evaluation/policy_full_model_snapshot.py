@@ -33,10 +33,11 @@ from tgvf_rl.policy.deepeyes_native_contract import (
     load_deepeyes_native_run_contract,
 )
 
+from .policy_evaluation_config import FULL_MODEL_EVALUATION_BACKEND
+
 
 FULL_MODEL_SNAPSHOT_SCHEMA = "tgvf-prl13-full-model-snapshot-v1"
 FULL_MODEL_MATERIALIZATION_SCHEMA = "tgvf-prl13-full-model-materialization-v1"
-FULL_MODEL_EVALUATION_BACKEND = "full_model"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _FSDP_STEP = re.compile(r"^global_step_([0-9]+)$")
