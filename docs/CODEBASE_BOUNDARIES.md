@@ -6,6 +6,9 @@ only a naming convention.
 
 The measured debt and ordered reduction plan are tracked in
 [`CODEBASE_CONSOLIDATION_PLAN_20260830.md`](CODEBASE_CONSOLIDATION_PLAN_20260830.md).
+The frozen worktree/ref review is recorded separately in
+[`WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md`](WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md).
+That inventory is read-only and does not authorize any deletion.
 
 ## Code ownership boundary
 
@@ -61,8 +64,9 @@ machine-specific absolute paths.
 The historical policy-evaluation v1 schemas are readable evidence records but
 are not launch contracts: they predate explicit pixel, success-observation,
 action-boundary and complete snapshot bindings. Newly materialized policy
-evaluations use the v2 constants enforced by `policy_coredev.py` and the schema
-aid at
+evaluations use the v2 constants owned by
+`evaluation/policy_evaluation_config.py` and compatibility re-exported by
+`policy_coredev.py`, plus the schema aid at
 `configs/canonical/evaluation/policy_evaluation_v2.schema.json`. A v1 file is
 never upgraded in place, and a new measurement must use a new evaluation ID
 and output root.
@@ -80,6 +84,20 @@ silently copied into `configs/`.
 Generated manuscript tables must be materialized from a typed registry after
 its artifact checks pass. A document is a consumer of evidence, not an
 alternative score database.
+
+## Artifact primitive ownership
+
+Canonical JSON bytes and hashes with exact matching semantics belong to
+`tgvf_rl.artifact_contracts`. Create-only and content-consistent immutable
+publication belong to `tgvf_rl.immutable_publication`. Descriptor-bound
+regular-file reads belong to `tgvf_rl.secure_file_read`, whose final-leaf,
+absolute-chain, and already-bound-root contracts are deliberately separate.
+
+Migration is semantic and incremental. Similarly named helpers must not be
+merged when they differ in symlink, stability, error, ownership, or publication
+semantics. At this snapshot the secure-reader production migration covers only
+`evaluation/result_registry.py`; the existence of the shared leaf does not
+claim that every historical reader has been migrated.
 
 ## Absolute-path debt
 
@@ -136,9 +154,10 @@ commands (`ready`, `authorize`, `override-freeze`, `consume`, `wait`, `status`,
 `quarantine-legacy`, and `audit-control-plane`) and to its exact conservative
 capability map. Parser-mode or policy drift blocks the audit.
 
-The v2 stabilization inventory contains 79 rows: two canonical entries, two
-control-audit utilities, 36 permanently quarantined Python entries, one
-permanently quarantined shell entries, 13 mixed entries whose explicitly
+The revision-3 stabilization inventory contains 79 unique paths, and each has
+exactly one machine-checked disposition. It contains two canonical entries,
+two control-audit utilities, 36 permanently quarantined Python entries, one
+permanently quarantined shell entry, 13 mixed entries whose explicitly
 read-only modes remain available, 21 bounded offline artifact materializers,
 three read-only utilities, and one strictly import-only support module. A
 materializer receives `bounded_artifact_write` only after its content-bound
@@ -175,7 +194,7 @@ dispatch. Calls on an unrelated object named `parse_args`, caught guards, and
 nested business dispatch do not satisfy this contract.
 
 The remaining permanent shell entry is an exact byte-bound wrapper. It starts
-with `/bin/bash -p`, derive their location using only Bash parameter expansion
+with `/bin/bash -p`, derives its location using only Bash parameter expansion
 and builtins, and `exec` absolute `/usr/bin/python3 -I` into the quarantine
 controller. A symlink used as the final script path is rejected before path
 derivation, while symlinked ancestor directories are resolved to their physical
@@ -192,6 +211,10 @@ rebound, shadowed, or deleted. The internal worker has an equivalent exact
 inherited-receipt/closure prefix. These checks are containment while runtime
 closure remains disabled; they do not declare the public launch implementation
 complete.
+
+The C1 disposition condition is therefore satisfied, but canonical launch and
+runtime closure are not. A machine classification is containment and ownership
+metadata, not evidence that every retained surface is a public CLI command.
 
 Three conservative classifications deserve explicit rationale:
 

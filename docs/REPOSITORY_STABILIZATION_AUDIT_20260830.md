@@ -32,7 +32,7 @@ not closed merely because the affected experiment has stopped running.
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 now rejects every `golden` status and every numeric delta. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | verified | The final Python 3.12 collection discovered 2,117 tests with zero collection errors. The hermetic CPU run completed with 2,112 passed and five explicitly justified skips; no test failed. |
+| Test discovery and behavior | C0 verified; consolidation rerun pending | The C0 annotated tag discovered 2,117 tests with zero collection errors and completed with 2,112 passed plus five explicitly justified skips. Focused subsystem, repository-audit, and SCC checks pass on the consolidation line, but this row must not project the C0 full-suite count onto the later head. |
 
 ## Preserved dirty worktrees
 
@@ -54,13 +54,13 @@ worktree was added, 61 local branches, and 34 `origin/*` remote-tracking
 branches. The new stabilization worktree/branch raises the first two counts by
 one.
 
-A read-only inventory after adding the stabilization line reports 72 existing
-worktrees: 64 clean and eight dirty, with none missing, locked or marked
-prunable. Of 62 local branches, eight are merged into `origin/main` and 54 are
-not. The 64 clean worktrees are cleanup candidates, not disposable evidence:
-this audit does not remove them or their branches. A later cleanup must first
-materialize an explicit keep/remove table, preserve every unmerged branch, and
-obtain operator approval for the exact worktree paths.
+The frozen C4 read-only inventory reports 72 existing worktrees: 59 attached,
+13 detached, 65 clean, and seven dirty, with none locked or marked prunable.
+It also records 62 local branches. The complete per-path/per-ref table is
+[`WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md`](WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md).
+Every artifact reference remains unknown, so even a clean row is only a
+review-only candidate. This audit does not remove a worktree or branch, and
+every exact deletion still requires separate operator approval.
 
 ## Runtime preservation boundary
 
@@ -238,15 +238,20 @@ but is not score provenance.
 
 ## Verification gate
 
-- The full CPU suite passes on the stabilization worktree: 2,112 passed, five
+- At the C0 annotated tag, the full CPU suite passed with 2,112 tests, five
   explicitly justified skips, zero failures, and four non-failing upstream or
-  numeric warnings.
-- An independent clean-runner simulation masked local model directories and
+  numeric warnings. This is a preserved baseline result, not the current
+  consolidation-head count.
+- The C0 independent clean-runner simulation masked local model directories and
   undeclared optional stacks while retaining declared test dependencies. It
   passed with 2,016 tests, 91 explicit optional-integration/local-model/CUDA
   skips, zero failures, and zero warnings. This closed the 13 cases that the
   first clean-runner audit exposed despite the richer local environment being
   green.
+- On the current consolidation line, focused evaluation, policy,
+  representation, secure-read, import-graph, boundary, and control-plane checks
+  are rerun after each slice. A complete post-consolidation hermetic suite must
+  still be recorded before final push/CI closure.
 - Ruff passes across `src`, `tools`, `spikes`, and `tests`; `git diff --check`,
   shell syntax, the repository-boundary audit, and the control-plane audit also
   pass.
@@ -261,16 +266,23 @@ but is not score provenance.
 ## Structural debt after stabilization
 
 The control work makes the present repository auditable; it does not pretend
-that the source tree is already small or easy to extend. The measured cleanup
-backlog includes 31 production modules above 1,000 lines, four multi-module
-import cycles, repeated local hashing/publication helpers across more than 100
-files, 79 inventoried execution/support surfaces, and no portable runnable canonical model
-config yet. `policy_coredev.py`, representation internal evaluation, and the
-policy run-config union are the first decomposition targets.
+that the source tree is already small or easy to extend. At C2 completion the
+tree contained 263 Python modules and 29 production modules above 1,000 lines.
+The three first decomposition targets are complete:
+`policy_coredev.py`, representation internal evaluation, and `run_config.py`
+are now 902, 921, and 983 lines. The remaining 29 large modules still require
+an exact ratchet exception with a named next split or an actual decomposition.
+
+The four known multi-module import cycles are gone and a full-tree SCC test
+guards that boundary. Exact-equivalent canonical JSON helpers and three
+immutable-publication consumers now share tested implementations. Secure-file
+reading is still a partial migration: the new semantic contracts exist, but
+`evaluation/result_registry.py` is currently their only migrated production
+consumer. The 79 execution/support surfaces all have one machine disposition,
+which is containment rather than portable runtime closure.
 
 The ordered reduction, compatibility/deletion rules, and measurable definition
 of done are in
 [`CODEBASE_CONSOLIDATION_PLAN_20260830.md`](CODEBASE_CONSOLIDATION_PLAN_20260830.md).
-Those refactors happen after this fail-closed baseline; mixing broad module
-moves into the current security/provenance commit would make both harder to
-review.
+C4's separate inventory is read-only and did not execute or authorize
+historical-state cleanup.

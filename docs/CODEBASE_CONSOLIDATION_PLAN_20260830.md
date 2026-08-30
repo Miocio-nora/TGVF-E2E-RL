@@ -1,28 +1,37 @@
 # Codebase consolidation plan — 2026-08-30
 
-Status: C0 locally verified; C1-C4 remain a stabilization backlog. Remote CI
-must still verify the pushed commit. This plan does not authorize an
-experiment, delete a historical worktree, or rewrite historical evidence.
+Status: C0 is anchored by the remote annotated tag
+`stabilization-c0-20260830`. C1's machine-disposition condition is satisfied,
+the three C2 target facades are below 1,000 lines, and the four known C3 import
+cycles are gone. C3 utility migration remains partial. C4 produced a read-only
+inventory; it did not authorize or execute a deletion. The complete
+post-consolidation hermetic suite, push, and remote CI verification remain
+required. This plan does not authorize an experiment or rewrite historical
+evidence.
 
 ## Why the repository feels fragmented
 
-The problem is not only the number of branches. A static inventory of the
-stabilization line found:
+The problem is not only the number of branches. The C0 tag contained 245
+Python modules below `src/tgvf_rl`, 82 execution/support surfaces, 32
+production modules above 1,000 lines, and four multi-module import cycles. Its
+three highest-risk files were `evaluation/policy_coredev.py` (3,420 lines),
+`representation/training/internal_evaluation.py` (2,549 lines), and
+`policy/run_config.py` (2,491 lines).
 
-- 245 Python modules below `src/tgvf_rl` and 79 inventoried execution/support
-  surfaces across `src`, `tools`, and `spikes`;
-- 31 production modules above 1,000 lines, led by
-  `evaluation/policy_coredev.py` (3,414 lines at this audit point),
-  `representation/training/internal_evaluation.py` (2,549 lines), and
-  `policy/run_config.py` (2,491 lines);
-- four multi-module import cycles;
+At the C2 completion snapshot `bd67d0a`, the corresponding measurements were
+263 Python modules, 79 execution/support surfaces, 29 other modules above
+1,000 lines, zero import cycles, and C2 facades of 902, 921, and 983 lines.
+The remaining structural inventory still includes:
+
+- 29 production modules above 1,000 lines that require a recorded ratchet
+  exception and a named next split, not an unmeasured waiver;
 - repeated local implementations of hashing, canonical JSON, file validation,
   and atomic publication across more than 100 files;
 - historical RP/PRL launchers, current reusable implementation, evidence
   materializers, and manuscript-facing summaries sharing the same `tools`
   namespace;
-- 62 local branches and 72 worktrees at the audit snapshot, including eight
-  dirty worktrees that must be preserved.
+- 62 local branches and 72 worktrees at the C4 snapshot, including seven dirty
+  worktrees that must be preserved.
 
 These dimensions need different remedies. Deleting clean worktrees would not
 fix module ownership, and moving large modules would not make historical score
@@ -53,8 +62,9 @@ result controls, zero test-collection errors, a passing 2,117-test hermetic CPU
 collection (2,112 passed and five explicit dependency/environment skips),
 an independently simulated clean runner (2,016 passed, 91 explicit optional
 integration/environment skips, zero failures), Ruff, and no GPU process
-started by the cleanup. C0 becomes the shared baseline only after the reviewed
-commits are pushed and remote CI reproduces these checks.
+started by the cleanup. The remote annotated tag
+`stabilization-c0-20260830` preserves that baseline. Remote CI still has to
+reproduce the later consolidation head rather than inheriting C0's result.
 
 No module split or historical deletion belongs in C0. Combining security fixes
 with broad moves would make review and provenance harder.
@@ -75,6 +85,14 @@ and artifact manifests have been migrated and a release/tag preserves its last
 historical implementation. The execution-surface manifest must shrink in the
 same commit as each removal; an allowlist expansion is not cleanup.
 
+The first C1 batch removed three unreferenced quarantine shell wrappers in
+`d6b5a1c` and shrank the manifest from 82 to 79 entries. Revision 3 assigns one
+machine-checked disposition to every one of those 79 unique paths: two
+canonical, two control-audit, 37 permanent quarantine, 13 mixed, 21 bounded
+materializer, three read-only, and one import-only. This satisfies the C1
+disposition condition; it does **not** mean all entry points are canonical CLI
+commands or that runtime closure is enabled.
+
 ### C2 — split the three highest-risk modules
 
 Split by responsibility while preserving public imports through temporary
@@ -89,6 +107,19 @@ re-exports and characterization tests:
 
 Each slice must leave the suite green and remove, rather than duplicate, the
 old implementation. Target fewer than 1,000 lines per responsibility module.
+
+C2 reached that target while retaining exact facade objects, historical pickle
+coordinates, type hints, and characterization tests:
+
+- the evaluation facade is 902 lines; extracted responsibility leaves are
+  390, 634, 292, 813, and 884 lines;
+- the representation facade is 921 lines; extracted artifact, contract, and
+  native-runtime leaves are 102, 945, and 915 lines;
+- the run-config facade is 983 lines; extracted schema, validation, canonical
+  launch, and reward leaves are 511, 387, 838, and 259 lines.
+
+The three named C2 targets are complete. The repository-wide size condition is
+not: 29 other production modules still exceed 1,000 lines.
 
 ### C3 — remove utility duplication and import cycles
 
@@ -106,12 +137,35 @@ modules, not by adding local imports as a permanent workaround:
 - `evaluation.policy_coredev` ↔ `evaluation.policy_full_model_snapshot`;
 - image-axis `streaming` ↔ `trainer`.
 
+All four cycles are now removed and a full-tree Tarjan SCC regression test
+prevents their silent return. Utility consolidation is intentionally partial:
+
+- six byte-level canonical-JSON helpers and three digest helpers with exact
+  semantics now delegate to `artifact_contracts.py`;
+- create-only/content-consistent publication has one implementation and three
+  production consumers (`policy_benchmark_config.py`,
+  `policy_benchmark_scoring.py`, and `internal_evaluation_artifact.py`);
+- `secure_file_read.py` defines separate leaf, absolute-chain, and
+  descriptor-rooted contracts, but the first production migration currently
+  covers only `evaluation/result_registry.py`.
+
+Names alone are not evidence of equivalent security semantics, so the
+remaining readers and publishers must be migrated one reviewed group at a
+time.
+
 ### C4 — retire historical repository state
 
 Only after C0–C3, generate an explicit worktree/branch retention table with
 commit, merge status, unique commits, dirty state, artifact references, and a
 proposed recoverable action. Deletion requires operator approval for every
 exact path/ref. Never infer that a clean worktree is disposable.
+
+The frozen read-only inventory is
+[`WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md`](WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md).
+It records 72 worktrees and 62 branches at `05e32ea`, treats every artifact
+reference as unknown, and identifies two unanchored detached commits that must
+receive exact durable tags before any later removal is considered. No action
+code in that document is deletion approval.
 
 ## Definition of done
 
@@ -128,3 +182,9 @@ Consolidation is complete when:
 - historical evidence remains byte-preserved and cannot be mistaken for a new
   comparable result;
 - the full hermetic CPU suite and repository audits run in CI.
+
+Current state: the entry-point disposition condition, the three C2 targets,
+the known-cycle condition, and the read-only C4 inventory are complete. The
+portable runtime/CLI closure, the 29-module size ratchet, remaining
+semantic-helper migrations, final full-suite verification, push, and remote CI
+are still open.
