@@ -42,6 +42,9 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from tgvf_rl.experiment_identity import validate_run_id  # noqa: E402
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_mode_quarantined,
+)
 
 ACCEPTED_MODEL_PATH = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking")
 REWARD_PATH = Path(__file__).with_name("verl_sync_fixed_reward.py").resolve()
@@ -717,7 +720,7 @@ def launch(
     return 0 if result["status"] == "PASS" else 1
 
 
-def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--run-id",
@@ -734,7 +737,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="launch the recorded GPU gate; without this flag only print its plan",
     )
-    return parser.parse_args(argv)
+    return parser
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    return _parser().parse_args(argv)
 
 
 def _run_id_argument(value: str) -> str:
@@ -745,7 +752,13 @@ def _run_id_argument(value: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(argv)
+    args = _parser().parse_args(argv)
+    assert_legacy_standalone_mode_quarantined(
+        "spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py",
+        selected_mode="launch-gpu" if args.launch_gpu else "plan",
+        read_only_modes=("plan",),
+        blocked_modes=("launch-gpu",),
+    )
     if args.timeout_seconds < 60 or args.timeout_seconds > 3600:
         raise ValueError("timeout must be between 60 and 3600 seconds")
     result = bounded_result_path(args.output, require_new=args.launch_gpu)

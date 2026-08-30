@@ -1,7 +1,35 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Prove that a completed one-step Policy run resumes without another update."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/prove_policy_auto_resume.py",
+        ),
+    )
 
 import argparse
 from datetime import datetime, timezone
@@ -12,6 +40,10 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any, Sequence
+
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
 
@@ -59,7 +91,9 @@ def _metrics_snapshot(path: Path, *, expected_step: int) -> dict[str, Any]:
                 f"Policy metrics are invalid at {path}:{line_number}: {error}"
             ) from error
         if not isinstance(record, dict):
-            raise RuntimeError(f"Policy metrics record is not an object: {path}:{line_number}")
+            raise RuntimeError(
+                f"Policy metrics record is not an object: {path}:{line_number}"
+            )
         records.append(record)
     if not records:
         raise RuntimeError(f"Policy metrics are empty: {path}")
@@ -152,6 +186,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    assert_legacy_standalone_execution_quarantined("tools/prove_policy_auto_resume.py")
     arguments = _parser().parse_args(argv)
     try:
         proof = prove_auto_resume(arguments.config, arguments.proof)

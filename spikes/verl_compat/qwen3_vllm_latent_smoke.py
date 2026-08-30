@@ -1,3 +1,4 @@
+#!/usr/bin/python3 -I
 """One-request Qwen3-vLLM smoke over source plus two recorded-D items.
 
 The request is a deterministic synthetic compatibility fixture. It loads the
@@ -6,6 +7,34 @@ optimizer, or materialize a production TGVF Adapter checkpoint.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(3):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "spikes/verl_compat/qwen3_vllm_latent_smoke.py",
+        ),
+    )
 
 import argparse
 from dataclasses import asdict
@@ -42,6 +71,9 @@ from tgvf_rl.compatibility_stack import (  # noqa: E402
 from tgvf_rl.experiment_identity import validate_run_id  # noqa: E402
 from tgvf_rl.framework.verl import verify_verl_distribution_identity  # noqa: E402
 from tgvf_rl.protocol import NativeProtocolRenderer  # noqa: E402
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 EXPECTED_MODEL_PATH = Path("/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Thinking")
@@ -202,6 +234,9 @@ def _validate_candidate_runtime(stack_selector: str) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "spikes/verl_compat/qwen3_vllm_latent_smoke.py"
+    )
     args = _parse_args(argv)
     runtime_identity = _validate_candidate_runtime(args.stack)
     model_path = args.model.resolve()
@@ -359,3 +394,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+#!/usr/bin/python3 -I

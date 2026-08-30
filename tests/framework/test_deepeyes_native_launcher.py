@@ -28,15 +28,13 @@ from tgvf_rl.framework.verl.prl13_main import (
     create_prl13_task_runner_class,
     preflight_pinned_deepeyes_config,
 )
-from tgvf_rl.framework.verl.torch_bert_padding import (
-    PRL13_TORCH_BERT_PADDING_SCHEMA,
-)
 from tgvf_rl.policy.deepeyes_native_contract import (
     load_deepeyes_native_run_contract,
 )
 
 
 _ROOT = Path(__file__).parents[2]
+PRL13_TORCH_BERT_PADDING_SCHEMA = "tgvf.prl13-torch-bert-padding.v1"
 _TEMPLATE = (
     _ROOT / "configs/policy/runs/"
     "prl_13_a_qwen3_instruct_grpo_bs256_n16_native_crop_t1_stratified_"
@@ -49,6 +47,10 @@ def _contract():
 
 
 def test_task_runner_wraps_exact_upstream_class_without_global_setup_hook() -> None:
+    pytest.importorskip(
+        "verl.trainer.main_ppo_v0",
+        reason="TaskRunner wrapping requires the optional pinned veRL",
+    )
     from verl.trainer.main_ppo_v0 import TaskRunner
 
     wrapped = create_prl13_task_runner_class()
@@ -78,10 +80,7 @@ def test_formal_plan_is_upstream_full_model_fsdp2_and_segmented() -> None:
     assert values["actor_rollout_ref.rollout.enable_sleep_mode"] is True
     assert values["actor_rollout_ref.rollout.max_model_len"] == 32_768
     assert (
-        values[
-            "actor_rollout_ref.rollout.engine_kwargs.vllm."
-            "mm_encoder_attn_backend"
-        ]
+        values["actor_rollout_ref.rollout.engine_kwargs.vllm.mm_encoder_attn_backend"]
         == DEEPEYES_NATIVE_VLLM_MM_ENCODER_ATTN_BACKEND
         == "TORCH_SDPA"
     )
@@ -156,28 +155,30 @@ def test_each_launch_shape_is_statically_divisible_for_fsdp(
     log_prob_micro: int,
     actor_micro: int,
 ) -> None:
-    plan = build_deepeyes_native_verl_launch_plan(
-        _contract(), mode=mode, target_step=1
-    )
+    plan = build_deepeyes_native_verl_launch_plan(_contract(), mode=mode, target_step=1)
     values = plan.overrides
     world_size = values["trainer.n_gpus_per_node"] * values["trainer.nnodes"]
     expanded = values["data.train_batch_size"] * values["actor_rollout_ref.rollout.n"]
 
     assert expanded // world_size == local_trajectories
-    assert local_trajectories % values[
-        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"
-    ] == 0
-    assert values[
-        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"
-    ] == log_prob_micro
+    assert (
+        local_trajectories
+        % values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"]
+        == 0
+    )
+    assert (
+        values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"]
+        == log_prob_micro
+    )
     local_ppo_mini = (
         values["actor_rollout_ref.actor.ppo_mini_batch_size"]
         * values["actor_rollout_ref.rollout.n"]
         // world_size
     )
-    assert local_ppo_mini % values[
-        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"
-    ] == 0
+    assert (
+        local_ppo_mini % values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"]
+        == 0
+    )
     assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == actor_micro
 
 
@@ -325,9 +326,7 @@ def test_resident_fast_stress_spends_b200_memory_to_remove_recompute() -> None:
 
     assert plan.checkpoint_root.parent.name == "stress-resident-fast"
     assert values["actor_rollout_ref.model.enable_gradient_checkpointing"] is False
-    assert (
-        values["actor_rollout_ref.actor.fsdp_config.reshard_after_forward"] is False
-    )
+    assert values["actor_rollout_ref.actor.fsdp_config.reshard_after_forward"] is False
     assert values["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu"] == 16
     assert values["actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu"] == 16
 
@@ -339,9 +338,9 @@ def test_resident_flex_stress_uses_packed_block_mask_attention() -> None:
     values = plan.overrides
 
     assert plan.checkpoint_root.parent.name == "stress-resident-flex"
-    assert values[
-        "actor_rollout_ref.model.override_config.attn_implementation"
-    ] == "sdpa"
+    assert (
+        values["actor_rollout_ref.model.override_config.attn_implementation"] == "sdpa"
+    )
     assert values["actor_rollout_ref.model.override_config.text_config"] == {
         "_attn_implementation_internal": "flex_attention"
     }
@@ -410,6 +409,10 @@ def test_canaries_reject_non_resume_horizons(mode: str, target_step: int) -> Non
 
 
 def test_real_pinned_hydra_compose_and_custom_class_resolution() -> None:
+    pytest.importorskip(
+        "verl.trainer",
+        reason="Hydra composition requires the optional pinned veRL",
+    )
     for mode, target in (
         ("formal", 8),
         ("smoke", 1),

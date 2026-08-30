@@ -370,7 +370,7 @@ def test_rejects_incomplete_final_decision_population(tmp_path: Path) -> None:
         )
 
 
-def test_cli_materializes_fixture(tmp_path: Path) -> None:
+def test_cli_is_quarantined_before_materializing_fixture(tmp_path: Path) -> None:
     candidates_path, final_manifest_path, _ = _three_source_fixture(tmp_path)
     output_root = tmp_path / "cli-artifact"
     repository_root = Path(__file__).resolve().parents[2]
@@ -395,11 +395,12 @@ def test_cli_materializes_fixture(tmp_path: Path) -> None:
         ],
         cwd=repository_root,
         env=environment,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    output = json.loads(completed.stdout)
-    assert output["dataset_kind"] == POLICY_T1_MIXED_DATASET_KIND
-    assert output["sample_count"] == 3
-    assert output_root.is_dir()
+    assert completed.returncode != 0
+    assert "materialize_policy_t1_mixed_retained_pool.py is quarantined" in (
+        completed.stderr
+    )
+    assert not output_root.exists()

@@ -1,3 +1,4 @@
+#!/usr/bin/python3 -I
 """Bounded Qwen3-VL patch-embedding parity and performance probe.
 
 The probe isolates the projection at the front of the accepted local Qwen3
@@ -25,6 +26,34 @@ complete ``PLANNED`` experiment-ledger entry.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(3):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "spikes/verl_compat/qwen3_patch_embed_probe.py",
+        ),
+    )
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
@@ -45,6 +74,9 @@ import torch
 from torch.nn import functional as F
 
 from tgvf_rl.experiment_identity import validate_run_id
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -573,6 +605,9 @@ def _run_id_argument(value: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "spikes/verl_compat/qwen3_patch_embed_probe.py"
+    )
     args = _parse_args(argv)
     output_path = bounded_output_path(args.output)
     expected_runtime = validate_environment(
@@ -684,3 +719,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+#!/usr/bin/python3 -I

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Wait for RP69 and run its isolated, hash-bound post-training evaluation.
 
 This controller accepts exactly the 500-step Qwen3-VL-8B-Instruct RP69
@@ -25,6 +25,34 @@ does not create output directories, inspect GPU occupancy, or start a process.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/run_rp69_post_training_evaluations.py",
+        ),
+    )
 
 import argparse
 from contextlib import contextmanager
@@ -45,6 +73,14 @@ from urllib.request import urlopen
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
+
 PYTHON = REPOSITORY_ROOT / ".venv312/bin/python"
 CLEAN_RUNTIME = REPOSITORY_ROOT / ".eval-runtime-rp70-20260802"
 CLEAN_RUNTIME_COMMIT = "2d61b07995b1d5b90c221fe1faf5090e8d985fef"
@@ -2169,6 +2205,9 @@ def _restore_signal_handlers(previous: Mapping[signal.Signals, Any]) -> None:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/run_rp69_post_training_evaluations.py"
+    )
     args = _parser().parse_args()
     _validate_arguments(args)
     training_config_path = args.training_config.expanduser().resolve()
@@ -2208,8 +2247,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except ControllerError as error:
-        print(f"RP69_EVALUATION_CONTROLLER_BLOCKED: {error}", file=sys.stderr)
-        raise SystemExit(3) from error
+    raise SystemExit(main())

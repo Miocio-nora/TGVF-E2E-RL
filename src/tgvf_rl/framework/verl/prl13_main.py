@@ -1,6 +1,35 @@
+#!/usr/bin/python3 -I
 """Thin upstream-e003 main for PRL13 native DeepEyes training."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(5):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "src/tgvf_rl/framework/verl/prl13_main.py",
+        ),
+    )
 
 from contextlib import redirect_stdout
 from importlib.util import find_spec
@@ -8,6 +37,10 @@ import io
 from pathlib import Path
 import sys
 from typing import Sequence
+
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 def pinned_verl_config_directory() -> Path:
@@ -99,9 +132,7 @@ def preflight_pinned_deepeyes_config(config: object) -> dict[str, object]:
         raise TypeError("PRL13 reward manager did not resolve to a class")
     if config.actor_rollout_ref.rollout.get("checkpoint_manager_class") is not None:
         raise ValueError("PRL13 must use the upstream checkpoint manager")
-    manager_fqn = config.actor_rollout_ref.rollout.agent.get(
-        "agent_loop_manager_class"
-    )
+    manager_fqn = config.actor_rollout_ref.rollout.agent.get("agent_loop_manager_class")
     if manager_fqn != PRL13_AGENT_LOOP_MANAGER_FQN:
         raise ValueError("PRL13 heterogeneous manager identity differs")
     manager_cls = load_class_from_fqn(manager_fqn, "PRL13 AgentLoopManager")
@@ -190,13 +221,12 @@ def run_pinned_deepeyes_config(config: object) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    assert_legacy_standalone_execution_quarantined(
+        "src/tgvf_rl/framework/verl/prl13_main.py"
+    )
     arguments = tuple(sys.argv[1:] if argv is None else argv)
     config = compose_pinned_deepeyes_config(arguments)
     run_pinned_deepeyes_config(config)
-
-
-if __name__ == "__main__":
-    main()
 
 
 __all__ = [
@@ -208,3 +238,8 @@ __all__ = [
     "run_pinned_deepeyes_config",
     "run_prl13_task_runner",
 ]
+
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/python3 -I

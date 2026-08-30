@@ -308,7 +308,7 @@ def test_complete_config_maps_to_runtime_contracts_and_binds_both_hashes(
 ) -> None:
     path = _write_config(tmp_path)
 
-    config = load_representation_training_config(path)
+    config = load_representation_training_config(path, verify_external_files=False)
 
     assert config.code_identity.repository == "Miocio-nora/TGVF-E2E-RL"
     assert config.model_identity.revision_or_path == ACCEPTED_QWEN3_MODEL_PATH
@@ -356,7 +356,7 @@ def test_world4_ga2_config_preserves_eight_global_matrices(
     text = text.replace("mesh_shape = [2]", "mesh_shape = [4]", 1)
     path.write_text(text, encoding="utf-8")
 
-    config = load_representation_training_config(path)
+    config = load_representation_training_config(path, verify_external_files=False)
 
     assert config.fsdp2.world_size == 4
     assert config.fsdp2.physical_gpu_ids == (0, 1, 2, 3)
@@ -428,7 +428,7 @@ def test_direct_groups_select_versioned_accumulation_identity_and_partition_even
     )
     path.write_text(text, encoding="utf-8")
 
-    config = load_representation_training_config(path)
+    config = load_representation_training_config(path, verify_external_files=False)
     accumulation = config.accumulation_identity
 
     assert config.training.groups_per_rank_per_optimizer_step == 4
@@ -480,7 +480,7 @@ def test_v2_binds_norm_and_2000_step_cosine_while_allowing_bounded_target(
 ) -> None:
     path = _upgrade_config_to_v2(_write_config(tmp_path))
 
-    config = load_representation_training_config(path)
+    config = load_representation_training_config(path, verify_external_files=False)
 
     assert config.schema_version == REPRESENTATION_TRAINING_CONFIG_SCHEMA_VERSION_V2
     assert isinstance(config.data, RepresentationDataConfigV2)
@@ -799,7 +799,8 @@ def test_target_token_embedding_is_a_real_exclusive_provider_choice(
     tmp_path: Path,
 ) -> None:
     config = load_representation_training_config(
-        _write_config(tmp_path, provider="target_token_embedding")
+        _write_config(tmp_path, provider="target_token_embedding"),
+        verify_external_files=False,
     )
 
     assert (
@@ -905,6 +906,10 @@ def test_fixed_safety_and_scientific_boundaries_fail_closed(
         load_representation_training_config(path, verify_external_files=False)
 
 
+@pytest.mark.skipif(
+    not Path(ACCEPTED_QWEN3_MODEL_PATH).is_dir(),
+    reason="accepted local Qwen3 model is absent",
+)
 def test_jsonl_bytes_are_verified_but_validation_never_launches_gpu(
     tmp_path: Path,
 ) -> None:
@@ -914,6 +919,10 @@ def test_jsonl_bytes_are_verified_but_validation_never_launches_gpu(
         load_representation_training_config(path)
 
 
+@pytest.mark.skipif(
+    not Path(ACCEPTED_QWEN3_MODEL_PATH).is_dir(),
+    reason="accepted local Qwen3 model is absent",
+)
 def test_enabled_resume_requires_a_distributed_checkpoint_directory(
     tmp_path: Path,
 ) -> None:
@@ -955,6 +964,10 @@ def test_canonical_digest_ignores_toml_formatting_but_raw_digest_does_not(
     assert first_config.source_toml_sha256 != second_config.source_toml_sha256
 
 
+@pytest.mark.skipif(
+    not Path(ACCEPTED_QWEN3_MODEL_PATH).is_dir(),
+    reason="accepted local Qwen3 model is absent",
+)
 def test_validation_cli_emits_identity_without_starting_training(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

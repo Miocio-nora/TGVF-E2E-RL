@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Run an exact accepted overnight pipeline sequence fail-closed.
 
 The controller is deliberately ignorant of training implementation details.  A
@@ -34,6 +34,34 @@ launch.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/run_overnight_pipeline.py",
+        ),
+    )
 
 import argparse
 from contextlib import contextmanager
@@ -48,6 +76,16 @@ import subprocess
 import sys
 import time
 from typing import Any, Iterator, Mapping, NoReturn, Sequence
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 SCHEMA_VERSION = "tgvf-overnight-pipeline-v1"
@@ -230,7 +268,9 @@ def _validate_predicate(
         return {
             "type": kind,
             "path": str(
-                _resolve_path(value.get("path"), base=config_dir, location=f"{location}.path")
+                _resolve_path(
+                    value.get("path"), base=config_dir, location=f"{location}.path"
+                )
             ),
             "kind": artifact_kind,
             "nonempty": nonempty,
@@ -242,7 +282,9 @@ def _validate_predicate(
         return {
             "type": kind,
             "path": str(
-                _resolve_path(value.get("path"), base=config_dir, location=f"{location}.path")
+                _resolve_path(
+                    value.get("path"), base=config_dir, location=f"{location}.path"
+                )
             ),
             "field": _validate_field_path(
                 value.get("field"), location=f"{location}.field"
@@ -258,7 +300,9 @@ def _validate_predicate(
     return {
         "type": kind,
         "path": str(
-            _resolve_path(value.get("path"), base=config_dir, location=f"{location}.path")
+            _resolve_path(
+                value.get("path"), base=config_dir, location=f"{location}.path"
+            )
         ),
         "field": _validate_field_path(value.get("field"), location=f"{location}.field"),
         "equals": expected,
@@ -282,7 +326,9 @@ def _validate_command(
         _require_nonempty_string(item, location=f"{location}.argv[{index}]")
         for index, item in enumerate(argv)
     ]
-    cwd = _resolve_path(value.get("cwd", "."), base=config_dir, location=f"{location}.cwd")
+    cwd = _resolve_path(
+        value.get("cwd", "."), base=config_dir, location=f"{location}.cwd"
+    )
     if not cwd.is_dir():
         raise ConfigError(f"{location}.cwd is not an existing directory: {cwd}")
     environment = value.get("env", {})
@@ -297,7 +343,11 @@ def _validate_command(
         if "=" in name:
             raise ConfigError(f"{location}.env keys may not contain '='")
     timeout = value.get("timeout_seconds")
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or timeout <= 0
+    ):
         raise ConfigError(f"{location}.timeout_seconds must be positive")
     grace = value.get("terminate_grace_seconds", 30)
     if isinstance(grace, bool) or not isinstance(grace, (int, float)) or grace < 0:
@@ -328,7 +378,11 @@ def _validate_retry(raw: object, *, stage_location: str) -> dict[str, Any]:
             f"{MAX_EXPLICIT_RETRIES}"
         )
     delay = value.get("delay_seconds", 0)
-    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not 0 <= delay <= 3600:
+    if (
+        isinstance(delay, bool)
+        or not isinstance(delay, (int, float))
+        or not 0 <= delay <= 3600
+    ):
         raise ConfigError(f"{location}.delay_seconds must be between 0 and 3600")
     return {
         "max_retries": retries,
@@ -356,7 +410,9 @@ def load_config(path: Path) -> tuple[dict[str, Any], bytes]:
     )
     if value.get("schema_version") != SCHEMA_VERSION:
         raise ConfigError(f"config.schema_version must equal {SCHEMA_VERSION!r}")
-    pipeline_id = _require_nonempty_string(value.get("pipeline_id"), location="config.pipeline_id")
+    pipeline_id = _require_nonempty_string(
+        value.get("pipeline_id"), location="config.pipeline_id"
+    )
     config_dir = config_path.parent
     runtime_root = _resolve_path(
         value.get("runtime_root"), base=config_dir, location="config.runtime_root"
@@ -398,8 +454,7 @@ def load_config(path: Path) -> tuple[dict[str, Any], bytes]:
     observed_sequence = tuple(observed_ids)
     if observed_sequence not in ALLOWED_STAGE_ID_SEQUENCES:
         choices = " or ".join(
-            "[" + ", ".join(sequence) + "]"
-            for sequence in ALLOWED_STAGE_ID_SEQUENCES
+            "[" + ", ".join(sequence) + "]" for sequence in ALLOWED_STAGE_ID_SEQUENCES
         )
         raise ConfigError(
             "config.stages must contain one exact fail-closed order: " + choices
@@ -428,7 +483,9 @@ def _field(value: object, path: str) -> object:
         elif isinstance(current, list) and component.isdigit():
             index = int(component)
             if index >= len(current):
-                raise PredicateFailed(f"JSON field {path!r} index {index} is out of range")
+                raise PredicateFailed(
+                    f"JSON field {path!r} index {index} is out of range"
+                )
             current = current[index]
         else:
             raise PredicateFailed(f"JSON field {path!r} cannot traverse {component!r}")
@@ -484,7 +541,9 @@ def evaluate_predicate(
         if path.is_symlink() or not path.exists():
             raise PredicateFailed(f"required artifact does not exist: {path}")
         if not path.is_file() and not path.is_dir():
-            raise PredicateFailed(f"required artifact is not a regular file or directory: {path}")
+            raise PredicateFailed(
+                f"required artifact is not a regular file or directory: {path}"
+            )
         expected_kind = predicate["kind"]
         if expected_kind == "file" and not path.is_file():
             raise PredicateFailed(f"required artifact is not a file: {path}")
@@ -498,7 +557,9 @@ def evaluate_predicate(
                 try:
                     next(path.iterdir())
                 except StopIteration as error:
-                    raise PredicateFailed(f"required artifact directory is empty: {path}") from error
+                    raise PredicateFailed(
+                        f"required artifact directory is empty: {path}"
+                    ) from error
         observation: dict[str, Any] = {
             "type": kind,
             "path": str(path),
@@ -514,7 +575,9 @@ def evaluate_predicate(
         try:
             document = json.loads(path.read_bytes())
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise PredicateFailed(f"JSON artifact is invalid: {path}: {error}") from error
+            raise PredicateFailed(
+                f"JSON artifact is invalid: {path}: {error}"
+            ) from error
         actual = _field(document, str(predicate["field"]))
         if not _json_equal(actual, predicate["equals"]):
             raise PredicateFailed(
@@ -536,7 +599,9 @@ def evaluate_predicate(
     try:
         record = json.loads(line)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise PredicateFailed(f"last JSONL record is invalid in {path}: {error}") from error
+        raise PredicateFailed(
+            f"last JSONL record is invalid in {path}: {error}"
+        ) from error
     actual = _field(record, str(predicate["field"]))
     if (
         isinstance(actual, bool)
@@ -562,7 +627,9 @@ def evaluate_predicate(
     }
 
 
-def evaluate_acceptance(predicates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def evaluate_acceptance(
+    predicates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     return [evaluate_predicate(predicate) for predicate in predicates]
 
 
@@ -574,14 +641,22 @@ def revalidate_accepted_artifacts(
     if len(predicates) != len(accepted):
         raise PredicateFailed("accepted artifact count changed")
     observations: list[dict[str, Any]] = []
-    for index, (predicate, recorded) in enumerate(zip(predicates, accepted, strict=True)):
+    for index, (predicate, recorded) in enumerate(
+        zip(predicates, accepted, strict=True)
+    ):
         if predicate["type"] != "jsonl_last_step":
             observations.append(evaluate_predicate(predicate))
             continue
         if not isinstance(recorded, Mapping):
-            raise PredicateFailed(f"accepted JSONL artifact {index} metadata is invalid")
+            raise PredicateFailed(
+                f"accepted JSONL artifact {index} metadata is invalid"
+            )
         prefix_size = recorded.get("size")
-        if isinstance(prefix_size, bool) or not isinstance(prefix_size, int) or prefix_size < 0:
+        if (
+            isinstance(prefix_size, bool)
+            or not isinstance(prefix_size, int)
+            or prefix_size < 0
+        ):
             raise PredicateFailed(
                 f"accepted JSONL artifact {index} prefix size is invalid: {prefix_size!r}"
             )
@@ -658,7 +733,10 @@ def _load_state(path: Path, config: Mapping[str, Any]) -> dict[str, Any]:
         state = json.loads(path.read_bytes())
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise PipelineBlockedError(f"state file is invalid: {error}") from error
-    if not isinstance(state, dict) or state.get("schema_version") != STATE_SCHEMA_VERSION:
+    if (
+        not isinstance(state, dict)
+        or state.get("schema_version") != STATE_SCHEMA_VERSION
+    ):
         raise PipelineBlockedError("state schema is absent or incompatible")
     for key in ("pipeline_id", "config_path", "config_sha256"):
         if state.get(key) != config.get(key):
@@ -689,7 +767,9 @@ def _singleton_lock(path: Path) -> Iterator[None]:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise PipelineBlockedError("another controller owns the pipeline lock") from error
+            raise PipelineBlockedError(
+                "another controller owns the pipeline lock"
+            ) from error
         try:
             yield
         finally:
@@ -755,7 +835,12 @@ class PipelineRunner:
     def _event(self, event: str, **fields: object) -> None:
         _append_jsonl(
             self.events_path,
-            {"schema_version": STATE_SCHEMA_VERSION, "at": _utc_now(), "event": event, **fields},
+            {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "at": _utc_now(),
+                "event": event,
+                **fields,
+            },
         )
 
     def _signal_handler(self, signum: int, _frame: object) -> None:
@@ -790,7 +875,9 @@ class PipelineRunner:
         stage_id, stage_state = running[0]
         attempts = stage_state["attempts"]
         if not attempts or not isinstance(attempts[-1], dict):
-            raise PipelineBlockedError(f"running stage {stage_id} lacks an attempt identity")
+            raise PipelineBlockedError(
+                f"running stage {stage_id} lacks an attempt identity"
+            )
         attempt = attempts[-1]
         process_identity = attempt.get("process_identity")
         if isinstance(process_identity, dict) and _same_live_process(process_identity):
@@ -814,7 +901,9 @@ class PipelineRunner:
             stage_state = self.state["stages"][stage_id]
             if stage_state["status"] == "accepted":
                 if seen_unaccepted:
-                    raise PipelineBlockedError("state contains a non-prefix accepted stage")
+                    raise PipelineBlockedError(
+                        "state contains a non-prefix accepted stage"
+                    )
                 recorded = stage_state.get("accepted_artifacts")
                 if not isinstance(recorded, list):
                     raise PipelineBlockedError(
@@ -878,7 +967,12 @@ class PipelineRunner:
         self.state["status"] = "running"
         self.state["current_stage"] = stage_id
         self._save()
-        self._event("stage_attempt_start", stage_id=stage_id, attempt=ordinal, log_path=str(log_path))
+        self._event(
+            "stage_attempt_start",
+            stage_id=stage_id,
+            attempt=ordinal,
+            log_path=str(log_path),
+        )
         environment = os.environ.copy()
         environment.update(command["env"])
         process: subprocess.Popen[bytes] | None = None
@@ -1026,7 +1120,9 @@ class PipelineRunner:
                 start_index = self._revalidate_accepted_prefix()
                 if start_index == len(self.config["stage_ids"]):
                     self.state["status"] = "complete"
-                    self.state["completed_at"] = self.state.get("completed_at", _utc_now())
+                    self.state["completed_at"] = self.state.get(
+                        "completed_at", _utc_now()
+                    )
                     self._save()
                     self._event("pipeline_already_complete")
                     return self.state
@@ -1130,7 +1226,11 @@ def _parser() -> argparse.ArgumentParser:
 def _print_error(error: BaseException) -> NoReturn:
     print(
         json.dumps(
-            {"status": "blocked", "error_type": type(error).__name__, "error": str(error)},
+            {
+                "status": "blocked",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            },
             ensure_ascii=False,
             sort_keys=True,
         ),
@@ -1140,6 +1240,7 @@ def _print_error(error: BaseException) -> NoReturn:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    assert_legacy_standalone_execution_quarantined("tools/run_overnight_pipeline.py")
     args = _parser().parse_args(argv)
     try:
         config, _payload = load_config(args.config)

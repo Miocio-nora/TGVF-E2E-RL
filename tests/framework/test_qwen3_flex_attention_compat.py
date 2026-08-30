@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tgvf_rl.framework.verl.qwen3_flex_attention_compat import (
     QWEN3_VL_TEXT_FLEX_COMPAT_SCHEMA,
     install_qwen3_vl_text_flex_attention_compat,
@@ -30,6 +32,10 @@ def test_qwen3_vl_text_flex_compat_is_narrow_and_idempotent() -> None:
 
 
 def test_qwen3_vl_config_routes_flex_only_to_text_subconfig() -> None:
+    pytest.importorskip(
+        "verl.utils.model",
+        reason="Qwen configuration routing requires optional pinned veRL",
+    )
     from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
     from verl.utils.model import update_model_config
 
@@ -37,9 +43,7 @@ def test_qwen3_vl_config_routes_flex_only_to_text_subconfig() -> None:
     update_model_config(
         config,
         {
-            "text_config": {
-                "_attn_implementation_internal": "flex_attention"
-            },
+            "text_config": {"_attn_implementation_internal": "flex_attention"},
             "vision_config": {"_attn_implementation_internal": "sdpa"},
         },
     )

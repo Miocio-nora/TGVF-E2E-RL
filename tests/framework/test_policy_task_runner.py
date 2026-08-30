@@ -46,6 +46,13 @@ from tgvf_rl.framework.verl.rollout_bridge import (
 )
 
 
+def _require_verl() -> None:
+    pytest.importorskip(
+        "verl",
+        reason="Policy trainer lifecycle integration requires optional pinned veRL",
+    )
+
+
 def test_live_agent_loop_dataproto_gets_driver_and_worker_release_lease() -> None:
     non_tensor_batch = {
         name: np.array([object(), object()], dtype=object)
@@ -174,14 +181,17 @@ def test_policy_worker_rejects_ambiguous_cuda_mapping(
 
 
 def test_policy_colocated_worker_wrapper_preserves_upstream_type() -> None:
-    import ray.cloudpickle
+    ray_cloudpickle = pytest.importorskip(
+        "ray.cloudpickle",
+        reason="worker-wrapper serialization requires optional Ray",
+    )
 
     class UpstreamWorker:
         def _setup_env_cuda_visible_devices(self):
             return "upstream"
 
     wrapped = make_policy_colocated_worker_class(UpstreamWorker)
-    restored = ray.cloudpickle.loads(ray.cloudpickle.dumps(wrapped))
+    restored = ray_cloudpickle.loads(ray_cloudpickle.dumps(wrapped))
 
     assert issubclass(wrapped, UpstreamWorker)
     assert wrapped is not UpstreamWorker
@@ -541,6 +551,7 @@ def test_recovery_checkpoint_restores_last_completed_data_cursor() -> None:
 
 
 def test_policy_fit_saves_last_completed_boundary_before_reraising_failure() -> None:
+    _require_verl()
     events: list[object] = []
 
     class UpstreamTrainer:
@@ -600,6 +611,8 @@ def test_policy_fit_saves_last_completed_boundary_before_reraising_failure() -> 
 
 
 def test_policy_fit_preserves_training_and_recovery_checkpoint_failures() -> None:
+    _require_verl()
+
     class UpstreamTrainer:
         def init_workers(self):
             return None
@@ -649,6 +662,7 @@ def test_policy_fit_preserves_training_and_recovery_checkpoint_failures() -> Non
 
 
 def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> None:
+    _require_verl()
     events: list[object] = []
     checkpoint_root = tmp_path / "checkpoints"
     checkpoint = checkpoint_root / "global_step_1"
@@ -710,6 +724,7 @@ def test_completed_resume_checkpoint_exits_without_an_extra_update(tmp_path) -> 
 
 
 def test_policy_fit_closes_dataloader_workers_and_runtime_after_failure() -> None:
+    _require_verl()
     events: list[str] = []
 
     class UpstreamTrainer:
@@ -776,6 +791,7 @@ def test_policy_tracking_backends_finish_once_before_ray_teardown() -> None:
 def test_policy_fit_captures_and_finishes_upstream_tracking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _require_verl()
     from verl.utils import tracking as tracking_module
 
     events: list[object] = []

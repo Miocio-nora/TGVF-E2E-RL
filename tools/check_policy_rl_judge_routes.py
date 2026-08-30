@@ -1,6 +1,35 @@
+#!/usr/bin/python3 -I
 """Exercise real MCQ/math/open reward routes against the RL judge service."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/check_policy_rl_judge_routes.py",
+        ),
+    )
 
 import argparse
 from dataclasses import replace
@@ -19,6 +48,9 @@ from tgvf_rl.judges import (
 from tgvf_rl.rewards import AnswerTaskKind, PilotRewardPipeline, RewardContext
 from tgvf_rl.rewards.schema import NormalizationSpec, PilotRewardSpec
 from tgvf_rl.rewards.verifiers import RuleFirstAnswerVerifier
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 _REAL_CASES = {
@@ -70,7 +102,9 @@ def _canonical_sha(value: object) -> str:
 
 
 def _artifact(name: str, version: str, payload: object) -> ArtifactIdentity:
-    return ArtifactIdentity("policy-rl-answer-judge", name, version, _canonical_sha(payload))
+    return ArtifactIdentity(
+        "policy-rl-answer-judge", name, version, _canonical_sha(payload)
+    )
 
 
 def _load_rows(samples_path: Path) -> dict[str, dict[str, Any]]:
@@ -89,6 +123,9 @@ def _load_rows(samples_path: Path) -> dict[str, dict[str, Any]]:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/check_policy_rl_judge_routes.py"
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
@@ -98,9 +135,7 @@ def main() -> int:
     parser.add_argument(
         "--samples",
         type=Path,
-        default=Path(
-            "artifacts/data/deepeyes47k/materialized-seed42-v1/samples.jsonl"
-        ),
+        default=Path("artifacts/data/deepeyes47k/materialized-seed42-v1/samples.jsonl"),
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -110,9 +145,7 @@ def main() -> int:
     if config["scope"]["allows_mcq_judge_calls"] is not False:
         raise RuntimeError("MCQ judge calls must remain forbidden")
     prompt = config["prompt"]
-    actual_prompt_sha = sha256(
-        QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT.encode()
-    ).hexdigest()
+    actual_prompt_sha = sha256(QWEN25_72B_RL_JUDGE_SYSTEM_PROMPT.encode()).hexdigest()
     if (
         prompt["version"] != QWEN25_72B_RL_JUDGE_PROMPT_VERSION
         or prompt["sha256"] != actual_prompt_sha
@@ -126,7 +159,9 @@ def main() -> int:
     bound.provider.validate_credentials()
     judge = _CountingJudge(bound.provider)
     verifier = RuleFirstAnswerVerifier(
-        rule_identity=_artifact("rule-first", "v1", {"routes": ["mcq", "math", "open"]}),
+        rule_identity=_artifact(
+            "rule-first", "v1", {"routes": ["mcq", "math", "open"]}
+        ),
         normalization=NormalizationSpec(True, True, True),
         judge=judge,
         judge_prompt_identity=bound.prompt_identity,
@@ -136,7 +171,9 @@ def main() -> int:
         judge_calibration_identity=bound.calibration_identity,
     )
     reward_spec = PilotRewardSpec(
-        pipeline_identity=_artifact("reward-pipeline", "v1", {"weights": [0.8, 0.2, 1.2]}),
+        pipeline_identity=_artifact(
+            "reward-pipeline", "v1", {"weights": [0.8, 0.2, 1.2]}
+        ),
         answer_verifier_identity=verifier.rule_identity,
         format_verifier_identity=_artifact("format", "v1", {"invalid": -1}),
         tool_verifier_identity=_artifact("conditional-tool", "v1", {"once": True}),
@@ -213,3 +250,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+#!/usr/bin/python3 -I

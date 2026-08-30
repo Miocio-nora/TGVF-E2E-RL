@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Wait for RP67 completion, run every accepted ACC check, and release GPU0/1.
 
 This one-off controller is intentionally strict and restartable.  It waits for
@@ -10,6 +10,34 @@ by ``supervise_rp67_t1_schedule.py``.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/run_rp67_step2000_acc_pipeline.py",
+        ),
+    )
 
 import argparse
 from datetime import datetime, timezone
@@ -27,6 +55,14 @@ from urllib.request import urlopen
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
+
 PYTHON = REPOSITORY_ROOT / ".venv312/bin/python"
 RUN_ID = "RP-67-QWEN3-INSTRUCT-REP-BALANCED-T1-IMAGE-AXIS-GROUNDED-2000-GPU01"
 RUN_IDENTITY_SHA256 = "0b53d04cf8e4c8b665e76279da1df8d1e6ebabee63318c644a3bff5bad099b44"
@@ -35,12 +71,16 @@ EXPERIMENT_CONFIG = REPOSITORY_ROOT / (
     "configs/representation/experiments/image_axis_grounding/"
     "rp67_image_axis_grounding_2000_finalize_step2000_v1.toml"
 )
-EXPERIMENT_CONFIG_SHA256 = "c7242f0b259ac0ceb3416ce0e2d33deef1736b32e6f9988a55ba217386a84672"
+EXPERIMENT_CONFIG_SHA256 = (
+    "c7242f0b259ac0ceb3416ce0e2d33deef1736b32e6f9988a55ba217386a84672"
+)
 TRAINING_CONFIG = REPOSITORY_ROOT / (
     "configs/representation/experiments/image_axis_grounding/"
     "rp67_qwen3_instruct_image_axis_grounded_2000_gpu01_finalize_step2000.toml"
 )
-TRAINING_CONFIG_SHA256 = "cbbfc146b97263f5529603c462a4b46400deea283f307a89d8db7cae264aa5ee"
+TRAINING_CONFIG_SHA256 = (
+    "cbbfc146b97263f5529603c462a4b46400deea283f307a89d8db7cae264aa5ee"
+)
 TRAINING_ROOT = REPOSITORY_ROOT / (
     "artifacts/representation/"
     "RP-67-qwen3-instruct-balanced-t1-image-axis-grounded-2000-gpu01"
@@ -66,27 +106,39 @@ FULL_CONFIG = EVALUATION_CONFIG_ROOT / "rp67_step2000_full867_gpu0.toml"
 FIRST_MAIN_ROOT = EVALUATION_ROOT / "rp67_step2000_first200_acc_main_mw2_20260801"
 FULL_MAIN_ROOT = EVALUATION_ROOT / "rp67_step2000_full867_acc_main_mw2_20260801"
 FIRST_SIX_ROOT = EVALUATION_ROOT / "rp67_step2000_first200_6arm_scalar_mw4_20260801"
-FIRST_MAIN_SEMANTIC = EVALUATION_ROOT / "rp67_step2000_first200_acc_main_semantic_v2_20260801"
-FULL_MAIN_SEMANTIC = EVALUATION_ROOT / "rp67_step2000_full867_acc_main_semantic_v2_20260801"
+FIRST_MAIN_SEMANTIC = (
+    EVALUATION_ROOT / "rp67_step2000_first200_acc_main_semantic_v2_20260801"
+)
+FULL_MAIN_SEMANTIC = (
+    EVALUATION_ROOT / "rp67_step2000_full867_acc_main_semantic_v2_20260801"
+)
 FIRST_SIX_SEMANTIC = EVALUATION_ROOT / "rp67_step2000_first200_6arm_semantic_20260801"
-JUDGE_CONFIG = REPOSITORY_ROOT / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+JUDGE_CONFIG = (
+    REPOSITORY_ROOT / "configs/policy/judges/qwen25_72b_rl_answer_judge_v1.json"
+)
 JUDGE_CONFIG_SHA256 = "3737504858912a6392679d2c9720597cde58dd7d3218aa6f75b67ad00a769573"
 PYTHON_HEADER_ROOT = REPOSITORY_ROOT / ".deps/python312-dev/root/usr/include"
 FIRST_MANIFEST = REPOSITORY_ROOT / (
     "configs/representation/internal_evaluation/"
     "qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json"
 )
-FIRST_MANIFEST_SHA256 = "55e2cde5e118de77e4bcc099a422844129cdff1caf328d349dae5c7f11a634d8"
+FIRST_MANIFEST_SHA256 = (
+    "55e2cde5e118de77e4bcc099a422844129cdff1caf328d349dae5c7f11a634d8"
+)
 FULL_MANIFEST = REPOSITORY_ROOT / (
     "configs/representation/internal_evaluation/"
     "qwen3_v4_clean_imend_test_full867_variable_k_v1.json"
 )
-FULL_MANIFEST_SHA256 = "31cce579e919dccf3ba2702e09db3a7b2cfa65e412db079c7dcdcb15dcddbe78"
+FULL_MANIFEST_SHA256 = (
+    "31cce579e919dccf3ba2702e09db3a7b2cfa65e412db079c7dcdcb15dcddbe78"
+)
 COUNTERFACTUAL_MANIFEST = REPOSITORY_ROOT / (
     "configs/representation/internal_evaluation/"
     "qwen3_v4_clean_imend_test_golden_counterfactual_v1.json"
 )
-COUNTERFACTUAL_SHA256 = "4589d14f196ccde48c3439405700220bc0fb63487edae0e74bc6b3713d7f4cc4"
+COUNTERFACTUAL_SHA256 = (
+    "4589d14f196ccde48c3439405700220bc0fb63487edae0e74bc6b3713d7f4cc4"
+)
 GROUNDING_MANIFEST = REPOSITORY_ROOT / (
     "configs/representation/internal_evaluation/"
     "qwen3_v4_clean_imend_audited_grounding_v1.json"
@@ -97,7 +149,9 @@ EVALUATION_DATA = Path(
     "runs/tgvf_v4_teacher_50k_clean_imend/splits/"
     "tgvf_v4_teacher_stage1_protocol_c_focus.test.jsonl"
 )
-EVALUATION_DATA_SHA256 = "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
+EVALUATION_DATA_SHA256 = (
+    "de61c731eb961825a77df587cd76c00eabfea75b5c6003096f3cc7f1a51dd82d"
+)
 MARKER_SCHEMA = "rp67-all-validations-complete-v2"
 PIPELINE_SCHEMA = "rp67-step2000-acc-pipeline-v1"
 SEMANTIC_SCHEMA = "answer-utility-semantic-rescore-v2"
@@ -143,7 +197,9 @@ def _atomic_bytes(path: Path, payload: bytes) -> None:
 def _atomic_json(path: Path, value: object) -> None:
     _atomic_bytes(
         path,
-        (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+        (
+            json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode(),
     )
 
 
@@ -279,7 +335,7 @@ def _render_source_config(
     run_id = f"RP-67-STEP2000-{split.upper()}-IMAGE-AXIS-UTILITY-EVAL-GPU01"
     evaluation_id = f"rp67-step2000-{split}-answer-utility-v1"
     report_path = PIPELINE_ROOT / f"{split}-internal-evaluation-unused.json"
-    values = f'''schema_version = "representation-internal-evaluation-run-v3"
+    values = f"""schema_version = "representation-internal-evaluation-run-v3"
 run_id = {_toml_string(run_id)}
 
 [code]
@@ -317,7 +373,7 @@ report_path = {_toml_string(report_path)}
 random_seed = 42
 max_new_tokens = 64
 eos_token_ids = [151645]
-'''
+"""
     return values.encode("utf-8")
 
 
@@ -362,7 +418,9 @@ def _launch_generation(
         return existing
     command = [
         str(PYTHON),
-        str(REPOSITORY_ROOT / "tools/launch_representation_answer_utility_evaluation.py"),
+        str(
+            REPOSITORY_ROOT / "tools/launch_representation_answer_utility_evaluation.py"
+        ),
         "--production-source",
         "--source-evaluation-config",
         str(source_config),
@@ -385,7 +443,9 @@ def _launch_generation(
     ]
     for arm in arms:
         command.extend(("--arm", arm))
-    _append_event(events, "generation_started", output_root=str(output_root), arms=list(arms))
+    _append_event(
+        events, "generation_started", output_root=str(output_root), arms=list(arms)
+    )
     log_path = PIPELINE_ROOT / f"{output_root.name}.log"
     with log_path.open("ab", buffering=0) as log:
         completed = subprocess.run(
@@ -475,8 +535,7 @@ def _semantic_complete(root: Path, *, arms: Sequence[str], samples: int) -> bool
         or set(by_arm) != set(arms)
         or summary.get("overall", {}).get("total") != samples * len(arms)
         or any(
-            not isinstance(by_arm.get(arm), dict)
-            or by_arm[arm].get("total") != samples
+            not isinstance(by_arm.get(arm), dict) or by_arm[arm].get("total") != samples
             for arm in arms
         )
         or not isinstance(manifest_summary, dict)
@@ -529,7 +588,9 @@ def _python_header_cpath() -> str:
     )
     missing = tuple(str(path) for path in required if not path.is_file())
     if missing:
-        raise PipelineBlockedError(f"Python 3.12 development headers are missing: {missing}")
+        raise PipelineBlockedError(
+            f"Python 3.12 development headers are missing: {missing}"
+        )
     return os.pathsep.join((str(PYTHON_HEADER_ROOT), str(python_headers)))
 
 
@@ -573,7 +634,10 @@ def _run_semantic(
     roots = [str(shard["output_root"]) for shard in generation_summary["shards"]]
     command = [
         str(PYTHON),
-        str(REPOSITORY_ROOT / "tools/run_representation_answer_utility_semantic_rescore.py"),
+        str(
+            REPOSITORY_ROOT
+            / "tools/run_representation_answer_utility_semantic_rescore.py"
+        ),
     ]
     for root in roots:
         command.extend(("--generation-output-root", root))
@@ -704,7 +768,9 @@ def _status() -> dict[str, object]:
         "training_live": _training_is_live(),
         "adapter_exists": ADAPTER.is_file(),
         "int_diag_exists": INT_DIAG.is_file(),
-        "semantic_summaries": {name: path.is_file() for name, path in summaries.items()},
+        "semantic_summaries": {
+            name: path.is_file() for name, path in summaries.items()
+        },
         "complete_marker_exists": COMPLETE_MARKER.is_file(),
     }
 
@@ -748,6 +814,9 @@ def _existing_complete_marker_is_valid() -> bool:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/run_rp67_step2000_acc_pipeline.py"
+    )
     args = _parser().parse_args()
     _assert_pinned_files()
     if args.poll_seconds <= 0:
@@ -927,7 +996,8 @@ def main() -> int:
             REPOSITORY_ROOT / "tools/launch_representation_answer_utility_evaluation.py"
         ),
         "semantic_tool_sha256": _file_sha256(
-            REPOSITORY_ROOT / "tools/run_representation_answer_utility_semantic_rescore.py"
+            REPOSITORY_ROOT
+            / "tools/run_representation_answer_utility_semantic_rescore.py"
         ),
         "artifacts": {
             "int_diag": _artifact_record(INT_DIAG),
@@ -952,8 +1022,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except PipelineBlockedError as error:
-        print(f"ACC_PIPELINE_BLOCKED: {error}", file=sys.stderr)
-        raise SystemExit(3) from error
+    raise SystemExit(main())

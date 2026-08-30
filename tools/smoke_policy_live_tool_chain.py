@@ -1,3 +1,5 @@
+#!/usr/bin/python3 -I
+# ruff: noqa: E402
 """Single-GPU gate for the real Qwen3 TGVF live-tool chain.
 
 This intentionally avoids veRL/Ray startup.  It loads the same local model and
@@ -8,11 +10,44 @@ recorded D/DeepStack observation before it is packed for the next vLLM turn.
 
 from __future__ import annotations
 
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/smoke_policy_live_tool_chain.py",
+        ),
+    )
+
 import argparse
 import hashlib
 import json
 from pathlib import Path
+import sys
 from time import perf_counter
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 import torch
 from transformers import AutoProcessor
@@ -43,8 +78,16 @@ from tgvf_rl.framework.vllm import (
     require_preexpanded_prompt_contract,
 )
 from tgvf_rl.policy.run_config import load_policy_e2e_smoke_run_config
+from tgvf_rl.protocol import (
+    NativeActionBoundaryProtocolId,
+    NativeSuccessObservationProtocolId,
+    NativeToolCapabilityProfile,
+)
 from tgvf_rl.protocol.parser import StrictToolCallParser
 from tgvf_rl.trajectories.schema import TrajectoryIdentity
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 class _NeverSampler:
@@ -137,6 +180,9 @@ def _sampled_tool_call(
 
 
 def main() -> None:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/smoke_policy_live_tool_chain.py"
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--physical-gpu", type=int, required=True)
@@ -146,6 +192,16 @@ def main() -> None:
 
     started = perf_counter()
     config = load_policy_e2e_smoke_run_config(args.config.resolve())
+    if config.protocol.tool_profile is not NativeToolCapabilityProfile.TGVF_ONLY:
+        raise ValueError("live TGVF tool-chain smoke requires tgvf_only")
+    if (
+        config.protocol.success_observation_protocol_id
+        is not NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1
+    ):
+        raise ValueError(
+            "live TGVF tool-chain smoke requires the explicit generic-native "
+            "success observation protocol"
+        )
     processor = AutoProcessor.from_pretrained(
         config.model.revision_or_path,
         local_files_only=True,
@@ -296,8 +352,10 @@ def main() -> None:
             )
             for branch in record.branches
         )
-        if main.ndim != 2 or len(branches) != 3 or any(
-            branch.shape != main.shape for branch in branches
+        if (
+            main.ndim != 2
+            or len(branches) != 3
+            or any(branch.shape != main.shape for branch in branches)
         ):
             raise RuntimeError("recorded main D/DeepStack shapes differ")
         d_shapes.append(tuple(main.shape))
@@ -307,6 +365,12 @@ def main() -> None:
             {
                 "status": "PASS",
                 "physical_gpu": args.physical_gpu,
+                "success_observation_protocol_id": (
+                    config.protocol.success_observation_protocol_id.value
+                ),
+                "action_boundary_protocol_id": (
+                    NativeActionBoundaryProtocolId.STRICT_SINGLE_TERMINAL_TOOL_CALL_V2.value
+                ),
                 "initial_prompt_tokens": len(prompt_ids),
                 "third_turn_prompt_tokens": len(current_prompt),
                 "observation_count": len(handles),
@@ -323,3 +387,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+#!/usr/bin/python3 -I

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind an official-visible task suite to one exact full-model snapshot."""
+"""Bind an explicit-boundary official-visible full-model suite."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from tgvf_rl.evaluation.policy_benchmark_config import (  # noqa: E402
     materialize_full_model_policy_benchmark_config,
 )
+from tgvf_rl.protocol import NativeActionBoundaryProtocolId  # noqa: E402
 
 
 def main() -> int:
@@ -38,6 +39,13 @@ def main() -> int:
         default=False,
     )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    parser.add_argument("--declared-image-max-pixels", type=int, required=True)
+    parser.add_argument(
+        "--action-boundary-protocol-id",
+        choices=tuple(protocol.value for protocol in NativeActionBoundaryProtocolId),
+        required=True,
+        help="Explicit legacy reproduction or strict single-terminal-call semantics.",
+    )
     parser.add_argument(
         "--gpu-ids",
         type=int,
@@ -58,6 +66,8 @@ def main() -> int:
         expected_single_image_count=args.expected_single_image_count,
         output_root=args.output_root,
         config_path=args.config_output,
+        declared_image_max_pixels=args.declared_image_max_pixels,
+        action_boundary_protocol_id=args.action_boundary_protocol_id,
         inference_concurrency_per_gpu=args.inference_concurrency_per_gpu,
         max_model_len=args.max_model_len,
         max_num_batched_tokens=args.max_num_batched_tokens,

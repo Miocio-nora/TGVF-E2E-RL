@@ -24,6 +24,9 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     trajectory_audit_payload,
     write_official_coredev_tasks,
 )
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_mode_quarantined,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -189,6 +192,12 @@ def _status(config_path: Path) -> int:
 
 def main() -> int:
     args = _parser().parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/run_policy_coredev_2511.py",
+        selected_mode=args.mode,
+        read_only_modes=("status",),
+        blocked_modes=("prepare", "worker"),
+    )
     config = load_policy_coredev_config(args.config)
     if args.mode == "prepare":
         materialize_vllm_lora_adapter(config)

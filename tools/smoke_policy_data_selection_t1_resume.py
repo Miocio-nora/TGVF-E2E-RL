@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Run the GPU-3 Instruct T1 stop/resume equivalence smoke.
 
 The commands are intentionally split.  ``plan`` is CPU-only.  GPU execution is
@@ -16,6 +17,11 @@ import subprocess
 import sys
 from typing import Any
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SOURCE_ROOT = _REPO_ROOT / "src"
+if str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
+
 from tgvf_rl.data.policy_selection_t1_resume_smoke import (
     archive_t1_continuous_baseline,
     build_t1_resume_smoke_plan,
@@ -25,9 +31,10 @@ from tgvf_rl.data.policy_selection_t1_resume_smoke import (
     write_t1_resume_smoke_artifact,
 )
 from tgvf_rl.data.policy_selection_vllm import prepare_output_root
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_mode_quarantined,
+)
 
-
-_REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKER = _REPO_ROOT / "tools" / "run_policy_data_selection_t1.py"
 
 
@@ -252,6 +259,12 @@ def _run_resume(config: Path) -> dict[str, Any]:
 
 def main() -> None:
     args = _parser().parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/smoke_policy_data_selection_t1_resume.py",
+        selected_mode=args.command,
+        read_only_modes=("plan",),
+        blocked_modes=("baseline", "interrupt", "resume"),
+    )
     if args.command == "plan":
         result = _plan_record(args.config)
     elif args.command == "baseline":

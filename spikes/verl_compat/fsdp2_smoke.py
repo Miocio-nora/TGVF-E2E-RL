@@ -1,3 +1,4 @@
+#!/usr/bin/python3 -I
 """Two-rank FSDP2 checkpoint/resume smoke for the accepted veRL environment.
 
 This is deliberately an infrastructure objective over a tiny deterministic
@@ -6,6 +7,34 @@ does not select GRPO/SDPO mathematics or claim a Qwen training result.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(3):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "spikes/verl_compat/fsdp2_smoke.py",
+        ),
+    )
 
 import argparse
 import hashlib
@@ -46,6 +75,9 @@ from tgvf_rl.framework.verl import (  # noqa: E402
     verify_verl_distribution_identity,
 )
 from tgvf_rl.experiment_identity import validate_run_id  # noqa: E402
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 class TinyBlock(nn.Module):
@@ -171,6 +203,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    assert_legacy_standalone_execution_quarantined("spikes/verl_compat/fsdp2_smoke.py")
     args = _parse_args(argv)
     selected_stack = audited_compatibility_stack(args.stack)
     config = validate_smoke_config(
@@ -321,3 +354,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+#!/usr/bin/python3 -I

@@ -1,7 +1,35 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Materialize the Golden-matched Qwen3 representation evaluation population."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/materialize_representation_internal_evaluation_manifests.py",
+        ),
+    )
 
 from collections import Counter
 from hashlib import sha256
@@ -9,6 +37,9 @@ import json
 from pathlib import Path
 
 from tgvf_rl.representation.training.data import load_retained_representation_jsonl
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 VALIDATION_PATH = Path(
@@ -40,6 +71,9 @@ OUTPUT_DIRECTORY = Path(
 
 
 def main() -> None:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/materialize_representation_internal_evaluation_manifests.py"
+    )
     dataset = load_retained_representation_jsonl(
         VALIDATION_PATH,
         expected_source_sha256=VALIDATION_SOURCE_SHA256,
@@ -159,12 +193,10 @@ def main() -> None:
         / "qwen3_v4_clean_imend_test_golden_first200_variable_k_v1.json": (
             ordered_payload
         ),
-        OUTPUT_DIRECTORY
-        / "qwen3_v4_clean_imend_test_full867_variable_k_v1.json": (
+        OUTPUT_DIRECTORY / "qwen3_v4_clean_imend_test_full867_variable_k_v1.json": (
             full_ordered_payload
         ),
-        OUTPUT_DIRECTORY
-        / "qwen3_v4_clean_imend_test_golden_counterfactual_v1.json": (
+        OUTPUT_DIRECTORY / "qwen3_v4_clean_imend_test_golden_counterfactual_v1.json": (
             counterfactual_payload
         ),
     }

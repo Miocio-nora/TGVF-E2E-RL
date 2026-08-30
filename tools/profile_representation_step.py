@@ -1,3 +1,5 @@
+#!/usr/bin/python3 -I
+# ruff: noqa: E402
 """Profile one exact representation optimizer step under ``torchrun``.
 
 This is a diagnostic launcher, not a training entry point.  It delegates the
@@ -8,6 +10,33 @@ make host/device gaps attributable without changing the training source path.
 
 from __future__ import annotations
 
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/profile_representation_step.py",
+        ),
+    )
+
 import argparse
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
@@ -15,14 +44,23 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import sys
 from time import perf_counter_ns
 from typing import Any
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 import torch
 
 import tgvf_rl.representation.training.native_pipeline as native_pipeline_module
 import tgvf_rl.representation.training.streaming as streaming_module
 import tgvf_rl.representation.training.trainer as trainer_module
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 from tgvf_rl.representation.training import runner
 
 
@@ -244,6 +282,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/profile_representation_step.py"
+    )
     args = _parser().parse_args(argv)
     profiler = _StepProfiler(
         profile_global_step=args.profile_global_step,
@@ -278,3 +319,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+#!/usr/bin/python3 -I

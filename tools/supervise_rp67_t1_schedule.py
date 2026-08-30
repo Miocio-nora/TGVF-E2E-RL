@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Safely supervise the one-off RP67/T1 GPU handoff schedule.
 
 The supervisor never signals a process discovered only from GPU utilization.
@@ -11,6 +11,34 @@ reconciles the live machine every few seconds; all transitions are resumable.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/supervise_rp67_t1_schedule.py",
+        ),
+    )
 
 import argparse
 from dataclasses import asdict, dataclass
@@ -29,6 +57,21 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.launch_gate import (  # noqa: E402
+    LaunchGateError,
+    consume_launch_authorization,
+    make_run_identity,
+    materialize_ready_receipt,
+)
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
+
+
 DEFAULT_CONFIG = REPOSITORY_ROOT / (
     "configs/policy/data_selection/"
     "qwen3_instruct_t1_512_vstar170k_arxiv32k_thinklite69842_v1.json"
@@ -56,6 +99,7 @@ MARKER_SCHEMA = "rp67-all-validations-complete-v2"
 SEMANTIC_SCHEMA = "answer-utility-semantic-rescore-v2"
 HEARTBEAT_SCHEMA = "rp67-t1-gpu-supervisor-heartbeat-v1"
 COMPLETE_SCHEMA = "t1-revision0-supervisor-complete-v1"
+EXECUTION_POLICY = REPOSITORY_ROOT / "configs/ops/experiment_execution_policy.json"
 WORKER_FILE_RE = re.compile(
     r"^rank-(?P<rank>[0-3])(?:-subshard-(?P<index>\d+)-of-(?P<count>\d+))?\.pgid$"
 )
@@ -237,7 +281,9 @@ def _validate_worker(
         raise SupervisorBlockedError(f"worker {pgid} belongs to another uid")
     if not argv:
         raise SupervisorBlockedError(f"worker {pgid} has an empty argv")
-    expected_script = (REPOSITORY_ROOT / "tools/run_policy_data_selection_t1.py").resolve()
+    expected_script = (
+        REPOSITORY_ROOT / "tools/run_policy_data_selection_t1.py"
+    ).resolve()
     script_positions = [
         index
         for index, value in enumerate(argv)
@@ -246,7 +292,10 @@ def _validate_worker(
     if len(script_positions) != 1 or "worker" not in argv[script_positions[0] + 1 :]:
         raise SupervisorBlockedError(f"PGID {pgid} is not the accepted T1 worker")
     observed_config = _argument(argv, "--config")
-    if observed_config is None or Path(observed_config).resolve() != config_path.resolve():
+    if (
+        observed_config is None
+        or Path(observed_config).resolve() != config_path.resolve()
+    ):
         raise SupervisorBlockedError(f"worker {pgid} uses another T1 config")
     rank = int(_argument(argv, "--rank") or "-1")
     gpu = int(_argument(argv, "--cuda-visible-device") or "-1")
@@ -263,11 +312,17 @@ def _validate_worker(
     else:
         count, index = int(count_text), int(index_text)
         if int(_argument(argv, "--chunk-subshard-count") or "-1") != count:
-            raise SupervisorBlockedError(f"worker {pgid} subshard count differs from PGID file")
+            raise SupervisorBlockedError(
+                f"worker {pgid} subshard count differs from PGID file"
+            )
         if int(_argument(argv, "--chunk-subshard-index") or "-1") != index:
-            raise SupervisorBlockedError(f"worker {pgid} subshard index differs from PGID file")
+            raise SupervisorBlockedError(
+                f"worker {pgid} subshard index differs from PGID file"
+            )
         if not 0 <= index < count:
-            raise SupervisorBlockedError(f"worker {pgid} has invalid subshard coordinates")
+            raise SupervisorBlockedError(
+                f"worker {pgid} has invalid subshard coordinates"
+            )
     return Worker(
         tag=pgid_path.stem,
         pgid_path=str(pgid_path),
@@ -305,7 +360,9 @@ def _discover_workers(runtime_root: Path, config_path: Path) -> tuple[Worker, ..
     for worker in workers:
         live_counts_by_rank.setdefault(worker.rank, set()).add(worker.subshard_count)
     if any(len(counts) != 1 for counts in live_counts_by_rank.values()):
-        raise SupervisorBlockedError("one logical rank has incompatible live topologies")
+        raise SupervisorBlockedError(
+            "one logical rank has incompatible live topologies"
+        )
     return tuple(workers)
 
 
@@ -385,7 +442,10 @@ def _validated_acc_marker(path: Path) -> bool:
         raise SupervisorBlockedError("ACC completion marker is malformed") from error
     if not isinstance(value, dict):
         raise SupervisorBlockedError("ACC completion marker must be an object")
-    if value.get("schema_version") != MARKER_SCHEMA or value.get("status") != "complete":
+    if (
+        value.get("schema_version") != MARKER_SCHEMA
+        or value.get("status") != "complete"
+    ):
         raise SupervisorBlockedError("ACC completion marker schema/status mismatch")
     if value.get("rp67_run_id") != EXPECTED_RP67_RUN_ID:
         raise SupervisorBlockedError("ACC completion marker identifies another RP run")
@@ -398,7 +458,10 @@ def _validated_acc_marker(path: Path) -> bool:
     )
     if not isinstance(artifacts, dict) or set(artifacts) != set(required):
         raise SupervisorBlockedError("ACC marker artifact set is incomplete")
-    def validate_file_binding(record: object, *, expected_path: Path | None = None) -> Path:
+
+    def validate_file_binding(
+        record: object, *, expected_path: Path | None = None
+    ) -> Path:
         if not isinstance(record, dict) or record.get("status") != "complete":
             raise SupervisorBlockedError("ACC marker file binding is incomplete")
         artifact_path = Path(str(record.get("path", "")))
@@ -842,6 +905,8 @@ def _parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run")
     run.add_argument("--execute", action="store_true", required=True)
     run.add_argument("--once", action="store_true")
+    run.add_argument("--authorization-token", type=Path)
+    run.add_argument("--freeze-override", type=Path)
     return parser
 
 
@@ -883,6 +948,9 @@ def _public_plan(plan: Plan) -> dict[str, object]:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/supervise_rp67_t1_schedule.py"
+    )
     args = _parser().parse_args()
     config_path = args.config.expanduser().resolve()
     output_root = args.output_root.expanduser().resolve()
@@ -924,12 +992,46 @@ def main() -> int:
     supervisor_root = output_root / "runtime" / SUPERVISOR_RUNTIME_NAME
     if supervisor_root.exists() and supervisor_root.is_symlink():
         raise SupervisorBlockedError("supervisor runtime root must not be a symlink")
+    gate_root = supervisor_root / "launch-gate"
+    run_identity = make_run_identity(
+        run_id=EXPECTED_T1_RUN_ID,
+        phase="t1-worker-schedule",
+        command_id="tools/supervise_rp67_t1_schedule.py",
+        parameters={
+            "schedule_sha256": schedule_sha,
+            "output_root": str(output_root),
+            "expected_run_manifest_sha256": EXPECTED_T1_RUN_MANIFEST_SHA256,
+        },
+    )
+    try:
+        materialize_ready_receipt(
+            gate_root,
+            run_identity=run_identity,
+            evidence_paths={"selection_config": config_path},
+        )
+        if args.authorization_token is None:
+            raise LaunchGateError(
+                f"schedule is ready but launch is denied by default; authorize {gate_root}"
+            )
+        consume_launch_authorization(
+            gate_root,
+            args.authorization_token,
+            EXECUTION_POLICY,
+            expected_run_id=EXPECTED_T1_RUN_ID,
+            expected_phase="t1-worker-schedule",
+            freeze_override_path=args.freeze_override,
+        )
+    except LaunchGateError as error:
+        raise SupervisorBlockedError(str(error)) from error
+
     supervisor_root.mkdir(parents=True, exist_ok=True)
     lock_handle = (supervisor_root / "supervisor.lock").open("a+b")
     try:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as error:
-        raise SupervisorBlockedError("another supervisor instance owns the schedule") from error
+        raise SupervisorBlockedError(
+            "another supervisor instance owns the schedule"
+        ) from error
     state_path = supervisor_root / "state.json"
     journal_path = supervisor_root / "events.jsonl"
     heartbeat_path = supervisor_root / "heartbeat.json"
@@ -1085,8 +1187,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except SupervisorBlockedError as error:
-        print(f"SUPERVISOR_BLOCKED: {error}", file=sys.stderr)
-        raise SystemExit(3) from error
+    raise SystemExit(main())

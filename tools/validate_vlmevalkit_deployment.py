@@ -1,6 +1,35 @@
+#!/usr/bin/python3 -I
 """Validate the pinned external VLMEvalKit CPU/CLI deployment without downloads."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/validate_vlmevalkit_deployment.py",
+        ),
+    )
 
 import argparse
 from hashlib import sha256
@@ -9,6 +38,10 @@ import os
 from pathlib import Path
 import subprocess
 from typing import Any
+
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -110,7 +143,9 @@ print('TGVF_VLMEVALKIT_PROBE=' + json.dumps(payload, sort_keys=True))
     environment["TGVF_REQUIRED_DATASETS"] = json.dumps(config["required_datasets"])
     probe = _run([str(python), "-c", probe_source], env=environment)
     _require_ok(probe, "VLMEvalKit import/registry probe")
-    probe_lines = [line for line in probe.stdout.splitlines() if line.startswith(PROBE_PREFIX)]
+    probe_lines = [
+        line for line in probe.stdout.splitlines() if line.startswith(PROBE_PREFIX)
+    ]
     if len(probe_lines) != 1:
         raise RuntimeError("VLMEvalKit registry probe did not emit its result")
     registry = json.loads(probe_lines[0][len(PROBE_PREFIX) :])
@@ -137,6 +172,9 @@ print('TGVF_VLMEVALKIT_PROBE=' + json.dumps(payload, sort_keys=True))
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/validate_vlmevalkit_deployment.py"
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--deployment",
@@ -151,3 +189,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+#!/usr/bin/python3 -I

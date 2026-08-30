@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Real Qwen3-Instruct initial/post-crop prompt-trigger canary."""
 
 from __future__ import annotations
@@ -8,17 +9,24 @@ import hashlib
 import json
 from pathlib import Path
 from statistics import mean
+import sys
 from time import perf_counter
 from typing import Any, Mapping
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from PIL import Image
 
 from tgvf_rl.environment.native_appender import (
-    render_qwen_native_success_environment_text,
+    NativeSuccessObservationContract,
 )
 from tgvf_rl.protocol import (
     NativeAssistantDialect,
     NativeProtocolRenderer,
+    NativeSuccessObservationProtocolId,
     NativeToolCapabilityProfile,
     StrictToolCallParser,
     build_native_tool_schemas,
@@ -31,9 +39,13 @@ from tgvf_rl.protocol.tool_prompts import (
     QWEN3_INSTRUCT_TOOL_RESPONSE_REASONING_REMINDER,
 )
 from tgvf_rl.qwen.crop_coordinates import map_qwen3_crop_bbox_to_source
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_mode_quarantined,
+)
 
 
-SCHEMA = "qwen3-instruct-crop-prompt-canary-v1"
+LEGACY_SCHEMA_V1 = "qwen3-instruct-crop-prompt-canary-v1"
+SCHEMA_V2 = "qwen3-instruct-crop-prompt-canary-v2"
 DIALECT = NativeAssistantDialect.QWEN3_VL_INSTRUCT
 PROFILE = NativeToolCapabilityProfile.CROP_ONLY
 
@@ -49,7 +61,9 @@ def _sha_text(value: str) -> str:
 def _load_config(path: Path) -> tuple[dict[str, Any], str]:
     raw = path.read_bytes()
     value = json.loads(raw.decode("utf-8"))
-    if not isinstance(value, dict) or value.get("schema_version") != SCHEMA:
+    if not isinstance(value, dict):
+        raise ValueError("canary config must be a JSON object")
+    if value.get("schema_version") not in {LEGACY_SCHEMA_V1, SCHEMA_V2}:
         raise ValueError("canary config schema mismatch")
     return value, _sha_bytes(raw)
 
@@ -119,13 +133,33 @@ def _validate(config: Mapping[str, Any], processor: Any) -> dict[str, Any]:
         raise ValueError("chat template SHA256 mismatch")
     identity = visual_tool_prompt_identity(PROFILE, assistant_dialect=DIALECT)
     prompt_config = config["prompt"]
+    if config["schema_version"] == LEGACY_SCHEMA_V1:
+        # The v1 canary predates an explicit field.  Its exact-byte schema is
+        # permanently defined as the historical generic86 continuation; this
+        # branch is evidence validation, not a runtime default.
+        observation_protocol_id = (
+            NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1
+        )
+        if "success_observation_protocol_id" in prompt_config:
+            raise ValueError("legacy v1 canary config bytes were upgraded in place")
+    else:
+        observation_protocol_id = NativeSuccessObservationProtocolId(
+            prompt_config["success_observation_protocol_id"]
+        )
     if (
         prompt_config["assistant_dialect"] != DIALECT.value
         or prompt_config["version"] != identity.version
         or prompt_config["response_version"] != identity.response_version
         or prompt_config["bundle_sha256"] != identity.bundle_sha256
+        or observation_protocol_id
+        is not NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC86_V1
     ):
         raise ValueError("V4 Instruct prompt identity mismatch")
+    observation_contract = NativeSuccessObservationContract(
+        protocol_id=observation_protocol_id,
+        tool_profile=PROFILE,
+        assistant_dialect=DIALECT,
+    )
     image_path = Path(config["sample"]["image_path"])
     if _sha_bytes(image_path.read_bytes()) != config["sample"]["image_sha256"]:
         raise ValueError("source image SHA256 mismatch")
@@ -152,14 +186,7 @@ def _validate(config: Mapping[str, Any], processor: Any) -> dict[str, Any]:
     followup_messages = _tool_messages(initial_messages, controlled)
     followup = renderer.render(followup_messages, add_generation_prompt=True)
     renderer.assert_generation_prefill(followup, processor.tokenizer)
-    exact_expected = (
-        initial.text
-        + controlled
-        + render_qwen_native_success_environment_text(
-            parsed,
-            assistant_dialect=DIALECT,
-        )
-    )
+    exact_expected = initial.text + controlled + observation_contract.render(parsed)
     if followup.text != exact_expected:
         raise ValueError("rerendered post-crop prompt differs from native append bytes")
     if not followup.text.endswith("<|im_start|>assistant\n"):
@@ -174,6 +201,7 @@ def _validate(config: Mapping[str, Any], processor: Any) -> dict[str, Any]:
     )
     return {
         "prompt_bundle_sha256": identity.bundle_sha256,
+        "success_observation_protocol_id": observation_protocol_id.value,
         "initial_prompt_text_sha256": initial.text_sha256,
         "initial_prompt_token_ids_sha256": initial.token_ids_sha256,
         "post_crop_prompt_text_sha256": followup.text_sha256,
@@ -312,6 +340,12 @@ def main() -> int:
     parser.add_argument("--physical-gpu", type=int, required=True)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/canary_qwen3_instruct_crop_prompt.py",
+        selected_mode="validate" if args.validate_only else "execute",
+        read_only_modes=("validate",),
+        blocked_modes=("execute",),
+    )
     config, config_sha = _load_config(args.config.resolve())
     if args.physical_gpu != config["execution"]["physical_gpu"]:
         raise ValueError("physical GPU differs from config")
@@ -377,7 +411,7 @@ def main() -> int:
     )
     result = {
         **public_golden,
-        "schema_version": SCHEMA,
+        "schema_version": SCHEMA_V2,
         "physical_gpu": args.physical_gpu,
         "crop_path": str(crop_path),
         "crop_sha256": _sha_bytes(crop_path.read_bytes()),

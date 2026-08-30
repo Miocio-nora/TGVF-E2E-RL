@@ -1,7 +1,35 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Summarize answer-relevant versus bonus-only PRL13 GRPO group signal."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/analyze_prl13_group_signal.py",
+        ),
+    )
 
 import argparse
 import json
@@ -15,6 +43,9 @@ if str(_SOURCE) not in sys.path:
     sys.path.insert(0, str(_SOURCE))
 
 from tgvf_rl.policy.prl13_group_signal import summarize_group_signal  # noqa: E402
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -49,6 +80,9 @@ def _load(paths: Sequence[Path]) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/analyze_prl13_group_signal.py"
+    )
     args = _parser().parse_args(argv)
     records, errors = _load(args.trajectories)
     if not records:

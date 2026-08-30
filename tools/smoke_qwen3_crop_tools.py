@@ -1,7 +1,35 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
+# ruff: noqa: E402
 """Run one real-Qwen plain-crop and atomic crop+TGVF implementation smoke."""
 
 from __future__ import annotations
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/smoke_qwen3_crop_tools.py",
+        ),
+    )
 
 import argparse
 from dataclasses import asdict
@@ -9,7 +37,13 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import random
+import sys
 from typing import Any
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 import torch
 
@@ -35,7 +69,10 @@ from tgvf_rl.environment.crop_runtime import CropExecutionLedger, ImageZoomInToo
 from tgvf_rl.environment.crop_tgvf_runtime import AtomicCropTGVFToolRuntime
 from tgvf_rl.environment.crop_tgvf_tool import AtomicCropTGVFTool
 from tgvf_rl.environment.focus_runtime import FocusExecutionLedger
-from tgvf_rl.environment.native_appender import QWEN_NATIVE_IMAGE_PLACEHOLDER
+from tgvf_rl.environment.native_appender import (
+    NativeSuccessObservationContract,
+    QWEN_NATIVE_IMAGE_PLACEHOLDER,
+)
 from tgvf_rl.environment.qwen3_crop_materializer import Qwen3CropVisualMaterializer
 from tgvf_rl.environment.qwen3_tool_layout import Qwen3NativeToolLayoutBuilder
 from tgvf_rl.environment.source_visual import record_trajectory_source_visual
@@ -43,11 +80,16 @@ from tgvf_rl.framework.vllm import Qwen3VLLMObservationPayloadResolver
 from tgvf_rl.observations.schema import CropObservationRecord, CropTGVFObservationRecord
 from tgvf_rl.observations.store import ObservationStore
 from tgvf_rl.protocol.parser import StrictToolCallParser
+from tgvf_rl.protocol.native import NativeAssistantDialect
+from tgvf_rl.protocol.observation_contract import (
+    NativeSuccessObservationProtocolId,
+)
 from tgvf_rl.protocol.schema import (
     TGVF_CROP_TOOL_NAME,
     IMAGE_ZOOM_IN_TOOL_NAME,
     SampledAssistantTurn,
     TokenByteSpan,
+    NativeToolCapabilityProfile,
 )
 from tgvf_rl.representation.training.distributed_checkpoint import (
     load_rank_zero_adapter_owned_state_export,
@@ -60,6 +102,9 @@ from tgvf_rl.representation.training.runtime import (
 )
 from tgvf_rl.qwen import InjectedForwardRequest, InjectedVisualBlock, Qwen3VLAdapter
 from tgvf_rl.trajectories.schema import TrajectoryIdentity
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
+)
 
 
 MODEL_NAME = "Qwen3-VL-8B-Thinking"
@@ -93,7 +138,9 @@ def _tokenize_sampled_turn(tokenizer: Any, text: str) -> SampledAssistantTurn:
         truncation=False,
     )
     token_ids = tuple(int(value) for value in encoded["input_ids"])
-    offsets = tuple(tuple(int(value) for value in pair) for pair in encoded["offset_mapping"])
+    offsets = tuple(
+        tuple(int(value) for value in pair) for pair in encoded["offset_mapping"]
+    )
     if len(token_ids) != len(offsets):
         raise ValueError("sampled tool text token/offset counts differ")
     byte_boundaries = [0]
@@ -231,11 +278,14 @@ class _Qwen3ContextualHiddenStateDependency:
         if request.hidden_layer != -1:
             raise ValueError("smoke contextual forward exposes only the final layer")
         ids = request.input_ids.reshape(1, -1)
-        if tuple(
-            index
-            for index, token_id in enumerate(request.input_ids.tolist())
-            if token_id == self.image_pad_id
-        ) != self.source_positions:
+        if (
+            tuple(
+                index
+                for index, token_id in enumerate(request.input_ids.tolist())
+                if token_id == self.image_pad_id
+            )
+            != self.source_positions
+        ):
             raise ValueError("contextual smoke source positions changed")
         cpu_ids = ids.detach().to(device="cpu")
         cpu_mask = torch.ones_like(cpu_ids, dtype=torch.bool)
@@ -285,6 +335,7 @@ class _Qwen3ContextualHiddenStateDependency:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined("tools/smoke_qwen3_crop_tools.py")
     args = _arguments()
     if args.output.exists():
         raise FileExistsError(f"refusing to overwrite smoke output: {args.output}")
@@ -394,9 +445,7 @@ def main() -> int:
             add_special_tokens=False,
         )
     )
-    image_pad_id = int(
-        processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
-    )
+    image_pad_id = int(processor.tokenizer.convert_tokens_to_ids("<|image_pad|>"))
     prompt_ids, source_positions = _expand_source_prompt(
         canonical_prompt_ids,
         image_pad_id=image_pad_id,
@@ -409,7 +458,9 @@ def main() -> int:
             source_visual=source_visual,
             source_positions=source_positions,
             deepstack_branch_layers=BRANCH_LAYERS,
-            deepstack_injection_positions=tuple(source_positions for _ in BRANCH_LAYERS),
+            deepstack_injection_positions=tuple(
+                source_positions for _ in BRANCH_LAYERS
+            ),
             observation_store=store,
             source_rgb=source_rgb,
         )
@@ -452,6 +503,13 @@ def main() -> int:
     )
     if getattr(plain_parsed, "name", None) != IMAGE_ZOOM_IN_TOOL_NAME:
         raise TypeError("plain parser returned another call type")
+    plain_observation_contract = NativeSuccessObservationContract(
+        protocol_id=(
+            NativeSuccessObservationProtocolId.LEGACY_CROP_GENERIC_THINKING_V1
+        ),
+        tool_profile=NativeToolCapabilityProfile.CROP_ONLY,
+        assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
+    )
     plain_runtime = ImageZoomInToolRuntime(
         model=model_identity,
         materializer=materializer,
@@ -461,6 +519,7 @@ def main() -> int:
         crop_layout_identity=layout_identity,
         execution_ledger=CropExecutionLedger(),
         coordinate_mapper=Qwen3VLAdapter(),
+        observation_contract=plain_observation_contract,
     )
     plain_handle = plain_runtime.execute(
         plain_parsed,
@@ -515,6 +574,11 @@ def main() -> int:
         conditioning_input_device=device,
         contextual_forward_identity=contextual_forward_identity,
         execution_ledger=FocusExecutionLedger(),
+        observation_contract=NativeSuccessObservationContract(
+            protocol_id=NativeSuccessObservationProtocolId.GENERIC_NATIVE_V1,
+            tool_profile=NativeToolCapabilityProfile.CROP_TGVF,
+            assistant_dialect=NativeAssistantDialect.QWEN3_VL_THINKING,
+        ),
     )
     fused_handle = fused_runtime.execute(
         fused_parsed,
@@ -534,9 +598,10 @@ def main() -> int:
         raise TypeError("plain runtime did not store CropObservationRecord")
     if not isinstance(fused_record, CropTGVFObservationRecord):
         raise TypeError("fused runtime did not store CropTGVFObservationRecord")
-    if fused_record.layout.deepstack_branch_layers != BRANCH_LAYERS or len(
-        fused_record.branches
-    ) != 3:
+    if (
+        fused_record.layout.deepstack_branch_layers != BRANCH_LAYERS
+        or len(fused_record.branches) != 3
+    ):
         raise RuntimeError("fused runtime did not preserve all Qwen3 branches")
     resolver = Qwen3VLLMObservationPayloadResolver(
         store=store,
@@ -563,6 +628,9 @@ def main() -> int:
         "source_grid_thw": source_visual.image_grid_thw,
         "source_merged_tokens": int(source_visual.merged_main.shape[-2]),
         "plain": {
+            "success_observation_protocol_id": (
+                plain_observation_contract.protocol_id.value
+            ),
             "record_sha256": plain_handle.record_sha256,
             "requested_bbox_2d": plain_record.requested_bbox_2d,
             "effective_bbox_2d": plain_record.effective_bbox_2d,

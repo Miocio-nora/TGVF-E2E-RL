@@ -359,6 +359,10 @@ def test_external_lib_import_registers_concrete_engine_in_real_registry() -> Non
 
 
 def test_config_bound_factory_builds_existing_qwen_port_for_actor_and_ref() -> None:
+    pytest.importorskip(
+        "peft",
+        reason="config-bound Qwen3 LoRA port requires optional PEFT",
+    )
     payload, _ = _payload()
     bundle = payload.non_tensor_batch[TRAJECTORY_REPLAY_BUNDLE_FIELD][0]
     factory = Qwen3ConfigBoundReplayPortFactory()

@@ -15,6 +15,10 @@ RUN_ID = "SC-20-T211-QWEN3-VLLM-LATENT-TEST"
 
 
 def _load() -> Any:
+    pytest.importorskip(
+        "vllm",
+        reason="candidate latent smoke imports the optional vLLM runtime",
+    )
     spec = importlib.util.spec_from_file_location(
         "tgvf_qwen3_latent_contract", SMOKE_PATH
     )

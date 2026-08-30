@@ -7,10 +7,10 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import time
 from typing import Any, Sequence
-
 
 REPORT_SCHEMA = "policy-mcq-terminal-reward-confusion-gate-v1"
 AUDIT_SCHEMA = "policy-trajectory-audit-v1"
@@ -261,23 +261,91 @@ def audit_run(
     return report
 
 
-def _write_report(path: Path, report: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.monotonic_ns()}")
-    payload = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+def _read_regular_file_at(directory_fd: int, name: str) -> bytes:
+    descriptor: int | None = None
     try:
-        with temporary.open("x", encoding="utf-8") as handle:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError("existing report is not a regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mode,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mode,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise RuntimeError("existing report changed while it was read")
+        return b"".join(chunks)
+    except OSError as error:
+        raise RuntimeError("existing report is not a readable regular file") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _write_report(path: Path, report: dict[str, Any]) -> None:
+    """Publish one immutable report, accepting only byte-identical retries."""
+
+    path = path.expanduser().absolute()
+    if not path.name:
+        raise ValueError("report output must name a file")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    directory_fd = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    temporary_name = f".{path.name}.tmp.{os.getpid()}.{time.monotonic_ns()}"
+    payload = (
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+            os.link(
+                temporary_name,
+                path.name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            if _read_regular_file_at(directory_fd, path.name) != payload:
+                raise RuntimeError(
+                    f"existing immutable reward-gate report differs: {path}"
+                ) from None
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        os.fsync(directory_fd)
+        os.close(directory_fd)
 
 
 def _parser() -> argparse.ArgumentParser:

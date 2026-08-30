@@ -34,6 +34,13 @@ _LORA_SHA256 = "b" * 64
 _FORWARD_SHA256 = "c" * 64
 
 
+def _require_peft() -> None:
+    pytest.importorskip(
+        "peft",
+        reason="Qwen3 decoder-LoRA integration requires optional PEFT",
+    )
+
+
 class _TinyAttention(nn.Module):
     def __init__(self, hidden_size: int) -> None:
         super().__init__()
@@ -185,6 +192,7 @@ def _ports(bundle):
 
 
 def test_qwen3_lora_scope_and_exact_current_reference_replay() -> None:
+    _require_peft()
     torch.manual_seed(19)
     store, handle = _replay(branches=3, calls=0)
     bundle = store.export_replay_bundle(handle)
@@ -239,7 +247,11 @@ def test_qwen3_lora_scope_and_exact_current_reference_replay() -> None:
 
 
 def test_qwen3_lora_preserves_bfloat16_snapshot_dtype() -> None:
-    from peft.utils.save_and_load import get_peft_model_state_dict
+    _require_peft()
+    get_peft_model_state_dict = pytest.importorskip(
+        "peft.utils.save_and_load",
+        reason="LoRA state export requires optional PEFT",
+    ).get_peft_model_state_dict
 
     built = build_qwen3_decoder_lora_policy(
         _TinyQwen3().to(dtype=torch.bfloat16)
@@ -251,6 +263,7 @@ def test_qwen3_lora_preserves_bfloat16_snapshot_dtype() -> None:
 
 
 def test_qwen3_replay_rejects_wrong_role_tokens_and_mutated_bundle() -> None:
+    _require_peft()
     store, handle = _replay(branches=3, calls=0)
     bundle = store.export_replay_bundle(handle)
     _, _, current, _ = _ports(bundle)

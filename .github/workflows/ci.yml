@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-and-control-plane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test,qwen]'
+      - name: Lint
+        run: python -m ruff check src tools spikes tests
+      - name: Audit repository boundaries
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+        run: >-
+          python tools/audit_repository_boundaries.py
+          --repository-root .
+          --policy configs/ops/repository_boundary_policy.json
+      - name: Verify launch controls and repository freeze
+        run: python tools/check_launch_gate.py audit-control-plane
+      - name: Run complete CPU test suite
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+        run: env -u OPENROUTER_API_KEY python -m pytest -q

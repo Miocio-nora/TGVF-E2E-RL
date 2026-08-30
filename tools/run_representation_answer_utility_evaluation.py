@@ -18,6 +18,13 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_mode_quarantined,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -95,6 +102,12 @@ def _enter_launch_environment(gpu_id: int) -> None:
 
 def main() -> None:
     args = _parser().parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/run_representation_answer_utility_evaluation.py",
+        selected_mode="validate" if args.validate_only else "execute",
+        read_only_modes=("validate",),
+        blocked_modes=("execute",),
+    )
     run_config = (
         None if args.run_config is None else args.run_config.expanduser().resolve()
     )

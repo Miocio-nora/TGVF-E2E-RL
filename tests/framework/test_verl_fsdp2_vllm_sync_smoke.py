@@ -103,9 +103,13 @@ def test_plan_is_one_upstream_v1_no_sleep_integration_path() -> None:
     assert plan["expected_runtime"]["distributions"]["nvidia-nccl-cu12"] == ("2.28.9")
 
 
-def test_candidate_python_symlink_is_not_resolved_out_of_virtualenv() -> None:
+def test_candidate_python_symlink_is_not_resolved_out_of_virtualenv(
+    tmp_path: Path,
+) -> None:
     smoke = _load(SMOKE_PATH, "tgvf_verl_sync_smoke_python_path_test")
-    candidate_python = REPOSITORY_ROOT / ".venv-torch211-cu129/bin/python"
+    candidate_python = tmp_path / "candidate-venv/bin/python"
+    candidate_python.parent.mkdir(parents=True)
+    candidate_python.symlink_to(Path(sys.executable))
 
     assert smoke.absolute_executable(candidate_python) == candidate_python
     assert smoke.absolute_executable(candidate_python) != candidate_python.resolve()
@@ -113,8 +117,14 @@ def test_candidate_python_symlink_is_not_resolved_out_of_virtualenv() -> None:
 
 def test_child_environment_allows_ray_to_assign_logical_cuda_ordinals(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     smoke = _load(SMOKE_PATH, "tgvf_verl_sync_smoke_ray_mapping_test")
+    header_root = tmp_path / "python312-dev/include"
+    python_include = header_root / "python3.12"
+    python_include.mkdir(parents=True)
+    (python_include / "Python.h").write_text("/* hermetic fixture */\n")
+    monkeypatch.setattr(smoke, "PYTHON_HEADER_ROOT", header_root)
     paths = smoke.derive_paths(
         smoke.bounded_result_path(
             Path("artifacts/compatibility/proposed-ray-mapping-gate.json"),

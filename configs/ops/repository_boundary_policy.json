@@ -1,0 +1,189 @@
+{
+  "canonical_config_roots": [
+    "configs/canonical/evaluation",
+    "configs/canonical/policy",
+    "configs/canonical/representation",
+    "configs/ops"
+  ],
+  "evidence_only_config_inventories": [
+    {
+      "content_tree_sha256": "d6da1940cd4ace6edd18bc524000930777b005908e2385e5c1a44b50f0d4299e",
+      "file_count": 8,
+      "path": "configs/evaluation",
+      "relative_paths_sha256": "ddffcc4543826c34395cb758dad00f61ecdbd485517091f84f60ddb614530977"
+    },
+    {
+      "content_tree_sha256": "9ca036d4bd043e40b8ba98eab29167bccb9fba17d38a969803e645c4cf5345ad",
+      "file_count": 3,
+      "path": "configs/overnight",
+      "relative_paths_sha256": "459d315004b6b6e3e2815d9b8765de1f1912c498758e07f8254efe6e578c52f0"
+    },
+    {
+      "content_tree_sha256": "5fa27579b1d5839f0ef8a43b5152e3fe65342cd56dc6e11cdf0814072f52671b",
+      "file_count": 84,
+      "path": "configs/policy",
+      "relative_paths_sha256": "9b1e4c31686076a7e8cddeca349ec60ce67bacb00b11747ec218cb2ed42a8b95"
+    },
+    {
+      "content_tree_sha256": "22ce35a8c6281d6cd4f5e077f1a39ae9c060e8f6e505c38cff9748dd28a3a4cf",
+      "file_count": 95,
+      "path": "configs/representation",
+      "relative_paths_sha256": "c583c1a68f3d3906b3c17ada78c526358c2d4ac8a27f49c1e90592e34ea3b766"
+    },
+    {
+      "content_tree_sha256": "2396dfae43cc48691a1d489b0ec4a60638045a2745fbe5a785f77f9399931c43",
+      "file_count": 38,
+      "path": "configs/smoke",
+      "relative_paths_sha256": "65b8fec2d97a39b4a6b3b530e4ede15d912fdbae3240dcc0ac2b2cdb81b0f9c5"
+    }
+  ],
+  "machine_path_debt_allowlist": [
+    {
+      "count": 1,
+      "literal_sha256": "0fa895f1bb3245f019769f91713b49d57b9462ef64e8fa43d19794a6a5c15d27",
+      "path": "src/tgvf_rl/data/deepeyes_official_schedule.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "e4e80afb317345b0ab3064416dc6f11053bbe190dff5d520cb6131294493d555",
+      "path": "src/tgvf_rl/data/deepeyes_official_schedule.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "0f27299d8974d3abde07bcb9585274136f9bb8b593abf4b8e8c01df3421d4ed6",
+      "path": "src/tgvf_rl/data/policy_selection_runtime.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "d8f9c0da2eab5aef39094386abb95e74ccda2d8c03b13bc4bbcf79eb9e6834c1",
+      "path": "src/tgvf_rl/data/policy_selection_runtime.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "7636e9a3370d34c1d695103b9428db9f6da4bee1a95647162aeee513e0286599",
+      "path": "src/tgvf_rl/evaluation/vlmevalkit.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "0f27299d8974d3abde07bcb9585274136f9bb8b593abf4b8e8c01df3421d4ed6",
+      "path": "src/tgvf_rl/policy/config.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "d8f9c0da2eab5aef39094386abb95e74ccda2d8c03b13bc4bbcf79eb9e6834c1",
+      "path": "src/tgvf_rl/policy/config.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "0f27299d8974d3abde07bcb9585274136f9bb8b593abf4b8e8c01df3421d4ed6",
+      "path": "src/tgvf_rl/representation/training/runtime.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "d8f9c0da2eab5aef39094386abb95e74ccda2d8c03b13bc4bbcf79eb9e6834c1",
+      "path": "src/tgvf_rl/representation/training/runtime.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "d8f9c0da2eab5aef39094386abb95e74ccda2d8c03b13bc4bbcf79eb9e6834c1",
+      "path": "tools/compact_policy_checkpoint_storage.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "fe83c938a86f6fc91fb9e650777c0731be3ce6488e187c65054184eaa38b71cf",
+      "path": "tools/control_local_qwen3_vl_32b_tgvf_visual_judge.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "790ddb865c8390905450615d03c3500e6509c842a38c8010b1e4c0d9d76b7058",
+      "path": "tools/launch_prl14_cleanfinal16.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "7636e9a3370d34c1d695103b9428db9f6da4bee1a95647162aeee513e0286599",
+      "path": "tools/materialize_coredev_2511.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "dec3ec8e6f11f1c912fced84334d4ab329a986a7c93869d9913f35c80411c895",
+      "path": "tools/materialize_coredev_2511.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "20c14002b606894dc855c13eb757e8ca5a7895d6b1f458a3fd4ac9559ed570c7",
+      "path": "tools/materialize_deepeyes_dev591.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "43d94f334b5cda9dd31cf93b7837a8510ac5af09216d22d8a280b5d84d4c6e38",
+      "path": "tools/materialize_deepeyes_dev591.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "20c14002b606894dc855c13eb757e8ca5a7895d6b1f458a3fd4ac9559ed570c7",
+      "path": "tools/materialize_policy_coredev_tasks.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "1e078bc066a7356d2c83ebe594e95fe8c9c911da9c225a386c6fdb9197e2b3ee",
+      "path": "tools/materialize_qwen3_grounding_manifest.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "9580b263a049d5a2d7f0c47919bba8ecaaed19889e150a6f188cb6829ab771ec",
+      "path": "tools/materialize_qwen3_grounding_manifest.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "1e078bc066a7356d2c83ebe594e95fe8c9c911da9c225a386c6fdb9197e2b3ee",
+      "path": "tools/materialize_representation_internal_evaluation_manifests.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "9580b263a049d5a2d7f0c47919bba8ecaaed19889e150a6f188cb6829ab771ec",
+      "path": "tools/materialize_representation_internal_evaluation_manifests.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "1e078bc066a7356d2c83ebe594e95fe8c9c911da9c225a386c6fdb9197e2b3ee",
+      "path": "tools/run_rp67_step2000_acc_pipeline.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "776f71ce206fbb509dbbd98eed588826dfa0a96b3e0aa816cb7148e58aedd5fb",
+      "path": "tools/run_rp67_step2000_acc_pipeline.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "776f71ce206fbb509dbbd98eed588826dfa0a96b3e0aa816cb7148e58aedd5fb",
+      "path": "tools/run_rp68_post_training_evaluations.py"
+    },
+    {
+      "count": 1,
+      "literal_sha256": "d8f9c0da2eab5aef39094386abb95e74ccda2d8c03b13bc4bbcf79eb9e6834c1",
+      "path": "tools/smoke_prl13_qwen3_full_model_grad.py"
+    }
+  ],
+  "policy_id": "TGVF-REPOSITORY-BOUNDARIES-V2",
+  "revision": 2,
+  "run_specific_code_allowlist": [
+    "src/tgvf_rl/framework/verl/prl13_main.py",
+    "src/tgvf_rl/policy/prl13_group_signal.py",
+    "tools/analyze_prl13_group_signal.py",
+    "tools/benchmark_prl13_schedule_index.py",
+    "tools/launch_prl13_native_deepeyes.py",
+    "tools/launch_prl14_cleanfinal16.py",
+    "tools/materialize_prl13_full_model.py",
+    "tools/materialize_prl13_schedule_index.py",
+    "tools/run_rp67_step2000_acc_pipeline.py",
+    "tools/run_rp68_post_training_evaluations.py",
+    "tools/run_rp69_post_training_evaluations.py",
+    "tools/smoke_prl13_qwen3_full_model_grad.py",
+    "tools/supervise_prl14_cleanfinal16_eval.sh",
+    "tools/supervise_rp67_t1_schedule.py",
+    "tools/watchdog_rp67_step2000_acc_pipeline.py"
+  ],
+  "schema_version": "tgvf-repository-boundary-policy-v2",
+  "source_root": "src/tgvf_rl",
+  "tools_root": "tools"
+}

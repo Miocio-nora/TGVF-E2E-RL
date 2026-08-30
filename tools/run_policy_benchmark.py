@@ -31,6 +31,7 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     load_policy_coredev_config,
     load_policy_evaluation_snapshot,
     materialize_vllm_lora_adapter,
+    policy_evaluation_identity,
     prepare_policy_benchmark_tasks,
     trajectory_audit_payload,
     write_policy_evaluation_identity,
@@ -39,6 +40,9 @@ from tgvf_rl.evaluation.policy_official_visible import (  # noqa: E402
     OfficialVisiblePolicyEvaluator,
     official_visible_trajectory_audit_payload,
     validate_official_visible_processor,
+)
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_mode_quarantined,
 )
 
 
@@ -250,7 +254,7 @@ def _status(config: PolicyCoreDevConfig, requested_world_size: int | None) -> in
     tasks = load_bound_policy_benchmark_tasks(config)
     _world_size(config, requested_world_size)
     snapshot = load_frozen_policy_evaluation_snapshot(config)
-    evaluation_identity = write_policy_evaluation_identity(config, snapshot)
+    evaluation_identity = policy_evaluation_identity(config, snapshot)
     completed = set(
         load_policy_benchmark_results(
             config.output_root / "inference",
@@ -281,7 +285,7 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
     tasks = load_bound_policy_benchmark_tasks(config)
     _world_size(config, requested_world_size)
     snapshot = load_frozen_policy_evaluation_snapshot(config)
-    identity = write_policy_evaluation_identity(config, snapshot)
+    identity = policy_evaluation_identity(config, snapshot)
     result: dict[str, object] = {
         "evaluation_id": config.evaluation_id,
         "evaluation_identity_sha256": identity["identity_sha256"],
@@ -314,6 +318,12 @@ def _validate(config: PolicyCoreDevConfig, requested_world_size: int | None) -> 
 
 def main() -> int:
     args = _parser().parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/run_policy_benchmark.py",
+        selected_mode=args.mode,
+        read_only_modes=("status", "validate"),
+        blocked_modes=("prepare", "worker"),
+    )
     config = load_policy_coredev_config(args.config)
     if args.mode == "prepare":
         counts = prepare_policy_benchmark_tasks(config)

@@ -4,6 +4,7 @@ import asyncio
 import pickle
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from tgvf_rl.environment.focus_tool import (
@@ -27,6 +28,10 @@ from tgvf_rl.representation.deepstack import DDeepStackPayload
 
 
 def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
+    pytest.importorskip(
+        "vllm.v1.serial_utils",
+        reason="utility wire compatibility requires optional vLLM",
+    )
     from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, UtilityResult
 
     source = torch.arange(24, dtype=torch.float32).reshape(3, 8)
@@ -55,15 +60,21 @@ def test_source_tensor_wire_survives_untyped_vllm_utility_transport() -> None:
         spatial_merge_size=2,
         decoded_rgb_sha256="a" * 64,
     )
-    visual_wire = MsgpackDecoder(UtilityResult).decode(
-        MsgpackEncoder().encode(UtilityResult(_source_to_utility_wire(visual)))
-    ).result
+    visual_wire = (
+        MsgpackDecoder(UtilityResult)
+        .decode(MsgpackEncoder().encode(UtilityResult(_source_to_utility_wire(visual))))
+        .result
+    )
     visual_restored = _source_from_utility_wire(visual_wire)
     assert isinstance(visual_restored, SourceVisualTensorBundle)
     torch.testing.assert_close(visual_restored.premerge_main, visual.premerge_main)
 
 
 def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() -> None:
+    pytest.importorskip(
+        "vllm.v1.serial_utils",
+        reason="utility wire compatibility requires optional vLLM",
+    )
     from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, UtilityResult
 
     layers = (8, 16, 24)
@@ -75,8 +86,7 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
             d_deepstack=DDeepStackPayload(
                 branch_layers=layers,
                 branches=tuple(
-                    torch.full((2, 8), float(i), dtype=torch.bfloat16)
-                    for i in range(3)
+                    torch.full((2, 8), float(i), dtype=torch.bfloat16) for i in range(3)
                 ),
                 projection_identities=identities,
             ),
@@ -94,9 +104,11 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
         ),
     )
 
-    transported_wire = MsgpackDecoder(UtilityResult).decode(
-        MsgpackEncoder().encode(UtilityResult(_focus_to_utility_wire(result)))
-    ).result
+    transported_wire = (
+        MsgpackDecoder(UtilityResult)
+        .decode(MsgpackEncoder().encode(UtilityResult(_focus_to_utility_wire(result))))
+        .result
+    )
     transported = _focus_from_utility_wire(transported_wire)
 
     assert isinstance(transported, TGVFFocusMaterializationResult)
@@ -104,10 +116,14 @@ def test_focus_result_restores_all_nested_types_across_vllm_utility_transport() 
     assert isinstance(transported.observation.d_deepstack, DDeepStackPayload)
     assert isinstance(transported.observation.metadata, TGVFAdapterMetadata)
     torch.testing.assert_close(transported.hq, result.hq)
-    torch.testing.assert_close(transported.observation.main_d, result.observation.main_d)
+    torch.testing.assert_close(
+        transported.observation.main_d, result.observation.main_d
+    )
 
 
-def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases() -> None:
+def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases() -> (
+    None
+):
     extension = object.__new__(TGVFVLLMWorkerExtension)
     trace = _BehaviorTraceBuffer(
         prompt_length=3,
@@ -136,13 +152,9 @@ def test_vllm_behavior_trace_captures_generated_token_hidden_states_and_releases
 
     extension._tgvf_capture_execute_state()
 
-    torch.testing.assert_close(
-        trace.hidden[:2], torch.tensor([[1.0, 2.0], [3.0, 4.0]])
-    )
+    torch.testing.assert_close(trace.hidden[:2], torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
     assert trace.covered == bytearray((1, 1, 0, 0))
-    assert extension.tgvf_release_trajectory(
-        "trajectory-0", ("turn-0",)
-    )
+    assert extension.tgvf_release_trajectory("trajectory-0", ("turn-0",))
     assert extension._tgvf_sources() == {}
     assert extension._tgvf_traces() == {}
 
@@ -186,6 +198,10 @@ def test_crop_rpc_reuses_the_rollout_worker_visual_path() -> None:
 
 
 def test_vllm_server_shutdown_stops_http_engine_and_bound_sockets() -> None:
+    pytest.importorskip(
+        "verl",
+        reason="vLLM server lifecycle adapter requires optional pinned veRL",
+    )
     events: list[str] = []
 
     class Engine:

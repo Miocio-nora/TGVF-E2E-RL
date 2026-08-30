@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from tensordict import TensorDict
 
@@ -19,9 +20,7 @@ def test_torch_unpad_input_matches_exact_row_major_mask_selection() -> None:
         ]
     )
 
-    unpadded, indices, cumulative, maximum, lengths = torch_unpad_input(
-        values, mask
-    )
+    unpadded, indices, cumulative, maximum, lengths = torch_unpad_input(values, mask)
 
     assert indices.tolist() == [1, 2, 3, 5, 6, 7, 8, 9]
     assert cumulative.tolist() == [0, 3, 8]
@@ -35,6 +34,10 @@ def test_torch_unpad_input_matches_exact_row_major_mask_selection() -> None:
 
 
 def test_pinned_verl_padding_round_trip_uses_torch_compat_without_flash_attn() -> None:
+    pytest.importorskip(
+        "verl",
+        reason="padding integration requires the optional pinned veRL",
+    )
     from verl.trainer.ppo import ray_trainer
     from verl.workers.utils import padding
 

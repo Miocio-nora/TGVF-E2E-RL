@@ -1,17 +1,54 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
+# ruff: noqa: E402
 """Run or inspect the resumable Stage1 oracle-target D utility evaluation."""
 
 from __future__ import annotations
 
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/run_representation_oracle_d_utility.py",
+        ),
+    )
+
 import argparse
 import json
 from pathlib import Path
+import sys
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from tgvf_rl.representation.training.oracle_d_utility import (
     DEFAULT_ORACLE_D_UTILITY_ARMS,
     DEFAULT_THINKING_EOS_TOKEN_IDS,
     OracleDUtilityArm,
     run_oracle_d_utility_evaluation,
+)
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
 )
 
 
@@ -51,6 +88,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/run_representation_oracle_d_utility.py"
+    )
     args = _parser().parse_args()
     result = run_oracle_d_utility_evaluation(
         args.source_config,

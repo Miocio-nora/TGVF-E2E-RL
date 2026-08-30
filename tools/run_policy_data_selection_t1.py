@@ -7,11 +7,21 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+import sys
 
-from tgvf_rl.data.policy_selection_vllm import (
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.data.policy_selection_vllm import (  # noqa: E402
     prepare_output_root,
     run_t1_worker,
     t1_status,
+)
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_mode_quarantined,
 )
 
 
@@ -41,6 +51,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _parser().parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/run_policy_data_selection_t1.py",
+        selected_mode=args.command,
+        read_only_modes=("status",),
+        blocked_modes=("prepare", "worker"),
+    )
     if args.command == "prepare":
         result = prepare_output_root(args.config)
     elif args.command == "status":

@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Control and canary the local Qwen3-VL-32B TGVF visual judge.
 
 ``preflight`` is CPU-only.  ``launch`` starts one TP1 vLLM service on the
@@ -24,13 +25,19 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
 from tgvf_rl.judges.tgvf_visual_quality import (
     TGVFVisualQualityJudgeRequest,
     load_tgvf_visual_quality_judge,
 )
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_mode_quarantined,
+)
 
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = (
     REPOSITORY_ROOT
     / "configs/policy/judges/local_qwen3_vl_32b_tgvf_visual_quality_v1.json"
@@ -412,6 +419,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/control_local_qwen3_vl_32b_tgvf_visual_judge.py",
+        selected_mode=args.action,
+        read_only_modes=("preflight", "status", "wait"),
+        blocked_modes=("canary", "launch", "stop"),
+    )
     if args.physical_gpu < 0:
         raise ValueError("physical GPU must be non-negative")
     handlers = {

@@ -19,6 +19,10 @@ from tgvf_rl.evaluation.policy_coredev import (  # noqa: E402
     POLICY_EVALUATION_PROTOCOLS,
     TRAINING_RUN_EVALUATION_PROTOCOL,
 )
+from tgvf_rl.protocol import (  # noqa: E402
+    NativeActionBoundaryProtocolId,
+    NativeSuccessObservationProtocolId,
+)
 
 
 def main() -> int:
@@ -39,6 +43,21 @@ def main() -> int:
         "--enable-chunked-prefill", action=argparse.BooleanOptionalAction, default=False
     )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    parser.add_argument("--declared-image-max-pixels", type=int, required=True)
+    parser.add_argument(
+        "--success-observation-protocol-id",
+        choices=tuple(item.value for item in NativeSuccessObservationProtocolId),
+        required=True,
+        help=(
+            "Exact environment-owned success continuation; no Crop renderer "
+            "is inferred from a historical run"
+        ),
+    )
+    parser.add_argument(
+        "--action-boundary-protocol-id",
+        choices=tuple(item.value for item in NativeActionBoundaryProtocolId),
+        required=True,
+    )
     parser.add_argument(
         "--evaluation-protocol",
         choices=sorted(POLICY_EVALUATION_PROTOCOLS),
@@ -61,6 +80,9 @@ def main() -> int:
         enable_chunked_prefill=args.enable_chunked_prefill,
         gpu_memory_utilization=args.gpu_memory_utilization,
         evaluation_protocol=args.evaluation_protocol,
+        declared_image_max_pixels=args.declared_image_max_pixels,
+        success_observation_protocol_id=args.success_observation_protocol_id,
+        action_boundary_protocol_id=args.action_boundary_protocol_id,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

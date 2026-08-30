@@ -1,14 +1,48 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
+# ruff: noqa: E402
 """Compare native contextual conditioning with and without vision reuse."""
 
 from __future__ import annotations
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/smoke_qwen3_contextual_vision_reuse.py",
+        ),
+    )
 
 import argparse
 from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path
+import sys
 from time import perf_counter
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 import torch
 
@@ -48,6 +82,9 @@ from tgvf_rl.representation.training.readout import (
 )
 from tgvf_rl.representation.training.runtime import (
     create_qwen3_representation_runtime,
+)
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_execution_quarantined,
 )
 
 
@@ -100,6 +137,9 @@ def _tensor_diagnostic(
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/smoke_qwen3_contextual_vision_reuse.py"
+    )
     args = _parser().parse_args()
     config = load_representation_internal_evaluation_run_config(args.config)
     _require_launch_environment(config)
@@ -248,8 +288,7 @@ def main() -> int:
             )
         diagnostics[name] = tensor_diagnostics
         all_within_tolerance = all_within_tolerance and all(
-            bool(value["within_tolerance"])
-            for value in tensor_diagnostics.values()
+            bool(value["within_tolerance"]) for value in tensor_diagnostics.values()
         )
     if not all_within_tolerance:
         raise RuntimeError("contextual vision-reuse parity exceeded tolerance")

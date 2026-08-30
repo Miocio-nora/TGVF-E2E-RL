@@ -1,6 +1,35 @@
+#!/usr/bin/python3 -I
 """Run pinned VLMEvalKit with official aliases bound to immutable CoreDev slices."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/run_coredev_2511_vlmevalkit.py",
+        ),
+    )
 
 import importlib
 import json
@@ -11,6 +40,14 @@ import sys
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
+
 DEPLOYMENT = REPOSITORY_ROOT / "configs/evaluation/vlmevalkit_deployment_v1.json"
 PINNED_ARTIFACTS = (
     REPOSITORY_ROOT / "configs/evaluation/coredev_2511_vlmevalkit_v1.json"
@@ -53,6 +90,9 @@ def _option_values(name: str) -> tuple[str, ...]:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/run_coredev_2511_vlmevalkit.py"
+    )
     deployment = json.loads(DEPLOYMENT.read_text(encoding="utf-8"))
     pinned = json.loads(PINNED_ARTIFACTS.read_text(encoding="utf-8"))
     judge_service = json.loads(JUDGE_SERVICE_CONFIG.read_text(encoding="utf-8"))
@@ -90,7 +130,9 @@ def main() -> int:
     if selected is not None:
         config_path = Path(_required_option("--config")).resolve()
         if config_path != DIRECT_BASELINE_CONFIG:
-            raise RuntimeError("--coredev-data requires the pinned direct baseline config")
+            raise RuntimeError(
+                "--coredev-data requires the pinned direct baseline config"
+            )
         datasets = tuple(item.strip() for item in selected.split(",") if item.strip())
         selected_datasets = datasets
         work_dir = Path(_required_option("--work-dir")).resolve()
@@ -107,7 +149,10 @@ def main() -> int:
 
     if any(name not in canonical_datasets for name in selected_datasets):
         raise RuntimeError("CoreDev runner received an unknown dataset")
-    if tuple(name for name in canonical_datasets if name in selected_datasets) != selected_datasets:
+    if (
+        tuple(name for name in canonical_datasets if name in selected_datasets)
+        != selected_datasets
+    ):
         raise RuntimeError("CoreDev datasets must follow canonical suite order")
 
     if pinned["llm_judge_model"] != COREDEV_LLM_JUDGE_MODEL:
@@ -152,7 +197,9 @@ def main() -> int:
     judge_base_url = None
     if "--help" not in sys.argv and mode in {"all", "eval"}:
         if "--judge" not in sys.argv:
-            raise RuntimeError(f"CoreDev evaluation requires --judge {COREDEV_LLM_JUDGE_MODEL}")
+            raise RuntimeError(
+                f"CoreDev evaluation requires --judge {COREDEV_LLM_JUDGE_MODEL}"
+            )
         judge = sys.argv[sys.argv.index("--judge") + 1]
         if judge != COREDEV_LLM_JUDGE_MODEL:
             raise RuntimeError(f"CoreDev LLM judge must be {COREDEV_LLM_JUDGE_MODEL}")
@@ -167,7 +214,9 @@ def main() -> int:
         if judge_service["model"]["served_name"] != COREDEV_LLM_JUDGE_MODEL:
             raise RuntimeError("CoreDev judge service config model mismatch")
         if not judge_service["scope"]["allows_vlmevalkit_benchmark_judging"]:
-            raise RuntimeError("CoreDev judge service is not authorized for benchmark scoring")
+            raise RuntimeError(
+                "CoreDev judge service is not authorized for benchmark scoring"
+            )
 
         work_dir = Path(_required_option("--work-dir")).resolve()
         preflight = check_qwen25_72b_judge(base_url=judge_base_url)
@@ -195,3 +244,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+#!/usr/bin/python3 -I

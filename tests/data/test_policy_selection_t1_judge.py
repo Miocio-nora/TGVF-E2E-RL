@@ -42,7 +42,7 @@ def test_strict_local_response_requires_model_stop_binary_and_usage() -> None:
             _strict_response(changed, expected_model="Qwen2.5-72B-Instruct")
 
 
-def test_judge_cli_help_does_not_import_vllm_or_transformers() -> None:
+def test_legacy_judge_cli_is_quarantined_even_for_help() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     completed = subprocess.run(
         [
@@ -50,9 +50,12 @@ def test_judge_cli_help_does_not_import_vllm_or_transformers() -> None:
             str(repository_root / "tools" / "judge_policy_data_selection_t1.py"),
             "--help",
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    assert "finalize" in completed.stdout
-    assert "run" in completed.stdout
+    assert completed.returncode != 0
+    assert "legacy standalone tool tools/judge_policy_data_selection_t1.py" in (
+        completed.stderr
+    )
+    assert "is quarantined by frozen repository policy" in completed.stderr

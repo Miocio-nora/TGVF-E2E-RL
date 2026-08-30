@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from tensordict import TensorDict
+
+pytest.importorskip(
+    "verl",
+    reason="Torch padding compatibility is an integration with optional pinned veRL",
+)
 
 from tgvf_rl.framework.verl.torch_bert_padding import (
     PRL13_TORCH_BERT_PADDING_SCHEMA,
@@ -75,9 +81,7 @@ def test_exact_old_logprob_no_padding_adapter_needs_no_flash_attn() -> None:
     input_ids = torch.tensor(
         [[0, 11, 12, 21, 22], [31, 32, 33, 41, 0]], dtype=torch.long
     )
-    attention_mask = torch.tensor(
-        [[0, 1, 1, 1, 1], [1, 1, 1, 1, 0]], dtype=torch.long
-    )
+    attention_mask = torch.tensor([[0, 1, 1, 1, 1], [1, 1, 1, 1, 0]], dtype=torch.long)
     batch = TensorDict(
         {
             "input_ids": input_ids,

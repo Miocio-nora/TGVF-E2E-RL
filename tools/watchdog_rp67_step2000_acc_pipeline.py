@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Bounded, fail-closed watchdog for the restartable RP67 ACC controller.
 
 The watchdog never signals a controller.  It adopts one exact, identity-bound
@@ -10,6 +10,34 @@ resume of completed ACC stages.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/watchdog_rp67_step2000_acc_pipeline.py",
+        ),
+    )
 
 import argparse
 from dataclasses import asdict, dataclass
@@ -29,6 +57,14 @@ from typing import Any, Mapping, Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
+
 PYTHON = REPOSITORY_ROOT / ".venv312/bin/python"
 CONTROLLER = REPOSITORY_ROOT / "tools/run_rp67_step2000_acc_pipeline.py"
 PIPELINE_ROOT = REPOSITORY_ROOT / (
@@ -73,9 +109,7 @@ class RestartGate:
         reasons: list[str] = []
         if self.controller_pids:
             reasons.append(f"controller processes are live: {self.controller_pids}")
-        busy = {
-            gpu: pids for gpu, pids in self.gpu_compute_pids.items() if pids
-        }
+        busy = {gpu: pids for gpu, pids in self.gpu_compute_pids.items() if pids}
         if busy:
             reasons.append(f"GPU0/1 have compute processes: {busy}")
         if not self.pipeline_lock_available:
@@ -104,7 +138,9 @@ def _atomic_json(path: Path, value: object) -> None:
     temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     with temporary.open("xb") as handle:
         handle.write(
-            (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+            (
+                json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode()
         )
         handle.flush()
         os.fsync(handle.fileno())
@@ -169,7 +205,9 @@ def _controller_argv_is_valid(argv: Sequence[str], *, cwd: Path) -> bool:
     if _lexical_absolute(argv[0], cwd=cwd) != PYTHON.absolute():
         return False
     try:
-        script_index = argv.index(next(item for item in argv if item.endswith(CONTROLLER.name)))
+        script_index = argv.index(
+            next(item for item in argv if item.endswith(CONTROLLER.name))
+        )
     except (StopIteration, ValueError):
         return False
     if tuple(argv[1:script_index]) != ("-u",):
@@ -208,13 +246,17 @@ def _inspect_controller(pid: int) -> ControllerIdentity | None:
     if not argv_bytes:
         if _process_has_exited(pid, expected_starttime=starttime):
             return None
-        raise WatchdogBlockedError(f"live controller candidate PID {pid} has empty argv")
+        raise WatchdogBlockedError(
+            f"live controller candidate PID {pid} has empty argv"
+        )
     if uid != os.getuid():
         raise WatchdogBlockedError(f"controller candidate PID {pid} has another uid")
     if cwd.resolve() != REPOSITORY_ROOT:
         raise WatchdogBlockedError(f"controller candidate PID {pid} has another cwd")
     if executable != PYTHON.resolve():
-        raise WatchdogBlockedError(f"controller candidate PID {pid} has another executable")
+        raise WatchdogBlockedError(
+            f"controller candidate PID {pid} has another executable"
+        )
     argv = tuple(
         item.decode("utf-8", errors="surrogateescape")
         for item in argv_bytes.rstrip(b"\0").split(b"\0")
@@ -222,7 +264,9 @@ def _inspect_controller(pid: int) -> ControllerIdentity | None:
     if not _controller_argv_is_valid(argv, cwd=cwd):
         if _process_has_exited(pid, expected_starttime=starttime):
             return None
-        raise WatchdogBlockedError(f"controller candidate PID {pid} has unexpected argv")
+        raise WatchdogBlockedError(
+            f"controller candidate PID {pid} has unexpected argv"
+        )
     return ControllerIdentity(
         pid=pid,
         uid=uid,
@@ -284,11 +328,15 @@ def _assert_controller_preflight() -> None:
     try:
         controller._assert_pinned_files()
     except controller.PipelineBlockedError as error:
-        raise WatchdogBlockedError(f"ACC controller preflight failed: {error}") from error
+        raise WatchdogBlockedError(
+            f"ACC controller preflight failed: {error}"
+        ) from error
 
 
 def _pipeline_lock_is_available() -> bool:
-    if PIPELINE_LOCK.exists() and (PIPELINE_LOCK.is_symlink() or not PIPELINE_LOCK.is_file()):
+    if PIPELINE_LOCK.exists() and (
+        PIPELINE_LOCK.is_symlink() or not PIPELINE_LOCK.is_file()
+    ):
         raise WatchdogBlockedError("ACC pipeline lock is not a regular file")
     PIPELINE_LOCK.parent.mkdir(parents=True, exist_ok=True)
     handle = PIPELINE_LOCK.open("a+b")
@@ -310,7 +358,9 @@ def _restart_gate() -> RestartGate:
         gpu_pids = controller._gpu_compute_pids((0, 1))
         endpoint_open = bool(controller._judge_endpoint_is_open())
     except (OSError, subprocess.SubprocessError, ValueError) as error:
-        raise WatchdogBlockedError(f"cannot audit GPU0/1 before restart: {error}") from error
+        raise WatchdogBlockedError(
+            f"cannot audit GPU0/1 before restart: {error}"
+        ) from error
     return RestartGate(
         controller_pids=tuple(item.pid for item in identities),
         gpu_compute_pids=gpu_pids,
@@ -330,7 +380,9 @@ def _progress_token(events_path: Path) -> str:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as error:
-                raise WatchdogBlockedError("ACC event ledger contains invalid JSON") from error
+                raise WatchdogBlockedError(
+                    "ACC event ledger contains invalid JSON"
+                ) from error
             if value.get("event") in SIGNIFICANT_PROGRESS_EVENTS:
                 significant.append(value)
     return sha256(_canonical_bytes(significant)).hexdigest()
@@ -375,7 +427,9 @@ def _controller_command(poll_seconds: float) -> list[str]:
     ]
 
 
-def _start_controller(*, poll_seconds: float, log_path: Path) -> tuple[subprocess.Popen[bytes], ControllerIdentity]:
+def _start_controller(
+    *, poll_seconds: float, log_path: Path
+) -> tuple[subprocess.Popen[bytes], ControllerIdentity]:
     log = log_path.open("ab", buffering=0)
     try:
         process = subprocess.Popen(
@@ -401,7 +455,9 @@ def _start_controller(*, poll_seconds: float, log_path: Path) -> tuple[subproces
     )
 
 
-def _new_state(*, identity: ControllerIdentity | None, progress_token: str) -> dict[str, Any]:
+def _new_state(
+    *, identity: ControllerIdentity | None, progress_token: str
+) -> dict[str, Any]:
     return {
         "schema_version": WATCHDOG_SCHEMA,
         "created_at": _utc_now(),
@@ -454,7 +510,9 @@ def _identity_from_state(value: object) -> ControllerIdentity | None:
             argv_sha256=str(value["argv_sha256"]),
         )
     except (KeyError, TypeError, ValueError) as error:
-        raise WatchdogBlockedError("watchdog controller identity is malformed") from error
+        raise WatchdogBlockedError(
+            "watchdog controller identity is malformed"
+        ) from error
 
 
 def _validate_initial_identity(args: argparse.Namespace) -> ControllerIdentity | None:
@@ -463,7 +521,10 @@ def _validate_initial_identity(args: argparse.Namespace) -> ControllerIdentity |
     starttime = _proc_starttime(args.initial_controller_pid)
     if starttime is None:
         return None
-    if starttime != args.initial_controller_starttime_ticks or _boot_id() != args.initial_controller_boot_id:
+    if (
+        starttime != args.initial_controller_starttime_ticks
+        or _boot_id() != args.initial_controller_boot_id
+    ):
         raise WatchdogBlockedError("initial controller PID identity no longer matches")
     observed = _inspect_controller(args.initial_controller_pid)
     if observed is None:
@@ -545,7 +606,8 @@ def _run(args: argparse.Namespace) -> int:
 
     if _marker_is_complete():
         state = _load_state(state_path) or _new_state(
-            identity=None, progress_token=_progress_token(PIPELINE_ROOT / "events.jsonl")
+            identity=None,
+            progress_token=_progress_token(PIPELINE_ROOT / "events.jsonl"),
         )
         state["completed"] = True
         state["updated_at"] = _utc_now()
@@ -576,8 +638,14 @@ def _run(args: argparse.Namespace) -> int:
         _atomic_json(state_path, state)
     elif initial is not None:
         persisted = _identity_from_state(state["controller"])
-        if persisted is not None and persisted != initial and _identity_is_live(persisted):
-            raise WatchdogBlockedError("initial controller conflicts with watchdog state")
+        if (
+            persisted is not None
+            and persisted != initial
+            and _identity_is_live(persisted)
+        ):
+            raise WatchdogBlockedError(
+                "initial controller conflicts with watchdog state"
+            )
         state["controller"] = asdict(initial)
         state["updated_at"] = _utc_now()
         _atomic_json(state_path, state)
@@ -658,7 +726,9 @@ def _run(args: argparse.Namespace) -> int:
         if gate.controller_pids:
             identities = _scan_controllers()
             if len(identities) != 1:
-                raise WatchdogBlockedError("cannot uniquely adopt a live ACC controller")
+                raise WatchdogBlockedError(
+                    "cannot uniquely adopt a live ACC controller"
+                )
             state["controller"] = asdict(identities[0])
             state["next_restart_not_before_epoch"] = None
             state["updated_at"] = _utc_now()
@@ -698,6 +768,9 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/watchdog_rp67_step2000_acc_pipeline.py"
+    )
     args = _parser().parse_args()
     if not 0 < args.poll_seconds <= 60:
         raise ValueError("--poll-seconds must be in (0, 60]")
@@ -712,7 +785,9 @@ def main() -> int:
     if any(value is not None for value in identity_values) and not all(
         value is not None for value in identity_values
     ):
-        raise ValueError("all initial-controller identity arguments are required together")
+        raise ValueError(
+            "all initial-controller identity arguments are required together"
+        )
     if args.restart_backoff_seconds <= 0 or args.maximum_backoff_seconds <= 0:
         raise ValueError("restart backoff values must be positive")
     if args.maximum_backoff_seconds < args.restart_backoff_seconds:
@@ -721,8 +796,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except WatchdogBlockedError as error:
-        print(f"ACC_WATCHDOG_BLOCKED: {error}", file=sys.stderr)
-        raise SystemExit(3) from error
+    raise SystemExit(main())

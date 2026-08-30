@@ -4,9 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from verl.trainer.ppo.core_algos import get_policy_loss_fn
 
-from tgvf_rl.framework.verl.deepeyes_actor_loss import (
+_verl_core_algos = pytest.importorskip(
+    "verl.trainer.ppo.core_algos",
+    reason="DeepEyes actor-loss registration requires the optional pinned veRL",
+)
+get_policy_loss_fn = _verl_core_algos.get_policy_loss_fn
+
+from tgvf_rl.framework.verl.deepeyes_actor_loss import (  # noqa: E402
     DEEPEYES_OFFICIAL_POLICY_LOSS_MODE,
     compute_deepeyes_official_micro_token_mean_loss,
 )
@@ -19,9 +24,7 @@ def _actor_config(
     micro_batch_size: int = 4,
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        policy_loss=SimpleNamespace(
-            loss_mode=DEEPEYES_OFFICIAL_POLICY_LOSS_MODE
-        ),
+        policy_loss=SimpleNamespace(loss_mode=DEEPEYES_OFFICIAL_POLICY_LOSS_MODE),
         use_dynamic_bsz=False,
         ppo_epochs=1,
         entropy_coeff=0.0,
@@ -81,13 +84,12 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
     width = 6
     response_mask = _response_mask(lengths, width)
     old_log_prob = torch.zeros((16, width), dtype=torch.float64)
-    log_prob = torch.linspace(
-        -0.08, 0.08, 16 * width, dtype=torch.float64
-    ).reshape(16, width)
+    log_prob = torch.linspace(-0.08, 0.08, 16 * width, dtype=torch.float64).reshape(
+        16, width
+    )
     log_prob.requires_grad_(True)
     advantages = (
-        torch.arange(1, 16 * width + 1, dtype=torch.float64).reshape(16, width)
-        / 17.0
+        torch.arange(1, 16 * width + 1, dtype=torch.float64).reshape(16, width) / 17.0
     )
     advantages[::3] *= -1
     config = _actor_config()
@@ -106,9 +108,7 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
     # averages the two rank-local accumulated gradients.
     actual = torch.stack(micro_losses).sum() / 2
 
-    per_token = _official_per_token_loss(
-        old_log_prob, log_prob, advantages
-    )
+    per_token = _official_per_token_loss(old_log_prob, log_prob, advantages)
     official_oracle = torch.stack(
         [
             per_token[start : start + 4]
@@ -125,9 +125,7 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
         ]
     ).mean()
 
-    actual_gradient = torch.autograd.grad(
-        actual, log_prob, retain_graph=True
-    )[0]
+    actual_gradient = torch.autograd.grad(actual, log_prob, retain_graph=True)[0]
     official_gradient = torch.autograd.grad(
         official_oracle, log_prob, retain_graph=True
     )[0]
@@ -137,25 +135,16 @@ def test_value_and_gradient_match_equal_micro_token_means_not_other_means() -> N
     sequence_gradient = torch.autograd.grad(sequence_mean, log_prob)[0]
 
     torch.testing.assert_close(actual, official_oracle, rtol=0, atol=1e-12)
-    torch.testing.assert_close(
-        actual_gradient, official_gradient, rtol=0, atol=1e-12
-    )
+    torch.testing.assert_close(actual_gradient, official_gradient, rtol=0, atol=1e-12)
     assert not torch.isclose(actual, global_token_mean, rtol=0, atol=1e-8)
     assert not torch.isclose(actual, sequence_mean, rtol=0, atol=1e-8)
-    assert not torch.allclose(
-        actual_gradient, global_token_gradient, rtol=0, atol=1e-8
-    )
-    assert not torch.allclose(
-        actual_gradient, sequence_gradient, rtol=0, atol=1e-8
-    )
+    assert not torch.allclose(actual_gradient, global_token_gradient, rtol=0, atol=1e-8)
+    assert not torch.allclose(actual_gradient, sequence_gradient, rtol=0, atol=1e-8)
     assert [
-        int(response_mask[start : start + 4].sum())
-        for start in range(0, 16, 4)
+        int(response_mask[start : start + 4].sum()) for start in range(0, 16, 4)
     ] == [4, 18, 10, 24]
     assert actual.detach().item() == pytest.approx(-0.8464697448242664)
-    assert global_token_mean.detach().item() == pytest.approx(
-        -0.7438512345090551
-    )
+    assert global_token_mean.detach().item() == pytest.approx(-0.7438512345090551)
     assert sequence_mean.detach().item() == pytest.approx(-0.7028142003424558)
     assert (actual_gradient - global_token_gradient).abs().max().item() == (
         pytest.approx(0.04747654239317267)
@@ -201,9 +190,7 @@ def test_formal_shape_scales_each_micro_by_one_over_256() -> None:
         ("rollout_weights", "disables rollout importance weights"),
     ),
 )
-def test_loss_fails_closed_on_reduction_drift(
-    mutation: str, message: str
-) -> None:
+def test_loss_fails_closed_on_reduction_drift(mutation: str, message: str) -> None:
     config = _actor_config()
     shape = (4, 3)
     if mutation == "partial_micro":

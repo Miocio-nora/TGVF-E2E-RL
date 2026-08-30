@@ -141,6 +141,16 @@ def _write_chunk(plan, chunk_index: int) -> None:
 
 
 def test_real_gpu3_plan_is_exact_instruct_tool_free_request_set() -> None:
+    # This is an integration check for immutable historical evidence.  The
+    # config deliberately binds its original artifact root, so a checkout in a
+    # different worktree must not rewrite or silently reinterpret that path.
+    # Hermetic unit coverage for plan construction uses ``_fixture_config``
+    # below; run this assertion only from the artifact-owning checkout.
+    configured_output = Path(
+        json.loads(_REAL_CONFIG.read_text(encoding="utf-8"))["output_root"]
+    )
+    if not configured_output.is_relative_to(resume_smoke._ARTIFACT_ROOT):  # noqa: SLF001
+        pytest.skip("historical T1 artifacts belong to a different worktree")
     plan = build_t1_resume_smoke_plan(_REAL_CONFIG)
     candidates = {
         candidate.identity_sha256: candidate
@@ -278,14 +288,27 @@ def test_worker_rejects_invalid_chunk_subshard(
         )
 
 
-def test_plan_cli_is_cpu_only_and_reports_no_tools() -> None:
+def test_plan_cli_is_cpu_only_and_reports_no_tools(tmp_path: Path) -> None:
+    record = _run_record(tmp_path)
+    record["run_id"] = "t1-instruct-resume-smoke-cli-plan-fixture"
+    record["model"]["repository"] = "Qwen/Qwen3-VL-8B-Instruct"
+    record["model"]["path"] = "/nvmesv/dredvpn009/models/hf/Qwen3-VL-8B-Instruct"
+    record["verifier"]["answer_parser"] = "direct-completion-v1"
+    planned_output = (
+        _REPO_ROOT
+        / "artifacts/data/policy_selection/t1"
+        / f"pytest-read-only-plan-{tmp_path.parent.name}-{tmp_path.name}"
+    )
+    record["output_root"] = str(planned_output)
+    config = tmp_path / "resume-smoke-cli-plan.json"
+    config.write_text(json.dumps(record), encoding="utf-8")
     script = f"""
 import json
 import subprocess
 import sys
 result = subprocess.run(
     [sys.executable, {str(_REPO_ROOT / "tools/smoke_policy_data_selection_t1_resume.py")!r},
-     'plan', '--config', {str(_REAL_CONFIG)!r}],
+     'plan', '--config', {str(config)!r}],
     check=True, capture_output=True, text=True,
 )
 record = json.loads(result.stdout)
@@ -302,3 +325,4 @@ for name in ('torch', 'vllm', 'transformers'):
         text=True,
         cwd=_REPO_ROOT,
     )
+    assert not planned_output.exists()

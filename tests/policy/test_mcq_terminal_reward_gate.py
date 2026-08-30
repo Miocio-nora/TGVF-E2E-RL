@@ -241,22 +241,56 @@ def test_independent_gate_parser_accepts_bound_wrappers(candidate: str) -> None:
     assert gate.terminal_mcq_letter(candidate) == "B"
 
 
-def test_atomic_report_failure_preserves_existing_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_immutable_report_rejects_different_existing_content(tmp_path: Path) -> None:
     output = tmp_path / "report.json"
     output.write_text("sentinel\n", encoding="utf-8")
 
-    def fail_replace(_source: object, _target: object) -> None:
-        raise OSError("injected replace failure")
-
-    monkeypatch.setattr(gate.os, "replace", fail_replace)
-
-    with pytest.raises(OSError, match="injected replace failure"):
+    with pytest.raises(RuntimeError, match="immutable reward-gate report differs"):
         gate._write_report(output, {"status": "passed"})
 
     assert output.read_text(encoding="utf-8") == "sentinel\n"
     assert [path.name for path in tmp_path.iterdir()] == ["report.json"]
+
+
+def test_immutable_report_accepts_only_byte_identical_retry(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+    report = {"schema_version": gate.REPORT_SCHEMA, "status": "passed"}
+
+    gate._write_report(output, report)
+    first = output.read_bytes()
+    gate._write_report(output, report)
+
+    assert output.read_bytes() == first
+    assert [path.name for path in tmp_path.iterdir()] == ["report.json"]
+
+
+def test_immutable_report_rejects_symlink_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("target\n", encoding="utf-8")
+    output = tmp_path / "report.json"
+    output.symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="readable regular file"):
+        gate._write_report(output, {"status": "passed"})
+
+    assert target.read_text(encoding="utf-8") == "target\n"
+
+
+def test_report_publication_failure_leaves_no_partial_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "report.json"
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected publication failure")
+
+    monkeypatch.setattr(gate.os, "link", fail_link)
+    with pytest.raises(OSError, match="injected publication failure"):
+        gate._write_report(output, {"status": "passed"})
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_gate_rejects_optimizer_step_directory_mismatch(tmp_path: Path) -> None:

@@ -1,7 +1,35 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Validate the policy-result registry and materialize its Markdown tables."""
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/materialize_policy_result_table.py",
+        ),
+    )
 
 import argparse
 from pathlib import Path
@@ -14,6 +42,9 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from tgvf_rl.evaluation.result_registry import (  # noqa: E402
     RegistryValidationError,
     load_result_registry,
+)
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
 )
 
 
@@ -64,6 +95,9 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/materialize_policy_result_table.py"
+    )
     args = _parser().parse_args()
     if args.unsafe_skip_artifact_verification and args.output is not None:
         print(

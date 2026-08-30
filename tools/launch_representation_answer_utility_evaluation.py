@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Launch fail-closed multi-GPU answer-utility evaluation shards.
 
 This is an orchestration layer over
@@ -8,6 +8,34 @@ output root.
 """
 
 from __future__ import annotations
+# ruff: noqa: E402
+
+# Direct script execution is stopped before legacy path/environment mutation or
+# heavyweight runtime imports. Importing the module for read-only compatibility
+# tests remains possible; its public ``main`` retains a second fail-closed guard.
+if __name__ == "__main__":
+    import os as _early_quarantine_os
+
+    _early_quarantine_root = _early_quarantine_os.path.realpath(__file__)
+    for _early_quarantine_depth in range(2):
+        _early_quarantine_root = _early_quarantine_os.path.dirname(
+            _early_quarantine_root
+        )
+    _early_quarantine_os.execv(
+        "/usr/bin/python3",
+        (
+            "/usr/bin/python3",
+            "-I",
+            _early_quarantine_os.path.join(
+                _early_quarantine_root,
+                "tools",
+                "check_launch_gate.py",
+            ),
+            "quarantine-legacy",
+            "--tool-id",
+            "tools/launch_representation_answer_utility_evaluation.py",
+        ),
+    )
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +52,14 @@ from typing import Any, BinaryIO, Iterator, Mapping, Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from tgvf_rl.ops.cli_authorization import (  # noqa: E402
+    assert_legacy_standalone_execution_quarantined,
+)
+
 EVALUATOR_PATH = (
     REPOSITORY_ROOT / "tools/run_representation_answer_utility_evaluation.py"
 )
@@ -751,6 +787,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> int:
+    assert_legacy_standalone_execution_quarantined(
+        "tools/launch_representation_answer_utility_evaluation.py"
+    )
     result = run(_parser().parse_args())
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

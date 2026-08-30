@@ -1,0 +1,1787 @@
+{
+  "schema_version": "tgvf-execution-surface-policy-v2",
+  "revision": 2,
+  "content_binding": "sha256-file-bytes-v1",
+  "python_roots": [
+    "src",
+    "tools",
+    "spikes"
+  ],
+  "shell_roots": [
+    "tools",
+    "spikes"
+  ],
+  "surfaces": [
+    {
+      "path": "spikes/verl_compat/fsdp2_smoke.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "d1224ca6efd0fad311afa1cf1fe1112eaa82703aaf71829670739bbfc3594034"
+    },
+    {
+      "path": "spikes/verl_compat/public_api_probe.py",
+      "kind": "python_main",
+      "classification": "read_only_utility",
+      "allowed_modes": [
+        "read-only"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "none_offline",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "read_only"
+      ],
+      "content_sha256": "2e62e8901ff923fae0ec1b317f458941e210fdb5b1df944cf9ba98cad95fa003"
+    },
+    {
+      "path": "spikes/verl_compat/qwen3_patch_embed_probe.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "e4ae7de0424670537d4b2cc1ccc283bf18c10065138f52037c54fc3e064f7591"
+    },
+    {
+      "path": "spikes/verl_compat/qwen3_vllm_latent_smoke.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "01444dd4c1fa1aa852d6cc11d543bfd81dbc8faa41dc7834928e5bb80df72c2d"
+    },
+    {
+      "path": "spikes/verl_compat/verl_fsdp2_vllm_sync_smoke.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "plan"
+      ],
+      "blocked_modes": [
+        "launch-gpu"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "1611682dfea10ce7239a9b930c382bcb4c4a1b23bd8901d1e2c2b643a642b93c"
+    },
+    {
+      "path": "spikes/verl_compat/verl_sync_fixed_reward.py",
+      "kind": "python_module",
+      "classification": "import_only_support",
+      "allowed_modes": [
+        "import-only"
+      ],
+      "blocked_modes": [
+        "direct-execution"
+      ],
+      "authorization_kind": "none_offline",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "support"
+      ],
+      "content_sha256": "f2da3ff00bf7d089bd8bb71ba642a4873f0a0638141c6c2f99e579c6386423e0"
+    },
+    {
+      "path": "src/tgvf_rl/cli.py",
+      "kind": "python_main",
+      "classification": "canonical_public_cli",
+      "allowed_modes": [
+        "read-only",
+        "run-bound-authorized"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "canonical_run_bound",
+      "capabilities": {
+        "gpu": true,
+        "network": true,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "control",
+        "evaluation",
+        "training"
+      ],
+      "content_sha256": "893ccf2d7dad66e0cf5caf920b27af68360d2fccbce4dfa449b6ec22136383d3"
+    },
+    {
+      "path": "src/tgvf_rl/framework/verl/policy_main.py",
+      "kind": "python_main",
+      "classification": "canonical_internal_worker",
+      "allowed_modes": [
+        "authorized-worker"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "inherited_worker_receipt",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "750c56b11f23a21c61964e5ca292d3786827df12302689eb0fd911d134de850e"
+    },
+    {
+      "path": "src/tgvf_rl/framework/verl/prl13_main.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "1dab692244ae5e022287de676d923b7d2d8347d8f97384d27be252ce7ee9b4b1"
+    },
+    {
+      "path": "tools/analyze_prl13_group_signal.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": true
+      },
+      "workload_kinds": [
+        "destructive_maintenance"
+      ],
+      "content_sha256": "0ce47d9ec44d7e3d575c7597cb18a99d38c97647886e2db2ff67636ae85125cd"
+    },
+    {
+      "path": "tools/audit_policy_data_selection_t1_replay.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "plan"
+      ],
+      "blocked_modes": [
+        "run"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "25f9d49082d553b0b9bae369fb02f9c0c3180f84848a891934b89c958326cc4c"
+    },
+    {
+      "path": "tools/audit_repository_boundaries.py",
+      "kind": "python_main",
+      "classification": "control_utility",
+      "allowed_modes": [
+        "audit"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "repository_control",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "control"
+      ],
+      "content_sha256": "e038d292b0b71753a8bb6549f41eaf9d9733d95078338a7340fe380434336592"
+    },
+    {
+      "path": "tools/benchmark_prl13_schedule_index.py",
+      "kind": "python_main",
+      "classification": "read_only_utility",
+      "allowed_modes": [
+        "read-only"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "none_offline",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "read_only"
+      ],
+      "content_sha256": "a64dc8d97bf6d1de2780aff2acc745c3bbf39d9d79c8ea22b21882b211a73fb0"
+    },
+    {
+      "path": "tools/canary_qwen3_instruct_crop_prompt.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "validate"
+      ],
+      "blocked_modes": [
+        "execute"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "3025fe4698999a455e06a20440c2309234ce479938633be88b4d18345347dfca"
+    },
+    {
+      "path": "tools/check_launch_gate.py",
+      "kind": "python_main",
+      "classification": "control_utility",
+      "allowed_modes": [
+        "audit-control-plane",
+        "authorize",
+        "consume",
+        "override-freeze",
+        "quarantine-legacy",
+        "ready",
+        "status",
+        "wait"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "repository_control",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "control"
+      ],
+      "content_sha256": "afea3652bdddad815c84d6e5c75202ae2460d40a4e6fdcb2377e901cd9f0c8ce"
+    },
+    {
+      "path": "tools/check_policy_mcq_terminal_reward.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "1fe6d982c51d5d2fdef75bb540d377ad2e9999b20ba89ec8f38da5ccd67b4213"
+    },
+    {
+      "path": "tools/check_policy_rl_judge_routes.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": true,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "external_judge"
+      ],
+      "content_sha256": "75bbcd2baea819a299a3dd1783fb746dc7dd576f98a24d58776ca4f828dbaaa3"
+    },
+    {
+      "path": "tools/compact_policy_checkpoint_storage.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "inventory"
+      ],
+      "blocked_modes": [
+        "compact",
+        "delete-non-scientific"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": true
+      },
+      "workload_kinds": [
+        "destructive_maintenance"
+      ],
+      "content_sha256": "d6c1b10709c2db3795ce246466f9cac111f61528e680e237b745926192a00668"
+    },
+    {
+      "path": "tools/control_local_qwen3_vl_32b_tgvf_visual_judge.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "preflight",
+        "status",
+        "wait"
+      ],
+      "blocked_modes": [
+        "canary",
+        "launch",
+        "stop"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": true,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "40fb374f450d2a360f08361400317e0c6cccc2965f933d46c1eb328446ce36a8"
+    },
+    {
+      "path": "tools/handoff_representation_image_axis_evaluation.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": true,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "arbitrary_execution"
+      ],
+      "content_sha256": "50c2d7e5226a4b7a8e65f7a5ef6a54d56500f92ce33d51d3b4991291cedad1ac"
+    },
+    {
+      "path": "tools/judge_policy_data_selection_t1.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": true,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "external_judge"
+      ],
+      "content_sha256": "cf6ed1d2bc0e632764b8137b327011425d49bb9d3e5a5b912a8a772548591746"
+    },
+    {
+      "path": "tools/launch_policy_data_selection_t1_rank.sh",
+      "kind": "shell",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "269692e41116f81bd39f2919caf42714589126f76271c40cb141cb36f1f76d01"
+    },
+    {
+      "path": "tools/launch_policy_data_selection_t1_single_gpu.sh",
+      "kind": "shell",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "0f58974d74f75bfc8dccb18bb4d862266a4fe19d1a91ed996fdb69cf4576377b"
+    },
+    {
+      "path": "tools/launch_policy_data_selection_t1_subshard.sh",
+      "kind": "shell",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "d9fe8c093ccd735adb88c16c0b49930658ceb242b6fe62961edc739ecb8efd10"
+    },
+    {
+      "path": "tools/launch_prl13_native_deepeyes.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "da2aafa31c4ed20ccddf6d3b4f83a2525b46a3f553cf8d66d6dfb9e31d367a97"
+    },
+    {
+      "path": "tools/launch_prl14_cleanfinal16.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "1019f6b8395bea1e7af041ee9a5af9f1a9bba7fbb2c15fd6a2dec76518e284e5"
+    },
+    {
+      "path": "tools/launch_representation_answer_utility_evaluation.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "975fa260f1937a66938c9b5961cdd60e2d0dfcf0dc101415fa0305130cc4be57"
+    },
+    {
+      "path": "tools/materialize_coredev_2511.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "8d2a756fe9028c18e33235717dd2e6e39cf36f96571d10ec9b0803f129f0d76e"
+    },
+    {
+      "path": "tools/materialize_crop_grounding_probe.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "9afd80a91fca9bd5e921aa4aafd5d362d735159dbafdf64758330883205ad8e1"
+    },
+    {
+      "path": "tools/materialize_deepeyes47k.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "c0399015eb2bab1ef3beff3a786f459e21e44cd60fefba2a795a1c86cd5cf89a"
+    },
+    {
+      "path": "tools/materialize_deepeyes_dev591.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "f595e361398f2fa57b606ad160aa1989cbc414d051eff699c6c58c992822d6b5"
+    },
+    {
+      "path": "tools/materialize_full_model_policy_benchmark_config.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "2ae303192a1e9a16eb8f60b0dc3817b35c8213bad3b185b884fc7d92342f7cfa"
+    },
+    {
+      "path": "tools/materialize_policy_benchmark_config.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "89527491097632a7302cfdd0a3ba56ab532f06ab743ec22fe9ba529620011f43"
+    },
+    {
+      "path": "tools/materialize_policy_benchmark_scoring.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "a3fdb70aea361074bf83919c3f6ed535587849899ecdd394ff255656a2ba0fa9"
+    },
+    {
+      "path": "tools/materialize_policy_coredev_scoring.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "f2de3834d5ad6c57ce121ffc031192de63838551b7a5adce10a86bf8987c898e"
+    },
+    {
+      "path": "tools/materialize_policy_coredev_tasks.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "ff7b0475256cbf39af780c4b971a9b95ffb2c7728a7a3475ba120c3a983260a4"
+    },
+    {
+      "path": "tools/materialize_policy_result_table.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": true
+      },
+      "workload_kinds": [
+        "destructive_maintenance"
+      ],
+      "content_sha256": "01e9292ea38722cef6a3117676701ef33387e6e9c6c73d7aa77a4ec0c25a1d0e"
+    },
+    {
+      "path": "tools/materialize_policy_selection_sources.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": true,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "network_materialization"
+      ],
+      "content_sha256": "f2a283316539239a7c8167416412f07848c5e4c0020804de947d262ca6b53307"
+    },
+    {
+      "path": "tools/materialize_policy_selection_t1_recommended.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "df701f3e0644ea578740823ff4a1b272b2008dc048cfe10837f69eac3db60708"
+    },
+    {
+      "path": "tools/materialize_policy_t1_arxivqa_rl_dataset.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "1707e0644ff930e2b6692c575d78d65888ee64d9464c8dd98a72020e3beed0b3"
+    },
+    {
+      "path": "tools/materialize_policy_t1_mixed_retained_pool.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "4114288fbd39811f04d7196f2e388ddbb9e740f831cd5edaac2e0bddf918f3fd"
+    },
+    {
+      "path": "tools/materialize_prl13_full_model.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "f7582a1993e4a073631ae01ac9695c55e7ff440486a0724324c52bce3ed40317"
+    },
+    {
+      "path": "tools/materialize_prl13_schedule_index.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "0f81853f801c44e6c2fda3b59e2a2a086787cd13c962770124ca4bbdcd7b4f57"
+    },
+    {
+      "path": "tools/materialize_qwen3_grounding_manifest.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": true
+      },
+      "workload_kinds": [
+        "destructive_maintenance"
+      ],
+      "content_sha256": "62d2b1f90f6fe1846c5b53fbd3ba9da1fce1dae7414c9a386fea3ec74f775f4d"
+    },
+    {
+      "path": "tools/materialize_representation_checkpoint_adapter_export.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "bad0162391728668f2845f64e5e20d8e557ea8d607718f7c67a5791cab7890e6"
+    },
+    {
+      "path": "tools/materialize_representation_image_axis_manifest.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "e75cff4a39950491ccad9849a7d1664a09e4f129c247d1aa9ee9b5a2bad1a535"
+    },
+    {
+      "path": "tools/materialize_representation_internal_evaluation_manifests.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": true
+      },
+      "workload_kinds": [
+        "destructive_maintenance"
+      ],
+      "content_sha256": "95a320f8ec4c5308c10e50415e39dcca77df2c404bd4db6a86c97723fcf55dbf"
+    },
+    {
+      "path": "tools/materialize_vlmevalkit_final_answers.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "4299cf5bd129367a50c7db34671b11f814500d997d3eafc2aeb350a4062f18ad"
+    },
+    {
+      "path": "tools/prepare_policy_data_selection.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "b342cb7d0cc7cae8e69642e26f7a58f4a016f27190858390475913d111fe35dc"
+    },
+    {
+      "path": "tools/profile_representation_step.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "3e744b0477d21482aa8dc5a5ec0ebced794af3011a1e3180fe9e5b7475b7474b"
+    },
+    {
+      "path": "tools/prove_policy_auto_resume.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "cfdd7354ea5f5fc609bff26d47ea0c2dab8fc5378cc10364444871fb650ed1a4"
+    },
+    {
+      "path": "tools/run_coredev_2511_vlmevalkit.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "d854cd7609ac09a761677b1a942512a84878fc68501a0da5fbabd9e15f7ad77c"
+    },
+    {
+      "path": "tools/run_overnight_pipeline.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "49156f497724612ee688ed6c3d5689fdd77a88619112c21cacc8a91f8854543e"
+    },
+    {
+      "path": "tools/run_policy_benchmark.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "status",
+        "validate"
+      ],
+      "blocked_modes": [
+        "prepare",
+        "worker"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "2cf3f7287fb1fecb90669158348a482585e9ca63eec6e09f2eebe5333c1b0506"
+    },
+    {
+      "path": "tools/run_policy_coredev_2511.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "status"
+      ],
+      "blocked_modes": [
+        "prepare",
+        "worker"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "20f34f13086229b908f4e2ea4d76e1bbaf6283df82750962345e30b4ac4cd34d"
+    },
+    {
+      "path": "tools/run_policy_data_selection_t1.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "status"
+      ],
+      "blocked_modes": [
+        "prepare",
+        "worker"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "d298879c62fcfb019f090bce87499bdba33c7691769b46d50e94664b6956f7a6"
+    },
+    {
+      "path": "tools/run_policy_data_selection_t1_retry.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "plan"
+      ],
+      "blocked_modes": [
+        "worker"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "c59fa6ad88379878c50284937b626ed4850c8be5f152184fc680568a9ef14180"
+    },
+    {
+      "path": "tools/run_representation_answer_utility.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "validate"
+      ],
+      "blocked_modes": [
+        "execute"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "75c7f20490c02d39cf1a575f6e9a39322f03b3c894fa190a9d08ead5f03178d8"
+    },
+    {
+      "path": "tools/run_representation_answer_utility_evaluation.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "validate"
+      ],
+      "blocked_modes": [
+        "execute"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "954dab5e9d291221f1f77dbb7215fe61c8af8a12115d4f8accadac1b2e9b7f11"
+    },
+    {
+      "path": "tools/run_representation_answer_utility_semantic_rescore.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": true,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "external_judge"
+      ],
+      "content_sha256": "7a6e665fe0b35e227a742dacdf0d67f850f232b02585991e7562da5bdaf591e8"
+    },
+    {
+      "path": "tools/run_representation_image_axis_grounding.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "validate"
+      ],
+      "blocked_modes": [
+        "execute"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "b461c7cdd9d78f3974a6b0d7c83c87e1d439b847c1c947b4b81f7402e28804fc"
+    },
+    {
+      "path": "tools/run_representation_oracle_d_utility.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "2b9fd56eeccc77877003278859a0e529df584406d3e66c9d44a13f5bf261d58c"
+    },
+    {
+      "path": "tools/run_rp67_step2000_acc_pipeline.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "95214405fc4b083398833a17c230007b69499024801decf255b56fbcef4e3ab5"
+    },
+    {
+      "path": "tools/run_rp68_post_training_evaluations.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "ce0cbd03b1ca6b7592e22f809143b521feb20409c959c52117b2dda57794ce0c"
+    },
+    {
+      "path": "tools/run_rp69_post_training_evaluations.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "dab59952f3d89503d77f31294b0a8cdc5849a871da7b1b7a7a72900563dba78b"
+    },
+    {
+      "path": "tools/score_crop_grounding.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "5ebdbc10439c8bb0671a565412d81292dbbe7af7d502170dae184eb4bc42bf8c"
+    },
+    {
+      "path": "tools/score_policy_data_selection_t1.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "b2354abc9b6248ecb7cc7bc36180b9f973df656399488c7b42f38b397dededc1"
+    },
+    {
+      "path": "tools/smoke_policy_data_selection_t1_resume.py",
+      "kind": "python_main",
+      "classification": "mixed_read_only_and_quarantined",
+      "allowed_modes": [
+        "plan"
+      ],
+      "blocked_modes": [
+        "baseline",
+        "interrupt",
+        "resume"
+      ],
+      "authorization_kind": "read_only_mode_guard",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "a3c793021c0cb8d201504071361915d9314d883a63e53ff282a97aafee2262d6"
+    },
+    {
+      "path": "tools/smoke_policy_live_tool_chain.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "86d3a9338d4d3c963d5b7aff5269334f4f449f080188aa71e3ee5f293e230b7c"
+    },
+    {
+      "path": "tools/smoke_prl13_qwen3_full_model_grad.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "a917936b4c6803490ab5c925b5bcc72694f2692781b01b8433e25ddd0dc9f085"
+    },
+    {
+      "path": "tools/smoke_qwen25_72b_judge.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": true,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "external_judge"
+      ],
+      "content_sha256": "dac7ebb2e3db45430beb66e622c638f4d6e271c46fb3783af01f9e920c84ae6f"
+    },
+    {
+      "path": "tools/smoke_qwen3_cached_continuation.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "477393deb33d2ed0ddf93254b1dae04a8055ece2c0fbfbd6945f02de4eec4abd"
+    },
+    {
+      "path": "tools/smoke_qwen3_contextual_vision_reuse.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "9faaed5d5d4615baab6d0aa9fb59bb0974434ced53396a1a97a0c14ef0ae5898"
+    },
+    {
+      "path": "tools/smoke_qwen3_crop_tools.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "training"
+      ],
+      "content_sha256": "8569cb3654f921fc3f174a16145330fc5ea3afc44fec80029852b584ef5d28ef"
+    },
+    {
+      "path": "tools/summarize_coredev_2511.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": true
+      },
+      "workload_kinds": [
+        "destructive_maintenance"
+      ],
+      "content_sha256": "835110a1f625dc870530511a82802ba34920f52901acadaace35710f589593fe"
+    },
+    {
+      "path": "tools/summarize_representation_answer_utility_scaling.py",
+      "kind": "python_main",
+      "classification": "artifact_materializer",
+      "allowed_modes": [
+        "bounded-artifact-write"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "bounded_artifact_write",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "offline_materialization"
+      ],
+      "content_sha256": "fd45626bfca8f8759bcd9b117e44aebfbcbc09d72aea124a9de2f4044ac17005"
+    },
+    {
+      "path": "tools/supervise_prl14_cleanfinal16_eval.sh",
+      "kind": "shell",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "2f91a28059f92956f0f9ad0ee798306210e0c7fcdb25db990fdab3270dcddf3f"
+    },
+    {
+      "path": "tools/supervise_rp67_t1_schedule.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "0866b422be16271b2d624d93728bc039c3eb4c4d4fd3d60dcd3df4181df1a84a"
+    },
+    {
+      "path": "tools/validate_coredev_2511.py",
+      "kind": "python_main",
+      "classification": "read_only_utility",
+      "allowed_modes": [
+        "read-only"
+      ],
+      "blocked_modes": [],
+      "authorization_kind": "none_offline",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "read_only"
+      ],
+      "content_sha256": "891168829961a598004715126fc4f17c7dd59764fe745c4596bbaa667bef519e"
+    },
+    {
+      "path": "tools/validate_vlmevalkit_deployment.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": false,
+        "subprocess": true,
+        "arbitrary_exec": true,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "arbitrary_execution"
+      ],
+      "content_sha256": "44d866a8d39cd6f7b14ac770ddd4bf54c5bdb7eced95dfdfbc3433cccc860266"
+    },
+    {
+      "path": "tools/watch_representation_wandb.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": false,
+        "network": true,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "network_materialization"
+      ],
+      "content_sha256": "77f080f7ae7d52f04d04b928b8e8ec281072bc179fa31b55c4f6ca90f2b652b2"
+    },
+    {
+      "path": "tools/watchdog_rp67_step2000_acc_pipeline.py",
+      "kind": "python_main",
+      "classification": "permanent_quarantine",
+      "allowed_modes": [],
+      "blocked_modes": [
+        "*"
+      ],
+      "authorization_kind": "permanent_quarantine",
+      "capabilities": {
+        "gpu": true,
+        "network": false,
+        "subprocess": false,
+        "arbitrary_exec": false,
+        "destructive_fs": false
+      },
+      "workload_kinds": [
+        "evaluation"
+      ],
+      "content_sha256": "37f9b05bbfcbbb7a8d9f7b5657e3c8b11f4913a1ed90b3765d67aacf607ee4d0"
+    }
+  ]
+}

@@ -28,6 +28,10 @@ import subprocess
 import tempfile
 from typing import Any
 
+from tgvf_rl.ops.cli_authorization import (
+    assert_legacy_standalone_mode_quarantined,
+)
+
 
 WORKSPACE = Path(__file__).resolve().parents[1]
 ARTIFACTS = WORKSPACE / "artifacts/policy"
@@ -848,6 +852,12 @@ def main() -> None:
     compact.add_argument("--shard-index", type=int, default=0)
     subparsers.add_parser("delete-non-scientific")
     args = parser.parse_args()
+    assert_legacy_standalone_mode_quarantined(
+        "tools/compact_policy_checkpoint_storage.py",
+        selected_mode=args.command,
+        read_only_modes=("inventory",),
+        blocked_modes=("compact", "delete-non-scientific"),
+    )
     if getattr(args, "shard_count", 1) <= 0:
         parser.error("--shard-count must be positive")
     if not 0 <= getattr(args, "shard_index", 0) < getattr(args, "shard_count", 1):
