@@ -421,6 +421,43 @@ class RepresentationStartupPlan:
             raise ValueError("representation startup authorization digest differs")
         return plan
 
+    @classmethod
+    def from_cli_authorization_parameters(
+        cls,
+        value: object,
+    ) -> RepresentationStartupPlan:
+        """Reconstruct the protected plan group inside a broader CLI map.
+
+        Every key is type-checked before the protected namespace is scanned.
+        This ordering prevents a ``str`` subclass from participating in the
+        scan, and the exact namespace check prevents a caller from silently
+        projecting the three known fields out of a larger authority group.
+        Unrelated CLI parameters remain outside this leaf's ownership.
+        """
+
+        if type(value) is not dict:
+            raise TypeError(
+                "representation startup CLI authorization parameters must be "
+                "an exact dict"
+            )
+        if any(type(key) is not str for key in value):
+            raise TypeError(
+                "representation startup CLI authorization parameter keys must be "
+                "exactly str"
+            )
+        startup_names = {
+            key for key in value if key.startswith("representation_startup_")
+        }
+        missing = sorted(_AUTHORIZATION_PARAMETER_FIELDS.difference(value))
+        extra = sorted(startup_names.difference(_AUTHORIZATION_PARAMETER_FIELDS))
+        if missing or extra:
+            raise ValueError(
+                "representation startup CLI authorization parameter group differs: "
+                f"missing={missing!r}, extra={extra!r}"
+            )
+        parameters = {name: value[name] for name in _AUTHORIZATION_PARAMETER_FIELDS}
+        return cls.from_authorization_parameters(parameters)
+
 
 def build_representation_startup_plan(
     envelope: WorkerStartupEnvelope,

@@ -562,6 +562,99 @@ def test_authorization_parameters_require_exact_container_keys_and_values() -> N
         RepresentationStartupPlan.from_authorization_parameters(future_authority)
 
 
+def test_plan_reconstructs_from_complete_broader_cli_authorization_map() -> None:
+    plan = _plan()
+    parameters = {
+        "canonical_config_sha256": CONFIG_SHA256,
+        "prepared_representation_launch_sha256": "c" * 64,
+        **plan.authorization_parameters(),
+    }
+
+    assert RepresentationStartupPlan.from_cli_authorization_parameters(parameters) == (
+        plan
+    )
+
+
+@pytest.mark.parametrize(
+    "retained_names",
+    [
+        (),
+        ("representation_startup_plan_schema",),
+        (
+            "representation_startup_plan_schema",
+            "representation_startup_plan_json",
+        ),
+    ],
+)
+def test_cli_authorization_rejects_missing_or_partial_plan_group(
+    retained_names: tuple[str, ...],
+) -> None:
+    complete = _plan().authorization_parameters()
+    parameters = {name: complete[name] for name in retained_names}
+    parameters["unrelated_cli_parameter"] = "ignored"
+
+    with pytest.raises(ValueError, match="parameter group differs.*missing"):
+        RepresentationStartupPlan.from_cli_authorization_parameters(parameters)
+
+
+@pytest.mark.parametrize(
+    "extra_name",
+    [
+        "representation_startup_plan_future",
+        "representation_startup_member_claim",
+        "representation_startup_future_authority",
+    ],
+)
+def test_cli_authorization_rejects_extra_protected_plan_parameter(
+    extra_name: str,
+) -> None:
+    parameters = _plan().authorization_parameters()
+    parameters[extra_name] = "forbidden"
+
+    with pytest.raises(ValueError, match="parameter group differs.*extra"):
+        RepresentationStartupPlan.from_cli_authorization_parameters(parameters)
+
+
+def test_cli_authorization_checks_exact_keys_before_protected_namespace_scan() -> None:
+    class _StringSubclass(str):
+        pass
+
+    plan = _plan()
+    subclass_required = {
+        _StringSubclass(name): value
+        for name, value in plan.authorization_parameters().items()
+    }
+    with pytest.raises(TypeError, match="keys must be exactly str"):
+        RepresentationStartupPlan.from_cli_authorization_parameters(subclass_required)
+
+    subclass_extra = plan.authorization_parameters()
+    subclass_extra[_StringSubclass("representation_startup_future_authority")] = (
+        "forbidden"
+    )
+    with pytest.raises(TypeError, match="keys must be exactly str"):
+        RepresentationStartupPlan.from_cli_authorization_parameters(subclass_extra)
+
+    nonstring_unrelated = plan.authorization_parameters()
+    nonstring_unrelated[1] = object()  # type: ignore[index]
+    with pytest.raises(TypeError, match="keys must be exactly str"):
+        RepresentationStartupPlan.from_cli_authorization_parameters(nonstring_unrelated)
+
+
+def test_cli_authorization_requires_exact_dict_and_delegates_value_checks() -> None:
+    class _DictSubclass(dict[str, str]):
+        pass
+
+    parameters = _plan().authorization_parameters()
+    with pytest.raises(TypeError, match="exact dict"):
+        RepresentationStartupPlan.from_cli_authorization_parameters(
+            _DictSubclass(parameters)
+        )
+
+    parameters["representation_startup_plan_json"] = 1  # type: ignore[assignment]
+    with pytest.raises(TypeError, match="values must be exactly str"):
+        RepresentationStartupPlan.from_cli_authorization_parameters(parameters)
+
+
 def test_contract_objects_are_frozen() -> None:
     plan = _plan()
     with pytest.raises(FrozenInstanceError):
