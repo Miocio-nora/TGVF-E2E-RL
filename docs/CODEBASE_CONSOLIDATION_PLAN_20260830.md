@@ -13,9 +13,10 @@ case. Remote CI commit `a5dd0d1` is green for install, lint, repository
 boundary, control plane, and the full CPU suite. The later fd-closure head
 `ab508c4` is also green in remote CI run `33300849634` across install, lint,
 both audits, and the complete CPU suite.
-The subsequent strict child-environment milestone is locally verified but is
-not covered by that earlier remote run: its final hermetic CPU suite has 2,383
-passed, five skipped, and four non-failing warnings in 143.29 seconds. Its
+The subsequent strict child-environment milestone has a final local hermetic
+CPU suite of 2,383 passed, five skipped, and four non-failing warnings in
+143.29 seconds. Commit `5c058a1` is independently green in remote CI run
+`33302879219` across install, lint, both audits, and the complete CPU suite. Its
 expanded focused selection has 285 passing tests in 64.77 seconds, and the core
 aggregate had already reached 126 passing tests.
 Policy v3 revision 7 records the 17 remaining oversized modules and rejects
@@ -60,8 +61,9 @@ full CPU rerun has 2,337 passed, five skipped, and four warnings in 140.25
 seconds. The newer strict child-environment checkpoint has a final hermetic CPU
 result of 2,383 passed, five skipped, and four warnings in 143.29 seconds; its
 expanded focused selection has 285 passing tests in 64.77 seconds and its
-earlier core aggregate had 126 passing tests. These are current local results,
-while the remote claims below still belong to the preceding commits.
+earlier core aggregate had 126 passing tests. Remote run `33302879219` verifies
+the same strict child-environment head across install, lint, both audits, and
+the complete CPU suite.
 Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
 full CPU job after five private-machine-path test fixtures were made hermetic.
 The fd-closure head `ab508c4` is independently green in remote run
@@ -353,9 +355,9 @@ Current state: the entry-point disposition condition, the three C2 targets, all
 nine post-C2 priority decompositions, the revision-7 production-size exception
 ratchet, the known-cycle condition, the fd-bound Python-exec blocker, and the
 strict child-environment blocker are complete, and C4 remains a read-only
-inventory. The predecessor and fd-closure checkpoint both have green remote
-CPU CI; the newer child-environment full CPU verification is local. Portable
-runtime/CLI closure remains disabled by seven named blockers, now including
+inventory. The predecessor, fd-closure, and strict child-environment
+checkpoints all have green remote CPU CI. Portable runtime/CLI closure remains
+disabled by seven named blockers, now including
 `role_scoped_judge_secret_transport_missing`; immutable code/startup closure,
 the worker envelope and member claims, Ray-descendant environment closure, and
 the remaining semantic-helper migrations are still open.

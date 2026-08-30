@@ -415,4 +415,5 @@ combined focused selection was 304 passed; the updated fd security file passes
 fd-closure results. The subsequent strict child-environment expanded focused
 selection has 285 passing tests in 64.77 seconds, with an earlier 126-pass core
 aggregate. Its final hermetic CPU suite has 2,383 passed, five skipped, and four
-warnings in 143.29 seconds; it does not inherit the earlier remote-CI claim.
+warnings in 143.29 seconds. Commit `5c058a1` passes install, lint, both audits,
+and the complete CPU suite in remote run `33302879219`.
