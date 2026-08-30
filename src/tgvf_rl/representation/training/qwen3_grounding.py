@@ -17,7 +17,7 @@ from typing import Any
 
 import torch
 
-from .internal_evaluation import NativeDOnlyContext, NativeTargetPresenceCase
+from .internal_evaluation_contract import NativeDOnlyContext, NativeTargetPresenceCase
 from .native_pipeline import (
     Qwen3NativeRepresentationGroupBuilder,
     _qwen3_position_ids,

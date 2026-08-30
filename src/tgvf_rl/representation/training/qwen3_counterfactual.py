@@ -29,7 +29,7 @@ from tgvf_rl.qwen.base import (
     resolve_language_model,
 )
 
-from .internal_evaluation import (
+from .internal_evaluation_contract import (
     NativeCounterfactualCase,
     NativeDOnlyContext,
     NativeGenerationForward,
