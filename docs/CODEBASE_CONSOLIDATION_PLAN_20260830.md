@@ -13,6 +13,11 @@ case. Remote CI commit `a5dd0d1` is green for install, lint, repository
 boundary, control plane, and the full CPU suite. The later fd-closure head
 `ab508c4` is also green in remote CI run `33300849634` across install, lint,
 both audits, and the complete CPU suite.
+The subsequent strict child-environment milestone is locally verified but is
+not covered by that earlier remote run: its final hermetic CPU suite has 2,383
+passed, five skipped, and four non-failing warnings in 143.29 seconds. Its
+expanded focused selection has 285 passing tests in 64.77 seconds, and the core
+aggregate had already reached 126 passing tests.
 Policy v3 revision 7 records the 17 remaining oversized modules and rejects
 growth, slack, stale entries, or a relaxed baseline. This plan does not
 authorize an experiment or rewrite historical evidence.
@@ -47,26 +52,35 @@ preserved historical snapshot, not the current head.
 At the current checkpoint, repository-boundary policy v3 revision 7 passes
 with 61 visible debts (five evidence-only roots, 25 machine paths, 17 oversized
 modules, and 14 run-specific paths) and zero violations. Execution-surface
-policy revision 4 binds 79 surfaces and the control-plane audit passes. Before
+policy revision 5 binds 79 surfaces and the control-plane audit passes with
+zero violations. Before
 the added size-tamper parameter, the focused stabilization selection had 304
-passing tests; the updated fd security file passes 10/10, and the final full
-CPU rerun has 2,337 passed, five skipped, and four warnings in 140.25 seconds.
+passing tests; the updated fd security file passes 10/10, and the fd-closure
+full CPU rerun has 2,337 passed, five skipped, and four warnings in 140.25
+seconds. The newer strict child-environment checkpoint has a final hermetic CPU
+result of 2,383 passed, five skipped, and four warnings in 143.29 seconds; its
+expanded focused selection has 285 passing tests in 64.77 seconds and its
+earlier core aggregate had 126 passing tests. These are current local results,
+while the remote claims below still belong to the preceding commits.
 Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
 full CPU job after five private-machine-path test fixtures were made hermetic.
 The fd-closure head `ab508c4` is independently green in remote run
 `33300849634` across the same stages.
 
-This milestone does not close the runtime authority boundary. The experiment
-policy revision 3 still has `runtime_closure.launch_enabled=false` with seven
+This milestone does not close the runtime authority boundary. Experiment
+policy revision 4 still has `runtime_closure.launch_enabled=false` with seven
 IDs present: `atomic_authority_transaction_missing`,
-`child_environment_allowlist_missing`,
 `immutable_runtime_code_package_missing`,
 `policy_recursive_compile_closure_missing`,
-`representation_eval_safe_artifact_missing`, `worker_member_claims_missing`,
-and `worker_startup_envelope_missing`. C3 semantic-helper migration remains
-partial. C4 remains an inventory only: its 72 worktrees, 62 branches, and seven
-dirty worktrees must be preserved unless a later operator-approved action names
-an exact path or ref.
+`representation_eval_safe_artifact_missing`,
+`role_scoped_judge_secret_transport_missing`, `worker_member_claims_missing`,
+and `worker_startup_envelope_missing`. The strict child-environment blocker is
+narrowly closed, but immutable code packaging, Python startup/`.pth` and
+import-before-authorization closure, an exact worker startup envelope,
+role-scoped secret delivery, and exact Ray-descendant environments are not
+thereby solved. C3 semantic-helper migration remains partial. C4 remains an
+inventory only: its 72 worktrees, 62 branches, and seven dirty worktrees must be
+preserved unless a later operator-approved action names an exact path or ref.
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -94,11 +108,47 @@ registry is also split into a 292-line facade, an 839-line schema leaf, and a
 225-line support leaf. Together these changes reduce the oversized inventory
 from the historical revision-5 count of 20 to the revision-7 count of 17.
 
-`child_environment_allowlist_missing` is the next runtime-closure priority and
-cannot yet be removed. Both launch paths still sanitize through a denylist and
-then pass the remaining host environment into the child; the replacement must
-construct a reviewed allowlist while preserving only explicitly justified
-torchrun/Ray/veRL inputs and separately bound secret transport.
+At this fd-only checkpoint, `child_environment_allowlist_missing` was the next
+runtime-closure priority. The later checkpoint below supersedes that specific
+status without rewriting the fd checkpoint's evidence.
+
+## 2026-08-30 strict child-environment checkpoint
+
+Canonical representation and Policy launches now use two reviewed,
+profile-specific child-environment bindings assembled from an empty mapping.
+Host environment names are classified for the authorization audit, but their
+values are never retrieved or copied. Repository-fixed baseline values,
+profile-owned values, and exact late overlays for CLI worker authorization and
+compile receipts are content-bound into the prepared launch identity; unknown
+names, overwrites, or a changed field set fail closed. The older
+sanitized-environment helpers remain available only for compatibility, and
+neither canonical launch path uses them.
+
+Representation additionally delegates only the exact 16 fields emitted by a
+real two-worker `torchrun` under pinned PyTorch 2.9: `GROUP_RANK`,
+`GROUP_WORLD_SIZE`, `LOCAL_RANK`, `LOCAL_WORLD_SIZE`, `MASTER_ADDR`,
+`MASTER_PORT`, `RANK`, `ROLE_NAME`, `ROLE_RANK`, `ROLE_WORLD_SIZE`,
+`TORCHELASTIC_ERROR_FILE`, `TORCHELASTIC_MAX_RESTARTS`,
+`TORCHELASTIC_RESTART_COUNT`, `TORCHELASTIC_RUN_ID`,
+`TORCHELASTIC_USE_AGENT_STORE`, and `WORLD_SIZE`. The smoke test verifies both
+workers' exact added field set and verifies that `tgvf_rl`, its CLI, and the
+child-environment module resolve from the stabilization repository. The fixed
+repository `PYTHONPATH` prevents a wrong-worktree import in this launch shape;
+it is not an immutable code package and does not close Python startup, `.pth`,
+or import-before-authorization execution.
+
+The expanded focused verification has 285 passing tests in 64.77 seconds; an
+earlier core aggregate had 126 passing tests. The final hermetic CPU suite has
+2,383 passed, five skipped, and four warnings in 143.29 seconds.
+Repository-boundary policy v3 revision 7 remains at 61 debts and zero
+violations, while execution-surface policy revision 5 binds all 79 surfaces
+with zero control-plane violations.
+Experiment policy revision 4 therefore replaces
+`child_environment_allowlist_missing` with
+`role_scoped_judge_secret_transport_missing`; launch remains false with seven
+blockers. This narrow promotion does not claim an exact Ray-descendant
+environment, role-scoped judge-secret transport, worker startup envelope,
+worker member claims, or immutable runtime packaging.
 
 ## Why the repository feels fragmented
 
@@ -302,8 +352,10 @@ Consolidation is complete when:
 Current state: the entry-point disposition condition, the three C2 targets, all
 nine post-C2 priority decompositions, the revision-7 production-size exception
 ratchet, the known-cycle condition, the fd-bound Python-exec blocker, and the
-read-only C4 inventory are complete. The predecessor and fd-closure checkpoint
-both have green remote CPU CI. The portable runtime/CLI closure remains
-disabled by its seven remaining named blockers;
-`child_environment_allowlist_missing` and the remaining semantic-helper
-migrations are still open.
+strict child-environment blocker are complete, and C4 remains a read-only
+inventory. The predecessor and fd-closure checkpoint both have green remote
+CPU CI; the newer child-environment full CPU verification is local. Portable
+runtime/CLI closure remains disabled by seven named blockers, now including
+`role_scoped_judge_secret_transport_missing`; immutable code/startup closure,
+the worker envelope and member claims, Ray-descendant environment closure, and
+the remaining semantic-helper migrations are still open.

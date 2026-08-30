@@ -176,14 +176,55 @@ dispatch, extra effects, wrong finalizers, wrong imports, and rebinding. A
 second independent security review found no blocker to removing
 `fd_bound_python_exec_missing`.
 
-Experiment execution policy revision 3 therefore removes only that blocker.
-`runtime_closure.launch_enabled` remains `false` with seven blockers. In
-particular, `child_environment_allowlist_missing` remains the next priority:
-both canonical launch paths still begin with host-environment pass-through and
-a denylist, rather than constructing a strict allowlist, so that blocker must
-not be removed. Same-inode mutation between final verification and `execve`
-also remains within `immutable_runtime_code_package_missing`; fd closure does
-not claim to solve immutable runtime packaging.
+At this fd-only checkpoint, experiment execution policy revision 3 removed only
+that blocker. `runtime_closure.launch_enabled` remained `false` with seven
+blockers, and `child_environment_allowlist_missing` was the next priority. The
+later child-environment checkpoint below supersedes that specific status.
+Same-inode mutation between final verification and `execve` remains within
+`immutable_runtime_code_package_missing`; fd closure does not claim to solve
+immutable runtime packaging.
+
+## 2026-08-30 strict child-environment checkpoint
+
+The two canonical launch paths now own distinct fixed child-environment
+profiles. Each environment is constructed from an empty mapping: host names are
+classified into ignored/rejected audit identities, while host values are never
+retrieved and no host entry is copied. Fixed baseline entries, explicitly
+owned profile values, and exact late overlays are authorization-bound. The
+final representation boundary admits only its six CLI worker-authorization
+fields before `torchrun`; the final Policy boundary admits those six fields
+plus its two compile-receipt fields. The corresponding internal entry points
+revalidate the base identity and exact expected late field set. The historical
+sanitized child-environment helpers remain for API compatibility only;
+canonical launches no longer use them.
+
+A real two-worker `torchrun` smoke under pinned PyTorch 2.9 establishes the
+complete 16-field worker delta: `GROUP_RANK`, `GROUP_WORLD_SIZE`, `LOCAL_RANK`,
+`LOCAL_WORLD_SIZE`, `MASTER_ADDR`, `MASTER_PORT`, `RANK`, `ROLE_NAME`,
+`ROLE_RANK`, `ROLE_WORLD_SIZE`, `TORCHELASTIC_ERROR_FILE`,
+`TORCHELASTIC_MAX_RESTARTS`, `TORCHELASTIC_RESTART_COUNT`,
+`TORCHELASTIC_RUN_ID`, `TORCHELASTIC_USE_AGENT_STORE`, and `WORLD_SIZE`. Both
+workers add exactly that set and load `tgvf_rl`, the CLI, and the
+child-environment module from the stabilization repository. The fixed
+repository `PYTHONPATH` prevents the observed wrong-worktree resolution; it
+does not provide an immutable code package or close Python startup, `.pth`, or
+import-before-authorization execution.
+
+Experiment execution policy revision 4 replaces
+`child_environment_allowlist_missing` with
+`role_scoped_judge_secret_transport_missing`.
+`runtime_closure.launch_enabled` remains `false` with seven blockers. The
+expanded focused selection has 285 passing tests in 64.77 seconds, and the
+earlier core aggregate had 126 passing tests. The final hermetic CPU suite has
+2,383 passed, five skipped, and four warnings in 143.29 seconds.
+Repository-boundary revision 7 passes at 61 debts and zero violations;
+execution-surface revision 5 binds 79 surfaces and the control-plane audit has
+zero violations.
+
+This promotion is deliberately narrow. It does not establish an immutable
+runtime code package, protection from caller Python/`.pth` or imports before
+authorization, a complete worker startup envelope, per-member claims,
+role-scoped judge-secret transport, or exact Ray-descendant environments.
 
 ## Absolute-path debt
 
@@ -266,7 +307,7 @@ commands (`ready`, `authorize`, `override-freeze`, `consume`, `wait`, `status`,
 `quarantine-legacy`, and `audit-control-plane`) and to its exact conservative
 capability map. Parser-mode or policy drift blocks the audit.
 
-The revision-4 stabilization inventory contains 79 unique paths, and each has
+The revision-5 stabilization inventory contains 79 unique paths, and each has
 exactly one machine-checked disposition. The current control-plane audit covers
 all 79 and reports zero violations. The inventory contains two canonical
 entries, two control-audit utilities, 36 permanently quarantined Python
@@ -359,7 +400,7 @@ CUDA_VISIBLE_DEVICES='' .venv312/bin/python tools/check_launch_gate.py \
   audit-control-plane --repository-root .
 ```
 
-At this checkpoint execution-surface policy revision 4 binds all 79 surfaces,
+At this checkpoint execution-surface policy revision 5 binds all 79 surfaces,
 and both the control-plane and repository-boundary audits pass locally. The
 predecessor commit `a5dd0d1` is green in remote CI across dependency
 installation, lint, boundary, control-plane, and the full CPU suite after five
@@ -370,4 +411,8 @@ passed. The final local full suite,
 including the added size-tamper case, is 2,337 passed, five skipped, and four
 non-failing warnings in 140.25 seconds. Before that additional parameter, the
 combined focused selection was 304 passed; the updated fd security file passes
-10/10 and the final full suite includes the added case.
+10/10 and the final full suite includes the added case. These are preserved
+fd-closure results. The subsequent strict child-environment expanded focused
+selection has 285 passing tests in 64.77 seconds, with an earlier 126-pass core
+aggregate. Its final hermetic CPU suite has 2,383 passed, five skipped, and four
+warnings in 143.29 seconds; it does not inherit the earlier remote-CI claim.

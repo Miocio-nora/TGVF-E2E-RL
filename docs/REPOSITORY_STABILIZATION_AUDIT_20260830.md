@@ -24,15 +24,15 @@ not closed merely because the affected experiment has stopped running.
 | Area | State | Required closure |
 |---|---|---|
 | Repository ownership | partial | Boundary policy v3 revision 7 passes with zero violations and 61 visible debts: five evidence-only roots, 25 machine paths, 17 oversized modules, and 14 run-specific paths. Every oversized row binds its current line count, owner, rationale, and next split; baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
-| Execution-surface inventory | verified | Execution-surface policy revision 4 binds 79 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes. |
-| Public and historical launch surfaces | contained, fd execution closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution has implementation, adversarial coverage, policy promotion, and two independent security reviews; `fd_bound_python_exec_missing` is removed. Worker envelope, strict child environment, member claims, authorization transaction, immutable runtime package, and two artifact/compiler blockers remain, so experiment policy revision 3 keeps canonical runtime closure disabled. |
+| Execution-surface inventory | verified | Execution-surface policy revision 5 binds 79 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes with zero violations. |
+| Public and historical launch surfaces | contained; fd execution and strict child environment narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Experiment policy revision 4 removes their blocker IDs but keeps launch false with seven blockers. Immutable runtime packaging, Python startup/`.pth` and import-before-authorization closure, worker startup envelope/member claims, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers are not thereby solved. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical RP/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
 | Historical TGVF/Atomic impact | verified | Implementation commits `b100d3d`, `ec0555b`, `8e6b3d`, `5baddc` and provenance checkouts `b87126a`, `017b507`, `001838b` explicitly pass one dialect-bound renderer to appender and layout. Training replay consumes the recorded token rows, so the unused fallback does not downgrade those rows. Their runtime is `training_run`/precomputed, not official-visible/native-pixel. |
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | current local and remote verification green | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The final current hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; both repository audits pass. Before the added size-tamper parameter, the focused selection had 304 passing tests; the updated fd security file passes 10/10 and the final full suite contains that case. Predecessor commit `a5dd0d1` is remotely green after five private-machine-path fixtures were made hermetic, and fd-closure head `ab508c4` independently passes install, lint, both audits, and the complete CPU suite in remote run `33300849634`. |
+| Test discovery and behavior | current local verification green; earlier remote verification preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. The newer strict child-environment final hermetic CPU suite has 2,383 passed, five skips, four warnings, and zero failures in 143.29 seconds; its expanded focused selection has 285 passing tests in 64.77 seconds and its earlier core aggregate had 126 passing tests. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 5 at 79 surfaces/zero violations. The newer milestone does not yet inherit a remote result. |
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -70,13 +70,52 @@ reviewed try body, and the only final statement is
 659 lines. Repository policy v3 revision 7 removes both stale facade
 exceptions and retains 17 other oversized modules.
 
-Experiment execution policy revision 3 removes
+At this fd-only checkpoint, experiment execution policy revision 3 removed
 `fd_bound_python_exec_missing`, but `runtime_closure.launch_enabled` remains
 `false` with seven exact blockers. `child_environment_allowlist_missing` is
-the next priority and is not closed: representation and Policy still construct
-children from host-environment pass-through plus a denylist. They require a
-strict reviewed allowlist, including deliberate torchrun/Ray/veRL inputs and
-separately bound credential transport, before that blocker can move.
+recorded here as the then-next priority. The later child-environment checkpoint
+below supersedes that specific status without changing this fd evidence.
+
+## 2026-08-30 strict child-environment checkpoint
+
+Canonical representation and Policy launch environments are now constructed
+from an empty mapping under separate fixed profiles. The builder iterates host
+environment names only to record ignored/rejected-name audit identities; it
+does not retrieve or copy any host value. The fixed baseline, explicit
+profile-owned inputs, and exact CLI worker-authorization/compile-receipt late
+overlays are bound into the prepared authorization identity. Unknown fields,
+an overwrite, a changed base identity, or a non-exact late field set fails
+closed. The old sanitized child-environment helpers remain as compatibility
+APIs, but canonical representation and Policy launches no longer call them.
+
+The representation profile admits the exact 16 worker fields observed from a
+real two-worker launch under pinned PyTorch 2.9: `GROUP_RANK`,
+`GROUP_WORLD_SIZE`, `LOCAL_RANK`, `LOCAL_WORLD_SIZE`, `MASTER_ADDR`,
+`MASTER_PORT`, `RANK`, `ROLE_NAME`, `ROLE_RANK`, `ROLE_WORLD_SIZE`,
+`TORCHELASTIC_ERROR_FILE`, `TORCHELASTIC_MAX_RESTARTS`,
+`TORCHELASTIC_RESTART_COUNT`, `TORCHELASTIC_RUN_ID`,
+`TORCHELASTIC_USE_AGENT_STORE`, and `WORLD_SIZE`. The smoke test checks that
+these and only these fields are added to both worker environments, and that the
+loaded `tgvf_rl`, CLI, and child-environment module origins are inside the
+stabilization repository. A repository-fixed `PYTHONPATH` addresses the
+observed wrong-worktree import only; it is not an immutable code package and
+does not establish Python startup, `.pth`, or import-before-authorization
+closure.
+
+The expanded focused suite has 285 passing tests in 64.77 seconds; the earlier
+core aggregate had 126 passing tests. The final hermetic CPU suite has 2,383
+passed, five skipped, and four warnings in 143.29 seconds.
+Repository-boundary revision 7 remains green with 61 debts and zero violations,
+and execution-surface revision 5 binds 79 surfaces with zero control-plane
+violations. Experiment execution policy revision 4 replaces
+`child_environment_allowlist_missing` with
+`role_scoped_judge_secret_transport_missing`; it still has seven exact
+blockers and `runtime_closure.launch_enabled=false`.
+
+This is deliberately a narrow closure. It does not solve immutable runtime
+packaging, caller Python or `.pth` execution, imports that can occur before
+authorization checks, the worker startup envelope, worker member claims,
+role-scoped judge-secret transport, or exact environments for Ray descendants.
 
 ## Historical post-ratchet consolidation milestone (`fd8da97`)
 
@@ -188,7 +227,7 @@ different controls. A reasoned freeze override can authorize a future scheduled
 run only after runtime closure is complete; it cannot waive a code-execution or
 artifact-safety blocker.
 
-`configs/ops/experiment_execution_policy.json` revision 3 currently declares
+`configs/ops/experiment_execution_policy.json` revision 4 currently declares
 `runtime_closure.launch_enabled=false`. Canonical Policy training,
 representation training, their workers, and representation internal evaluation
 fail before token consumption or unsafe artifact loading while any blocker
@@ -197,15 +236,19 @@ remains. The exact blocker identifiers cover:
 - an immutable, content-bound runtime code package (the current `.venv312`
   editable installation points at the separate base worktree);
 - an exact worker argv/environment startup envelope and per-member claims;
-- a strict child-environment allowlist;
+- role-scoped judge-secret transport that cannot fan out through Ray or another
+  outer/global environment;
 - a safe non-pickle representation-evaluation artifact;
 - recursive compiler/header/system-toolchain closure;
 - atomic publication of the combined one-time authorization transaction.
 
-Descriptor-bound Python execution is no longer in that list. Its retained-fd
-implementation, adversarial tests, policy update, and two independent reviews
-are recorded in the checkpoint above. The other seven identifiers remain
-unchanged, and no launch is enabled.
+Descriptor-bound Python execution and the strict canonical child-environment
+allowlist are no longer in that list. Their retained-fd and empty-built-profile
+implementations, adversarial tests, and policy updates are recorded in the two
+checkpoints above. The child-environment promotion adds the narrower
+`role_scoped_judge_secret_transport_missing` blocker rather than treating
+credentials as an environment value. Seven identifiers remain, and no launch
+is enabled.
 
 This is containment, not a claim that the dormant launch implementation is
 already secure. Removing a blocker requires its implementation, adversarial
@@ -300,7 +343,7 @@ but is not score provenance.
 - Credentials must be passed to the target session/process only. Global tmux
   environment mutation is forbidden.
 - Direct entry-point coverage is recursive and exact, not marker-based. The
-  v2-schema inventory is at revision 4 and contains 79 content-bound rows. It
+  v2-schema inventory is at revision 5 and contains 79 content-bound rows. It
   covers every Python file in `tools`/`spikes`, all shell files there, and `src`
   modules exposed by a main guard, `__main__.py`, a Python shebang, executable
   mode, or a `project.scripts` console entry. The one non-entry support module
@@ -365,15 +408,21 @@ but is not score provenance.
   its local count is superseded by the later local suite. Each later remote
   status is stated separately below rather than inherited from this snapshot.
 - At the current checkpoint, repository boundary policy v3 revision 7 passes
-  with 61 debts and zero violations, and execution-surface policy revision 4
-  passes with 79 surfaces and zero violations. Before the added size-tamper
-  parameter, the focused selection had 304 passing tests; the updated fd
-  security file passes 10/10. The final hermetic CPU rerun has 2,337 passed,
-  five skipped, four warnings, and zero failures in 140.25 seconds. Predecessor
-  commit `a5dd0d1` is green for install, lint, both audits, and full CPU after
-  five private-path fixtures were made hermetic. Fd-closure head `ab508c4`
-  independently passes install, lint, both audits, and the complete CPU suite
-  in remote run `33300849634`.
+  with 61 debts and zero violations, and execution-surface policy revision 5
+  passes with 79 surfaces and zero violations. The strict child-environment
+  final hermetic CPU suite has 2,383 passed, five skipped, four warnings, and
+  zero failures in 143.29 seconds. Its expanded focused selection has 285
+  passing tests in 64.77 seconds; its earlier core aggregate had 126 passing
+  tests. The preceding fd checkpoint's
+  focused selection had 304 passing tests before the added size-tamper
+  parameter, and its updated fd security file passed 10/10. That fd checkpoint
+  also has a preserved hermetic CPU result of 2,337 passed, five skipped, four
+  warnings, and zero failures in 140.25 seconds. Predecessor commit `a5dd0d1`
+  is green for install, lint, both audits, and full CPU after five private-path
+  fixtures were made hermetic. Fd-closure head `ab508c4` independently passes
+  install, lint, both audits, and the complete CPU suite in remote run
+  `33300849634`; that remote claim does not automatically cover the newer
+  child-environment milestone.
 - Ruff passes across `src`, `tools`, `spikes`, and `tests`; `git diff --check`,
   shell syntax, the repository-boundary audit, and the control-plane audit also
   pass.
