@@ -19,14 +19,7 @@ from tgvf_rl.policy.horizon_extension import PolicyHorizonExtension
 from tgvf_rl.policy.run_config import PolicyE2ESmokeRunConfig
 from tgvf_rl.data import PolicyT1MixedRuntimeBinding, PolicyT1RLRuntimeBinding
 from tgvf_rl.framework.vllm.registration import VLLM_012_LORA_PDL_MODE
-
-from .adapter import LOSSLESS_AGENT_LOOP_MANAGER_FQN, VerlAdapterConfig
-from .compatibility import (
-    FSDP2BridgeConfig,
-    SPIKE_CANDIDATE_VERL_COMMIT,
-    VerlRuntimeRequirements,
-)
-from .compile_prerequisites import (
+from tgvf_rl.ops.policy_compile_prerequisites import (
     POLICY_COMPILE_PREREQUISITE_BINDING_SCHEMA,
     POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER,
     POLICY_COMPILE_PREREQUISITE_RECEIPT_SCHEMA,
@@ -34,6 +27,13 @@ from .compile_prerequisites import (
     PolicyCompilePrerequisiteFileReceipt,
     PolicyCompilePrerequisiteReceipt,
     preflight_policy_compile_prerequisites,
+)
+
+from .adapter import LOSSLESS_AGENT_LOOP_MANAGER_FQN, VerlAdapterConfig
+from .compatibility import (
+    FSDP2BridgeConfig,
+    SPIKE_CANDIDATE_VERL_COMMIT,
+    VerlRuntimeRequirements,
 )
 from .exact_replay_engine import TGVF_EXACT_REPLAY_MODEL_TYPE
 from .smoke_dataset import VerlSelectedSampleDatasetBinding

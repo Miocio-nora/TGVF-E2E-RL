@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import NoReturn
 
-from tgvf_rl.framework.verl.compile_prerequisites import (
+from tgvf_rl.ops.policy_compile_prerequisites import (
     POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
     PolicyCompilePrerequisiteBinding,
     PolicyCompilePrerequisiteReceipt,

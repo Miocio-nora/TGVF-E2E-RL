@@ -4,12 +4,18 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import pickle
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from tgvf_rl.framework.verl import policy_main
-from tgvf_rl.framework.verl.compile_prerequisites import (
+from tgvf_rl.ops import (
+    policy_compile_prerequisites as canonical_compile_prerequisites,
+)
+from tgvf_rl.ops.policy_compile_prerequisites import (
     POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
     POLICY_COMPILE_PREREQUISITE_MANIFEST_SCHEMA,
     POLICY_COMPILE_PREREQUISITE_RESIDUAL_BLOCKER,
@@ -22,6 +28,10 @@ from tgvf_rl.ops.child_environment import (
     CLI_WORKER_LATE_ENVIRONMENT_NAMES,
     POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
 )
+
+
+_REPOSITORY_ROOT = Path(__file__).parents[2]
+_HISTORICAL_MODULE = "tgvf_rl.framework.verl.compile_prerequisites"
 
 
 def _canonical(value: object) -> bytes:
@@ -80,6 +90,60 @@ def test_explicit_manifest_preflight_is_content_bound_but_not_closure_complete(
     assert receipt.binding == binding
     assert receipt.as_record()["closure_complete"] is False
     assert len(receipt.receipt_sha256) == 64
+
+
+def test_historical_facade_reexports_canonical_objects_and_pickle_coordinates() -> None:
+    from tgvf_rl.framework.verl import (
+        compile_prerequisites as historical_compile_prerequisites,
+    )
+
+    assert historical_compile_prerequisites.__all__ == (
+        canonical_compile_prerequisites.__all__
+    )
+    for name in canonical_compile_prerequisites.__all__:
+        assert getattr(historical_compile_prerequisites, name) is getattr(
+            canonical_compile_prerequisites,
+            name,
+        )
+    for name in (
+        "PolicyCompilePrerequisiteFile",
+        "PolicyCompilePrerequisiteBinding",
+        "PolicyCompilePrerequisiteFileReceipt",
+        "PolicyCompilePrerequisiteReceipt",
+        "load_policy_compile_prerequisite_manifest",
+        "materialize_policy_compile_prerequisite_receipt",
+        "preflight_policy_compile_prerequisites",
+        "verify_policy_compile_prerequisite_receipt",
+        "verify_policy_compile_prerequisites_from_environment",
+    ):
+        value = getattr(canonical_compile_prerequisites, name)
+        assert value.__module__ == _HISTORICAL_MODULE
+        assert pickle.loads(pickle.dumps(value)) is value
+
+
+def test_canonical_leaf_import_isolated_python_firebreak() -> None:
+    source_root = _REPOSITORY_ROOT / "src"
+    script = """
+import importlib
+import sys
+
+module = importlib.import_module('tgvf_rl.ops.policy_compile_prerequisites')
+assert module.POLICY_COMPILE_PREREQUISITE_MANIFEST_SCHEMA
+for forbidden in ('torch', 'numpy', 'hydra', 'ray', 'verl', 'tgvf_rl.framework'):
+    assert not any(
+        name == forbidden or name.startswith(forbidden + '.')
+        for name in sys.modules
+    ), forbidden
+"""
+    completed = subprocess.run(
+        [sys.executable, "-B", "-P", "-S", "-c", script],
+        cwd=_REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": str(source_root)},
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_manifest_missing_tampered_and_symlink_inputs_fail_closed(

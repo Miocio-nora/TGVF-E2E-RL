@@ -18,8 +18,7 @@ from tgvf_rl.ops.cli_authorization import (
     bind_current_python_executable,
     verify_cli_worker_authorization_from_environment,
 )
-
-from .compile_prerequisites import (
+from tgvf_rl.ops.policy_compile_prerequisites import (
     POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
     verify_policy_compile_prerequisites_from_environment,
 )

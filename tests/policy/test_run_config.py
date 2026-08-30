@@ -63,7 +63,7 @@ from tgvf_rl.policy.run_config import (
 )
 from tgvf_rl.protocol.action_boundary import NativeActionBoundaryProtocolId
 from tests.rewards.test_tgvf_visual_quality_judge import _config_document
-from tgvf_rl.framework.verl.compile_prerequisites import (
+from tgvf_rl.ops.policy_compile_prerequisites import (
     POLICY_COMPILE_PREREQUISITE_CLOSURE_POLICY,
     POLICY_COMPILE_PREREQUISITE_MANIFEST_SCHEMA,
     POLICY_COMPILE_PREREQUISITE_MISSING_BLOCKER,
