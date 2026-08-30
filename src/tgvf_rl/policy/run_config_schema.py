@@ -459,7 +459,10 @@ for _schema_type in _RUN_CONFIG_SCHEMA_TYPES:
             else (_member,)
         )
         for _function in _functions:
-            if isinstance(_function, FunctionType):
+            if (
+                isinstance(_function, FunctionType)
+                and _function.__module__ == __name__
+            ):
                 _function.__module__ = _PUBLIC_RUN_CONFIG_MODULE
 del _function, _functions, _member, _schema_type
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 from pathlib import Path
 import pickle
@@ -13,6 +14,10 @@ from tgvf_rl.policy import run_config, run_config_schema
 
 
 PUBLIC_RUN_CONFIG_MODULE = "tgvf_rl.policy.run_config"
+_DATACLASS_PICKLE_HELPERS = (
+    dataclasses._dataclass_getstate,  # noqa: SLF001
+    dataclasses._dataclass_setstate,  # noqa: SLF001
+)
 
 
 def _schema_types() -> tuple[type[object], ...]:
@@ -40,7 +45,23 @@ def test_extracted_schema_types_keep_public_and_pickle_identity() -> None:
             )
             for function in functions:
                 if isinstance(function, FunctionType):
-                    assert function.__module__ == PUBLIC_RUN_CONFIG_MODULE
+                    expected_module = (
+                        dataclasses.__name__
+                        if function in _DATACLASS_PICKLE_HELPERS
+                        else PUBLIC_RUN_CONFIG_MODULE
+                    )
+                    assert function.__module__ == expected_module
+
+
+def test_schema_compatibility_does_not_mutate_dataclass_pickle_helpers() -> None:
+    for helper in _DATACLASS_PICKLE_HELPERS:
+        assert helper.__module__ == dataclasses.__name__
+
+    for schema_type in _schema_types():
+        for name in ("__getstate__", "__setstate__"):
+            helper = vars(schema_type).get(name)
+            if isinstance(helper, FunctionType):
+                assert helper.__module__ == dataclasses.__name__
 
 
 def test_extracted_schema_type_hints_resolve_through_both_facades() -> None:
