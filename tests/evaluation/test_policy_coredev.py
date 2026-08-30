@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pickle
 import sys
 import threading
 from types import ModuleType
@@ -122,6 +123,17 @@ def _lora_evaluation_fixture(
         evaluation_id="fixture-evaluation",
     )
     return config, snapshot
+
+
+def test_policy_evaluation_snapshot_preserves_legacy_pickle_path(
+    tmp_path: Path,
+) -> None:
+    _config, snapshot = _lora_evaluation_fixture(tmp_path)
+
+    restored = pickle.loads(pickle.dumps(snapshot))
+
+    assert type(restored) is PolicyEvaluationSnapshot
+    assert restored == snapshot
 
 
 def _contract_run(

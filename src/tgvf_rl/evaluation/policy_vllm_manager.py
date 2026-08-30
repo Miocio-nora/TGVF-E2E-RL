@@ -278,11 +278,14 @@ _TurnRoute.__module__ = "tgvf_rl.evaluation.policy_coredev"
 StandaloneTGVFVLLMManager.__module__ = "tgvf_rl.evaluation.policy_coredev"
 for _legacy_class in (_TurnRoute, StandaloneTGVFVLLMManager):
     for _member in _legacy_class.__dict__.values():
-        if isinstance(_member, FunctionType):
+        if isinstance(_member, FunctionType) and _member.__module__ == __name__:
             _member.__module__ = "tgvf_rl.evaluation.policy_coredev"
         elif isinstance(_member, property):
             for _accessor in (_member.fget, _member.fset, _member.fdel):
-                if isinstance(_accessor, FunctionType):
+                if (
+                    isinstance(_accessor, FunctionType)
+                    and _accessor.__module__ == __name__
+                ):
                     _accessor.__module__ = "tgvf_rl.evaluation.policy_coredev"
 
 

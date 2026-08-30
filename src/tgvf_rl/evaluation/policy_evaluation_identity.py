@@ -588,11 +588,14 @@ def _bind_legacy_function(value: Callable[..., object], *, name: str) -> None:
 # re-exports the exact same objects, including their pickle/import coordinates.
 PolicyEvalContract.__module__ = _LEGACY_MODULE
 for _member in PolicyEvalContract.__dict__.values():
-    if isinstance(_member, FunctionType):
+    if isinstance(_member, FunctionType) and _member.__module__ == __name__:
         _member.__module__ = _LEGACY_MODULE
     elif isinstance(_member, property):
         for _accessor in (_member.fget, _member.fset, _member.fdel):
-            if isinstance(_accessor, FunctionType):
+            if (
+                isinstance(_accessor, FunctionType)
+                and _accessor.__module__ == __name__
+            ):
                 _accessor.__module__ = _LEGACY_MODULE
 for _function, _legacy_name in (
     (canonical_json_sha256, "_canonical_json_sha256"),
