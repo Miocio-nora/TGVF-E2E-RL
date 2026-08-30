@@ -23,16 +23,74 @@ not closed merely because the affected experiment has stopped running.
 
 | Area | State | Required closure |
 |---|---|---|
-| Repository ownership | partial | Boundary policy v3 passes with zero violations and 73 visible debts: 44 exact historical/config/path debts plus 29 exact oversized-module debts. Every oversized row binds its current line count, owner, rationale, and next split; optional baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
+| Repository ownership | partial | Boundary policy v3 revision 5 passes with zero violations and 64 visible debts: 44 exact historical/config/path debts plus 20 exact oversized-module debts. Every oversized row binds its current line count, owner, rationale, and next split; comparison against the preceding revision-4 policy rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
 | Execution-surface inventory | verified | The v2 recursive exact-set manifest binds 79 entries and their file bytes: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed. |
 | Public and historical launch surfaces | contained, not closed | Legacy/spike surfaces are inventoried and guarded. Independent review found unresolved worker-envelope, executable-FD, environment, member-claim, authorization-transaction and runtime-package gaps. Policy v2 therefore sets the non-overridable canonical runtime closure to disabled. |
-| Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical PRL/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
+| Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical RP/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
 | Historical TGVF/Atomic impact | verified | Implementation commits `b100d3d`, `ec0555b`, `8e6b3d`, `5baddc` and provenance checkouts `b87126a`, `017b507`, `001838b` explicitly pass one dialect-bound renderer to appender and layout. Training replay consumes the recorded token rows, so the unused fallback does not downgrade those rows. Their runtime is `training_run`/precomputed, not official-visible/native-pixel. |
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 now rejects every `golden` status and every numeric delta. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | consolidation head verified locally | The C0 tag remains a preserved 2,112-pass baseline. At `ccef450`, the post-consolidation hermetic CPU suite completed with 2,193 passed, five explicit skips, four non-failing warnings, and zero failures; repository audits and the SCC regression also pass. Remote CI still has to reproduce this result. |
+| Test discovery and behavior | current code milestone verified locally | The C0 tag remains a preserved 2,112-pass baseline, and `ccef450` remains the 2,193-pass post-consolidation snapshot. At code milestone `fd8da97`, the hermetic CPU suite completed with 2,286 passed, five explicit skips, four non-failing warnings, and zero failures in 135.24 seconds; repository audits and the SCC regression also pass. Remote CI still has to reproduce this result. |
+
+## Post-ratchet consolidation milestone
+
+This section is the current additive status. Earlier counts below remain dated
+snapshots and are not retroactively rewritten.
+
+- The initial raw oversized-module scan found 32 production files above the
+  limit. The first three decompositions established the 29-row policy-v3
+  baseline; nine further reviewed decompositions now leave 20 exact
+  exceptions. The production-size list in policy revision 5 drops exactly
+  those nine satisfied rows, adds no size exception, and raises no ceiling.
+  Revision 5 also relocates two unchanged machine-path debt records to the
+  extracted Policy-selection config-schema leaf.
+- The completed nine-module batch covers veRL exact-replay registration,
+  weight-snapshot storage, the native policy client, representation config and
+  checkpoint contracts, policy-selection runtime contracts, Answer Utility
+  evaluation inputs, Oracle-D evaluation, and distributed checkpoints. Every
+  facade targeted by these nine decompositions and every newly extracted leaf
+  is below 1,000 lines. Six split families additionally enforce explicit
+  per-file headroom ceilings no greater than 850 lines: representation config,
+  representation checkpoint, Policy-selection runtime, Answer Utility,
+  Oracle-D, and distributed checkpoint.
+- The four known multi-module import SCCs remain at zero. The execution-surface
+  inventory remains an exact 79-path set with zero control-plane violations.
+- Independent compatibility review found and fixed missing facade exports for
+  private helpers whose pickle coordinates had been rebound to the historical
+  facade. A shared opt-in helper now resolves only a class's own necessary
+  postponed annotations before module rebinding, using explicit leaf globals.
+  Leaf-first imports therefore preserve type hints, pickle coordinates, and
+  the one-way import DAG without a `sys.modules` facade backreference. The raw
+  annotations of the selected classes become resolved type objects; existing
+  dataclass `Field.type` metadata remains unchanged.
+- Configuration payloads, bound manifests, and weight snapshots now use one
+  no-follow descriptor payload for hashing plus parsing. Presence-only model
+  and report checks use a metadata-only regular-file probe, including a sparse
+  16-GiB regression that performs no payload read. The boundary is intentionally
+  narrower than immutable-file semantics: hardlinks remain allowed, a
+  same-inode concurrent rewrite can still yield a torn read, and an unopened
+  real directory component can be replaced before its later descriptor open.
+  The existing unsafe `torch.load(..., weights_only=False)` path remains a
+  separate runtime-closure blocker.
+- Formal verification at code milestone `fd8da97` is: repository boundary
+  `pass` with 64 debts (`5` evidence-only roots, `25` machine paths, `20` oversized
+  modules, `14` run-specific paths) and zero violations; control-plane `pass`
+  with 79 surfaces and zero violations; `tests/ops` 199 passed; the combined
+  representation/Answer Utility/import compatibility selection 577 passed;
+  and the full hermetic suite 2,286 passed, five skipped, four warnings in
+  135.24 seconds.
+- Full-repository Ruff lint passes, and all 51 Python paths changed relative to
+  the preceding published milestone (`0b5f42f`) pass the current formatter. A
+  separate whole-tree
+  formatter check still identifies 158 historical files that would be
+  reformatted. They are pre-existing formatting debt and were not mechanically
+  rewritten as part of this stabilization batch.
+- Runtime closure remains non-overridably disabled with eight declared
+  blockers. No GPU, training, evaluation, external judge, worktree deletion,
+  or branch deletion was performed. These are local verification results;
+  no remote-CI result is claimed.
 
 ## Preserved dirty worktrees
 
@@ -269,9 +327,11 @@ but is not score provenance.
 
 The control work makes the present repository auditable; it does not pretend
 that the source tree is already small or easy to extend. At C2 completion the
-tree contained 263 Python modules and 29 production modules above 1,000 lines;
-the later compatibility and ratchet leaves bring the current count to 265
-without adding an oversized module.
+tree contained 263 Python modules and 29 registered production modules above
+1,000 lines. That is a historical C2 snapshot. Policy revision 5 now retains
+20 exact oversized-module exceptions after nine additional decompositions;
+new implementation leaves increased the module count without creating a new
+oversized file.
 The three first decomposition targets are complete:
 `policy_coredev.py`, representation internal evaluation, and `run_config.py`
 are now 902, 921, and 983 lines. Policy v3 now gives every remaining large
@@ -281,10 +341,11 @@ They remain visible debt and still require actual decomposition over time.
 The four known multi-module import cycles are gone and a full-tree SCC test
 guards that boundary. Exact-equivalent canonical JSON helpers and three
 immutable-publication consumers now share tested implementations. Secure-file
-reading is still a partial migration: the new semantic contracts exist, but
-`evaluation/result_registry.py` is currently their only migrated production
-consumer. The 79 execution/support surfaces all have one machine disposition,
-which is containment rather than portable runtime closure.
+reading remains a partial migration, but it now covers result-registry reads,
+configuration payloads and external bindings, and weight-snapshot storage and
+loading with explicitly tested descriptor/probe boundaries. The 79
+execution/support surfaces all have one machine disposition, which is
+containment rather than portable runtime closure.
 
 The ordered reduction, compatibility/deletion rules, and measurable definition
 of done are in

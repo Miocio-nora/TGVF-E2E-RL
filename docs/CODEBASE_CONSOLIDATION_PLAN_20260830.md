@@ -3,13 +3,54 @@
 Status: C0 is anchored by the remote annotated tag
 `stabilization-c0-20260830`. C1's machine-disposition condition is satisfied,
 the three C2 target facades are below 1,000 lines, and the four known C3 import
-cycles are gone. C3 utility migration remains partial. C4 produced a read-only
-inventory; it did not authorize or execute a deletion. The complete
-post-consolidation hermetic CPU suite passes locally with 2,193 tests, five
-explicit skips, and four non-failing warnings. Push and remote CI verification
-remain required. A policy-v3 size ratchet now records all 29 remaining oversized
-modules and rejects growth, slack, stale entries, or a relaxed baseline. This
-plan does not authorize an experiment or rewrite historical evidence.
+cycles are gone. All nine post-C2 priority decompositions are also complete,
+reducing the current production-size inventory to 20 modules. C3 utility
+migration remains partial. C4 produced a read-only inventory; it did not
+authorize or execute a deletion. At verified code milestone `fd8da97`, the
+latest complete hermetic CPU suite passes locally with 2,286 passed tests, five
+explicit skips, and four non-failing warnings in 135.24 seconds. Remote CI
+verification remains required.
+Policy v3 revision 5 records the 20 remaining oversized modules and rejects
+growth, slack, stale entries, or a relaxed baseline. This plan does not
+authorize an experiment or rewrite historical evidence.
+
+## Current macro milestone
+
+The dated snapshots below remain historical anchors. The current local head
+advances them as follows:
+
+- production modules above 1,000 lines fell from 32 at C0, to 29 at the C2
+  snapshot, and to 20 now;
+- all nine priority decompositions after C2 are complete: exact replay, Policy
+  weight sync, the native agent loop, representation configuration,
+  representation checkpointing, Policy-selection runtime, answer-utility
+  evaluation, Oracle-D utility, and distributed checkpointing;
+- the four known multi-module strongly connected components fell to zero and
+  remain guarded by a full-tree Tarjan regression test;
+- execution/support surfaces fell from 82 at C0 to 79, and all 79 current
+  surfaces have exactly one machine-checked classification;
+- the production-size policy ratcheted from 29 exceptions to 20 at revision 5.
+
+Verification of code milestone `fd8da97` is green: the repository-boundary
+audit reports 64 visible debts (five evidence-only config roots, 25 machine
+paths, 20 oversized modules, and 14 run-specific paths) and zero violations;
+the control-plane audit reports 79 surfaces and zero violations. `tests/ops`
+has 199 passing tests, the focused split and compatibility suites have 577
+passing tests, and the complete hermetic CPU suite has 2,286 passed, five
+skipped, and four non-failing warnings in 135.24 seconds. These are local
+verification results; remote CI has not yet reproduced them.
+
+This milestone does not close the runtime authority boundary. The experiment
+policy still has `runtime_closure.launch_enabled=false` with all eight blocker
+IDs present: `atomic_authority_transaction_missing`,
+`child_environment_allowlist_missing`, `fd_bound_python_exec_missing`,
+`immutable_runtime_code_package_missing`,
+`policy_recursive_compile_closure_missing`,
+`representation_eval_safe_artifact_missing`, `worker_member_claims_missing`,
+and `worker_startup_envelope_missing`. C3 semantic-helper migration remains
+partial. C4 remains an inventory only: its 72 worktrees, 62 branches, and seven
+dirty worktrees must be preserved unless a later operator-approved action names
+an exact path or ref.
 
 ## Why the repository feels fragmented
 
@@ -23,9 +64,9 @@ three highest-risk files were `evaluation/policy_coredev.py` (3,420 lines),
 At the C2 completion snapshot `bd67d0a`, the corresponding measurements were
 263 Python modules, 79 execution/support surfaces, 29 other modules above
 1,000 lines, zero import cycles, and C2 facades of 902, 921, and 983 lines.
-The remaining structural inventory still includes:
+That snapshot's remaining structural inventory included:
 
-- 29 production modules above 1,000 lines, now bound to their exact current
+- 29 production modules above 1,000 lines, then bound to their exact snapshot
   size, stable owner, rationale, and named next split by a fail-closed ratchet;
 - repeated local implementations of hashing, canonical JSON, file validation,
   and atomic publication across more than 100 files;
@@ -120,11 +161,14 @@ coordinates, type hints, and characterization tests:
 - the run-config facade is 983 lines; extracted schema, validation, canonical
   launch, and reward leaves are 511, 387, 838, and 259 lines.
 
-The three named C2 targets are complete. Twenty-nine other production modules
-still exceed 1,000 lines, but policy v3 now records each exact current ceiling,
-owner, rationale, and next split. Candidate audit rejects new, growing, stale,
-or slack exceptions; optional baseline comparison also rejects a newly added
-exception or raised ceiling. These rows remain visible debt, not waivers.
+The three named C2 targets are complete. At that snapshot, twenty-nine other
+production modules still exceeded 1,000 lines, and policy v3 recorded each
+exact ceiling, owner, rationale, and next split. The later nine-of-nine priority
+decomposition series reduced that inventory to 20; policy revision 5 removes
+the nine stale exceptions without adding an exception or raising a ceiling.
+Candidate audit rejects new, growing, stale, or slack exceptions; optional
+baseline comparison also rejects a newly added exception or raised ceiling.
+The 20 surviving rows remain visible debt, not waivers.
 
 ### C3 — remove utility duplication and import cycles
 
@@ -151,12 +195,22 @@ prevents their silent return. Utility consolidation is intentionally partial:
   production consumers (`policy_benchmark_config.py`,
   `policy_benchmark_scoring.py`, and `internal_evaluation_artifact.py`);
 - `secure_file_read.py` defines separate leaf, absolute-chain, and
-  descriptor-rooted contracts, but the first production migration currently
-  covers only `evaluation/result_registry.py`.
-- `public_api_compat.py` owns implementation-to-facade identity rebinding for
-  nine extracted modules and changes only implementation-owned functions,
-  preventing shared `dataclasses` or `typing` helpers from being mutated by
-  import order.
+  descriptor-rooted contracts. Production migrations now include
+  `evaluation/result_registry.py`, descriptor-bound Policy weight-snapshot
+  reads, and representation-training configuration and external-file
+  reads/probes. This does not claim that every repository reader or directory
+  trust boundary has been migrated; a metadata-only probe also does not make a
+  later runtime reopen an immutable descriptor binding.
+- `public_api_compat.py` owns implementation-to-facade identity rebinding and
+  changes only implementation-owned functions, preventing shared
+  `dataclasses` or `typing` helpers from being mutated by import order. Its
+  opt-in leaf-first annotation helper resolves only a moved class's own
+  postponed annotations against explicit leaf globals before module rebinding;
+  fake-package/import-order tests preserve type-hint resolution, exact object
+  identity, historical module coordinates, and pickle compatibility.
+- annotation freezing is deliberately not an automatic graph rewrite: future
+  extracted annotated classes need an explicit opt-in and characterization
+  test, and facade hooks that must remain late-bound still belong in the facade.
 
 Names alone are not evidence of equivalent security semantics, so the
 remaining readers and publishers must be migrated one reviewed group at a
@@ -172,9 +226,10 @@ exact path/ref. Never infer that a clean worktree is disposable.
 The frozen read-only inventory is
 [`WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md`](WORKTREE_BRANCH_RETENTION_INVENTORY_20260830.md).
 It records 72 worktrees and 62 branches at `05e32ea`, treats every artifact
-reference as unknown, and identifies two unanchored detached commits that must
-receive exact durable tags before any later removal is considered. No action
-code in that document is deletion approval.
+reference as unknown, preserves all seven dirty worktrees, and identifies two
+unanchored detached commits that must receive exact durable tags before any
+later removal is considered. No action code in that document is deletion
+approval.
 
 ## Definition of done
 
@@ -192,7 +247,9 @@ Consolidation is complete when:
   comparable result;
 - the full hermetic CPU suite and repository audits run in CI.
 
-Current state: the entry-point disposition condition, the three C2 targets,
-the production-size exception ratchet, the known-cycle condition, and the
-read-only C4 inventory are complete. The portable runtime/CLI closure,
-remaining semantic-helper migrations, push, and remote CI are still open.
+Current state: the entry-point disposition condition, the three C2 targets, all
+nine post-C2 priority decompositions, the revision-5 production-size exception
+ratchet, the known-cycle condition, and the read-only C4 inventory are
+complete. The portable runtime/CLI closure remains disabled by its eight named
+blockers; remaining semantic-helper migrations and remote CI are also still
+open.

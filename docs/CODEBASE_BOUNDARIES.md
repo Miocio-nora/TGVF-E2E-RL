@@ -90,14 +90,59 @@ alternative score database.
 Canonical JSON bytes and hashes with exact matching semantics belong to
 `tgvf_rl.artifact_contracts`. Create-only and content-consistent immutable
 publication belong to `tgvf_rl.immutable_publication`. Descriptor-bound
-regular-file reads belong to `tgvf_rl.secure_file_read`, whose final-leaf,
-absolute-chain, and already-bound-root contracts are deliberately separate.
+regular-file reads and metadata-only presence probes belong to
+`tgvf_rl.secure_file_read`. Its path contracts are deliberately separate:
+
+- the leaf reader refuses a symlink at the final component but retains normal
+  operating-system semantics for ancestor symlinks;
+- the absolute reader and probe open each POSIX path component relative to the
+  already-open parent descriptor, refuse symlinks throughout the chain, open
+  the leaf nonblocking, and require it to be a regular file;
+- the beneath-root reader accepts only a normalized relative path and anchors
+  every lookup below an already-bound directory descriptor.
+
+The read contracts return bytes plus descriptor metadata from immediately
+before and after the read. The probe contract returns one metadata snapshot,
+reads no payload bytes, and closes the descriptor before returning. A probe is
+therefore only a point-in-time presence/type observation, not durable authority
+for a later open. Descriptor binding keeps each opened component or leaf
+anchored despite a later pathname rebind, but it does not prevent in-place
+writes to the same file during a read. The shared primitive verifies
+regular-file type; it does not compare the before/after metadata or impose a
+content digest.
+Consumers that require immutable or content-bound input must add that check.
 
 Migration is semantic and incremental. Similarly named helpers must not be
 merged when they differ in symlink, stability, error, ownership, or publication
-semantics. At this snapshot the secure-reader production migration covers only
-`evaluation/result_registry.py`; the existence of the shared leaf does not
-claim that every historical reader has been migrated.
+semantics. At this snapshot the secure-reader production consumers are
+`evaluation/result_registry.py`,
+`framework/verl/policy_weight_snapshot_store.py`, and
+`representation/training/config_values.py`; the existence of the shared leaf
+does not claim that every historical reader has been migrated.
+
+## Public API compatibility boundary
+
+`tgvf_rl.public_api_compat` is the shared neutral leaf for preserving a moved
+implementation object's historical facade and pickle coordinates. It changes
+only implementation-owned functions and accessors, does not rewrite function
+globals, and does not emulate arbitrary facade monkeypatching. Implementation
+leaves must not reverse-import the facade to establish compatibility.
+
+Postponed class annotations need an additional, opt-in leaf-first boundary.
+Before rebinding a class to its public module, a leaf may call
+`freeze_public_class_annotations` with the defining leaf's globals passed
+explicitly. The helper resolves with those globals and class-local names, then
+replaces only the keys in the class's own `__annotations__`; inherited
+annotations are neither copied nor frozen. This permits `typing.get_type_hints`
+to work when the leaf is imported before the facade, without importing the
+facade in the reverse direction.
+
+Freezing deliberately changes those raw annotation values from postponed
+strings to resolved type objects. It is appropriate only where leaf-first type
+hints and stable historical module coordinates outweigh preservation of the
+raw strings. Existing dataclass field metadata is not retroactively rewritten,
+so callers and tests must not assume that `dataclasses.fields(...).type` changes
+with the class's own `__annotations__`.
 
 ## Absolute-path debt
 
@@ -120,19 +165,21 @@ only for an intentional boundary migration with explicit review and evidence.
 
 ## Production module size debt
 
-Repository-boundary policy v3 fixes the normal production-module limit at
-1,000 physical lines. Each of the 29 current exceptions names one exact Python
-path below `src/tgvf_rl`, its stable subsystem owner, concrete reason, next
-split seam, and a ceiling equal to its current line count. The candidate audit
-fails on an unregistered oversized module, growth above a ceiling, slack after
-a file shrinks, a missing/moved file, or an exception retained after the module
+Repository-boundary policy `TGVF-REPOSITORY-BOUNDARIES-V3` is currently at
+policy revision 5 and fixes the normal production-module limit at 1,000
+physical lines. Each of the 20 current exceptions names one exact Python path
+below `src/tgvf_rl`, its stable subsystem owner, concrete reason, next split
+seam, and a ceiling equal to its current line count. The candidate audit fails
+on an unregistered oversized module, growth above a ceiling, slack after a file
+shrinks, a missing/moved file, or an exception retained after the module
 reaches the limit.
 
 The boundary CLI also accepts an explicit baseline policy. In that mode the
 candidate exception paths must be a subset of the baseline and no ceiling may
 increase, so changing code and its allowance together cannot relax the
 ratchet. The initial v3 inventory is a reviewed bootstrap; its 29 rows are
-visible structural debt and do not declare those files well-factored.
+historical structural debt, not the current exception count, and do not declare
+those files well-factored.
 
 ## Running the audit
 
@@ -147,6 +194,10 @@ From the repository root, run:
 The command emits a structured report, exits successfully only when there are
 no violations, does not import model runtimes, and requires no GPU. CI runs the
 same audit with `CUDA_VISIBLE_DEVICES` empty before the test suite.
+
+At this snapshot policy revision 5 passes with 64 debts and zero violations:
+five evidence-only configuration roots, 25 machine-specific absolute paths, 20
+oversized production modules, and 14 quarantined run-specific code paths.
 
 ## Execution-surface ownership
 
@@ -171,15 +222,16 @@ commands (`ready`, `authorize`, `override-freeze`, `consume`, `wait`, `status`,
 capability map. Parser-mode or policy drift blocks the audit.
 
 The revision-3 stabilization inventory contains 79 unique paths, and each has
-exactly one machine-checked disposition. It contains two canonical entries,
-two control-audit utilities, 36 permanently quarantined Python entries, one
-permanently quarantined shell entry, 13 mixed entries whose explicitly
-read-only modes remain available, 21 bounded offline artifact materializers,
-three read-only utilities, and one strictly import-only support module. A
-materializer receives `bounded_artifact_write` only after its content-bound
-implementation has been reviewed for write-once or content-consistent
-idempotent publication; arbitrary overwrite and cross-worktree frozen-config
-writers are quarantined. GPU,
+exactly one machine-checked disposition. The current control-plane audit covers
+all 79 and reports zero violations. The inventory contains two canonical
+entries, two control-audit utilities, 36 permanently quarantined Python
+entries, one permanently quarantined shell entry, 13 mixed entries whose
+explicitly read-only modes remain available, 21 bounded offline artifact
+materializers, three read-only utilities, and one strictly import-only support
+module. A materializer receives `bounded_artifact_write` only after its
+content-bound implementation has been reviewed for write-once or
+content-consistent idempotent publication; arbitrary overwrite and
+cross-worktree frozen-config writers are quarantined. GPU,
 training/evaluation, external-judge/network, arbitrary exec, and destructive
 legacy or spike entries must be permanently quarantined or have a statically
 verified mode guard before any business dispatch.
