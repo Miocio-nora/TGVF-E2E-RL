@@ -7,6 +7,7 @@ import pytest
 import torch
 from torch import nn
 
+import tgvf_rl.framework.verl.exact_replay_engine as exact_replay_engine_module
 from tests.policy.test_exact_replay import _payload
 from tests.policy.test_qwen_replay import _TinyQwen3
 from tgvf_rl.contracts.errors import ReplayMismatchError
@@ -295,6 +296,30 @@ def test_actor_adapter_sync_fails_closed_without_lora_stream() -> None:
 
     with pytest.raises(ReplayMismatchError, match="LoRA-only parameter stream"):
         engine.get_per_tensor_param(base_sync_done=True)
+
+
+def test_dynamic_engine_keeps_facade_snapshot_wrapper_late_bound(monkeypatch) -> None:
+    engine = _weight_sync_engine()
+    source = iter([("adapter.weight", torch.ones(1))])
+    engine.parameter_stream = source
+    engine.peft_config = {"rank": 64}
+    calls: list[tuple[object, bool]] = []
+
+    def replacement(parameter_stream, *, base_sync_done):
+        calls.append((parameter_stream, base_sync_done))
+        return parameter_stream
+
+    monkeypatch.setattr(
+        exact_replay_engine_module,
+        "wrap_lora_parameter_stream_for_snapshot",
+        replacement,
+    )
+
+    actual_stream, _ = engine.get_per_tensor_param(base_sync_done=True)
+
+    assert actual_stream is source
+    assert calls == [(source, True)]
+    assert type(engine).__module__ == exact_replay_engine_module.__name__
 
 
 def test_engine_registration_rejects_changed_weight_export_signature() -> None:

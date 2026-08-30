@@ -47,6 +47,9 @@ from .data_bridge import (
     DataProtoIntegrityView,
     validate_data_proto_integrity,
 )
+from .exact_replay_verl_registration import (
+    build_exact_replay_fsdp2_engine_class,
+)
 from .rollout_bridge import (
     ACTUAL_RESPONSE_LOGPROBS_FIELD,
     BEHAVIOR_TRACE_HANDLES_FIELD,
@@ -383,108 +386,18 @@ def make_exact_replay_fsdp2_engine_class(
 ) -> type[Any]:
     """Create the custom-model-type subclass used by two TrainingWorkers."""
 
-    _validate_upstream_engine_surface(upstream_engine_cls)
-    if not callable(port_factory):
-        raise TypeError("exact replay port_factory must be callable")
-    if (
-        not isinstance(model_type, str)
-        or not model_type
-        or model_type == "language_model"
-    ):
-        raise ValueError("exact replay requires a distinct non-empty model_type")
-
-    class ExactReplayFSDPEngineWithLMHead(upstream_engine_cls):
-        def _build_module(self):
-            engine_config = getattr(self, "engine_config", None)
-            if getattr(engine_config, "strategy", None) != "fsdp2":
-                raise ValueError("the exact replay engine supports FSDP2 only")
-            model_config = getattr(self, "model_config", None)
-            if getattr(model_config, "model_type", None) != model_type:
-                raise IdentityMismatchError(
-                    "TrainingWorker model_type differs from the exact replay registry key"
-                )
-            model_config.model_type = "language_model"
-            try:
-                module = super()._build_module()
-            finally:
-                model_config.model_type = model_type
-            if getattr(engine_config, "forward_only", False):
-                module.requires_grad_(False)
-                module.eval()
-            return module
-
-        def _build_lora_module(self, module):
-            # Actor/ref configs are copied from the same HFModelConfig.  The
-            # reference TrainingWorker must nevertheless remain the unadapted
-            # frozen base, while the actor uses upstream's normal LoRA builder.
-            if bool(getattr(self.engine_config, "forward_only", False)):
-                module.requires_grad_(False)
-                module.eval()
-                return module
-            return super()._build_lora_module(module)
-
-        def get_per_tensor_param(
-            self,
-            layered_summon=False,
-            base_sync_done=False,
-            **kwargs,
-        ):
-            """Preserve veRL's stream while publishing the exact actor LoRA.
-
-            The pinned naive checkpoint path uses ``base_sync_done=True`` for
-            the adapter-only stream and ``False`` for the one-time base-model
-            stream.  Only the current-policy adapter stream is tee'd.  The
-            reference worker and base-model stream are returned byte-for-byte
-            through the upstream path without requiring publication state.
-            """
-
-            result = super().get_per_tensor_param(
-                layered_summon=layered_summon,
-                base_sync_done=base_sync_done,
-                **kwargs,
-            )
-            if not isinstance(result, tuple) or len(result) != 2:
-                raise TypeError(
-                    "pinned FSDP2 get_per_tensor_param() must return "
-                    "(parameter_stream, peft_config)"
-                )
-            parameter_stream, peft_config = result
-            if not base_sync_done or _engine_role(self) is ComponentRole.REFERENCE:
-                return parameter_stream, peft_config
-            if peft_config is None:
-                raise ReplayMismatchError(
-                    "current Policy Pilot adapter sync did not expose a LoRA-only "
-                    "parameter stream"
-                )
-            return (
-                wrap_lora_parameter_stream_for_snapshot(
-                    parameter_stream,
-                    base_sync_done=True,
-                ),
-                peft_config,
-            )
-
-        def forward_step(self, micro_batch, loss_function, forward_only):
-            return exact_replay_forward_step(
-                engine=self,
-                micro_batch=micro_batch,
-                loss_function=loss_function,
-                forward_only=forward_only,
-                port_factory=port_factory,
-            )
-
-        def forward_backward_batch(self, *args, **kwargs):
-            try:
-                return super().forward_backward_batch(*args, **kwargs)
-            finally:
-                _reshard_exact_replay_root(self.module)
-
-    ExactReplayFSDPEngineWithLMHead.__name__ = "ExactReplayFSDPEngineWithLMHead"
-    ExactReplayFSDPEngineWithLMHead.__qualname__ = "ExactReplayFSDPEngineWithLMHead"
-    ExactReplayFSDPEngineWithLMHead.__module__ = __name__
-    ExactReplayFSDPEngineWithLMHead.exact_replay_port_factory = port_factory
-    ExactReplayFSDPEngineWithLMHead.exact_replay_model_type = model_type
-    return ExactReplayFSDPEngineWithLMHead
+    return build_exact_replay_fsdp2_engine_class(
+        upstream_engine_cls,
+        port_factory=port_factory,
+        model_type=model_type,
+        forward_step=exact_replay_forward_step,
+        engine_role=_engine_role,
+        reshard_root=_reshard_exact_replay_root,
+        snapshot_wrapper_provider=(
+            lambda: wrap_lora_parameter_stream_for_snapshot
+        ),
+        public_module=__name__,
+    )
 
 
 def register_exact_replay_fsdp2_engine(
@@ -929,29 +842,6 @@ def _validate_upstream_response_slice(
             raise ReplayMismatchError(
                 "restored full-sequence logprobs fail veRL's response slice"
             )
-
-
-def _validate_upstream_engine_surface(upstream_engine_cls: type[Any]) -> None:
-    if not isinstance(upstream_engine_cls, type):
-        raise TypeError("upstream FSDP engine must be a class")
-    for name in ("_build_module", "forward_step", "get_per_tensor_param"):
-        if not callable(getattr(upstream_engine_cls, name, None)):
-            raise TypeError(f"upstream FSDP engine is missing {name}()")
-    parameters = tuple(inspect.signature(upstream_engine_cls.forward_step).parameters)
-    if parameters != ("self", "micro_batch", "loss_function", "forward_only"):
-        raise RuntimeError("pinned FSDPEngineWithLMHead.forward_step signature changed")
-    weight_parameters = tuple(
-        inspect.signature(upstream_engine_cls.get_per_tensor_param).parameters
-    )
-    if weight_parameters != (
-        "self",
-        "layered_summon",
-        "base_sync_done",
-        "kwargs",
-    ):
-        raise RuntimeError(
-            "pinned FSDPEngineWithLMHead.get_per_tensor_param signature changed"
-        )
 
 
 def _batched_sidecar(micro_batch: Any, name: str) -> Any:
