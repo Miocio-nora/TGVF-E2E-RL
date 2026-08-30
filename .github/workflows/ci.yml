@@ -17,6 +17,22 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Bind repository-boundary baseline
+        env:
+          BOUNDARY_BASELINE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          baseline_policy="$RUNNER_TEMP/repository_boundary_policy.base.json"
+          if [[ -n "$BOUNDARY_BASELINE_SHA" && ! "$BOUNDARY_BASELINE_SHA" =~ ^0+$ ]] &&
+             git show "$BOUNDARY_BASELINE_SHA:configs/ops/repository_boundary_policy.json" \
+               > "$baseline_policy" 2>/dev/null &&
+             python -c 'import json, sys; assert json.load(open(sys.argv[1], encoding="utf-8"))["schema_version"] == "tgvf-repository-boundary-policy-v3"' \
+               "$baseline_policy"; then
+            echo "BOUNDARY_BASELINE_POLICY=$baseline_policy" >> "$GITHUB_ENV"
+          else
+            echo "BOUNDARY_BASELINE_POLICY=" >> "$GITHUB_ENV"
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -30,10 +46,16 @@ jobs:
       - name: Audit repository boundaries
         env:
           CUDA_VISIBLE_DEVICES: ""
-        run: >-
-          python tools/audit_repository_boundaries.py
-          --repository-root .
-          --policy configs/ops/repository_boundary_policy.json
+        run: |
+          audit_args=(
+            python tools/audit_repository_boundaries.py
+            --repository-root .
+            --policy configs/ops/repository_boundary_policy.json
+          )
+          if [[ -n "${BOUNDARY_BASELINE_POLICY:-}" ]]; then
+            audit_args+=(--baseline-policy "$BOUNDARY_BASELINE_POLICY")
+          fi
+          "${audit_args[@]}"
       - name: Verify launch controls and repository freeze
         run: python tools/check_launch_gate.py audit-control-plane
       - name: Run complete CPU test suite
