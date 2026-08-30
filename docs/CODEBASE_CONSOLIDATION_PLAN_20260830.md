@@ -60,8 +60,9 @@ The dated snapshots below remain historical anchors. Verified code checkpoint
   evaluation, Oracle-D utility, and distributed checkpointing;
 - the four known multi-module strongly connected components fell to zero and
   remain guarded by a full-tree Tarjan regression test;
-- execution/support surfaces fell from 82 at C0 to 79, and all 79 current
-  surfaces have exactly one machine-checked classification;
+- execution/support surfaces fell from 82 at C0 to 79 at checkpoint `4dd8267`,
+  and all 79 surfaces at that checkpoint had exactly one machine-checked
+  classification;
 - the production-size policy ratcheted from 29 exceptions to 20 at revision 5,
   then to 17 at revision 7.
 
@@ -444,6 +445,45 @@ checkpoint `6506a02`, the canonical line is 128 commits ahead of local `main`
 and 86 ahead of `origin/main`, with no opposite-side commits. Physical `main`
 still has the same 38 tracked plus 55 untracked collapsed entries and remains
 untouched.
+
+## 2026-08-31 inspection-only worker bootstrap checkpoint
+
+Committed code checkpoint `64ee534` introduces a deliberately unwired,
+non-dispatch `tgvf_rl.worker_bootstrap` inspection for two exact cases:
+Policy driver and Representation member. Its pre-import contract requires the
+literal `-B -P -S -m tgvf_rl.worker_bootstrap` prefix, the matching fixed mode
+and complete argv, the exact `TGVF_CLI_*` namespace, and canonical
+execution-identity JSON. A dependency-light firebreak checks the native
+single-thread inventory, trace/profile absence, default import-machinery shape,
+heavy/project-module absence, and then the exact allow-closure of delayed
+project verifier imports. The scaffold reuses the inherited CLI
+receipt/liveness verifier and reconstructs the complete startup envelope for
+the fixed role and target.
+
+The next-step value is characterization, not launch authority. The module never
+imports the selected training target, mints `VerifiedWorkerStartup`, or
+dispatches, and every executable invocation exits 2. Its output is explicitly
+an ordinary caller-constructible `inspection-only` diagnostic. No CLI or
+launcher calls it, so this checkpoint does not yet alter the canonical Policy
+or Representation execution path.
+
+The remaining closure work is unchanged and concrete: replace the mutable
+Python `-m` parent and `PYTHONPATH` lookup with a trusted package/origin root;
+verify both package and project-verifier origins; close same-process
+class/import mutation; supply an immutable runtime; re-verify the runtime
+locator and role-specific child environment in the worker; and replace
+fork-rebindable process-local evidence. Policy still needs exact outer-exec
+process identity. Representation still needs member receipt consumption in the
+bootstrap and runtime-locator authority.
+
+Execution-surface policy revision 9 now content-binds 80 surfaces. Local
+evidence comprises 414 related passes, a full hermetic CPU result of 2,745
+passed/five skipped/four warnings in 148.46 seconds, passing repository and
+control audits, and green Ruff and diff checks. A separate frozen-byte review
+ran 438 tests and accepted committed bytes `64ee534` under the same strict
+inspection-only scope. No remote result is asserted for this checkpoint.
+Experiment policy revision 4 therefore still records
+`runtime_closure.launch_enabled=false` and the identical seven blockers.
 
 ## Why the repository feels fragmented
 

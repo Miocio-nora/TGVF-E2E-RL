@@ -456,6 +456,47 @@ disabled by the same seven blockers. The canonical line is 128/86 commits ahead 
 local/origin `main`; physical `main` remains untouched at 93 collapsed dirty
 entries.
 
+## 2026-08-31 inspection-only worker bootstrap boundary
+
+Committed checkpoint `64ee534` adds `tgvf_rl.worker_bootstrap` as a bounded,
+dependency-light inspection surface for the fixed Policy-driver and
+Representation-member cases. It admits only the exact
+`-B -P -S -m tgvf_rl.worker_bootstrap` interpreter prefix, one fixed mode, the
+corresponding fixed process argv, the exact `TGVF_CLI_*` worker namespace, and
+the canonical spelling of the CLI execution-identity JSON. Before delayed
+project verification imports, it checks one exact native process thread, no
+trace/profile hook, the expected heavy/project-module absence, and the shape of
+the default import machinery. After importing the existing verification leaves,
+it admits only the exact delayed project-module closure, reuses the inherited
+CLI receipt/liveness verifier, and reconstructs and checks the complete startup
+envelope for the hard-coded role and target.
+
+This surface deliberately stops short of authority. It never imports either
+training target, never mints `VerifiedWorkerStartup`, never dispatches, and
+always exits with status 2, including after a successful inspection. Its
+serialized result labels itself an `inspection-only`, ordinary
+caller-constructible diagnostic; it is not evidence that another caller may
+use to cross a launch boundary. It is not wired into the public CLI, Policy
+launcher, or Representation launcher.
+
+The exact residual boundary remains explicit. Python's mutable `-m` parent
+package executes before this module, and `-P` still permits an explicit
+`PYTHONPATH`; package and project-verifier origins are unverified; hostile
+same-process class/import-machinery mutation is not closed; no immutable runtime
+exists; workers do not re-verify the runtime locator or role-specific child
+environment; and existing process-local evidence remains susceptible to fork
+rebinding. Policy additionally lacks an exact outer-exec process-identity check.
+Representation additionally performs no member receipt consumption in this
+bootstrap and has no runtime-locator authority.
+
+Execution-surface policy revision 9 content-binds 80 surfaces. The related local
+selection has 414 passes; the full hermetic CPU suite has 2,745 passed, five
+skipped, and four warnings in 148.46 seconds. Both audits, Ruff, and the diff
+check pass. An independent frozen-byte review ran 438 tests and judged commit
+`64ee534` green only within this same non-dispatch scope. Remote CI is not yet
+claimed. Experiment policy revision 4 remains
+`runtime_closure.launch_enabled=false` with all seven blockers unchanged.
+
 ## 2026-08-30 canonical line versus physical `main`
 
 At verified code checkpoint `4dd8267`, the graph is linear: the stabilization
