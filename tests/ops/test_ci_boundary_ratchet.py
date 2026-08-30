@@ -88,7 +88,10 @@ def test_ci_failure_details_are_emitted_as_public_check_annotations() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     assert '--junitxml "$junit_report"' in workflow
-    assert 'python tools/emit_ci_pytest_annotations.py "$junit_report"' in workflow
+    assert (
+        'python .github/scripts/emit_ci_pytest_annotations.py "$junit_report"'
+        in workflow
+    )
     assert 'exit "$pytest_status"' in workflow
 
 

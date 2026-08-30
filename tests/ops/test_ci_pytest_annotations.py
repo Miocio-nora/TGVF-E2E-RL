@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import runpy
 
-from tools.emit_ci_pytest_annotations import pytest_failure_annotations
+
+CI_ANNOTATION_SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / ".github"
+    / "scripts"
+    / "emit_ci_pytest_annotations.py"
+)
+pytest_failure_annotations = runpy.run_path(CI_ANNOTATION_SCRIPT)[
+    "pytest_failure_annotations"
+]
 
 
 def test_pytest_failure_annotations_expose_node_and_escaped_traceback(

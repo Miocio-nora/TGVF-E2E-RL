@@ -71,6 +71,6 @@ jobs:
           pytest_status=$?
           set -e
           if [[ "$pytest_status" -ne 0 ]]; then
-            python tools/emit_ci_pytest_annotations.py "$junit_report"
+            python .github/scripts/emit_ci_pytest_annotations.py "$junit_report"
           fi
           exit "$pytest_status"
