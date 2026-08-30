@@ -1,6 +1,6 @@
 {
   "schema_version": "tgvf-execution-surface-policy-v2",
-  "revision": 4,
+  "revision": 5,
   "content_binding": "sha256-file-bytes-v1",
   "python_roots": [
     "src",
@@ -164,7 +164,7 @@
         "evaluation",
         "training"
       ],
-      "content_sha256": "e1f22082ea02ce740a4a1433beb3279f764f1e374c0b0b27d2dfb749426dc926"
+      "content_sha256": "73e4804a26a0bc4ac3a2b29bc2d3e2aaa6e321ca5a4d080d608efabc782f703b"
     },
     {
       "path": "src/tgvf_rl/framework/verl/policy_main.py",
@@ -185,7 +185,7 @@
       "workload_kinds": [
         "training"
       ],
-      "content_sha256": "750c56b11f23a21c61964e5ca292d3786827df12302689eb0fd911d134de850e"
+      "content_sha256": "f84b178302745dfc841e9ba0094eb4c551e490cf960466e1ddb0e24929737632"
     },
     {
       "path": "src/tgvf_rl/framework/verl/prl13_main.py",
@@ -343,7 +343,7 @@
       "workload_kinds": [
         "control"
       ],
-      "content_sha256": "f123621273fedf71462518122d7bfeaf8c909f13e4bbb4a6e3b0088f7b03dd81"
+      "content_sha256": "6b6a393b5ef680b6d92201f70857627a96b38a017485b32aa498d81924e8a257"
     },
     {
       "path": "tools/check_policy_mcq_terminal_reward.py",

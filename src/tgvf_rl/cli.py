@@ -53,6 +53,9 @@ from tgvf_rl.ops.cli_launch import (
     _representation_command_prefix,
     _representation_torchrun_command as _representation_torchrun_command,
 )
+from tgvf_rl.ops.child_environment import (
+    verify_representation_torchrun_child_environment,
+)
 from tgvf_rl.representation.training.config import (
     load_representation_training_config,
 )
@@ -365,7 +368,7 @@ def _preflight_representation_launch(
             stop_after_global_step,
         )
         representation_runner._verify_live_code_identity(config)  # noqa: SLF001
-        environment, stripped_names = _representation_child_environment(config)
+        child_environment_binding = _representation_child_environment(config)
         command_prefix = _representation_command_prefix(
             config,
             python_executable=python_identity.declared_path,
@@ -377,8 +380,7 @@ def _preflight_representation_launch(
             python_identity=python_identity,
             stop_after_global_step=stop_after_global_step,
             command_prefix=command_prefix,
-            child_environment=tuple(sorted(environment.items())),
-            stripped_environment_names=stripped_names,
+            child_environment_binding=child_environment_binding,
             python_binding=python_binding,
         )
     except BaseException:
@@ -753,6 +755,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_command_id=_REPRESENTATION_COMMAND_ID,
             )
             assert_canonical_runtime_launch_enabled()
+            verify_representation_torchrun_child_environment(
+                os.environ,
+                dict(launch_identity.parameters),
+            )
             if (
                 os.environ.get("TGVF_CLI_GATE_DIRECTORY")
                 != str(args.gate_directory.expanduser().absolute())

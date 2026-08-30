@@ -4,6 +4,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -203,12 +204,19 @@ def test_policy_main_requires_complete_compile_closure_before_config(
     monkeypatch.setattr(
         policy_main,
         "verify_cli_worker_authorization_from_environment",
-        lambda **_kwargs: events.append("worker-authorization") or object(),
+        lambda **_kwargs: (
+            events.append("worker-authorization") or SimpleNamespace(parameters=())
+        ),
     )
     monkeypatch.setattr(
         policy_main,
         "assert_canonical_runtime_launch_enabled",
         lambda: events.append("runtime-closure"),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "verify_policy_driver_child_environment",
+        lambda *_args: events.append("child-environment"),
     )
     monkeypatch.setattr(
         policy_main,
@@ -238,8 +246,53 @@ def test_policy_main_requires_complete_compile_closure_before_config(
     assert events == [
         "worker-authorization",
         "runtime-closure",
+        "child-environment",
         "process-identity",
         "compile-receipt",
+    ]
+
+
+def test_policy_main_refuses_child_environment_before_process_or_compile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(
+        policy_main,
+        "verify_cli_worker_authorization_from_environment",
+        lambda **_kwargs: (
+            events.append("worker-authorization") or SimpleNamespace(parameters=())
+        ),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "assert_canonical_runtime_launch_enabled",
+        lambda: events.append("runtime-closure"),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "verify_policy_driver_child_environment",
+        lambda *_args: (
+            events.append("child-environment")
+            or (_ for _ in ()).throw(RuntimeError("synthetic child-env refusal"))
+        ),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "_verify_launch_identity_against_current_process",
+        lambda _identity: events.append("process-identity"),
+    )
+    monkeypatch.setattr(
+        policy_main,
+        "verify_policy_compile_prerequisites_from_environment",
+        lambda *_args, **_kwargs: events.append("compile-receipt"),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic child-env refusal"):
+        policy_main.main(())
+    assert events == [
+        "worker-authorization",
+        "runtime-closure",
+        "child-environment",
     ]
 
 

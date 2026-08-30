@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
+from tgvf_rl.ops.child_environment import verify_policy_driver_child_environment
 from tgvf_rl.ops.cli_authorization import (
     CLIExecutionAuthorizationIdentity,
     assert_canonical_runtime_launch_enabled,
@@ -52,6 +53,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         expected_command_id=_POLICY_COMMAND_ID,
     )
     assert_canonical_runtime_launch_enabled()
+    verify_policy_driver_child_environment(
+        os.environ,
+        dict(launch_identity.parameters),
+    )
     _verify_launch_identity_against_current_process(launch_identity)
     verify_policy_compile_prerequisites_from_environment(
         required=True,

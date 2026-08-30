@@ -15,6 +15,12 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+from tgvf_rl.ops.child_environment import (
+    CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+    REPRESENTATION_TORCHRUN_PROFILE,
+    ChildEnvironmentBinding,
+    build_child_environment,
+)
 from tgvf_rl.ops.cli_authorization import (
     CLIExecutionAuthorizationIdentity,
     CLIWorkerAuthorization,
@@ -24,8 +30,6 @@ from tgvf_rl.ops.cli_authorization import (
     assert_fd_exec_supported,
     assert_loaded_config_matches_binding,
     cli_worker_authorization_environment,
-    environment_sanitization_parameters,
-    sanitized_child_environment,
     verify_canonical_config_binding,
     verify_python_executable_binding,
 )
@@ -54,11 +58,22 @@ class PreparedRepresentationLaunch:
     python_identity: PythonExecutableIdentity
     stop_after_global_step: int | None
     command_prefix: tuple[str, ...]
-    child_environment: tuple[tuple[str, str], ...]
-    stripped_environment_names: tuple[str, ...]
+    child_environment_binding: ChildEnvironmentBinding
     python_binding: PythonExecutableBinding | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.child_environment_binding, ChildEnvironmentBinding):
+            raise TypeError("child_environment_binding must be ChildEnvironmentBinding")
+        if self.child_environment_binding.profile != REPRESENTATION_TORCHRUN_PROFILE:
+            raise ValueError(
+                "prepared representation launch requires the torchrun environment "
+                "profile"
+            )
+        if self.child_environment_binding.late_overlay_names:
+            raise ValueError(
+                "prepared representation outer environment already contains a late "
+                "overlay"
+            )
         if (
             self.python_binding is not None
             and self.python_binding.identity != self.python_identity
@@ -74,15 +89,14 @@ class PreparedRepresentationLaunch:
     @property
     def prepared_identity_sha256(self) -> str:
         record = {
-            "schema_version": "tgvf-prepared-representation-launch-v1",
+            "schema_version": "tgvf-prepared-representation-launch-v2",
             "canonical_config": self.config_binding.authorization_parameters(),
             "python": self.python_identity.authorization_parameters(),
             "stop_after_global_step": self.stop_after_global_step,
             "command_prefix": list(self.command_prefix),
-            "child_environment_sha256": _canonical_json_sha256(
-                dict(self.child_environment)
+            "child_environment": (
+                self.child_environment_binding.authorization_parameters()
             ),
-            "stripped_environment_names": list(self.stripped_environment_names),
         }
         return _canonical_json_sha256(record)
 
@@ -90,11 +104,8 @@ class PreparedRepresentationLaunch:
         return {
             **self.config_binding.authorization_parameters(),
             **self.python_identity.authorization_parameters(),
-            **environment_sanitization_parameters(self.stripped_environment_names),
+            **self.child_environment_binding.authorization_parameters(),
             "prepared_representation_launch_sha256": self.prepared_identity_sha256,
-            "child_environment_sha256": _canonical_json_sha256(
-                dict(self.child_environment)
-            ),
         }
 
 
@@ -123,40 +134,20 @@ def _representation_command_prefix(
 def _representation_child_environment(
     config: Any,
     *,
-    base: Mapping[str, str] | None = None,
-) -> tuple[dict[str, str], tuple[str, ...]]:
-    environment, stripped = sanitized_child_environment(base)
-    torchrun_owned = {
-        "RANK",
-        "LOCAL_RANK",
-        "LOCAL_WORLD_SIZE",
-        "GROUP_RANK",
-        "ROLE_RANK",
-        "ROLE_NAME",
-        "MASTER_ADDR",
-        "MASTER_PORT",
-        "TORCHELASTIC_RESTART_COUNT",
-        "TORCHELASTIC_MAX_RESTARTS",
-        "TORCHELASTIC_RUN_ID",
-    }
-    inherited_conflicts = tuple(
-        sorted(name for name in torchrun_owned if name in environment)
-    )
-    for name in inherited_conflicts:
-        environment.pop(name)
-    stripped_names = tuple(sorted(set(stripped).union(inherited_conflicts)))
-    environment.update(
-        {
+    host_environment: Mapping[str, str] | None = None,
+) -> ChildEnvironmentBinding:
+    return build_child_environment(
+        REPRESENTATION_TORCHRUN_PROFILE,
+        owned_environment={
             "CUDA_VISIBLE_DEVICES": ",".join(
                 str(gpu_id) for gpu_id in config.fsdp2.physical_gpu_ids
             ),
             "CUBLAS_WORKSPACE_CONFIG": _REQUIRED_CUBLAS_WORKSPACE_CONFIG,
             "PYTHONHASHSEED": "0",
             "TOKENIZERS_PARALLELISM": "false",
-            "WORLD_SIZE": str(config.fsdp2.world_size),
-        }
+        },
+        host_environment=host_environment,
     )
-    return environment, stripped_names
 
 
 def _representation_torchrun_command(
@@ -192,6 +183,27 @@ def _representation_torchrun_command(
     return tuple(command)
 
 
+def _materialize_representation_child_environment(
+    binding: ChildEnvironmentBinding,
+    worker_environment: Mapping[str, str],
+) -> dict[str, str]:
+    """Materialize one exact outer environment plus its consumed CLI proof."""
+
+    if not isinstance(binding, ChildEnvironmentBinding):
+        raise TypeError("binding must be ChildEnvironmentBinding")
+    if binding.profile != REPRESENTATION_TORCHRUN_PROFILE:
+        raise ValueError("representation execution requires the torchrun profile")
+    if binding.late_overlay_names:
+        raise ValueError(
+            "representation outer environment already contains a late overlay"
+        )
+    if set(worker_environment) != set(CLI_WORKER_LATE_ENVIRONMENT_NAMES):
+        raise RuntimeError(
+            "CLI worker authorization environment has an unexpected field set"
+        )
+    return binding.with_late_overlay(worker_environment).as_environment()
+
+
 def _execute_representation_torchrun(
     prepared: PreparedRepresentationLaunch,
     *,
@@ -209,6 +221,24 @@ def _execute_representation_torchrun(
             raise RuntimeError(
                 "prepared representation Python identity differs from its bound fd"
             )
+        if not isinstance(launch_identity, CLIExecutionAuthorizationIdentity):
+            raise TypeError("launch_identity must be CLIExecutionAuthorizationIdentity")
+        expected_parameters = prepared.authorization_parameters()
+        observed_parameters = dict(launch_identity.parameters)
+        for name, expected in expected_parameters.items():
+            if observed_parameters.get(name) != expected:
+                raise RuntimeError(
+                    "consumed representation authorization differs from prepared "
+                    f"launch: {name}"
+                )
+        if (
+            launch_identity.run_id != prepared.config.run_id
+            or launch_identity.run_identity_sha256
+            != prepared.config.canonical_config_sha256
+        ):
+            raise RuntimeError(
+                "consumed representation authorization has a different run identity"
+            )
         verify_canonical_config_binding(prepared.config_binding)
         assert_loaded_config_matches_binding(
             prepared.config,
@@ -224,13 +254,14 @@ def _execute_representation_torchrun(
         )
         if command[: len(prepared.command_prefix)] != prepared.command_prefix:
             raise RuntimeError("representation command changed after authorization")
-        environment = dict(prepared.child_environment)
-        environment.update(
-            cli_worker_authorization_environment(
-                launch_identity,
-                worker_authorization,
-                gate_directory=gate_directory,
-            )
+        worker_environment = cli_worker_authorization_environment(
+            launch_identity,
+            worker_authorization,
+            gate_directory=gate_directory,
+        )
+        environment = _materialize_representation_child_environment(
+            prepared.child_environment_binding,
+            worker_environment,
         )
         if not command or command[0] != str(prepared.python_identity.declared_path):
             raise RuntimeError("representation argv[0] lost its declared Python path")

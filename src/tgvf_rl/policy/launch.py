@@ -23,6 +23,13 @@ from tgvf_rl.framework.verl.launcher import (
     UpstreamVerlLaunchPlan,
     build_policy_e2e_smoke_verl_plan,
 )
+from tgvf_rl.ops.child_environment import (
+    CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+    POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+    POLICY_VERL_DRIVER_PROFILE,
+    ChildEnvironmentBinding,
+    build_child_environment,
+)
 from tgvf_rl.ops.cli_authorization import (
     CLIExecutionAuthorizationIdentity,
     CLIWorkerAuthorization,
@@ -32,8 +39,6 @@ from tgvf_rl.ops.cli_authorization import (
     assert_canonical_runtime_launch_enabled,
     bind_current_python_executable_for_exec,
     cli_worker_authorization_environment,
-    environment_sanitization_parameters,
-    sanitized_child_environment,
     verify_python_executable_binding,
 )
 
@@ -99,13 +104,20 @@ class PreparedPolicyLaunch:
     compile_authorization: PolicyCompileAuthorizationProof
     python_identity: PythonExecutableIdentity
     command: tuple[str, ...]
-    child_environment: tuple[tuple[str, str], ...]
-    stripped_environment_names: tuple[str, ...]
+    child_environment_binding: ChildEnvironmentBinding
     repository_root: Path
     horizon_extension: PolicyHorizonExtension | None = None
     python_binding: PythonExecutableBinding | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.child_environment_binding, ChildEnvironmentBinding):
+            raise TypeError("child_environment_binding must be ChildEnvironmentBinding")
+        if self.child_environment_binding.profile != POLICY_VERL_DRIVER_PROFILE:
+            raise ValueError("prepared Policy child environment profile differs")
+        if self.child_environment_binding.late_overlay_names:
+            raise ValueError(
+                "prepared Policy outer environment already contains a late overlay"
+            )
         if (
             self.python_binding is not None
             and self.python_binding.identity != self.python_identity
@@ -121,7 +133,7 @@ class PreparedPolicyLaunch:
     @property
     def prepared_identity_sha256(self) -> str:
         record = {
-            "schema_version": "tgvf-prepared-policy-launch-v1",
+            "schema_version": "tgvf-prepared-policy-launch-v2",
             "run_identity_sha256": self.config.identity_sha256,
             "config_source_sha256": self.config.source_sha256,
             "horizon_extension_sha256": (
@@ -133,10 +145,9 @@ class PreparedPolicyLaunch:
             "compile": self.compile_authorization.authorization_parameters(),
             "python": self.python_identity.authorization_parameters(),
             "command": list(self.command),
-            "child_environment_sha256": _canonical_json_sha256(
-                dict(self.child_environment)
+            "child_environment": (
+                self.child_environment_binding.authorization_parameters()
             ),
-            "stripped_environment_names": list(self.stripped_environment_names),
             "repository_root": str(self.repository_root),
         }
         return _canonical_json_sha256(record)
@@ -145,7 +156,7 @@ class PreparedPolicyLaunch:
         return {
             **self.compile_authorization.authorization_parameters(),
             **self.python_identity.authorization_parameters(),
-            **environment_sanitization_parameters(self.stripped_environment_names),
+            **self.child_environment_binding.authorization_parameters(),
             "prepared_policy_launch_sha256": self.prepared_identity_sha256,
         }
 
@@ -219,10 +230,7 @@ def preflight_policy_launch_for_authorization(
     try:
         python_identity = python_binding.identity
         command = plan.command(python_identity.declared_path)
-        child_environment, stripped_environment_names = policy_child_environment(
-            plan,
-            include_sanitization_record=True,
-        )
+        child_environment_binding = _policy_child_environment_binding(plan)
         compile_authorization = PolicyCompileAuthorizationProof(
             manifest_source_path=compile_prerequisites.manifest_source_path,
             manifest_source_sha256=compile_prerequisites.manifest_source_sha256,
@@ -238,8 +246,7 @@ def preflight_policy_launch_for_authorization(
             compile_authorization=compile_authorization,
             python_identity=python_identity,
             command=command,
-            child_environment=tuple(sorted(child_environment.items())),
-            stripped_environment_names=stripped_environment_names,
+            child_environment_binding=child_environment_binding,
             repository_root=Path(repository_root).resolve(),
             horizon_extension=horizon_extension,
             python_binding=python_binding,
@@ -255,15 +262,32 @@ def policy_child_environment(
     base: Mapping[str, str] | None = None,
     include_sanitization_record: bool = False,
 ) -> dict[str, str] | tuple[dict[str, str], tuple[str, ...]]:
-    """Apply the exact launch environment, overriding inherited launch values."""
+    """Return the strict driver profile without inheriting host values."""
+
+    binding = _policy_child_environment_binding(plan, base=base)
+    result = binding.as_environment()
+    if include_sanitization_record:
+        rejected = tuple(
+            sorted((*binding.ignored_host_names, *binding.rejected_host_names))
+        )
+        return result, rejected
+    return result
+
+
+def _policy_child_environment_binding(
+    plan: UpstreamVerlLaunchPlan,
+    *,
+    base: Mapping[str, str] | None = None,
+) -> ChildEnvironmentBinding:
+    """Bind only profile-owned plan entries atop a fixed safe baseline."""
 
     if not isinstance(plan, UpstreamVerlLaunchPlan):
         raise TypeError("plan must be UpstreamVerlLaunchPlan")
-    result, stripped = sanitized_child_environment(base)
-    result.update(plan.environment)
-    if include_sanitization_record:
-        return result, stripped
-    return result
+    return build_child_environment(
+        POLICY_VERL_DRIVER_PROFILE,
+        owned_environment=plan.environment,
+        host_environment=base,
+    )
 
 
 def assert_policy_execution_identity(
@@ -410,26 +434,28 @@ def execute_policy_e2e_smoke(
             / "runtime-policy-state"
             / "compile-prerequisite-attestations",
         )
-        environment = dict(prepared.child_environment)
-        environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256"] = (
-            prerequisite_receipt.receipt_sha256
-        )
-        environment["TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_PATH"] = str(
-            prerequisite_receipt_path
-        )
-        environment["TGVF_POLICY_COMPILE_PREREQUISITE_BINDING_SHA256"] = (
-            prepared.compile_prerequisites.identity_sha256
-        )
-        environment["TGVF_POLICY_COMPILE_PREREQUISITE_MANIFEST_SHA256"] = (
-            prepared.compile_prerequisites.manifest_source_sha256
-        )
-        environment.update(
-            cli_worker_authorization_environment(
+        late_environment = {
+            "TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_SHA256": (
+                prerequisite_receipt.receipt_sha256
+            ),
+            "TGVF_POLICY_COMPILE_PREREQUISITE_RECEIPT_PATH": str(
+                prerequisite_receipt_path
+            ),
+            **cli_worker_authorization_environment(
                 launch_identity,
                 worker_authorization,
                 gate_directory=gate_directory,
-            )
-        )
+            ),
+        }
+        expected_late_names = {
+            *CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+            *POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+        }
+        if set(late_environment) != expected_late_names:
+            raise RuntimeError("Policy late child environment field set differs")
+        environment = prepared.child_environment_binding.with_late_overlay(
+            late_environment
+        ).as_environment()
         descriptor = verify_python_executable_binding(python_binding)
         assert_fd_exec_supported()
         os.execve(descriptor, prepared.command, environment)

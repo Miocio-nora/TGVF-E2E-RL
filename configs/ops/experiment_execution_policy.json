@@ -8,10 +8,10 @@
   "runtime_closure": {
     "blocker_ids": [
       "atomic_authority_transaction_missing",
-      "child_environment_allowlist_missing",
       "immutable_runtime_code_package_missing",
       "policy_recursive_compile_closure_missing",
       "representation_eval_safe_artifact_missing",
+      "role_scoped_judge_secret_transport_missing",
       "worker_member_claims_missing",
       "worker_startup_envelope_missing"
     ],
@@ -19,6 +19,6 @@
   },
   "policy_id": "TGVF-EXPERIMENT-EXECUTION-STABILIZATION-V1",
   "reason": "Protocol stabilization audit is active; canonical runtime closure is incomplete and no training or evaluation may launch.",
-  "revision": 3,
+  "revision": 4,
   "schema_version": "tgvf-experiment-execution-policy-v2"
 }

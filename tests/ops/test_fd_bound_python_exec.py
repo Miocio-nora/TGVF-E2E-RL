@@ -20,6 +20,13 @@ from tgvf_rl import cli
 from tgvf_rl.ops import cli_authorization as facade
 from tgvf_rl.ops import cli_authorization_identity as identity_module
 from tgvf_rl.ops import cli_launch
+from tgvf_rl.ops.child_environment import (
+    CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+    POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+    POLICY_VERL_DRIVER_PROFILE,
+    REPRESENTATION_TORCHRUN_PROFILE,
+    build_child_environment,
+)
 from tgvf_rl.ops.cli_authorization import (
     CLIExecutionAuthorizationIdentity,
     CLIWorkerAuthorization,
@@ -42,6 +49,37 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 class _ExecIntercept(RuntimeError):
     pass
+
+
+def _child_environment_binding(profile: str):
+    return build_child_environment(profile, host_environment={})
+
+
+def _cli_worker_environment() -> dict[str, str]:
+    values = {
+        "TGVF_CLI_CONSUMPTION_RECEIPT_PATH": "/gate/consumption.json",
+        "TGVF_CLI_CONSUMPTION_RECEIPT_SHA256": "c" * 64,
+        "TGVF_CLI_EXECUTION_IDENTITY_JSON": "{}",
+        "TGVF_CLI_GATE_DIRECTORY": "/gate",
+        "TGVF_CLI_LAUNCHER_LIVENESS_RECEIPT_PATH": "/gate/liveness.json",
+        "TGVF_CLI_WORKER_AUTHORIZATION_SCHEMA": (
+            "tgvf-cli-worker-authorization-environment-v1"
+        ),
+    }
+    assert set(values) == set(CLI_WORKER_LATE_ENVIRONMENT_NAMES)
+    return values
+
+
+def _representation_launch_identity(
+    prepared: cli.PreparedRepresentationLaunch,
+) -> CLIExecutionAuthorizationIdentity:
+    return CLIExecutionAuthorizationIdentity.create(
+        run_id=prepared.config.run_id,
+        phase="representation_training",
+        command_id="fd-exec-test",
+        run_identity_sha256=prepared.config.canonical_config_sha256,
+        parameters=prepared.authorization_parameters(),
+    )
 
 
 def _copied_executable(tmp_path: Path, name: str = "python-copy") -> Path:
@@ -140,15 +178,21 @@ def test_representation_exec_uses_retained_inode_after_path_replacement(
     assert declared.stat().st_ino != original_inode
 
     config_path = tmp_path / "run.toml"
-    config = SimpleNamespace(source_path=config_path, source_toml_sha256="b" * 64)
+    config = SimpleNamespace(
+        run_id="REPRESENTATION-FD-EXEC",
+        canonical_config_sha256="a" * 64,
+        source_path=config_path,
+        source_toml_sha256="b" * 64,
+    )
     prepared = cli.PreparedRepresentationLaunch(
         config=config,
         config_binding=_config_binding(config_path),
         python_identity=binding.identity,
         stop_after_global_step=32,
         command_prefix=(str(declared),),
-        child_environment=(),
-        stripped_environment_names=(),
+        child_environment_binding=_child_environment_binding(
+            REPRESENTATION_TORCHRUN_PROFILE
+        ),
         python_binding=binding,
     )
     worker = CLIWorkerAuthorization(
@@ -171,14 +215,14 @@ def test_representation_exec_uses_retained_inode_after_path_replacement(
     monkeypatch.setattr(
         cli_launch,
         "cli_worker_authorization_environment",
-        lambda *_a, **_k: {},
+        lambda *_a, **_k: _cli_worker_environment(),
     )
     _install_fake_fd_exec(monkeypatch, cli_launch, captured)
 
     with pytest.raises(_ExecIntercept):
         cli._execute_representation_torchrun(
             prepared,
-            launch_identity=object(),  # type: ignore[arg-type]
+            launch_identity=_representation_launch_identity(prepared),
             gate_directory=tmp_path,
             worker_authorization=worker,
         )
@@ -207,8 +251,9 @@ def test_representation_exec_rejects_identity_drift_before_final_verification(
         python_identity=binding.identity,
         stop_after_global_step=32,
         command_prefix=(str(declared),),
-        child_environment=(),
-        stripped_environment_names=(),
+        child_environment_binding=_child_environment_binding(
+            REPRESENTATION_TORCHRUN_PROFILE
+        ),
         python_binding=binding,
     )
     object.__setattr__(
@@ -269,8 +314,9 @@ def test_policy_exec_uses_integer_bound_fd_and_closes_on_exec_failure(
         compile_authorization=compile_authorization,
         python_identity=binding.identity,
         command=command,
-        child_environment=(),
-        stripped_environment_names=(),
+        child_environment_binding=_child_environment_binding(
+            POLICY_VERL_DRIVER_PROFILE
+        ),
         repository_root=tmp_path,
         python_binding=binding,
     )
@@ -300,7 +346,7 @@ def test_policy_exec_uses_integer_bound_fd_and_closes_on_exec_failure(
     monkeypatch.setattr(
         policy_launch,
         "cli_worker_authorization_environment",
-        lambda *_a, **_k: {},
+        lambda *_a, **_k: _cli_worker_environment(),
     )
     _install_fake_fd_exec(monkeypatch, policy_launch, captured)
 
@@ -314,6 +360,14 @@ def test_policy_exec_uses_integer_bound_fd_and_closes_on_exec_failure(
 
     assert captured["descriptor"] == descriptor
     assert captured["argv"][0] == str(declared)  # type: ignore[index]
+    captured_environment = captured["environment"]
+    assert isinstance(captured_environment, dict)
+    assert set(captured_environment) == {
+        *_child_environment_binding(POLICY_VERL_DRIVER_PROFILE).as_environment(),
+        *CLI_WORKER_LATE_ENVIRONMENT_NAMES,
+        *POLICY_COMPILE_RECEIPT_LATE_ENVIRONMENT_NAMES,
+    }
+    assert "OPENROUTER_API_KEY" not in captured_environment
     assert binding.closed
     with pytest.raises(OSError):
         os.fstat(descriptor)
@@ -399,8 +453,9 @@ def test_authorization_failure_closes_prepared_python_descriptor(
         python_identity=binding.identity,
         stop_after_global_step=32,
         command_prefix=(str(binding.identity.declared_path),),
-        child_environment=(),
-        stripped_environment_names=(),
+        child_environment_binding=_child_environment_binding(
+            REPRESENTATION_TORCHRUN_PROFILE
+        ),
         python_binding=binding,
     )
     monkeypatch.setattr(cli, "assert_canonical_runtime_launch_enabled", lambda: None)
@@ -503,8 +558,9 @@ def test_representation_plan_keeps_legacy_cli_coordinate_after_leaf_split(
             python_identity=binding.identity,
             stop_after_global_step=32,
             command_prefix=(str(executable),),
-            child_environment=(),
-            stripped_environment_names=(),
+            child_environment_binding=_child_environment_binding(
+                REPRESENTATION_TORCHRUN_PROFILE
+            ),
         )
         assert (
             cli.PreparedRepresentationLaunch is cli_launch.PreparedRepresentationLaunch

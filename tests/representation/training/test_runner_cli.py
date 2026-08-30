@@ -1044,6 +1044,11 @@ def test_cli_run_command_lazily_dispatches_and_prints_rank_zero_payload(
     )
     monkeypatch.setattr(
         cli,
+        "verify_representation_torchrun_child_environment",
+        lambda *_args: events.append("child-environment"),
+    )
+    monkeypatch.setattr(
+        cli,
         "bind_canonical_config_path",
         lambda *_args, **_kwargs: binding,
     )
@@ -1092,7 +1097,12 @@ def test_cli_run_command_lazily_dispatches_and_prints_rank_zero_payload(
         == 0
     )
     assert calls == [(Path("/unused/representation.toml"), 7)]
-    assert events == ["authorize", "runtime-closure", "identity"]
+    assert events == [
+        "authorize",
+        "runtime-closure",
+        "child-environment",
+        "identity",
+    ]
     assert json.loads(capsys.readouterr().out) == {
         "gpu_work_launched": False,
         "status": "synthetic",

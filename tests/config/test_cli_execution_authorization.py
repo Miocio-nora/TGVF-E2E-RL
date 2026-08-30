@@ -7,6 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from tgvf_rl import cli
+from tgvf_rl.ops.child_environment import (
+    REPRESENTATION_TORCHRUN_PROFILE,
+    build_child_environment,
+)
 from tgvf_rl.ops.cli_authorization import (
     CLIExecutionAuthorizationIdentity,
     CLIWorkerAuthorization,
@@ -305,8 +309,10 @@ def test_representation_preflights_then_consumes_then_executes_same_plan(
         python_identity=python_identity,
         stop_after_global_step=32,
         command_prefix=("/audited/python", "-m", "torch.distributed.run"),
-        child_environment=(("WORLD_SIZE", "4"),),
-        stripped_environment_names=(),
+        child_environment_binding=build_child_environment(
+            REPRESENTATION_TORCHRUN_PROFILE,
+            host_environment={},
+        ),
     )
     worker = CLIWorkerAuthorization(
         consumption_receipt_path=Path("/gate/consumptions/token.json"),
@@ -392,6 +398,11 @@ def test_representation_worker_authorization_is_first_action(
     )
     monkeypatch.setattr(
         cli,
+        "verify_representation_torchrun_child_environment",
+        lambda *_args: events.append("child-environment"),
+    )
+    monkeypatch.setattr(
+        cli,
         "bind_canonical_config_path",
         lambda *_a, **_k: events.append("bind-config") or binding,
     )
@@ -441,6 +452,7 @@ def test_representation_worker_authorization_is_first_action(
     assert events == [
         "authorize",
         "runtime-closure",
+        "child-environment",
         "bind-config",
         "load-config",
         "check-config",
@@ -448,6 +460,64 @@ def test_representation_worker_authorization_is_first_action(
         "check-identity",
         "runner",
     ]
+
+
+def test_representation_worker_refuses_child_environment_before_config(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    events: list[str] = []
+    identity = CLIExecutionAuthorizationIdentity.create(
+        run_id="REP",
+        phase=cli.REPRESENTATION_TRAINING_PHASE,
+        command_id=cli._REPRESENTATION_COMMAND_ID,
+        run_identity_sha256="a" * 64,
+    )
+    monkeypatch.setattr(
+        cli,
+        "verify_cli_worker_authorization_from_environment",
+        lambda **_kwargs: events.append("authorize") or identity,
+    )
+    monkeypatch.setattr(
+        cli,
+        "assert_canonical_runtime_launch_enabled",
+        lambda: events.append("runtime-closure"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "verify_representation_torchrun_child_environment",
+        lambda *_args: (
+            events.append("child-environment")
+            or (_ for _ in ()).throw(RuntimeError("synthetic child-env refusal"))
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "bind_canonical_config_path",
+        lambda *_args, **_kwargs: events.append("bind-config"),
+    )
+
+    assert (
+        cli.main(
+            [
+                "run-representation",
+                "/canonical/representation.toml",
+                "--launcher-python-executable",
+                "/audited/python",
+                "--gate-directory",
+                "/gate",
+                "--launch-consumption-receipt",
+                "/gate/receipt.json",
+                "--launch-consumption-sha256",
+                "c" * 64,
+                "--launcher-liveness-receipt",
+                "/gate/live.json",
+            ]
+        )
+        == 2
+    )
+    assert events == ["authorize", "runtime-closure", "child-environment"]
+    assert "synthetic child-env refusal" in capsys.readouterr().err
 
 
 def test_read_only_commands_keep_legacy_config_access_without_auth_arguments() -> None:

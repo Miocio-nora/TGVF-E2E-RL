@@ -42,7 +42,7 @@ DEFAULT_EXECUTION_SURFACE_POLICY = (
     REPOSITORY_ROOT / "configs/ops/execution_surface_policy.json"
 )
 EXECUTION_SURFACE_POLICY_SCHEMA = "tgvf-execution-surface-policy-v2"
-EXECUTION_SURFACE_POLICY_REVISION = 4
+EXECUTION_SURFACE_POLICY_REVISION = 5
 EXECUTION_SURFACE_CONTENT_BINDING = "sha256-file-bytes-v1"
 EXECUTION_SURFACE_ROOTS = ("src", "tools", "spikes")
 EXECUTION_SHELL_ROOTS = ("tools", "spikes")

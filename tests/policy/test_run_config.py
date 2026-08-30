@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import MappingProxyType
 
@@ -1710,7 +1711,7 @@ def test_policy_launch_record_and_pre_authorization_preflight_fail_closed(
         )
 
 
-def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
+def test_policy_child_environment_rejects_host_and_uses_exact_profile_values(
     tmp_path: Path,
 ) -> None:
     path, _, _ = _write_config(tmp_path)
@@ -1731,7 +1732,27 @@ def test_policy_child_environment_overrides_inherited_gpu_and_identity_values(
     assert environment["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
     assert environment["TGVF_POLICY_RUN_ID"] == config.run_id
     assert environment["TGVF_POLICY_RUN_IDENTITY"] == config.identity_sha256
-    assert environment["UNRELATED"] == "preserved"
+    assert "UNRELATED" not in environment
+    assert environment["RAY_USAGE_STATS_ENABLED"] == "0"
+    assert environment["VLLM_NO_USAGE_STATS"] == "1"
+    assert environment["PYTHONNOUSERSITE"] == "1"
+    assert environment["PYTHONSAFEPATH"] == "1"
+    assert environment["PATH"] == os.defpath
+    assert set(environment) == {
+        *plan.environment,
+        "HF_HUB_DISABLE_TELEMETRY",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH",
+        "PYTHONSAFEPATH",
+        "PYTHONUTF8",
+        "RAY_USAGE_STATS_ENABLED",
+        "TZ",
+        "VLLM_NO_USAGE_STATS",
+    }
     assert not config.output.root.exists()
 
     upstream_config_dir = _write_minimal_upstream_config_directory(tmp_path)

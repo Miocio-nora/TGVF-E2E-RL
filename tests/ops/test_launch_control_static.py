@@ -133,7 +133,7 @@ def test_stabilization_policy_v2_is_frozen_and_runtime_closed() -> None:
         )
     )
     assert policy["schema_version"] == "tgvf-experiment-execution-policy-v2"
-    assert policy["revision"] == 3
+    assert policy["revision"] == 4
     assert policy["execution_mode"] == "frozen"
     assert policy["freeze_override"] == {
         "max_ttl_seconds": 3600,
@@ -143,10 +143,10 @@ def test_stabilization_policy_v2_is_frozen_and_runtime_closed() -> None:
     assert policy["runtime_closure"] == {
         "blocker_ids": [
             "atomic_authority_transaction_missing",
-            "child_environment_allowlist_missing",
             "immutable_runtime_code_package_missing",
             "policy_recursive_compile_closure_missing",
             "representation_eval_safe_artifact_missing",
+            "role_scoped_judge_secret_transport_missing",
             "worker_member_claims_missing",
             "worker_startup_envelope_missing",
         ],
@@ -1146,7 +1146,7 @@ def test_execution_surface_manifest_is_exact_and_content_bound() -> None:
         )
     )
     assert policy["schema_version"] == "tgvf-execution-surface-policy-v2"
-    assert policy["revision"] == 4
+    assert policy["revision"] == 5
     completed = subprocess.run(
         [
             sys.executable,
