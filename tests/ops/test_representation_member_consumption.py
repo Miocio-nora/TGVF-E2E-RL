@@ -56,6 +56,11 @@ RUN_SHA256 = "a" * 64
 CONFIG_SHA256 = "b" * 64
 TORCHELASTIC_RUN_ID = "12345678-1234-4abc-8def-1234567890ab"
 
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:This process .* is multi-threaded, use of fork\(\) may lead to "
+    r"deadlocks in the child\.:DeprecationWarning"
+)
+
 
 def _worker_identity(role: str) -> WorkerStartupIdentity:
     if role == REPRESENTATION_LAUNCHER_ROLE:
