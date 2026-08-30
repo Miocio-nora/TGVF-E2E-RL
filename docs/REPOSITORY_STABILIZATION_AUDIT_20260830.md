@@ -13,17 +13,16 @@ authorization to launch training or evaluation.
   `4dd826729ab42027e0204633af55edca96122a87`, synchronized with the remote
   stabilization line at verification time and green in complete remote CI run
   `33309273768`.
-- Current locally and independently verified, committed inspection-only code
-  checkpoint: `9ca6822`. Combined A-minus code/docs checkpoint `91d77f5`, which
-  contains it, is green in complete remote CI run `33330786187`. The v1
-  combined code/docs checkpoint `79edd70` remains green in complete remote run
-  `33329512817`, and the subsequent docs-only checkpoint `b0e240c` is green in
-  run `33329825931`.
-- Commit graph at the Representation-startup checkpoint: zero commits unique to
-  local `main` and 120 unique to the stabilization line; zero unique to
-  `origin/main` and 78 unique
-  to the stabilization line. Local `main` is 42 commits behind `origin/main`,
-  and both are strict ancestors of the verified checkpoint.
+- Current locally and independently verified, committed non-dispatch code
+  checkpoint: `50f5de7`. It adds only the sealed-memfd artifact scaffold; its
+  final local evidence is recorded below and no remote result is yet claimed.
+  Combined A-minus code/docs checkpoint `91d77f5` is green in complete remote CI
+  run `33330786187`, and remote receipt checkpoint `0abca2f` is green in run
+  `33331161012`.
+- Commit graph at code checkpoint `50f5de7`: zero commits unique to local
+  `main` and 136 unique to the stabilization line; zero unique to `origin/main`
+  and 94 unique to the stabilization line. Local `main` is 42 commits behind
+  `origin/main`, and both are strict ancestors of the verified checkpoint.
 - Experiment execution: frozen until the protocol, evidence, control-plane,
   and test gates in this document pass.
 - Integration rule: selectively port reviewed changes. Do not merge an entire
@@ -40,14 +39,14 @@ not closed merely because the affected experiment has stopped running.
 |---|---|---|
 | Repository ownership | partial | Boundary policy v3 revision 7 passes with zero violations and 61 visible debts: five evidence-only roots, 25 machine paths, 17 oversized modules, and 14 run-specific paths. Every oversized row binds its current line count, owner, rationale, and next split; baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
 | Execution-surface inventory | verified | Execution-surface policy revision 10 binds 80 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes with zero violations. Earlier revision/count checkpoints below remain historical evidence. |
-| Public and historical launch surfaces | contained; fd execution and child-environment base/inventory checks narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Inspection schema v2 now checks the exact seven-key current-Python identity through a retained `/proc`-bound fd and closes it, then checks each fixed role's child-environment base identity and exact late-field inventory. Late values are explicitly unchecked and remain blocked. Atomic worker-envelope, explicit runtime-locator, and Representation member-authorization scaffolds exist, but the bootstrap is deliberately unwired, never selects or consumes a member, target-imports, mints verified startup, or dispatches, and always exits 2; it is not formal stage-0 authority. An individual member claim and bootstrap diagnostic are not standalone authority. Experiment policy revision 4 keeps launch false with seven blockers. Immutable runtime packaging and formal stage-0/import closure, verified member bootstrap, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers remain unsolved. |
+| Public and historical launch surfaces | contained; fd execution, child-environment base/inventory, and sealed-byte primitive narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Inspection schema v2 now checks the exact seven-key current-Python identity through a retained `/proc`-bound fd and closes it, then checks each fixed role's child-environment base identity and exact late-field inventory. Late values are explicitly unchecked and remain blocked. The sealed-memfd scaffold now provides an independently verified, content-immutable byte capability with exact owner/fd/inode/seal/hash identity, but it is neither a trusted trampoline nor an immutable runtime package. Atomic worker-envelope, explicit runtime-locator, and Representation member-authorization scaffolds exist, but the bootstrap is deliberately unwired, never selects or consumes a member, target-imports, mints verified startup, or dispatches, and always exits 2; it is not formal stage-0 authority. An individual member claim, byte capability, and bootstrap diagnostic are not standalone authority. Experiment policy revision 4 keeps launch false with seven blockers. Deterministic immutable runtime packaging, formal stage-0/import closure, verified member bootstrap, native dependencies, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers remain unsolved. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical RP/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
 | Historical TGVF/Atomic impact | verified | Implementation commits `b100d3d`, `ec0555b`, `8e6b3d`, `5baddc` and provenance checkouts `b87126a`, `017b507`, `001838b` explicitly pass one dialect-bound renderer to appender and layout. Training replay consumes the recorded token rows, so the unused fallback does not downgrade those rows. Their runtime is `training_run`/precomputed, not official-visible/native-pixel. |
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | current inspection-v2 checkpoint locally, independently, and remotely green; prior remote checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. Compile-verifier lineage fix `2488487`, atomic envelope `cd1eb5e`, and UTF-8 hardening `4bba7e9` are green in remote runs `33305858959`, `33306088543`, and `33306353388`. Runtime-locator checkpoint `c60828d` has 50 focused, two isolated import/firebreak, 201 repository/control, and 404 complete `tests/ops` passes; its full hermetic suite has 2,508 passed, five skips, and four warnings in 139.30 seconds, and complete remote run `33307853768` is green. Representation-startup checkpoint `4dd8267` has 148 focused, 201 repository/control, and 482 complete `tests/ops` passes; its full hermetic suite has 2,586 passed, five skips, and four warnings in 141.50 seconds, and complete remote run `33309273768` is green. Inspection-v1 code checkpoint `64ee534` has 414 related passes and a full hermetic CPU result of 2,745 passed, five skipped, and four warnings in 148.46 seconds. Its repository-boundary revision 7 result is 61 debts/zero violations, its execution-surface revision 9 result is 80 surfaces/zero violations, and Ruff/diff checks are green. An independent frozen-byte run passed 438 tests under the same non-dispatch scope. Combined v1 checkpoint `79edd70` is green in complete remote CI run `33329512817`, and later docs-only checkpoint `b0e240c` is green in run `33329825931`. Current A-minus checkpoint `9ca6822` has 59 worker tests, 61 focused tests, 626 complete `tests/ops` passes, an independent 303-test final review, and a full hermetic CPU result of 2,770 passed, five skipped, and four warnings in 149.25 seconds. Full Ruff, repository-boundary revision 7 at 61 debts/zero violations, execution-surface revision 10 at 80 surfaces/zero violations, content hashes, and diff checks are green. Combined A-minus code/docs checkpoint `91d77f5` is green in complete remote run `33330786187`. |
+| Test discovery and behavior | current sealed-byte checkpoint locally and independently green; prior remote checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. Compile-verifier lineage fix `2488487`, atomic envelope `cd1eb5e`, and UTF-8 hardening `4bba7e9` are green in remote runs `33305858959`, `33306088543`, and `33306353388`. Runtime-locator checkpoint `c60828d` has 50 focused, two isolated import/firebreak, 201 repository/control, and 404 complete `tests/ops` passes; its full hermetic suite has 2,508 passed, five skips, and four warnings in 139.30 seconds, and complete remote run `33307853768` is green. Representation-startup checkpoint `4dd8267` has 148 focused, 201 repository/control, and 482 complete `tests/ops` passes; its full hermetic suite has 2,586 passed, five skips, and four warnings in 141.50 seconds, and complete remote run `33309273768` is green. Inspection-v1 code checkpoint `64ee534` has 414 related passes and a full hermetic CPU result of 2,745 passed, five skipped, and four warnings in 148.46 seconds. Its repository-boundary revision 7 result is 61 debts/zero violations, its execution-surface revision 9 result is 80 surfaces/zero violations, and Ruff/diff checks are green. An independent frozen-byte run passed 438 tests under the same non-dispatch scope. Combined v1 checkpoint `79edd70` is green in complete remote CI run `33329512817`, and later docs-only checkpoint `b0e240c` is green in run `33329825931`. Current A-minus checkpoint `9ca6822` has 59 worker tests, 61 focused tests, 626 complete `tests/ops` passes, an independent 303-test final review, and a full hermetic CPU result of 2,770 passed, five skipped, and four warnings in 149.25 seconds. Full Ruff, repository-boundary revision 7 at 61 debts/zero violations, execution-surface revision 10 at 80 surfaces/zero violations, content hashes, and diff checks are green. Combined A-minus code/docs checkpoint `91d77f5` is green in complete remote run `33330786187`, and receipt checkpoint `0abca2f` is green in run `33331161012`. Current sealed-artifact code checkpoint `50f5de7` has 34 focused tests, 660 complete `tests/ops` passes, an independent no-blocker review within its byte-capability scope, and a full hermetic CPU result of 2,804 passed, five skipped, and four warnings in 149.32 seconds. Full Ruff, both audits, content hashes, and diff checks are green; no remote result is yet claimed for `50f5de7`. |
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -469,6 +468,52 @@ remote run `33330786187`. The preceding docs-only checkpoint `b0e240c` is green
 in complete remote run `33329825931`; the inspection-v1 combined checkpoint
 `79edd70` remains green in run `33329512817`. Experiment policy revision 4
 retains all seven blocker IDs and `runtime_closure.launch_enabled=false`.
+
+## 2026-08-31 sealed memfd artifact scaffold audit
+
+Committed non-dispatch checkpoint `50f5de7` adds one dependency-light,
+Linux/procfs-specific immutable-byte primitive. It copies exact non-empty bytes
+into an `MFD_CLOEXEC|MFD_ALLOW_SEALING` memfd, enforces a 64 MiB ceiling,
+applies write/grow/shrink/final seals, and verifies content with a streaming
+SHA-256. Its strict canonical identity binds purpose, owner PID and process
+start ticks, owner fd, device/inode, mode, byte length, exact seals, and content
+digest. A fresh process can reconstruct the identity, prove the owner before
+and after proc-fd access, reopen the same inode, repeat all checks, and retain a
+non-inheritable local descriptor.
+
+The capability also owns a private guard fd, so raw-closing its public fd does
+not free and immediately recycle the sealed inode. Identity-aware finalizers do
+not close an unrelated reused fd and clean a fork child's descriptor-table
+copies without affecting the parent. The 34 focused cases cover kernel refusal
+of writes and size changes, strict JSON/digest tampering, false payload SHA,
+metadata/seal/owner/fd changes, stale integer-fd reuse, GC and fork lifetime,
+fresh `-B -I -S` production-API reopen, descriptor release, and a dependency
+firebreak.
+
+The negative boundary is explicit. An identity digest is consistency data, not
+launch authority. The module imports no project runtime or Torch and performs
+no subprocess creation, locator verification, authorization consumption,
+worker mint, target import, or dispatch. Executing the proc-fd directly as a
+Python script proves only mechanical reachability because Python reads those
+bytes before they can verify their locator. The reviewed candidate therefore
+uses an authorization-bound stdlib-only `-c` trampoline that verifies and
+locally rebinds the artifact first. That trampoline, one-use outer-exec
+handoff, deterministic package creation/provenance, zip origins and `__file__`
+assumptions, descendants, native dependencies, procfs security profiles, and
+hostile same-process fd rebinding all remain open.
+
+Final local evidence for `50f5de7` is 34 focused tests, 660 complete
+`tests/ops` passes in 68.86 seconds, and 2,804 passed/five skipped/four warnings
+in the full hermetic CPU suite in 149.32 seconds. The committed source and test
+SHA-256 values are `767d8764a265b910328d9b35eb7cec7713b34e7bcb4ff11a1196c0fedf9d60c9`
+and `ca678e931954bfc4f22f13a9d22d352770e7ae567bb44e636759379988529f7c`,
+respectively. Independent review found no remaining blocker within the
+byte-capability scope. Full Ruff,
+repository-boundary revision 7 at 61 debts/zero violations, execution-surface
+revision 10 at 80 surfaces/zero violations, content hashes, and
+`git diff --check` are green. No remote result is yet claimed. Experiment
+policy revision 4 retains all seven blockers and
+`runtime_closure.launch_enabled=false`.
 
 ## Historical post-ratchet consolidation milestone (`fd8da97`)
 

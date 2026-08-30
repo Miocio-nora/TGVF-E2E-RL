@@ -528,6 +528,35 @@ remote run `33329825931`; v1 combined checkpoint `79edd70` remains historically
 green in run `33329512817`. Experiment policy revision 4 still has the same
 seven blockers and `launch_enabled=false`.
 
+## 2026-08-31 sealed memfd artifact checkpoint
+
+Committed checkpoint `50f5de7` begins immutable-runtime work without changing
+reachability. The new dependency-light leaf creates content-sealed Linux memfd
+artifacts, enforces a fixed 64 MiB bound, streams content verification, binds
+the live owner PID/start ticks and exact fd/inode/mode/seals/length/SHA identity
+in strict canonical JSON, and reopens the same inode through procfs into a
+retained local descriptor. A private guard fd plus identity-aware finalization
+prevents an ordinary stale integer fd from closing an unrelated replacement and
+cleans post-fork copies without affecting the parent capability.
+
+The independent launcher review also fixed the next architecture decision. The
+current module-mode torchrun path is not a trusted stage-0. The future repo-owned
+launcher must lazy-import Torch only after verification, use a string exact
+Python entrypoint, and start each member with `-B -I -S`. A direct proc-fd script
+executes before it can verify its locator, so the canonical Linux candidate is
+an authorization-bound, stdlib-only `-c` trampoline that verifies and locally
+rebinds the sealed fd before any repository byte is imported.
+
+The scaffold contains no launcher, Torch import, target import, mint, member
+selection/receipt, or dispatch. It does not yet provide deterministic runtime
+archive bytes, native dependency closure, zip-origin migration, descendant fd
+transport, an outer-exec handoff, or procfs/dumpable/LSM portability. Final
+local evidence is 34 focused tests and 2,804 passed/five skipped/four warnings
+in the full hermetic CPU suite in 149.32 seconds; complete `tests/ops` has 660
+passes in 68.86 seconds. Full Ruff, both audits, hashes, and the diff check
+pass. No remote CI result is yet claimed. Experiment policy revision 4
+therefore keeps all seven blockers and `launch_enabled=false`.
+
 ## Why the repository feels fragmented
 
 The problem is not only the number of branches. The C0 tag contained 245

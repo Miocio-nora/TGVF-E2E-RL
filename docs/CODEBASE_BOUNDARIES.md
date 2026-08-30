@@ -540,6 +540,44 @@ remote run `33329825931`; the v1 combined code/docs checkpoint `79edd70` remains
 historically green in run `33329512817`. Experiment policy revision 4 remains
 launch-disabled with the same seven blocker IDs.
 
+## 2026-08-31 sealed memfd artifact scaffold boundary
+
+Committed checkpoint `50f5de7` adds a Linux/procfs-specific, dependency-light
+sealed byte capability in `tgvf_rl.ops.sealed_memfd_artifact`. Creation copies
+non-empty exact bytes into an `MFD_CLOEXEC|MFD_ALLOW_SEALING` memfd, fixes a 64
+MiB maximum, applies write/grow/shrink/final seals, and verifies the payload by
+streaming SHA-256. Its canonical identity binds purpose, live owner PID and
+process start ticks, owner fd, device/inode, mode, byte length, exact seal set,
+and content digest. Reopen checks the owner before and after proc-fd access,
+revalidates all inode/content facts, and retains a non-inheritable local fd.
+
+The capability owns a private guard duplicate so a raw-close of its public fd
+cannot free and immediately recycle the memfd inode. Finalizers compare
+device/inode and seals before closing, refuse stale unrelated fd numbers, and
+clean only the current process's post-fork descriptor-table entries. Strict
+JSON parsing rejects duplicate/extra fields, noncanonical spelling, boolean
+integer aliases, and identity-digest drift.
+
+This is not a startup authority or an immutable runtime package. The module has
+no project-runtime/Torch import, subprocess creation, authority consumption,
+worker evidence mint, target import, or dispatch. A direct proc-fd Python
+script remains merely a mechanical probe because Python reads it before its
+identity can be checked. The reviewed next design requires an
+authorization-bound, stdlib-only `-c` trampoline to verify and locally rebind a
+sealed artifact before importing it. Deterministic package construction,
+zip/module-origin migration, native dependency closure, descendant transport,
+outer-exec CLOEXEC handoff, procfs security-profile checks, and hostile
+same-process fd rebinding remain open.
+
+Final local evidence for committed bytes `50f5de7` is 34 focused tests and a
+complete `tests/ops` result of 660 passed in 68.86 seconds. The full hermetic
+CPU result is 2,804 passed, five skipped, and four warnings in 149.32 seconds.
+Full Ruff, repository-boundary revision 7 at 61 debts/zero violations,
+execution-surface revision 10 at 80 surfaces/zero violations, content hashes,
+and `git diff --check` are green. No remote result is yet claimed. No blocker
+is removed: experiment policy revision 4 remains launch-disabled with all
+seven blocker IDs.
+
 ## 2026-08-30 canonical line versus physical `main`
 
 At verified code checkpoint `4dd8267`, the graph is linear: the stabilization

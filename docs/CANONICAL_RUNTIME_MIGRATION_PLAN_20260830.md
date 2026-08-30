@@ -74,6 +74,49 @@ Until those requirements and their race/replay tests pass,
 `runtime_closure.launch_enabled` remains false. A freeze override cannot change
 that value or bypass these blockers.
 
+### 2026-08-31 resolved Representation startup architecture
+
+The current Representation route is not the future trusted route. It still
+executes the audited Python as `python -m torch.distributed.run`, then asks
+torchrun to start `python -m tgvf_rl.cli run-representation`. Both layers load
+substantial mutable package code before inherited worker authority is checked.
+The existing worker bootstrap is diagnostic-only and deliberately unwired.
+
+The reviewed target architecture is one authorization-first, repo-owned
+launcher followed by Torch Elastic with a string/binary entrypoint equal to the
+exact Python executable. Torch must be imported only after launcher-stage
+verification. Each member must be a fresh `-B -I -S` interpreter. Callable
+Elastic entrypoints, `--run-path`, the current module-mode torchrun route, and
+`PYTHON_EXEC` wrappers are not acceptable substitutes: installed Torch 2.9
+either loads Torch too early, uses an in-process callable context, or cannot
+express the required interpreter flags.
+
+The proposed Linux candidate uses a small, authorization-bound `-c`
+stdlib-only trampoline. Before any repository or sealed-package byte executes,
+the trampoline must verify the live launcher PID and start ticks, reopen the
+declared proc-fd, and check regular-file metadata, exact seals, size, and whole
+payload SHA-256. It may then rebase the retained local fd as
+`/proc/self/fd/<n>` and import a sealed stage-0/package. Directly passing a
+launcher proc-fd as the Python script is only a mechanical compatibility probe:
+Python executes bytes before those bytes can authenticate their own locator.
+
+Commit `50f5de7` adds only the dependency-light sealed-memfd byte-capability
+scaffold needed to study this candidate. It creates a Linux memfd with
+write/grow/shrink/final seals, a fixed 64 MiB ceiling and streaming verification;
+binds owner PID/start ticks, fd, device/inode, mode, length, seals and SHA-256 in
+canonical JSON; retains a private guard fd; and can reopen and retain the same
+sealed inode through a live owner's proc-fd. It imports no project runtime or
+Torch and performs no process creation, authority consumption, target import,
+mint, or dispatch.
+
+This scaffold does not close immutable packaging. A canonical package still
+requires the verified trampoline and outer exec handoff, deterministic sealed
+archive construction and provenance, zip-origin and `__file__` migration,
+descendant FD transport, procfs/hidepid/LSM/dumpable preflight, and separate
+native Torch/CUDA/dependency closure. Same-process hostile raw-close, `dup2`, or
+concurrent fd rebinding also remains outside the leaf's guarantee. Consequently
+the seven experiment blockers and `launch_enabled=false` remain unchanged.
+
 ## Batch 2 — four-method training substrate
 
 Port and reconcile these cohesive layers:
