@@ -43,9 +43,7 @@ import tgvf_rl.framework.verl.policy_weight_snapshot_store as _snapshot_store
 # Keep the historical private facade intact while the filesystem mechanics live
 # in an import-acyclic, framework-neutral leaf.
 _assert_immutable_file_equals_at = _snapshot_store.assert_immutable_file_equals_at
-_assert_snapshot_root_path_binding = (
-    _snapshot_store.assert_snapshot_root_path_binding
-)
+_assert_snapshot_root_path_binding = _snapshot_store.assert_snapshot_root_path_binding
 _atomic_replace_bytes = _snapshot_store.atomic_replace_bytes
 _fsync_directory = _snapshot_store.fsync_directory
 _open_snapshot_root = _snapshot_store.open_snapshot_root

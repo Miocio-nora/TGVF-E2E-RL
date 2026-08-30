@@ -128,9 +128,7 @@ class _FakeUpstreamFSDPEngineWithLMHead:
     def forward_step(self, micro_batch, loss_function, forward_only):
         raise AssertionError((micro_batch, loss_function, forward_only))
 
-    def forward_backward_batch(
-        self, micro_batch, loss_function, forward_only
-    ):
+    def forward_backward_batch(self, micro_batch, loss_function, forward_only):
         loss, output = self.forward_step(
             micro_batch,
             loss_function,

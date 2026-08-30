@@ -16,8 +16,7 @@ def test_ci_compares_module_size_exceptions_with_a_v3_git_baseline() -> None:
         "${{ github.event.pull_request.base.sha || github.event.before }}"
     ) in workflow
     assert (
-        'git show "$BOUNDARY_BASELINE_SHA:'
-        'configs/ops/repository_boundary_policy.json"'
+        'git show "$BOUNDARY_BASELINE_SHA:configs/ops/repository_boundary_policy.json"'
     ) in workflow
     assert '"tgvf-repository-boundary-policy-v3"' in workflow
     assert 'audit_args+=(--baseline-policy "$BOUNDARY_BASELINE_POLICY")' in workflow

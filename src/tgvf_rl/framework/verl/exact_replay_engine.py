@@ -393,9 +393,7 @@ def make_exact_replay_fsdp2_engine_class(
         forward_step=exact_replay_forward_step,
         engine_role=_engine_role,
         reshard_root=_reshard_exact_replay_root,
-        snapshot_wrapper_provider=(
-            lambda: wrap_lora_parameter_stream_for_snapshot
-        ),
+        snapshot_wrapper_provider=(lambda: wrap_lora_parameter_stream_for_snapshot),
         public_module=__name__,
     )
 
