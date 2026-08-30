@@ -39,14 +39,18 @@ import/firebreak tests, 201 repository/control tests, and all 404 `tests/ops`
 tests passing locally. Its complete hermetic CPU suite has 2,508 passed, five
 skipped, and four warnings in 139.30 seconds; complete remote run `33307853768`
 is green.
+Representation-startup authorization checkpoint `4dd8267` has 148 focused,
+201 repository/control, and all 482 `tests/ops` tests passing. Its complete
+hermetic CPU suite has 2,586 passed, five skipped, and four warnings in 141.50
+seconds; complete remote run `33309273768` is green.
 Policy v3 revision 7 records the 17 remaining oversized modules and rejects
 growth, slack, stale entries, or a relaxed baseline. This plan does not
 authorize an experiment or rewrite historical evidence.
 
-## Current macro milestone
+## Verified macro milestone
 
-The dated snapshots below remain historical anchors. The current local head
-advances them as follows:
+The dated snapshots below remain historical anchors. Verified code checkpoint
+`4dd8267` advances them as follows:
 
 - production modules above 1,000 lines fell from 32 at C0, to 29 at the C2
   snapshot, to 20 at the `fd8da97` snapshot, and to 17 now;
@@ -68,9 +72,10 @@ the control-plane audit reports 79 surfaces and zero violations. `tests/ops`
 has 199 passing tests, the focused split and compatibility suites have 577
 passing tests, and the complete hermetic CPU suite has 2,286 passed, five
 skipped, and four non-failing warnings in 135.24 seconds. These values are a
-preserved historical snapshot, not the current head.
+preserved historical snapshot, not the verified code checkpoint.
 
-At the current checkpoint, repository-boundary policy v3 revision 7 passes
+At verified code checkpoint `4dd8267`, repository-boundary policy v3 revision 7
+passes
 with 61 visible debts (five evidence-only roots, 25 machine paths, 17 oversized
 modules, and 14 run-specific paths) and zero violations. Execution-surface
 policy revision 7 binds 79 surfaces and the control-plane audit passes with
@@ -94,10 +99,14 @@ revision 7 pass locally at 79 surfaces/zero violations and 61 debts/zero
 violations, respectively. Its lineage is remotely green at test-only FIFO timing
 fix `2488487` in run `33305858959`. Envelope commit `cd1eb5e` and UTF-8
 hardening commit `4bba7e9` are remotely green in runs `33306088543` and
-`33306353388`. The later runtime-locator head `c60828d` has a complete local
+`33306353388`. The later runtime-locator checkpoint `c60828d` has a complete local
 result of 2,508 passed, five skipped, and four warnings in 139.30 seconds, plus
 50 focused locator, two isolated import/firebreak, 201 repository/control, and
 404 complete `tests/ops` passes. Complete remote run `33307853768` is green.
+The Representation-startup authorization scaffold has 148 focused, 201
+repository/control, and 482 complete `tests/ops` passes. Its full hermetic suite
+has 2,586 passed, five skipped, and four warnings in 141.50 seconds; complete
+remote run `33309273768` is green.
 Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
 full CPU job after five private-machine-path test fixtures were made hermetic.
 The fd-closure head `ab508c4` is independently green in remote run
@@ -292,6 +301,31 @@ retained through execution, and a formal stage-0 loader/module-origin proof is
 still absent. This scaffold removes no experiment blocker; revision 4 remains
 launch-disabled with the same seven identifiers.
 
+## 2026-08-30 Representation startup authorization scaffold
+
+Verified code checkpoint `4dd8267` reconstructs the complete protected
+`WorkerStartupEnvelope` authorization group from canonical schema/JSON/SHA-256
+parameters and checks the expected entry role. Exact-string keys are now
+validated before scanning the `worker_startup_` namespace. This fixes the
+review-discovered original ordering in which a `str` subclass could participate
+in the namespace scan before rejection.
+
+`RepresentationMemberClaim` and `RepresentationStartupPlan` are pure
+authorization data. They admit exact world sizes two or four; require complete
+global and local rank sets, equal single-node global/local ranks, and a unique
+physical GPU mapping. The plan binds the complete envelope and mapping; each
+claim binds their digests, the run/configuration/world identities, and its own
+rank/GPU assignment. The plan reconstructs only
+from its exact standalone authorization group. An individual claim is not
+standalone authority.
+
+Validation has 148 focused, 201 repository/control, and 482 complete
+`tests/ops` passes. The full hermetic suite has 2,586 passed, five skipped, and
+four warnings in 141.50 seconds; complete remote run `33309273768` is green.
+There is no CLI/`exec` wiring or member-bootstrap verification. Formal stage-0,
+immutable-runtime, and member-bootstrap blockers remain; revision 4 stays
+launch-disabled with the same seven identifiers.
+
 ## Why the repository feels fragmented
 
 The problem is not only the number of branches. The C0 tag contained 245
@@ -475,10 +509,10 @@ unanchored detached commits that must receive exact durable tags before any
 later removal is considered. No action code in that document is deletion
 approval.
 
-At verified runtime checkpoint `c60828d`, both local `main` and `origin/main` are strict
-ancestors of the stabilization line. The line is ahead by 117 and 75 commits,
+At verified code checkpoint `4dd8267`, both local `main` and `origin/main` are
+strict ancestors of the stabilization line. The line is ahead by 120 and 78 commits,
 respectively; local `main` is itself 42 commits behind `origin/main`. Its delta
-from local `main` is 297 paths: 138 additions, 156 modifications, and three
+from local `main` is 299 paths: 140 additions, 156 modifications, and three
 deletions. This linear graph permits a fast-forward but does not make the
 physical worktree promotion-ready.
 
@@ -517,7 +551,8 @@ Consolidation is complete when:
   comparable result;
 - the full hermetic CPU suite and repository audits run in CI.
 
-Current state: the entry-point disposition condition, the three C2 targets, all
+State at verified code checkpoint `4dd8267`: the entry-point disposition
+condition, the three C2 targets, all
 nine post-C2 priority decompositions, the revision-7 production-size exception
 ratchet, the known-cycle condition, the fd-bound Python-exec blocker, and the
 strict child-environment blocker are complete, and C4 remains a read-only
@@ -526,11 +561,12 @@ dispatch. The predecessor, fd-closure, strict child-environment, and
 proof-consumption checkpoints all have green remote CPU CI. The newer
 compile-verifier import-firebreak lineage is remotely green at FIFO timing fix
 `2488487` in run `33305858959`; atomic envelope `cd1eb5e` and UTF-8 hardening
-`4bba7e9` are green in runs `33306088543` and `33306353388`. Runtime-locator
-head `c60828d` has 2,508 local passes, five skips, and four warnings, but
+`4bba7e9` are green in runs `33306088543` and `33306353388`. Runtime checkpoint
+`c60828d` has 2,508 local passes, five skips, and four warnings, but
 deliberately reports incomplete closure; complete remote run `33307853768` is
-green.
+green. Representation-startup checkpoint `4dd8267` has 2,586 local passes,
+five skips, and four warnings; complete remote run `33309273768` is green.
 Portable runtime/CLI closure remains disabled by seven named blockers, now
 including `role_scoped_judge_secret_transport_missing`; immutable code/startup
-closure, the worker envelope and member claims, Ray-descendant environment
+closure, launch-integrated envelope/member bootstrap, Ray-descendant environment
 closure, and the remaining semantic-helper migrations are still open.

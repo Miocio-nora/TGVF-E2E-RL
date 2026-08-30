@@ -329,15 +329,46 @@ module-origin proof is absent. This scaffold neither supplies an immutable
 runtime package nor closes a launch blocker. Experiment policy revision 4 and
 all seven blockers remain unchanged.
 
+## 2026-08-30 Representation startup authorization scaffold
+
+Verified code checkpoint `4dd8267` reconstructs a complete
+`WorkerStartupEnvelope` authorization group before use. The reconstruction
+requires an exact dictionary with exact-string keys. Within that broader CLI
+map, the protected `worker_startup_` namespace must contain exactly its three
+envelope names with exact-string values. Reconstruction then
+revalidates the canonical JSON, schema, SHA-256, and expected entry role. Review
+found that the original implementation scanned the protected namespace before
+rejecting a `str` subclass key. The final implementation rejects every
+non-exact-string key before that scan, closing the namespace blocker.
+
+The dependency-light `RepresentationMemberClaim` and
+`RepresentationStartupPlan` form pure authorization data for a single-node
+Representation launch. Only world sizes two and four are admitted. Global and
+local ranks must each cover exactly `0..world_size-1`, every member has equal
+global/local rank, and physical GPU IDs form a one-to-one mapping. The plan
+binds the complete envelope and full physical GPU mapping. Each claim binds the
+envelope and Representation member digests, run/configuration identities,
+world size, and its own rank/GPU assignment.
+The plan's standalone authorization group is an exact schema/JSON/SHA-256
+triple; an individual member claim is not standalone authority.
+
+This checkpoint has 148 focused tests, 201 repository/control tests, and all
+482 `tests/ops` tests passing. The complete hermetic CPU suite has 2,586 passed,
+five skipped, and four warnings in 141.50 seconds; complete remote run
+`33309273768` is green. There is no CLI or `exec`
+wiring, no member-bootstrap verification, and no authority minted from an
+individual claim. Formal stage-0 and immutable-runtime closure also remain
+absent. Experiment policy revision 4 stays at
+`runtime_closure.launch_enabled=false` with the same seven blockers.
+
 ## 2026-08-30 canonical line versus physical `main`
 
-At verified runtime checkpoint `c60828d`, the canonical stabilization branch
-and its remote tracking ref were synchronized. The graph at that checkpoint is
-linear: it is 117 commits ahead of
-local `main` and 75 ahead of `origin/main`, with no commits on either comparison
+At verified code checkpoint `4dd8267`, the graph is linear: the stabilization
+line is 120 commits ahead of local `main` and 78 ahead of `origin/main`, with no
+commits on either comparison
 side that are absent from the stabilization line. Local `main` itself is 42
 commits behind `origin/main`. The stabilization delta from local `main` spans
-297 paths: 138 additions, 156 modifications, and three deletions.
+299 paths: 140 additions, 156 modifications, and three deletions.
 
 That graph permits a fast-forward, but the physical `main` worktree is not
 promotion-ready. It has 93 collapsed status entries: 38 unstaged tracked
@@ -567,4 +598,9 @@ repository/control tests, all 404 `tests/ops` tests, and a complete hermetic CPU
 suite of 2,508 passed, five skipped, and four warnings in 139.30 seconds. Its
 complete remote workflow is green in run `33307853768`. The non-atomic same-UID
 mutation residual remains launch-blocking under the existing immutable-runtime
-package blocker.
+package blocker. Representation-startup authorization checkpoint `4dd8267` has
+148 focused, 201 repository/control, and 482 complete `tests/ops` passes; its
+complete hermetic CPU suite has 2,586 passed, five skipped, and four warnings in
+141.50 seconds; complete remote run `33309273768` is green. It adds no
+CLI/`exec` wiring and removes none of the seven
+runtime-closure blockers.

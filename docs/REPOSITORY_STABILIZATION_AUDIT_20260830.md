@@ -9,15 +9,14 @@ authorization to launch training or evaluation.
 - Worktree: `/nvmesv/dredvpn009/projects/r-vlm/tgvf-e2e-rl-stabilize-protocol-v1`
 - Branch: `stabilize/protocol-contract-v1-20260830`
 - Base: `origin/main` at `43f2295c15da2bbc14972af6b63f0038e7789c3f`
-- Current verified runtime checkpoint:
-  `c60828da828cc3741709bc8370b7d771d6c48200`, synchronized with the remote
-  stabilization branch at verification time and green in complete remote CI
-  run `33307853768`. Later documentation-only commits do not invalidate this
-  code checkpoint.
-- Commit graph at that checkpoint: zero commits unique to local `main` and 117 unique to the
-  stabilization line; zero unique to `origin/main` and 75 unique to the
-  stabilization line. Local `main` is 42 commits behind `origin/main`, and both
-  are strict ancestors of the canonical head.
+- Verified Representation-startup code checkpoint:
+  `4dd826729ab42027e0204633af55edca96122a87`, synchronized with the remote
+  stabilization line at verification time and green in complete remote CI run
+  `33309273768`.
+- Commit graph at that checkpoint: zero commits unique to local `main` and 120
+  unique to the stabilization line; zero unique to `origin/main` and 78 unique
+  to the stabilization line. Local `main` is 42 commits behind `origin/main`,
+  and both are strict ancestors of the verified checkpoint.
 - Experiment execution: frozen until the protocol, evidence, control-plane,
   and test gates in this document pass.
 - Integration rule: selectively port reviewed changes. Do not merge an entire
@@ -34,14 +33,14 @@ not closed merely because the affected experiment has stopped running.
 |---|---|---|
 | Repository ownership | partial | Boundary policy v3 revision 7 passes with zero violations and 61 visible debts: five evidence-only roots, 25 machine paths, 17 oversized modules, and 14 run-specific paths. Every oversized row binds its current line count, owner, rationale, and next split; baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
 | Execution-surface inventory | verified | Execution-surface policy revision 7 binds 79 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes with zero violations. |
-| Public and historical launch surfaces | contained; fd execution and strict child environment narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Atomic worker-envelope and explicit runtime-locator scaffolds now exist, but neither is wired into canonical launch authority and the locator explicitly reports incomplete closure. Experiment policy revision 4 keeps launch false with seven blockers. Immutable runtime packaging and stage-0/import closure, worker member claims, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers remain unsolved. |
+| Public and historical launch surfaces | contained; fd execution and strict child environment narrowly closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution and exact empty-built canonical child environments have implementation, adversarial coverage, and policy promotion. Atomic worker-envelope, explicit runtime-locator, and Representation member-authorization scaffolds now exist, but none is wired into canonical CLI/exec authority and the locator explicitly reports incomplete closure. An individual member claim is not standalone authority. Experiment policy revision 4 keeps launch false with seven blockers. Immutable runtime packaging and formal stage-0/import closure, verified member bootstrap, role-scoped judge-secret transport, exact Ray-descendant environments, authorization transaction, and the artifact/compiler blockers remain unsolved. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical RP/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
 | Historical TGVF/Atomic impact | verified | Implementation commits `b100d3d`, `ec0555b`, `8e6b3d`, `5baddc` and provenance checkouts `b87126a`, `017b507`, `001838b` explicitly pass one dialect-bound renderer to appender and layout. Training replay consumes the recorded token rows, so the unused fallback does not downgrade those rows. Their runtime is `training_run`/precomputed, not official-visible/native-pixel. |
 | Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | verified runtime checkpoint local and remote green; historical checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. Compile-verifier lineage fix `2488487`, atomic envelope `cd1eb5e`, and UTF-8 hardening `4bba7e9` are green in remote runs `33305858959`, `33306088543`, and `33306353388`. Runtime-locator head `c60828d` has 50 focused, two isolated import/firebreak, 201 repository/control, and 404 complete `tests/ops` passes; its full hermetic suite has 2,508 passed, five skips, and four warnings in 139.30 seconds, and complete remote run `33307853768` is green. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 7 at 79 surfaces/zero violations. |
+| Test discovery and behavior | verified Representation-startup checkpoint local and remote green; historical checkpoints preserved | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The fd-closure hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; before its added size-tamper parameter, the focused selection had 304 passing tests and the updated fd security file passed 10/10. Predecessor commit `a5dd0d1` and fd-closure head `ab508c4` are remotely green, the latter in run `33300849634`. Strict child-environment head `5c058a1` has 2,383 local passes and is remotely green in run `33302879219`. The authorization-proof consumption follow-up has 2,386 passes and is remotely green in run `33304029789`; worker-startup scaffold commit `6cb133d` is remotely green in run `33304509263`. Compile-verifier lineage fix `2488487`, atomic envelope `cd1eb5e`, and UTF-8 hardening `4bba7e9` are green in remote runs `33305858959`, `33306088543`, and `33306353388`. Runtime-locator checkpoint `c60828d` has 50 focused, two isolated import/firebreak, 201 repository/control, and 404 complete `tests/ops` passes; its full hermetic suite has 2,508 passed, five skips, and four warnings in 139.30 seconds, and complete remote run `33307853768` is green. Representation-startup checkpoint `4dd8267` has 148 focused, 201 repository/control, and 482 complete `tests/ops` passes; its full hermetic suite has 2,586 passed, five skips, and four warnings in 141.50 seconds, and complete remote run `33309273768` is green. Current policies report boundary revision 7 at 61 debts/zero violations plus execution-surface revision 7 at 79 surfaces/zero violations. |
 
 ## 2026-08-30 fd-closure checkpoint
 
@@ -237,10 +236,35 @@ This scaffold is not an immutable runtime package and removes no blocker.
 Experiment policy revision 4 remains launch-disabled with the same seven exact
 identifiers.
 
+## 2026-08-30 Representation startup authorization scaffold
+
+Verified code checkpoint `4dd8267` reconstructs the complete protected
+`WorkerStartupEnvelope` authorization group, requiring exact-string keys before
+the `worker_startup_` namespace scan and revalidating canonical JSON, schema,
+SHA-256, and expected entry role. This ordering fixes the original
+review-discovered blocker in which a `str` subclass could enter the namespace
+scan before rejection.
+
+`RepresentationMemberClaim` and `RepresentationStartupPlan` are pure
+authorization data. Exact world sizes two or four require complete global/local
+rank sets, equal single-node global/local ranks, and one-to-one physical GPU
+mapping. The plan binds the complete envelope and mapping. Every claim binds
+the envelope/member digests, run/configuration/world identities, and its own
+rank/GPU assignment. Only the complete plan has an
+exact standalone authorization group; an individual claim is not standalone
+authority.
+
+Validation has 148 focused, 201 repository/control, and 482 complete
+`tests/ops` passes. The full suite has 2,586 passed, five skipped, and four
+warnings in 141.50 seconds; complete remote run `33309273768` is green. There is
+no CLI/`exec` wiring or member-bootstrap verification. Formal stage-0,
+immutable-runtime, and member-bootstrap blockers remain. Revision 4 stays
+launch-disabled with the same seven identifiers.
+
 ## Historical post-ratchet consolidation milestone (`fd8da97`)
 
-This section preserves the earlier `fd8da97` snapshot. Its counts are not the
-current head and are not retroactively rewritten.
+This section preserves the earlier `fd8da97` snapshot. Its counts are not those
+of the verified checkpoint and are not retroactively rewritten.
 
 - The initial raw oversized-module scan found 32 production files above the
   limit. The first three decompositions established the 29-row policy-v3
@@ -314,16 +338,17 @@ The physical `main` row's 93 collapsed entries are 38 unstaged tracked
 modifications and 55 untracked entries, with no staged, deleted, renamed, or
 copied entry. Expanding untracked directories yields 132 entries: the same 38
 tracked modifications plus 94 untracked paths, 14 of them below `.worktrees/`.
-At verified runtime checkpoint `c60828d`, the stabilization delta from local `main` spans 297
-paths: 138 additions, 156 modifications, and three deletions. Nineteen dirty
+At verified code checkpoint `4dd8267`, the stabilization delta from local
+`main` spans 299 paths: 140 additions, 156 modifications, and three deletions.
+Nineteen dirty
 paths overlap that delta. Eighteen are modify/modify and pass a read-only
 textual merge probe. The remaining modify/delete case is
 `tools/supervise_prl14_cleanfinal16_eval.sh`, which is modified on physical
 `main` and deleted on the stabilization line. A graph-only fast-forward cannot
 merge or preserve this uncommitted state.
 
-The graph itself is linear: the stabilization line is 117 commits ahead of
-local `main` and 75 ahead of `origin/main`, with neither comparison having a
+The graph itself is linear: the stabilization line is 120 commits ahead of
+local `main` and 78 ahead of `origin/main`, with neither comparison having a
 commit absent from the stabilization line. Local `main` is 42 commits behind
 `origin/main`. Consequently, the canonical unified line exists, but physical
 `main` is not promotion-ready.
@@ -556,7 +581,8 @@ but is not score provenance.
   passed with 79 surfaces and zero violations. This is a historical snapshot;
   its local count is superseded by the later local suite. Each later remote
   status is stated separately below rather than inherited from this snapshot.
-- At the current checkpoint, repository boundary policy v3 revision 7 passes
+- At verified code checkpoint `4dd8267`, repository boundary policy v3 revision
+  7 passes
   with 61 debts and zero violations, and execution-surface policy revision 7
   passes with 79 surfaces and zero violations. The compile-verifier
   import-firebreak follow-up has 2,427 passed, five skipped, four warnings, and
@@ -584,6 +610,10 @@ but is not score provenance.
   repository/control, and 404 complete `tests/ops` passes. Its full hermetic
   suite has 2,508 passed, five skipped, four warnings, and zero failures in
   139.30 seconds; complete remote run `33307853768` is green.
+  Representation-startup checkpoint `4dd8267` has 148 focused, 201
+  repository/control, and 482 complete `tests/ops` passes. Its full hermetic
+  suite has 2,586 passed, five skipped, four warnings, and zero failures in
+  141.50 seconds; complete remote run `33309273768` is green.
 - Ruff passes across `src`, `tools`, `spikes`, and `tests`; `git diff --check`,
   shell syntax, the repository-boundary audit, and the control-plane audit also
   pass.
