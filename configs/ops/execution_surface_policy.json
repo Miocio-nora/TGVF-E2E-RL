@@ -271,7 +271,7 @@
       "workload_kinds": [
         "control"
       ],
-      "content_sha256": "e038d292b0b71753a8bb6549f41eaf9d9733d95078338a7340fe380434336592"
+      "content_sha256": "cceae503dedd886fdab5a7f22825c4ec473e6aff56013a75e1077f67387f4207"
     },
     {
       "path": "tools/benchmark_prl13_schedule_index.py",

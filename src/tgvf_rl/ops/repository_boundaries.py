@@ -13,9 +13,18 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
+from .module_size_ratchet import (
+    PRODUCTION_MODULE_LINE_LIMIT,
+    ModuleSizeFinding,
+    ModuleSizePolicyError,
+    ProductionModuleSizeException,
+    audit_production_module_sizes,
+    compare_module_size_exception_ratchet,
+    load_production_module_size_exceptions,
+)
 
-REPOSITORY_BOUNDARY_POLICY_SCHEMA = "tgvf-repository-boundary-policy-v2"
-REPOSITORY_BOUNDARY_AUDIT_SCHEMA = "tgvf-repository-boundary-audit-v2"
+REPOSITORY_BOUNDARY_POLICY_SCHEMA = "tgvf-repository-boundary-policy-v3"
+REPOSITORY_BOUNDARY_AUDIT_SCHEMA = "tgvf-repository-boundary-audit-v3"
 
 SOURCE_ROOT = "src/tgvf_rl"
 TOOLS_ROOT = "tools"
@@ -85,6 +94,7 @@ class RepositoryBoundaryPolicy:
     run_specific_code_allowlist: tuple[str, ...]
     machine_path_debt_allowlist: tuple[MachinePathDebt, ...]
     evidence_only_config_inventories: tuple[EvidenceConfigInventory, ...]
+    production_module_size_exceptions: tuple[ProductionModuleSizeException, ...]
     schema_version: str = REPOSITORY_BOUNDARY_POLICY_SCHEMA
 
 
@@ -112,6 +122,7 @@ class RepositoryBoundaryAudit:
     policy_sha256: str
     debts: tuple[BoundaryFinding, ...]
     violations: tuple[BoundaryFinding, ...]
+    baseline_policy_sha256: str | None = None
     schema_version: str = REPOSITORY_BOUNDARY_AUDIT_SCHEMA
 
     @property
@@ -126,6 +137,7 @@ class RepositoryBoundaryAudit:
             "policy_id": self.policy_id,
             "policy_revision": self.policy_revision,
             "policy_sha256": self.policy_sha256,
+            "baseline_policy_sha256": self.baseline_policy_sha256,
             "summary": {
                 "debt_count": len(self.debts),
                 "violation_count": len(self.violations),
@@ -201,6 +213,8 @@ def load_repository_boundary_policy(path: str | Path) -> RepositoryBoundaryPolic
         "evidence_only_config_inventories",
         "run_specific_code_allowlist",
         "machine_path_debt_allowlist",
+        "production_module_line_limit",
+        "production_module_size_exceptions",
     }
     if not isinstance(payload, dict) or set(payload) != expected_fields:
         raise RepositoryBoundaryError(
@@ -216,6 +230,11 @@ def load_repository_boundary_policy(path: str | Path) -> RepositoryBoundaryPolic
         raise RepositoryBoundaryError("repository boundary revision must be positive")
     if payload["source_root"] != SOURCE_ROOT or payload["tools_root"] != TOOLS_ROOT:
         raise RepositoryBoundaryError("repository source/tools roots differ")
+    if payload["production_module_line_limit"] != PRODUCTION_MODULE_LINE_LIMIT:
+        raise RepositoryBoundaryError(
+            "production module line limit must remain exactly "
+            f"{PRODUCTION_MODULE_LINE_LIMIT}"
+        )
     canonical_roots = _strict_string_list(
         payload["canonical_config_roots"], field="canonical_config_roots"
     )
@@ -320,6 +339,14 @@ def load_repository_boundary_policy(path: str | Path) -> RepositoryBoundaryPolic
     if len(set(machine_keys)) != len(machine_keys):
         raise RepositoryBoundaryError("machine-path debt allowlist contains duplicates")
 
+    try:
+        module_size_exceptions = load_production_module_size_exceptions(
+            payload["production_module_size_exceptions"],
+            source_root=SOURCE_ROOT,
+        )
+    except ModuleSizePolicyError as error:
+        raise RepositoryBoundaryError(str(error)) from error
+
     return RepositoryBoundaryPolicy(
         policy_id=policy_id,
         revision=revision,
@@ -331,12 +358,30 @@ def load_repository_boundary_policy(path: str | Path) -> RepositoryBoundaryPolic
             )
         ),
         evidence_only_config_inventories=tuple(inventories),
+        production_module_size_exceptions=module_size_exceptions,
+    )
+
+
+def compare_production_module_size_policies(
+    baseline: RepositoryBoundaryPolicy,
+    candidate: RepositoryBoundaryPolicy,
+) -> tuple[BoundaryFinding, ...]:
+    """Return monotonicity violations between parsed base and candidate policies."""
+
+    return tuple(
+        _boundary_finding(finding)
+        for finding in compare_module_size_exception_ratchet(
+            baseline.production_module_size_exceptions,
+            candidate.production_module_size_exceptions,
+        )
     )
 
 
 def audit_repository_boundaries(
     repository_root: str | Path,
     policy_path: str | Path,
+    *,
+    baseline_policy_path: str | Path | None = None,
 ) -> RepositoryBoundaryAudit:
     """Audit current files against the explicit debt baseline."""
 
@@ -348,8 +393,18 @@ def audit_repository_boundaries(
         policy_file = root / policy_file
     policy = load_repository_boundary_policy(policy_file)
     policy_sha256 = sha256(policy_file.read_bytes()).hexdigest()
+    baseline_policy_sha256: str | None = None
     debts: list[BoundaryFinding] = []
     violations: list[BoundaryFinding] = []
+    if baseline_policy_path is not None:
+        baseline_file = Path(baseline_policy_path)
+        if not baseline_file.is_absolute():
+            baseline_file = root / baseline_file
+        baseline_policy = load_repository_boundary_policy(baseline_file)
+        baseline_policy_sha256 = sha256(baseline_file.read_bytes()).hexdigest()
+        violations.extend(
+            compare_production_module_size_policies(baseline_policy, policy)
+        )
 
     source_files = _tree_files(
         root,
@@ -413,6 +468,18 @@ def audit_repository_boundaries(
             key = (relative, digest)
             actual_machine_paths[key] += 1
             machine_literals[key] = literal
+
+    observed_module_line_counts = {
+        relative: len(text.splitlines())
+        for relative, text in decoded.items()
+        if _is_under(relative, SOURCE_ROOT) and relative.endswith(".py")
+    }
+    module_debts, module_violations = audit_production_module_sizes(
+        observed_module_line_counts,
+        policy.production_module_size_exceptions,
+    )
+    debts.extend(_boundary_finding(item) for item in module_debts)
+    violations.extend(_boundary_finding(item) for item in module_violations)
 
     expected_machine_paths = {
         (item.path, item.literal_sha256): item.count
@@ -684,6 +751,7 @@ def audit_repository_boundaries(
         policy_sha256=policy_sha256,
         debts=tuple(sorted(debts, key=_finding_sort_key)),
         violations=tuple(sorted(violations, key=_finding_sort_key)),
+        baseline_policy_sha256=baseline_policy_sha256,
     )
 
 
@@ -874,6 +942,15 @@ def _finding_sort_key(finding: BoundaryFinding) -> tuple[str, str, str]:
     return finding.kind, finding.path, finding.message
 
 
+def _boundary_finding(finding: ModuleSizeFinding) -> BoundaryFinding:
+    return BoundaryFinding(
+        kind=finding.kind,
+        path=finding.path,
+        message=finding.message,
+        evidence=finding.evidence,
+    )
+
+
 __all__ = [
     "CANONICAL_CONFIG_ROOTS",
     "EVIDENCE_ONLY_CONFIG_ROOTS",
@@ -882,10 +959,13 @@ __all__ = [
     "BoundaryFinding",
     "EvidenceConfigInventory",
     "MachinePathDebt",
+    "PRODUCTION_MODULE_LINE_LIMIT",
+    "ProductionModuleSizeException",
     "RepositoryBoundaryAudit",
     "RepositoryBoundaryError",
     "RepositoryBoundaryPolicy",
     "audit_repository_boundaries",
+    "compare_production_module_size_policies",
     "content_tree_inventory_sha256",
     "load_repository_boundary_policy",
     "relative_path_inventory_sha256",

@@ -164,8 +164,214 @@
       "path": "tools/smoke_prl13_qwen3_full_model_grad.py"
     }
   ],
-  "policy_id": "TGVF-REPOSITORY-BOUNDARIES-V2",
-  "revision": 3,
+  "policy_id": "TGVF-REPOSITORY-BOUNDARIES-V3",
+  "production_module_line_limit": 1000,
+  "production_module_size_exceptions": [
+    {
+      "current_ceiling": 1144,
+      "next_split_seam": "Move representation and policy command implementations into private subcommand leaves while retaining the parser facade.",
+      "owner": "public-cli",
+      "path": "src/tgvf_rl/cli.py",
+      "reason": "Parser construction, preflight, authorization identity, and dispatch still share the public facade."
+    },
+    {
+      "current_ceiling": 2181,
+      "next_split_seam": "Move T1RunConfig, load_t1_run_config, and their strict parsing helpers into policy_selection_config.py.",
+      "owner": "policy-data",
+      "path": "src/tgvf_rl/data/policy_selection_runtime.py",
+      "reason": "T1 configuration, generation evidence, answer verification, and chunk persistence remain colocated."
+    },
+    {
+      "current_ceiling": 1388,
+      "next_split_seam": "Move VStar-specific materialization and quarantine logic into policy_selection_vstar_source.py.",
+      "owner": "policy-data",
+      "path": "src/tgvf_rl/data/policy_selection_sources.py",
+      "reason": "The artifact writer and three independent source adapters remain colocated."
+    },
+    {
+      "current_ceiling": 1228,
+      "next_split_seam": "Move runtime classes, manifest semantics, and load_policy_t1_mixed_runtime into policy_t1_mixed_runtime.py.",
+      "owner": "policy-data",
+      "path": "src/tgvf_rl/data/policy_t1_mixed_rl_dataset.py",
+      "reason": "Retained-pool materialization and training-time runtime loading remain colocated."
+    },
+    {
+      "current_ceiling": 1290,
+      "next_split_seam": "Move probe, candidate, rollout-audit, and benchmark-audit loading into crop_grounding_inputs.py.",
+      "owner": "policy-evaluation",
+      "path": "src/tgvf_rl/evaluation/crop_grounding.py",
+      "reason": "Manifest and audit loading remain mixed with geometry and per-sample scoring."
+    },
+    {
+      "current_ceiling": 1544,
+      "next_split_seam": "Move manifest, materialization, and artifact loading into full_model_snapshot_artifact.py while retaining the evaluation facade.",
+      "owner": "policy-evaluation",
+      "path": "src/tgvf_rl/evaluation/policy_full_model_snapshot.py",
+      "reason": "Full-model artifact materialization and the evaluation runtime adapter remain colocated."
+    },
+    {
+      "current_ceiling": 1175,
+      "next_split_seam": "Move enums, immutable record schemas, and comparison validation into result_registry_schema.py.",
+      "owner": "policy-evaluation",
+      "path": "src/tgvf_rl/evaluation/result_registry.py",
+      "reason": "Registry record schemas and filesystem-backed registry operations remain colocated."
+    },
+    {
+      "current_ceiling": 1475,
+      "next_split_seam": "Move validate_data_proto_integrity and ownership validation helpers into data_proto_integrity.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/data_bridge.py",
+      "reason": "Payload construction, sidecar lifetime, and integrity auditing remain colocated."
+    },
+    {
+      "current_ceiling": 1019,
+      "next_split_seam": "Move dynamic veRL engine construction and registration into exact_replay_verl_registration.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/exact_replay_engine.py",
+      "reason": "Framework-neutral exact replay and veRL engine registration remain colocated."
+    },
+    {
+      "current_ceiling": 1131,
+      "next_split_seam": "Move UpstreamVerlLaunchPlan and pure serialization into verl_launch_plan.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/launcher.py",
+      "reason": "The launch-plan schema and Hydra projection logic remain colocated."
+    },
+    {
+      "current_ceiling": 1013,
+      "next_split_seam": "Move VerlAsyncServerPolicyTurnClient and sampling, evidence, and termination helpers into native_agent_client.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/native_agent_loop.py",
+      "reason": "The async server client, invocation factory, and framework-neutral loop remain colocated."
+    },
+    {
+      "current_ceiling": 1591,
+      "next_split_seam": "Move the trajectory finalizer, bound judge, and reward-pipeline builders into policy_live_reward.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/policy_live_runtime.py",
+      "reason": "Tool runtimes, trajectory finalization, and judge and reward composition remain colocated."
+    },
+    {
+      "current_ceiling": 1669,
+      "next_split_seam": "Move metrics event, tracking, and policy_metrics_observation_from_data_proto logic into policy_task_metrics.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/policy_task_runner.py",
+      "reason": "Metrics, checkpoint lifecycle, and Ray worker and trainer factories remain colocated."
+    },
+    {
+      "current_ceiling": 1232,
+      "next_split_seam": "Move snapshot publication, loading, and integrity helpers into policy_weight_snapshot_store.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/policy_weight_sync.py",
+      "reason": "Weight-sync orchestration and secure snapshot storage and reads remain colocated."
+    },
+    {
+      "current_ceiling": 1175,
+      "next_split_seam": "Move tensor, source, and focus wire codecs into vllm_tool_wire.py.",
+      "owner": "verl-runtime",
+      "path": "src/tgvf_rl/framework/verl/vllm_tool_runtime.py",
+      "reason": "Wire codecs, the worker extension, and dynamic runtime-class construction remain colocated."
+    },
+    {
+      "current_ceiling": 1073,
+      "next_split_seam": "Move immutable config, Python, and environment identity binding into cli_authorization_identity.py.",
+      "owner": "repository-ops",
+      "path": "src/tgvf_rl/ops/cli_authorization.py",
+      "reason": "Identity and environment binding remain mixed with gate consumption and authorization materialization."
+    },
+    {
+      "current_ceiling": 2164,
+      "next_split_seam": "Move candidate, input, and donor contracts plus input loading and common materialization into evaluation/inputs.py.",
+      "owner": "answer-utility-evaluation",
+      "path": "src/tgvf_rl/representation/experiments/answer_utility/evaluation/runner.py",
+      "reason": "Private artifact binding, input construction, generation, and evaluation identity remain colocated."
+    },
+    {
+      "current_ceiling": 1181,
+      "next_split_seam": "Move request sanitization, retry policy, and asynchronous judge transport into semantic_judge.py.",
+      "owner": "answer-utility-evaluation",
+      "path": "src/tgvf_rl/representation/experiments/answer_utility/evaluation/semantic_rescore.py",
+      "reason": "Immutable-ledger overlay logic and asynchronous semantic-judge transport remain colocated."
+    },
+    {
+      "current_ceiling": 1100,
+      "next_split_seam": "Move private checkpoint, resume, and final-artifact helpers into answer_utility/checkpoint_io.py.",
+      "owner": "answer-utility-training",
+      "path": "src/tgvf_rl/representation/experiments/answer_utility/runner.py",
+      "reason": "The experiment training loop and private checkpoint and artifact IO remain colocated."
+    },
+    {
+      "current_ceiling": 1889,
+      "next_split_seam": "Move checkpoint identity, manifest, artifact, and resume-result dataclasses into checkpoint_schema.py.",
+      "owner": "representation-training",
+      "path": "src/tgvf_rl/representation/training/checkpoint.py",
+      "reason": "Checkpoint identity schemas and save, restore, digest, and validation logic remain colocated."
+    },
+    {
+      "current_ceiling": 2149,
+      "next_split_seam": "Move Representation configuration dataclasses into config_schema.py and preserve exact facade re-exports.",
+      "owner": "representation-training",
+      "path": "src/tgvf_rl/representation/training/config.py",
+      "reason": "Configuration dataclasses, TOML parsing, and external-file binding remain colocated."
+    },
+    {
+      "current_ceiling": 1731,
+      "next_split_seam": "Move rank-zero adapter export contracts and IO into distributed_checkpoint_export.py.",
+      "owner": "representation-training",
+      "path": "src/tgvf_rl/representation/training/distributed_checkpoint.py",
+      "reason": "Distributed checkpoint core, rank-zero export, metadata, and digest logic remain colocated."
+    },
+    {
+      "current_ceiling": 1401,
+      "next_split_seam": "Move action-target contracts, rendering, and token-span helpers into native_action_target.py.",
+      "owner": "representation-training",
+      "path": "src/tgvf_rl/representation/training/native_pipeline.py",
+      "reason": "Action-target rendering, Qwen group construction, and token-span binding remain colocated."
+    },
+    {
+      "current_ceiling": 2155,
+      "next_split_seam": "Move _OracleRunLedger, run identity, paired summary, and publication into oracle_d_ledger.py.",
+      "owner": "representation-evaluation",
+      "path": "src/tgvf_rl/representation/training/oracle_d_utility.py",
+      "reason": "Oracle prompt construction, generation, scoring, and durable ledger publication remain colocated."
+    },
+    {
+      "current_ceiling": 1134,
+      "next_split_seam": "Move pair, manifest, processor-prefix, and message contracts into qwen3_counterfactual_schema.py.",
+      "owner": "representation-evaluation",
+      "path": "src/tgvf_rl/representation/training/qwen3_counterfactual.py",
+      "reason": "Counterfactual contracts and messages remain mixed with injected-request materialization and case building."
+    },
+    {
+      "current_ceiling": 1552,
+      "next_split_seam": "Move checkpoint saving, output-path preparation, and resume-metrics validation into runner_state_io.py.",
+      "owner": "representation-training",
+      "path": "src/tgvf_rl/representation/training/runner.py",
+      "reason": "The hot training loop and output, checkpoint, resume, and metrics IO remain colocated."
+    },
+    {
+      "current_ceiling": 1109,
+      "next_split_seam": "Move create_qwen3_representation_runtime and construction validators into qwen3_runtime_factory.py.",
+      "owner": "representation-training",
+      "path": "src/tgvf_rl/representation/training/runtime.py",
+      "reason": "The runtime object and Qwen construction and architecture validation remain colocated."
+    },
+    {
+      "current_ceiling": 1398,
+      "next_split_seam": "Move score dataclasses and score_streaming functions into streaming_score.py.",
+      "owner": "representation-training",
+      "path": "src/tgvf_rl/representation/training/streaming.py",
+      "reason": "Streaming score kernels, backward kernels, and padding and batching helpers remain colocated."
+    },
+    {
+      "current_ceiling": 1082,
+      "next_split_seam": "Move DeepEyesJudgeServiceConfig, its loader, and AsyncDeepEyesOpenRouterJudge into deepeyes_judge_client.py.",
+      "owner": "reward-runtime",
+      "path": "src/tgvf_rl/rewards/deepeyes_verl_reward.py",
+      "reason": "External judge configuration and client code remain mixed with the veRL reward manager."
+    }
+  ],
+  "revision": 4,
   "run_specific_code_allowlist": [
     "src/tgvf_rl/framework/verl/prl13_main.py",
     "src/tgvf_rl/policy/prl13_group_signal.py",
@@ -182,7 +388,7 @@
     "tools/supervise_rp67_t1_schedule.py",
     "tools/watchdog_rp67_step2000_acc_pipeline.py"
   ],
-  "schema_version": "tgvf-repository-boundary-policy-v2",
+  "schema_version": "tgvf-repository-boundary-policy-v3",
   "source_root": "src/tgvf_rl",
   "tools_root": "tools"
 }

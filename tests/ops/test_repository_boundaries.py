@@ -14,8 +14,10 @@ from tgvf_rl.ops.repository_boundaries import (
     REPOSITORY_BOUNDARY_AUDIT_SCHEMA,
     REPOSITORY_BOUNDARY_POLICY_SCHEMA,
     MachinePathDebt,
+    ProductionModuleSizeException,
     RepositoryBoundaryError,
     audit_repository_boundaries,
+    compare_production_module_size_policies,
     content_tree_inventory_sha256,
     load_repository_boundary_policy,
     relative_path_inventory_sha256,
@@ -51,6 +53,7 @@ def _write_policy(
     *,
     run_allowlist: tuple[str, ...] = (),
     machine_allowlist: tuple[MachinePathDebt, ...] = (),
+    module_size_exceptions: tuple[ProductionModuleSizeException, ...] = (),
     evidence_overrides: dict[str, tuple[int, str, str]] | None = None,
 ) -> Path:
     overrides = evidence_overrides or {}
@@ -78,6 +81,10 @@ def _write_policy(
         "evidence_only_config_inventories": inventories,
         "run_specific_code_allowlist": list(run_allowlist),
         "machine_path_debt_allowlist": [item.as_record() for item in machine_allowlist],
+        "production_module_line_limit": 1000,
+        "production_module_size_exceptions": [
+            item.as_record() for item in module_size_exceptions
+        ],
     }
     path = repository / "configs/ops/repository_boundary_policy.json"
     path.write_text(
@@ -89,6 +96,19 @@ def _write_policy(
 
 def _kinds(report: object, attribute: str) -> set[str]:
     return {item.kind for item in getattr(report, attribute)}
+
+
+def _module_size_exception(
+    path: str,
+    ceiling: int,
+) -> ProductionModuleSizeException:
+    return ProductionModuleSizeException(
+        path=path,
+        owner="test-owner",
+        reason="The fixture deliberately keeps two responsibilities together.",
+        next_split_seam="Move the second responsibility into a dedicated test leaf.",
+        current_ceiling=ceiling,
+    )
 
 
 def test_clean_repository_passes_with_evidence_roots_reported_as_debt(
@@ -355,6 +375,182 @@ def test_stale_allowlists_and_occurrence_drift_fail_the_ratchet(
     } <= _kinds(report, "violations")
 
 
+def test_exact_oversized_production_module_is_visible_registered_debt(
+    tmp_path: Path,
+) -> None:
+    repository = _make_repository(tmp_path)
+    module_path = "src/tgvf_rl/large.py"
+    (repository / module_path).write_text("VALUE = 0\n" * 1001, encoding="utf-8")
+    policy = _write_policy(
+        repository,
+        module_size_exceptions=(_module_size_exception(module_path, 1001),),
+    )
+
+    report = audit_repository_boundaries(repository, policy)
+
+    assert report.status == "pass"
+    debt = next(item for item in report.debts if item.path == module_path)
+    assert debt.kind == "oversized_production_module"
+    assert debt.evidence["registered_ceiling"] == 1001
+    assert debt.evidence["observed_line_count"] == 1001
+
+
+def test_new_oversized_production_module_fails_closed(tmp_path: Path) -> None:
+    repository = _make_repository(tmp_path)
+    module_path = "src/tgvf_rl/large.py"
+    (repository / module_path).write_text("VALUE = 0\n" * 1001, encoding="utf-8")
+    policy = _write_policy(repository)
+
+    report = audit_repository_boundaries(repository, policy)
+
+    finding = next(
+        item
+        for item in report.violations
+        if item.kind == "new_oversized_production_module"
+    )
+    assert finding.path == module_path
+    assert finding.evidence == {"line_limit": 1000, "observed_line_count": 1001}
+
+
+@pytest.mark.parametrize(
+    ("observed", "ceiling", "expected_kind"),
+    (
+        (1002, 1001, "module_size_ceiling_exceeded"),
+        (1001, 1002, "stale_module_size_ceiling"),
+        (1000, 1001, "stale_module_size_exception"),
+    ),
+)
+def test_module_size_growth_slack_and_completed_debt_fail_the_ratchet(
+    tmp_path: Path,
+    observed: int,
+    ceiling: int,
+    expected_kind: str,
+) -> None:
+    repository = _make_repository(tmp_path)
+    module_path = "src/tgvf_rl/large.py"
+    (repository / module_path).write_text("VALUE = 0\n" * observed, encoding="utf-8")
+    policy = _write_policy(
+        repository,
+        module_size_exceptions=(_module_size_exception(module_path, ceiling),),
+    )
+
+    report = audit_repository_boundaries(repository, policy)
+
+    assert expected_kind in _kinds(report, "violations")
+
+
+def test_missing_registered_module_size_exception_is_stale(tmp_path: Path) -> None:
+    repository = _make_repository(tmp_path)
+    module_path = "src/tgvf_rl/removed.py"
+    policy = _write_policy(
+        repository,
+        module_size_exceptions=(_module_size_exception(module_path, 1001),),
+    )
+
+    report = audit_repository_boundaries(repository, policy)
+
+    finding = next(
+        item
+        for item in report.violations
+        if item.kind == "stale_module_size_exception"
+    )
+    assert finding.path == module_path
+
+
+def test_module_size_policy_rejects_field_path_order_and_metadata_drift(
+    tmp_path: Path,
+) -> None:
+    repository = _make_repository(tmp_path)
+    first = _module_size_exception("src/tgvf_rl/first.py", 1001)
+    second = _module_size_exception("src/tgvf_rl/second.py", 1001)
+    policy = _write_policy(
+        repository,
+        module_size_exceptions=(first, second),
+    )
+    base = json.loads(policy.read_text(encoding="utf-8"))
+
+    invalid_payloads = []
+    unsorted = json.loads(json.dumps(base))
+    unsorted["production_module_size_exceptions"].reverse()
+    invalid_payloads.append((unsorted, "sorted by path"))
+    wrong_path = json.loads(json.dumps(base))
+    wrong_path["production_module_size_exceptions"][0]["path"] = "tools/first.py"
+    invalid_payloads.append((wrong_path, "canonical Python path"))
+    extra_field = json.loads(json.dumps(base))
+    extra_field["production_module_size_exceptions"][0]["unexpected"] = True
+    invalid_payloads.append((extra_field, "unexpected field set"))
+    blank_owner = json.loads(json.dumps(base))
+    blank_owner["production_module_size_exceptions"][0]["owner"] = " "
+    invalid_payloads.append((blank_owner, "trimmed text"))
+    boolean_ceiling = json.loads(json.dumps(base))
+    boolean_ceiling["production_module_size_exceptions"][0][
+        "current_ceiling"
+    ] = True
+    invalid_payloads.append((boolean_ceiling, "integer greater than 1000"))
+    relaxed_limit = json.loads(json.dumps(base))
+    relaxed_limit["production_module_line_limit"] = 1001
+    invalid_payloads.append((relaxed_limit, "must remain exactly 1000"))
+
+    for payload, pattern in invalid_payloads:
+        policy.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(RepositoryBoundaryError, match=pattern):
+            load_repository_boundary_policy(policy)
+
+
+def test_registered_unreadable_or_symlink_module_fails_closed(tmp_path: Path) -> None:
+    repository = _make_repository(tmp_path)
+    non_utf8_path = "src/tgvf_rl/non_utf8.py"
+    linked_path = "src/tgvf_rl/linked.py"
+    (repository / non_utf8_path).write_bytes(b"\xff\n" * 1001)
+    target = tmp_path / "outside.py"
+    target.write_text("VALUE = 0\n" * 1001, encoding="utf-8")
+    (repository / linked_path).symlink_to(target)
+    policy = _write_policy(
+        repository,
+        module_size_exceptions=(
+            _module_size_exception(linked_path, 1001),
+            _module_size_exception(non_utf8_path, 1001),
+        ),
+    )
+
+    report = audit_repository_boundaries(repository, policy)
+
+    assert {
+        "non_utf8_canonical_file",
+        "stale_module_size_exception",
+        "symlink_boundary",
+    } <= _kinds(report, "violations")
+
+
+def test_baseline_comparator_rejects_new_exception_and_relaxed_ceiling(
+    tmp_path: Path,
+) -> None:
+    repository = _make_repository(tmp_path)
+    shared_path = "src/tgvf_rl/shared.py"
+    new_path = "src/tgvf_rl/new.py"
+    baseline_path = _write_policy(
+        repository,
+        module_size_exceptions=(_module_size_exception(shared_path, 1001),),
+    )
+    baseline = load_repository_boundary_policy(baseline_path)
+    candidate_path = _write_policy(
+        repository,
+        module_size_exceptions=(
+            _module_size_exception(new_path, 1001),
+            _module_size_exception(shared_path, 1002),
+        ),
+    )
+    candidate = load_repository_boundary_policy(candidate_path)
+
+    violations = compare_production_module_size_policies(baseline, candidate)
+
+    assert {item.kind for item in violations} == {
+        "module_size_ceiling_relaxed",
+        "new_module_size_exception",
+    }
+    assert {item.path for item in violations} == {new_path, shared_path}
+
+
 def test_non_utf8_and_symlink_inputs_fail_closed(tmp_path: Path) -> None:
     repository = _make_repository(tmp_path)
     policy = _write_policy(repository)
@@ -403,6 +599,52 @@ def test_cli_exit_status_and_json_are_fail_closed(tmp_path: Path) -> None:
     payload = json.loads(blocked.stdout)
     assert payload["status"] == "blocked"
     assert payload["summary"]["violation_count"] == 1
+
+
+def test_cli_optional_baseline_policy_rejects_a_relaxed_ceiling(
+    tmp_path: Path,
+) -> None:
+    repository = _make_repository(tmp_path)
+    module_path = "src/tgvf_rl/large.py"
+    module = repository / module_path
+    module.write_text("VALUE = 0\n" * 1001, encoding="utf-8")
+    candidate_policy = _write_policy(
+        repository,
+        module_size_exceptions=(_module_size_exception(module_path, 1001),),
+    )
+    baseline_policy = repository / "configs/ops/module-size-baseline.json"
+    baseline_policy.write_bytes(candidate_policy.read_bytes())
+    module.write_text("VALUE = 0\n" * 1002, encoding="utf-8")
+    _write_policy(
+        repository,
+        module_size_exceptions=(_module_size_exception(module_path, 1002),),
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(AUDIT_TOOL),
+            "--repository-root",
+            str(repository),
+            "--policy",
+            str(candidate_policy),
+            "--baseline-policy",
+            str(baseline_policy),
+            "--compact",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    assert payload["baseline_policy_sha256"] == sha256(
+        baseline_policy.read_bytes()
+    ).hexdigest()
+    assert payload["summary"]["violation_kinds"] == {
+        "module_size_ceiling_relaxed": 1
+    }
 
 
 def test_cli_error_uses_current_audit_schema(tmp_path: Path) -> None:

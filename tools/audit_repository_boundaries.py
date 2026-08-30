@@ -40,6 +40,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Boundary policy path, relative to --repository-root by default.",
     )
     parser.add_argument(
+        "--baseline-policy",
+        type=Path,
+        help="Optional base policy whose module-size ceilings may not be relaxed.",
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         help="Emit compact JSON instead of indented JSON.",
@@ -50,7 +55,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        report = audit_repository_boundaries(args.repository_root, args.policy)
+        report = audit_repository_boundaries(
+            args.repository_root,
+            args.policy,
+            baseline_policy_path=args.baseline_policy,
+        )
     except (OSError, RepositoryBoundaryError) as error:
         failure = {
             "schema_version": REPOSITORY_BOUNDARY_AUDIT_SCHEMA,
