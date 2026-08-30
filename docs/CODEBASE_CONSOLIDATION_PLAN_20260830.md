@@ -4,13 +4,15 @@ Status: C0 is anchored by the remote annotated tag
 `stabilization-c0-20260830`. C1's machine-disposition condition is satisfied,
 the three C2 target facades are below 1,000 lines, and the four known C3 import
 cycles are gone. All nine post-C2 priority decompositions are also complete,
-reducing the current production-size inventory to 20 modules. C3 utility
-migration remains partial. C4 produced a read-only inventory; it did not
-authorize or execute a deletion. At verified code milestone `fd8da97`, the
-latest complete hermetic CPU suite passes locally with 2,286 passed tests, five
-explicit skips, and four non-failing warnings in 135.24 seconds. Remote CI
-verification remains required.
-Policy v3 revision 5 records the 20 remaining oversized modules and rejects
+and the later result-registry and CLI/authorization splits reduce the current
+production-size inventory to 17 modules. C3 utility migration remains partial.
+C4 produced a read-only inventory; it did not authorize or execute a deletion.
+The final hermetic CPU rerun has 2,337 passed tests, five explicit skips, and
+four non-failing warnings in 140.25 seconds, including the added size-tamper
+case. Remote CI commit `a5dd0d1` is green for install, lint, repository
+boundary, control plane, and the full CPU suite; it is the predecessor of the
+fd-closure commit, whose remote reproduction is still pending.
+Policy v3 revision 7 records the 17 remaining oversized modules and rejects
 growth, slack, stale entries, or a relaxed baseline. This plan does not
 authorize an experiment or rewrite historical evidence.
 
@@ -20,7 +22,7 @@ The dated snapshots below remain historical anchors. The current local head
 advances them as follows:
 
 - production modules above 1,000 lines fell from 32 at C0, to 29 at the C2
-  snapshot, and to 20 now;
+  snapshot, to 20 at the `fd8da97` snapshot, and to 17 now;
 - all nine priority decompositions after C2 are complete: exact replay, Policy
   weight sync, the native agent loop, representation configuration,
   representation checkpointing, Policy-selection runtime, answer-utility
@@ -29,21 +31,33 @@ advances them as follows:
   remain guarded by a full-tree Tarjan regression test;
 - execution/support surfaces fell from 82 at C0 to 79, and all 79 current
   surfaces have exactly one machine-checked classification;
-- the production-size policy ratcheted from 29 exceptions to 20 at revision 5.
+- the production-size policy ratcheted from 29 exceptions to 20 at revision 5,
+  then to 17 at revision 7.
 
-Verification of code milestone `fd8da97` is green: the repository-boundary
+The historical `fd8da97` checkpoint was green: the repository-boundary
 audit reports 64 visible debts (five evidence-only config roots, 25 machine
 paths, 20 oversized modules, and 14 run-specific paths) and zero violations;
 the control-plane audit reports 79 surfaces and zero violations. `tests/ops`
 has 199 passing tests, the focused split and compatibility suites have 577
 passing tests, and the complete hermetic CPU suite has 2,286 passed, five
-skipped, and four non-failing warnings in 135.24 seconds. These are local
-verification results; remote CI has not yet reproduced them.
+skipped, and four non-failing warnings in 135.24 seconds. These values are a
+preserved historical snapshot, not the current head.
+
+At the current checkpoint, repository-boundary policy v3 revision 7 passes
+with 61 visible debts (five evidence-only roots, 25 machine paths, 17 oversized
+modules, and 14 run-specific paths) and zero violations. Execution-surface
+policy revision 4 binds 79 surfaces and the control-plane audit passes. Before
+the added size-tamper parameter, the focused stabilization selection had 304
+passing tests; the updated fd security file passes 10/10, and the final full
+CPU rerun has 2,337 passed, five skipped, and four warnings in 140.25 seconds.
+Predecessor commit `a5dd0d1` is green across install, lint, both audits, and the
+full CPU job after five private-machine-path test fixtures were made hermetic.
+The fd-closure commit has not yet been reproduced remotely.
 
 This milestone does not close the runtime authority boundary. The experiment
-policy still has `runtime_closure.launch_enabled=false` with all eight blocker
+policy revision 3 still has `runtime_closure.launch_enabled=false` with seven
 IDs present: `atomic_authority_transaction_missing`,
-`child_environment_allowlist_missing`, `fd_bound_python_exec_missing`,
+`child_environment_allowlist_missing`,
 `immutable_runtime_code_package_missing`,
 `policy_recursive_compile_closure_missing`,
 `representation_eval_safe_artifact_missing`, `worker_member_claims_missing`,
@@ -51,6 +65,38 @@ and `worker_startup_envelope_missing`. C3 semantic-helper migration remains
 partial. C4 remains an inventory only: its 72 worktrees, 62 branches, and seven
 dirty worktrees must be preserved unless a later operator-approved action names
 an exact path or ref.
+
+## 2026-08-30 fd-closure checkpoint
+
+The first runtime blocker is closed without enabling launch. Representation and
+Policy preflight retain an absolute no-follow regular-file descriptor, compare
+its device/inode with `/proc/self/exe`, and carry it through the prepared plan.
+Both final boundaries revalidate the same descriptor's bytes, digest, size,
+stat, executable mode, and prepared identity before calling `os.execve` with
+the integer fd. The declared Python path remains `argv[0]`; neither boundary
+reopens that path or falls back through `/proc/self/fd`. Process-local binding
+ownership uses explicit close plus `weakref.finalize` for abandoned plans.
+
+Race, payload/size/mode tamper, descriptor reuse, real fd-exec,
+pickle/import compatibility, and control-plane AST mutation tests pass. The
+public CLI permits only one exact prepared-lifetime `try/finally`: preflight is
+outside, authorization and dispatch are inside, and the sole finalizer is
+`prepared.close_python_binding()`. A second independent security review found
+no blocker, so experiment policy revision 3 removes
+`fd_bound_python_exec_missing` and no other blocker.
+
+The same split removes two stale size exceptions: `cli.py` is 963 lines and
+`ops/cli_authorization.py` is 622, while their new `ops/cli_launch.py` and
+`ops/cli_authorization_identity.py` leaves are 265 and 659 lines. The result
+registry is also split into a 292-line facade, an 839-line schema leaf, and a
+225-line support leaf. Together these changes reduce the oversized inventory
+from the historical revision-5 count of 20 to the revision-7 count of 17.
+
+`child_environment_allowlist_missing` is the next runtime-closure priority and
+cannot yet be removed. Both launch paths still sanitize through a denylist and
+then pass the remaining host environment into the child; the replacement must
+construct a reviewed allowlist while preserving only explicitly justified
+torchrun/Ray/veRL inputs and separately bound secret transport.
 
 ## Why the repository feels fragmented
 
@@ -106,8 +152,10 @@ collection (2,112 passed and five explicit dependency/environment skips),
 an independently simulated clean runner (2,016 passed, 91 explicit optional
 integration/environment skips, zero failures), Ruff, and no GPU process
 started by the cleanup. The remote annotated tag
-`stabilization-c0-20260830` preserves that baseline. Remote CI still has to
-reproduce the later consolidation head rather than inheriting C0's result.
+`stabilization-c0-20260830` preserves that baseline. At that historical
+checkpoint, the later consolidation head still awaited remote reproduction.
+The later `a5dd0d1` predecessor is remotely green; the fd-closure checkpoint
+still awaits its own run.
 
 No module split or historical deletion belongs in C0. Combining security fixes
 with broad moves would make review and provenance harder.
@@ -168,7 +216,9 @@ decomposition series reduced that inventory to 20; policy revision 5 removes
 the nine stale exceptions without adding an exception or raising a ceiling.
 Candidate audit rejects new, growing, stale, or slack exceptions; optional
 baseline comparison also rejects a newly added exception or raised ceiling.
-The 20 surviving rows remain visible debt, not waivers.
+That 20-row value is the historical `fd8da97` checkpoint. The subsequent
+result-registry and CLI/authorization splits remove three more stale exceptions;
+revision 7 now retains 17 visible debts, not waivers.
 
 ### C3 — remove utility duplication and import cycles
 
@@ -178,7 +228,7 @@ time, then delete its local helper. A shared helper is acceptable only when
 its security and serialization semantics are identical; similarly named but
 semantically different hashes must stay explicitly separate.
 
-Break the four current import cycles by moving shared protocols toward leaf
+Break the four then-current import cycles by moving shared protocols toward leaf
 modules, not by adding local imports as a permanent workaround:
 
 - `framework.verl.data_bridge` ↔ `framework.verl.rollout_bridge`;
@@ -196,7 +246,7 @@ prevents their silent return. Utility consolidation is intentionally partial:
   `policy_benchmark_scoring.py`, and `internal_evaluation_artifact.py`);
 - `secure_file_read.py` defines separate leaf, absolute-chain, and
   descriptor-rooted contracts. Production migrations now include
-  `evaluation/result_registry.py`, descriptor-bound Policy weight-snapshot
+  `evaluation/result_registry_support.py`, descriptor-bound Policy weight-snapshot
   reads, and representation-training configuration and external-file
   reads/probes. This does not claim that every repository reader or directory
   trust boundary has been migrated; a metadata-only probe also does not make a
@@ -248,8 +298,10 @@ Consolidation is complete when:
 - the full hermetic CPU suite and repository audits run in CI.
 
 Current state: the entry-point disposition condition, the three C2 targets, all
-nine post-C2 priority decompositions, the revision-5 production-size exception
-ratchet, the known-cycle condition, and the read-only C4 inventory are
-complete. The portable runtime/CLI closure remains disabled by its eight named
-blockers; remaining semantic-helper migrations and remote CI are also still
-open.
+nine post-C2 priority decompositions, the revision-7 production-size exception
+ratchet, the known-cycle condition, the fd-bound Python-exec blocker, and the
+read-only C4 inventory are complete. The predecessor's remote CPU CI is green,
+while the fd-closure checkpoint still awaits remote reproduction. The portable
+runtime/CLI closure remains disabled by its seven remaining named blockers;
+`child_environment_allowlist_missing` and the remaining semantic-helper
+migrations are still open.

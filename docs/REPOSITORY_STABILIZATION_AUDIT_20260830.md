@@ -23,21 +23,65 @@ not closed merely because the affected experiment has stopped running.
 
 | Area | State | Required closure |
 |---|---|---|
-| Repository ownership | partial | Boundary policy v3 revision 5 passes with zero violations and 64 visible debts: 44 exact historical/config/path debts plus 20 exact oversized-module debts. Every oversized row binds its current line count, owner, rationale, and next split; comparison against the preceding revision-4 policy rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
-| Execution-surface inventory | verified | The v2 recursive exact-set manifest binds 79 entries and their file bytes: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed. |
-| Public and historical launch surfaces | contained, not closed | Legacy/spike surfaces are inventoried and guarded. Independent review found unresolved worker-envelope, executable-FD, environment, member-claim, authorization-transaction and runtime-package gaps. Policy v2 therefore sets the non-overridable canonical runtime closure to disabled. |
+| Repository ownership | partial | Boundary policy v3 revision 7 passes with zero violations and 61 visible debts: five evidence-only roots, 25 machine paths, 17 oversized modules, and 14 run-specific paths. Every oversized row binds its current line count, owner, rationale, and next split; baseline comparison rejects a new exception or raised ceiling. Neutral-path semantic RP/PRL debt still needs a second policy layer. |
+| Execution-surface inventory | verified | Execution-surface policy revision 4 binds 79 entries and their file bytes under the v2 recursive exact-set schema: every Python file below `tools`/`spikes`, every shell file there, and every `src` main/module-main, Python-shebang, executable-bit, or console-entry target. Missing, extra, duplicate, moved, reclassified, or content-drifted entries fail closed, and the control-plane audit passes. |
+| Public and historical launch surfaces | contained, fd execution closed | Legacy/spike surfaces remain inventoried and guarded. Descriptor-bound Python execution has implementation, adversarial coverage, policy promotion, and two independent security reviews; `fd_bound_python_exec_missing` is removed. Worker envelope, strict child environment, member claims, authorization transaction, immutable runtime package, and two artifact/compiler blockers remain, so experiment policy revision 3 keeps canonical runtime closure disabled. |
 | Crop observation/action contracts | verified for the stabilization runtime | Matched60, legacy generic86 and strict/legacy action semantics are explicit identities with focused tests. No historical RP/PRL config binds the new strict loop, so this does not retroactively certify old artifacts. |
 | TGVF/Atomic observation layout | verified | Live append and immutable replay/layout consume the same once-rendered protocol/dialect-bound bytes; the layout has no implicit Thinking renderer. |
 | Historical TGVF/Atomic impact | verified | Implementation commits `b100d3d`, `ec0555b`, `8e6b3d`, `5baddc` and provenance checkouts `b87126a`, `017b507`, `001838b` explicitly pass one dialect-bound renderer to appender and layout. Training replay consumes the recorded token rows, so the unused fallback does not downgrade those rows. Their runtime is `training_run`/precomputed, not official-visible/native-pixel. |
-| Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 now rejects every `golden` status and every numeric delta. |
+| Result comparisons | contained, not closed | Registry v2 verifies score-file bytes/content and independent preregistration bytes, but those artifacts do not bind a score to evaluation identity, the exact trajectory set, weights and the full comparison contract. V2 rejects every `golden` status and every numeric delta. Its implementation is now split into a 292-line facade, 839-line schema leaf, and 225-line support leaf without changing historical imports or serialization coordinates. |
 | Policy compile prerequisites | blocked | The hidden worktree-local default is removed and a strict content-bound v1 manifest now binds four minimum declared files. Launch remains blocked because recursive Python headers and the compiler system-toolchain are not yet closed by the manifest schema. |
 | Snapshot filesystem closure | partial | LoRA closure reads use descriptor-relative traversal and immutable publications use no-replace semantics. Full-model freeze stores immutable manifest/receipt records rather than copying the external weights; official loading now hashes the complete bound checkpoint/model closure and repeats that verification immediately before vLLM construction, including same-size mutation tests. vLLM 0.12 exposes neither a loaded-adapter nor loaded-full-model digest, so same-UID mutation after the final verification remains a documented runtime residual. |
-| Test discovery and behavior | current code milestone verified locally | The C0 tag remains a preserved 2,112-pass baseline, and `ccef450` remains the 2,193-pass post-consolidation snapshot. At code milestone `fd8da97`, the hermetic CPU suite completed with 2,286 passed, five explicit skips, four non-failing warnings, and zero failures in 135.24 seconds; repository audits and the SCC regression also pass. Remote CI still has to reproduce this result. |
+| Test discovery and behavior | current local green; remote reproduction pending | The C0 tag remains a preserved 2,112-pass baseline, `ccef450` remains the 2,193-pass snapshot, and `fd8da97` remains the historical 2,286-pass snapshot. The final current hermetic CPU rerun completed with 2,337 passed, five explicit skips, four non-failing warnings, and zero failures in 140.25 seconds; both repository audits pass. Before the added size-tamper parameter, the focused selection had 304 passing tests; the updated fd security file passes 10/10 and the final full suite contains that case. Predecessor commit `a5dd0d1` is remotely green after five private-machine-path fixtures were made hermetic, but the fd-closure commit still requires its own remote run. |
 
-## Post-ratchet consolidation milestone
+## 2026-08-30 fd-closure checkpoint
 
-This section is the current additive status. Earlier counts below remain dated
-snapshots and are not retroactively rewritten.
+The executable pathname-rebinding and fd-selection chain is now closed from
+bind through process replacement. Both canonical launch preflights open the
+Python candidate through absolute component-by-component no-follow traversal,
+retain the regular-file descriptor, and compare its device/inode with
+`/proc/self/exe`. The prepared
+plan carries a serializable fd-free identity and a process-local,
+non-serializable descriptor owner. The two final execution boundaries compare
+the binding identity with the prepared identity, reread the same fd, revalidate
+digest, size, device, inode, mode, and executable bit, then call
+`os.execve(integer_fd, argv, environment)`. They preserve the declared Python
+path as `argv[0]` and have no path or `/proc/self/fd` fallback.
+
+The retained owner uses explicit idempotent close plus `weakref.finalize`.
+Preflight failure, authorization refusal, failed exec, abandoned ownership,
+double close, and fd-number reuse are covered. Adversarial tests also cover a
+candidate replacement between process-identity inspection and retained open,
+payload/size/mode tampering on the same inode, unavailable `/proc` identity,
+real fd execution after replacing the declared pathname, and
+facade/pickle/type-hint/import-order compatibility. Control-plane negative
+mutations reject caught dispatch, extra try/finally effects, a wrong finalizer,
+wrong dispatch provenance, and rebinds. A second independent read-only security
+review found no remaining blocker to the narrow fd-bound promotion; the known
+same-inode write window after final verification belongs to
+`immutable_runtime_code_package_missing`, not this closed blocker.
+
+The control-plane now requires one exact prepared lifetime. Static preflight
+occurs before a handler-free `try/finally`; authorization and dispatch are the
+reviewed try body, and the only final statement is
+`prepared.close_python_binding()`. The implementation split leaves `cli.py` at
+963 lines and `ops/cli_authorization.py` at 622 lines; new
+`ops/cli_launch.py` and `ops/cli_authorization_identity.py` leaves are 265 and
+659 lines. Repository policy v3 revision 7 removes both stale facade
+exceptions and retains 17 other oversized modules.
+
+Experiment execution policy revision 3 removes
+`fd_bound_python_exec_missing`, but `runtime_closure.launch_enabled` remains
+`false` with seven exact blockers. `child_environment_allowlist_missing` is
+the next priority and is not closed: representation and Policy still construct
+children from host-environment pass-through plus a denylist. They require a
+strict reviewed allowlist, including deliberate torchrun/Ray/veRL inputs and
+separately bound credential transport, before that blocker can move.
+
+## Historical post-ratchet consolidation milestone (`fd8da97`)
+
+This section preserves the earlier `fd8da97` snapshot. Its counts are not the
+current head and are not retroactively rewritten.
 
 - The initial raw oversized-module scan found 32 production files above the
   limit. The first three decompositions established the 29-row policy-v3
@@ -144,7 +188,7 @@ different controls. A reasoned freeze override can authorize a future scheduled
 run only after runtime closure is complete; it cannot waive a code-execution or
 artifact-safety blocker.
 
-`configs/ops/experiment_execution_policy.json` revision 2 currently declares
+`configs/ops/experiment_execution_policy.json` revision 3 currently declares
 `runtime_closure.launch_enabled=false`. Canonical Policy training,
 representation training, their workers, and representation internal evaluation
 fail before token consumption or unsafe artifact loading while any blocker
@@ -152,12 +196,16 @@ remains. The exact blocker identifiers cover:
 
 - an immutable, content-bound runtime code package (the current `.venv312`
   editable installation points at the separate base worktree);
-- descriptor-bound Python execution rather than re-opening a mutable symlink;
 - an exact worker argv/environment startup envelope and per-member claims;
 - a strict child-environment allowlist;
 - a safe non-pickle representation-evaluation artifact;
 - recursive compiler/header/system-toolchain closure;
 - atomic publication of the combined one-time authorization transaction.
+
+Descriptor-bound Python execution is no longer in that list. Its retained-fd
+implementation, adversarial tests, policy update, and two independent reviews
+are recorded in the checkpoint above. The other seven identifiers remain
+unchanged, and no launch is enabled.
 
 This is containment, not a claim that the dormant launch implementation is
 already secure. Removing a blocker requires its implementation, adversarial
@@ -252,11 +300,11 @@ but is not score provenance.
 - Credentials must be passed to the target session/process only. Global tmux
   environment mutation is forbidden.
 - Direct entry-point coverage is recursive and exact, not marker-based. The
-  v2 inventory contains 79 content-bound rows. It covers every Python file in
-  `tools`/`spikes`, all shell files there, and `src` modules exposed by a main
-  guard, `__main__.py`, a Python shebang, executable mode, or a
-  `project.scripts` console entry. The one non-entry support module is admitted
-  only under a strict import-only syntax class.
+  v2-schema inventory is at revision 4 and contains 79 content-bound rows. It
+  covers every Python file in `tools`/`spikes`, all shell files there, and `src`
+  modules exposed by a main guard, `__main__.py`, a Python shebang, executable
+  mode, or a `project.scripts` console entry. The one non-entry support module
+  is admitted only under a strict import-only syntax class.
 - Thirty-six permanent Python entries use only `os` before an exact top-level
   handoff to absolute `/usr/bin/python3 -I` and the quarantine controller;
   their helper guard and final uncaught dispatch are separately checked. The
@@ -272,13 +320,16 @@ but is not score provenance.
   tests.
 - Every public mutating branch begins with an argument-free runtime-closure
   assertion and then matches an exact reviewed statement/call shape through
-  preflight, authorization consume, and dispatch. Nested calls or extra side
-  effects cannot hide in a guard/preflight argument or between those
-  boundaries. Guard, preflight, and dispatch names have one exact local
-  definition or direct import provenance and cannot be rebound, shadowed, or
-  deleted. The internal worker similarly requires its exact inherited-receipt
-  verification followed by an argument-free closure assertion. Runtime closure
-  remains disabled, so this is containment rather than launch closure.
+  preflight, authorization consume, and dispatch. Descriptor-owning branches
+  place preflight outside one handler-free prepared-lifetime `try/finally`, with
+  authorization and dispatch inside and only
+  `prepared.close_python_binding()` in `finally`. Nested calls, extra effects,
+  caught dispatch, a wrong finalizer, or import/rebind drift fail the audit.
+  Guard, preflight, and dispatch names have one exact local definition or
+  direct import provenance and cannot be rebound, shadowed, or deleted. The
+  internal worker similarly requires its exact inherited-receipt verification
+  followed by an argument-free closure assertion. Seven blockers keep runtime
+  closure disabled, so this remains containment rather than launch authority.
 - Only enumerated read-only modes may pass a mixed-mode guard;
   notably replay `plan` and checkpoint-storage `inventory` remain available,
   while GPU replay and compact/delete dispatches remain quarantined.
@@ -310,8 +361,18 @@ but is not score provenance.
   2,193 passed, five explicit environment/dependency/history skips, four
   non-failing warnings, and zero failures in 118.46 seconds. The boundary audit
   passed with 73 visible debts and zero violations; the control-plane audit
-  passed with 79 surfaces and zero violations. Remote CI reproduction remains
-  required.
+  passed with 79 surfaces and zero violations. This is a historical snapshot;
+  its local count is superseded by the later local suite. Remote status is
+  stated separately below and is not inherited by the fd-closure commit.
+- At the current checkpoint, repository boundary policy v3 revision 7 passes
+  with 61 debts and zero violations, and execution-surface policy revision 4
+  passes with 79 surfaces and zero violations. Before the added size-tamper
+  parameter, the focused selection had 304 passing tests; the updated fd
+  security file passes 10/10. The final hermetic CPU rerun has 2,337 passed,
+  five skipped, four warnings, and zero failures in 140.25 seconds. Predecessor
+  commit `a5dd0d1` is green for install, lint, both audits, and full CPU after
+  five private-path fixtures were made hermetic; the fd-closure commit still
+  requires its own remote reproduction.
 - Ruff passes across `src`, `tools`, `spikes`, and `tests`; `git diff --check`,
   shell syntax, the repository-boundary audit, and the control-plane audit also
   pass.
@@ -328,10 +389,11 @@ but is not score provenance.
 The control work makes the present repository auditable; it does not pretend
 that the source tree is already small or easy to extend. At C2 completion the
 tree contained 263 Python modules and 29 registered production modules above
-1,000 lines. That is a historical C2 snapshot. Policy revision 5 now retains
+1,000 lines. That is a historical C2 snapshot. Policy revision 5 later retained
 20 exact oversized-module exceptions after nine additional decompositions;
-new implementation leaves increased the module count without creating a new
-oversized file.
+that is the historical `fd8da97` snapshot. Current revision 7 retains 17 after
+the result-registry and CLI/authorization splits, and the new leaves create no
+replacement oversized file.
 The three first decomposition targets are complete:
 `policy_coredev.py`, representation internal evaluation, and `run_config.py`
 are now 902, 921, and 983 lines. Policy v3 now gives every remaining large
@@ -341,7 +403,8 @@ They remain visible debt and still require actual decomposition over time.
 The four known multi-module import cycles are gone and a full-tree SCC test
 guards that boundary. Exact-equivalent canonical JSON helpers and three
 immutable-publication consumers now share tested implementations. Secure-file
-reading remains a partial migration, but it now covers result-registry reads,
+reading remains a partial migration, but it now covers result-registry support
+reads,
 configuration payloads and external bindings, and weight-snapshot storage and
 loading with explicitly tested descriptor/probe boundaries. The 79
 execution/support surfaces all have one machine disposition, which is

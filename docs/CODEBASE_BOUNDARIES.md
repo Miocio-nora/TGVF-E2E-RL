@@ -85,6 +85,15 @@ Generated manuscript tables must be materialized from a typed registry after
 its artifact checks pass. A document is a consumer of evidence, not an
 alternative score database.
 
+The result-registry implementation is split along that ownership boundary:
+`evaluation/result_registry.py` is a 292-line loading/facade surface,
+`evaluation/result_registry_schema.py` owns 839 lines of enums, immutable
+records, and comparison validation, and
+`evaluation/result_registry_support.py` owns 225 lines of primitive validators
+and secure-read support. Historical imports, object identity, pickle
+coordinates, and type hints remain characterized; the facade is not a second
+implementation.
+
 ## Artifact primitive ownership
 
 Canonical JSON bytes and hashes with exact matching semantics belong to
@@ -114,8 +123,8 @@ Consumers that require immutable or content-bound input must add that check.
 
 Migration is semantic and incremental. Similarly named helpers must not be
 merged when they differ in symlink, stability, error, ownership, or publication
-semantics. At this snapshot the secure-reader production consumers are
-`evaluation/result_registry.py`,
+semantics. At this checkpoint the secure-reader production consumers are
+`evaluation/result_registry_support.py`,
 `framework/verl/policy_weight_snapshot_store.py`, and
 `representation/training/config_values.py`; the existence of the shared leaf
 does not claim that every historical reader has been migrated.
@@ -144,6 +153,38 @@ raw strings. Existing dataclass field metadata is not retroactively rewritten,
 so callers and tests must not assume that `dataclasses.fields(...).type` changes
 with the class's own `__annotations__`.
 
+## 2026-08-30 fd-closure checkpoint
+
+Canonical representation and Policy launches now retain the exact regular-file
+descriptor opened during preflight and pass that integer descriptor to their
+respective `os.execve` boundaries. Binding uses absolute component-by-component
+no-follow traversal, compares the retained candidate's device and inode with
+`/proc/self/exe`, and fails closed when the platform cannot establish either
+process identity or descriptor-based `execve`. Immediately before process
+replacement, the same descriptor is reread and its digest, size, device,
+inode, mode, executable bit, and prepared identity are revalidated. There is no
+path reopen and no `/proc/self/fd` fallback at the execution boundary;
+`argv[0]` remains the declared Python path.
+
+Descriptor ownership is process-local and non-serializable. Explicit close and
+the retained owner's `weakref.finalize` cover authorization failure, preflight
+failure, failed exec, and abandoned prepared plans without closing a later fd
+that reused the same number. Adversarial coverage includes candidate-replacement
+races, payload/size/mode tampering, real fd execution after pathname
+replacement, descriptor lifetime and reuse, and AST mutations for caught
+dispatch, extra effects, wrong finalizers, wrong imports, and rebinding. A
+second independent security review found no blocker to removing
+`fd_bound_python_exec_missing`.
+
+Experiment execution policy revision 3 therefore removes only that blocker.
+`runtime_closure.launch_enabled` remains `false` with seven blockers. In
+particular, `child_environment_allowlist_missing` remains the next priority:
+both canonical launch paths still begin with host-environment pass-through and
+a denylist, rather than constructing a strict allowlist, so that blocker must
+not be removed. Same-inode mutation between final verification and `execve`
+also remains within `immutable_runtime_code_package_missing`; fd closure does
+not claim to solve immutable runtime packaging.
+
 ## Absolute-path debt
 
 Machine-specific absolute paths under source and tools are prohibited for new
@@ -166,8 +207,8 @@ only for an intentional boundary migration with explicit review and evidence.
 ## Production module size debt
 
 Repository-boundary policy `TGVF-REPOSITORY-BOUNDARIES-V3` is currently at
-policy revision 5 and fixes the normal production-module limit at 1,000
-physical lines. Each of the 20 current exceptions names one exact Python path
+policy revision 7 and fixes the normal production-module limit at 1,000
+physical lines. Each of the 17 current exceptions names one exact Python path
 below `src/tgvf_rl`, its stable subsystem owner, concrete reason, next split
 seam, and a ceiling equal to its current line count. The candidate audit fails
 on an unregistered oversized module, growth above a ceiling, slack after a file
@@ -195,9 +236,13 @@ The command emits a structured report, exits successfully only when there are
 no violations, does not import model runtimes, and requires no GPU. CI runs the
 same audit with `CUDA_VISIBLE_DEVICES` empty before the test suite.
 
-At this snapshot policy revision 5 passes with 64 debts and zero violations:
-five evidence-only configuration roots, 25 machine-specific absolute paths, 20
+At this checkpoint policy revision 7 passes with 61 debts and zero violations:
+five evidence-only configuration roots, 25 machine-specific absolute paths, 17
 oversized production modules, and 14 quarantined run-specific code paths.
+The former exceptions for `cli.py` and `ops/cli_authorization.py` are gone:
+their facades are now 963 and 622 lines. Their extracted
+`ops/cli_launch.py` and `ops/cli_authorization_identity.py` leaves are 265 and
+659 lines and introduce no replacement size exception.
 
 ## Execution-surface ownership
 
@@ -221,7 +266,7 @@ commands (`ready`, `authorize`, `override-freeze`, `consume`, `wait`, `status`,
 `quarantine-legacy`, and `audit-control-plane`) and to its exact conservative
 capability map. Parser-mode or policy drift blocks the audit.
 
-The revision-3 stabilization inventory contains 79 unique paths, and each has
+The revision-4 stabilization inventory contains 79 unique paths, and each has
 exactly one machine-checked disposition. The current control-plane audit covers
 all 79 and reports zero violations. The inventory contains two canonical
 entries, two control-audit utilities, 36 permanently quarantined Python
@@ -272,13 +317,16 @@ the expected words cannot satisfy the audit.
 
 Canonical public branches also use structural checks. Each branch begins with
 an argument-free runtime-closure assertion and has an exact reviewed call
-shape through preflight, one-time authorization consume, and dispatch; nested
-argument side effects and extra statements are rejected. Those control symbols
-must have one exact local definition or direct-import provenance and may not be
-rebound, shadowed, or deleted. The internal worker has an equivalent exact
-inherited-receipt/closure prefix. These checks are containment while runtime
-closure remains disabled; they do not declare the public launch implementation
-complete.
+shape through preflight, one-time authorization consume, and dispatch. For the
+two descriptor-owning commands, preflight completes before one strict
+prepared-lifetime `try/finally`; authorization and dispatch are its only
+reviewed body, it has no handler or `else`, and its `finally` contains only
+`prepared.close_python_binding()`. Nested argument side effects, caught
+dispatch, extra statements, a different finalizer, and control-symbol import or
+rebind drift are rejected. The internal worker has an equivalent exact
+inherited-receipt/closure prefix. These checks are containment while the seven
+remaining runtime blockers keep launch disabled; fd closure alone does not
+declare the public launch implementation complete.
 
 The C1 disposition condition is therefore satisfied, but canonical launch and
 runtime closure are not. A machine classification is containment and ownership
@@ -310,3 +358,14 @@ Run the combined control-plane audit with no GPU visibility:
 CUDA_VISIBLE_DEVICES='' .venv312/bin/python tools/check_launch_gate.py \
   audit-control-plane --repository-root .
 ```
+
+At this checkpoint execution-surface policy revision 4 binds all 79 surfaces,
+and both the control-plane and repository-boundary audits pass locally. The
+predecessor commit `a5dd0d1` is green in remote CI across dependency
+installation, lint, boundary, control-plane, and the full CPU suite after five
+tests with private machine dataset paths were made hermetic. The fd-closure
+commit still requires its own remote reproduction. The final local full suite,
+including the added size-tamper case, is 2,337 passed, five skipped, and four
+non-failing warnings in 140.25 seconds. Before that additional parameter, the
+combined focused selection was 304 passed; the updated fd security file passes
+10/10 and the final full suite includes the added case.
